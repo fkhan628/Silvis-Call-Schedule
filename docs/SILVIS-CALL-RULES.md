@@ -72,6 +72,7 @@ decides the Trauma Director role.
 - Max consecutive **3** primary days (hard, real days). ⟶ **9/22 (Prompt 12 A): he is the one surgeon who opted in to count a holiday unit as one day** (`holidayUnitCountsAsOneDay`; his 4-day Thanksgiving unit vs his max 3); any-role soft limit **4** with the long-run penalty beyond it. No monthly target.
 - ⟶ **9/22 evening — standing East rule: on Davenport call every Christmas Eve and Christmas Day.** Never Silvis primary
   on 12/24–12/25 in any year (the Christmas unit is someone else's); backup allowed as on any East day.
+- ⟶ **Seed key (Prompt 12 V, 9/22 evening):** `surgeonRules.s1.eastStanding = [{ "name": "Christmas", "days": ["12-24", "12-25"] }]` — generic for any surgeon (an `MM-DD` list per named entry; no Setup field yet — seed/blob data like item L; the Setup East card shows it read-only as "Standing: Christmas 12-24, 12-25 (every year)"). `rules.js` treats a standing day exactly like a published East busy day in every year: the same hard `east-busy` for the roles his `eastFeed` blocks (primary), ahead of the forecast and of `east-unknown`, behind the same gate (`eastFeed.enabled` with `eastBlocksPrimary` or `eastBlocksBackup`; a malformed day, a disabled East feature or a feature that blocks no role is a warning, never a silent block or a silent no-op). Not counted in the Totals "East days" column or the East-only tallies until the feed itself carries the day (those count published busy days and derived weeks). A one-year exception (say he swaps Christmas at Davenport once) is a **manual edit in the day editor**, which may override with the visible warning per the eligibility contract — not a data field.
 - **Thanksgiving 2026: Khan takes Thu 11/26 – Sun 11/29 as one unit, primary** (Faraz 9/21 evening; locked in the seed).
 - ⟶ **9/22 (Prompt 12 T, Faraz ~15:40): covers Wed 11/25, 2026 only** — a locked one-off (`existingAssignments` source
   `faraz-2026-09-22-khan-1125`, row note "Khan covers 11/25, 2026 only"), **not a rule** (no Khan rule was added) and **not part
@@ -228,6 +229,7 @@ Seed keys (Prompt 12 U): `groupRules.holidays.mondayMinorAbsorbsWeekend` (true) 
 treated like a published East busy day every year, independent of the feed and the forecast: Khan is never Silvis
 **primary** on 12/24 or 12/25 (so never the Christmas unit's primary); backup on those days follows his normal
 East-day rule (allowed).
+Seed key (Prompt 12 V): `surgeonRules.s1.eastStanding` (generic — any surgeon, an `MM-DD` list per named entry; seed/blob data, no Setup field yet) — read by `rules.js` as a published busy day in every year (`east-busy`, primary only for Khan, ahead of the forecast and of the coverage), so `holidayUnitCandidates` never lists him for the Christmas primary; `diagnostics.eastStandingDays` lists the concrete days of a run. Same gate as busy days (`eastFeed.enabled` blocking a role; otherwise a warning). Not counted in the Totals "East days" column until the feed carries the day. A one-year exception is a manual edit with the visible warning.
 
 | Holiday | Tier | 2026 unit days | Notes |
 |---|---|---|---|

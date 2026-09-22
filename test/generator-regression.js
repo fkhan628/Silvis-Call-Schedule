@@ -849,6 +849,7 @@ const BEST_OF = RANGES.map((r, i) => BEST_OF_OVERRIDE || BEST_OF_DEFAULT[i]);
 const BUDGET_MS = process.env.SILVIS_GEN_BUDGET_MS ? Math.floor(+process.env.SILVIS_GEN_BUDGET_MS) : 10000;
 const timing = {}; RANGES.forEach((r) => { timing[r.name] = { ms: 0, runs: 0, candidates: 0 }; });
 const r2Results = [];
+const r4Results = []; // Prompt 12 V
 const r2Json = new Set();
 const R4_SEED = (s) => s % 2 === 0; // R4 on the even seeds only (budget; see the header)
 for (let s = 1; s <= SEEDS; s++) {
@@ -860,6 +861,7 @@ for (let s = 1; s <= SEEDS; s++) {
     timing[range.name].ms += el; timing[range.name].runs++; timing[range.name].candidates += out.diagnostics.candidatesTried;
     checkRun(out, range, s, range.name.indexOf("R4") === 0);
     if (ri === 1) { r2Results.push({ seed: s, score: out.diagnostics.score.total, out }); r2Json.add(JSON.stringify(out.schedule)); }
+    if (ri === 3) r4Results.push({ seed: s, out }); // Prompt 12 V: the R4 runs are re-read at the end (standing East days)
   });
 }
 CUR.range = "R2 Nov-Dec"; CUR.seed = "1/1"; CUR.day = "-";
@@ -1253,6 +1255,46 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
     ok(ctx.holidayByDay[sat] && ctx.holidayByDay[sat].name === name && ctx.holidayByDay[sat].days.length === 3, "ctx: " + sat + " opens the 3-day " + name + " unit");
   });
   CUR.range = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 12 V (9/22 evening) ----
+// Standing East rule (surgeonRules.s1.eastStanding = Christmas 12-24 + 12-25):
+// Khan is on Davenport call every Christmas Eve and Christmas Day, so he is
+// never Silvis PRIMARY on those days in any year; backup stays open (his East
+// days never block backup). Restated here against every stored run whose days
+// include 2026-12-24/25 - the 50 R2 runs, the 25 R4 runs, the same-seed R2 run
+// and the bestOf-200 preview - on placed AND locked slots (no lock exists there;
+// one would be a fact to flag, never to accept silently). No new generator run.
+// (V review) The placement pin is belt-and-braces here: the harness's forecast fixture
+// (test/fixtures/east-forecast-2026-09-22.json) rates 12/23-12/26 at 1.0, so the forecast
+// alone kept Khan off Christmas 2026 before V (a HEAD-engine soak found 0 of 76 runs with
+// him primary). The lines that bite on an engine without V are the eastStandingDays
+// diagnostics below; the rule itself is proved without a forecast in test/rules.test.js
+// (V block) and test/holidays.test.js (D1 candidates).
+{
+  CUR.range = "V"; CUR.seed = "-"; CUR.day = "-";
+  const standing = (SR[KHAN].eastStanding || []).find((e) => e.name === "Christmas");
+  eq(standing && standing.days, ["12-24", "12-25"], "seed: surgeonRules.s1.eastStanding Christmas = 12-24 + 12-25 (Prompt 12 V)");
+  eq(SR[KHAN].eastFeed.enabled, true, "seed: the standing rule acts through Khan's East feature (same gate as busy days)");
+  const runs = r2Results.map((r) => ({ label: "R2 seed " + r.seed, out: r.out }))
+    .concat(r4Results.map((r) => ({ label: "R4 seed " + r.seed, out: r.out })))
+    .concat([{ label: "R2 seed 1 (a1)", out: a1 }, { label: "Nov-Dec bestOf 200", out: big }]);
+  ok(runs.length >= 77, "V covers " + runs.length + " stored runs (50 R2 + 25 R4 + a1 + bestOf 200)");
+  let checked = 0;
+  runs.forEach((r) => {
+    CUR.seed = r.label;
+    ["2026-12-24", "2026-12-25"].forEach((d) => {
+      CUR.day = d;
+      ok(r.out.schedule[d], d + " is in the run");
+      ok(r.out.schedule[d].primary !== KHAN, "V: Khan is never Silvis primary on " + d + " (standing East call, every year) - got " + JSON.stringify(r.out.schedule[d]));
+      checked++;
+    });
+    CUR.day = "-";
+    eq(r.out.diagnostics.eastStandingDays && r.out.diagnostics.eastStandingDays[KHAN], ["2026-12-24", "2026-12-25"], "diagnostics.eastStandingDays.s1 for a run over Christmas 2026");
+    ok(!r.out.diagnostics.eastUnknownDays.some((u) => u.id === KHAN && (u.day === "2026-12-24" || u.day === "2026-12-25")), "a standing day is never listed as East-unknown");
+  });
+  ok(checked === runs.length * 2, "V checked " + checked + " day slots");
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
 const total = Date.now() - T_FILE;

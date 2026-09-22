@@ -4890,7 +4890,10 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
   Object.keys(meta).forEach(id => {
     const m = meta[id]; const P = ctx && ctx.per ? ctx.per[id] : null; const name = nameOf(id);
     if (m.busyDays) {
-      if (!m.eastId) out.push({ id, text: name + ": East id unresolved - status unknown", tone: "warn" });
+      // Prompt 12 V: a standing East day (surgeonRules.<id>.eastStanding, every year) is known whatever the feed says
+      const standing = P && P.eastStanding && P.eastStanding.size ? P.eastStanding.get(day.slice(5)) : null;
+      if (standing) out.push({ id, text: name + ": East call (standing rule: " + standing + ", every year) - Silvis primary blocked", tone: "busy" });
+      else if (!m.eastId) out.push({ id, text: name + ": East id unresolved - status unknown", tone: "warn" });
       else if (P && P.eastBusy.has(day)) out.push({ id, text: name + ": East call (published) - Silvis primary blocked", tone: "busy" });
       else {
         const p = P && P.eastForecast ? P.eastForecast[day] : undefined;
@@ -4951,7 +4954,7 @@ function DayEditor(props) {
       let r;
       try { r = ctx ? eligibility(ctx, day, role, s.id) : { ok: true, hard: [], soft: [] }; }
       catch (e) { console.warn("eligibility threw for", s.id, role, day, e); r = { ok: true, hard: [], soft: [], error: true }; }
-      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: !!r.error };
+      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: !!r.error, eastStanding: r.eastStanding || null }; // eastStanding: Prompt 12 V - the standing East entry's name behind an east-busy
     });
     // eligible first, then ineligible (roster order kept inside each group); inactive only if currently held
     return list.filter(o => o.active && o.ok).concat(list.filter(o => o.active && !o.ok)).concat(list.filter(o => !o.active && o.id === draft[role]));
@@ -5053,7 +5056,7 @@ function DayEditor(props) {
         )}
         {canEdit && ineligible.length > 0 && (
           <div data-testid={"editor-" + role + "-reasons"} style={{fontSize:11,color:sub,marginTop:6,lineHeight:1.5}}>
-            <span style={{fontWeight:700}}>Not eligible:</span> {ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf)).join("; ")}
+            <span style={{fontWeight:700}}>Not eligible:</span> {ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "")).join("; ")}
           </div>
         )}
       </div>
@@ -6051,6 +6054,12 @@ function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ct
             const P = ctx && ctx.per ? ctx.per[id] : null;
             const days = P ? Array.from(P.eastBusy).filter(d => d.slice(0, 7) === monthKey).sort() : [];
             return <div key={id} data-testid={"east-busy-" + id} style={{ fontSize: 12, marginBottom: 4 }}><strong>{nameOf(id)}</strong>{meta[id].eastId ? "" : " (East id unresolved)"}: {days.length ? <span style={{ fontFamily: mono }}>{days.map(d => fmtMD(d)).join(", ")}</span> : <span style={{ color: "#7a8a98" }}>none</span>}</div>;
+          })}
+          {busyIds.map(id => {
+            // Prompt 12 V: standing East days (surgeonRules.<id>.eastStanding) - read-only; seed/blob data, no Setup field yet
+            const P = ctx && ctx.per ? ctx.per[id] : null;
+            const st = P && P.eastStandingList ? P.eastStandingList : [];
+            return st.length ? <div key={"standing-" + id} data-testid={"east-standing-" + id} style={{ fontSize: 12, marginTop: 6, color: "#2c3e50" }}><strong>{nameOf(id)}</strong> - Standing: <span style={{ fontFamily: mono }}>{st.map(e => e.name + " " + e.days.join(", ")).join("; ")}</span> (every year; Silvis primary blocked, backup per the East-day rule; seed/blob data, no Setup field yet)</div> : null;
           })}
         </div>
       </div>

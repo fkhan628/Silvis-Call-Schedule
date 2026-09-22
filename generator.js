@@ -115,7 +115,8 @@ function genRulesApi() {
     genRulesCache = {
       eligibility: eligibility, buildContext: buildContext, weekendUnitPatterns: weekendUnitPatterns,
       holidayUnits: holidayUnits, holidayUnitCandidates: holidayUnitCandidates, isHolidayDay: isHolidayDay,
-      talliesFor: talliesFor, runThrough: rdRunThrough, resolveWeight: resolveWeight, monthlyCapFor: monthlyCapFor, defaultWeights: defaultWeights
+      talliesFor: talliesFor, runThrough: rdRunThrough, resolveWeight: resolveWeight, monthlyCapFor: monthlyCapFor, defaultWeights: defaultWeights,
+      standingEastDays: standingEastDays
     };
   }
   return genRulesCache;
@@ -1181,10 +1182,13 @@ function genDiagnostics(G, best, meta) {
   });
   // East feed snapshot / forecast / unknown days.
   var snapshot = { coverage: ctx.eastCoverage ? { from: ctx.eastCoverage.from, to: ctx.eastCoverage.to } : null, busyDaysInRange: {}, forecastDaysInRange: {}, derivedDaysInRange: {}, forecastThreshold: ctx.forecastThreshold };
-  var eastForecast = [], eastUnknownDays = [];
+  var eastForecast = [], eastUnknownDays = [], eastStandingDays = {};
   ids.forEach(function (id) {
     var P = ctx.per[id];
     if (!P.eastEnabled) return;
+    // Prompt 12 V: the standing East days of the range (every year) - known days, never "unknown".
+    var standingList = genRulesApi().standingEastDays(ctx, id, G.start, G.end), standingSet = new Set(standingList);
+    if (P.eastStandingList && P.eastStandingList.length) eastStandingDays[id] = standingList;
     var busy = 0, fc = 0, derived = 0;
     G.days.forEach(function (d) {
       var e = W[d];
@@ -1196,7 +1200,7 @@ function genDiagnostics(G, best, meta) {
         fc++;
         if (prob >= 0.2) eastForecast.push({ id: id, day: d, weekday: genWeekday(d), probability: prob, busyByThreshold: prob >= ctx.forecastThreshold, assigned: role });
       }
-      if (role && !P.eastBusy.has(d) && typeof prob !== "number") {
+      if (role && !P.eastBusy.has(d) && !standingSet.has(d) && typeof prob !== "number") {
         var covered = ctx.eastCoverage && d >= ctx.eastCoverage.from && d <= ctx.eastCoverage.to;
         var blocks = role === "primary" ? P.blocksPrimary : P.blocksBackup;
         if (!covered && blocks) eastUnknownDays.push({ id: id, day: d, role: role });
@@ -1295,6 +1299,7 @@ function genDiagnostics(G, best, meta) {
     eastFeedSnapshot: snapshot,
     eastForecast: eastForecast,
     eastUnknownDays: eastUnknownDays,
+    eastStandingDays: eastStandingDays, // V: { [id]: ['YYYY-MM-DD', ...] } - standing East days inside the range
     placedCount: Object.keys(S.placed).length,
     warnings: warnings
   };

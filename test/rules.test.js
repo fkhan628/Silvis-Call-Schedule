@@ -644,7 +644,8 @@ eq(R.holidayUnits(ctx, "2026-12-01", "2026-12-23"), []);
 eq(R.holidayUnitCandidates(ctx, units[0], P), [KHAN], "locked primary is the only primary candidate");
 eq(R.holidayUnitCandidates(ctx, units[0], B), [BURCHETT, PHILIP, FIERCE], "backup candidates: not Khan (primary), not Acton (opt-out), not Sarkar (window)");
 const xmasP = R.holidayUnitCandidates(clean, units[1], P);
-ok(xmasP.indexOf(ACTON) >= 0 && xmasP.indexOf(PHILIP) >= 0 && xmasP.indexOf(KHAN) >= 0, "Christmas primary candidates include Acton, Philip, Khan: " + xmasP);
+ok(xmasP.indexOf(ACTON) >= 0 && xmasP.indexOf(PHILIP) >= 0, "Christmas primary candidates include Acton, Philip: " + xmasP);
+ok(xmasP.indexOf(KHAN) < 0, "...but not Khan since V (9/22 evening): standing East call on 12/24 + 12/25 every year - see the V block at the end: " + xmasP);
 ok(xmasP.indexOf(SARKAR) < 0, "Sarkar is outside her window at Christmas");
 // unit-wide counting: Burchett with 7 December PRIMARY days already cannot take the 2-day Christmas unit as primary (cap 8 primary days)
 const bx = {};
@@ -1264,7 +1265,11 @@ eq([seed.surgeonRules[KHAN].eastFeed.eastBlocksPrimary, seed.surgeonRules[KHAN].
   eq(sortedSet(kb.busy), ["2026-12-21", "2026-12-22", "2026-12-23", "2026-12-24", "2026-12-26"], "holidayCoverage: 12/24 his, 12/25 someone else's (service-week Friday cleared)");
   eq(kb.reasons["2026-12-24"], ["service-week", "holiday"], "his holiday keeps every reason");
   busyPrimaryFreeBackup(c, "2026-12-24", "holidayCoverage (his 24h unit, a Silvis holiday-unit day)");
-  freePrimaryAndBackup(c, "2026-12-25", "holidayCoverage held by another Davenport surgeon (his service-week Friday is theirs)");
+  // V (9/22 evening): the FEED clears 12/25 (kb.busy above lacks it), but 12/25 is a standing East day every year - primary blocked by V, backup still free
+  const v1225 = R.eligibility(c, "2026-12-25", P, KHAN);
+  blocked(v1225, "east-busy", "holidayCoverage held by another Davenport surgeon clears the feed day, yet 12/25 is a standing East day (V)");
+  eq(v1225.eastStanding, "Christmas", "...named as the standing entry, not a feed day");
+  okElig(R.eligibility(c, "2026-12-25", B, KHAN), "backup 12/25 stays eligible");
   busyPrimaryFreeBackup(c, "2026-12-26", "the service-week Saturday after the holiday");
   const lone = eastCtx([{ weekMonday: "2026-11-23", data: { dayCall: "s2", nights: NIGHTS_OTHERS, off: "s7", holidayCoverage: { "2026-11-26": { surgeonId: DFAK, role: "holiday_24h" } } } }]);
   eq(sortedSet(lone.kb.busy), ["2026-11-26"], "a holiday unit alone: only that day");
@@ -1309,7 +1314,8 @@ eq([seed.surgeonRules[KHAN].eastFeed.eastBlocksPrimary, seed.surgeonRules[KHAN].
   eq(all.ctx.warnings, [], "the { busy, reasons } object is accepted without a warning");
   all.kb.busy.forEach(d => has(R.eligibility(all.ctx, d, P, KHAN).hard, "east-busy", "primary east-busy on " + d));
   all.kb.busy.forEach(d => okElig(R.eligibility(all.ctx, d, B, KHAN), "backup eligible on " + d));
-  ["2026-11-04", "2026-11-08", "2026-11-21", "2026-12-25", "2027-01-05"].forEach(d => lacks(R.eligibility(all.ctx, d, P, KHAN).hard, "east-busy", "no East reason leaks onto " + d));
+  ["2026-11-04", "2026-11-08", "2026-11-21", "2026-12-27", "2027-01-05"].forEach(d => lacks(R.eligibility(all.ctx, d, P, KHAN).hard, "east-busy", "no East reason leaks onto " + d));
+  ok(!all.kb.busy.has("2026-12-25"), "the FEED clears 12/25 (someone else's holiday coverage) - the primary block that day is V's standing rule (below), not the feed");
   // and his Friday 11/20 (East Friday night) still allows the weekend BACKUP, carrying the L soft, never a hard block
   const fb = R.eligibility(all.ctx, "2026-11-20", B, KHAN);
   okElig(fb, "backup on an East Friday"); hasSoft(fb, "weekend-backup", "...discouraged by the L soft only");
@@ -1413,6 +1419,87 @@ const noFlag = R.buildContext(SA.seedToContextInput(noFlagSeed, { eastDerived: D
   eq(R.eligibility(ctx, d, P, id), R.eligibility(noFlag, d, P, id), "primary eligibility " + d + " " + id + " is independent of the flag");
   eq(R.eligibility(ctx, d, B, id), R.eligibility(noFlag, d, B, id), "backup eligibility " + d + " " + id + " is independent of the flag");
 }));
+
+// ---- Prompt 12 V (9/22 evening) ----
+// surgeonRules.<id>.eastStanding [{ name, days: ["MM-DD"] }] - a standing East day is a
+// published East busy day in EVERY year, independent of the feed and the forecast: the
+// same hard "east-busy" for the roles East blocks (Khan: primary only), precedence over
+// the forecast and over east-unknown, the same eastFeed gate as busy days. Khan:
+// Christmas Eve + Day (Faraz 9/22 evening; the Davenport standing rule of 2026-08-06).
+step("V: seed - surgeonRules.s1.eastStanding is Christmas 12-24 + 12-25");
+eq(seed.surgeonRules[KHAN].eastStanding.map(e => ({ name: e.name, days: e.days })), [{ name: "Christmas", days: ["12-24", "12-25"] }], "seed: s1.eastStanding");
+step("V: Khan PRIMARY on 12/24 and 12/25 is hard east-busy every year (no feed busy day, no forecast)");
+const vClean = makeCtx({ schedule: {} });   // eastBusyDays {}, no forecast, coverage 2026-11-01..2027-01-31
+eq(vClean.warnings.filter(w => /eastStanding/.test(w)), [], "a well-formed eastStanding list raises no warning");
+["2026-12-24", "2026-12-25", "2027-12-24", "2027-12-25", "2028-12-24", "2028-12-25"].forEach(d => {
+  const r = R.eligibility(vClean, d, P, KHAN);
+  blocked(r, "east-busy", "standing East day " + d);
+  eq(r.eastStanding, "Christmas", d + ": the result names the standing entry for the day editor");
+  lacks(r.hard, "east-forecast-busy", d + ": no forecast reason");
+  lacksSoft(r, "east-unknown", d + ": a standing day is never East-unknown (" + d + " is " + (d < "2027-02-01" ? "inside" : "outside") + " the feed coverage)");
+});
+step("V: Khan BACKUP on 12/24 and 12/25 is not east-busy (eastBlocksBackup false)");
+["2026-12-24", "2026-12-25", "2027-12-25"].forEach(d => { const r = R.eligibility(vClean, d, B, KHAN); lacks(r.hard, "east-busy", "backup " + d); eq(r.eastStanding, undefined, "no standing name on the backup result " + d); });
+okElig(R.eligibility(vClean, "2026-12-24", B, KHAN), "Christmas Eve backup stays open to him");
+step("V: the neighbouring days carry no east-busy from the standing rule");
+["2026-12-23", "2026-12-26", "2027-12-23", "2027-12-26"].forEach(d => lacks(R.eligibility(vClean, d, P, KHAN).hard, "east-busy", "primary " + d + " (other rules may still apply)"));
+step("V: standing beats the forecast and the coverage");
+const vFc = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2026-12-24": 0.10, "2026-12-25": 0.70 } } });
+const vFc24 = R.eligibility(vFc, "2026-12-24", P, KHAN);
+blocked(vFc24, "east-busy", "forecast 0.10 on a standing day: still the hard east-busy");
+lacksSoft(vFc24, "east-forecast", "...and NO east-forecast soft term");
+const vFc25 = R.eligibility(vFc, "2026-12-25", P, KHAN);
+blocked(vFc25, "east-busy", "forecast 0.70 on a standing day: east-busy, not east-forecast-busy");
+lacks(vFc25.hard, "east-forecast-busy", "the forecast-busy code is not added on a standing day");
+const vNoCov = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, eastDerived: DERIVED, eastBusyDays: {} }));   // no eastFeedCoverage at all
+const vNoCov24 = R.eligibility(vNoCov, "2026-12-24", P, KHAN);
+blocked(vNoCov24, "east-busy", "outside any feed coverage: still east-busy");
+lacksSoft(vNoCov24, "east-unknown", "...and no east-unknown soft term");
+hasSoft(R.eligibility(vNoCov, "2026-12-23", P, KHAN), "east-unknown", "fixture: without coverage the day before IS East-unknown (so the line above is a real check)");
+step("V: a malformed entry warns and blocks nothing; a surgeon whose eastFeed is off warns and blocks nothing");
+const srBad = clone(SA.seedToContextInput(seed).surgeonRules);
+srBad[KHAN].eastStanding = [{ name: "Christmas", days: ["12/24", "12-25"] }, { name: "Bogus", days: ["13-01", "02-30"] }, { days: ["01-01"] }];
+const vBad = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, surgeonRules: srBad, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, eastBusyDays: {} }));
+const wBad = vBad.warnings.filter(w => /eastStanding/.test(w));
+ok(wBad.some(w => /surgeonRules\.s1\.eastStanding\[0\]/.test(w) && /"12\/24"/.test(w)), "warning names the surgeon, the entry and the bad day: " + JSON.stringify(wBad));
+ok(wBad.some(w => /eastStanding\[1\]/.test(w) && /"13-01"/.test(w)) && wBad.some(w => /eastStanding\[1\]/.test(w) && /"02-30"/.test(w)), "13-01 and 02-30 are not real month/days: " + JSON.stringify(wBad));
+ok(wBad.some(w => /eastStanding\[2\]/.test(w)), "an entry without a name is refused: " + JSON.stringify(wBad));
+lacks(R.eligibility(vBad, "2026-12-24", P, KHAN).hard, "east-busy", "the malformed 12/24 day blocks nothing");
+blocked(R.eligibility(vBad, "2026-12-25", P, KHAN), "east-busy", "the well-formed 12-25 day of the same entry still counts");
+lacks(R.eligibility(vBad, "2027-01-01", P, KHAN).hard, "east-busy", "the nameless entry blocks nothing");
+const srOff = clone(SA.seedToContextInput(seed).surgeonRules);
+srOff[KHAN].eastFeed = Object.assign({}, srOff[KHAN].eastFeed, { enabled: false });
+const vOff = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, surgeonRules: srOff, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, eastBusyDays: {} }));
+ok(vOff.warnings.some(w => /surgeonRules\.s1\.eastStanding ignored/.test(w) && /enable surgeonRules\.s1\.eastFeed/.test(w)), "eastFeed off: one warning that names the gate: " + JSON.stringify(vOff.warnings.filter(w => /eastStanding/.test(w))));
+lacks(R.eligibility(vOff, "2026-12-24", P, KHAN).hard, "east-busy", "eastFeed off: the standing day blocks nothing (same gate as busy days)");
+// (V review) eastFeed enabled but blocking neither role: the entries could never act, so they are
+// ignored with the same warning (naming the roles) - never validated into the list, never a silent no-op.
+const srNoRole = clone(SA.seedToContextInput(seed).surgeonRules);
+srNoRole[KHAN].eastFeed = Object.assign({}, srNoRole[KHAN].eastFeed, { enabled: true, eastBlocksPrimary: false, eastBlocksBackup: false });
+const vNoRole = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, surgeonRules: srNoRole, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, eastBusyDays: {} }));
+const wNoRole = vNoRole.warnings.filter(w => /eastStanding/.test(w));
+ok(wNoRole.length === 1 && /surgeonRules\.s1\.eastStanding ignored/.test(wNoRole[0]) && /eastBlocksPrimary or eastBlocksBackup/.test(wNoRole[0]), "eastFeed on but no role blocked: one warning naming the roles: " + JSON.stringify(wNoRole));
+eq(vNoRole.per[KHAN].eastStandingList, [], "eastFeed on but no role blocked: nothing reaches the display list");
+eq(R.standingEastDays(vNoRole, KHAN, "2026-11-02", "2027-01-03"), [], "eastFeed on but no role blocked: standingEastDays lists nothing");
+lacks(R.eligibility(vNoRole, "2026-12-24", P, KHAN).hard, "east-busy", "eastFeed on but no role blocked: primary not east-busy");
+lacks(R.eligibility(vNoRole, "2026-12-24", B, KHAN).hard, "east-busy", "eastFeed on but no role blocked: backup not east-busy");
+step("V: standingEastDays(ctx, id, from, to) lists the concrete days of every year in the range");
+eq(R.standingEastDays(vClean, KHAN, "2026-11-02", "2027-01-03"), ["2026-12-24", "2026-12-25"], "milestone range");
+eq(R.standingEastDays(vClean, KHAN, "2026-12-25", "2028-12-24"), ["2026-12-25", "2027-12-24", "2027-12-25", "2028-12-24"], "edges inclusive, every year in between");
+eq(R.standingEastDays(vClean, KHAN, "2027-01-02", "2027-12-23"), [], "none in range");
+eq(R.standingEastDays(vClean, BURCHETT, "2026-11-02", "2027-12-31"), [], "a surgeon without entries");
+eq(R.standingEastDays(vClean, "nobody", "2026-11-02", "2027-12-31"), [], "unknown surgeon -> []");
+step("V: holidayUnitCandidates - Christmas 2026: Khan is absent from primary and present for backup");
+const vUnits = R.holidayUnits(vClean, "2026-12-01", "2026-12-31");
+eq(vUnits.map(u => u.name), ["Christmas", "New Year's"]);
+const vXmasP = R.holidayUnitCandidates(vClean, vUnits[0], P), vXmasB = R.holidayUnitCandidates(vClean, vUnits[0], B);
+ok(vXmasP.indexOf(KHAN) < 0, "Khan is not a Christmas 2026 primary candidate: " + vXmasP);
+ok(vXmasP.length >= 2, "others remain primary candidates: " + vXmasP);
+ok(vXmasB.indexOf(KHAN) >= 0, "Khan IS a Christmas 2026 backup candidate: " + vXmasB);
+// and without the standing entry he is a primary candidate again (the exclusion is this rule, nothing else)
+const srNoSt = clone(SA.seedToContextInput(seed).surgeonRules); delete srNoSt[KHAN].eastStanding;
+const vNoSt = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, surgeonRules: srNoSt, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, eastBusyDays: {} }));
+ok(R.holidayUnitCandidates(vNoSt, vUnits[0], P).indexOf(KHAN) >= 0, "fixture: without eastStanding he is a Christmas primary candidate (so the exclusion above is V's)");
 
 const total = Date.now() - t0;
 if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }

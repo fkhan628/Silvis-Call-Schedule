@@ -283,3 +283,64 @@ Delivered (data plus one generic builder, no surgeon- or year-specific code):
   wholesale) — mirror them into the seed first, or stop re-importing the blob after go-live. Not done: a smoke step for
   the Add year path (`test/ui/smoke.mjs` is wave 4's file); the flow was observed by lifting the handler's prefill
   expression against the real `helpers.js` instead.
+
+## V. Standing East rule — Khan on Davenport call every Christmas Eve and Christmas Day (Faraz 9/22 evening; wave 5)
+
+Faraz, 9/22 evening, verbatim:
+
+> "Standing East rule: Khan is on Davenport call every Christmas Eve and Christmas Day. Encode as a generic
+> surgeonRules.<id>.eastStanding list - for s1: [{ name: "Christmas", days: ["12-24", "12-25"] }] - treated exactly
+> like a published East busy day in every year, independent of the feed and forecast: Silvis primary excluded, backup
+> allowed per his existing East-day rule. So the Christmas unit never has Khan as primary. rules.test.js case, a
+> regression assertion for 2026 and 2027, and docs/SILVIS-CALL-RULES.md §3 Khan / §5 (already updated in the OneDrive
+> copy - take it from there)."
+
+His follow-up in chat: "That would mean I can never be on at Silvis on Christmas/Christmas Eve" — answered by the rule
+itself: never **primary**; backup stays possible under his East-day rule (`eastFeed.eastBlocksBackup` false).
+Background: the Davenport app's standing rule of 2026-08-06 (FAK covers both Christmas Eve and Christmas Day at
+Davenport every year).
+
+Delivered (data plus one generic rule, no surgeon-specific code):
+- Seed: `surgeonRules.s1.eastStanding = [{ name: "Christmas", days: ["12-24", "12-25"], note }]` next to `eastFeed`;
+  `_meta.revisions`. Nothing else in the seed. The importer drops the note as documentation (dry run:
+  `surgeonRules.s1.eastStanding[0].note -> drop`) and carries `name` + `days` to the blob.
+- `rules.js`: `buildContext` reads the list per surgeon (each day must be `MM-DD` naming a real month/day; a bad day, a
+  nameless entry or a non-list is a `ctx.warnings` line naming the surgeon and the entry, and is ignored; entries on a
+  surgeon whose `eastFeed.enabled` is not true, or whose feature blocks neither role, are ignored with one warning
+  naming the gate — the same gate as busy days; the no-role case was the review's finding) into
+  `P.eastStanding` (`"MM-DD" -> name`) and `P.eastStandingList` (validated, for display). Inside the existing East
+  block of `eligibility()` a standing day is exactly `P.eastBusy.has(date)`: the same hard `east-busy` (no new
+  vocabulary; the UI gloss and the regression's `REASON_PREFIXES` stand), ahead of the forecast (no `east-forecast`
+  soft term, no `east-forecast-busy`) and of `east-unknown` (`rdEastCovered` is true for a standing day); the result
+  carries `eastStanding: <name>`, which the day editor's "Not eligible" line appends to the east-busy gloss
+  ("on East (Davenport) call (standing rule: Christmas, every year)"; review: the field now has a consumer). New pure
+  export `standingEastDays(ctx, id, from, to)`.
+  `holidayUnitCandidates` needed no change: the Christmas unit's primary candidates exclude s1, backup still lists him.
+- `generator.js` (diagnostics only): `diagnostics.eastStandingDays = { [id]: ['YYYY-MM-DD', ...] }` for the run range;
+  a standing day is never listed in `eastUnknownDays`; the browser shim exposes `standingEastDays`. No placement change.
+- UI (`index-source.html`, ASCII): Setup → East card, one read-only line per surgeon with entries
+  (`data-testid="east-standing-<id>"`: "Khan - Standing: Christmas 12-24, 12-25 (every year; ...)"); the day editor's
+  East status line names the entry ("East call (standing rule: Christmas, every year) - Silvis primary blocked").
+  Not done: the My-schedule badge set has no feed-busy badge at all (only the derived "E" and forecast "F"), so there
+  was no badge path to extend; the block is enforced by `rules.js` regardless.
+- Tests: `test/rules.test.js` V block (2026 / 2027 / 2028 primary blocked, backup free, neighbours untouched, forecast
+  0.10 and 0.70 beaten, no coverage → no `east-unknown`, malformed entries and a disabled feature warn and block
+  nothing, `standingEastDays`, Christmas 2026 candidates) plus two reconciled pre-V assertions (the Christmas
+  candidates used to include Khan; the L feed test used 12/25 as a "cleared" day — the FEED still clears it, V blocks
+  it); `test/generator-regression.js` V pin over every stored run whose days include 12/24–25 (50 R2 + 25 R4 + the
+  same-seed R2 run + the bestOf-200 preview; the R4 runs are now kept in `r4Results` — one line in the loop; no new
+  generator range, budget untouched); `test/holidays.test.js` D1 (one run 2027-12-20 → 2028-01-03, seed 5, bestOf 3,
+  800 ms: Khan not primary on 12/24–25, one other surgeon holds the unit both days, `eastStandingDays.s1`, not
+  East-unknown, plus the Christmas 2027 unit candidates).
+- Decisions: same `east-busy` code (no new vocabulary); same gate as busy days (warning when `eastFeed` is off or
+  blocks no role); standing beats forecast and coverage; the standing name rides on the result object, not in the
+  reason list; standing days are NOT added to `P.eastDays` (the Totals "East days" column and East-only tallies count
+  feed days and derived weeks only — unchanged and now said so in the rules doc; the Totals column is outside V's
+  index-source.html scope; say if they should count). The placement pins in the regression and D1 are belt-and-braces
+  (other terms already kept Khan off Christmas in the harness inputs); the candidates lines and the diagnostics field are
+  the assertions that bite — both test files say so. Open for Faraz: a per-year exception is a manual override with the
+  visible warning (not a data field) — confirm that is enough.
+- Live: the seed re-import (dry run → diff shown to Faraz → apply) carries `s1.eastStanding` to the blob; the rule is
+  inert in the app until then (the JSX reads it from the shared setup). Run the re-import only from the merged branch:
+  this wave-5 base's seed lacks the 20 November `schedule_days` and 20 `availability` rows that are live (wave 4
+  carries them), so a dry run from this worktree alone lists them as deletes.

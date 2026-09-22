@@ -215,6 +215,47 @@ eq(seed.holidays.units["2026"].map((u) => ({ name: u.name, days: u.days })), [
   { name: "New Year's", days: ["2026-12-31", "2027-01-01"] }
 ], "seed 2026 units");
 
+/* =================================================================== D */
+// ---- Prompt 12 V (9/22 evening) ----
+// Standing East rule: Khan (s1) is on Davenport call every Christmas Eve and
+// Christmas Day (surgeonRules.s1.eastStanding = Christmas 12-24 + 12-25), so he
+// is never the Christmas unit's PRIMARY in any year; backup stays open. One
+// generator run over Christmas 2027 from the seed: no feed busy days, no
+// forecast, and the synthetic coverage ends 2027-01-31, so December 2027 is
+// outside every feed input - only the standing rule can know about it.
+step("D1: generator 2027-12-20 -> 2028-01-03: Khan is not primary on 12/24 or 12/25; one other surgeon holds the Christmas 2027 unit as primary on both days");
+{
+  const c = makeCtx({ schedule: {} });
+  const out = GEN.generate(c, "2027-12-20", "2028-01-03", { seed: 5, bestOf: 3, timeBudgetMs: 800 });
+  const S = out.schedule, D = out.diagnostics;
+  // (V review) The placement pins below are belt-and-braces: without the key other terms (the
+  // east-unknown soft outside the coverage) already kept Khan off Christmas 2027 in every probed
+  // seed, so a still-green placement line is not proof on its own. The assertions that bite on an
+  // engine without V are diagnostics.eastStandingDays.s1 and the R.holidayUnitCandidates(...)
+  // lines at the end of this block (at HEAD the Christmas 2027 primary candidates were s1..s5).
+  ["2027-12-24", "2027-12-25"].forEach((d) => {
+    ok(S[d], d + " is in the generated range");
+    ok(S[d].primary !== "s1", d + ": Khan is not Silvis primary (standing East call) - got " + JSON.stringify(S[d]));
+  });
+  const p = S["2027-12-24"].primary;
+  ok(p && p !== "s1", "the Christmas 2027 primary is one other surgeon (open slots on the unit: " + JSON.stringify(D.uncovered.filter((u) => u.day === "2027-12-24" || u.day === "2027-12-25")) + ")");
+  eq(S["2027-12-25"].primary, p, "the same primary holds both days of the unit");
+  const hu = D.holidayUnits.find((h) => h.name === "Christmas");
+  ok(hu && hu.days.join(",") === "2027-12-24,2027-12-25", "diagnostics.holidayUnits lists Christmas 2027 as 12/24 + 12/25");
+  eq(hu.primary, p, "diagnostics.holidayUnits primary");
+  ok(hu.primary !== "s1", "...and it is not Khan");
+  eq(D.eastStandingDays && D.eastStandingDays.s1, ["2027-12-24", "2027-12-25"], "diagnostics.eastStandingDays.s1 for the range");
+  ok(!D.eastUnknownDays.some((u) => u.id === "s1" && (u.day === "2027-12-24" || u.day === "2027-12-25")), "the standing days are not listed as East-unknown (outside the feed coverage, yet known)");
+  ok(D.hardViolations.length === 0, "no hard violations: " + JSON.stringify(D.hardViolations));
+  // and at the rules level for the same unit: Khan is no Christmas 2027 PRIMARY candidate, still a BACKUP candidate
+  const xmas27 = R.holidayUnits(c, "2027-12-01", "2027-12-31").find((u) => u.name === "Christmas");
+  eq(xmas27 && xmas27.days, ["2027-12-24", "2027-12-25"], "seed: Christmas 2027 unit");
+  const candP = R.holidayUnitCandidates(c, xmas27, "primary"), candB = R.holidayUnitCandidates(c, xmas27, "backup");
+  ok(candP.indexOf("s1") < 0, "Khan is not a Christmas 2027 primary candidate: " + candP);
+  ok(candP.indexOf(p) >= 0, "the placed primary is a candidate: " + candP);
+  ok(candB.indexOf("s1") >= 0, "Khan IS a Christmas 2027 backup candidate: " + candB);
+}
+
 const total = Date.now() - t0;
 // Same override as test/generator-regression.js for a loaded machine; the default stays 4000 ms.
 const LIMIT_MS = process.env.SILVIS_GEN_BUDGET_MS ? Math.floor(+process.env.SILVIS_GEN_BUDGET_MS) : 4000;

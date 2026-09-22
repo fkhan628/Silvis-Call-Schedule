@@ -409,6 +409,18 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
   `schedule_days`), so mirror Setup holiday edits into `docs/silvis-seed.json` before re-importing, or stop re-importing
   the blob after go-live. 2027: Memorial Day 5/29–5/31, Labor Day 9/4–9/6, July 4 (a Sunday) alone; 2026 left as built
   (the milestone range does not move). Proof: `test/holidays.test.js` (CI step "Holiday unit builder tests").
+- **Standing East rule (Faraz 9/22 evening, Prompt 12 V)**: Khan is on Davenport call every Christmas Eve and Christmas
+  Day, so he is never Silvis **primary** on 12/24–12/25 in any year (backup stays open under his East-day rule). Data,
+  not code: `surgeonRules.<id>.eastStanding = [{ name, days: ["MM-DD"] }]` (s1: Christmas 12-24 + 12-25), read by
+  `rules.buildContext` and applied inside the existing East block of `eligibility()` as the same hard `east-busy`,
+  ahead of the forecast and of `east-unknown`, behind the same gate as busy days — `eastFeed.enabled` blocking a role (a
+  bad day, a nameless entry, a disabled feature or one that blocks no role warns and is ignored); not counted in the
+  Totals "East days" column until the feed carries the day; `rules.standingEastDays(ctx, id, from, to)` lists the
+  concrete days, `diagnostics.eastStandingDays` carries them per run and they are never "East-unknown"; the Setup East
+  card shows a read-only "Standing:" line (`east-standing-<id>`) and the day editor's East line names the entry. No
+  Setup field yet (seed/blob data; the rule is inert in the app until the seed re-import carries the key to the blob);
+  a one-year exception is a manual override with the visible warning. Proof: `test/rules.test.js` V block,
+  `test/generator-regression.js` V pin (every stored run over Christmas 2026), `test/holidays.test.js` D1 (Christmas 2027).
 
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
 

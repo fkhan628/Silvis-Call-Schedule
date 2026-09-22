@@ -35,6 +35,14 @@
 //   eastBusyDays  { [surgeonId]: Array | Set | { 'YYYY-MM-DD': truthy } |
 //                 { busy: Set, reasons } } - the last is deriveKhanBusyDays()'s
 //                 own return shape.
+//   surgeonRules[id].eastStanding  [{ name, days: ['MM-DD'] }] (Prompt 12 V,
+//                 9/22 evening) - standing East call in EVERY year (Khan:
+//                 Christmas 12-24 + 12-25), treated like a published busy day:
+//                 the same hard 'east-busy' for the roles East blocks, ahead of
+//                 the forecast and of east-unknown; ignored with a warning
+//                 unless eastFeed.enabled blocks a role (eastBlocksPrimary /
+//                 eastBlocksBackup); standingEastDays(ctx, id, from, to)
+//                 lists the concrete days of a range.
 //   surgeonRules[id].explicitListMonths  ['YYYY-MM', ...] or { month, roles }.
 //                 The role scope is read literally (Prompt 12 I + T, 9/22): a
 //                 plain 'YYYY-MM' entry governs PRIMARY only (backup is open to
@@ -442,6 +450,11 @@ function buildContext(input) {
       blocksBackup: !!ef.eastBlocksBackup,
       eastBusy: rdBusySet(ctx, id, input.eastBusyDays && input.eastBusyDays[id]),
       eastForecast: (input.eastForecast && input.eastForecast[id]) || null,
+      // Prompt 12 V (9/22 evening): surgeonRules.<id>.eastStanding [{ name, days: ["MM-DD"] }] -
+      // standing East call in EVERY year (Khan: Christmas 12-24 + 12-25), treated like a
+      // published busy day: "MM-DD" -> entry name, plus the validated list for display.
+      eastStanding: new Map(),
+      eastStandingList: [],
       derived: Object.create(null), // date -> forced Silvis role
       eastDays: new Set(),          // every day he holds ANY East call (busy days + derived weeks) - display / East-only tallies
       // 9/22 (Prompt 12 K): the days of his East PRIMARY weeks only (derived Silvis
@@ -480,6 +493,25 @@ function buildContext(input) {
     };
     if (rules.primaryContribution !== undefined && rules.primaryContribution !== null && rules.primaryContribution !== "" && P.contribution === null) {
       ctx.warnings.push("surgeonRules." + id + ".primaryContribution = " + JSON.stringify(rules.primaryContribution) + " is not a value the engine knows (Prompt 12 L: only \"weekends\"): ignored - no contribution term for this surgeon");
+    }
+    // Prompt 12 V (9/22 evening): standing East days. The same gate as busy days (the
+    // surgeon's East feature must be on AND block at least one role - blocksPrimary /
+    // blocksBackup - or the entries could never act); a bad entry is a warning and is
+    // ignored - never a silent block, never a silent pass.
+    if (rules.eastStanding !== undefined && rules.eastStanding !== null) {
+      if (!Array.isArray(rules.eastStanding)) ctx.warnings.push("surgeonRules." + id + ".eastStanding is not a list (Prompt 12 V): ignored - use [{ name, days: [\"MM-DD\"] }]");
+      else if (!P.eastEnabled || (!P.blocksPrimary && !P.blocksBackup)) { if (rules.eastStanding.length) ctx.warnings.push("surgeonRules." + id + ".eastStanding ignored - enable surgeonRules." + id + ".eastFeed with eastBlocksPrimary or eastBlocksBackup (a standing day is a published East busy day, and busy days act only for the roles a surgeon's East feature blocks)"); }
+      else rules.eastStanding.forEach(function (e, idx) {
+        var name = e && typeof e.name === "string" && e.name.trim() ? e.name.trim() : null;
+        var days = e && Array.isArray(e.days) ? e.days : null;
+        if (!name || !days || !days.length) { ctx.warnings.push("surgeonRules." + id + ".eastStanding[" + idx + "]: ignored - needs { name, days: [\"MM-DD\"] } (got " + JSON.stringify(e) + ")"); return; }
+        var good = [];
+        days.forEach(function (md) {
+          if (rdValidMonthDay(md)) { good.push(md); P.eastStanding.set(md, name); }
+          else ctx.warnings.push("surgeonRules." + id + ".eastStanding[" + idx + "] (" + name + "): ignored day " + JSON.stringify(md) + " - use \"MM-DD\" with a real month and day");
+        });
+        if (good.length) P.eastStandingList.push({ name: name, days: good.slice().sort() });
+      });
     }
     // (N review) weekendBlockPenalty: a weight name ("strong", "medium", ...) or a number is
     // applied as given; anything else falls back to weights.medium inside resolveWeight - say
@@ -619,8 +651,40 @@ function rdWeekHasAledo(rules, mondayStr) {
   return false;
 }
 
+// "MM-DD" naming a real month and day (02-29 counts: it exists in leap years).
+function rdValidMonthDay(md) {
+  if (typeof md !== "string" || !/^\d{2}-\d{2}$/.test(md)) return false;
+  var m = +md.slice(0, 2), d = +md.slice(3, 5);
+  return m >= 1 && m <= 12 && d >= 1 && d <= rdDaysInMonth(2000, m);
+}
+
+// The standing East entry (its name) that covers `date` for this surgeon, or null (Prompt 12 V).
+function rdStandingName(P, date) {
+  return P.eastStanding.size ? (P.eastStanding.get(date.slice(5)) || null) : null;
+}
+
+// standingEastDays(ctx, surgeonId, from, to) -> the concrete 'YYYY-MM-DD' days of the
+// surgeon's standing East entries inside [from, to], every year in the range, sorted
+// (Prompt 12 V; the generator's diagnostics and the UI read it). [] for an unknown
+// surgeon, no entries or an empty range; a 02-29 entry appears in leap years only.
+function standingEastDays(ctx, surgeonId, from, to) {
+  var P = ctx && ctx.per ? ctx.per[surgeonId] : null;
+  var out = [];
+  if (!P || !P.eastStanding.size || typeof from !== "string" || typeof to !== "string" || from > to) return out;
+  var y0 = +from.slice(0, 4), y1 = +to.slice(0, 4);
+  for (var y = y0; y <= y1; y++) {
+    P.eastStanding.forEach(function (name, md) {
+      if (+md.slice(3, 5) > rdDaysInMonth(y, +md.slice(0, 2))) return;
+      var d = y + "-" + md;
+      if (d >= from && d <= to) out.push(d);
+    });
+  }
+  return out.sort();
+}
+
 function rdEastCovered(ctx, P, info) {
   if (P.eastBusy.has(info.s)) return true;
+  if (rdStandingName(P, info.s)) return true; // Prompt 12 V: a standing East day is known, feed or no feed
   if (P.eastForecast && P.eastForecast[info.s] != null) return true;
   if (!ctx.eastCoverage) return false;
   return info.n >= ctx.eastCoverage.fromN && info.n <= ctx.eastCoverage.toN;
@@ -770,7 +834,11 @@ function rdStatic(ctx, date, role, id, asBlock) {
 
   // East feed: busy days / forecast / unknown for the roles East blocks.
   if (P.eastEnabled && (role === "primary" ? P.blocksPrimary : P.blocksBackup)) {
-    if (P.eastBusy.has(date)) hard.push("east-busy");
+    // Prompt 12 V (9/22 evening): a standing East day (surgeonRules.<id>.eastStanding, every
+    // year) is a published busy day - the same hard code, ahead of the forecast and of
+    // east-unknown; res.eastStanding carries the entry's name for the day editor.
+    var standing = rdStandingName(P, date);
+    if (P.eastBusy.has(date) || standing) { hard.push("east-busy"); if (standing) res.eastStanding = standing; }
     else {
       var prob = P.eastForecast ? P.eastForecast[date] : undefined;
       if (typeof prob === "number") {
@@ -877,8 +945,9 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // collected (as `conflicts`) so the caller can warn, but the result is ok.
   var importHolder = !!(entry && entry[role + "Locked"] && entry[role] === surgeonId);
   function blockedResult() {
-    if (importHolder) return { ok: true, hard: [], soft: soft, lockHolder: true, conflicts: hard };
-    return { ok: false, hard: hard, soft: soft };
+    var out = importHolder ? { ok: true, hard: [], soft: soft, lockHolder: true, conflicts: hard } : { ok: false, hard: hard, soft: soft };
+    if (st.eastStanding) out.eastStanding = st.eastStanding; // Prompt 12 V: the standing East entry's name (the reason itself stays "east-busy")
+    return out;
   }
   if (hard.length) return blockedResult();
 
@@ -1336,6 +1405,7 @@ if (typeof module !== "undefined") {
     talliesFor: talliesFor,
     runThrough: rdRunThrough,
     monthlyCapFor: monthlyCapFor,
+    standingEastDays: standingEastDays,
     rdFmt: rdFmt,
     rdParse: rdParse,
     rdAddDays: rdAddDays,
