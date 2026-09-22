@@ -4021,6 +4021,10 @@ function CallSchedule() {
         td[data-flag="over"], span[data-flag="over"] { color: #f06060 !important; }
         td[data-flag="under"], span[data-flag="under"] { color: #5aafe8 !important; }
         td[data-flag="ok"], span[data-flag="ok"] { color: #40c060 !important; }
+        /* Prompt 13 fix round: the .table-wrap swipe-hint covers are painted in the light card white (#ffffff)
+           in the <head> rule; under dark mode they repaint in the dark card colour so the first column stays
+           readable at 390 px (positions / sizes / attachment come from the light rule - only the images change) */
+        .table-wrap { background-image: linear-gradient(90deg, #16213e 30%, rgba(22,33,62,0)), linear-gradient(90deg, rgba(22,33,62,0), #16213e 70%), radial-gradient(farthest-side at 0 50%, rgba(0,0,0,0.55), rgba(0,0,0,0)), radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,0.55), rgba(0,0,0,0)) !important; }
       `}</style>}
 
       {/* --- Auth Gate --- */}

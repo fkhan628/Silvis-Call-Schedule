@@ -12,7 +12,9 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron with body `{"mode":"open-shifts"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
-function. Nothing in this folder has been deployed yet.
+function. All four functions were first deployed on 9/22 (verify_jwt off); the
+Prompt 13 changes to `send-notification` and `daily-reminder` are NOT live until
+redeployed (section 3) - confirm with `supabase functions list`.
 
 ## 0. Prerequisites
 

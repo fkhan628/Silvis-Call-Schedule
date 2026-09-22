@@ -20,7 +20,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. |
-| `audit_log` | Who did what; insert by any authenticated user, read by scheduler/admin. |
+| `audit_log` | Who did what; insert by any authenticated user, read by scheduler/admin. Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`). |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |

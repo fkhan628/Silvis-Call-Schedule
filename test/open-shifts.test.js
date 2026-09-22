@@ -1030,5 +1030,118 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   });
 }
 
+/* ------------------------------------------------------------------ */
+/* Part 6 - docs pins. The guide's section 16 sub-headings, the README */
+/* cron job, the ONBOARDING paragraph, the two audit-action lists and  */
+/* the prompt text on file. Docs are part of the contract here: the    */
+/* orchestrator applies the schema, deploys and creates the cron job   */
+/* BY HAND from these pages, so a missing line is a missing live step. */
+/* ------------------------------------------------------------------ */
+{
+  const readDoc = (...p) => { const f = path.join(ROOT, ...p); return fs.existsSync(f) ? fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n") : null; };
+  const guide = readDoc("docs", "SILVIS-BUILD-GUIDE.md") || "";
+  const readme = readDoc("edge-functions", "README.md") || "";
+  const onboarding = readDoc("docs", "ONBOARDING.md") || "";
+  const status = readDoc("docs", "STATUS-2026-09-22.md") || "";
+  const schemaReview = readDoc("docs", "SCHEMA-REVIEW.md") || "";
+  const prompt13 = readDoc("docs", "PROMPT-13-OPEN-SHIFTS.md");
+  const HEADS = ["### 16.1 The single definition", "### 16.2 The claim boundary", "### 16.3 The three notification paths", "### 16.4 The cron job", "### 16.5 What is NOT automatic"];
+  const sub = (n) => { const i = guide.indexOf("\n" + HEADS[n - 1]); const j = n < HEADS.length ? guide.indexOf("\n" + HEADS[n]) : -1; assert.ok(i > 0, "sub-heading " + HEADS[n - 1]); return guide.slice(i, j > 0 ? j : undefined); };
+
+  check("docs/SILVIS-BUILD-GUIDE.md: section 16 carries the five sub-headings 16.1 The single definition .. 16.5 What is NOT automatic, in order, all after the '## 16.' heading (the last H2)", () => {
+    const s16 = guide.indexOf("\n## 16. Open shifts");
+    assert.ok(s16 > 0, "the '## 16. Open shifts' heading");
+    assert.strictEqual(guide.indexOf("\n## ", s16 + 1), -1, "section 16 is the last H2");
+    let last = s16;
+    HEADS.forEach(h => { const i = guide.indexOf("\n" + h); assert.ok(i > last, "missing or out of order: " + h); last = i; });
+    assert.strictEqual((guide.match(/\n### 16\.\d/g) || []).length, HEADS.length, "exactly five 16.x sub-headings");
+  });
+  check("guide 16.1 names openSlots as the one definition; 16.2 states the boundary (eligibility() in the client before the button, NOT in SQL; claim_open_slot guards integrity and logs schedule.claim); 16.3 names the three paths with category open_shifts, pref schedule_updates_email, audit openshifts.notify, mode open-shifts + job silvis-open-shifts-weekly, and shift_claimed on a claim", () => {
+    assert.ok(/openSlots\(schedule, from, to, today/.test(sub(1)) && /helpers\.js/.test(sub(1)), "16.1");
+    const s2 = sub(2);
+    assert.ok(/eligibility\(\)/.test(s2) && /NOT in\s+SQL/.test(s2) && /claim_open_slot/.test(s2) && /schedule\.claim/.test(s2) && /CL001/.test(s2), "16.2");
+    const s3 = sub(3);
+    assert.ok(/Accept & Publish/.test(s3) && /Email the group now/.test(s3) && /Monday/.test(s3), "16.3 names publish / on demand / Monday");
+    assert.ok(/`open_shifts`/.test(s3) && /`schedule_updates_email`/.test(s3) && /`openshifts\.notify`/.test(s3) && /`open-shifts`/.test(s3) && /`silvis-open-shifts-weekly`/.test(s3) && /`shift_claimed`/.test(s3), "16.3 names");
+    // fix round: '0 12 * * 1' has no DST adjustment - 16.3 must state the UTC hour with both Central halves next to Faraz's 'Monday 07:00 Central'
+    assert.ok(/Monday 07:00 Central\*\* \(12:00 UTC: 07:00 CDT \/\s+06:00 CST/.test(s3), "16.3 states 12:00 UTC = 07:00 CDT / 06:00 CST beside 'Monday 07:00 Central'");
+  });
+  check("guide 16.4 carries the cron job SQL verbatim (job name, '0 12 * * 1', the Vault lookup, the open-shifts body) and 16.5 says schema apply, deploys and the cron job are done by hand - a git push does none of them", () => {
+    const s4 = sub(4);
+    assert.ok(s4.indexOf("cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $") > 0, "16.4 job line");
+    assert.ok(/vault\.decrypted_secrets where name = 'silvis_cron_secret' limit 1\), 'unset'\)\)/.test(s4), "16.4 Vault lookup");
+    assert.ok(s4.indexOf("body := '{\"mode\":\"open-shifts\"}'::jsonb") > 0, "16.4 body");
+    const s5 = sub(5);
+    assert.ok(/by hand/.test(s5) && /git push/.test(s5) && /deploy/.test(s5) && /cron\.schedule|cron job/.test(s5) && /migration|schema/.test(s5), "16.5");
+  });
+  check("edge-functions/README.md names the cron job silvis-open-shifts-weekly (true since part 5 - this pin cannot fail before part 6; it keeps the guide and the README in step)", () => {
+    assert.ok(/silvis-open-shifts-weekly/.test(readme), "README job name");
+    assert.ok(/silvis-open-shifts-weekly/.test(guide), "guide job name");
+  });
+  check("edge-functions/README.md states the deployed state truthfully: the four functions were first deployed on 9/22, the Prompt 13 changes are NOT live until redeployed, confirmed with 'supabase functions list' - never 'Nothing in this folder has been deployed yet'", () => {
+    assert.ok(!/Nothing in this folder has been deployed yet/.test(readme), "the stale 'Nothing in this folder has been deployed yet' sentence is gone");
+    assert.ok(/first deployed on 9\/22/.test(readme) && /NOT live until\s+redeployed/.test(readme) && /supabase functions list/.test(readme), "the deployed-state sentence names the first deploy, the not-yet-live changes and the confirming command");
+  });
+  check("docs/ONBOARDING.md tells surgeons about the Open shifts tab: 'Take this shift' is immediate and logged, the scheduler can still reassign, and the button is gated by the HARD rules (monthly and backup caps included) - it never claims caps do not block", () => {
+    assert.ok(/\*\*Open shifts\*\*/.test(onboarding), "names the tab in bold");
+    assert.ok(/Take this shift/.test(onboarding), "names the button");
+    assert.ok(/immediate/.test(onboarding) && /logged/.test(onboarding), "'immediate' and 'logged'");
+    assert.ok(/reassign/.test(onboarding), "the scheduler can still reassign");
+    // fix round: rules.js pushes monthly-cap / backup-cap / backup-weekend-cap and the weekday patterns as HARD reasons - only soft preferences are warnings
+    assert.ok(/hard schedule rules allow it/.test(onboarding) && /monthly and backup caps/.test(onboarding), "says the button is offered only when the hard rules allow it, naming the monthly and backup caps");
+    assert.ok(!/caps[^.]*do not block/i.test(onboarding), "must not tell surgeons that caps do not block (the monthly cap is a hard eligibility rule)");
+  });
+  check("index-source.html: the dark-mode style block overrides the .table-wrap swipe-hint covers with the dark card colour - no #ffffff / white cover under dark mode", () => {
+    const appSrc = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const i = appSrc.indexOf("{darkMode && <style>{`"), j = appSrc.indexOf("`}</style>}", i);
+    assert.ok(i > 0 && j > i, "the darkMode <style> block");
+    const darkCss = appSrc.slice(i, j);
+    const rule = (/\.table-wrap \{[^}]*\}/.exec(darkCss) || [])[0] || "";
+    assert.ok(rule, "a .table-wrap rule inside the darkMode style block");
+    assert.ok(/#16213e/.test(rule) && /background-image/.test(rule) && /!important/.test(rule), "the dark rule repaints the covers in the dark card colour #16213e: " + rule.slice(0, 160));
+    assert.ok(!/#fff|255,\s*255,\s*255/.test(rule), "no white left in the dark .table-wrap rule");
+  });
+  check("the audit-action lists carry schedule.claim (written by the SQL function) and openshifts.notify (client): docs/STATUS-2026-09-22.md section 6 and docs/SCHEMA-REVIEW.md (a) audit_log", () => {
+    const i6 = status.indexOf("\n## 6."), i7 = status.indexOf("\n## 7.");
+    assert.ok(i6 > 0 && i7 > i6, "STATUS sections 6 and 7");
+    const s6 = status.slice(i6, i7);
+    assert.ok(/`schedule\.claim`/.test(s6) && /`openshifts\.notify`/.test(s6), "STATUS section 6");
+    assert.ok(/SQL function/.test(s6), "STATUS says the SQL function writes schedule.claim");
+    const row = (schemaReview.split("\n").find(l => /^\| `audit_log` \|/.test(l)) || "");
+    assert.ok(/`schedule\.claim`/.test(row) && /`openshifts\.notify`/.test(row), "SCHEMA-REVIEW table (a) audit_log row lists both: " + row.slice(0, 160));
+  });
+  check("docs/PROMPT-13-OPEN-SHIFTS.md is on file: the title, the six numbered parts in order, the cron job", () => {
+    assert.ok(prompt13, "docs/PROMPT-13-OPEN-SHIFTS.md exists");
+    assert.ok(/^# Prompt 13 /.test(prompt13), "title");
+    let last = -1;
+    for (let n = 1; n <= 6; n++) { const m = new RegExp("\\n" + n + "\\. [A-Z]").exec(prompt13); assert.ok(m && m.index > last, "part " + n + " in order"); last = m.index; }
+    assert.ok(prompt13.indexOf("cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $") > 0, "the cron job");
+  });
+  check("no address-shaped string in the part 6 docs outside the @example.test / @example.com fixtures (guide, README, ONBOARDING, STATUS, SCHEMA-REVIEW, PROMPT-13)", () => {
+    const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g;
+    const hits = [];
+    [["guide", guide], ["README", readme], ["ONBOARDING", onboarding], ["STATUS", status], ["SCHEMA-REVIEW", schemaReview], ["PROMPT-13", prompt13 || ""]].forEach(([n, t]) => {
+      (t.match(EMAIL) || []).forEach(m => { if (!/@example\.(test|com)$/.test(m)) hits.push(n + ": " + m.replace(/[A-Za-z0-9]/g, "x")); });
+    });
+    assert.deepStrictEqual(hits, [], "address-shaped strings (masked)");
+  });
+  check("test/ui/smoke.mjs covers the board at 390 px in BOTH themes with the same probe (swipe-hint wrapper, buttons >= 36 px) and writes the six screenshots openshifts.png, -sheet, -email-preview, -390, -dark, -390-dark", () => {
+    const smoke = readDoc("test", "ui", "smoke.mjs") || "";
+    ["openshifts.png", "openshifts-sheet.png", "openshifts-email-preview.png", "openshifts-390.png", "openshifts-dark.png", "openshifts-390-dark.png"].forEach(f => assert.ok(smoke.indexOf(`"${f}"`) > 0, "screenshot " + f));
+    const dark = smoke.slice(smoke.indexOf("const m2 = await mobileProbe()"), smoke.indexOf('"openshifts-390-dark.png"'));
+    assert.ok(dark.length > 0, "the dark 390 probe precedes its screenshot");
+    assert.ok(/table-wrap/.test(dark) && /swipe sideways/.test(dark) && /minBtn/.test(dark) && /rgb\\\(26, 26, 46\\\)/.test(dark), "the dark 390 pass checks the wrapper hint, the button height and the dark body like the light pass");
+    // fix round: the probe reads the wrapper's computed background-image and the dark pass fails on a white cover
+    assert.ok(/wrapBg: wrap \? getComputedStyle\(wrap\)\.backgroundImage/.test(smoke), "mobileProbe returns the wrapper's computed backgroundImage as wrapBg");
+    assert.ok(/rgb\\\(255, 255, 255\\\)\/\.test\(m2\.wrapBg\)/.test(dark), "the dark 390 pass fails when the swipe-hint cover is white");
+    // fix round: the 'ok screenshots' line is earned - every file must exist, be fresh (this run) and stay under 300 KB
+    assert.ok(/screenshots missing or stale/.test(smoke) && /300 \* 1024/.test(smoke), "the screenshot ok line is guarded by existence, mtime and the 300 KB size rule");
+    // fix round: review screenshots carry no harness artefacts - openshifts.png is taken BEFORE Copy list, the sheet is a viewport shot after the toast is dismissed
+    assert.ok(smoke.indexOf('"openshifts.png"') < smoke.indexOf('page.click("[data-testid=ob-copy]")'), "openshifts.png is taken before the Copy list click (no 'Copied' toast over the rows)");
+    assert.ok(/"openshifts-sheet\.png"\), fullPage: false/.test(smoke), "the confirm-sheet screenshot is a viewport shot (no full-page stitching band under a fixed overlay)");
+    assert.ok(/const clearToast = /.test(smoke) && (smoke.match(/await clearToast\(\)/g) || []).length >= 4, "the harness dismisses the toast before each review screenshot");
+  });
+}
+
 console.log(`\nopen-shifts: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

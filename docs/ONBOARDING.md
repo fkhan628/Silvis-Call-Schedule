@@ -43,6 +43,16 @@ or in the app ever needs an address typed anywhere except the Supabase dashboard
 4. Tell them: **Time off** is self-service (no approval) and is refused over a day they are already published — trade
    first. **Trades** are by day and role. Their calendar subscription URL is in **Settings → Live Calendar Sync**.
 
+**Open shifts (tell every surgeon).** The **Open shifts** tab lists every unfilled primary or backup slot from today to
+the end of the published schedule, with the weekend or holiday unit it belongs to, why it is open, and who is eligible
+right now; the count sits on the tab as a badge. **Take this shift** is immediate and logged: the moment they confirm,
+the day is theirs (no approval step, no waiting for the scheduler), it shows on everyone's calendar and in the feed,
+the scheduler and the surgeon each get an e-mail, and the audit log keeps the entry. The button is offered only when the
+hard schedule rules allow it (their OR / outreach days, monthly and backup caps, vacations, holiday opt-outs). Soft
+preferences are shown as warnings on the confirm sheet but do not block. The scheduler can still reassign the
+day from the day editor afterwards. The group is also e-mailed on publish and every Monday morning while any shift in
+the next 30 days is open (covered by the "Schedule published / changes affecting me" e-mail preference in Settings).
+
 Roles: `admin` (everything, including user links and roles), `scheduler` (generate, publish, edit, import, snapshots),
 `surgeon` (own vacations, propose/accept trades, own preferences), `viewer` (read-only — the ER-panel author).
 

@@ -505,7 +505,14 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
 
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
 
-After generation some slots may stay open. One pure definition — `openSlots(schedule, from, to, today, opts)` in
+After generation some slots may stay open. Prompt 13 (`docs/PROMPT-13-OPEN-SHIFTS.md`) gives the group one list of
+them, lets any surgeon take one, and tells everyone while any remain. Five things to know, in order: what "open"
+means (16.1), where the claim is checked (16.2), how the group hears about it (16.3), the cron job (16.4), and what a
+`git push` does NOT do (16.5).
+
+### 16.1 The single definition
+
+One pure definition — `openSlots(schedule, from, to, today, opts)` in
 `helpers.js` → `[{ day, role, unit, reason }]` for every day in `[from, to]` (inclusive) that is `>= today` (inclusive;
 the Prompt 12 rule that days before today are never open) where the role is unassigned: **primary** = no `primary_id`
 AND no `external_cover`; **backup** = no `backup_id`; a day with NO row inside the range is open in both roles; sorted
@@ -527,15 +534,7 @@ the coverage strip (`suCoverageGlance` computes its open lists through it), the 
 remains only the per-cell rendering of the same rule), a new **Open shifts** view
 (nav badge with the count; table of open slots from today to the end of the published range with weekday, role, unit,
 the generator's operational reason, who is eligible now, when it was last announced), and the notifications.
-**Any surgeon may claim** an open slot ("Take this shift"): the client offers the button only when `eligibility()`
-passes the hard rules (soft-rule warnings are shown, not blocking); the write goes through a security-definer
-`claim_open_slot(day, role)` that guards data integrity (open, unlocked, not past, not external-covered, distinct roles,
-no vacation conflict, inside the published range), logs `schedule.claim`, and adds an in-app feed row. The scheduler
-assigns from the day editor as before, or writes in outside cover. **The group is told** on Accept & Publish when open
-slots remain (`send-notification` category `open_shifts`, honouring `schedule_updates_email`), on demand from the board
-("Email the group now", logged as `openshifts.notify`), and every **Monday 07:00 Central** while any open slot lies in
-the next 30 days (`daily-reminder` mode `open-shifts`, cron job `silvis-open-shifts-weekly`, Vault secret like the
-others). Reasons persisted in `call_schedule_data.data.lastGenerate` are operational wording only (anon-readable blob).
+After this prompt there is no second place that decides what "open" means.
 
 **Why it is open (Prompt 13 part 4).** Accept & Publish, once the CAS write of the generated days succeeded, stores
 `helpers.lastGenerateFromDiagnostics(diagnostics, at)` as blob key `call_schedule_data.data.lastGenerate =
@@ -558,22 +557,127 @@ unit patterns read this record, and a live preview overlays the slots and weeken
 earlier generate that lies outside the newest range stays listed on the board but its Why column reads `-` until the
 slot is filled or regenerated.
 
+### 16.2 The claim boundary
+
+**Any surgeon may claim** an open slot ("Take this shift"): the client offers the button only when `eligibility()`
+passes the hard rules (soft-rule warnings are shown, not blocking); the write goes through a security-definer
+`claim_open_slot(day, role)` that guards data integrity (open, unlocked, not past, not external-covered, distinct roles,
+no vacation conflict, inside the published range), logs `schedule.claim`, and adds an in-app feed row. The scheduler
+assigns from the day editor as before, or writes in outside cover.
+
 **The claim boundary (Prompt 13 part 2).** The JS eligibility rules (OR days, Clinton/Aledo days, caps, weekday
 patterns, consecutive runs, East busy days, holiday opt-outs) are enforced in the client before the "Take this shift"
 button is offered - `eligibility()` must pass the hard rules; soft-rule warnings are shown, not blocking - and NOT in
 SQL. `claim_open_slot(p_day, p_role)` guards data integrity only: linked caller, valid role, not past in Central time,
 inside the published range (`min(day)..max(day)` of `schedule_days`), open, not external-covered for primary,
 unlocked, distinct roles, no vacation conflict (including the day before a primary shift), each refusal with its own
-SQLSTATE `CL001`-`CL009` and a token-prefixed message that part 3 must surface verbatim (today `describeDbError` passes
-only `ON_CALL_CONFLICT` / `TRADE_*` through; part 3 extends its two regexes with `CLAIM_[A-Z_]+` and adds
-`shift_claimed` to the notification `tabMap`) - and it logs everything (`audit_log` `schedule.claim`, `notifications`
-`shift_claimed`) in the same transaction as the `version + 1` write. For six surgeons that is the accepted boundary: a
-claim that slips past a client rule is visible in the audit log and the feed, and the scheduler corrects it from the
-day editor, which is untouched. Open for Faraz: a claim sets `source = 'claim'` and no lock flag, and Generate keeps only
-locked slots, so a later Generate over a claimed day discards the claim unless the claim also locks the role or Generate
-treats `claim` days as locked (`docs/SCHEMA-REVIEW.md`, review note 5). Definition in `sql/schema.sql` right after
-`apply_trade()`, applied live only through `sql/migrations/2026-09-22-claim-open-slot.sql` (never by a git push), proven
-by the rolled-back `sql/probes/claim-open-slot-probe.sql` and `scripts/verify-rls.sh` section 7 (`docs/SCHEMA-REVIEW.md`).
+SQLSTATE `CL001`-`CL009` and a token-prefixed message that part 3 surfaces verbatim (`describeDbError` passes
+`ON_CALL_CONFLICT` / `TRADE_*` / `CLAIM_*` through; `shift_claimed` is in the notification `tabMap`) - and it logs
+everything (`audit_log` `schedule.claim`, `notifications` `shift_claimed`) in the same transaction as the
+`version + 1` write. The client never writes `schedule_days`, the audit row or the feed row for a claim itself; it
+logs `schedule.claim` only with `outcome: "failed"` when the function refused. For six surgeons that is the accepted
+boundary: a claim that slips past a client rule is visible in the audit log and the feed, and the scheduler corrects it
+from the day editor, which is untouched. Open for Faraz: a claim sets `source = 'claim'` and no lock flag, and Generate
+keeps only locked slots, so a later Generate over a claimed day discards the claim unless the claim also locks the role
+or Generate treats `claim` days as locked (`docs/SCHEMA-REVIEW.md`, review note 5). Definition in `sql/schema.sql`
+right after `apply_trade()`, applied live only through `sql/migrations/2026-09-22-claim-open-slot.sql` (never by a
+git push), proven by the rolled-back `sql/probes/claim-open-slot-probe.sql` and `scripts/verify-rls.sh` section 7
+(`docs/SCHEMA-REVIEW.md`).
+
+### 16.3 The three notification paths
+
+**The group is told** on Accept & Publish when open
+slots remain (`send-notification` category `open_shifts`, honouring `schedule_updates_email`), on demand from the board
+("Email the group now", logged as `openshifts.notify`), and every **Monday 07:00 Central** (12:00 UTC: 07:00 CDT /
+06:00 CST, see 16.4) while any open slot lies in
+the next 30 days (`daily-reminder` mode `open-shifts`, cron job `silvis-open-shifts-weekly`, Vault secret like the
+others). Reasons persisted in `call_schedule_data.data.lastGenerate` are operational wording only (anon-readable blob).
+
+The three paths, and the message that follows a claim, in detail (Prompt 13 part 5):
+
+1. **On Accept & Publish (5a).** The notice is a property of Accept & Publish, not of the office e-mail: Accept arms it
+   once the generated days are on file; it goes out after the office publish POST succeeded (on Send), or once on Skip /
+   closing the publish dialog. The client computes `openSlots` over the schedule ON FILE from today to the last
+   contiguous published day; nothing goes out when the range is fully covered. Otherwise it writes one `notifications`
+   row (type `open_shifts`, title = the subject `N open shifts through M/D`, `data.slots = [{ day, role }]`,
+   `data.through`, `data.origin: "publish"`), then POSTs `send-notification` category `open_shifts` as a **broadcast** (no
+   `targetIds`; the function resolves every linked account and gates each recipient on `schedule_updates_email`; frame
+   title "Open Shifts", call to action "Open shifts"), then logs `openshifts.notify` with
+   `{ count, through, origin, slots, email: "sent N" | "not enabled" | "failed" }`. The message is the Copy-list lines
+   grouped under `Week of Mon M/D:` headings; the detail line is the deep link `Take this shift: <app>#openshifts`. A
+   failure is reported in the Published toast and never undoes the publish; the board's button is the retry.
+2. **On demand (5b).** "Email the group now" on the board (scheduler only) opens a confirm dialog with a **Preview** of
+   the subject, the week-grouped list and the deep link, writes nothing until Send, then runs the same three writes with
+   `origin: "board"`. The board's "last announced" column reads the most recent `open_shifts` feed row whose
+   `data.slots` contains that day + role (the rows are fetched auth-only when the board opens; a fresh session reads
+   `never` until the first notice).
+3. **Monday cron (5c).** `daily-reminder` with body `{"mode":"open-shifts"}`, behind the same `x-cron-secret` gate and
+   `dryRun` contract as the hourly reminder (an unknown mode is a 400, an absent mode is the hourly reminder, unchanged).
+   It reads `schedule_days` for `[today, today+30]` in Central time, computes the open slots with the TypeScript mirror
+   of `openSlots` (pinned to the same fixture by `test/open-shifts.test.js`), answers `200 { open: 0, sent: 0 }` when
+   nothing is open, else e-mails every linked surgeon whose `schedule_updates_email` is not false (addresses from
+   `user_profiles` via the service role, results keyed by `person_id` only) and inserts the `notifications` row
+   `{ type: 'open_shifts', data: { slots, through, source: 'cron' } }` that "last announced" reads. `dryRun` composes,
+   sends nothing and writes no feed row. A day WITHOUT a `schedule_days` row is never announced by the cron: it is not
+   published and `claim_open_slot` refuses it. The job is `silvis-open-shifts-weekly` (16.4).
+4. **After a claim (5d).** The in-app feed row (`shift_claimed`, title `<Name> took <M/D> <role>`) comes from the SQL
+   function. The client then sends `send-notification` category `shift_claimed` to the scheduler(s) (roles
+   `scheduler` / `admin`, looked up, never hardcoded) plus the claimer - `targetIds`, never a broadcast. The office learns
+   of it through the existing weekly digest diff.
+
+Preferences and the feed: all four categories (`open_shifts`, `shift_claimed`, alongside `schedule_published` and
+`manual_edit`) ride the one preference `schedule_updates_email` ("Schedule published / changes affecting me" in
+Settings); a missing preference row means on. In the feed, `open_shifts` rows show to everyone and open the Open shifts
+tab when tapped (`tabMap` `open_shifts` → `openshifts`); `shift_claimed` rows reach the claimer (`data.surgeon_id`) and
+the scheduler, who sees everything, and open the calendar. No message on any path carries an address, an id-plus-reason
+pair or free text from the diagnostics: subjects and lines are built from `openSlotsLine` and the fixed reason
+categories of 16.1 (`test/fixtures/open-shifts-email.json` pins the composition for the client and the function alike).
+
+### 16.4 The cron job
+
+Pasted once in the SQL editor by Faraz, after the secret is in Vault and `daily-reminder` is deployed (order: secret →
+function → cron, so nothing ever runs ungated). `12:00 UTC` = Monday 07:00 CDT / 06:00 CST. Verbatim, as in
+`edge-functions/README.md` section 4 next to the other two jobs:
+
+```sql
+select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $
+  select net.http_post(
+    url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder',
+    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+      coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+    body := '{"mode":"open-shifts"}'::jsonb);
+$);
+
+select jobid, jobname, schedule, active from cron.job;                 -- expect three rows
+```
+
+The secret is read from Vault (`vault.create_secret('<value>', 'silvis_cron_secret')` once; the other two live jobs read
+it the same way since 9/22), so `cron.job.command` holds only the lookup. Proof after the deploy: one `dryRun` POST
+(`{"mode":"open-shifts","dryRun":true}`) through pg_net or curl with the 200 body quoted; the function answers
+`{ open: 0, sent: 0 }` when nothing in the window is open, so the job is safe to leave running. Rotation and the
+fail-closed 401 behaviour are in the README (section 4, Notes).
+
+### 16.5 What is NOT automatic
+
+A `git push` to `main` redeploys the PWA and nothing else. Everything below is done by hand, in this order, and each
+step is proven by observing it (a real row, a quoted 200 body, a byte-diff) — never assumed:
+
+1. **Schema:** `sql/migrations/2026-09-22-claim-open-slot.sql` pasted in the SQL editor (report-first; `sql/schema.sql`
+   carries the identical text and `test/schema.test.js` pins the identity). Proven by the rolled-back
+   `sql/probes/claim-open-slot-probe.sql` and `scripts/verify-rls.sh` section 7 (anon refused; the nine refusals; a
+   linked surgeon's claim succeeds inside the probe and rolls back; leftover count 0).
+2. **Deploys:** `send-notification` (the two new categories) and `daily-reminder` (mode `open-shifts`) redeployed with
+   the Supabase CLI `--no-verify-jwt` (README section 3), the deployed source downloaded and byte-compared with the repo
+   copy afterwards. A dashboard deploy would re-enable Verify JWT — always the CLI.
+3. **Vault secret + cron job:** `vault.create_secret` once, then the `cron.schedule` of 16.4; `select ... from cron.job`
+   must show three rows. Not before Faraz has approved live mail (README section 6): from then on the Monday notice is a
+   real send to every opted-in surgeon whenever anything in the next 30 days is open.
+4. **Live mail on the client paths** needs step 2 plus `RESEND_API_KEY` / `NOTIFICATION_FROM_EMAIL` set by name. Until
+   `send-notification` is redeployed, the live function answers `400 unknown notification type` for `open_shifts` /
+   `shift_claimed`; the client treats that as `notEnabled` — an INFO toast ("the e-mail for this notice is not enabled
+   yet"), never an error — and still writes the feed row and the audit row, so the in-app list is complete either way.
+
+Nothing in Prompt 13 publishes a schedule, and no part of it sends mail on its own before steps 2–3 are done.
 
 ## 17. Offers — paint the dates you'll cover; the generator fills the gaps (Faraz 9/22 evening; Prompt 14)
 

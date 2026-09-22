@@ -135,10 +135,16 @@
 //     calendar cell shows s1 (the harness overlays the claimer on the mocked
 //     row); Email the group now (confirm) -> feed open_shifts with data.slots,
 //     broadcast send-notification, audit openshifts.notify, 'last announced'
-//     fills; 390 px in light and dark (no page scroll, table scrolls in its
-//     wrapper with the swipe hint, buttons >= 36 px, table text >= 3:1 in
-//     dark). Screenshots openshifts.png, openshifts-sheet.png,
-//     openshifts-390.png, openshifts-dark.png.
+//     fills; 390 px in BOTH themes with the same probe (no page scroll, table
+//     scrolls in its wrapper with the swipe hint, buttons >= 36 px; dark adds
+//     the navy body and table text >= 3:1). Screenshots openshifts.png,
+//     openshifts-sheet.png, openshifts-email-preview.png, openshifts-390.png,
+//     openshifts-dark.png, openshifts-390-dark.png (part 6 copies the set to
+//     docs/screenshots/open-shifts/ for review without Playwright). Fix round:
+//     the review shots are taken with the toast dismissed (openshifts.png
+//     BEFORE Copy list, the sheet as a viewport shot), the dark 390 probe
+//     fails on a white swipe-hint cover, and the 'ok screenshots' line is
+//     earned - every file must exist, be from this run and stay under 300 KB.
 // Exit code 1 on any failure.
 //
 // Determinism (finding removal-03): React / ReactDOM / the Supabase SDK are
@@ -1258,6 +1264,9 @@ try {
   try {
     const parseBody = (w) => { try { return JSON.parse(w.body); } catch (e) { return null; } };
     const noAddr = (s) => !/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(String(s || ""));
+    // Review screenshots carry no harness artefacts: dismiss the app toast (click closes it) before each shot.
+    const shotStart = Date.now();
+    const clearToast = async () => { await page.evaluate(() => { const t = document.querySelector("[data-testid=toast]"); if (t) t.click(); }); await page.waitForTimeout(150); };
     const plusDays = (d, k) => utcDay(Date.parse(d + "T12:00:00Z") + k * 86400000);
     const openIn = (d) => { const r = liveByDay[d]; return { p: !(r && (r.primary_id || r.external_cover)), b: !(r && r.backup_id) }; };
     const isWknd = (d) => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w === 5 || w === 6 || w === 0; };
@@ -1338,6 +1347,9 @@ try {
     await page.click("[data-testid=ob-horizon-all]"); await page.waitForTimeout(150);
     const badgeStill = await badgeOf();
     if (badgeStill !== all.rows.length) fail(`Open shifts: the badge followed the filters (${badgeStill}); it must always count the whole range (${all.rows.length})`); else ok("Open shifts: the badge kept counting the whole range while the filters changed");
+    // The review shot of the board: whole range, no toast, taken BEFORE Copy list so no 'Copied' toast covers the rows.
+    await clearToast();
+    await page.screenshot({ path: path.join(OUT, "openshifts.png"), fullPage: true });
     // Copy list: one openSlotsLine per visible row, written with navigator.clipboard.writeText (mocked to record; delegated to the real clipboard).
     await page.evaluate(() => { window.__obClip = []; const real = navigator.clipboard.writeText.bind(navigator.clipboard); navigator.clipboard.writeText = async (t) => { window.__obClip.push(t); try { await real(t); } catch (e) {} }; });
     await page.click("[data-testid=ob-copy]");
@@ -1348,17 +1360,18 @@ try {
     else if (!lines.every(l => /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l))) fail("Open shifts: a Copy list line is not 'Ddd MM/DD - role (unit) - open': " + lines.find(l => !/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l)));
     else if (!noAddr(clip[0])) fail("Open shifts: the Copy list carries an email address");
     else ok(`Open shifts: Copy list -> ${lines.length} line(s), e.g. "${lines[0]}"${lines.length > 1 ? ` ... "${lines[lines.length - 1]}"` : ""}`);
-    await page.screenshot({ path: path.join(OUT, "openshifts.png"), fullPage: true });
     // Take this shift as s1 on the first row where s1 is eligible.
     const target = all.rows.find(r => r.take === "enabled");
     if (!target) console.log("     (no row where s1 is eligible under the current rules - the claim flow is not exercised)");
     else {
       const [cDay, cRole] = target.slot.split("|");
       const beforeClaim = writes.length;
+      await clearToast();
       await page.click(`tr[data-slot="${target.slot}"] [data-testid=ob-take]`);
       await page.waitForSelector("[data-testid=claim-sheet]", { timeout: 5000 });
       const sheet = await page.$eval("[data-testid=claim-sheet]", el => el.innerText.replace(/\s+/g, " "));
-      await page.screenshot({ path: path.join(OUT, "openshifts-sheet.png"), fullPage: true });
+      // a viewport shot: the sheet is a fixed overlay, a full-page stitch paints a band under it
+      await page.screenshot({ path: path.join(OUT, "openshifts-sheet.png"), fullPage: false });
       const md = `${Number(cDay.slice(5, 7))}/${Number(cDay.slice(8, 10))}`;
       if (!sheet.includes(md) || !new RegExp("\\b" + cRole + "\\b", "i").test(sheet) || !/07:00/.test(sheet)) fail(`Open shifts: the confirm sheet does not name ${md} ${cRole} and the 07:00 shift: ` + sheet.slice(0, 200));
       else ok(`Open shifts: Take this shift on ${target.slot} opens the confirm sheet: "${sheet.slice(0, 150)}"`);
@@ -1408,6 +1421,7 @@ try {
     // whole range, title = the subject) + broadcast send-notification { subject, message, detail } + audit openshifts.notify; 'last announced' fills.
     const beforeMail = writes.length;
     const cur0 = await readBoard();
+    await clearToast();
     await page.click("[data-testid=ob-email]");
     if (cur0.rows.length) {
       await page.waitForSelector("[data-testid=ob-email-dialog]", { timeout: 5000 });
@@ -1461,7 +1475,7 @@ try {
     const mobileProbe = () => page.evaluate(() => {
       const wrap = document.querySelector("[data-testid=openshifts-wrap]");
       const btns = Array.from(document.querySelectorAll("[data-testid=openshifts-card] button")).filter(b => b.offsetParent !== null);
-      return { pageW: document.documentElement.scrollWidth, cls: wrap ? wrap.className : "", hint: wrap ? getComputedStyle(wrap, "::after").content : "", wrapScroll: wrap ? wrap.scrollWidth : 0, wrapClient: wrap ? wrap.clientWidth : 0, minBtn: btns.length ? Math.min(...btns.map(b => b.getBoundingClientRect().height)) : 0, bodyBg: getComputedStyle(document.body).backgroundColor };
+      return { pageW: document.documentElement.scrollWidth, cls: wrap ? wrap.className : "", hint: wrap ? getComputedStyle(wrap, "::after").content : "", wrapScroll: wrap ? wrap.scrollWidth : 0, wrapClient: wrap ? wrap.clientWidth : 0, minBtn: btns.length ? Math.min(...btns.map(b => b.getBoundingClientRect().height)) : 0, bodyBg: getComputedStyle(document.body).backgroundColor, wrapBg: wrap ? getComputedStyle(wrap).backgroundImage : "" };
     });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(400);
@@ -1470,13 +1484,16 @@ try {
     else if (!/table-wrap/.test(m1.cls) || !/swipe sideways/.test(m1.hint)) fail("Open shifts 390px: the table wrapper lacks the table-wrap swipe hint: " + JSON.stringify(m1));
     else if (m1.minBtn && m1.minBtn < 36) fail(`Open shifts 390px: a button is shorter than 36px (${m1.minBtn})`);
     else ok(`Open shifts 390px (light): no horizontal page scroll (${m1.pageW}), the table scrolls inside its wrapper (${m1.wrapScroll} in ${m1.wrapClient}) with the swipe hint, buttons >= 36px`);
+    await clearToast();
     await page.screenshot({ path: path.join(OUT, "openshifts-390.png"), fullPage: true });
     await page.setViewportSize({ width: 1180, height: 900 });
     await page.click('button[data-tab="settings"]');
     await page.click("button:has-text('Dark')");
     await openBoard();
     await page.waitForTimeout(300);
-    await page.screenshot({ path: path.join(OUT, "openshifts-dark.png"), fullPage: true });
+    await clearToast();
+    // a viewport shot (1180 x 900): the full-page dark board weighs over the 300 KB review rule; the 390 px dark shot below stays full-page
+    await page.screenshot({ path: path.join(OUT, "openshifts-dark.png"), fullPage: false });
     const darkText = await page.evaluate(() => {
       const parseRgb = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); if (!m) return null; const p = m[1].split(",").map(x => parseFloat(x)); return p.length >= 4 && p[3] === 0 ? null : p.slice(0, 3); };
       const lum = (rgb) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }; return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]); };
@@ -1489,10 +1506,23 @@ try {
     if (darkText.cells && darkText.worst < 3) fail(`Open shifts dark: a table cell's text is below 3:1 contrast (${darkText.worst})`); else ok(`Open shifts dark: table text contrast >= 3:1 (worst ${darkText.worst} over ${darkText.cells} cells)`);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(400);
+    // Part 6: the dark 390 px pass runs the SAME probe as the light one (wrapper hint, button height) plus the dark body, and keeps its own screenshot.
+    // Fix round: the swipe-hint covers must be repainted in the dark card colour - a white (#ffffff) cover paints a pale band over the date column.
     const m2 = await mobileProbe();
     if (m2.pageW > 392) fail(`Open shifts 390px (dark): the page scrolls horizontally (scrollWidth ${m2.pageW})`);
     else if (!/rgb\(26, 26, 46\)/.test(m2.bodyBg)) fail("Open shifts 390px (dark): the body background is not the dark navy: " + m2.bodyBg);
-    else ok(`Open shifts 390px (dark): no horizontal page scroll (${m2.pageW}), body ${m2.bodyBg}`);
+    else if (!/table-wrap/.test(m2.cls) || !/swipe sideways/.test(m2.hint)) fail("Open shifts 390px (dark): the table wrapper lacks the table-wrap swipe hint: " + JSON.stringify(m2));
+    else if (m2.minBtn && m2.minBtn < 36) fail(`Open shifts 390px (dark): a button is shorter than 36px (${m2.minBtn})`);
+    else if (/rgb\(255, 255, 255\)/.test(m2.wrapBg) || !/rgb\(22, 33, 62\)/.test(m2.wrapBg)) fail("Open shifts 390px (dark): the table-wrap swipe-hint cover is still white under dark mode (computed background-image): " + m2.wrapBg.slice(0, 200));
+    else ok(`Open shifts 390px (dark): no horizontal page scroll (${m2.pageW}), body ${m2.bodyBg}, the table scrolls inside its wrapper (${m2.wrapScroll} in ${m2.wrapClient}) with the swipe hint painted in the dark card colour, buttons >= 36px`);
+    await clearToast();
+    await page.screenshot({ path: path.join(OUT, "openshifts-390-dark.png"), fullPage: true });
+    // The 'ok screenshots' line is earned: the sheet and preview shots sit inside conditionals, so check that every one of the six exists, is from THIS run and is under 300 KB (docs/screenshots/open-shifts/ is copied from these files).
+    const SIX = ["openshifts.png", "openshifts-sheet.png", "openshifts-email-preview.png", "openshifts-390.png", "openshifts-dark.png", "openshifts-390-dark.png"];
+    const shotState = SIX.map(f => { const p = path.join(OUT, f); if (!fs.existsSync(p)) return { f, why: "missing" }; const st = fs.statSync(p); if (st.mtimeMs < shotStart - 2000) return { f, why: "stale (" + new Date(st.mtimeMs).toISOString() + ")" }; if (st.size > 300 * 1024) return { f, why: "too big (" + st.size + " bytes)" }; return { f, size: st.size }; });
+    const badShots = shotState.filter(s => s.why);
+    if (badShots.length) fail("screenshots missing or stale: " + badShots.map(s => `${s.f} ${s.why}`).join(", "));
+    else ok("screenshots test/ui/out/" + shotState.map(s => `${s.f} (${Math.round(s.size / 1024)} KB)`).join(", ") + " - all from this run, all under 300 KB");
     await page.setViewportSize({ width: 1180, height: 900 });
     await page.click('button[data-tab="settings"]');
     await page.click("button:has-text('Light')");
