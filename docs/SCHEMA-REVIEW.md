@@ -209,3 +209,121 @@ then reported `RESULT: 15 passed, 0 failed`: sections 1, 2 and 4 as before, sect
 **Client consequence.** None required: the app already POSTs `status: 'pending'` with its own id and shows `apply_trade`
 errors verbatim; the new messages read as sentences. Acceptance-time client eligibility stays as a courtesy check - the
 server is now the authority.
+
+## 2026-09-22 - claim_open_slot (Prompt 13 part 2)
+
+**Status: report-first. NOT applied live until Faraz's go-ahead.** The definition sits in `sql/schema.sql` in its own
+section right after `apply_trade()` and, byte-identical, in `sql/migrations/2026-09-22-claim-open-slot.sql` (the file
+that runs live; `test/schema.test.js` pins the identity, the nine codes in order, the placement, the revoke/grant and
+`security definer set search_path = public`). A `git push` applies nothing.
+
+**What it is.** `public.claim_open_slot(p_day date, p_role text) returns jsonb` - a linked surgeon takes an OPEN slot
+from the Open shifts board ("Take this shift"). Members cannot write `schedule_days` under RLS, so the write runs as
+security definer, modelled on `apply_trade()`: every check before the first write, the day's row locked with
+`for update` (a day inside the published range with no row gets one, `source = 'claim'`, version 1), then the one
+role set with `version = version + 1`, `source = 'claim'`, `updated_by = <caller's roster id>`, `updated_at = now()`
+(so every other client's compare-and-swap on that day fails loudly and reloads), an `audit_log` row
+`schedule.claim` `{day, role, person, version}` and a `notifications` row (type `shift_claimed`, title
+`<Name> took <M/D> <role>`, data `{day, role, surgeon_id, person_id}` - the feed filter shows `data.surgeon_id` rows
+to that surgeon, the scheduler sees everything) in the SAME transaction; returns `{ok, day, role, person_id,
+version}`. `revoke all ... from public, anon; grant execute ... to authenticated`. The published range is
+`min(day)..max(day)` of `schedule_days`; "today" is `(now() at time zone 'America/Chicago')::date`. A scheduler
+assigns from the day editor as before and does not use this (the function does not refuse a scheduler whose account
+is linked - Khan is also a surgeon - but the UI never offers it to the scheduler path).
+
+**The boundary, stated plainly.** The JS eligibility rules (OR days, Clinton/Aledo days, caps, weekday patterns,
+consecutive runs, East busy days, holiday opt-outs) are enforced in the client - `eligibility()` must pass the hard
+rules before the "Take this shift" button is offered; soft-rule warnings are shown, not blocking. They are NOT in
+SQL. The function guards data integrity only and logs everything: a claim that slips past a client rule is visible
+in the audit log and the feed, and the scheduler corrects it from the day editor. For six surgeons that is the
+accepted boundary (also written into the guide, section 16).
+
+**Refusals** - each its own SQLSTATE (custom class `CL`) and a message prefixed with a stable token; PostgREST
+returns both (a custom class maps to HTTP 400) so the client CAN show the message verbatim - it does not yet (see
+"Client consequence" below: a part-3 item). In evaluation order:
+
+| code | token | meaning |
+|---|---|---|
+| `CL001` | `CLAIM_NOT_LINKED` | `auth.uid()` is null (anon) or the account has no `user_profiles.person_id` |
+| `CL002` | `CLAIM_BAD_ROLE` | `p_role` not in (`primary`, `backup`) |
+| `CL003` | `CLAIM_PAST` | `p_day` before today in America/Chicago (checked before the range: a past day inside the range is still refused as past) |
+| `CL004` | `CLAIM_OUTSIDE_RANGE` | `p_day` outside `min(day)..max(day)` of `schedule_days` (or the table is empty) |
+| `CL005` | `CLAIM_HELD` | the slot already has a surgeon |
+| `CL006` | `CLAIM_EXTERNAL` | primary requested while `external_cover` is set (non-empty) |
+| `CL007` | `CLAIM_LOCKED` | the role's lock flag is set - the scheduler assigns it from the editor (a claim never touches a lock flag) |
+| `CL008` | `CLAIM_OTHER_ROLE` | the caller already holds the other role that day (readable message ahead of `schedule_days_distinct_roles`) |
+| `CL009` | `CLAIM_VACATION` | a `time_off` row of the caller overlaps `p_day`, or `p_day + 1` when `p_role = 'primary'` (the 07:00 shift end falls on the vacation day - the `time_off` trigger's trailing-edge rule mirrored; like that trigger and `apply_trade`, the SQL side hardcodes primary) |
+
+CL001-CL004 need no row and run before the missing-row insert; CL005-CL009 run against the locked row, before the
+update. Two surgeons claiming the same slot at once serialise on the row lock (a missing row: `on conflict (day) do
+nothing` then `for update`), so the second sees `CLAIM_HELD`.
+
+**Review notes on the drafted text (kept verbatim; none is a syntax error).** (1) Unlike `apply_trade()` check (a),
+the function does not verify that `me` is an ACTIVE roster entry - `person_id` is admin-assigned in Setup -> Users,
+and an unlinked account is refused, but a surgeon whose roster entry was later set inactive could still claim; the
+client's `eligibility()` refuses inactive entries before the button. (2) The range check widens if a stray
+`schedule_days` row exists far outside the published schedule (verify-rls.sh sections 3/4 delete theirs). (3) The
+function body references `notifications` and `audit_log`, which `schema.sql` creates further down: plpgsql resolves
+tables at run time, and `apply_trade` already does the same with `audit_log`, so a fresh paste of the whole file
+works. (4) `p_day` null lands in `CLAIM_PAST` (message prints `<NULL>`); PostgREST rejects a missing argument
+before that. (5) **Design gap for Faraz (reviewer, fix stage 2026-09-22):** a claim writes `source = 'claim'` and
+deliberately no lock flag, but the generator keeps only LOCKED slots when it rebuilds a range (`generator.js`
+`lockedP` / `lockedB` in the base-schedule pass), so a later Generate over a claimed day silently discards the
+surgeon's claim. Two ways out, his call for parts 3-4: (a) the claim also sets the role's lock flag (a claimed slot
+is a commitment, like an import) - changes the drafted function and the test's "never touches a lock flag" pin, so
+needs his go-ahead; or (b) the Generate path treats `source = 'claim'` days as locked, or warns before overwriting
+them. Record the decision in `docs/SILVIS-CALL-RULES.md` and the seed/test in the same PR. (6) The
+`schedule_days.source` column comment in `schema.sql` now lists the sixth value `claim` (no client whitelist rejects
+unknown source values; documentation only).
+
+**The probe - `sql/probes/claim-open-slot-probe.sql` (persists nothing).** Same mechanism as the trade probe: one
+batch, no `BEGIN`/`COMMIT`, last statement raises `PROBE_RESULTS A=...;B=...;END`, so fixtures (2030-04 rows plus a
+`2020-01-01` row as the range's lower bound, two `time_off` rows note `probe-claim`, two throwaway `auth.users`
+`probe-claim-<uuid>@example.test` linked to `s3`/surgeon and `s1`/scheduler) and everything the function writes
+(schedule rows, audit rows, feed rows) roll back. Cases, expected AFTER the migration: **A** anon (role `anon`, no
+sub) -> `ERR 42501 permission denied for function claim_open_slot`; **B** s3 claims 4/7 backup -> `ok version=2
+backup=s3 source=claim audit=1 notif=Acton took 4/7 backup`; **C** held -> `CL005`; **D** locked -> `CL007`; **E**
+2020-01-01 -> `CL003` (past before range); **F** external-covered primary -> `CL006`; **G** other role same day ->
+`CL008`; **H** vacation on the day -> `CL009`; **I** primary the day before a vacation -> `CL009` while **I2** the
+same backup -> `ok version=2 backup=s3`; **J** a day after `max(day)` -> `CL004`; **K** a day inside the range with
+no row -> `ok version=2 backup=s3 source=claim`; **L** the scheduler's direct `schedule_days` update (day-editor
+path) -> `ok rows=1 primary=s4`. BEFORE the migration every case but L reads `ERR 42883 function
+public.claim_open_slot(date, unknown) does not exist`. Errors are recorded as `ERR <SQLSTATE> <message>` (`;` and
+quotes flattened to spaces).
+
+Run it (absolute path; workdir linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`):
+
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/claim-open-slot-probe.sql        # before: every case 'does not exist'
+    supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-22-claim-open-slot.sql
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/claim-open-slot-probe.sql        # after: the picture above
+    SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh                                                  # section 7: 7a anon REST refusal, 7b probe graded + leftover count
+
+After EVERY probe run the rollback is observed, never assumed (`verify-rls.sh` 7b does it; by hand after the manual runs):
+
+    supabase db query --linked --workdir <dir> -o json "select ((select count(*) from public.schedule_days where day between '2030-04-01' and '2030-04-30' or day = '2020-01-01') + (select count(*) from public.time_off where note = 'probe-claim') + (select count(*) from auth.users where email like 'probe-claim-%@example.test') + (select count(*) from public.audit_log where action = 'schedule.claim' and detail ->> 'day' like '2030-04-%') + (select count(*) from public.notifications where type = 'shift_claimed' and data ->> 'day' like '2030-04-%'))::int as leftover"
+
+`leftover` must be 0; otherwise clean up at once (the `delete` statements `verify-rls.sh` prints) and report.
+`verify-rls.sh` 7a needs no JWT: an anon `POST rest/v1/rpc/claim_open_slot` is `404` before the migration and
+`401`/`403` after (a `400` would mean anon reached the body - the revoke is missing). 7c-7e run only with
+`SILVIS_SURGEON_JWT` (a linked surgeon's token) and exercise refusals only - `CLAIM_PAST`, `CLAIM_BAD_ROLE` (no
+fixture, nothing written) and `CLAIM_HELD` (a `2030-04-20` fixture through the CLI, deleted afterwards) - because a
+successful claim over REST would be a real, persisted schedule change.
+
+**Client consequence (parts 3-4 of Prompt 13) - REQUIRED, not yet true.** The board calls `rpc/claim_open_slot`
+with `dbAuthHeaders()` and must show the `CLAIM_*` message verbatim on a non-2xx, reloading the day on
+`CLAIM_HELD` / `CLAIM_LOCKED` (someone else got there first). Today's client does NOT do that: `describeDbError`
+in `index-source.html` passes only `ON_CALL_CONFLICT` and `TRADE_*` through verbatim (its `OWN` regex and the
+fallback regex), so a `CL0xx` refusal would surface as the first 200 characters of the raw PostgREST JSON body,
+and the notification `tabMap` has no `shift_claimed` entry. Part 3 must therefore (i) extend both regexes to
+`/ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+/`, (ii) add `shift_claimed: "calendar"` to the `tabMap`, and
+(iii) optionally map the roster id in `CLAIM_HELD` ("held by s2") to a name via `nameOf()` before showing it.
+Until then the sentence "the app shows the message verbatim" in the SQL banner (kept as drafted) describes the
+contract, not the shipped client. Live results (before string, after string, leftover 0) are to be recorded here
+when Faraz runs the steps above.
+
+**Fix stage (2026-09-22, reviewer findings).** `verify-rls.sh` 7e now deletes its `2030-04-20` fixture by day
+alone before and after the check (a successful REST claim would rewrite `source` to `claim`, and a source-filtered
+delete would have left the row in the anon-readable table) and verifies the cleanup delete (`bad "7e cleanup delete
+failed ..."` instead of an unconditional "cleanup done"). `test/schema.test.js` grades the section-7 case pins
+against the section-7 slice only (section 5's `expect_eq A ...` lines had satisfied cases A-H) and pins the 7e
+cleanup and the `source` comment; 291 assertions.

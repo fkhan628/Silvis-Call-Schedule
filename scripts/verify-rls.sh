@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2) + trigger checks (4) + trade-guard probe (5) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 7a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write check (3)
-#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6; a SURGEON-role user's access token)
+#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6) and REST claim checks (7c-7e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
 # RAISING an exception whose message carries the per-case results, and this script grades them.
+# Section 7 (Prompt 13 part 2) does the same with sql/probes/claim-open-slot-probe.sql (claim_open_slot).
 set -u
 cd "$(dirname "$0")/.." || exit 1
 URL=$(grep -oE 'SUPABASE_URL\s*=\s*"[^"]+"' config.js | head -1 | sed 's/.*"\(.*\)"/\1/')
@@ -159,6 +160,98 @@ if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
   fi
 else
   echo "   SKIP  (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment; no such user exists until invites go out)"
+fi
+
+echo "== 7. claim_open_slot (Prompt 13 part 2: a linked surgeon takes an OPEN slot) =="
+# 7a. anon may not call it at all - no JWT needed. 404 = the function is not created yet (before the
+#     migration); 401/403 = execute revoked from anon (after). A 400 here would mean anon reached the
+#     body (CLAIM_NOT_LINKED): the revoke is missing. Nothing is written either way.
+line=$(curl -s -o /tmp/vr7a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_day":"2030-04-07","p_role":"backup"}')
+echo "   7a anon rpc: $line  body: $(head -c 160 /tmp/vr7a.json)"
+case "$line" in "HTTP 401"|"HTTP 403"|"HTTP 404") ok "anon rpc claim_open_slot refused ($line)";; *) bad "anon rpc claim_open_slot: $line (expected 401/403/404)";; esac
+# 7b. the rolled-back probe (sql/probes/claim-open-slot-probe.sql): fixtures in 2030-04 plus a 2020-01-01 lower
+#     bound, throwaway auth users probe-claim-<uuid>@example.test linked to s3 (surgeon) / s1 (scheduler), and
+#     the same 'PROBE_RESULTS ...;END' sentinel as section 5. Expectations are the AFTER-migration picture;
+#     before it every case but L reads 'ERR 42883 function public.claim_open_slot(date, unknown) does not exist'.
+#     The rollback is then OBSERVED: a leftover count over every row the probe or the function writes must be 0.
+if linked; then
+  CPROBE="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/claim-open-slot-probe.sql"   # absolute path for the CLI (pwd -W = Windows form under Git Bash)
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$CPROBE" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "claim probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results" | tr ';' '\n' | sed 's/^/   /'
+    case_val()    { echo "$results" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq()   { v=$(case_val "$1"); [ "$v" = "$2" ] && ok "claim probe $1: $3" || bad "claim probe $1: $3 (got '$v', expected '$2')"; }
+    expect_code() { v=$(case_val "$1"); case "$v" in "ERR $2 $3"*) ok "claim probe $1: $4 ($2 $3)";; *) bad "claim probe $1: $4 (got '$v', expected 'ERR $2 $3 ...')";; esac; }
+    expect_code A  42501 "permission denied for function claim_open_slot" "anon (role anon, no jwt sub) cannot execute the function"
+    expect_eq   B  "ok version=2 backup=s3 source=claim audit=1 notif=Acton took 4/7 backup" "linked surgeon claims an open unlocked backup: version 2, source claim, audit row, feed row titled '<Name> took 4/7 backup'"
+    expect_code C  CL005 CLAIM_HELD          "held slot is refused"
+    expect_code D  CL007 CLAIM_LOCKED        "locked slot is refused"
+    expect_code E  CL003 CLAIM_PAST          "past day (2020-01-01, inside the range) is refused - PAST is checked before RANGE"
+    expect_code F  CL006 CLAIM_EXTERNAL      "primary under external cover is refused"
+    expect_code G  CL008 CLAIM_OTHER_ROLE    "caller already holding the other role that day is refused"
+    expect_code H  CL009 CLAIM_VACATION      "vacation on the day is refused"
+    expect_code I  CL009 CLAIM_VACATION      "PRIMARY the day before a vacation start is refused (trailing edge)"
+    expect_eq   I2 "ok version=2 backup=s3" "BACKUP the day before a vacation start is allowed"
+    expect_code J  CL004 CLAIM_OUTSIDE_RANGE "day after max(day) is refused"
+    expect_eq   K  "ok version=2 backup=s3 source=claim" "day inside the range with NO row gets a row (source claim) and the claim succeeds"
+    expect_eq   L  "ok rows=1 primary=s4" "scheduler's direct schedule_days update (day-editor path) is untouched"
+  fi
+  # Did it roll back? Count every kind of row the probe creates or the function writes.
+  LEFTOVER7_SQL="select ((select count(*) from public.schedule_days where day between '2030-04-01' and '2030-04-30' or day = '2020-01-01') + (select count(*) from public.time_off where note = 'probe-claim') + (select count(*) from auth.users where email like 'probe-claim-%@example.test') + (select count(*) from public.audit_log where action = 'schedule.claim' and detail ->> 'day' like '2030-04-%') + (select count(*) from public.notifications where type = 'shift_claimed' and data ->> 'day' like '2030-04-%'))::int as leftover"
+  r=$(q "$LEFTOVER7_SQL")
+  if [ "$(verdict "$r")" != "accepted" ]; then
+    bad "claim probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then   # ::int, but tolerate a string-typed 0
+    ok "claim probe persisted nothing (leftover count 0: schedule_days 2030-04 + 2020-01-01 / time_off / auth.users / audit_log / notifications)"
+  else
+    bad "claim probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.notifications where type = 'shift_claimed' and data ->> 'day' like '2030-04-%';"
+    echo "      delete from public.audit_log where action = 'schedule.claim' and detail ->> 'day' like '2030-04-%';"
+    echo "      delete from public.time_off where note = 'probe-claim';"
+    echo "      delete from public.schedule_days where day between '2030-04-01' and '2030-04-30' or day = '2020-01-01';"
+    echo "      delete from auth.users where email like 'probe-claim-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 7b (supabase CLI not linked at $WORKDIR)"
+fi
+# 7c-7e. over REST as a linked SURGEON (SILVIS_SURGEON_JWT). Only refusals are exercised: a successful claim over
+#        REST would be a real, persisted schedule change. 7c and 7d need no fixture and write nothing.
+if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
+  line=$(curl -s -o /tmp/vr7c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2020-01-01","p_role":"backup"}')
+  echo "   7c past day: $line  body: $(head -c 200 /tmp/vr7c.json)"
+  if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_PAST' /tmp/vr7c.json; then ok "surgeon claim of a past day is refused ($line CLAIM_PAST)"; else bad "surgeon claim of a past day: $line $(head -c 120 /tmp/vr7c.json)"; fi
+  line=$(curl -s -o /tmp/vr7d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2030-04-07","p_role":"observer"}')
+  echo "   7d bad role: $line  body: $(head -c 200 /tmp/vr7d.json)"
+  if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_BAD_ROLE' /tmp/vr7d.json; then ok "surgeon claim with an unknown role is refused ($line CLAIM_BAD_ROLE)"; else bad "surgeon claim with an unknown role: $line $(head -c 120 /tmp/vr7d.json)"; fi
+  # 7e. a HELD slot (fixture through the CLI: 2030-04-20 backup held by the throwaway 's9test'); deleted afterwards
+  #     BY DAY ALONE (nothing real lives on 2030-04-20): if the REST claim ever succeeded - the failure this case
+  #     exists to catch - the row's source becomes 'claim' and a source-filtered delete would leave it behind.
+  if linked; then
+    q "delete from public.schedule_days where day = '2030-04-20';" >/dev/null
+    r=$(q "insert into public.schedule_days (day, backup_id, source) values ('2030-04-20','s9test','verify-rls');")
+    if [ "$(verdict "$r")" != "accepted" ]; then
+      bad "7e: fixture setup failed: $(echo "$r" | tr -d '\n' | head -c 200)"
+    else
+      line=$(curl -s -o /tmp/vr7e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2030-04-20","p_role":"backup"}')
+      echo "   7e held slot: $line  body: $(head -c 200 /tmp/vr7e.json)"
+      if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_HELD' /tmp/vr7e.json; then ok "surgeon claim of a held slot is refused ($line CLAIM_HELD)"; else bad "surgeon claim of a held slot: $line $(head -c 120 /tmp/vr7e.json)"; fi
+    fi
+    # The cleanup is verified, never assumed: a stray 2030-04-20 row widens the published range (min(day)..max(day))
+    # that claim_open_slot and the Open shifts board use, and trips the claim probe's PROBE_SETUP guard.
+    r=$(q "delete from public.schedule_days where day = '2030-04-20';")
+    if [ "$(verdict "$r")" = "accepted" ]; then
+      echo "   cleanup done"
+    else
+      bad "7e cleanup delete failed - a stray 2030-04-20 row widens the published range; delete it by hand: $(echo "$r" | tr -d '\n' | head -c 200)"
+    fi
+  else
+    echo "   SKIP 7e (needs the linked supabase CLI for the fixture)"
+  fi
+else
+  echo "   SKIP 7c-7e (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment; no such user exists until invites go out)"
 fi
 
 echo

@@ -537,6 +537,23 @@ slots remain (`send-notification` category `open_shifts`, honouring `schedule_up
 the next 30 days (`daily-reminder` mode `open-shifts`, cron job `silvis-open-shifts-weekly`, Vault secret like the
 others). Reasons persisted in `call_schedule_data.data.lastGenerate` are operational wording only (anon-readable blob).
 
+**The claim boundary (Prompt 13 part 2).** The JS eligibility rules (OR days, Clinton/Aledo days, caps, weekday
+patterns, consecutive runs, East busy days, holiday opt-outs) are enforced in the client before the "Take this shift"
+button is offered - `eligibility()` must pass the hard rules; soft-rule warnings are shown, not blocking - and NOT in
+SQL. `claim_open_slot(p_day, p_role)` guards data integrity only: linked caller, valid role, not past in Central time,
+inside the published range (`min(day)..max(day)` of `schedule_days`), open, not external-covered for primary,
+unlocked, distinct roles, no vacation conflict (including the day before a primary shift), each refusal with its own
+SQLSTATE `CL001`-`CL009` and a token-prefixed message that part 3 must surface verbatim (today `describeDbError` passes
+only `ON_CALL_CONFLICT` / `TRADE_*` through; part 3 extends its two regexes with `CLAIM_[A-Z_]+` and adds
+`shift_claimed` to the notification `tabMap`) - and it logs everything (`audit_log` `schedule.claim`, `notifications`
+`shift_claimed`) in the same transaction as the `version + 1` write. For six surgeons that is the accepted boundary: a
+claim that slips past a client rule is visible in the audit log and the feed, and the scheduler corrects it from the
+day editor, which is untouched. Open for Faraz: a claim sets `source = 'claim'` and no lock flag, and Generate keeps only
+locked slots, so a later Generate over a claimed day discards the claim unless the claim also locks the role or Generate
+treats `claim` days as locked (`docs/SCHEMA-REVIEW.md`, review note 5). Definition in `sql/schema.sql` right after
+`apply_trade()`, applied live only through `sql/migrations/2026-09-22-claim-open-slot.sql` (never by a git push), proven
+by the rolled-back `sql/probes/claim-open-slot-probe.sql` and `scripts/verify-rls.sh` section 7 (`docs/SCHEMA-REVIEW.md`).
+
 ## 17. Offers — paint the dates you'll cover; the generator fills the gaps (Faraz 9/22 evening; Prompt 14)
 
 Silvis is an **offers** problem where Davenport is a rules problem: the schedule has always been assembled from the
