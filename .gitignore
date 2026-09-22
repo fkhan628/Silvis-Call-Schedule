@@ -1,0 +1,6 @@
+# Silvis-Call-Schedule
+# NOTE: index.html is deliberately NOT ignored — CI builds it and commits it back.
+node_modules/
+.DS_Store
+*.log
+.env*

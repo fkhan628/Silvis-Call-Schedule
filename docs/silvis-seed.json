@@ -1,0 +1,1184 @@
+{
+  "_meta": {
+    "generatedOn": "2026-09-21",
+    "redaction": "PUBLIC-REPO COPY (Faraz 9/21): every email and phone value in this file is null. The complete seed lives in the OneDrive folder <the OneDrive folder>/docs/silvis-seed.json and is imported through Setup → Import seed (file picker). Live contact data exists only in Supabase.",
+    "sources": [
+      "group-email-2026-08-27-to-09-14: the four surgeons' thread on a shared call schedule (Burchett/Acton/Philip/Khan)",
+      "burchett-email-2026-08-27: Burchett to Khan; October availability of Burchett/Acton/Philip",
+      "burchett-email-2026-09-17: Burchett typical days + December list, Acton rules, Sarkar windows relayed by administration",
+      "office-er-call-panels-2026-09-14-to-09-20: the ER-panel author's ER Call Panels document 9/14\u201312/13, Burchett 9/18 update, Philip 9/20 availability",
+      "administration-email-2026-09-12-to-09-15: Khan and administration",
+      "Faraz Khan, in-session statements (Sep 21 2026): shift model, weekend styles, Fierce rule, Khan rule"
+    ],
+    "assumptions": [
+      "24-hour call runs 07:00 \u2192 07:00 next day \u2014 CONFIRMED by Faraz 9/21.",
+      "Surgeon ids s1\u2013s6 and 3-letter codes are placeholders; the display `name` (last name) is what people will read.",
+      "Atwell is deliberately NOT in the roster (Faraz 9/21). His 9/28\u201310/4 primary week is imported as externalCover so it shows as covered, not OPEN.",
+      "Contact emails are HOME addresses (gmail/yahoo), not work addresses (Faraz 9/21).",
+      "Holiday unit day membership (which days belong to each holiday unit) is Faraz's current guess and editable in Setup."
+    ]
+  },
+  "site": {
+    "name": "MercyOne Genesis Medical Center \u2013 Silvis",
+    "appName": "Silvis Surgical Care Call Schedule",
+    "shortName": "Silvis Call",
+    "shiftStart": "07:00",
+    "shiftEnd": "07:00 next day",
+    "shiftHours": 24,
+    "shiftBoundaryConfirmed": "Faraz 9/21",
+    "timezone": "America/Chicago",
+    "supabaseUrl": "https://bzhsroegtagqhutbnsrp.supabase.co",
+    "supabaseProjectRef": "bzhsroegtagqhutbnsrp",
+    "scheduleAdmin": "s1",
+    "traumaCoordinator": {
+      "name": "the ER-panel author, RN, TNS",
+      "email": null,
+      "phone": null,
+      "role": "Maintains the ER Call Panels Word document",
+      "account": "viewer (read-only) \u2014 Faraz 9/21"
+    },
+    "adminContact": {
+      "name": "administration",
+      "email": null,
+      "role": "Administration; relays Sarkar availability",
+      "account": "none"
+    }
+  },
+  "roster": [
+    {
+      "id": "s1",
+      "name": "Khan",
+      "code": "FAK",
+      "fullName": "Faraz Khan",
+      "email": null,
+      "active": true,
+      "roles": [
+        "surgeon",
+        "scheduler",
+        "admin"
+      ]
+    },
+    {
+      "id": "s2",
+      "name": "Burchett",
+      "code": "MAB",
+      "fullName": "Michael Burchett",
+      "email": null,
+      "active": true,
+      "roles": [
+        "surgeon"
+      ]
+    },
+    {
+      "id": "s3",
+      "name": "Acton",
+      "code": "BDA",
+      "fullName": "Benjamin Acton",
+      "email": null,
+      "active": true,
+      "roles": [
+        "surgeon"
+      ]
+    },
+    {
+      "id": "s4",
+      "name": "Philip",
+      "code": "AFP",
+      "fullName": "Andrew Philip",
+      "email": null,
+      "active": true,
+      "roles": [
+        "surgeon"
+      ]
+    },
+    {
+      "id": "s5",
+      "name": "Fierce",
+      "code": "NF",
+      "fullName": "Nathan Fierce",
+      "email": null,
+      "active": true,
+      "roles": [
+        "surgeon"
+      ]
+    },
+    {
+      "id": "s6",
+      "name": "Sarkar",
+      "code": "SRK",
+      "fullName": "Dr. Sarkar (first name TBD)",
+      "email": null,
+      "emailNote": "Home email TBD",
+      "active": true,
+      "roles": [
+        "surgeon"
+      ],
+      "note": "Availability supplied by administration (admin), one window per month"
+    }
+  ],
+  "groupRules": {
+    "slotsPerDay": [
+      "primary",
+      "backup"
+    ],
+    "fillOrder": [
+      "primary",
+      "backup"
+    ],
+    "everyDayNeedsPrimary": true,
+    "everyDayNeedsBackup": true,
+    "backupDistinctFromPrimary": true,
+    "dailyHandoff": "Service hands off every morning at shift change; the weekend surgeon covers everyone Fri\u2013Sun; only the primary must be physically in Silvis.",
+    "noOperatingElsewhereWhilePrimary": true,
+    "responseTimeMinutes": 30,
+    "defaultMaxConsecutiveDays": 2,
+    "defaultMonthlyCap": {
+      "total": 8
+    },
+    "timeOff": {
+      "kinds": [
+        "vacation"
+      ],
+      "noCallDays": false,
+      "approval": "none \u2014 surgeons enter their own vacations; the app logs them (audit) and blocks those days from call",
+      "conflictRule": "A vacation cannot be entered over a day the surgeon is already published as primary or backup \u2014 the entry is refused with the conflicting dates and a link to open a trade; enter the vacation after the trade is applied (scheduler may override)",
+      "trailingEdge": "A vacation day also blocks the day before it (the 07:00 shift end falls on the vacation day)"
+    },
+    "shiftAccounting": {
+      "unit": "one 24-hour day = 1 shift",
+      "partialShifts": false,
+      "weights": null,
+      "countSeparately": [
+        "primary",
+        "backup",
+        "weekendDays",
+        "holidays"
+      ],
+      "tallies": [
+        "month",
+        "yearToDate",
+        "rolling12Months"
+      ],
+      "note": "No Davenport-style half-day splits or weighted burden; no $ figures"
+    },
+    "generationHorizons": {
+      "firstRound": {
+        "start": "2026-11-02",
+        "end": "2027-01-03",
+        "note": "through end of 2026 plus the New Year's weekend"
+      },
+      "presets": [
+        {
+          "months": 3
+        },
+        {
+          "months": 6
+        },
+        {
+          "months": 9
+        },
+        {
+          "months": 12
+        }
+      ],
+      "note": "After the first round, generate 3/6/9/12 months from the last published day"
+    },
+    "holidayPolicy": "Same holiday set as Davenport (3 major + 3 minor) as UNITS with one primary + one backup sticking through each unit \u2014 see holidays.rules. Burchett's stated preference (Christmas split as 2 on / off) is satisfied by the Eve+Day unit.",
+    "weekendUnit": {
+      "days": [
+        "Fri",
+        "Sat",
+        "Sun"
+      ],
+      "patterns": {
+        "block": "one surgeon Fri+Sat+Sun",
+        "split": "one surgeon Fri+Sun, another surgeon Sat",
+        "daily": "three independent days (fallback only)"
+      }
+    },
+    "compensationInApp": false,
+    "compensationNote": "Faraz 9/21: no compensation in the call schedule \u2014 no $ display, no stipend math anywhere in the app.",
+    "carriedOverFromDavenport": [
+      "office notifications (office_contacts + digest emails)",
+      "calendar sync (per-surgeon ICS subscription feed)",
+      "refresh / client version check",
+      "data management (backup, restore, export, import, snapshots)",
+      "all safety features (payloadLooksWiped, intentional-wipe ref, snapshot-before-destructive, restore UI, audit log)",
+      "shift trades",
+      "in-app notifications + email"
+    ],
+    "droppedFromDavenport": [
+      "APP roster/shifts/vacations",
+      "Fierce separate backup weeks (replaced by daily backup + derived weeks)",
+      "no-call days",
+      "vacation approval workflow + deadline reminders",
+      "half-day / weighted shift accounting",
+      "compensation and $ display",
+      "Davenport holiday A/B (day + night-before) convention"
+    ]
+  },
+  "surgeonRules": {
+    "s1": {
+      "name": "Khan",
+      "poolMember": true,
+      "availabilityMode": "weekends-plus-weekdays",
+      "weekendStyle": "block",
+      "maxConsecutiveDays": 3,
+      "primaryContribution": "weekends",
+      "weekendsInPool": true,
+      "weekdays": {
+        "allowed": [
+          "Mon",
+          "Wed"
+        ],
+        "autoOffer": true,
+        "note": "Faraz 9/21: auto-offer Mon/Wed whenever East is clear ('I'll have to figure it out on those days'); weekends remain the main contribution"
+      },
+      "hardNeverWeekdays": [
+        "Tue",
+        "Thu"
+      ],
+      "hardNeverWeekdaysReason": "Tue/Thu are his OR days",
+      "eastFeed": {
+        "enabled": true,
+        "rule": "PRIMARY: eligible only on days with no Davenport (East) call assignment. BACKUP: allowed even on East call days (Faraz 9/21). East assignments are read from the Davenport app's schedule_weeks for the surgeon whose code is FAK.",
+        "eastBlocksPrimary": true,
+        "eastBlocksBackup": false
+      },
+      "monthlyTarget": null,
+      "monthlyCap": null,
+      "notes": [
+        "Stated 9/21 (supersedes the earlier 'no Mon/Wed nights' statement): main coverage = weekends; can do Mon/Wed; never Tue/Thu",
+        "May cover Thanksgiving Thu\u2013Sun (pending)"
+      ]
+    },
+    "s2": {
+      "name": "Burchett",
+      "poolMember": true,
+      "availabilityMode": "whitelist-recurring",
+      "recurringAvailable": [
+        {
+          "weekday": "Mon",
+          "nth": [
+            2,
+            4
+          ],
+          "note": "unless in Jackson County"
+        },
+        {
+          "weekday": "Tue",
+          "nth": [
+            1
+          ]
+        },
+        {
+          "weekday": "Wed",
+          "nth": [
+            2,
+            4
+          ]
+        }
+      ],
+      "weekendsAvailable": {
+        "primary": true,
+        "backup": true,
+        "note": "Backup any weekend incl. Fridays when not primary (Oct statement)"
+      },
+      "weekendStyle": "split",
+      "splitPartner": "s3",
+      "maxConsecutiveDays": 2,
+      "monthlyCap": {
+        "total": 8,
+        "preferred": 7
+      },
+      "holidayPreference": "Split Christmas: every other day, or 2 on then off",
+      "explicitAvailable": {
+        "2026-10": [
+          "2026-10-06",
+          "2026-10-10",
+          "2026-10-11",
+          "2026-10-14",
+          "2026-10-26",
+          "2026-10-28"
+        ],
+        "2026-12": [
+          "2026-12-01",
+          "2026-12-05",
+          "2026-12-06",
+          "2026-12-09",
+          "2026-12-12",
+          "2026-12-13",
+          "2026-12-14",
+          "2026-12-19",
+          "2026-12-20",
+          "2026-12-23",
+          "2026-12-25",
+          "2026-12-26",
+          "2026-12-27",
+          "2026-12-28",
+          "2026-12-30",
+          "2026-12-31",
+          "2027-01-01",
+          "2027-01-02",
+          "2027-01-03"
+        ]
+      },
+      "explicitBackupOnly": {
+        "2026-10": [
+          "2026-10-12"
+        ]
+      },
+      "explicitUnavailable": {
+        "2026-10": [
+          "2026-10-02",
+          "2026-10-03",
+          "2026-10-04",
+          "2026-10-18",
+          "2026-10-23",
+          "2026-10-24",
+          "2026-10-30",
+          "2026-10-31",
+          "2026-11-01"
+        ]
+      },
+      "notes": [
+        "In DeWitt and/or Jackson County most days",
+        "Total primary+backup per month \u2264 7\u20138; more than 2 consecutive 24h periods 'no longer an option'"
+      ]
+    },
+    "s3": {
+      "name": "Acton",
+      "poolMember": true,
+      "availabilityMode": "blacklist-recurring",
+      "recurringUnavailable": [
+        {
+          "weekday": "Mon",
+          "nth": [
+            2,
+            4
+          ],
+          "note": "outreach (Maquoketa)"
+        },
+        {
+          "weekday": "Wed",
+          "nth": [
+            2,
+            4
+          ],
+          "note": "outreach (Maquoketa)"
+        }
+      ],
+      "recurringAvoid": [
+        {
+          "weekday": "Sun",
+          "beforeNthMonday": [
+            2,
+            4
+          ],
+          "weight": "medium",
+          "note": "morning carryover before Maquoketa; matters less with a true handoff"
+        },
+        {
+          "weekday": "Tue",
+          "weight": "medium",
+          "note": "[removed]"
+        }
+      ],
+      "timeOff": [
+        {
+          "start": "2026-11-19",
+          "end": "2026-11-22",
+          "note": "[removed]"
+        },
+        {
+          "start": "2026-11-25",
+          "end": "2026-11-29",
+          "note": "Thanksgiving week"
+        }
+      ],
+      "holidayRules": {
+        "neverThanksgiving": true,
+        "christmasOrNewYearOk": true,
+        "alternatingDaysOk": true
+      },
+      "weekendStyle": "split",
+      "splitPartner": "s2",
+      "maxConsecutiveDays": 3,
+      "monthlyCap": null,
+      "monthlyCapNote": "Faraz 9/21: no specific cap (the group default does not apply)",
+      "explicitAvailable": {
+        "2026-10": {
+          "primary": [
+            "2026-10-05",
+            "2026-10-07",
+            "2026-10-09",
+            "2026-10-17",
+            "2026-10-18",
+            "2026-10-19",
+            "2026-10-21"
+          ],
+          "backup": [
+            "2026-10-06",
+            "2026-10-08",
+            "2026-10-20"
+          ]
+        }
+      },
+      "notes": [
+        "Offered to send a full monthly date list like Burchett"
+      ]
+    },
+    "s4": {
+      "name": "Philip",
+      "poolMember": true,
+      "availabilityMode": "whitelist-weeks",
+      "aledo": {
+        "weekdays": [
+          {
+            "weekday": "Wed",
+            "nth": [
+              1,
+              3
+            ]
+          },
+          {
+            "weekday": "Fri",
+            "nthWeekOfMonth": 3
+          }
+        ],
+        "avoidWholeWeek": "strong",
+        "hardAvoidDayBefore": true,
+        "note": "Leaves before 7 AM for Aledo \u2192 must not be on call the day before an Aledo day (Tue before 1st/3rd Wed; Thu before the 3rd-week Fri)"
+      },
+      "availableWeeks": [
+        "2026-11-09",
+        "2026-11-23",
+        "2026-12-07",
+        "2026-12-21",
+        "2026-12-28",
+        "2027-01-11",
+        "2027-01-25",
+        "2027-02-08",
+        "2027-02-22",
+        "2027-03-08",
+        "2027-03-22",
+        "2027-03-29",
+        "2027-04-12",
+        "2027-04-26",
+        "2027-05-10",
+        "2027-05-24",
+        "2027-06-07",
+        "2027-06-21",
+        "2027-06-28"
+      ],
+      "availableWeeksNote": "Mondays of weeks he could be primary or backup; does NOT want all of them; 2027-06-07 is a tentative vacation",
+      "preferences": {
+        "noFullWeek": true,
+        "maxMajorHolidays": 1
+      },
+      "backupCap": {
+        "perMonthDays": 7,
+        "weekendsPerMonth": 1
+      },
+      "weekendStyle": "block",
+      "maxConsecutiveDays": 4,
+      "explicitAvailable": {
+        "2026-10": {
+          "primary": [
+            "2026-10-08",
+            "2026-10-13",
+            "2026-10-16",
+            "2026-10-27",
+            "2026-10-29",
+            "2026-10-30",
+            "2026-10-31",
+            "2026-11-01"
+          ]
+        }
+      },
+      "explicitBackupUnavailable": {
+        "2026-10": [
+          "2026-10-15",
+          "2026-10-07",
+          "2026-10-21",
+          "2026-10-23"
+        ]
+      },
+      "timeOff": [
+        {
+          "start": "2026-10-15",
+          "end": "2026-10-15",
+          "note": "[removed]"
+        }
+      ],
+      "notes": [
+        "Could take some call on Aledo weeks but it is inconvenient",
+        "Call has been getting busier \u2014 no more full weeks"
+      ]
+    },
+    "s5": {
+      "name": "Fierce",
+      "poolMember": true,
+      "availabilityMode": "derived-from-east-plus-weekday-pattern",
+      "outsideDerivedWeeks": {
+        "canBePrimary": true,
+        "weekdayPattern": {
+          "Mon": {
+            "where": "East (Davenport)",
+            "primary": false,
+            "backup": true,
+            "note": "Faraz 9/21: Fierce must be on site at Silvis when on call, so Monday is BACKUP ONLY"
+          },
+          "Tue": {
+            "where": "Clinton all day",
+            "primary": false,
+            "backup": false
+          },
+          "Wed": {
+            "where": "Office Clinton/Silvis",
+            "primary": true,
+            "backup": true,
+            "preferred": true,
+            "note": "'good day to be on call'"
+          },
+          "Thu": {
+            "where": "Clinton all day",
+            "primary": false,
+            "backup": false
+          },
+          "Fri": {
+            "where": "Clinton or Dubuque (rotates)",
+            "primary": "weekend-block-only",
+            "backup": "weekend-block-only",
+            "note": "Faraz 9/21: his Sat/Sun run with his Friday \u2014 he takes Fri+Sat+Sun as one block; never a standalone Friday"
+          },
+          "Sat": {
+            "where": "\u2014",
+            "primary": "weekend-block-only",
+            "backup": "weekend-block-only"
+          },
+          "Sun": {
+            "where": "\u2014",
+            "primary": "weekend-block-only",
+            "backup": "weekend-block-only"
+          }
+        },
+        "source": "Fierce via Faraz 9/21"
+      },
+      "monthlyCap": {
+        "total": 14,
+        "countsEastDays": true,
+        "note": "'willing to take up to 14 days of call per month' \u2014 counts Silvis primary + backup plus East week days from the feed"
+      },
+      "statedPreferenceNotARule": "Fierce described an ideal of East week \u2192 following week Silvis \u2192 ~10 days with no call. Faraz 9/21: NOT a rule \u2014 no penalty, no Davenport alignment; recorded only in his words.",
+      "eastFeed": {
+        "enabled": true,
+        "rule": "Davenport week flagged isBackup (Fierce PRIMARY at East) \u2192 Fierce is Silvis BACKUP every day Mon\u2013Sun. Davenport week flagged isFierceBackup (Fierce BACKUP at East) \u2192 Fierce is Silvis PRIMARY every day Mon\u2013Sun (24/7).",
+        "liveVerifiedDavenportPrimaryWeeks": [
+          "2026-09-28",
+          "2026-11-09"
+        ],
+        "liveVerifiedDavenportBackupWeeks": [
+          "2026-10-12"
+        ],
+        "liveVerifiedOn": "2026-09-21",
+        "liveVerifiedThrough": "2026-11-15",
+        "seedNote": "Read from the Davenport project's anon-readable schedule_weeks on 2026-09-21 (published through the week of 11/9). Later weeks appear once Faraz generates the next Davenport period \u2014 the East feed must re-fetch, never rely on this list. Cross-check: the ER-panel author's doc has Fierce as Silvis backup 9/28\u201310/4 (East primary week \u2713); Burchett's 9/18 email has Fierce primary 10/12 (East backup week \u2713)."
+      },
+      "weekendStyle": "block",
+      "maxConsecutiveDays": 7,
+      "notes": [
+        "Derived weeks (from the East feed) are hard locks; outside them he is in the pool under the weekday pattern above (Faraz 9/21)",
+        "Must be on site at Silvis whenever he is primary (Faraz 9/21)",
+        "Week he is East primary \u2192 Silvis backup; week he is Silvis primary \u2192 East backup (his own words; matches the derivation rule)"
+      ]
+    },
+    "s6": {
+      "name": "Sarkar",
+      "poolMember": true,
+      "availabilityMode": "whitelist-windows",
+      "availableWindows": [
+        {
+          "start": "2026-10-19",
+          "end": "2026-10-24"
+        },
+        {
+          "start": "2026-11-16",
+          "end": "2026-11-21"
+        },
+        {
+          "start": "2026-12-14",
+          "end": "2026-12-18"
+        },
+        {
+          "start": "2027-01-11",
+          "end": "2027-01-16"
+        }
+      ],
+      "daysPerWindowWeek": {
+        "min": 3,
+        "max": 4,
+        "note": "Faraz 9/21: 3\u20134 days a week inside her window"
+      },
+      "weekendStyle": "saturday-only",
+      "hardNeverWeekdays": [
+        "Fri",
+        "Sun"
+      ],
+      "hardNeverWeekdaysReason": "Faraz 9/21: no Fri/Sun block; a Saturday is fine",
+      "maxConsecutiveDays": 2,
+      "monthlyTarget": null,
+      "handoffPartnerRequired": true,
+      "notes": [
+        "Windows run Mon\u2013Sat (Dec: Mon\u2013Fri); Saturday inside a window is allowed, Friday and Sunday are not",
+        "Burchett's October plan (Tue/Thu/Sat with handoff partners) is the model"
+      ]
+    }
+  },
+  "holidays": {
+    "rules": {
+      "unitModel": "One primary + one backup per holiday unit; both stick through every day of the unit. A holiday unit takes precedence over the weekend unit it overlaps; the leftover weekend days form a reduced weekend unit.",
+      "tiers": {
+        "major": [
+          "New Year's",
+          "Thanksgiving",
+          "Christmas"
+        ],
+        "minor": [
+          "Memorial Day",
+          "July 4th",
+          "Labor Day"
+        ]
+      },
+      "fairness": "Track major and minor holiday counts per surgeon separately, lifetime, tenure-normalized (same idea as the Davenport holidayRate).",
+      "dayMembershipNote": "Faraz 9/21: 'the days will have to be figured out' \u2014 defaults below are his current guess; Setup lets the scheduler edit each unit's days per year."
+    },
+    "units": {
+      "2026": [
+        {
+          "name": "Memorial Day",
+          "tier": "minor",
+          "days": [
+            "2026-05-25"
+          ]
+        },
+        {
+          "name": "July 4th",
+          "tier": "minor",
+          "days": [
+            "2026-07-04"
+          ]
+        },
+        {
+          "name": "Labor Day",
+          "tier": "minor",
+          "days": [
+            "2026-09-07"
+          ]
+        },
+        {
+          "name": "Thanksgiving",
+          "tier": "major",
+          "days": [
+            "2026-11-26"
+          ]
+        },
+        {
+          "name": "Christmas",
+          "tier": "major",
+          "days": [
+            "2026-12-24",
+            "2026-12-25"
+          ],
+          "note": "Eve + Day as one unit"
+        },
+        {
+          "name": "New Year's",
+          "tier": "major",
+          "days": [
+            "2026-12-31",
+            "2027-01-01"
+          ],
+          "note": "Eve + Day as one unit"
+        }
+      ],
+      "2027": [
+        {
+          "name": "Memorial Day",
+          "tier": "minor",
+          "days": [
+            "2027-05-31"
+          ]
+        },
+        {
+          "name": "July 4th",
+          "tier": "minor",
+          "days": [
+            "2027-07-04"
+          ]
+        },
+        {
+          "name": "Labor Day",
+          "tier": "minor",
+          "days": [
+            "2027-09-06"
+          ]
+        },
+        {
+          "name": "Thanksgiving",
+          "tier": "major",
+          "days": [
+            "2027-11-25"
+          ]
+        },
+        {
+          "name": "Christmas",
+          "tier": "major",
+          "days": [
+            "2027-12-24",
+            "2027-12-25"
+          ],
+          "note": "Eve + Day as one unit"
+        },
+        {
+          "name": "New Year's",
+          "tier": "major",
+          "days": [
+            "2027-12-31",
+            "2028-01-01"
+          ],
+          "note": "Eve + Day as one unit"
+        }
+      ]
+    }
+  },
+  "existingAssignments": [
+    {
+      "date": "2026-09-14",
+      "primary": "s2",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-15",
+      "primary": "s4",
+      "backup": "s2",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-16",
+      "primary": "s4",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-17",
+      "primary": "s4",
+      "backup": "s2",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-18",
+      "primary": "s4",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-19",
+      "primary": "s2",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-20",
+      "primary": "s2",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-21",
+      "primary": "s3",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-22",
+      "primary": "s3",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-23",
+      "primary": "s2",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-24",
+      "primary": "s3",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-25",
+      "primary": "s2",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-26",
+      "primary": "s3",
+      "backup": "s2",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-27",
+      "primary": "s2",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-09-28",
+      "primary": null,
+      "backup": "s5",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true,
+      "externalCover": "Atwell",
+      "note": "Covered by Dr. Atwell (legacy week, outside this schedule)"
+    },
+    {
+      "date": "2026-09-29",
+      "primary": null,
+      "backup": "s5",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true,
+      "externalCover": "Atwell",
+      "note": "Covered by Dr. Atwell (legacy week, outside this schedule)"
+    },
+    {
+      "date": "2026-09-30",
+      "primary": null,
+      "backup": "s5",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true,
+      "externalCover": "Atwell",
+      "note": "Covered by Dr. Atwell (legacy week, outside this schedule)"
+    },
+    {
+      "date": "2026-10-01",
+      "primary": null,
+      "backup": "s5",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true,
+      "externalCover": "Atwell",
+      "note": "Covered by Dr. Atwell (legacy week, outside this schedule)"
+    },
+    {
+      "date": "2026-10-02",
+      "primary": null,
+      "backup": "s5",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true,
+      "externalCover": "Atwell",
+      "note": "Covered by Dr. Atwell (legacy week, outside this schedule)"
+    },
+    {
+      "date": "2026-10-03",
+      "primary": null,
+      "backup": "s5",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true,
+      "externalCover": "Atwell",
+      "note": "Covered by Dr. Atwell (legacy week, outside this schedule)"
+    },
+    {
+      "date": "2026-10-04",
+      "primary": null,
+      "backup": "s5",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true,
+      "externalCover": "Atwell",
+      "note": "Covered by Dr. Atwell (legacy week, outside this schedule)"
+    },
+    {
+      "date": "2026-10-05",
+      "primary": "s3",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-06",
+      "primary": "s2",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-07",
+      "primary": "s3",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-08",
+      "primary": "s4",
+      "backup": "s3",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-09",
+      "primary": "s3",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-10",
+      "primary": "s3",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-11",
+      "primary": "s3",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-12",
+      "primary": "s5",
+      "backup": "s2",
+      "source": "burchett-email-2026-09-18",
+      "locked": true
+    },
+    {
+      "date": "2026-10-13",
+      "primary": "s4",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-14",
+      "primary": "s2",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-15",
+      "primary": null,
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-16",
+      "primary": "s4",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-17",
+      "primary": "s3",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-18",
+      "primary": "s3",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-19",
+      "primary": "s3",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-20",
+      "primary": "s6",
+      "backup": "s3",
+      "source": "burchett-email-2026-09-17",
+      "locked": true
+    },
+    {
+      "date": "2026-10-21",
+      "primary": "s3",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-22",
+      "primary": "s6",
+      "backup": "s4",
+      "source": "burchett-email-2026-09-17",
+      "locked": true
+    },
+    {
+      "date": "2026-10-23",
+      "primary": "s3",
+      "backup": null,
+      "source": "burchett-email-2026-09-18",
+      "locked": true
+    },
+    {
+      "date": "2026-10-24",
+      "primary": "s6",
+      "backup": null,
+      "source": "burchett-email-2026-09-17",
+      "locked": true
+    },
+    {
+      "date": "2026-10-25",
+      "primary": "s2",
+      "backup": null,
+      "source": "burchett-email-2026-09-17",
+      "locked": true
+    },
+    {
+      "date": "2026-10-26",
+      "primary": "s2",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-27",
+      "primary": "s4",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-28",
+      "primary": "s2",
+      "backup": "s4",
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-29",
+      "primary": "s4",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-30",
+      "primary": "s4",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-10-31",
+      "primary": "s4",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    },
+    {
+      "date": "2026-11-01",
+      "primary": "s4",
+      "backup": null,
+      "source": "office-er-call-panels-2026-09-16",
+      "locked": true
+    }
+  ],
+  "pendingDeltas": [
+    {
+      "date": "2026-10-12",
+      "role": "primary",
+      "surgeon": "s5",
+      "replaces": "s4",
+      "source": "burchett-email-2026-09-18",
+      "status": "applied",
+      "note": "Single day only (Faraz 9/21: October stays as the emails describe it). The full-week derivation rule applies from November onward."
+    },
+    {
+      "date": "2026-10-23",
+      "role": "primary",
+      "surgeon": "s3",
+      "replaces": null,
+      "source": "burchett-email-2026-09-18",
+      "status": "applied"
+    },
+    {
+      "date": "2026-10-20",
+      "role": "primary",
+      "surgeon": "s6",
+      "replaces": null,
+      "source": "burchett-email-2026-09-17",
+      "status": "applied",
+      "note": "Burchett's October plan: Sarkar 10/20, 10/22, 10/24 so she always has a handoff partner; Burchett 10/25 (Sun)."
+    },
+    {
+      "date": "2026-10-22",
+      "role": "primary",
+      "surgeon": "s6",
+      "replaces": null,
+      "source": "burchett-email-2026-09-17",
+      "status": "applied"
+    },
+    {
+      "date": "2026-10-24",
+      "role": "primary",
+      "surgeon": "s6",
+      "replaces": null,
+      "source": "burchett-email-2026-09-17",
+      "status": "applied"
+    },
+    {
+      "date": "2026-10-25",
+      "role": "primary",
+      "surgeon": "s2",
+      "replaces": null,
+      "source": "burchett-email-2026-09-17",
+      "status": "applied"
+    }
+  ],
+  "answeredQuestions": [
+    "Shift boundary: 07:00 \u2192 07:00 (Faraz 9/21).",
+    "October: keep the schedule exactly as the emails describe it (Fierce 10/12 single day; Acton 10/23; Sarkar 10/20, 10/22, 10/24; Burchett 10/25); the rules generate from November onward (Faraz 9/21).",
+    "Sarkar: 3\u20134 days per window week; Saturday OK; never Friday or Sunday; no target (Faraz 9/21).",
+    "Khan: may be Silvis BACKUP on an East call day; Mon/Wed auto-offered whenever East is clear; never Tue/Thu (Faraz 9/21).",
+    "Fierce: in the pool outside his derived weeks under his weekday pattern; up to 14 call days/month; ideal = East week \u2192 Silvis week \u2192 ~10 days off (Fierce via Faraz 9/21).",
+    "the ER-panel author: read-only (viewer) account (Faraz 9/21). administration: no account.",
+    "Fierce: must be on site at Silvis when on call \u2192 Monday is backup-only; weekends are Fri+Sat+Sun blocks; his '10 days off' is a stated preference, not a rule (Faraz 9/21).",
+    "Acton: no specific monthly cap; Khan: no cap (Faraz 9/21).",
+    "Scope (Faraz 9/21): drop APP info/call/vacation, Fierce separate backup weeks, no-call days, vacation approvals; keep trades; holidays = same DSG set with primary+backup per unit sticking through eve+day; vacations self-entered and logged, blocked over on-call days (trade first); stats = shift counts/fairness, 1 shift per 24h, running yearly tally; generate through end of year, then 3/6/9/12-month presets; carry over office notifications, calendar sync, refresh, data management and all safety features.",
+    "Compensation: none in the app (Faraz 9/21).",
+    "Atwell: not in the roster (Faraz 9/21)."
+  ],
+  "openQuestions": [
+    "1. 10/15 (Thu) \u2014 the one open primary day in the locked October import; nobody's rules allow it. To be discussed by the group.",
+    "2. Sarkar's home email address (none on record).",
+    "3. Holiday unit days: confirm the defaults (Thanksgiving = Thu only; Christmas = 12/24+12/25; New Year's = 12/31+1/1; Memorial/Labor = the Monday; July 4th = the day) \u2014 e.g. should a Monday holiday unit include the preceding weekend?"
+  ]
+}
