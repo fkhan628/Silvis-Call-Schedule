@@ -212,10 +212,28 @@ server is now the authority.
 
 ## 2026-09-22 - claim_open_slot (Prompt 13 part 2)
 
-**Status: report-first. NOT applied live until Faraz's go-ahead.** The definition sits in `sql/schema.sql` in its own
-section right after `apply_trade()` and, byte-identical, in `sql/migrations/2026-09-22-claim-open-slot.sql` (the file
-that runs live; `test/schema.test.js` pins the identity, the nine codes in order, the placement, the revoke/grant and
-`security definer set search_path = public`). A `git push` applies nothing.
+**Status: APPLIED LIVE on 2026-09-22 after Faraz's go-ahead in chat** (report-first: the function text had been put in
+front of him earlier that day and the committed body is identical to that draft). The definition sits in `sql/schema.sql`
+in its own section right after `apply_trade()` and, byte-identical, in `sql/migrations/2026-09-22-claim-open-slot.sql`
+(the file that ran live through the linked CLI; `test/schema.test.js` pins the identity, the nine codes in order, the
+placement, the revoke/grant and `security definer set search_path = public`). A `git push` applies nothing.
+
+**Observed 2026-09-22 (Claude Code, linked CLI).** `pg_proc`: `claim_open_slot(p_day date, p_role text)`, security
+definer, `search_path=public`; EXECUTE for `authenticated`, `postgres`, `service_role` only. The rolled-back probe
+returned: `PROBE_RESULTS A=ERR 42501 permission denied for function claim_open_slot;B=ok version=2 backup=s3
+source=claim audit=1 notif=Acton took 4/7 backup;C=ERR CL005 CLAIM_HELD: 2030-04-03 backup is already held by s2;D=ERR
+CL007 CLAIM_LOCKED: 2030-04-05 backup is locked  ask the scheduler to assign it;E=ERR CL003 CLAIM_PAST: 2020-01-01 is
+before today (2026-09-22) in Central time  past days are not open;F=ERR CL006 CLAIM_EXTERNAL: 2030-04-11 primary is
+covered by probe-locum (outside the roster);G=ERR CL008 CLAIM_OTHER_ROLE: you already hold primary on 2030-04-13;H=ERR
+CL009 CLAIM_VACATION: your vacation 4/15-4/15 conflicts with 2030-04-15 backup (a primary shift also blocks the day
+before a vacation);I=ERR CL009 CLAIM_VACATION: your vacation 4/18-4/18 conflicts with 2030-04-17 primary (a primary
+shift also blocks the day before a vacation);I2=ok version=2 backup=s3;J=ERR CL004 CLAIM_OUTSIDE_RANGE: 2030-04-25 is
+outside the published schedule (2020-01-01 to 2030-04-17);K=ok version=2 backup=s3 source=claim;L=ok rows=1
+primary=s4;END`. Leftover count afterwards 0 (2030-04 rows, the 2020-01-01 row, probe-claim time_off and auth users,
+`shift_claimed` notifications, `schedule.claim` audit rows); the project still had one auth user; the live published
+range read `2026-09-14..2026-11-29`. `scripts/verify-rls.sh` then reported `RESULT: 30 passed, 0 failed` - section 7:
+anon `rpc/claim_open_slot` refused with HTTP 401, probes A through L PASS, "claim probe persisted nothing"; 7c-7e SKIP
+until a surgeon-role JWT exists.
 
 **What it is.** `public.claim_open_slot(p_day date, p_role text) returns jsonb` - a linked surgeon takes an OPEN slot
 from the Open shifts board ("Take this shift"). Members cannot write `schedule_days` under RLS, so the write runs as

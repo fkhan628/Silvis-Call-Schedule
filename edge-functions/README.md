@@ -12,9 +12,17 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron with body `{"mode":"open-shifts"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
-function. All four functions were first deployed on 9/22 (verify_jwt off); the
-Prompt 13 changes to `send-notification` and `daily-reminder` are NOT live until
-redeployed (section 3) - confirm with `supabase functions list`.
+function. All four functions were first deployed on 9/22 (verify_jwt off). The
+Prompt 13 versions of `send-notification` and `daily-reminder` were deployed on
+2026-09-22 18:31 UTC (both now version 3, downloaded back and byte-identical to
+this folder; the previous versions were backed up first). Proof through pg_net
+with the Vault secret the same day: `{"mode":"open-shifts","dryRun":true}` ->
+200 `{"mode":"open-shifts","dry_run":true,"open":9,"through":"2026-10-22",
+"published_through":"2026-10-22","window_end":"2026-10-22","sent":0,"failed":0,
+"skipped_pref_off":0,"skipped_no_email":0,"feed_row":"skipped_dry_run","results":
+[{"person_id":"s1","status":"dry_run_composed"}]}`; `{"mode":"nope"}` -> 400; the
+default-mode dryRun still answers as before (200, tomorrow's two on-call people
+`skipped_wrong_hour`). The Monday cron job (section 4) is not created yet.
 
 ## 0. Prerequisites
 

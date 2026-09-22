@@ -1078,9 +1078,9 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(/silvis-open-shifts-weekly/.test(readme), "README job name");
     assert.ok(/silvis-open-shifts-weekly/.test(guide), "guide job name");
   });
-  check("edge-functions/README.md states the deployed state truthfully: the four functions were first deployed on 9/22, the Prompt 13 changes are NOT live until redeployed, confirmed with 'supabase functions list' - never 'Nothing in this folder has been deployed yet'", () => {
+  check("edge-functions/README.md states the deployed state truthfully: the four functions were first deployed on 9/22, the Prompt 13 versions of send-notification and daily-reminder were deployed on 2026-09-22 (version 3, byte-identical) with the open-shifts dryRun proof quoted, confirmed with 'supabase functions list' - never 'Nothing in this folder has been deployed yet'", () => {
     assert.ok(!/Nothing in this folder has been deployed yet/.test(readme), "the stale 'Nothing in this folder has been deployed yet' sentence is gone");
-    assert.ok(/first deployed on 9\/22/.test(readme) && /NOT live until\s+redeployed/.test(readme) && /supabase functions list/.test(readme), "the deployed-state sentence names the first deploy, the not-yet-live changes and the confirming command");
+    assert.ok(/first deployed on 9\/22/.test(readme) && /deployed on\s+2026-09-22 18:31 UTC/.test(readme) && /version 3/.test(readme) && /byte-identical/.test(readme) && /"mode":"open-shifts","dryRun":true/.test(readme) && /supabase functions list/.test(readme), "the deployed-state paragraph names the first deploy, the 2026-09-22 version-3 deploy of the two functions, the byte-identical check, the dryRun proof and the confirming command");
   });
   check("docs/ONBOARDING.md tells surgeons about the Open shifts tab: 'Take this shift' is immediate and logged, the scheduler can still reassign, and the button is gated by the HARD rules (monthly and backup caps included) - it never claims caps do not block", () => {
     assert.ok(/\*\*Open shifts\*\*/.test(onboarding), "names the tab in bold");
