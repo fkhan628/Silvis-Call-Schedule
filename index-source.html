@@ -3135,8 +3135,10 @@ function CallSchedule() {
   const dkHdr = dk ? "linear-gradient(180deg,#16213e,#1a1a2e)" : "linear-gradient(180deg,#ffffff,#f8f9fb)";
   const dkInp = dk ? {background:"#0f3460",border:"1px solid #2a3a5e",color:"#e0e0f0"} : {};
 
-  // --- Today ---
-  const todayStr = fmt(new Date());
+  // --- Today --- ONE notion of today: the Central date (helpers.js
+  // todayCentral) drives the today ring, the coverage strip and the OPEN
+  // logic (an unassigned slot is OPEN only from today forward, Faraz 9/22).
+  const todayStr = todayCentral();
   const todayAssign = schedule[todayStr] || null;
   const buildTonightMsg = () => {
     const a = todayAssign;
@@ -3270,7 +3272,7 @@ function CallSchedule() {
     if (h < 48) return h + " h ago";
     return Math.floor(h / 24) + " days ago";
   };
-  const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr), [schedule, surgeons, monthStartStr, monthEndStr]);
+  const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr, { today: todayStr }), [schedule, surgeons, monthStartStr, monthEndStr, todayStr]);
 
   // --- Calendar tools (Prompt 9 exports) ---
   // Group .ics, the shareable read-only page, the printable view and the ER-panel author's
@@ -3287,7 +3289,7 @@ function CallSchedule() {
       downloadICS(generateICS(events, "Silvis Call - All"), icsFileName(null));
     } catch(e) { console.error("Group calendar export failed:", e); showToast("Calendar export failed: " + errText(e), "error"); }
   };
-  const buildSharePage = () => generateShareHTML(schedule, surgeons, { months: toolMonthList(), holidays, vacations, generatedAt: new Date(), appUrl: location.origin + location.pathname });
+  const buildSharePage = () => generateShareHTML(schedule, surgeons, { months: toolMonthList(), holidays, vacations, generatedAt: new Date(), appUrl: location.origin + location.pathname, today: todayStr });
   const downloadSharePage = () => {
     try {
       const ok = downloadTextFile(buildSharePage(), `silvis-call-${monthStartStr}-${toolRangeEnd()}.html`, "text/html");
@@ -3304,7 +3306,7 @@ function CallSchedule() {
   };
   const openPrintable = () => {
     try {
-      const html = buildPrintableCalendarHTML({ startYear: calYear, startMonth: calMonth, numMonths: toolMonths, schedule, roster: surgeons, holidays, vacations });
+      const html = buildPrintableCalendarHTML({ startYear: calYear, startMonth: calMonth, numMonths: toolMonths, schedule, roster: surgeons, holidays, vacations, today: todayStr });
       const w = window.open("", "_blank");
       if (!w) { showToast("Popup blocked - allow popups for this site and try again.", "error"); return; }
       w.document.open(); w.document.write(html); w.document.close();
@@ -3317,7 +3319,7 @@ function CallSchedule() {
   // the surrounding Monday/Sunday (helpers.js erPanelSpan); the note under the
   // buttons says so and the download is named for the span it really covers.
   const erSpan = erRangeOk ? erPanelSpan(erFrom, erTo) : { from: erFrom, to: erTo, widened: false };
-  const erPanelHtml = useMemo(() => erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo) : "", [schedule, surgeons, erFrom, erTo, erRangeOk]);
+  const erPanelHtml = useMemo(() => erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo, { today: todayStr }) : "", [schedule, surgeons, erFrom, erTo, erRangeOk, todayStr]);
   // Copy for Word: text/html + text/plain in one ClipboardItem so Word pastes
   // a real table. When the rich clipboard is unavailable (http, an old
   // browser, permission denied) the rendered preview is selected instead and
@@ -3325,7 +3327,7 @@ function CallSchedule() {
   const copyErForWord = async () => {
     if (!erRangeOk) return;
     const html = erPanelHtml;
-    const text = buildErCallPanelsText(schedule, surgeons, erFrom, erTo);
+    const text = buildErCallPanelsText(schedule, surgeons, erFrom, erTo, { today: todayStr });
     try {
       if (!(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem && window.isSecureContext)) throw new Error("rich clipboard unavailable");
       await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([text], { type: "text/plain" }) })]);
@@ -3343,7 +3345,7 @@ function CallSchedule() {
   };
   const downloadErHtml = () => {
     if (!erRangeOk) return;
-    try { downloadTextFile(buildErCallPanelsDocument(schedule, surgeons, erFrom, erTo), `silvis-er-call-panels-${erSpan.from}-${erSpan.to}.html`, "text/html"); }
+    try { downloadTextFile(buildErCallPanelsDocument(schedule, surgeons, erFrom, erTo, { today: todayStr }), `silvis-er-call-panels-${erSpan.from}-${erSpan.to}.html`, "text/html"); }
     catch(e) { console.error("ER panel download failed:", e); showToast("Download failed: " + errText(e), "error"); }
   };
   // Arrow keys in the editor move a day; the grid follows into the new month.
@@ -3836,10 +3838,12 @@ function CallSchedule() {
 
         {/* ================ CALENDAR (Slice B grid + Slice C week rows + Slice D editor) ================ */}
         {view==="calendar" && (() => {
-          const SlotLine = ({ role, holder, locked }) => {
+          const SlotLine = ({ role, day, holder, locked }) => {
             const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
             let body;
             if (!holder && !loaded) body = <span className="cal-skel" data-testid="loading-slot" style={{background:dk?"#243250":"#e4e8ee"}}/>;
+            // Unassigned before today (Central): a blank pill-height line - no text, no red (Faraz 9/22).
+            else if (!holder && !slotIsOpen(day, holder, todayStr)) body = <span className="cal-pill cal-blank" aria-hidden="true">&nbsp;</span>;
             else if (!holder) body = <span className="cal-pill cal-open" style={{color:"#c04040",fontWeight:800,letterSpacing:0.4}}>OPEN</span>;
             else if (isExt) { const ext = holder.slice(4); body = <span className="cal-pill cal-ext" title={ext + " (external cover, outside the roster)"} style={{color:dk?"#a0a8b0":"#6a7a88",fontStyle:"italic",background:dk?"#1e2a44":"#eef1f4",borderColor:dk?"#2a3a5e":"#d8dee6"}}><span className="cal-name">{ext}</span><span className="cal-code">{ext.slice(0, 3).toUpperCase()}</span></span>; }
             else { const c = colorOf(holder); body = <span className="cal-pill" title={nameOf(holder)} style={{background:c.tg,color:c.tx,borderColor:c.bd}}><span className="cal-name">{nameOf(holder)}</span><span className="cal-code">{codeOf(holder)}</span></span>; }
@@ -3944,14 +3948,15 @@ function CallSchedule() {
                 const derived = rulesCtx ? rulesCtx.derivedByDay[d] : null;
                 const fc = forecastByDay[d];
                 const pH = dayHolder(a, "primary"); const bH = a ? a.backup : null;
-                const openP = !pH, openB = !bH;
+                const openP = slotIsOpen(d, pH, todayStr), openB = slotIsOpen(d, bH, todayStr); // past unassigned days are blank, not OPEN
                 const inFilter = calSurgeonFilters.length === 0 || (a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup)));
                 const dim = !inFilter || (calOnlyOpen && !(openP || openB));
                 const isToday = d === todayStr;
                 const bg = hol ? (dk ? "#3a3418" : "#fdf6dc") : isWk ? (dk ? "#141c30" : "#f3f6f9") : (dk ? "#16213e" : "#ffffff");
                 const bracket = isWk ? { borderTop: "2px solid #a9c4da", borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
                 const derivedWho = derived ? Object.keys(derived).map(r => nameOf(derived[r]) + " Silvis " + r).join(", ") : "";
-                const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + holderLabel(pH, nameOf), "B " + holderLabel(bH, nameOf)];
+                // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
+                const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
                 if (hol) titleBits.push(hol.name + " (holiday unit)"); if (derivedWho) titleBits.push("East-derived: " + derivedWho); if (a && a.note) titleBits.push("note: " + a.note);
                 return (
                   <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
@@ -3966,8 +3971,8 @@ function CallSchedule() {
                       {derived && <span data-badge="E" title={"East-derived week: " + derivedWho} style={badge(true, "#1a6fa8")}>E</span>}
                       {fc && fc.p >= 0.2 && <span data-badge={fc.p >= forecastThreshold ? "F" : "f"} title={"East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)"} style={badge(fc.p >= forecastThreshold, "#8a5a10")}>F</span>}
                     </div>
-                    <SlotLine role="P" holder={pH} locked={!!(a && a.primaryLocked)}/>
-                    <SlotLine role="B" holder={bH} locked={!!(a && a.backupLocked)}/>
+                    <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)}/>
+                    <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>
                     {(vacByDay[d] || []).length > 0 && (
                       <div className="cal-dots" title={"On vacation: " + vacByDay[d].map(nameOf).join(", ")}>
                         {vacByDay[d].map(pid => <span key={pid} data-vac={pid} style={{width:6,height:6,borderRadius:3,background:textColorOf(pid),display:"inline-block"}}/>)}

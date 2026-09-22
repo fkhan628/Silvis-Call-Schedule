@@ -222,6 +222,13 @@ const failures = [];
 const fail = (m) => { failures.push(m); console.log("FAIL " + m); };
 const ok = (m) => console.log("ok   " + m);
 const failedRequests = [];
+// ONE notion of today for the whole run: the Central date, the same expression
+// the app uses (helpers.js todayCentral). Item Q (Faraz 9/22): an unassigned
+// slot is OPEN only from today forward, so every pin on a specific OPEN day is
+// dated - dated(until, what) runs the pin while today <= until and otherwise
+// prints a note and skips it (the harness is run by hand for years).
+const todayCentral = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+const dated = (until, what) => { if (todayCentral <= until) return true; console.log(`     (today ${todayCentral} is after ${until} - ${what} skipped)`); return false; };
 
 // ---- CDN cache + font stub (shared by every page in the run) ----
 let cdnHits = 0, cdnMisses = 0;
@@ -626,9 +633,9 @@ try {
   if (octCells.length !== 35 || octCells[0].day !== "2026-09-28" || octCells[34].day !== "2026-11-01") fail(`October 2026 grid is not 5 Mon-Sun rows 9/28..11/1: ${octCells.length} cells, ${octCells[0] && octCells[0].day}..${octCells[34] && octCells[34].day}`);
   else ok("October 2026 grid: 35 Mon..Sun cells from 9/28 to 11/1 (weekend unit Fri-Sun in one row)");
   if (!pCells.length) fail("October 2026: no cell carries a primary assignment"); else ok(`October 2026: ${pCells.length} day(s) with 'P <name>', e.g. ${pCells[0].day} P ${pCells[0].p}`);
-  if (!openCells.length) fail("October 2026: no cell shows OPEN"); else ok(`October 2026: ${openCells.length} cell(s) show OPEN (e.g. ${openCells[0].day} open=${openCells[0].open})`);
+  if (dated("2026-11-01", "the 'October 2026 shows OPEN cells' pin (the grid ends 11/1; past unassigned days are blank)")) { if (!openCells.length) fail("October 2026: no cell shows OPEN"); else ok(`October 2026: ${openCells.length} cell(s) show OPEN (e.g. ${openCells[0].day} open=${openCells[0].open})`); }
   const oct15 = octCells.find(c => c.day === "2026-10-15");
-  if (!oct15 || oct15.p || !/OPEN/.test(oct15.text)) fail("2026-10-15 should render P OPEN (the one open primary of the import): " + JSON.stringify(oct15)); else ok("2026-10-15 renders P OPEN");
+  if (dated("2026-10-15", "the '2026-10-15 renders P OPEN' pin")) { if (!oct15 || oct15.p || !/OPEN/.test(oct15.text)) fail("2026-10-15 should render P OPEN (the one open primary of the import): " + JSON.stringify(oct15)); else ok("2026-10-15 renders P OPEN"); }
   const atwellCells = octCells.filter(c => c.day >= "2026-09-28" && c.day <= "2026-10-04");
   if (atwellCells.length !== 7 || !atwellCells.every(c => c.ext === "Atwell" && /Atwell/.test(c.text) && !/OPEN[^]*OPEN/.test(c.text))) fail("week of 9/28: the Atwell external cover is not shown on every cell: " + JSON.stringify(atwellCells.map(c => [c.day, c.ext, c.text.slice(0, 30)])));
   else ok("week of 9/28: all 7 cells show the external cover label 'Atwell' in the primary line (muted, not OPEN)");
@@ -645,11 +652,43 @@ try {
   const row928 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
   if (!/9\/28-10\/4 Atwell/.test(row928) || !/9\/28-10\/4 Fierce/.test(row928)) fail("week row 9/28 lacks '9/28-10/4 Atwell' / '9/28-10/4 Fierce': " + row928); else ok("week row 9/28: '9/28-10/4 Atwell' (primary) and '9/28-10/4 Fierce' (backup) collapsed");
   const row1005 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-10-05"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
-  if (!/10\/9-10\/11 Acton/.test(row1005) || !/10\/7 OPEN/.test(row1005)) fail("week row 10/5 lacks '10/9-10/11 Acton' or '10/7 OPEN': " + row1005); else ok("week row 10/5: same-surgeon run collapsed to '10/9-10/11 Acton', open backup shown as '10/7 OPEN'");
+  if (!/10\/9-10\/11 Acton/.test(row1005)) fail("week row 10/5 lacks '10/9-10/11 Acton': " + row1005); else ok("week row 10/5: same-surgeon run collapsed to '10/9-10/11 Acton'");
+  if (dated("2026-10-07", "the '10/7 OPEN' week-row pin (a past open backup is blank)")) { if (!/10\/7 OPEN/.test(row1005)) fail("week row 10/5 lacks '10/7 OPEN' (open backup, today or later): " + row1005); else ok("week row 10/5: open backup shown as '10/7 OPEN'"); }
   const openRed = await page.$eval('[data-testid=week-rows] [data-kind="open"]', el => getComputedStyle(el).color).catch(() => "");
-  if (!/rgb\(192, 64, 64\)/.test(openRed)) fail("week rows: OPEN entry is not red (#c04040): " + openRed); else ok("week rows: OPEN entries are red");
+  if (openRed) { if (!/rgb\(192, 64, 64\)/.test(openRed)) fail("week rows: OPEN entry is not red (#c04040): " + openRed); else ok("week rows: OPEN entries are red"); }
+  else if (dated("2026-11-01", "the 'week rows OPEN entries are red' pin (no OPEN entry left in the October rows)")) fail("week rows: no OPEN entry found in the October 2026 week rows");
   await page.locator("[data-testid=week-rows]").screenshot({ path: path.join(OUT, "week-rows-oct-2026.png") });
   ok("screenshot test/ui/out/week-rows-oct-2026.png");
+
+  // ---- Item Q (Faraz 9/22): an unassigned slot is OPEN only from today (Central) forward ----
+  // September 2026 (9/1-9/13 have no rows; the import has open backups before
+  // 9/22): no week-row entry dated before today may read "M/D OPEN" and no grid
+  // cell before today may carry the red OPEN pill or a data-open flag. October
+  // 10/15 must still be OPEN in both places while today <= 2026-10-15. A past
+  // cell's hover title must not say OPEN either (fix round: the tooltip).
+  await showMonth(2026, 8);
+  const sepEntries = await page.$$eval("[data-testid=week-rows] tr[data-week]", trs => trs.flatMap(tr => Array.from(tr.querySelectorAll('[data-kind="open"]')).map(el => ({ week: tr.getAttribute("data-week"), text: el.textContent.trim() }))));
+  // "M/D OPEN" -> ISO, the year taken from the row's Monday (a December row can list January days).
+  const entryIso = (e) => { const m = /^(\d{1,2})\/(\d{1,2}) OPEN$/.exec(e.text); if (!m) return null; const wy = Number(e.week.slice(0, 4)), wm = Number(e.week.slice(5, 7)), mo = Number(m[1]); return `${mo < wm ? wy + 1 : wy}-${String(mo).padStart(2, "0")}-${String(m[2]).padStart(2, "0")}`; };
+  const sepDated = sepEntries.map(e => ({ ...e, iso: entryIso(e) }));
+  const sepPast = sepDated.filter(e => !e.iso || e.iso < todayCentral), sepFuture = sepDated.filter(e => e.iso && e.iso >= todayCentral);
+  if (sepPast.length) fail(`September 2026 week rows: ${sepPast.length} OPEN entry(ies) dated before today ${todayCentral} (Central): ${sepPast.slice(0, 6).map(e => e.text).join(", ")}${sepPast.length > 6 ? ", ..." : ""}`);
+  else ok(`September 2026 week rows: no OPEN entry dated before today ${todayCentral} (Central); ${sepFuture.length} OPEN entry(ies) today or later`);
+  const sepGrid = await page.$$eval("[data-testid=cal-grid] .cal-cell", (els, t) => els.filter(e => e.getAttribute("data-day") < t).map(e => ({ day: e.getAttribute("data-day"), pill: !!e.querySelector(".cal-pill.cal-open"), open: e.getAttribute("data-open") || "", text: e.textContent, title: e.getAttribute("title") || "" })), todayCentral);
+  const sepBad = sepGrid.filter(c => c.pill || c.open || /OPEN/.test(c.text) || /OPEN/.test(c.title));
+  if (!sepGrid.length) fail(`September 2026 grid: no cell before today ${todayCentral} to check`);
+  else if (sepBad.length) fail(`September 2026 grid: ${sepBad.length} cell(s) before today ${todayCentral} still show OPEN (pill / data-open / text / title): ${sepBad.slice(0, 5).map(c => `${c.day} open=${c.open} title='${c.title}'`).join(", ")}`);
+  else ok(`September 2026 grid: none of the ${sepGrid.length} cell(s) before today ${todayCentral} shows an OPEN pill, data-open, OPEN text or an OPEN tooltip (e.g. ${sepGrid[0].day} title='${sepGrid[0].title}')`);
+  await page.screenshot({ path: path.join(OUT, "calendar-sep-2026.png"), fullPage: true });
+  ok("screenshot test/ui/out/calendar-sep-2026.png");
+  await showMonth(2026, 9);
+  if (todayCentral <= "2026-10-15") {
+    const oct15Rows = await page.$$eval('[data-testid=week-rows] tr[data-week="2026-10-12"] [data-kind="open"]', els => els.map(e => e.textContent.trim()));
+    const oct15Cell = await page.$eval('[data-testid=cal-grid] [data-day="2026-10-15"]', el => ({ open: el.getAttribute("data-open"), pill: !!el.querySelector(".cal-pill.cal-open"), text: el.textContent }));
+    if (!oct15Rows.includes("10/15 OPEN")) fail("October 2026 week rows: '10/15 OPEN' (today or later) is missing: " + JSON.stringify(oct15Rows));
+    else if (!/P/.test(oct15Cell.open || "") || !oct15Cell.pill || !/OPEN/.test(oct15Cell.text)) fail("October 2026 grid: 10/15 should still be P OPEN with the red pill: " + JSON.stringify(oct15Cell));
+    else ok(`today-forward: 10/15 still reads '10/15 OPEN' in the week rows and P OPEN (data-open=${oct15Cell.open}, red pill) in the grid (today ${todayCentral})`);
+  } else console.log(`     (today ${todayCentral} is after 2026-10-15 - the '10/15 still OPEN' half of the today-forward check is skipped)`);
 
   // ---- Prompt 9: exports (Calendar tools card + My schedule .ics) ----
   // Real downloads are captured and read back; the share page is re-opened
@@ -694,8 +733,10 @@ try {
     watchPage(sharePage, "share");
     await sharePage.goto(BASE + "test/ui/out/" + s.name, { waitUntil: "load" });
     await sharePage.waitForSelector(".mo .cg .cd", { timeout: 5000 });
-    const shareOpen = await sharePage.$eval('.cd[data-day="2026-10-15"] .open', el => getComputedStyle(el).color).catch(() => "");
-    if (!/rgb\(192, 64, 64\)/.test(shareOpen)) fail("share page: 10/15 P OPEN is not red: " + shareOpen); else ok("share page renders: 10/15 P OPEN in red");
+    if (dated("2026-10-15", "the 'share page 10/15 P OPEN red' pin")) {
+      const shareOpen = await sharePage.$eval('.cd[data-day="2026-10-15"] .open', el => getComputedStyle(el).color).catch(() => "");
+      if (!/rgb\(192, 64, 64\)/.test(shareOpen)) fail("share page: 10/15 P OPEN is not red: " + shareOpen); else ok("share page renders: 10/15 P OPEN in red");
+    }
     const shareAtwell = await sharePage.$eval('table.wr[data-month="2026-10"] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
     if (!/9\/28-10\/4 Atwell/.test(shareAtwell)) fail("share page week rows lack '9/28-10/4 Atwell': " + shareAtwell); else ok("share page week rows: '9/28-10/4 Atwell' under the October grid");
     const shareScroll = await sharePage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
@@ -713,8 +754,10 @@ try {
     const printTitle = await pop.title();
     const printCell = await pop.$eval('.cell[data-day="2026-10-05"]', el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
     if (!/P (Khan|Burchett|Acton|Philip|Fierce|Sarkar|OPEN)/.test(printCell) || !/B (Khan|Burchett|Acton|Philip|Fierce|Sarkar|OPEN)/.test(printCell)) fail("printable 10/5 cell lacks 'P <Name>' / 'B <Name>': " + printCell); else ok(`printable view '${printTitle}': 10/5 cell reads "${printCell}"`);
-    const printOpen = await pop.$eval('.cell[data-day="2026-10-15"] .shift .open', el => getComputedStyle(el).color).catch(() => "");
-    if (!/rgb\(192, 0, 0\)/.test(printOpen)) fail("printable: 10/15 OPEN not red: " + printOpen); else ok("printable view: 10/15 P OPEN in red");
+    if (dated("2026-10-15", "the 'printable 10/15 P OPEN red' pin")) {
+      const printOpen = await pop.$eval('.cell[data-day="2026-10-15"] .shift .open', el => getComputedStyle(el).color).catch(() => "");
+      if (!/rgb\(192, 0, 0\)/.test(printOpen)) fail("printable: 10/15 OPEN not red: " + printOpen); else ok("printable view: 10/15 P OPEN in red");
+    }
     const printAtwell = await pop.$eval('.cell[data-day="2026-10-01"] .shift .ext', el => el.textContent).catch(() => "");
     if (!/Atwell/.test(printAtwell)) fail("printable: 10/1 external cover missing: " + printAtwell); else ok("printable view: 10/1 shows '" + printAtwell + "'");
     await pop.screenshot({ path: path.join(OUT, "printable-page.png"), fullPage: true });
@@ -737,8 +780,9 @@ try {
     if (!/^10\/26 - 11\/1 \| /.test(erRow1026) || !/11\/1/.test(erRow1026.split(" | ").slice(1).join(" | "))) fail("ER panel: the 10/26 row must keep Sunday 11/1: " + erRow1026); else ok("ER panel: last October row keeps Sunday 11/1 - '" + erRow1026.slice(0, 60) + "...'");
     const erSpanNote = await page.$eval("[data-testid=er-span-note]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
     if (!/^Whole weeks: the table runs 9\/28 - 11\/1 \(the Mon-Sun weeks around 10\/1 - 10\/31\)/.test(erSpanNote)) fail("ER panel: widened-range note missing or wrong: '" + erSpanNote + "'"); else ok("ER panel: note says the month was widened to whole weeks 9/28 - 11/1");
-    const erOpenRed = await page.$eval('[data-testid=er-panel-preview] [data-kind="open"]', el => getComputedStyle(el).color);
-    if (!/rgb\(255, 0, 0\)/.test(erOpenRed)) fail("ER panel OPEN not red: " + erOpenRed); else ok("ER panel: OPEN entries red (#ff0000)");
+    const erOpenRed = await page.$eval('[data-testid=er-panel-preview] [data-kind="open"]', el => getComputedStyle(el).color).catch(() => "");
+    if (erOpenRed) { if (!/rgb\(255, 0, 0\)/.test(erOpenRed)) fail("ER panel OPEN not red: " + erOpenRed); else ok("ER panel: OPEN entries red (#ff0000)"); }
+    else if (dated("2026-11-01", "the 'ER panel OPEN red' pin (no OPEN entry left in the visible-month panel)")) fail("ER panel: no OPEN entry in the visible-month (Oct 2026) preview");
     await page.click("[data-testid=er-preset-1213]");
     await page.waitForFunction(() => { const r = document.querySelectorAll("[data-testid=er-panel-preview] tr[data-week]"); return r.length === 6 && r[0].getAttribute("data-week") === "2026-11-02"; }, null, { timeout: 3000 });
     const erFromV = await page.$eval("[data-testid=er-from]", el => el.value), erToV = await page.$eval("[data-testid=er-to]", el => el.value);
@@ -852,7 +896,7 @@ try {
   const clipped = await page.$$eval("[data-testid=cal-grid] .cal-pill", els => els.filter(e => e.scrollWidth > e.clientWidth + 0.5).map(e => { const cell = e.closest("[data-day]"); return (cell ? cell.getAttribute("data-day") + ":" : "") + e.textContent + " " + e.scrollWidth + ">" + e.clientWidth; }));
   if (clipped.length) fail(`mobile 390px: ${clipped.length} pill(s) clipped, e.g. ${clipped.slice(0, 4).join(", ")}`); else ok("mobile 390px: no pill is clipped (every .cal-pill scrollWidth <= clientWidth)");
   const openPills = await page.$$eval("[data-testid=cal-grid] .cal-pill.cal-open", els => els.map(e => ({ text: e.textContent, fits: e.scrollWidth <= e.clientWidth + 0.5, line: e.parentElement.scrollWidth <= e.parentElement.clientWidth + 0.5 })));
-  if (!openPills.length) fail("mobile 390px: no OPEN pill found in October 2026 (10/15 is open)"); else if (!openPills.every(p => p.text === "OPEN" && p.fits && p.line)) fail("mobile 390px: OPEN pill truncated: " + JSON.stringify(openPills.filter(p => !(p.fits && p.line)).slice(0, 3))); else ok(`mobile 390px: ${openPills.length} OPEN pill(s) render the full word`);
+  if (!openPills.length) { if (dated("2026-10-15", "the 'mobile OPEN pill renders the full word' pin (10/15 is blank once past)")) fail("mobile 390px: no OPEN pill found in October 2026 (10/15 is open)"); } else if (!openPills.every(p => p.text === "OPEN" && p.fits && p.line)) fail("mobile 390px: OPEN pill truncated: " + JSON.stringify(openPills.filter(p => !(p.fits && p.line)).slice(0, 3))); else ok(`mobile 390px: ${openPills.length} OPEN pill(s) render the full word`);
   const lineOverflow = await page.$$eval("[data-testid=cal-grid] .cal-line", els => els.filter(e => e.scrollWidth > e.clientWidth + 0.5).map(e => { const cell = e.closest("[data-day]"); return (cell ? cell.getAttribute("data-day") : "?") + ":" + e.textContent + (e.querySelector("svg") ? "+lock" : "") + " " + e.scrollWidth + ">" + e.clientWidth; }));
   if (lineOverflow.length) fail(`mobile 390px: ${lineOverflow.length} P/B line(s) overflow their cell, e.g. ${lineOverflow.slice(0, 5).join(", ")}`); else ok("mobile 390px: no P/B line overflows its cell (padlock included)");
   await page.screenshot({ path: path.join(OUT, "calendar-mobile.png"), fullPage: true });
@@ -950,7 +994,7 @@ try {
   // the comparison never depends on which calendar month the run happens in
   // and is never skipped (vis-002).
   const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
-  const todayIso = (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; })();
+  const todayIso = todayCentral; // the Central date, like the app's todayStr (helpers.js todayCentral) - the strip and the recount agree from any time zone
   let liveRows = [];
   try {
     if (fixture) liveRows = fixture.schedule_days.filter(r => r.day >= "2026-09-01");

@@ -48,6 +48,11 @@ const schedule = {
 };
 const holidays = { units: { "2026": [{ name: "Thanksgiving", tier: "major", days: ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"] }] } };
 const vacations = { s3: [["2026-11-03", "2026-11-05"]] };
+// OPEN is shown only from today (Central) forward (Faraz 9/22). Every builder
+// below gets an explicit today so the suite never depends on the wall clock:
+// TODAY_NOV keeps every fixture day open-eligible; TODAY_MID (Sat 11/7) puts
+// 11/6 in the past and 11/9+ in the future.
+const TODAY_NOV = "2026-11-01", TODAY_MID = "2026-11-07";
 
 /* ---------------- ICS ---------------- */
 const all = H.buildICSEvents(schedule, null, roster, {});
@@ -145,7 +150,7 @@ check("generateICS stays backward compatible: events without tzid get plain DTST
 });
 
 /* ---------------- ER Call Panels ---------------- */
-const er = H.buildErCallPanelsHTML(schedule, roster, "2026-10-26", "2026-11-15");
+const er = H.buildErCallPanelsHTML(schedule, roster, "2026-10-26", "2026-11-15", { today: TODAY_NOV });
 const cellText = (html) => html.replace(/<br\s*\/?>/g, " | ").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&");
 const erRows = (html) => Array.from(html.matchAll(/<tr data-week="(\d{4}-\d{2}-\d{2})">([\s\S]*?)<\/tr>/g)).map(m => ({ week: m[1], cells: Array.from(m[2].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)).map(c => cellText(c[1])) }));
 
@@ -183,37 +188,37 @@ check("ER panel: an external cover reads 'M/D-M/D Atwell' (not OPEN, not red) an
   assert.ok(/11\/3-11\/5 Fierce/.test(w2.cells[2]), w2.cells[2]);
 });
 check("ER panel (exp-001): a mid-week range lists WHOLE Mon-Sun weeks by default (from 11/4 -> the 11/2 row still starts '11/2 Khan' under label '11/2 - 11/8'); the document title and erPanelSpan report the widened span", () => {
-  const full = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-11-04", "2026-11-08"));
+  const full = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-11-04", "2026-11-08", { today: TODAY_NOV }));
   assert.strictEqual(full.length, 1);
   assert.strictEqual(full[0].cells[0], "11/2 - 11/8");
   assert.ok(/^11\/2 Khan \| 11\/3-11\/5 Atwell/.test(full[0].cells[1]), full[0].cells[1]);
   // the visible-month default (Oct 2026) keeps 9/28-9/30 and 11/1 in their rows
-  const oct = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-10-01", "2026-10-31"));
+  const oct = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-10-01", "2026-10-31", { today: "2026-09-01" }));
   assert.strictEqual(oct[0].cells[0], "9/28 - 10/4");
   assert.ok(oct[0].cells[1].startsWith("9/28"), "first row must start on Monday 9/28, got " + oct[0].cells[1]);
   assert.ok(/11\/1/.test(oct[oct.length - 1].cells[1]) && oct[oct.length - 1].cells[0] === "10/26 - 11/1", "last row must include Sunday 11/1: " + oct[oct.length - 1].cells[1]);
   assert.deepStrictEqual(H.erPanelSpan("2026-10-01", "2026-10-31"), { from: "2026-09-28", to: "2026-11-01", widened: true });
   assert.deepStrictEqual(H.erPanelSpan("2026-11-02", "2026-12-13"), { from: "2026-11-02", to: "2026-12-13", widened: false });
-  const doc = H.buildErCallPanelsDocument(schedule, roster, "2026-10-01", "2026-10-31");
+  const doc = H.buildErCallPanelsDocument(schedule, roster, "2026-10-01", "2026-10-31", { today: "2026-09-01" });
   assert.ok(doc.includes("<title>ER Call Panels - Silvis Surgical Care - 9/28 to 11/1</title>"), "document title must name the whole-week span");
-  const txt = H.buildErCallPanelsText(schedule, roster, "2026-11-04", "2026-11-08").split("\n");
+  const txt = H.buildErCallPanelsText(schedule, roster, "2026-11-04", "2026-11-08", { today: TODAY_NOV }).split("\n");
   assert.ok(txt[1].startsWith("11/2 - 11/8\t11/2 Khan; "), txt[1]);
 });
 check("ER panel: clipToRange:true is an explicit opt-in - only in-range days, and the row label shrinks to the clipped span (never a full-week label over a partial row)", () => {
-  const clipped = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-11-04", "2026-11-08", { clipToRange: true }));
+  const clipped = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-11-04", "2026-11-08", { clipToRange: true, today: TODAY_NOV }));
   assert.strictEqual(clipped.length, 1);
   assert.strictEqual(clipped[0].cells[0], "11/4 - 11/8");
   assert.ok(/^11\/4-11\/5 Atwell \| 11\/6 OPEN/.test(clipped[0].cells[1]), clipped[0].cells[1]);
-  const one = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-11-06", "2026-11-06", { clipToRange: true }));
+  const one = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-11-06", "2026-11-06", { clipToRange: true, today: TODAY_NOV }));
   assert.strictEqual(one[0].cells[0], "11/6");
-  const doc = H.buildErCallPanelsDocument(schedule, roster, "2026-11-04", "2026-11-08", { clipToRange: true });
+  const doc = H.buildErCallPanelsDocument(schedule, roster, "2026-11-04", "2026-11-08", { clipToRange: true, today: TODAY_NOV });
   assert.ok(doc.includes("<title>ER Call Panels - Silvis Surgical Care - 11/4 to 11/8</title>"));
 });
 check("ER panel: names are HTML-escaped; every cell is inline-styled (Word paste keeps borders); text twin is tab-separated; document wraps the table with a title", () => {
   const evil = H.buildErCallPanelsHTML({ "2026-11-02": day(null, null, { externalCover: "<b>x</b>" }) }, roster, "2026-11-02", "2026-11-02");
   assert.ok(evil.includes("&lt;b&gt;x&lt;/b&gt;") && !evil.includes("<b>x</b>"));
   assert.ok(!/<td>/.test(er) && !/<th>/.test(er), "a cell without inline style");
-  const txt = H.buildErCallPanelsText(schedule, roster, "2026-10-26", "2026-11-15").split("\n");
+  const txt = H.buildErCallPanelsText(schedule, roster, "2026-10-26", "2026-11-15", { today: TODAY_NOV }).split("\n");
   assert.strictEqual(txt[0], "MON/SUN DATES\tTRAUMA\tTRAUMA BACKUP");
   assert.strictEqual(txt.length, 4);
   assert.ok(txt[1].startsWith("10/26 - 11/1\t") && txt[1].split("\t").length === 3);
@@ -222,7 +227,7 @@ check("ER panel: names are HTML-escaped; every cell is inline-styled (Word paste
 });
 
 /* ---------------- Share page ---------------- */
-const share = H.generateShareHTML(schedule, roster, { months: ["2026-10", "2026-11"], holidays, vacations, generatedAt: new Date(2026, 8, 22, 9, 5) });
+const share = H.generateShareHTML(schedule, roster, { months: ["2026-10", "2026-11"], holidays, vacations, generatedAt: new Date(2026, 8, 22, 9, 5), today: TODAY_NOV });
 check("share page: a month grid AND a week-rows table for each requested month, in order", () => {
   const sections = Array.from(share.matchAll(/<section class="mo" data-month="(\d{4}-\d{2})">/g)).map(m => m[1]);
   assert.deepStrictEqual(sections, ["2026-10", "2026-11"]);
@@ -270,7 +275,7 @@ check("share page: months default to the schedule's span; {startYear,startMonth,
 });
 
 /* ---------------- Printable ---------------- */
-const printable = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 9, numMonths: 2, schedule, roster, holidays, vacations });
+const printable = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 9, numMonths: 2, schedule, roster, holidays, vacations, today: TODAY_NOV });
 check("printable: cells carry 'P <Name>' / 'B <Name>' lines, OPEN in red, the external cover, holiday unit names", () => {
   assert.ok(printable.includes('<span class="role">P</span> <span class="who">Khan</span>'));
   assert.ok(printable.includes('<span class="role">B</span> <span class="who">Burchett</span>'));
@@ -296,8 +301,73 @@ check("printable: holidays accepted as the blob shape, a flat unit list or a day
   assert.ok(flat.includes('<div class="holiday-note">Thanksgiving</div>'));
   const map = H.holidayNameByDay({ "2026-11-26": { name: "Thanksgiving", tier: "major" }, "2026-12-25": "Christmas" });
   assert.deepStrictEqual(map, { "2026-11-26": "Thanksgiving", "2026-12-25": "Christmas" });
-  const bare = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 10, numMonths: 1, schedule: {} });
+  const bare = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 10, numMonths: 1, schedule: {}, today: TODAY_NOV });
   assert.ok(bare.includes('<span class="open">OPEN</span>'));
+});
+
+/* ---------------- Item Q (Faraz 9/22): OPEN only from today (Central) forward ----------------
+   today = Sat 11/7: 11/6 (open in both roles) is in the past, 11/9.. is the future. */
+const shareMid = H.generateShareHTML(schedule, roster, { months: ["2026-11"], holidays, vacations, generatedAt: new Date(2026, 10, 7, 9, 5), today: TODAY_MID });
+const shareCell = (html, d) => { const j = html.indexOf(`data-day="${d}"`); assert.ok(j > 0, "no cell " + d); const i = html.lastIndexOf('<div class="cd', j); return html.slice(i, html.indexOf("</div></div>", j) + 12); };
+check("share page (today 11/7): the past open day 11/6 has NO <span class=\"open\"> in its cell (the P and B role letters stay), the future open day 11/9 still has two; the week rows drop '11/6 OPEN' and keep '11/9 OPEN'", () => {
+  const c6 = shareCell(shareMid, "2026-11-06");
+  assert.strictEqual((c6.match(/<span class="open">OPEN<\/span>/g) || []).length, 0, c6);
+  assert.ok(!/OPEN/.test(c6), "OPEN text in a past cell: " + c6);
+  assert.ok(c6.includes('<div class="ln"><span class="rl">P</span></div>') && c6.includes('<div class="ln"><span class="rl">B</span></div>'), "the empty P/B lines must keep their role letters: " + c6);
+  const c9 = shareCell(shareMid, "2026-11-09");
+  assert.strictEqual((c9.match(/<span class="open">OPEN<\/span>/g) || []).length, 2, c9);
+  const c7 = shareCell(shareMid, "2026-11-07");
+  assert.ok(/<span class="rl">P<\/span><span class="bdg"[^>]*>Burchett<\/span>/.test(c7), "assigned days are unchanged: " + c7);
+  assert.ok(!shareMid.includes(">11/6 OPEN</div>"), "'11/6 OPEN' must not appear in the week rows");
+  assert.ok(shareMid.includes('<div class="wr-open">11/9 OPEN</div>'), "'11/9 OPEN' must still appear");
+  const row = shareMid.slice(shareMid.indexOf('<tr data-week="2026-11-02">'), shareMid.indexOf("</tr>", shareMid.indexOf('<tr data-week="2026-11-02">')));
+  assert.deepStrictEqual(Array.from(row.matchAll(/<div class="wr-[a-z]+"[^>]*>([^<]*)<\/div>/g)).map(m => m[1]), ["11/2 Khan", "11/3-11/5 Atwell", "11/7-11/8 Burchett", "11/2 Burchett", "11/3-11/5 Fierce", "11/7-11/8 Acton"]);
+  // the day of the boundary itself is OPEN when unassigned: 11/7 backup null -> shown
+  const boundary = H.generateShareHTML({ "2026-11-07": day("s2", null) }, roster, { months: ["2026-11"], today: TODAY_MID });
+  assert.strictEqual((shareCell(boundary, "2026-11-07").match(/<span class="open">OPEN<\/span>/g) || []).length, 1, "today inclusive");
+});
+const printMid = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 10, numMonths: 1, schedule, roster, holidays, vacations, today: TODAY_MID });
+check("printable (today 11/7): the 11/6 cell has no class=\"open\" and no OPEN text but keeps both role letters; 11/9 still has two red OPEN spans", () => {
+  const cell = (html, d, next) => html.slice(html.indexOf(`data-day="${d}"`), html.indexOf(`data-day="${next}"`));
+  const nov6 = cell(printMid, "2026-11-06", "2026-11-07");
+  assert.strictEqual((nov6.match(/class="open"/g) || []).length, 0, nov6);
+  assert.ok(!/OPEN/.test(nov6), nov6);
+  assert.ok(nov6.includes('<div class="shift"><span class="role">P</span> </div>') && nov6.includes('<div class="shift"><span class="role">B</span> </div>'), "empty P/B lines keep the role letters: " + nov6);
+  const nov9 = cell(printMid, "2026-11-09", "2026-11-10");
+  assert.strictEqual((nov9.match(/<span class="open">OPEN<\/span>/g) || []).length, 2, nov9);
+  const nov7 = cell(printMid, "2026-11-07", "2026-11-08");
+  assert.ok(nov7.includes('<span class="role">P</span> <span class="who">Burchett</span>'), nov7);
+});
+check("ER panel (today 11/7): HTML has no data-kind=\"open\" span for 11/6, the text flavour has no '11/6 OPEN', the 11/9 row still lists its OPEN days; the document and clipToRange follow", () => {
+  const html = H.buildErCallPanelsHTML(schedule, roster, "2026-11-02", "2026-11-15", { today: TODAY_MID });
+  assert.ok(!html.includes("11/6 OPEN"), "11/6 OPEN leaked into the HTML");
+  const rows = erRows(html);
+  assert.deepStrictEqual(rows.map(r => r.week), ["2026-11-02", "2026-11-09"]);
+  assert.strictEqual(rows[0].cells[1], "11/2 Khan | 11/3-11/5 Atwell | 11/7-11/8 Burchett");
+  assert.strictEqual(rows[0].cells[2], "11/2 Burchett | 11/3-11/5 Fierce | 11/7-11/8 Acton");
+  const w1 = html.slice(html.indexOf('<tr data-week="2026-11-02">'), html.indexOf('<tr data-week="2026-11-09">'));
+  assert.strictEqual((w1.match(/data-kind="open"/g) || []).length, 0, w1);
+  assert.deepStrictEqual(rows[1].cells[1].split(" | "), ["11/9 OPEN", "11/10 Philip", "11/11 OPEN", "11/12 OPEN", "11/13 OPEN", "11/14 OPEN", "11/15 OPEN"]);
+  assert.ok(html.includes('<span data-kind="open" style="color:#ff0000;font-weight:bold">11/9 OPEN</span>'));
+  const txt = H.buildErCallPanelsText(schedule, roster, "2026-11-02", "2026-11-15", { today: TODAY_MID }).split("\n");
+  assert.strictEqual(txt[1], "11/2 - 11/8\t11/2 Khan; 11/3-11/5 Atwell; 11/7-11/8 Burchett\t11/2 Burchett; 11/3-11/5 Fierce; 11/7-11/8 Acton");
+  assert.ok(txt[2].startsWith("11/9 - 11/15\t11/9 OPEN; 11/10 Philip; 11/11 OPEN"), txt[2]);
+  const doc = H.buildErCallPanelsDocument(schedule, roster, "2026-11-02", "2026-11-08", { today: TODAY_MID });
+  assert.ok(!doc.includes('data-kind="open"') && !doc.includes("11/6 OPEN"), "the document flavour still shows the past open day");
+  const clipped = erRows(H.buildErCallPanelsHTML(schedule, roster, "2026-11-06", "2026-11-09", { clipToRange: true, today: TODAY_MID }));
+  assert.deepStrictEqual(clipped.map(r => r.cells[1]), ["11/7-11/8 Burchett", "11/9 OPEN"]);
+  // today itself is OPEN when unassigned
+  const onDay = erRows(H.buildErCallPanelsHTML({ "2026-11-07": day("s2", null) }, roster, "2026-11-07", "2026-11-07", { clipToRange: true, today: TODAY_MID }));
+  assert.deepStrictEqual([onDay[0].cells[1], onDay[0].cells[2]], ["11/7 Burchett", "11/7 OPEN"]);
+});
+check("exports default today (none given): a 2020 ER week / share month / printable month carry no OPEN, a 2099 week carries fourteen", () => {
+  const past = H.buildErCallPanelsHTML({}, roster, "2020-01-06", "2020-01-12");
+  assert.strictEqual((past.match(/data-kind="open"/g) || []).length, 0, "2020 must be blank under the default today");
+  const future = H.buildErCallPanelsHTML({}, roster, "2099-01-05", "2099-01-11"); // Mon 1/5 .. Sun 1/11 2099: one week
+  assert.strictEqual((future.match(/data-kind="open"/g) || []).length, 14);
+  assert.ok(!/OPEN/.test(H.generateShareHTML({}, roster, { months: ["2020-01"] }).split('<div class="lg">')[1].split("</div>").slice(1).join("</div>")), "2020 share page shows OPEN outside the legend");
+  assert.ok(!/<span class="open">/.test(H.buildPrintableCalendarHTML({ startYear: 2020, startMonth: 0, numMonths: 1, schedule: {} })), "2020 printable shows OPEN");
+  assert.ok(/<span class="open">OPEN<\/span>/.test(H.buildPrintableCalendarHTML({ startYear: 2099, startMonth: 0, numMonths: 1, schedule: {} })), "2099 printable must show OPEN");
 });
 
 /* ---------------- STRICT ICS: parser, VTIMEZONE evaluation, edge-function parity ----------------

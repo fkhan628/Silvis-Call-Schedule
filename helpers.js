@@ -3,7 +3,13 @@
 // Ported from the Davenport app. Date/ICS/download utilities are kept as-is;
 // the daily-model helpers (dayRowToAssignment ... payloadLooksWipedDaily) were
 // added in Prompt 6 Slice A and are unit-tested by test/data-layer.test.js.
-// The export builders are STUBS until Prompt 9 (exports).
+// The export builders (share page, printable month, ER Call Panels) arrived
+// in Prompt 9 and are unit-tested by test/exports.test.js.
+// todayCentral() / slotIsOpen(dateStr, holder, today) (Faraz 9/22): the app's
+// ONE notion of today is the Central date, and an unassigned slot is OPEN only
+// from today forward - before today it renders blank (no red, no pill, no
+// "M/D OPEN" line, no export entry). buildWeekRows and every export builder
+// take opts.today (default todayCentral()) and route OPEN through slotIsOpen.
 //
 // BROWSER-SAFE: this file is loaded as a classic <script>, so every top-level
 // name here is a global. Names must not collide with config.js / rules.js /
@@ -30,6 +36,36 @@ function fmtMD(dayStr) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dayStr || ""));
   if (!m) return String(dayStr || "?");
   return `${Number(m[2])}/${Number(m[3])}`;
+}
+
+// Today's date as "YYYY-MM-DD" in America/Chicago - the same expression
+// bump-version.js uses. The call is in Silvis, so the app has ONE notion of
+// today (Central) for the today ring, the coverage strip and the OPEN logic,
+// whatever device clock a travelling surgeon carries. If the runtime has no
+// time-zone data the device-local date is used and a warning is logged.
+function todayCentral() {
+  try {
+    const s = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    console.warn("todayCentral: unexpected en-CA date format, using the device date:", s);
+  } catch (e) { console.warn("todayCentral: time zone data unavailable, using the device date", e); }
+  return fmt(new Date());
+}
+
+// An ISO day if `v` is one, else todayCentral() - how every opts.today is read.
+function todayOrCentral(v) {
+  return (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : todayCentral();
+}
+
+// slotIsOpen(dateStr, holder, today) -> true iff the slot has NO holder
+// (null / undefined / "") AND dateStr is today or later (today inclusive,
+// both ISO strings). An unassigned slot before today is not OPEN - nobody can
+// be paged for a day that has passed - so the grid, the week rows and every
+// export render it blank (Faraz 9/22). A roster id or "ext:<name>" is a
+// holder. A missing or malformed today falls back to todayCentral(). Pure.
+function slotIsOpen(dateStr, holder, today) {
+  if (holder !== null && holder !== undefined && holder !== "") return false;
+  return String(dateStr || "") >= todayOrCentral(today);
 }
 
 /* ═══ DAILY MODEL - row <-> assignment ═══
@@ -271,9 +307,14 @@ function slotLabel(dayStr, role) {
    ("9/28-10/4 Atwell"); OPEN days never collapse - each open day stays
    visible as "M/D OPEN" (the ER-panel author's red entries). A day with no row is OPEN.
    Primary: roster id, else externalCover, else OPEN. Backup: roster id or OPEN.
+   opts.today ("YYYY-MM-DD", default todayCentral()): an unassigned day BEFORE
+   today produces NO entry at all (slotIsOpen) - the day is simply absent from
+   that column, so a same-surgeon run never bridges it; assigned days, external
+   covers and today/future OPEN days are unchanged (Faraz 9/22).
    Pure: no DOM, no state. Prompt 9's export reuses it. */
 function buildWeekRows(schedule, roster, rangeStart, rangeEnd, opts) {
   const o = opts || {};
+  const today = todayOrCentral(o.today);
   const sched = schedule || {};
   const nameById = {};
   (roster || []).forEach(r => { if (r && r.id) nameById[r.id] = r.name || r.id; });
@@ -303,6 +344,7 @@ function buildWeekRows(schedule, roster, rangeStart, rangeEnd, opts) {
       const out = [];
       days.forEach(d => {
         const h = holderOf(d, role);
+        if (h.kind === "open" && !slotIsOpen(d, null, today)) return; // past + unassigned: blank, no entry
         const last = out[out.length - 1];
         const adjacent = last && fmt(addD(parse(last.end), 1)) === d;
         if (last && adjacent && last.kind !== "open" && last.kind === h.kind && last.id === h.id && last.name === h.name) { last.end = d; return; }
@@ -585,7 +627,9 @@ function surgeonTextColor(c, code, dark) {
    grid the app shows (two lines per day, "P <name>" / "B <name>", OPEN in
    red, an externalCover in italics, holiday unit names, vacation lines) and
    the ER-panel author's week-rows table for that month (buildWeekRows). `months` follows
-   normalizeMonths(); default = the schedule's span. */
+   normalizeMonths(); default = the schedule's span. opts.today (default
+   todayCentral()): an unassigned slot before today renders an empty line
+   (the P/B letter stays, no OPEN text, no red) - slotIsOpen decides. */
 function generateShareHTML(schedule, roster, opts) {
   const o = opts || {};
   const sched = schedule || {};
@@ -594,17 +638,16 @@ function generateShareHTML(schedule, roster, opts) {
   const holByDay = holidayNameByDay(o.holidays);
   const vacations = o.vacations || {};
   const generatedAt = o.generatedAt ? new Date(o.generatedAt) : new Date();
+  const today = todayOrCentral(o.today);
   const nameById = {}, colorById = {};
   list.forEach((r, i) => { nameById[r.id] = r.name || r.id; colorById[r.id] = exportColorsFor(r, i); });
   const nameOf = (id) => nameById[id] || id;
   const pill = (id) => { const c = colorById[id] || EXPORT_PAL[6]; return `<span class="bdg" style="background:${c.tg};color:${c.tx};border-color:${c.bd}">${escHtml(nameOf(id))}</span>`; };
-  const holderHtml = (a, role) => {
-    if (role === "primary") {
-      if (a && a.primary) return pill(a.primary);
-      if (a && a.externalCover) return `<span class="ext">${escHtml(a.externalCover)} (ext)</span>`;
-      return `<span class="open">OPEN</span>`;
-    }
-    return (a && a.backup) ? pill(a.backup) : `<span class="open">OPEN</span>`;
+  const holderHtml = (a, role, ds) => {
+    const h = dayHolder(a, role);
+    if (!h) return slotIsOpen(ds, h, today) ? `<span class="open">OPEN</span>` : "";
+    if (typeof h === "string" && h.indexOf("ext:") === 0) return `<span class="ext">${escHtml(h.slice(4))} (ext)</span>`;
+    return pill(h);
   };
   const entryHtml = (e) => e.kind === "open" ? `<div class="wr-open">${escHtml(e.text)}</div>` : e.kind === "external" ? `<div class="wr-ext">${escHtml(e.text)}</div>` : `<div class="wr-s" style="color:${(colorById[e.id] || EXPORT_PAL[6]).tx}">${escHtml(e.text)}</div>`;
 
@@ -622,15 +665,15 @@ function generateShareHTML(schedule, roster, opts) {
       const hol = holByDay[ds];
       const cls = "cd" + (hol ? " hol" : isWk ? " we" : "");
       let inner = `<div class="dn"><span>${d.getDate()}</span>${hol ? `<span class="ht">${escHtml(hol)}</span>` : ""}</div>`;
-      inner += `<div class="ln"><span class="rl">P</span>${holderHtml(a, "primary")}</div>`;
-      inner += `<div class="ln"><span class="rl">B</span>${holderHtml(a, "backup")}</div>`;
+      inner += `<div class="ln"><span class="rl">P</span>${holderHtml(a, "primary", ds)}</div>`;
+      inner += `<div class="ln"><span class="rl">B</span>${holderHtml(a, "backup", ds)}</div>`;
       const vac = list.filter(s => onVac(s.id, ds, vacations)).map(s => escHtml(s.name));
       if (vac.length) inner += `<div class="vl">VAC ${vac.join(", ")}</div>`;
       if (a && a.note) inner += `<div class="nt" title="${escHtml(a.note)}">NOTE</div>`;
       grid += `<div class="${cls}" data-day="${ds}">${inner}</div>`;
     }
     grid += `</div>`;
-    const rows = buildWeekRows(sched, list, range.start, range.end);
+    const rows = buildWeekRows(sched, list, range.start, range.end, { today });
     let table = `<table class="wr" data-month="${range.start.slice(0, 7)}"><thead><tr><th>MON/SUN DATES</th><th>TRAUMA</th><th>TRAUMA BACKUP</th></tr></thead><tbody>`;
     rows.forEach(r => { table += `<tr data-week="${r.monday}"><td class="wd">${escHtml(r.label)}</td><td>${r.primary.map(entryHtml).join("")}</td><td>${r.backup.map(entryHtml).join("")}</td></tr>`; });
     table += `</tbody></table>`;
@@ -702,7 +745,9 @@ ${body}
    lanes) with the daily-model cell content: "P <Name>" / "B <Name>" (OPEN in
    red, an external cover in italics), the holiday unit name, and one bar per
    surgeon vacation ("<Name> VAC"). Opened with window.open + document.write;
-   the toolbar offers Print / Close and hides itself when printing. */
+   the toolbar offers Print / Close and hides itself when printing.
+   opts.today (default todayCentral()): an unassigned slot before today is an
+   empty "P" / "B" line - no OPEN text, no red (slotIsOpen). */
 function buildPrintableCalendarHTML(opts) {
   const o = opts || {};
   const startYear = Number(o.startYear), startMonth = Number(o.startMonth);
@@ -711,6 +756,7 @@ function buildPrintableCalendarHTML(opts) {
   const list = (o.roster || o.surgeons || []).filter(r => r && r.id);
   const vacations = o.vacations || {};
   const holByDay = holidayNameByDay(o.holidays);
+  const today = todayOrCentral(o.today);
   const MONTH_NAMES = EXPORT_MONTH_NAMES;
   const nameById = {}; list.forEach(r => { nameById[r.id] = r.name || r.id; });
   const nameOf = (id) => nameById[id] || id;
@@ -724,10 +770,11 @@ function buildPrintableCalendarHTML(opts) {
 
   function cellLinesFor(ds) {
     const a = sched[ds] || null;
+    const openOrBlank = (h) => slotIsOpen(ds, h, today) ? `<span class="open">OPEN</span>` : "";
     const p = (a && a.primary) ? `<span class="who">${escHtml(nameOf(a.primary))}</span>`
       : (a && a.externalCover) ? `<span class="ext">${escHtml(a.externalCover)} (ext)</span>`
-      : `<span class="open">OPEN</span>`;
-    const b = (a && a.backup) ? `<span class="who">${escHtml(nameOf(a.backup))}</span>` : `<span class="open">OPEN</span>`;
+      : openOrBlank(null);
+    const b = (a && a.backup) ? `<span class="who">${escHtml(nameOf(a.backup))}</span>` : openOrBlank(null);
     return `<div class="shift"><span class="role">P</span> ${p}</div><div class="shift"><span class="role">B</span> ${b}</div>`;
   }
 
@@ -941,7 +988,9 @@ ${pages}
    listed under it - a clipped row would silently drop covered days under a
    header that claims the full week. opts.clipToRange=true is an explicit
    opt-in for callers that want only the in-range days (then the label is
-   the clipped span). buildWeekRows does the collapsing. */
+   the clipped span). buildWeekRows does the collapsing. opts.today (default
+   todayCentral()) reaches buildWeekRows: a past unassigned day has no entry
+   in the HTML, the text flavour or the document (Faraz 9/22). */
 function erPanelSpan(from, to) {
   const isDay = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
   if (!isDay(from) || !isDay(to) || to < from) return { from: from, to: to, widened: false };
@@ -950,7 +999,7 @@ function erPanelSpan(from, to) {
 }
 function erPanelRows(schedule, roster, from, to, opts) {
   const clip = !!(opts && opts.clipToRange);
-  const rows = buildWeekRows(schedule, roster, from, to, { clipToRange: clip });
+  const rows = buildWeekRows(schedule, roster, from, to, { clipToRange: clip, today: opts && opts.today });
   if (clip) rows.forEach(r => { if (r.days.length) { const a = r.days[0], b = r.days[r.days.length - 1]; r.label = a === b ? fmtMD(a) : fmtMD(a) + " - " + fmtMD(b); } });
   return rows;
 }
@@ -1440,7 +1489,7 @@ if (typeof module !== "undefined" && module.exports) {
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
-    fmt, parse, addD, monOf, getMondays, onVac, fmtMD,
+    fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
