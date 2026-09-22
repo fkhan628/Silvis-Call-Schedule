@@ -317,6 +317,7 @@
         "forecastNote": "Uses groupRules.eastFeed.forecast while Davenport is unpublished (Faraz 9/21 evening)."
       },
       "monthlyTarget": null,
+      "monthlyTargetNote": "9/22 (Prompt 12 J): null = equal share. The generator gives every pool member an implied target of an equal share of the month's open primary slots and, separately, of its open backup slots (diagnostics.impliedTargets; his backup count is balanced like everyone else's). A number here would set the PRIMARY target only; { primary, backup } sets each. There is no neutral or zero term. The share divides the month's OPEN slots by the whole pool while the deviation counts whole-month days, so where a locked floor pins a member (his own locked Thanksgiving primaries, Fierce's derived week) the targets ask for fewer placements than there are open slots (impliedTargets.months[m].placeableAtTarget) and the surplus days are placed by the soft terms alone - kept on purpose 9/22 pending a decision on a water-filled share.",
       "monthlyCap": null,
       "notes": [
         "Stated 9/21 (supersedes the earlier 'no Mon/Wed nights' statement): main coverage = weekends; can do Mon/Wed; never Tue/Thu",
@@ -821,7 +822,7 @@
         "Windows run Mon-Fri (the clinic manager 9/22 evening); a window Friday is a standalone primary day; Saturday and Sunday are outside every window, so the windows are her only hard rule",
         "Burchett's October plan (Tue/Thu/Sat with handoff partners) was the model; since 9/22 evening she starts at two primary days per window week and adjusts once she is here (Faraz: not hard and fast yet)",
         "maxConsecutiveDays 2 = the group-wide default, hard on real primary days (Prompt 12 A); maxConsecutiveAnyRole 2 is the soft any-role limit with the long-run penalty",
-        "monthlyTarget stays null: her monthly primary target is derived by the generator as daysPerWindowWeek.target x the window weeks in the month (diagnostics.impliedTargets windowTarget)"
+        "monthlyTarget stays null: her monthly primary target is derived by the generator as daysPerWindowWeek.target x the window weeks in the month (diagnostics.impliedTargets windowTarget); since Prompt 12 J she is outside the equal-share pool (no backup target) and her reserved window primaries come off the pool's open primary slots (impliedTargets.months[m].reservedForWindows)"
       ],
       "handoffPartnerRequiredNote": "Diagnostics flag only (Prompt 12 N, 9/22 evening): the generator lists diagnostics.handoffGaps and warns when the day after one of her primaries is hers again or open; the soft penalty on consecutive days is preferAlternateDays.",
       "weekendStyleNote": "daily (9/22 evening) = a window Friday is an ordinary standalone day (memberPen 0 in a daily weekend pattern); a multi-day block or a split membership is still offered but carries weekendBlockPenalty (strong = weights.strong, 10) per surgeon as a soft penalty. The legacy value saturday-only (Saturday member of a split or daily weekend only, never Friday/Sunday, never a block) still works for older blobs."

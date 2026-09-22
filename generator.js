@@ -39,27 +39,40 @@
 //   3 primary pass    holidays first, then weekends + days most-constrained-first
 //                     (jittered ties). Patterns: holidayUnitCandidates /
 //                     weekendUnitPatterns / per-surgeon eligibility. Score =
-//                     soft sum + target-deviation delta + pattern penalty +
-//                     holiday load + jitter; minimum wins; none -> open. The
-//                     target delta uses the fairness target, or a neutral
-//                     implied term for an explicit-null pool member (genTargets).
-//   4 backup pass     same with primary fixed.
+//                     soft sum + target-deviation delta FOR THE ROLE BEING PLACED
+//                     + pattern penalty + holiday load + jitter; minimum wins;
+//                     none -> open. The target delta uses the per-role fairness
+//                     target of genTargets (Prompt 12 J: equal primary and backup
+//                     shares; no neutral term, no explicit-null branch).
+//   4 backup pass     same with primary fixed, against the backup targets.
 //   5 repair          open slots: unit retry (holidays), direct fill, then
 //                     1-hop and 2-hop swaps of non-locked generator-placed
 //                     day-unit slots, each move re-verified via eligibility().
-//   6 smoothing       move a non-locked day-unit slot from a surgeon above his
-//                     monthly target to one below while eligibility holds, the
-//                     soft score does not worsen beyond weights.smoothingTolerance
-//                     and total target deviation strictly falls.
+//   6 smoothing       per role (primary, then backup): move a non-locked
+//                     day-unit slot of that role from a surgeon above his
+//                     monthly target for the role to one below while eligibility
+//                     holds, the soft score does not worsen beyond
+//                     weights.smoothingTolerance and the role's deviation
+//                     strictly falls.
 //   7 evaluate        final eligibility pass over every generator-placed slot
 //                     (hard violations must be 0; counted anyway), soft list,
-//                     open slots, target deviation, spreads -> scoreCandidate().
+//                     open slots, primary deviation, backup deviation, spreads
+//                     -> scoreCandidate().
 // Best-of-N keeps the minimum total; early exit only when nothing is open and
 // the soft sum is 0.
 //
+// Prompt 12 J (9/22) - equal-share fairness (rules doc section 6, guide section
+// 15): every pool member carries TWO monthly targets, an equal share of the
+// month's open primary slots (after the windows surgeon's reserved primaries)
+// and, separately, of its open backup slots; counts, unit scoring, pending
+// forced slots, smoothing and the score are all per role (genTargets,
+// genMonthCount(role), genTargetDelta(role), genSmooth, genEvaluate).
+// diagnostics.impliedTargets shows every share and, per member, the two targets
+// and the "allowed by rules" slot counts so an availability shortfall is visible.
+//
 // Prompt 12 N (9/22 evening) - a windows surgeon (availableWindows) with a
-// daysPerWindowWeek.target: her monthly target is target x window weeks in the
-// month, PRIMARY days only (G.primaryOnly), see genTargets; the window-week
+// daysPerWindowWeek.target: her monthly PRIMARY target is target x window weeks
+// in the month and she has no backup target (genTargets); the window-week
 // count itself is SOFT (rules.js eligibility) and is reported, never repaired:
 // diagnostics.windowWeeks (one row per window week overlapping the range, with
 // status met / under / over / partial) plus a warning per fully-in-range week
@@ -69,7 +82,8 @@
 var GEN_DAY_MS = 86400000;
 var GEN_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 var GEN_ROLES = ["primary", "backup"];
-var GEN_SCORE_WEIGHTS = { uncoveredPrimary: 1e9, uncoveredBackup: 1e7, hardViolations: 1e6, softSum: 1e3, targetDeviation: 100, weekendSpread: 10, holidaySpread: 1 };
+// Prompt 12 J: primary spread before backup spread (targetDeviation split per role, 9/22).
+var GEN_SCORE_WEIGHTS = { uncoveredPrimary: 1e9, uncoveredBackup: 1e7, hardViolations: 1e6, softSum: 1e3, primaryDeviation: 300, backupDeviation: 100, weekendSpread: 10, holidaySpread: 1 };
 // Hard reasons that depend only on the schedule state (a swap can lift them).
 var GEN_DYNAMIC_REASONS = ["monthly-cap", "max-consecutive", "backup-cap", "backup-weekend-cap", "max-major-holidays", "holds-other-role"]; // window-week-max left the vocabulary 9/22 evening (Prompt 12 N: soft target)
 var genRulesCache = null;
@@ -178,7 +192,7 @@ function scoreCandidate(parts) {
   var p = parts || {};
   var out = {
     uncoveredPrimary: p.uncoveredPrimary || 0, uncoveredBackup: p.uncoveredBackup || 0, hardViolations: p.hardViolations || 0,
-    softSum: p.softSum || 0, targetDeviation: p.targetDeviation || 0, weekendSpread: p.weekendSpread || 0, holidaySpread: p.holidaySpread || 0
+    softSum: p.softSum || 0, primaryDeviation: p.primaryDeviation || 0, backupDeviation: p.backupDeviation || 0, weekendSpread: p.weekendSpread || 0, holidaySpread: p.holidaySpread || 0
   };
   var total = 0;
   Object.keys(GEN_SCORE_WEIGHTS).forEach(function (k) { total += out[k] * GEN_SCORE_WEIGHTS[k]; });
@@ -206,64 +220,57 @@ function genHoldsFullBlock(W, day, role, id) {
   for (var k = 0; k < 3; k++) { var e = W[genAddDays(fri, k)]; if (!e || e[role] !== id) return false; }
   return true;
 }
-// Silvis days the surgeon holds in a month, read from the working schedule: any
-// role, or PRIMARY only for a surgeon in G.primaryOnly (Prompt 12 N, 9/22 evening:
-// a windows surgeon whose target is her window-week PRIMARY target; her backups
-// are allowed but never counted against it). Prompt 12 J replaces this count.
-function genMonthCountScan(W, id, month, primaryOnly) {
+// Silvis days the surgeon holds in a month IN ONE ROLE, read from the working
+// schedule (Prompt 12 J: every count is per role - primary days against the
+// primary target, backup days against the backup target; one day held in one
+// role is one day).
+function genMonthCountScan(W, id, month, role) {
   var days = genMonthDays(month), c = 0;
-  for (var i = 0; i < days.length; i++) { var e = W[days[i]]; if (e && (e.primary === id || (!primaryOnly && e.backup === id))) c++; }
+  for (var i = 0; i < days.length; i++) { var e = W[days[i]]; if (e && e[role] === id) c++; }
   return c;
 }
-// Running per-candidate counters (S.counts[month][id]) kept exact by genSet/genUnset.
+// Running per-candidate counters (S.counts[month][id] = { primary, backup }) kept exact by genSet/genUnset.
 function genInitCounts(G, S) {
   S.counts = {};
   G.months.forEach(function (month) {
     S.counts[month] = {};
-    G.ctx.activeIds.forEach(function (id) { S.counts[month][id] = genMonthCountScan(G.ctx.schedule, id, month, !!G.primaryOnly[id]); });
+    G.ctx.activeIds.forEach(function (id) { S.counts[month][id] = { primary: genMonthCountScan(G.ctx.schedule, id, month, "primary"), backup: genMonthCountScan(G.ctx.schedule, id, month, "backup") }; });
   });
 }
-function genMonthCount(G, S, id, month) {
+function genMonthCount(G, S, id, month, role) {
   var m = S.counts[month];
-  return m && m[id] !== undefined ? m[id] : genMonthCountScan(G.ctx.schedule, id, month, !!G.primaryOnly[id]);
+  return m && m[id] ? m[id][role] : genMonthCountScan(G.ctx.schedule, id, month, role);
 }
 function genBump(G, S, day, id, delta, role) {
   var m = S.counts[genMonthOf(day)];
-  if (!m || m[id] === undefined) return;
-  if (G.primaryOnly[id]) { if (role === "primary") m[id] += delta; return; } // N: primary days only, exact per slot
-  var e = G.ctx.schedule[day];
-  // distinct days: the counter moves only when the surgeon gains his first / loses his last role that day
-  if (delta > 0 && (e.primary === id) !== (e.backup === id)) m[id] += 1;
-  else if (delta < 0 && e.primary !== id && e.backup !== id) m[id] -= 1;
+  if (!m || !m[id]) return;
+  m[id][role] += delta;
 }
-// Fairness target (deviation term, smoothing, tallies display) - null when the surgeon has none.
-function genTargetFor(G, month, id) { var t = G.targets.byMonth[month]; return t && t[id] != null ? t[id] : null; }
-// Unit-scoring target: the fairness target, or the neutral term of an explicit-null pool member (see genTargets).
-function genScoreTargetFor(G, month, id) { var t = G.targets.scoreByMonth[month]; return t && t[id] != null ? t[id] : null; }
-// Still-open day-unit slots in `month` where `id` is the ONLY eligible surgeon
-// (measured on the lock-only schedule): load he will carry anyway, so the
-// target term sees it before weekends and holidays are handed out.
-function genPendingForced(G, S, id, month, exceptDay) {
+// Fairness target for a role (deviation term, unit scoring, smoothing, tallies
+// display) - null when the surgeon has none for that role (see genTargets).
+function genTargetFor(G, month, id, role) { var t = G.targets.byMonth[month], x = t && t[id]; return x && x[role] != null ? x[role] : null; }
+// Still-open day-unit slots of `role` in `month` where `id` is the ONLY eligible
+// surgeon (measured on the lock-only schedule): load he will carry anyway, so
+// the target term sees it before weekends and holidays are handed out.
+function genPendingForced(G, S, id, month, exceptDay, role) {
   var list = G.forced[id] && G.forced[id][month];
   if (!list) return 0;
-  var W = G.ctx.schedule, n = 0, primaryOnly = !!G.primaryOnly[id];
+  var W = G.ctx.schedule, n = 0;
   for (var i = 0; i < list.length; i++) {
     var f = list[i];
-    if (f.day === exceptDay) continue;
+    if (f.day === exceptDay || f.roles.indexOf(role) < 0) continue;
     var e = W[f.day];
-    if (e.primary === id || (!primaryOnly && e.backup === id)) continue;
-    for (var r = 0; r < f.roles.length; r++) if ((!primaryOnly || f.roles[r] === "primary") && genSlotOpen(e, f.roles[r])) { n++; break; }
+    if (e.primary === id || e.backup === id) continue; // already his that day (either role: he cannot take the other)
+    if (genSlotOpen(e, role)) n++;
   }
   return n;
 }
-// Change in |count - target| when `extra` more days in `month` go to `id`
-// (0 when the surgeon carries neither a target nor a neutral term, and 0 for a
-// BACKUP placement of a primary-only-counted surgeon - N: her backups are free).
+// Change in |count - target| for `role` when `extra` more days of that role in
+// `month` go to `id` (0 when the surgeon carries no target for the role).
 function genTargetDelta(G, S, id, month, extra, exceptDay, role) {
-  var T = genScoreTargetFor(G, month, id);
+  var T = genTargetFor(G, month, id, role);
   if (T === null) return 0;
-  if (role === "backup" && G.primaryOnly[id]) return 0;
-  var c = genMonthCount(G, S, id, month) + genPendingForced(G, S, id, month, exceptDay);
+  var c = genMonthCount(G, S, id, month, role) + genPendingForced(G, S, id, month, exceptDay, role);
   return (Math.abs(c + extra - T) - Math.abs(c - T)) * G.W.low;
 }
 function genTargetDeltaForDays(G, S, id, days, role) {
@@ -387,12 +394,20 @@ function buildUnits(ctx, startDate, endDate) {
     wu.reduced = wu.present.length < 3;
     return wu;
   });
-  // Tightness per role on the current schedule.
-  var ids = ctx.activeIds;
+  // Tightness per role on the current schedule, and - from the same eligibility walk
+  // (Prompt 12 J) - allowed[month][id][role]: the open in-range slots of the role the
+  // rules let each surgeon take on this schedule (a holiday day counts when he is a
+  // candidate for its unit; a weekend day as a block member of a full unit).
+  var ids = ctx.activeIds, allowed = {};
+  days.forEach(function (d) { var m = genMonthOf(d); if (!allowed[m]) { allowed[m] = {}; ids.forEach(function (id) { allowed[m][id] = { primary: 0, backup: 0 }; }); } });
+  function countAllowed(d, id, role) { allowed[genMonthOf(d)][id][role]++; }
   GEN_ROLES.forEach(function (role) {
     holidays.forEach(function (u) {
-      var anyOpen = u.inRange.some(function (d) { return genSlotOpen(ctx.schedule[d], role); });
-      u.tightness[role] = anyOpen ? R.holidayUnitCandidates(ctx, { name: u.name, tier: u.tier, days: u.inRange }, role).length : 99;
+      var openDays = u.inRange.filter(function (d) { return genSlotOpen(ctx.schedule[d], role); });
+      if (!openDays.length) { u.tightness[role] = 99; return; }
+      var cands = R.holidayUnitCandidates(ctx, { name: u.name, tier: u.tier, days: u.inRange }, role);
+      u.tightness[role] = cands.length;
+      cands.forEach(function (id) { openDays.forEach(function (d) { countAllowed(d, id, role); }); });
     });
     weekends.forEach(function (u) {
       var anyOpen = u.present.some(function (d) { return genSlotOpen(ctx.schedule[d], role); });
@@ -402,7 +417,11 @@ function buildUnits(ctx, startDate, endDate) {
       var n = 0;
       for (var i = 0; i < ids.length; i++) {
         var can = false;
-        for (var k = 0; k < u.present.length && !can; k++) can = R.eligibility(ctx, u.present[k], role, ids[i], { asBlockMember: u.present.length === 3 }).ok;
+        for (var k = 0; k < u.present.length; k++) {
+          var d = u.present[k];
+          if (!genSlotOpen(ctx.schedule[d], role)) continue;
+          if (R.eligibility(ctx, d, role, ids[i], { asBlockMember: u.present.length === 3 }).ok) { can = true; countAllowed(d, ids[i], role); }
+        }
         if (can) n++;
       }
       u.tightness[role] = n;
@@ -410,11 +429,11 @@ function buildUnits(ctx, startDate, endDate) {
     dayUnits.forEach(function (u) {
       if (!genSlotOpen(ctx.schedule[u.day], role)) { u.tightness[role] = 99; return; }
       var n = 0;
-      for (var i = 0; i < ids.length; i++) if (R.eligibility(ctx, u.day, role, ids[i]).ok) n++;
+      for (var i = 0; i < ids.length; i++) if (R.eligibility(ctx, u.day, role, ids[i]).ok) { n++; countAllowed(u.day, ids[i], role); }
       u.tightness[role] = n;
     });
   });
-  return { holidays: holidays, weekends: weekends, days: dayUnits, all: holidays.concat(weekends, dayUnits), holidayDaySet: holidayDaySet };
+  return { holidays: holidays, weekends: weekends, days: dayUnits, all: holidays.concat(weekends, dayUnits), holidayDaySet: holidayDaySet, allowed: allowed };
 }
 
 // Holidays first (tightest first), then weekends and day units together,
@@ -429,122 +448,152 @@ function genOrder(G, role, rng) {
 
 /* ----------------------------------------------------------- targets */
 
-// Monthly targets (rules doc section 6; orientation section 3 item 10), per month:
-//   numeric monthlyTarget    -> that number: fairness target (deviation term,
-//                               smoothing) AND unit-scoring term.
-//   absent, pool member      -> implied: target = max(lockedHeld, min(share, clip))
-//                               share = the month's open in-range slots / active
-//                               pool members without a numeric target; clip =
+// Monthly targets - Prompt 12 J (9/22): EQUAL SHARES, per role (rules doc section 6,
+// guide section 15 "no neutral/zero terms; primary spread then backup spread").
+//   pool                     -> active roster ids with rules.poolMember !== false, no
+//                               availableWindows and no roster type "external"
+//                               (genPoolIds). Everyone in it carries BOTH targets.
+//   per month                -> primaryOpen  = in-range PRIMARY slots open on the
+//                               lock-only base minus reservedForWindows, the windows
+//                               surgeons' reserved primaries (window target x her
+//                               window weeks of the month, capped by her open window
+//                               days); backupOpen = in-range BACKUP slots open on the
+//                               base. primaryShare = primaryOpen / pool size,
+//                               backupShare = backupOpen / pool size. Days already
+//                               held through locks (import, derived, published days
+//                               outside the range) count TOWARD a share, never on top.
+//   pool member              -> primaryTarget = max(lockedHeld.primary,
+//                               min(primaryShare, clipPrimary)); clipPrimary =
 //                               min(capPreferred, capPrimary - 1) minus the East
-//                               PRIMARY-week days of that month he does NOT already
-//                               hold in the base schedule (a countsEastDays cap; a
-//                               held derived week is in lockedHeld and counts once;
-//                               9/22, Prompt 12 K - caps count primary only).
-//                               NOTE: Prompt 12 J replaces this target model (equal
-//                               primary and backup shares); until then the share
-//                               and lockedHeld still count both roles and only the
-//                               clip follows the primary-only cap.
-//                               Days already held through locks (import, derived,
-//                               published days outside the range) count TOWARD the
-//                               share, never on top of it, and an implied target
-//                               never sits on the cap itself (the cap is a ceiling;
-//                               a locked month above it keeps its held count).
-//   explicit null, pool member -> NO fairness target (nothing pulls his count,
-//                               smoothing never moves his days, tallies show "-")
-//                               but the unit-scoring term uses the same implied
-//                               number as a NEUTRAL term: a zero term loses every
-//                               weekend/day tie while the targeted surgeons are
-//                               under target and wins every tie once they are over,
-//                               which turns a no-target surgeon into the residual
-//                               sink (Khan: 0 primaries, 25 backups). With the neutral
-//                               term he competes on equal footing.
-//   availability windows +   -> (Prompt 12 N, 9/22 evening) a numeric monthly
-//   daysPerWindowWeek.target    PRIMARY target = target x the window weeks whose
-//                               window days fall in that month AND touch the
-//                               generated range (a week counts once, in the month
-//                               of its first window day; a week outside the range
-//                               adds nothing, as with the in-range shares), no
-//                               backup target: the month count for such a surgeon
-//                               is PRIMARY only (G.primaryOnly - genMonthCount,
-//                               genBump, genTargetDelta ignore her backups) and
-//                               impliedTargets.windowTarget / windowWeeks expose
-//                               it for Prompt 12 J to consume. A month the range
-//                               touches without a window week gives her NO target
-//                               (noTerm, tallies "-"), not a numeric 0 (N review).
-//                               Until J she still counts in the share divisor of
-//                               the others (pre-N she was a noTerm divisor member
-//                               too, so N moved nobody else's target); J decides
-//                               whether to take her and her window slots out.
-//   availability windows,    -> no term at all (window rules fix the load).
-//   no window target
-//   poolMember === false     -> no target, no term.
-// diagnostics.impliedTargets[month] prints every input and which surgeons carry
-// a neutral term (neutralTerm) or none (noTerm); diagnostics.scoreTargets is the
-// per-month table the unit scoring actually used.
-var GEN_TARGET_RULE = "target = max(lockedHeld, min(share, clip)); share = open in-range slots / pool members without a numeric target; clip = min(capPreferred, capPrimary - 1) - East primary-week days (K); explicit null = no fairness target but the same number as a neutral scoring term; windows + daysPerWindowWeek.target = target x window weeks of the month the range touches, PRIMARY days only, no target in a month without one (N; the windows surgeon still counts in the share divisor until J); windows without a target = no term";
+//                               PRIMARY-week days of the month he does not hold as
+//                               Silvis primary (a countsEastDays cap adds those days
+//                               to his primary count whether or not he holds the
+//                               derived Silvis backup - K, per role); null when
+//                               uncapped, so an implied target never sits on the cap.
+//                               backupTarget = max(lockedHeld.backup,
+//                               min(backupShare, backupCap.perMonthDays when set)).
+//   numeric monthlyTarget    -> a NUMBER is the primary target (the backup target
+//                               stays the share); an OBJECT { primary, backup } sets
+//                               each numeric member. An explicit null means "equal
+//                               share" - there is no neutral term and no
+//                               "explicit null = no target" branch any more.
+//   availability windows +   -> (Prompt 12 N, 9/22 evening) primaryTarget = target x
+//   daysPerWindowWeek.target    the window weeks whose window days fall in that month
+//                               AND touch the generated range (a week counts once, in
+//                               the month of its first window day); NO backup target;
+//                               a month without a window week gives her no target at
+//                               all (null, tallies "-"), never a numeric 0 (N review).
+//                               She is outside the pool; her reserved primaries come
+//                               off the pool's primaryOpen.
+//   everyone else            -> no targets (poolMember false, external, windows
+//                               without a target), unless a numeric override says so.
+//   allowedPrimary / allowedBackup -> the month's in-range open slots of the role
+//                               where eligibility() passes on the lock-only base
+//                               (static availability, measured once per generate()
+//                               inside buildUnits' tightness walk: a holiday day
+//                               counts when he is a candidate for its unit, a
+//                               weekend day of a full Fri-Sat-Sun unit counts when
+//                               he may take it as a BLOCK MEMBER - so a
+//                               weekend-block-only surgeon's weekend days count),
+//                               so a shortfall caused by availability is visible.
+//   month scope              -> lockedHeld and the targets are whole-calendar-month
+//                               figures (the deviation counts the merged month); a
+//                               month the range only touches (rangeDays < its length)
+//                               keeps its full-month locked floor although few or no
+//                               slots of it are being generated.
+//   placeableAtTarget        -> sum over every targeted surgeon of max(0, target -
+//                               lockedHeld) per role: the open slots the targets ask
+//                               the generator to place. With the flat share it can be
+//                               BELOW primaryOpen / backupOpen in a month where a
+//                               locked floor or a clip pins a member (his share of
+//                               the open slots is not redistributed); those surplus
+//                               days carry no target pressure. Reported, not fixed
+//                               here (a water-filled share is a spec decision).
+// diagnostics.impliedTargets = { rule, pool, months: { m: { primaryOpen, backupOpen,
+// poolSize, reservedForWindows, primaryShare, backupShare, rangeDays,
+// placeableAtTarget: { primary, backup }, windowTarget, windowWeeks,
+// members: { id: { primaryTarget, backupTarget, lockedHeld: { primary, backup },
+// clipPrimary, eastPrimaryDays, allowedPrimary, allowedBackup } } } } };
+// diagnostics.targets (= scoreTargets) is the per-month { id: { primary, backup } }
+// table the unit scoring, smoothing and the deviation terms use.
+var GEN_TARGET_RULE = "equal shares per role (J): pool = active, poolMember !== false, no availableWindows, not external; primaryShare = (open in-range primary slots - the windows surgeons' reserved primaries) / pool size; backupShare = open in-range backup slots / pool size; pool member primaryTarget = max(lockedHeld.primary, min(primaryShare, clipPrimary)) with clipPrimary = min(capPreferred, capPrimary - 1) - East primary-week days not held as Silvis primary (K; null when uncapped), backupTarget = max(lockedHeld.backup, min(backupShare, backupCap.perMonthDays)); a numeric monthlyTarget sets the primary target, { primary, backup } sets each, explicit null = equal share; windows + daysPerWindowWeek.target = target x window weeks of the month the range touches, primary only, no backup target, no target in a month without a window week (N); everyone else: no targets; allowedPrimary / allowedBackup = open in-range slots where eligibility passes on the lock-only schedule (a weekend day of a full unit as a block member, a holiday day as a unit candidate); lockedHeld and the targets are whole-calendar-month figures even where the range only touches the month (rangeDays); placeableAtTarget = sum of max(0, target - lockedHeld) per role - below the open slots where a locked floor or a clip pins a member, since the flat share is not redistributed";
+// monthlyTarget override -> { primary: number|null, backup: number|null }
+function genTargetOverride(v) {
+  if (typeof v === "number" && isFinite(v)) return { primary: v, backup: null };
+  if (v && typeof v === "object") return { primary: typeof v.primary === "number" && isFinite(v.primary) ? v.primary : null, backup: typeof v.backup === "number" && isFinite(v.backup) ? v.backup : null };
+  return { primary: null, backup: null };
+}
+function genRound1(v) { return Math.round(v * 10) / 10; }
 function genTargets(G) {
-  var ctx = G.ctx, base = G.ctx.schedule, byMonth = {}, scoreByMonth = {}, implied = { rule: GEN_TARGET_RULE, months: {} };
-  var ids = ctx.activeIds;
-  var noNumeric = ids.filter(function (id) { var r = ctx.per[id].rules; return r.poolMember !== false && typeof r.monthlyTarget !== "number"; });
+  var ctx = G.ctx, base = ctx.schedule, ids = ctx.activeIds, pool = genPoolIds(G);
+  var byMonth = {}, implied = { rule: GEN_TARGET_RULE, pool: pool.slice(), months: {} };
+  var poolSet = {};
+  pool.forEach(function (id) { poolSet[id] = true; });
   G.months.forEach(function (month) {
-    var openSlots = 0;
-    G.days.forEach(function (d) {
-      if (genMonthOf(d) !== month) return;
-      GEN_ROLES.forEach(function (role) { if (genSlotOpen(base[d], role)) openSlots++; });
-    });
-    var share = noNumeric.length ? openSlots / noNumeric.length : 0;
-    byMonth[month] = {}; scoreByMonth[month] = {};
-    var I = implied.months[month] = { openSlots: openSlots, divisor: noNumeric.length, share: Math.round(share * 10) / 10, targets: {}, neutralTerm: {}, noTerm: [], lockedHeld: {}, eastOnlyDays: {}, capClip: {}, windowTarget: {}, windowWeeks: {} };
+    var inMonth = G.days.filter(function (d) { return genMonthOf(d) === month; });
+    var primaryOpen = 0, backupOpen = 0;
+    inMonth.forEach(function (d) { if (genSlotOpen(base[d], "primary")) primaryOpen++; if (genSlotOpen(base[d], "backup")) backupOpen++; });
+    // N: window target x the window weeks of this month that the generated range touches (a week counts
+    // once, by its first window day; a week entirely outside the range adds nothing - like every other
+    // target here, hers is measured on the range being generated). Her reserved primaries - capped by
+    // the open window days she can actually hold - come off the pool's primary slots.
+    var reserved = 0, windowTarget = {}, windowWeeks = {}, windowIds = {};
     ids.forEach(function (id) {
-      var P = ctx.per[id], r = P.rules;
-      if (typeof r.monthlyTarget === "number") { byMonth[month][id] = r.monthlyTarget; scoreByMonth[month][id] = r.monthlyTarget; return; }
-      if (r.poolMember === false) return;
-      if (P.hasWindows) {
-        if (P.windowTarget === null) { I.noTerm.push(id); return; }
-        // N: window target x the window weeks of this month that the generated range touches (a week
-        // counts once, by its first window day; a week entirely outside the range adds nothing - like
-        // every other target here, hers is measured on the range being generated)
-        var weeks = G.windowWeeks[id] || {};
-        var nWeeks = Object.keys(weeks).filter(function (mon) { return genMonthOf(weeks[mon][0]) === month && weeks[mon].some(function (d) { return d >= G.start && d <= G.end; }); }).length;
-        var wt = P.windowTarget * nWeeks;
-        var heldP = 0;
-        genMonthDays(month).forEach(function (d) { var e = base[d]; if (e && e.primary === id) heldP++; });
-        I.lockedHeld[id] = heldP; I.eastOnlyDays[id] = 0; I.capClip[id] = null;
-        I.windowTarget[id] = wt; I.windowWeeks[id] = nWeeks;
-        // (N review) no window week in this month -> no target and no term (tallies target null),
-        // never a numeric 0 the preview would print as "Target 0"; she is outside-window all month anyway
-        if (!nWeeks) { I.noTerm.push(id); return; }
-        byMonth[month][id] = wt; scoreByMonth[month][id] = wt; I.targets[id] = wt;
-        return;
-      }
-      var held = 0, eastOnly = 0;
-      genMonthDays(month).forEach(function (d) {
-        var e = base[d], holds = !!(e && (e.primary === id || e.backup === id));
-        if (holds) held++;
-        // K: the days a countsEastDays cap adds are his East PRIMARY-week days
-        // (derived Silvis backup). A day he already holds - as the derived backup
-        // itself, or as Silvis primary - is in `held` and is counted ONCE; only an
-        // East primary-week day he does NOT hold in the base schedule (the derived
-        // lock overridden or skipped) is East-only. Counting a held derived week
-        // twice shrank his clip from 13 to 6 and collapsed the November target onto
-        // the locked floor (K review, 9/22).
-        else if (P.countsEastDays && P.eastPrimaryDays.has(d)) eastOnly++;
-      });
-      var clip = null;
-      if (P.capPrimary !== null) {
-        var ceiling = P.capPreferred !== null ? Math.min(P.capPreferred, P.capPrimary - 1) : P.capPrimary - 1;
-        clip = Math.max(0, ceiling - eastOnly);
-      }
-      var t = Math.max(held, clip === null ? share : Math.min(share, clip));
-      t = Math.round(t * 10) / 10;
-      I.lockedHeld[id] = held; I.eastOnlyDays[id] = eastOnly; I.capClip[id] = clip;
-      scoreByMonth[month][id] = t;
-      if (Object.prototype.hasOwnProperty.call(r, "monthlyTarget")) { I.neutralTerm[id] = t; return; } // explicit null: neutral term only
-      byMonth[month][id] = t;
-      I.targets[id] = t;
+      var P = ctx.per[id];
+      if (!P.hasWindows || P.windowTarget === null || P.rules.poolMember === false || genIsExternal(ctx, id)) return;
+      var weeks = G.windowWeeks[id] || {};
+      var nWeeks = Object.keys(weeks).filter(function (mon) { return genMonthOf(weeks[mon][0]) === month && weeks[mon].some(function (d) { return d >= G.start && d <= G.end; }); }).length;
+      var wt = P.windowTarget * nWeeks;
+      var openWindow = inMonth.filter(function (d) { return P.windowDays.has(d) && genSlotOpen(base[d], "primary"); }).length;
+      windowTarget[id] = wt; windowWeeks[id] = nWeeks; windowIds[id] = true;
+      reserved += Math.min(wt, openWindow);
     });
+    var poolN = pool.length;
+    var primaryShare = poolN ? genRound1(Math.max(0, primaryOpen - reserved) / poolN) : 0;
+    var backupShare = poolN ? genRound1(backupOpen / poolN) : 0;
+    var I = implied.months[month] = { primaryOpen: primaryOpen, backupOpen: backupOpen, poolSize: poolN, reservedForWindows: reserved, primaryShare: primaryShare, backupShare: backupShare, rangeDays: inMonth.length, placeableAtTarget: { primary: 0, backup: 0 }, windowTarget: windowTarget, windowWeeks: windowWeeks, members: {} };
+    byMonth[month] = {};
+    ids.forEach(function (id) {
+      var P = ctx.per[id], r = P.rules, ov = genTargetOverride(r.monthlyTarget);
+      var heldP = 0, heldB = 0, eastP = 0;
+      genMonthDays(month).forEach(function (d) {
+        var e = base[d];
+        if (e && e.primary === id) heldP++;
+        if (e && e.backup === id) heldB++;
+        // K: the days a countsEastDays cap adds to his PRIMARY count - every East primary-week day
+        // he does not already hold as Silvis primary (held or not as the derived Silvis backup)
+        if (P.countsEastDays && P.eastPrimaryDays.has(d) && !(e && e.primary === id)) eastP++;
+      });
+      var tP = ov.primary, tB = ov.backup, clip = null;
+      if (poolSet[id]) {
+        if (P.capPrimary !== null) {
+          var ceiling = P.capPreferred !== null ? Math.min(P.capPreferred, P.capPrimary - 1) : P.capPrimary - 1;
+          clip = Math.max(0, ceiling - eastP);
+        }
+        if (tP === null) tP = genRound1(Math.max(heldP, clip === null ? primaryShare : Math.min(primaryShare, clip)));
+        var bCap = r.backupCap && typeof r.backupCap.perMonthDays === "number" ? r.backupCap.perMonthDays : null;
+        if (tB === null) tB = genRound1(Math.max(heldB, bCap === null ? backupShare : Math.min(backupShare, bCap)));
+      } else if (windowIds[id]) {
+        // (N review) no window week in this month -> no target (tallies "-"), never a numeric 0
+        if (tP === null) tP = windowWeeks[id] ? windowTarget[id] : null;
+      }
+      // static availability, counted by buildUnits on the same lock-only schedule (one eligibility walk)
+      var al = (G.units.allowed[month] && G.units.allowed[month][id]) || { primary: 0, backup: 0 };
+      I.members[id] = { primaryTarget: tP, backupTarget: tB, lockedHeld: { primary: heldP, backup: heldB }, clipPrimary: clip, eastPrimaryDays: eastP, allowedPrimary: al.primary, allowedBackup: al.backup };
+      byMonth[month][id] = { primary: tP, backup: tB };
+      // the open slots this surgeon's targets ask the generator to place (see placeableAtTarget below)
+      if (typeof tP === "number") I.placeableAtTarget.primary += Math.max(0, tP - heldP);
+      if (typeof tB === "number") I.placeableAtTarget.backup += Math.max(0, tB - heldB);
+    });
+    // The flat share (design decision a) divides the OPEN slots by the whole pool while the deviation counts
+    // whole-month days, so where a member's locked floor or clip pins him the targets ask for FEWER
+    // placements than there are open slots and the surplus days carry no target pressure (only the soft
+    // terms place them). placeableAtTarget makes that gap visible next to primaryOpen / backupOpen instead
+    // of hiding it; closing it (a water-filled share) is a spec decision recorded in the 9/22 J review.
+    I.placeableAtTarget.primary = genRound1(I.placeableAtTarget.primary);
+    I.placeableAtTarget.backup = genRound1(I.placeableAtTarget.backup);
   });
-  return { byMonth: byMonth, scoreByMonth: scoreByMonth, implied: implied };
+  return { byMonth: byMonth, implied: implied };
 }
 
 // Day-unit slots where exactly one surgeon is eligible on the lock-only
@@ -826,40 +875,43 @@ function genRepair(G, S, rng) {
 
 /* ----------------------------------------------------------- smoothing */
 
+// Prompt 12 J: smoothing runs per ROLE - a primary day moves from a surgeon above his
+// primary target to one below it, a backup day likewise against the backup targets
+// (day-unit slots only; every move through eligibility(); the soft score may not
+// worsen beyond weights.smoothingTolerance; the role's deviation must strictly fall).
 function genSmooth(G, S) {
-  var ctx = G.ctx, R = G.R, W = ctx.schedule, ids = ctx.activeIds;
+  var ctx = G.ctx, R = G.R, ids = ctx.activeIds;
   var tol = typeof G.W.smoothingTolerance === "number" ? G.W.smoothingTolerance : 2;
-  for (var iter = 0; iter < 200; iter++) {
+  for (var iter = 0; iter < 400; iter++) {
     var moved = false;
     for (var mi = 0; mi < G.months.length && !moved; mi++) {
-      var month = G.months[mi], T = G.targets.byMonth[month];
-      if (!T) continue;
-      var counts = {};
-      ids.forEach(function (id) { counts[id] = genMonthCount(G, S, id, month); });
-      var highs = ids.filter(function (id) { return T[id] != null && counts[id] > T[id]; }).sort(function (a, b) { return (counts[b] - T[b]) - (counts[a] - T[a]); });
-      var lows = ids.filter(function (id) { return T[id] != null && counts[id] < T[id]; }).sort(function (a, b) { return (T[b] - counts[b]) - (T[a] - counts[a]); });
-      if (!highs.length || !lows.length) continue;
-      for (var h = 0; h < highs.length && !moved; h++) {
-        var H = highs[h];
-        // N: a primary-only-counted surgeon's backup slots never move her count - only her primary slots are candidates
-        var slots = Object.keys(S.placed).map(function (k) { return S.placed[k]; }).filter(function (p) { return p.id === H && p.unitKind === "day" && genMonthOf(p.day) === month && (!G.primaryOnly[H] || p.role === "primary"); }).sort(function (a, b) { return a.day < b.day ? -1 : a.day > b.day ? 1 : 0; });
-        for (var s = 0; s < slots.length && !moved; s++) {
-          var slot = slots[s];
-          var oldSoft = genSoftSum(R.eligibility(ctx, slot.day, slot.role, H));
-          genUnset(G, S, slot.day, slot.role);
-          for (var l = 0; l < lows.length; l++) {
-            var L = lows[l];
-            if (G.primaryOnly[L] && slot.role !== "primary") continue; // a backup day would not raise her primary count
-            var before = Math.abs(counts[H] - T[H]) + Math.abs(counts[L] - T[L]);
-            var after = Math.abs(counts[H] - 1 - T[H]) + Math.abs(counts[L] + 1 - T[L]);
-            if (after >= before) continue;
-            var r = R.eligibility(ctx, slot.day, slot.role, L);
-            if (!r.ok || genSoftSum(r) - oldSoft > tol) continue;
-            genSet(G, S, slot.day, slot.role, L);
-            moved = true;
-            break;
+      var month = G.months[mi];
+      for (var ri = 0; ri < GEN_ROLES.length && !moved; ri++) {
+        var role = GEN_ROLES[ri], T = {}, counts = {};
+        ids.forEach(function (id) { T[id] = genTargetFor(G, month, id, role); counts[id] = genMonthCount(G, S, id, month, role); });
+        var highs = ids.filter(function (id) { return T[id] !== null && counts[id] > T[id]; }).sort(function (a, b) { return (counts[b] - T[b]) - (counts[a] - T[a]); });
+        var lows = ids.filter(function (id) { return T[id] !== null && counts[id] < T[id]; }).sort(function (a, b) { return (T[b] - counts[b]) - (T[a] - counts[a]); });
+        if (!highs.length || !lows.length) continue;
+        for (var h = 0; h < highs.length && !moved; h++) {
+          var H = highs[h];
+          var slots = Object.keys(S.placed).map(function (k) { return S.placed[k]; }).filter(function (p) { return p.id === H && p.role === role && p.unitKind === "day" && genMonthOf(p.day) === month; }).sort(function (a, b) { return a.day < b.day ? -1 : a.day > b.day ? 1 : 0; });
+          for (var s = 0; s < slots.length && !moved; s++) {
+            var slot = slots[s];
+            var oldSoft = genSoftSum(R.eligibility(ctx, slot.day, slot.role, H));
+            genUnset(G, S, slot.day, slot.role);
+            for (var l = 0; l < lows.length; l++) {
+              var L = lows[l];
+              var before = Math.abs(counts[H] - T[H]) + Math.abs(counts[L] - T[L]);
+              var after = Math.abs(counts[H] - 1 - T[H]) + Math.abs(counts[L] + 1 - T[L]);
+              if (after >= before) continue;
+              var r = R.eligibility(ctx, slot.day, slot.role, L);
+              if (!r.ok || genSoftSum(r) - oldSoft > tol) continue;
+              genSet(G, S, slot.day, slot.role, L);
+              moved = true;
+              break;
+            }
+            if (!moved) genSet(G, S, slot.day, slot.role, H);
           }
-          if (!moved) genSet(G, S, slot.day, slot.role, H);
         }
       }
     }
@@ -889,8 +941,11 @@ function genRefreshWeekendDiag(G, S) {
 
 /* ----------------------------------------------------------- evaluate */
 
+// A roster entry of type "external" (outside surgeon / internal locum, Prompt 12 M) is never in the pool.
+function genIsExternal(ctx, id) { var r = ctx.rosterById && ctx.rosterById[id]; return !!(r && r.type === "external"); }
+// The equal-share pool (J): active, poolMember !== false, no availability windows, not external.
 function genPoolIds(G) {
-  return G.ctx.activeIds.filter(function (id) { var P = G.ctx.per[id]; return P.rules.poolMember !== false && !P.hasWindows; });
+  return G.ctx.activeIds.filter(function (id) { var P = G.ctx.per[id]; return P.rules.poolMember !== false && !P.hasWindows && !genIsExternal(G.ctx, id); });
 }
 function genSpread(values) {
   if (!values.length) return 0;
@@ -914,10 +969,14 @@ function genEvaluate(G, S) {
     });
   });
   S.patternPenalties.forEach(function (p) { softList.push(p); softSum += p.weight; });
-  var targetDeviation = 0;
+  // J: one deviation per role (primary first in the lexicographic score)
+  var primaryDeviation = 0, backupDeviation = 0;
   G.months.forEach(function (month) {
     var T = G.targets.byMonth[month];
-    Object.keys(T).forEach(function (id) { targetDeviation += Math.abs(genMonthCount(G, S, id, month) - T[id]); });
+    Object.keys(T).forEach(function (id) {
+      if (T[id].primary !== null) primaryDeviation += Math.abs(genMonthCount(G, S, id, month, "primary") - T[id].primary);
+      if (T[id].backup !== null) backupDeviation += Math.abs(genMonthCount(G, S, id, month, "backup") - T[id].backup);
+    });
   });
   var pool = genPoolIds(G), wk = {}, hol = {};
   pool.forEach(function (id) { wk[id] = 0; hol[id] = {}; });
@@ -935,7 +994,8 @@ function genEvaluate(G, S) {
   var score = scoreCandidate({
     uncoveredPrimary: open.filter(function (o) { return o.role === "primary"; }).length,
     uncoveredBackup: open.filter(function (o) { return o.role === "backup"; }).length,
-    hardViolations: hardViolations.length, softSum: Math.round(softSum * 1000) / 1000, targetDeviation: Math.round(targetDeviation * 10) / 10,
+    hardViolations: hardViolations.length, softSum: Math.round(softSum * 1000) / 1000,
+    primaryDeviation: Math.round(primaryDeviation * 10) / 10, backupDeviation: Math.round(backupDeviation * 10) / 10,
     weekendSpread: weekendSpread, holidaySpread: holidaySpread
   });
   return { score: score, hardViolations: hardViolations, softList: softList, open: open };
@@ -1046,16 +1106,22 @@ function genDiagnostics(G, best, meta) {
     // everyone else) - the preview flags a row when primary + eastP is over the cap, which
     // is the engine's count; a backup day on one of those days is not counted twice.
     var eastPIn = function (list) { return P.countsEastDays ? list.filter(function (d) { return P.eastPrimaryDays.has(d); }).length : 0; };
+    // J: target = { primary, backup } per month (null where the surgeon has none for the role);
+    // the range row carries the per-role sums (null when no month has one).
+    var sumP = null, sumB = null;
     G.months.forEach(function (month) {
       var t = R.talliesFor(ctx, id, month);
       t.cap = R.monthlyCapFor(ctx, id).primary; // K: the cap is on PRIMARY days (preview column "Cap (P)")
       t.eastP = eastPIn(genMonthDays(month));
-      t.target = genTargetFor(G, month, id);
+      t.target = { primary: genTargetFor(G, month, id, "primary"), backup: genTargetFor(G, month, id, "backup") };
+      if (t.target.primary !== null) sumP = (sumP || 0) + t.target.primary;
+      if (t.target.backup !== null) sumB = (sumB || 0) + t.target.backup;
       months[month] = t;
     });
     var range = genRunStats(G, id, G.days);
     range.cap = R.monthlyCapFor(ctx, id).primary;
     range.eastP = eastPIn(G.days);
+    range.target = { primary: sumP === null ? null : genRound1(sumP), backup: sumB === null ? null : genRound1(sumB) };
     tallies[id] = { code: ctx.rosterById[id].code, name: ctx.rosterById[id].name, months: months, range: range };
   });
   // East feed snapshot / forecast / unknown days.
@@ -1160,8 +1226,8 @@ function genDiagnostics(G, best, meta) {
     holidayUnits: holidayUnitsOut,
     weekendUnits: weekendUnitsOut,
     impliedTargets: G.targets.implied,
-    targets: G.targets.byMonth,
-    scoreTargets: G.targets.scoreByMonth,
+    targets: G.targets.byMonth,     // J: { month: { id: { primary, backup } } }
+    scoreTargets: G.targets.byMonth, // the unit scoring uses the same per-role table (no neutral terms since J)
     forcedSlots: G.forced,
     windowWeeks: windowWeeks,
     handoffGaps: handoffGaps,
@@ -1201,11 +1267,10 @@ function generate(ctx, startDate, endDate, opts) {
     ctx: ctx, R: R, W: W, start: startDate, end: endDate, days: days, months: months,
     respectLocks: opts.respectLocks !== false, jitter: typeof W.jitter === "number" ? W.jitter : 1, warnings: [],
     unitKeyOf: {}, unitKindOf: {},
-    // N: window weeks per windows surgeon, and the surgeons whose month count is PRIMARY only
-    // (a windows surgeon with a daysPerWindowWeek.target - her backups never count against it)
-    windowWeeks: genWindowWeeks(ctx), primaryOnly: {}
+    // N: window weeks per windows surgeon (her monthly primary target = target x these weeks; J counts per role,
+    // so her backups simply have no target to count against)
+    windowWeeks: genWindowWeeks(ctx)
   };
-  ctx.activeIds.forEach(function (id) { var P = ctx.per[id]; if (P.hasWindows && P.windowTarget !== null && P.rules.poolMember !== false && typeof P.rules.monthlyTarget !== "number") G.primaryOnly[id] = true; });
   try {
     G.base = genSeedLocks(G, original);
     ctx.schedule = G.base;

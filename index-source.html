@@ -5215,15 +5215,31 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   if (hasPreview && withPreview) sources.push({ key: "preview", label: "With preview", sched: suMergePreview(schedule || {}, preview.schedule, preview.respectLocks !== false) });
   const dg = preview && preview.diagnostics;
   const nMonths = range.months.length;
+  // Prompt 12 J (9/22): TWO targets per surgeon - primary days and backup days. An explicit monthlyTarget
+  // number is the PRIMARY target ({ primary, backup } sets each); otherwise the implied equal share from
+  // the last Generate preview's diagnostics when it covers every month of the period
+  // (tallies[id].months[m].target = { primary, backup }; a pre-J numeric target reads as primary); else '-'.
   const targetFor = (id) => {
     const r = surgeonRules && surgeonRules[id];
-    if (r && typeof r.monthlyTarget === "number") return { value: r.monthlyTarget * nMonths, kind: "explicit" };
-    if (dg && dg.tallies && dg.tallies[id] && dg.tallies[id].months) {
-      let sum = 0, all = nMonths > 0;
-      range.months.forEach(m => { const t = dg.tallies[id].months[m]; if (t && typeof t.target === "number") sum += t.target; else all = false; });
-      if (all) return { value: sum, kind: "implied" };
-    }
-    return { value: null, kind: "none" };
+    const mt = r ? r.monthlyTarget : undefined;
+    const explicit = {
+      primary: typeof mt === "number" ? mt : (mt && typeof mt === "object" && typeof mt.primary === "number" ? mt.primary : null),
+      backup: mt && typeof mt === "object" && typeof mt.backup === "number" ? mt.backup : null
+    };
+    const out = { primary: { value: null, kind: "none" }, backup: { value: null, kind: "none" } };
+    ["primary", "backup"].forEach(role => {
+      if (explicit[role] !== null) { out[role] = { value: explicit[role] * nMonths, kind: "explicit" }; return; }
+      if (dg && dg.tallies && dg.tallies[id] && dg.tallies[id].months) {
+        let sum = 0, all = nMonths > 0;
+        range.months.forEach(m => {
+          const t = dg.tallies[id].months[m];
+          const v = t && t.target && typeof t.target === "object" ? t.target[role] : (role === "primary" && t && typeof t.target === "number" ? t.target : null);
+          if (typeof v === "number") sum += v; else all = false;
+        });
+        if (all) out[role] = { value: Math.round(sum * 10) / 10, kind: "implied" };
+      }
+    });
+    return out;
   };
   // 9/22 (Prompt 12 K): the cap is on PRIMARY days (monthlyCapFor(...).primary); the
   // comparison uses the primary count plus, for a countsEastDays cap, the East
@@ -5242,11 +5258,14 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     const t = ttTotalsFor(src.sched, s.id, range.from, range.to, { ...opts, unitCollapse: collapseFor(s.id) });
     const tg = targetFor(s.id), cap = capFor(s.id), east = eastFor(s.id), eastP = countsEast(s.id) ? eastPrimaryFor(s.id) : 0;
     const capUse = t.primary + eastP; // K: primary days (+ East primary-week days for Fierce's 14); backup never counts
-    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.value, targetKind: tg.kind, cap, capUse, east, eastP, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.total, tg.value) });
+    // J: Target / Deviation are PRIMARY days against the primary target; Target B / Deviation B are backup days
+    // against the backup target (ttDeviation per role; '-' without a target).
+    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.primary.value, targetKind: tg.primary.kind, targetB: tg.backup.value, targetBKind: tg.backup.kind, cap, capUse, east, eastP, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.primary, tg.primary.value), deviationB: ttDeviation(t.backup, tg.backup.value) });
   }));
   const capText = (r) => r.cap === null ? "-" : (nMonths > 1 ? r.cap + "/mo" : String(r.cap));
   const targetText = (r) => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
-  const anyImplied = rows.some(r => r.targetKind === "implied");
+  const targetBText = (r) => r.targetB === null ? "-" : String(r.targetB) + (r.targetBKind === "implied" ? "*" : "");
+  const anyImplied = rows.some(r => r.targetKind === "implied" || r.targetBKind === "implied");
   const periodText = range.label + (mode === "fairness" ? "" : "") ;
   const exportCsv = () => {
     try {
@@ -5254,8 +5273,10 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       // consumers (and test/ui/smoke.mjs) read them - Prompt 12 A, 9/22.
       // K (9/22): the cap is on PRIMARY days - the header says so, the column keeps its position; the
       // count the cap is compared with (primary + East primary-week days) is APPENDED as the last column.
-      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)"];
-      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse]);
+      // J (9/22): "Target" / "Deviation" keep their positions and now mean the PRIMARY target and primary days
+      // minus it; the backup target and its deviation are APPENDED as the last two columns.
+      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B"];
+      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB]);
       const csv = ttCsvText(headers, data);
       const name = "silvis-totals-" + rangeMode + "-" + range.from + "-" + range.to + ".csv";
       const real = downloadTextFile(csv, name, "text/csv");
@@ -5267,9 +5288,14 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const td = { padding: "6px 8px", fontFamily: mono, fontSize: 12.5, textAlign: "right", color: dk ? "#e0e0f0" : "#2c3e50", whiteSpace: "nowrap" };
   const tdL = { ...td, textAlign: "left", fontFamily: font };
   const border = dk ? "#2a3a5e" : "#e8ecf0";
-  const devColor = (r) => r.target === null ? "#8a94a0" : r.t.total > r.target ? "#c04040" : r.t.total < r.target ? "#1a6fa8" : "#1a8040";
+  // J: the primary deviation compares PRIMARY days with the primary target, the backup deviation backup days with
+  // the backup target (a surgeon's target is per role since 9/22 - never total days against one number)
+  const devColor = (r) => r.target === null ? "#8a94a0" : r.t.primary > r.target ? "#c04040" : r.t.primary < r.target ? "#1a6fa8" : "#1a8040";
   // data-flag mirrors the colour so the dark sheet can keep it (its td rule overrides inline colours - vis-004)
-  const devFlag = (r) => r.target === null ? undefined : r.t.total > r.target ? "over" : r.t.total < r.target ? "under" : "ok";
+  const devFlag = (r) => r.target === null ? undefined : r.t.primary > r.target ? "over" : r.t.primary < r.target ? "under" : "ok";
+  const devColorB = (r) => r.targetB === null ? "#8a94a0" : r.t.backup > r.targetB ? "#c04040" : r.t.backup < r.targetB ? "#1a6fa8" : "#1a8040";
+  const devFlagB = (r) => r.targetB === null ? undefined : r.t.backup > r.targetB ? "over" : r.t.backup < r.targetB ? "under" : "ok";
+  const targetSum = (r) => r.target === null && r.targetB === null ? null : Math.round(((r.target || 0) + (r.targetB || 0)) * 10) / 10;
   const overCap = (r) => r.cap !== null && r.capUse > r.cap * nMonths;
   const overConsec = (r) => r.maxRule !== null && r.t.maxConsecutive > r.maxRule;
   const overConsecAny = (r) => r.maxRuleAny !== null && r.t.maxConsecutiveAnyRole > r.maxRuleAny;
@@ -5297,7 +5323,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                 <th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}
                 <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
                 {showEast && <th style={th} title="Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)">East days</th>}
-                <th style={th} title="Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it">Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th}>Target</th><th style={th}>Deviation</th>
+                <th style={th} title="Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it">Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else the implied equal share of the open primary slots from the last Generate preview (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else the implied equal share of the open backup slots from the last Generate preview (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th>
               </tr>
             </thead>
             <tbody>
@@ -5312,6 +5338,8 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                   <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}</td>
                   <td data-col="target" style={td}>{targetText(r)}</td>
                   <td data-col="deviation" data-flag={devFlag(r)} style={{ ...td, color: devColor(r), fontWeight: 600 }}>{r.deviation}</td>
+                  <td data-col="targetb" style={td}>{targetBText(r)}</td>
+                  <td data-col="deviationb" data-flag={devFlagB(r)} style={{ ...td, color: devColorB(r), fontWeight: 600 }}>{r.deviationB}</td>
                 </tr>
               ))}
             </tbody>
@@ -5319,28 +5347,28 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
         </div>
       ) : (
         <div data-testid="fairness-view">
-          <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 10px", lineHeight: 1.5 }}>Total days in {range.label} against each surgeon's target (green mark) and cap (red mark). Fairness at Silvis is per-surgeon targets and caps, not equal shares - a surgeon without a target shows '-'.</p>
+          <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 10px", lineHeight: 1.5 }}>Total days in {range.label} against each surgeon's targets (green mark = primary target + backup target) and primary cap (red mark). Fairness at Silvis (9/22) is an equal share of primary days and, separately, of backup days for every pool member, within each person's availability - the deviation reads primary days against the primary target, then backup days against the backup target; a surgeon without a target shows '-'.</p>
           {(() => {
-            const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, r.target === null ? 0 : r.target)));
+            const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, targetSum(r) === null ? 0 : targetSum(r))));
             const pct = (v) => Math.min(100, Math.round((v / scale) * 100));
             return rows.map(r => (
-              <div key={r.id + r.src} data-testid={"fairness-row-" + r.id} data-source={r.src} data-total={r.t.total} data-deviation={r.deviation} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid " + border, flexWrap: "wrap" }}>
+              <div key={r.id + r.src} data-testid={"fairness-row-" + r.id} data-source={r.src} data-total={r.t.total} data-deviation={r.deviation} data-deviation-b={r.deviationB} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid " + border, flexWrap: "wrap" }}>
                 <div style={{ width: 110, display: "flex", gap: 6, alignItems: "center" }}><Badge id={r.id}/>{r.src === "preview" && <span style={{ fontSize: 9, color: "#7a4fbf" }}>preview</span>}</div>
                 <div style={{ flex: "1 1 220px", position: "relative", height: 18, background: dk ? "#16213e" : "#eef1f4", borderRadius: 4, overflow: "hidden" }}>
                   <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : "linear-gradient(90deg,#1a6fa8,#2488c8)", borderRadius: 4 }}/>
                   {countsEast(r.id) && r.eastP > 0 && <div title={"+ " + r.eastP + " East primary-week day(s) counted toward the cap (P)"} style={{ position: "absolute", left: pct(r.t.total) + "%", top: 0, bottom: 0, width: Math.max(0, pct(r.t.total + r.eastP) - pct(r.t.total)) + "%", background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)" }}/>}
-                  {r.target !== null && <div data-testid="fairness-target-mark" title={"target " + r.target} style={{ position: "absolute", left: pct(r.target) + "%", top: 0, bottom: 0, width: 2, background: "#1a8040" }}/>}
+                  {targetSum(r) !== null && <div data-testid="fairness-target-mark" title={"target P " + (r.target === null ? "-" : r.target) + " + B " + (r.targetB === null ? "-" : r.targetB) + " = " + targetSum(r)} style={{ position: "absolute", left: pct(targetSum(r)) + "%", top: 0, bottom: 0, width: 2, background: "#1a8040" }}/>}
                   {r.cap !== null && <div title={"cap " + r.cap * nMonths} style={{ position: "absolute", left: pct(r.cap * nMonths) + "%", top: 0, bottom: 0, width: 2, background: "#c04040" }}/>}
                 </div>
                 <div style={{ fontFamily: mono, fontSize: 12, color: dk ? "#e0e0f0" : "#2c3e50", minWidth: 250 }}>
-                  {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" ? "no target" : "deviation " + r.deviation}</span>
+                  {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - target B {r.targetB === null ? "-" : r.targetB}{r.targetBKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" && r.deviationB === "-" ? "no target" : r.deviation === "-" ? "no primary target" : "deviation " + r.deviation + " P"}</span>{r.targetB !== null && <span data-flag={devFlagB(r)} style={{ color: devColorB(r), fontWeight: 700 }}> / {r.deviationB} B</span>}
                 </div>
               </div>
             ));
           })()}
         </div>
       )}
-      {anyImplied && <div style={{ fontSize: 11, color: "#7a8a98", marginTop: 8 }}>* implied target from the last Generate preview's diagnostics (no explicit monthlyTarget in Setup).</div>}
+      {anyImplied && <div style={{ fontSize: 11, color: "#7a8a98", marginTop: 8 }}>* implied equal share (of the period's open primary slots and, separately, its open backup slots) from the last Generate preview's diagnostics - no explicit monthlyTarget in Setup.</div>}
       {showEast && <div style={{ fontSize: 11, color: "#7a8a98", marginTop: 4 }}>East days: days on Davenport call (published weeks, derived weeks and overrides) inside the period; a cap that counts them reads Silvis + East.</div>}
     </div>
   );
@@ -6027,6 +6055,11 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
   const bySurgeon = {};
   soft.forEach(p => { (bySurgeon[p.id] = bySurgeon[p.id] || []).push(p); });
   const num = (v) => v === null || v === undefined ? "-" : (Math.round(v * 10) / 10);
+  // Prompt 12 J (9/22): tallies target = { primary, backup } per month and for the range (a pre-J preview
+  // persisted a single number: read it as the primary target); impliedTargets carries the shares table.
+  const tgtOf = (t, role) => t && typeof t === "object" ? (typeof t[role] === "number" ? t[role] : null) : (role === "primary" && typeof t === "number" ? t : null);
+  const IT = dg.impliedTargets;
+  const hasShares = !!(IT && IT.months && Object.keys(IT.months).some(m => IT.months[m] && IT.months[m].members));
   const scoreKeys = dg.score ? Object.keys(dg.score) : [];
   const box = { border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 8 };
   return (
@@ -6048,22 +6081,36 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Per-surgeon tallies vs cap / target</div>
         <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="gen-tallies">
-            <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th title="Longest run of consecutive primary days touching the month / range (real days; the hard limit's measure)">Max consec. P</th><th title="Longest run of consecutive days in either role (real days; the soft limit's measure)">Max consec. any</th><th title="Monthly cap on PRIMARY days (backup days never count); a row is flagged when P - plus, for a cap that counts East days, his East primary-week days - is over it">Cap (P)</th><th>Target</th></tr></thead>
+            <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th title="Longest run of consecutive primary days touching the month / range (real days; the hard limit's measure)">Max consec. P</th><th title="Longest run of consecutive days in either role (real days; the soft limit's measure)">Max consec. any</th><th title="Monthly cap on PRIMARY days (backup days never count); a row is flagged when P - plus, for a cap that counts East days, his East primary-week days - is over it">Cap (P)</th><th title="Primary-day target for the month: an explicit monthlyTarget, else the implied equal share of the month's open primary slots (the window surgeon: her window target)">Target P</th><th title="Backup-day target for the month: the implied equal share of the month's open backup slots (a windows surgeon has none)">Target B</th></tr></thead>
             <tbody>
               {ids.map(id => {
                 const t = dg.tallies[id];
                 const rows = months.map(m => { const x = t.months[m] || {}; return (
                   <tr key={id + m} data-tally={id} style={{ color: (x.cap !== null && x.cap !== undefined && (x.primary + (x.eastP || 0)) > x.cap) ? "#a83232" : undefined }}>
-                    <td>{nameOf(id)}</td><td style={{ fontFamily: mono }}>{m}</td><td>{x.primary}</td><td>{x.backup}</td><td><strong>{x.total}</strong></td><td>{x.weekendDays}</td><td>{x.majorHolidays}</td><td>{x.minorHolidays}</td><td>{x.maxConsecutive}</td><td>{x.maxConsecutiveAnyRole}</td><td title={x.eastP ? x.primary + " P + " + x.eastP + " East primary-week day(s) = " + (x.primary + x.eastP) + " counted against the cap" : undefined}>{num(x.cap)}{x.eastP ? " (" + (x.primary + x.eastP) + " counted)" : ""}</td><td>{num(x.target)}</td>
+                    <td>{nameOf(id)}</td><td style={{ fontFamily: mono }}>{m}</td><td>{x.primary}</td><td>{x.backup}</td><td><strong>{x.total}</strong></td><td>{x.weekendDays}</td><td>{x.majorHolidays}</td><td>{x.minorHolidays}</td><td>{x.maxConsecutive}</td><td>{x.maxConsecutiveAnyRole}</td><td title={x.eastP ? x.primary + " P + " + x.eastP + " East primary-week day(s) = " + (x.primary + x.eastP) + " counted against the cap" : undefined}>{num(x.cap)}{x.eastP ? " (" + (x.primary + x.eastP) + " counted)" : ""}</td><td>{num(tgtOf(x.target, "primary"))}</td><td>{num(tgtOf(x.target, "backup"))}</td>
                   </tr>); });
                 const r = t.range || {};
-                rows.push(<tr key={id + "range"} data-tally-range={id} style={{ background: "#f4f6f8", fontWeight: 700 }}><td>{nameOf(id)}</td><td>range</td><td>{r.primary}</td><td>{r.backup}</td><td>{r.total}</td><td>{r.weekendDays}</td><td>{r.majorHolidays}</td><td>{r.minorHolidays}</td><td>{r.maxConsecutive}</td><td>{r.maxConsecutiveAnyRole}</td><td title={r.eastP ? r.primary + " P + " + r.eastP + " East primary-week day(s) in the range" : undefined}>{num(r.cap)}{r.eastP ? " (+" + r.eastP + " East P)" : ""}</td><td></td></tr>);
+                rows.push(<tr key={id + "range"} data-tally-range={id} style={{ background: "#f4f6f8", fontWeight: 700 }}><td>{nameOf(id)}</td><td>range</td><td>{r.primary}</td><td>{r.backup}</td><td>{r.total}</td><td>{r.weekendDays}</td><td>{r.majorHolidays}</td><td>{r.minorHolidays}</td><td>{r.maxConsecutive}</td><td>{r.maxConsecutiveAnyRole}</td><td title={r.eastP ? r.primary + " P + " + r.eastP + " East primary-week day(s) in the range" : undefined}>{num(r.cap)}{r.eastP ? " (+" + r.eastP + " East P)" : ""}</td><td>{num(tgtOf(r.target, "primary"))}</td><td>{num(tgtOf(r.target, "backup"))}</td></tr>);
                 return rows;
               })}
             </tbody>
           </table>
         </div>
       </div>
+      {hasShares && (
+        <div style={box} data-testid="gen-shares">
+          <div style={{ ...css.subT, margin: "0 0 4px" }}>Implied shares (equal-share fairness: target vs what the rules allow)</div>
+          <p style={{ fontSize: 11, color: "#7a8a98", margin: "0 0 6px", lineHeight: 1.5 }}>Pool: {(IT.pool || []).map(nameOf).join(", ")}. Every pool member is targeted at an equal share of the month's open primary slots (after the window surgeon's reserved primaries) and, separately, of its open backup slots, held to locked days, caps and availability. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and locked days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus locked days, summed); where a locked floor or a cap pins a member it reads below the open count and the surplus days are placed by the soft terms alone.</p>
+          {months.map(m => { const I = IT.months[m]; if (!I || !I.members) return null; return (
+            <div key={m} style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 12, fontFamily: mono }} data-testid={"gen-shares-head-" + m}>{m}: primary {I.primaryOpen} open - {I.reservedForWindows} reserved = share {I.primaryShare} each of {I.poolSize}; backup {I.backupOpen} open = share {I.backupShare}{I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : ""}{typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""}</div>
+              <div className="table-wrap" style={css.tableWrap}><table className="setup-table" data-testid={"gen-shares-" + m}><thead><tr><th>Surgeon</th><th>Target P</th><th>Allowed P</th><th>Locked P</th><th title="min(preferred cap, cap - 1) minus East primary-week days (a cap that counts them); '-' when uncapped">Clip P</th><th>Target B</th><th>Allowed B</th><th>Locked B</th></tr></thead><tbody>
+                {ids.filter(id => I.members[id]).map(id => { const M = I.members[id]; const shortP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget; const shortB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget; return (
+                  <tr key={id} data-share={id + ":" + m}><td>{nameOf(id)}</td><td>{num(M.primaryTarget)}</td><td style={{ color: shortP ? "#a83232" : undefined }} title={shortP ? "the rules allow fewer open primary slots than the target" : undefined}>{M.allowedPrimary}{shortP ? " (short)" : ""}</td><td>{M.lockedHeld.primary}</td><td>{num(M.clipPrimary)}</td><td>{num(M.backupTarget)}</td><td style={{ color: shortB ? "#a83232" : undefined }} title={shortB ? "the rules allow fewer open backup slots than the target" : undefined}>{M.allowedBackup}{shortB ? " (short)" : ""}</td><td>{M.lockedHeld.backup}</td></tr>); })}
+              </tbody></table></div>
+            </div>); })}
+        </div>
+      )}
       <div style={box}>
         <div style={{ ...css.subT, margin: "0 0 4px", color: (dg.uncovered || []).length ? "#a83232" : undefined }}>Open slots ({(dg.uncovered || []).length})</div>
         {(dg.uncovered || []).length === 0 ? <p style={{ fontSize: 12, color: "#1a8040", margin: 0 }}>Every slot in the range is covered.</p> : (

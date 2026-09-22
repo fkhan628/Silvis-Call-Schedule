@@ -239,10 +239,22 @@ from the last published day**. Any range works; the presets are conveniences.
 3. **Primary pass** — order units by constraint tightness (fewest eligible candidates first; weekend units generally first). For each unit enumerate legal patterns: day unit → each eligible surgeon; weekend unit → `block(x)`, `split(x,y)`, `daily(x,y,z)` per §4 of the rules. Score = Σ soft penalties + target-deviation term + pattern penalty (`daily` is expensive; `split` cheap for split-style pairs; `block` cheap for block-style surgeons) + small jitter. Pick the min. If a unit has **no** legal pattern, leave it open and record `diagnostics.uncovered` with the blocking reasons per surgeon (the UI shows this — never silently skip).
 4. **Backup pass** — same as 3 with primary fixed; backup ≠ primary; caps count primary+backup.
 5. **Repair pass** — for each open slot, try 1-hop and 2-hop swaps that free an eligible surgeon (mirrors Davenport's Phase-1B chain swaps) while keeping every move inside `eligibility()`.
-6. **Target smoothing** — while any pool surgeon is above target and another below, move a *non-locked* day from high→low if eligibility holds and the soft score does not worsen beyond `weights.smoothingTolerance`.
+6. **Target smoothing** — per role, primary first: while any pool surgeon is above his primary (then backup) target and another below, move a *non-locked* day-unit slot of that role from high→low if eligibility holds, the soft score does not worsen beyond `weights.smoothingTolerance` and that role's total deviation strictly falls.
 
-**Candidate score (lexicographic, lower is better):**
-`uncoveredPrimary ×1e9 + uncoveredBackup ×1e7 + hardViolations ×1e6 (should be 0 by construction) + Σsoft ×1e3 + Σ|actual−target| ×100 + weekendSpread ×10 + holidaySpread`.
+**Candidate score (lexicographic, lower is better) — Prompt 12 J, 9/22:**
+`uncoveredPrimary ×1e9 + uncoveredBackup ×1e7 + hardViolations ×1e6 (should be 0 by construction) + Σsoft ×1e3 + primaryDeviation ×300 + backupDeviation ×100 + weekendSpread ×10 + holidaySpread`.
+Targets are per role and equal by default (`genTargets`): each pool member (active, `poolMember !== false`, no
+`availableWindows`, not `type: "external"`) gets a primary target = an equal share of the month's open primary slots
+(after the windows surgeon's reserved window primaries), clipped by the K cap and floored by locked primaries, and a
+backup target = an equal share of the month's open backup slots (clipped by `backupCap.perMonthDays`, floored by locked
+backups); `monthlyTarget: null` means equal share, a number sets the primary target, `{ primary, backup }` sets each;
+there is no neutral term. Step 4 scores backup placements against the backup targets (caps count primary only — K),
+step 6 smooths primary days and then backup days separately, and `diagnostics.impliedTargets` shows every share plus,
+per member, the two targets and the "allowed by rules" slot counts so an availability shortfall is visible. Known
+property of the flat share (9/22 J review, kept on purpose pending a decision): it divides the *open* slots by the whole
+pool while the deviation counts whole-month days, so in a month where a locked floor or a clip pins a member the targets
+sum to fewer placements than there are open slots (`months[m].placeableAtTarget` vs `primaryOpen` / `backupOpen`) and
+the surplus days are placed by the soft terms alone; read the deviation numbers with that in mind.
 
 **Diagnostics** returned with every run: per-surgeon tallies (primary, backup, weekend days, holidays, consecutive max,
 month totals vs cap/target), a list of open slots with reasons, the soft penalties incurred (so Faraz can see *why*

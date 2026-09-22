@@ -39,9 +39,13 @@
 // 7060 ms total at 2.3 / 8.0 / 20.5 / 9.5 ms per candidate (R1-R4) - the
 // engine's hard and any-role runs are measured in ONE walk per direction in
 // eligibility() (single-walk rewrite; behaviour-identical to the two-walk
-// version on 16 generations and 23,136 eligibility results). If a CI runner
-// lands above ~8 s quiet, drop R4 to bestOf 1 (BEST_OF_DEFAULT [6, 5, 2, 1])
-// before anything else; never raise the budget to hide it.
+// version on 16 generations and 23,136 eligibility results). Prompt 12 J
+// (equal shares per role, smoothing over both roles, the allowed-by-rules count
+// inside buildUnits' tightness walk) added about +0.6 s quiet: the J review's
+// sequential A/B on the same machine read 5247 ms -> 5852 ms total (R2 6.1 ->
+// 6.6, R3 14.8 -> 16.6 ms per candidate); a loaded worktree run read 7297 ms.
+// If a CI runner lands above ~8 s quiet, drop R4 to bestOf 1 (BEST_OF_DEFAULT
+// [6, 5, 2, 1]) before anything else; never raise the budget to hide it.
 // ~77 % of a candidate is inside rules.weekendUnitPatterns
 // and eligibility, so nothing on the generator side can buy the 4x that
 // bestOf 25 everywhere would need - review findings rules-2 / harness-1 /
@@ -241,9 +245,18 @@ eq(SR[BURCHETT].monthlyCap, { primary: 8, preferred: 7 }, "seed: Burchett cap 8 
 eq(SR[FIERCE].monthlyCap.primary, 14, "seed: Fierce cap 14 primary"); eq(SR[FIERCE].monthlyCap.countsEastDays, true, "seed: Fierce countsEastDays is boolean true");
 ok(!("total" in SR[BURCHETT].monthlyCap) && !("total" in SR[FIERCE].monthlyCap), "seed: no legacy monthlyCap.total keys");
 ok(!("monthlyCap" in SR[PHILIP]), "seed: Philip has no cap key");
-// Targets: nobody has a numeric target; Khan and Sarkar carry an explicit null (no fairness target).
+// Targets (9/22, Prompt 12 J - equal-share fairness): nobody has a numeric target; Khan and Sarkar carry an
+// explicit null, which since J reads "equal share" for a pool member (Khan) and "window target" for the
+// windows surgeon (Sarkar) - never a neutral term and never "no target".
 IDS.forEach((id) => ok(typeof SR[id].monthlyTarget !== "number", "seed: " + CODE[id] + " has a numeric target"));
 eq([KHAN, SARKAR].every((id) => "monthlyTarget" in SR[id] && SR[id].monthlyTarget === null), true, "seed: Khan and Sarkar explicit null target");
+// J: the equal-share pool = active roster entries with poolMember !== false, no availableWindows and no roster
+// type "external" (the windows surgeon is outside the pool; her window primaries come off the pool's slots).
+const POOL = IDS.filter((id) => SR[id].poolMember !== false && !(Array.isArray(SR[id].availableWindows) && SR[id].availableWindows.length) && (seed.roster.find((r) => r.id === id) || {}).type !== "external");
+eq(POOL.slice().sort(), [KHAN, BURCHETT, ACTON, PHILIP, FIERCE].sort(), "seed: the equal-share pool is s1-s5 (Sarkar outside it)");
+eq(SR[PHILIP].backupCap.perMonthDays, 7, "seed: Philip backupCap.perMonthDays = 7 (clips his backup target)");
+const SCORE_PARTS = ["uncoveredPrimary", "uncoveredBackup", "hardViolations", "softSum", "primaryDeviation", "backupDeviation", "weekendSpread", "holidaySpread"];
+const round1 = (v) => Math.round(v * 10) / 10;
 // Hard-reason vocabulary (rules doc sections 3-5; guide section 5). A reason in
 // diagnostics.uncovered must start with one of these; anything else is a renamed,
 // bogus or placeholder reason. Holiday-unit reasons carry "@YYYY-MM-DD".
@@ -510,58 +523,113 @@ function checkRun(out, range, seedNo, deep) {
   if (expLV.length) ok(D.warnings.includes(expLV.length + " locked slot(s) break a rule - kept as facts, see lockViolations"), "missing the lock-violation summary warning for " + expLV.length + " slot(s)");
   else ok(!D.warnings.some((w) => /locked slot\(s\) break a rule/.test(w)), "lock-violation warning although nothing is locked");
 
-  // implied targets (quality-2): locked days count toward the share, never on top;
-  // an implied target never sits on the cap: clip = min(preferred, cap - 1) - East-only days
+  // J (9/22): equal-share fairness. diagnostics.impliedTargets is restated from the inputs alone: the lock-only
+  // base (import/manual locks, externalCover, Fierce's derived weeks), the pool s1-s5, Sarkar's reserved window
+  // primaries, and per member the two role targets, the locked days, the K clip and the "allowed by rules" counts
+  // (exactly for two surgeons whose backup / primary eligibility is fully data-restatable here).
+  const otherRole = (role) => (role === P ? B : P);
+  // the lock-only base: an out-of-range day is the published entry as it stands; an in-range day keeps only
+  // its import/manual locks plus Fierce's derived weeks (applied to in-range days only, as genSeedLocks does)
+  const baseHolder = (d, role) => {
+    const e = INPUT[d];
+    if (!days.includes(d)) return (e && e[role]) || null;
+    if (e && e[role + "Locked"] && e[role]) return e[role];
+    if (DERIVED_ROLE[d] === role && !(e && e[otherRole(role) + "Locked"] && e[otherRole(role)] === FIERCE)) return FIERCE; // a derived lock is skipped when he is import-locked in the other role
+    return null;
+  };
+  const baseOpen = (d, role) => !baseHolder(d, role) && !(role === P && INPUT[d] && INPUT[d].externalCover);
+  eq((D.impliedTargets.pool || []).slice().sort(), POOL.slice().sort(), "impliedTargets.pool = the restated equal-share pool");
   months.forEach((m) => {
     const I = D.impliedTargets.months[m];
-    ok(I && typeof I.share === "number", "impliedTargets for " + m);
-    eq(I.capClip[BURCHETT], 7, "Burchett clip = preferred 7 in " + m);
-    eq(I.capClip[PHILIP], DEFAULT_CAP - 1, "Philip clip = default cap - 1 in " + m);
-    eq(I.capClip[FIERCE], 14 - 1 - I.eastOnlyDays[FIERCE], "Fierce clip = 13 minus East-only days in " + m);
-    eq(I.capClip[ACTON], null, "Acton has no clip in " + m);
-    Object.keys(I.targets).forEach((id) => {
-      if (I.windowTarget && id in I.windowTarget) return; // a window target is not share-based (checked below)
-      const t = I.targets[id], held = I.lockedHeld[id], clip = I.capClip[id];
-      ok(t >= held, CODE[id] + " implied target " + t + " below his locked days " + held + " in " + m);
-      ok(t <= Math.max(held, clip === null ? Infinity : clip), CODE[id] + " implied target " + t + " above his clip " + clip + " in " + m);
-      ok(t <= Math.max(held, I.share) + 0.05, CODE[id] + " implied target " + t + " exceeds max(held, share) in " + m);
-    });
-    // Khan: explicit null -> no fairness target (tallies show none) but a neutral scoring term
-    ok(!(KHAN in I.targets) && typeof I.neutralTerm[KHAN] === "number", "Khan must carry a neutral scoring term, not a target, in " + m);
-    // Sarkar (Prompt 12 N, 9/22 evening): a numeric monthly PRIMARY target = daysPerWindowWeek.target x the window
-    // weeks in the month (a week counts once), exposed as impliedTargets.windowTarget, no backup target, no neutral term
-    // (N review, fix stage): a month the range touches that holds NO window week gives her no target at all
-    // (noTerm, tallies target null) - never a numeric 0 that the preview would print as "Target 0".
+    const mdaysIn = days.filter((d) => monthOf(d) === m);
+    ok(I && typeof I.primaryShare === "number" && typeof I.backupShare === "number" && I.members, "impliedTargets " + m + " lacks primaryShare / backupShare / members (keys: " + JSON.stringify(I ? Object.keys(I) : null) + ")");
+    ok(!("neutralTerm" in I) && !("noTerm" in I) && !("share" in I) && !("targets" in I), "impliedTargets " + m + " still carries a pre-J key (neutralTerm / noTerm / share / targets)");
+    const primaryOpen = mdaysIn.filter((d) => baseOpen(d, P)).length, backupOpen = mdaysIn.filter((d) => baseOpen(d, B)).length;
     const nW = sarkarWeeksInMonth(m, range);
-    const wt = nW ? SARKAR_TARGET * nW : null;
-    ok(I.windowTarget && I.windowTarget[SARKAR] === SARKAR_TARGET * nW, "Sarkar impliedTargets.windowTarget must be " + SARKAR_TARGET * nW + " in " + m + " (got " + JSON.stringify(I.windowTarget) + ")");
-    eq(I.windowWeeks && I.windowWeeks[SARKAR], nW, "Sarkar impliedTargets.windowWeeks = window weeks the range touches in " + m);
-    if (nW) {
-      eq(I.targets[SARKAR], wt, "Sarkar implied target = window target x window weeks in " + m);
-      ok(!(SARKAR in I.neutralTerm) && !I.noTerm.includes(SARKAR), "Sarkar carries a real target in " + m + ", not a neutral / no term");
-    } else {
-      ok(!(SARKAR in I.targets) && !(SARKAR in I.neutralTerm) && I.noTerm.includes(SARKAR), "Sarkar carries NO target and no term in " + m + " (no window week in the range): targets " + JSON.stringify(I.targets[SARKAR]) + " noTerm " + JSON.stringify(I.noTerm));
+    const openWindow = mdaysIn.filter((d) => SARKAR_WINDOW.has(d) && baseOpen(d, P)).length;
+    const reserved = Math.min(SARKAR_TARGET * nW, openWindow);
+    eq([I.primaryOpen, I.backupOpen, I.poolSize, I.reservedForWindows], [primaryOpen, backupOpen, POOL.length, reserved], "impliedTargets " + m + " primaryOpen / backupOpen / poolSize / reservedForWindows");
+    eq([I.primaryShare, I.backupShare], [round1((primaryOpen - reserved) / POOL.length), round1(backupOpen / POOL.length)], "impliedTargets " + m + " primaryShare / backupShare = (open - reserved) / pool, open / pool");
+    POOL.forEach((id) => {
+      const M = I.members[id];
+      ok(M && typeof M.primaryTarget === "number" && typeof M.backupTarget === "number", CODE[id] + " must carry a primary AND a backup target in " + m + " (got " + JSON.stringify(M) + ")");
+      const heldP = monthDays(m).filter((d) => baseHolder(d, P) === id).length, heldB = monthDays(m).filter((d) => baseHolder(d, B) === id).length;
+      eq(M.lockedHeld, { primary: heldP, backup: heldB }, CODE[id] + " lockedHeld in " + m);
+      ok(M.primaryTarget >= heldP && M.backupTarget >= heldB, CODE[id] + " a target below the locked days in " + m + ": " + JSON.stringify(M));
+      ok(M.primaryTarget <= Math.max(heldP, M.clipPrimary === null ? Infinity : M.clipPrimary), CODE[id] + " primary target " + M.primaryTarget + " above his clip " + M.clipPrimary + " in " + m);
+      ok(M.primaryTarget <= Math.max(heldP, I.primaryShare) + 0.05, CODE[id] + " primary target " + M.primaryTarget + " exceeds max(held, primaryShare " + I.primaryShare + ") in " + m);
+      ok(M.backupTarget <= Math.max(heldB, I.backupShare) + 0.05, CODE[id] + " backup target " + M.backupTarget + " exceeds max(held, backupShare " + I.backupShare + ") in " + m);
+      if (SR[id].backupCap && typeof SR[id].backupCap.perMonthDays === "number") ok(M.backupTarget <= Math.max(heldB, SR[id].backupCap.perMonthDays) + 0.05, CODE[id] + " backup target " + M.backupTarget + " above his backup cap in " + m);
+      ok(typeof M.allowedPrimary === "number" && typeof M.allowedBackup === "number" && M.allowedPrimary >= 0 && M.allowedPrimary <= primaryOpen && M.allowedBackup >= 0 && M.allowedBackup <= backupOpen, CODE[id] + " allowedPrimary / allowedBackup out of range in " + m + ": " + JSON.stringify(M));
+      eq(D.tallies[id].months[m].target, { primary: M.primaryTarget, backup: M.backupTarget }, CODE[id] + " tallies target = { primary, backup } in " + m);
+    });
+    // clips (K, per role since J): Burchett preferred 7; Philip default 8 - 1; Acton / Khan uncapped; Fierce 13 minus the
+    // East primary-week days of the month he does not hold as Silvis PRIMARY - the cap adds those days to his primary
+    // count whether or not he holds the derived Silvis backup, so November (derived week held) reads 6, not 13.
+    const fierceEastP = monthDays(m).filter((d) => FIERCE_EAST_PRIMARY_DAYS.has(d) && baseHolder(d, P) !== FIERCE).length;
+    eq([I.members[BURCHETT].clipPrimary, I.members[PHILIP].clipPrimary, I.members[ACTON].clipPrimary, I.members[KHAN].clipPrimary, I.members[FIERCE].clipPrimary], [7, DEFAULT_CAP - 1, null, null, 14 - 1 - fierceEastP], "clipPrimary MAB 7 / AFP 7 / BDA null / FAK null / NF 13 - East primary-week days in " + m);
+    eq(I.members[FIERCE].eastPrimaryDays, fierceEastP, "Fierce members.eastPrimaryDays in " + m);
+    // Khan's allowed backup count exactly: since 9/22 backup is open to him on every open in-range backup slot of the
+    // month except his vacation days and the days he holds the locked primary (Thanksgiving) - no cap, no East block
+    eq(I.members[KHAN].allowedBackup, mdaysIn.filter((d) => baseOpen(d, B) && !VAC[KHAN].has(d) && baseHolder(d, P) !== KHAN).length, "Khan allowedBackup = open in-range backup slots minus vacations and his locked primaries in " + m);
+    // Sarkar (N + J): primaryTarget = window target x the window weeks the range touches (null without one), NO
+    // backupTarget, outside the pool; allowedPrimary exactly = the open in-range primary slots inside her windows
+    const MS = I.members[SARKAR];
+    eq([I.windowTarget[SARKAR], I.windowWeeks[SARKAR]], [SARKAR_TARGET * nW, nW], "Sarkar impliedTargets.windowTarget / windowWeeks in " + m);
+    eq([MS.primaryTarget, MS.backupTarget], [nW ? SARKAR_TARGET * nW : null, null], "Sarkar primaryTarget = window target, backupTarget null in " + m + " (got " + JSON.stringify(MS) + ")");
+    eq(MS.allowedPrimary, mdaysIn.filter((d) => SARKAR_WINDOW.has(d) && baseOpen(d, P) && !VAC[SARKAR].has(d)).length, "Sarkar allowedPrimary = open in-range primary slots inside her windows in " + m);
+    eq(D.tallies[SARKAR].months[m].target, { primary: nW ? SARKAR_TARGET * nW : null, backup: null }, "Sarkar tallies target in " + m);
+    // J (fix stage, review finding 1): the flat share is measured on OPEN slots while the deviation counts whole-month
+    // days, so in a month with locks the targets can ask for FEWER placements than there are open slots (Khan's 4
+    // locked Thanksgiving primaries sit inside his 4.6 November target). The generator reports that gap instead of
+    // hiding it: placeableAtTarget = sum over every targeted surgeon of max(0, target - lockedHeld) per role, to be
+    // read against primaryOpen / backupOpen; rangeDays = the month's days inside the generated range (a partial
+    // month carries a whole-month locked floor - review finding 8).
+    {
+      let plP = 0, plB = 0;
+      IDS.forEach((id) => { const M = I.members[id]; if (!M) return; if (typeof M.primaryTarget === "number") plP += Math.max(0, M.primaryTarget - M.lockedHeld.primary); if (typeof M.backupTarget === "number") plB += Math.max(0, M.backupTarget - M.lockedHeld.backup); });
+      eq(I.placeableAtTarget, { primary: round1(plP), backup: round1(plB) }, "impliedTargets " + m + " placeableAtTarget = sum of max(0, target - lockedHeld) per role (got " + JSON.stringify(I.placeableAtTarget) + ")");
+      ok(I.placeableAtTarget.primary <= primaryOpen + 0.05 && I.placeableAtTarget.backup <= backupOpen + 0.05, "impliedTargets " + m + " placeableAtTarget above the open slots: " + JSON.stringify(I.placeableAtTarget) + " vs open " + primaryOpen + " / " + backupOpen);
+      eq(I.rangeDays, mdaysIn.length, "impliedTargets " + m + " rangeDays = the month's in-range days");
     }
-    eq(D.tallies[SARKAR].months[m].target, wt, "Sarkar tallies target = her window target (null without a window week) in " + m);
-    eq(D.tallies[KHAN].months[m].target, null, "Khan tallies target must stay null in " + m);
     // K (fix stage): diagnostics.tallies carry the East primary-week days a countsEastDays cap adds
     // (eastP) so the Generate preview can flag P + eastP > cap the way the engine counts; 0 for everyone else.
     eq(D.tallies[FIERCE].months[m].eastP, [...FIERCE_EAST_PRIMARY_DAYS].filter((d) => monthOf(d) === m).length, "Fierce tallies.eastP = his East primary-week days in " + m);
     eq(D.tallies[KHAN].months[m].eastP, 0, "Khan tallies.eastP must be 0 (no countsEastDays cap) in " + m);
   });
   eq(D.tallies[FIERCE].range.eastP, days.filter((d) => FIERCE_EAST_PRIMARY_DAYS.has(d)).length, "Fierce tallies.range.eastP = his East primary-week days in the range");
+  // range target = the sum of the numeric monthly targets per role (null when no month carries one)
+  IDS.forEach((id) => {
+    const sum = (role) => { let s = null; months.forEach((m) => { const t = D.tallies[id].months[m].target[role]; if (typeof t === "number") s = (s || 0) + t; }); return s === null ? null : round1(s); };
+    eq(D.tallies[id].range.target, { primary: sum(P), backup: sum(B) }, CODE[id] + " tallies.range.target = per-role sums of the monthly targets");
+  });
   if (range.name.indexOf("R2") === 0 || range.name.indexOf("R4") === 0) {
-    const nov = D.impliedTargets.months["2026-11"];
-    eq(nov.lockedHeld[FIERCE], 7, "Fierce holds his 7 derived November days before generation");
-    ok(nov.targets[FIERCE] < 14 && nov.targets[FIERCE] <= nov.share + 0.05, "Fierce November implied target " + nov.targets[FIERCE] + " must not be pushed to his cap by the derived week");
-    // 9/22 (Prompt 12 K review, major): the derived East-primary week 11/09..11/15 is HELD (as Silvis
-    // backup) and therefore already in lockedHeld; counting it a second time as East-only shrank his
-    // clip to 6 and collapsed his November target onto the locked floor (7 instead of share 7.8), so
-    // the generator steered November primaries away from him. East-only = East primary-week days he
-    // does NOT hold in the base schedule (see the derived-week-overridden fixture below for the 7 / 6 case).
-    eq(nov.eastOnlyDays[FIERCE], 0, "Fierce's held derived week must not count as East-only days in 2026-11");
-    eq(nov.capClip[FIERCE], 13, "Fierce clip = 13 in 2026-11 (14 - 1, nothing East-only)");
-    eq(nov.targets[FIERCE], Math.round(Math.max(7, Math.min(nov.share, 13)) * 10) / 10, "Fierce November target = max(held 7, min(share " + nov.share + ", 13)) - not collapsed to the locked floor");
+    const nov = D.impliedTargets.months["2026-11"], NF = nov.members[FIERCE];
+    eq(NF.lockedHeld, { primary: 0, backup: 7 }, "Fierce holds his 7 derived November days as BACKUP before generation");
+    // 9/22 (K review, restated per role by J): his held derived East-primary week is 7 locked BACKUPS - it never
+    // inflates his primary target - and the cap adds those 7 days to his primary count, so his primary clip is
+    // 14 - 1 - 7 = 6; the primary target is min(primaryShare, 6) (nothing primary is locked), never the old 13 clip.
+    eq([NF.eastPrimaryDays, NF.clipPrimary], [7, 6], "Fierce November: 7 East primary-week days leave a primary clip of 6");
+    eq(NF.primaryTarget, round1(Math.max(0, Math.min(nov.primaryShare, 6))), "Fierce November primary target = min(primaryShare " + nov.primaryShare + ", clip 6)");
+    ok(NF.backupTarget >= 7, "Fierce November backup target " + NF.backupTarget + " must hold his 7 locked backups");
+  }
+  // score (J): the lexicographic parts split the deviation per role - primary first - and targetDeviation is gone;
+  // both deviations are restated from the merged view (full calendar months, the way the engine counts) and the
+  // total is the weighted sum of the parts.
+  eq(Object.keys(D.score.weights), SCORE_PARTS, "score.weights = the J parts (primaryDeviation 300 before backupDeviation 100; no targetDeviation)");
+  eq([D.score.weights.primaryDeviation, D.score.weights.backupDeviation], [300, 100], "score weights primaryDeviation 300 / backupDeviation 100");
+  ok(!("targetDeviation" in D.score) && typeof D.score.primaryDeviation === "number" && typeof D.score.backupDeviation === "number", "score must carry primaryDeviation + backupDeviation and no targetDeviation: " + JSON.stringify(Object.keys(D.score)));
+  {
+    let devP = 0, devB = 0;
+    months.forEach((m) => IDS.forEach((id) => {
+      const M = D.impliedTargets.months[m].members[id];
+      if (!M) return;
+      if (typeof M.primaryTarget === "number") devP += Math.abs(monthDays(m).filter((d) => holder(view, d, P) === id).length - M.primaryTarget);
+      if (typeof M.backupTarget === "number") devB += Math.abs(monthDays(m).filter((d) => holder(view, d, B) === id).length - M.backupTarget);
+    }));
+    eq([D.score.primaryDeviation, D.score.backupDeviation], [round1(devP), round1(devB)], "score.primaryDeviation / backupDeviation restated from the schedule and the targets");
+    const total = SCORE_PARTS.reduce((s, k) => s + D.score[k] * D.score.weights[k], 0);
+    eq(D.score.total, Math.round(total * 1000) / 1000, "score.total = sum of parts x weights");
   }
 
   // quality-1 (Nov-Dec, the milestone range with the real forecast): Khan's main
@@ -802,6 +870,23 @@ checkRun(big, RANGES[1], 1, true); // seed 1, bestOf 200; deep = item G tally co
 // old day rules left open are now fillable. Deterministic (genPrng, seed 1).
 CUR.range = "R2 Nov-Dec bestOf 200"; CUR.seed = 1; CUR.day = "-";
 eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone preview (seed 1, bestOf 200): no uncovered slot");
+// J (9/22): equal shares in force on the milestone preview - both checks read the targets from the diagnostics.
+// (1) Khan is no longer the default weekend backup: his Nov-Dec backup count is at most 1.5 x his backup target
+//     (review section 4 item 2: the old preview gave him 21 backups against a share near 8-9).
+// (2) every pool member's monthly primary count is within 3 of the primary target unless availability limits it
+//     (allowedPrimary + locked primaries below the target).
+{
+  const DB = big.diagnostics, kb = DB.tallies[KHAN].range;
+  ok(kb.target && typeof kb.target.backup === "number" && kb.target.backup > 0, "Khan must carry a Nov-Dec backup target (got " + JSON.stringify(kb.target) + ")");
+  ok(kb.backup <= 1.5 * kb.target.backup, "Khan holds " + kb.backup + " backups in Nov-Dec against a backup target of " + kb.target.backup + " - more than 1.5x, the backup sink is back");
+  DB.range.months.forEach((m) => POOL.forEach((id) => {
+    const M = DB.impliedTargets.months[m].members[id], c = DB.tallies[id].months[m].primary;
+    if (M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget) return; // availability-limited: visible in the shares table, not a defect
+    CUR.day = m;
+    ok(Math.abs(c - M.primaryTarget) <= 3, CODE[id] + " " + m + ": " + c + " primaries against a primary target of " + M.primaryTarget + " (allowed " + M.allowedPrimary + " + locked " + M.lockedHeld.primary + ") - more than 3 off");
+  }));
+  CUR.day = "-";
+}
 // 9/22 positive sightings across the 150 runs + the bestOf-200 run
 CUR.range = "all runs"; CUR.seed = "-"; CUR.day = "-";
 Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosened backup rule is not in force, or the runs changed - counts " + JSON.stringify(SAW) + ")"));
@@ -881,10 +966,10 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   CUR.day = "-";
   wkOv.forEach((d) => { eq(outOv.schedule[d].backup, ACTON, "manual backup lock kept on " + d); ok(DOv.warnings.some((w) => w.indexOf("derived lock overridden by import/manual lock: " + d + " backup derived " + FIERCE) === 0), "missing the 'derived lock overridden' warning for " + d + ": " + JSON.stringify(DOv.warnings)); });
   ok(!DOv.warnings.some((w) => /generator bug/.test(w)), "derived-week-overridden run: generator reports its own bug");
-  eq(novOv.lockedHeld[FIERCE], heldOv, "Fierce holds " + heldOv + " November day(s) before generation (the overridden week is not his)");
-  eq(novOv.eastOnlyDays[FIERCE], 7, "the overridden East primary week is East-only: 7 days");
-  eq(novOv.capClip[FIERCE], 14 - 1 - 7, "Fierce clip = 6 (13 minus the 7 East-only days)");
-  ok(novOv.targets[FIERCE] <= Math.max(heldOv, 6) + 0.05, "Fierce November implied target " + novOv.targets[FIERCE] + " above max(held " + heldOv + ", clip 6)");
+  const NFOv = novOv.members[FIERCE];
+  eq(NFOv.lockedHeld.primary + NFOv.lockedHeld.backup, heldOv, "Fierce holds " + heldOv + " November day(s) before generation (the overridden week is not his)");
+  eq([NFOv.eastPrimaryDays, NFOv.clipPrimary], [7, 14 - 1 - 7], "the overridden East primary week still counts: eastPrimaryDays 7, clipPrimary 6 (J: the same clip as when he holds the derived backup)");
+  ok(NFOv.primaryTarget <= Math.max(NFOv.lockedHeld.primary, 6) + 0.05, "Fierce November primary target " + NFOv.primaryTarget + " above max(locked primaries " + NFOv.lockedHeld.primary + ", clip 6)");
   eq(DOv.tallies[FIERCE].months["2026-11"].eastP, 7, "tallies.eastP still counts the East primary-week days he does not hold in Silvis");
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
@@ -896,18 +981,24 @@ function printTallies(out, title) {
   const D = out.diagnostics;
   console.log("\n" + title);
   console.log("  score " + JSON.stringify(Object.assign({}, D.score, { weights: undefined })) + "; candidates " + D.candidatesTried + "; warnings " + D.warnings.length);
-  console.log("  " + pad("surgeon", 8, true) + pad("month", 8, true) + pad("prim", 6) + pad("bkup", 6) + pad("total", 6) + pad("wkend", 6) + pad("major", 6) + pad("minor", 6) + pad("maxCP", 6) + pad("maxCA", 6) + pad("cap(P)", 6) + pad("target", 8));
+  const tg = (t, role) => (t && t.target && typeof t.target[role] === "number") ? t.target[role] : "-";
+  console.log("  " + pad("surgeon", 8, true) + pad("month", 8, true) + pad("prim", 6) + pad("bkup", 6) + pad("total", 6) + pad("wkend", 6) + pad("major", 6) + pad("minor", 6) + pad("maxCP", 6) + pad("maxCA", 6) + pad("cap(P)", 7) + pad("tgtP", 7) + pad("tgtB", 7));
   Object.keys(D.tallies).forEach((id) => {
     const t = D.tallies[id];
     Object.keys(t.months).forEach((m) => {
       const x = t.months[m];
-      console.log("  " + pad(t.code, 8, true) + pad(m, 8, true) + pad(x.primary, 6) + pad(x.backup, 6) + pad(x.total, 6) + pad(x.weekendDays, 6) + pad(x.majorHolidays, 6) + pad(x.minorHolidays, 6) + pad(x.maxConsecutive, 6) + pad(x.maxConsecutiveAnyRole, 6) + pad(x.cap === null ? "-" : x.cap, 6) + pad(x.target === null ? "-" : x.target, 8));
+      console.log("  " + pad(t.code, 8, true) + pad(m, 8, true) + pad(x.primary, 6) + pad(x.backup, 6) + pad(x.total, 6) + pad(x.weekendDays, 6) + pad(x.majorHolidays, 6) + pad(x.minorHolidays, 6) + pad(x.maxConsecutive, 6) + pad(x.maxConsecutiveAnyRole, 6) + pad(x.cap === null ? "-" : x.cap, 7) + pad(tg(x, "primary"), 7) + pad(tg(x, "backup"), 7));
     });
     const r = t.range;
-    console.log("  " + pad(t.code, 8, true) + pad("RANGE", 8, true) + pad(r.primary, 6) + pad(r.backup, 6) + pad(r.total, 6) + pad(r.weekendDays, 6) + pad(r.majorHolidays, 6) + pad(r.minorHolidays, 6) + pad(r.maxConsecutive, 6) + pad(r.maxConsecutiveAnyRole, 6) + pad(r.cap === null ? "-" : r.cap, 6) + pad("", 8));
+    console.log("  " + pad(t.code, 8, true) + pad("RANGE", 8, true) + pad(r.primary, 6) + pad(r.backup, 6) + pad(r.total, 6) + pad(r.weekendDays, 6) + pad(r.majorHolidays, 6) + pad(r.minorHolidays, 6) + pad(r.maxConsecutive, 6) + pad(r.maxConsecutiveAnyRole, 6) + pad(r.cap === null ? "-" : r.cap, 7) + pad(tg(r, "primary"), 7) + pad(tg(r, "backup"), 7));
   });
   console.log("  implied targets (" + D.impliedTargets.rule + "):");
-  Object.keys(D.impliedTargets.months).forEach((m) => console.log("    " + m + " " + JSON.stringify(D.impliedTargets.months[m])));
+  Object.keys(D.impliedTargets.months).forEach((m) => {
+    const I = D.impliedTargets.months[m];
+    console.log("    " + m + " primaryOpen " + I.primaryOpen + " - reserved " + I.reservedForWindows + " / pool " + I.poolSize + " = primaryShare " + I.primaryShare + "; backupOpen " + I.backupOpen + " / " + I.poolSize + " = backupShare " + I.backupShare + "; placeable at target " + I.placeableAtTarget.primary + " P / " + I.placeableAtTarget.backup + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" + (I.rangeDays < monthDays(m).length ? " (partial month: " + I.rangeDays + " days in range)" : ""));
+    console.log("      " + pad("member", 6, true) + pad("tgtP", 6) + pad("allwP", 6) + pad("lockP", 6) + pad("clipP", 6) + pad("tgtB", 6) + pad("allwB", 6) + pad("lockB", 6));
+    Object.keys(I.members || {}).forEach((id) => { const M = I.members[id]; console.log("      " + pad(CODE[id], 6, true) + pad(M.primaryTarget === null ? "-" : M.primaryTarget, 6) + pad(M.allowedPrimary, 6) + pad(M.lockedHeld.primary, 6) + pad(M.clipPrimary === null ? "-" : M.clipPrimary, 6) + pad(M.backupTarget === null ? "-" : M.backupTarget, 6) + pad(M.allowedBackup, 6) + pad(M.lockedHeld.backup, 6)); });
+  });
   console.log("  uncovered slots (" + D.uncovered.length + "):");
   D.uncovered.forEach((u) => {
     console.log("    " + u.day + " " + u.weekday + " " + u.role + (u.holidayUnit ? " [" + u.holidayUnit + "]" : ""));

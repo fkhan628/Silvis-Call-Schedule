@@ -213,6 +213,34 @@ pool, within each person's availability:
   violations, (4) minimize soft penalties, (5) minimize primary spread, (6) minimize backup spread, (7) balance weekends
   and holidays.
 
+**Key names (Prompt 12 J, 9/22 — `generator.js genTargets`; data in `call_schedule_data.data.surgeonRules`):**
+
+- `surgeonRules.<id>.monthlyTarget`: `null` or absent = **equal share** (both roles); a **number** = the **primary** target
+  for the month (the backup target stays the share); `{ "primary": n, "backup": m }` sets each. There is no neutral or
+  zero term. Setup → Rules edits the number form only (its "Monthly target" field is a single number; blank = equal
+  share — the field's hint still says "blank = no target", a pending one-line follow-up); the object form is blob-only
+  for now. `rules.js` still reads a numeric `monthlyTarget` as an any-role soft term (pending in the rules.js item; no
+  shipped surgeon has a number today).
+- `surgeonRules.<id>.poolMember: false` takes a surgeon out of the pool (no targets); a roster entry of `type: "external"`
+  is never in it; `availableWindows` + `daysPerWindowWeek.target` gives the window target instead (primary only, no
+  backup target — item N); `backupCap.perMonthDays` clips the backup target; the K clip
+  (`min(monthlyCap.preferred, monthlyCap.primary − 1) − East primary-week days`) clips the primary target.
+- Per month the generator reports `diagnostics.impliedTargets.months[m]` = `{ primaryOpen, backupOpen, poolSize,
+  reservedForWindows, primaryShare, backupShare, rangeDays, placeableAtTarget: { primary, backup }, members }` with
+  `members[id]` = `{ primaryTarget, backupTarget, lockedHeld: { primary, backup }, clipPrimary, eastPrimaryDays,
+  allowedPrimary, allowedBackup }` — `allowed` is the number of the month's open slots the rules let the surgeon take
+  (a weekend day of a full Fri–Sat–Sun unit counts as a block member, a holiday day as a unit candidate), so a target
+  above it is an availability shortfall. `lockedHeld` and the targets are whole-calendar-month figures even where the
+  range only touches the month (`rangeDays`). `placeableAtTarget` = Σ max(0, target − lockedHeld) per role: the flat
+  share divides the *open* slots by the whole pool, so in a month where a locked floor or a clip pins a member (Khan's
+  locked Thanksgiving primaries, Fierce's derived week) it reads *below* `primaryOpen` / `backupOpen` and the surplus days
+  are placed by the soft terms alone — visible, not hidden; whether to redistribute (a water-filled share) is an open
+  decision from the 9/22 J review. `diagnostics.tallies[id].months[m].target` = `{ primary, backup }` (the Totals
+  view's **Target** and **Target B** columns — both compare that role's days only; the range row carries the sums).
+- Score parts, lexicographic: `uncoveredPrimary`, `uncoveredBackup`, `hardViolations`, `softSum`, **`primaryDeviation`
+  (×300)**, **`backupDeviation` (×100)**, `weekendSpread`, `holidaySpread`; target smoothing moves primary days and,
+  separately, backup days from above-target to below-target surgeons through `eligibility()`.
+
 ## 7. Existing assignments to import (locks)
 
 `silvis-seed.json → existingAssignments` holds every day from **2026-09-14 through 2026-11-01** exactly as the emails
