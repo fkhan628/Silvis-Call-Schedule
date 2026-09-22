@@ -205,6 +205,9 @@ begin
      or new.return_day is distinct from old.return_day or new.return_role is distinct from old.return_role then
     raise exception 'TRADE_IMMUTABLE: only the scheduler may change the legs of a trade' using errcode = 'P0001';
   end if;
+  if current_setting('silvis.apply_trade', true) = '1' and old.status = 'accepted' and new.status = 'applied' then
+    return new;   -- set only inside public.apply_trade()
+  end if;
   if old.status <> 'pending' then
     raise exception 'TRADE_NOT_PENDING: this trade is already %', old.status using errcode = 'P0001';
   end if;
@@ -216,6 +219,63 @@ drop trigger if exists trade_update_guard_trg on public.shift_trade_requests;
 create trigger trade_update_guard_trg
   before update on public.shift_trade_requests
   for each row execute function public.trade_update_guard();
+
+-- Apply an ACCEPTED trade atomically. Members cannot write schedule_days (scheduler-only RLS), so the
+-- swap runs here as security definer with explicit checks: caller must be a party or the scheduler;
+-- the trade must be 'accepted'; each leg must still be held by the expected surgeon (stale -> error);
+-- both days get version+1 and source 'trade'; the trade becomes 'applied'; an audit row is written.
+-- The distinct-roles check constraint still applies (a swap that would double-book a day fails loudly).
+create or replace function public.apply_trade(p_trade_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  t      public.shift_trade_requests%rowtype;
+  d1     public.schedule_days%rowtype;
+  d2     public.schedule_days%rowtype;
+  me     text    := public.silvis_person_id();
+  sched  boolean := public.silvis_is_sched();
+  holder text;
+begin
+  select * into t from public.shift_trade_requests where id = p_trade_id for update;
+  if not found then raise exception 'TRADE_NOT_FOUND' using errcode = 'P0001'; end if;
+  if not (sched or me = t.from_surgeon_id or me = t.to_surgeon_id) then
+    raise exception 'TRADE_FORBIDDEN: only a party or the scheduler may apply this trade' using errcode = 'P0001';
+  end if;
+  if t.status <> 'accepted' then
+    raise exception 'TRADE_NOT_ACCEPTED: status is %', t.status using errcode = 'P0001';
+  end if;
+  select * into d1 from public.schedule_days where day = t.day for update;
+  holder := case when t.role = 'primary' then d1.primary_id else d1.backup_id end;
+  if not found or holder is distinct from t.from_surgeon_id then
+    raise exception 'TRADE_STALE: % % is no longer held by %', t.day, t.role, t.from_surgeon_id using errcode = 'P0001';
+  end if;
+  if t.return_day is not null then
+    select * into d2 from public.schedule_days where day = t.return_day for update;
+    holder := case when t.return_role = 'primary' then d2.primary_id else d2.backup_id end;
+    if not found or holder is distinct from t.to_surgeon_id then
+      raise exception 'TRADE_STALE: % % is no longer held by %', t.return_day, t.return_role, t.to_surgeon_id using errcode = 'P0001';
+    end if;
+  end if;
+  if t.role = 'primary' then
+    update public.schedule_days set primary_id = t.to_surgeon_id, version = version + 1, source = 'trade', updated_by = coalesce(me, 'scheduler'), updated_at = now() where day = t.day;
+  else
+    update public.schedule_days set backup_id = t.to_surgeon_id, version = version + 1, source = 'trade', updated_by = coalesce(me, 'scheduler'), updated_at = now() where day = t.day;
+  end if;
+  if t.return_day is not null then
+    if t.return_role = 'primary' then
+      update public.schedule_days set primary_id = t.from_surgeon_id, version = version + 1, source = 'trade', updated_by = coalesce(me, 'scheduler'), updated_at = now() where day = t.return_day;
+    else
+      update public.schedule_days set backup_id = t.from_surgeon_id, version = version + 1, source = 'trade', updated_by = coalesce(me, 'scheduler'), updated_at = now() where day = t.return_day;
+    end if;
+  end if;
+  perform set_config('silvis.apply_trade', '1', true);
+  update public.shift_trade_requests set status = 'applied', decided_at = coalesce(decided_at, now()) where id = p_trade_id;
+  perform set_config('silvis.apply_trade', '0', true);
+  insert into public.audit_log (actor_id, action, detail)
+  values (me, 'trade.apply', jsonb_build_object('trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role, 'from', t.from_surgeon_id, 'to', t.to_surgeon_id));
+  return jsonb_build_object('ok', true, 'trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role);
+end $$;
+revoke all on function public.apply_trade(uuid) from public, anon;
+grant execute on function public.apply_trade(uuid) to authenticated;
 
 -- ---------- notifications, prefs, audit, snapshots, versions, contacts
 create table if not exists public.notifications (
