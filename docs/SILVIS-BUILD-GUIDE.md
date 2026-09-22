@@ -505,8 +505,26 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
 
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
 
-After generation some slots may stay open. One pure definition (`openSlots(schedule, from, to, today)` in `helpers.js`,
-mirrored in the edge function) feeds everything: the coverage strip, the "only OPEN" filter, a new **Open shifts** view
+After generation some slots may stay open. One pure definition — `openSlots(schedule, from, to, today, opts)` in
+`helpers.js` → `[{ day, role, unit, reason }]` for every day in `[from, to]` (inclusive) that is `>= today` (inclusive;
+the Prompt 12 rule that days before today are never open) where the role is unassigned: **primary** = no `primary_id`
+AND no `external_cover`; **backup** = no `backup_id`; a day with NO row inside the range is open in both roles; sorted
+by day then role (primary before backup); invalid inputs → `[]`, never throws. `opts` is optional:
+`{ holidayByDay, weekendKinds: { '<friday>': 'block'|'split'|'daily' }, reasons: { 'YYYY-MM-DD|primary': string } }`;
+`from`/`to` must be real calendar days (`'2026-13-40'` → `[]`). `unit` is decided per day, as the generator builds its
+units: `{ kind: 'holiday', name }` on a holiday-unit day, else `{ kind: 'weekend', pattern, friday }` on any Fri/Sat/Sun
+(including the leftover days of a weekend a holiday pre-empts — the generator's reduced weekend unit; `tradeUnitOf`
+voiding a whole block *trade* over such a weekend is a trading rule), else `null`; `reason` is the last generate's
+operational wording from `opts.reasons`, trimmed, or `null` (a lock flag never holds a slot). Companions:
+`openSlotKey(day, role)` (`'day|role'`), `openSlotCounts(list)` → `{ primary, backup, total }`,
+`openSlotWeekendKinds(diagnostics.weekendUnits)`, and `openSlotsLine(slot, nameOfUnit?)` →
+`'Fri 11/06 - primary (weekend block) - open'` (the board's Copy list: weekday, zero-padded `MM/DD`, role, the unit in
+parentheses, `- open`, and ` - <reason>` appended when the slot has one). Pinned by `test/open-shifts.test.js` against
+`test/fixtures/open-slots.json` (which also states the `schedule_days` column mapping); part 5 mirrors the function in
+TypeScript in `edge-functions/daily-reminder/index.ts` against the same fixture — this one function feeds everything:
+the coverage strip (`suCoverageGlance` computes its open lists through it), the "only OPEN" filter (a memoized Set of
+`openSlotKey`s over the grid's span, a generator preview overlaid per day exactly as the cells draw it; `slotIsOpen`
+remains only the per-cell rendering of the same rule), a new **Open shifts** view
 (nav badge with the count; table of open slots from today to the end of the published range with weekday, role, unit,
 the generator's operational reason, who is eligible now, when it was last announced), and the notifications.
 **Any surgeon may claim** an open slot ("Take this shift"): the client offers the button only when `eligibility()`

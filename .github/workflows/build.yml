@@ -37,6 +37,8 @@ on:
       - "test/totals.test.js"
       - "test/holidays.test.js"
       - "test/publish.test.js"
+      - "test/open-shifts.test.js"
+      - "test/fixtures/open-slots.json"
       - "test/schema.test.js"
       - "importer.js"
       - "test/generator-regression.js"
@@ -115,6 +117,13 @@ jobs:
       # the SQL, no notifications table anywhere in it. Pure - no network.
       - name: Publish-preview plan tests
         run: node test/publish.test.js
+
+      # ONE definition of "open" (Prompt 13): helpers.js openSlots against
+      # test/fixtures/open-slots.json (the edge function mirrors the same
+      # fixture), the glance equivalence and the source pins that keep a
+      # second definition out of index-source.html.
+      - name: Open-shifts tests + source pins
+        run: node test/open-shifts.test.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js

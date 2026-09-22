@@ -68,6 +68,112 @@ function slotIsOpen(dateStr, holder, today) {
   return String(dateStr || "") >= todayOrCentral(today);
 }
 
+/* ═══ ONE definition of "open" (Faraz 9/22, Prompt 13 part 1) ═══
+   openSlots(schedule, from, to, today, opts) -> [{ day, role, unit, reason }]
+   for every day in [from, to] (inclusive, ISO strings) that is >= today
+   (inclusive; a missing/malformed today is todayCentral()) where the role is
+   unassigned: primary = no primary AND no externalCover; backup = no backup
+   (dayHolder - an external cover stands in for the primary). A day with NO
+   row inside the range is open in both roles. Sorted by day, then primary
+   before backup. Invalid inputs -> [] (never throws).
+   opts (all optional):
+     holidayByDay  { 'YYYY-MM-DD': { name, days } }  (rulesCtx.holidayByDay)
+     weekendKinds  { '<friday>': 'block'|'split'|'daily' }  (openSlotWeekendKinds(diagnostics.weekendUnits))
+     reasons       { 'YYYY-MM-DD|primary': string }  (openSlotKey; the last generate's operational reasons)
+   unit is decided PER DAY, as generator.js buildUnits builds its units:
+   { kind: 'holiday', name } on a holiday-unit day, else { kind: 'weekend',
+   pattern: weekendKinds[friday] || null, friday } on any Fri/Sat/Sun - also
+   the leftover day(s) of a weekend a holiday unit pre-empts (the generator
+   makes a reduced weekend unit of them; tradeUnitOf voiding a whole BLOCK
+   trade over such a weekend is a trading rule, not a unit) - else null.
+   reason = opts.reasons[openSlotKey(day, role)] trimmed, or null when absent
+   or whitespace (so the board and openSlotsLine agree). from/to must be real
+   calendar days ('2026-13-40' is ISO-shaped but -> []), from <= to.
+   The coverage strip (suCoverageGlance), the calendar's only-OPEN filter, the
+   Open shifts board, the publish hook and the weekly reminder ALL read this
+   list; part 5 mirrors it in TypeScript in edge-functions/daily-reminder/
+   index.ts against test/fixtures/open-slots.json (schedule_days columns
+   primary_id / backup_id / external_cover -> primary / backup / externalCover;
+   a lock flag never holds a slot). There is no second place that decides what
+   "open" means - slotIsOpen above is the per-slot rendering of the same rule
+   (holder empty AND day >= today) for one cell. Pure. */
+const OPEN_SLOT_ROLES = ["primary", "backup"];
+function openSlotKey(day, role) { return day + "|" + role; }
+// A real calendar day in ISO form: suIsIso shape AND it survives a parse/fmt round trip.
+function openSlotIsDay(s) { return suIsIso(s) && fmt(parse(s)) === s; }
+function openSlotUnit(day, holidayByDay, weekendKinds) {
+  const hol = holidayByDay && typeof holidayByDay === "object" ? holidayByDay[day] : null;
+  if (hol && typeof hol === "object") return { kind: "holiday", name: hol.name || null };
+  const dow = parse(day).getDay(); // 0 Sun ... 6 Sat
+  if (dow !== 5 && dow !== 6 && dow !== 0) return null;
+  const friday = dow === 5 ? day : suAddDays(day, dow === 6 ? -1 : -2);
+  const kinds = weekendKinds && typeof weekendKinds === "object" ? weekendKinds : {};
+  const k = kinds[friday];
+  return { kind: "weekend", pattern: k === "block" || k === "split" || k === "daily" ? k : null, friday: friday };
+}
+function openSlots(schedule, from, to, today, opts) {
+  if (!openSlotIsDay(from) || !openSlotIsDay(to) || from > to) return [];
+  const sched = schedule && typeof schedule === "object" ? schedule : {};
+  const o = opts && typeof opts === "object" ? opts : {};
+  const reasons = o.reasons && typeof o.reasons === "object" ? o.reasons : {};
+  const t = todayOrCentral(today);
+  // slotIsOpen(d, holder, t) is THE predicate (item Q): no holder AND d >= t.
+  // The clip to t below is the same rule applied once to the range (a day
+  // before today never yields an entry), not a second definition.
+  const start = from < t ? t : from;
+  if (start > to) return [];
+  const out = [];
+  const n = suDaysBetween(start, to);
+  for (let k = 0; k <= n; k++) {
+    const d = suAddDays(start, k);
+    const a = sched[d] || null;
+    let unit;
+    OPEN_SLOT_ROLES.forEach(role => {
+      if (!slotIsOpen(d, dayHolder(a, role), t)) return; // held (roster id, outside surgeon, "ext:<cover>" for primary) or before today
+      if (unit === undefined) unit = openSlotUnit(d, o.holidayByDay, o.weekendKinds);
+      const r = reasons[openSlotKey(d, role)];
+      const reason = typeof r === "string" ? r.trim() : "";
+      out.push({ day: d, role: role, unit: unit, reason: reason || null });
+    });
+  }
+  return out;
+}
+// openSlotCounts(list) -> { primary, backup, total } (the nav badge / strip numbers).
+function openSlotCounts(list) {
+  const out = { primary: 0, backup: 0, total: 0 };
+  (Array.isArray(list) ? list : []).forEach(s => { if (s && (s.role === "primary" || s.role === "backup")) { out[s.role]++; out.total++; } });
+  return out;
+}
+// openSlotWeekendKinds(diagnostics.weekendUnits) -> { '<friday>': 'block'|'split'|'daily' }
+// (locked / open / unfilled units carry no pattern and are left out).
+function openSlotWeekendKinds(weekendUnits) {
+  const out = {};
+  (Array.isArray(weekendUnits) ? weekendUnits : []).forEach(u => {
+    if (!u || !suIsIso(u.friday)) return;
+    if (u.kind === "block" || u.kind === "split" || u.kind === "daily") out[u.friday] = u.kind;
+  });
+  return out;
+}
+// openSlotsLine(slot, nameOfUnit?) -> 'Fri 11/06 - primary (weekend block) - open'
+// - the plain-text line the board's Copy list and the reminder e-mail use:
+// weekday + MM/DD from the date, the unit in parentheses ('weekend block',
+// 'weekend' when the pattern is unknown, 'holiday: Thanksgiving'; none for a
+// plain day), then '- open' and ' - <reason>' when the slot carries one.
+// nameOfUnit(unit) -> string overrides the parenthesised text ('' drops it).
+const OPEN_SLOT_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function openSlotsLine(slot, nameOfUnit) {
+  const s = slot || {};
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s.day || ""));
+  const when = m ? OPEN_SLOT_DOW[parse(s.day).getDay()] + " " + m[2] + "/" + m[3] : String(s.day || "?");
+  const u = s.unit && typeof s.unit === "object" ? s.unit : null;
+  let unitText = "";
+  if (typeof nameOfUnit === "function") unitText = u ? String(nameOfUnit(u) || "") : "";
+  else if (u && u.kind === "holiday") unitText = "holiday: " + (u.name || "unit");
+  else if (u && u.kind === "weekend") unitText = "weekend" + (u.pattern ? " " + u.pattern : "");
+  const reason = typeof s.reason === "string" && s.reason.trim() ? " - " + s.reason.trim() : "";
+  return when + " - " + (s.role || "?") + (unitText ? " (" + unitText + ")" : "") + " - open" + reason;
+}
+
 /* ═══ DAILY MODEL - row <-> assignment ═══
    In-memory: schedule = { "YYYY-MM-DD": { primary, backup, primaryLocked,
    backupLocked, source, externalCover, note } }. Persisted: one row per day in
@@ -1143,15 +1249,11 @@ function suHolidayCounts(schedule, unitsByYear, sinceIso) {
   }));
   return out;
 }
-// suOpenPrimaryDays(schedule, fromIso, count) -> days in [from, from+count) with no primary and no external cover.
+// suOpenPrimaryDays(schedule, fromIso, count) -> days in [from, from+count) with
+// no primary and no external cover - openSlots with today = fromIso (Prompt 13).
 function suOpenPrimaryDays(schedule, fromIso, count) {
-  const out = [];
-  const sched = schedule || {};
-  for (let k = 0; k < (count || 60); k++) {
-    const d = suAddDays(fromIso, k);
-    if (!dayHolder(sched[d] || null, "primary")) out.push(d);
-  }
-  return out;
+  if (!suIsIso(fromIso)) return [];
+  return openSlots(schedule, fromIso, suAddDays(fromIso, (count || 60) - 1), fromIso).filter(s => s.role === "primary").map(s => s.day);
 }
 // suCoverageGlance(schedule, fromIso, count, eastForecast, threshold) -> the
 // "coverage at a glance" numbers for the next `count` days from fromIso
@@ -1160,17 +1262,20 @@ function suOpenPrimaryDays(schedule, fromIso, count) {
 // the generator treats those days as busy). eastForecast is
 // { surgeonId: { day: probability } } (ctxInputs.eastForecast shape). Pure.
 //   -> { openPrimary: [days], openBackup: [days], forecastPrimary: [{ day, id, p }] }
+// openPrimary / openBackup come THROUGH openSlots(schedule, fromIso,
+// fromIso + count - 1, fromIso) - the ONE definition of open (Prompt 13 part
+// 1); the strip passes todayStr as fromIso, so the window is today forward.
 function suCoverageGlance(schedule, fromIso, count, eastForecast, threshold) {
   const sched = schedule || {};
   const out = { openPrimary: [], openBackup: [], forecastPrimary: [] };
   if (!suIsIso(fromIso)) return out;
   const th = typeof threshold === "number" ? threshold : 0.5;
   const fc = eastForecast || {};
-  for (let k = 0; k < (count || 60); k++) {
+  const n = count || 60;
+  openSlots(sched, fromIso, suAddDays(fromIso, n - 1), fromIso).forEach(s => { (s.role === "primary" ? out.openPrimary : out.openBackup).push(s.day); });
+  for (let k = 0; k < n; k++) {
     const d = suAddDays(fromIso, k);
     const a = sched[d] || null;
-    if (!dayHolder(a, "primary")) out.openPrimary.push(d);
-    if (!dayHolder(a, "backup")) out.openBackup.push(d);
     if (a && a.primary && fc[a.primary] && typeof fc[a.primary][d] === "number" && fc[a.primary][d] >= th) out.forecastPrimary.push({ day: d, id: a.primary, p: fc[a.primary][d] });
   }
   return out;
@@ -1623,6 +1728,7 @@ if (typeof module !== "undefined" && module.exports) {
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
+    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,

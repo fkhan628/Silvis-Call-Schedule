@@ -1,0 +1,139 @@
+{
+  "note": "ONE definition of OPEN (Prompt 13 part 1). helpers.js openSlots(schedule, from, to, today, opts) is unit-tested against this fixture by test/open-shifts.test.js, and part 5 mirrors the function in TypeScript in edge-functions/daily-reminder/index.ts (mode open-shifts) against THIS SAME fixture - change the two together. The TypeScript mirror reads schedule_days rows; column -> assignment field: primary_id -> primary, backup_id -> backup, external_cover -> externalCover (primary_locked / backup_locked are irrelevant: a lock flag never holds a slot - see 2026-11-17). Rules: a role is open when primary has no primary AND no externalCover / backup has no backup ('' counts as empty); a day with no row is open in both roles; from/to inclusive and both must be real calendar days (see invalidRanges); only days >= today (today inclusive); sorted by day then role (primary before backup); a whitespace-only reason is null; unit is decided PER DAY: a holiday-unit day carries the holiday unit, any other Fri/Sat/Sun carries its weekend unit keyed by the Friday even when a holiday pre-empts the rest of that weekend (the generator builds a reduced weekend unit from the leftover days - see unitPrecedence). November 2026: 11/01 is a Sunday, today (11/04) is a Wednesday, Thanksgiving is Thu 11/26 - Sun 11/29. Roster ids only (no names, no contact data).",
+  "today": "2026-11-04",
+  "from": "2026-11-01",
+  "to": "2026-11-29",
+  "schedule": {
+    "2026-11-03": { "primary": "s1", "backup": null, "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-04": { "primary": null, "backup": null, "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-05": { "primary": "s2", "backup": null, "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-06": { "primary": null, "backup": null, "primaryLocked": false, "backupLocked": false, "source": "import", "externalCover": "Atwell", "note": null },
+    "2026-11-08": { "primary": "s3", "backup": "s4", "primaryLocked": true, "backupLocked": true, "source": "manual", "externalCover": null, "note": null },
+    "2026-11-09": { "primary": "s5", "backup": "s6", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-10": { "primary": "s1", "backup": "s2", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-11": { "primary": "s3", "backup": "s4", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-12": { "primary": "s5", "backup": "s6", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-13": { "primary": "s1", "backup": "s2", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-14": { "primary": "s3", "backup": null, "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-15": { "primary": "s4", "backup": "s5", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-16": { "primary": "s6", "backup": "s1", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-17": { "primary": null, "backup": null, "primaryLocked": true, "backupLocked": true, "source": "manual", "externalCover": null, "note": null },
+    "2026-11-18": { "primary": "s4", "backup": "s5", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-19": { "primary": "s6", "backup": "s1", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-20": { "primary": null, "backup": "s6", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-21": { "primary": "s1", "backup": "s2", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-22": { "primary": "s3", "backup": "s4", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-23": { "primary": "s5", "backup": "s6", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-24": { "primary": "s1", "backup": "s2", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-25": { "primary": "s3", "backup": "s4", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+    "2026-11-26": { "primary": "s1", "backup": null, "primaryLocked": true, "backupLocked": false, "source": "import", "externalCover": null, "note": null },
+    "2026-11-27": { "primary": "s1", "backup": "s2", "primaryLocked": true, "backupLocked": false, "source": "import", "externalCover": null, "note": null },
+    "2026-11-29": { "primary": "s1", "backup": null, "primaryLocked": true, "backupLocked": false, "source": "import", "externalCover": null, "note": null }
+  },
+  "cases": {
+    "past open day excluded": "2026-11-02 has no row and 2026-11-03 has an open backup - both are before today and appear in no list",
+    "today open": "2026-11-04 is today and open in both roles",
+    "primary held + backup open": "2026-11-05",
+    "external cover + backup open": "2026-11-06 - only the backup is listed",
+    "no row": "2026-11-07 and 2026-11-28 - open in both roles",
+    "locked held slot": "2026-11-08 - both roles locked and held, not open",
+    "locked but empty slot": "2026-11-17 - both lock flags set, no holders: open in both roles (a lock never holds a slot)",
+    "whitespace reason": "2026-11-05|backup has a reason of spaces in opts.reasons - it reads back as null",
+    "weekend unit day": "2026-11-06 / 11-07 (block), 2026-11-14 (split), 2026-11-20 (daily)",
+    "holiday unit day": "2026-11-26, 11-28, 11-29 (Thanksgiving; 11-28 is a Saturday and the holiday wins over the weekend)"
+  },
+  "expected": [
+    { "day": "2026-11-04", "role": "primary" },
+    { "day": "2026-11-04", "role": "backup" },
+    { "day": "2026-11-05", "role": "backup" },
+    { "day": "2026-11-06", "role": "backup" },
+    { "day": "2026-11-07", "role": "primary" },
+    { "day": "2026-11-07", "role": "backup" },
+    { "day": "2026-11-14", "role": "backup" },
+    { "day": "2026-11-17", "role": "primary" },
+    { "day": "2026-11-17", "role": "backup" },
+    { "day": "2026-11-20", "role": "primary" },
+    { "day": "2026-11-26", "role": "backup" },
+    { "day": "2026-11-28", "role": "primary" },
+    { "day": "2026-11-28", "role": "backup" },
+    { "day": "2026-11-29", "role": "backup" }
+  ],
+  "invalidRanges": [
+    { "from": "2026-13-40", "to": "2026-13-41", "why": "ISO-shaped but not a calendar day" },
+    { "from": "2026-11-01", "to": "2026-02-30", "why": "to is not a calendar day" },
+    { "from": "2026-11-12", "to": "2026-11-10", "why": "to before from" },
+    { "from": "nope", "to": "2026-11-05", "why": "not ISO" }
+  ],
+  "opts": {
+    "holidayByDay": {
+      "2026-11-26": { "name": "Thanksgiving", "days": ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"] },
+      "2026-11-27": { "name": "Thanksgiving", "days": ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"] },
+      "2026-11-28": { "name": "Thanksgiving", "days": ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"] },
+      "2026-11-29": { "name": "Thanksgiving", "days": ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"] }
+    },
+    "weekendKinds": { "2026-11-06": "block", "2026-11-13": "split", "2026-11-20": "daily" },
+    "reasons": {
+      "2026-11-04|primary": "no eligible surgeon (vacations)",
+      "2026-11-05|backup": "   ",
+      "2026-11-20|primary": "weekend pattern fallback (daily)"
+    }
+  },
+  "expectedWithUnits": [
+    { "day": "2026-11-04", "role": "primary", "unit": null, "reason": "no eligible surgeon (vacations)" },
+    { "day": "2026-11-04", "role": "backup", "unit": null, "reason": null },
+    { "day": "2026-11-05", "role": "backup", "unit": null, "reason": null },
+    { "day": "2026-11-06", "role": "backup", "unit": { "kind": "weekend", "pattern": "block", "friday": "2026-11-06" }, "reason": null },
+    { "day": "2026-11-07", "role": "primary", "unit": { "kind": "weekend", "pattern": "block", "friday": "2026-11-06" }, "reason": null },
+    { "day": "2026-11-07", "role": "backup", "unit": { "kind": "weekend", "pattern": "block", "friday": "2026-11-06" }, "reason": null },
+    { "day": "2026-11-14", "role": "backup", "unit": { "kind": "weekend", "pattern": "split", "friday": "2026-11-13" }, "reason": null },
+    { "day": "2026-11-17", "role": "primary", "unit": null, "reason": null },
+    { "day": "2026-11-17", "role": "backup", "unit": null, "reason": null },
+    { "day": "2026-11-20", "role": "primary", "unit": { "kind": "weekend", "pattern": "daily", "friday": "2026-11-20" }, "reason": "weekend pattern fallback (daily)" },
+    { "day": "2026-11-26", "role": "backup", "unit": { "kind": "holiday", "name": "Thanksgiving" }, "reason": null },
+    { "day": "2026-11-28", "role": "primary", "unit": { "kind": "holiday", "name": "Thanksgiving" }, "reason": null },
+    { "day": "2026-11-28", "role": "backup", "unit": { "kind": "holiday", "name": "Thanksgiving" }, "reason": null },
+    { "day": "2026-11-29", "role": "backup", "unit": { "kind": "holiday", "name": "Thanksgiving" }, "reason": null }
+  ],
+  "expectedLines": [
+    "Wed 11/04 - primary - open - no eligible surgeon (vacations)",
+    "Wed 11/04 - backup - open",
+    "Thu 11/05 - backup - open",
+    "Fri 11/06 - backup (weekend block) - open",
+    "Sat 11/07 - primary (weekend block) - open",
+    "Sat 11/07 - backup (weekend block) - open",
+    "Sat 11/14 - backup (weekend split) - open",
+    "Tue 11/17 - primary - open",
+    "Tue 11/17 - backup - open",
+    "Fri 11/20 - primary (weekend daily) - open - weekend pattern fallback (daily)",
+    "Thu 11/26 - backup (holiday: Thanksgiving) - open",
+    "Sat 11/28 - primary (holiday: Thanksgiving) - open",
+    "Sat 11/28 - backup (holiday: Thanksgiving) - open",
+    "Sun 11/29 - backup (holiday: Thanksgiving) - open"
+  ],
+  "expectedCounts": { "primary": 5, "backup": 9, "total": 14 },
+  "unitPrecedence": {
+    "note": "Unit is decided per day, as the generator builds units (buildUnits: a holiday unit pre-empts its weekend days and the leftover Fri/Sat/Sun form a reduced weekend unit keyed by the Friday). A synthetic Sat-Mon holiday unit over 11/14-11/16 with an empty schedule: the Friday 11/13 keeps its weekend unit (pattern from weekendKinds), 11/14-11/16 carry the holiday. tradeUnitOf in the app voids a whole weekend BLOCK trade when any of its days is a holiday - that is a trading rule, not the unit an open slot belongs to.",
+    "today": "2026-11-04",
+    "from": "2026-11-13",
+    "to": "2026-11-16",
+    "schedule": {},
+    "opts": {
+      "holidayByDay": {
+        "2026-11-14": { "name": "Test unit", "days": ["2026-11-14", "2026-11-15", "2026-11-16"] },
+        "2026-11-15": { "name": "Test unit", "days": ["2026-11-14", "2026-11-15", "2026-11-16"] },
+        "2026-11-16": { "name": "Test unit", "days": ["2026-11-14", "2026-11-15", "2026-11-16"] }
+      },
+      "weekendKinds": { "2026-11-13": "block" }
+    },
+    "expected": [
+      { "day": "2026-11-13", "role": "primary", "unit": { "kind": "weekend", "pattern": "block", "friday": "2026-11-13" }, "reason": null },
+      { "day": "2026-11-13", "role": "backup", "unit": { "kind": "weekend", "pattern": "block", "friday": "2026-11-13" }, "reason": null },
+      { "day": "2026-11-14", "role": "primary", "unit": { "kind": "holiday", "name": "Test unit" }, "reason": null },
+      { "day": "2026-11-14", "role": "backup", "unit": { "kind": "holiday", "name": "Test unit" }, "reason": null },
+      { "day": "2026-11-15", "role": "primary", "unit": { "kind": "holiday", "name": "Test unit" }, "reason": null },
+      { "day": "2026-11-15", "role": "backup", "unit": { "kind": "holiday", "name": "Test unit" }, "reason": null },
+      { "day": "2026-11-16", "role": "primary", "unit": { "kind": "holiday", "name": "Test unit" }, "reason": null },
+      { "day": "2026-11-16", "role": "backup", "unit": { "kind": "holiday", "name": "Test unit" }, "reason": null }
+    ]
+  }
+}

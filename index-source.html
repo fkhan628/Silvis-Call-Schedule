@@ -3372,6 +3372,22 @@ function CallSchedule() {
     return Math.floor(h / 24) + " days ago";
   };
   const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr, { today: todayStr }), [schedule, surgeons, monthStartStr, monthEndStr, todayStr]);
+  // ONE definition of OPEN (Prompt 13 part 1): the "only OPEN" filter dims
+  // every day without an entry in helpers.js openSlots() over the grid's span
+  // (the month plus its leading/trailing cells) - the same list the coverage
+  // strip (suCoverageGlance), the board and the reminder read. A generator
+  // preview overlays the map with the cells' own rule, per grid day:
+  // previewGen.schedule[d] || schedule[d] (a falsy preview row never hides
+  // the live row), so the filter and the drawn cells always agree.
+  const openKeys = useMemo(() => {
+    if (!gridDays.length) return new Set();
+    let base = schedule;
+    if (previewGen && previewGen.schedule) {
+      base = {};
+      gridDays.forEach(d => { base[d] = previewGen.schedule[d] || schedule[d] || null; });
+    }
+    return new Set(openSlots(base, gridDays[0], gridDays[gridDays.length - 1], todayStr).map(s => openSlotKey(s.day, s.role)));
+  }, [schedule, previewGen, gridDays, todayStr]);
 
   // --- Calendar tools (Prompt 9 exports) ---
   // Group .ics, the shareable read-only page, the printable view and the ER-panel author's
@@ -4050,7 +4066,7 @@ function CallSchedule() {
                 const pH = dayHolder(a, "primary"); const bH = a ? a.backup : null;
                 const openP = slotIsOpen(d, pH, todayStr), openB = slotIsOpen(d, bH, todayStr); // past unassigned days are blank, not OPEN
                 const inFilter = calSurgeonFilters.length === 0 || (a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup)));
-                const dim = !inFilter || (calOnlyOpen && !(openP || openB));
+                const dim = !inFilter || (calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup")))); // only-OPEN reads the openSlots Set, never a per-cell rule
                 const isToday = d === todayStr;
                 const bg = hol ? (dk ? "#3a3418" : "#fdf6dc") : isWk ? (dk ? "#141c30" : "#f3f6f9") : (dk ? "#16213e" : "#ffffff");
                 const bracket = isWk ? { borderTop: "2px solid #a9c4da", borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
