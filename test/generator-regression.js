@@ -1327,6 +1327,8 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   });
   ok(checked === runs.length * 2, "V checked " + checked + " day slots");
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
 // ---- Prompt 12 W (9/22 evening) ----
 // Faraz: "Own dates beat own patterns (his East OR days are not every Tue/Thu): a surgeon's explicit dated
 // availability ... lifts that surgeon's WEEKDAY-PATTERN rules for that date and role, including hard ones ... It
