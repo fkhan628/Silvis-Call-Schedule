@@ -74,6 +74,11 @@ decides the Trauma Director role.
 - Christmas: prefers to **split it up** (every other day, or 2 on then off).
 - October: available 10/6, 10/10, 10/11, 10/12 (backup only), 10/14, 10/26, 10/28. Not available 10/2–10/4, 10/18, 10/23, 10/24, 10/30, 10/31, 11/1. Takes 10/25 (Sun) with Sarkar on 10/24 (Sat).
 - December (can take primary or backup): 12/1, 12/5, 12/6, 12/9, 12/12, 12/13, 12/14, 12/19, 12/20, 12/23, 12/25, 12/26, 12/27, 12/28, 12/30, 12/31, 1/1, 1/2, 1/3. "I don't need all these dates but am able to do them."
+- ⟶ **9/22 evening (Burchett email): weekends in early 2027 he CANNOT work, either role:** **Sat 1/9–Sun 1/10, Sat 1/16–Sun 1/17,
+  Fri 2/12–Sun 2/14, Fri 4/9–Sun 4/11.** Exactly as listed — the two January entries are Sat+Sun only, so Fri 1/8 and
+  Fri 1/15 are not excluded. ⟶ **Faraz 9/22: "can essentially be considered vacations"** — entered as four `time_off`
+  (vacation) ranges for s2, which blocks both roles and the day before each range for primary, exactly like any other
+  vacation; source `burchett-email-2026-09-22`. Beyond the current milestone; recorded now for the next generate period.
 
 ### Acton (s3) — recurring blacklist (primary)
 - **Unavailable for primary on the 2nd & 4th Monday and Wednesday** (outreach in Maquoketa). These align with Burchett's available days — the two are designed to complement each other. ⟶ **9/22: backup on those days is allowed.**
@@ -117,10 +122,23 @@ decides the Trauma Director role.
 - ⟶ **9/22 (Prompt 12 A): 7 is hard on real primary days**; any-role soft limit **7**.
 
 ### Sarkar (s6) — monthly windows only
-- Available **only** inside windows supplied by administration: **Oct 19–24, Nov 16–21, Dec 14–18, Jan 11–16** (Mon–Sat; Dec is Mon–Fri).
-- ⟶ **9/22: she is PRIMARY 3–4 days of her window week** (primary days count; backup days do not), **mainly every other day when possible** (soft: prefer non-consecutive; hard max 2 consecutive). **A Friday may be taken as a standalone day, separate from Saturday/Sunday**; Saturday standalone is fine too; never a Fri–Sun block; Sunday only if inside a window (never, in practice). Backup on her remaining window days is allowed but not required.
+- Available **only** inside windows supplied by administration. ⟶ **9/22 evening (the clinic manager, after
+  meeting Dr. Sarkar): the weeks are Oct 19–23, Nov 16–20, Dec 14–18, Jan 11–15 — Mon–Fri.** (Earlier, via administration
+  and Burchett's 9/17 plan: Oct 19–24, Nov 16–21, Jan 11–16 with Saturdays. The Saturdays are no longer stated; see §7
+  for what that does to 10/24.)
+- ⟶ **9/22 evening: she starts with 2 primary days per window week** ("open to adding more days but wants to see how
+  call goes first and then reassess"). This supersedes the 9/22 daytime "3–4 days". Primary days count; backup days do
+  not.
+- ⟶ **Faraz 9/22 evening: none of Sarkar's rules are hard and fast at this point — "she will adjust once she gets here
+  because she will need to."** So: the **2 days is a SOFT target** (`daysPerWindowWeek` target 2, no hard min/max — a
+  week with 1 or 3 is a warning in diagnostics, not a violation); every-other-day is a soft preference; the only hard
+  facts are her **windows** (she is physically here only those weeks) and the group-wide vacation/lock rules. Keep all
+  of it as data in Setup → Rules so it can be tightened after her first window.
+- **Mainly every other day when possible** (soft). **A Friday may be taken as a standalone day, separate from
+  Saturday/Sunday**; a Saturday standalone is fine if it is ever inside a window again; no Fri–Sun block (soft, strong);
+  Sunday is never inside a window. Backup on her remaining window days is allowed but not required.
+- Her target is her window-week days, not an equal share. A handoff partner the next morning is a diagnostics check.
 - ⟶ **9/22 (Prompt 12 A): max 2 consecutive primary days is hard on real days**; any-role soft limit **2**.
-- Her target is her 3–4 primaries per window week, not an equal share. Must always have a handoff partner the next morning. Burchett's October plan (Tue/Thu/Sat with handoff partners, Burchett taking the Sunday) is the model.
 
 ## 4. Weekend unit — how the styles combine
 
@@ -174,7 +192,7 @@ pool, within each person's availability:
   penalty (see §1 consecutive days and Prompt 12 A).
 - **Khan's weekend preference** is a bonus term: weekend primary for Khan scores better than weekend backup for Khan when
   East allows; his backup count is still balanced like everyone else's.
-- **Sarkar** is targeted at 3–4 primaries per window week, alternating days when possible; she is outside the
+- **Sarkar** is targeted at her window-week primaries (⟶ 9/22 evening: 2 per week to start, adjustable in Setup → Rules), alternating days when possible; she is outside the
   equal-share pool. **Fierce's** derived weeks count toward his primary/backup tallies and the pool balances the rest.
 - **Outside surgeons** (internal locums) are never in the pool; their hand-written days reduce the pool's slot count.
 - Metrics per surgeon — by month, year-to-date and rolling 12 months: primary shifts, backup shifts, weekend days,
@@ -193,16 +211,26 @@ flagged `externalCover`; 16 open backup days). Import them as **locked** slots. 
 
 - 10/12 primary → Fierce, **single day only** (Burchett 9/18); the full-week derivation rule applies from November.
 - 10/23 primary → Acton (Burchett 9/18).
-- 10/20, 10/22, 10/24 primary → Sarkar; 10/25 primary → Burchett (Burchett's 9/17 October plan).
+- 10/20, 10/22, 10/24 primary → Sarkar; 10/25 primary → Burchett (Burchett's 9/17 October plan). ⟶ 9/22 evening: **10/24 taken back off Sarkar** (two days a week, October included) — open primary.
 
 **The only open primary day in the import is 10/15 (Thu)** — Philip cannot (hard), Burchett and Acton did not offer it,
 Khan never takes Thursdays, and Fierce is in Clinton on Thursdays. It needs a human decision. Nothing is scheduled from
 11/2 onward.
 
+⟶ **9/22 evening — Sat 10/24 is now in question.** the clinic manager's email has Sarkar at **2 days** in the week of
+**Oct 19–23 (Mon–Fri)**; the import carries her on 10/20, 10/22 **and Sat 10/24** (Burchett's 9/17 plan). If the new
+statement stands, 10/24 comes off Sarkar and becomes a second open primary day in October (Burchett already holds
+Sun 10/25 and said he cannot do 10/24; Acton's rules allow a Saturday). ⟶ **Faraz 9/22 evening: adjust her to two days
+a week, October locks included — so Sarkar keeps 10/20 and 10/22 and comes OFF Sat 10/24.** 10/24 primary is now the
+second open primary day of the import (locked-open like 10/15, listed with reasons; backup 10/24 was already open).
+Candidates by the rules: Acton (a Saturday is allowed; he is primary Fri 10/23, so 10/24 would make 2 consecutive),
+Khan (weekend primary if East is clear that day), Philip (his October list is the model — check it), or an outside
+surgeon written in. Burchett said he cannot do 10/24.
+
 ## 8. Answered (9/21) and still open
 
 **Answered by Faraz on 9/21:** shift boundary 07:00→07:00; October stays as the emails describe it (Fierce 10/12 single
-day, Acton 10/23, Sarkar 10/20/22/24, Burchett 10/25) and the rules generate from November; Sarkar 3–4 days per window
+day, Acton 10/23, Sarkar 10/20/22/24 — ⟶ 9/22 evening: 10/24 removed —, Burchett 10/25) and the rules generate from November; Sarkar 3–4 days per window
 week, Saturday OK, never Fri/Sun, no target; Khan may be backup on East days, Mon/Wed are auto-offered, no cap; Fierce is
 in the pool outside his derived weeks under his weekday pattern — Monday backup-only because primary must be on site,
 weekends as Fri+Sat+Sun blocks, 14 call days/month cap, and his "10 days off" is a preference not a rule; Acton has no
@@ -221,6 +249,14 @@ contribution is weekend primary when available, cross-referenced against all of 
 ("internal locums", e.g. from Davenport) can be added to the roster and written in by hand; Sarkar is primary 3–4 days
 of her window week, mainly every other day, and may take a Friday as a standalone day.
 
+**New statements received 9/22 evening (emails forwarded by Faraz):** Sarkar starts with **2 days per window week**
+(the clinic manager, after meeting her; weeks Oct 19–23, Nov 16–20, Dec 14–18, Jan 11–15, Mon–Fri; open to
+more later) — supersedes "3–4"; Burchett **cannot work** the 2027 weekends 1/9–1/10, 1/16–1/17, 2/12–2/14, 4/9–4/11.
+**Faraz's reading (9/22 evening):** Sarkar's rules are **not hard and fast** at this point — she will adjust once she is
+here — so her day count is a soft target and only her windows are hard; **but the two-days-a-week figure is applied to
+the October locks too: Sarkar keeps 10/20 and 10/22 and comes off Sat 10/24**, which is now open. Burchett's dates
+**are vacations**.
+
 **Still open:**
 
 1. **10/15 (Thu)** — the one open primary day in the locked October import; nobody's rules allow it. The group will discuss. (Imported unlocked; the generator lists it as uncovered with reasons.)
@@ -228,5 +264,7 @@ of her window week, mainly every other day, and may take a Friday as a standalon
 3. **Holiday unit days for 2027 and the minor holidays** — should a Monday holiday unit include the preceding weekend? (Christmas and New Year's stay Eve + Day.)
 4. ~~Khan as backup on ordinary Tue/Thu~~ — answered 9/22: backup is open to everyone.
 5. **Philip's monthly cap** — none stated; the group default (8 primary) applies from November although his own October was 15 days.
+6. **Sat 10/24 primary** — open since Sarkar dropped to two days (Faraz 9/22 evening); who covers it (see §7 candidates).
+7. **Sarkar's day count after her first window** — soft target 2 for now; tighten or raise `daysPerWindowWeek` in Setup → Rules once she has been here.
 6. **Thanksgiving 11/26–29 for Khan** — recorded by Claude Code as confirmed in an evening chat; the daytime record said pending. Re-confirm before publishing (Prompt 12 B).
 7. **Backup opt-outs** — the 9/22 rule says anyone may opt out of backup explicitly; nobody has. Ask the group once.
