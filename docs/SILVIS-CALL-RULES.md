@@ -15,6 +15,7 @@ the two disagree, fix both.*
 | Unit of call | **One calendar day = one 24-hour shift, 07:00 → 07:00 next day** (confirmed) | Khan 9/21 |
 | Roles per day | **Primary** (must be physically in Silvis — applies to everyone, Fierce included) + **Backup** (standby). ⟶ **9/22: backup is open to everyone, on-site or off-site, every day** — outreach days, OR days and Clinton/Aledo days restrict **primary only** — **unless a surgeon explicitly opts out of backup** (none has so far). | Burchett 9/18, Khan 9/12, 9/21, **9/22** |
 | Weekdays (Mon–Thu) | Primary + backup, one surgeon each, 24 h at a time | Khan 9/21 |
+| Own dates beat own patterns | ⟶ **9/22 evening: a surgeon's weekday-pattern rules (OR days, outreach and clinic days, Acton's Tuesdays) are defaults; a specific date the surgeon enters as available lifts the pattern for that date and role.** Obligations never lift: vacations, East call days from the feed, Fierce's derived weeks, Sarkar's windows. | Khan 9/22 |
 | Weekend (Fri–Sun) | Handled as a **weekend unit** whose shape depends on the surgeon (see §3, §4) | Khan 9/21, Burchett 9/10 |
 | Handoff | Service hands off every morning; whoever operated/consulted on a patient hands them to the next day's primary. The weekend surgeon covers everyone Fri–Sun. Only the primary must be in Silvis; everyone else can be off-site. | Khan 9/9, Burchett 9/10 |
 | Fill order | **Fill every primary day first (top priority), then backup.** | Burchett 9/17, 9/18 |
@@ -65,6 +66,9 @@ decides the Trauma Director role.
 - ⟶ **Seed keys (Prompt 12 L, 9/22):** `surgeonRules.s1.primaryContribution: "weekends"` (generic — any surgeon; seed/blob data today, no Setup field yet) with `groupRules.weights.weekendContribution` = 3 (medium; 0 = off): his full Fri+Sat+Sun primary block earns the soft `weekend-primary` (−3 per day in the score, only as a member of a whole block; once per block inside the weekend-unit choice) and any weekend backup day of his costs the soft `weekend-backup` (+3 per day; once per pattern membership in the unit choice) — both soft, never a block; the weight is editable in Setup → Rules → weights (0 = off). Holiday units are not weekend units: neither term applies on a holiday-unit day and a weekend a unit pre-empts earns no block bonus. East cross-reference sources (`east-feed.js deriveKhanBusyDays`): `dayCall` Mon–Sat, `nights.mon..thu`, `nights.wknd` (Fri + Sun), `holidayCoverage` (24 h; someone else's holiday clears his day), `dayCallOverrides`, `isBackup` weeks (busy for primary while `eastFeed.eastBackupCountsAsBusy` is true); each blocks primary (`east-busy`) and leaves backup open.
 - **Mondays and Wednesdays are auto-offered as primary** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday as primary** — those are his OR days (hard). ⟶ **9/22: backup on any day is fine, Tue/Thu included.** *(Supersedes the earlier "no Mon/Wed nights" statement and the "never Tue/Thu for both roles" reading.)*
 - East feed: **primary** only on days he is **not on call at East (Davenport)**; **backup is allowed even on East call days**. ⟶ **9/22: cross-reference ALL of his Davenport call** — service weeks (Mon–Sat), weeknights, weekends, backup weeks, holiday coverage — from the Davenport app's `schedule_weeks` rows for the surgeon coded FAK, plus the forecast until Davenport publishes.
+- ⟶ **9/22 evening: his OR days are not every Tuesday and Thursday.** On a Tuesday or Thursday with no East OR block
+  he can take Silvis primary — so the Tue/Thu rule is the default, and **a specific date he enters himself lifts it**
+  for that date (Setup → availability date list now; the offers painter from Prompt 14). Nothing else lifts it.
 - Max consecutive **3** primary days (hard, real days). ⟶ **9/22 (Prompt 12 A): he is the one surgeon who opted in to count a holiday unit as one day** (`holidayUnitCountsAsOneDay`; his 4-day Thanksgiving unit vs his max 3); any-role soft limit **4** with the long-run penalty beyond it. No monthly target.
 - ⟶ **9/22 evening — standing East rule: on Davenport call every Christmas Eve and Christmas Day.** Never Silvis primary
   on 12/24–12/25 in any year (the Christmas unit is someone else's); backup allowed as on any East day.
@@ -109,7 +113,9 @@ decides the Trauma Director role.
 ### Acton (s3) — recurring blacklist (primary)
 - **Unavailable for primary on the 2nd & 4th Monday and Wednesday** (outreach in Maquoketa). These align with Burchett's available days — the two are designed to complement each other. ⟶ **9/22: backup on those days is allowed.**
 - Avoid (soft, medium): the **Sunday immediately before a 2nd/4th Monday** (morning carryover before Maquoketa; "may not be as much of an issue" with a true handoff).
-- Avoid (soft, medium): **Tuesdays** — [removed].
+- ⟶ **9/22 evening (Faraz): no Tuesdays for Acton — HARD for primary** ("[removed]"). He asked for
+  it "if possible"; Faraz made it firm. Backup on Tuesdays stays allowed (standby; the 9/22 backup rule). Note in
+  any anon-readable table reads "not Tuesdays" — the reason stays here and in his own words only.
 - Time off: **Nov 19–22** ([removed]), **Nov 25–29** (Thanksgiving week). **Never on Thanksgiving.** Christmas or New Year's is fine; agrees with Burchett's alternating-days strategy.
 - Weekend style: **split** with Burchett; has also taken full Fri–Sun (10/9–10/11), so max consecutive 3.
 - ⟶ **9/22 (Prompt 12 A): max consecutive 3 primary days is hard on real days** (no holiday-unit opt-in); any-role soft limit **4**.
@@ -409,5 +415,18 @@ November lists govern both roles.
 10. ~~11/9, 11/14, 11/15 backup~~ — decided 9/22 evening: **Fierce is backup 11/9–11/16** and **Khan is primary 11/25 (2026 only)**; Burchett's four backup days and his 11/25 are superseded (in the app; the ER-panel author's document is retired).
 11. **October's open backups + 10/24 primary** — fill by generator (fill-open-only over 10/15 – 11/1: `scripts/preview-generate.js --backfill`, Prompt 12 T) or by hand before publishing? The backfill section of the preview lists a candidate and the alternatives per open slot; Faraz decides. (The import has eleven open backups in that range, not eight — item 14.)
 12. **Burchett 10/25** — in his own 9/17 plan but not in the ER-panel author's document; confirm it stands now that Sarkar is off 10/24.
-13. **Thu 11/5 primary** — open for nobody once Acton is locked as its backup (his submitted day): Burchett did not offer 11/5, Philip's week of 11/2 is not on his list, Khan never a Thursday, Fierce is in Clinton, Sarkar is outside her window. Options: Acton primary instead of backup on 11/5 (then 11/5 backup is open to everyone), an outside surgeon, or the group settles Thursdays once (same gap as 10/15). Related consequence of the November locks: Philip is the only eligible primary on 11/10, 11/12, 11/13 and 11/24 (his weeks of 11/9 and 11/23), so he runs over his equal share in November by necessity.
+13. ~~Thu 11/5 primary~~ — resolved 9/22 evening: Acton's 9/17 message gave rules and preferences, never a date list
+    (the November dates came through Burchett's relay), so his November list is preferences, the whitelist comes off,
+    and his rules allow Thursday 11/5 (primary 11/4–11/6, within his max of three) with someone else as backup.
 14. **10/16, 10/27, 10/29 backup** — open in the import (the ER-panel author's 9/16 document: Philip primary, no backup) but **not** in the open-backup list of her 9/22 document (10/15, 10/21, 10/23, 10/24, 10/25, 10/30, 10/31, 11/1). Does her 9/22 document carry a backup on those three days? If so, send it and it is imported as a lock; meanwhile the backfill proposes candidates for all eleven.
+15. **Tuesdays and Thursdays are the group's structural gap.** Three of six can never take them as primary (Khan: OR
+    days; Fierce: Clinton; Burchett: outreach except the 1st Tuesday), so every Tue/Thu falls on Acton, Philip or
+    Sarkar — and with Acton now off Tuesdays (hard, 9/22 evening), **Tuesdays fall on Philip and Sarkar alone** (plus
+    Burchett's first Tuesday, and Khan on any Tuesday/Thursday he has no East OR block and enters himself); Thursdays
+    on Acton, Philip, Sarkar and those Khan dates. In a month where Acton is held to his list
+    (November) that meant Philip alone on 11/10, 11/12, 11/24. Either
+    accept Philip carrying them (his own October was 15 days), or ask Acton and Burchett whether their lists are
+    exhaustive or preferences, or write in an outside surgeon. ⟶ Faraz 9/22 evening: **treat lists as preferences
+    unless the surgeon says "only these days"** — under Prompt 14 each surgeon picks that when submitting (default:
+    preferred, rules fill gaps, and they are told which days). Ask Acton about November now. The reminder email should
+    say plainly that Tuesdays and Thursdays are the days the group most needs.
