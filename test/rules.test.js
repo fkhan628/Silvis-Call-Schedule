@@ -1066,8 +1066,10 @@ blocked(R.eligibility(withRows([row(KHAN, "available", "2026-11-03", "backup")],
 
 step("tests-09: weekend pattern penalty arithmetic and shape dedupe");
 const penOf = (kind, f, s, u) => { const p = wp.find(q => q.kind === kind && q.members.fri === f && q.members.sat === s && q.members.sun === u); return p ? p.penalty : null; };
-eq(penOf("block", KHAN, KHAN, KHAN), 0, "block-style surgeon in a block");
-eq(penOf("block", FIERCE, FIERCE, FIERCE), 0);
+// 9/22 (Prompt 12 L): Khan's primaryContribution "weekends" makes his full PRIMARY block the unit-level bonus
+// -weights.weekendContribution (3); Fierce (block style, no contribution key) stays at 0.
+eq(penOf("block", KHAN, KHAN, KHAN), -3, "block-style surgeon with primaryContribution weekends in a full primary block: -weekendContribution");
+eq(penOf("block", FIERCE, FIERCE, FIERCE), 0, "block-style surgeon without the key in a block");
 eq(penOf("block", BURCHETT, BURCHETT, BURCHETT), null, "Burchett cannot block: max consecutive 2");
 eq(penOf("split", BURCHETT, ACTON, BURCHETT), 0, "the designed split pair");
 eq(penOf("split", ACTON, BURCHETT, ACTON), 3, "the mirror split costs Acton's recurring-avoid on Sunday 11/8 (before the 2nd Monday)");
@@ -1112,6 +1114,195 @@ okElig(R.eligibility(kbCtx, "2026-11-04", P, KHAN));
 const badCtx = makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: { foo: true, "2026-11-02": true } } });
 eq(badCtx.warnings.length, 1, "non-date keys warn: " + JSON.stringify(badCtx.warnings));
 blocked(R.eligibility(badCtx, "2026-11-02", P, KHAN), "east-busy", "the date keys still count");
+
+/* ------------------------------------------------ Prompt 12 L (9/22): Khan = weekend primary when available */
+step("L: primaryContribution weekends - per-day softs in eligibility");
+// surgeonRules.<id>.primaryContribution === "weekends" (data; Khan in the seed, any surgeon in Setup) with
+// groupRules.weights.weekendContribution (3 = medium): a Fri/Sat/Sun PRIMARY evaluated as a member of a full
+// Fri+Sat+Sun block (opts.asBlockMember) earns the soft 'weekend-primary' at -weekendContribution per day, so
+// repair and smoothing keep the block whole; a Fri/Sat/Sun BACKUP costs the soft 'weekend-backup' at
+// +weekendContribution per day (single-day fills and repair keep him off weekend backup). Both are skipped under
+// skipPatternSoft: weekendUnitPatterns adds ONE unit-level term of its own instead (next step) - never both.
+eq(seed.surgeonRules[KHAN].primaryContribution, "weekends", "seed: Khan primaryContribution = weekends");
+eq(seed.groupRules.weights.weekendContribution, 3, "seed: groupRules.weights.weekendContribution = 3 (medium)");
+eq(clean.weights.weekendContribution, 3, "ctx.weights carries weekendContribution");
+const WC = clean.weights.weekendContribution;
+const WK1 = ["2026-11-06", "2026-11-07", "2026-11-08"];
+const asBlock = (d, trio) => ({ asBlockMember: true, assume: trio.filter(x => x !== d).map(x => ({ date: x, role: P })) });
+const softOf = (r, reason) => r.soft.filter(s => s.reason === reason);
+WK1.forEach(d => eq(softOf(R.eligibility(clean, d, P, KHAN, asBlock(d, WK1)), "weekend-primary"), [{ reason: "weekend-primary", weight: -WC }], "Khan primary as a full-block member on " + d + ": weekend-primary -" + WC));
+lacksSoft(R.eligibility(clean, "2026-11-07", P, KHAN), "weekend-primary", "a lone Saturday primary (no asBlockMember) earns no bonus");
+lacksSoft(R.eligibility(clean, "2026-11-06", P, KHAN, { assume: [{ date: "2026-11-08", role: P }] }), "weekend-primary", "Fri+Sun without the block flag earns no bonus");
+lacksSoft(R.eligibility(clean, "2026-11-04", P, KHAN, { asBlockMember: true }), "weekend-primary", "a weekday is never a weekend block member");
+lacksSoft(R.eligibility(clean, "2026-11-06", P, KHAN, Object.assign(asBlock("2026-11-06", WK1), { skipPatternSoft: true })), "weekend-primary", "skipPatternSoft drops weekend-primary (weekendUnitPatterns adds the unit-level term)");
+WK1.forEach(d => eq(softOf(R.eligibility(clean, d, B, KHAN), "weekend-backup"), [{ reason: "weekend-backup", weight: WC }], "Khan backup on " + d + ": weekend-backup +" + WC));
+okElig(R.eligibility(clean, "2026-11-07", B, KHAN), "weekend backup stays ELIGIBLE - the term is soft");
+lacksSoft(R.eligibility(clean, "2026-11-03", B, KHAN), "weekend-backup", "a Tuesday backup carries no weekend-backup");
+lacksSoft(R.eligibility(clean, "2026-11-06", B, KHAN, { skipPatternSoft: true }), "weekend-backup", "skipPatternSoft drops weekend-backup");
+lacksSoft(R.eligibility(clean, "2026-11-06", P, KHAN, asBlock("2026-11-06", WK1)), "weekend-backup", "a primary never carries weekend-backup");
+// Holiday units are NOT weekend units (review 9/22, fix stage): the per-day view must equal the unit view, where
+// weekendUnitPatterns never sees a holiday-unit day (the generator's present = the non-holiday days) and 'full'
+// means three present days. So: no weekend-backup on a holiday-unit day (genFillHoliday ranks by soft sums and
+// "anyone can be on backup for holidays"); no weekend-primary when any of the weekend's Fri/Sat/Sun is a
+// holiday-unit day (a reduced weekend is never a full block, whatever genHoldsFullBlock says); a non-holiday day of
+// a reduced weekend still carries weekend-backup (the enumerator charges its backup term on reduced patterns too).
+const xmasB = R.eligibility(clean, "2026-12-25", B, KHAN);
+okElig(xmasB, "Khan backup on Christmas Day (a holiday-unit Friday) is eligible");
+lacksSoft(xmasB, "weekend-backup", "...and carries no weekend-backup: holiday units are not weekend units");
+lacksSoft(R.eligibility(clean, "2027-01-01", B, KHAN), "weekend-backup", "New Year's Day (unit Friday): no weekend-backup");
+lacksSoft(R.eligibility(clean, "2026-11-27", B, KHAN), "weekend-backup", "Thanksgiving Friday (unit day): no weekend-backup");
+const WKX = ["2026-12-25", "2026-12-26", "2026-12-27"];
+const xmasSat = R.eligibility(clean, "2026-12-26", P, KHAN, asBlock("2026-12-26", WKX));
+okElig(xmasSat, "Khan primary Sat 12/26 as a block member is eligible");
+lacksSoft(xmasSat, "weekend-primary", "...but earns no weekend-primary: the Friday is Christmas, the weekend is reduced (unit view: full blocks only)");
+lacksSoft(R.eligibility(clean, "2026-12-27", P, KHAN, asBlock("2026-12-27", WKX)), "weekend-primary", "Sun 12/27 likewise");
+const TGF = ["2026-11-27", "2026-11-28", "2026-11-29"];
+lacksSoft(R.eligibility(clean, "2026-11-28", P, KHAN, asBlock("2026-11-28", TGF)), "weekend-primary", "Thanksgiving Saturday as a 'block member' (genHoldsFullBlock ignores unit pre-emption): no bonus on a holiday-unit weekend");
+hasSoft(R.eligibility(clean, "2026-12-26", B, KHAN), "weekend-backup", "Sat 12/26 is not a holiday day: backup there is still discouraged (reduced-weekend backup patterns carry the term too)");
+eq(R.weekendUnitPatterns(clean, "2026-12-25", "primary", ["2026-12-26", "2026-12-27"]).find(q => q.kind === "block" && q.members.sat === KHAN).penalty, 0, "the unit view agrees: Khan's reduced Sat+Sun block after Christmas earns nothing");
+ok(R.weekendUnitPatterns(clean, "2026-12-25", "backup", ["2026-12-26", "2026-12-27"]).filter(p => p.surgeons.indexOf(KHAN) >= 0).every(p => p.penalty >= WC), "...and every reduced backup pattern with him costs at least +" + WC);
+// the East busy ctx: backup on an East day is allowed AND still carries the weekend-backup soft (it is a weekend day)
+hasSoft(R.eligibility(busy, "2026-11-07", B, KHAN), "weekend-backup", "backup on an East-busy Saturday: allowed, still discouraged");
+// nobody else carries the key: Philip (block style too) gets neither term
+lacksSoft(R.eligibility(clean, "2026-11-06", P, PHILIP, asBlock("2026-11-06", WK1)), "weekend-primary", "Philip: no primaryContribution, no bonus");
+lacksSoft(R.eligibility(clean, "2026-11-07", B, PHILIP), "weekend-backup", "Philip: no primaryContribution, no penalty");
+// generic and data-driven: the key on another surgeon, a different weight, the engine default, and 0 = off
+const srWC = clone(SA.seedToSurgeonRules(seed)); srWC[PHILIP].primaryContribution = "weekends"; delete srWC[KHAN].primaryContribution;
+const grWC = Object.assign(clone(seed.groupRules), { weights: Object.assign({}, seed.groupRules.weights, { weekendContribution: 5 }) });
+const wcCtx = makeCtx({ schedule: {}, surgeonRules: srWC, groupRules: grWC });
+eq(softOf(R.eligibility(wcCtx, "2026-11-07", B, PHILIP), "weekend-backup"), [{ reason: "weekend-backup", weight: 5 }], "the key on Philip with weights.weekendContribution 5");
+const WK2 = ["2026-11-13", "2026-11-14", "2026-11-15"]; // the weekend of Philip's listed week 11/09 (11/06 is outside his weeks: hard, no softs at all)
+eq(softOf(R.eligibility(wcCtx, "2026-11-14", P, PHILIP, asBlock("2026-11-14", WK2)), "weekend-primary"), [{ reason: "weekend-primary", weight: -5 }], "...and his full block earns -5 (on his listed week)");
+blocked(R.eligibility(wcCtx, "2026-11-07", P, PHILIP, asBlock("2026-11-07", WK1)), "outside-available-weeks", "the bonus never opens a weekend his hard rules close");
+lacksSoft(R.eligibility(wcCtx, "2026-11-07", B, KHAN), "weekend-backup", "Khan without the key: nothing");
+lacksSoft(R.eligibility(wcCtx, "2026-11-07", P, KHAN, asBlock("2026-11-07", WK1)), "weekend-primary", "Khan without the key: no bonus");
+const grNoWC = clone(seed.groupRules); delete grNoWC.weights.weekendContribution;
+eq(makeCtx({ schedule: {}, groupRules: grNoWC }).weights.weekendContribution, 3, "an older blob without weights.weekendContribution reads the engine default 3");
+const grOffWC = Object.assign(clone(seed.groupRules), { weights: Object.assign({}, seed.groupRules.weights, { weekendContribution: 0 }) });
+const offCtx = makeCtx({ schedule: {}, groupRules: grOffWC });
+lacksSoft(R.eligibility(offCtx, "2026-11-07", B, KHAN), "weekend-backup", "weekendContribution 0 switches the feature off (backup)");
+lacksSoft(R.eligibility(offCtx, "2026-11-07", P, KHAN, asBlock("2026-11-07", WK1)), "weekend-primary", "weekendContribution 0 switches the feature off (primary)");
+eq(R.weekendUnitPatterns(offCtx, "2026-11-06").find(q => q.kind === "block" && q.members.fri === KHAN).penalty, 0, "weekendContribution 0: his block is back at 0");
+
+step("L: weekendUnitPatterns - the unit-level weekend contribution (no double count)");
+// Inside weekendUnitPatterns every member is evaluated with skipPatternSoft, so the per-day softs above are OFF and
+// exactly one unit-level term applies: role primary -> a FULL block held by a contribution surgeon gets
+// -weekendContribution once; role backup -> every membership of a contribution surgeon (block, split X or Y,
+// daily) gets +weekendContribution once per surgeon. Reduced blocks, splits and daily days earn no primary bonus.
+ok(wp[0].kind === "block" && wp[0].members.fri === KHAN && wp[0].penalty === -WC, "the cheapest 11/06 primary pattern is Khan's full block at -" + WC + ": " + JSON.stringify(wp[0]));
+eq(penOf("split", KHAN, BURCHETT, KHAN), 3, "primary split with Khan as X: only the style mismatch, no bonus (not a full block)");
+eq(penOf("daily", KHAN, BURCHETT, BURCHETT), 11, "primary daily with Khan on Friday: unchanged (patternDaily 5 + mismatch 3 + Burchett Sun mismatch 3)");
+eq(wpR.find(q => q.kind === "block" && q.members.sat === KHAN && q.members.sun === KHAN).penalty, 0, "a reduced Sat+Sun block (Friday pre-empted) earns no bonus - full blocks only");
+// backup enumeration on 12/04-06 (11/13-15 is inside Fierce's derived Silvis-backup week: locked, no backup patterns)
+const wpKB = R.weekendUnitPatterns(clean, "2026-12-04", "backup");
+const penB = (kind, f, s, u) => { const p = wpKB.find(q => q.kind === kind && q.members.fri === f && q.members.sat === s && q.members.sun === u); return p ? p.penalty : null; };
+eq(penB("block", KHAN, KHAN, KHAN), WC, "Khan as the weekend BACKUP block: +" + WC + " exactly once (not +" + 3 * WC + " - no per-day double count)");
+eq(penB("split", KHAN, BURCHETT, KHAN), 3 + WC, "Khan as X of a backup split: style mismatch 3 + weekend contribution " + WC);
+eq(penB("split", BURCHETT, KHAN, BURCHETT), 3 + WC, "Khan as the Saturday of a backup split: 3 + " + WC);
+eq(penB("split", ACTON, BURCHETT, ACTON), 0, "the Acton/Burchett backup split stays free");
+ok(wpKB.filter(p => p.surgeons.indexOf(KHAN) >= 0).every(p => p.penalty >= WC), "every backup pattern that includes Khan costs at least +" + WC);
+ok(wpKB.filter(p => p.kind === "daily" && p.surgeons.indexOf(KHAN) >= 0).every(p => p.penalty >= 5 + 3 + WC), "a daily backup pattern with Khan: patternDaily + his style mismatch + the contribution");
+ok(wpKB[0].surgeons.indexOf(KHAN) < 0 && wpKB[0].penalty === 0, "the cheapest backup pattern excludes Khan: " + JSON.stringify(wpKB[0]));
+// the same terms for Philip once the key moves to him (generic rule)
+const wpPh = R.weekendUnitPatterns(wcCtx, "2026-11-13");
+eq(wpPh.find(q => q.kind === "block" && q.members.fri === PHILIP).penalty, -5, "Philip's full primary block at -5 with the key on him (the weekend of his listed week 11/09)");
+eq(wpPh.find(q => q.kind === "block" && q.members.fri === KHAN).penalty, 0, "Khan's block back at 0 without the key");
+ok(R.weekendUnitPatterns(wcCtx, "2026-11-13", "backup").filter(p => p.surgeons.indexOf(PHILIP) >= 0).every(p => p.penalty >= 5), "Philip's backup memberships cost at least +5 with the key on him");
+
+/* ------------------------------------------------ Prompt 12 L.2 (9/22): East cross-reference, end to end */
+step("L: East cross-reference covers every Davenport source (week row -> deriveKhanBusyDays -> ctx -> eligibility)");
+// One synthetic Davenport week row per source, run through east-feed.deriveKhanBusyDays exactly as the app's ctx
+// builder and scripts/preview-generate.js do, fed as ctx input eastBusyDays[s1], then eligibility(): PRIMARY is
+// blocked by 'east-busy' on every day he holds East call and BACKUP stays eligible on the same day (subject only
+// to the ordinary rules - eastBlocksBackup false). The rows use "s6" for FAK: that is his DAVENPORT id (production
+// resolves it by roster code, never by id); the Silvis roster id is s1 - the East feed matches on code.
+const DFAK = "s6";
+const sortedSet = s => [...s].sort();
+const eastCtx = (weekRows, opts) => {
+  const kb = EF.deriveKhanBusyDays(weekRows, DFAK, Object.assign({ eastBackupCountsAsBusy: seed.surgeonRules[KHAN].eastFeed.eastBackupCountsAsBusy === true }, opts || {}));
+  return { kb, ctx: makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: kb } }) };
+};
+const busyPrimaryFreeBackup = (c, d, why) => { has(R.eligibility(c, d, P, KHAN).hard, "east-busy", why + ": primary must be east-busy on " + d); okElig(R.eligibility(c, d, B, KHAN), why + ": backup must stay eligible on " + d); lacks(R.eligibility(c, d, B, KHAN).hard, "east-busy", why + ": backup never cites east-busy"); };
+const freePrimaryAndBackup = (c, d, why) => { lacks(R.eligibility(c, d, P, KHAN).hard, "east-busy", why + ": primary must NOT be east-busy on " + d); okElig(R.eligibility(c, d, B, KHAN), why + ": backup eligible on " + d); };
+const NIGHTS_OTHERS = { mon: "s1", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" };
+eq(seed.surgeonRules[KHAN].eastFeed.eastBackupCountsAsBusy, true, "seed: s1.eastFeed.eastBackupCountsAsBusy true");
+eq([seed.surgeonRules[KHAN].eastFeed.eastBlocksPrimary, seed.surgeonRules[KHAN].eastFeed.eastBlocksBackup], [true, false], "seed: East blocks primary only");
+{ // dayCall = the service week Mon..Sat (Sat 07:00 -> Sun 07:00 is his); Sunday is not
+  const { kb, ctx: c } = eastCtx([{ weekMonday: "2026-11-02", data: { dayCall: DFAK, nights: NIGHTS_OTHERS, off: "s7" } }]);
+  eq(sortedSet(kb.busy), ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07"], "dayCall: Mon..Sat derived");
+  ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07"].forEach(d => busyPrimaryFreeBackup(c, d, "dayCall"));
+  freePrimaryAndBackup(c, "2026-11-08", "dayCall Sunday");
+  eq(kb.reasons["2026-11-07"], ["service-week"], "the Saturday carries the service-week reason");
+}
+{ // nights.mon / tue / wed / thu = that weeknight (one row, all four, so each weekday is checked)
+  const { kb, ctx: c } = eastCtx([{ weekMonday: "2026-11-30", data: { dayCall: "s2", nights: { mon: DFAK, tue: DFAK, wed: DFAK, thu: DFAK, wknd: "s5" }, off: "s7" } }]);
+  eq(sortedSet(kb.busy), ["2026-11-30", "2026-12-01", "2026-12-02", "2026-12-03"], "nights.mon..thu: Mon..Thu derived");
+  [["mon", "2026-11-30"], ["tue", "2026-12-01"], ["wed", "2026-12-02"], ["thu", "2026-12-03"]].forEach(([k, d]) => { eq(kb.reasons[d], ["night"], "nights." + k + " -> " + d); busyPrimaryFreeBackup(c, d, "nights." + k); });
+  freePrimaryAndBackup(c, "2026-12-04", "the Friday after four weeknights");
+}
+{ // nights.wknd = Friday night + Sunday, NOT Saturday day
+  const { kb, ctx: c } = eastCtx([{ weekMonday: "2026-11-16", data: { dayCall: "s2", nights: Object.assign({}, NIGHTS_OTHERS, { wknd: DFAK }), off: "s7" } }]);
+  eq(sortedSet(kb.busy), ["2026-11-20", "2026-11-22"], "nights.wknd: Fri + Sun derived");
+  busyPrimaryFreeBackup(c, "2026-11-20", "nights.wknd Friday");
+  busyPrimaryFreeBackup(c, "2026-11-22", "nights.wknd Sunday");
+  freePrimaryAndBackup(c, "2026-11-21", "nights.wknd Saturday (the service-week surgeon's day)");
+}
+{ // holidayCoverage: his own 24h holiday is busy; a holiday held by someone else clears his service-week day
+  const { kb, ctx: c } = eastCtx([{ weekMonday: "2026-12-21", data: { dayCall: DFAK, nights: NIGHTS_OTHERS, off: "s7",
+    holidayCoverage: { "2026-12-24": { surgeonId: DFAK, role: "holiday_24h" }, "2026-12-25": { surgeonId: "s3", role: "holiday_24h" } } } }]);
+  eq(sortedSet(kb.busy), ["2026-12-21", "2026-12-22", "2026-12-23", "2026-12-24", "2026-12-26"], "holidayCoverage: 12/24 his, 12/25 someone else's (service-week Friday cleared)");
+  eq(kb.reasons["2026-12-24"], ["service-week", "holiday"], "his holiday keeps every reason");
+  busyPrimaryFreeBackup(c, "2026-12-24", "holidayCoverage (his 24h unit, a Silvis holiday-unit day)");
+  freePrimaryAndBackup(c, "2026-12-25", "holidayCoverage held by another Davenport surgeon (his service-week Friday is theirs)");
+  busyPrimaryFreeBackup(c, "2026-12-26", "the service-week Saturday after the holiday");
+  const lone = eastCtx([{ weekMonday: "2026-11-23", data: { dayCall: "s2", nights: NIGHTS_OTHERS, off: "s7", holidayCoverage: { "2026-11-26": { surgeonId: DFAK, role: "holiday_24h" } } } }]);
+  eq(sortedSet(lone.kb.busy), ["2026-11-26"], "a holiday unit alone: only that day");
+  busyPrimaryFreeBackup(lone.ctx, "2026-11-26", "holidayCoverage alone (Thanksgiving Thursday, clean schedule)");
+  freePrimaryAndBackup(lone.ctx, "2026-11-25", "the Wednesday before it");
+}
+{ // dayCallOverrides: an override of a service-week day to someone else frees it; an override TO FAK on another
+  // surgeon's week marks it (holiday 24h > overrides > dayCall)
+  const { kb, ctx: c } = eastCtx([
+    { weekMonday: "2026-11-02", data: { dayCall: DFAK, nights: NIGHTS_OTHERS, off: "s7", dayCallOverrides: { "2026-11-04": "s2" } } },
+    { weekMonday: "2026-12-14", data: { dayCall: "s2", nights: NIGHTS_OTHERS, off: "s7", dayCallOverrides: { "2026-12-16": DFAK } } }
+  ]);
+  eq(sortedSet(kb.busy), ["2026-11-02", "2026-11-03", "2026-11-05", "2026-11-06", "2026-11-07", "2026-12-16"], "dayCallOverrides: 11/04 released, 12/16 taken");
+  freePrimaryAndBackup(c, "2026-11-04", "dayCallOverrides to someone else on his service week");
+  busyPrimaryFreeBackup(c, "2026-11-02", "the rest of that service week");
+  eq(kb.reasons["2026-12-16"], ["override"], "an override to FAK on a non-service week");
+  busyPrimaryFreeBackup(c, "2026-12-16", "dayCallOverrides to FAK");
+  freePrimaryAndBackup(c, "2026-12-14", "the other days of that week are not his");
+}
+{ // isBackup week (the Davenport group is backup): the days FAK holds count as busy for primary with
+  // eastBackupCountsAsBusy true (the seed), and are free with false - backup allowed either way
+  const row = [{ weekMonday: "2027-01-04", data: { dayCall: "s2", nights: Object.assign({}, NIGHTS_OTHERS, { mon: DFAK }), off: "s7", isBackup: true } }];
+  const on = eastCtx(row);
+  eq(sortedSet(on.kb.busy), ["2027-01-04"], "isBackup week: his Monday night derived (seed flag true)");
+  eq(on.kb.reasons["2027-01-04"], ["night", "backup-week"], "tagged backup-week");
+  busyPrimaryFreeBackup(on.ctx, "2027-01-04", "isBackup week with eastBackupCountsAsBusy true");
+  freePrimaryAndBackup(on.ctx, "2027-01-05", "a backup week is never busy wholesale");
+  const off = eastCtx(row, { eastBackupCountsAsBusy: false });
+  eq(sortedSet(off.kb.busy), [], "eastBackupCountsAsBusy false: dropped from the busy set");
+  eq(off.kb.reasons["2027-01-04"], ["ignored:night", "ignored:backup-week"], "...but still explained");
+  freePrimaryAndBackup(off.ctx, "2027-01-04", "isBackup week with eastBackupCountsAsBusy false");
+}
+{ // all sources in one feed: the busy set is the union, nothing leaks onto a day with no East call
+  const all = eastCtx([
+    { weekMonday: "2026-11-02", data: { dayCall: DFAK, nights: NIGHTS_OTHERS, off: "s7", dayCallOverrides: { "2026-11-04": "s2" } } },
+    { weekMonday: "2026-11-16", data: { dayCall: "s2", nights: Object.assign({}, NIGHTS_OTHERS, { wknd: DFAK }), off: "s7" } },
+    { weekMonday: "2026-11-30", data: { dayCall: "s2", nights: Object.assign({}, NIGHTS_OTHERS, { wed: DFAK }), off: "s7" } },
+    { weekMonday: "2026-12-21", data: { dayCall: DFAK, nights: NIGHTS_OTHERS, off: "s7", holidayCoverage: { "2026-12-24": { surgeonId: DFAK }, "2026-12-25": { surgeonId: "s3" } } } },
+    { weekMonday: "2027-01-04", data: { dayCall: "s2", nights: Object.assign({}, NIGHTS_OTHERS, { mon: DFAK }), off: "s7", isBackup: true } }
+  ]);
+  eq(sortedSet(all.kb.busy), ["2026-11-02", "2026-11-03", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-20", "2026-11-22", "2026-12-02", "2026-12-21", "2026-12-22", "2026-12-23", "2026-12-24", "2026-12-26", "2027-01-04"], "every source in one feed");
+  eq(all.ctx.warnings, [], "the { busy, reasons } object is accepted without a warning");
+  all.kb.busy.forEach(d => has(R.eligibility(all.ctx, d, P, KHAN).hard, "east-busy", "primary east-busy on " + d));
+  all.kb.busy.forEach(d => okElig(R.eligibility(all.ctx, d, B, KHAN), "backup eligible on " + d));
+  ["2026-11-04", "2026-11-08", "2026-11-21", "2026-12-25", "2027-01-05"].forEach(d => lacks(R.eligibility(all.ctx, d, P, KHAN).hard, "east-busy", "no East reason leaks onto " + d));
+  // and his Friday 11/20 (East Friday night) still allows the weekend BACKUP, carrying the L soft, never a hard block
+  const fb = R.eligibility(all.ctx, "2026-11-20", B, KHAN);
+  okElig(fb, "backup on an East Friday"); hasSoft(fb, "weekend-backup", "...discouraged by the L soft only");
+}
 
 /* ------------------------------------------------ purity and speed */
 step("purity and speed");

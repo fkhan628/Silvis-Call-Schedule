@@ -67,6 +67,19 @@
 //                 still means Saturday member of a split / daily only.
 //   surgeonRules[id].handoffPartnerRequired  a DIAGNOSTICS flag the generator
 //                 reads (diagnostics.handoffGaps); no eligibility effect.
+//   surgeonRules[id].primaryContribution 'weekends'  (Prompt 12 L, 9/22; Khan)
+//                 with groupRules.weights.weekendContribution (3 = medium; 0
+//                 switches it off): a Fri/Sat/Sun PRIMARY evaluated as a member
+//                 of a full Fri+Sat+Sun block (opts.asBlockMember) -> soft
+//                 'weekend-primary' at -weekendContribution per day; a Fri/Sat/Sun
+//                 BACKUP -> soft 'weekend-backup' at +weekendContribution per day.
+//                 weekendUnitPatterns (which evaluates with skipPatternSoft) adds
+//                 ONE unit-level term instead: -weekendContribution on his full
+//                 primary block, +weekendContribution per membership of his in a
+//                 backup pattern - so when East allows he is the weekend primary
+//                 and someone else backs him up. Holiday units are not weekend
+//                 units: no term on a holiday-unit day, no block bonus on a weekend
+//                 a unit pre-empts (reduced). Any other value warns once.
 //
 // Backup is open to everyone (Faraz 9/22, rules doc section 1 "Roles per day"):
 // outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed
@@ -218,7 +231,8 @@ function defaultWeights() {
     low: 1, medium: 3, strong: 10, preferred: -1,
     patternDaily: 5, patternMismatch: 3, backToBackWeekend: 3, backupAfterPrimary: 1,
     noTargetWeekday: 1, eastUnknown: 1, eastForecastBelowThreshold: 2, smoothingTolerance: 2,
-    longRunPerDay: 3 // Prompt 12 A (9/22): per day beyond surgeonRules.<id>.maxConsecutiveAnyRole (= medium)
+    longRunPerDay: 3, // Prompt 12 A (9/22): per day beyond surgeonRules.<id>.maxConsecutiveAnyRole (= medium)
+    weekendContribution: 3 // Prompt 12 L (9/22): primaryContribution "weekends" - full-block primary bonus / weekend backup penalty (= medium)
   };
 }
 
@@ -450,8 +464,15 @@ function buildContext(input) {
       windowCountsBackup: false,
       preferAlternate: rules.preferAlternateDays === true,
       blockPenalty: rules.weekendBlockPenalty !== undefined && rules.weekendBlockPenalty !== null ? resolveWeight(ctx, rules.weekendBlockPenalty) : 0,
-      handoffPartnerRequired: rules.handoffPartnerRequired === true
+      handoffPartnerRequired: rules.handoffPartnerRequired === true,
+      // Prompt 12 L (9/22): "weekends" = weekend primary is his main contribution
+      // (weights.weekendContribution as a full-block primary bonus / weekend backup
+      // penalty); null = no contribution term.
+      contribution: rules.primaryContribution === "weekends" ? "weekends" : null
     };
+    if (rules.primaryContribution !== undefined && rules.primaryContribution !== null && rules.primaryContribution !== "" && P.contribution === null) {
+      ctx.warnings.push("surgeonRules." + id + ".primaryContribution = " + JSON.stringify(rules.primaryContribution) + " is not a value the engine knows (Prompt 12 L: only \"weekends\"): ignored - no contribution term for this surgeon");
+    }
     // (N review) weekendBlockPenalty: a weight name ("strong", "medium", ...) or a number is
     // applied as given; anything else falls back to weights.medium inside resolveWeight - say
     // so once, so a typo in the blob is never a silent downgrade from strong (10) to medium (3).
@@ -681,6 +702,13 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // window-week-below-target:<t> (-medium), window-week-over-target:<t>
 // (medium x days over) and consecutive-primary (medium, preferAlternateDays).
 // The pre-N hard reason window-week-max: no longer exists.
+// Weekend-contribution vocabulary (Prompt 12 L, 9/22) is SOFT only:
+// weekend-primary (-weights.weekendContribution per day, a Fri/Sat/Sun primary
+// evaluated as a full-block member) and weekend-backup (+weekendContribution
+// per day, a Fri/Sat/Sun backup) for a surgeon whose primaryContribution is
+// "weekends"; both are skipped under skipPatternSoft (weekendUnitPatterns
+// carries the unit-level term instead) and neither applies on a holiday-unit
+// day; weekend-primary also needs the whole Fri/Sat/Sun free of holiday units.
 function rdStatic(ctx, date, role, id, asBlock) {
   var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "");
   var memo = ctx._memo[key];
@@ -801,11 +829,13 @@ function rdAssumeMap(assume) {
 // The returned arrays and soft entries are fresh copies: callers may mutate them.
 // opts: { asBlockMember: bool, assume: [{date, role}], ignoreLocks: bool, skipPatternSoft: bool }
 //   asBlockMember  - the caller is evaluating a full Fri+Sat+Sun block; relaxes only the
-//                    'weekend-block-only' weekday-pattern rule.
+//                    'weekend-block-only' weekday-pattern rule and (Prompt 12 L) enables
+//                    the 'weekend-primary' bonus of a primaryContribution "weekends" surgeon.
 //   assume         - other slots to count as held by this surgeon (unit / block members)
 //                    for caps, consecutive runs and week counts.
 //   ignoreLocks    - do not report 'slot-locked' for a slot locked to someone else.
-//   skipPatternSoft - weekendUnitPatterns adds the style mismatch itself.
+//   skipPatternSoft - weekendUnitPatterns adds the style mismatch and the weekend-contribution
+//                    term (weekend-primary / weekend-backup) itself, once per pattern.
 function eligibility(ctx, dateStr, role, surgeonId, opts) {
   opts = opts || {};
   if (role !== "primary" && role !== "backup") return { ok: false, hard: ["bad-role:" + role], soft: [] };
@@ -1021,6 +1051,24 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
       }
       if (mismatch) soft.push({ reason: "pattern-mismatch:" + P.weekendStyle, weight: W.patternMismatch });
     }
+
+    // Prompt 12 L (9/22): primaryContribution "weekends". Per-day view, used by the
+    // candidate score, single-day fills, repair and smoothing: a primary counts as
+    // his contribution only as a member of a full Fri+Sat+Sun block (so a move that
+    // breaks the block loses the bonus), a weekend backup is discouraged on any
+    // weekend day. weekendUnitPatterns evaluates with skipPatternSoft and adds its
+    // own unit-level term instead - exactly one of the two applies anywhere.
+    // Holiday units are NOT weekend units (review 9/22): no term on a holiday-unit
+    // day (the holiday fill ranks by soft sums; anyone may back up a holiday), and no
+    // block bonus when a unit pre-empts any day of this weekend - the enumerator's
+    // 'full' is three present non-holiday days, so the per-day view equals the unit
+    // view even though genHoldsFullBlock ignores the pre-emption. A non-holiday day
+    // of a reduced weekend still carries weekend-backup (reduced patterns do too).
+    if (!opts.skipPatternSoft && P.contribution === "weekends" && W.weekendContribution && !hol) {
+      var wkWhole = !ctx.holidayByDay[info.friday] && !ctx.holidayByDay[rdAddDays(info.friday, 1)] && !ctx.holidayByDay[rdAddDays(info.friday, 2)];
+      if (role === "primary" && opts.asBlockMember && wkWhole) soft.push({ reason: "weekend-primary", weight: -W.weekendContribution });
+      else if (role === "backup") soft.push({ reason: "weekend-backup", weight: W.weekendContribution });
+    }
   }
 
   if (typeof rules.monthlyTarget === "number") {
@@ -1047,6 +1095,14 @@ function rdSoftSum(r) { var s = 0; for (var k = 0; k < r.soft.length; k++) s += 
 // each such membership adds that weight; weekendStyle "daily" means a standalone
 // weekend day is the normal pattern (memberPen 0). "saturday-only" (older blobs)
 // keeps its meaning: Saturday member of a split / daily only, never a block.
+// Prompt 12 L (9/22): a surgeon with surgeonRules.<id>.primaryContribution
+// "weekends" earns -weights.weekendContribution ONCE on a FULL three-day
+// primary block he holds, and every pattern membership of his in a BACKUP
+// enumeration (block, split X or Y, daily) costs +weekendContribution once per
+// surgeon. Members are evaluated with skipPatternSoft, so eligibility()'s
+// per-day weekend-primary / weekend-backup softs are off in here: the unit-level
+// term is the only one a pattern carries (no double count). Reduced blocks,
+// splits and daily days earn no primary bonus (the block must be whole).
 function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
   role = role || "primary";
   if (rdWeekday(fridayStr) !== "Fri") throw new Error("weekendUnitPatterns: " + fridayStr + " is not a Friday");
@@ -1062,6 +1118,11 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
   function members(map) { return { fri: map[fri] || null, sat: map[sat] || null, sun: map[sun] || null }; }
   function styleOf(id) { return ctx.per[id].weekendStyle; }
   function assumeFor(days, skip) { return days.filter(function (d) { return d !== skip; }).map(function (d) { return { date: d, role: role }; }); }
+  // L: the unit-level weekend-contribution term. Backup: +weekendContribution per
+  // membership of a "weekends" surgeon in any pattern; primary: the block loop
+  // subtracts it for a full block (blockBonus).
+  function contrib(id) { return ctx.per[id].contribution === "weekends" && W.weekendContribution ? W.weekendContribution : 0; }
+  function backupPen(id) { return role === "backup" ? contrib(id) : 0; }
 
   // Solo eligibility per surgeon per day (daily / split-Sat members).
   var solo = {};
@@ -1083,6 +1144,8 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
     }
     if (present.length > 1 ? style !== "block" : style === "block") pen += W.patternMismatch;
     if (present.length > 1) pen += ctx.per[id].blockPenalty; // N: a multi-day block for a weekendBlockPenalty surgeon (0 for everyone else)
+    if (role === "primary" && full) pen -= contrib(id);        // L: his full primary block is the contribution (bonus once per block)
+    pen += backupPen(id);                                       // L: him as the weekend backup block (penalty once)
     out.push({ kind: "block", members: members(map), penalty: pen, fallback: false, surgeons: [id] });
   });
 
@@ -1095,11 +1158,11 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
       if (!rf.ok) return;
       var rs = eligibility(ctx, sun, role, x, { assume: [{ date: fri, role: role }], skipPatternSoft: true });
       if (!rs.ok) return;
-      var penX = rdSoftSum(rf) + rdSoftSum(rs) + (sx === "split" ? 0 : W.patternMismatch) + ctx.per[x].blockPenalty; // N: split membership carries the surgeon's weekendBlockPenalty
+      var penX = rdSoftSum(rf) + rdSoftSum(rs) + (sx === "split" ? 0 : W.patternMismatch) + ctx.per[x].blockPenalty + backupPen(x); // N: split membership carries the surgeon's weekendBlockPenalty; L: a backup split membership carries his contribution penalty
       ids.forEach(function (y) {
         if (y === x || !solo[y][sat].ok) return;
         var sy = styleOf(y);
-        var pen = penX + rdSoftSum(solo[y][sat]) + ((sy === "split" || sy === "saturday-only") ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty;
+        var pen = penX + rdSoftSum(solo[y][sat]) + ((sy === "split" || sy === "saturday-only") ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty + backupPen(y);
         var map = {}; map[fri] = x; map[sun] = x; map[sat] = y;
         out.push({ kind: "split", members: members(map), penalty: pen, fallback: false, surgeons: [x, y] });
       });
@@ -1129,6 +1192,7 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
         if (!r.ok) return;
         pen += rdSoftSum(r) + memberPen(id, d);
       }
+      for (var c2 = 0; c2 < distinct.length; c2++) pen += backupPen(distinct[c2]); // L: once per surgeon, however many days he holds
       out.push({ kind: "daily", members: members(map), penalty: pen, fallback: true, surgeons: distinct });
       return;
     }

@@ -303,6 +303,18 @@ const RANGES = [
 ];
 function lockedIn(day, role) { const e = INPUT[day]; return !!(e && e[role + "Locked"]); }
 function derivedLock(day, role, id) { return DERIVED_ROLE[day] === role && id === FIERCE; }
+// The Fri+Sat+Sun trios inside `days` where Khan is primary-eligible on all three days, restated from the
+// inputs: in range, no holiday day, no East busy / forecast-busy day, no vacation edge, no lock to someone
+// else, no external cover (the quality-1 filter; the Prompt 12 L pin on the bestOf-200 run reuses it).
+function khanOpenWeekends(days) {
+  const out = [];
+  days.filter((d) => weekday(d) === "Fri").forEach((f) => {
+    const trio = [0, 1, 2].map((k) => addDays(f, k));
+    if (!trio.every((d) => days.includes(d) && !isHoliday(d) && !KHAN_NO_PRIMARY.has(d) && !VAC[KHAN].has(d) && !DAY_BEFORE_VAC[KHAN].has(d) && !(lockedIn(d, P) && INPUT[d].primary !== KHAN) && !(INPUT[d] && INPUT[d].externalCover))) return;
+    out.push(trio);
+  });
+  return out;
+}
 // Expected diagnostics.lockViolations per range, restated from the inputs alone
 // (locks are facts the generator keeps; the conflicts must be REPORTED):
 //   R1  Philip's locked October is 7 primaries + 8 backups. Since 9/22 (Prompt 12 K)
@@ -640,15 +652,12 @@ function checkRun(out, range, seedNo, deep) {
   // backup sink. Not asserted for Oct (locked import) or Jan-Mar: there the feed
   // carries forecast doubt (0 < p < threshold = east-forecast soft, +2 per day)
   // on every weekend and, from 2027-02-22, no data at all (east-unknown, +1 per
-  // day), which legitimately ranks him behind surgeons at 0 soft - and nothing
-  // models surgeonRules.primaryContribution = "weekends" yet (rules.js follow-up).
+  // day), which legitimately ranks him behind surgeons at 0 soft. Since 9/22
+  // (Prompt 12 L) surgeonRules.primaryContribution = "weekends" is modelled by
+  // rules.js (weekend-primary / weekend-backup softs, weights.weekendContribution);
+  // the bestOf-200 pin below the run loop checks the primary-over-backup outcome.
   if (range.name.indexOf("R2") === 0) {
-    const khanWeekends = [];
-    days.filter((d) => weekday(d) === "Fri").forEach((f) => {
-      const trio = [0, 1, 2].map((k) => addDays(f, k));
-      if (!trio.every((d) => days.includes(d) && !isHoliday(d) && !KHAN_NO_PRIMARY.has(d) && !VAC[KHAN].has(d) && !DAY_BEFORE_VAC[KHAN].has(d) && !(lockedIn(d, P) && INPUT[d].primary !== KHAN) && !(INPUT[d] && INPUT[d].externalCover))) return;
-      khanWeekends.push(trio);
-    });
+    const khanWeekends = khanOpenWeekends(days);
     ok(khanWeekends.length >= 1, "Nov-Dec must offer Khan at least one eligible weekend (fixture drift?)");
     ok(khanWeekends.some((trio) => trio.every((d) => out.schedule[d].primary === KHAN)), "Khan holds no full weekend primary block although " + khanWeekends.length + " weekend(s) are open to him: " + khanWeekends.map((t) => t[0]).join(", "));
   }
@@ -886,6 +895,30 @@ eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone pr
     ok(Math.abs(c - M.primaryTarget) <= 3, CODE[id] + " " + m + ": " + c + " primaries against a primary target of " + M.primaryTarget + " (allowed " + M.allowedPrimary + " + locked " + M.lockedHeld.primary + ") - more than 3 off");
   }));
   CUR.day = "-";
+}
+// L (9/22, data-driven): Khan = weekend PRIMARY when East allows. On the milestone preview, among the weekends
+// open to him (khanOpenWeekends: primary-eligible all three days) the full-block PRIMARY weekends are at least
+// as many as the weekends where he holds ANY backup day, and over the run his weekend backup days are at most
+// half his weekend primary days (weekend = Fri/Sat/Sun in range outside a holiday unit, so his locked
+// Thanksgiving Fri-Sun does not pad the primary side). Pinned only for the surgeon(s) the seed marks.
+// The spec's thresholds ('>=' and 'at most half') held on the pre-L code at the boundary (2 vs 1 weekends, 3 vs 6
+// days: the 11/20-22 backup block), so the pins hold the OBSERVED post-L outcome - no backup weekend and no weekend
+// backup day at all - which is a real fail-before (review 9/22); the counts are printed so drift is visible.
+{
+  const DB = big.diagnostics, view = makeView(big), days = daysList(RANGES[1].start, RANGES[1].end);
+  const openWk = khanOpenWeekends(days);
+  const fullP = openWk.filter((trio) => trio.every((d) => holder(view, d, P) === KHAN)).length;
+  const anyB = openWk.filter((trio) => trio.some((d) => holder(view, d, B) === KHAN)).length;
+  const wkDays = days.filter((d) => isWeekend(d) && !isHoliday(d));
+  const kP = wkDays.filter((d) => holder(view, d, P) === KHAN).length, kB = wkDays.filter((d) => holder(view, d, B) === KHAN).length;
+  console.log("L (Khan weekends, Nov-Dec bestOf 200 seed 1): weekends open to him " + openWk.length + ", full-block primary " + fullP + ", with a backup day of his " + anyB + "; weekend days outside holiday units: primary " + kP + ", backup " + kB);
+  ok(fullP >= 2 && anyB === 0, "L: of the " + openWk.length + " weekends open to Khan he is full-block primary on " + fullP + " (>= 2 expected) and holds a backup day on " + anyB + " (0 expected: " + openWk.filter((trio) => trio.some((d) => holder(view, d, B) === KHAN)).map((t) => t[0]).join(", ") + ")");
+  ok(kP >= 6 && kB === 0, "L: Khan holds " + kB + " weekend backup days (0 expected) against " + kP + " weekend primary days (>= 6 expected) in Nov-Dec: " + wkDays.filter((d) => holder(view, d, B) === KHAN).join(", "));
+  ok(DB.softPenalties.some((s) => s.id === KHAN && s.reason === "weekend-primary" && s.weight < 0), "L: the preview's soft list carries Khan's weekend-primary bonus (the term is in force)");
+  // holiday units are not weekend units (review 9/22): neither L term ever lands on a holiday-unit day
+  eq(DB.softPenalties.filter((s) => (s.reason === "weekend-primary" || s.reason === "weekend-backup") && isHoliday(s.day)).map((s) => s.day + " " + s.role + " " + s.reason), [], "L: no weekend-primary / weekend-backup term on a holiday-unit day");
+  eq(IDS.filter((id) => SR[id].primaryContribution === "weekends"), [KHAN], "seed: Khan is the one surgeon with primaryContribution weekends");
+  eq(seed.groupRules.weights.weekendContribution, 3, "seed: groupRules.weights.weekendContribution = 3 (medium)");
 }
 // 9/22 positive sightings across the 150 runs + the bestOf-200 run
 CUR.range = "all runs"; CUR.seed = "-"; CUR.day = "-";
