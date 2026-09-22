@@ -163,6 +163,16 @@ create table if not exists public.east_overrides (
   updated_at  timestamptz not null default now(),
   primary key (day, person_id)
 );
+-- East FORECAST (scripts/east-forecast.js --sql), kept OUT of east_feed on purpose:
+-- east_feed = published Davenport rows only. A forecast row is
+--   { isForecast:true, runs, generatedAt, fakBusyProbabilityByDay:{date:p}, fierceWeekProbability }
+-- and is read only through east-feed.js forecastFromFeedRows -> forecastToBusy;
+-- every published-row deriver ignores data.isForecast rows as a second guard.
+create table if not exists public.east_forecast (
+  week_monday  date primary key,
+  data         jsonb not null,
+  generated_at timestamptz not null default now()
+);
 
 -- ---------- trades (there is NO vacation_requests table — vacations need no approval)
 create table if not exists public.shift_trade_requests (
@@ -285,6 +295,7 @@ alter table public.time_off                enable row level security;
 alter table public.availability            enable row level security;
 alter table public.east_feed               enable row level security;
 alter table public.east_overrides          enable row level security;
+alter table public.east_forecast           enable row level security;
 alter table public.shift_trade_requests    enable row level security;
 alter table public.notifications           enable row level security;
 alter table public.notification_preferences enable row level security;
@@ -295,7 +306,7 @@ alter table public.office_contacts         enable row level security;
 
 -- Anon-readable tables (shareable page + calendar-sync need these without a JWT)
 do $$ declare t text; begin
-  foreach t in array array['call_schedule_data','schedule_days','availability','east_feed','client_versions'] loop
+  foreach t in array array['call_schedule_data','schedule_days','availability','east_feed','east_forecast','client_versions'] loop
     execute format('drop policy if exists %I on public.%I', t||'_read_all', t);
     execute format('create policy %I on public.%I for select using (true)', t||'_read_all', t);
     execute format('drop policy if exists %I on public.%I', t||'_write_sched', t);

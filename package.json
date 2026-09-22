@@ -6,7 +6,8 @@
   "scripts": {
     "bump": "node bump-version.js",
     "build": "node build.js",
-    "deploy": "node bump-version.js && node build.js"
+    "deploy": "node bump-version.js && node build.js",
+    "test": "node test/rules.test.js && node test/east-feed.test.js && node test/generator-regression.js"
   },
   "devDependencies": {
     "@babel/core": "8.0.1",

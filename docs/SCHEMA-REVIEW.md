@@ -16,6 +16,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. |
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
+| `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` 2026-09-22; **not yet applied to the live DB** (additive; apply by hand). |
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. |
@@ -30,7 +31,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 
 | Table | Read | Write |
 |---|---|---|
-| `call_schedule_data`, `schedule_days`, `availability`, `east_feed` | anyone (anon) | scheduler/admin (all verbs) |
+| `call_schedule_data`, `schedule_days`, `availability`, `east_feed`, `east_forecast` | anyone (anon) | scheduler/admin (all verbs) |
 | `client_versions` | anon: row `main` only; authenticated: all rows | scheduler/admin all rows; each authenticated user may insert/update **their own** heartbeat row (`id = auth.uid()`) |
 | `time_off` | anyone (anon) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 | `east_overrides` | anyone (anon) | scheduler/admin |

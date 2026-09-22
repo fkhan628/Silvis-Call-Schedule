@@ -19,7 +19,7 @@ bumps the version, transpiles `index.html` and commits it back with `[skip ci]`;
 
 ```
 npm install
-node test/rules.test.js && node test/generator-regression.js && node build.js
+node test/rules.test.js && node test/east-feed.test.js && node test/generator-regression.js && node build.js
 ```
 
 `build.js` writes `index.html` locally as a byproduct - never commit it by hand.

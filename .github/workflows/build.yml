@@ -29,6 +29,7 @@ on:
       - "helpers.js"
       - "app-styles.js"
       - "test/rules.test.js"
+      - "test/east-feed.test.js"
       - "test/generator-regression.js"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
@@ -63,6 +64,9 @@ jobs:
       # regression + sync-guard steps.)
       - name: Rules engine unit tests
         run: node test/rules.test.js
+
+      - name: East feed unit tests
+        run: node test/east-feed.test.js
 
       - name: Generator regression test
         run: node test/generator-regression.js
