@@ -423,6 +423,17 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
   a one-year exception is a manual override with the visible warning. Proof: `test/rules.test.js` V block,
   `test/generator-regression.js` V pin (every stored run over Christmas 2026), `test/holidays.test.js` D1 (Christmas 2027).
 
+- **Own dates beat own patterns (Faraz 9/22 evening; Prompt 12 W)**: a surgeon's explicit dated `available` /
+  `backup_only` row (entered by them or by the scheduler for them) lifts every weekday-pattern rule for that date and
+  role, `hardNeverWeekdays` included (`rules.js rdStatic` reads the same `rowAvail` flag as the rest of the family); it
+  never lifts an obligation — vacations and the trailing edge, East busy / forecast-busy days, derived-week locks,
+  `availableWindows` (moved to the never-lifted gates: a row outside a window no longer opens the day; edit the window
+  in Setup instead), `backupOptOut`, caps, consecutive limits, the other role. A manual/import lock is not a row (the
+  holder keeps the lock, the rule is listed in `conflicts`). Seed: `groupRules.availabilityPrecedence` tiers and
+  `availabilityPrecedenceNote`, `surgeonRules.s1.hardNeverWeekdaysNote`, `s6.availableWindowsNote`; pinned in
+  `test/rules.test.js` (Prompt 12 W block) and `test/generator-regression.js` (generic hardNeverWeekdays pin +
+  `test/fixtures/khan-dated-row-2026-12-01.json`).
+
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
 
 After generation some slots may stay open. One pure definition (`openSlots(schedule, from, to, today)` in `helpers.js`,

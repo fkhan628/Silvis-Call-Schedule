@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "purpose": "Prompt 12 W (Faraz 9/22 evening, 'own dates beat own patterns'): a dated available/primary row of Khan's on an ordinary Tuesday (2026-12-01: no lock, no holiday, not East-busy, forecast 0.41 below the 0.5 threshold) lifts his hardNeverWeekdays Tue/Thu rule for that date and role, so the generator may place him primary there. The four other primary candidates carry a dated unavailable/primary row the same day (Fierce's own pattern keeps him off Tuesday primary), so the slot has exactly one candidate: before W it stays open with hard-never-weekday:Tue as Khan's reason, after W it is his. Backup that day is untouched (the unavailable rows are primary-scoped).",
+    "shape": "availability rows appended to the seed's rows (test/seed-adapter.js seedToAvailabilityRows) before rules.buildContext; the control run drops the Khan row",
+    "contact_data": "none"
+  },
+  "day": "2026-12-01",
+  "khanRow": { "person_id": "s1", "kind": "available", "role": "primary", "start_date": "2026-12-01", "end_date": "2026-12-01" },
+  "otherRows": [
+    { "person_id": "s2", "kind": "unavailable", "role": "primary", "start_date": "2026-12-01", "end_date": "2026-12-01" },
+    { "person_id": "s3", "kind": "unavailable", "role": "primary", "start_date": "2026-12-01", "end_date": "2026-12-01" },
+    { "person_id": "s4", "kind": "unavailable", "role": "primary", "start_date": "2026-12-01", "end_date": "2026-12-01" },
+    { "person_id": "s6", "kind": "unavailable", "role": "primary", "start_date": "2026-12-01", "end_date": "2026-12-01" }
+  ]
+}

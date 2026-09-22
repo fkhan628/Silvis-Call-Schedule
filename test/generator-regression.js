@@ -22,10 +22,11 @@
 // Coverage and the 10 s budget (Prompt 4: "All runs must finish under 10 s
 // total"): 50 seeds x 4 ranges, then one bestOf 200 Nov-Dec run for the tally
 // table (the UI default), 50 fill-open-only backfill runs over 10/15..11/1 at
-// bestOf 2 (Prompt 12 T), plus seven short fixture runs (manual lock, backup
+// bestOf 2 (Prompt 12 T), plus nine short fixture runs (manual lock, backup
 // opt-out, legacy group key, range edge, derived week overridden - a
-// November-only bestOf 1 run added by the Prompt 12 K fix stage, ~10 ms - and
-// the two fill-open-only runs, plain + fill-open-only, Prompt 12 T).
+// November-only bestOf 1 run added by the Prompt 12 K fix stage, ~10 ms - the
+// two fill-open-only runs, plain + fill-open-only, Prompt 12 T, and the two
+// Prompt 12 W runs over Nov-Dec: Khan's dated Tuesday row, with and without).
 // bestOf per range is 6 / 5 / 2 / 2
 // (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
 // on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
@@ -219,6 +220,20 @@ function burchettMay(d, role) {
 const ACT_AVAIL = explicitRoleDates(SR[ACTON].explicitAvailable), ACT_GOV = governedRoles(ACTON);
 eq(govText(ACT_GOV), ["2026-10:primary", "2026-11:backup+primary"], "seed: Acton governed Oct primary only, Nov both roles (T)");
 const GOV = {}; IDS.forEach((id) => { GOV[id] = governedRoles(id); });
+// Prompt 12 W (9/22 evening, "own dates beat own patterns"): hardNeverWeekdays restated GENERICALLY for every surgeon
+// from surgeonRules.<id>.hardNeverWeekdays + hardNeverWeekdaysRoles (Khan's Tue/Thu today; Acton's Tuesday arrives
+// with item X and is covered by the same pin), on non-holiday days, and lifted ONLY by a dated available /
+// backup_only row of that surgeon for that date and role - the seed's explicit lists, or the rows a fixture run
+// appends (checkRun's extraRows). A manual lock is not a row (item 3 keeps locks byte-identical; lockViolations
+// report the conflict). Vacations, East days, derived locks and Sarkar's windows are obligations no row lifts
+// (items 4, 5, 9a, 10 below never consult a row).
+const HARD_NEVER = {}; IDS.forEach((id) => { HARD_NEVER[id] = new Set(SR[id].hardNeverWeekdays || []); });
+const SEED_ROWS = {}; IDS.forEach((id) => { const a = explicitRoleDates(SR[id].explicitAvailable); explicitDates(SR[id].explicitBackupOnly).forEach((d) => a.backup.add(d)); SEED_ROWS[id] = a; });
+function datedRowLifts(id, d, role, extraRows) {
+  if (SEED_ROWS[id][role].has(d)) return true;
+  return (extraRows || []).some((r) => r.person_id === id && d >= r.start_date && d <= (r.end_date || r.start_date) && ((r.kind === "available" && (!r.role || r.role === "any" || r.role === role)) || (r.kind === "backup_only" && role === B)));
+}
+const W_STATS = { forbiddenNoRow: 0, liftedByRow: 0 }; // placements on a hardNeverWeekdays day: without a row (must stay 0) / with one
 const actonBlockedRecurring = (d) => ["Mon", "Wed"].includes(weekday(d)) && [2, 4].includes(nthOf(d));
 const otherRoleOf = (role) => (role === P ? B : P);
 // Philip: Aledo days = 1st/3rd Wednesday + the Friday of the Mon-Sun week containing the 3rd Wednesday.
@@ -400,7 +415,7 @@ function runLengths(view, days, id) {
 
 /* ------------------------------------------------------- the checks */
 // deep: also compare diagnostics.tallies[id].range run lengths with runLengths() (every R4 run + the bestOf-200 run).
-function checkRun(out, range, seedNo, deep) {
+function checkRun(out, range, seedNo, deep, extraRows) { // extraRows (W): dated rows a fixture run appended to the seed's
   CUR.range = range.name; CUR.seed = seedNo; CUR.day = "-";
   const days = daysList(range.start, range.end);
   const months = []; days.forEach((d) => { const m = monthOf(d); if (!months.includes(m)) months.push(m); });
@@ -488,11 +503,15 @@ function checkRun(out, range, seedNo, deep) {
       // item 4
       ok(!VAC[id].has(d), CODE[id] + " placed on a vacation day");
       if (role === P) ok(!DAY_BEFORE_VAC[id].has(d), CODE[id] + " placed PRIMARY the day before a vacation");
-      // item 5 (9/22: his OR days block the roles his hardNeverWeekdaysRoles list names - primary only in the seed)
-      if (id === KHAN) {
-        if (!isHoliday(d) && hardNeverApplies(KHAN, role)) ok(!["Tue", "Thu"].includes(weekday(d)), "Khan " + role + " on a " + weekday(d));
-        if (role === P) ok(!KHAN_NO_PRIMARY.has(d), "Khan PRIMARY on an East busy/forecast-busy day");
+      // item 5, generic since Prompt 12 W (9/22 evening): surgeonRules.<id>.hardNeverWeekdays blocks the roles the
+      // surgeon's hardNeverWeekdaysRoles list names (primary only by default) unless a dated row of his covers that
+      // date and role. Before W this was the Khan-only line ok(!["Tue", "Thu"].includes(weekday(d))) - no row lifted it.
+      if (!isHoliday(d) && HARD_NEVER[id].has(weekday(d)) && hardNeverApplies(id, role)) {
+        const lifted = datedRowLifts(id, d, role, extraRows);
+        if (lifted) W_STATS.liftedByRow++; else W_STATS.forbiddenNoRow++;
+        ok(lifted, CODE[id] + " " + role + " on a " + weekday(d) + " (" + d + ") his hardNeverWeekdays forbid, with no dated row of his for that date and role (W)");
       }
+      if (id === KHAN && role === P) ok(!KHAN_NO_PRIMARY.has(d), "Khan PRIMARY on an East busy/forecast-busy day");
       // item 6 (9/22: outreach days and the governed October restrict primary only)
       if (id === ACTON) {
         if (role === P && !isHoliday(d)) ok(!actonBlockedRecurring(d), "Acton PRIMARY on a 2nd/4th " + weekday(d));
@@ -1299,11 +1318,62 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   });
   ok(checked === runs.length * 2, "V checked " + checked + " day slots");
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+// ---- Prompt 12 W (9/22 evening) ----
+// Faraz: "Own dates beat own patterns (his East OR days are not every Tue/Thu): a surgeon's explicit dated
+// availability ... lifts that surgeon's WEEKDAY-PATTERN rules for that date and role, including hard ones ... It
+// never lifts obligations: vacations, East feed busy days, derived-week locks, Sarkar's windows."
+// test/fixtures/khan-dated-row-2026-12-01.json: Khan has a dated available/primary row on Tue 12/1 (an ordinary
+// Tuesday - no lock, no holiday, not East-busy, forecast 0.41 < 0.5) and the other four primary candidates carry a
+// primary-scoped unavailable row the same day (Fierce's own pattern keeps him off Tuesday primary), so 12/1 primary
+// has exactly one candidate. Control run (no Khan row): the slot stays open and Khan's only reason is
+// hard-never-weekday:Tue. W run (with the row): Khan is placed, nothing cites hard-never for that slot, and every
+// per-run rule (checkRun, extraRows = the fixture rows) accepts the placement because of the row.
+{
+  const FIXW = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "khan-dated-row-2026-12-01.json"), "utf8"));
+  const DAYW = FIXW.day;
+  eq([weekday(DAYW), isHoliday(DAYW), KHAN_NO_PRIMARY.has(DAYW), lockedIn(DAYW, P), lockedIn(DAYW, B), DERIVED_ROLE[DAYW] || null], ["Tue", false, false, false, false, null], "fixture: 12/1 is an ordinary Tuesday for Khan (not East-busy or forecast-busy, no lock, no holiday, no derived week)");
+  ok(HARD_NEVER[KHAN].has("Tue") && hardNeverApplies(KHAN, P), "seed: Khan's hardNeverWeekdays forbid Tuesday primary");
+  eq([FIXW.khanRow.person_id, FIXW.khanRow.kind, FIXW.khanRow.role, FIXW.khanRow.start_date], [KHAN, "available", P, DAYW], "fixture: Khan's dated available/primary row on 12/1");
+  eq(FIXW.otherRows.map((r) => r.person_id + ":" + r.kind + ":" + r.role + ":" + r.start_date).sort(), [BURCHETT, ACTON, PHILIP, SARKAR].map((id) => id + ":unavailable:primary:" + DAYW).sort(), "fixture: the other four primary candidates are unavailable for primary that day (Fierce: his pattern)");
+  const runW = (rows, label) => {
+    const inputW = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } });
+    inputW.availabilityRows = inputW.availabilityRows.concat(rows);
+    const ctxW = R.buildContext(inputW);
+    if (ctxW.warnings.length) fail("buildContext warnings (" + label + "): " + JSON.stringify(ctxW.warnings));
+    CUR.range = label; CUR.seed = 1; CUR.day = DAYW;
+    return GEN.generate(ctxW, RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: BEST_OF[1] });
+  };
+  // control: the same day with no Khan row - open, and his reason is exactly the OR-day rule (reason code unchanged)
+  const outC = runW(FIXW.otherRows, "W control (no Khan row) Nov-Dec");
+  const uC = outC.diagnostics.uncovered.find((u) => u.day === DAYW && u.role === P);
+  eq(outC.schedule[DAYW].primary, null, "W control: 12/1 primary is open when nobody's rules allow it");
+  ok(!!uC, "W control: 12/1 primary is listed uncovered");
+  eq(uC.reasons[KHAN], ["hard-never-weekday:Tue"], "W control: Khan's only reason for 12/1 primary is his OR-day rule");
+  [BURCHETT, ACTON, PHILIP, SARKAR].forEach((id) => ok((uC.reasons[id] || []).some((r) => r.indexOf("unavailable-row") === 0), "W control: " + CODE[id] + " is blocked by the fixture's unavailable row"));
+  ok((uC.reasons[FIERCE] || []).some((r) => r.indexOf("weekday-pattern:Tue") === 0), "W control: Fierce is blocked by his Tuesday pattern");
+  const liftedBefore = W_STATS.liftedByRow;
+  checkRun(outC, RANGES[1], 1, false, FIXW.otherRows);
+  eq(W_STATS.liftedByRow, liftedBefore, "W control: no lifted placement without the row");
+  // W: with the row - Khan is placed on 12/1, nothing cites hard-never for that slot, every per-run rule holds
+  const outW = runW(FIXW.otherRows.concat([FIXW.khanRow]), "W fixture (Khan dated row 12/1) Nov-Dec");
+  CUR.range = "W fixture (Khan dated row 12/1) Nov-Dec"; CUR.seed = 1; CUR.day = DAYW;
+  eq(outW.schedule[DAYW].primary, KHAN, "W: the generator places Khan primary on his rowed Tuesday (the row lifted hard-never-weekday:Tue)");
+  eq(outW.schedule[DAYW].primaryLocked, false, "W: a dated row is availability, not a lock");
+  ok(!inUncovered(outW, DAYW, P), "W: 12/1 primary is not open");
+  ok(!outW.diagnostics.uncovered.some((u) => u.day === DAYW && Object.keys(u.reasons).some((id) => u.reasons[id].some((r) => r.indexOf("hard-never-weekday") === 0))), "W: no hard-never reason is reported for 12/1 in either role");
+  ok(!outW.diagnostics.hardViolations.some((v) => v.day === DAYW), "W: no hard violation on 12/1");
+  ok(outW.schedule[DAYW].backup && outW.schedule[DAYW].backup !== KHAN, "W: 12/1 backup is filled by someone else (the unavailable rows are primary-scoped)");
+  checkRun(outW, RANGES[1], 1, false, FIXW.otherRows.concat([FIXW.khanRow]));
+  eq(W_STATS.liftedByRow, liftedBefore + 1, "W: exactly one placement in the W run was accepted because of a dated row (Khan 12/1 primary)");
+  // the fixture's control is the only Khan row anywhere in this harness: every OTHER run of the file placed nobody on a
+  // hardNeverWeekdays day without a row (the per-slot assertion fails first; this names the pin across all runs)
+  eq(W_STATS.forbiddenNoRow, 0, "W: across every run no surgeon was placed on a day his hardNeverWeekdays forbid without a dated row of his (generic over surgeonRules.<id>.hardNeverWeekdays + Roles)");
+  CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
 
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 7 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 9 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

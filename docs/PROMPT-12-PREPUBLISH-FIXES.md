@@ -344,3 +344,31 @@ Delivered (data plus one generic rule, no surgeon-specific code):
   inert in the app until then (the JSX reads it from the shared setup). Run the re-import only from the merged branch:
   this wave-5 base's seed lacks the 20 November `schedule_days` and 20 `availability` rows that are live (wave 4
   carries them), so a dry run from this worktree alone lists them as deletes.
+
+## Item W — own dates beat own patterns (Faraz, 9/22 evening; appended by Claude Code)
+
+Faraz, verbatim: *"Own dates beat own patterns (his East OR days are not every Tue/Thu): a surgeon's explicit dated
+availability, entered by them or by the scheduler for them, lifts that surgeon's WEEKDAY-PATTERN rules for that date
+and role, including hard ones (Khan's Tue/Thu primary, Fierce's Clinton days, Burchett's outreach days, Acton's
+Tuesdays). It never lifts obligations: vacations, East feed busy days, derived-week locks, Sarkar's windows. Confirm the
+existing dated-row lift covers hardNeverWeekdays; if not, make it so. rules.test.js: Khan on a Tuesday with a dated row
+-> eligible primary; without -> not; a dated row on an East busy day -> still not."*
+
+Finding: the dated-row lift did **not** cover `hardNeverWeekdays` (`rules.js rdStatic` pushed `hard-never-weekday:<wd>`
+regardless of the row — "the one member no explicit row lifts"), and `outside-window` **was** lifted by a dated row.
+Both changed, minimally and generically (no surgeon branch): `hardNeverWeekdays` now reads the same `rowAvail` flag the
+rest of the weekday-pattern family reads (role- and date-scoped; the reason code is unchanged where it applies), and
+`outside-window` no longer reads a row at all (windows are an obligation, both roles, holidays included). Untouched, and
+proven by tests rather than asserted: time-off / day-before-vacation, east-busy / east-forecast-busy, derived-lock*,
+backup-opt-out, holds-other-role, max-consecutive; a manual lock is not a row (a locked holder on an OR day keeps the
+lock with `hard-never-weekday:<wd>` in `conflicts`). Two pre-W assertions flipped in place (Sarkar's rowed 10/27 and
+10/30 were eligible, now `outside-window`) plus Khan's rowed 10/15 (was `hard-never-weekday:Thu`, now eligible). Seed:
+`groupRules.availabilityPrecedence` tiers (hardNeverWeekdays into the row-liftable tier, availableWindows into the
+never-lifted gates; short and reason-free — the importer keeps these strings), `availabilityPrecedenceNote`,
+`surgeonRules.s1.hardNeverWeekdaysNote`, `s6.availableWindowsNote`, a `_meta.revisions` entry; the importer drops every
+`*Note` key, so none of the explanatory prose reaches the blob — only the reason-free tier strings and the
+`settings.seedRevisions` entry do (dry run: `groupRules=update`, `settings=update`, 0 row changes). Regression: `test/fixtures/khan-dated-row-2026-12-01.json` (Khan's
+dated primary row on an ordinary Tuesday; the other candidates unavailable that day) — the control run leaves 12/1 open
+with `hard-never-weekday:Tue` as Khan's only reason, the W run places him; `checkRun` now pins `hardNeverWeekdays`
+generically over `surgeonRules.<id>.hardNeverWeekdays + Roles` for every surgeon (Acton's Tuesday from item X is covered
+automatically), lifted only by a dated row for that date and role.

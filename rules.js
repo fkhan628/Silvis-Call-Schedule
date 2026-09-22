@@ -69,6 +69,17 @@
 //                 row lifts it (Faraz 9/22; nobody has opted out).
 //   surgeonRules[id].hardNeverWeekdaysRoles  default ['primary'] (9/22); an
 //                 empty list reads as the default.
+//   Row precedence (Prompt 12 W, Faraz 9/22 evening - "own dates beat own
+//                 patterns"): an explicit dated available / backup_only row for
+//                 a role lifts every WEEKDAY-PATTERN rule for that date and
+//                 role - hardNeverWeekdays included (it moved out of the
+//                 never-lifted gates) - and never lifts an obligation: time off
+//                 and its trailing edge, East busy / forecast-busy days,
+//                 derived-week locks, availableWindows (moved INTO the
+//                 never-lifted gates: a row outside a window opens nothing),
+//                 backupOptOut, caps, consecutive limits, the other role. A
+//                 manual/import lock is not a row: a lock holder on a pattern
+//                 day keeps the lock with the rule listed in `conflicts`.
 //   groupRules.backupPolicy.openToEveryone  the 9/22 switch (absent = true);
 //                 false restores the pre-9/22 both-roles reading of the rules
 //                 listed below (explicit per-surgeon data is honoured either way).
@@ -763,9 +774,9 @@ function rdDerivedOverridden(ctx, date, role, id) {
 // weekday allow-list, the outside-derived-weeks pattern and the Aledo rules.
 // rowAvail = an explicit dated available/backup_only row covers this role today;
 // per groupRules.availabilityPrecedence it lifts every HARD rule in this family
-// (soft preferences still apply). hardNeverWeekdays is the caller's and is never
-// lifted. Called from the static layer outside derived weeks and from the
-// dynamic layer when a derived lock has been overridden.
+// (soft preferences still apply). hardNeverWeekdays is the caller's and reads
+// the same rowAvail flag (Prompt 12 W). Called from the static layer outside
+// derived weeks and from the dynamic layer when a derived lock has been overridden.
 // 9/22: the recurring blacklist, the allow-list and the Aledo week restrict
 // PRIMARY only (backup is open to everyone); day-before-Aledo follows
 // ctx.aledoDayBeforeRoles; the outside-derived-weeks pattern is per-role data;
@@ -904,15 +915,18 @@ function rdStatic(ctx, date, role, id, asBlock) {
   }
 
   // Weekday-pattern family - waived on holiday-unit days (groupRules.holidays.ignoreWeekdayRules).
-  // hardNeverWeekdays is the one member no explicit row lifts (its roles list
-  // defaults to primary only since 9/22). Inside a derived (East) week the
-  // derived lock governs instead, so the rest of the family is deferred:
-  // eligibility() re-applies it when an import/manual lock overrides that
-  // derived lock (res.patternDeferred + res.rowAvail carry what it needs).
+  // hardNeverWeekdays (its roles list defaults to primary only since 9/22) is a
+  // member of the family: since Prompt 12 W (Faraz 9/22 evening, "own dates beat
+  // own patterns") an explicit dated row for the role lifts it for that date like
+  // the rest of the family - his OR days are not every Tue/Thu. Nothing else
+  // lifts it (a manual lock is not a row; see the header). Inside a derived
+  // (East) week the derived lock governs instead, so the rest of the family is
+  // deferred: eligibility() re-applies it when an import/manual lock overrides
+  // that derived lock (res.patternDeferred + res.rowAvail carry what it needs).
   var notRecurring = false;
   var patternDeferred = false;
   if (!waive) {
-    if (P.hardNever.has(info.wd) && P.hardNeverRoles.has(role)) hard.push("hard-never-weekday:" + info.wd);
+    if (P.hardNever.has(info.wd) && P.hardNeverRoles.has(role) && !rowAvail) hard.push("hard-never-weekday:" + info.wd);
     if (P.derived[date]) patternDeferred = true;
     else rdPatternRules(ctx, P, info, role, asBlock, rowAvail, hard, soft);
   }
@@ -924,7 +938,8 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // entry = primary only since 9/22, an object entry = the roles it lists - T);
   // the recurring whitelist and the weeks whitelist restrict PRIMARY only (backup
   // is open to everyone). Sarkar's windows are her only availability and keep
-  // governing both roles.
+  // governing both roles; since Prompt 12 W they are an OBLIGATION no dated row
+  // lifts (edit the window in Setup instead) - unlike the weeks whitelist.
   var datedBlock = null;
   var isPrimary = role === "primary" || !ctx.backupOpen; // backupPolicy.openToEveryone false -> both roles again
   var governed = !!((P.governedMonths[info.month] || 0) & mask);
@@ -936,7 +951,7 @@ function rdStatic(ctx, date, role, id, asBlock) {
     if (!(rowAvail || weekendOk || rdRecurringMatches(rules.recurringAvailable, date))) notRecurring = true;
   }
   if (isPrimary && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
-  if (P.hasWindows && !(P.windowDays.has(date) || rowAvail)) hard.push("outside-window"); // both roles; still enforced on holidays
+  if (P.hasWindows && !P.windowDays.has(date)) hard.push("outside-window"); // both roles; still enforced on holidays; never lifted by a row (W)
 
   if (notRecurring && !waive) hard.push("not-recurring-available");
   if (datedBlock) {

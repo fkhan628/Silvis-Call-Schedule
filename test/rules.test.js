@@ -805,7 +805,7 @@ function withRows(extraRows, extras) {
   return R.buildContext(SA.seedToContextInput(seed, Object.assign({ schedule: {}, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, availabilityRows: SA.seedToAvailabilityRows(seed).concat(extraRows) }, extras || {})));
 }
 
-step("fidelity-02/contract-003: a dated available row lifts the pattern family for its role, never hardNeverWeekdays");
+step("fidelity-02/contract-003: a dated available row lifts the pattern family for its role - hardNeverWeekdays included since Prompt 12 W (9/22 evening), never availableWindows");
 const lift = withRows([
   row(ACTON, "available", "2026-11-09", "primary"),
   row(FIERCE, "available", "2026-11-17"),
@@ -820,7 +820,9 @@ okElig(R.eligibility(lift, "2026-11-09", P, ACTON), "row lifts recurring-unavail
 hasSoft(R.eligibility(lift, "2026-11-08", P, ACTON), "recurring-avoid:Sun", "soft preferences are not lifted");
 blocked(R.eligibility(lift, "2026-11-09", B, PHILIP), "derived-lock-held:s5", "11/09 backup is Fierce's derived lock, not a pattern block (Philip; Acton's 11/9 backup is off his November list since T)");
 okElig(R.eligibility(lift, "2026-12-14", B, ACTON), "9/22: backup on a 2nd Monday (12/14, outside any derived week) needs no row");
-okElig(R.eligibility(lift, "2026-10-27", P, SARKAR), "a primary row lifts outside-window for primary (Tue 10/27 is after her October window)");
+// Prompt 12 W (9/22 evening) FLIP: before W a primary row lifted outside-window here (okElig). Faraz's W puts Sarkar's
+// windows among the obligations a dated row never lifts - a row outside a window does not open the day.
+blocked(R.eligibility(lift, "2026-10-27", P, SARKAR), "outside-window", "W: a primary row does NOT lift outside-window (Tue 10/27 is after her October window; windows are an obligation)");
 blocked(R.eligibility(lift, "2026-10-27", B, SARKAR), "outside-window", "a primary-only row does not free backup");
 okElig(R.eligibility(lift, "2026-11-17", P, FIERCE), "row lifts weekday-pattern:Tue");
 okElig(R.eligibility(lift, "2026-11-17", B, FIERCE), "any-role row lifts both roles");
@@ -829,10 +831,15 @@ okElig(R.eligibility(lift, "2026-11-06", B, FIERCE), "9/22: a standalone Friday 
 okElig(R.eligibility(lift, "2026-11-05", B, FIERCE), "backup_only row lifts the Thursday pattern for backup");
 blocked(R.eligibility(lift, "2026-11-05", P, FIERCE), "backup-only-row");
 okElig(R.eligibility(lift, "2026-11-03", P, PHILIP), "row lifts day-before-aledo");
-blocked(R.eligibility(lift, "2026-10-15", P, KHAN), "hard-never-weekday:Thu", "hardNeverWeekdays is never lifted by a row");
+// Prompt 12 W (9/22 evening) FLIP: before W this was blocked("hard-never-weekday:Thu", "hardNeverWeekdays is never lifted
+// by a row"). Own dates beat own patterns: his any-role row on Thu 10/15 lifts the OR-day rule for primary that date.
+okElig(R.eligibility(lift, "2026-10-15", P, KHAN), "W: a dated row of his lifts hard-never-weekday:Thu for primary on that date");
+lacks(R.eligibility(lift, "2026-10-15", P, KHAN).hard, "weekday-not-allowed", "W: the Mon/Wed allow-list does not re-block a lifted OR day");
 okElig(R.eligibility(lift, "2026-10-15", B, KHAN), "9/22: backup on his OR day needs no row");
-okElig(R.eligibility(lift, "2026-10-30", P, SARKAR), "9/22 evening: a dated row opens a Friday outside her window (no hard-never on Fridays any more)");
-lacks(R.eligibility(lift, "2026-10-30", P, SARKAR).hard, "outside-window", "the row does satisfy the window gate");
+// Prompt 12 W (9/22 evening) FLIP: before W these two read okElig + lacks("outside-window") - "a dated row opens a Friday
+// outside her window". Windows never lift now; the Friday after her window stays outside-window with or without the row.
+blocked(R.eligibility(lift, "2026-10-30", P, SARKAR), "outside-window", "W: a dated row does not open a Friday outside her window");
+lacks(R.eligibility(lift, "2026-10-30", P, SARKAR).hard, "hard-never-weekday", "no hard-never on Fridays any more (N) - the block is the window alone");
 okElig(R.eligibility(clean, "2026-10-23", P, SARKAR), "and without rows her window Friday is open (9/22 evening: a standalone Friday is her normal pattern)");
 blocked(R.eligibility(clean, "2026-10-30", P, SARKAR), "outside-window", "without the row the Friday after her window stays outside-window");
 eq(R.eligibility(clean, "2026-10-19", P, SARKAR).hard, [], "window Monday is still open without window rows");
@@ -1570,6 +1577,89 @@ ok(cOvInert.warnings.some(w => /eastOverrides\[s5\]: 2 entries ignored - this su
 ok(!cOvInert.per[FIERCE].eastBusy.has("2026-11-04") && !cOvInert.per[FIERCE].eastDays.has("2026-11-04") && cOvInert.per[FIERCE].eastOverrides["2026-11-04"] === undefined, "C fix 7: ...and the entries never land in his override / busy / East-day sets");
 okElig(R.eligibility(cOvInert, "2026-11-04", P, FIERCE), "C fix 7: ...eligibility unchanged (a Wednesday primary is open to Fierce)");
 ok(!makeCtx({ schedule: {}, eastOverrides: { [KHAN]: { "2026-11-04": true } } }).warnings.some(w => /blocks no role/.test(w)), "C fix 7: Khan's East feature blocks primary - no such warning for him");
+// ---- Prompt 12 W (9/22 evening) ----
+// Faraz: "Own dates beat own patterns (his East OR days are not every Tue/Thu): a surgeon's explicit dated
+// availability, entered by them or by the scheduler for them, lifts that surgeon's WEEKDAY-PATTERN rules for that
+// date and role, including hard ones (Khan's Tue/Thu primary, Fierce's Clinton days, Burchett's outreach days,
+// Acton's Tuesdays). It never lifts obligations: vacations, East feed busy days, derived-week locks, Sarkar's windows."
+// Engine: rdStatic applies hard-never-weekday:<wd> only when no dated available/backup_only row covers the role that
+// day (the same rowAvail flag the rest of the family reads); outside-window no longer reads rowAvail at all.
+step("Prompt 12 W: Khan on an ordinary Tuesday - a dated primary row lifts hard-never-weekday, nothing else does");
+const W_TUE = "2026-12-01"; // an ordinary Tuesday: no lock, no holiday, no East busy day in these contexts
+const wRow = withRows([row(KHAN, "available", W_TUE, "primary")]);
+okElig(R.eligibility(wRow, W_TUE, P, KHAN), "W: Khan PRIMARY on Tue 12/1 with a dated available/primary row");
+lacks(R.eligibility(wRow, W_TUE, P, KHAN).hard, "hard-never-weekday", "W: the OR-day reason is gone for that date");
+blocked(R.eligibility(clean, W_TUE, P, KHAN), "hard-never-weekday:Tue", "W: the same Tuesday without a row stays his OR day");
+eq(R.eligibility(clean, W_TUE, P, KHAN).hard, ["hard-never-weekday:Tue"], "W: ...and that is the only hard reason (reason code unchanged)");
+blocked(R.eligibility(clean, "2026-12-08", P, KHAN), "hard-never-weekday:Tue", "W: the row is date-scoped - the next Tuesday is still blocked in the row context too");
+blocked(R.eligibility(wRow, "2026-12-08", P, KHAN), "hard-never-weekday:Tue", "W: (row context) 12/8 has no row");
+// role scope: an available/backup row on a Tuesday lifts nothing for primary (his backup was open anyway)
+const wRowB = withRows([row(KHAN, "available", W_TUE, "backup")]);
+blocked(R.eligibility(wRowB, W_TUE, P, KHAN), "hard-never-weekday:Tue", "W: a backup-role row does not lift his PRIMARY block (role-scoped)");
+okElig(R.eligibility(wRowB, W_TUE, B, KHAN), "W: backup on a Tuesday needs no row (9/22) - the row changes nothing there");
+okElig(R.eligibility(clean, W_TUE, B, KHAN), "W: ...and without the row too");
+// an any-role row lifts primary (mask 3 covers both roles)
+okElig(R.eligibility(withRows([row(KHAN, "available", W_TUE)]), W_TUE, P, KHAN), "W: an any-role row lifts the primary block as well");
+step("Prompt 12 W: obligations never lift - East busy, vacation, trailing edge, derived locks, other role, consecutive, opt-out");
+const wEast = withRows([row(KHAN, "available", W_TUE, "primary")], { eastBusyDays: { [KHAN]: [W_TUE] } });
+blocked(R.eligibility(wEast, W_TUE, P, KHAN), "east-busy", "W: a dated row on an East busy day - east-busy still hard");
+lacks(R.eligibility(wEast, W_TUE, P, KHAN).hard, "hard-never-weekday", "W: (the row did lift the OR-day rule; East is the block)");
+okElig(R.eligibility(wEast, W_TUE, B, KHAN), "W: backup on his East day stays allowed (eastBlocksBackup false)");
+const wFc = withRows([row(KHAN, "available", W_TUE, "primary")], { eastForecast: { [KHAN]: { [W_TUE]: 0.9 } } });
+blocked(R.eligibility(wFc, W_TUE, P, KHAN), "east-forecast-busy:0.90", "W: a forecast-busy day is an obligation too");
+const W_THU = "2026-12-03"; // Thursday inside a synthetic vacation 12/3-12/4
+const wVac = withRows([row(KHAN, "available", W_THU, "primary"), row(KHAN, "available", "2026-12-02", "primary")], { timeOffRows: SA.seedToTimeOffRows(seed).concat([{ person_id: KHAN, start_date: W_THU, end_date: "2026-12-04" }]) });
+blocked(R.eligibility(wVac, W_THU, P, KHAN), "time-off:" + W_THU, "W: a dated row on a Thursday inside his vacation - time-off still hard");
+lacks(R.eligibility(wVac, W_THU, P, KHAN).hard, "hard-never-weekday", "W: (the OR-day rule was lifted; the vacation is the block)");
+blocked(R.eligibility(wVac, W_THU, B, KHAN), "time-off:" + W_THU, "W: vacation blocks backup too, row or no row");
+blocked(R.eligibility(wVac, "2026-12-02", P, KHAN), "day-before-vacation", "W: a row on the trailing-edge day does not lift day-before-vacation (Wed 12/2 is an allowed weekday otherwise)");
+// derived-week locks: Fierce with a dated row inside his derived weeks
+const wDer = withRows([row(FIERCE, "available", "2026-11-10", "primary"), row(FIERCE, "available", "2026-12-08", "backup")]);
+blocked(R.eligibility(wDer, "2026-11-10", P, FIERCE), "derived-lock:backup", "W: a primary row inside his East-primary (Silvis backup) week - the derived lock still governs");
+blocked(R.eligibility(wDer, "2026-12-08", B, FIERCE), "derived-lock:primary", "W: a backup row inside his East-backup (Silvis primary) week - the derived lock still governs");
+eq(R.eligibility(wDer, "2026-11-10", B, FIERCE).lockHolder, true, "W: he is still the derived backup holder that day");
+// same-day other role
+const wOther = withRows([row(KHAN, "available", W_TUE, "primary")], { schedule: { [W_TUE]: { primary: null, backup: KHAN } } });
+blocked(R.eligibility(wOther, W_TUE, P, KHAN), "holds-other-role", "W: a row does not lift holds-other-role");
+// max consecutive (Khan 3 on real primary days): Wed 12/2 - Fri 12/4 held, the lifted Tuesday would make 4
+const wRun = withRows([row(KHAN, "available", W_TUE, "primary")], { schedule: { "2026-12-02": { primary: KHAN }, "2026-12-03": { primary: KHAN }, "2026-12-04": { primary: KHAN } } });
+blocked(R.eligibility(wRun, W_TUE, P, KHAN), "max-consecutive:3", "W: a row does not lift max-consecutive (Tue + Wed-Fri = 4 > 3)");
+// backup opt-out: a backup row never lifts it
+const srWOpt = clone(SA.seedToSurgeonRules(seed)); srWOpt[KHAN].backupOptOut = true;
+blocked(R.eligibility(withRows([row(KHAN, "available", W_TUE, "backup")], { surgeonRules: srWOpt }), W_TUE, B, KHAN), "backup-opt-out", "W: a backup row does not lift backup-opt-out");
+step("Prompt 12 W: the rest of the pattern family keeps lifting (regression) - Fierce Clinton, Burchett outreach, Acton 2nd Monday");
+const wFam = withRows([row(FIERCE, "available", "2026-12-01", "primary"), row(BURCHETT, "available", "2027-01-07", "primary"), row(ACTON, "available", "2026-12-14", "primary")]);
+okElig(R.eligibility(wFam, "2026-12-01", P, FIERCE), "W: Fierce Clinton Tuesday primary with a dated row (weekday-pattern:Tue lifted; outside any derived week)");
+blocked(R.eligibility(clean, "2026-12-01", P, FIERCE), "weekday-pattern:Tue", "W: ...and blocked without it");
+okElig(R.eligibility(wFam, "2027-01-07", P, BURCHETT), "W: Burchett off-list Thursday primary with a dated row (not-recurring-available lifted; January ungoverned)");
+blocked(R.eligibility(clean, "2027-01-07", P, BURCHETT), "not-recurring-available", "W: ...and blocked without it");
+okElig(R.eligibility(wFam, "2026-12-14", P, ACTON), "W: Acton 2nd-Monday primary with a dated row (recurring-unavailable:Mon lifted; December ungoverned)");
+blocked(R.eligibility(clean, "2026-12-14", P, ACTON), "recurring-unavailable:Mon", "W: ...and blocked without it");
+// generic, data-driven: a synthetic hardNeverWeekdays ["Tue"] primary rule on Acton (item X's shape) lifts the same way
+const srWAct = clone(SA.seedToSurgeonRules(seed)); srWAct[ACTON].hardNeverWeekdays = ["Tue"]; srWAct[ACTON].hardNeverWeekdaysRoles = ["primary"];
+blocked(R.eligibility(withRows([], { surgeonRules: srWAct }), "2027-01-12", P, ACTON), "hard-never-weekday:Tue", "W: a hard Tuesday rule on Acton blocks an ungoverned January Tuesday primary");
+okElig(R.eligibility(withRows([row(ACTON, "available", "2027-01-12", "primary")], { surgeonRules: srWAct }), "2027-01-12", P, ACTON), "W: ...and his own dated row lifts it (no surgeon-specific code: the rule is data)");
+okElig(R.eligibility(withRows([], { surgeonRules: srWAct }), "2027-01-12", B, ACTON), "W: his Tuesday backup stays open (roles [primary])");
+step("Prompt 12 W: Sarkar's windows are an obligation - a row inside a window changes nothing, a manual lock is not a row");
+okElig(R.eligibility(withRows([row(SARKAR, "available", "2026-11-17", "primary")]), "2026-11-17", P, SARKAR), "W: a dated row on a window day - eligible as before");
+blocked(R.eligibility(withRows([row(SARKAR, "available", "2026-11-23")]), "2026-11-23", P, SARKAR), "outside-window", "W: an any-role row on the Monday after her November window does not open it");
+blocked(R.eligibility(withRows([row(SARKAR, "available", "2026-11-23")]), "2026-11-23", B, SARKAR), "outside-window", "W: ...for backup either");
+blocked(R.eligibility(withRows([row(SARKAR, "available", "2026-11-26", "backup")]), "2026-11-26", B, SARKAR), "outside-window", "W: a row on a holiday-unit day outside a window - still enforced on holidays");
+// a manual lock is not a dated availability row: the holder keeps the lock and the OR-day rule is reported as a conflict
+const wLock = R.eligibility(makeCtx({ schedule: { [W_TUE]: { primary: KHAN, primaryLocked: true } } }), W_TUE, P, KHAN);
+ok(wLock.ok === true && wLock.lockHolder === true, "W: a manual lock on an OR day keeps the holder");
+eq(wLock.conflicts, ["hard-never-weekday:Tue"], "W: ...with hard-never-weekday:Tue reported in conflicts (a lock lifts nothing)");
+// holiday-unit days: the family is waived there anyway (unchanged) - the row adds nothing and the East rule still holds
+blocked(R.eligibility(withRows([row(KHAN, "available", "2026-12-24", "primary")], { eastBusyDays: { [KHAN]: ["2026-12-24"] } }), "2026-12-24", P, KHAN), "east-busy", "W: Christmas Eve (Thu) with a row - hard-never is waived on the unit day anyway, the East day still blocks primary");
+// review fix (Prompt 12 W): the BACKUP branch of the rowAvail read - a both-roles hardNeverWeekdays rule
+// (hardNeverWeekdaysRoles ["primary","backup"], the openToEveryone=false shape) blocks backup without a row and is
+// lifted for backup by a backup_only row or an available/backup row (rdStatic sets RD_MASK.backup for both).
+step("Prompt 12 W: a backup_only / available-backup row lifts a both-roles hardNeverWeekdays rule for BACKUP");
+const srWBoth = clone(SA.seedToSurgeonRules(seed)); srWBoth[KHAN].hardNeverWeekdaysRoles = ["primary", "backup"];
+blocked(R.eligibility(withRows([], { surgeonRules: srWBoth }), W_TUE, B, KHAN), "hard-never-weekday:Tue", "W: roles [primary,backup] - Tuesday backup blocked without a row");
+okElig(R.eligibility(withRows([row(KHAN, "backup_only", W_TUE)], { surgeonRules: srWBoth }), W_TUE, B, KHAN), "W: ...a backup_only row lifts it for backup");
+okElig(R.eligibility(withRows([row(KHAN, "available", W_TUE, "backup")], { surgeonRules: srWBoth }), W_TUE, B, KHAN), "W: ...an available/backup row lifts it for backup too");
+blocked(R.eligibility(withRows([row(KHAN, "backup_only", W_TUE)], { surgeonRules: srWBoth }), W_TUE, P, KHAN), "hard-never-weekday:Tue", "W: ...and a backup_only row lifts nothing for PRIMARY (role-scoped; backup-only-row blocks it as well)");
 
 const total = Date.now() - t0;
 if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }
