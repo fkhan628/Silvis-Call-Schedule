@@ -735,6 +735,18 @@ eq(r1, r2, "deterministic");
 r1.hard.push("mutated"); r1.soft.push({ reason: "mutated", weight: 1 });
 eq(R.eligibility(ctx, "2026-11-04", P, KHAN), r2, "callers cannot corrupt the memo");
 
+step("rules-1: Fierce manually locked PRIMARY on a derived-backup day frees that day's backup slot (generator review)");
+const manPri = makeCtx({ schedule: { "2026-11-10": { primary: FIERCE, primaryLocked: true, backup: null } } });
+const fp1110 = R.eligibility(manPri, "2026-11-10", P, FIERCE);
+ok(fp1110.ok === true && fp1110.lockHolder === true, "manual primary lock: he is the holder, conflicts reported not blocking: " + JSON.stringify(fp1110));
+lacks(R.eligibility(manPri, "2026-11-10", B, ACTON).hard, "derived-lock-held", "Acton may take backup: the derived backup lock is moot once Fierce is locked primary");
+okElig(R.eligibility(manPri, "2026-11-10", B, ACTON), "Acton backup 11/10 (Tue; not a 2nd/4th Mon/Wed)");
+lacks(R.eligibility(manPri, "2026-11-10", B, PHILIP).hard, "derived-lock-held", "Philip too (week of 11/9 is on his list)");
+blocked(R.eligibility(manPri, "2026-11-10", B, FIERCE), "holds-other-role", "he cannot also be backup that day");
+okElig(R.eligibility(manPri, "2026-11-11", B, FIERCE), "the other derived days stay his");
+eq(R.eligibility(manPri, "2026-11-11", B, FIERCE).lockHolder, true, "still the derived lock holder on 11/11");
+blocked(R.eligibility(manPri, "2026-11-11", B, BURCHETT), "derived-lock-held:s5", "and still held against everyone else on 11/11 (Burchett: a 2nd Wednesday is on his whitelist, so only the derived lock blocks him)");
+
 const total = Date.now() - t0;
 if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }
 console.log("ok " + N + " assertions (" + total + " ms)");

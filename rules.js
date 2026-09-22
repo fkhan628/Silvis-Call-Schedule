@@ -492,12 +492,18 @@ function rdEastCovered(ctx, P, info) {
   return info.n >= ctx.eastCoverage.fromN && info.n <= ctx.eastCoverage.toN;
 }
 
-// Was the derived lock for (date, role) overridden by an import/manual lock on
-// another surgeon? (import/manual locks beat derived locks, with a warning)
+// Was the derived lock for (date, role) overridden by an import/manual lock?
+// Two ways (import/manual locks beat derived locks, with a warning):
+//   (a) another surgeon is locked into his derived slot, or
+//   (b) he himself is locked into the OTHER role that day (a manual primary lock
+//       on a derived-backup day frees the backup slot for everyone else -
+//       he cannot hold both roles, so the derived backup lock is moot).
 function rdDerivedOverridden(ctx, date, role, id) {
   var e = ctx.schedule[date];
   if (!e) return false;
-  return !!(e[role + "Locked"] && e[role] && e[role] !== id);
+  if (e[role + "Locked"] && e[role] && e[role] !== id) return true;
+  var other = role === "primary" ? "backup" : "primary";
+  return !!(e[other + "Locked"] && e[other] === id);
 }
 
 // The weekday-pattern family for one (surgeon, date, role): recurring blacklist,
