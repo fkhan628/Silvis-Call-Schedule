@@ -285,10 +285,9 @@ const liveFilled = clone(liveEq);
 Object.assign(liveFilled.schedule_days.find((d) => d.day === "2026-11-26"), { backup_id: BURCHETT, updated_by: "s1", version: 2 });
 const d2b = IMP.planDiff(plan, liveFilled);
 eq(d2b.tables.schedule_days.blocked, 1, "app-filled Thanksgiving backup is blocked");
-ok(/^11/26 B Burchett -> OPEN [BLOCKED: live source 'import' updated_by 's1'/.test(d2b.blocked[0] || ""), "blocked line names the app owner: " + d2b.blocked[0]);
+ok(String(d2b.blocked[0] || "").startsWith("11/26 B Burchett -> OPEN [BLOCKED: live source 'import' updated_by 's1'"), "blocked line names the app owner: " + d2b.blocked[0]);
 eq(d2b.totalChanges, 0, "and it is not a change");
-ok(/where schedule_days.source = 'import'
-  and coalesce(schedule_days.updated_by, 'seed') = 'seed'/.test(IMP.importSql(plan)), "SQL upsert guard requires seed ownership (updated_by)");
+ok(IMP.importSql(plan).includes("where schedule_days.source = 'import'\n  and coalesce(schedule_days.updated_by, 'seed') = 'seed'"), "SQL upsert guard requires seed ownership (updated_by)");
 const d3 = IMP.planDiff(plan, Object.assign({}, liveEq, { availability: liveEq.availability.slice(1).concat([Object.assign({}, liveEq.availability[0], { note: "old" })]) }));
 eq(d3.tables.availability.update, 1, "note change -> update");
 
