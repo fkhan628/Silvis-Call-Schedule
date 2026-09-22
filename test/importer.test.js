@@ -309,7 +309,7 @@ refuses((fx) => { fx.holidays.note = "someone@example.test"; }, "email in holida
 refuses((fx) => { fx.pendingDeltas[0].source = "x@example.test"; }, "email in a pendingDelta source (would be printed)");
 // no false positives on the shapes the seed really carries (the whole real seed passed above)
 eq(IMP.impFindContactValues({ a: "2026-09-16 07:00 to 2026-10-04", b: "s1 s2 s3", c: "10/15 and 11/26-11/29", d: "version 1.2.3", e: "Total 8 / preferred 7", f: NOW, g: "2026-12-30..2027-01-03" }), [], "dates, ranges, ids, times are not contact data");
-ok(IMP.impFindEmailValues({ x: "a@b.co" }).length === 1 && IMP.impFindPhoneValues({ x: ["", { y: "555-555-0100" }] }).join() === "x[1].y", "value finders report paths, never values");
+ok(IMP.impFindEmailValues({ x: "a@example.test" }).length === 1 && IMP.impFindPhoneValues({ x: ["", { y: "555-555-0100" }] }).join() === "x[1].y", "value finders report paths, never values");
 ok(!/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(sql), "generated SQL carries no email-looking value");
 eq(IMP.impFindContactValues(sql), [], "generated SQL carries no phone-looking value");
 
