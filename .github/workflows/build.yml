@@ -30,7 +30,9 @@ on:
       - "app-styles.js"
       - "test/rules.test.js"
       - "test/east-feed.test.js"
+      - "test/data-layer.test.js"
       - "test/generator-regression.js"
+      - "test/data-layer.test.js"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
 permissions:
@@ -68,8 +70,20 @@ jobs:
       - name: East feed unit tests
         run: node test/east-feed.test.js
 
+      - name: Data-layer contracts (safeguards, CAS pins, weekly-model absence)
+        run: node test/data-layer.test.js
+
       - name: Generator regression test
         run: node test/generator-regression.js
+
+      # Data-layer contract: helpers round trips, snapshot fail-closed paths,
+      # and the SOURCE PINS on index-source.html (guard-ref site counts, CAS
+      # literals, blob-strip, blobLoadedRef gate, realtime merge). Without this
+      # step every pin is unenforced on a push to main - a live deploy. The
+      # Playwright smoke harness (test/ui/smoke.mjs) is NOT run here: it needs
+      # Chromium and live network; run it locally with `npm run smoke`.
+      - name: Data-layer unit tests + source pins
+        run: node test/data-layer.test.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js

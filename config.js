@@ -2,13 +2,16 @@
 // Supabase config, DB helpers, data-loss safeguards, roster and palette.
 // Ported from the Davenport (DSG) app: the client, safeguards, auth, dbAuth and
 // biometric objects are carried over intact (the "bones"); every weekly-shift
-// constant was removed. payloadLooksWiped / snapshots are retargeted to
+// constant was removed. payloadLooksWiped / snapshots were retargeted to
 // schedule_days + time_off + availability in Prompt 6 Slice A.
 
 /* ═══════════════════════════════════════════════════
    SUPABASE CONFIG
    ═══════════════════════════════════════════════════ */
 const SUPABASE_URL = "https://bzhsroegtagqhutbnsrp.supabase.co";
+// Edge functions live under the project URL; there is no per-install setting
+// for this any more (the Davenport per-install config row is gone).
+const EDGE_FN_BASE = SUPABASE_URL + "/functions/v1";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6aHNyb2VndGFncWh1dGJuc3JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwMDg2NjUsImV4cCI6MjEwNTU4NDY2NX0.EFQ8ZS-7KOLIxoB205HeXEnZeWgqT4WjQl5HqBboRLM"; // public anon (publishable) key - safe in client code by design
 
 // Lightweight Supabase REST client (no SDK dependency needed)
@@ -179,126 +182,117 @@ const db = {
    refuse empty-over-real writes and keep recoverable snapshots. */
 
 // A payload "looks wiped" when it carries NONE of the operational data that is
-// expensive to recreate: no schedule weeks, no vacations, no APP shifts.
-// This deliberately ignores historical count config and the surgeon/APP roster
-// (which default to INIT_* and are therefore always "present"). It is true for
-// the literal {} blob that the old Reset button wrote, but FALSE for a normal
-// clearSchedule (which keeps vacations/appShifts) — so legitimate clears still
-// save.
-// NOTE: p.schedule/p.vacations here are the reason buildStateBundle keeps
-// those keys in the in-memory bundle even though blob writes strip them —
-// this predicate IS their consumer. (A dataCounts-marker variant that would
-// free the bundle of them was built, verified, and PARKED 2026-08-08 with the
-// mirror-retirement cancellation — see REMAINING-WORK.)
+// expensive to recreate: no populated schedule day, no vacations, no
+// availability statements. This deliberately ignores the roster / rules /
+// settings (which default and are therefore always "present"). The daily
+// predicate itself lives in helpers.js (payloadLooksWipedDaily, unit-tested);
+// this name is kept because the guard sites and the snapshot code call it.
+// NOTE: p.schedule / p.vacations / p.availability here are the reason
+// buildStateBundle keeps those keys in the in-memory bundle even though blob
+// writes strip them - this predicate IS their consumer.
 function payloadLooksWiped(p) {
-  if (!p || typeof p !== "object") return true;
-  const noSchedule = !p.schedule || Object.keys(p.schedule).length === 0;
-  const noVac      = !p.vacations || Object.keys(p.vacations).length === 0;
-  const noApp      = !p.appShifts || Object.keys(p.appShifts).length === 0;
-  return noSchedule && noVac && noApp;
+  if (typeof payloadLooksWipedDaily === "function") return payloadLooksWipedDaily(p);
+  // helpers.js not loaded (should never happen in the app - the loader order
+  // is config, helpers, ...). Fail CLOSED: an unknown payload is treated as
+  // wiped so the guard refuses the write rather than letting it through.
+  console.warn("payloadLooksWiped: payloadLooksWipedDaily is not loaded - treating payload as wiped (write refused).");
+  return true;
 }
 
-// Build vacations / noCallDays maps from time_off rows — the same shape the
-// app's loadTimeOff produces ({ person_id: [[start, end, id], ...] }, sorted
-// by start). Top-level copy so snapshots.capture below can fold time_off;
-// the component keeps its own identical local const for now (it shadows this
-// one harmlessly — dedupe rides a later refactor, not a data-safety PR).
+// Build the vacations map from time_off rows - the same shape the app's
+// loadTimeOff produces ({ person_id: [[start, end, id, note], ...] }, sorted by
+// start). Time off is VACATIONS ONLY at Silvis (there is no kind column and no
+// no-call concept), so this is a single map.
 const buildTimeOffMaps = (rows) => {
-  const vac = {}, nc = {};
+  const vac = {};
   (rows || []).forEach(r => {
-    const tgt = r.kind === "nocall" ? nc : vac;
-    (tgt[r.person_id] = tgt[r.person_id] || []).push([r.start_date, r.end_date, r.id]);
+    (vac[r.person_id] = vac[r.person_id] || []).push([r.start_date, r.end_date, r.id, r.note || null]);
   });
   const byStart = (a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
   Object.values(vac).forEach(a => a.sort(byStart));
-  Object.values(nc).forEach(a => a.sort(byStart));
-  return { vac, nc };
+  return vac;
+};
+
+// Snapshot payload -> the in-memory schedule map (helpers.js translator).
+const scheduleMapFromDayRows = (rows) => {
+  const sched = {};
+  (rows || []).forEach(r => { if (r && r.day) sched[r.day] = dayRowToAssignment(r); });
+  return sched;
 };
 
 // Snapshot helper. Before any destructive write, copy the row that is CURRENTLY
 // persisted (not local state) into call_schedule_snapshots so it can always be
 // restored by hand. Best-effort: never throws — a snapshot failure must not
 // block the user, but it is surfaced to the console.
+// PostgREST silently caps every response at max-rows (Supabase default 1000).
+// The snapshot reader pages at this size, exactly like the app's own
+// loadScheduleDays, because a snapshot that holds the first 1000 of 1200 days
+// reports ok:true and a restore from it writes the missing 200 days EMPTY.
+const SNAPSHOT_PAGE = 1000;
 const snapshots = {
-  async capture(reason) {
-    try {
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main&select=data,updated_at`,
-        { headers: dbAuthHeaders() }
-      );
-      // A FAILED READ MUST NOT LOOK LIKE AN EMPTY ROW. This previously did
-      // `res.ok ? json : []` → current=null → the "nothing to snapshot" exit
-      // below → {ok:true}. Callers gate destructive actions on .ok, so factory
-      // reset / regenerate / clearSchedule all proceeded believing a backup
-      // existed when none had been written — the capture-failure-BLOCKS-the-
-      // action safeguard (built after two wipe incidents) was hollow. A stale
-      // mid-session token guarantees this path: these reads use dbAuthHeaders,
-      // which sends the token as-is with no expiry check.
+  // Reads the four persisted sources with the SAME identity the insert will
+  // use (dbAuthHeaders). A FAILED READ MUST NOT LOOK LIKE AN EMPTY TABLE:
+  // callers gate destructive actions on .ok, so every non-2xx returns
+  // {ok:false} - the Davenport hollow-guard bug (`res.ok ? json : []` ->
+  // "nothing to snapshot" -> {ok:true}) is exactly what this shape prevents.
+  // Pages with limit/offset until a short page; a non-array body THROWS (it
+  // is not an empty table either).
+  async _readAll(path, label) {
+    const all = [];
+    let offset = 0;
+    for (;;) {
+      const sep = path.includes("?") ? "&" : "?";
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}${sep}limit=${SNAPSHOT_PAGE}&offset=${offset}`, { headers: dbAuthHeaders() });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        console.warn(`Snapshot capture: source read failed (HTTP ${res.status})`, body.slice(0, 200));
-        return { ok: false, error: `source read failed: HTTP ${res.status}` };
+        throw new Error(`${label} read failed: HTTP ${res.status} ${body.slice(0, 160)}`);
       }
       const rows = await res.json();
-      let current = rows?.[0]?.data ?? null;
-      // The schedule now lives in the schedule_weeks table, not the blob, so
-      // fold it back in here — otherwise the snapshot would have no schedule and
-      // couldn't restore one. Best-effort: if this fetch fails we still snapshot
-      // whatever the blob has.
+      if (!Array.isArray(rows)) throw new Error(`${label} read failed: unexpected response body (not an array)`);
+      for (const r of rows) all.push(r);
+      if (rows.length < SNAPSHOT_PAGE) break;
+      offset += SNAPSHOT_PAGE;
+    }
+    return all;
+  },
+  async capture(reason) {
+    try {
+      let cfgRows, dayRows, toRows, avRows;
       try {
-        const wres = await fetch(
-          `${SUPABASE_URL}/rest/v1/schedule_weeks?select=week_monday,data&order=week_monday.asc`,
-          { headers: dbAuthHeaders() }
-        );
-        if (wres.ok) {
-          const wrows = await wres.json();
-          if (Array.isArray(wrows) && wrows.length) {
-            const sched = {};
-            wrows.forEach(r => { sched[r.week_monday] = r.data; });
-            current = { ...(current || {}), schedule: sched };
-          }
-        }
-      } catch (e) { console.warn("Snapshot: schedule_weeks fetch failed:", e); }
-      // Vacations/no-call live in the time_off table (the blob mirror was
-      // retired in PR #18), so fold them back in under the old mirror keys —
-      // without this, snapshots carry NO vacations and a time_off wipe would
-      // be unrecoverable. Best-effort like the schedule_weeks fold above; the
-      // explicit order makes consecutive snapshots byte-stable on ties.
-      try {
-        const tres = await fetch(
-          `${SUPABASE_URL}/rest/v1/time_off?select=id,person_id,kind,start_date,end_date&order=start_date.asc`,
-          { headers: dbAuthHeaders() }
-        );
-        if (tres.ok) {
-          const trows = await tres.json();
-          if (Array.isArray(trows) && trows.length) {
-            const { vac, nc } = buildTimeOffMaps(trows);
-            current = { ...(current || {}), vacations: vac, noCallDays: nc };
-          }
-        }
-      } catch (e) { console.warn("Snapshot: time_off fetch failed:", e); }
-      // Don't bother snapshotting an already-empty row. This exit is now
-      // reached ONLY on a genuine 200 with nothing worth keeping — a real
-      // failure returned above — so an empty DB still doesn't block a
-      // legitimate reset.
-      if (current && !payloadLooksWiped(current)) {
-        const ins = await fetch(`${SUPABASE_URL}/rest/v1/call_schedule_snapshots`, {
-          method: "POST",
-          headers: { ...dbAuthHeaders(), Prefer: "return=minimal" },
-          body: JSON.stringify({
-            reason: reason || "manual",
-            data: current,
-            source_updated_at: rows?.[0]?.updated_at ?? null,
-          }),
-        });
-        if (!ins.ok) {
-          const body = await ins.text().catch(() => "");
-          console.warn(`Snapshot capture: insert failed (HTTP ${ins.status})`, body.slice(0, 200));
-          return { ok: false, error: `snapshot insert failed: HTTP ${ins.status}` };
-        }
-        return { ok: true };
+        cfgRows = await this._readAll("call_schedule_data?id=eq.main&select=data,updated_at", "config");
+        dayRows = await this._readAll("schedule_days?select=*&order=day.asc", "schedule_days");
+        toRows  = await this._readAll("time_off?select=*&order=start_date.asc,person_id.asc", "time_off");
+        avRows  = await this._readAll("availability?select=*&order=start_date.asc,person_id.asc", "availability");
+      } catch (e) {
+        console.warn("Snapshot capture: source read failed", e);
+        return { ok: false, error: String(e && e.message || e) };
       }
-      return { ok: true, skipped: "empty_or_missing" };
+      const cfgRow = cfgRows[0] || null;
+      let config = cfgRow && cfgRow.data;
+      if (typeof config === "string") { try { config = JSON.parse(config); } catch (e) { config = null; } }
+      const blobEmpty = !config || typeof config !== "object" || Object.keys(config).length === 0;
+      // Skip ONLY when every table is empty AND the blob is empty - a genuine
+      // 200 with nothing worth keeping. A real failure returned above, so an
+      // empty DB still doesn't block a legitimate reset.
+      if (dayRows.length === 0 && toRows.length === 0 && avRows.length === 0 && blobEmpty) {
+        return { ok: true, skipped: "empty_or_missing" };
+      }
+      const data = { config: config || {}, schedule_days: dayRows, time_off: toRows, availability: avRows };
+      const ins = await fetch(`${SUPABASE_URL}/rest/v1/call_schedule_snapshots`, {
+        method: "POST",
+        headers: { ...dbAuthHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify({
+          reason: reason || "manual",
+          data: data,
+          source_updated_at: (cfgRow && cfgRow.updated_at) || null,
+        }),
+      });
+      if (!ins.ok) {
+        const body = await ins.text().catch(() => "");
+        console.warn(`Snapshot capture: insert failed (HTTP ${ins.status})`, body.slice(0, 200));
+        return { ok: false, error: `snapshot insert failed: HTTP ${ins.status}` };
+      }
+      return { ok: true, counts: { schedule_days: dayRows.length, time_off: toRows.length, availability: avRows.length } };
     } catch (e) {
       console.warn("Snapshot capture failed:", e);
       return { ok: false, error: String(e) };
@@ -337,16 +331,39 @@ const snapshots = {
       return await this.capture(reason || "periodic");
     } catch (e) { return { ok: false, error: String(e) }; }
   },
-  // Restore a snapshot: roster/config back into the call_schedule_data blob,
-  // schedule back into schedule_weeks. The schedule leg MUST go through the
-  // app's own sync (syncSchedWeeks: per-week compare-and-swap + wipe guard),
-  // which lives in the component — the caller passes it in as applySchedule.
-  // A restore is itself destructive, so the CURRENT state is snapshotted
-  // first and the restore aborts if that capture fails.
-  async restore(snapshotId, applySchedule) {
+  // Validate a snapshot / JSON-backup payload of the daily shape. Returns the
+  // normalized payload or throws with a specific reason. Shared by restore()
+  // and the Settings JSON import so both paths accept exactly the same thing.
+  normalizePayload(payload) {
+    if (!payload || typeof payload !== "object") throw new Error("payload is not an object");
+    const cfg = payload.config;
+    if (cfg !== undefined && (cfg === null || typeof cfg !== "object" || Array.isArray(cfg))) throw new Error("config must be an object");
+    const arr = (k) => {
+      const v = payload[k];
+      if (v === undefined || v === null) return [];
+      if (!Array.isArray(v)) throw new Error(`${k} must be an array of rows`);
+      return v;
+    };
+    const days = arr("schedule_days"), to = arr("time_off"), av = arr("availability");
+    days.forEach((r, i) => { if (!r || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.day || ""))) throw new Error(`schedule_days[${i}] has no valid day`); });
+    to.forEach((r, i) => { if (!r || !r.person_id || !r.start_date || !r.end_date) throw new Error(`time_off[${i}] is missing person_id/start_date/end_date`); });
+    av.forEach((r, i) => { if (!r || !r.person_id || !r.kind || !r.start_date || !r.end_date) throw new Error(`availability[${i}] is missing person_id/kind/start_date/end_date`); });
+    return { config: cfg || {}, schedule_days: days, time_off: to, availability: av };
+  },
+  // Restore a snapshot: config back into the call_schedule_data blob, the
+  // schedule back into schedule_days THROUGH THE APP'S CAS SYNC (applySchedule,
+  // passed in by the component - the same per-day compare-and-swap + wipe
+  // guard every schedule write uses), then time_off / availability rows
+  // upserted by id via applyTables (merge-duplicates; never deletes). A
+  // restore is itself destructive, so the CURRENT state is snapshotted first
+  // and the restore aborts if that capture fails.
+  async restore(snapshotId, applySchedule, applyTables) {
     if (!snapshotId) return { ok: false, error: "No snapshot id" };
     if (typeof applySchedule !== "function") {
-      return { ok: false, error: "restore() requires the app's schedule applier (the CAS sync path) — refusing to bypass it" };
+      return { ok: false, error: "restore() requires the app's schedule applier (the CAS sync path) - refusing to bypass it" };
+    }
+    if (typeof applyTables !== "function") {
+      return { ok: false, error: "restore() requires the app's table applier (time_off / availability upserts) - refusing to bypass it" };
     }
     try {
       const res = await fetch(
@@ -356,25 +373,50 @@ const snapshots = {
       if (!res.ok) return { ok: false, error: `Snapshot fetch failed (${res.status})` };
       const rows = await res.json();
       const snap = rows?.[0];
-      const payload = snap && (typeof snap.data === "string" ? JSON.parse(snap.data) : snap.data);
-      if (!payload) return { ok: false, error: "Snapshot not found or has no data" };
-      if (payloadLooksWiped(payload)) return { ok: false, error: "Snapshot looks empty — refusing to restore it" };
-      const pre = await this.capture("before_restore");
-      if (!pre.ok) return { ok: false, error: "Couldn't snapshot the current state first — restore aborted, nothing changed" };
-      const schedule = payload.schedule || {};
-      const blob = { ...payload }; delete blob.schedule;
-      const ts = new Date().toISOString();
-      const up = await db.upsert("call_schedule_data", { id: "main", data: blob, updated_at: ts });
-      if (up && up.error) return { ok: false, error: "Config write failed: " + up.error };
-      const applied = await applySchedule(schedule);
-      if (applied && applied.ok === false) {
-        return { ok: false, error: applied.error || "Schedule apply failed", blobRestored: true };
-      }
-      return { ok: true, blob, schedule, ts, reason: snap.reason, created_at: snap.created_at };
+      const raw = snap && (typeof snap.data === "string" ? JSON.parse(snap.data) : snap.data);
+      if (!raw) return { ok: false, error: "Snapshot not found or has no data" };
+      const r = await this.applyPayload(raw, applySchedule, applyTables, "before_restore");
+      if (!r.ok) return r;
+      return { ...r, reason: snap.reason, created_at: snap.created_at };
     } catch (e) {
       console.warn("Snapshot restore failed:", e);
       return { ok: false, error: String(e) };
     }
+  },
+  // The shared apply step behind restore() and the JSON import. Order:
+  // validate -> refuse an empty payload -> snapshot the current state (abort
+  // if that fails) -> blob upsert -> CAS schedule apply -> table upserts.
+  async applyPayload(raw, applySchedule, applyTables, preReason) {
+    let payload;
+    try { payload = this.normalizePayload(raw); }
+    catch (e) { return { ok: false, error: "Backup shape invalid: " + (e && e.message || e) }; }
+    const schedule = scheduleMapFromDayRows(payload.schedule_days);
+    const vacations = buildTimeOffMaps(payload.time_off);
+    if (payloadLooksWiped({ schedule, vacations, availability: payload.availability })) {
+      return { ok: false, error: "Backup looks empty - refusing to restore it" };
+    }
+    const pre = await this.capture(preReason || "before_restore");
+    if (!pre.ok) return { ok: false, error: "Couldn't snapshot the current state first - restore aborted, nothing changed (" + (pre.error || "unknown") + ")" };
+    const ts = new Date().toISOString();
+    const up = await db.upsert("call_schedule_data", { id: "main", data: payload.config, updated_at: ts });
+    if (up && up.error) return { ok: false, error: "Config write failed: " + up.error };
+    const applied = await applySchedule(schedule);
+    if (applied && applied.ok === false) {
+      return { ok: false, error: applied.error || "Schedule apply failed", blobRestored: true };
+    }
+    const tables = await applyTables({ time_off: payload.time_off, availability: payload.availability });
+    if (tables && tables.ok === false) {
+      return { ok: false, error: tables.error || "Table restore failed", blobRestored: true, scheduleRestored: true };
+    }
+    return {
+      ok: true, blob: payload.config, schedule, ts,
+      counts: {
+        schedule_days: payload.schedule_days.length,
+        time_off: payload.time_off.length,
+        availability: payload.availability.length,
+        ...(tables && tables.counts ? tables.counts : {}),
+      },
+    };
   },
 };
 
@@ -428,12 +470,20 @@ const INIT_SURGEONS = [
   { id:"s6", name:"Sarkar", code:"SRK", fullName:"Dr. Sarkar (first name TBD)", active:true, roles:["surgeon"] },
 ];
 
-// Holiday fairness rate: lifetime assignments / holidays the surgeon was
-// eligible for. ZERO ELIGIBLE (a new hire) MUST resolve to 0, never 0/0 = NaN:
-// a NaN comparator makes Array.sort produce arbitrary order with no error.
-function holidayRate(count, eligible) {
-  if (!eligible || eligible <= 0) return 0;
-  return count / eligible;
+// Lazily-created Supabase JS client for Realtime only (the REST wrapper above
+// carries every read/write). The SDK arrives as an ES module (see the module
+// script in index-source.html), so this returns null until it has loaded; the
+// data-load effect retries on the "supabase-sdk-ready" event and falls back to
+// its 60s poll if Realtime never comes up.
+let _supabaseRT = null;
+function getSupabaseRT() {
+  try {
+    if (_supabaseRT) return _supabaseRT;
+    const sdk = window._supabaseSDK;
+    if (!sdk || typeof sdk.createClient !== "function") return null;
+    _supabaseRT = sdk.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    return _supabaseRT;
+  } catch (e) { console.warn("Realtime client unavailable (poll only):", e); return null; }
 }
 
 /* ═══════════════════════════════════════════════════
@@ -744,24 +794,3 @@ const biometric = {
     } catch(e) { console.warn("Couldn't remove biometric enrollment keys:", e); }
   },
 };
-
-/* =====================================================================
-   TEMPORARY SHIMS - Prompt 1 only (remove in Prompt 6 Slice A)
-   index-source.html still references these Davenport weekly-model names at
-   component top level (useState(INIT_APPS), useState(COUNTS_1YR), ...).
-   Without them the first render throws ReferenceError and the app never
-   mounts - not even the login gate. Empty values keep the shell alive; every
-   feature behind them is dead by design until Slice A deletes the consumers.
-   ===================================================================== */
-const INIT_APPS = [];
-const APP_PAL = [{ tx:"#985020", bd:"#e0b890", tg:"#faf0e4" }];
-const COUNTS_1YR = {};
-const COUNTS_MULTIYEAR = {};
-const NIGHT_KEYS = [];
-const ALL_SHIFT_KEYS = [];
-const SHIFT_LABELS = {};
-const SHIFT_TIMES = {};
-const SURGEON_DEPTS = {};
-const DEPT_LABELS = {};
-const VACATION_DEADLINE_WEEKS_BEFORE = 0;
-const MIN_AVAILABLE_SURGEONS = 0;

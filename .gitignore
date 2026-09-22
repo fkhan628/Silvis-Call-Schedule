@@ -8,3 +8,5 @@ node_modules/
 silvis-contacts.md
 # npm lockfile is not tracked (CI runs npm install against exact-pinned devDependencies, as Davenport does)
 package-lock.json
+# Playwright smoke-harness screenshots (test/ui/smoke.mjs)
+test/ui/out/
