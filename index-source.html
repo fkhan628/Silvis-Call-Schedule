@@ -79,6 +79,19 @@
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
       .cal-legend { font-size: 10px !important; }
+      /* Prompt 11 mobile pass: the PREVIEW tag no longer clips or sits on the
+         B line / vacation dots (smaller, no tracking, and the cell grows). */
+      .cal-cell.cal-preview { min-height: 78px; padding-bottom: 12px; }
+      .cal-preview-tag { font-size: 7px; letter-spacing: 0; left: 2px; bottom: 1px; }
+      /* Tables wider than the phone scroll INSIDE their card (never the page):
+         a right-edge shade + caption say so, because the action column
+         (Delete / Remove / Save / coverage) sits past the edge. */
+      .table-wrap { background: linear-gradient(90deg, #ffffff 30%, rgba(255,255,255,0)), linear-gradient(90deg, rgba(255,255,255,0), #ffffff 70%) 100% 0, radial-gradient(farthest-side at 0 50%, rgba(0,0,0,0.22), rgba(0,0,0,0)), radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,0.22), rgba(0,0,0,0)) 100% 0; background-repeat: no-repeat; background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%; background-attachment: local, local, scroll, scroll; }
+      .table-wrap::after { content: "swipe sideways for more columns"; display: block; font-size: 10px; color: #7a8a98; padding: 3px 8px; font-style: italic; }
+      .setup-table input[type="text"] { max-width: 150px !important; }
+      input[type="checkbox"] { width: 20px; height: 20px; }
+      .trade-pick { width: 100% !important; }
+      .trade-pick-wrap { flex: 1 1 100%; }
     }
   </style>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -121,7 +134,7 @@
           // cache entry that served THIS (stale) build within max-age.
           url.searchParams.set("_v", APP_VERSION + "-" + Date.now());
           window.location.replace(url.toString());
-        }).catch(function() { window.location.reload(true); });
+        }).catch(function(e) { console.warn("nukeAndReload: cache/service-worker clear failed - plain reload:", e); window.location.reload(true); });
       }
 
       if (mismatch) {
@@ -219,7 +232,7 @@ function CallSchedule() {
     try {
       const params = new URLSearchParams(window.location.search);
       return params.get("public") === "1";
-    } catch(e) { return false; }
+    } catch(e) { console.warn("isPublicMode: could not read the URL query (treated as signed-in mode):", e); return false; }
   }, []);
 
   const [view, setView] = useState("calendar");
@@ -281,7 +294,7 @@ function CallSchedule() {
 
   // --- Dark Mode ---
   const [darkMode, setDarkMode] = useState(() => {
-    try { return localStorage.getItem("silvis-dark-mode") === "true"; } catch(e) { return false; }
+    try { return localStorage.getItem("silvis-dark-mode") === "true"; } catch(e) { console.warn("Couldn't read the dark-mode setting (light mode used):", e); return false; }
   });
   useEffect(() => {
     try { localStorage.setItem("silvis-dark-mode", darkMode); } catch(e) { console.warn("Couldn't persist dark-mode setting:", e); }
@@ -494,7 +507,7 @@ function CallSchedule() {
       lastUpdateCheckRef.current = Date.now();
       try {
         const res = await fetch(`version.json?t=${Date.now()}`, { cache: "no-store" });
-        if (!res.ok) return;
+        if (!res.ok) { console.warn(`version check: version.json answered HTTP ${res.status} (ignored until the next check)`); return; }
         const j = await res.json();
         const v = j && j.version;
         if (typeof v !== "string" || !/^\d{4}\.\d{2}\.\d{2}[a-z]*$/.test(v)) return;
@@ -521,18 +534,24 @@ function CallSchedule() {
   const [notifications, setNotifications] = useState([]);
   const [showNotifs, setShowNotifs] = useState(false);
   const [notifLastSeen, setNotifLastSeen] = useState(() => {
-    try { return localStorage.getItem("silvis-notif-seen") || "2000-01-01T00:00:00Z"; } catch(e) { return "2000-01-01T00:00:00Z"; }
+    try { return localStorage.getItem("silvis-notif-seen") || "2000-01-01T00:00:00Z"; } catch(e) { console.warn("Couldn't read the notifications-seen marker (every alert reads as unread):", e); return "2000-01-01T00:00:00Z"; }
   });
   // Per-device "cleared" watermark (the feed is shared; Clear is local only).
   const [notifClearedBefore, setNotifClearedBefore] = useState(() => {
-    try { return localStorage.getItem("silvis-notif-cleared") || "2000-01-01T00:00:00Z"; } catch(e) { return "2000-01-01T00:00:00Z"; }
+    try { return localStorage.getItem("silvis-notif-cleared") || "2000-01-01T00:00:00Z"; } catch(e) { console.warn("Couldn't read the notifications-cleared marker:", e); return "2000-01-01T00:00:00Z"; }
   });
 
   // --- Email notification preferences (notification_preferences, own row) ---
   const [browserNotifPermission, setBrowserNotifPermission] = useState(() => {
-    try { return (typeof Notification !== "undefined" && Notification.permission) || "unsupported"; } catch(e) { return "unsupported"; }
+    try { return (typeof Notification !== "undefined" && Notification.permission) || "unsupported"; } catch(e) { console.warn("Notification.permission unavailable (pop-ups read as unsupported):", e); return "unsupported"; }
   });
   const [notifPrefs, setNotifPrefs] = useState({}); // { person_id: { schedule_updates_email, trade_updates_email, shift_reminders_email, reminder_hour_central } }
+  const [notifPrefsLoadFailed, setNotifPrefsLoadFailed] = useState(false); // the card must never show defaults as if they were saved
+  // Coverage strip (Prompt 11): when the newest snapshot was taken. null = not
+  // loaded / none on file; loaded once after mount for schedulers, refreshed by
+  // loadSnapshots and stamped by every successful capture in this session.
+  const [lastSnapshotAt, setLastSnapshotAt] = useState(null);
+  const noteSnapshotTaken = () => setLastSnapshotAt(new Date().toISOString());
   const notifPrefsRef = useRef(notifPrefs);
   useEffect(() => { notifPrefsRef.current = notifPrefs; }, [notifPrefs]);
   const [notifPrefsSaving, setNotifPrefsSaving] = useState(false);
@@ -642,12 +661,17 @@ function CallSchedule() {
     setAuthError(""); setAuthBusy(true);
     const result = await biometric.authenticate();
     if (result.success) {
-      const { user } = await auth.getUser();
+      const { user, error } = await auth.getUser();
       if (user) {
         await adoptSignedInUser(user);
         setBiometricPending(false);
         setAuthBusy(false);
         return;
+      } else if (error === "network") {
+        // The session is intact; the server could not be reached. Say so and
+        // keep the unlock screen - never "Session expired" for a bad connection.
+        console.warn("Biometric unlock: the session check hit a network error - session kept, try again");
+        setAuthError("Couldn't reach the server to confirm your session - check your connection and try again.");
       } else {
         // Session invalid or refresh failed. Keep the enrollment - after one
         // password sign-in Face ID works again next time.
@@ -707,7 +731,7 @@ function CallSchedule() {
         await adoptSignedInUser(user);
         setAuthEmail(""); setAuthPassword("");
       }
-    } catch(e) { setAuthError(e.message || "Auth error"); }
+    } catch(e) { console.warn("Auth submit failed:", e); setAuthError(e.message || "Auth error"); }
     setAuthBusy(false);
   };
 
@@ -756,7 +780,7 @@ function CallSchedule() {
   };
   const fmtAuditTime = (iso) => {
     try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
-    catch (e) { return iso; }
+    catch (e) { console.warn("fmtAuditTime: could not format", iso, e); return iso; }
   };
   // Load client-version heartbeats (scheduler/admin only). dbAuthHeaders, NOT
   // the expiry-aware read headers: authenticated users read all rows while
@@ -906,7 +930,7 @@ function CallSchedule() {
     const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+/;
     if (OWN.test(s)) {
       let verbatim = "";
-      try { const o = typeof err === "string" ? JSON.parse(err) : err; verbatim = String((o && (o.message || o.details)) || ""); } catch (e) { verbatim = ""; }
+      try { const o = typeof err === "string" ? JSON.parse(err) : err; verbatim = String((o && (o.message || o.details)) || ""); } catch (e) { console.warn("describeDbError: error body is not JSON - extracting the raised message by regex", e); verbatim = ""; }
       if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
       return verbatim;
     }
@@ -995,7 +1019,10 @@ function CallSchedule() {
     const r = await deleteTimeOffRow(rowId);
     if (!r.ok) return r;
     adoptTimeOffRows(timeOffRows.filter(x => x.id !== rowId));
-    if (row) logAudit("vacation.remove", `Removed vacation for ${nameOf(personId)}: ${row.start_date}${row.start_date !== row.end_date ? " -> " + row.end_date : ""}`, { person_id: personId, start: row.start_date, end: row.end_date });
+    // Always audited - the DELETE succeeded even when the local list was stale
+    // and no longer held the row (then the ids stand in for the dates).
+    if (row) logAudit("timeoff.remove", `Removed vacation for ${nameOf(personId)}: ${row.start_date}${row.start_date !== row.end_date ? " -> " + row.end_date : ""}`, { person_id: personId, row_id: rowId, start: row.start_date, end: row.end_date });
+    else logAudit("timeoff.remove", `Removed vacation row ${rowId} for ${nameOf(personId)} (dates unknown - the local list was stale)`, { person_id: personId, row_id: rowId });
     return r;
   };
   const toEdit = async (personId, rowId, newStart, newEnd) => {
@@ -1012,7 +1039,7 @@ function CallSchedule() {
       const rows = await res.json().catch(() => []);
       const updated = rows[0] || { ...old, start_date: newStart, end_date: newEnd };
       adoptTimeOffRows(timeOffRows.map(r => r.id === rowId ? updated : r));
-      logAudit("vacation.edit", `Changed vacation for ${nameOf(personId)}: ${old ? old.start_date + "->" + old.end_date : "?"} to ${newStart}->${newEnd}`, { person_id: personId, newStart, newEnd });
+      logAudit("timeoff.edit", `Changed vacation for ${nameOf(personId)}: ${old ? old.start_date + "->" + old.end_date : "?"} to ${newStart}->${newEnd}`, { person_id: personId, row_id: rowId, before: old ? { start: old.start_date, end: old.end_date } : null, start: newStart, end: newEnd });
       return { ok: true };
     } catch (e) { console.warn("time_off edit ex", e); showToast("Couldn't save that change - check your connection and try again.", "error"); return { ok: false }; }
   };
@@ -1539,10 +1566,14 @@ function CallSchedule() {
             const ver = dayVersionsRef.current[day];
             const row = assignmentToDayRow(day, cur[day] || emptyDayAssignment());
             const rearm = (e) => { console.warn(`Keepalive flush (${source}): schedule_days ${day} not sent -`, e); pendingSaveRef.current = payload; };
+            // The response IS read: a 401/403/409 (or a CAS miss) re-arms the
+            // pending payload so the next foreground re-syncs it - never a
+            // silent "sent" (Prompt 11 hardening).
+            const checkDay = (res) => { if (!res.ok) { console.warn(`Keepalive flush (${source}): schedule_days ${day} rejected with HTTP ${res.status} - re-armed for the next sync`); pendingSaveRef.current = payload; } };
             if (typeof ver === "number") {
-              fetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${day}&version=eq.${ver}`, { method: "PATCH", keepalive: true, headers: dayHdrs, body: JSON.stringify({ ...row, version: ver + 1, updated_by: by, updated_at: ts }) }).catch(rearm);
+              fetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${day}&version=eq.${ver}`, { method: "PATCH", keepalive: true, headers: dayHdrs, body: JSON.stringify({ ...row, version: ver + 1, updated_by: by, updated_at: ts }) }).then(checkDay).catch(rearm);
             } else {
-              fetch(`${SUPABASE_URL}/rest/v1/schedule_days`, { method: "POST", keepalive: true, headers: dayHdrs, body: JSON.stringify({ ...row, version: 1, updated_by: by, updated_at: ts }) }).catch(rearm);
+              fetch(`${SUPABASE_URL}/rest/v1/schedule_days`, { method: "POST", keepalive: true, headers: dayHdrs, body: JSON.stringify({ ...row, version: 1, updated_by: by, updated_at: ts }) }).then(checkDay).catch(rearm);
             }
             sent++;
           }
@@ -1554,7 +1585,13 @@ function CallSchedule() {
       fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?on_conflict=id`, {
         method: "POST", keepalive: true, headers: hdrs,
         body: JSON.stringify({ id: "main", data: blobFromBundle(payload), updated_by: by, updated_at: ts }),
-      }).then(() => { blobTsRef.current = ts; }).catch(e => {
+      }).then((res) => {
+        // Stamp the blob timestamp ONLY on a 2xx: a 401/403/5xx used to be
+        // counted as saved and never retried (Prompt 11 hardening).
+        if (res.ok) { blobTsRef.current = ts; return; }
+        console.warn(`Keepalive blob save (${source}) rejected with HTTP ${res.status} - re-armed for the next autosave`);
+        pendingSaveRef.current = payload;
+      }).catch(e => {
         console.warn(`Keepalive save failed (${source}):`, e);
         pendingSaveRef.current = payload;
       });
@@ -1585,7 +1622,16 @@ function CallSchedule() {
     if (!loaded || sessionSnapRef.current) return;
     if (!isScheduler) return;
     sessionSnapRef.current = true;
-    snapshots.captureIfStale("periodic_session", 6);
+    // The result IS inspected: a failed safety-net snapshot is worth a toast
+    // (it is the restore point every destructive action counts on).
+    snapshots.captureIfStale("periodic_session", 6).then(r => {
+      if (r && r.ok && !r.skipped) { noteSnapshotTaken(); console.info("Periodic session snapshot saved", r.counts || ""); }
+      else if (r && r.ok && r.skipped === "fresh") console.info("Periodic session snapshot skipped - a snapshot newer than 6 h exists");
+      else if (r && r.ok) console.warn("Periodic session snapshot skipped:", r.skipped);
+      else { console.warn("Periodic session snapshot FAILED:", r && r.error); showToast("The automatic backup snapshot failed - " + ((r && r.error) || "unknown error") + ". Export a JSON backup from Settings before any destructive change.", "error"); }
+    }).catch(e => { console.warn("Periodic session snapshot threw:", e); showToast("The automatic backup snapshot failed - check your connection.", "error"); });
+    // The strip's "last snapshot" age: the newest row, once, for schedulers.
+    snapshots.list(1).then(rows => { if (Array.isArray(rows) && rows[0] && rows[0].created_at) setLastSnapshotAt(rows[0].created_at); }).catch(e => console.warn("last-snapshot lookup failed:", e));
   }, [loaded, isScheduler]);
 
   // ====================================================================
@@ -1701,6 +1747,10 @@ function CallSchedule() {
       day, before: assignmentToDayRow(day, before), after: assignmentToDayRow(day, after), overrides,
     });
     if (overrides.length) logAudit("schedule.override", "Override on " + fmtMD(day) + ": " + overrides.map(o => nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", ")).join("; "), { day, overrides });
+    // A lock change gets its own row (Prompt 11): the day_edit row carries it
+    // too, but "who locked what" must be searchable by action.
+    const lockChanges = ["primary", "backup"].filter(r => !!before[r + "Locked"] !== !!after[r + "Locked"]).map(r => ({ role: r, locked: !!after[r + "Locked"] }));
+    if (lockChanges.length) logAudit("schedule.lock", fmtMD(day) + ": " + lockChanges.map(c => c.role + (c.locked ? " locked" : " unlocked")).join(", "), { day, changes: lockChanges });
     const roleChanged = before.primary !== after.primary || before.backup !== after.backup || (before.externalCover || null) !== (after.externalCover || null);
     const affected = [...new Set([before.primary, before.backup, after.primary, after.backup].filter(Boolean))];
     if (roleChanged && affected.length) {
@@ -1751,9 +1801,13 @@ function CallSchedule() {
     });
     setSchedule(next);
     scheduleRef.current = next;
-    logAudit("schedule.clear", `Cleared ${cleared} slot(s) ${fmtMD(start)} - ${fmtMD(end)}`, { start, end, cleared });
+    noteSnapshotTaken();
     intentionalScheduleWipeRef.current = true; // authorize this one legitimate wipe-shaped write
     const r = await syncScheduleDays(next);
+    // Audited AFTER the write with its outcome: a wipe-blocked or failed
+    // sync must not leave a row claiming the clear happened (Prompt 11).
+    const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";
+    logAudit("schedule.clear", `Cleared ${cleared} slot(s) ${fmtMD(start)} - ${fmtMD(end)}${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start, end, cleared, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
     if (r && r.ok) { setSaveStatus("Schedule cleared"); setTimeout(() => setSaveStatus(""), 2000); }
   };
 
@@ -2031,9 +2085,13 @@ function CallSchedule() {
     setSchedule(next);
     scheduleRef.current = next;
     setPreviewGen(null);
-    logAudit("schedule.generate_publish", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, changes: changes.length, score: pv.diagnostics && pv.diagnostics.score, uncovered: (pv.diagnostics.uncovered || []).length, snapshot: snap.counts || null });
+    noteSnapshotTaken();
     setSaveStatus("Saving generated days");
     const r = await syncScheduleDays(next);
+    // Audited AFTER the CAS sync with its outcome (Prompt 11): a wipe-blocked
+    // or failed write must not leave a row saying the schedule was accepted.
+    const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";
+    logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, changes: changes.length, uncovered: (pv.diagnostics.uncovered || []).length, snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
     if (r && r.ok) {
       setSaveStatus("Generated days saved"); setTimeout(() => setSaveStatus(""), 2000);
       showToast(`Saved ${changes.length} generated slot change(s). Review the publish diff.`, "success");
@@ -2129,6 +2187,7 @@ function CallSchedule() {
       setSeedState(s => ({ ...s, applying: false })); setSaveStatus("");
       return;
     }
+    noteSnapshotTaken();
     const plan = st.plan;
     const ts = new Date().toISOString();
     const by = userProfile?.person_id || authUser?.id || null;
@@ -2210,7 +2269,9 @@ function CallSchedule() {
       setSaveStatus("Reset cancelled"); setTimeout(() => setSaveStatus(""), 2000);
       return;
     }
-    logAudit("system.factory_reset", "FACTORY RESET - wiped the schedule and reset the config blob");
+    noteSnapshotTaken();
+    // The audit row ('data.reset') is written AFTER each step with what really
+    // happened - an aborted reset used to leave a row claiming a wipe (Prompt 11).
     allowWipeSaveRef.current = true;   // authorize the intended empty blob write
     everHadRealDataRef.current = false; // wipe is intentional; re-arm only when real data returns
     // Step 1 - schedule_days DELETE. Runs FIRST: if it fails, nothing in the
@@ -2226,6 +2287,7 @@ function CallSchedule() {
       // pre-authorize the next accidental empty write).
       allowWipeSaveRef.current = false;
       everHadRealDataRef.current = true;
+      logAudit("data.reset", "Factory reset ABORTED - the schedule_days delete failed; nothing was changed", { outcome: "aborted", step: "schedule_days_delete", error: String(e?.message || e).slice(0, 160), snapshot: resetSnap.counts || null });
       showToast("Couldn't delete the stored schedule - reset cancelled. Nothing was changed: the schedule, roster and rules are as they were. (" + String(e?.message || e).slice(0, 120) + ")", "error");
       setSaveStatus("Reset cancelled"); setTimeout(() => setSaveStatus(""), 2000);
       return;
@@ -2246,10 +2308,12 @@ function CallSchedule() {
       if (blobClearErr) throw new Error(`blob clear failed: ${String(blobClearErr).slice(0, 200)}`);
     } catch(e) {
       console.error("Factory reset: config blob reset failed after the schedule was deleted:", e);
+      logAudit("data.reset", "FACTORY RESET - PARTIAL: every schedule_days row deleted, the config blob reset FAILED and is unchanged", { outcome: "partial", step: "blob_reset", error: String(e?.message || e).slice(0, 160), snapshot: resetSnap.counts || null });
       showToast("Partial reset: the schedule rows WERE deleted (restore the 'Before factory reset' snapshot in Settings to get them back), but the roster/rules blob could not be reset and is unchanged. (" + String(e?.message || e).slice(0, 120) + ")", "error");
       setSaveStatus("Reset incomplete - schedule deleted, setup kept"); setTimeout(() => setSaveStatus(""), 6000);
       return;
     }
+    logAudit("data.reset", "FACTORY RESET - deleted every schedule_days row and reset the config blob", { outcome: "ok", snapshot: resetSnap.counts || null });
     blobLoadedRef.current = true; // we wrote the blob ourselves; local defaults below ARE its content
     setSurgeons(INIT_SURGEONS);
     setSurgeonRules(undefined); setGroupRules(undefined); setHolidays(undefined); setSettings({}); setLastPublished(null);
@@ -2491,7 +2555,7 @@ function CallSchedule() {
       });
       const text = await res.text().catch(() => "");
       if (!res.ok) return { ok: false, error: describeDbError(text) || `HTTP ${res.status}` };
-      let rows = []; try { rows = JSON.parse(text); } catch (e) { rows = []; }
+      let rows = []; try { rows = JSON.parse(text); } catch (e) { console.warn("trade status write: 2xx with a non-JSON body (treated as no row updated)", text.slice(0, 160), e); rows = []; }
       if (!Array.isArray(rows) || rows.length !== 1) return { ok: false, error: "no row was updated - the trade was already decided, or your account is not a party to it (list reloaded)" };
       return { ok: true, row: rows[0] };
     } catch (e) { console.warn("trade status write failed:", e); return { ok: false, error: "network error - check your connection and try again" }; }
@@ -2504,7 +2568,7 @@ function CallSchedule() {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/apply_trade`, { method: "POST", headers: dbAuthHeaders(), body: JSON.stringify({ p_trade_id: trade.id }) });
       const text = await res.text().catch(() => "");
       if (!res.ok) return { ok: false, error: describeDbError(text) || `HTTP ${res.status}` };
-      let body = null; try { body = text ? JSON.parse(text) : null; } catch (e) { body = null; }
+      let body = null; try { body = text ? JSON.parse(text) : null; } catch (e) { console.warn("apply_trade: 2xx with a non-JSON body", text.slice(0, 160), e); body = null; }
       return { ok: true, result: body };
     } catch (e) { console.warn("apply_trade call failed:", e); return { ok: false, error: "network error - the trade stays accepted; use Retry apply" }; }
   };
@@ -2695,14 +2759,19 @@ function CallSchedule() {
     (async () => {
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/notification_preferences?select=*`, { headers: dbAuthHeaders() });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 120)}`);
         const rows = await res.json();
-        if (Array.isArray(rows)) {
-          const prefs = {};
-          rows.forEach(r => { prefs[r.person_id] = r; });
-          setNotifPrefs(prefs);
-        }
-      } catch(e) { console.warn("Load notif prefs error:", e); }
+        if (!Array.isArray(rows)) throw new Error("unexpected response body");
+        const prefs = {};
+        rows.forEach(r => { prefs[r.person_id] = r; });
+        setNotifPrefs(prefs);
+        setNotifPrefsLoadFailed(false);
+      } catch(e) {
+        // Not silent: the Notification settings card must say the switches
+        // show DEFAULTS, not what is saved (Prompt 11).
+        console.warn("Load notif prefs error:", e);
+        setNotifPrefsLoadFailed(true);
+      }
     })();
   }, [loaded, reloadTrigger, authUser]);
 
@@ -2793,7 +2862,11 @@ function CallSchedule() {
     setOfficeContacts(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
     try {
       const { error } = await db.update("office_contacts", id, patch);
-      if (error) { setOfficeContacts(before); showToast("Couldn't update the contact: " + describeDbError(error), "error"); }
+      if (error) { console.warn("Office contact update failed:", error); setOfficeContacts(before); showToast("Couldn't update the contact: " + describeDbError(error), "error"); return; }
+      // Audited like add / remove (the one mutation that had no row): ids and
+      // the toggled field only - never the address.
+      const c = before.find(x => x.id === id);
+      logAudit("office_contact.update", `Office contact ${c ? c.name : id}: ${Object.keys(patch).map(k => k + " -> " + String(patch[k])).join(", ")}`, { id, patch: { active: patch.active } });
     } catch(e) { console.warn("Office contact update failed:", e); setOfficeContacts(before); showToast("Couldn't update the contact - check your connection and try again.", "error"); }
   };
   const deleteOfficeContact = async (id) => {
@@ -2834,7 +2907,7 @@ function CallSchedule() {
       const f = parse(days[0]), l = parse(days[days.length - 1]);
       const nice = (d) => `${MO[d.getMonth()].slice(0,3)} ${d.getDate()}`;
       return `${nice(f)} - ${nice(l)}`;
-    } catch(e) { return ""; }
+    } catch(e) { console.warn("computePeriodLabel failed - the publish dialog opens with a blank period label:", e); return ""; }
   };
   const openPublishDialog = () => {
     const changes = diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup");
@@ -2915,11 +2988,18 @@ function CallSchedule() {
       }
       const rows = entries.map(en => ({ person_id: en.personId, start_date: en.start, end_date: en.end, note: en.note || null, created_by: userProfile?.person_id || authUser?.id || null }));
       const res = await fetch(`${SUPABASE_URL}/rest/v1/time_off`, { method: "POST", headers: { ...dbAuthHeaders(), Prefer: "return=representation" }, body: JSON.stringify(rows) });
-      if (!res.ok) { const t = await res.text().catch(() => ""); return { ok: false, error: describeDbError(t) }; }
-      logAudit("vacation.paint", `Painted ${rows.length} vacation entr${rows.length === 1 ? "y" : "ies"} (bulk)`, { entries: rows.map(r => ({ person_id: r.person_id, start: r.start_date, end: r.end_date })) });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        console.warn("Paint vacations: time_off bulk insert failed", res.status, t.slice(0, 300));
+        showToast("Paint vacations: nothing was saved - " + describeDbError(t), "error");
+        return { ok: false, error: describeDbError(t) };
+      }
+      logAudit("timeoff.paint", `Painted ${rows.length} vacation entr${rows.length === 1 ? "y" : "ies"} (bulk)`, { entries: rows.map(r => ({ person_id: r.person_id, start: r.start_date, end: r.end_date })) });
       loadTimeOff(); // canonicalize immediately (realtime would also catch it)
       return { ok: true };
     } catch (e) {
+      console.warn("Paint vacations: commit threw", e);
+      showToast("Paint vacations: nothing was saved - check your connection and try again.", "error");
       return { ok: false, error: String(e?.message || e) };
     }
   };
@@ -2936,7 +3016,7 @@ function CallSchedule() {
     try {
       const rows = await snapshots.list(15);
       setSnapshotLoadFailed(rows === null);
-      if (rows !== null) setSnapshotList(rows);
+      if (rows !== null) { setSnapshotList(rows); if (rows[0] && rows[0].created_at) setLastSnapshotAt(rows[0].created_at); }
     } finally { setSnapshotsLoading(false); }
   };
   const snapshotReasonLabel = (r) => ({
@@ -3000,8 +3080,9 @@ function CallSchedule() {
     setSaveStatus("Restoring snapshot");
     const r = await snapshots.restore(snap.id, applyScheduleViaCAS, applyTablesUpsert);
     setRestoreBusyId(null);
-    if (!r.ok) { showToast("Restore failed: " + (r.error || "unknown error"), "error"); setSaveStatus(""); return; }
-    logAudit("system.restore_snapshot", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}`, { snapshot_id: snap.id, reason: snap.reason, created_at: snap.created_at, counts: r.counts });
+    if (!r.ok) { console.warn("Snapshot restore failed:", r.error); showToast("Restore failed: " + (r.error || "unknown error"), "error"); setSaveStatus(""); return; }
+    noteSnapshotTaken(); // applyPayload captured 'before_restore' first
+    logAudit("snapshot.restore", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}`, { snapshot_id: snap.id, reason: snap.reason, created_at: snap.created_at, counts: r.counts });
     setSaveStatus("Snapshot restored");
     setTimeout(() => setSaveStatus(""), 3000);
     afterPayloadApplied(r, "Restore");
@@ -3010,15 +3091,16 @@ function CallSchedule() {
     if (!file || !isScheduler) return;
     let obj;
     try { obj = JSON.parse(await file.text()); }
-    catch (e) { showToast("That file is not valid JSON.", "error"); return; }
+    catch (e) { console.warn("Import backup: file is not valid JSON", file.name, e); showToast("Import backup: that file is not valid JSON.", "error"); return; }
     let normalized;
     try { normalized = snapshots.normalizePayload(obj); }
-    catch (e) { showToast("Backup shape invalid: " + (e && e.message || e), "error"); return; }
+    catch (e) { console.warn("Import backup: shape invalid", file.name, e); showToast("Import backup refused - backup shape invalid: " + (e && e.message || e), "error"); return; }
     if (!confirm(`Import this backup?\n\n${normalized.schedule_days.length} schedule day(s), ${normalized.time_off.length} vacation row(s), ${normalized.availability.length} availability row(s), config keys: ${Object.keys(normalized.config).join(", ") || "(none)"}.\n\nIt replaces the current schedule and setup for everyone (a snapshot is saved first).`)) return;
     setSaveStatus("Importing backup");
     const r = await snapshots.applyPayload(obj, applyScheduleViaCAS, applyTablesUpsert, "before_import");
-    if (!r.ok) { showToast("Import failed: " + (r.error || "unknown error"), "error"); setSaveStatus(""); return; }
-    logAudit("system.import_backup", `Imported JSON backup (${file.name})`, { counts: r.counts, file: file.name });
+    if (!r.ok) { console.warn("Import backup failed:", r.error); showToast("Import failed: " + (r.error || "unknown error"), "error"); setSaveStatus(""); return; }
+    noteSnapshotTaken(); // applyPayload captured 'before_import' first
+    logAudit("data.import", `Imported JSON backup (${file.name})`, { counts: r.counts, file: file.name });
     setSaveStatus("Backup imported");
     setTimeout(() => setSaveStatus(""), 3000);
     afterPayloadApplied(r, "Import");
@@ -3038,7 +3120,9 @@ function CallSchedule() {
       setSaveStatus(downloaded ? "Backup exported" : "Backup opened - use Share, then Save to Files");
       setTimeout(()=>setSaveStatus(""),3000);
     } catch(e) {
-      alert("Export failed: " + (e && e.message ? e.message : String(e)));
+      console.error("Export backup failed:", e);
+      setSaveStatus("Export failed"); setTimeout(() => setSaveStatus(""), 3000);
+      showToast("Export backup failed: " + (e && e.message ? e.message : String(e)), "error");
     }
   };
 
@@ -3076,13 +3160,15 @@ function CallSchedule() {
       setCopiedUrl(label);
       setTimeout(() => setCopiedUrl(""), 2500);
     } catch(e) {
+      console.warn("Copy URL: clipboard unavailable - falling back to a prompt:", e);
+      showToast("Copy URL: the clipboard is blocked here - copy it from the box instead.", "error");
       prompt("Copy this URL:", text);
     }
   };
   const shareTonightMsg = async () => {
     const msg = buildTonightMsg();
     if (navigator.share) {
-      try { await navigator.share({ text: msg }); return; } catch(e) { console.debug("Share dismissed or unavailable (falling back to copy):", e); }
+      try { await navigator.share({ text: msg }); return; } catch(e) { if (e && e.name === "AbortError") console.debug("Share sheet dismissed by the user (falling back to copy)"); else console.warn("Share today: navigator.share failed (falling back to copy):", e); }
     }
     try { await navigator.clipboard.writeText(msg); setCopied(true); setTimeout(()=>setCopied(false), 2000); } catch(e) {
       console.warn("Copy to clipboard failed:", e);
@@ -3164,6 +3250,26 @@ function CallSchedule() {
     return out;
   }, [ctxInputs]);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
+  // Coverage at a glance (Prompt 11): the next 60 days from today - open
+  // primary / backup days, forecast-busy days that still hold that surgeon as
+  // primary (should be 0), the East feed's coverage end, the last publish and
+  // the newest snapshot's age. helpers.js suCoverageGlance is pure; each count
+  // links to its first day through goToDay.
+  const glance = useMemo(() => suCoverageGlance(schedule, todayStr, 60, ctxInputs.eastForecast, forecastThreshold), [schedule, todayStr, ctxInputs, forecastThreshold]);
+  const eastCoverageEnd = useMemo(() => {
+    if (typeof coverageOf !== "function") return null;
+    const cov = coverageOf(eastFeedRows.map(r => ({ weekMonday: r.week_monday, data: r.data || {} })));
+    return cov && cov.to ? cov.to : null;
+  }, [eastFeedRows]);
+  const snapshotAgeText = (iso) => {
+    if (!iso) return "none on file";
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return "unknown";
+    const h = Math.floor((Date.now() - t) / 3600000);
+    if (h < 1) return "under an hour ago";
+    if (h < 48) return h + " h ago";
+    return Math.floor(h / 24) + " days ago";
+  };
   const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr), [schedule, surgeons, monthStartStr, monthEndStr]);
 
   // --- Calendar tools (Prompt 9 exports) ---
@@ -3364,7 +3470,7 @@ function CallSchedule() {
       )}
       {/* Non-blocking toast */}
       {toast && (
-        <div role="status" aria-live="polite" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1a2a3a",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...(paintSheet ? { top: 12 } : { bottom: 24 }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1a2a3a",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           {toast.msg}
         </div>
       )}
@@ -3747,6 +3853,31 @@ function CallSchedule() {
           const chipStyle = (on, c) => ({ background: on ? c.tg : "transparent", color: on ? c.tx : (dk ? "#8a8aaa" : "#6a7a88"), border: "1px solid " + (on ? c.bd : (dk ? "#2a3a5e" : "#c8d0d8")), borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono, letterSpacing: 0.3 });
           return <>
           <div style={css.card}>
+            {/* Coverage at a glance (Prompt 11): every count links to its first day. */}
+            {(() => {
+              const covItem = (key, text, days, color) => {
+                const n = days.length;
+                const first = n ? days[0] : null;
+                return (
+                  <button key={key} type="button" data-testid={key} data-count={loaded ? n : ""} data-first={first || ""} disabled={!loaded || !n} onClick={() => { if (first) goToDay(first); }}
+                    title={n ? "Open " + fmtMD(first) + " in the day editor" : "none in the next 60 days"}
+                    style={{...css.mini(false),color: !loaded ? dkSubtext : n ? color : "#1a8040",borderColor: !loaded ? "#c8d0d8" : n ? color : "#a0d8b0",fontFamily:font,cursor: n ? "pointer" : "default"}}>
+                    <span style={{fontFamily:mono,fontWeight:800}}>{loaded ? n : "..."}</span> {text}{n ? " - first " + fmtMD(first) : ""}
+                  </button>
+                );
+              };
+              return (
+                <div data-testid="coverage-strip" style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",marginBottom:10,fontSize:11.5,color:dkSubtext,padding:"6px 8px",borderRadius:6,background:dk?"#141c30":"#f4f6f8",border:"1px solid " + dkCardBorder}}>
+                  <span style={{fontWeight:700,color:dkText,marginRight:2}}>Next 60 days:</span>
+                  {covItem("cov-open-primary", "open primary", glance.openPrimary, "#c04040")}
+                  {covItem("cov-open-backup", "open backup", glance.openBackup, "#c04040")}
+                  {covItem("cov-forecast-primary", "forecast-busy as primary", glance.forecastPrimary.map(x => x.day), "#8a5a10")}
+                  <span data-testid="cov-east-end" data-value={eastCoverageEnd || ""} title="Last day covered by a published Davenport week in the East feed cache">East feed through <strong style={{fontFamily:mono}}>{eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown"}</strong></span>
+                  <span data-testid="cov-last-published" data-value={(lastPublished && lastPublished.at) || ""}>last published <strong>{lastPublished && lastPublished.at ? fmtAuditTime(lastPublished.at) : "never"}</strong></span>
+                  {isScheduler && !isPublicMode && <span data-testid="cov-last-snapshot" data-value={lastSnapshotAt || ""}>last snapshot <strong>{snapshotAgeText(lastSnapshotAt)}</strong></span>}
+                </div>
+              );
+            })()}
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:10}}>
               <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                 <button onClick={prevMonth} aria-label="Previous month" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&lsaquo;</button>
@@ -3870,7 +4001,7 @@ function CallSchedule() {
 
           <Collapsible css={css} ck="cal_weekrows" defaultOpen={true} title="Week rows (ER Call Panels layout)">
             <p style={sectionNote}>the ER-panel author's layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too.</p>
-            <div style={{overflowX:"auto"}}>
+            <div className="table-wrap" style={{overflowX:"auto"}}>
               <table className="week-rows" data-testid="week-rows" style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead><tr><th style={thS}>MON/SUN DATES</th><th style={thS}>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA</th><th style={thS}>TRAUMA BACKUP</th></tr></thead>
                 <tbody>
@@ -3922,7 +4053,7 @@ function CallSchedule() {
                 </div>
                 {!erRangeOk && <p style={{...muted,color:"#c04040",marginBottom:6}}>Enter a valid range (From on or before To).</p>}
                 {erRangeOk && erSpan.widened && <p data-testid="er-span-note" style={{...muted,marginBottom:6}}>Whole weeks: the table runs {fmtMD(erSpan.from)} - {fmtMD(erSpan.to)} (the Mon-Sun weeks around {fmtMD(erFrom)} - {fmtMD(erTo)}), so no covered day is left out of a week row.</p>}
-                <div data-testid="er-panel-preview" ref={erPreviewRef} style={{overflowX:"auto",background:"#ffffff",color:"#000000",padding:10,borderRadius:6,border:"1px solid " + dkCardBorder}} dangerouslySetInnerHTML={{__html: erPanelHtml}}/>
+                <div data-testid="er-panel-preview" className="table-wrap" ref={erPreviewRef} style={{overflowX:"auto",background:"#ffffff",color:"#000000",padding:10,borderRadius:6,border:"1px solid " + dkCardBorder}} dangerouslySetInnerHTML={{__html: erPanelHtml}}/>
               </div>
             </div>
           </Collapsible>
@@ -4097,8 +4228,8 @@ function CallSchedule() {
                         </select>
                       ) : <div style={{paddingTop:4}}><Badge id={fromId}/></div>}
                     </div>
-                    <div><label style={label}>My day + role</label>
-                      <select data-testid="trade-mine-pick" value={dayOk && holder === fromId ? tradeDay + "|" + tradeRole : ""} onChange={e=>{ const v = e.target.value.split("|"); if (v[0]) { setTradeDay(v[0]); setTradeRole(v[1]); } }} style={{...inp,width:200}}>
+                    <div className="trade-pick-wrap"><label style={label}>My day + role</label>
+                      <select data-testid="trade-mine-pick" className="trade-pick" value={dayOk && holder === fromId ? tradeDay + "|" + tradeRole : ""} onChange={e=>{ const v = e.target.value.split("|"); if (v[0]) { setTradeDay(v[0]); setTradeRole(v[1]); } }} style={{...inp,width:260,maxWidth:"100%"}}>
                         <option value="">{mine.length ? "Pick one of my upcoming days" : "No upcoming days on file"}</option>
                         {mine.map(x=><option key={x.day+x.role} value={x.day+"|"+x.role}>{slotLabel(x.day, x.role)}{unitOfDay(x.day) ? " - " + unitOfDay(x.day).name + " unit" : ""}</option>)}
                       </select>
@@ -4112,8 +4243,8 @@ function CallSchedule() {
                       <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontWeight:600}}><input type="checkbox" data-testid="trade-whole-unit" checked={tradeWholeUnit} onChange={e=>setTradeWholeUnit(e.target.checked)}/> Trade the whole unit</label>
                       {!tradeWholeUnit && <span data-testid="trade-unit-split" style={{color:"#8a3030",fontWeight:600}}>{isScheduler ? "Unchecked: this single day would split the unit - you will be asked to confirm." : "A single day of a unit cannot be traded - tick the box to trade the whole unit."}</span>}
                     </div>}
-                    <div><label style={label}>Trade with</label>
-                      <select data-testid="trade-to" value={tradeTo} onChange={e=>{ setTradeTo(e.target.value); setTradeReturnDay(""); }} style={{...inp,width:230}}>
+                    <div className="trade-pick-wrap"><label style={label}>Trade with</label>
+                      <select data-testid="trade-to" className="trade-pick" value={tradeTo} onChange={e=>{ setTradeTo(e.target.value); setTradeReturnDay(""); }} style={{...inp,width:230,maxWidth:"100%"}}>
                         <option value="">Select</option>
                         {cands.map(({ s, e }) => {
                           const bad = e && !e.ok;
@@ -4123,8 +4254,8 @@ function CallSchedule() {
                     </div>
                     {toElig && !toElig.ok && <div data-testid="trade-to-reason" style={{...css.errBox,flex:"1 1 100%"}}>{nameOf(tradeTo)} can't take {givenLabel}: {tradeReasonText(toElig)}. {toElig.unknown ? "" : "Pick someone else or ask the scheduler."}</div>}
                     {toElig && toElig.ok && toElig.soft && toElig.soft.length > 0 && <div style={{...css.warnBox,flex:"1 1 100%"}}>Allowed with a note: {toElig.soft.map(softTag).join(", ")}.</div>}
-                    <div><label style={label}>Their day + role (return)</label>
-                      <select data-testid="trade-theirs-pick" value={suIsIso(tradeReturnDay) && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeReturnDay + "|" + tradeReturnRole : ""} onChange={e=>{ const v = e.target.value.split("|"); if (v[0]) { setTradeReturnDay(v[0]); setTradeReturnRole(v[1]); } else setTradeReturnDay(""); }} style={{...inp,width:200}} disabled={!tradeTo}>
+                    <div className="trade-pick-wrap"><label style={label}>Their day + role (return)</label>
+                      <select data-testid="trade-theirs-pick" className="trade-pick" value={suIsIso(tradeReturnDay) && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeReturnDay + "|" + tradeReturnRole : ""} onChange={e=>{ const v = e.target.value.split("|"); if (v[0]) { setTradeReturnDay(v[0]); setTradeReturnRole(v[1]); } else setTradeReturnDay(""); }} style={{...inp,width:260,maxWidth:"100%"}} disabled={!tradeTo}>
                         <option value="">{isScheduler ? "None (one-way)" : (tradeTo ? "Pick one of their days" : "Pick a surgeon first")}</option>
                         {theirs.map(x=><option key={x.day+x.role} value={x.day+"|"+x.role}>{slotLabel(x.day, x.role)}{unitOfDay(x.day) ? " - " + unitOfDay(x.day).name + " unit" : ""}</option>)}
                       </select>
@@ -4283,6 +4414,7 @@ function CallSchedule() {
               <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:12}}>
                 <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Email</div>
                 <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Emails go to your sign-in address. Choose which events email you and when the daily reminder arrives (Central time).</p>
+                {notifPrefsLoadFailed && <div data-testid="notif-prefs-load-failed" style={{...css.errBox,marginBottom:8}}>Couldn't load your saved notification settings - the switches below show the DEFAULTS, not what is saved. Reload before changing anything here.</div>}
                 {!mySurgeon ? <p style={muted}>Available once your account is linked to a roster entry.</p> : (() => {
                   const myPref = notifPrefs[mySurgeon] || {};
                   return (
@@ -4407,15 +4539,15 @@ function CallSchedule() {
             <div style={css.cardT}>Data management</div>
             <p style={sectionNote}>Download a full JSON backup: config (roster, rules, holidays, settings), every schedule day, vacations and availability rows. It can be re-imported below or used to rebuild the database.</p>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              <button onClick={exportBackup} style={{...css.btn(true),padding:"8px 16px",fontSize:13,borderRadius:7}}>Export backup (JSON)</button>
-              <input ref={importFileRef} type="file" accept="application/json,.json" style={{display:"none"}} onChange={e=>{ const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) importBackupFile(f); }}/>
+              <button data-testid="export-backup" onClick={exportBackup} style={{...css.btn(true),padding:"8px 16px",fontSize:13,borderRadius:7}}>Export backup (JSON)</button>
+              <input ref={importFileRef} data-testid="import-file" type="file" accept="application/json,.json" style={{display:"none"}} onChange={e=>{ const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) importBackupFile(f); }}/>
               <button onClick={()=>importFileRef.current && importFileRef.current.click()} style={{...css.btn(false),padding:"8px 16px",fontSize:13,borderRadius:7}}>Import backup (JSON)</button>
             </div>
             <p style={{fontSize:10,color:"#8a94a0",margin:"6px 0 0",lineHeight:1.5}}>Import validates the shape, snapshots the current state first, then restores through the same compare-and-swap path as a snapshot restore. It never deletes vacation or availability rows.</p>
             <div style={{borderTop:"1px solid #f0d8d8",marginTop:16,paddingTop:12}}>
               <div style={{fontSize:11,fontWeight:700,color:"#a05050",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Danger zone</div>
               <p style={{fontSize:11,color:"#a06868",marginBottom:10,lineHeight:1.4}}>Deletes every schedule day and resets the config blob for everyone. A snapshot is saved automatically first (if it can't be, nothing happens). Requires typing <strong>RESET</strong>.</p>
-              <button onClick={resetAllData} style={{background:"none",border:"1px solid #e8c0c0",color:"#804040",borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",fontFamily:font}}>Reset all data</button>
+              <button data-testid="reset-all-data" onClick={resetAllData} style={{background:"none",border:"1px solid #e8c0c0",color:"#804040",borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",fontFamily:font}}>Reset all data</button>
             </div>
           </div>}
 
@@ -4432,12 +4564,12 @@ function CallSchedule() {
               )}
               {!snapshotsLoading && !snapshotLoadFailed && (!snapshotList || snapshotList.length === 0) && <div style={{fontSize:12,color:"#7a8a98"}}>No snapshots yet.</div>}
               {!snapshotsLoading && snapshotList && snapshotList.map(sn => (
-                <div key={sn.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid #f0f2f4"}}>
+                <div key={sn.id} data-testid="snapshot-row" data-snapshot-id={sn.id} data-reason={sn.reason || ""} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid #f0f2f4"}}>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:12,fontWeight:600,color:"#3a4a58"}}>{snapshotReasonLabel(sn.reason)}</div>
                     <div style={{fontSize:10,color:"#8a94a0",fontFamily:mono}}>{new Date(sn.created_at).toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})}</div>
                   </div>
-                  <button disabled={!!restoreBusyId} onClick={()=>restoreSnapshot(sn)} style={{background:"none",border:"1px solid #b8cfe0",color:restoreBusyId?"#a8b4c0":"#1a6fa8",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:600,cursor:restoreBusyId?"default":"pointer",fontFamily:font}}>{restoreBusyId===sn.id ? "Restoring" : "Restore"}</button>
+                  <button data-testid="snapshot-restore" disabled={!!restoreBusyId} onClick={()=>restoreSnapshot(sn)} style={{background:"none",border:"1px solid #b8cfe0",color:restoreBusyId?"#a8b4c0":"#1a6fa8",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:600,cursor:restoreBusyId?"default":"pointer",fontFamily:font}}>{restoreBusyId===sn.id ? "Restoring" : "Restore"}</button>
                 </div>
               ))}
               <button onClick={loadSnapshots} disabled={snapshotsLoading} style={{background:"none",border:"none",color:"#1a6fa8",fontSize:11,cursor:"pointer",fontFamily:font,padding:"8px 0 0",fontWeight:600}}>Refresh list</button>
@@ -4514,7 +4646,7 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
     const items = describeDraft();
     let r;
     try { r = await onCommit(draftEntries); }
-    catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    catch (e) { console.warn("Paint vacations: commit threw", e); r = { ok: false, error: String(e?.message || e) }; }
     finally { setBusy(false); }
     if (r && r.ok) {
       setDraftEntries([]); setPendingStart(null);
@@ -4685,7 +4817,7 @@ const REASON_WORDS = {
 // never []. A 401 on a sent token still throws inside db.query. (datalayer-001)
 async function readAuthOnlyTable(table, opts) {
   let token = null;
-  try { token = localStorage.getItem("silvis-auth-token"); } catch (e) { token = null; }
+  try { token = localStorage.getItem("silvis-auth-token"); } catch (e) { console.warn(table + ": session token read failed", e); token = null; }
   if (!token || !jwtIsFresh(token)) {
     console.warn(table + ": read skipped - the session token is missing or expired; an anon read would answer 200 + [] and wipe the current list (kept as is until the session refreshes)");
     return null;
@@ -4973,7 +5105,8 @@ function DayEditor(props) {
         )}
 
         {hint && <div role="status" data-testid="editor-hint" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>{hint}</div>}
-        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        {/* Sticky footer: the Cancel / Save row stays in view while the dialog body scrolls (a phone showed it below the fold - Prompt 11). */}
+        <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",borderTop:"1px solid " + border}}>
           {!isPublicMode && (canEdit || myRole) && (
             <button type="button" data-testid="editor-trade" onClick={() => onTrade(day, myRole || (entry && entry.primary ? "primary" : "backup"))} style={{background:"none",border:"none",color:"#1a6fa8",fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0}}>Propose a trade for this day</button>
           )}
@@ -5138,7 +5271,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       </div>
       {!ctx && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules context unavailable - caps, targets, holiday units and East days show as '-' until the setup loads.</div>}
       {mode !== "fairness" ? (
-        <div style={css.tableWrap}>
+        <div className="table-wrap" style={css.tableWrap}>
           <table data-testid="totals-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
             <thead>
               <tr>
@@ -5245,7 +5378,7 @@ function RosterEditor({ css, roster, schedule, availabilityRows, timeOffRows, on
   return (
     <div data-testid="roster-editor">
       <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Names and codes only - the schedule stores ids, the calendar shows last names, narrow cells show the code. Contact details never live here (accounts are linked under Users; addresses stay in Supabase Auth).</p>
-      <div style={css.tableWrap}>
+      <div className="table-wrap" style={css.tableWrap}>
         <table className="setup-table">
           <thead><tr><th>Id</th><th>Last name</th><th>Code</th><th>Full name</th><th>Active</th><th>Roles</th><th></th></tr></thead>
           <tbody>
@@ -5286,7 +5419,7 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
       {error && <div data-testid="users-error" style={css.errBox}>{error}</div>}
       {!loading && !error && (!profiles || profiles.length === 0) && <p style={{ fontSize: 12, color: "#7a8a98", fontStyle: "italic" }}>No accounts loaded yet.</p>}
       {!loading && profiles && profiles.length > 0 && (
-        <div style={css.tableWrap}>
+        <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="users-table">
             <thead><tr><th>Address (display only)</th><th>Display name</th><th>Role</th><th>Roster link</th><th>Since</th></tr></thead>
             <tbody>
@@ -5360,7 +5493,7 @@ function PatternListEditor({ css, label, list, onChange, withWeight, today, hint
               <button onClick={() => onChange(items.filter((_, j) => j !== i))} style={css.danger}>Remove</button>
             </div>
             <div data-testid="pattern-preview" style={{ fontSize: 11, color: "#5a6a78", marginTop: 4, fontFamily: mono }}>
-              <span style={{ fontFamily: font, color: "#7a8a98" }}>{suPatternLabel(p)} - next 8: </span>{next.length ? next.join(", ") : "no matching date in the next two years"}
+              <span style={{ fontFamily: font, color: "#7a8a98" }}>{suPatternLabel(p)} - next 8: </span>{next.error ? <span data-testid="pattern-error" style={{ color: "#a83232", fontFamily: font }}>pattern is invalid - the rules engine refused it ({next.error})</span> : next.length ? next.join(", ") : "no matching date in the next two years"}
             </div>
           </div>
         );
@@ -5414,7 +5547,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
       const leaks = suContactPaths(obj);
       if (leaks.length) throw new Error("contact-looking data at " + leaks.join(", "));
       setDraft(obj); setDirty(true); setRawErr(""); setRawOpen(false);
-    } catch (e) { setRawErr(String(e && e.message || e)); }
+    } catch (e) { console.warn("Rules JSON not applied:", e); setRawErr(String(e && e.message || e)); }
   };
   const capMode = Object.prototype.hasOwnProperty.call(draft, "monthlyCap") ? (draft.monthlyCap === null ? "none" : "number") : "default";
   const capObj = draft.monthlyCap && typeof draft.monthlyCap === "object" ? draft.monthlyCap : (typeof draft.monthlyCap === "number" ? { total: draft.monthlyCap } : {});
@@ -5506,7 +5639,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <div style={css.subT}>Weekday pattern outside East-derived weeks <span style={{ fontWeight: 400, color: "#7a8a98" }}>(per weekday: allowed / not / only inside a Fri+Sat+Sun block)</span></div>
           <SuCheck label="use a weekday pattern" checked={!!wp} onChange={v => set("outsideDerivedWeeks", v ? { canBePrimary: true, weekdayPattern: {} } : undefined)} />
           {wp && (
-            <div style={css.tableWrap}>
+            <div className="table-wrap" style={css.tableWrap}>
               <table className="setup-table">
                 <thead><tr><th>Day</th><th>Primary</th><th>Backup</th><th>Preferred</th><th>Where</th></tr></thead>
                 <tbody>
@@ -5601,7 +5734,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <div style={{ marginTop: 8 }}>
             <textarea value={groupRaw} onChange={e => setGroupRaw(e.target.value)} spellCheck={false} style={{ ...inp, width: "100%", minHeight: 200, fontFamily: mono, fontSize: 11 }} />
             {groupRawErr && <div style={css.errBox}>Not applied: {groupRawErr}</div>}
-            <button onClick={() => { try { const o = JSON.parse(groupRaw); if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("groupRules must be a JSON object"); const leaks = suContactPaths(o); if (leaks.length) throw new Error("contact-looking data at " + leaks.join(", ")); setGroup(o); setGroupDirty(true); setGroupRawOpen(false); setGroupRawErr(""); } catch (e) { setGroupRawErr(String(e && e.message || e)); } }} style={{ ...css.btn(true), padding: "5px 12px", marginTop: 6 }}>Apply JSON</button>
+            <button onClick={() => { try { const o = JSON.parse(groupRaw); if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("groupRules must be a JSON object"); const leaks = suContactPaths(o); if (leaks.length) throw new Error("contact-looking data at " + leaks.join(", ")); setGroup(o); setGroupDirty(true); setGroupRawOpen(false); setGroupRawErr(""); } catch (e) { console.warn("Group rules JSON not applied:", e); setGroupRawErr(String(e && e.message || e)); } }} style={{ ...css.btn(true), padding: "5px 12px", marginTop: 6 }}>Apply JSON</button>
           </div>
         )}
       </div>
@@ -5673,7 +5806,7 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
         <button onClick={() => setFilter("")} style={css.mini(!filter)}>everyone ({(rows || []).length})</button>
         {(roster || []).map(s => <button key={s.id} data-testid={"avail-filter-" + s.id} onClick={() => setFilter(s.id)} style={css.mini(filter === s.id)}>{s.name} ({(rows || []).filter(r => r.person_id === s.id).length})</button>)}
       </div>
-      <div style={{ ...css.tableWrap, maxHeight: 320, overflowY: "auto" }}>
+      <div className="table-wrap" style={{ ...css.tableWrap, maxHeight: 320, overflowY: "auto" }}>
         <table className="setup-table" data-testid="avail-table">
           <thead><tr><th>Person</th><th>Kind</th><th>Role</th><th>Dates</th><th>Note</th><th>Source</th><th></th></tr></thead>
           <tbody>
@@ -5729,7 +5862,7 @@ function HolidaysCard({ css, holidays, schedule, roster, nameOf, onSave, onEditD
       {years.map(y => (
         <div key={y} style={{ border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
           <div style={{ ...css.subT, margin: "0 0 6px" }}>{y} <button onClick={() => addUnit(y)} style={{ ...css.mini(false), marginLeft: 8 }}>Add unit</button></div>
-          <div style={css.tableWrap}>
+          <div className="table-wrap" style={css.tableWrap}>
             <table className="setup-table" data-testid={"hol-year-" + y}>
               <thead><tr><th>Unit</th><th>Tier</th><th>Days (ISO, comma separated)</th><th>Covered now</th><th></th></tr></thead>
               <tbody>
@@ -5811,7 +5944,7 @@ function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ct
       </div>
       <div style={{ border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Overrides (days Faraz knows differ from the feed)</div>
-        <div style={css.tableWrap}>
+        <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="east-overrides">
             <thead><tr><th>Day</th><th>Surgeon</th><th>Busy</th><th>Note</th><th></th></tr></thead>
             <tbody>
@@ -5868,13 +6001,19 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
       <div style={box}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Score (lower is better)</div>
         <div data-testid="gen-score" style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12, fontFamily: mono }}>
-          {scoreKeys.map(k => <span key={k}><span style={{ color: "#7a8a98" }}>{k}</span> {typeof dg.score[k] === "number" ? (Number.isInteger(dg.score[k]) ? dg.score[k] : dg.score[k].toFixed(2)) : String(dg.score[k])}</span>)}
+          {scoreKeys.map(k => {
+            const v = dg.score[k];
+            // An object-valued key (weights) is summarised, never String()-ed
+            // into "[object Object]"; the full JSON sits in the title.
+            if (v && typeof v === "object") { const ks = Object.keys(v); return <span key={k} data-testid={"gen-score-" + k} title={JSON.stringify(v)}><span style={{ color: "#7a8a98" }}>{k}</span> {ks.length} key{ks.length === 1 ? "" : "s"}: {ks.slice(0, 4).map(x => x + "=" + v[x]).join(", ")}{ks.length > 4 ? ", ..." : ""}</span>; }
+            return <span key={k}><span style={{ color: "#7a8a98" }}>{k}</span> {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : String(v)}</span>;
+          })}
           <span><span style={{ color: "#7a8a98" }}>candidates</span> {dg.candidatesTried}/{dg.bestOf}{dg.truncated ? " (time budget hit)" : ""}</span>
         </div>
       </div>
       <div style={box}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Per-surgeon tallies vs cap / target</div>
-        <div style={css.tableWrap}>
+        <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="gen-tallies">
             <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th>Max consec</th><th>Cap</th><th>Target</th></tr></thead>
             <tbody>
@@ -5895,7 +6034,7 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
       <div style={box}>
         <div style={{ ...css.subT, margin: "0 0 4px", color: (dg.uncovered || []).length ? "#a83232" : undefined }}>Open slots ({(dg.uncovered || []).length})</div>
         {(dg.uncovered || []).length === 0 ? <p style={{ fontSize: 12, color: "#1a8040", margin: 0 }}>Every slot in the range is covered.</p> : (
-          <div style={css.tableWrap}><table className="setup-table" data-testid="gen-uncovered"><thead><tr><th>Day</th><th>Role</th><th>Why nobody is eligible</th></tr></thead><tbody>
+          <div className="table-wrap" style={css.tableWrap}><table className="setup-table" data-testid="gen-uncovered"><thead><tr><th>Day</th><th>Role</th><th>Why nobody is eligible</th></tr></thead><tbody>
             {dg.uncovered.map(u => <tr key={u.day + u.role} data-uncovered={u.day + ":" + u.role}><td style={{ fontFamily: mono, whiteSpace: "nowrap" }}>{u.weekday} {u.day}{u.holidayUnit ? " (" + u.holidayUnit + ")" : ""}</td><td>{u.role}</td><td style={{ fontSize: 11 }}>{Object.keys(u.reasons || {}).map(id => <div key={id}><strong>{nameOf(id)}</strong>: {(Array.isArray(u.reasons[id]) ? u.reasons[id] : [u.reasons[id]]).map(r => reasonLabel(r, nameOf)).join(", ")}</div>)}</td></tr>)}
           </tbody></table></div>
         )}

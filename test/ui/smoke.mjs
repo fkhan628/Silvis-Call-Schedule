@@ -95,6 +95,23 @@
 //     pending rows survive (datalayer-001); the single-day flow now runs from
 //     Burchett (Khan's only upcoming days are the unit)
 //   - screenshots each tab to test/ui/out/<tab>.png
+//   - Prompt 11 (hardening): the 'coverage at a glance' strip equals an
+//     independent 60-day recount of the live rows (open primary / backup,
+//     forecast-busy primary = 0, East coverage end, last published, snapshot
+//     age) and its counts open the first such day; mobile 390px checks (tap
+//     targets >= 36px, in-card table scroll with a swipe hint, sticky day
+//     editor footer, PREVIEW tag fits, trade selects fit, no '[object
+//     Object]' in the Generate score); a second page with version.json newer
+//     than APP_VERSION + client_versions.main.min_version above it asserts
+//     both refresh banners and that their buttons call __silvisHardReset; a
+//     third page runs data management end to end with recorded writes: JSON
+//     export shape/counts = live anon data, malformed imports refused with no
+//     write, factory reset needs the typed RESET, records the snapshot BEFORE
+//     the delete and aborts when the snapshot insert fails, restore from that
+//     very snapshot replays config upsert + CAS day POSTs + time_off /
+//     availability upserts with a byte-compare of restored map vs snapshot vs
+//     export, then a valid import of the export (snapshot first, nothing to
+//     rewrite). The snapshot table is served from an in-harness store.
 // Exit code 1 on any failure.
 //
 // Determinism (finding removal-03): React / ReactDOM / the Supabase SDK are
@@ -393,7 +410,18 @@ const representation = (method, url, body) => {
     return Array.isArray(b) ? b : [b];
   } catch (e) { return []; }
 };
-await page.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+// Prompt 11: the snapshot table is served from THIS store (RLS hides it from
+// the anon passthrough). Every snapshot the app POSTs is kept WITH its data, so
+// the restore scenario replays exactly what the app captured before the reset.
+const snapStore = [];
+let minVersionOverride = null; // Prompt 11: { min_version, message } served for client_versions row 'main'
+// Prompt 11 (factory reset): once the app's DELETE of every schedule_days row is
+// recorded, the table reads as EMPTY from then on and later CAS POSTs / PATCHes
+// land in this store - what the real table would do - so the restore that
+// follows writes every day back and the 60 s poll cannot resurrect live rows.
+let daysWiped = false;
+const dayStore = {};
+const routeSupabase = async (route) => {
   const req = route.request();
   const url = new URL(req.url());
   const method = req.method();
@@ -453,9 +481,34 @@ await page.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
       writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", aborted: true });
       return route.abort("failed");
     }
+    if (method === "DELETE" && url.pathname + url.search === "/rest/v1/schedule_days?day=not.is.null") { daysWiped = true; Object.keys(dayStore).forEach(k => delete dayStore[k]); }
+    if (daysWiped && url.pathname === "/rest/v1/schedule_days" && method === "POST") { try { const b = JSON.parse(body); if (b && b.day) dayStore[b.day] = { ...b }; } catch (e) {} }
+    if (daysWiped && url.pathname === "/rest/v1/schedule_days" && method === "PATCH") { try { const b = JSON.parse(body); const d = (url.searchParams.get("day") || "").replace(/^eq\./, ""); if (dayStore[d]) Object.assign(dayStore[d], b); } catch (e) {} }
+    if (method === "POST" && url.pathname.startsWith("/rest/v1/call_schedule_snapshots")) {
+      try { const b = JSON.parse(body); snapStore.push({ id: crypto.randomUUID(), reason: b.reason || null, source_updated_at: b.source_updated_at || null, created_at: new Date().toISOString(), data: b.data }); }
+      catch (e) { failedRequests.push("snapshot POST body did not parse: " + (e && e.message || e)); }
+    }
     writes.push({ method, path: url.pathname + url.search, body: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? "(snapshot body omitted)" : body, prefer: req.headers()["prefer"] || "", snapshotReason: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? (() => { try { return JSON.parse(body).reason; } catch (e) { return null; } })() : undefined });
     return json(method === "POST" ? 201 : 200, representation(method, url, body));
   }
+  // Snapshot list / read from the store (authenticated-only table: anon would answer []).
+  if (method === "GET" && url.pathname.startsWith("/rest/v1/call_schedule_snapshots")) {
+    const sel = url.searchParams.get("select") || "";
+    const idQ = (url.searchParams.get("id") || "").replace(/^eq\./, "");
+    const meta = (r) => ({ id: r.id, reason: r.reason, source_updated_at: r.source_updated_at, created_at: r.created_at });
+    const rows = snapStore.slice().sort((a, b) => a.created_at < b.created_at ? 1 : -1);
+    if (idQ) return json(200, rows.filter(r => r.id === idQ).map(r => /\bdata\b/.test(sel) ? r : meta(r)));
+    return json(200, rows.slice(0, Number(url.searchParams.get("limit") || 25)).map(meta));
+  }
+  if (daysWiped && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
+    let rows = Object.values(dayStore).sort((a, b) => a.day < b.day ? -1 : 1);
+    const dayQ = (url.searchParams.get("day") || "").replace(/^eq\./, "");
+    if (dayQ) rows = rows.filter(r => r.day === dayQ);
+    const off = Number(url.searchParams.get("offset") || 0), lim = Number(url.searchParams.get("limit") || rows.length);
+    return json(200, rows.slice(off, off + lim));
+  }
+  // Forced minimum version (refresh-banner scenario): row 'main' of client_versions.
+  if (minVersionOverride && method === "GET" && url.pathname.startsWith("/rest/v1/client_versions") && /id=eq\.main/.test(url.search)) return json(200, [{ id: "main", ...minVersionOverride }]);
   // Harness switch (fix round 2, safe-4): stamp a foreign updated_at / updated_by
   // onto the blob row so the import's dry run and its pre-apply re-read see a
   // setup that "changed since the dry run".
@@ -474,7 +527,8 @@ await page.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
   const headers = { ...req.headers() };
   headers["authorization"] = "Bearer " + ANON_KEY;
   return route.continue({ headers });
-});
+};
+await page.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
 
 // Load a page and wait for a selector, with ONE retry (a slow CDN/Supabase
 // round trip must not read as a Slice regression; a real failure fails twice).
@@ -803,6 +857,34 @@ try {
   if (lineOverflow.length) fail(`mobile 390px: ${lineOverflow.length} P/B line(s) overflow their cell, e.g. ${lineOverflow.slice(0, 5).join(", ")}`); else ok("mobile 390px: no P/B line overflows its cell (padlock included)");
   await page.screenshot({ path: path.join(OUT, "calendar-mobile.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-mobile.png");
+  // ---- Prompt 11 mobile pass ----
+  // (a) tap targets: every visible button in the calendar view is >= 36px tall
+  const shortButtons = await page.$$eval("button", els => els.filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== "hidden"; }).map(e => ({ h: Math.round(e.getBoundingClientRect().height), t: (e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 24) })).filter(x => x.h < 36));
+  if (shortButtons.length) fail(`mobile 390px: ${shortButtons.length} button(s) under 36px tall: ` + JSON.stringify(shortButtons.slice(0, 6))); else ok("mobile 390px: every visible button is at least 36px tall (tap targets)");
+  // (b) the week-rows table scrolls INSIDE its wrapper and the wrapper shows the swipe hint
+  const wrapHint = await page.evaluate(() => {
+    const wrap = document.querySelector("[data-testid=week-rows]") ? document.querySelector("[data-testid=week-rows]").parentElement : null;
+    if (!wrap) return null;
+    return { cls: wrap.className, hint: getComputedStyle(wrap, "::after").content, pageW: document.documentElement.scrollWidth, wrapScroll: wrap.scrollWidth, wrapClient: wrap.clientWidth };
+  });
+  if (!wrapHint) fail("mobile 390px: week-rows wrapper not found");
+  else if (!/table-wrap/.test(wrapHint.cls) || !/swipe sideways/.test(wrapHint.hint) || wrapHint.pageW > 392) fail("mobile 390px: the week-rows wrapper lacks the table-wrap swipe hint or the page scrolls: " + JSON.stringify(wrapHint));
+  else ok(`mobile 390px: week rows scroll inside their wrapper (${wrapHint.wrapScroll} vs ${wrapHint.wrapClient}) with the '${wrapHint.hint.replace(/"/g, "")}' hint; page ${wrapHint.pageW}px`);
+  // (c) the day editor's Cancel / Save row is on screen without scrolling (sticky footer)
+  await page.click('[data-day="2026-10-15"]');
+  await page.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+  await page.waitForTimeout(200);
+  const foot = await page.$eval("[data-testid=editor-save]", el => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height), vh: window.innerHeight }; });
+  if (foot.bottom > foot.vh || foot.top < 0 || foot.h < 36) fail(`mobile 390px: the day editor's Save button is off screen or too small (${JSON.stringify(foot)})`); else ok(`mobile 390px: the day editor's Save button is on screen at open (bottom ${foot.bottom} of ${foot.vh}px, ${foot.h}px tall)`);
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+  // (d) the trade form's selects fit the phone width
+  await page.click('button[data-tab="timeoff"]');
+  await page.waitForSelector("[data-testid=trade-card]", { timeout: 8000 });
+  const picks = await page.$$eval("[data-testid=trade-mine-pick], [data-testid=trade-to], [data-testid=trade-theirs-pick]", els => els.map(e => { const r = e.getBoundingClientRect(); return { id: e.getAttribute("data-testid"), left: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width) }; }));
+  const pickBad = picks.filter(p => p.right > 390 || p.left < 0 || p.w < 200);
+  if (picks.length !== 3 || pickBad.length) fail("mobile 390px: trade selects off screen or narrower than 200px: " + JSON.stringify(picks)); else ok("mobile 390px: the three trade selects span the row and stay on screen (" + picks.map(p => p.w + "px").join(", ") + ")");
+  await page.click('button[data-tab="calendar"]');
   await page.setViewportSize({ width: 1180, height: 900 });
 
   // ---- vis-002: the year field accepts typed input ----
@@ -882,6 +964,62 @@ try {
     if (!liveRows.some(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && (r.primary_id || r.backup_id))) throw new Error("no October 2026 assignments in the live rows - the recount has nothing to compare");
   } catch (e) { fail("Slices F+G: could not read the live schedule_days rows for the recount: " + errLine(e)); }
   const liveByDay = {}; liveRows.forEach(r => { liveByDay[r.day] = r; });
+
+  // ---- Prompt 11: coverage at a glance = an independent 60-day recount of the live rows ----
+  // Runs BEFORE this run's first edit, so the app's map still equals the live
+  // rows. A day without a row is open in both roles (the app's rule too).
+  try {
+    await page.click('button[data-tab="calendar"]');
+    await page.waitForSelector("[data-testid=coverage-strip]", { timeout: 5000 });
+    await page.waitForFunction(() => { const el = document.querySelector("[data-testid=cov-open-primary]"); return !!el && el.getAttribute("data-count") !== ""; }, null, { timeout: 10000 });
+    const strip = await page.$eval("[data-testid=coverage-strip]", el => {
+      const g = (t, a) => { const x = el.querySelector(`[data-testid=${t}]`); return x ? x.getAttribute(a) : null; };
+      return { text: el.innerText.replace(/\s+/g, " "), scrollW: el.scrollWidth, clientW: el.clientWidth,
+        openP: Number(g("cov-open-primary", "data-count")), firstP: g("cov-open-primary", "data-first"),
+        openB: Number(g("cov-open-backup", "data-count")), firstB: g("cov-open-backup", "data-first"),
+        fc: Number(g("cov-forecast-primary", "data-count")), eastEnd: g("cov-east-end", "data-value"), lastPub: g("cov-last-published", "data-value"), snap: g("cov-last-snapshot", "data-value") };
+    });
+    const expP = [], expB = [];
+    for (let k = 0; k < 60; k++) { const d = utcDay(Date.parse(todayIso + "T12:00:00Z") + k * 86400000); const r = liveByDay[d]; if (!(r && (r.primary_id || r.external_cover))) expP.push(d); if (!(r && r.backup_id)) expB.push(d); }
+    // East coverage end: the newest cached Davenport week's Sunday (anon read of east_feed).
+    let expEastEnd = "";
+    try {
+      const er = await fetch(`https://${SUPABASE_HOST}/rest/v1/east_feed?select=week_monday&order=week_monday.desc&limit=1`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+      if (!er.ok) throw new Error("HTTP " + er.status);
+      const erows = await er.json();
+      if (Array.isArray(erows) && erows[0] && erows[0].week_monday) expEastEnd = utcDay(Date.parse(String(erows[0].week_monday).slice(0, 10) + "T12:00:00Z") + 6 * 86400000);
+    } catch (e) { fail("coverage strip: could not read east_feed for the expected coverage end: " + errLine(e)); }
+    // Last published: the blob's lastPublished.at (anon read; the fixture blob has none).
+    let expLastPub = "";
+    try {
+      if (fixture) expLastPub = (fixture.call_schedule_data[0].data.lastPublished && fixture.call_schedule_data[0].data.lastPublished.at) || "";
+      else {
+        const br = await fetch(`https://${SUPABASE_HOST}/rest/v1/call_schedule_data?id=eq.main&select=data`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+        if (!br.ok) throw new Error("HTTP " + br.status);
+        const brows = await br.json();
+        let d = brows[0] && brows[0].data; if (typeof d === "string") d = JSON.parse(d);
+        expLastPub = (d && d.lastPublished && d.lastPublished.at) || "";
+      }
+    } catch (e) { fail("coverage strip: could not read the blob for lastPublished: " + errLine(e)); }
+    if (strip.openP !== expP.length || strip.firstP !== (expP[0] || "")) fail(`coverage strip: open primary reads ${strip.openP} (first ${strip.firstP}), the live rows say ${expP.length} (first ${expP[0] || "-"}) for ${todayIso} + 60 days`);
+    else if (strip.openB !== expB.length || strip.firstB !== (expB[0] || "")) fail(`coverage strip: open backup reads ${strip.openB} (first ${strip.firstB}), the live rows say ${expB.length} (first ${expB[0] || "-"})`);
+    else if (strip.fc !== 0) fail(`coverage strip: ${strip.fc} forecast-busy day(s) hold that surgeon as primary (should be 0): ` + strip.text);
+    else if (strip.eastEnd !== expEastEnd) fail(`coverage strip: East feed coverage end reads '${strip.eastEnd}', east_feed says '${expEastEnd}'`);
+    else if ((strip.lastPub || "") !== (expLastPub || "")) fail(`coverage strip: last published reads '${strip.lastPub}', the blob says '${expLastPub}'`);
+    else if (strip.snap === null) fail("coverage strip: the scheduler's 'last snapshot' item is missing");
+    else if (strip.scrollW > strip.clientW + 1) fail("coverage strip overflows its card");
+    else ok(`coverage strip (${todayIso} + 60 d): open primary ${strip.openP} (first ${strip.firstP || "-"}), open backup ${strip.openB} (first ${strip.firstB || "-"}), forecast-busy as primary 0, East feed through ${strip.eastEnd || "unknown"}, last published ${strip.lastPub ? strip.lastPub.slice(0, 10) : "never"}, last snapshot ${strip.snap ? strip.snap.slice(0, 16) : "none"} - all equal the live rows`);
+    if (strip.openP > 0) {
+      await page.click("[data-testid=cov-open-primary]");
+      await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      const t = await page.$eval("[data-testid=editor-title]", el => el.textContent);
+      const want = new Date(strip.firstP + "T12:00:00Z");
+      const wantText = `${["January","February","March","April","May","June","July","August","September","October","November","December"][want.getUTCMonth()]} ${want.getUTCDate()}, ${want.getUTCFullYear()}`;
+      if (!t.includes(wantText)) fail(`coverage strip: the open-primary count opened '${t}', expected the first open day ${strip.firstP}`); else ok(`coverage strip: tapping the open-primary count opens the day editor on ${strip.firstP} ('${t}')`);
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+    } else console.log("     (no open primary in the next 60 days - the strip link is not exercised)");
+  } catch (e) { fail("coverage strip: " + errLine(e)); }
   const harnessDays = {}; // day -> { primary_id, backup_id } as this run leaves them in the app
   const noteEdit = (d, patch) => { harnessDays[d] = { ...(harnessDays[d] || {}), ...patch }; };
   const now = new Date();
@@ -1621,13 +1759,22 @@ try {
       if (dates.length !== 8 || !nthOk) fail("Rules: the first pattern preview should list the next 8 2nd/4th Mondays: " + first.slice(0, 200)); else ok(`Rules (Acton): pattern preview lists 8 dates, all 2nd/4th Mondays: ${dates[0]} .. ${dates[7]}`);
       await page.locator("[data-testid=rules-editor]").screenshot({ path: path.join(OUT, "setup-rules-acton.png") });
       // save round trip: maxConsecutiveDays 3 -> 4 -> audit + blob autosave carries it, then back to 3
-      const before = writes.length;
+      let before = writes.length;
       const maxInput = page.locator("[data-testid=rules-editor] input[type=number][max='14']").first();
-      await maxInput.fill("4");
-      await page.click("[data-testid=rules-save]");
-      await page.waitForTimeout(1500);
+      const findBlob4 = () => writesSince(before, "/rest/v1/call_schedule_data").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).find(b => b && b.data && b.data.surgeonRules && b.data.surgeonRules.s3 && b.data.surgeonRules.s3.maxConsecutiveDays === 4);
+      // The 60 s background poll re-adopts the LIVE blob whenever its updated_at differs
+      // from our last (mocked, never persisted) write - a harness artefact that can land
+      // inside this save's 800 ms debounce and revert the 4. One retry covers that window;
+      // a real regression fails both attempts.
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await maxInput.fill("4");
+        if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) await page.click("[data-testid=rules-save]");
+        if (await waitFor(() => !!findBlob4(), 3000, 100)) break;
+        if (attempt === 1) { console.log("     (Rules: the blob write after Save did not carry the 4 - the background blob refresh raced the save; retrying once)"); before = writes.length; }
+      }
+      await page.waitForTimeout(300);
       const ruleAudit = auditSince(before, "rules.edit");
-      const blobW = writesSince(before, "/rest/v1/call_schedule_data").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).find(b => b && b.data && b.data.surgeonRules && b.data.surgeonRules.s3);
+      const blobW = findBlob4() || writesSince(before, "/rest/v1/call_schedule_data").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).find(b => b && b.data && b.data.surgeonRules && b.data.surgeonRules.s3);
       if (!ruleAudit) fail("Rules: no audit_log 'rules.edit' after Save");
       else if (!blobW || blobW.data.surgeonRules.s3.maxConsecutiveDays !== 4) fail("Rules: the blob autosave after Save does not carry surgeonRules.s3.maxConsecutiveDays = 4: " + JSON.stringify(blobW && blobW.data.surgeonRules && blobW.data.surgeonRules.s3 && blobW.data.surgeonRules.s3.maxConsecutiveDays));
       else if ("schedule" in blobW.data || "vacations" in blobW.data) fail("Rules: the blob write carries operational keys");
@@ -1808,7 +1955,12 @@ try {
     const uncRows = await page.$$eval("[data-testid=gen-uncovered] tr[data-uncovered]", els => els.map(e => e.getAttribute("data-uncovered"))).catch(() => []);
     if (unc > 0 && uncRows.length !== unc) fail(`Generate uncovered: ${unc} open slot(s) but ${uncRows.length} row(s) rendered`); else ok(`Generate uncovered: ${unc} open slot(s)${unc ? " rendered with per-surgeon reasons: " + uncRows.join(", ") : ""}`);
     const scoreText = await page.$eval("[data-testid=gen-score]", el => el.innerText.replace(/\s+/g, " "));
-    if (!/total/.test(scoreText)) fail("Generate score breakdown missing: " + scoreText); else ok("Generate score: " + scoreText.slice(0, 120));
+    if (!/total/.test(scoreText)) fail("Generate score breakdown missing: " + scoreText);
+    else if (/\[object Object\]/.test(scoreText)) fail("Generate score renders '[object Object]' (the weights object is String()-ed): " + scoreText.slice(0, 160));
+    else ok("Generate score: " + scoreText.slice(0, 120));
+    const weightsCell = await page.$eval("[data-testid=gen-score-weights]", el => ({ text: el.textContent, title: el.getAttribute("title") })).catch(() => null);
+    if (weightsCell && !/weights \d+ keys?: \w+=/.test(weightsCell.text)) fail("Generate score: the weights summary is not 'weights N keys: k=v, ...': " + weightsCell.text);
+    else if (weightsCell) ok("Generate score: weights summarised as '" + weightsCell.text.slice(0, 80) + "' (full JSON in the title)");
     await page.locator("[data-testid=card-setup_generate]").screenshot({ path: path.join(OUT, "generate-diagnostics.png") });
     ok("screenshot test/ui/out/generate-diagnostics.png");
     // the calendar shows the preview days with the distinct style
@@ -1820,6 +1972,29 @@ try {
     if (monthLabel !== "November 2026" || previewCells.length !== 29 || previewCells[0] !== "2026-11-02" || previewStyled !== "dashed") fail(`Calendar preview: month ${monthLabel}, ${previewCells.length} preview cells (${previewCells[0]}..), outline ${previewStyled}`); else ok("Calendar preview: November 2026, 29 cells 11/2..11/30 drawn with the dashed preview outline + banner");
     await page.screenshot({ path: path.join(OUT, "generate-preview.png"), fullPage: true });
     ok("screenshot test/ui/out/generate-preview.png");
+    // Prompt 11 mobile: at 390px the PREVIEW tag fits its cell and clears the B line and the vacation dots
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(300);
+    const tagCheck = await page.evaluate(() => {
+      const out = { cells: 0, clipped: 0, overB: 0, overDots: 0, example: null };
+      for (const cell of document.querySelectorAll("[data-testid=cal-grid] .cal-cell.cal-preview")) {
+        out.cells++;
+        const tag = cell.querySelector(".cal-preview-tag"); if (!tag) continue;
+        const t = tag.getBoundingClientRect(), c = cell.getBoundingClientRect();
+        if (t.right > c.right + 0.5 || t.left < c.left - 0.5 || t.bottom > c.bottom + 0.5 || tag.scrollWidth > tag.clientWidth + 0.5) { out.clipped++; out.example = out.example || { day: cell.getAttribute("data-day"), tag: [Math.round(t.left), Math.round(t.right)], cell: [Math.round(c.left), Math.round(c.right)] }; }
+        const lines = cell.querySelectorAll(".cal-line"); const b = lines[lines.length - 1] ? lines[lines.length - 1].getBoundingClientRect() : null;
+        const dots = cell.querySelector(".cal-dots"); const d = dots ? dots.getBoundingClientRect() : null;
+        const hit = (r) => r && !(t.right <= r.left || t.left >= r.right || t.bottom <= r.top || t.top >= r.bottom);
+        if (hit(b)) out.overB++;
+        if (hit(d)) out.overDots++;
+      }
+      return out;
+    });
+    if (!tagCheck.cells || tagCheck.clipped || tagCheck.overB || tagCheck.overDots) fail("mobile 390px preview: PREVIEW tag clipped / overlapping in the preview cells: " + JSON.stringify(tagCheck));
+    else ok(`mobile 390px preview: the PREVIEW tag fits and clears the B line and the vacation dots in all ${tagCheck.cells} preview cells`);
+    await page.locator("[data-testid=cal-grid]").screenshot({ path: path.join(OUT, "mobile-calendar-generate-preview-grid.png") });
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await page.waitForTimeout(200);
     await page.click('button[data-tab="setup"]');
     await page.waitForSelector("[data-testid=gen-accept]", { timeout: 5000 });
 
@@ -1849,14 +2024,14 @@ try {
     const dayIdx = seq.findIndex(w => w.path.startsWith("/rest/v1/schedule_days"));
     const dayWrites = seq.filter(w => w.path.startsWith("/rest/v1/schedule_days"));
     const casShaped = dayWrites.every(w => (w.method === "POST" && /"version":1/.test(w.body) && /return=representation/.test(w.prefer || "")) || (w.method === "PATCH" && /schedule_days\?day=eq\.\d{4}-\d{2}-\d{2}&version=eq\.\d+/.test(w.path)));
-    const genAudit = auditSince(beforeOk, "schedule.generate_publish");
+    const genAudit = auditSince(beforeOk, "schedule.generate_accept");
     if (snapIdx < 0) fail("Accept & Publish: no snapshot insert recorded");
     else if (seq[snapIdx].snapshotReason !== "generate_publish") fail("Accept & Publish: snapshot reason is " + seq[snapIdx].snapshotReason + ", expected generate_publish");
     else if (dayIdx < 0) fail("Accept & Publish: no schedule_days write recorded");
     else if (dayIdx < snapIdx) fail(`Accept & Publish: a schedule_days write (#${dayIdx}) happened BEFORE the snapshot insert (#${snapIdx})`);
     else if (dayWrites.length < 20 || !casShaped) fail(`Accept & Publish: ${dayWrites.length} schedule_days write(s), CAS-shaped=${casShaped}: ` + JSON.stringify(dayWrites.slice(0, 3).map(w => w.method + " " + w.path)));
-    else if (!genAudit) fail("Accept & Publish: no audit_log 'schedule.generate_publish'");
-    else ok(`Accept & Publish: snapshot 'generate_publish' (#${snapIdx}) precedes the first schedule_days write (#${dayIdx}); ${dayWrites.length} CAS writes (${dayWrites.filter(w => w.method === "POST").length} POST v1, ${dayWrites.filter(w => w.method === "PATCH").length} PATCH ?day&version); audit schedule.generate_publish; publish dialog opened`);
+    else if (!genAudit) fail("Accept & Publish: no audit_log 'schedule.generate_accept'");
+    else ok(`Accept & Publish: snapshot 'generate_publish' (#${snapIdx}) precedes the first schedule_days write (#${dayIdx}); ${dayWrites.length} CAS writes (${dayWrites.filter(w => w.method === "POST").length} POST v1, ${dayWrites.filter(w => w.method === "PATCH").length} PATCH ?day&version); audit schedule.generate_accept; publish dialog opened`);
     const dlgText = await page.$eval("[data-testid=publish-dialog]", el => el.innerText);
     if (!/Publish schedule changes/.test(dlgText) || !/→/.test(dlgText)) fail("publish dialog after Accept lacks the diff lines: " + dlgText.slice(0, 200)); else ok("publish dialog after Accept: diff since last publish with arrow lines (" + (dlgText.match(/→/g) || []).length + ")");
     await page.screenshot({ path: path.join(OUT, "generate-publish-dialog.png"), fullPage: false });
@@ -2037,6 +2212,212 @@ try {
   if (writes.some(w => w.public)) fail("public mode attempted a write: " + JSON.stringify(writes.filter(w => w.public)));
   else ok("public mode issued no writes");
   await pub.close();
+
+  // ====================== Prompt 11: refresh banners (version.json + client_versions.main.min_version) ======================
+  {
+    const NEWER = "2099.01.01";
+    const p2 = await context.newPage();
+    watchPage(p2, "refresh");
+    await p2.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {}); // silenced: poll only
+    await p2.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
+    await p2.route((url) => /\/version\.json$/.test(url.pathname), (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "cache-control": "no-store" }, body: JSON.stringify({ version: NEWER }) }));
+    minVersionOverride = { min_version: NEWER, message: "Harness minimum - reload." };
+    try {
+      await loadWithRetry(p2, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "refresh page");
+      const minBanner = p2.locator("div[role=alert]:has-text('below the required minimum')");
+      await minBanner.waitFor({ timeout: 30000 });
+      const minText = (await minBanner.innerText()).replace(/\s+/g, " ");
+      if (!minText.includes(`(${APP_VERSION}) is below the required minimum (${NEWER})`) || !minText.includes("Harness minimum - reload.")) fail("forced-refresh banner text wrong: " + minText);
+      else ok(`forced-refresh banner (client_versions.main.min_version ${NEWER} > APP_VERSION ${APP_VERSION}): "${minText.slice(0, 120)}"`);
+      const updBanner = p2.locator("div[role=status]:has-text('New version available')");
+      await updBanner.waitFor({ timeout: 20000 }); // the version.json check runs 5 s after mount
+      const updText = (await updBanner.innerText()).replace(/\s+/g, " ");
+      if (!updText.includes(`New version available (${NEWER})`)) fail("update banner text wrong: " + updText); else ok(`update banner (version.json ${NEWER} > APP_VERSION): "${updText.slice(0, 80)}"`);
+      await p2.evaluate(() => { window.__hardResets = 0; window.__silvisHardReset = () => { window.__hardResets++; }; });
+      await updBanner.locator("button:has-text('Tap to reload')").click();
+      await p2.waitForTimeout(150);
+      await minBanner.locator("button:has-text('Reload now')").click();
+      await p2.waitForTimeout(150);
+      const resets = await p2.evaluate(() => window.__hardResets);
+      if (resets !== 2) fail(`refresh banners: the two reload buttons called __silvisHardReset ${resets} time(s), expected 2`); else ok("refresh banners: 'Tap to reload' and 'Reload now' each call window.__silvisHardReset (cache + service-worker clear, then reload)");
+      await updBanner.locator("button[aria-label=Dismiss]").click();
+      await p2.waitForTimeout(200);
+      if (await p2.locator("div[role=status]:has-text('New version available')").count()) fail("update banner: Dismiss did not hide it"); else ok("update banner: Dismiss hides it for this version (the forced-minimum banner has no dismiss)");
+      if (!(await minBanner.count())) fail("forced-refresh banner disappeared on its own - it must persist until the reload");
+    } catch (e) { fail("refresh banners: " + errLine(e)); try { await p2.screenshot({ path: path.join(OUT, "failure-refresh.png"), fullPage: true }); } catch (e2) {} }
+    minVersionOverride = null;
+    await p2.close();
+  }
+
+  // ====================== Prompt 11: data management end to end (recorded writes) ======================
+  {
+    const p3 = await context.newPage();
+    watchPage(p3, "data");
+    await p3.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await p3.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
+    const dialogs3 = [];
+    let promptAnswer = null; // null = dismiss the RESET prompt
+    p3.on("dialog", (d) => { dialogs3.push({ type: d.type(), message: d.message() }); if (d.type() === "prompt") { if (promptAnswer === null) d.dismiss(); else d.accept(promptAnswer); } else d.accept(); });
+    const bodyText3 = () => p3.evaluate(() => document.body.innerText || "");
+    const covCount = async () => { await p3.click('button[data-tab="calendar"]'); await p3.waitForSelector("[data-testid=cov-open-primary]", { timeout: 5000 }); await p3.waitForTimeout(300); return p3.$eval("[data-testid=cov-open-primary]", el => Number(el.getAttribute("data-count"))); };
+    const toSettings = async () => { await p3.click('button[data-tab="settings"]'); await p3.waitForSelector("[data-testid=export-backup]", { timeout: 8000 }); };
+    const normRow = (r) => ({ day: r.day, primary_id: r.primary_id || null, backup_id: r.backup_id || null, primary_locked: r.primary_locked === true, backup_locked: r.backup_locked === true, source: r.source || null, external_cover: r.external_cover || null, note: (r.note === undefined || r.note === null || r.note === "") ? null : String(r.note) });
+    const mapText = (rows) => JSON.stringify(rows.map(normRow).sort((a, b) => a.day < b.day ? -1 : 1));
+    try {
+      await loadWithRetry(p3, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "data page");
+      await p3.waitForSelector("text=Synced", { timeout: 30000 });
+      const openBefore = await covCount();
+      await p3.waitForTimeout(3300); // past the autosave hydration window
+      // Live counts (anon) for the export comparison - the fixture lengths when the live table is empty.
+      const liveCount = async (t) => {
+        if (fixture && fixture[t]) return fixture[t].length;
+        const res = await fetch(`https://${SUPABASE_HOST}/rest/v1/${t}?select=${t === "schedule_days" ? "day" : "id"}&limit=1`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY, prefer: "count=exact" } });
+        if (!res.ok) throw new Error(`${t} count read failed: HTTP ${res.status}`);
+        return Number((res.headers.get("content-range") || "").split("/")[1] || "0");
+      };
+      const liveCounts = { schedule_days: await liveCount("schedule_days"), time_off: await liveCount("time_off"), availability: await liveCount("availability") };
+      // (1) Export
+      await toSettings();
+      const [dl] = await Promise.all([p3.waitForEvent("download", { timeout: 8000 }), p3.click("[data-testid=export-backup]")]);
+      const expName = dl.suggestedFilename(); const expPath = path.join(OUT, expName); await dl.saveAs(expPath);
+      const expText = fs.readFileSync(expPath, "utf8");
+      const backup = JSON.parse(expText);
+      const shapeOk = ["config", "schedule_days", "time_off", "availability"].every(k => k in backup) && backup.config && typeof backup.config === "object" && !Array.isArray(backup.config) && [backup.schedule_days, backup.time_off, backup.availability].every(Array.isArray);
+      if (!shapeOk) fail("Export backup: shape is not { config, schedule_days, time_off, availability }: keys " + Object.keys(backup).join(","));
+      else if (backup.schedule_days.length !== liveCounts.schedule_days || backup.time_off.length !== liveCounts.time_off || backup.availability.length !== liveCounts.availability) fail(`Export backup: counts ${backup.schedule_days.length}/${backup.time_off.length}/${backup.availability.length} differ from the live anon data ${liveCounts.schedule_days}/${liveCounts.time_off}/${liveCounts.availability} (schedule_days/time_off/availability)`);
+      else if ("schedule" in backup.config || "vacations" in backup.config || "availability" in backup.config) fail("Export backup: config carries operational keys: " + Object.keys(backup.config).join(","));
+      else if (!/^silvis-call-backup-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/.test(expName)) fail("Export backup: filename " + expName);
+      else if (!noAddress(expText)) fail("Export backup: the file carries an email address");
+      else ok(`Export backup: ${expName} = { config (${Object.keys(backup.config).join(", ")}), schedule_days ${backup.schedule_days.length}, time_off ${backup.time_off.length}, availability ${backup.availability.length} } - counts equal the live anon data`);
+      // (2) Malformed imports are refused before any write
+      const beforeBad = writes.length;
+      await p3.setInputFiles("[data-testid=import-file]", { name: "bad-shape.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ config: [], schedule_days: [] })) });
+      const badToast = await waitFor(async () => /backup shape invalid: config must be an object/i.test(await bodyText3()), 5000);
+      await p3.setInputFiles("[data-testid=import-file]", { name: "bad-day.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ config: {}, schedule_days: [{ day: "nope" }] })) });
+      const badDayToast = await waitFor(async () => /schedule_days\[0\] has no valid day/.test(await bodyText3()), 5000);
+      await p3.setInputFiles("[data-testid=import-file]", { name: "not-json.json", mimeType: "application/json", buffer: Buffer.from("{ not json") });
+      const notJsonToast = await waitFor(async () => /not valid JSON/.test(await bodyText3()), 5000);
+      const badWrites = writesSince(beforeBad).filter(w => /\/rest\/v1\/(call_schedule_snapshots|schedule_days|call_schedule_data|time_off|availability)/.test(w.path));
+      const badConfirm = dialogs3.some(d => d.type === "confirm" && /Import this backup/.test(d.message));
+      if (!badToast || !badDayToast || !notJsonToast) fail(`Import backup (malformed): toasts missing - shape ${badToast}, bad day ${badDayToast}, not-JSON ${notJsonToast}`);
+      else if (badWrites.length || badConfirm) fail("Import backup (malformed): a write or the confirm happened: " + JSON.stringify(badWrites.map(w => w.method + " " + w.path)) + " confirm=" + badConfirm);
+      else ok("Import backup: { config: [] }, a row without a valid day and non-JSON are each refused with a toast before the confirm - zero writes");
+      // (3) Factory reset: the typed word must be RESET
+      promptAnswer = "reset";
+      const beforeWrong = writes.length;
+      await p3.click("[data-testid=reset-all-data]");
+      // The header status shows for 2 s and an earlier save's own 2 s clear can cut it short - poll from the click.
+      const wrongStatus = await waitFor(async () => /Reset cancelled/i.test(await bodyText3()), 2500, 50); // the header sub-line is CSS-uppercased in innerText
+      await p3.waitForTimeout(500);
+      const wrongWrites = writesSince(beforeWrong).filter(w => /\/rest\/v1\/(call_schedule_snapshots|schedule_days|call_schedule_data)/.test(w.path));
+      const wrongPrompt = dialogs3.filter(d => d.type === "prompt").pop();
+      if (!wrongPrompt || !/Type  RESET  \(all caps\) to confirm/.test(wrongPrompt.message)) fail("Factory reset: no RESET prompt: " + JSON.stringify(wrongPrompt));
+      else if (wrongWrites.length || !wrongStatus) fail(`Factory reset: typing 'reset' (lower case) must cancel with no write - writes ${wrongWrites.length}, status 'Reset cancelled' ${wrongStatus}`);
+      else ok("Factory reset: the prompt demands RESET in caps; 'reset' cancels with no snapshot / delete / blob write");
+      // (4) Factory reset with the snapshot insert failing: nothing deleted
+      failSnapshotInsert = true; promptAnswer = "RESET";
+      const beforeSnapFail = writes.length;
+      await p3.click("[data-testid=reset-all-data]");
+      await waitFor(() => writesSince(beforeSnapFail, "/rest/v1/call_schedule_snapshots").length > 0, 30000);
+      await p3.waitForTimeout(900);
+      const sf = writesSince(beforeSnapFail);
+      const sfSnap = sf.find(w => w.path.startsWith("/rest/v1/call_schedule_snapshots"));
+      const sfDel = sf.filter(w => w.method === "DELETE");
+      const sfBlob = sf.filter(w => w.path.startsWith("/rest/v1/call_schedule_data"));
+      const sfAudit = auditSince(beforeSnapFail, "data.reset");
+      const sfToast = /reset cancelled\. Nothing was deleted/.test(await bodyText3());
+      failSnapshotInsert = false;
+      if (!sfSnap || !sfSnap.forcedFail) fail("Factory reset (snapshot failing): the snapshot insert was not attempted / not the forced failure");
+      else if (sfDel.length || sfBlob.length) fail("Factory reset (snapshot failing): something was deleted or written: " + JSON.stringify(sf.map(w => w.method + " " + w.path)));
+      else if (sfAudit) fail("Factory reset (snapshot failing): an audit 'data.reset' row was written although nothing happened: " + JSON.stringify(sfAudit.detail));
+      else if (!sfToast) fail("Factory reset (snapshot failing): no 'reset cancelled. Nothing was deleted' toast");
+      else ok("Factory reset with the snapshot insert answering 500: the attempt is recorded, NO schedule_days DELETE, NO blob write, no audit row, toast says nothing was deleted");
+      // (5) Factory reset for real: snapshot BEFORE the delete, then the blob reset, then the audit row
+      const beforeReset = writes.length;
+      await p3.click("[data-testid=reset-all-data]");
+      await waitFor(() => writesSince(beforeReset).some(w => w.method === "DELETE" && w.path === "/rest/v1/schedule_days?day=not.is.null"), 30000);
+      await waitFor(() => !!auditSince(beforeReset, "data.reset"), 10000);
+      await p3.waitForTimeout(1200);
+      const rs = writesSince(beforeReset);
+      const iSnap = rs.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/call_schedule_snapshots"));
+      const iDel = rs.findIndex(w => w.method === "DELETE" && w.path === "/rest/v1/schedule_days?day=not.is.null");
+      const iBlob = rs.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/call_schedule_data") && /_intentionalClear/.test(w.body));
+      const iAudit = rs.findIndex(w => w.path.startsWith("/rest/v1/audit_log") && /"data\.reset"/.test(w.body));
+      const resetAudit = auditSince(beforeReset, "data.reset");
+      const snapRow = snapStore.slice().reverse().find(r => r.reason === "reset_all_data");
+      const openAfterReset = await covCount();
+      const resetStatus = /No schedule days in the database yet/.test(await bodyText3());
+      if (iSnap < 0 || rs[iSnap].snapshotReason !== "reset_all_data") fail("Factory reset: no 'reset_all_data' snapshot insert: " + JSON.stringify(rs.map(w => w.method + " " + w.path)));
+      else if (iDel < 0 || iDel < iSnap) fail(`Factory reset: the schedule_days DELETE (#${iDel}) did not follow the snapshot (#${iSnap})`);
+      else if (iBlob < 0 || iBlob < iDel) fail(`Factory reset: the blob reset (#${iBlob}) did not follow the DELETE (#${iDel})`);
+      else if (!resetAudit || resetAudit.detail.outcome !== "ok" || iAudit < iDel) fail("Factory reset: audit 'data.reset' missing, not outcome ok, or logged before the delete: " + JSON.stringify(resetAudit && resetAudit.detail));
+      else if (!snapRow || !snapRow.data || snapRow.data.schedule_days.length !== backup.schedule_days.length) fail(`Factory reset: the captured snapshot does not hold the ${backup.schedule_days.length} live day rows: ` + (snapRow ? snapRow.data.schedule_days.length : "no row"));
+      else if (openAfterReset !== 60 || !resetStatus) fail(`Factory reset: the calendar should read empty afterwards (open primary 60, 'No schedule days' note) - got ${openAfterReset}, note ${resetStatus}`);
+      else ok(`Factory reset (RESET typed): snapshot 'reset_all_data' (#${iSnap}, ${snapRow.data.schedule_days.length} days / ${snapRow.data.time_off.length} time_off / ${snapRow.data.availability.length} availability) -> DELETE schedule_days?day=not.is.null (#${iDel}) -> blob reset (#${iBlob}) -> audit data.reset outcome ok (#${iAudit}); calendar now empty (open primary 60 of 60)`);
+      // (6) Restore from that snapshot: config upsert, CAS day POSTs, table upserts; byte-compare
+      await toSettings();
+      const restoreCard = p3.locator("text=Restore from snapshot");
+      if (!(await p3.$("[data-testid=snapshot-row]"))) await restoreCard.click();
+      await p3.waitForSelector("[data-testid=snapshot-row]", { timeout: 10000 });
+      const row = p3.locator(`[data-testid=snapshot-row][data-snapshot-id="${snapRow ? snapRow.id : "none"}"]`);
+      if (!(await row.count())) throw new Error("the 'Before factory reset' snapshot is not listed in Settings (rows: " + (await p3.$$eval("[data-testid=snapshot-row]", els => els.map(e => e.getAttribute("data-reason")))).join(",") + ")");
+      const rowLabel = (await row.innerText()).replace(/\s+/g, " ");
+      const beforeRestore = writes.length;
+      await row.locator("[data-testid=snapshot-restore]").click();
+      await waitFor(() => !!auditSince(beforeRestore, "snapshot.restore"), 60000);
+      await p3.waitForTimeout(1500);
+      const rr = writesSince(beforeRestore);
+      const jSnap = rr.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/call_schedule_snapshots"));
+      const jCfg = rr.findIndex((w, i) => i > jSnap && w.method === "POST" && w.path === "/rest/v1/call_schedule_data");
+      const dayW = rr.filter(w => w.path.startsWith("/rest/v1/schedule_days"));
+      const jDay = dayW.length ? rr.indexOf(dayW[0]) : -1;
+      const jTo = rr.findIndex(w => w.method === "POST" && w.path === "/rest/v1/time_off?on_conflict=id");
+      const jAv = rr.findIndex(w => w.method === "POST" && w.path === "/rest/v1/availability?on_conflict=id");
+      const cfgBody = jCfg >= 0 ? bodyOf(rr[jCfg]) : null;
+      const casOk = dayW.every(w => w.method === "POST" && /return=representation/.test(w.prefer || "") && (bodyOf(w) || {}).version === 1 && (bodyOf(w) || {}).updated_by === "s1");
+      const restoredMap = mapText(dayW.map(bodyOf).filter(Boolean));
+      const snapMap = mapText(snapRow.data.schedule_days);
+      const exportMap = mapText(backup.schedule_days);
+      const restoreAudit = auditSince(beforeRestore, "snapshot.restore");
+      const restoreAlert = dialogs3.find(d => d.type === "alert" && /Restore complete/.test(d.message));
+      const openAfterRestore = await covCount();
+      if (!/Before factory reset/.test(rowLabel)) fail("Restore: the snapshot row is not labelled 'Before factory reset': " + rowLabel);
+      else if (jSnap < 0 || rr[jSnap].snapshotReason !== "before_restore") fail("Restore: no 'before_restore' snapshot first: " + JSON.stringify(rr.slice(0, 4).map(w => w.method + " " + w.path)));
+      else if (jCfg < 0 || !cfgBody || JSON.stringify(cfgBody.data) !== JSON.stringify(snapRow.data.config) || !/merge-duplicates/.test(rr[jCfg].prefer || "")) fail("Restore: the config upsert is missing, not after the snapshot, or its data differs from the snapshot's config");
+      else if (jDay < 0 || jDay < jCfg) fail(`Restore: the schedule_days writes (#${jDay}) did not follow the config upsert (#${jCfg})`);
+      else if (dayW.length !== snapRow.data.schedule_days.length || !casOk) fail(`Restore: expected ${snapRow.data.schedule_days.length} CAS POSTs (version 1, return=representation, updated_by s1), got ${dayW.length}, CAS-shaped ${casOk}`);
+      else if (restoredMap !== snapMap) fail("Restore: BYTE-COMPARE FAILED - the restored day rows differ from the snapshot's rows");
+      else if (snapMap !== exportMap) fail("Restore: BYTE-COMPARE FAILED - the snapshot's day rows differ from the JSON export taken before the reset");
+      else if ((snapRow.data.time_off.length > 0 && (jTo < jDay || (bodyOf(rr[jTo]) || []).length !== snapRow.data.time_off.length)) || (snapRow.data.availability.length > 0 && (jAv < jDay || (bodyOf(rr[jAv]) || []).length !== snapRow.data.availability.length))) fail(`Restore: time_off / availability upserts wrong (time_off #${jTo}, availability #${jAv})`);
+      else if (!restoreAudit || restoreAudit.detail.snapshot_id !== snapRow.id) fail("Restore: audit 'snapshot.restore' missing or not for this snapshot: " + JSON.stringify(restoreAudit && restoreAudit.detail));
+      else if (!restoreAlert) fail("Restore: no 'Restore complete' summary");
+      else if (openAfterRestore !== openBefore) fail(`Restore: the coverage strip reads ${openAfterRestore} open primary, ${openBefore} before the reset`);
+      else ok(`Restore from 'Before factory reset': snapshot before_restore (#${jSnap}) -> config upsert (#${jCfg}, data == snapshot config) -> ${dayW.length} CAS POSTs v1 (#${jDay}..) -> time_off upsert (#${jTo}, ${snapRow.data.time_off.length}) + availability upsert (#${jAv}, ${snapRow.data.availability.length}); restored map == snapshot map == export map (byte compare, ${restoredMap.length} bytes); audit snapshot.restore; coverage strip back to ${openAfterRestore} open primary`);
+      if (!rr.every(w => noAddress(w.body))) fail("Restore: a write body carries an email address");
+      // (7) A valid import of the export taken before the reset: snapshot first; the state already matches, so no day is rewritten
+      await toSettings();
+      const beforeImp = writes.length;
+      await p3.setInputFiles("[data-testid=import-file]", { name: expName, mimeType: "application/json", buffer: Buffer.from(expText) });
+      await waitFor(() => !!auditSince(beforeImp, "data.import"), 60000);
+      await p3.waitForTimeout(1200);
+      const ir = writesSince(beforeImp);
+      const kSnap = ir.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/call_schedule_snapshots"));
+      const kCfg = ir.findIndex((w, i) => i > kSnap && w.method === "POST" && w.path === "/rest/v1/call_schedule_data");
+      const kDays = ir.filter(w => w.path.startsWith("/rest/v1/schedule_days"));
+      const kTo = ir.findIndex(w => w.method === "POST" && w.path === "/rest/v1/time_off?on_conflict=id");
+      const impConfirm = dialogs3.find(d => d.type === "confirm" && /Import this backup/.test(d.message));
+      const impAudit = auditSince(beforeImp, "data.import");
+      if (kSnap < 0 || ir[kSnap].snapshotReason !== "before_import") fail("Import backup (valid): no 'before_import' snapshot first: " + JSON.stringify(ir.slice(0, 4).map(w => w.method + " " + w.path)));
+      else if (kCfg < 0) fail("Import backup (valid): no config upsert after the snapshot");
+      else if (kDays.length) fail(`Import backup (valid): ${kDays.length} schedule_days write(s) although the map already equals the backup`);
+      else if (!impConfirm || !impConfirm.message.includes(`${backup.schedule_days.length} schedule day(s), ${backup.time_off.length} vacation row(s), ${backup.availability.length} availability row(s)`)) fail("Import backup (valid): the confirm does not state the counts: " + (impConfirm && impConfirm.message.slice(0, 160)));
+      else if (!impAudit) fail("Import backup (valid): no audit 'data.import'");
+      else ok(`Import backup (the export, valid): confirm states ${backup.schedule_days.length} / ${backup.time_off.length} / ${backup.availability.length}; snapshot before_import (#${kSnap}) -> config upsert (#${kCfg}) -> 0 day writes (map unchanged) -> time_off upsert (#${kTo}); audit data.import`);
+      await p3.screenshot({ path: path.join(OUT, "data-management.png"), fullPage: true });
+    } catch (e) { fail("data management: " + errLine(e)); try { await p3.screenshot({ path: path.join(OUT, "failure-data.png"), fullPage: true }); } catch (e2) {} }
+    failSnapshotInsert = false;
+    await p3.close();
+  }
 } catch (e) {
   fail("harness exception: " + (e && e.stack || e));
   try { await page.screenshot({ path: path.join(OUT, "failure.png"), fullPage: true }); } catch (e2) {}

@@ -38,7 +38,12 @@ function jwtIsFresh(token) {
   try {
     const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
     return typeof payload.exp === "number" && payload.exp * 1000 > Date.now() + 30000;
-  } catch (e) { return false; }
+  } catch (e) {
+    // Still "stale" by contract, but never silently: an undecodable token in
+    // storage is worth a line in the console (Prompt 11 hardening).
+    console.warn("jwtIsFresh: stored token is not a decodable JWT - treating it as stale:", e);
+    return false;
+  }
 }
 
 // READ headers: like dbAuthHeaders(), but if the stored token is expired or
@@ -153,7 +158,18 @@ const db = {
       method: "POST", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
       body: JSON.stringify(row),
     });
-    const data = await res.json();
+    // Read the body as TEXT and check res.ok BEFORE parsing: a non-JSON error
+    // body (an HTML 502/504 from a proxy) used to surface as a SyntaxError
+    // instead of { error } with the HTTP status (Prompt 11 hardening).
+    const text = await res.text().catch(() => "");
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; }
+    catch (e) {
+      if (res.ok) { console.warn(`db.insert(${table}): 2xx with a non-JSON body`, text.slice(0, 120)); return { data: null, error: { message: `HTTP ${res.status} with a non-JSON body`, body: text.slice(0, 200) } }; }
+      data = { message: `HTTP ${res.status} ${text.slice(0, 200)}`, status: res.status };
+    }
+    if (!res.ok) console.warn(`db.insert(${table}) failed: HTTP ${res.status}`, text.slice(0, 200));
+    if (!res.ok && !data) data = { message: `HTTP ${res.status}`, status: res.status };
     // On failure, return data:null (NOT the PostgREST error body) so callers'
     // `if (data)` success-guards can't mis-fire on the error object — that
     // false-success masked the RLS-blocked notifications insert. `error` still
@@ -269,7 +285,16 @@ const snapshots = {
       }
       const cfgRow = cfgRows[0] || null;
       let config = cfgRow && cfgRow.data;
-      if (typeof config === "string") { try { config = JSON.parse(config); } catch (e) { config = null; } }
+      if (typeof config === "string") {
+        // A blob that does not parse is CORRUPT, not empty: treating it as
+        // empty let the snapshot be skipped with ok:true and a destructive
+        // action proceed with nothing saved. Fail the capture instead.
+        try { config = JSON.parse(config); }
+        catch (e) {
+          console.warn("Snapshot capture: the config blob is not valid JSON - refusing to snapshot (and so blocking the action)", e);
+          return { ok: false, error: "config blob is not valid JSON: " + String(e && e.message || e) };
+        }
+      }
       const blobEmpty = !config || typeof config !== "object" || Object.keys(config).length === 0;
       // Skip ONLY when every table is empty AND the blob is empty - a genuine
       // 200 with nothing worth keeping. A real failure returned above, so an
@@ -329,7 +354,7 @@ const snapshots = {
       const newest = recent?.[0]?.created_at ? new Date(recent[0].created_at).getTime() : 0;
       if (Date.now() - newest < hours * 3600 * 1000) return { ok: true, skipped: "fresh" };
       return await this.capture(reason || "periodic");
-    } catch (e) { return { ok: false, error: String(e) }; }
+    } catch (e) { console.warn("Snapshot captureIfStale failed:", e); return { ok: false, error: String(e) }; }
   },
   // Validate a snapshot / JSON-backup payload of the daily shape. Returns the
   // normalized payload or throws with a specific reason. Shared by restore()
@@ -499,7 +524,7 @@ const auth = {
       const token = localStorage.getItem(AUTH_TOKEN_KEY);
       const refresh = localStorage.getItem(AUTH_REFRESH_KEY);
       return token ? { access_token: token, refresh_token: refresh } : null;
-    } catch(e) { return null; }
+    } catch(e) { console.warn("auth.getSession: session read failed (reads as signed out):", e); return null; }
   },
 
   // Store session
@@ -565,6 +590,9 @@ const auth = {
       if (session.refresh_token) {
         const refreshed = await auth._refresh(session.refresh_token);
         if (refreshed?.user) return refreshed;
+        // The refresh could not be attempted (network) - the session is kept
+        // and the caller sees error:"network", exactly like the first call.
+        if (refreshed?.error === "network") return { user: null, error: "network" };
       }
       // Refresh wasn't possible or genuinely failed — token is dead.
       auth._clearSession();
@@ -585,11 +613,21 @@ const auth = {
         headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
-      if (!res.ok) { auth._clearSession(); return { user: null }; }
+      if (!res.ok) {
+        console.warn(`auth._refresh: refresh token rejected (HTTP ${res.status}) - clearing the stored session`);
+        auth._clearSession();
+        return { user: null };
+      }
       const data = await res.json();
       auth._saveSession(data);
       return { user: data.user, session: data };
-    } catch(e) { auth._clearSession(); return { user: null }; }
+    } catch(e) {
+      // A THROWN fetch is a network error (offline, DNS, a transient blip),
+      // not a rejected token. Clearing the session here silently logged
+      // people out on a bad connection; keep it and report "network".
+      console.warn("auth._refresh: network error - session kept, refresh will be retried:", e);
+      return { user: null, error: "network" };
+    }
   },
 
   // Sign out
@@ -597,10 +635,11 @@ const auth = {
     const session = auth.getSession();
     if (session?.access_token) {
       try {
-        await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
           method: "POST",
           headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
         });
+        if (!res.ok) console.warn(`Server-side logout answered HTTP ${res.status} (session cleared locally anyway):`, (await res.text().catch(() => "")).slice(0, 160));
       } catch(e) { console.warn("Server-side logout failed (session cleared locally anyway):", e); }
     }
     auth._clearSession();
@@ -660,14 +699,19 @@ const auth = {
   },
 };
 
-// DB helper that uses auth token for user_profiles table
+// DB helper that uses auth token for user_profiles table. NO CALLERS in the
+// app today (index-source.html reads profiles through fetchProfile /
+// loadAllProfilesLoud, which tell "failed" from "empty"). Kept as bones for
+// the Davenport parity, but every read now THROWS on a non-2xx: the old
+// shape (null / [] on failure) is exactly the silent failure-equals-empty
+// contract this codebase must not offer (Prompt 11 hardening).
 const dbAuth = {
   async getProfile(userId) {
     const hdrs = auth.getAuthHeaders();
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?id=eq.${userId}&select=*`, { headers: hdrs });
-    if (!res.ok) return null;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?id=eq.${encodeURIComponent(userId)}&select=*`, { headers: hdrs });
+    if (!res.ok) throw new Error(`dbAuth.getProfile failed: HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 160)}`);
     const rows = await res.json();
-    return rows?.[0] || null;
+    return Array.isArray(rows) ? (rows[0] || null) : null;
   },
   async upsertProfile(profile) {
     const hdrs = auth.getAuthHeaders();
@@ -676,14 +720,16 @@ const dbAuth = {
       headers: { ...hdrs, Prefer: "resolution=merge-duplicates,return=representation" },
       body: JSON.stringify(profile),
     });
-    if (!res.ok) return { error: await res.text() };
+    if (!res.ok) { const t = await res.text().catch(() => ""); console.warn(`dbAuth.upsertProfile failed: HTTP ${res.status}`, t.slice(0, 160)); return { data: null, error: t || `HTTP ${res.status}` }; }
     const data = await res.json();
-    return { data: data?.[0] || data, error: null };
+    return { data: Array.isArray(data) ? (data[0] || null) : data, error: null };
   },
   async getAllProfiles() {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?select=*`, { headers: dbAuthHeaders() });
-    if (!res.ok) return [];
-    return await res.json();
+    if (!res.ok) throw new Error(`dbAuth.getAllProfiles failed: HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 160)}`);
+    const rows = await res.json();
+    if (!Array.isArray(rows)) throw new Error("dbAuth.getAllProfiles: unexpected response body (not an array)");
+    return rows;
   },
 };
 
@@ -716,12 +762,12 @@ const biometric = {
 
   // Check if biometric is already enrolled
   isEnrolled() {
-    try { return !!localStorage.getItem(BIOMETRIC_CRED_KEY); } catch(e) { return false; }
+    try { return !!localStorage.getItem(BIOMETRIC_CRED_KEY); } catch(e) { console.warn("biometric.isEnrolled: storage read failed (reads as not enrolled):", e); return false; }
   },
 
   // Get stored user email for biometric
   getStoredUser() {
-    try { return localStorage.getItem(BIOMETRIC_USER_KEY) || null; } catch(e) { return null; }
+    try { return localStorage.getItem(BIOMETRIC_USER_KEY) || null; } catch(e) { console.warn("biometric.getStoredUser: storage read failed:", e); return null; }
   },
 
   // Register biometric credential (call after successful email/password login)

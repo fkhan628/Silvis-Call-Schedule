@@ -251,7 +251,7 @@ function slotLabel(dayStr, role) {
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   let d;
-  try { d = parse(String(dayStr)); } catch (e) { d = null; }
+  try { d = parse(String(dayStr)); } catch (e) { console.warn("slotLabel: could not parse", dayStr, e); d = null; }
   if (!d || isNaN(d.getTime())) return `${dayStr || "?"} ${role || ""}`.trim();
   const md = `${DOW[d.getDay()]} ${MON[d.getMonth()]} ${d.getDate()}`;
   if (role === "primary") return `Primary - ${md}`;
@@ -331,7 +331,7 @@ function escHtml(s) {
 // browser, the local palette by index elsewhere.
 function exportColorsFor(entry, idx) {
   if (typeof surgeonColors === "function" && entry) {
-    try { const c = surgeonColors(entry.code || entry.name, idx); if (c && c.tx) return c; } catch (e) { /* fall through */ }
+    try { const c = surgeonColors(entry.code || entry.name, idx); if (c && c.tx) return c; } catch (e) { console.warn("exportColorsFor: surgeonColors threw - using the export palette", e); }
   }
   return EXPORT_PAL[(idx || 0) % EXPORT_PAL.length];
 }
@@ -914,7 +914,7 @@ function buildPrintableCalendarHTML(opts) {
 <div class="toolbar">
   <button onclick="window.print()">Print</button>
   <button class="secondary" onclick="
-    try { window.close(); } catch(e) {}
+    try { window.close(); } catch(e) { console.warn('close blocked by the browser', e); }
     setTimeout(function() {
       if (!window.closed) {
         document.body.innerHTML = '<div style=\\'text-align:center;padding:60px 20px;font-family:Arial,Helvetica,sans-serif;color:#5a6a78\\'>You can close this tab now.</div>';
@@ -1047,7 +1047,10 @@ function suCollapseDates(dates) {
   return out;
 }
 // suNextMatchingDates(matcher, pattern, fromIso, n, horizonDays) -> the next n
-// dates on/after fromIso for which matcher(date, pattern) is true.
+// dates on/after fromIso for which matcher(date, pattern) is true. A matcher
+// that THROWS (a broken pattern) stops the scan; the partial list comes back
+// with `.error` set to the message so the Rules card can say "pattern is
+// invalid" instead of "no matching date" (Prompt 11 hardening).
 function suNextMatchingDates(matcher, pattern, fromIso, n, horizonDays) {
   const out = [];
   if (typeof matcher !== "function" || !pattern || !suIsIso(fromIso)) return out;
@@ -1055,7 +1058,12 @@ function suNextMatchingDates(matcher, pattern, fromIso, n, horizonDays) {
   for (let k = 0; k < limit && out.length < (n || 8); k++) {
     const d = suAddDays(fromIso, k);
     let hit = false;
-    try { hit = !!matcher(d, pattern); } catch (e) { return out; }
+    try { hit = !!matcher(d, pattern); }
+    catch (e) {
+      console.warn("suNextMatchingDates: the pattern matcher threw for", pattern, e);
+      out.error = String(e && e.message || e);
+      return out;
+    }
     if (hit) out.push(d);
   }
   return out;
@@ -1093,6 +1101,28 @@ function suOpenPrimaryDays(schedule, fromIso, count) {
   for (let k = 0; k < (count || 60); k++) {
     const d = suAddDays(fromIso, k);
     if (!dayHolder(sched[d] || null, "primary")) out.push(d);
+  }
+  return out;
+}
+// suCoverageGlance(schedule, fromIso, count, eastForecast, threshold) -> the
+// "coverage at a glance" numbers for the next `count` days from fromIso
+// (Prompt 11): open primary days, open backup days, and days where a surgeon
+// whose East forecast is at/above the threshold holds PRIMARY (should be 0 -
+// the generator treats those days as busy). eastForecast is
+// { surgeonId: { day: probability } } (ctxInputs.eastForecast shape). Pure.
+//   -> { openPrimary: [days], openBackup: [days], forecastPrimary: [{ day, id, p }] }
+function suCoverageGlance(schedule, fromIso, count, eastForecast, threshold) {
+  const sched = schedule || {};
+  const out = { openPrimary: [], openBackup: [], forecastPrimary: [] };
+  if (!suIsIso(fromIso)) return out;
+  const th = typeof threshold === "number" ? threshold : 0.5;
+  const fc = eastForecast || {};
+  for (let k = 0; k < (count || 60); k++) {
+    const d = suAddDays(fromIso, k);
+    const a = sched[d] || null;
+    if (!dayHolder(a, "primary")) out.openPrimary.push(d);
+    if (!dayHolder(a, "backup")) out.openBackup.push(d);
+    if (a && a.primary && fc[a.primary] && typeof fc[a.primary][d] === "number" && fc[a.primary][d] >= th) out.forecastPrimary.push({ day: d, id: a.primary, p: fc[a.primary][d] });
   }
   return out;
 }
@@ -1246,7 +1276,7 @@ function suMissingTimeOff(planRows, liveRows) {
 function suFmtTs(iso) {
   if (!iso) return "never";
   try { const d = new Date(iso); if (isNaN(d.getTime())) return String(iso); return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
-  catch (e) { return String(iso); }
+  catch (e) { console.warn("suFmtTs: could not format", iso, e); return String(iso); }
 }
 
 // Node entry point for test/data-layer.test.js. A no-op in the browser.
@@ -1408,7 +1438,7 @@ function schedulePublishedMsg(period, lines, maxLines) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
-    suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suAgeDays, suLastAssignedDay, suLastContiguousDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
+    suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
