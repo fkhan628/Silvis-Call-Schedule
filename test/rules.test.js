@@ -1628,8 +1628,12 @@ const wEast = withRows([row(KHAN, "available", W_TUE, "primary")], { eastBusyDay
 blocked(R.eligibility(wEast, W_TUE, P, KHAN), "east-busy", "W: a dated row on an East busy day - east-busy still hard");
 lacks(R.eligibility(wEast, W_TUE, P, KHAN).hard, "hard-never-weekday", "W: (the row did lift the OR-day rule; East is the block)");
 okElig(R.eligibility(wEast, W_TUE, B, KHAN), "W: backup on his East day stays allowed (eastBlocksBackup false)");
-const wFc = withRows([row(KHAN, "available", W_TUE, "primary")], { eastForecast: { [KHAN]: { [W_TUE]: 0.9 } } });
-blocked(R.eligibility(wFc, W_TUE, P, KHAN), "east-forecast-busy:0.90", "W: a forecast-busy day is an obligation too");
+// (merge with Prompt 12 C: the forecast is consulted only OUTSIDE the published coverage - EAST_COVER ends 2027-01-31 -
+// so the forecast-obligation case uses Tue 2027-02-02; inside coverage the published rows decide, see the C.1 tests)
+const W_TUE_OUT = "2027-02-02"; // a Tuesday outside EAST_COVER
+const wFc = withRows([row(KHAN, "available", W_TUE_OUT, "primary")], { eastForecast: { [KHAN]: { [W_TUE_OUT]: 0.9 } } });
+blocked(R.eligibility(wFc, W_TUE_OUT, P, KHAN), "east-forecast-busy:0.90", "W: a forecast-busy day (outside published coverage) is an obligation too");
+lacks(R.eligibility(wFc, W_TUE_OUT, P, KHAN).hard, "hard-never-weekday", "W: (the row lifted the OR-day rule there as well; the forecast is the block)");
 const W_THU = "2026-12-03"; // Thursday inside a synthetic vacation 12/3-12/4
 const wVac = withRows([row(KHAN, "available", W_THU, "primary"), row(KHAN, "available", "2026-12-02", "primary")], { timeOffRows: SA.seedToTimeOffRows(seed).concat([{ person_id: KHAN, start_date: W_THU, end_date: "2026-12-04" }]) });
 blocked(R.eligibility(wVac, W_THU, P, KHAN), "time-off:" + W_THU, "W: a dated row on a Thursday inside his vacation - time-off still hard");
