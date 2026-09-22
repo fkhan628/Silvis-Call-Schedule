@@ -128,8 +128,9 @@
     "responseTimeMinutes": 30,
     "defaultMaxConsecutiveDays": 2,
     "defaultMonthlyCap": {
-      "total": 8
+      "primary": 8
     },
+    "defaultMonthlyCapNote": "9/22 (Prompt 12 K): the group default cap is on PRIMARY days per calendar month (key 'primary'); backup days never count toward a monthly cap. A surgeon with no monthlyCap key gets this default; an explicit null means no cap. The legacy key 'total' is read as an alias with a warning.",
     "timeOff": {
       "kinds": [
         "vacation"
@@ -378,9 +379,10 @@
       "maxConsecutiveAnyRole": 3,
       "holidayUnitCountsAsOneDay": false,
       "monthlyCap": {
-        "total": 8,
+        "primary": 8,
         "preferred": 7
       },
+      "monthlyCapNote": "9/22 (Prompt 12 K): 8 PRIMARY days per month, hard; 7 preferred (soft). Backup days do not count toward either number (his 'total primary+backup <= 7-8' note predates the 9/22 rule).",
       "holidayPreference": "Split Christmas: every other day, or 2 on then off",
       "explicitAvailable": {
         "2026-10": [
@@ -434,7 +436,8 @@
       },
       "notes": [
         "In DeWitt and/or Jackson County most days",
-        "Total primary+backup per month \u2264 7\u20138; more than 2 consecutive 24h periods 'no longer an option'"
+        "Total primary+backup per month \u2264 7\u20138; more than 2 consecutive 24h periods 'no longer an option'",
+        "9/22 (Faraz, Prompt 12 K): the 7\u20138 is read as PRIMARY days per month (monthlyCap.primary 8 hard, preferred 7 soft); backup days never count toward it"
       ],
       "explicitListMonths": [
         "2026-10",
@@ -635,7 +638,7 @@
         "maxMajorHolidays": 1,
         "maxMajorHolidaysNote": "Hard, rolling 12 months (moved here from preferences; preferences.maxMajorHolidays kept for readers of the old shape). Window = fewer than 12 calendar months between unit START months, symmetric (a held later unit blocks an earlier date too): Thanksgiving 2026 -> Thanksgiving 2027 and Christmas -> Christmas are 12 months and do not collide; Christmas 2026 -> Thanksgiving 2027 (11) does."
       },
-      "monthlyCapNote": "No cap stated by Philip. Absent monthlyCap means the group default (8 total) applies from November per guide section 5 - flagged for Faraz: his own October was 15 days; raise in Setup if he should carry more.",
+      "monthlyCapNote": "No cap stated by Philip. Absent monthlyCap means the group default (8 PRIMARY days per month; backup days never count - 9/22, Prompt 12 K) applies from November per guide section 5. His locked October is 7 primaries + 8 backups: under the primary cap, over his explicit backupCap of 7 (reported as a lock violation, kept as a fact). Raise in Setup if he should carry more.",
       "explicitListMonths": [
         {
           "month": "2026-10",
@@ -699,10 +702,10 @@
         "backupNote": "9/22: backup is open on every weekday (backup:true throughout, standalone weekend days included); only the primary column carries his Clinton / Monday / Fri+Sat+Sun-block restrictions."
       },
       "monthlyCap": {
-        "total": 14,
-        "countsEastDays": "distinct-days",
-        "note": "'willing to take up to 14 days of call per month' \u2014 counts Silvis primary + backup plus East week days from the feed",
-        "countsEastDaysNote": "Count distinct calendar days on which he holds ANY call (Silvis primary/backup or East), attributed to the month each day falls in; when the East feed does not cover a month, count Silvis days only and warn."
+        "primary": 14,
+        "countsEastDays": true,
+        "note": "'willing to take up to 14 days of call per month' \u2014 9/22 (Prompt 12 K): counts his Silvis PRIMARY days plus the days of his East PRIMARY week from the feed; backup days on either site never count",
+        "countsEastDaysNote": "Count distinct calendar days per month: Silvis primary days (his derived East-BACKUP week is Silvis primary and counts here) plus every day of an East PRIMARY week (derived Silvis backup, 7 per week); a Silvis backup day on either kind of week adds nothing. When the East feed does not cover a month, count Silvis primaries only and warn."
       },
       "statedPreferenceNotARule": "Fierce described an ideal of East week \u2192 following week Silvis \u2192 ~10 days with no call. Faraz 9/21: NOT a rule \u2014 no penalty, no Davenport alignment; recorded only in his words.",
       "eastFeed": {
@@ -739,7 +742,8 @@
       "notes": [
         "Derived weeks (from the East feed) are hard locks; outside them he is in the pool under the weekday pattern above (Faraz 9/21)",
         "Must be on site at Silvis whenever he is primary (Faraz 9/21)",
-        "Week he is East primary \u2192 Silvis backup; week he is Silvis primary \u2192 East backup (his own words; matches the derivation rule)"
+        "Week he is East primary \u2192 Silvis backup; week he is Silvis primary \u2192 East backup (his own words; matches the derivation rule)",
+        "9/22 (Faraz, Prompt 12 K): his 14/month is PRIMARY days - Silvis primary days plus his East primary week (7); his Silvis backup week (East primary) and any other backup day never count"
       ]
     },
     "s6": {

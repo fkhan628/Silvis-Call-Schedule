@@ -144,12 +144,19 @@ eq(sched["2026-11-26"].backupLocked, false);
 
 step("buildContext basics");
 eq(ctx.activeIds, [KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR]);
-eq(R.monthlyCapFor(ctx, KHAN).total, null, "explicit null = no cap");
-eq(R.monthlyCapFor(ctx, ACTON).total, null, "explicit null = no cap");
-eq(R.monthlyCapFor(ctx, PHILIP).total, 8, "absent = group default");
-eq(R.monthlyCapFor(ctx, SARKAR).total, 8, "absent = group default");
-eq(R.monthlyCapFor(ctx, BURCHETT), { total: 8, preferred: 7 });
-eq(R.monthlyCapFor(ctx, FIERCE).total, 14);
+// 9/22 (Prompt 12 K): the cap is on PRIMARY days (monthlyCap.primary); monthlyCapFor
+// also returns total = primary for one release so UI callers mid-edit keep working.
+eq(R.monthlyCapFor(ctx, KHAN).primary, null, "explicit null = no cap");
+eq(R.monthlyCapFor(ctx, ACTON).primary, null, "explicit null = no cap");
+eq(R.monthlyCapFor(ctx, PHILIP).primary, 8, "absent = group default (defaultMonthlyCap.primary)");
+eq(R.monthlyCapFor(ctx, SARKAR).primary, 8, "absent = group default");
+eq(R.monthlyCapFor(ctx, BURCHETT), { primary: 8, preferred: 7, total: 8 }, "Burchett { primary: 8, preferred: 7 } plus the one-release total alias");
+eq(R.monthlyCapFor(ctx, FIERCE).primary, 14);
+eq(R.monthlyCapFor(ctx, FIERCE).total, 14, "total alias = primary");
+ok(ctx.per[FIERCE].countsEastDays === true, "seed: Fierce countsEastDays is boolean true");
+eq(ctx.per[FIERCE].eastPrimaryDays.size, 7, "K: eastPrimaryDays = the 7 days of his East PRIMARY week (derived Silvis backup 11/9-11/15) only");
+ok(ctx.per[FIERCE].eastPrimaryDays.has("2026-11-09") && ctx.per[FIERCE].eastPrimaryDays.has("2026-11-15") && !ctx.per[FIERCE].eastPrimaryDays.has("2026-12-09"), "K: the East BACKUP week (12/7-12/13, Silvis primary) is not an East primary-week day");
+ok(!ctx.warnings.some(w => /monthlyCap\.total|defaultMonthlyCap\.total/.test(w)), "K: the seed carries no legacy total keys: " + JSON.stringify(ctx.warnings));
 eq(R.resolveWeight(ctx, "medium"), 3);
 eq(R.resolveWeight(ctx, "strong"), 10);
 eq(R.resolveWeight(ctx, 4), 4);
@@ -234,11 +241,21 @@ const bk7 = {};
 ["2026-12-01", "2026-12-05", "2026-12-06", "2026-12-09", "2026-12-12", "2026-12-13", "2026-12-14"].forEach(d => { bk7[d] = { primary: BURCHETT }; });
 const bkc = makeCtx({ schedule: bk7 });
 const b8 = R.eligibility(bkc, "2026-12-19", P, BURCHETT);
-okElig(b8, "8th day is within the cap");
+okElig(b8, "8th primary is within the cap");
 hasSoft(b8, "over-preferred-cap:7", "but above the preferred 7");
+// 9/22 (Prompt 12 K): caps count PRIMARY days only - a backup never trips the cap or the preferred cap.
+lacksSoft(R.eligibility(bkc, "2026-12-19", B, BURCHETT), "over-preferred-cap", "K: 7 primaries held, a backup does not carry over-preferred-cap");
 bk7["2026-12-19"] = { primary: BURCHETT };
-blocked(R.eligibility(makeCtx({ schedule: bk7 }), "2026-12-20", P, BURCHETT), "monthly-cap:8");
-blocked(R.eligibility(makeCtx({ schedule: bk7 }), "2026-12-20", B, BURCHETT), "monthly-cap:8", "caps count both roles");
+blocked(R.eligibility(makeCtx({ schedule: bk7 }), "2026-12-20", P, BURCHETT), "monthly-cap:8", "8 primaries held, a 9th primary");
+okElig(R.eligibility(makeCtx({ schedule: bk7 }), "2026-12-20", B, BURCHETT), "K: 8 primaries held, a backup that month is still eligible (was monthly-cap:8 - caps counted both roles)");
+step("K: backup days never count toward the monthly cap");
+const bkB = {};
+["2026-12-01", "2026-12-05", "2026-12-06", "2026-12-09", "2026-12-12", "2026-12-13", "2026-12-14", "2026-12-19"].forEach(d => { bkB[d] = { backup: BURCHETT }; });
+const bkBctx = makeCtx({ schedule: bkB });
+const p1223 = R.eligibility(bkBctx, "2026-12-23", P, BURCHETT);
+okElig(p1223, "K: 8 backup days held in December and 0 primaries -> primary on a listed December day is eligible (was monthly-cap:8)");
+lacksSoft(p1223, "over-preferred-cap", "K: 8 backups do not reach the preferred cap either");
+okElig(R.eligibility(bkBctx, "2026-12-23", B, BURCHETT), "K: a 9th backup is eligible - no total cap on backup");
 
 /* ------------------------------------------------ Acton */
 step("Acton time off and trailing edge");
@@ -382,15 +399,45 @@ lacks(R.eligibility(ovr, "2026-11-11", P, FIERCE).hard, "derived-lock", "the ove
 const octDerived = makeCtx({ schedule: {}, eastDerived: [{ weekMonday: "2026-10-12", surgeonId: FIERCE, silvisRole: "primary" }] });
 lacks(R.eligibility(octDerived, "2026-10-14", B, FIERCE).hard, "derived-lock", "October is not derived (single locked day in the import instead)");
 step("Fierce 14-day cap counting East days");
+// 9/22 (Prompt 12 K): his 14 counts Silvis PRIMARY days plus the days of his East
+// PRIMARY week (derived Silvis backup, 11/9-11/15). Backup days on either site and
+// a Khan-style East busy-day set never count.
 const capFree = makeCtx({ schedule: {} });
-okElig(R.eligibility(capFree, "2026-11-04", P, FIERCE), "7 derived East days + 1 = 8");
-const capHit = makeCtx({ schedule: {}, eastBusyDays: { [FIERCE]: ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22"] } });
-blocked(R.eligibility(capHit, "2026-11-04", P, FIERCE), "monthly-cap:14", "7 derived + 7 East busy = 14, the 15th day is blocked");
-blocked(R.eligibility(capHit, "2026-11-30", B, FIERCE), "monthly-cap:14");
-okElig(R.eligibility(capHit, "2026-12-02", P, FIERCE), "December is a fresh month");
-// distinct days: a Silvis backup on an East day is not counted twice
-const capDistinct = makeCtx({ schedule: { "2026-11-09": { backup: FIERCE }, "2026-11-10": { backup: FIERCE } }, eastBusyDays: { [FIERCE]: ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20", "2026-11-21"] } });
-okElig(R.eligibility(capDistinct, "2026-11-04", P, FIERCE), "7 + 6 + 1 = 14 exactly");
+okElig(R.eligibility(capFree, "2026-11-04", P, FIERCE), "7 East primary-week days + 1 = 8");
+const capBusy = makeCtx({ schedule: {}, eastBusyDays: { [FIERCE]: ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22"] } });
+okElig(R.eligibility(capBusy, "2026-11-04", P, FIERCE), "K: an East busy-day set is not an East primary week - it does not count (was monthly-cap:14 at 7 + 7 + 1)");
+// November arithmetic pinned against 14: 7 East primary-week days + N Silvis primaries (assume-slots on non-adjacent days).
+const sixP = ["2026-11-02", "2026-11-18", "2026-11-20", "2026-11-23", "2026-11-25", "2026-11-27"].map(d => ({ date: d, role: P }));
+const sevenP = sixP.concat([{ date: "2026-11-30", role: P }]);
+okElig(R.eligibility(capFree, "2026-11-04", P, FIERCE, { assume: sixP }), "K: 7 East primary-week days + 6 Silvis primaries + this one = 14 exactly");
+blocked(R.eligibility(capFree, "2026-11-04", P, FIERCE, { assume: sevenP }), "monthly-cap:14", "K: 7 + 7 + 1 = 15");
+okElig(R.eligibility(capFree, "2026-11-16", B, FIERCE, { assume: sevenP }), "K: at 14 primaries a backup is still eligible - backup days never count");
+okElig(R.eligibility(capFree, "2026-12-02", P, FIERCE, { assume: sevenP }), "December is a fresh month");
+// A Silvis backup held on an East primary-week day is the same day, never counted twice.
+const capDistinct = makeCtx({ schedule: { "2026-11-09": { backup: FIERCE }, "2026-11-10": { backup: FIERCE } } });
+okElig(R.eligibility(capDistinct, "2026-11-04", P, FIERCE, { assume: sixP }), "K: 7 (with two of them held as Silvis backup) + 6 + 1 = 14 exactly");
+// His East BACKUP week 12/7-12/13 is Silvis primary: those 7 count as Silvis primaries, nothing is added for East.
+const decHeld = {};
+for (let k = 0; k < 7; k++) decHeld[R.rdAddDays("2026-12-07", k)] = { primary: FIERCE };
+const decCtx = makeCtx({ schedule: decHeld });
+const decSix = ["2026-12-02", "2026-12-18", "2026-12-21", "2026-12-23", "2026-12-28", "2026-12-30"].map(d => ({ date: d, role: P }));
+okElig(R.eligibility(decCtx, "2026-12-16", P, FIERCE, { assume: decSix }), "K: 7 Silvis primaries of the derived week + 6 + this one = 14");
+blocked(R.eligibility(decCtx, "2026-12-16", P, FIERCE, { assume: decSix.concat([{ date: "2026-12-04", role: P }]) }), "monthly-cap:14", "K: 7 + 7 + 1 = 15 in December");
+step("K: legacy monthlyCap.total alias and the group default");
+const srLeg = clone(seed.surgeonRules); srLeg[ACTON].monthlyCap = { total: 5 };
+const legCtx = makeCtx({ schedule: {}, surgeonRules: srLeg });
+eq(R.monthlyCapFor(legCtx, ACTON), { primary: 5, preferred: null, total: 5 }, "K: monthlyCap { total: 5 } behaves like { primary: 5 }");
+ok(legCtx.warnings.some(w => w.indexOf(ACTON) >= 0 && /monthlyCap\.total/.test(w)), "K: buildContext warns once per surgeon still on the legacy total key: " + JSON.stringify(legCtx.warnings));
+const fourP = ["2026-11-02", "2026-11-04", "2026-11-06", "2026-11-10"].map(d => ({ date: d, role: P }));
+okElig(R.eligibility(legCtx, "2026-11-16", P, ACTON, { assume: fourP }), "K: 4 + 1 = 5 within the aliased cap");
+blocked(R.eligibility(legCtx, "2026-11-16", P, ACTON, { assume: fourP.concat([{ date: "2026-11-12", role: P }]) }), "monthly-cap:5", "K: the aliased cap blocks the 6th primary");
+okElig(R.eligibility(legCtx, "2026-11-16", B, ACTON, { assume: fourP.concat([{ date: "2026-11-12", role: P }]) }), "K: and never a backup");
+const grLeg = clone(seed.groupRules); grLeg.defaultMonthlyCap = { total: 8 };
+const grCtx = makeCtx({ schedule: {}, groupRules: grLeg });
+eq(R.monthlyCapFor(grCtx, PHILIP).primary, 8, "K: groupRules.defaultMonthlyCap { total: 8 } still yields 8");
+ok(grCtx.warnings.some(w => /defaultMonthlyCap\.total/.test(w)), "K: and warns about the legacy group key: " + JSON.stringify(grCtx.warnings));
+const legStr = clone(seed.surgeonRules); legStr[FIERCE].monthlyCap = { primary: 14, countsEastDays: "distinct-days" };
+ok(makeCtx({ schedule: {}, surgeonRules: legStr }).per[FIERCE].countsEastDays === true, "K: the legacy countsEastDays string 'distinct-days' still reads as true");
 
 /* ------------------------------------------------ holidays */
 /* ------------------------------------------------ Prompt 12 A (9/22): consecutive-day rules */
@@ -507,11 +554,16 @@ eq(R.holidayUnitCandidates(ctx, units[0], B), [BURCHETT, PHILIP, FIERCE], "backu
 const xmasP = R.holidayUnitCandidates(clean, units[1], P);
 ok(xmasP.indexOf(ACTON) >= 0 && xmasP.indexOf(PHILIP) >= 0 && xmasP.indexOf(KHAN) >= 0, "Christmas primary candidates include Acton, Philip, Khan: " + xmasP);
 ok(xmasP.indexOf(SARKAR) < 0, "Sarkar is outside her window at Christmas");
-// unit-wide counting: Burchett with 7 December days already cannot take the 2-day Christmas unit (cap 8)
+// unit-wide counting: Burchett with 7 December PRIMARY days already cannot take the 2-day Christmas unit as primary (cap 8 primary days)
 const bx = {};
-["2026-12-01", "2026-12-05", "2026-12-06", "2026-12-09", "2026-12-12", "2026-12-13", "2026-12-14"].forEach(d => { bx[d] = { backup: BURCHETT }; });
+["2026-12-01", "2026-12-05", "2026-12-06", "2026-12-09", "2026-12-14", "2026-12-19", "2026-12-20"].forEach(d => { bx[d] = { primary: BURCHETT }; });
 ok(R.holidayUnitCandidates(makeCtx({ schedule: bx }), units[1], P).indexOf(BURCHETT) < 0, "a 2-day unit is counted as a whole against the cap");
 ok(R.eligibility(makeCtx({ schedule: bx }), "2026-12-25", P, BURCHETT).ok, "...even though each day alone would fit");
+// 9/22 (Prompt 12 K): the same 7 days held as BACKUP do not count - his candidacy for the primary unit is whatever it is with an empty December
+const bxB = {};
+Object.keys(bx).forEach(d => { bxB[d] = { backup: BURCHETT }; });
+eq(R.holidayUnitCandidates(makeCtx({ schedule: bxB }), units[1], P).indexOf(BURCHETT) >= 0, R.holidayUnitCandidates(clean, units[1], P).indexOf(BURCHETT) >= 0, "K: 7 backup days held do not cost him the 2-day primary unit (was excluded by monthly-cap:8)");
+ok(R.holidayUnitCandidates(clean, units[1], P).indexOf(BURCHETT) >= 0, "fixture: Burchett is a Christmas primary candidate with an empty December (so the line above is a real check)");
 
 /* ------------------------------------------------ external cover and locks */
 step("externalCover 2026-09-30");

@@ -200,7 +200,8 @@ Hard blocks (any → `ok:false`): inactive on that date; `time_off` covering the
 Philip's day-before-Aledo; Fierce's weekday pattern outside his derived weeks (Tue/Thu none; Mon backup-only; Wed preferred;
 Fri/Sat/Sun only as one Fri+Sat+Sun block); Sarkar outside her windows or beyond `daysPerWindowWeek.max`; already
 holds the other role that day; would exceed `maxConsecutiveDays` (primary-only count by default,
-`groupRules.countBackupInConsecutive` toggles); would exceed `monthlyCap.total`; Philip's `backupCap`.
+`groupRules.countBackupInConsecutive` toggles); would exceed `monthlyCap.primary` (primary placements only — see the
+9/22 paragraph below); Philip's `backupCap`.
 
 Soft penalties (weights configurable in `groupRules.weights`): `recurringAvoid` / `avoid` rows (medium), Philip on an
 Aledo week (strong), `prefer` rows (negative), weekend-style mismatch (block-style surgeon on a lone Sat, etc.), holiday
@@ -210,7 +211,20 @@ back-to-back weekends, backup on the day right after a primary day (mild), dista
 Every rule must be expressible in `call_schedule_data.data.surgeonRules` and editable in Setup — no surgeon-specific
 `if (name === "Philip")` in code. Fierce's derivation and Khan's East dependency are generic features
 (`eastFeed.enabled` + `eastBlocksPrimary` / `eastBlocksBackup` + a `derivedFrom` spec), so a future surgeon who splits
-sites can reuse them. Fierce's `monthlyCap.countsEastDays` adds his East week days (7 per derived week) to his monthly total.
+sites can reuse them. Fierce's `monthlyCap.countsEastDays` adds the days of his East *primary* weeks (derived Silvis backup,
+7 per week) to his monthly primary count - see the 9/22 paragraph below (Prompt 12 K).
+
+**Caps count primary days only (Prompt 12 K, 9/22).** `monthlyCap.primary` is the hard cap on the distinct days of a
+calendar month on which the surgeon holds *primary* (schedule, assume-slots and the evaluated slot); `preferred` is the
+soft ceiling on the same count; `eligibility()` runs the check for a primary placement only, so a backup placement never
+trips `monthly-cap:N` or `over-preferred-cap:N` and backup days never count. `buildContext` reads the pre-9/22 key
+`monthlyCap.total` (and `groupRules.defaultMonthlyCap.total`) as an alias of `primary` with one warning per surgeon;
+`monthlyCapFor(ctx, id)` returns `{ primary, preferred }` plus `total = primary` for one release. Fierce
+(`countsEastDays: true`) adds `P.eastPrimaryDays` — the days of his East *primary* weeks (derived Silvis backup,
+`silvisRole: "backup"`); his East *backup* week is Silvis primary and counts through the primaries he holds; Khan's
+busy-day set is never added to anyone's cap. Philip's `backupCap` (≤ 7 backup days, ≤ 1 backup weekend per month) is the
+separate, explicit backup rule. The generator's `genTargets` clip and the tallies' `cap` field follow the primary cap
+(preview column "Cap (P)"); the numeric `monthlyTarget` term still uses the any-role count until Prompt 12 J.
 
 ## 6. Generator (`generator.js`)
 

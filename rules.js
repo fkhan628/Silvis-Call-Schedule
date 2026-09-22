@@ -301,6 +301,13 @@ function buildContext(input) {
   // false restores the pre-9/22 reading: the weekday-pattern family, the dated
   // whitelists, the Aledo week and the hardNeverWeekdays default govern BOTH roles.
   var backupOpen = !(groupRules.backupPolicy && groupRules.backupPolicy.openToEveryone === false);
+  // 9/22 (Prompt 12 K): the group default cap is on PRIMARY days per month
+  // (groupRules.defaultMonthlyCap.primary). The pre-K key 'total' is read as an
+  // alias (one warning) so an older blob keeps its cap until Setup rewrites it.
+  var dmc = groupRules.defaultMonthlyCap;
+  var defaultCap = null, defaultCapLegacy = false;
+  if (dmc && typeof dmc.primary === "number") defaultCap = dmc.primary;
+  else if (dmc && typeof dmc.total === "number") { defaultCap = dmc.total; defaultCapLegacy = true; }
 
   var ctx = {
     roster: roster,
@@ -324,7 +331,7 @@ function buildContext(input) {
     aledoDayBeforeRoles: dayBefore.aledoDayBeforeRoles || ["primary"],
     countBackupInConsecutive: !!groupRules.countBackupInConsecutive,
     defaultMaxConsecutive: typeof groupRules.defaultMaxConsecutiveDays === "number" ? groupRules.defaultMaxConsecutiveDays : 2,
-    defaultCap: (groupRules.defaultMonthlyCap && typeof groupRules.defaultMonthlyCap.total === "number") ? groupRules.defaultMonthlyCap.total : null,
+    defaultCap: defaultCap,        // PRIMARY days per month for a surgeon without a monthlyCap key (null = none)
     backupDistinct: groupRules.backupDistinctFromPrimary !== false,
     backupOpen: backupOpen,
     rangeStart: input.rangeStart || null,
@@ -339,6 +346,7 @@ function buildContext(input) {
   if (ctx.holidayFlags && Object.prototype.hasOwnProperty.call(ctx.holidayFlags, "unitExemptFromMaxConsecutive")) {
     ctx.warnings.push("groupRules.holidays.unitExemptFromMaxConsecutive is ignored (Prompt 12 A, 9/22): a holiday unit counts as one day for the consecutive limits only for a surgeon whose surgeonRules.<id>.holidayUnitCountsAsOneDay is true - remove the group key from the blob");
   }
+  if (defaultCapLegacy) ctx.warnings.push("groupRules.defaultMonthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as defaultMonthlyCap.primary = " + defaultCap + " (a cap on PRIMARY days per month) - rename it in Setup");
 
   if (input.eastFeedCoverage && input.eastFeedCoverage.from && input.eastFeedCoverage.to) {
     ctx.eastCoverage = { from: input.eastFeedCoverage.from, to: input.eastFeedCoverage.to,
@@ -392,10 +400,14 @@ function buildContext(input) {
       eastBusy: rdBusySet(ctx, id, input.eastBusyDays && input.eastBusyDays[id]),
       eastForecast: (input.eastForecast && input.eastForecast[id]) || null,
       derived: Object.create(null), // date -> forced Silvis role
-      eastDays: new Set(),          // every day he holds ANY East call (busy days + derived weeks)
-      capTotal: null,
-      capPreferred: null,
-      countsEastDays: false,
+      eastDays: new Set(),          // every day he holds ANY East call (busy days + derived weeks) - display / East-only tallies
+      // 9/22 (Prompt 12 K): the days of his East PRIMARY weeks only (derived Silvis
+      // backup, silvisRole "backup") - the East days a countsEastDays cap adds.
+      // A busy-day set (Khan's) is never added to anyone's cap.
+      eastPrimaryDays: new Set(),
+      capPrimary: null,             // cap on PRIMARY days per calendar month (null = none)
+      capPreferred: null,           // soft ceiling on the same count
+      countsEastDays: false,        // add eastPrimaryDays of the month to the primary count
       maxConsec: typeof rules.maxConsecutiveDays === "number" ? rules.maxConsecutiveDays : ctx.defaultMaxConsecutive,
       // 9/22 (Prompt 12 A): the any-role SOFT limit (null = no soft check; there is no
       // group default) and the per-surgeon holiday-unit collapse (opt-in; Khan today).
@@ -415,18 +427,27 @@ function buildContext(input) {
     if (typeof hr.maxMajorHolidays === "number") P.maxMajor = hr.maxMajorHolidays;
     else if (rules.preferences && typeof rules.preferences.maxMajorHolidays === "number") P.maxMajor = rules.preferences.maxMajorHolidays;
 
-    // monthlyCap semantics: explicit null = no cap; absent = group default; object = its total.
+    // monthlyCap semantics (9/22, Prompt 12 K - caps count PRIMARY days only):
+    // explicit null = no cap; absent = group default; a number = that many primary
+    // days; an object = { primary, preferred, countsEastDays }. The pre-K key
+    // 'total' is an alias of 'primary' (one warning per surgeon); the pre-K
+    // countsEastDays string "distinct-days" reads as true.
     if (Object.prototype.hasOwnProperty.call(rules, "monthlyCap")) {
       var mc = rules.monthlyCap;
-      if (mc === null) P.capTotal = null;
-      else if (typeof mc === "number") P.capTotal = mc;
+      if (mc === null) P.capPrimary = null;
+      else if (typeof mc === "number") P.capPrimary = mc;
       else if (mc && typeof mc === "object") {
-        P.capTotal = typeof mc.total === "number" ? mc.total : ctx.defaultCap;
+        if (typeof mc.primary === "number") P.capPrimary = mc.primary;
+        else if (typeof mc.total === "number") {
+          P.capPrimary = mc.total;
+          ctx.warnings.push("surgeonRules." + id + ".monthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as monthlyCap.primary = " + mc.total + " (a cap on PRIMARY days per month) - rename it in Setup");
+        } else P.capPrimary = ctx.defaultCap;
         P.capPreferred = typeof mc.preferred === "number" ? mc.preferred : null;
-        P.countsEastDays = !!mc.countsEastDays;
+        P.countsEastDays = mc.countsEastDays === true || mc.countsEastDays === "distinct-days";
+        if (mc.countsEastDays && !P.countsEastDays) ctx.warnings.push("surgeonRules." + id + ".monthlyCap.countsEastDays = " + JSON.stringify(mc.countsEastDays) + " is not true - ignored (use true)");
       }
     } else {
-      P.capTotal = ctx.defaultCap;
+      P.capPrimary = ctx.defaultCap;
     }
 
     // Whitelist of weeks (Philip): governs from the first day of the month of the
@@ -491,6 +512,10 @@ function buildContext(input) {
     for (var k = 0; k < 7; k++) {
       var d = rdAddDays(w.weekMonday, k);
       P.eastDays.add(d); // he is on East call (primary or backup) all week either way
+      // K: an East PRIMARY week is the derived Silvis BACKUP week - those days count
+      // toward a countsEastDays cap; an East BACKUP week is Silvis primary and
+      // counts through the Silvis primary days he holds instead.
+      if (w.silvisRole === "backup") P.eastPrimaryDays.add(d);
       if (rdInfo(d).n < fromN) continue;
       P.derived[d] = w.silvisRole;
       var slot = ctx.derivedByDay[d] || (ctx.derivedByDay[d] = {});
@@ -802,15 +827,30 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   }
   function holdsAny(d) { return holdsRole(d, "primary") || holdsRole(d, "backup"); }
 
-  // Monthly cap (distinct days with any Silvis call; Fierce also counts East days).
+  // Monthly cap (9/22, Prompt 12 K): counts PRIMARY days only - distinct days of the
+  // evaluated month on which he holds Silvis primary (schedule, assume-slots and
+  // this slot) plus, for a countsEastDays cap, the days of his East PRIMARY weeks.
+  // The check applies to a PRIMARY placement only: a backup placement never trips
+  // monthly-cap or over-preferred-cap, and backup days never count. An explicit
+  // backup cap (rules.backupCap, Philip) is the separate block below.
+  // monthCount keeps the pre-K any-role count (Silvis either role + every East day)
+  // for the numeric monthlyTarget term below until Prompt 12 J replaces the
+  // target model; monthPrimary is the count the cap is measured against.
   var monthDays = rdMonthDays(info.month);
-  var monthCount = 0;
-  for (var i = 0; i < monthDays.length; i++) {
-    var md = monthDays[i];
-    if (holdsAny(md) || (P.countsEastDays && P.eastDays.has(md))) monthCount++;
+  var capApplies = role === "primary" && (P.capPrimary !== null || P.capPreferred !== null);
+  var hasTarget = typeof rules.monthlyTarget === "number";
+  var monthCount = 0, monthPrimary = 0;
+  if (capApplies || hasTarget) {
+    for (var i = 0; i < monthDays.length; i++) {
+      var md = monthDays[i];
+      if (holdsRole(md, "primary") || (P.countsEastDays && P.eastPrimaryDays.has(md))) monthPrimary++;
+      if (hasTarget && (holdsAny(md) || (P.countsEastDays && P.eastDays.has(md)))) monthCount++;
+    }
   }
-  if (P.capTotal !== null && monthCount > P.capTotal) hard.push("monthly-cap:" + P.capTotal);
-  else if (P.capPreferred !== null && monthCount > P.capPreferred) soft.push({ reason: "over-preferred-cap:" + P.capPreferred, weight: W.medium });
+  if (capApplies) {
+    if (P.capPrimary !== null && monthPrimary > P.capPrimary) hard.push("monthly-cap:" + P.capPrimary);
+    else if (P.capPreferred !== null && monthPrimary > P.capPreferred) soft.push({ reason: "over-preferred-cap:" + P.capPreferred, weight: W.medium });
+  }
 
   // Max consecutive days: the HARD limit counts PRIMARY days only (unless
   // groupRules.countBackupInConsecutive) on REAL calendar days; the days of one
@@ -1131,10 +1171,14 @@ function talliesFor(ctx, surgeonId, month) {
   return t;
 }
 
-// monthlyCapFor(ctx, surgeonId) -> { total: number|null, preferred: number|null }
+// monthlyCapFor(ctx, surgeonId) -> { primary: number|null, preferred: number|null, total }
+// 9/22 (Prompt 12 K): the cap is on PRIMARY days per month. 'total' is kept equal
+// to 'primary' for ONE release so a UI caller mid-edit does not break; new code
+// reads .primary. Remove 'total' with the next release.
 function monthlyCapFor(ctx, surgeonId) {
   var P = ctx.per[surgeonId];
-  return P ? { total: P.capTotal, preferred: P.capPreferred } : { total: null, preferred: null };
+  var primary = P ? P.capPrimary : null;
+  return { primary: primary, preferred: P ? P.capPreferred : null, total: primary };
 }
 
 if (typeof module !== "undefined") {

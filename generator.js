@@ -405,8 +405,15 @@ function genOrder(G, role, rng) {
 //   absent, pool member      -> implied: target = max(lockedHeld, min(share, clip))
 //                               share = the month's open in-range slots / active
 //                               pool members without a numeric target; clip =
-//                               min(capPreferred, capTotal - 1) minus the East-only
-//                               days of that month (caps that count East days).
+//                               min(capPreferred, capPrimary - 1) minus the East
+//                               PRIMARY-week days of that month he does NOT already
+//                               hold in the base schedule (a countsEastDays cap; a
+//                               held derived week is in lockedHeld and counts once;
+//                               9/22, Prompt 12 K - caps count primary only).
+//                               NOTE: Prompt 12 J replaces this target model (equal
+//                               primary and backup shares); until then the share
+//                               and lockedHeld still count both roles and only the
+//                               clip follows the primary-only cap.
 //                               Days already held through locks (import, derived,
 //                               published days outside the range) count TOWARD the
 //                               share, never on top of it, and an implied target
@@ -426,7 +433,7 @@ function genOrder(G, role, rng) {
 // diagnostics.impliedTargets[month] prints every input and which surgeons carry
 // a neutral term (neutralTerm) or none (noTerm); diagnostics.scoreTargets is the
 // per-month table the unit scoring actually used.
-var GEN_TARGET_RULE = "target = max(lockedHeld, min(share, clip)); share = open in-range slots / pool members without a numeric target; clip = min(capPreferred, capTotal - 1) - East-only days; explicit null = no fairness target but the same number as a neutral scoring term; windows = no term";
+var GEN_TARGET_RULE = "target = max(lockedHeld, min(share, clip)); share = open in-range slots / pool members without a numeric target; clip = min(capPreferred, capPrimary - 1) - East primary-week days (K); explicit null = no fairness target but the same number as a neutral scoring term; windows = no term";
 function genTargets(G) {
   var ctx = G.ctx, base = G.ctx.schedule, byMonth = {}, scoreByMonth = {}, implied = { rule: GEN_TARGET_RULE, months: {} };
   var ids = ctx.activeIds;
@@ -449,11 +456,18 @@ function genTargets(G) {
       genMonthDays(month).forEach(function (d) {
         var e = base[d], holds = !!(e && (e.primary === id || e.backup === id));
         if (holds) held++;
-        else if (P.countsEastDays && P.eastDays.has(d)) eastOnly++;
+        // K: the days a countsEastDays cap adds are his East PRIMARY-week days
+        // (derived Silvis backup). A day he already holds - as the derived backup
+        // itself, or as Silvis primary - is in `held` and is counted ONCE; only an
+        // East primary-week day he does NOT hold in the base schedule (the derived
+        // lock overridden or skipped) is East-only. Counting a held derived week
+        // twice shrank his clip from 13 to 6 and collapsed the November target onto
+        // the locked floor (K review, 9/22).
+        else if (P.countsEastDays && P.eastPrimaryDays.has(d)) eastOnly++;
       });
       var clip = null;
-      if (P.capTotal !== null) {
-        var ceiling = P.capPreferred !== null ? Math.min(P.capPreferred, P.capTotal - 1) : P.capTotal - 1;
+      if (P.capPrimary !== null) {
+        var ceiling = P.capPreferred !== null ? Math.min(P.capPreferred, P.capPrimary - 1) : P.capPrimary - 1;
         clip = Math.max(0, ceiling - eastOnly);
       }
       var t = Math.max(held, clip === null ? share : Math.min(share, clip));
@@ -960,15 +974,21 @@ function genDiagnostics(G, best, meta) {
   // Tallies: per month (full calendar month, running-tally semantics) plus in-range totals.
   var tallies = {};
   ids.forEach(function (id) {
-    var months = {};
+    var P = ctx.per[id], months = {};
+    // K: the East PRIMARY-week days a countsEastDays cap adds to the primary count (0 for
+    // everyone else) - the preview flags a row when primary + eastP is over the cap, which
+    // is the engine's count; a backup day on one of those days is not counted twice.
+    var eastPIn = function (list) { return P.countsEastDays ? list.filter(function (d) { return P.eastPrimaryDays.has(d); }).length : 0; };
     G.months.forEach(function (month) {
       var t = R.talliesFor(ctx, id, month);
-      t.cap = R.monthlyCapFor(ctx, id).total;
+      t.cap = R.monthlyCapFor(ctx, id).primary; // K: the cap is on PRIMARY days (preview column "Cap (P)")
+      t.eastP = eastPIn(genMonthDays(month));
       t.target = genTargetFor(G, month, id);
       months[month] = t;
     });
     var range = genRunStats(G, id, G.days);
-    range.cap = R.monthlyCapFor(ctx, id).total;
+    range.cap = R.monthlyCapFor(ctx, id).primary;
+    range.eastP = eastPIn(G.days);
     tallies[id] = { code: ctx.rosterById[id].code, name: ctx.rosterById[id].name, months: months, range: range };
   });
   // East feed snapshot / forecast / unknown days.
@@ -998,7 +1018,7 @@ function genDiagnostics(G, best, meta) {
     if (P.countsEastDays) {
       G.months.forEach(function (month) {
         var cov = ctx.eastCoverage && genMonthDays(month).every(function (d) { return d >= ctx.eastCoverage.from && d <= ctx.eastCoverage.to; });
-        if (!cov) warnings.push(id + " cap counts East days but the East feed does not cover all of " + month + ": Silvis days only were counted for that month");
+        if (!cov) warnings.push(id + " cap counts East days but the East feed does not cover all of " + month + ": only his Silvis primaries and the derived East primary-week days were counted for that month");
       });
     }
   });

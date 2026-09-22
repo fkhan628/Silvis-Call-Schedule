@@ -5225,9 +5225,13 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     }
     return { value: null, kind: "none" };
   };
-  const capFor = (id) => (ctx && typeof monthlyCapFor === "function") ? monthlyCapFor(ctx, id).total : null;
+  // 9/22 (Prompt 12 K): the cap is on PRIMARY days (monthlyCapFor(...).primary); the
+  // comparison uses the primary count plus, for a countsEastDays cap, the East
+  // PRIMARY-week days in the period. Backup days never count.
+  const capFor = (id) => (ctx && typeof monthlyCapFor === "function") ? monthlyCapFor(ctx, id).primary : null;
   const perOf = (id) => (ctx && ctx.per) ? ctx.per[id] : null;
   const eastFor = (id) => { const P = perOf(id); return P ? ttDaysIn(P.eastDays, range.from, range.to) : 0; };
+  const eastPrimaryFor = (id) => { const P = perOf(id); return P && P.eastPrimaryDays ? ttDaysIn(P.eastPrimaryDays, range.from, range.to) : 0; };
   const countsEast = (id) => { const P = perOf(id); return !!(P && P.countsEastDays); };
   const maxConsecRule = (id) => { const P = perOf(id); return P ? P.maxConsec : null; };
   const maxConsecAnyRule = (id) => { const P = perOf(id); return P && typeof P.maxConsecAnyRole === "number" ? P.maxConsecAnyRole : null; };
@@ -5236,9 +5240,9 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const rows = [];
   list.forEach(s => sources.forEach(src => {
     const t = ttTotalsFor(src.sched, s.id, range.from, range.to, { ...opts, unitCollapse: collapseFor(s.id) });
-    const tg = targetFor(s.id), cap = capFor(s.id), east = eastFor(s.id);
-    const capUse = countsEast(s.id) ? t.total + east : t.total; // Fierce's 14 counts East days too
-    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.value, targetKind: tg.kind, cap, capUse, east, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.total, tg.value) });
+    const tg = targetFor(s.id), cap = capFor(s.id), east = eastFor(s.id), eastP = countsEast(s.id) ? eastPrimaryFor(s.id) : 0;
+    const capUse = t.primary + eastP; // K: primary days (+ East primary-week days for Fierce's 14); backup never counts
+    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.value, targetKind: tg.kind, cap, capUse, east, eastP, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.total, tg.value) });
   }));
   const capText = (r) => r.cap === null ? "-" : (nMonths > 1 ? r.cap + "/mo" : String(r.cap));
   const targetText = (r) => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
@@ -5248,8 +5252,10 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     try {
       // The any-role run column is APPENDED so the older column positions (East days .. Deviation) stay where
       // consumers (and test/ui/smoke.mjs) read them - Prompt 12 A, 9/22.
-      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap per month", "Target", "Deviation", "Max consecutive any role"];
-      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole]);
+      // K (9/22): the cap is on PRIMARY days - the header says so, the column keeps its position; the
+      // count the cap is compared with (primary + East primary-week days) is APPENDED as the last column.
+      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)"];
+      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse]);
       const csv = ttCsvText(headers, data);
       const name = "silvis-totals-" + rangeMode + "-" + range.from + "-" + range.to + ".csv";
       const real = downloadTextFile(csv, name, "text/csv");
@@ -5290,8 +5296,8 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
               <tr>
                 <th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}
                 <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
-                {showEast && <th style={th} title="Days on East (Davenport) call in the period - counted toward the cap for a surgeon whose cap counts them">East days</th>}
-                <th style={th}>Cap{nMonths > 1 ? " /mo" : ""}</th><th style={th}>Target</th><th style={th}>Deviation</th>
+                {showEast && <th style={th} title="Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)">East days</th>}
+                <th style={th} title="Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it">Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th}>Target</th><th style={th}>Deviation</th>
               </tr>
             </thead>
             <tbody>
@@ -5303,7 +5309,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                   <td data-col="maxconsec" data-flag={overConsec(r) ? "over" : undefined} style={{ ...td, color: overConsec(r) ? "#c04040" : td.color }}>{r.t.maxConsecutive}{r.maxRule !== null ? " (" + r.maxRule + ")" : ""}</td>
                   <td data-col="maxconsecany" data-flag={overConsecAny(r) ? "over" : undefined} style={{ ...td, color: overConsecAny(r) ? "#c04040" : td.color }}>{r.t.maxConsecutiveAnyRole}{r.maxRuleAny !== null ? " (" + r.maxRuleAny + ")" : ""}</td>
                   {showEast && <td style={td}>{r.east || (countsEast(r.id) ? 0 : "-")}</td>}
-                  <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={countsEast(r.id) ? "This cap counts Silvis + East days: " + r.capUse : undefined}>{capText(r)}</td>
+                  <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}</td>
                   <td data-col="target" style={td}>{targetText(r)}</td>
                   <td data-col="deviation" data-flag={devFlag(r)} style={{ ...td, color: devColor(r), fontWeight: 600 }}>{r.deviation}</td>
                 </tr>
@@ -5322,12 +5328,12 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                 <div style={{ width: 110, display: "flex", gap: 6, alignItems: "center" }}><Badge id={r.id}/>{r.src === "preview" && <span style={{ fontSize: 9, color: "#7a4fbf" }}>preview</span>}</div>
                 <div style={{ flex: "1 1 220px", position: "relative", height: 18, background: dk ? "#16213e" : "#eef1f4", borderRadius: 4, overflow: "hidden" }}>
                   <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : "linear-gradient(90deg,#1a6fa8,#2488c8)", borderRadius: 4 }}/>
-                  {countsEast(r.id) && r.east > 0 && <div title={"+ " + r.east + " East day(s) counted toward the cap"} style={{ position: "absolute", left: pct(r.t.total) + "%", top: 0, bottom: 0, width: (pct(r.capUse) - pct(r.t.total)) + "%", background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)" }}/>}
+                  {countsEast(r.id) && r.eastP > 0 && <div title={"+ " + r.eastP + " East primary-week day(s) counted toward the cap (P)"} style={{ position: "absolute", left: pct(r.t.total) + "%", top: 0, bottom: 0, width: Math.max(0, pct(r.t.total + r.eastP) - pct(r.t.total)) + "%", background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)" }}/>}
                   {r.target !== null && <div data-testid="fairness-target-mark" title={"target " + r.target} style={{ position: "absolute", left: pct(r.target) + "%", top: 0, bottom: 0, width: 2, background: "#1a8040" }}/>}
                   {r.cap !== null && <div title={"cap " + r.cap * nMonths} style={{ position: "absolute", left: pct(r.cap * nMonths) + "%", top: 0, bottom: 0, width: 2, background: "#c04040" }}/>}
                 </div>
                 <div style={{ fontFamily: mono, fontSize: 12, color: dk ? "#e0e0f0" : "#2c3e50", minWidth: 250 }}>
-                  {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.east + " East" : ""} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - cap {r.cap === null ? "-" : r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" ? "no target" : "deviation " + r.deviation}</span>
+                  {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" ? "no target" : "deviation " + r.deviation}</span>
                 </div>
               </div>
             ));
@@ -5565,7 +5571,11 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
     } catch (e) { console.warn("Rules JSON not applied:", e); setRawErr(String(e && e.message || e)); }
   };
   const capMode = Object.prototype.hasOwnProperty.call(draft, "monthlyCap") ? (draft.monthlyCap === null ? "none" : "number") : "default";
-  const capObj = draft.monthlyCap && typeof draft.monthlyCap === "object" ? draft.monthlyCap : (typeof draft.monthlyCap === "number" ? { total: draft.monthlyCap } : {});
+  // 9/22 (Prompt 12 K): the cap is on PRIMARY days (monthlyCap.primary). A legacy
+  // 'total' value is shown in the field and rewritten as 'primary' on the first edit.
+  const capObj = draft.monthlyCap && typeof draft.monthlyCap === "object" ? draft.monthlyCap : (typeof draft.monthlyCap === "number" ? { primary: draft.monthlyCap } : {});
+  const capPrimaryVal = typeof capObj.primary === "number" ? capObj.primary : (typeof capObj.total === "number" ? capObj.total : undefined);
+  const setCapPrimary = (v) => { if (Object.prototype.hasOwnProperty.call(capObj, "total")) set("monthlyCap.total", undefined); set("monthlyCap.primary", v); };
   const wp = get("outsideDerivedWeeks.weekdayPattern", null);
   const holNames = holidayNames && holidayNames.length ? holidayNames : SU_HOLIDAY_NAMES;
   const s = (roster || []).find(x => x.id === sel) || {};
@@ -5591,14 +5601,14 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <SuField label="Monthly target" hint="blank = no target"><input data-testid="rules-monthly-target" type="number" min="0" max="31" value={get("monthlyTarget", null) === null ? "" : get("monthlyTarget", "")} onChange={e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
           <div>
             <SuField label="Monthly cap">
-              <select data-testid="rules-cap-mode" value={capMode} onChange={e => { const v = e.target.value; if (v === "default") set("monthlyCap", undefined); else if (v === "none") set("monthlyCap", null); else set("monthlyCap", { total: capObj.total || 8 }); }} style={{ ...inp, width: 200 }}>
+              <select data-testid="rules-cap-mode" value={capMode} onChange={e => { const v = e.target.value; if (v === "default") set("monthlyCap", undefined); else if (v === "none") set("monthlyCap", null); else set("monthlyCap", { primary: capPrimaryVal || 8 }); }} style={{ ...inp, width: 200 }}>
                 <option value="default">group default</option><option value="none">no cap (explicit null)</option><option value="number">a number</option>
               </select>
             </SuField>
             {capMode === "number" && <>
-              <SuField label="Total"><input type="number" min="1" max="31" value={capObj.total === undefined || capObj.total === null ? "" : capObj.total} onChange={e => set("monthlyCap.total", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
+              <SuField label="Primary days per month" hint="hard; backup days never count"><input type="number" min="1" max="31" data-testid="rules-cap-primary" value={capPrimaryVal === undefined || capPrimaryVal === null ? "" : capPrimaryVal} onChange={e => setCapPrimary(e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
               <SuField label="Preferred (soft)"><input type="number" min="0" max="31" value={capObj.preferred === undefined || capObj.preferred === null ? "" : capObj.preferred} onChange={e => set("monthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-              <SuCheck label="count East week days toward the cap" checked={!!capObj.countsEastDays} onChange={v => set("monthlyCap.countsEastDays", v ? "distinct-days" : undefined)} />
+              <SuCheck label="count East primary-week days toward the cap" checked={capObj.countsEastDays === true || capObj.countsEastDays === "distinct-days"} onChange={v => set("monthlyCap.countsEastDays", v ? true : undefined)} />
             </>}
           </div>
           <div style={{ marginTop: 4 }}>
@@ -5732,7 +5742,8 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
 
       <div style={{ ...box, borderColor: "#c8d8e8" }}>
         <div style={css.subT}>Group rules</div>
-        <SuField label="Default monthly cap (total)" hint="blank = none"><input type="number" min="1" max="31" value={gget("defaultMonthlyCap.total", "") === null ? "" : gget("defaultMonthlyCap.total", "")} onChange={e => gset("defaultMonthlyCap.total", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
+        {/* K (9/22): bound to defaultMonthlyCap.primary; a legacy 'total' value is shown and replaced on the first edit */}
+        <SuField label="Default monthly cap (primary days)" hint="blank = none; backup days never count"><input type="number" min="1" max="31" data-testid="group-default-cap-primary" value={(() => { const p = gget("defaultMonthlyCap.primary", null); if (typeof p === "number") return p; const t = gget("defaultMonthlyCap.total", null); return typeof t === "number" ? t : ""; })()} onChange={e => { if (gget("defaultMonthlyCap.total", null) !== null) gset("defaultMonthlyCap.total", undefined); gset("defaultMonthlyCap.primary", e.target.value === "" ? undefined : Number(e.target.value)); }} style={{ ...inp, width: 70 }} /></SuField>
         <SuField label="Default max consecutive"><input type="number" min="1" max="14" value={gget("defaultMaxConsecutiveDays", "")} onChange={e => gset("defaultMaxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
         <SuField label="Forecast busy threshold (0-1)"><input type="number" min="0" max="1" step="0.05" value={gget("eastFeed.forecast.busyThreshold", "")} onChange={e => gset("eastFeed.forecast.busyThreshold", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 80 }} /></SuField>
         <div>
@@ -6035,16 +6046,16 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Per-surgeon tallies vs cap / target</div>
         <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="gen-tallies">
-            <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th title="Longest run of consecutive primary days touching the month / range (real days; the hard limit's measure)">Max consec. P</th><th title="Longest run of consecutive days in either role (real days; the soft limit's measure)">Max consec. any</th><th>Cap</th><th>Target</th></tr></thead>
+            <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th title="Longest run of consecutive primary days touching the month / range (real days; the hard limit's measure)">Max consec. P</th><th title="Longest run of consecutive days in either role (real days; the soft limit's measure)">Max consec. any</th><th title="Monthly cap on PRIMARY days (backup days never count); a row is flagged when P - plus, for a cap that counts East days, his East primary-week days - is over it">Cap (P)</th><th>Target</th></tr></thead>
             <tbody>
               {ids.map(id => {
                 const t = dg.tallies[id];
                 const rows = months.map(m => { const x = t.months[m] || {}; return (
-                  <tr key={id + m} data-tally={id} style={{ color: (x.cap !== null && x.cap !== undefined && x.total > x.cap) ? "#a83232" : undefined }}>
-                    <td>{nameOf(id)}</td><td style={{ fontFamily: mono }}>{m}</td><td>{x.primary}</td><td>{x.backup}</td><td><strong>{x.total}</strong></td><td>{x.weekendDays}</td><td>{x.majorHolidays}</td><td>{x.minorHolidays}</td><td>{x.maxConsecutive}</td><td>{x.maxConsecutiveAnyRole}</td><td>{num(x.cap)}</td><td>{num(x.target)}</td>
+                  <tr key={id + m} data-tally={id} style={{ color: (x.cap !== null && x.cap !== undefined && (x.primary + (x.eastP || 0)) > x.cap) ? "#a83232" : undefined }}>
+                    <td>{nameOf(id)}</td><td style={{ fontFamily: mono }}>{m}</td><td>{x.primary}</td><td>{x.backup}</td><td><strong>{x.total}</strong></td><td>{x.weekendDays}</td><td>{x.majorHolidays}</td><td>{x.minorHolidays}</td><td>{x.maxConsecutive}</td><td>{x.maxConsecutiveAnyRole}</td><td title={x.eastP ? x.primary + " P + " + x.eastP + " East primary-week day(s) = " + (x.primary + x.eastP) + " counted against the cap" : undefined}>{num(x.cap)}{x.eastP ? " (" + (x.primary + x.eastP) + " counted)" : ""}</td><td>{num(x.target)}</td>
                   </tr>); });
                 const r = t.range || {};
-                rows.push(<tr key={id + "range"} data-tally-range={id} style={{ background: "#f4f6f8", fontWeight: 700 }}><td>{nameOf(id)}</td><td>range</td><td>{r.primary}</td><td>{r.backup}</td><td>{r.total}</td><td>{r.weekendDays}</td><td>{r.majorHolidays}</td><td>{r.minorHolidays}</td><td>{r.maxConsecutive}</td><td>{r.maxConsecutiveAnyRole}</td><td>{num(r.cap)}</td><td></td></tr>);
+                rows.push(<tr key={id + "range"} data-tally-range={id} style={{ background: "#f4f6f8", fontWeight: 700 }}><td>{nameOf(id)}</td><td>range</td><td>{r.primary}</td><td>{r.backup}</td><td>{r.total}</td><td>{r.weekendDays}</td><td>{r.majorHolidays}</td><td>{r.minorHolidays}</td><td>{r.maxConsecutive}</td><td>{r.maxConsecutiveAnyRole}</td><td title={r.eastP ? r.primary + " P + " + r.eastP + " East primary-week day(s) in the range" : undefined}>{num(r.cap)}{r.eastP ? " (+" + r.eastP + " East P)" : ""}</td><td></td></tr>);
                 return rows;
               })}
             </tbody>

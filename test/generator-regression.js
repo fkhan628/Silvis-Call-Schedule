@@ -21,8 +21,10 @@
 //
 // Coverage and the 10 s budget (Prompt 4: "All runs must finish under 10 s
 // total"): 50 seeds x 4 ranges, then one bestOf 200 Nov-Dec run for the tally
-// table (the UI default), plus four short fixture runs (manual lock, backup
-// opt-out, legacy group key, range edge). bestOf per range is 6 / 5 / 2 / 2
+// table (the UI default), plus five short fixture runs (manual lock, backup
+// opt-out, legacy group key, range edge, derived week overridden - the last one
+// a November-only bestOf 1 run added by the Prompt 12 K fix stage, ~10 ms).
+// bestOf per range is 6 / 5 / 2 / 2
 // (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
 // on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
 // milestone range 2026-11-02 -> 2027-01-03 added by Prompt 12 A so the year
@@ -120,8 +122,11 @@ const FORECAST = forecastFile.busyProbabilityByDay;
 const THRESHOLD = seed.groupRules.eastFeed.forecast.busyThreshold;
 const KHAN_NO_PRIMARY = new Set(KHAN_BUSY.concat(Object.keys(FORECAST).filter((d) => FORECAST[d] >= THRESHOLD)));
 const DERIVED_ROLE = {};   // day -> forced Silvis role (from deriveFrom on)
-const FIERCE_EAST_DAYS = new Set(); // every day of every derived week (East call either way)
-DERIVED.forEach((w) => { for (let k = 0; k < 7; k++) { const d = addDays(w.weekMonday, k); FIERCE_EAST_DAYS.add(d); if (d >= DERIVE_FROM) DERIVED_ROLE[d] = w.silvisRole; } });
+const FIERCE_EAST_DAYS = new Set(); // every day of every derived week (East call either way; the Totals "East days" column)
+// 9/22 (Prompt 12 K): only the days of an East PRIMARY week (derived Silvis backup, silvisRole B)
+// count toward his 14; his East BACKUP week is Silvis primary and counts as Silvis primaries.
+const FIERCE_EAST_PRIMARY_DAYS = new Set();
+DERIVED.forEach((w) => { for (let k = 0; k < 7; k++) { const d = addDays(w.weekMonday, k); FIERCE_EAST_DAYS.add(d); if (w.silvisRole === B) FIERCE_EAST_PRIMARY_DAYS.add(d); if (d >= DERIVE_FROM) DERIVED_ROLE[d] = w.silvisRole; } });
 
 /* ------------------------------------------------------- context (ctx) */
 const input = SA.seedToContextInput(seed, {
@@ -209,11 +214,16 @@ SR[SARKAR].availableWindows.forEach((w) => daysList(w.start, w.end).forEach((d) 
 // Weekend styles.
 const BLOCK_STYLE = IDS.filter((id) => SR[id].weekendStyle === "block");
 eq(BLOCK_STYLE.sort(), [KHAN, PHILIP, FIERCE].sort(), "seed: block-style surgeons are Khan, Philip, Fierce");
-// Caps (an explicit null never falls back to the default).
+// Caps (an explicit null never falls back to the default). 9/22 (Prompt 12 K): a cap
+// is on PRIMARY days per month (monthlyCap.primary; defaultMonthlyCap.primary).
 eq(SR[ACTON].monthlyCap, null, "seed: Acton uncapped"); eq(SR[KHAN].monthlyCap, null, "seed: Khan uncapped");
-const DEFAULT_CAP = seed.groupRules.defaultMonthlyCap.total; // 8: Philip (no key) falls back to it
-eq(SR[BURCHETT].monthlyCap, { total: 8, preferred: 7 }, "seed: Burchett cap 8 / preferred 7");
-eq(SR[FIERCE].monthlyCap.total, 14, "seed: Fierce cap 14"); ok(!("monthlyCap" in SR[PHILIP]), "seed: Philip has no cap key");
+const DEFAULT_CAP = seed.groupRules.defaultMonthlyCap.primary; // 8 primary days: Philip (no key) falls back to it
+eq(DEFAULT_CAP, 8, "seed: groupRules.defaultMonthlyCap.primary = 8 (K: not the legacy total key)");
+ok(!("total" in seed.groupRules.defaultMonthlyCap), "seed: no legacy defaultMonthlyCap.total");
+eq(SR[BURCHETT].monthlyCap, { primary: 8, preferred: 7 }, "seed: Burchett cap 8 primary / preferred 7");
+eq(SR[FIERCE].monthlyCap.primary, 14, "seed: Fierce cap 14 primary"); eq(SR[FIERCE].monthlyCap.countsEastDays, true, "seed: Fierce countsEastDays is boolean true");
+ok(!("total" in SR[BURCHETT].monthlyCap) && !("total" in SR[FIERCE].monthlyCap), "seed: no legacy monthlyCap.total keys");
+ok(!("monthlyCap" in SR[PHILIP]), "seed: Philip has no cap key");
 // Targets: nobody has a numeric target; Khan and Sarkar carry an explicit null (no fairness target).
 IDS.forEach((id) => ok(typeof SR[id].monthlyTarget !== "number", "seed: " + CODE[id] + " has a numeric target"));
 eq([KHAN, SARKAR].every((id) => "monthlyTarget" in SR[id] && SR[id].monthlyTarget === null), true, "seed: Khan and Sarkar explicit null target");
@@ -265,22 +275,27 @@ function lockedIn(day, role) { const e = INPUT[day]; return !!(e && e[role + "Lo
 function derivedLock(day, role, id) { return DERIVED_ROLE[day] === role && id === FIERCE; }
 // Expected diagnostics.lockViolations per range, restated from the inputs alone
 // (locks are facts the generator keeps; the conflicts must be REPORTED):
-//   R1  Philip's locked October is 15 days > the default cap of 8 -> every locked
-//       Philip slot in 2026-10 (monthly-cap; his 8 backups also break backup-cap 7),
-//       plus Fierce's single locked Monday primary 10/12 outside any derived week
+//   R1  Philip's locked October is 7 primaries + 8 backups. Since 9/22 (Prompt 12 K)
+//       the monthly cap counts PRIMARY days only, so his 7 primaries sit under the
+//       default cap of 8 and no locked Philip PRIMARY breaks a rule; his 8 locked
+//       backups break backup-cap 7 (the explicit backup cap, unchanged). Plus
+//       Fierce's single locked Monday primary 10/12 outside any derived week
 //       (weekday-pattern:Mon - October is not derived).
 //   R2  Khan's import-locked Thanksgiving primaries on the synthetic East-busy days
 //       11/26, 11/27, 11/28 (east-busy); 11/29 is not East-busy.
 //   R3  nothing is locked -> empty.
 function expectedLockViolations(range) {
   const out = [];
-  const philipOct = monthDays("2026-10").filter((d) => holdsAny(INPUT, d, PHILIP)).length;
+  const philipOctP = monthDays("2026-10").filter((d) => holder(INPUT, d, P) === PHILIP).length; // 7: under the primary cap of 8 (K)
+  const philipOctB = monthDays("2026-10").filter((d) => holder(INPUT, d, B) === PHILIP).length; // 8: over his explicit backup cap of 7
+  eq([philipOctP, philipOctB], [7, 8], "seed: Philip's locked October is 7 primaries + 8 backups (fixture drift?)");
   Object.keys(INPUT).sort().forEach((d) => {
     if (d < range.start || d > range.end) return;
     ROLES.forEach((role) => {
       const e = INPUT[d];
       if (!e[role + "Locked"] || !e[role]) return;
-      if (e[role] === PHILIP && monthOf(d) === "2026-10" && philipOct > DEFAULT_CAP) out.push({ day: d, role, id: PHILIP, lock: "import", prefix: "monthly-cap:" });
+      if (e[role] === PHILIP && monthOf(d) === "2026-10" && role === P && philipOctP > DEFAULT_CAP) out.push({ day: d, role, id: PHILIP, lock: "import", prefix: "monthly-cap:" });
+      if (e[role] === PHILIP && monthOf(d) === "2026-10" && role === B && philipOctB > SR[PHILIP].backupCap.perMonthDays) out.push({ day: d, role, id: PHILIP, lock: "import", prefix: "backup-cap:" });
       if (e[role] === FIERCE && role === P && weekday(d) === "Mon" && !DERIVED_ROLE[d]) out.push({ day: d, role, id: FIERCE, lock: "import", prefix: "weekday-pattern:Mon" });
       if (e[role] === KHAN && role === P && KHAN_BUSY.includes(d)) out.push({ day: d, role, id: KHAN, lock: "import", prefix: "east-busy" });
     });
@@ -496,11 +511,24 @@ function checkRun(out, range, seedNo, deep) {
     ok(!(KHAN in I.targets) && typeof I.neutralTerm[KHAN] === "number", "Khan must carry a neutral scoring term, not a target, in " + m);
     ok(!(SARKAR in I.targets) && !(SARKAR in I.neutralTerm) && I.noTerm.includes(SARKAR), "Sarkar must carry no target term in " + m);
     eq(D.tallies[KHAN].months[m].target, null, "Khan tallies target must stay null in " + m);
+    // K (fix stage): diagnostics.tallies carry the East primary-week days a countsEastDays cap adds
+    // (eastP) so the Generate preview can flag P + eastP > cap the way the engine counts; 0 for everyone else.
+    eq(D.tallies[FIERCE].months[m].eastP, [...FIERCE_EAST_PRIMARY_DAYS].filter((d) => monthOf(d) === m).length, "Fierce tallies.eastP = his East primary-week days in " + m);
+    eq(D.tallies[KHAN].months[m].eastP, 0, "Khan tallies.eastP must be 0 (no countsEastDays cap) in " + m);
   });
-  if (range.name.indexOf("R2") === 0) {
+  eq(D.tallies[FIERCE].range.eastP, days.filter((d) => FIERCE_EAST_PRIMARY_DAYS.has(d)).length, "Fierce tallies.range.eastP = his East primary-week days in the range");
+  if (range.name.indexOf("R2") === 0 || range.name.indexOf("R4") === 0) {
     const nov = D.impliedTargets.months["2026-11"];
     eq(nov.lockedHeld[FIERCE], 7, "Fierce holds his 7 derived November days before generation");
     ok(nov.targets[FIERCE] < 14 && nov.targets[FIERCE] <= nov.share + 0.05, "Fierce November implied target " + nov.targets[FIERCE] + " must not be pushed to his cap by the derived week");
+    // 9/22 (Prompt 12 K review, major): the derived East-primary week 11/09..11/15 is HELD (as Silvis
+    // backup) and therefore already in lockedHeld; counting it a second time as East-only shrank his
+    // clip to 6 and collapsed his November target onto the locked floor (7 instead of share 7.8), so
+    // the generator steered November primaries away from him. East-only = East primary-week days he
+    // does NOT hold in the base schedule (see the derived-week-overridden fixture below for the 7 / 6 case).
+    eq(nov.eastOnlyDays[FIERCE], 0, "Fierce's held derived week must not count as East-only days in 2026-11");
+    eq(nov.capClip[FIERCE], 13, "Fierce clip = 13 in 2026-11 (14 - 1, nothing East-only)");
+    eq(nov.targets[FIERCE], Math.round(Math.max(7, Math.min(nov.share, 13)) * 10) / 10, "Fierce November target = max(held 7, min(share " + nov.share + ", 13)) - not collapsed to the locked floor");
   }
 
   // quality-1 (Nov-Dec, the milestone range with the real forecast): Khan's main
@@ -529,18 +557,23 @@ function checkRun(out, range, seedNo, deep) {
     CUR.day = m;
     const mdays = monthDays(m);
     const placedIn = (id, role) => mdays.some((d) => out.schedule[d] && isPlaced(out, d, role) && out.schedule[d][role] === id);
-    // item 7: Burchett <= 8 total per month
-    const burTotal = mdays.filter((d) => holdsAny(view, d, BURCHETT)).length;
-    if (placedIn(BURCHETT, P) || placedIn(BURCHETT, B)) ok(burTotal <= 8, "Burchett " + burTotal + " days in " + m);
+    // item 7 (9/22, Prompt 12 K): Burchett <= 8 PRIMARY days per month; his backups are
+    // unbounded by the cap (no assertion on the backup count or the primary+backup total)
+    const burPrimary = mdays.filter((d) => holder(view, d, P) === BURCHETT).length;
+    if (placedIn(BURCHETT, P)) ok(burPrimary <= 8, "Burchett " + burPrimary + " primary days in " + m);
+    // K: Philip <= 8 PRIMARY days per month (the group default; his backups fall under item 8 only)
+    const phPrimary = mdays.filter((d) => holder(view, d, P) === PHILIP).length;
+    if (placedIn(PHILIP, P)) ok(phPrimary <= DEFAULT_CAP, "Philip " + phPrimary + " primary days in " + m + " (default cap " + DEFAULT_CAP + ")");
     // item 7: Acton / Khan uncapped -> the generator never cites a monthly cap for them
     D.uncovered.forEach((u) => { if (monthOf(u.day) === m) [ACTON, KHAN].forEach((id) => ok(!u.reasons[id].some((r) => String(r).indexOf("monthly-cap") === 0), CODE[id] + " blocked by a monthly cap on " + u.day)); });
     // item 8: Philip backup <= 7 days and <= 1 weekend per month
     const phBackups = mdays.filter((d) => holder(view, d, B) === PHILIP);
     const phWeekends = new Set(phBackups.filter(isWeekend).map(fridayOf));
     if (placedIn(PHILIP, B)) { ok(phBackups.length <= 7, "Philip " + phBackups.length + " backup days in " + m); ok(phWeekends.size <= 1, "Philip backup on " + phWeekends.size + " weekends in " + m); }
-    // item 9c: Fierce Silvis days + East week days <= 14 (distinct days)
-    const fierceDays = mdays.filter((d) => holdsAny(view, d, FIERCE) || FIERCE_EAST_DAYS.has(d)).length;
-    if (placedIn(FIERCE, P) || placedIn(FIERCE, B)) ok(fierceDays <= 14, "Fierce " + fierceDays + " call days in " + m);
+    // item 9c (9/22, Prompt 12 K): Fierce Silvis PRIMARY days + East PRIMARY-week days <= 14
+    // (distinct days; his Silvis backups - including the derived East-primary week - never count)
+    const fierceDays = mdays.filter((d) => holder(view, d, P) === FIERCE || FIERCE_EAST_PRIMARY_DAYS.has(d)).length;
+    if (placedIn(FIERCE, P)) ok(fierceDays <= 14, "Fierce " + fierceDays + " primary + East primary-week days in " + m);
     // item 10: Sarkar <= 4 days per window week (Mon-Sun)
     const mondays = new Set(mdays.map(mondayOf));
     mondays.forEach((mon) => {
@@ -768,6 +801,33 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   eq([novEdge.maxConsecutive, novEdge.maxConsecutiveAnyRole], [expEdge.maxConsecutive, expEdge.maxConsecutiveAnyRole], "AFP 2026-11 month row (talliesFor) follows the same run across the month edge");
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
+// Review 9/22 (Prompt 12 K, fix stage): an East PRIMARY week Fierce does NOT hold in the base schedule still
+// counts toward his 14 (rules.js adds P.eastPrimaryDays whatever the Silvis schedule says), so the implied-target
+// clip must subtract exactly those East-ONLY days - here the backup of 11/09..11/15 is manually locked to Acton
+// (import/manual beats derived: the 7 derived locks are overridden with a warning), so the week is East-only:
+// eastOnly 7, clip 14 - 1 - 7 = 6, tallies.eastP 7. The held case (eastOnly 0 / clip 13) is pinned in checkRun.
+// One November-only run at bestOf 1.
+{
+  const inputOv = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } });
+  CUR.range = "derived-week-overridden fixture 2026-11-02..2026-11-30"; CUR.seed = 1; CUR.day = "2026-11-09";
+  const wkOv = daysList("2026-11-09", "2026-11-15");
+  eq(wkOv.map((d) => DERIVED_ROLE[d]), [B, B, B, B, B, B, B], "fixture week must be Fierce's derived Silvis-BACKUP (East primary) week");
+  wkOv.forEach((d) => { ok(!inputOv.schedule[d], "seed already holds " + d + " (fixture drift?)"); inputOv.schedule[d] = { primary: null, backup: ACTON, primaryLocked: false, backupLocked: true, source: "manual", externalCover: null, note: "harness: derived week overridden" }; });
+  const ctxOv = R.buildContext(inputOv);
+  if (ctxOv.warnings.length) fail("buildContext warnings (derived-week-overridden fixture): " + JSON.stringify(ctxOv.warnings));
+  const heldOv = daysList("2026-11-01", "2026-11-30").filter((d) => holder(inputOv.schedule, d, P) === FIERCE || holder(inputOv.schedule, d, B) === FIERCE).length;
+  const outOv = GEN.generate(ctxOv, "2026-11-02", "2026-11-30", { seed: 1, bestOf: 1 });
+  const DOv = outOv.diagnostics, novOv = DOv.impliedTargets.months["2026-11"];
+  CUR.day = "-";
+  wkOv.forEach((d) => { eq(outOv.schedule[d].backup, ACTON, "manual backup lock kept on " + d); ok(DOv.warnings.some((w) => w.indexOf("derived lock overridden by import/manual lock: " + d + " backup derived " + FIERCE) === 0), "missing the 'derived lock overridden' warning for " + d + ": " + JSON.stringify(DOv.warnings)); });
+  ok(!DOv.warnings.some((w) => /generator bug/.test(w)), "derived-week-overridden run: generator reports its own bug");
+  eq(novOv.lockedHeld[FIERCE], heldOv, "Fierce holds " + heldOv + " November day(s) before generation (the overridden week is not his)");
+  eq(novOv.eastOnlyDays[FIERCE], 7, "the overridden East primary week is East-only: 7 days");
+  eq(novOv.capClip[FIERCE], 14 - 1 - 7, "Fierce clip = 6 (13 minus the 7 East-only days)");
+  ok(novOv.targets[FIERCE] <= Math.max(heldOv, 6) + 0.05, "Fierce November implied target " + novOv.targets[FIERCE] + " above max(held " + heldOv + ", clip 6)");
+  eq(DOv.tallies[FIERCE].months["2026-11"].eastP, 7, "tallies.eastP still counts the East primary-week days he does not hold in Silvis");
+  CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
+}
 const sortedR2 = r2Results.slice().sort((a, b) => a.score - b.score);
 const median = sortedR2[Math.floor(sortedR2.length / 2)];
 
@@ -776,7 +836,7 @@ function printTallies(out, title) {
   const D = out.diagnostics;
   console.log("\n" + title);
   console.log("  score " + JSON.stringify(Object.assign({}, D.score, { weights: undefined })) + "; candidates " + D.candidatesTried + "; warnings " + D.warnings.length);
-  console.log("  " + pad("surgeon", 8, true) + pad("month", 8, true) + pad("prim", 6) + pad("bkup", 6) + pad("total", 6) + pad("wkend", 6) + pad("major", 6) + pad("minor", 6) + pad("maxCP", 6) + pad("maxCA", 6) + pad("cap", 6) + pad("target", 8));
+  console.log("  " + pad("surgeon", 8, true) + pad("month", 8, true) + pad("prim", 6) + pad("bkup", 6) + pad("total", 6) + pad("wkend", 6) + pad("major", 6) + pad("minor", 6) + pad("maxCP", 6) + pad("maxCA", 6) + pad("cap(P)", 6) + pad("target", 8));
   Object.keys(D.tallies).forEach((id) => {
     const t = D.tallies[id];
     Object.keys(t.months).forEach((m) => {
@@ -813,7 +873,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
 
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + 1 x bestOf 200 + 4 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + 1 x bestOf 200 + 5 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");
