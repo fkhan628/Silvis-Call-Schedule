@@ -35,9 +35,25 @@
 //   eastBusyDays  { [surgeonId]: Array | Set | { 'YYYY-MM-DD': truthy } |
 //                 { busy: Set, reasons } } - the last is deriveKhanBusyDays()'s
 //                 own return shape.
-//   surgeonRules[id].explicitListMonths  ['YYYY-MM', ...] governs both roles;
-//                 { month:'YYYY-MM', roles:['primary'] } governs only those roles
-//                 (a role-scoped explicit list, e.g. Philip's October primaries).
+//   surgeonRules[id].explicitListMonths  ['YYYY-MM', ...] or { month, roles }.
+//                 Since 9/22 a governed month restricts PRIMARY only (backup is
+//                 open to everyone), so a backup-only entry has no effect.
+//   surgeonRules[id].backupOptOut  true -> hard 'backup-opt-out' on every
+//                 backup slot, holiday units included; never waived, no dated
+//                 row lifts it (Faraz 9/22; nobody has opted out).
+//   surgeonRules[id].hardNeverWeekdaysRoles  default ['primary'] (9/22); an
+//                 empty list reads as the default.
+//   groupRules.backupPolicy.openToEveryone  the 9/22 switch (absent = true);
+//                 false restores the pre-9/22 both-roles reading of the rules
+//                 listed below (explicit per-surgeon data is honoured either way).
+//
+// Backup is open to everyone (Faraz 9/22, rules doc section 1 "Roles per day"):
+// outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed
+// months and the weeks whitelist restrict PRIMARY only. Still blocking backup:
+// vacations, holiday opt-outs, explicit unavailable / no_backup rows, derived
+// East locks, the other role the same day, backup caps, Sarkar's windows and an
+// explicit backupOptOut. Fierce's outsideDerivedWeeks pattern stays per-role
+// data (the seed says backup:true on every weekday).
 //
 // Every rule reads data from surgeonRules / groupRules - there is no
 // surgeon-specific branch in this file.
@@ -280,6 +296,10 @@ function buildContext(input) {
   var dayBefore = groupRules.dayBeforeRules || {};
   var forecastThreshold = (groupRules.eastFeed && groupRules.eastFeed.forecast && groupRules.eastFeed.forecast.busyThreshold);
   if (typeof forecastThreshold !== "number") forecastThreshold = 0.5;
+  // 9/22 doctrine switch (groupRules.backupPolicy.openToEveryone; absent = open).
+  // false restores the pre-9/22 reading: the weekday-pattern family, the dated
+  // whitelists, the Aledo week and the hardNeverWeekdays default govern BOTH roles.
+  var backupOpen = !(groupRules.backupPolicy && groupRules.backupPolicy.openToEveryone === false);
 
   var ctx = {
     roster: roster,
@@ -305,6 +325,7 @@ function buildContext(input) {
     defaultMaxConsecutive: typeof groupRules.defaultMaxConsecutiveDays === "number" ? groupRules.defaultMaxConsecutiveDays : 2,
     defaultCap: (groupRules.defaultMonthlyCap && typeof groupRules.defaultMonthlyCap.total === "number") ? groupRules.defaultMonthlyCap.total : null,
     backupDistinct: groupRules.backupDistinctFromPrimary !== false,
+    backupOpen: backupOpen,
     rangeStart: input.rangeStart || null,
     rangeEnd: input.rangeEnd || null,
     warnings: [],
@@ -371,7 +392,11 @@ function buildContext(input) {
       holidaysOff: new Set(hr.holidaysOff || []),
       maxMajor: null,
       hardNever: new Set(rules.hardNeverWeekdays || []),
-      hardNeverRoles: new Set(rules.hardNeverWeekdaysRoles || ["primary", "backup"]),
+      // 9/22: OR days etc. block primary only unless the list says otherwise. An
+      // absent OR empty list reads as the default (an empty list never means "no
+      // role" - one click too many in Setup must not open Khan's OR days for primary).
+      hardNeverRoles: new Set(Array.isArray(rules.hardNeverWeekdaysRoles) && rules.hardNeverWeekdaysRoles.length ? rules.hardNeverWeekdaysRoles : (backupOpen ? ["primary"] : ["primary", "backup"])),
+      backupOptOut: rules.backupOptOut === true,
       weekendStyle: rules.weekendStyle || null
     };
     if (hr.neverThanksgiving) P.holidaysOff.add("Thanksgiving");
@@ -513,15 +538,20 @@ function rdDerivedOverridden(ctx, date, role, id) {
 // (soft preferences still apply). hardNeverWeekdays is the caller's and is never
 // lifted. Called from the static layer outside derived weeks and from the
 // dynamic layer when a derived lock has been overridden.
+// 9/22: the recurring blacklist, the allow-list and the Aledo week restrict
+// PRIMARY only (backup is open to everyone); day-before-Aledo follows
+// ctx.aledoDayBeforeRoles; the outside-derived-weeks pattern is per-role data;
+// a recurringAvoid entry weighs its own weight for primary and weights.low for backup.
 function rdPatternRules(ctx, P, info, role, asBlock, rowAvail, hard, soft) {
   var rules = P.rules, W = ctx.weights, date = info.s;
+  var primary = role === "primary" || !ctx.backupOpen; // backupPolicy.openToEveryone false -> both roles again
   var ru = rdRecurringMatches(rules.recurringUnavailable, date);
-  if (ru && !rowAvail) hard.push("recurring-unavailable:" + info.wd);
+  if (primary && ru && !rowAvail) hard.push("recurring-unavailable:" + info.wd);
   var ra = rdRecurringMatches(rules.recurringAvoid, date);
-  if (ra) soft.push({ reason: "recurring-avoid:" + info.wd, weight: resolveWeight(ctx, ra.weight || "medium") });
+  if (ra) soft.push({ reason: "recurring-avoid:" + info.wd, weight: primary ? resolveWeight(ctx, ra.weight || "medium") : W.low });
 
-  // Weekday allow-list (Khan): Mon-Thu only via the list; weekend days are pool days.
-  if (rules.weekdays && Array.isArray(rules.weekdays.allowed) && !rdIsWeekendDay(ctx, info)) {
+  // Weekday allow-list (Khan): Mon-Thu primary only via the list; weekend days are pool days.
+  if (primary && rules.weekdays && Array.isArray(rules.weekdays.allowed) && !rdIsWeekendDay(ctx, info)) {
     if (rules.weekdays.allowed.indexOf(info.wd) < 0) {
       if (!P.hardNever.has(info.wd) && !rowAvail) hard.push("weekday-not-allowed:" + info.wd);
     } else if (rules.weekdays.autoOffer !== false) {
@@ -539,11 +569,11 @@ function rdPatternRules(ctx, P, info, role, asBlock, rowAvail, hard, soft) {
     else if (!rowAvail) hard.push("weekday-pattern:" + info.wd);
   }
 
-  // Aledo (Philip): hard day-before for the configured roles; strong soft on the whole week.
+  // Aledo (Philip): hard day-before for the configured roles; strong soft on the whole week for primary.
   var al = rules.aledo;
   if (al) {
     if (!rowAvail && al.hardAvoidDayBefore !== false && ctx.aledoDayBeforeRoles.indexOf(role) >= 0 && rdIsAledoDay(rules, rdAddDays(date, 1))) hard.push("day-before-aledo");
-    if (al.avoidWholeWeek && rdWeekHasAledo(rules, info.monday)) soft.push({ reason: "aledo-week", weight: resolveWeight(ctx, al.avoidWholeWeek) });
+    if (primary && al.avoidWholeWeek && rdWeekHasAledo(rules, info.monday)) soft.push({ reason: "aledo-week", weight: resolveWeight(ctx, al.avoidWholeWeek) });
   }
 }
 
@@ -551,6 +581,17 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 
 /* ------------------------------------------------------- static layer */
 
+// Hard reason vocabulary (test/generator-regression.js REASON_PREFIXES pins it;
+// the UI's REASON_WORDS glosses the entries it knows and shows the raw code for
+// the rest): unknown-surgeon, bad-role:, inactive,
+// backup-opt-out, holiday-opt-out:, time-off:, day-before-vacation,
+// unavailable-row, no-backup-row, backup-only-row, east-busy, east-forecast-busy:,
+// hard-never-weekday:, recurring-unavailable:, weekday-not-allowed:,
+// weekend-block-only, weekday-pattern:, day-before-aledo, whitelist-month,
+// not-recurring-available, outside-available-weeks, outside-window,
+// external-cover, slot-locked:, derived-lock:, derived-lock-held:,
+// holds-other-role, monthly-cap:, max-consecutive:, backup-cap:,
+// backup-weekend-cap:, window-week-max:, max-major-holidays:.
 function rdStatic(ctx, date, role, id, asBlock) {
   var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "");
   var memo = ctx._memo[key];
@@ -566,6 +607,10 @@ function rdStatic(ctx, date, role, id, asBlock) {
   var mask = RD_MASK[role] || 0;
 
   if (!P.active || (P.activeFrom && date < P.activeFrom) || (P.activeTo && date > P.activeTo)) hard.push("inactive");
+
+  // 9/22: an explicit backup opt-out is hard on every backup slot - holiday
+  // units included, never waived, no dated row lifts it. Primary is unaffected.
+  if (role === "backup" && P.backupOptOut) hard.push("backup-opt-out");
 
   // Holiday context.
   var hol = ctx.holidayByDay[date] || null;
@@ -606,10 +651,11 @@ function rdStatic(ctx, date, role, id, asBlock) {
   }
 
   // Weekday-pattern family - waived on holiday-unit days (groupRules.holidays.ignoreWeekdayRules).
-  // hardNeverWeekdays is the one member no explicit row lifts. Inside a derived
-  // (East) week the derived lock governs instead, so the rest of the family is
-  // deferred: eligibility() re-applies it when an import/manual lock overrides
-  // that derived lock (res.patternDeferred + res.rowAvail carry what it needs).
+  // hardNeverWeekdays is the one member no explicit row lifts (its roles list
+  // defaults to primary only since 9/22). Inside a derived (East) week the
+  // derived lock governs instead, so the rest of the family is deferred:
+  // eligibility() re-applies it when an import/manual lock overrides that
+  // derived lock (res.patternDeferred + res.rowAvail carry what it needs).
   var notRecurring = false;
   var patternDeferred = false;
   if (!waive) {
@@ -620,18 +666,21 @@ function rdStatic(ctx, date, role, id, asBlock) {
   res.patternDeferred = patternDeferred;
   res.rowAvail = rowAvail;
 
-  // Dated whitelists (governance is per role: a role-scoped explicit list governs only its roles).
+  // Dated whitelists - PRIMARY only since 9/22 (backup is open to everyone), so a
+  // role-scoped explicit list can only narrow primary. Sarkar's windows are her
+  // only availability and keep governing both roles.
   var datedBlock = null;
-  var governed = !!((P.governedMonths[info.month] || 0) & mask);
+  var isPrimary = role === "primary" || !ctx.backupOpen; // backupPolicy.openToEveryone false -> both roles again
+  var governed = isPrimary && !!((P.governedMonths[info.month] || 0) & mask);
   if (governed) {
     if (!rowAvail) datedBlock = "whitelist-month";
-  } else if (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length)) {
+  } else if (isPrimary && (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length))) {
     var wa = rules.weekendsAvailable;
     var weekendOk = rdIsWeekendDay(ctx, info) && wa && (wa === true || wa[role]);
     if (!(rowAvail || weekendOk || rdRecurringMatches(rules.recurringAvailable, date))) notRecurring = true;
   }
-  if (P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
-  if (P.hasWindows && !(P.windowDays.has(date) || rowAvail)) hard.push("outside-window"); // still enforced on holidays
+  if (isPrimary && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
+  if (P.hasWindows && !(P.windowDays.has(date) || rowAvail)) hard.push("outside-window"); // both roles; still enforced on holidays
 
   if (notRecurring && !waive) hard.push("not-recurring-available");
   if (datedBlock) {
@@ -788,7 +837,9 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
       if (dp.countsBackup === false ? holdsRole(wd, "primary") : holdsAny(wd)) wcnt++;
     }
     if (typeof dp.max === "number" && wcnt > dp.max) hard.push("window-week-max:" + dp.max);
-    if (typeof dp.min === "number" && wcnt < dp.min) soft.push({ reason: "window-week-below-min:" + dp.min, weight: W.preferred });
+    // 9/22: the minimum is a PRIMARY target - backup inside a window is allowed but
+    // never rewarded (item N owns countsBackup and the rest of her 9/22 changes).
+    if (role === "primary" && typeof dp.min === "number" && wcnt < dp.min) soft.push({ reason: "window-week-below-min:" + dp.min, weight: W.preferred });
   }
 
   // Handoff partner required (Sarkar): consecutive primary days hand off to herself.

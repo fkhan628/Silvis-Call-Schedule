@@ -18,7 +18,8 @@
       "Holiday unit day membership (which days belong to each holiday unit) is Faraz's current guess and editable in Setup."
     ],
     "revisions": [
-      "2026-09-22 (Claude Code, from Faraz's 9/21 evening decisions): Thanksgiving 2026 = Khan primary Thu 11/26 - Sun 11/29 as one unit (locked rows added to existingAssignments); day rules do not apply on holiday-unit days and anyone may take a holiday unless opted out; Fierce East weeks stated by Faraz (primary 11/9, backup 10/12 + 12/7); East forecast while Davenport is unpublished; plus the implemented defaults listed under groupRules (countBackupInConsecutive, weights, availabilityPrecedence, holidays, eastFeed). See docs/ORIENTATION-2026-09-21.md section 3."
+      "2026-09-22 (Claude Code, from Faraz's 9/21 evening decisions): Thanksgiving 2026 = Khan primary Thu 11/26 - Sun 11/29 as one unit (locked rows added to existingAssignments); day rules do not apply on holiday-unit days and anyone may take a holiday unless opted out; Fierce East weeks stated by Faraz (primary 11/9, backup 10/12 + 12/7); East forecast while Davenport is unpublished; plus the implemented defaults listed under groupRules (countBackupInConsecutive, weights, availabilityPrecedence, holidays, eastFeed). See docs/ORIENTATION-2026-09-21.md section 3.",
+      "2026-09-22 (Claude Code, Prompt 12 item I, from Faraz's 9/22 answers): backup is open to everyone - hardNeverWeekdaysRoles [\"primary\"] for Khan and Sarkar (also the engine default when the key is absent), Fierce weekdayPattern backup:true on every weekday, surgeonRules.<id>.backupOptOut (all false), groupRules.backupPolicy; rules.js applies recurringUnavailable, weekdays.allowed, governed months, the recurring whitelist, availableWeeks and the Aledo week to primary only, and a recurringAvoid entry weighs low for backup."
     ]
   },
   "site": {
@@ -216,7 +217,12 @@
       "ignoreWeekdayRules": true,
       "anyoneMayCoverUnlessOptedOut": true,
       "unitExemptFromMaxConsecutive": true,
-      "note": "Faraz 9/21 (evening): 'The day rules are not for holidays. Anyone can be on backup for holidays unless they explicitly want that holiday off.' On a holiday-unit day the weekday-pattern rules (Khan Tue/Thu + Mon/Wed, Burchett recurring whitelist, Acton 2nd/4th Mon/Wed, Fierce Clinton days + Monday-backup-only, Philip Aledo weekday rules) are not applied, for primary or backup. Still applied: vacations, per-surgeon holidayRules.holidaysOff, maxMajorHolidays, East busy days / forecast, Fierce derived-week locks, Sarkar windows, monthly caps. A holiday unit counts as ONE commitment for maxConsecutiveDays (Khan's 4-day Thanksgiving unit vs his max 3)."
+      "note": "Faraz 9/21 (evening): 'The day rules are not for holidays. Anyone can be on backup for holidays unless they explicitly want that holiday off.' On a holiday-unit day the weekday-pattern rules (Khan Tue/Thu + Mon/Wed, Burchett recurring whitelist, Acton 2nd/4th Mon/Wed, Fierce Clinton days + Monday-backup-only, Philip Aledo weekday rules) are not applied to primary (since 9/22 they never apply to backup on any day - see backupPolicy). Still applied: vacations, per-surgeon holidayRules.holidaysOff, backupOptOut, maxMajorHolidays, East busy days / forecast, Fierce derived-week locks, Sarkar windows, monthly caps. A holiday unit counts as ONE commitment for maxConsecutiveDays (Khan's 4-day Thanksgiving unit vs his max 3)."
+    },
+    "backupPolicy": {
+      "openToEveryone": true,
+      "source": "Faraz 9/22",
+      "note": "Backup is open to everyone, on-site or off-site, every day: outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed months and the weeks whitelist restrict PRIMARY only. Still blocking backup: vacations, holiday opt-outs, explicit unavailable / no_backup rows, East-derived weeks, the other role the same day, backup caps, Sarkar's windows and an explicit surgeonRules.<id>.backupOptOut (Setup -> Rules: 'Does not take backup'; nobody has opted out - rules doc section 8 item 7). Soft avoids (recurringAvoid) weigh low for backup and medium for primary. rules.js READS openToEveryone: false restores the pre-9/22 reading (the day rules, the dated whitelists, the Aledo week and the hardNeverWeekdays default govern both roles again); an explicit hardNeverWeekdaysRoles list and backupOptOut are honoured either way, and an absent key means open. Still counting backup until their own items land: monthly caps (item K) and max-consecutive when countBackupInConsecutive is true. Sarkar's window-week minimum bonus is a primary soft: backup inside a window is allowed but never targeted."
     },
     "weights": {
       "low": 1,
@@ -237,9 +243,9 @@
       "time_off (+ trailing edge: the day before a vacation blocks PRIMARY)",
       "explicit unavailable / no_backup rows",
       "explicit available / backup_only rows (a dated row for a role lifts the next tier for that role only)",
-      "recurring patterns (recurringUnavailable), weekday patterns (weekdays.allowed, outsideDerivedWeeks incl. weekend-block-only), windows / weeks / governed months, day-before-Aledo",
+      "recurring patterns (recurringUnavailable), weekday patterns (weekdays.allowed, outsideDerivedWeeks incl. weekend-block-only), windows / weeks / governed months, day-before-Aledo - since 9/22 every member of this tier except availableWindows restricts PRIMARY only (outsideDerivedWeeks is per-role data and says backup:true everywhere)",
       "mode defaults (weekendsAvailable, pool membership)",
-      "independent gates no row overrides: hardNeverWeekdays (named hard on purpose: OR days, Sarkar Fri/Sun - change the rule, or override the edit with its warning), East busy, derived East weeks, caps, maxConsecutiveDays, same-day other role, holiday opt-outs"
+      "independent gates no row overrides: hardNeverWeekdays (primary only by default since 9/22 via hardNeverWeekdaysRoles; named hard on purpose: OR days, Sarkar Fri/Sun - change the rule, or override the edit with its warning), backupOptOut (hard on every backup slot), East busy, derived East weeks, caps, maxConsecutiveDays, same-day other role, holiday opt-outs"
     ],
     "availabilityPrecedenceNote": "availableWeeks and availableWindows are read from surgeonRules directly and are NOT written as available rows: a row is a dated exception that lifts weekday patterns, and one row per window day would open Sarkar's hard-never Friday inside every window.",
     "whitelistMonths": {
@@ -276,6 +282,8 @@
     "s1": {
       "name": "Khan",
       "poolMember": true,
+      "backupOptOut": false,
+      "backupNote": "9/22: backup any day, Tue/Thu included - backup is open to everyone; the OR-day rule restricts primary only.",
       "availabilityMode": "weekends-plus-weekdays",
       "weekendStyle": "block",
       "maxConsecutiveDays": 3,
@@ -310,10 +318,9 @@
         "Thanksgiving 2026 CONFIRMED (Faraz 9/21 evening): Khan primary Thu 11/26 through Sun 11/29 as one unit."
       ],
       "hardNeverWeekdaysRoles": [
-        "primary",
-        "backup"
+        "primary"
       ],
-      "hardNeverWeekdaysNote": "Applies to both roles on ordinary days; NOT applied on holiday-unit days (groupRules.holidays). Cheapest lever if Thursday backups come up short: set to [\"primary\"].",
+      "hardNeverWeekdaysNote": "9/22 (Faraz): Tue/Thu block PRIMARY only - backup any day, OR days included. Not applied on holiday-unit days (groupRules.holidays). [\"primary\"] is also the engine default when this key is absent or empty (an empty list never means 'no role'); list both roles to close backup again.",
       "holidays2026": {
         "thanksgiving": {
           "days": [
@@ -331,6 +338,8 @@
     "s2": {
       "name": "Burchett",
       "poolMember": true,
+      "backupOptOut": false,
+      "backupNote": "9/22: backup any day (off-site is fine for standby); the recurring whitelist and the October/December lists govern primary only.",
       "availabilityMode": "whitelist-recurring",
       "recurringAvailable": [
         {
@@ -431,6 +440,8 @@
     "s3": {
       "name": "Acton",
       "poolMember": true,
+      "backupOptOut": false,
+      "backupNote": "9/22: backup any day, 2nd/4th Monday and Wednesday included - the outreach rule restricts primary only; his soft avoids weigh low for backup and medium for primary.",
       "availabilityMode": "blacklist-recurring",
       "recurringUnavailable": [
         {
@@ -525,6 +536,8 @@
     "s4": {
       "name": "Philip",
       "poolMember": true,
+      "backupOptOut": false,
+      "backupNote": "9/22: backup any day, Aledo weeks and the day before an Aledo day included - the weeks whitelist and the Aledo rules restrict primary only; his backup cap still applies.",
       "availabilityMode": "whitelist-weeks",
       "aledo": {
         "weekdays": [
@@ -627,6 +640,8 @@
     "s5": {
       "name": "Fierce",
       "poolMember": true,
+      "backupOptOut": false,
+      "backupNote": "9/22: backup any day - Clinton Tue/Thu and a standalone Friday, Saturday or Sunday included (weekdayPattern backup:true everywhere); the primary pattern is unchanged.",
       "availabilityMode": "derived-from-east-plus-weekday-pattern",
       "outsideDerivedWeeks": {
         "canBePrimary": true,
@@ -640,7 +655,7 @@
           "Tue": {
             "where": "Clinton all day",
             "primary": false,
-            "backup": false
+            "backup": true
           },
           "Wed": {
             "where": "Office Clinton/Silvis",
@@ -652,26 +667,27 @@
           "Thu": {
             "where": "Clinton all day",
             "primary": false,
-            "backup": false
+            "backup": true
           },
           "Fri": {
             "where": "Clinton or Dubuque (rotates)",
             "primary": "weekend-block-only",
-            "backup": "weekend-block-only",
-            "note": "Faraz 9/21: his Sat/Sun run with his Friday \u2014 he takes Fri+Sat+Sun as one block; never a standalone Friday"
+            "backup": true,
+            "note": "Faraz 9/21: his Sat/Sun run with his Friday \u2014 he takes Fri+Sat+Sun as one block; never a standalone Friday as PRIMARY. 9/22: a standalone Friday BACKUP is fine (backup any day)."
           },
           "Sat": {
             "where": "\u2014",
             "primary": "weekend-block-only",
-            "backup": "weekend-block-only"
+            "backup": true
           },
           "Sun": {
             "where": "\u2014",
             "primary": "weekend-block-only",
-            "backup": "weekend-block-only"
+            "backup": true
           }
         },
-        "source": "Fierce via Faraz 9/21"
+        "source": "Fierce via Faraz 9/21",
+        "backupNote": "9/22: backup is open on every weekday (backup:true throughout, standalone weekend days included); only the primary column carries his Clinton / Monday / Fri+Sat+Sun-block restrictions."
       },
       "monthlyCap": {
         "total": 14,
@@ -718,6 +734,8 @@
     "s6": {
       "name": "Sarkar",
       "poolMember": true,
+      "backupOptOut": false,
+      "backupNote": "9/22: backup on her remaining window days is allowed (not targeted); the Fri/Sun rule restricts primary only, the windows govern both roles.",
       "availabilityMode": "whitelist-windows",
       "availableWindows": [
         {
@@ -750,6 +768,10 @@
         "Sun"
       ],
       "hardNeverWeekdaysReason": "Faraz 9/21: no Fri/Sun block; a Saturday is fine",
+      "hardNeverWeekdaysRoles": [
+        "primary"
+      ],
+      "hardNeverWeekdaysRolesNote": "9/22: Fri/Sun block PRIMARY only (backup is open to everyone on her window days); also the engine default when the key is absent or empty.",
       "maxConsecutiveDays": 2,
       "monthlyTarget": null,
       "handoffPartnerRequired": true,
@@ -1341,13 +1363,14 @@
     "Holidays: the day rules are not for holidays - anyone can be backup (or primary) on a holiday-unit day unless they explicitly want that holiday off (Faraz 9/21 evening).",
     "East feed: the Davenport schedule for the next period is not out until the end of 2026; Silvis includes Khan meanwhile and avoids his most likely East days via a forecast from repeated Davenport generator runs (Faraz 9/21 evening).",
     "Fierce East weeks: East primary week of 11/9; East backup weeks of 10/12 and 12/7 (Faraz 9/21 evening).",
-    "Porting stance: not a verbatim translation - use the bones and safety features and adjust whatever will not work for Silvis (Faraz 9/21 evening)."
+    "Porting stance: not a verbatim translation - use the bones and safety features and adjust whatever will not work for Silvis (Faraz 9/21 evening).",
+    "Backup (Faraz 9/22): open to everyone every day - outreach / OR / Clinton / Aledo days restrict primary only - unless a surgeon explicitly opts out (surgeonRules.<id>.backupOptOut; nobody has)."
   ],
   "openQuestions": [
     "1. 10/15 (Thu) \u2014 the one open primary day in the locked October import; nobody's rules allow it. To be discussed by the group. (Imported unlocked; shows as uncovered with reasons.)",
     "2. Sarkar's home email address (none on record) \u2014 goes in the private contacts file, not here.",
     "3. Holiday unit days for 2027 and the minor holidays: should a Monday holiday unit include the preceding weekend? (Thanksgiving 2026 is settled: Thu\u2013Sun with Khan. Christmas and New Year's stay Eve+Day.)",
-    "4. Khan as BACKUP on ordinary Tuesdays/Thursdays (his OR days): currently blocked for both roles. Allowing backup is the cheapest lever if Thursday backups come up short in Nov\u2013Dec.",
+    "4. ~~Khan as BACKUP on ordinary Tuesdays/Thursdays~~ - answered 9/22: backup is open to everyone (surgeonRules.s1.hardNeverWeekdaysRoles = [\"primary\"]). Open instead: does anyone want an explicit backup opt-out (surgeonRules.<id>.backupOptOut, Setup -> Rules 'Does not take backup')? Nobody so far - ask the group once (rules doc section 8 item 7).",
     "5. Philip's monthly cap: none stated; the group default (8 total) applies from November. His own October was 15 days."
   ]
 }

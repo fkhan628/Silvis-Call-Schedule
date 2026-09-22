@@ -5531,7 +5531,8 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
       return n;
     });
   };
-  const toggleList = (path, item, on) => { const cur = get(path, []); const list = Array.isArray(cur) ? cur.filter(x => x !== item) : []; if (on) list.push(item); set(path, list); };
+  // dflt: the engine default the checkboxes display when the key is absent - the toggle starts from the same list, and emptying it drops the key (back to the default) rather than saving [].
+  const toggleList = (path, item, on, dflt) => { const cur = get(path, dflt || []); const list = Array.isArray(cur) ? cur.filter(x => x !== item) : []; if (on) list.push(item); if (dflt && !list.length) { set(path, undefined); return; } set(path, list); };
   const save = () => {
     const leaks = suContactPaths(draft);
     if (leaks.length) { showToast("Refused: the rules would carry contact-looking data at " + leaks.join(", ") + " (the blob is public).", "error"); return; }
@@ -5588,7 +5589,11 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
             <span style={{ fontSize: 10, color: "#7a8a98", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 8 }}>Hard never on</span>
             {SU_WEEKDAYS.map(w => <SuCheck key={w} label={w} checked={(get("hardNeverWeekdays", []) || []).indexOf(w) >= 0} onChange={v => toggleList("hardNeverWeekdays", w, v)} />)}
             <span style={{ fontSize: 10, color: "#7a8a98", marginRight: 6 }}>applies to</span>
-            {["primary", "backup"].map(r => <SuCheck key={r} label={r} checked={(get("hardNeverWeekdaysRoles", ["primary", "backup"]) || []).indexOf(r) >= 0} onChange={v => toggleList("hardNeverWeekdaysRoles", r, v)} />)}
+            {["primary", "backup"].map(r => <SuCheck key={r} label={r} checked={(get("hardNeverWeekdaysRoles", ["primary"]) || []).indexOf(r) >= 0} onChange={v => toggleList("hardNeverWeekdaysRoles", r, v, ["primary"])} />)}
+            <span style={{ fontSize: 10, color: "#7a8a98" }}>(default: primary only - backup is open to everyone since 9/22; at least one role stays ticked)</span>
+          </div>
+          <div>
+            <SuCheck label="Does not take backup" title="9/22: backup is open to everyone unless the surgeon explicitly opts out. Checked = a hard block on every backup slot, holiday units included; primary is unaffected." checked={draft.backupOptOut === true} onChange={v => set("backupOptOut", v ? true : undefined)} testid="rules-backup-opt-out" />
           </div>
           <div>
             <SuCheck label="weekday allow-list (Mon-Thu; weekends stay pool days)" checked={!!draft.weekdays} onChange={v => set("weekdays", v ? { allowed: [], autoOffer: true } : undefined)} />

@@ -11,7 +11,11 @@
 //
 // rules.js is imported ONLY to build ctx (buildContext). Every assertion below
 // re-states its rule independently from the seed data; nothing here calls
-// eligibility(). Hard-rule items assert on GENERATOR-PLACED slots only
+// eligibility(). Since 9/22 (Prompt 12 item I) the restated rule set says backup
+// is open to everyone: the per-day items restrict PRIMARY only where the rules
+// doc does, and a backup slot is refused only by vacations, holiday opt-outs,
+// explicit rows, derived locks, the other role, backup caps, Sarkar's windows
+// and an explicit backupOptOut. Hard-rule items assert on GENERATOR-PLACED slots only
 // (import/manual locks and Fierce's derived locks are facts: item 3 checks
 // they are byte-identical, lock collisions are diagnostics warnings).
 //
@@ -124,20 +128,36 @@ IDS.forEach((id) => VAC[id].forEach((d) => { const b = addDays(d, -1); if (!VAC[
 eq(seed.groupRules.dayBeforeRules.trailingEdgeRoles, [P], "seed: trailing edge is primary-only");
 eq(seed.groupRules.dayBeforeRules.aledoDayBeforeRoles, [P], "seed: day-before-Aledo is primary-only");
 eq(seed.groupRules.countBackupInConsecutive, false, "seed: consecutive counts primary days only");
-// Burchett: recurring whitelist + explicit lists; governed months use the explicit list only.
+// 9/22 (rules doc section 1 "Roles per day"; Prompt 12 item I): backup is open to
+// everyone every day. The outreach / OR-day / Clinton / Aledo rules and the dated
+// whitelists below restrict PRIMARY only. Still blocking backup: vacations, holiday
+// opt-outs, explicit unavailable / no_backup rows, derived locks, the other role,
+// backup caps, Sarkar's windows and an explicit surgeonRules.<id>.backupOptOut.
+eq(!!(seed.groupRules.backupPolicy && seed.groupRules.backupPolicy.openToEveryone), true, "seed: groupRules.backupPolicy.openToEveryone");
+eq(IDS.filter((id) => SR[id].backupOptOut !== false), [], "seed: every surgeon carries backupOptOut:false (nobody has opted out)");
+const OPTED_OUT = new Set(IDS.filter((id) => SR[id].backupOptOut === true));
+const hardNeverApplies = (id, role) => { const r = SR[id].hardNeverWeekdaysRoles; return (Array.isArray(r) && r.length ? r : [P]).includes(role); }; // engine default when the key is absent OR empty: primary only
+eq(SR[KHAN].hardNeverWeekdaysRoles, [P], "seed: Khan's OR days block primary only");
+eq(SR[SARKAR].hardNeverWeekdaysRoles, [P], "seed: Sarkar's Fri/Sun block primary only");
+const FIERCE_WP = SR[FIERCE].outsideDerivedWeeks.weekdayPattern;
+eq(WD.map((w) => FIERCE_WP[w].backup), [true, true, true, true, true, true, true], "seed: Fierce may be backup on every weekday (9/22)");
+eq(WD.map((w) => FIERCE_WP[w].primary), [false, false, true, false, "weekend-block-only", "weekend-block-only", "weekend-block-only"], "seed: Fierce's primary pattern is unchanged");
+// Burchett: recurring whitelist + explicit lists govern PRIMARY (governed months use
+// the explicit list only); since 9/22 backup is any day not explicitly unavailable.
 const burchettRecurring = (d) => (weekday(d) === "Mon" && [2, 4].includes(nthOf(d))) || (weekday(d) === "Tue" && nthOf(d) === 1) || (weekday(d) === "Wed" && [2, 4].includes(nthOf(d)));
 const explicitDates = (obj) => { const s = new Set(); Object.keys(obj || {}).forEach((m) => (Array.isArray(obj[m]) ? obj[m] : []).forEach((d) => s.add(d))); return s; };
 const BUR_AVAIL = explicitDates(SR[BURCHETT].explicitAvailable), BUR_BACKUP_ONLY = explicitDates(SR[BURCHETT].explicitBackupOnly), BUR_UNAVAIL = explicitDates(SR[BURCHETT].explicitUnavailable);
 const BUR_GOVERNED = new Set(SR[BURCHETT].explicitListMonths.map((e) => (typeof e === "string" ? e : e.month)));
 function burchettMay(d, role) {
-  if (isHoliday(d)) return true; // day rules do not apply on holiday-unit days (rules doc section 5)
-  if (BUR_UNAVAIL.has(d)) return false;
+  if (BUR_UNAVAIL.has(d)) return false;     // explicit rows are never waived
+  if (role === B) return true;              // 9/22: backup any day
+  if (BUR_BACKUP_ONLY.has(d)) return false; // a backup_only row blocks primary
+  if (isHoliday(d)) return true;            // day rules do not apply on holiday-unit days (rules doc section 5)
   if (BUR_AVAIL.has(d)) return true;
-  if (role === B && BUR_BACKUP_ONLY.has(d)) return true;
   if (BUR_GOVERNED.has(monthOf(d))) return false;
   return burchettRecurring(d) || isWeekend(d);
 }
-// Acton: 2nd/4th Mon + Wed blocked; October governed for both roles by his explicit lists.
+// Acton: 2nd/4th Mon + Wed blocked for PRIMARY; October governed for primary by his explicit list (backup open since 9/22).
 const ACT_OCT = SR[ACTON].explicitAvailable["2026-10"];
 const actonBlockedRecurring = (d) => ["Mon", "Wed"].includes(weekday(d)) && [2, 4].includes(nthOf(d));
 // Philip: Aledo days = 1st/3rd Wednesday + the Friday of the Mon-Sun week containing the 3rd Wednesday.
@@ -176,7 +196,7 @@ eq([KHAN, SARKAR].every((id) => "monthlyTarget" in SR[id] && SR[id].monthlyTarge
 // diagnostics.uncovered must start with one of these; anything else is a renamed,
 // bogus or placeholder reason. Holiday-unit reasons carry "@YYYY-MM-DD".
 const REASON_PREFIXES = [
-  "time-off:", "day-before-vacation", "unavailable-row", "no-backup-row", "backup-only-row", "inactive", "holiday-opt-out:",
+  "time-off:", "day-before-vacation", "unavailable-row", "no-backup-row", "backup-only-row", "inactive", "holiday-opt-out:", "backup-opt-out",
   "hard-never-weekday:", "recurring-unavailable:", "weekday-not-allowed:", "weekend-block-only", "weekday-pattern:", "day-before-aledo",
   "whitelist-month", "not-recurring-available", "outside-available-weeks", "outside-window",
   "east-busy", "east-forecast-busy:", "derived-lock:", "derived-lock-held:", "slot-locked:", "external-cover", "holds-other-role",
@@ -191,6 +211,23 @@ function reasonOk(r) {
   if (at >= 0 && !/^\d{4}-\d{2}-\d{2}$/.test(r.slice(at + 1))) return false;
   return REASON_PREFIXES.some((p) => core.indexOf(p) === 0);
 }
+// 9/22 positive pins (review of item I): an uncovered BACKUP slot may never cite a
+// primary-only rule for any surgeon - if it does, the engine has re-closed backup.
+// Fierce's pattern reasons join the list because the seed pins backup:true on every
+// weekday; hard-never-weekday joins for a surgeon whose roles list is primary only;
+// the trailing edge and day-before-Aledo are pinned primary-only above; East never
+// blocks backup (eastBlocksBackup false).
+const PRIMARY_ONLY_FOR_BACKUP = ["recurring-unavailable:", "weekday-not-allowed:", "whitelist-month", "not-recurring-available", "outside-available-weeks", "day-before-aledo", "day-before-vacation", "east-busy", "east-forecast-busy:"]
+  .concat(WD.every((w) => FIERCE_WP[w].backup === true) ? ["weekday-pattern:", "weekend-block-only"] : []);
+function primaryOnlyReasonForBackup(id, r) {
+  const core = String(r).split("@")[0];
+  if (core.indexOf("hard-never-weekday:") === 0) return !hardNeverApplies(id, B);
+  return PRIMARY_ONLY_FOR_BACKUP.some((p) => core.indexOf(p) === 0);
+}
+// ...and, across all runs, the generator must actually USE the loosened backup
+// rules at least once each (otherwise an engine that re-closes backup would pass
+// because the other surgeons fill every slot).
+const SAW = { "Khan backup on an OR day (Tue/Thu)": 0, "Burchett backup on a day off his recurring list": 0, "Acton backup on an outreach 2nd/4th Mon/Wed": 0, "Philip backup outside his listed weeks": 0, "Fierce backup on a Clinton Tue/Thu outside a derived week": 0 };
 
 /* ------------------------------------------------------------ helpers */
 const RANGES = [
@@ -277,6 +314,7 @@ function checkRun(out, range, seedNo) {
           u.reasons[id].forEach((r) => {
             ok(!PLACEHOLDER_REASONS.includes(String(r).split("@")[0]), "uncovered " + role + ": " + CODE[id] + " is eligible but the generator left the slot open (" + r + ")");
             ok(reasonOk(r), "uncovered " + role + ": " + CODE[id] + " has a reason outside the rule vocabulary: " + JSON.stringify(r));
+            if (role === B) ok(!primaryOnlyReasonForBackup(id, r), "uncovered backup: " + CODE[id] + " blocked by a PRIMARY-only rule (" + r + ") - backup is open to everyone since 9/22");
           });
         });
       }
@@ -306,45 +344,56 @@ function checkRun(out, range, seedNo) {
       // item 4
       ok(!VAC[id].has(d), CODE[id] + " placed on a vacation day");
       if (role === P) ok(!DAY_BEFORE_VAC[id].has(d), CODE[id] + " placed PRIMARY the day before a vacation");
-      // item 5
+      // item 5 (9/22: his OR days block the roles his hardNeverWeekdaysRoles list names - primary only in the seed)
       if (id === KHAN) {
-        if (!isHoliday(d)) ok(!["Tue", "Thu"].includes(weekday(d)), "Khan on a " + weekday(d));
+        if (!isHoliday(d) && hardNeverApplies(KHAN, role)) ok(!["Tue", "Thu"].includes(weekday(d)), "Khan " + role + " on a " + weekday(d));
         if (role === P) ok(!KHAN_NO_PRIMARY.has(d), "Khan PRIMARY on an East busy/forecast-busy day");
       }
-      // item 6
+      // item 6 (9/22: outreach days and the governed October restrict primary only)
       if (id === ACTON) {
-        if (!isHoliday(d)) ok(!actonBlockedRecurring(d), "Acton on a 2nd/4th " + weekday(d));
+        if (role === P && !isHoliday(d)) ok(!actonBlockedRecurring(d), "Acton PRIMARY on a 2nd/4th " + weekday(d));
         ok(!(d >= "2026-11-19" && d <= "2026-11-22") && !(d >= "2026-11-25" && d <= "2026-11-29"), "Acton on his November time off");
         ok(!(HOLIDAY[d] && HOLIDAY[d].name === "Thanksgiving"), "Acton on a Thanksgiving unit day");
-        if (monthOf(d) === "2026-10" && !isHoliday(d)) ok(ACT_OCT[role].includes(d), "Acton October is governed by his explicit " + role + " list");
+        if (role === P && monthOf(d) === "2026-10" && !isHoliday(d)) ok(ACT_OCT.primary.includes(d), "Acton October PRIMARY is governed by his explicit list");
       }
-      // item 7
-      if (id === BURCHETT) ok(burchettMay(d, role), "Burchett " + role + " on a day outside his whitelist (" + weekday(d) + ")");
-      // item 8
+      // item 7 (9/22: backup any day unless explicitly unavailable)
+      if (id === BURCHETT) ok(burchettMay(d, role), "Burchett " + role + " on a day his rules exclude (" + weekday(d) + ")");
+      // item 8 (9/22: the weeks whitelist and the Aledo rules restrict primary only; the backup cap and no_backup rows stay)
       if (id === PHILIP) {
         if (role === P && !isHoliday(d)) ok(!isAledoDay(addDays(d, 1)), "Philip PRIMARY the day before an Aledo day");
         ok(d !== "2026-10-15", "Philip on 2026-10-15");
         if (role === B) ok(!PHILIP_NO_BACKUP.has(d), "Philip backup on a no-backup date");
         if (monthOf(d) === "2026-10" && role === P && !isHoliday(d)) ok(PHILIP_OCT_PRIMARY.has(d), "Philip October primary outside his list");
-        if (d >= PHILIP_WEEKS_FROM && !isHoliday(d) && !(monthOf(d) === "2026-10" && role === P)) ok(PHILIP_WEEK_DAYS.has(d) || PHILIP_OCT_PRIMARY.has(d), "Philip outside his available weeks");
+        if (role === P && d >= PHILIP_WEEKS_FROM && !isHoliday(d)) ok(PHILIP_WEEK_DAYS.has(d) || PHILIP_OCT_PRIMARY.has(d), "Philip PRIMARY outside his available weeks");
       }
-      // item 9b: Fierce outside derived weeks
+      // item 9b: Fierce outside derived weeks follows his per-role weekday pattern
+      // (pinned above: primary Mon/Tue/Thu never, Wed yes, Fri-Sun block only; backup any day since 9/22)
       if (id === FIERCE) {
         ok(!DERIVED_ROLE[d] || DERIVED_ROLE[d] === role, "Fierce placed in the wrong role inside a derived week");
         if (!DERIVED_ROLE[d] && !isHoliday(d)) {
-          ok(!["Tue", "Thu"].includes(weekday(d)), "Fierce on a " + weekday(d));
-          if (role === P) ok(weekday(d) !== "Mon", "Fierce PRIMARY on a Monday");
-          if (isWeekend(d)) {
+          const pd = FIERCE_WP[weekday(d)] || {};
+          ok(pd[role] === true || pd[role] === "weekend-block-only", "Fierce " + role + " on a " + weekday(d) + " his pattern excludes");
+          if (pd[role] === "weekend-block-only") {
             const fri = fridayOf(d);
             const block = [0, 1, 2].every((k) => holder(view, addDays(fri, k), role) === FIERCE && !isHoliday(addDays(fri, k)));
-            ok(block, "Fierce holds " + weekday(d) + " " + d + " without the full Fri+Sat+Sun block");
+            ok(block, "Fierce holds " + weekday(d) + " " + d + " as " + role + " without the full Fri+Sat+Sun block");
           }
         }
       }
-      // item 10
+      // item 10 (9/22: windows govern both roles; Fri/Sun follows her hardNeverWeekdaysRoles list - primary only in the seed)
       if (id === SARKAR) {
-        ok(SARKAR_WINDOW.has(d), "Sarkar outside her windows");
-        ok(!["Fri", "Sun"].includes(weekday(d)), "Sarkar on a " + weekday(d));
+        ok(SARKAR_WINDOW.has(d), "Sarkar " + role + " outside her windows");
+        if (hardNeverApplies(SARKAR, role)) ok(!["Fri", "Sun"].includes(weekday(d)), "Sarkar " + role + " on a " + weekday(d));
+      }
+      // 9/22: an explicit backup opt-out is hard on every backup slot
+      if (role === B) ok(!OPTED_OUT.has(id), CODE[id] + " placed as backup although opted out");
+      // 9/22 positive sightings (asserted once at the end: each must happen somewhere in the 150 runs)
+      if (role === B && !isHoliday(d)) {
+        if (id === KHAN && ["Tue", "Thu"].includes(weekday(d))) SAW["Khan backup on an OR day (Tue/Thu)"]++;
+        if (id === BURCHETT && !isWeekend(d) && !burchettRecurring(d) && !BUR_AVAIL.has(d)) SAW["Burchett backup on a day off his recurring list"]++;
+        if (id === ACTON && actonBlockedRecurring(d)) SAW["Acton backup on an outreach 2nd/4th Mon/Wed"]++;
+        if (id === PHILIP && d >= PHILIP_WEEKS_FROM && !PHILIP_WEEK_DAYS.has(d)) SAW["Philip backup outside his listed weeks"]++;
+        if (id === FIERCE && !DERIVED_ROLE[d] && ["Tue", "Thu"].includes(weekday(d))) SAW["Fierce backup on a Clinton Tue/Thu outside a derived week"]++;
       }
       // item 11 (independent half): a block-style surgeon's lone weekend day needs a fallback-flagged unit
       if (BLOCK_STYLE.includes(id) && isWeekend(d) && !isHoliday(d)) {
@@ -589,6 +638,33 @@ const tBig = Date.now();
 const big = GEN.generate(ctx, RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: 200 });
 const bigMs = Date.now() - tBig;
 checkRun(big, RANGES[1], 1); // seed 1, bestOf 200
+// 9/22 (item I review): with backup open to everyone the milestone preview has no
+// open slot at all - the three Thursday backups (11/05, 11/19, 12/03) that only the
+// old day rules left open are now fillable. Deterministic (genPrng, seed 1).
+CUR.range = "R2 Nov-Dec bestOf 200"; CUR.seed = 1; CUR.day = "-";
+eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone preview (seed 1, bestOf 200): no uncovered slot");
+// 9/22 positive sightings across the 150 runs + the bestOf-200 run
+CUR.range = "all runs"; CUR.seed = "-"; CUR.day = "-";
+Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosened backup rule is not in force, or the runs changed - counts " + JSON.stringify(SAW) + ")"));
+// 9/22 opt-out with real data: the shipped seed opts nobody out, so run Nov-Dec once
+// with Acton (uncapped, a frequent backup filler) opted out - never placed as backup,
+// still placed as primary, and every open backup slot names the opt-out for him.
+{
+  const srOpt = JSON.parse(JSON.stringify(SA.seedToSurgeonRules(seed))); srOpt[ACTON].backupOptOut = true;
+  const inputOpt = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST }, surgeonRules: srOpt });
+  const ctxOpt = R.buildContext(inputOpt);
+  if (ctxOpt.warnings.length) fail("buildContext warnings (opt-out run): " + JSON.stringify(ctxOpt.warnings));
+  CUR.range = "R2 + Acton backupOptOut"; CUR.seed = 1; CUR.day = "-";
+  const outOpt = GEN.generate(ctxOpt, RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: 1 });
+  const DO = outOpt.diagnostics;
+  ok(!DO.warnings.some((w) => /generator bug/.test(w)), "opt-out run: generator reports its own bug");
+  eq(DO.hardViolations, [], "opt-out run: hard violations");
+  const actonBackups = Object.keys(outOpt.schedule).filter((d) => outOpt.schedule[d].backup === ACTON);
+  eq(actonBackups, [], "opt-out run: Acton placed as backup on " + actonBackups.join(", "));
+  ok(Object.keys(outOpt.schedule).some((d) => outOpt.schedule[d].primary === ACTON), "opt-out run: Acton must still be placed as primary (the opt-out is backup-only)");
+  DO.uncovered.filter((u) => u.role === B).forEach((u) => ok((u.reasons[ACTON] || []).some((r) => String(r).indexOf("backup-opt-out") === 0), "opt-out run: open backup " + u.day + " does not name backup-opt-out for BDA: " + JSON.stringify(u.reasons[ACTON])));
+  CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
+}
 const sortedR2 = r2Results.slice().sort((a, b) => a.score - b.score);
 const median = sortedR2[Math.floor(sortedR2.length / 2)];
 
