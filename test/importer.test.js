@@ -355,7 +355,7 @@ ok(/on conflict \(person_id, kind, role, start_date, end_date, coalesce\(source,
 ok(/on conflict \(day\) do update set[\s\S]*where schedule_days\.source = 'import'/.test(sql), "schedule_days update guarded by source = 'import'");
 ok(/version\s*=\s*schedule_days\.version \+ 1/.test(sql), "schedule_days update bumps version");
 ok(/is distinct from/.test(sql.slice(sql.indexOf("schedule_days (day"))), "schedule_days update only when something differs");
-ok(/coalesce\(call_schedule_data\.data, '\{\}'::jsonb\) \|\| /.test(sql), "blob merges into the existing data");
+ok(/\(coalesce\(call_schedule_data\.data, '\{\}'::jsonb\) - 'settings'\) \|\| /.test(sql), "blob merges into the existing data (M review 9/22: settings set apart, the roster re-set with the live outside surgeons kept)");
 ok(/'\{settings\}'/.test(sql), "settings merged one level deeper");
 ok(/before_seed_import/.test(sql) && sql.indexOf("call_schedule_snapshots") < sql.indexOf("call_schedule_data (id"), "snapshot comes first");
 ok(sql.indexOf("into public.schedule_days") < sql.indexOf("into public.time_off"), "schedule_days before time_off so the ON_CALL_CONFLICT trigger sees the schedule");
@@ -797,5 +797,52 @@ eq(days.filter((d) => d.day >= "2026-11-02" && d.day <= "2026-11-25" && d.backup
   const dE = IMP.planDiff(plan, liveEdited);
   eq([dE.tables.schedule_days.update, dE.tables.schedule_days.blocked], [0, 1], "Y: an app-edited live 11/5 row is blocked, not updated");
 }
+
+/* ------------------------------------------------- Prompt 12 M: outside surgeons in the roster */
+step("M: roster type 'external' and its note pass through impSeedRoster; a personal word in the note is refused");
+const LOCUM_ROW = { id: "x1", name: "Locum", code: "LOC", fullName: "Locum Tenens", active: true, roles: ["surgeon"], type: "external", note: "covers when asked" };
+const fxExt = clone(seed); fxExt.roster.push(clone(LOCUM_ROW));
+const planExt = IMP.importPlan(fxExt, { now: NOW });
+eq(planExt.blob.roster.length, 7, "seven roster rows");
+eq(Object.keys(planExt.blob.roster[6]).sort(), ["active", "code", "fullName", "id", "name", "note", "roles", "type"], "external row keys: the pool keys plus type and note");
+eq(planExt.blob.roster[6].type, "external", "type passes through");
+eq(planExt.blob.roster[6].note, "covers when asked", "an operational external note passes through");
+eq(planExt.blob.roster[6].code, "LOC");
+planExt.blob.roster.slice(0, 6).forEach((r) => eq(Object.keys(r).sort(), ["active", "code", "fullName", "id", "name", "roles"], r.id + ": a pool row carries neither type nor note (Sarkar's seed note stays dropped)"));
+eq(Object.prototype.hasOwnProperty.call(IMP.impSeedRoster({ roster: [Object.assign(clone(LOCUM_ROW), { note: "   " })] })[0], "note"), false, "a blank external note is omitted");
+eq(Object.prototype.hasOwnProperty.call(IMP.impSeedRoster({ roster: [{ id: "s9", name: "Pool", code: "PL", note: "documentation" }] })[0], "note"), false, "a pool row's note never reaches the blob");
+eq(Object.prototype.hasOwnProperty.call(IMP.impSeedRoster({ roster: [{ id: "s9", name: "Pool", code: "PL", type: "pool" }] })[0], "type"), false, "only type 'external' is a roster type (anything else is dropped: absent = pool surgeon)");
+refusesWith("NOTE_DENYLIST: roster[6].note (\"family\")", (fx) => { fx.roster.push(Object.assign(clone(LOCUM_ROW), { note: "family friend of the group" })); }, "external note with a denylist word");
+refuses((fx) => { fx.roster.push(Object.assign(clone(LOCUM_ROW), { note: "page 555-555-0100" })); }, "external note with a phone number");
+const ctxExt = R.buildContext({ roster: planExt.blob.roster, surgeonRules: planExt.blob.surgeonRules, groupRules: planExt.blob.groupRules, holidays: planExt.blob.holidays, schedule: {} });
+eq(ctxExt.activeIds.indexOf("x1"), -1, "blob roster -> the external is not in activeIds");
+eq(ctxExt.externalIds, ["x1"], "blob roster -> externalIds");
+eq(plan.blob.roster.some((r) => r.type === "external"), false, "the real seed adds no outside surgeon (they are added in Setup)");
+ok(typeof seed.groupRules.outsideSurgeonsNote === "string" && /Setup/.test(seed.groupRules.outsideSurgeonsNote), "the seed documents that outside surgeons are added in Setup (groupRules.outsideSurgeonsNote)");
+ok(!("outsideSurgeonsNote" in plan.blob.groupRules), "...and that note is seed documentation: dropped from the blob like every groupRules note");
+
+// review 9/22 (M, findings 1 + 5): a Setup-added outside surgeon lives only in the live blob - a seed import
+// must carry him over (planDiff, the app's merge and the SQL path), never replace the roster wholesale.
+step("M: a Setup-added outside surgeon survives a seed import (impMergeRoster: planDiff, SQL)");
+eq(typeof IMP.impMergeRoster, "function", "impMergeRoster is exported (the app's apply path calls it)");
+const liveRosterExt = plan.blob.roster.concat([clone(LOCUM_ROW)]);
+eq(IMP.impMergeRoster(plan.blob.roster, liveRosterExt).map((r) => r.id), ["s1", "s2", "s3", "s4", "s5", "s6", "x1"], "seed rows first, then the live externals the seed lacks");
+eq(IMP.impMergeRoster(plan.blob.roster, liveRosterExt)[6], LOCUM_ROW, "the live external row is carried over as it is (type, note included)");
+eq(IMP.impMergeRoster(planExt.blob.roster, liveRosterExt).map((r) => r.id), ["s1", "s2", "s3", "s4", "s5", "s6", "x1"], "an external the seed names itself is not duplicated (the seed's row wins)");
+eq(IMP.impMergeRoster(plan.blob.roster, plan.blob.roster.concat([{ id: "s9", name: "Gone", code: "GN", active: true, roles: ["surgeon"] }])).length, 6, "a live POOL row the seed lacks is not kept (the seed owns the pool rows, as before)");
+eq(IMP.impMergeRoster(plan.blob.roster, null).length, 6, "no live roster -> the seed roster");
+eq(IMP.impMergeRoster(plan.blob.roster, liveRosterExt.concat([{ id: "x2", type: "external", name: "Off", code: "OFF", active: false }])).map((r) => r.id).slice(6), ["x1", "x2"], "an inactive live external is kept too (his old days still name him)");
+const liveBlobExt = Object.assign(clone(plan.blob), { roster: liveRosterExt });
+const dExt = IMP.planDiff(plan, { blob: liveBlobExt, availability: [], time_off: [], schedule_days: [] });
+eq(dExt.tables.call_schedule_data.keys.roster, "unchanged", "planDiff: a live roster = seed + a Setup-added external reads roster=unchanged");
+eq(dExt.tables.call_schedule_data.keptExternals, ["x1"], "planDiff reports the carried-over externals");
+ok(dExt.text.indexOf("outside surgeon(s) kept from the live roster: x1") >= 0, "...and says so in the text: " + dExt.lines[0]);
+const dExtGone = IMP.planDiff(plan, { blob: Object.assign(clone(plan.blob), { roster: plan.blob.roster.concat([{ id: "s9", name: "Gone", code: "GN", active: true, roles: ["surgeon"] }]) }), availability: [], time_off: [], schedule_days: [] });
+eq(dExtGone.tables.call_schedule_data.keys.roster, "update", "planDiff: a stray live POOL row still reads roster=update (the seed replaces it)");
+const sqlExt = IMP.importSql(plan);
+const sqlKeep = "jsonb_array_elements(coalesce(call_schedule_data.data -> 'roster', '[]'::jsonb)) as r where r ->> 'type' = 'external' and not (r ->> 'id' = any (array['s1', 's2', 's3', 's4', 's5', 's6']::text[]))";
+eq((sqlExt.match(/r ->> 'type' = 'external'/g) || []).length, 2, "the SQL keeps the live externals in the SET and in the idempotency WHERE");
+ok(sqlExt.indexOf(sqlKeep) >= 0, "the SQL appends the live externals the seed lacks to the seed roster: " + sqlExt.split("\n").filter((l) => /'\{roster\}'/.test(l)).join(" | ").slice(0, 400));
+ok(/'\{roster\}', '\[\{"id":"s1"/.test(sqlExt), "...after the seed's roster JSON");
 
 console.log("ok " + n + " assertions");

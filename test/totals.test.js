@@ -238,5 +238,47 @@ console.log("\n[E] notification message composers (data.message for send-notific
   });
 }
 
+console.log("[M] ttOutsideSurgeons - the Totals 'Outside surgeons' section (Prompt 12 M)");
+{
+  const rosterM = [
+    { id: "s1", name: "Khan", code: "FAK" }, { id: "s2", name: "Burchett", code: "MAB" },
+    { id: "x1", name: "Locum", code: "LOC", type: "external", active: true },
+    { id: "x2", name: "Idle", code: "IDL", type: "external", active: true },
+    { id: "x3", name: "Gone", code: "GON", type: "external", active: false },
+    { id: "x4", name: "Past", code: "PST", type: "external", active: false },
+  ];
+  const schedM = {
+    "2026-11-10": day("x1", "s1"), "2026-11-13": day("s2", "x1"), "2026-11-14": day("x1", "s1"),
+    "2026-11-20": day("x4", "s2"),
+    "2026-12-01": day("x1", null),
+  };
+  check("lists active externals (with or without days) and inactive ones only when they hold a day in the period; never a pool surgeon", () => {
+    const rows = H.ttOutsideSurgeons(rosterM, schedM, "2026-11-01", "2026-11-30");
+    assert.deepStrictEqual(rows.map(r => r.id), ["x1", "x2", "x4"]);
+  });
+  check("counts come from ttTotalsFor for the period (primary / backup / total), name / code / active carried", () => {
+    const rows = H.ttOutsideSurgeons(rosterM, schedM, "2026-11-01", "2026-11-30");
+    const x1 = rows.find(r => r.id === "x1");
+    assert.deepStrictEqual([x1.primary, x1.backup, x1.total], [2, 1, 3]);
+    assert.deepStrictEqual([x1.name, x1.code, x1.active], ["Locum", "LOC", true]);
+    const x2 = rows.find(r => r.id === "x2");
+    assert.deepStrictEqual([x2.primary, x2.backup, x2.total], [0, 0, 0]);
+    const x4 = rows.find(r => r.id === "x4");
+    assert.deepStrictEqual([x4.primary, x4.total, x4.active], [1, 1, false]);
+    assert.deepStrictEqual(H.ttOutsideSurgeons(rosterM, schedM, "2026-12-01", "2026-12-31").map(r => [r.id, r.primary]), [["x1", 1], ["x2", 0]], "December: x4 held nothing -> not listed");
+  });
+  check("no externals in the roster -> an empty list; a bad range or no roster -> an empty list (never throws)", () => {
+    assert.deepStrictEqual(H.ttOutsideSurgeons(rosterM.slice(0, 2), schedM, "2026-11-01", "2026-11-30"), []);
+    assert.deepStrictEqual(H.ttOutsideSurgeons(rosterM, schedM, "2026-11-30", "2026-11-01"), []);
+    assert.deepStrictEqual(H.ttOutsideSurgeons(null, schedM, "2026-11-01", "2026-11-30"), []);
+    assert.deepStrictEqual(H.ttOutsideSurgeons(rosterM, null, "2026-11-01", "2026-11-30").map(r => r.total), [0, 0]);
+  });
+  check("an externalCover day (legacy Atwell) stays nobody's day - it never shows in the outside-surgeon counts", () => {
+    const rows = H.ttOutsideSurgeons(rosterM, { "2026-11-03": day(null, "x1", { externalCover: "Atwell" }) }, "2026-11-01", "2026-11-30");
+    const x1 = rows.find(r => r.id === "x1");
+    assert.deepStrictEqual([x1.primary, x1.backup], [0, 1]);
+  });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

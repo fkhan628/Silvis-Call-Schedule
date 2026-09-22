@@ -354,8 +354,13 @@ function genSeedLocks(G, original) {
     var e = original[d] || {};
     var lockedP = !!e.externalCover || (G.respectLocks && !!e.primaryLocked && !!e.primary);
     var lockedB = G.respectLocks && !!e.backupLocked && !!e.backup;
-    var fixedP = lockedP || (fillOpen && !!e.primary);
-    var fixedB = lockedB || (fillOpen && !!e.backup);
+    // Prompt 12 M: a slot held by an outside surgeon (roster type "external", never in
+    // ctx.activeIds) is a hand-written fact in every mode - fixed like a lock inside the
+    // run (so nobody is placed over him and his own days are never re-evaluated), its
+    // own lock flag kept on the output (G.outLock). The day editor locks such a slot
+    // anyway; this pins the same reading for an unlocked row.
+    var fixedP = lockedP || (fillOpen && !!e.primary) || genIsExternal(ctx, e.primary);
+    var fixedB = lockedB || (fillOpen && !!e.backup) || genIsExternal(ctx, e.backup);
     base[d] = {
       primary: fixedP ? (e.primary || null) : null,
       backup: fixedB ? e.backup : null,
@@ -382,7 +387,7 @@ function genSeedLocks(G, original) {
     if (!ds) return;
     GEN_ROLES.forEach(function (role) {
       var id = ds[role];
-      if (!id) return;
+      if (!id || genIsExternal(ctx, id)) return;   // M (review 9/22): never a derived lock for an outside surgeon (buildContext already drops and warns)
       var e = base[d], other = role === "primary" ? "backup" : "primary";
       if (e[role + "Locked"]) {
         if (e[role] === id) { G.lockSrc[d][role] = G.lockSrc[d][role] + "+derived"; G.derivedConfirmed.push({ day: d, role: role, id: id, derivedId: id, holderSource: e.source }); return; }
@@ -794,6 +799,26 @@ function genFillHoliday(G, S, unit, role, rng) {
     diag[role + "Locked"] = !!(W[unit.inRange[0]][role + "Locked"] || W[unit.inRange[0]].externalCover);
     return true;
   }
+  // Prompt 12 M (review 9/22): a unit day held by a hand-written outside surgeon breaks the one-holder unit
+  // for that role - he is never a unit candidate (not in activeIds), so the other in-range days are filled
+  // day by day around him (the path a broken weekend unit takes), never left open for want of a whole-unit
+  // holder. One warning per unit and role; the diagnostic records the break and the daily fill.
+  var brokenDays = unit.inRange.filter(function (d) { return genIsExternal(ctx, W[d][role]); });
+  if (brokenDays.length) {
+    var extId = W[brokenDays[0]][role];
+    diag[role + "BrokenBy"] = { id: extId, days: brokenDays.slice() };
+    var daily = diag[role + "Daily"] = diag[role + "Daily"] || {};
+    var brokenMsg = "holiday unit " + unit.name + " " + unit.days[0] + ": " + role + " broken by hand-written outside surgeon " + extId + " on " + brokenDays.join(", ") + " - the other unit day(s) are filled day by day";
+    if (S.warnings.indexOf(brokenMsg) < 0) S.warnings.push(brokenMsg);
+    var allFilled = true;
+    open.forEach(function (d) {
+      var best = genBestFor(G, S, d, role, []);
+      if (best) { genSet(G, S, d, role, best); daily[d] = best; } else allFilled = false;
+    });
+    diag[role] = extId;
+    diag.candidates[role] = [];
+    return allFilled;
+  }
   var cands = R.holidayUnitCandidates(ctx, { name: unit.name, tier: unit.tier, days: unit.inRange }, role);
   var outHolder = null, outMixed = false;
   unit.outOfRange.forEach(function (d) { var e = W[d]; var h = e && e[role]; if (!h) return; if (outHolder && outHolder !== h) outMixed = true; outHolder = h; });
@@ -998,7 +1023,9 @@ function genRefreshWeekendDiag(G, S) {
 /* ----------------------------------------------------------- evaluate */
 
 // A roster entry of type "external" (outside surgeon / internal locum, Prompt 12 M) is never in the pool.
-function genIsExternal(ctx, id) { var r = ctx.rosterById && ctx.rosterById[id]; return !!(r && r.type === "external"); }
+// rules.buildContext keeps him out of ctx.activeIds altogether (every candidate loop here runs over
+// activeIds), so this test only guards the pool filter and the fixed-slot reading in genSeedLocks.
+function genIsExternal(ctx, id) { var r = id && ctx.rosterById && ctx.rosterById[id]; return !!(r && r.type === "external"); }
 // The equal-share pool (J): active, poolMember !== false, no availability windows, not external.
 function genPoolIds(G) {
   return G.ctx.activeIds.filter(function (id) { var P = G.ctx.per[id]; return P.rules.poolMember !== false && !P.hasWindows && !genIsExternal(G.ctx, id); });
@@ -1114,8 +1141,11 @@ function genUncoveredReasons(G, open) {
   var ctx = G.ctx, R = G.R, ids = ctx.activeIds;
   return open.map(function (o) {
     var reasons = {}, hol = G.units.holidayDaySet[o.day];
+    // M (review 9/22): a unit broken by a hand-written outside surgeon is filled day by day, so its
+    // open slot is explained day by day too (a unit-level reason would read 'slot-locked:x1@<his day>').
+    var brokenUnit = !!hol && hol.inRange.some(function (d) { return genIsExternal(ctx, ctx.schedule[d][o.role]); });
     ids.forEach(function (id) {
-      if (hol) {
+      if (hol && !brokenUnit) {
         // unit-level: the first unit day the surgeon cannot take (assuming the others)
         var found = null;
         for (var k = 0; k < hol.inRange.length && !found; k++) {

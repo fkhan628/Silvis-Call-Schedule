@@ -105,10 +105,16 @@ function addDays(s: string, days: number): string {
   return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
 }
 
-interface RosterEntry { id: string; name: string; code: string; fullName?: string; active?: boolean }
+interface RosterEntry { id: string; name: string; code: string; fullName?: string; active?: boolean; type?: "external"; note?: string }
 interface Roster { list: RosterEntry[]; byId: Record<string, RosterEntry> }
 
-// Roster = call_schedule_data.data.roster (ids s1..s6, last name, 3-letter code).
+// Roster = call_schedule_data.data.roster (ids s1..s6, last name, 3-letter code;
+// since Prompt 12 M also outside surgeons: ids x1, x2, ..., type "external",
+// written in by hand in the app). EVERY entry is served, whatever its roles,
+// type or active flag: an outside surgeon has a feed by his code
+// (?surgeon=LOC) and appears by last name in the group feed exactly like a
+// pool surgeon - no filter here, keep it that way. The note never reaches a
+// calendar (nothing below reads it).
 // Names and codes only - the blob carries no contact data by policy.
 async function loadRoster(): Promise<Roster> {
   const rows = await rest("call_schedule_data?select=data&id=eq.main");

@@ -2115,6 +2115,85 @@ try {
     await page.click('button[data-tab="setup"]');
     await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
 
+    // ---- Prompt 12 M: outside surgeons - Setup adds 'Locum' (LOC), the day editor writes him in
+    //      (locked, source manual-external, no override confirm), Totals lists him under its own heading ----
+    {
+      try {
+        const rosterCard = await openCard("setup_roster");
+        if (!rosterCard) throw new Error("setup_roster card missing");
+        const beforeRoster = writes.length;
+        const findRosterBlob = () => writesSince(beforeRoster, "/rest/v1/call_schedule_data").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).find(b => b && b.data && Array.isArray(b.data.roster) && b.data.roster.some(r => r.id === "x1"));
+        await page.click("[data-testid=roster-add-external]");
+        await page.fill("[data-testid=roster-name-x1]", "Locum");
+        await page.fill("[data-testid=roster-note-x1]", "covers when asked");
+        // a duplicate code is refused before anything is saved
+        await page.fill("[data-testid=roster-code-x1]", "FAK");
+        await page.click("[data-testid=roster-save]");
+        await page.waitForTimeout(500);
+        const dupRefused = /code FAK is used twice/i.test(await bodyText());
+        if (!dupRefused || findRosterBlob()) fail(`Roster: a duplicate code must be refused with no blob write (refused=${dupRefused}, blobWrite=${!!findRosterBlob()})`);
+        else ok("Roster: 'Add outside surgeon' with the duplicate code FAK is refused client-side, nothing written");
+        await page.fill("[data-testid=roster-code-x1]", "LOC");
+        await page.click("[data-testid=roster-save]");
+        if (!(await waitFor(() => !!findRosterBlob(), 4000, 100))) fail("Roster: no blob autosave carrying the outside surgeon x1 after Save roster");
+        else {
+          const x1 = findRosterBlob().data.roster.find(r => r.id === "x1");
+          const pool = findRosterBlob().data.roster.filter(r => r.type !== "external").length;
+          if (x1.type !== "external" || x1.code !== "LOC" || x1.name !== "Locum" || x1.note !== "covers when asked" || pool !== 6) fail("Roster: the saved outside surgeon row is wrong: " + JSON.stringify(x1) + " pool=" + pool);
+          else ok("Roster: Save -> blob autosave carries { id: x1, type: external, name: Locum, code: LOC, note } beside the six pool rows");
+        }
+        // the day editor on an open day well outside the milestone range (nothing else in this run touches spring 2027)
+        const extDay = (() => { const start = Date.UTC(2027, 2, 1); for (let i = 0; i < 120; i++) { const d = utcDay(start + i * 86400000); if (!fixtureHasDay(d) && !liveByDay[d] && d !== day) return d; } return null; })();
+        if (!extDay) throw new Error("no row-less day in spring 2027");
+        const [ey, em] = extDay.split("-");
+        await showMonth(Number(ey), Number(em) - 1);
+        await page.click(`[data-day="${extDay}"]`);
+        await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+        const grp = await page.$$eval("[data-testid=editor-primary-externals] option", els => els.map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
+        const grpB = await page.$$eval("[data-testid=editor-backup-externals] option", els => els.map(o => o.value));
+        if (!grp.some(o => o.value === "x1" && o.eligible === "true" && /Locum/.test(o.text)) || !grpB.includes("x1")) fail("Day editor: the 'Outside surgeons' optgroup must list Locum (eligible) for both roles: " + JSON.stringify({ grp, grpB }));
+        else ok(`Day editor ${extDay}: 'Outside surgeons' optgroup lists Locum as eligible for primary and backup`);
+        const beforeExt = writes.length;
+        await page.selectOption("[data-testid=editor-primary]", "x1");
+        await page.waitForTimeout(250);
+        const ovConfirm = await page.$("[data-testid=override-confirm]");
+        const lockedNow = await page.$eval("[data-testid=editor-lock-primary]", el => el.checked);
+        // review 9/22: the note is an INFO line (editor-info, sub colour), never the red error hint
+        const hintNow = await page.$eval("[data-testid=editor-info]", el => el.textContent).catch(() => "");
+        const redHint = await page.$eval("[data-testid=editor-hint]", el => el.textContent).catch(() => "");
+        if (ovConfirm) fail("Day editor: picking an outside surgeon must not open the override confirm");
+        else if (!lockedNow) fail("Day editor: picking an outside surgeon must lock the role");
+        else if (!/written in by hand/.test(hintNow)) fail("Day editor: no 'written in by hand' info line (editor-info) after picking an outside surgeon: " + JSON.stringify({ info: hintNow, hint: redHint }));
+        else if (redHint) fail("Day editor: picking an outside surgeon must not show the red error hint: " + JSON.stringify(redHint));
+        else ok("Day editor: picking Locum locks primary, shows the hand-written info line (not the error hint), no override confirm");
+        await page.screenshot({ path: path.join(OUT, "day-editor-outside-surgeon.png") });
+        await page.click("[data-testid=editor-save]");
+        await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+        noteEdit(extDay, { primary_id: "x1" });
+        await page.waitForTimeout(1800);
+        const extWrite = writesSince(beforeExt, "/rest/v1/schedule_days").find(w => { try { return JSON.parse(w.body).day === extDay; } catch (e) { return false; } });
+        const eb = extWrite ? JSON.parse(extWrite.body) : null;
+        if (!eb) fail("Day editor: no schedule_days write for the outside surgeon's day " + extDay + "; writes: " + JSON.stringify(writesSince(beforeExt).map(w => w.method + " " + w.path)));
+        else if (eb.primary_id !== "x1" || eb.primary_locked !== true || eb.source !== "manual-external") fail("Day editor: the outside surgeon's row must be { primary_id: x1, primary_locked: true, source: manual-external }: " + JSON.stringify(eb));
+        else ok(`Day editor: ${extDay} -> ${extWrite.method} schedule_days { primary_id: x1, primary_locked: true, source: manual-external }`);
+        if ((await cellAttr(extDay, "data-primary")) !== "x1") fail("Calendar: the cell does not show x1 as primary after the save"); else ok("Calendar: the cell shows Locum as primary");
+        // Totals: the 'Outside surgeons' section for that month, and never a pool-table row
+        await page.click('button[data-tab="totals"]');
+        await page.waitForSelector("[data-testid=totals-card]", { timeout: 5000 });
+        await page.selectOption("[data-testid=totals-year]", ey);
+        await page.selectOption("[data-testid=totals-month]", String(Number(em) - 1));
+        await page.waitForTimeout(400);
+        const extRow = await page.$eval("[data-testid=totals-external] [data-testid=totals-ext-row-x1]", el => ({ p: el.getAttribute("data-primary"), b: el.getAttribute("data-backup"), t: el.getAttribute("data-total"), text: el.textContent })).catch(() => null);
+        const inMain = await page.$("[data-testid=totals-table] [data-testid=totals-row-x1]");
+        if (!extRow || extRow.p !== "1" || extRow.t !== "1" || !/Locum/.test(extRow.text)) fail("Totals: the 'Outside surgeons' section must list Locum with 1 primary for " + ey + "-" + em + ": " + JSON.stringify(extRow));
+        else if (inMain) fail("Totals: an outside surgeon must not appear in the pool table");
+        else ok(`Totals ${ey}-${em}: 'Outside surgeons' section lists Locum (P 1, total 1) and the pool table does not`);
+        await page.locator("[data-testid=totals-external]").screenshot({ path: path.join(OUT, "totals-outside-surgeons.png") }).catch(() => {});
+      } catch (e) { fail("outside surgeons (M): " + errLine(e)); }
+      await page.click('button[data-tab="setup"]').catch(() => {});
+      await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 }).catch(() => {});
+    }
+
     // ---- Import seed: dry run shows zero changes against the live rows and writes nothing ----
     {
       await openCard("setup_import");

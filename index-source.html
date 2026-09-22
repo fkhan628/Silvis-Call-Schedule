@@ -748,6 +748,12 @@ function CallSchedule() {
   const codeOf = (id) => surgeons.find(s => s.id === id)?.code || id || "?";
   const sMap = useMemo(() => { const m={}; surgeons.forEach((s,i)=>m[s.id]={...s,idx:i}); return m; }, [surgeons]);
   const activeSurgeons = useMemo(() => surgeons.filter(s => s.active !== false), [surgeons]);
+  // Prompt 12 M (review 9/22): outside surgeons (roster type "external") have no account and no rules - they
+  // stay in `surgeons` / activeSurgeons for everything that renders a holder (calendar chips, legend, ICS
+  // buttons, exports) but are kept out of the self-service lists: vacations, availability statements, trade
+  // parties (nobody could accept), the Users roster link and Setup -> Rules.
+  const rosterPool = useMemo(() => surgeons.filter(s => s.type !== "external"), [surgeons]);
+  const poolSurgeons = useMemo(() => rosterPool.filter(s => s.active !== false), [rosterPool]);
 
   // --- Audit log ---
   // Append-only record of who changed what. Fire-and-forget + try/catch so it
@@ -1762,7 +1768,10 @@ function CallSchedule() {
       note = note ? tag + " " + note : tag;
     }
     after.note = note || null;
-    after.source = "manual";
+    // Prompt 12 M: a day that carries an outside surgeon (roster type "external") in either role is a
+    // hand-written assignment - source manual-external (the generator never moves such a slot).
+    const isExternalId = (id) => !!(id && sMap[id] && sMap[id].type === "external");
+    after.source = (isExternalId(after.primary) || isExternalId(after.backup)) ? "manual-external" : "manual";
     if (sameAssignment(day, before, after)) return true; // nothing changed - nothing to write
     pushUndo(schedule);
     setSchedule(p => ({ ...p, [day]: after }));
@@ -2256,6 +2265,11 @@ function CallSchedule() {
       if (bt.insert + bt.update > 0) {
         const liveBlob = (st.live && st.live.blob && typeof st.live.blob === "object") ? st.live.blob : {};
         const core = { ...plan.blob }; delete core.settings;
+        // M (review 9/22): the seed owns the pool rows only - outside surgeons added in Setup (type "external",
+        // ids x1, x2, ...) live in the live roster alone and are carried over (importer.js impMergeRoster; the
+        // SQL path does the same merge). Without this the next Apply would drop them from the roster while
+        // their schedule_days rows still name them.
+        if (Array.isArray(core.roster) && IMP && typeof IMP.impMergeRoster === "function") core.roster = IMP.impMergeRoster(core.roster, liveBlob.roster);
         const merged = { ...liveBlob, ...core, settings: { ...((liveBlob.settings && typeof liveBlob.settings === "object") ? liveBlob.settings : {}), ...(plan.blob.settings || {}) } };
         // Compare-and-swap on the stamp seen at dry-run time: zero rows back = the
         // setup changed between the check above and this write - nothing merged.
@@ -3521,7 +3535,7 @@ function CallSchedule() {
       {paintSheet && (
         <MonthPainterSheet
           css={css} dk={dk}
-          surgeons={isScheduler ? activeSurgeons : activeSurgeons.filter(s => s.id === mySurgeon)}
+          surgeons={isScheduler ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon)}
           vacations={vacations}
           onCommit={commitTimeOffPaint}
           onClose={() => setPaintSheet(false)}
@@ -3816,7 +3830,7 @@ function CallSchedule() {
           {isAdmin && (
             <Collapsible css={css} ck="setup_users" defaultOpen={false} title="Users (accounts, roles, roster links)"
               right={<button onClick={(e)=>{e.stopPropagation(); loadAllProfilesLoud();}} style={css.mini(false)}>Refresh</button>}>
-              <UsersCard css={css} roster={surgeons} profiles={allProfiles} error={profilesErr} loading={profilesLoading} onSave={saveUserProfile} nameOf={nameOf} myId={authUser && authUser.id}/>
+              <UsersCard css={css} roster={rosterPool} profiles={allProfiles} error={profilesErr} loading={profilesLoading} onSave={saveUserProfile} nameOf={nameOf} myId={authUser && authUser.id}/>
             </Collapsible>
           )}
 
@@ -3826,13 +3840,13 @@ function CallSchedule() {
           </Collapsible>
 
           <Collapsible css={css} ck="setup_availability" defaultOpen={false} title={<>Availability statements <span style={{fontWeight:400,fontSize:11,color:"#7a8a98"}}>- {availabilityRows.length} row(s)</span></>}>
-            <AvailabilityCard css={css} rows={availabilityRows} roster={activeSurgeons} nameOf={nameOf} onAdd={addAvailabilityRows} onDelete={deleteAvailabilityRow} busy={availBusy} today={todayStr}/>
+            <AvailabilityCard css={css} rows={availabilityRows} roster={poolSurgeons} nameOf={nameOf} onAdd={addAvailabilityRows} onDelete={deleteAvailabilityRow} busy={availBusy} today={todayStr}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_vacations" defaultOpen={false} title="Vacations (everyone)"
             right={<button onClick={(e)=>{e.stopPropagation(); setPaintSheet(true);}} style={{...css.btn(false),padding:"3px 10px",fontSize:11}}>Paint month</button>}>
             <p style={sectionNote}>Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is.</p>
-            {renderVacationForm(activeSurgeons)}
+            {renderVacationForm(poolSurgeons)}
             <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#7a8a98",marginBottom:8,cursor:"pointer"}}>
               <input type="checkbox" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past vacations
             </label>
@@ -4219,7 +4233,7 @@ function CallSchedule() {
             <p style={sectionNote}>Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record{isScheduler ? " (as the scheduler you can enter or remove anyone's)" : ""}. Notes are operational and visible to the whole group.</p>
             {!mySurgeon && !isScheduler ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
               <>
-                {renderVacationForm(isScheduler ? activeSurgeons : activeSurgeons.filter(s => s.id === mySurgeon))}
+                {renderVacationForm(isScheduler ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
                 <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#7a8a98",marginBottom:8,cursor:"pointer"}}>
                   <input type="checkbox" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past
                 </label>
@@ -4239,7 +4253,7 @@ function CallSchedule() {
             const whole = !!unit && tradeWholeUnit;
             const offerDays = whole ? unit.days : [tradeDay];
             const eligOf = (cand) => whole ? tradeEligibilityOver(offerDays, tradeRole, cand) : tradeEligibility(tradeDay, tradeRole, cand);
-            const cands = activeSurgeons.filter(s => s.id !== fromId).map(s => ({ s, e: dayOk ? eligOf(s.id) : null }));
+            const cands = poolSurgeons.filter(s => s.id !== fromId).map(s => ({ s, e: dayOk ? eligOf(s.id) : null }));
             cands.sort((a, b) => ((a.e && !a.e.ok) ? 1 : 0) - ((b.e && !b.e.ok) ? 1 : 0));
             const toElig = dayOk && tradeTo ? eligOf(tradeTo) : null;
             const retUnit = suIsIso(tradeReturnDay) && tradeTo && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo) : null;
@@ -4291,7 +4305,7 @@ function CallSchedule() {
                     <div><label style={label}>From</label>
                       {isScheduler ? (
                         <select data-testid="trade-from" value={fromId} onChange={e=>{ setTradeFrom(e.target.value); setTradeDay(""); }} style={{...inp,width:120}}>
-                          {activeSurgeons.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                          {poolSurgeons.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
                         </select>
                       ) : <div style={{paddingTop:4}}><Badge id={fromId}/></div>}
                     </div>
@@ -4875,7 +4889,7 @@ const REASON_WORDS = {
   "whitelist-month": "not on this month's stated list", "outside-available-weeks": "outside the listed weeks",
   "outside-window": "outside the availability window", "not-recurring-available": "not a recurring available day",
   "holds-other-role": "already holds the other role that day", "unknown-surgeon": "not on the roster", "bad-role": "unknown role",
-  "backup-opt-out": "does not take backup",
+  "backup-opt-out": "does not take backup", "external-surgeon": "outside surgeon (written in by hand)",
 };
 // Read an AUTHENTICATED-ONLY table (shift_trade_requests, notifications: RLS
 // 'to authenticated'). db.query reads with dbReadHeaders(), which falls back
@@ -5010,6 +5024,8 @@ function DayEditor(props) {
   const [overrides, setOverrides] = React.useState([]);   // [{ id, role, reasons }]
   const [pending, setPending] = React.useState(null);     // { id, role, reasons } awaiting the Override confirm
   const [hint, setHint] = React.useState("");
+  const [info, setInfo] = React.useState("");   // M: the hand-written outside-surgeon note (an info line, never the red error hint)
+  const extInfo = (name) => name + " is an outside surgeon - written in by hand and locked; the generator never moves it.";
   const norm = (a) => JSON.stringify(assignmentToDayRow(day, a));
   const dirty = norm(draft) !== norm(opened);
 
@@ -5019,30 +5035,45 @@ function DayEditor(props) {
   const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
   const evalRole = (role) => {
     const list = roster.map(s => {
+      const external = s.type === "external";
       let r;
-      try { r = ctx ? eligibility(ctx, day, role, s.id) : { ok: true, hard: [], soft: [] }; }
+      // Prompt 12 M: an outside surgeon is asked on the manual path (slot facts only, never external-surgeon)
+      try { r = ctx ? eligibility(ctx, day, role, s.id, external ? { manual: true } : undefined) : { ok: true, hard: [], soft: [] }; }
       catch (e) { console.warn("eligibility threw for", s.id, role, day, e); r = { ok: true, hard: [], soft: [], error: true }; }
-      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: !!r.error, eastStanding: r.eastStanding || null }; // eastStanding: Prompt 12 V - the standing East entry's name behind an east-busy
+      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, external, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: !!r.error, eastStanding: r.eastStanding || null }; // eastStanding: Prompt 12 V - the standing East entry's name behind an east-busy
     });
-    // eligible first, then ineligible (roster order kept inside each group); inactive only if currently held
-    return list.filter(o => o.active && o.ok).concat(list.filter(o => o.active && !o.ok)).concat(list.filter(o => !o.active && o.id === draft[role]));
+    // pool: eligible first, then ineligible (roster order kept inside each group); inactive only if currently held;
+    // outside surgeons (M) come last as their own group - the select shows them under "Outside surgeons"
+    const pool = list.filter(o => !o.external), ext = list.filter(o => o.external);
+    return pool.filter(o => o.active && o.ok).concat(pool.filter(o => o.active && !o.ok)).concat(pool.filter(o => !o.active && o.id === draft[role]))
+      .concat(ext.filter(o => o.active || o.id === draft[role]));
   };
   const opts = React.useMemo(() => ({ primary: evalRole("primary"), backup: evalRole("backup") }), [ctx, day, draft, roster]); // eslint-disable-line
 
   const pick = (role, value) => {
-    setHint("");
+    setHint(""); setInfo("");
     if (!value) { setDraft(d => ({ ...d, [role]: null })); setOverrides(o => o.filter(x => x.role !== role)); return; }
     const opt = opts[role].find(o => o.id === value);
     if (opt && !opt.ok) { setPending({ id: value, role, reasons: opt.hard.slice() }); return; }
-    setDraft(d => ({ ...d, [role]: value, ...(role === "primary" ? { externalCover: null } : {}) }));
+    // Prompt 12 M: an outside surgeon is written in by hand - the role locks with the pick and the save
+    // carries source manual-external (saveDayEdit reads the roster type). His only blocks are slot facts
+    // (locked to someone else, holds the other role), which take the ordinary override path above.
+    const external = !!(opt && opt.external);
+    setDraft(d => ({ ...d, [role]: value, ...(external ? { [role + "Locked"]: true } : {}), ...(role === "primary" ? { externalCover: null } : {}) }));
     setOverrides(o => o.filter(x => x.role !== role));
+    if (external) setInfo(extInfo(opt.name));
   };
   const confirmOverride = () => {
     if (!pending) return;
     const p = pending;
-    setDraft(d => ({ ...d, [p.role]: p.id, ...(p.role === "primary" ? { externalCover: null } : {}) }));
+    // M (review 9/22): an outside surgeon written in over a slot fact (locked to someone else, holds the other
+    // role) locks the role and shows the note exactly like a plain pick.
+    const opt = opts[p.role].find(o => o.id === p.id);
+    const external = !!(opt && opt.external);
+    setDraft(d => ({ ...d, [p.role]: p.id, ...(external ? { [p.role + "Locked"]: true } : {}), ...(p.role === "primary" ? { externalCover: null } : {}) }));
     setOverrides(o => o.filter(x => x.role !== p.role).concat([p]));
     setPending(null);
+    if (external) setInfo(extInfo(opt.name));
   };
   const clearRole = (role) => {
     if (draft[role + "Locked"]) { setHint((role === "primary" ? "Primary" : "Backup") + " is locked - unlock it first."); return; }
@@ -5102,6 +5133,7 @@ function DayEditor(props) {
           <span style={{...label,marginBottom:0,minWidth:60}}>{role === "primary" ? "Primary" : "Backup"}</span>
           {holderView(role)}
           {locked && <Padlock title={role + " locked"} size={11}/>}
+          {cur && cur.external && <span data-testid={"editor-" + role + "-external-tag"} style={{fontSize:10,color:sub,fontWeight:700}}>outside surgeon - written in by hand</span>}
           {cur && cur.lockHolder && cur.conflicts.length > 0 && <span title={cur.conflicts.join(", ")} style={{fontSize:10,color:"#8a5a10",fontWeight:700}}>locked holder breaks: {cur.conflicts.map(c => reasonLabel(c, nameOf)).join("; ")}</span>}
           {ov && <span data-testid={"override-tag-" + role} style={{fontSize:10,color:"#a83232",fontWeight:700}}>override: {ov.reasons.join(", ")}</span>}
         </div>
@@ -5109,9 +5141,16 @@ function DayEditor(props) {
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
             <select data-testid={"editor-" + role} aria-label={role} value={draft[role] || ""} disabled={locked} onChange={e => pick(role, e.target.value)} style={{...inp,minWidth:230,fontSize:13,opacity:locked?0.6:1}}>
               <option value="" data-eligible="true">{role === "primary" && draft.externalCover ? draft.externalCover + " (external cover)" : "OPEN"}</option>
-              {list.map(o => (
+              {list.filter(o => !o.external).map(o => (
                 <option key={o.id} value={o.id} data-eligible={o.ok ? "true" : "false"} style={o.ok ? {} : {color:"#a0a8b0"}}>{optionLabel(o)}</option>
               ))}
+              {list.some(o => o.external) && (
+                <optgroup label="Outside surgeons" data-testid={"editor-" + role + "-externals"}>
+                  {list.filter(o => o.external).map(o => (
+                    <option key={o.id} value={o.id} data-eligible={o.ok ? "true" : "false"} style={o.ok ? {} : {color:"#a0a8b0"}}>{optionLabel(o)}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             <label style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:sub,cursor:"pointer"}}>
               <input type="checkbox" data-testid={"editor-lock-" + role} checked={locked} onChange={() => toggleLock(role)}/> Lock {role}
@@ -5181,6 +5220,7 @@ function DayEditor(props) {
           <div style={{fontSize:12,color:sub,marginBottom:10}}>{draft.note ? <>Note: {draft.note}</> : "No note."}</div>
         )}
 
+        {info && <div role="status" data-testid="editor-info" style={{fontSize:12,color:sub,fontWeight:600,marginBottom:8}}>{info}</div>}
         {hint && <div role="status" data-testid="editor-hint" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>{hint}</div>}
         {/* Sticky footer: the Cancel / Save row stays in view while the dialog body scrolls (a phone showed it below the fold - Prompt 11). */}
         <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",borderTop:"1px solid " + border}}>
@@ -5210,6 +5250,9 @@ const SU_MODES = ["", "weekends-plus-weekdays", "whitelist-recurring", "blacklis
 const SU_AVAIL_KINDS = ["available", "unavailable", "avoid", "prefer", "backup_only", "no_backup"];
 const SU_CONTACT_KEY = /e-?_?mail|phone|contact|mobile|cell/i;
 const SU_CONTACT_VALUE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(?:\+?1[-. ]?)?\(?\b\d{3}\)?[-. ]\s?\d{3}[-. ]\d{4}\b/;
+// Prompt 12 M: an outside surgeon's roster note is the one roster string that reaches the anon-readable
+// blob - operational wording only. Same word list as importer.js IMP_NOTE_DENYLIST (item F).
+const SU_NOTE_DENYLIST = /\b(family|families|wife|husband|kid|kids|child|children|daughter|son|parents|in-laws|school|medical|maternity|hosts|hosting|illness|funeral)\b/i;
 function suClone(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
 function suNumOrNull(v) { if (v === "" || v === null || v === undefined) return null; const n = Number(v); return isNaN(n) ? null : n; }
 function suIntList(text) { return String(text || "").split(/[,\s]+/).map(t => t.trim()).filter(Boolean).map(Number).filter(n => Number.isInteger(n) && n >= 1 && n <= 6); }
@@ -5322,7 +5365,11 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const countsEast = (id) => { const P = perOf(id); return !!(P && P.countsEastDays); };
   const maxConsecRule = (id) => { const P = perOf(id); return P ? P.maxConsec : null; };
   const maxConsecAnyRule = (id) => { const P = perOf(id); return P && typeof P.maxConsecAnyRole === "number" ? P.maxConsecAnyRole : null; };
-  const list = (roster || []).filter(s => s && s.id);
+  // Prompt 12 M: outside surgeons (roster type "external") are tallied under their own heading (ttOutsideSurgeons),
+  // never in the pool table; their days are nobody's share and count toward no cap.
+  const list = (roster || []).filter(s => s && s.id && s.type !== "external");
+  const outside = sources.map(src => ({ src, rows: ttOutsideSurgeons(roster || [], src.sched, range.from, range.to, opts) }));
+  const hasOutside = outside.some(o => o.rows.length > 0);
   const showEast = list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
   const rows = [];
   list.forEach(s => sources.forEach(src => {
@@ -5346,8 +5393,11 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       // count the cap is compared with (primary + East primary-week days) is APPENDED as the last column.
       // J (9/22): "Target" / "Deviation" keep their positions and now mean the PRIMARY target and primary days
       // minus it; the backup target and its deviation are APPENDED as the last two columns.
-      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B"];
-      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB]);
+      // M (9/22): a "Type" column is APPENDED (pool / outside) and the outside surgeons' rows follow the pool rows
+      // with their day counts only (the share / cap / run columns stay blank for them).
+      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
+      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool"]);
+      outside.forEach(o => o.rows.forEach(x => data.push([range.label, range.from, range.to, o.src.label, x.name, x.code, x.primary, x.backup, x.total, "", "", "", "", "", "", "", "", "", "", "", "", "outside"])));
       const csv = ttCsvText(headers, data);
       const name = "silvis-totals-" + rangeMode + "-" + range.from + "-" + range.to + ".csv";
       const real = downloadTextFile(csv, name, "text/csv");
@@ -5439,6 +5489,25 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
           })()}
         </div>
       )}
+      {hasOutside && (
+        <div data-testid="totals-external" style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: dk ? "#c0c0d8" : "#3a4a58", marginBottom: 2 }}>Outside surgeons</div>
+          <div style={{ fontSize: 11, color: "#7a8a98", marginBottom: 6 }}>Written in by hand (internal locums): their days come off the pool's open slots and count toward nobody's share or cap.</div>
+          <div className="table-wrap" style={css.tableWrap}>
+            <table data-testid="totals-external-table" style={{ borderCollapse: "collapse", minWidth: 360 }}>
+              <thead><tr><th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}<th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th></tr></thead>
+              <tbody>
+                {outside.map(o => o.rows.map(r => (
+                  <tr key={r.id + o.src.key} data-testid={"totals-ext-row-" + r.id} data-source={o.src.key} data-primary={r.primary} data-backup={r.backup} data-total={r.total} style={{ borderTop: "1px solid " + border, opacity: o.src.key === "preview" ? 0.85 : 1, fontStyle: o.src.key === "preview" ? "italic" : "normal" }}>
+                    <td style={tdL}><Badge id={r.id}/>{!r.active && <span style={{ fontSize: 10, color: "#9aa4ae", marginLeft: 6 }}>inactive</span>}</td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: o.src.key === "preview" ? "#7a4fbf" : "#7a8a98" }}>{o.src.label}</td>}
+                    <td style={td}>{r.primary}</td><td style={td}>{r.backup}</td><td style={{ ...td, fontWeight: 700 }}>{r.total}</td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {anyImplied && <div style={{ fontSize: 11, color: "#7a8a98", marginTop: 8 }}>* implied equal share (of the period's open primary slots and, separately, its open backup slots) from the last Generate preview's diagnostics - no explicit monthlyTarget in Setup.</div>}
       {showEast && <div style={{ fontSize: 11, color: "#7a8a98", marginTop: 4 }}>East days: days on Davenport call (published weeks, derived weeks and overrides) inside the period; a cap that counts them reads Silvis + East.</div>}
     </div>
@@ -5474,6 +5543,13 @@ function RosterEditor({ css, roster, schedule, availabilityRows, timeOffRows, on
     let n = 1; while (used.has("s" + n)) n++;
     setDirty(true); setRows(r => [...r, { id: "s" + n, name: "", code: "", fullName: "", active: true, roles: ["surgeon"] }]);
   };
+  // Prompt 12 M: an outside surgeon (internal locum) - ids x1, x2, ...; type "external"; no account needed.
+  // Written in by hand in the day editor, never generated, tallied under its own heading in Totals.
+  const addExternal = () => {
+    const used = new Set(rows.map(r => r.id));
+    let n = 1; while (used.has("x" + n)) n++;
+    setDirty(true); setRows(r => [...r, { id: "x" + n, name: "", code: "", fullName: "", active: true, roles: ["surgeon"], type: "external", note: "" }]);
+  };
   const remove = (i) => {
     const r = rows[i];
     if (referenced(r.id)) { showToast(`${r.name || r.id} is referenced by schedule days, availability or vacations - set Active off instead of removing.`, "error"); return; }
@@ -5482,33 +5558,43 @@ function RosterEditor({ css, roster, schedule, availabilityRows, timeOffRows, on
   const save = () => {
     const ids = new Set(), codes = new Set();
     for (const r of rows) {
-      if (!/^s\d+$/.test(String(r.id || ""))) { showToast(`Roster id "${r.id}" must look like s1, s2, ...`, "error"); return; }
+      const isExt = r.type === "external";
+      if (!(isExt ? /^x\d+$/ : /^s\d+$/).test(String(r.id || ""))) { showToast(isExt ? `Outside-surgeon id "${r.id}" must look like x1, x2, ...` : `Roster id "${r.id}" must look like s1, s2, ...`, "error"); return; }
       if (!String(r.name || "").trim() || !String(r.code || "").trim()) { showToast(`Roster entry ${r.id} needs a last name and a code.`, "error"); return; }
       if (ids.has(r.id)) { showToast(`Roster id ${r.id} is used twice.`, "error"); return; }
       const c = String(r.code).trim().toUpperCase();
       if (codes.has(c)) { showToast(`Roster code ${c} is used twice.`, "error"); return; }
       ids.add(r.id); codes.add(c);
     }
-    const clean = rows.map(r => ({ id: r.id, name: String(r.name).trim(), code: String(r.code).trim().toUpperCase(), fullName: String(r.fullName || "").trim(), active: r.active !== false, roles: Array.isArray(r.roles) ? r.roles : String(r.roles || "surgeon").split(/[,\s]+/).filter(Boolean) }));
+    const clean = rows.map(r => {
+      const base = { id: r.id, name: String(r.name).trim(), code: String(r.code).trim().toUpperCase(), fullName: String(r.fullName || "").trim(), active: r.active !== false, roles: Array.isArray(r.roles) ? r.roles : String(r.roles || "surgeon").split(/[,\s]+/).filter(Boolean) };
+      if (r.type !== "external") return base;
+      const note = String(r.note || "").trim();
+      return { ...base, type: "external", ...(note ? { note } : {}) };
+    });
+    const badNote = clean.find(r => r.note && SU_NOTE_DENYLIST.test(r.note));
+    if (badNote) { showToast(`Refused: the note for ${badNote.name || badNote.id} carries a personal word - keep roster notes operational (the setup is readable with the public key).`, "error"); return; }
     const leaks = suContactPaths(clean);
     if (leaks.length) { showToast("Refused: the roster would carry contact-looking data at " + leaks.join(", ") + " - names and codes only.", "error"); return; }
     onSave(clean); setDirty(false);
   };
   return (
     <div data-testid="roster-editor">
-      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Names and codes only - the schedule stores ids, the calendar shows last names, narrow cells show the code. Contact details never live here (accounts are linked under Users; addresses stay in Supabase Auth).</p>
+      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Names and codes only - the schedule stores ids, the calendar shows last names, narrow cells show the code. Contact details never live here (accounts are linked under Users; addresses stay in Supabase Auth). Outside surgeons (internal locums, 9/22) get their own button: written in by hand in the day editor, never generated, tallied under their own heading; their note is operational only (no personal wording - the setup is readable with the public key).</p>
       <div className="table-wrap" style={css.tableWrap}>
         <table className="setup-table">
-          <thead><tr><th>Id</th><th>Last name</th><th>Code</th><th>Full name</th><th>Active</th><th>Roles</th><th></th></tr></thead>
+          <thead><tr><th>Id</th><th>Type</th><th>Last name</th><th>Code</th><th>Full name</th><th>Active</th><th>Roles</th><th>Note</th><th></th></tr></thead>
           <tbody>
             {rows.map((r, i) => (
               <tr key={r.id + ":" + i}>
                 <td style={{ fontFamily: mono }}>{r.id}</td>
-                <td><input type="text" value={r.name || ""} onChange={e => edit(i, "name", e.target.value)} style={{ ...inp, width: 110 }} /></td>
-                <td><input type="text" value={r.code || ""} maxLength={4} onChange={e => edit(i, "code", e.target.value.toUpperCase())} style={{ ...inp, width: 60, fontFamily: mono }} /></td>
+                <td data-testid={"roster-type-" + r.id} style={{ fontSize: 11, fontWeight: 600, color: r.type === "external" ? "#8a5a10" : "#7a8a98" }}>{r.type === "external" ? "outside" : "pool"}</td>
+                <td><input type="text" data-testid={"roster-name-" + r.id} value={r.name || ""} onChange={e => edit(i, "name", e.target.value)} style={{ ...inp, width: 110 }} /></td>
+                <td><input type="text" data-testid={"roster-code-" + r.id} value={r.code || ""} maxLength={4} onChange={e => edit(i, "code", e.target.value.toUpperCase())} style={{ ...inp, width: 60, fontFamily: mono }} /></td>
                 <td><input type="text" value={r.fullName || ""} onChange={e => edit(i, "fullName", e.target.value)} style={{ ...inp, width: 190 }} /></td>
                 <td><input type="checkbox" checked={r.active !== false} onChange={e => edit(i, "active", e.target.checked)} /></td>
                 <td><input type="text" value={Array.isArray(r.roles) ? r.roles.join(", ") : (r.roles || "")} onChange={e => edit(i, "roles", e.target.value.split(/[,\s]+/).filter(Boolean))} style={{ ...inp, width: 120 }} /></td>
+                <td>{r.type === "external" ? <input type="text" data-testid={"roster-note-" + r.id} value={r.note || ""} maxLength={120} onChange={e => edit(i, "note", e.target.value)} placeholder="operational note (shown here only)" title="Operational only - the setup is readable with the public key; never a personal reason" style={{ ...inp, width: 200 }} /> : <span style={{ color: "#b0b8c0", fontSize: 11 }}>-</span>}</td>
                 <td><button onClick={() => remove(i)} style={css.danger} title="Remove (refused while the id is referenced)">Remove</button></td>
               </tr>
             ))}
@@ -5517,6 +5603,7 @@ function RosterEditor({ css, roster, schedule, availabilityRows, timeOffRows, on
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
         <button onClick={add} style={css.mini(false)}>Add surgeon</button>
+        <button data-testid="roster-add-external" onClick={addExternal} style={css.mini(false)} title="An outside surgeon (internal locum): written in by hand in the day editor, never generated, tallied under its own heading">Add outside surgeon</button>
         <button data-testid="roster-save" onClick={save} disabled={!dirty} style={{ ...css.btn(true), padding: "5px 14px", opacity: dirty ? 1 : 0.5 }}>Save roster</button>
         {dirty && <button onClick={() => { setRows(suClone(roster || [])); setDirty(false); }} style={css.mini(false)}>Revert</button>}
         <span style={{ fontSize: 11, color: "#7a8a98" }}>{dirty ? "Unsaved changes" : "Saved in the shared setup (autosave)."}</span>
@@ -5686,7 +5773,8 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
   return (
     <div data-testid="rules-editor">
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-        {(roster || []).map(x => <button key={x.id} data-testid={"rules-pick-" + x.id} onClick={() => pick(x.id)} style={css.mini(sel === x.id)}>{x.name} <span style={{ fontFamily: mono, fontSize: 10 }}>{x.id}</span>{surgeonRules[x.id] ? "" : " (no rules)"}</button>)}
+        {/* M: no rule applies to an outside surgeon (type "external") - no rules editing for him, East derived weeks included */}
+        {(roster || []).filter(x => x.type !== "external").map(x => <button key={x.id} data-testid={"rules-pick-" + x.id} onClick={() => pick(x.id)} style={css.mini(sel === x.id)}>{x.name} <span style={{ fontFamily: mono, fontSize: 10 }}>{x.id}</span>{surgeonRules[x.id] ? "" : " (no rules)"}</button>)}
       </div>
       {!sel ? null : <>
         <div style={box}>

@@ -404,6 +404,7 @@ function buildContext(input) {
     rosterById: {},
     activeIds: [],
     allIds: [],
+    externalIds: [],   // active roster entries of type "external" (Prompt 12 M): hand-written only, never in activeIds
     surgeonRules: surgeonRules,
     groupRules: groupRules,
     weights: weights,
@@ -460,7 +461,8 @@ function buildContext(input) {
     if (!r || !r.id) return;
     ctx.rosterById[r.id] = r;
     ctx.allIds.push(r.id);
-    if (r.active !== false) ctx.activeIds.push(r.id);
+    if (r.active === false) return;
+    if (r.type === "external") ctx.externalIds.push(r.id); else ctx.activeIds.push(r.id);
   });
 
   // Per-surgeon precompute.
@@ -472,6 +474,7 @@ function buildContext(input) {
     var P = {
       id: id,
       active: r.active !== false,
+      external: r.type === "external",   // Prompt 12 M: outside surgeon - see eligibility()
       activeFrom: r.activeFrom || null,
       activeTo: r.activeTo || null,
       rules: rules,
@@ -661,6 +664,9 @@ function buildContext(input) {
     }
     var P = ctx.per[w.surgeonId];
     if (!P) { ctx.warnings.push("eastDerived[" + idx + "]: dropped - unknown surgeonId " + w.surgeonId); return; }
+    // Prompt 12 M (review 9/22): an outside surgeon is never generated - a derived week entered for him
+    // (Setup -> Rules eastFeed.deriveFrom / statedWeeks) would otherwise become a whole generated week.
+    if (P.external) { ctx.warnings.push("eastDerived[" + idx + "]: ignored - " + w.surgeonId + " is an outside surgeon (written in by hand only, never generated; the East fields do not apply to him)"); return; }
     var ef = P.rules.eastFeed || {};
     var fromN = ef.deriveFrom ? rdInfo(ef.deriveFrom).n : -Infinity;
     for (var k = 0; k < 7; k++) {
@@ -828,9 +834,19 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // hard-never-weekday:, recurring-unavailable:, weekday-not-allowed:,
 // weekend-block-only, weekday-pattern:, day-before-aledo, whitelist-month,
 // not-recurring-available, outside-available-weeks, outside-window,
-// external-cover, slot-locked:, derived-lock:, derived-lock-held:,
-// holds-other-role, monthly-cap:, max-consecutive:, backup-cap:,
-// backup-weekend-cap:, max-major-holidays:.
+// external-cover, external-surgeon, slot-locked:, derived-lock:,
+// derived-lock-held:, holds-other-role, monthly-cap:, max-consecutive:,
+// backup-cap:, backup-weekend-cap:, max-major-holidays:.
+// external-surgeon (Prompt 12 M, 9/22): the surgeon is a roster entry of type
+// "external" (an outside surgeon / internal locum, ids x1, x2, ...) - written in
+// by hand only. He is in ctx.rosterById / allIds and, when active, in
+// ctx.externalIds, never in ctx.activeIds (the generation universe), so the
+// generator never evaluates him; a caller that does (the trade path, a stray
+// loop) gets this hard reason. The day editor asks with opts.manual === true
+// and then gets the SLOT facts only (external-cover, slot-locked:, inactive,
+// time-off: on his own vacation day, holds-other-role) and ok otherwise - no pattern, cap, run or target rule
+// applies to an outside surgeon; the result carries external: true. A day he
+// holds is a fact like any lock holder (ok, lockHolder, no conflicts).
 // max-consecutive:<limit> is the HARD primary-only run limit on real days (a
 // holiday unit is one day only for a surgeon who opted in). Its SOFT sibling
 // long-run:<runLength> (Prompt 12 A, 9/22) marks an any-role run (primary or
@@ -988,6 +1004,10 @@ function rdAssumeMap(assume) {
 //   assume         - other slots to count as held by this surgeon (unit / block members)
 //                    for caps, consecutive runs and week counts.
 //   ignoreLocks    - do not report 'slot-locked' for a slot locked to someone else.
+//   manual         - the day editor's hand-written path (Prompt 12 M): an outside surgeon
+//                    (roster type "external") is judged on the slot facts only and is ok
+//                    otherwise; without it he is hard 'external-surgeon'. Pool surgeons
+//                    are unaffected by the flag.
 //   skipPatternSoft - weekendUnitPatterns adds the style mismatch and the weekend-contribution
 //                    term (weekend-primary / weekend-backup) itself, once per pattern.
 function eligibility(ctx, dateStr, role, surgeonId, opts) {
@@ -1003,6 +1023,17 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   if (role === "primary" && entry && entry.externalCover) hard.push("external-cover");
   if (!opts.ignoreLocks && entry && entry[role + "Locked"] && entry[role] && entry[role] !== surgeonId) hard.push("slot-locked:" + entry[role]);
 
+  // Outside surgeon (Prompt 12 M): slot facts only - see the vocabulary comment above rdStatic.
+  var PX = ctx.per[surgeonId];
+  if (PX && PX.external) {
+    var otherX = role === "primary" ? "backup" : "primary";
+    if (entry && entry[role + "Locked"] && entry[role] === surgeonId) return { ok: true, hard: [], soft: [], lockHolder: true, conflicts: [], external: true };
+    if (!PX.active || (PX.activeFrom && dateStr < PX.activeFrom) || (PX.activeTo && dateStr > PX.activeTo)) hard.push("inactive");
+    if (PX.vacation.has(dateStr)) hard.push("time-off:" + dateStr);   // his own stated absence (the day itself; no trailing edge for him)
+    if (ctx.backupDistinct && entry && entry[otherX] === surgeonId) hard.push("holds-other-role");
+    if (!opts.manual) hard.push("external-surgeon");
+    return hard.length ? { ok: false, hard: hard, soft: [], external: true } : { ok: true, hard: [], soft: [], external: true };
+  }
   var st = rdStatic(ctx, dateStr, role, surgeonId, !!opts.asBlockMember);
   hard = hard.concat(st.hard);
   soft = soft.concat(st.soft.map(function (s) { return { reason: s.reason, weight: s.weight }; })); // copies: the memo's entries stay pristine

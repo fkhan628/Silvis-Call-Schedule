@@ -1248,7 +1248,8 @@ function suSetupIssues(input) {
   Object.keys(codes).forEach(k => { if (codes[k] > 1) out.push("Roster code " + k + " is used " + codes[k] + " times"); });
   if (i.surgeonRules === undefined || i.groupRules === undefined || i.holidays === undefined) out.push("Rules not imported yet (Setup > Import seed)");
   else {
-    roster.forEach(r => { if (r && r.id && r.active !== false && !(i.surgeonRules && i.surgeonRules[r.id])) out.push("No rules for " + (r.name || r.id) + " (" + r.id + ") - every active surgeon needs a surgeonRules entry"); });
+    // an outside surgeon (type "external", Prompt 12 M) has no rules by design: never in the pool, written in by hand
+    roster.forEach(r => { if (r && r.id && r.active !== false && r.type !== "external" && !(i.surgeonRules && i.surgeonRules[r.id])) out.push("No rules for " + (r.name || r.id) + " (" + r.id + ") - every active surgeon needs a surgeonRules entry"); });
   }
   const sched = i.schedule || {};
   const days = Object.keys(sched).sort();
@@ -1451,6 +1452,25 @@ function ttDeviation(total, target) {
   var d = Number(total || 0) - target;
   return d > 0 ? "+" + d : String(d);
 }
+// ttOutsideSurgeons(roster, schedule, from, to, opts) -> [{ id, name, code, active, primary, backup, total }]
+// The Totals view's "Outside surgeons" section (Prompt 12 M, 9/22): every roster
+// entry of type "external" that is active, plus an inactive one that still holds
+// a day inside [from, to]; counts from ttTotalsFor (one day = one shift, the same
+// opts). Pool surgeons never appear; an externalCover day is nobody's day here
+// too. Roster order. An empty list without externals, on a bad range or without
+// a roster (never throws).
+function ttOutsideSurgeons(roster, schedule, from, to, opts) {
+  var out = [];
+  if (!Array.isArray(roster) || !ttIsIso(from) || !ttIsIso(to) || to < from) return out;
+  roster.forEach(function (r) {
+    if (!r || !r.id || r.type !== "external") return;
+    var t = ttTotalsFor(schedule || {}, r.id, from, to, opts);
+    var active = r.active !== false;
+    if (!active && t.total === 0) return;
+    out.push({ id: r.id, name: r.name || r.id, code: r.code || "", active: active, primary: t.primary, backup: t.backup, total: t.total });
+  });
+  return out;
+}
 // CSV text (RFC 4180 quoting) from a header array and row arrays. CRLF lines.
 function ttCsvText(headers, rows) {
   var cell = function (v) {
@@ -1569,7 +1589,7 @@ if (typeof module !== "undefined" && module.exports) {
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
-    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso,
+    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,
     buildWeekRows,
     SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,
     escHtml, holidayNameByDay, monthsOfSchedule, normalizeMonths,

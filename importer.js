@@ -63,7 +63,12 @@
 // deletes for that table are not emitted (an empty seed can not wipe it).
 //
 // Mapping (seed key -> table / kind / role):
-//   roster[]                              -> blob.roster (6 keys only)
+//   roster[]                              -> blob.roster (pool rows: 6 keys only; a type "external" row
+//                                            (Prompt 12 M) also carries type + its operational note, gated
+//                                            by the denylist / contact gates). The seed owns the POOL rows
+//                                            only: live type "external" rows the seed lacks (added in Setup,
+//                                            ids x1, x2, ...) are carried over by planDiff, the app's apply
+//                                            and the SQL (impMergeRoster), never dropped by a re-import.
 //   surgeonRules                          -> blob.surgeonRules (+ explicitListMonths derived; notes scrubbed;
 //                                            timeOff as { start, end } only)
 //   groupRules, holidays                  -> blob.groupRules, blob.holidays (note-like keys dropped from both)
@@ -82,7 +87,7 @@
 //   existingAssignments[]                 -> schedule_days (source 'import', provenance in note,
 //                                            null slot never locked)
 //   pendingDeltas[]                       -> informational only (already applied in existingAssignments)
-//   site, _meta.sources/assumptions, answeredQuestions, openQuestions, roster[].note -> not imported
+//   site, _meta.sources/assumptions, answeredQuestions, openQuestions, a pool row's roster[].note -> not imported
 
 var IMP_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 var IMP_DAY_MS = 86400000;
@@ -338,9 +343,17 @@ function impRosterName(seed, id) {
 }
 
 // Roster for the blob: names and codes only (no email, no note, nothing else).
+// Prompt 12 M (9/22): a roster entry of type "external" (an outside surgeon /
+// internal locum, ids x1, x2, ...) keeps its type and its operational note - the
+// note is the one roster string that reaches the anon-readable blob, so the
+// blob-wide denylist gate (impRefuseNoteDenylist) and the contact-data gates
+// judge it like every other string. A pool row's note is seed documentation and
+// stays out, as before; any other type value is dropped (absent = pool surgeon).
+// The real seed adds no outside surgeon (they are added in Setup); this path
+// keeps them when a saved blob is exported and imported again.
 function impSeedRoster(seed) {
   return ((seed && seed.roster) || []).map(function (r) {
-    return {
+    var out = {
       id: r.id,
       name: r.name,
       code: r.code,
@@ -348,6 +361,12 @@ function impSeedRoster(seed) {
       active: r.active !== false,
       roles: Array.isArray(r.roles) ? r.roles.slice() : ["surgeon"]
     };
+    if (r.type === "external") {
+      out.type = "external";
+      var note = typeof r.note === "string" ? r.note.trim() : "";
+      if (note) out.note = note;
+    }
+    return out;
   });
 }
 
@@ -716,24 +735,51 @@ function impSqlSnapshot() {
   ].join("\n");
 }
 
+// impMergeRoster(seedRoster, liveRoster) -> the roster a seed import writes:
+// the seed's rows (the seed owns the pool), then every LIVE row of type
+// "external" (an outside surgeon added in Setup, Prompt 12 M - the seed never
+// names one) whose id the seed does not carry, in live order and as it is.
+// A live pool row the seed lacks is still dropped (as before); no live roster
+// -> the seed roster. planDiff compares this merged roster, the app's apply
+// writes it, and impSqlBlob does the same merge in SQL.
+function impMergeRoster(seedRoster, liveRoster) {
+  var seedRows = Array.isArray(seedRoster) ? seedRoster.slice() : [];
+  var seen = {};
+  seedRows.forEach(function (r) { if (r && r.id) seen[r.id] = true; });
+  (Array.isArray(liveRoster) ? liveRoster : []).forEach(function (r) {
+    if (r && r.id && r.type === "external" && !seen[r.id]) { seen[r.id] = true; seedRows.push(r); }
+  });
+  return seedRows;
+}
+
 function impSqlBlob(blob) {
   var core = Object.assign({}, blob);
   delete core.settings;
   var settings = Object.assign({}, blob.settings || {});
   var settingsStable = Object.assign({}, settings);
   delete settingsStable.importedAt;
+  // The roster the row ends up with = the seed's rows followed by the live outside surgeons the seed
+  // lacks (impMergeRoster in SQL): the seed owns the pool rows only. Same expression in the SET and in
+  // the idempotency WHERE so a byte-identical re-run still leaves the row untouched.
+  var roster = Array.isArray(blob.roster) ? blob.roster : [];
+  var seedIds = roster.map(function (r) { return impSqlStr(r && r.id); }).join(", ");
+  var liveExternals = "coalesce((select jsonb_agg(r) from jsonb_array_elements(coalesce(call_schedule_data.data -> 'roster', '[]'::jsonb)) as r" +
+    " where r ->> 'type' = 'external' and not (r ->> 'id' = any (array[" + seedIds + "]::text[]))), '[]'::jsonb)";
+  var coreExpr = "jsonb_set((coalesce(call_schedule_data.data, '{}'::jsonb) - 'settings') || " + impSqlJson(core) + ",\n" +
+    "                   '{roster}', " + impSqlJson(roster) + " || " + liveExternals + ", true)";
   return [
     "-- 2. config blob: merge the imported keys into row 'main' (keys the app adds later are kept;",
+    "--    outside surgeons added in Setup (roster rows of type \"external\") are kept beside the seed's roster;",
     "--    settings merge one level deeper; a byte-identical re-run leaves the row untouched)",
     "insert into public.call_schedule_data (id, data, updated_by, updated_at)",
     "values ('main', " + impSqlJson(blob) + ", 'seed', now())",
     "on conflict (id) do update set",
-    "  data = jsonb_set(coalesce(call_schedule_data.data, '{}'::jsonb) || " + impSqlJson(core) + ",",
+    "  data = jsonb_set(" + coreExpr + ",",
     "                   '{settings}',",
     "                   coalesce(call_schedule_data.data -> 'settings', '{}'::jsonb) || " + impSqlJson(settings) + ", true),",
     "  updated_by = 'seed',",
     "  updated_at = now()",
-    "where (coalesce(call_schedule_data.data, '{}'::jsonb) - 'settings') || " + impSqlJson(core),
+    "where " + coreExpr,
     "        is distinct from (coalesce(call_schedule_data.data, '{}'::jsonb) - 'settings')",
     "   or coalesce(call_schedule_data.data -> 'settings', '{}'::jsonb) || " + impSqlJson(settingsStable),
     "        is distinct from coalesce(call_schedule_data.data -> 'settings', '{}'::jsonb);",
@@ -921,10 +967,15 @@ function planDiff(plan, live) {
   // call_schedule_data
   var liveBlob = live.blob && typeof live.blob === "object" ? live.blob : null;
   var blobKeys = Object.keys(plan.blob);
-  var blobT = { insert: 0, update: 0, unchanged: 0, keys: {} };
+  var blobT = { insert: 0, update: 0, unchanged: 0, keys: {}, keptExternals: [] };
   var liveEmpty = !liveBlob || Object.keys(liveBlob).length === 0;
   blobKeys.forEach(function (k) {
     var mine = plan.blob[k], theirs = liveBlob ? liveBlob[k] : undefined;
+    if (k === "roster" && Array.isArray(theirs)) {
+      // the seed owns the pool rows only: live outside surgeons ride along (impMergeRoster, as the SQL / app write them)
+      mine = impMergeRoster(mine, theirs);
+      blobT.keptExternals = mine.slice((plan.blob.roster || []).length).map(function (r) { return r.id; });
+    }
     if (k === "settings") {
       mine = Object.assign({}, mine); delete mine.importedAt;
       theirs = theirs ? Object.assign({}, theirs) : theirs; if (theirs) delete theirs.importedAt;
@@ -1032,6 +1083,7 @@ function planDiff(plan, live) {
   var totalChanges = blobT.insert + blobT.update + avT.insert + avT.update + toT.insert + sdT.insert + sdT.update + totalDeletes;
 
   lines.push("call_schedule_data 'main': " + blobKeys.map(function (k) { return k + "=" + blobT.keys[k]; }).join(", "));
+  if (blobT.keptExternals.length) lines.push("  outside surgeon(s) kept from the live roster: " + blobT.keptExternals.join(", ") + " (added in Setup; the seed never names them)");
   lines.push("schedule_days: insert " + sdT.insert + ", update " + sdT.update + ", delete " + sdT.delete + ", unchanged " + sdT.unchanged + (sdT.blocked ? ", BLOCKED " + sdT.blocked : "") + (sdT.kept ? ", kept " + sdT.kept : ""));
   Object.keys(sdT.byMonth).sort().forEach(function (m) {
     var b = sdT.byMonth[m];
@@ -1058,6 +1110,7 @@ var impExports = {
   planDiff: planDiff,
   // seed -> shape helpers (test/seed-adapter.js delegates here)
   impSeedRoster: impSeedRoster,
+  impMergeRoster: impMergeRoster,
   impSeedAvailabilityRows: impSeedAvailabilityRows,
   impSeedSurgeonRules: impSeedSurgeonRules,
   impSeedTimeOffRows: impSeedTimeOffRows,

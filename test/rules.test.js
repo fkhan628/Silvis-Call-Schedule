@@ -1788,6 +1788,114 @@ blocked(R.eligibility(ctx, "2026-11-12", P, BURCHETT), "whitelist-month", "Y: Bu
 has(R.eligibility(clean, "2026-11-03", P, ACTON).hard, "hard-never-weekday:Tue", "Y: his Tuesday reason stands alone now on 11/3 (an ungoverned November)");
 eq(R.eligibility(clean, "2026-11-03", P, ACTON).hard, ["hard-never-weekday:Tue"], "Y: ...exactly one hard reason");
 
+/* ------------------------------------------------ Prompt 12 M: outside surgeons (internal locums) */
+// A roster entry of type "external" is written in by hand only: it is in
+// rosterById / allIds, in externalIds when active, never in activeIds (the
+// generation universe). eligibility() answers the generator path with the hard
+// reason external-surgeon; the day editor asks with opts.manual and gets the
+// slot facts only (external-cover, slot-locked, holds-other-role, inactive).
+step("M: outside surgeons - roster type external");
+const G = require("../generator.js");
+const LOCUM = { id: "x1", name: "Locum", code: "LOC", fullName: "Locum Tenens", active: true, roles: ["surgeon"], type: "external", note: "covers when asked" };
+const LOCUM_OFF = { id: "x2", name: "Retired", code: "RET", active: false, roles: ["surgeon"], type: "external" };
+const mRoster = seed.roster.concat([LOCUM, LOCUM_OFF]);
+const mSched = clone(ctx.schedule);   // the seed's locked import + Thanksgiving + November rows
+mSched["2026-11-10"] = { primary: "x1", backup: null, primaryLocked: true, backupLocked: false, source: "manual-external", externalCover: null, note: null };  // Tue, hand-written primary
+mSched["2026-11-12"] = { primary: null, backup: "x1", primaryLocked: false, backupLocked: true, source: "manual-external", externalCover: null, note: null };  // Thu, hand-written backup
+const mCtx = makeCtx({ roster: mRoster, schedule: mSched });
+ok(mCtx.rosterById.x1 && mCtx.allIds.indexOf("x1") >= 0, "M: an external entry is in rosterById / allIds");
+eq(mCtx.activeIds.indexOf("x1"), -1, "M: ...but NOT in activeIds (the generation universe)");
+eq(mCtx.externalIds, ["x1"], "M: ctx.externalIds lists the ACTIVE externals only (x2 is inactive)");
+eq(mCtx.activeIds, ctx.activeIds, "M: the pool's activeIds are unchanged by the two external entries");
+blocked(R.eligibility(mCtx, "2026-11-13", P, "x1"), "external-surgeon", "M: generator path, primary");
+blocked(R.eligibility(mCtx, "2026-11-13", B, "x1"), "external-surgeon", "M: generator path, backup");
+okElig(R.eligibility(mCtx, "2026-11-13", P, "x1", { manual: true }), "M: manual primary on an open day");
+okElig(R.eligibility(mCtx, "2026-11-19", B, "x1", { manual: true }), "M: manual backup on an open day (11/19: 11/13 backup is Fierce's locked week)");
+const mMan = R.eligibility(mCtx, "2026-11-13", P, "x1", { manual: true });
+eq(mMan.soft, [], "M: the manual path carries no soft terms (no pattern, cap, run or target rule applies to an outside surgeon)");
+ok(mMan.external === true, "M: the manual result is flagged external");
+blocked(R.eligibility(mCtx, "2026-11-12", P, "x1", { manual: true }), "holds-other-role", "M: manual primary on the day he holds backup");
+blocked(R.eligibility(mCtx, "2026-11-03", P, "x1", { manual: true }), "slot-locked:s2", "M: manual primary on a day locked to Burchett");
+blocked(R.eligibility(mCtx, "2026-09-30", P, "x1", { manual: true }), "external-cover", "M: manual primary on an Atwell external-cover day");
+const mExtB = R.eligibility(mCtx, "2026-09-30", B, "x1", { manual: true });
+lacks(mExtB.hard, "external-cover", "M: external-cover never applies to the backup slot on the manual path");
+has(mExtB.hard, "slot-locked:s5", "M: ...the backup beside the Atwell cover is judged on its own slot fact (locked to Fierce)");
+blocked(R.eligibility(mCtx, "2026-11-13", P, "x2", { manual: true }), "inactive", "M: an inactive external is not assignable by hand either");
+const mHeld = R.eligibility(mCtx, "2026-11-10", P, "x1");
+ok(mHeld.ok && mHeld.lockHolder === true && (mHeld.conflicts || []).length === 0, "M: the hand-written holder is ok / lockHolder with no conflicts: " + JSON.stringify(mHeld));
+blocked(R.eligibility(mCtx, "2026-11-10", P, BURCHETT), "slot-locked:x1", "M: the pool sees his day as locked");
+[[PHILIP, B, "2026-11-19"], [KHAN, B, "2026-11-19"], [ACTON, P, "2026-11-13"], [BURCHETT, B, "2026-11-19"]].forEach(([id, role, d]) => eq(R.eligibility(mCtx, d, role, id), R.eligibility(ctx, d, role, id), "M: a pool surgeon's answer is untouched by the two external roster entries (" + id + " " + role + " " + d + ")"));
+const mT = R.talliesFor(mCtx, "x1", "2026-11");
+eq([mT.primary, mT.backup, mT.total], [1, 1, 2], "M: talliesFor counts an outside surgeon's own held days");
+ok(!R.holidayUnitCandidates(mCtx, R.holidayUnits(mCtx, "2026-11-01", "2026-12-31")[0], P).some(id => id === "x1"), "M: holiday-unit candidates never include an external");
+ok(!R.weekendUnitPatterns(mCtx, "2026-11-13", P).some(p => JSON.stringify(p.surgeons || p.members || {}).indexOf('"x1"') >= 0), "M: weekend-unit patterns never include an external");
+// generator: his held days are fixed input (locked or not), he is never placed, and the open-slot count excludes his days
+step("M: generator never touches an outside surgeon");
+const mGenSched = clone(mSched);
+mGenSched["2026-11-10"].primaryLocked = false;   // held but UNLOCKED: still fixed (design decision c)
+const mGenCtx = makeCtx({ roster: mRoster, schedule: mGenSched, rangeStart: "2026-11-02", rangeEnd: "2026-11-15" });
+const mGen = G.generate(mGenCtx, "2026-11-02", "2026-11-15", { seed: 1, bestOf: 1 });
+const mOut = mGen.schedule;
+eq(mOut["2026-11-10"].primary, "x1", "M: the unlocked hand-written primary is kept as a fixed slot");
+eq(mOut["2026-11-10"].primaryLocked, false, "M: ...and its lock flag is the input's (unlocked stays unlocked)");
+eq(mOut["2026-11-12"].backup, "x1", "M: the locked hand-written backup is kept");
+const mStray = Object.keys(mOut).filter(d => (mOut[d].primary === "x1" && d !== "2026-11-10") || (mOut[d].backup === "x1" && d !== "2026-11-12") || mOut[d].primary === "x2" || mOut[d].backup === "x2");
+eq(mStray, [], "M: the generator never assigns an external anywhere else");
+const mDg = mGen.diagnostics;
+ok(!(mDg.lockViolations || []).some(v => v.id === "x1") && !(mDg.fixedViolations || []).some(v => v.id === "x1"), "M: his held days are never reported as lock / fixed violations: " + JSON.stringify((mDg.lockViolations || []).concat(mDg.fixedViolations || []).filter(v => v.id === "x1")));
+ok(!Object.prototype.hasOwnProperty.call(mDg.tallies || {}, "x1"), "M: the generator's tallies cover the generation universe only (externals are tallied by the Totals view)");
+ok(mDg.impliedTargets.pool.indexOf("x1") < 0 && !mDg.impliedTargets.months["2026-11"].members.x1, "M: not in the equal-share pool and no member row");
+// control run without his day: exactly one more open primary slot in November
+const mCtrlSched = clone(mGenSched); mCtrlSched["2026-11-10"] = { primary: null, backup: null, primaryLocked: false, backupLocked: false, source: null, externalCover: null, note: null };
+const mCtrl = G.generate(makeCtx({ roster: mRoster, schedule: mCtrlSched, rangeStart: "2026-11-02", rangeEnd: "2026-11-15" }), "2026-11-02", "2026-11-15", { seed: 1, bestOf: 1 });
+eq(mCtrl.diagnostics.impliedTargets.months["2026-11"].primaryOpen - mDg.impliedTargets.months["2026-11"].primaryOpen, 1, "M: the day an outside surgeon holds is not an open slot (his days reduce the pool's share)");
+ok(mCtrl.schedule["2026-11-10"].primary && mCtrl.schedule["2026-11-10"].primary !== "x1", "M: control - without his row the generator fills 11/10 from the pool");
+
+// review 9/22 (M, finding 4): his own vacation is a slot fact on the manual path (the day itself only -
+// the trailing-edge day before is a pool pattern rule, not a fact about him)
+step("M: an outside surgeon's own vacation is a slot fact on the manual path");
+const mVacCtx = makeCtx({ roster: mRoster, schedule: mSched, timeOffRows: SA.seedToTimeOffRows(seed).concat([{ person_id: "x1", start_date: "2026-12-15", end_date: "2026-12-16" }]) });
+blocked(R.eligibility(mVacCtx, "2026-12-15", P, "x1", { manual: true }), "time-off:2026-12-15", "M: manual primary on his own vacation day");
+blocked(R.eligibility(mVacCtx, "2026-12-16", B, "x1", { manual: true }), "time-off:2026-12-16", "M: manual backup on his own vacation day");
+okElig(R.eligibility(mVacCtx, "2026-12-14", P, "x1", { manual: true }), "M: the day before his vacation is not a slot fact (no day-before-vacation for an outside surgeon)");
+okElig(R.eligibility(mVacCtx, "2026-12-17", P, "x1", { manual: true }), "M: the day after his vacation is open again");
+eq(R.eligibility(mVacCtx, "2026-12-15", P, BURCHETT), R.eligibility(makeCtx({ roster: mRoster, schedule: mSched }), "2026-12-15", P, BURCHETT), "M: a pool surgeon's answer is untouched by the outside surgeon's vacation");
+
+// review 9/22 (M, finding 6): the East derived-week path (Setup -> Rules eastFeed.deriveFrom / statedWeeks) must
+// never turn into a generated week for an outside surgeon
+step("M: the East derived-week path never assigns an outside surgeon");
+const mDerCtx = makeCtx({ roster: mRoster, schedule: {}, eastDerived: DERIVED.concat([{ surgeonId: "x1", weekMonday: "2027-02-01", silvisRole: "backup" }]) });
+eq(Object.keys(mDerCtx.derivedByDay).filter(d => mDerCtx.derivedByDay[d].primary === "x1" || mDerCtx.derivedByDay[d].backup === "x1"), [], "M: derivedByDay never names an outside surgeon");
+ok(mDerCtx.warnings.some(w => /^eastDerived\[\d+\]: ignored - x1 is an outside surgeon/.test(w)), "M: the ignored derived week is reported in ctx.warnings: " + JSON.stringify(mDerCtx.warnings.filter(w => /x1/.test(w))));
+eq(mDerCtx.per.x1.eastDays.size, 0, "M: ...and marks no East days for him");
+const mDerCtx2 = makeCtx({ roster: mRoster, schedule: {}, rangeStart: "2027-02-01", rangeEnd: "2027-02-07", eastDerived: [{ surgeonId: "x1", weekMonday: "2027-02-01", silvisRole: "backup" }] });
+const mDerGen = G.generate(mDerCtx2, "2027-02-01", "2027-02-07", { seed: 1, bestOf: 1 });
+eq(Object.keys(mDerGen.schedule).filter(d => mDerGen.schedule[d].primary === "x1" || mDerGen.schedule[d].backup === "x1"), [], "M: the generator never writes a derived week for an outside surgeon");
+ok(!!mDerGen.schedule["2027-02-03"].backup && mDerGen.schedule["2027-02-03"].backupLocked === false, "M: ...the week's backup slots are filled from the pool, unlocked: " + JSON.stringify(mDerGen.schedule["2027-02-03"]));
+ok(mDerGen.diagnostics.warnings.some(w => /^eastDerived\[0\]: ignored - x1 is an outside surgeon/.test(w)), "M: ...and the ignored week rides along in the generator's warnings");
+
+// review 9/22 (M, finding 2): a hand-written outside surgeon on one day of a holiday unit must not leave the
+// other in-range unit days open - they are filled day by day around him (as a broken weekend unit is)
+step("M: a holiday unit broken by a hand-written outside surgeon is filled day by day around him");
+const mHolSched = clone(ctx.schedule);
+mHolSched["2026-12-25"] = { primary: "x1", backup: null, primaryLocked: true, backupLocked: false, source: "manual-external", externalCover: null, note: null };
+const mHolCtx = makeCtx({ roster: mRoster, schedule: mHolSched, rangeStart: "2026-11-02", rangeEnd: "2027-01-03" });
+const mHol = G.generate(mHolCtx, "2026-11-02", "2027-01-03", { seed: 1, bestOf: 2 });
+eq(mHol.schedule["2026-12-25"].primary, "x1", "M: Christmas Day stays his");
+const mEve = mHol.schedule["2026-12-24"];
+ok(mEve && mEve.primary && mEve.primary !== "x1", "M: Christmas Eve primary is filled from the pool around him: " + JSON.stringify(mEve));
+eq((mHol.diagnostics.uncovered || []).filter(u => u.day === "2026-12-24" && u.role === P), [], "M: 12/24 primary is not an open slot");
+ok(mHol.diagnostics.warnings.some(w => /^holiday unit Christmas .*broken by hand-written outside surgeon x1 on 2026-12-25/.test(w)), "M: one warning names the broken unit: " + JSON.stringify(mHol.diagnostics.warnings.filter(w => /broken/.test(w))));
+ok(mHol.schedule["2026-12-24"].backup && mHol.schedule["2026-12-24"].backup === mHol.schedule["2026-12-25"].backup, "M: the backup side of the unit is untouched by his primary and stays one holder");
+const mHolUnit = (mHol.diagnostics.holidayUnits || []).find(u => /Christmas/.test(u.name) && (u.days || []).indexOf("2026-12-25") >= 0);
+ok(mHolUnit && mHolUnit.primaryBrokenBy && mHolUnit.primaryBrokenBy.id === "x1" && mHolUnit.primaryBrokenBy.days[0] === "2026-12-25" && mHolUnit.primaryDaily && mHolUnit.primaryDaily["2026-12-24"] === mEve.primary, "M: the unit diagnostic records the break and the daily fill: " + JSON.stringify(mHolUnit));
+// the same for a hand-written BACKUP on the eve (the other role of the unit is one holder as usual)
+const mHolSched2 = clone(ctx.schedule);
+mHolSched2["2026-12-24"] = { primary: null, backup: "x1", primaryLocked: false, backupLocked: true, source: "manual-external", externalCover: null, note: null };
+const mHol2 = G.generate(makeCtx({ roster: mRoster, schedule: mHolSched2, rangeStart: "2026-12-01", rangeEnd: "2027-01-03" }), "2026-12-01", "2027-01-03", { seed: 2, bestOf: 1 });
+ok(mHol2.schedule["2026-12-25"].backup && mHol2.schedule["2026-12-25"].backup !== "x1", "M: Christmas Day backup is filled from the pool beside his hand-written eve: " + JSON.stringify(mHol2.schedule["2026-12-25"]));
+ok(mHol2.schedule["2026-12-24"].primary && mHol2.schedule["2026-12-24"].primary === mHol2.schedule["2026-12-25"].primary, "M: the primary side of that unit is one holder");
+
 const total = Date.now() - t0;
 if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }
 console.log("ok " + N + " assertions (" + total + " ms)");

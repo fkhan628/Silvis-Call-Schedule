@@ -658,6 +658,55 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     }
   });
 
+  /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
+  console.log("\n[M] outside surgeons pins");
+  check("M: the day editor's per-role select carries an 'Outside surgeons' optgroup (data-testid editor-<role>-externals)", () => {
+    assert.ok(src.includes('data-testid={"editor-" + role + "-externals"}'), "no optgroup testid in the day editor");
+    assert.ok(src.includes('<optgroup label="Outside surgeons"'), "no 'Outside surgeons' optgroup label");
+  });
+  check("M: a hand-written outside surgeon saves with source 'manual-external' (exactly one literal, in saveDayEdit) and REASON_WORDS glosses external-surgeon", () => {
+    assert.strictEqual(count('"manual-external"'), 1, "expected exactly one \"manual-external\" literal in index-source.html");
+    const at = src.indexOf('"manual-external"'), fn = src.indexOf("const saveDayEdit = ");
+    assert.ok(fn > 0 && at > fn && at < src.indexOf("const proposeTradeForDay"), "the literal must sit inside saveDayEdit");
+    assert.ok(src.includes('"external-surgeon": "outside surgeon (written in by hand)"'), "REASON_WORDS lacks external-surgeon");
+  });
+  check("M: Setup roster has 'Add outside surgeon' (roster-add-external), x-prefixed ids and a note denylist; helpers exports ttOutsideSurgeons; Totals has the section", () => {
+    assert.ok(src.includes('data-testid="roster-add-external"'), "no roster-add-external button");
+    assert.ok(src.includes("/^x\\d+$/"), "no /^x\\d+$/ id check for externals");
+    assert.ok(src.includes("SU_NOTE_DENYLIST"), "the Setup roster note has no denylist gate (item F wording must not reach the anon-readable blob)");
+    assert.strictEqual(typeof H.ttOutsideSurgeons, "function");
+    assert.ok(src.includes('data-testid="totals-external"') && src.includes('data-testid={"totals-ext-row-" + r.id}'), "Totals lacks the Outside surgeons section / rows");
+  });
+  check("M: the manual-external literal never appears in the generator or the rules engine (the app writes it; the engine reads roster type only)", () => {
+    const g = fs.readFileSync(path.join(ROOT, "generator.js"), "utf8"), r = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8");
+    assert.ok(!g.includes('"manual-external"') && !r.includes('"manual-external"'));
+    assert.ok(r.includes('"external-surgeon"'), "rules.js lacks the external-surgeon hard reason");
+  });
+  // review 9/22 (M) fixes
+  check("M: the app's seed-import apply merges the live roster's outside surgeons back (impMergeRoster) before writing the blob", () => {
+    const at = src.indexOf("impMergeRoster"), from = src.indexOf("// 1) config blob: merge the plan's keys over the live blob");
+    assert.ok(from > 0 && at > from && at < src.indexOf("// 2) availability: insert only rows"), "the seed apply's blob merge does not call impMergeRoster (a Setup-added outside surgeon would be dropped by the next Apply)");
+  });
+  check("M: outside surgeons are hidden from the vacation form, the availability card, the trade counter-party list and the Users roster link (poolSurgeons)", () => {
+    assert.ok(src.includes("const poolSurgeons = useMemo("), "no poolSurgeons memo");
+    assert.ok(src.includes("renderVacationForm(poolSurgeons)") && !src.includes("renderVacationForm(activeSurgeons)"), "the vacation form still lists externals");
+    assert.ok(src.includes("<AvailabilityCard css={css} rows={availabilityRows} roster={poolSurgeons}"), "the availability card still lists externals");
+    assert.ok(src.includes("const cands = poolSurgeons.filter(s => s.id !== fromId)"), "the trade counter-party list still offers externals (no account can accept)");
+    assert.ok(src.includes("<UsersCard css={css} roster={rosterPool}"), "the Users roster link still offers x-ids");
+    assert.ok(src.includes('(roster || []).filter(x => x.type !== "external").map(x => <button key={x.id} data-testid={"rules-pick-" + x.id}'), "Setup -> Rules still offers rule editing (East derived weeks included) for an outside surgeon");
+  });
+  check("M: the day editor's 'written in by hand' line is an info line (editor-info), never the red error hint, and an override pick of an outside surgeon locks the role too", () => {
+    assert.ok(src.includes('data-testid="editor-info"'), "no editor-info line");
+    assert.ok(!src.includes('setHint(opt.name + " is an outside surgeon'), "the hand-written note still goes through the red error hint");
+    const co = src.indexOf("const confirmOverride = "), cr = src.indexOf("const clearRole = ");
+    assert.ok(co > 0 && cr > co && src.slice(co, cr).includes('[p.role + "Locked"]: true'), "confirmOverride does not lock the role for an outside surgeon");
+  });
+  check("M: Setup issues never nag about rules for an outside surgeon (no rule applies to him)", () => {
+    const roster = [{ id: "s1", name: "Khan", code: "FAK", active: true }, { id: "x1", name: "Locum", code: "LOC", active: true, type: "external" }];
+    const issues = H.suSetupIssues({ roster, surgeonRules: { s1: {} }, groupRules: {}, holidays: { units: { "2026": ["x"] } }, schedule: { "2026-11-02": { primary: "s1" } }, eastFeedRows: [{ fetched_at: new Date().toISOString() }], nowMs: Date.now() });
+    assert.deepStrictEqual(issues.filter(t => /No rules for/.test(t)), [], "issues: " + JSON.stringify(issues));
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

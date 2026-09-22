@@ -630,6 +630,50 @@ async function livePanel() {
   passed++; console.log("ok   live ER panel: 6 week rows 11/2..12/13 built from the live project and saved");
 }
 
+/* ---- Prompt 12 M: an outside surgeon (roster type "external") exports by last name like anyone else;
+   the legacy externalCover ("Atwell") keeps its own rendering beside him. ---- */
+const rosterExt = roster.concat([{ id: "x1", name: "Locum", code: "LOC", type: "external", active: true }]);
+const scheduleExt = Object.assign({}, schedule, {
+  "2026-11-12": day("x1", "s3", { primaryLocked: true, source: "manual-external" }),
+  "2026-11-13": day("s4", "x1", { backupLocked: true, source: "manual-external" }),
+});
+check("M: ICS - an outside surgeon's days are events named by last name in the group feed; his own feed (by id) and file name work", () => {
+  const ev = H.buildICSEvents(scheduleExt, null, rosterExt, {}).filter(e => e.day === "2026-11-12" || e.day === "2026-11-13");
+  assert.deepStrictEqual(ev.map(e => e.summary), ["Silvis Primary Call - Locum", "Silvis Backup Call - Acton", "Silvis Primary Call - Philip", "Silvis Backup Call - Locum"]);
+  assert.ok(ev[0].desc.startsWith("Primary: Locum\nBackup: Acton\n"), ev[0].desc);
+  const mine = H.buildICSEvents(scheduleExt, "x1", rosterExt, {});
+  assert.deepStrictEqual(mine.map(e => e.day + " " + e.role + " " + e.summary), ["2026-11-12 primary Silvis Primary Call", "2026-11-13 backup Silvis Backup Call"]);
+  assert.strictEqual(H.icsFileName(rosterExt[6]), "silvis-call-locum.ics");
+});
+check("M: week rows / ER panel - '11/12 Locum' is a surgeon entry (data-kind surgeon, never external); the Atwell cover is unchanged beside it", () => {
+  const rows = H.buildWeekRows(scheduleExt, rosterExt, "2026-11-09", "2026-11-15", { today: TODAY_NOV });
+  const p = rows[0].primary.find(e => e.id === "x1");
+  assert.deepStrictEqual(p && [p.kind, p.name, p.text], ["surgeon", "Locum", "11/12 Locum"]);
+  const b = rows[0].backup.find(e => e.id === "x1");
+  assert.deepStrictEqual(b && [b.kind, b.text], ["surgeon", "11/13 Locum"]);
+  const html = H.buildErCallPanelsHTML(scheduleExt, rosterExt, "2026-11-02", "2026-11-15", { today: TODAY_NOV });
+  assert.ok(html.includes('<span data-kind="surgeon">11/12 Locum</span>'), html);
+  assert.ok(html.includes('<span data-kind="surgeon">11/13 Locum</span>'), html);
+  assert.ok(html.includes('<span data-kind="external">11/3-11/5 Atwell</span>'), "the legacy externalCover must still render as before");
+  const text = H.buildErCallPanelsText(scheduleExt, rosterExt, "2026-11-09", "2026-11-15", { today: TODAY_NOV });
+  assert.ok(text.includes("11/12 Locum; 11/13 Philip") && text.includes("11/13 Locum"), text);
+});
+check("M: share page and printable month - the name in the grid cell and the week row, never '(ext)'; Atwell keeps '(ext)'", () => {
+  const sh = H.generateShareHTML(scheduleExt, rosterExt, { months: ["2026-11"], holidays, vacations, generatedAt: new Date(2026, 8, 22, 9, 5), today: TODAY_NOV });
+  const j = sh.indexOf('data-day="2026-11-12"'); const c = sh.slice(j, sh.indexOf('data-day="2026-11-13"', j));
+  assert.ok(j > 0 && c.includes("Locum") && !c.includes("(ext)"), c.slice(0, 300));
+  assert.ok(sh.includes(">11/12 Locum</div>"), "week-row entry for the outside surgeon");
+  assert.ok(sh.includes('<div class="wr-ext">11/3-11/5 Atwell</div>'), "the legacy cover keeps its week-row style");
+  const pr = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 10, numMonths: 1, schedule: scheduleExt, roster: rosterExt, holidays, vacations, today: TODAY_NOV });
+  const k = pr.indexOf('data-day="2026-11-12"'); const pc = pr.slice(k, pr.indexOf('data-day="2026-11-13"', k));
+  assert.ok(k > 0 && pc.includes('<span class="who">Locum</span>'), pc.slice(0, 300));
+  assert.ok(pr.includes('<span class="ext">Atwell (ext)</span>'), "the legacy cover keeps its (ext) rendering");
+});
+check("M: an outside surgeon's id that is NOT in the roster list still renders (as the raw id) rather than crashing an export", () => {
+  const html = H.buildErCallPanelsHTML(scheduleExt, roster, "2026-11-09", "2026-11-15", { today: TODAY_NOV });
+  assert.ok(html.includes('<span data-kind="surgeon">11/12 x1</span>'), html);
+});
+
 livePanel().catch(e => { failed++; console.log("FAIL live ER panel\n     " + (e && e.message || e)); }).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
