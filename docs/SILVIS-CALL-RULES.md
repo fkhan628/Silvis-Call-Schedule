@@ -2,8 +2,9 @@
 
 *Compiled 2026-09-21 from the group's email threads (Aug 27 – Sep 20, 2026), the ER-panel author's ER Call Panels
 Word document (9/14–12/13/26 version dated 9/16), Fierce's rules relayed by Faraz, and Faraz Khan's in-session
-answers (9/21). This is "the bones" the generator must honor. The machine-readable twin is `silvis-seed.json` —
-when the two disagree, fix both.*
+answers (9/21 and **9/22 — see the "9/22 amendments" marked ⟶ throughout and §8**). This is "the bones" the generator
+must honor. The machine-readable twin is the repo's `docs/silvis-seed.json` (canonical since the overnight build) — when
+the two disagree, fix both.*
 
 ---
 
@@ -12,11 +13,14 @@ when the two disagree, fix both.*
 | Item | Rule | Source |
 |---|---|---|
 | Unit of call | **One calendar day = one 24-hour shift, 07:00 → 07:00 next day** (confirmed) | Khan 9/21 |
-| Roles per day | **Primary** (must be physically in Silvis — applies to everyone, Fierce included) + **Backup** (standby) | Burchett 9/18, Khan 9/12, 9/21 |
+| Roles per day | **Primary** (must be physically in Silvis — applies to everyone, Fierce included) + **Backup** (standby). ⟶ **9/22: backup is open to everyone, on-site or off-site, every day** — outreach days, OR days and Clinton/Aledo days restrict **primary only** — **unless a surgeon explicitly opts out of backup** (none has so far). | Burchett 9/18, Khan 9/12, 9/21, **9/22** |
 | Weekdays (Mon–Thu) | Primary + backup, one surgeon each, 24 h at a time | Khan 9/21 |
 | Weekend (Fri–Sun) | Handled as a **weekend unit** whose shape depends on the surgeon (see §3, §4) | Khan 9/21, Burchett 9/10 |
 | Handoff | Service hands off every morning; whoever operated/consulted on a patient hands them to the next day's primary. The weekend surgeon covers everyone Fri–Sun. Only the primary must be in Silvis; everyone else can be off-site. | Khan 9/9, Burchett 9/10 |
 | Fill order | **Fill every primary day first (top priority), then backup.** | Burchett 9/17, 9/18 |
+| Fairness | ⟶ **9/22: everyone as equal as possible.** Primary counts are balanced across the pool and backup counts are balanced across the pool, each within the person's availability; nobody is a "neutral" filler. See §6. | Khan 9/22 |
+| Caps | ⟶ **9/22: monthly caps count primary days only** — backup days do not count toward Burchett's 8 (or anyone's total cap). An explicitly stated backup cap (Philip: ≤ 7 backup days and ≤ 1 backup weekend per month) still applies. | Khan 9/22 |
+| Outside surgeons | ⟶ **9/22: the roster can carry outside surgeons ("internal locums", e.g. a Davenport surgeon willing to take a shift)** who are **written in by hand** for specific days, never auto-assigned by the generator, and tallied separately. | Khan 9/22 |
 | Backup contract | Backup should never be called if the primary stays true to the location. (Stipend transfer on activation is a group/admin matter — **the app carries no compensation logic or $ display at all.**) | Burchett 9/18, Khan 9/21 |
 | Practice hygiene | No operating at another facility while on Silvis primary. 30-minute response time. | Khan 8/29, Burchett 8/27 |
 | Consecutive days | Default max **2 consecutive 24-h periods**; per-surgeon overrides below (weekend blocks are 3; Fierce weeks are 7). | Burchett 8/27, Khan 8/29 |
@@ -39,6 +43,10 @@ when the two disagree, fix both.*
 
 Contact details for all six (and for the ER-panel author / administration) are in the private `silvis-contacts.md`.
 
+**Outside surgeons (9/22):** Setup → Roster can add an *outside* surgeon (name + code, `type: "external"`, no account
+needed). They appear only in the day editor under "Outside surgeons", never in the generator's pool, and in Totals under
+their own heading. They must be written in by hand for each day they agree to cover.
+
 **Atwell is not in the roster** (Faraz, 9/21). His legacy primary week 9/28–10/4 is imported as `externalCover: "Atwell"`
 so those days render as covered rather than OPEN and count toward nobody's tallies. If that changes, Faraz will say so.
 
@@ -49,25 +57,25 @@ decides the Trauma Director role.
 
 ## 3. Per-surgeon rules
 
-### Khan (s1) — weekends first, East-dependent
-- **Main contribution = weekends** (Fri+Sat+Sun as a block). He is in the weekend pool by default.
-- **Mondays and Wednesdays are auto-offered** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday** — those are his OR days (hard). *(Stated 9/21; supersedes the earlier "no Mon/Wed nights" statement.)*
-- East feed: **primary** only on days he is **not on call at East (Davenport)**; **backup is allowed even on East call days**. Source of truth: the Davenport app's `schedule_weeks` rows for the surgeon coded FAK.
+### Khan (s1) — weekend primary when available, East-dependent
+- ⟶ **9/22: main contribution = PRIMARY on weekends when available** (Fri+Sat+Sun as a block). He is not a backup filler: his backup count is balanced like everyone else's, and the generator should prefer him as weekend *primary* over weekend *backup* whenever East allows.
+- **Mondays and Wednesdays are auto-offered as primary** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday as primary** — those are his OR days (hard). ⟶ **9/22: backup on any day is fine, Tue/Thu included.** *(Supersedes the earlier "no Mon/Wed nights" statement and the "never Tue/Thu for both roles" reading.)*
+- East feed: **primary** only on days he is **not on call at East (Davenport)**; **backup is allowed even on East call days**. ⟶ **9/22: cross-reference ALL of his Davenport call** — service weeks (Mon–Sat), weeknights, weekends, backup weeks, holiday coverage — from the Davenport app's `schedule_weeks` rows for the surgeon coded FAK, plus the forecast until Davenport publishes.
 - Max consecutive 3 (a holiday unit counts as one commitment). No monthly target.
 - **Thanksgiving 2026: Khan takes Thu 11/26 – Sun 11/29 as one unit, primary** (Faraz 9/21 evening; locked in the seed).
 - **East forecast while Davenport is unpublished** (Faraz 9/21 evening): the Davenport schedule for the next period is not out until the end of 2026. Until it is, the East feed carries a forecast built by running the Davenport generator many times over the next period with the live Davenport inputs; days where Khan is on East call in ≥ 50 % of runs are treated as East-busy for Silvis primary (backup allowed), lower probabilities are a soft penalty, and such days show a “forecast” badge. When Davenport publishes, the real feed replaces the forecast and a conflict report lists any Silvis day needing a trade. Faraz can also enter his published Silvis days as Davenport constraints when he generates DSG.
 
-### Burchett (s2) — recurring whitelist + weekends
-- Typically available: **2nd & 4th Monday** (unless in Jackson County), **1st Tuesday**, **2nd & 4th Wednesday**. Otherwise in DeWitt / Jackson County most days.
+### Burchett (s2) — recurring whitelist (primary) + weekends
+- Typically available **for primary**: **2nd & 4th Monday** (unless in Jackson County), **1st Tuesday**, **2nd & 4th Wednesday**. Otherwise in DeWitt / Jackson County most days. ⟶ **9/22: backup on any day** (off-site is fine for standby).
 - Weekends: available for **backup every weekend incl. Fridays** when not primary; takes primary weekends too.
 - Weekend style: **split** with Acton — one takes Fri+Sun, the other Sat. (the ER-panel author's doc shows exactly this: 9/25 Burchett, 9/26 Acton, 9/27 Burchett.)
-- **Max 2 consecutive 24-h periods.** **Monthly cap 7–8 days total (primary + backup)**; prefers ≤7 in December.
+- **Max 2 consecutive 24-h primary periods.** **Monthly cap 7–8 primary days** ⟶ 9/22: backup days do not count toward it; prefers ≤7 in December.
 - Christmas: prefers to **split it up** (every other day, or 2 on then off).
 - October: available 10/6, 10/10, 10/11, 10/12 (backup only), 10/14, 10/26, 10/28. Not available 10/2–10/4, 10/18, 10/23, 10/24, 10/30, 10/31, 11/1. Takes 10/25 (Sun) with Sarkar on 10/24 (Sat).
 - December (can take primary or backup): 12/1, 12/5, 12/6, 12/9, 12/12, 12/13, 12/14, 12/19, 12/20, 12/23, 12/25, 12/26, 12/27, 12/28, 12/30, 12/31, 1/1, 1/2, 1/3. "I don't need all these dates but am able to do them."
 
-### Acton (s3) — recurring blacklist
-- **Unavailable 2nd & 4th Monday and Wednesday** (outreach in Maquoketa). These align with Burchett's available days — the two are designed to complement each other.
+### Acton (s3) — recurring blacklist (primary)
+- **Unavailable for primary on the 2nd & 4th Monday and Wednesday** (outreach in Maquoketa). These align with Burchett's available days — the two are designed to complement each other. ⟶ **9/22: backup on those days is allowed.**
 - Avoid (soft, medium): the **Sunday immediately before a 2nd/4th Monday** (morning carryover before Maquoketa; "may not be as much of an issue" with a true handoff).
 - Avoid (soft, medium): **Tuesdays** — [removed].
 - Time off: **Nov 19–22** ([removed]), **Nov 25–29** (Thanksgiving week). **Never on Thanksgiving.** Christmas or New Year's is fine; agrees with Burchett's alternating-days strategy.
@@ -75,12 +83,12 @@ decides the Trauma Director role.
 - October: primary Oct 5, 7, 9, 17, 18, 19, 21, 23; backup Oct 6, 8, 20. Offered to send a full monthly date list like Burchett.
 - **No specific monthly cap** (Faraz 9/21); no target stated.
 
-### Philip (s4) — whitelist of weeks
-- In **Aledo the 1st and 3rd Wednesday** of each month **and the Friday of that 3rd week**; tries to avoid Silvis call those whole weeks (strong soft).
-- **Hard:** not on call the **day before an Aledo day** (Tue before a 1st/3rd Wed; Thu before the 3rd-week Fri) — he leaves before 7 AM, i.e. before the shift ends, and would dump late non-emergent work on the next person.
+### Philip (s4) — whitelist of weeks (primary)
+- In **Aledo the 1st and 3rd Wednesday** of each month **and the Friday of that 3rd week**; tries to avoid Silvis *primary* those whole weeks (strong soft). ⟶ **9/22: backup on any day, Aledo weeks included.**
+- **Hard (primary):** not primary the **day before an Aledo day** (Tue before a 1st/3rd Wed; Thu before the 3rd-week Fri) — he leaves before 7 AM, i.e. before the shift ends, and would dump late non-emergent work on the next person.
 - Weeks he could be primary or backup (week-of Monday): 11/9, 11/23, 12/7, 12/21, 12/28, 1/11, 1/25, 2/8, 2/22, 3/8, 3/22, 3/29, 4/12, 4/26, 5/10, 5/24, (6/7 tentative vacation), 6/21, 6/28. He does **not** want all of them.
 - **No more than one major holiday** (Thanksgiving / Christmas / New Year). **Prefers not a full week at a time** ("call has been getting busier").
-- Backup cap (stated for October, treat as monthly): **≤ 7 days and ≤ 1 weekend** of backup.
+- Backup cap (stated for October, treat as monthly): **≤ 7 days and ≤ 1 weekend** of backup — an explicit backup cap, so it survives the 9/22 "backup doesn't count" rule. The group default primary cap (8) applies to his primary days.
 - Weekend style: **block**; in practice Thu–Sun (10/29–11/1), so max consecutive 4.
 - October: **cannot 10/15** (personal — hard). Primary 10/8, 10/13, 10/16, 10/27, 10/29–11/1. Backup: not 10/15, 10/7, 10/21, 10/23.
 
@@ -94,20 +102,20 @@ decides the Trauma Director role.
   | Day | Where he is | Silvis eligibility |
   |---|---|---|
   | Mon | East (Davenport) | **backup only** — he must be on site at Silvis when primary (Faraz 9/21) |
-  | Tue | Clinton all day | none |
-  | Wed | Office Clinton/Silvis | **preferred** — "good day to be on call" |
-  | Thu | Clinton all day | none |
-  | Fri | Clinton or Dubuque (rotates) | only as the start of a **Fri+Sat+Sun block** — never a standalone Friday |
-  | Sat / Sun | — | as part of his Fri+Sat+Sun block (Faraz 9/21: "his Sat/Sun will run with his Fri") |
+  | Tue | Clinton all day | no primary; ⟶ 9/22 backup OK |
+  | Wed | Office Clinton/Silvis | **preferred** primary — "good day to be on call" |
+  | Thu | Clinton all day | no primary; ⟶ 9/22 backup OK |
+  | Fri | Clinton or Dubuque (rotates) | primary only as the start of a **Fri+Sat+Sun block** — never a standalone Friday; ⟶ 9/22 backup OK |
+  | Sat / Sun | — | primary as part of his Fri+Sat+Sun block (Faraz 9/21: "his Sat/Sun will run with his Fri"); backup any day |
 
-- **Cap: up to 14 call days per month**, counting Silvis primary + backup and his East week days (from the feed).
+- **Cap: up to 14 primary call days per month**, counting Silvis primary days and his East primary week (from the feed) ⟶ 9/22: backup days (either site) do not count.
 - He described an ideal of East week → following week Silvis → ~10 days with no call. **Not a rule** (Faraz 9/21): no penalty, no Davenport-side alignment; recorded only as his stated preference.
 - Max consecutive 7 (his derived weeks). Weekend style **block** (Fri–Sun).
 
 ### Sarkar (s6) — monthly windows only
 - Available **only** inside windows supplied by administration: **Oct 19–24, Nov 16–21, Dec 14–18, Jan 11–16** (Mon–Sat; Dec is Mon–Fri).
-- **3–4 days per window week.** **Saturday is fine; never Friday or Sunday** (no Fri–Sun block for her). Max consecutive 2.
-- **No target.** Must always have a handoff partner the next morning. Burchett's October plan (Tue/Thu/Sat with handoff partners, Burchett taking the Sunday) is the model.
+- ⟶ **9/22: she is PRIMARY 3–4 days of her window week** (primary days count; backup days do not), **mainly every other day when possible** (soft: prefer non-consecutive; hard max 2 consecutive). **A Friday may be taken as a standalone day, separate from Saturday/Sunday**; Saturday standalone is fine too; never a Fri–Sun block; Sunday only if inside a window (never, in practice). Backup on her remaining window days is allowed but not required.
+- Her target is her 3–4 primaries per window week, not an equal share. Must always have a handoff partner the next morning. Burchett's October plan (Tue/Thu/Sat with handoff partners, Burchett taking the Sunday) is the model.
 
 ## 4. Weekend unit — how the styles combine
 
@@ -115,7 +123,7 @@ The generator treats Fri/Sat/Sun as one unit and chooses a pattern per weekend:
 
 1. **Block** — one surgeon Fri+Sat+Sun (Khan, Philip, Fierce — for Fierce this is the *only* way he takes a Friday).
 2. **Split** — one surgeon Fri+Sun, another Sat (Acton/Burchett pair; also valid for any two surgeons who both accept split). Keeps each under the 2-consecutive limit. Sarkar can only ever be the Saturday half.
-3. **Daily** — three independent days; fallback only.
+3. **Daily** — three independent days; fallback only — except for Sarkar, for whom a standalone Friday or Saturday is the normal pattern (9/22).
 
 Backup for the weekend is filled with the same unit logic after primary. A surgeon's `weekendStyle` is a preference; the hard constraints (availability, caps, max consecutive) always win.
 
@@ -144,15 +152,32 @@ Burchett's stated Christmas preference ("2 days on then off") is satisfied by th
 tracked separately from shift counts: major and minor counts per surgeon, lifetime, tenure-normalized — the same idea
 as the Davenport holiday pools.
 
-## 6. Fairness model (differs from Davenport)
+## 6. Fairness model (differs from Davenport) — ⟶ rewritten 9/22
 
-Silvis is **not** an equal-share group. Each surgeon carries a configurable **monthly target** and **caps** rather than
-an equal split:
+**"We want everyone to be as equal as possible."** Fairness is measured on two separate counts per surgeon per month
+(and rolling 12 months): **primary shifts** and **backup shifts**. The generator drives both spreads down across the
+pool, within each person's availability:
 
-- Pool members (Burchett, Acton, Philip, and Fierce outside his derived weeks) are balanced toward their targets, subject to caps and hard availability. Khan has no target (weekends by default, Mon/Wed when East is clear). Sarkar has no target (her window, 3–4 days a week).
-- Fierce's derived weeks and Sarkar's windows are fixed-availability inputs, not fairness levers.
-- Metrics to track per surgeon — by month, year-to-date and rolling 12 months: primary shifts, backup shifts, weekend days, major/minor holidays, max consecutive days, and each vs. target/cap. One 24-hour day = one shift; nothing is weighted or split. **No compensation, stipend or $ figures anywhere in the app.**
-- The objective when generating: (1) zero uncovered primary days, (2) zero uncovered backup days, (3) zero hard-rule violations, (4) minimize weighted soft-rule penalties, (5) minimize deviation from monthly targets, (6) balance weekends and holidays.
+- **Equal share by default.** Every active pool member (Khan, Burchett, Acton, Philip, Fierce) gets an implied target of
+  an equal share of the month's primary slots and, separately, of its backup slots — after subtracting locked days
+  (Fierce's derived weeks, imports) and Sarkar's own primaries. Nobody has a "neutral" or zero term; `monthlyTarget: null`
+  means "equal share", not "no target".
+- **Availability limits the share, not the intent.** Someone who cannot take Thursdays or 2nd/4th Mondays gets fewer of
+  those, and the generator makes it up elsewhere for them where it can; the diagnostics show each person's share vs.
+  what their rules allowed.
+- **Caps count primary only** (9/22). Backup runs are unlimited by count; long any-role runs are discouraged by a soft
+  penalty (see §1 consecutive days and Prompt 12 A).
+- **Khan's weekend preference** is a bonus term: weekend primary for Khan scores better than weekend backup for Khan when
+  East allows; his backup count is still balanced like everyone else's.
+- **Sarkar** is targeted at 3–4 primaries per window week, alternating days when possible; she is outside the
+  equal-share pool. **Fierce's** derived weeks count toward his primary/backup tallies and the pool balances the rest.
+- **Outside surgeons** (internal locums) are never in the pool; their hand-written days reduce the pool's slot count.
+- Metrics per surgeon — by month, year-to-date and rolling 12 months: primary shifts, backup shifts, weekend days,
+  major/minor holidays, longest run (primary-only and any-role), each vs. share/cap. One 24-hour day = one shift; nothing
+  is weighted or split. **No compensation, stipend or $ figures anywhere in the app.**
+- Generation objective, in order: (1) zero uncovered primary days, (2) zero uncovered backup days, (3) zero hard-rule
+  violations, (4) minimize soft penalties, (5) minimize primary spread, (6) minimize backup spread, (7) balance weekends
+  and holidays.
 
 ## 7. Existing assignments to import (locks)
 
@@ -185,10 +210,18 @@ and every safety feature. Holidays are the same DSG set, as primary + backup uni
 
 **Answered by Faraz on 9/21 (evening, in chat with Claude Code):** Thanksgiving 2026 = Khan primary Thu 11/26 – Sun 11/29 as one unit; the day rules do not apply on holidays and anyone may be backup unless opted out; the Davenport schedule is not out until year end, so Silvis includes Khan and avoids his most likely East days via a forecast; Fierce East primary week 11/9, East backup weeks 10/12 and 12/7; port the bones and safety features, adjust whatever will not work for Silvis. The defaults taken for every remaining ambiguity (lock semantics for open slots, whitelist months, precedence, consecutive counting, caps, weights, Fierce cap arithmetic, Sarkar minimum, day-before rules primary-only) are listed in `docs/ORIENTATION-2026-09-21.md` §3 and written into `silvis-seed.json` (`groupRules.*`).
 
+**Answered by Faraz on 9/22 (in Cowork):** backup is open to everyone every day unless a surgeon explicitly opts out;
+everyone as equal as possible; monthly caps count primary only (backup days do not count toward the 8); Khan's main
+contribution is weekend primary when available, cross-referenced against all of his Davenport call; outside surgeons
+("internal locums", e.g. from Davenport) can be added to the roster and written in by hand; Sarkar is primary 3–4 days
+of her window week, mainly every other day, and may take a Friday as a standalone day.
+
 **Still open:**
 
 1. **10/15 (Thu)** — the one open primary day in the locked October import; nobody's rules allow it. The group will discuss. (Imported unlocked; the generator lists it as uncovered with reasons.)
 2. **Sarkar's home email** — none on record (goes into the private `silvis-contacts.md`, not here).
 3. **Holiday unit days for 2027 and the minor holidays** — should a Monday holiday unit include the preceding weekend? (Christmas and New Year's stay Eve + Day.)
-4. **Khan as backup on ordinary Tue/Thu** — currently blocked for both roles; allowing backup is the cheapest lever if Thursday backups come up short.
-5. **Philip's monthly cap** — none stated; the group default (8 total) applies from November although his own October was 15 days.
+4. ~~Khan as backup on ordinary Tue/Thu~~ — answered 9/22: backup is open to everyone.
+5. **Philip's monthly cap** — none stated; the group default (8 primary) applies from November although his own October was 15 days.
+6. **Thanksgiving 11/26–29 for Khan** — recorded by Claude Code as confirmed in an evening chat; the daytime record said pending. Re-confirm before publishing (Prompt 12 B).
+7. **Backup opt-outs** — the 9/22 rule says anyone may opt out of backup explicitly; nobody has. Ask the group once.
