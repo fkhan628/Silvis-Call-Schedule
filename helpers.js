@@ -259,6 +259,63 @@ function slotLabel(dayStr, role) {
   return `${md}${role ? " - " + role : ""}`;
 }
 
+/* === WEEK ROWS - the ER-panel author's ER Call Panels layout (Prompt 6 Slice C) ===
+   buildWeekRows(schedule, roster, rangeStart, rangeEnd, opts) -> rows
+     rows:  [{ monday, sunday, label: "9/28 - 10/4", days: [...], primary: [entry], backup: [entry] }]
+     entry: { text: "9/28-10/4 Atwell", start, end, kind: "surgeon"|"open"|"external", id, name }
+   One row per Mon-Sun week that intersects [rangeStart, rangeEnd] (so the
+   partial first/last weeks of a month are included). Every row lists all
+   seven days unless opts.clipToRange is true (then only the in-range days).
+   Consecutive days held by the SAME surgeon collapse into one entry
+   ("10/9-10/11 Acton"); an external cover collapses the same way
+   ("9/28-10/4 Atwell"); OPEN days never collapse - each open day stays
+   visible as "M/D OPEN" (the ER-panel author's red entries). A day with no row is OPEN.
+   Primary: roster id, else externalCover, else OPEN. Backup: roster id or OPEN.
+   Pure: no DOM, no state. Prompt 9's export reuses it. */
+function buildWeekRows(schedule, roster, rangeStart, rangeEnd, opts) {
+  const o = opts || {};
+  const sched = schedule || {};
+  const nameById = {};
+  (roster || []).forEach(r => { if (r && r.id) nameById[r.id] = r.name || r.id; });
+  const isDay = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  if (!isDay(rangeStart) || !isDay(rangeEnd) || rangeEnd < rangeStart) return [];
+  const holderOf = (d, role) => {
+    const a = sched[d];
+    if (!a) return { kind: "open", id: null, name: "OPEN" };
+    if (role === "primary") {
+      if (a.primary) return { kind: "surgeon", id: a.primary, name: nameById[a.primary] || a.primary };
+      if (a.externalCover) return { kind: "external", id: null, name: String(a.externalCover) };
+      return { kind: "open", id: null, name: "OPEN" };
+    }
+    if (a.backup) return { kind: "surgeon", id: a.backup, name: nameById[a.backup] || a.backup };
+    return { kind: "open", id: null, name: "OPEN" };
+  };
+  const rows = [];
+  const end = parse(rangeEnd);
+  for (let mon = monOf(parse(rangeStart)); mon <= end; mon = addD(mon, 7)) {
+    const monStr = fmt(mon), sunStr = fmt(addD(mon, 6));
+    const days = [];
+    for (let k = 0; k < 7; k++) {
+      const d = fmt(addD(mon, k));
+      if (!o.clipToRange || (d >= rangeStart && d <= rangeEnd)) days.push(d);
+    }
+    const column = (role) => {
+      const out = [];
+      days.forEach(d => {
+        const h = holderOf(d, role);
+        const last = out[out.length - 1];
+        const adjacent = last && fmt(addD(parse(last.end), 1)) === d;
+        if (last && adjacent && last.kind !== "open" && last.kind === h.kind && last.id === h.id && last.name === h.name) { last.end = d; return; }
+        out.push({ kind: h.kind, id: h.id, name: h.name, start: d, end: d });
+      });
+      out.forEach(e => { e.text = (e.start === e.end ? fmtMD(e.start) : fmtMD(e.start) + "-" + fmtMD(e.end)) + " " + e.name; });
+      return out;
+    };
+    rows.push({ monday: monStr, sunday: sunStr, label: fmtMD(monStr) + " - " + fmtMD(sunStr), days: days, primary: column("primary"), backup: column("backup") });
+  }
+  return rows;
+}
+
 /* ═══ ICS Calendar Generation ═══ */
 function icsDate(y,m,d,h,min) {
   return `${y}${String(m).padStart(2,"0")}${String(d).padStart(2,"0")}T${String(h).padStart(2,"0")}${String(min||0).padStart(2,"0")}00`;
@@ -321,6 +378,28 @@ function downloadJSON(obj, filename) {
   return true;
 }
 
+/* === Dark-mode text palette (vis-003) ===
+   config.js SURGEON_COLOR_BY_CODE.tx is tuned for light backgrounds (it sits
+   on the tg pill). Text written straight on the dark page (#1a1a2e / #16213e)
+   needs a lightened variant per code; Fierce's charcoal tx is invisible there.
+   Every value here clears 4.5:1 against #1a1a2e (the harness checks 3:1 on
+   the rendered week rows). Unpinned codes fall back to the border colour,
+   which is always a mid tone. */
+const SURGEON_DARK_TEXT_BY_CODE = {
+  "FAK": "#8fb8e0", // Khan     - slate blue, lightened
+  "MAB": "#e6c86a", // Burchett - mustard
+  "BDA": "#9fd0a4", // Acton    - sage
+  "AFP": "#f0a898", // Philip   - coral
+  "NF":  "#c8d0dc", // Fierce   - charcoal -> light grey-blue
+  "SRK": "#e8a8c8", // Sarkar   - rose
+};
+// surgeonTextColor(colors, code, dark) -> css colour for a name on the page.
+function surgeonTextColor(c, code, dark) {
+  const col = c || {};
+  if (!dark) return col.tx || "#2c3e50";
+  return SURGEON_DARK_TEXT_BY_CODE[code] || col.bd || "#c0c8d8";
+}
+
 /* ═══ Printable month ═══
    TODO(Prompt 9): rebuild for the daily model (two lines per day cell:
    P name / B name; OPEN in red; externalCover label). Placeholder returns a
@@ -339,6 +418,8 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel,
+    buildWeekRows,
+    SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,
     icsDate, buildICSEvents, generateICS,
   };
 }

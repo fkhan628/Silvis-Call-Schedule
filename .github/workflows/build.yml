@@ -32,6 +32,7 @@ on:
       - "test/east-feed.test.js"
       - "test/data-layer.test.js"
       - "test/importer.test.js"
+      - "test/week-rows.test.js"
       - "importer.js"
       - "test/generator-regression.js"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
@@ -85,6 +86,9 @@ jobs:
 
       - name: Seed importer tests
         run: node test/importer.test.js
+
+      - name: Week-rows builder tests
+        run: node test/week-rows.test.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js

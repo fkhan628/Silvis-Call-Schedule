@@ -34,6 +34,43 @@
       select, input[type="date"], input[type="text"], input[type="password"], input[type="email"] { font-size: 16px !important; min-height: 38px; }
       button { min-height: 36px; }
     }
+    /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
+       that inline styles cannot (grid + the phone breakpoint); colors stay
+       inline so dark mode's selectors keep working. */
+    .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+    .cal-hdr { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; padding: 4px 0; }
+    .cal-cell { min-height: 84px; border: 1px solid #e0e4ea; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
+    .cal-cell:focus-visible { outline: 2px solid #1a6fa8; outline-offset: 1px; }
+    .cal-line { display: flex; align-items: center; gap: 3px; margin-top: 2px; min-width: 0; }
+    .cal-pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; padding: 0 5px; font-weight: 600; border: 1px solid transparent; }
+    .cal-code { display: none; }
+    .cal-role { font-size: 9px; font-weight: 800; color: #8a94a0; width: 8px; flex-shrink: 0; }
+    .cal-lock { flex-shrink: 0; }
+    .cal-skel { display: inline-block; width: 58%; height: 9px; border-radius: 4px; background: #e4e8ee; opacity: 0.9; }
+    .cal-mobile-note { display: none; }
+    .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
+    .cal-dots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+    .week-rows td, .week-rows th { vertical-align: top; }
+    /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
+       role letter, holiday name, weekend label and NOTE tag give way (line
+       order = role, the cell title still spells everything out), the pill
+       shows the 3-letter code and never shrinks below its text (vis-001; the
+       harness asserts no pill is clipped), the padlock shrinks to 7px. */
+    @media (max-width: 600px) {
+      .cal-grid { gap: 2px; }
+      .cal-cell { min-height: 66px; padding: 3px 2px 2px; font-size: 10px; border-radius: 4px; }
+      .cal-line { gap: 1px; }
+      .cal-pill { padding: 0 1px; flex-shrink: 0; max-width: none; }
+      .cal-pill.cal-open { padding: 0; letter-spacing: 0 !important; font-size: 9.5px; }
+      .cal-role { display: none; }
+      .cal-lock { width: 6px; height: 6px; }
+      .cal-name { display: none; }
+      .cal-code { display: inline; }
+      .cal-hol, .cal-wk-label, .cal-note { display: none; }
+      .cal-mobile-note { display: inline; }
+      .cal-badges { top: 2px; right: 2px; }
+      .cal-legend { font-size: 10px !important; }
+    }
   </style>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -202,7 +239,27 @@ function CallSchedule() {
   // Calendar view defaults to the current month.
   const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
   const [calYear, setCalYear] = useState(() => new Date().getFullYear());
-  const [calSurgeonFilter, setCalSurgeonFilter] = useState(""); // "" = all, or surgeon id
+  // The year field's own text (vis-002): a controlled number input that only
+  // accepts in-range values swallows every keystroke ("2", "20", "202" are all
+  // out of range), so the text is local and commits to calYear once it is a
+  // 4-digit year in range; blur / Enter snap it back to calYear.
+  const [calYearText, setCalYearText] = useState(() => String(new Date().getFullYear()));
+  useEffect(() => { setCalYearText(String(calYear)); }, [calYear]);
+  const [calSurgeonFilters, setCalSurgeonFilters] = useState([]); // roster ids; [] = everyone (chips dim the rest)
+  const [calOnlyOpen, setCalOnlyOpen] = useState(false);          // dim every day without an OPEN slot
+  const [editorDay, setEditorDay] = useState(null);               // "YYYY-MM-DD" while the day editor is open
+  // --- East feed inputs (read-only caches of the Davenport project; Setup's
+  // East panel refreshes them in Slice E). A failed read keeps the previous
+  // rows and is recorded in eastLoadState so the UI says "unknown", never
+  // "clear" (guide section 7).
+  const [eastFeedRows, setEastFeedRows] = useState([]);           // east_feed: published Davenport weeks
+  const [eastForecastRows, setEastForecastRows] = useState([]);   // east_forecast: isForecast rows
+  const [eastOverrideRows, setEastOverrideRows] = useState([]);   // east_overrides: per day/person busy true/false
+  const [eastLoadState, setEastLoadState] = useState({ feed: "pending", forecast: "pending", overrides: "pending" });
+  // Davenport ids for our roster CODES (FAK is s6 there). Resolved from data,
+  // never a literal id: the forecast rows record the id they were built for;
+  // failing that the Davenport roster is read once, read-only, via east-feed.js.
+  const [eastIdByCode, setEastIdByCode] = useState(null);         // { CODE: davenportId, _source } | null
 
   const [auditEntries, setAuditEntries] = useState([]); // Activity log rows (scheduler/admin viewer)
   const [auditLoading, setAuditLoading] = useState(false);
@@ -763,6 +820,29 @@ function CallSchedule() {
       return false;
     }
   };
+  // The three East tables, each in its own try: one failure cannot blank the
+  // others, and a failed table keeps its previous rows (marked "failed").
+  const loadEastTables = async (quiet) => {
+    const one = async (table, order, set, key) => {
+      try {
+        const rows = await db.query(table, { order });
+        set(Array.isArray(rows) ? rows : []);
+        setEastLoadState(s => ({ ...s, [key]: "ok" }));
+        return true;
+      } catch (e) {
+        console.warn(`${table} load failed`, e);
+        setEastLoadState(s => ({ ...s, [key]: "failed" }));
+        return false;
+      }
+    };
+    const r = await Promise.all([
+      one("east_feed", "week_monday.asc", setEastFeedRows, "feed"),
+      one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"),
+      one("east_overrides", "day.asc", setEastOverrideRows, "overrides"),
+    ]);
+    if (!quiet && r.some(x => !x)) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
+    return r.every(Boolean);
+  };
 
   // Days in [start, end] where the person is published (primary or backup),
   // plus the day BEFORE the range when they are primary (the 07:00 handoff
@@ -1110,6 +1190,7 @@ function CallSchedule() {
       }
       await loadTimeOff();
       await loadAvailability();
+      await loadEastTables();
       setLoaded(true);
       loadedAtRef.current = Date.now();
     })();
@@ -1174,7 +1255,7 @@ function CallSchedule() {
     const refreshAll = async () => {
       await Promise.allSettled([
         refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(),
-        loadTimeOff(true), loadAvailability(true),
+        loadTimeOff(true), loadAvailability(true), loadEastTables(true),
       ]);
     };
 
@@ -1333,9 +1414,16 @@ function CallSchedule() {
   // --- Flush pending save when app is backgrounded or closing ---
   // The auto-save above has an 800ms debounce; an edit made right before
   // locking the phone would be lost. Fire any pending save immediately with
-  // fetch keepalive. The days leg is a BLIND upsert (CAS can't finish
-  // mid-unload); acceptable for this rare path. Uses a ref bridge so the
-  // []-deps effect sees the current render's closure (conventions item 1).
+  // fetch keepalive. The days leg KEEPS THE CAS CONTRACT (finding wire-1): a
+  // day whose version we know goes out as PATCH ?day=eq.X&version=eq.N with
+  // version N+1 (a moved version matches zero rows instead of overwriting a
+  // newer device's row and regressing its version); a day we have never seen
+  // in the table goes out as a plain POST at version 1 (an existing row 409s,
+  // it is never merged over). Responses are not awaited - whatever did not
+  // land re-syncs through syncScheduleDays on the next foreground (the
+  // pending payload stays armed on a rejected fetch). Never an upsert here.
+  // Uses a ref bridge so the []-deps effect sees the current render's
+  // closure (conventions item 1).
   const flushRef = useRef(() => {});
   flushRef.current = (source) => {
     if (isPublicMode) return;
@@ -1353,6 +1441,8 @@ function CallSchedule() {
       const ts = new Date().toISOString();
       const by = userProfile?.person_id || null;
       const hdrs = { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}`, "Prefer": "resolution=merge-duplicates,return=minimal" };
+      // schedule_days leg: per-day CAS writes, no upsert (see the comment above).
+      const dayHdrs = { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}`, "Prefer": "return=minimal" };
       try {
         const cur = payload.schedule || {};
         const base = lastSyncRef.current || {};
@@ -1360,17 +1450,22 @@ function CallSchedule() {
         if (chk.wipe && !intentionalScheduleWipeRef.current) {
           console.warn(`Keepalive flush (${source}): wipe-shaped diff skipped.`);
         } else {
-          const rows = [];
+          let sent = 0;
           for (const day of Object.keys(Object.assign({}, base, cur))) {
             if (sameAssignment(day, base[day], cur[day])) continue;
             const ver = dayVersionsRef.current[day];
-            rows.push({ ...assignmentToDayRow(day, cur[day] || emptyDayAssignment()), version: (typeof ver === "number" ? ver : 0) + 1, updated_by: by, updated_at: ts });
+            const row = assignmentToDayRow(day, cur[day] || emptyDayAssignment());
+            const rearm = (e) => { console.warn(`Keepalive flush (${source}): schedule_days ${day} not sent -`, e); pendingSaveRef.current = payload; };
+            if (typeof ver === "number") {
+              fetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${day}&version=eq.${ver}`, { method: "PATCH", keepalive: true, headers: dayHdrs, body: JSON.stringify({ ...row, version: ver + 1, updated_by: by, updated_at: ts }) }).catch(rearm);
+            } else {
+              fetch(`${SUPABASE_URL}/rest/v1/schedule_days`, { method: "POST", keepalive: true, headers: dayHdrs, body: JSON.stringify({ ...row, version: 1, updated_by: by, updated_at: ts }) }).catch(rearm);
+            }
+            sent++;
           }
-          if (rows.length) {
-            fetch(`${SUPABASE_URL}/rest/v1/schedule_days?on_conflict=day`, { method: "POST", keepalive: true, headers: hdrs, body: JSON.stringify(rows) }).catch(() => {});
-          }
+          if (sent) console.warn(`Keepalive flush (${source}): ${sent} schedule_days CAS write(s) sent; they re-sync on the next foreground if any did not land.`);
         }
-      } catch (e) { console.warn("Unload flush (schedule_days) failed:", e); }
+      } catch (e) { console.warn("Unload flush (schedule_days) failed:", e); pendingSaveRef.current = payload; }
       if (!canWriteBlob) return;
       if (!blobLoadedRef.current) { console.warn(`Keepalive flush (${source}): shared setup never loaded - blob leg skipped.`); return; }
       fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?on_conflict=id`, {
@@ -1410,48 +1505,135 @@ function CallSchedule() {
     snapshots.captureIfStale("periodic_session", 6);
   }, [loaded, isScheduler]);
 
-  // --- Manual schedule edit (Slice A stub of the day editor) ---
-  // TODO(Slice D): replaced by the eligibility-aware day editor (eligible
-  // names first, ineligible greyed with the first hard reason, lock toggles,
-  // note, override-with-warning). This minimal path exists so the data layer
-  // is exercised end to end. It still consults eligibility() - the single
-  // chokepoint - and asks before overriding a hard block, unless rules.js is
-  // the pre-Prompt-3 placeholder (ctx._placeholder).
-  const setDayRole = (day, role, id) => {
-    if (!isScheduler) return;
-    const cur = schedule[day] || emptyDayAssignment();
-    const value = id || null;
-    if (value && ((role === "primary" && cur.backup === value) || (role === "backup" && cur.primary === value))) {
-      showToast("Primary and backup must be different people.", "error");
-      return;
-    }
-    if ((role === "primary" && cur.primaryLocked) || (role === "backup" && cur.backupLocked)) {
-      if (!confirm(`${fmtMD(day)} ${role} is LOCKED. Change it anyway?`)) return;
-    }
-    if (value) {
+  // ====================================================================
+  // ONE RULES CONTEXT for the whole UI (Prompt 6 Slice B/D).
+  // Built from the blob (roster / surgeonRules / groupRules / holidays), the
+  // time_off and availability rows, the three East caches and the current
+  // schedule; memoised on exactly those inputs and rebuilt when any changes.
+  // eligibility(rulesCtx, ...) is the single chokepoint (rules.js) - the day
+  // editor, badges and (Slice E) the generator all read this one ctx or a
+  // draft built from the same ctxInputs. No surgeon-specific branch: which
+  // East feature applies to whom is read from surgeonRules[id].eastFeed.
+  // ====================================================================
+  // Resolve Davenport ids by CODE once the East caches are in (never a literal id).
+  useEffect(() => {
+    if (eastIdByCode && eastIdByCode._source !== "failed") return;
+    const needCodes = surgeons.filter(s => {
+      const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
+      return ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code;
+    }).map(s => String(s.code).toUpperCase());
+    if (!needCodes.length) return;
+    // 1) the forecast rows carry the Davenport id they were built for (code FAK by construction)
+    const fc = eastForecastRows.find(r => r && r.data && r.data.fakId);
+    if (fc && needCodes.length === 1 && needCodes[0] === "FAK") { setEastIdByCode({ FAK: fc.data.fakId, _source: "forecast" }); return; }
+    if (!eastFeedRows.length || (eastIdByCode && eastIdByCode._source === "failed")) return;
+    // 2) the Davenport roster, read-only, through east-feed.js (GET only)
+    let cancelled = false;
+    (async () => {
       try {
-        const ctx = buildContext({ roster: surgeons, surgeonRules, groupRules, holidays, timeOff: vacations, availability: availabilityRows, schedule, eastBusy: null });
-        if (!ctx || !ctx._placeholder) {
-          const el = eligibility(ctx, day, role, value);
-          if (el && el.ok === false) {
-            const why = (el.hard || []).join("; ") || "rule block";
-            if (!confirm(`${nameOf(value)} is not eligible for ${role} on ${fmtMD(day)}:\n${why}\n\nOverride and assign anyway?`)) return;
-            logAudit("schedule.override", `Override: ${nameOf(value)} ${role} ${fmtMD(day)} despite: ${why}`, { day, role, surgeon_id: value, reasons: el.hard });
-          }
-        }
-      } catch (e) { console.warn("eligibility check failed (assignment proceeds with a warning):", e); showToast("Couldn't run the eligibility check - assignment saved without it.", "error"); }
+        const rows = await eastGetJson("call_schedule_data?id=eq.main&select=data");
+        let blob = rows[0] && rows[0].data;
+        if (typeof blob === "string") blob = JSON.parse(blob);
+        const m = { _source: "davenport" };
+        (blob && Array.isArray(blob.surgeons) ? blob.surgeons : []).forEach(s => { if (s && s.name && s.id) m[String(s.name).toUpperCase()] = s.id; });
+        if (!cancelled) setEastIdByCode(m);
+      } catch (e) {
+        console.warn("Davenport roster read failed - East ids unresolved, East days show as unknown:", e);
+        if (!cancelled) setEastIdByCode({ _source: "failed" });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [surgeons, surgeonRules, eastFeedRows, eastForecastRows, eastIdByCode]);
+
+  const ctxInputs = useMemo(() => {
+    const weeks = eastFeedRows.map(r => ({ weekMonday: r.week_monday, data: r.data || {} }));
+    const forecast = forecastFromFeedRows(eastForecastRows);
+    const eastBusyDays = {}, eastForecast = {}, eastDerived = [], eastMeta = {};
+    let unresolved = false;
+    surgeons.forEach(s => {
+      const ef = (surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed) || null;
+      if (!ef || !ef.enabled) return;
+      const meta = { code: s.code, busyDays: false, derivedWeeks: false, forecast: false, eastId: null };
+      if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {
+        meta.busyDays = true;
+        meta.eastId = (eastIdByCode && eastIdByCode[String(s.code || "").toUpperCase()]) || null;
+        let busy = new Set();
+        if (meta.eastId) busy = deriveKhanBusyDays(weeks, meta.eastId, { eastBackupCountsAsBusy: ef.eastBackupCountsAsBusy !== false }).busy;
+        else if (weeks.length) unresolved = true;
+        eastBusyDays[s.id] = applyOverrides(busy, eastOverrideRows, s.id);
+        if (ef.forecast && Object.keys(forecast).length) { eastForecast[s.id] = forecast; meta.forecast = true; }
+      }
+      if (ef.deriveFrom || ef.statedWeeks) {
+        meta.derivedWeeks = true;
+        deriveFierceWeeks(weeks, { statedWeeks: ef.statedWeeks || null }).forEach(w => {
+          eastDerived.push({ surgeonId: s.id, weekMonday: w.weekMonday, silvisRole: w.silvisRole, source: w.source });
+        });
+      }
+      eastMeta[s.id] = meta;
+    });
+    // Coverage is claimed only when every busy-days surgeon resolved: an
+    // unresolved id must read as "unknown" (soft penalty), never as "clear".
+    const coverage = unresolved ? null : coverageOf(weeks);
+    return {
+      roster: surgeons, surgeonRules: surgeonRules || {}, groupRules: groupRules || {}, holidays: holidays || {},
+      timeOffRows, availabilityRows, schedule,
+      eastBusyDays, eastForecast, eastDerived, eastFeedCoverage: coverage, eastMeta,
+    };
+  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode]);
+  const rulesCtxState = useMemo(() => safeBuildContext(ctxInputs), [ctxInputs]);
+  const rulesCtx = rulesCtxState.ctx;
+  useEffect(() => {
+    if (rulesCtxState.error) showToast("Couldn't build the rules context - eligibility checks are unavailable (" + rulesCtxState.error.slice(0, 90) + ").", "error");
+    else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) console.warn("rules context warnings:", rulesCtx.warnings);
+  }, [rulesCtxState]);
+
+  // --- Day editor save: the ONLY manual schedule mutation path ---
+  // DayEditor (module scope) validates every pick through eligibility() and
+  // collects explicit overrides; this applies the result: undo point, note
+  // prefixed '[override: ...]', source "manual", audit 'schedule.day_edit'
+  // with before/after rows, a schedule_changed notification for everyone
+  // affected. Persistence is unchanged: the autosave's days leg pushes the
+  // new map through syncScheduleDays (per-day CAS; a conflict toasts
+  // "Changed by someone else - reloaded").
+  const saveDayEdit = (day, next, meta) => {
+    if (!isScheduler || isPublicMode) { showToast("Only the scheduler can change the schedule.", "error"); return false; }
+    const before = schedule[day] || emptyDayAssignment();
+    const after = { ...emptyDayAssignment(), ...next };
+    if (after.primary && after.primary === after.backup) { showToast("Primary and backup must be different people.", "error"); return false; }
+    if (after.primary) after.externalCover = null; // a roster primary replaces an external cover
+    after.externalCover = (after.externalCover || "").trim() || null;
+    const overrides = (meta && meta.overrides) || [];
+    let note = (after.note || "").replace(/^\[override:[^\]]*\]\s*/, "").trim();
+    if (overrides.length) {
+      const tag = "[override: " + overrides.map(o => nameOf(o.id) + " " + o.role + ": " + o.reasons.join(", ")).join("; ") + "]";
+      note = note ? tag + " " + note : tag;
     }
+    after.note = note || null;
+    after.source = "manual";
+    if (sameAssignment(day, before, after)) return true; // nothing changed - nothing to write
     pushUndo(schedule);
-    const nextDay = { ...cur, [role]: value, source: "manual" };
-    if (role === "primary" && value) nextDay.externalCover = null;
-    setSchedule(p => ({ ...p, [day]: nextDay }));
-    logAudit("schedule.edit", `${fmtMD(day)} ${role === "primary" ? "P" : "B"} ${holderLabel(dayHolder(cur, role), nameOf)} -> ${holderLabel(value, nameOf)}`, { day, role, from: cur[role] || null, to: value });
-    const affected = [cur[role], value].filter(Boolean);
-    if (affected.length) {
-      addNotification("schedule_changed", "Schedule changed",
-        `${fmtMD(day)} ${role}: ${holderLabel(dayHolder(cur, role), nameOf)} -> ${holderLabel(value, nameOf)}`,
-        { surgeon_id: value || cur[role], day, role });
+    setSchedule(p => ({ ...p, [day]: after }));
+    const lines = diffScheduleDays({ [day]: before }, { [day]: after }).map(c => formatDayChange(c, nameOf));
+    logAudit("schedule.day_edit", fmtMD(day) + ": " + (lines.join("; ") || "edited"), {
+      day, before: assignmentToDayRow(day, before), after: assignmentToDayRow(day, after), overrides,
+    });
+    if (overrides.length) logAudit("schedule.override", "Override on " + fmtMD(day) + ": " + overrides.map(o => nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", ")).join("; "), { day, overrides });
+    const roleChanged = before.primary !== after.primary || before.backup !== after.backup || (before.externalCover || null) !== (after.externalCover || null);
+    const affected = [...new Set([before.primary, before.backup, after.primary, after.backup].filter(Boolean))];
+    if (roleChanged && affected.length) {
+      addNotification("schedule_changed", "Schedule changed", fmtMD(day) + ": " + lines.filter(l => / [PB] /.test(l)).join("; "), { surgeon_id: after.primary || after.backup || before.primary || before.backup, day, affected });
     }
+    return true;
+  };
+  // "Propose a trade for this day": switch to Time off & Trades with the day
+  // (and the role the viewer holds, else primary) preselected. Slice G wires
+  // the rest of the form.
+  const proposeTradeForDay = (day, role) => {
+    setTradeDay(day);
+    setTradeRole(role === "backup" ? "backup" : "primary");
+    if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);
+    setEditorDay(null);
+    setView("timeoff");
   };
 
   // --- Clear schedule (a range; locked slots stay) ---
@@ -2026,6 +2208,7 @@ function CallSchedule() {
   const todayAssign = schedule[todayStr] || null;
   const buildTonightMsg = () => {
     const a = todayAssign;
+    if (!a && !loaded) return "Silvis call today: loading schedule";
     const p = a ? holderLabel(dayHolder(a, "primary"), nameOf) : "OPEN";
     const b = a ? holderLabel(dayHolder(a, "backup"), nameOf) : "OPEN";
     return `Silvis call today: P ${p} / B ${b}`;
@@ -2072,22 +2255,72 @@ function CallSchedule() {
     return <span style={{...css.badge(s.idx, s.name),fontSize:small?10:11,padding:small?"1px 6px":"2px 9px"}}>{s.name}</span>;
   };
   const OpenTag = () => <span style={{color:"#c04040",fontWeight:800,fontSize:11,letterSpacing:0.5}}>OPEN</span>;
+  // Before the first load the schedule map is empty: a placeholder, never
+  // OPEN, so a viewer cannot read the loading state as a false alarm (vis-008).
+  const LoadingTag = () => <span data-testid="loading-holder" style={{color:dkSubtext,fontStyle:"italic",fontSize:11}}>loading</span>;
   const HolderTag = ({a, role, small}) => {
     const v = dayHolder(a, role);
+    if (!v && !loaded) return <LoadingTag/>;
     if (!v) return <OpenTag/>;
     if (typeof v === "string" && v.indexOf("ext:") === 0) return <span style={{fontSize:small?10:11,fontWeight:700,color:"#7a5a20",background:"#fbf1d8",border:"1px solid #e8d090",borderRadius:5,padding:small?"1px 6px":"2px 9px"}}>{v.slice(4)} (ext)</span>;
     return <Badge id={v} small={small}/>;
   };
 
-  // Month day list for the calendar stub
-  const monthDays = useMemo(() => {
-    const n = new Date(calYear, calMonth + 1, 0).getDate();
+  // --- Calendar month grid (Slice B) ---
+  // Mon..Sun columns so Fri/Sat/Sun sit together as the weekend unit and the
+  // rows line up with the ER-panel author's Mon-Sun week rows. gridDays runs from the Monday
+  // on/before the 1st to the Sunday on/after the last day of the month.
+  const monthStartStr = fmt(new Date(calYear, calMonth, 1));
+  const monthEndStr = fmt(new Date(calYear, calMonth + 1, 0));
+  const gridDays = useMemo(() => {
+    const first = new Date(calYear, calMonth, 1);
+    const last = new Date(calYear, calMonth + 1, 0);
     const out = [];
-    for (let d = 1; d <= n; d++) out.push(fmt(new Date(calYear, calMonth, d)));
+    for (let d = monOf(first); d <= last || out.length % 7 !== 0; d = addD(d, 1)) out.push(fmt(d));
     return out;
   }, [calYear, calMonth]);
   const prevMonth = () => { if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); } else setCalMonth(m => m - 1); };
   const nextMonth = () => { if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); } else setCalMonth(m => m + 1); };
+  const goToday = () => { const n = new Date(); setCalMonth(n.getMonth()); setCalYear(n.getFullYear()); };
+  const toggleCalFilter = (id) => setCalSurgeonFilters(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  const colorOf = (id) => surgeonColors(codeOf(id), sMap[id] ? sMap[id].idx : 0);
+  // Text colour for a surgeon's name written straight on the page (week rows,
+  // vacation dots): tx in light mode, the lightened dark palette in dark mode
+  // (helpers.js surgeonTextColor; vis-003). Pills keep tg/tx in both modes.
+  const textColorOf = (id) => surgeonTextColor(colorOf(id), codeOf(id), dk);
+  // Vacation dots: who is off on each visible day (time_off via the vacations map).
+  const vacByDay = useMemo(() => {
+    const map = {};
+    if (!gridDays.length) return map;
+    const lo = gridDays[0], hi = gridDays[gridDays.length - 1];
+    Object.keys(vacations).forEach(pid => (vacations[pid] || []).forEach(([vs, ve]) => {
+      if (!vs || !ve || ve < lo || vs > hi) return;
+      const stop = ve > hi ? hi : ve;
+      for (let d = parse(vs < lo ? lo : vs); fmt(d) <= stop; d = addD(d, 1)) { const ds = fmt(d); (map[ds] = map[ds] || []).push(pid); }
+    }));
+    return map;
+  }, [vacations, gridDays]);
+  const vacNamesOn = (d) => Object.keys(vacations).filter(pid => onVac(pid, d, vacations)).map(nameOf);
+  // Forecast badge input: the highest East forecast probability on each day
+  // (from ctxInputs.eastForecast - normally one surgeon, generic by data).
+  const forecastByDay = useMemo(() => {
+    const out = {};
+    Object.keys(ctxInputs.eastForecast || {}).forEach(id => {
+      const fc = ctxInputs.eastForecast[id] || {};
+      Object.keys(fc).forEach(d => { if (out[d] === undefined || fc[d] > out[d].p) out[d] = { p: fc[d], id }; });
+    });
+    return out;
+  }, [ctxInputs]);
+  const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
+  const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr), [schedule, surgeons, monthStartStr, monthEndStr]);
+  // Arrow keys in the editor move a day; the grid follows into the new month.
+  const editorNav = (delta) => {
+    if (!editorDay) return;
+    const nd = fmt(addD(parse(editorDay), delta));
+    setEditorDay(nd);
+    const m = parse(nd).getMonth(), y = parse(nd).getFullYear();
+    if (m !== calMonth || y !== calYear) { setCalMonth(m); setCalYear(y); }
+  };
   const myDays = useMemo(() => {
     if (!mySurgeon) return [];
     return Object.keys(schedule).sort().filter(d => schedule[d] && (schedule[d].primary === mySurgeon || schedule[d].backup === mySurgeon))
@@ -2362,7 +2595,7 @@ function CallSchedule() {
             <span style={{color:"#fff",fontSize:15,fontWeight:800,letterSpacing:-0.5,fontFamily:font}}>SSC</span>
           </div>
           <div>
-            <h1 style={css.h1}>Silvis Call Schedule</h1>
+            <h1 style={{...css.h1,color:dkText}}>Silvis Call Schedule</h1>
             <p style={css.sub}>
               {isPublicMode ? (
                 <>
@@ -2553,69 +2786,162 @@ function CallSchedule() {
           </Collapsible>
         </>}
 
-        {/* ================ CALENDAR (Slice A stub: month nav + day list) ================ */}
-        {view==="calendar" && <>
-          {/* TODO(Slice B): the month grid (two-line cells, colors, OPEN in red,
-              externalCover, lock icon, E badge, weekend bracket, week rows list). */}
+        {/* ================ CALENDAR (Slice B grid + Slice C week rows + Slice D editor) ================ */}
+        {view==="calendar" && (() => {
+          const SlotLine = ({ role, holder, locked }) => {
+            const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
+            let body;
+            if (!holder && !loaded) body = <span className="cal-skel" data-testid="loading-slot" style={{background:dk?"#243250":"#e4e8ee"}}/>;
+            else if (!holder) body = <span className="cal-pill cal-open" style={{color:"#c04040",fontWeight:800,letterSpacing:0.4}}>OPEN</span>;
+            else if (isExt) { const ext = holder.slice(4); body = <span className="cal-pill cal-ext" title={ext + " (external cover, outside the roster)"} style={{color:dk?"#a0a8b0":"#6a7a88",fontStyle:"italic",background:dk?"#1e2a44":"#eef1f4",borderColor:dk?"#2a3a5e":"#d8dee6"}}><span className="cal-name">{ext}</span><span className="cal-code">{ext.slice(0, 3).toUpperCase()}</span></span>; }
+            else { const c = colorOf(holder); body = <span className="cal-pill" title={nameOf(holder)} style={{background:c.tg,color:c.tx,borderColor:c.bd}}><span className="cal-name">{nameOf(holder)}</span><span className="cal-code">{codeOf(holder)}</span></span>; }
+            return <div className="cal-line"><span className="cal-role">{role}</span>{body}{locked ? <Padlock className="cal-lock" title={(role === "P" ? "Primary" : "Backup") + " locked"}/> : null}</div>;
+          };
+          const badge = (solid, color) => ({ display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:3,fontSize:9,fontWeight:800,lineHeight:1,
+            background: solid ? color : "transparent", color: solid ? "#fff" : color, border: "1px solid " + color });
+          // Week-row text sits directly on the page background, so dark mode
+          // uses the lightened per-code text palette (vis-003), not the pill's tx.
+          const entryStyle = (e) => e.kind === "open" ? { color:"#c04040", fontWeight:800 } : e.kind === "external" ? { color: dk ? "#a0a8b0" : "#6a7a88", fontStyle:"italic" } : { color: textColorOf(e.id), fontWeight:600 };
+          const chipStyle = (on, c) => ({ background: on ? c.tg : "transparent", color: on ? c.tx : (dk ? "#8a8aaa" : "#6a7a88"), border: "1px solid " + (on ? c.bd : (dk ? "#2a3a5e" : "#c8d0d8")), borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono, letterSpacing: 0.3 });
+          return <>
           <div style={css.card}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:10}}>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <button onClick={prevMonth} aria-label="Previous month" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&lsaquo;</button>
-                <span data-testid="cal-month" style={{fontSize:15,fontWeight:700,color:dkText,minWidth:170,textAlign:"center"}}>{MO[calMonth]} {calYear}</span>
-                <button onClick={nextMonth} aria-label="Next month" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&rsaquo;</button>
-                <button onClick={()=>{ const n = new Date(); setCalMonth(n.getMonth()); setCalYear(n.getFullYear()); }} style={{...css.btn(false),padding:"5px 10px",fontSize:11}}>Today</button>
-              </div>
               <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                <select value={calSurgeonFilter} onChange={e=>setCalSurgeonFilter(e.target.value)} style={{...inp,fontSize:12}}>
-                  <option value="">All surgeons</option>
-                  {surgeons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                <button onClick={prevMonth} aria-label="Previous month" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&lsaquo;</button>
+                <span data-testid="cal-month" style={{fontSize:15,fontWeight:700,color:dkText,minWidth:150,textAlign:"center"}}>{MO[calMonth]} {calYear}</span>
+                <button onClick={nextMonth} aria-label="Next month" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&rsaquo;</button>
+                <button onClick={goToday} style={{...css.btn(false),padding:"5px 10px",fontSize:11}}>Today</button>
+                <select data-testid="cal-month-select" aria-label="Month" value={calMonth} onChange={e=>setCalMonth(Number(e.target.value))} style={{...inp,fontSize:12,padding:"4px 6px"}}>
+                  {MO.map((m,i) => <option key={m} value={i}>{m}</option>)}
                 </select>
-                {!isPublicMode && <button onClick={shareTonightMsg} style={{...css.btn(false),padding:"5px 10px",fontSize:11}}>{copied ? "Copied" : "Share today"}</button>}
+                <input data-testid="cal-year-input" aria-label="Year" type="number" inputMode="numeric" min="2020" max="2100" value={calYearText}
+                  onChange={e=>{ const t = e.target.value; setCalYearText(t); const y = Number(t); if (/^\d{4}$/.test(t) && y >= 2020 && y <= 2100) setCalYear(y); }}
+                  onBlur={()=>setCalYearText(String(calYear))}
+                  onKeyDown={e=>{ if (e.key === "Enter") { e.preventDefault(); setCalYearText(String(calYear)); e.currentTarget.blur(); } }}
+                  style={{...inp,width:78,fontSize:12,padding:"4px 6px"}}/>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                {activeSurgeons.map(s => { const on = calSurgeonFilters.includes(s.id); return (
+                  <button key={s.id} data-filter={s.code} aria-pressed={on} title={"Show " + s.name + (on ? " (on)" : "")} onClick={()=>toggleCalFilter(s.id)} style={chipStyle(on, colorOf(s.id))}>{s.code}</button>
+                ); })}
+                {calSurgeonFilters.length > 0 && <button onClick={()=>setCalSurgeonFilters([])} style={{...css.btn(false),padding:"3px 8px",fontSize:11}}>All</button>}
+                <label style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:dkSubtext,cursor:"pointer",marginLeft:4}}>
+                  <input type="checkbox" data-testid="cal-only-open" checked={calOnlyOpen} onChange={e=>setCalOnlyOpen(e.target.checked)}/> only OPEN
+                </label>
               </div>
             </div>
-            {todayAssign && (
-              <div style={{fontSize:12.5,color:dkText,background:dk?"#16213e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                <strong>Today {fmtMD(todayStr)}:</strong> P <HolderTag a={todayAssign} role="primary" small/> B <HolderTag a={todayAssign} role="backup" small/>
-              </div>
-            )}
+
+            {/* On call today */}
+            <div data-testid="today-banner" style={{fontSize:12.5,color:dkText,background:dk?"#16213e":"#f8f9fb",border:"1px solid " + dkCardBorder,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <strong>On call today {fmtMD(todayStr)}:</strong>
+              <span>P</span> <HolderTag a={todayAssign} role="primary" small/>
+              <span>B</span> <HolderTag a={todayAssign} role="backup" small/>
+              <span style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>
+              {!isPublicMode && <button onClick={shareTonightMsg} style={{...css.btn(false),padding:"4px 10px",fontSize:11,marginLeft:"auto"}}>{copied ? "Copied" : "Share today"}</button>}
+            </div>
             {!loaded && <p style={muted}>Loading schedule</p>}
-            {loaded && Object.keys(schedule).length === 0 && <p style={{...muted,fontStyle:"italic"}}>No schedule days in the database yet.</p>}
-            <div style={{display:"flex",flexDirection:"column"}}>
-              {monthDays.map(d => {
+            {loaded && Object.keys(schedule).length === 0 && <p style={{...muted,fontStyle:"italic",marginBottom:8}}>No schedule days in the database yet - every day shows OPEN.</p>}
+            {!rulesImported && loaded && <p style={{...muted,marginBottom:8}}>Rules not imported yet: East and holiday badges appear once Setup imports the seed (Slice E).</p>}
+
+            {/* The grid */}
+            <div className="cal-grid" data-testid="cal-grid">
+              {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((h, i) => (
+                <div key={h} className="cal-hdr" style={{color: i >= 4 ? "#3d6a8c" : dkSubtext, background: i >= 4 ? (dk ? "#141c30" : "#eef3f8") : "transparent", borderRadius: i === 4 ? "6px 0 0 6px" : i === 6 ? "0 6px 6px 0" : 0}}>{h}{i === 4 ? <span className="cal-wk-label" style={{fontWeight:500,letterSpacing:0,textTransform:"none",marginLeft:4,fontSize:9}}>weekend unit</span> : null}</div>
+              ))}
+              {gridDays.map(d => {
                 const a = schedule[d] || null;
-                const dow = parse(d).getDay();
-                const involved = !calSurgeonFilter || (a && (a.primary === calSurgeonFilter || a.backup === calSurgeonFilter));
-                const rowBg = d === todayStr ? (dk ? "#1a3a5e" : "#eaf3fb") : isWeekendDay(d) ? (dk ? "#141c30" : "#f6f8fa") : "transparent";
+                const dt = parse(d); const dow = dt.getDay();
+                const inMonth = d >= monthStartStr && d <= monthEndStr;
+                const isWk = dow === 5 || dow === 6 || dow === 0;
+                const hol = rulesCtx ? isHolidayDay(rulesCtx, d) : null;
+                const derived = rulesCtx ? rulesCtx.derivedByDay[d] : null;
+                const fc = forecastByDay[d];
+                const pH = dayHolder(a, "primary"); const bH = a ? a.backup : null;
+                const openP = !pH, openB = !bH;
+                const inFilter = calSurgeonFilters.length === 0 || (a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup)));
+                const dim = !inFilter || (calOnlyOpen && !(openP || openB));
+                const isToday = d === todayStr;
+                const bg = hol ? (dk ? "#3a3418" : "#fdf6dc") : isWk ? (dk ? "#141c30" : "#f3f6f9") : (dk ? "#16213e" : "#ffffff");
+                const bracket = isWk ? { borderTop: "2px solid #a9c4da", borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
+                const derivedWho = derived ? Object.keys(derived).map(r => nameOf(derived[r]) + " Silvis " + r).join(", ") : "";
+                const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + holderLabel(pH, nameOf), "B " + holderLabel(bH, nameOf)];
+                if (hol) titleBits.push(hol.name + " (holiday unit)"); if (derivedWho) titleBits.push("East-derived: " + derivedWho); if (a && a.note) titleBits.push("note: " + a.note);
                 return (
-                  <div key={d} data-day={d} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 8px",borderBottom:`1px solid ${dkCardBorder}`,background:rowBg,opacity:involved?1:0.35,borderLeft: dow === 5 ? "3px solid #b8cfe0" : "3px solid transparent"}}>
-                    <div style={{width:70,flexShrink:0,fontFamily:mono,fontSize:12,color:dkText}}>{DAY_HDR[dow]} {fmtMD(d)}</div>
-                    <div style={{display:"flex",alignItems:"center",gap:6,flex:"1 1 auto",flexWrap:"wrap"}}>
-                      <span style={{fontSize:10,fontWeight:700,color:"#7a8a98"}}>P</span>
-                      {isScheduler && !isPublicMode ? (
-                        <select value={(a && a.primary) || ""} onChange={e=>setDayRole(d, "primary", e.target.value)} style={{...inp,padding:"2px 6px",fontSize:12,minWidth:110,color:(a&&a.primary)?undefined:"#c04040",fontWeight:(a&&a.primary)?500:800}}>
-                          <option value="">{a && a.externalCover ? a.externalCover + " (ext)" : "OPEN"}</option>
-                          {activeSurgeons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </select>
-                      ) : <HolderTag a={a} role="primary" small/>}
-                      {a && a.primaryLocked && <span title="locked" style={{fontSize:10,color:"#7a8a98"}}>[L]</span>}
-                      <span style={{fontSize:10,fontWeight:700,color:"#7a8a98",marginLeft:6}}>B</span>
-                      {isScheduler && !isPublicMode ? (
-                        <select value={(a && a.backup) || ""} onChange={e=>setDayRole(d, "backup", e.target.value)} style={{...inp,padding:"2px 6px",fontSize:12,minWidth:110,color:(a&&a.backup)?undefined:"#c04040",fontWeight:(a&&a.backup)?500:800}}>
-                          <option value="">OPEN</option>
-                          {activeSurgeons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </select>
-                      ) : <HolderTag a={a} role="backup" small/>}
-                      {a && a.backupLocked && <span title="locked" style={{fontSize:10,color:"#7a8a98"}}>[L]</span>}
-                      {a && a.source === "east-derived" && <span title="East-derived" style={{fontSize:10,fontWeight:800,color:"#1a6fa8"}}>E</span>}
-                      {a && a.note && <span style={{...muted,fontStyle:"italic"}}>{a.note}</span>}
+                  <div key={d} className="cal-cell" role="button" tabIndex={0} data-day={d} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
+                    onClick={()=>setEditorDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditorDay(d); } }}
+                    title={titleBits.join(" | ")}
+                    style={{background:bg, border: isToday ? "2px solid #1a6fa8" : "1px solid " + dkCardBorder, ...bracket, opacity: dim ? 0.28 : inMonth ? 1 : 0.5, color:dkText, boxShadow: isToday ? "0 0 0 2px rgba(26,111,168,0.18)" : "none"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:4,minWidth:0,paddingRight:30}}>
+                      <span style={{fontFamily:mono,fontSize:11,fontWeight:isToday?800:600,color:isToday?"#1a6fa8":inMonth?dkText:"#9aa4ae"}}>{dt.getDate()}</span>
+                      {hol && <span className="cal-hol" title={hol.name + " - holiday unit (" + hol.tier + ")"} style={{fontSize:9,fontWeight:700,color:"#8a6a10",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{hol.name}</span>}
                     </div>
+                    <div className="cal-badges">
+                      {derived && <span data-badge="E" title={"East-derived week: " + derivedWho} style={badge(true, "#1a6fa8")}>E</span>}
+                      {fc && fc.p >= 0.2 && <span data-badge={fc.p >= forecastThreshold ? "F" : "f"} title={"East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)"} style={badge(fc.p >= forecastThreshold, "#8a5a10")}>F</span>}
+                    </div>
+                    <SlotLine role="P" holder={pH} locked={!!(a && a.primaryLocked)}/>
+                    <SlotLine role="B" holder={bH} locked={!!(a && a.backupLocked)}/>
+                    {(vacByDay[d] || []).length > 0 && (
+                      <div className="cal-dots" title={"On vacation: " + vacByDay[d].map(nameOf).join(", ")}>
+                        {vacByDay[d].map(pid => <span key={pid} data-vac={pid} style={{width:6,height:6,borderRadius:3,background:textColorOf(pid),display:"inline-block"}}/>)}
+                      </div>
+                    )}
+                    {a && a.note && <span className="cal-note" title={a.note} style={{position:"absolute",bottom:2,right:4,fontSize:8,color:"#9aa4ae",fontWeight:700,letterSpacing:0.5}}>NOTE</span>}
                   </div>
                 );
               })}
             </div>
-            {isScheduler && !isPublicMode && <p style={{...muted,marginTop:8}}>Edits save automatically (per-day compare-and-swap). The full day editor with eligibility comes in Slice D.</p>}
+
+            {/* Legend */}
+            <div className="cal-legend" style={{display:"flex",flexWrap:"wrap",gap:"6px 14px",alignItems:"center",marginTop:10,fontSize:11,color:dkSubtext,lineHeight:1.6}}>
+              {activeSurgeons.map(s => { const c = colorOf(s.id); return (
+                <span key={s.id} style={{display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,borderRadius:3,background:c.tg,border:"1px solid " + c.bd,display:"inline-block"}}/>{s.name} <span style={{fontFamily:mono,fontSize:10}}>{s.code}</span></span>
+              ); })}
+              <span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>
+              <span><span style={{color:"#c04040",fontWeight:800}}>OPEN</span> = nobody assigned</span>
+              <span><span style={{fontStyle:"italic"}}>Atwell</span> = external cover</span>
+              <span style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot</span>
+              <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#1a6fa8")}>E</span> East-derived week</span>
+              <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#8a5a10")}>F</span> East forecast at or above {Math.round(forecastThreshold * 100)}%, <span style={badge(false, "#8a5a10")}>F</span> 20% or more</span>
+              <span>Fri-Sun tinted = weekend unit</span>
+              <span>gold = holiday unit</span>
+              <span>dots = vacations</span>
+              <span>blue outline = today</span>
+              {isScheduler && !isPublicMode && <span>Click a day to edit (eligibility-checked); saves per day with compare-and-swap.</span>}
+            </div>
           </div>
-        </>}
+
+          <Collapsible css={css} ck="cal_weekrows" defaultOpen={true} title="Week rows (ER Call Panels layout)">
+            <p style={sectionNote}>the ER-panel author's layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too.</p>
+            <div style={{overflowX:"auto"}}>
+              <table className="week-rows" data-testid="week-rows" style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead><tr><th style={thS}>MON/SUN DATES</th><th style={thS}>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA</th><th style={thS}>TRAUMA BACKUP</th></tr></thead>
+                <tbody>
+                  {!loaded && <tr><td colSpan={3} style={{...tdS,fontFamily:font,fontStyle:"italic",color:dkSubtext}}>Loading schedule</td></tr>}
+                  {loaded && weekRows.map(r => (
+                    <tr key={r.monday} data-week={r.monday} style={{borderTop:"1px solid " + dkCardBorder}}>
+                      <td style={{...tdS,whiteSpace:"nowrap",fontSize:12}}>{r.label}</td>
+                      <td style={{...tdS,fontFamily:font}}>{r.primary.map(e => <div key={e.start} data-kind={e.kind} style={entryStyle(e)}>{e.text}</div>)}</td>
+                      <td style={{...tdS,fontFamily:font}}>{r.backup.map(e => <div key={e.start} data-kind={e.kind} style={entryStyle(e)}>{e.text}</div>)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Collapsible>
+
+          {editorDay && (
+            <DayEditor key={editorDay} day={editorDay} entry={schedule[editorDay] || null}
+              roster={surgeons} ctxInputs={ctxInputs} ctxError={rulesCtxState.error}
+              canEdit={isScheduler && !isPublicMode} rulesImported={rulesImported} isPublicMode={isPublicMode}
+              nameOf={nameOf} codeOf={codeOf} colorOf={colorOf} mySurgeon={mySurgeon}
+              vacationNames={vacNamesOn(editorDay)}
+              onSave={(next, meta) => { if (saveDayEdit(editorDay, next, meta)) setEditorDay(null); }}
+              onCancel={() => setEditorDay(null)} onNav={editorNav} onTrade={proposeTradeForDay}
+              css={css} dk={dk}/>
+          )}
+          </>;
+        })()}
 
         {/* ================ MY SCHEDULE (Slice G placeholder) ================ */}
         {view==="myschedule" && !isPublicMode && <>
@@ -3249,7 +3575,320 @@ function Collapsible({ title, ck, defaultOpen = false, summary = null, children,
   );
 }
 
+// --- Rules-context helpers shared by the app and the day editor ---
+// buildContext never throws on well-formed data; on anything else the UI
+// must say "eligibility unavailable" rather than render nothing (fail loud).
+function safeBuildContext(inputs) {
+  try { return { ctx: buildContext(inputs), error: null }; }
+  catch (e) { console.warn("buildContext failed - eligibility unavailable:", e); return { ctx: null, error: String(e && e.message || e) }; }
+}
+
+// Human wording for rules.js reason codes. The raw code stays visible in the
+// dropdown label (it matches docs/SILVIS-CALL-RULES.md and the regression
+// test); this adds the plain-English gloss shown beside it.
+const REASON_WORDS = {
+  "external-cover": "primary is covered externally", "inactive": "inactive on the roster",
+  "unavailable-row": "stated unavailable", "no-backup-row": "stated no backup", "backup-only-row": "stated backup only",
+  "east-busy": "on East (Davenport) call", "day-before-vacation": "vacation starts the next morning",
+  "weekend-block-only": "weekends only as a full Fri-Sun block", "day-before-aledo": "Aledo clinic the next day",
+  "whitelist-month": "not on this month's stated list", "outside-available-weeks": "outside the listed weeks",
+  "outside-window": "outside the availability window", "not-recurring-available": "not a recurring available day",
+  "holds-other-role": "already holds the other role that day", "unknown-surgeon": "not on the roster", "bad-role": "unknown role",
+};
+function reasonLabel(code, nameOf) {
+  const s = String(code || ""); const i = s.indexOf(":");
+  const key = i < 0 ? s : s.slice(0, i); const arg = i < 0 ? "" : s.slice(i + 1);
+  const who = (id) => (typeof nameOf === "function" ? nameOf(id) : id);
+  switch (key) {
+    case "slot-locked": return "slot locked to " + who(arg);
+    case "derived-lock": return "East week: Silvis " + arg + " that week";
+    case "derived-lock-held": return "East week slot belongs to " + who(arg);
+    case "hard-never-weekday": return "never on " + arg;
+    case "recurring-unavailable": return "recurring unavailable on " + arg;
+    case "weekday-not-allowed": return arg + " is not one of the allowed weekdays";
+    case "weekday-pattern": return "weekday pattern excludes " + arg;
+    case "holiday-opt-out": return "opted out of " + arg;
+    case "time-off": return "on vacation";
+    case "east-forecast-busy": return "East forecast " + Math.round(Number(arg) * 100) + "% (treated as busy)";
+    case "monthly-cap": return "monthly cap of " + arg + " reached";
+    case "max-consecutive": return "more than " + arg + " consecutive days";
+    case "backup-cap": return "backup cap of " + arg + " per month reached";
+    case "backup-weekend-cap": return "backup weekend cap of " + arg + " reached";
+    case "window-week-max": return "over " + arg + " days in the window week";
+    case "max-major-holidays": return "already holds " + arg + " major holiday(s) in 12 months";
+    default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " (" + arg + ")" : "") : s;
+  }
+}
+// Compact tag for a soft penalty ("avoid: Tue", "preferred", "East 25%").
+function softTag(soft) {
+  const s = String(soft && soft.reason || ""); const i = s.indexOf(":");
+  const key = i < 0 ? s : s.slice(0, i); const arg = i < 0 ? "" : s.slice(i + 1);
+  switch (key) {
+    case "recurring-avoid": return "avoid: " + arg;
+    case "avoid-row": return "avoid";
+    case "prefer-row": case "preferred": return "preferred";
+    case "east-forecast": return "East " + Math.round(Number(arg) * 100) + "%";
+    case "east-unknown": return "East unknown";
+    case "auto-offer-weekday": return "auto-offer";
+    case "over-preferred-cap": return "over preferred cap " + arg;
+    case "over-target": return "over target +" + arg;
+    case "under-target": return "under target";
+    case "window-week-below-min": return "under window min " + arg;
+    case "handoff-partner": return "handoff";
+    case "back-to-back-weekend": return "back-to-back weekend";
+    case "backup-after-primary": return "backup after primary";
+    case "pattern-mismatch": return "style: " + arg;
+    case "aledo-week": return "Aledo week";
+    case "holiday-waiver": return "holiday waiver";
+    default: return s;
+  }
+}
+// East status lines for one day, per surgeon with an East feature (data-driven
+// from ctxInputs.eastMeta): published busy / forecast p / clear / unknown for
+// busy-days surgeons, derived Silvis role for derived-week surgeons.
+function eastStatusLines(ctx, ctxInputs, day, nameOf) {
+  const out = [];
+  const meta = (ctxInputs && ctxInputs.eastMeta) || {};
+  Object.keys(meta).forEach(id => {
+    const m = meta[id]; const P = ctx && ctx.per ? ctx.per[id] : null; const name = nameOf(id);
+    if (m.busyDays) {
+      if (!m.eastId) out.push({ id, text: name + ": East id unresolved - status unknown", tone: "warn" });
+      else if (P && P.eastBusy.has(day)) out.push({ id, text: name + ": East call (published) - Silvis primary blocked", tone: "busy" });
+      else {
+        const p = P && P.eastForecast ? P.eastForecast[day] : undefined;
+        if (typeof p === "number") out.push({ id, text: name + ": East forecast " + Math.round(p * 100) + "% (" + (p >= ctx.forecastThreshold ? "treated as busy" : "below the " + Math.round(ctx.forecastThreshold * 100) + "% threshold") + ")", tone: p >= ctx.forecastThreshold ? "busy" : "ok" });
+        else if (ctx && ctx.eastCoverage && day >= ctx.eastCoverage.from && day <= ctx.eastCoverage.to) out.push({ id, text: name + ": no East call (published)", tone: "ok" });
+        else out.push({ id, text: name + ": East unknown (no published week or forecast for this day)", tone: "warn" });
+      }
+    }
+    if (m.derivedWeeks && P) {
+      const dRole = P.derived[day];
+      if (dRole) out.push({ id, text: name + ": East week -> Silvis " + dRole + " (derived)", tone: "busy" });
+      else if (P.eastDays.has(day)) out.push({ id, text: name + ": on East call this week (not derived - before the derive-from date)", tone: "warn" });
+      else out.push({ id, text: name + ": no East week", tone: "ok" });
+    }
+  });
+  return out;
+}
+
+// Small padlock glyph (inline SVG so no emoji / non-ASCII is needed).
+function Padlock({ title, size, className }) {
+  const s = size || 9;
+  return (
+    <svg role="img" aria-label={title || "locked"} className={className} width={s} height={s} viewBox="0 0 10 10" style={{flexShrink:0,display:"inline-block"}}>
+      <title>{title || "locked"}</title>
+      <rect x="1.5" y="4.5" width="7" height="5" rx="1" fill="#7a8a98"/>
+      <path d="M3 4.7V3a2 2 0 0 1 4 0v1.7" fill="none" stroke="#7a8a98" strokeWidth="1.3"/>
+    </svg>
+  );
+}
+
+// --- Day editor (Slice D) ---
+// Module scope so a parent re-render never remounts it mid-edit (the parent
+// keys it by day, so moving to another day starts a fresh draft). Every
+// dropdown option is evaluated through eligibility() on a DRAFT ctx: the
+// app's ctxInputs with this day's draft swapped in, so the OTHER role's
+// current pick counts ("holds-other-role") and a lock toggled off in the
+// draft stops blocking. Ineligible options stay selectable for the scheduler
+// but only through the Override panel, which lists ALL hard reasons; the
+// overrides ride along to onSave (note prefix + audit). Non-schedulers get
+// the read-only detail. Esc closes; Left/Right arrows move a day when the
+// draft is clean and focus is not in a field.
+function DayEditor(props) {
+  const { day, entry, roster, ctxInputs, ctxError, canEdit, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, css, dk } = props;
+  const opened = React.useMemo(() => ({ ...emptyDayAssignment(), ...(entry || {}) }), [day]); // eslint-disable-line
+  const [draft, setDraft] = React.useState(opened);
+  const [overrides, setOverrides] = React.useState([]);   // [{ id, role, reasons }]
+  const [pending, setPending] = React.useState(null);     // { id, role, reasons } awaiting the Override confirm
+  const [hint, setHint] = React.useState("");
+  const norm = (a) => JSON.stringify(assignmentToDayRow(day, a));
+  const dirty = norm(draft) !== norm(opened);
+
+  const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } } }), [ctxInputs, day, draft]);
+  const ctx = draftState.ctx;
+  const hol = ctx ? isHolidayDay(ctx, day) : null;
+  const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
+  const evalRole = (role) => {
+    const list = roster.map(s => {
+      let r;
+      try { r = ctx ? eligibility(ctx, day, role, s.id) : { ok: true, hard: [], soft: [] }; }
+      catch (e) { console.warn("eligibility threw for", s.id, role, day, e); r = { ok: true, hard: [], soft: [], error: true }; }
+      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: !!r.error };
+    });
+    // eligible first, then ineligible (roster order kept inside each group); inactive only if currently held
+    return list.filter(o => o.active && o.ok).concat(list.filter(o => o.active && !o.ok)).concat(list.filter(o => !o.active && o.id === draft[role]));
+  };
+  const opts = React.useMemo(() => ({ primary: evalRole("primary"), backup: evalRole("backup") }), [ctx, day, draft, roster]); // eslint-disable-line
+
+  const pick = (role, value) => {
+    setHint("");
+    if (!value) { setDraft(d => ({ ...d, [role]: null })); setOverrides(o => o.filter(x => x.role !== role)); return; }
+    const opt = opts[role].find(o => o.id === value);
+    if (opt && !opt.ok) { setPending({ id: value, role, reasons: opt.hard.slice() }); return; }
+    setDraft(d => ({ ...d, [role]: value, ...(role === "primary" ? { externalCover: null } : {}) }));
+    setOverrides(o => o.filter(x => x.role !== role));
+  };
+  const confirmOverride = () => {
+    if (!pending) return;
+    const p = pending;
+    setDraft(d => ({ ...d, [p.role]: p.id, ...(p.role === "primary" ? { externalCover: null } : {}) }));
+    setOverrides(o => o.filter(x => x.role !== p.role).concat([p]));
+    setPending(null);
+  };
+  const clearRole = (role) => {
+    if (draft[role + "Locked"]) { setHint((role === "primary" ? "Primary" : "Backup") + " is locked - unlock it first."); return; }
+    pick(role, "");
+  };
+  const toggleLock = (role) => setDraft(d => ({ ...d, [role + "Locked"]: !d[role + "Locked"] }));
+  const save = () => {
+    if (!dirty) { onCancel(); return; }
+    if (draft.primary && draft.primary === draft.backup) { setHint("Primary and backup must be different people."); return; }
+    onSave({ ...draft }, { overrides });
+  };
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); if (pending) setPending(null); else onCancel(); return; }
+      const tag = (e.target && e.target.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        if (dirty) { setHint("Save or cancel your changes before moving to another day."); return; }
+        onNav(e.key === "ArrowLeft" ? -1 : 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pending, dirty, onCancel, onNav]);
+
+  const dt = parse(day);
+  const title = DAY_HDR[dt.getDay()] + " " + MO[dt.getMonth()] + " " + dt.getDate() + ", " + dt.getFullYear();
+  const panelBg = dk ? "#16213e" : "#ffffff";
+  const text = dk ? "#e0e0f0" : "#2c3e50";
+  const sub = dk ? "#8a8aaa" : "#7a8a98";
+  const border = dk ? "#2a3a5e" : "#e0e4ea";
+  const inp = { ...css.inp, ...(dk ? { background: "#0f3460", border: "1px solid #2a3a5e", color: "#e0e0f0" } : {}) };
+  const label = { fontSize: 10, color: sub, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 3 };
+  const pill = (id) => { const c = colorOf(id); return <span style={{background:c.tg,color:c.tx,border:"1px solid " + c.bd,borderRadius:5,padding:"1px 8px",fontSize:12,fontWeight:700}}>{nameOf(id)}</span>; };
+  const holderView = (role) => {
+    const v = role === "primary" ? (draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null)) : draft.backup;
+    if (!v) return <span style={{color:"#c04040",fontWeight:800}}>OPEN</span>;
+    if (String(v).indexOf("ext:") === 0) return <span style={{fontStyle:"italic",color:sub}}>{String(v).slice(4)} (external cover)</span>;
+    return pill(v);
+  };
+  const myRole = mySurgeon && entry ? (entry.primary === mySurgeon ? "primary" : entry.backup === mySurgeon ? "backup" : null) : null;
+  const optionLabel = (o) => {
+    if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");
+    const tags = o.soft.map(softTag).filter(Boolean);
+    return o.name + (o.lockHolder ? " (locked holder)" : "") + (tags.length ? " (" + tags.join(", ") + ")" : "");
+  };
+  const roleBlock = (role) => {
+    const list = opts[role];
+    const locked = !!draft[role + "Locked"];
+    const cur = list.find(o => o.id === draft[role]) || null;
+    const ineligible = list.filter(o => !o.ok);
+    const ov = overrides.find(x => x.role === role);
+    return (
+      <div data-testid={"editor-" + role + "-block"} style={{border:"1px solid " + border,borderRadius:8,padding:"10px 12px",marginBottom:10,background: dk ? "#1a2540" : "#fafbfc"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
+          <span style={{...label,marginBottom:0,minWidth:60}}>{role === "primary" ? "Primary" : "Backup"}</span>
+          {holderView(role)}
+          {locked && <Padlock title={role + " locked"} size={11}/>}
+          {cur && cur.lockHolder && cur.conflicts.length > 0 && <span title={cur.conflicts.join(", ")} style={{fontSize:10,color:"#8a5a10",fontWeight:700}}>locked holder breaks: {cur.conflicts.map(c => reasonLabel(c, nameOf)).join("; ")}</span>}
+          {ov && <span data-testid={"override-tag-" + role} style={{fontSize:10,color:"#a83232",fontWeight:700}}>override: {ov.reasons.join(", ")}</span>}
+        </div>
+        {canEdit && (
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <select data-testid={"editor-" + role} aria-label={role} value={draft[role] || ""} disabled={locked} onChange={e => pick(role, e.target.value)} style={{...inp,minWidth:230,fontSize:13,opacity:locked?0.6:1}}>
+              <option value="" data-eligible="true">{role === "primary" && draft.externalCover ? draft.externalCover + " (external cover)" : "OPEN"}</option>
+              {list.map(o => (
+                <option key={o.id} value={o.id} data-eligible={o.ok ? "true" : "false"} style={o.ok ? {} : {color:"#a0a8b0"}}>{optionLabel(o)}</option>
+              ))}
+            </select>
+            <label style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:sub,cursor:"pointer"}}>
+              <input type="checkbox" data-testid={"editor-lock-" + role} checked={locked} onChange={() => toggleLock(role)}/> Lock {role}
+            </label>
+            <button type="button" data-testid={"editor-clear-" + role} onClick={() => clearRole(role)} disabled={locked || !draft[role]} title={locked ? "Unlock first" : "Set to OPEN"} style={{...css.btn(false),padding:"4px 10px",fontSize:11,opacity:(locked || !draft[role])?0.5:1}}>Clear</button>
+          </div>
+        )}
+        {canEdit && cur && cur.ok && cur.soft.length > 0 && (
+          <div style={{fontSize:11,color:"#8a5a10",marginTop:5}}>Soft penalties for {cur.name}: {cur.soft.map(softTag).join(", ")}</div>
+        )}
+        {canEdit && ineligible.length > 0 && (
+          <div data-testid={"editor-" + role + "-reasons"} style={{fontSize:11,color:sub,marginTop:6,lineHeight:1.5}}>
+            <span style={{fontWeight:700}}>Not eligible:</span> {ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf)).join("; ")}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div data-testid="day-editor" onClick={onCancel} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
+      <div role="dialog" aria-modal="true" aria-label={"Day editor " + day} onClick={e => e.stopPropagation()} style={{background:panelBg,color:text,borderRadius:12,padding:"16px 18px",maxWidth:600,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+          <button type="button" aria-label="Previous day" onClick={() => { if (dirty) setHint("Save or cancel your changes before moving to another day."); else onNav(-1); }} style={{...css.btn(false),minWidth:34,padding:"4px 8px"}}>&lsaquo;</button>
+          <h3 data-testid="editor-title" style={{margin:0,fontSize:16,color:text,flex:1,textAlign:"center"}}>{title}</h3>
+          <button type="button" aria-label="Next day" onClick={() => { if (dirty) setHint("Save or cancel your changes before moving to another day."); else onNav(1); }} style={{...css.btn(false),minWidth:34,padding:"4px 8px"}}>&rsaquo;</button>
+          <button type="button" aria-label="Close" onClick={onCancel} style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer",padding:"0 4px",marginLeft:4}}>x</button>
+        </div>
+        <div style={{fontSize:12,color:sub,lineHeight:1.6,marginBottom:10}}>
+          <div>{hol ? <><span style={{fontWeight:700,color:"#8a6a10"}}>{hol.name}</span> holiday unit ({hol.tier}): {hol.days.map(fmtMD).join(", ")} - one primary and one backup stick through the unit.</> : "Not in a holiday unit."}</div>
+          {east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map(l => <div key={l.id + l.text} data-testid="east-status" style={{color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : sub}}>East - {l.text}</div>)}
+          <div>Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div>
+          {ctxError && <div style={{color:"#a83232",fontWeight:700}}>Eligibility unavailable: {ctxError}</div>}
+          {!rulesImported && <div>Rules not imported yet - eligibility reflects locks, vacations and availability rows only.</div>}
+          {entry && entry.source && <div>Source: {entry.source}</div>}
+        </div>
+
+        {roleBlock("primary")}
+        {roleBlock("backup")}
+
+        {pending && (
+          <div data-testid="override-confirm" role="alertdialog" style={{border:"1px solid #c05050",background: dk ? "#3a1a1a" : "#fdeaea",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+            <div style={{fontSize:13,fontWeight:800,color:"#a83232",marginBottom:4}}>{nameOf(pending.id)} is not eligible for {pending.role} on {fmtMD(day)}</div>
+            <ul style={{margin:"0 0 8px",paddingLeft:18,fontSize:12,color: dk ? "#e0b0b0" : "#8a3030",lineHeight:1.5}}>
+              {pending.reasons.map(r => <li key={r}><span style={{fontFamily:mono}}>{r}</span> - {reasonLabel(r, nameOf)}</li>)}
+            </ul>
+            <div style={{fontSize:11,color:sub,marginBottom:8}}>Overriding assigns anyway and prefixes the day's note with [override: ...]; the audit log records it.</div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <button type="button" onClick={() => setPending(null)} style={{...css.btn(false),padding:"5px 12px",fontSize:12}}>Keep as is</button>
+              <button type="button" data-testid="override-accept" onClick={confirmOverride} style={{...css.btn(true),padding:"5px 12px",fontSize:12,background:"linear-gradient(135deg,#a83232,#c04a4a)",borderColor:"#a83232"}}>Override and assign</button>
+            </div>
+          </div>
+        )}
+
+        {canEdit ? (
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+            <div style={{flex:"1 1 200px"}}>
+              <label style={label}>Note</label>
+              <input data-testid="editor-note" value={draft.note || ""} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} placeholder="operational note (shown on the day)" style={{...inp,width:"100%"}}/>
+            </div>
+            <div style={{flex:"1 1 160px"}}>
+              <label style={label}>External cover (primary)</label>
+              <input data-testid="editor-external" value={draft.externalCover || ""} disabled={!!draft.primary} onChange={e => setDraft(d => ({ ...d, externalCover: e.target.value }))} placeholder={draft.primary ? "clear primary to use" : "e.g. Atwell"} title="Someone outside the roster covering primary; counts toward nobody's tally" style={{...inp,width:"100%",opacity:draft.primary?0.6:1}}/>
+            </div>
+          </div>
+        ) : (
+          <div style={{fontSize:12,color:sub,marginBottom:10}}>{draft.note ? <>Note: {draft.note}</> : "No note."}</div>
+        )}
+
+        {hint && <div role="status" data-testid="editor-hint" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>{hint}</div>}
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          {!isPublicMode && (canEdit || myRole) && (
+            <button type="button" data-testid="editor-trade" onClick={() => onTrade(day, myRole || (entry && entry.primary ? "primary" : "backup"))} style={{background:"none",border:"none",color:"#1a6fa8",fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0}}>Propose a trade for this day</button>
+          )}
+          <span style={{flex:1}}/>
+          <span style={{fontSize:10,color:sub}}>Esc closes - arrow keys move a day</span>
+          <button type="button" onClick={onCancel} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>{canEdit ? "Cancel" : "Close"}</button>
+          {canEdit && <button type="button" data-testid="editor-save" onClick={save} disabled={!dirty} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:dirty?1:0.5}}>Save</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Error boundary ---
+
 // A render exception anywhere in the tree would otherwise white-screen the
 // whole app - the worst possible failure for someone checking who's on call.
 class ErrorBoundary extends React.Component {
