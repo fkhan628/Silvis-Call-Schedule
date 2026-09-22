@@ -1,9 +1,9 @@
-# Prompt 12 — Pre-publish fixes + the 9/22 rule amendments (v3)
+# Prompt 12 — Pre-publish fixes + the 9/22 rule amendments (v4)
 
 *Paste into Claude Code inside `<your clone>`. Implements `docs/REVIEW-2026-09-22.md` §3
 (items A–H) and Faraz's 9/22 rule changes (items I–O) as recorded in `docs/SILVIS-CALL-RULES.md` (the ⟶ 9/22 marks),
 plus two UI items from his first look at the live app (P: header without "cardiothoracic"; Q: no red OPEN before
-today). v3 adds P and Q — if Prompt 12 v2 already ran, paste only the "Already ran v2?" block at the bottom.*
+today). v3 added P and Q, v4 adds R (orange opening + SSC icon) — if Prompt 12 v2 already ran, paste only the "Already ran v2?" block at the bottom.*
 Same ground rules as every prompt: report-first for RLS/destructive changes, show every edit, verify by observing, one
 push at the end. Nothing here publishes a schedule. The repo's `docs/silvis-seed.json` is the canonical seed from now
 on; at the end, copy the repo's `docs/` back to the OneDrive folder (repo → OneDrive), not the other way.*
@@ -141,9 +141,9 @@ O. THEME — University of Illinois blue and orange, easy on the eyes (9/22)
       orange #D9561A (Burchett), teal #0F766E (Acton), plum #6B3FA0 (Philip), olive #6B7F1A (Fierce), slate #475569
       (Sarkar); outside surgeons grey #737373 with a dashed border. Keep primary/backup as text weight (P bold, B
       regular), not color.
-   4. manifest.json theme_color #13294B; recolor the icons to navy with an orange mark so the Silvis PWA is
-      distinguishable from Davenport's on a phone. Run the Playwright smoke harness in both themes and attach the
-      screenshots; check every text/background pair with an automated contrast check (fail < 4.5:1 for body text).
+   4. SUPERSEDED by item R below (Faraz 9/22 evening): the opening is ORANGE, not navy, and the icons are supplied.
+      Run the Playwright smoke harness in both themes and attach the screenshots; check every text/background pair
+      with an automated contrast check (fail < 4.5:1 for body text).
 
 P. PANEL HEADER — drop "cardiothoracic" (Faraz 9/22, after seeing the live app)
    1. The primary column of the week-rows table under the calendar and of the ER Call Panels export is headed
@@ -178,6 +178,22 @@ Q. NO "OPEN" ON DAYS BEFORE TODAY (Faraz 9/22)
       "M/D OPEN"; a smoke check that September's week rows carry no data-kind="open" before today and still carry it
       for 10/15. Do not change the meaning of open slots in generator diagnostics or the preview report.
 
+R. ORANGE OPENING + SSC ICON (Faraz 9/22, after installing the PWA next to DSG)
+   1. The three icon files in the repo root (icon-512.png, icon-192.png, apple-touch-icon.png) are still Davenport's
+      blue "DSG" tiles. Replace them byte-for-byte with the files in the OneDrive folder `assets\icons-ssc\` (Illini
+      orange #FF5F05, white "SSC", generated 9/22; same three sizes 512/192/180, maskable-safe). Do not regenerate or
+      restyle them.
+   2. manifest.json: theme_color and background_color both #FF5F05 (the splash and the Android title bar open orange);
+      keep name/short_name. index-source.html <meta name="theme-color"> #FF5F05 to match. Bump nothing by hand — CI
+      versions the build; note in the report that installed PWAs pick the new icon up on their next manifest refresh
+      (users may need to remove and re-add the home-screen icon on iOS).
+   3. The opening screens are orange: the sign-in / sign-up / reset / set-password card's "SSC" tile and its accent
+      (links, primary button) and the biometric "Welcome back" tile use an orange gradient (#FF5F05 → #E8520A, white
+      text) instead of the Davenport blue gradient (#1a6fa8 → #2488c8), and the loading/crash screens use the same
+      orange instead of blue. Inside the app after sign-in, item O stands: navy structure, orange accent, red OPEN.
+   4. Smoke: screenshot the sign-in screen in both themes; grep the source for the two Davenport blues and for "DSG" —
+      both must come back empty except in comments that explain the history.
+
 Small items (one commit): pass asBlockMember through the trade path and the day editor so Fierce can receive a Fri–Sun
 block; make the day editor fail CLOSED when eligibility throws (show the error, disable Save); do not waive a surgeon's
 EXPLICIT dated availability list on holiday-unit days (Burchett's December list omits 12/24 on purpose) — only the
@@ -211,4 +227,14 @@ Q. An unassigned slot is OPEN only from today (Central) forward; before today it
    editor's ability to assign a past day, the office-notifications diff and the generator's open-slot diagnostics do
    not change. Tests: a fixture straddling a fixed "today" (past unassigned → no entry; today and later → "M/D OPEN"),
    plus a smoke check that September's week rows have no data-kind="open" before today while 10/15 still does.
+
+R. Orange opening + SSC icon (supersedes item O.4). Replace icon-512.png, icon-192.png and apple-touch-icon.png in
+   the repo root byte-for-byte with the files in the OneDrive folder assets\icons-ssc\ (orange #FF5F05, white "SSC";
+   do not regenerate them). manifest.json theme_color AND background_color = #FF5F05; <meta name="theme-color">
+   #FF5F05. The sign-in / sign-up / reset / set-password card's "SSC" tile, its accent links and primary button, the
+   biometric "Welcome back" tile, and the loading/crash screens use an orange gradient (#FF5F05 → #E8520A, white
+   text) instead of the Davenport blue (#1a6fa8 → #2488c8). After sign-in, item O stands (navy structure, orange
+   accent, red OPEN). Smoke-screenshot the sign-in screen in both themes; grep for the two Davenport blues and for
+   "DSG" — both empty except in history comments. Note in the report that installed PWAs pick the icon up on their next
+   manifest refresh (iOS may need remove + re-add).
 ```
