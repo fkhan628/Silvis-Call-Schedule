@@ -149,9 +149,9 @@ const er = H.buildErCallPanelsHTML(schedule, roster, "2026-10-26", "2026-11-15")
 const cellText = (html) => html.replace(/<br\s*\/?>/g, " | ").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&");
 const erRows = (html) => Array.from(html.matchAll(/<tr data-week="(\d{4}-\d{2}-\d{2})">([\s\S]*?)<\/tr>/g)).map(m => ({ week: m[1], cells: Array.from(m[2].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)).map(c => cellText(c[1])) }));
 
-check("ER panel header text is exactly MON/SUN DATES | TRAUMA & CARDIOTHORACIC SURGERY TRAUMA | TRAUMA BACKUP, in that order", () => {
+check("ER panel header text is exactly MON/SUN DATES | TRAUMA | TRAUMA BACKUP, in that order", () => {
   const ths = Array.from(er.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)).map(m => cellText(m[1]));
-  assert.deepStrictEqual(ths, ["MON/SUN DATES", "TRAUMA & CARDIOTHORACIC SURGERY TRAUMA", "TRAUMA BACKUP"]);
+  assert.deepStrictEqual(ths, ["MON/SUN DATES", "TRAUMA", "TRAUMA BACKUP"]);
   assert.ok(er.startsWith("<table") && er.endsWith("</table>"), "the builder returns just the <table>");
   assert.ok(/<thead>[\s\S]*<\/thead><tbody>/.test(er));
 });
@@ -214,7 +214,7 @@ check("ER panel: names are HTML-escaped; every cell is inline-styled (Word paste
   assert.ok(evil.includes("&lt;b&gt;x&lt;/b&gt;") && !evil.includes("<b>x</b>"));
   assert.ok(!/<td>/.test(er) && !/<th>/.test(er), "a cell without inline style");
   const txt = H.buildErCallPanelsText(schedule, roster, "2026-10-26", "2026-11-15").split("\n");
-  assert.strictEqual(txt[0], "MON/SUN DATES\tTRAUMA & CARDIOTHORACIC SURGERY TRAUMA\tTRAUMA BACKUP");
+  assert.strictEqual(txt[0], "MON/SUN DATES\tTRAUMA\tTRAUMA BACKUP");
   assert.strictEqual(txt.length, 4);
   assert.ok(txt[1].startsWith("10/26 - 11/1\t") && txt[1].split("\t").length === 3);
   const doc = H.buildErCallPanelsDocument(schedule, roster, "2026-11-02", "2026-12-13");
@@ -258,7 +258,7 @@ check("share page is self-contained: no <script>, inline <style>, Outfit from Go
   assert.ok(/font-family:'Outfit',[^;]*sans-serif/.test(share));
   assert.ok(share.includes("Read-only snapshot generated 9/22/2026 09:05"));
   assert.ok(share.includes("<title>Silvis Call Schedule - October 2026 to November 2026</title>"));
-  assert.ok(share.includes("MON/SUN DATES") && share.includes("TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA"));
+  assert.ok(share.includes("MON/SUN DATES") && share.includes("<th>TRAUMA</th><th>TRAUMA BACKUP</th>"));
 });
 check("share page: months default to the schedule's span; {startYear,startMonth,numMonths} and [{year,month}] are accepted too", () => {
   const dflt = H.generateShareHTML(schedule, roster, {});

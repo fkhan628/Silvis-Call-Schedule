@@ -4003,7 +4003,7 @@ function CallSchedule() {
             <p style={sectionNote}>the ER-panel author's layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too.</p>
             <div className="table-wrap" style={{overflowX:"auto"}}>
               <table className="week-rows" data-testid="week-rows" style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead><tr><th style={thS}>MON/SUN DATES</th><th style={thS}>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA</th><th style={thS}>TRAUMA BACKUP</th></tr></thead>
+                <thead><tr><th style={thS}>MON/SUN DATES</th><th style={thS}>TRAUMA</th><th style={thS}>TRAUMA BACKUP</th></tr></thead>
                 <tbody>
                   {!loaded && <tr><td colSpan={3} style={{...tdS,fontFamily:font,fontStyle:"italic",color:dkSubtext}}>Loading schedule</td></tr>}
                   {loaded && weekRows.map(r => (

@@ -631,7 +631,7 @@ function generateShareHTML(schedule, roster, opts) {
     }
     grid += `</div>`;
     const rows = buildWeekRows(sched, list, range.start, range.end);
-    let table = `<table class="wr" data-month="${range.start.slice(0, 7)}"><thead><tr><th>MON/SUN DATES</th><th>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA</th><th>TRAUMA BACKUP</th></tr></thead><tbody>`;
+    let table = `<table class="wr" data-month="${range.start.slice(0, 7)}"><thead><tr><th>MON/SUN DATES</th><th>TRAUMA</th><th>TRAUMA BACKUP</th></tr></thead><tbody>`;
     rows.forEach(r => { table += `<tr data-week="${r.monday}"><td class="wd">${escHtml(r.label)}</td><td>${r.primary.map(entryHtml).join("")}</td><td>${r.backup.map(entryHtml).join("")}</td></tr>`; });
     table += `</tbody></table>`;
     body += `<section class="mo" data-month="${range.start.slice(0, 7)}"><h2 class="mh">${escHtml(monthLabel(ym))}</h2>${grid}<h3 class="wh">Week rows - ${escHtml(monthLabel(ym))}</h3><div class="tw">${table}</div></section>`;
@@ -930,8 +930,8 @@ ${pages}
 
 /* ═══ ER Call Panels export for the ER-panel author (Prompt 9) ═══
    buildErCallPanelsHTML(schedule, roster, from, to, opts) -> an HTML <table>
-   in her exact layout: header MON/SUN DATES | TRAUMA & CARDIOTHORACIC SURGERY
-   TRAUMA | TRAUMA BACKUP, one row per Mon-Sun week that intersects from..to,
+   in her exact layout: header MON/SUN DATES | TRAUMA | TRAUMA BACKUP, one row
+   per Mon-Sun week that intersects from..to,
    entries "M/D Name" one per line, consecutive same-surgeon days collapsed to
    "M/D-M/D Name", open days "M/D OPEN" in red, an external cover "M/D Atwell".
    Everything is inline-styled so a text/html clipboard paste lands in Word as
@@ -963,7 +963,7 @@ function buildErCallPanelsHTML(schedule, roster, from, to, opts) {
     ? `<span data-kind="open" style="color:#ff0000;font-weight:bold">${escHtml(e.text)}</span>`
     : `<span data-kind="${e.kind}">${escHtml(e.text)}</span>`;
   let html = `<table data-export="er-call-panels" style="border-collapse:collapse;border:1px solid #000000"><thead><tr>`;
-  html += `<th ${thS}>MON/SUN DATES</th><th ${thS}>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA</th><th ${thS}>TRAUMA BACKUP</th></tr></thead><tbody>`;
+  html += `<th ${thS}>MON/SUN DATES</th><th ${thS}>TRAUMA</th><th ${thS}>TRAUMA BACKUP</th></tr></thead><tbody>`;
   rows.forEach(r => {
     html += `<tr data-week="${r.monday}"><td ${tdS}>${escHtml(r.label)}</td><td ${tdS}>${r.primary.map(entry).join("<br>")}</td><td ${tdS}>${r.backup.map(entry).join("<br>")}</td></tr>`;
   });
@@ -975,7 +975,7 @@ function buildErCallPanelsHTML(schedule, roster, from, to, opts) {
 // line per week, tab-separated columns, entries joined with "; ".
 function buildErCallPanelsText(schedule, roster, from, to, opts) {
   const rows = erPanelRows(schedule, roster, from, to, opts);
-  const lines = ["MON/SUN DATES\tTRAUMA & CARDIOTHORACIC SURGERY TRAUMA\tTRAUMA BACKUP"];
+  const lines = ["MON/SUN DATES\tTRAUMA\tTRAUMA BACKUP"];
   rows.forEach(r => lines.push(`${r.label}\t${r.primary.map(e => e.text).join("; ")}\t${r.backup.map(e => e.text).join("; ")}`));
   return lines.join("\n");
 }

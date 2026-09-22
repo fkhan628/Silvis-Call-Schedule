@@ -77,7 +77,7 @@ await openDoc(path.join(OUT, "er-panel-2026-09-14-to-12-13.html"), "ER panel 9/1
   const title = await page.title();
   if (title !== "ER Call Panels - Silvis Surgical Care - 9/14 to 12/13") fail("ER panel title: " + title); else ok("ER panel title: " + title);
   const ths = await page.$$eval("table[data-export=er-call-panels] th", els => els.map(e => e.innerText.trim()));
-  if (ths.join(" | ") !== "MON/SUN DATES | TRAUMA & CARDIOTHORACIC SURGERY TRAUMA | TRAUMA BACKUP") fail("ER panel header cells: " + ths.join(" | ")); else ok("ER panel header cells exact: " + ths.join(" | "));
+  if (ths.join(" | ") !== "MON/SUN DATES | TRAUMA | TRAUMA BACKUP") fail("ER panel header cells: " + ths.join(" | ")); else ok("ER panel header cells exact: " + ths.join(" | "));
   const rows = await page.$$eval("table[data-export=er-call-panels] tbody tr", trs => trs.map(tr => Array.from(tr.children).map(td => td.innerText.trim().replace(/\n/g, "; "))));
   if (rows.length !== 13) fail("ER panel rows: " + rows.length); else ok("ER panel: 13 week rows rendered");
   rows.forEach(r => console.log("     " + r.join("  |  ")));

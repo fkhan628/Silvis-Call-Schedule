@@ -273,7 +273,7 @@ buttons, the notification center, the refresh/version banner, and Settings → D
 - **.ics** — per surgeon (`silvis-call-<name>.ics`) and full group; events `Silvis Primary Call` / `Silvis Backup Call`, 07:00 → 07:00 next day, `America/Chicago`. Reuse `helpers.js` `generateICS/downloadICS`; replace `buildICSEvents`.
 - **Shareable read-only HTML** — same mechanism as Davenport (self-contained page, Outfit font), month grid + week rows.
 - **Printable month** — reuse `buildPrintableCalendarHTML` with the new cell content.
-- **ER Call Panels export for the ER-panel author** — an HTML table in her exact layout (MON/SUN DATES | TRAUMA & CARDIOTHORACIC SURGERY TRAUMA | TRAUMA BACKUP; one row per Mon–Sun week; entries `M/D Name`, consecutive same-surgeon days collapsed `M/D–M/D Name`; open days in red) with a **Copy for Word** button (writes `text/html` to the clipboard so it pastes as a table). Stretch: true `.docx` via the `docx` UMD build from cdnjs.
+- **ER Call Panels export for the ER-panel author** — an HTML table in her exact layout (MON/SUN DATES | TRAUMA | TRAUMA BACKUP; one row per Mon–Sun week; entries `M/D Name`, consecutive same-surgeon days collapsed `M/D–M/D Name`; open days in red) with a **Copy for Word** button (writes `text/html` to the clipboard so it pastes as a table). Stretch: true `.docx` via the `docx` UMD build from cdnjs.
 
 ## 10. Notifications, office notifications, calendar sync, refresh, data management
 

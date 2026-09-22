@@ -641,7 +641,7 @@ try {
   const weekRowsVisible = await page.$("[data-testid=week-rows]");
   if (!weekRowsVisible) { await page.click("text=Week rows (ER Call Panels layout)"); await page.waitForSelector("[data-testid=week-rows]", { timeout: 3000 }); }
   const hdr = await page.$eval("[data-testid=week-rows] thead", el => el.innerText.replace(/\s+/g, " ").trim());
-  if (!/MON\/SUN DATES.*TRAUMA & CARDIOTHORACIC SURGERY TRAUMA.*TRAUMA BACKUP/.test(hdr)) fail("week rows header is not the ER-panel author's: " + hdr); else ok("week rows header: MON/SUN DATES | TRAUMA & CARDIOTHORACIC SURGERY TRAUMA | TRAUMA BACKUP");
+  if (hdr !== "MON/SUN DATES TRAUMA TRAUMA BACKUP") fail("week rows header is not the ER-panel author's: " + hdr); else ok("week rows header: " + hdr);
   const row928 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
   if (!/9\/28-10\/4 Atwell/.test(row928) || !/9\/28-10\/4 Fierce/.test(row928)) fail("week row 9/28 lacks '9/28-10/4 Atwell' / '9/28-10/4 Fierce': " + row928); else ok("week row 9/28: '9/28-10/4 Atwell' (primary) and '9/28-10/4 Fierce' (backup) collapsed");
   const row1005 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-10-05"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
@@ -724,7 +724,7 @@ try {
   // (e) ER Call Panels: default = visible month; preset 11/2-12/13; copy; download
   try {
     const defHdr = await page.$eval("[data-testid=er-panel-preview] thead", el => el.innerText.replace(/\s+/g, " ").trim());
-    if (defHdr !== "MON/SUN DATES TRAUMA & CARDIOTHORACIC SURGERY TRAUMA TRAUMA BACKUP") fail("ER panel header: " + defHdr); else ok("ER panel header: " + defHdr);
+    if (defHdr !== "MON/SUN DATES TRAUMA TRAUMA BACKUP") fail("ER panel header: " + defHdr); else ok("ER panel header: " + defHdr);
     const defWeeks = await page.$$eval("[data-testid=er-panel-preview] tr[data-week]", els => els.map(e => e.getAttribute("data-week")));
     if (defWeeks[0] !== "2026-09-28" || defWeeks[defWeeks.length - 1] !== "2026-10-26") fail("ER panel default range is not the visible month (Oct 2026): " + defWeeks.join(",")); else ok(`ER panel default range = visible month: ${defWeeks.length} week rows ${defWeeks[0]}..${defWeeks[defWeeks.length - 1]}`);
     // exp-001: rows are whole Mon-Sun weeks - the 9/28 row lists 9/28-10/4
@@ -774,8 +774,8 @@ try {
     const item = clipWrites.length === 1 && clipWrites[0].length === 1 ? clipWrites[0][0] : null;
     const clipHtml = item ? item["text/html"] || "" : "", clipText = item ? item["text/plain"] || "" : "";
     if (!item) fail(`Copy for Word: expected exactly one navigator.clipboard.write call with one ClipboardItem, saw ${JSON.stringify(clipWrites.map(w => w.map(i => Object.keys(i))))}; toast "${toastText}"`);
-    else if (!clipHtml.startsWith('<table data-export="er-call-panels"') || (clipHtml.match(/<tr data-week=/g) || []).length !== 6 || !/MON\/SUN DATES<\/th><th [^>]*>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA<\/th><th [^>]*>TRAUMA BACKUP<\/th>/.test(clipHtml) || !/<span data-kind="open" style="color:#ff0000;font-weight:bold">/.test(clipHtml)) fail("Copy for Word: text/html flavour is not the 6-row ER table: " + clipHtml.slice(0, 200));
-    else if (!/^MON\/SUN DATES\tTRAUMA & CARDIOTHORACIC SURGERY TRAUMA\tTRAUMA BACKUP\n11\/2 - 11\/8\t/.test(clipText) || clipText.split("\n").length !== 7) fail("Copy for Word: text/plain flavour wrong: " + clipText.slice(0, 120));
+    else if (!clipHtml.startsWith('<table data-export="er-call-panels"') || (clipHtml.match(/<tr data-week=/g) || []).length !== 6 || !/MON\/SUN DATES<\/th><th [^>]*>TRAUMA<\/th><th [^>]*>TRAUMA BACKUP<\/th>/.test(clipHtml) || !/<span data-kind="open" style="color:#ff0000;font-weight:bold">/.test(clipHtml)) fail("Copy for Word: text/html flavour is not the 6-row ER table: " + clipHtml.slice(0, 200));
+    else if (!/^MON\/SUN DATES\tTRAUMA\tTRAUMA BACKUP\n11\/2 - 11\/8\t/.test(clipText) || clipText.split("\n").length !== 7) fail("Copy for Word: text/plain flavour wrong: " + clipText.slice(0, 120));
     else if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(clipHtml + clipText)) fail("Copy for Word: an email address is on the clipboard");
     else if (!/^Copied - paste into the Word document/.test(toastText)) fail(`Copy for Word: flavours written but the toast reads "${toastText}"`);
     else ok(`Copy for Word: one clipboard write with ${Object.keys(item).join(" + ")} - 6-row ER table (inline styles, red OPEN spans) + tab-separated text; toast "${toastText}"`);

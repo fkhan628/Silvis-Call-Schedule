@@ -133,7 +133,7 @@ With imports locked and the East feed confirmed: run Generate for 2026-11-02 →
 ## Prompt 9 — Exports
 
 ```
-Implement guide §9: per-surgeon and full-group .ics (07:00→07:00 next day, America/Chicago, titles "Silvis Primary Call"/"Silvis Backup Call"); the shareable read-only HTML page; the printable month; and the ER Call Panels export for the ER-panel author — an HTML table in her exact layout (MON/SUN DATES | TRAUMA & CARDIOTHORACIC SURGERY TRAUMA | TRAUMA BACKUP, one row per Mon–Sun week, "M/D Name" entries, same-surgeon consecutive days collapsed to "M/D–M/D Name", open days in red) with a "Copy for Word" button that writes text/html to the clipboard. Generate the panel for 11/2–12/13 and show it side by side with the layout in docs/SILVIS-CALL-RULES.md §7 so I can compare. Stop.
+Implement guide §9: per-surgeon and full-group .ics (07:00→07:00 next day, America/Chicago, titles "Silvis Primary Call"/"Silvis Backup Call"); the shareable read-only HTML page; the printable month; and the ER Call Panels export for the ER-panel author — an HTML table in her exact layout (MON/SUN DATES | TRAUMA | TRAUMA BACKUP, one row per Mon–Sun week, "M/D Name" entries, same-surgeon consecutive days collapsed to "M/D–M/D Name", open days in red) with a "Copy for Word" button that writes text/html to the clipboard. Generate the panel for 11/2–12/13 and show it side by side with the layout in docs/SILVIS-CALL-RULES.md §7 so I can compare. Stop.
 ```
 
 ## Prompt 10 — Edge functions: calendar sync, office notifications, email, reminders (report-first)
