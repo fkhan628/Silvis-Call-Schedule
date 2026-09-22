@@ -426,7 +426,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
 
   /* ---------------- E. source pins ---------------- */
   console.log("\n[E] source pins (index-source.html)");
-  const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
+  // LF-normalize: a Windows checkout without .gitattributes handed us CRLF once and the two-line pins below missed.
+  const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
   const count = (needle) => src.split(needle).length - 1;
   const rxCount = (rx) => (src.match(rx) || []).length;
 

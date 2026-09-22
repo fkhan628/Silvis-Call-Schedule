@@ -1,0 +1,8 @@
+# Keep every text file LF in the working copy on every OS (Windows checkouts with
+# core.autocrlf=true produced CRLF copies of index-source.html, which broke the
+# multi-line source pins in test/data-layer.test.js). Binary assets are marked.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary
