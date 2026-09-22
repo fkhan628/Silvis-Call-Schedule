@@ -70,9 +70,6 @@ jobs:
       - name: East feed unit tests
         run: node test/east-feed.test.js
 
-      - name: Data-layer contracts (safeguards, CAS pins, weekly-model absence)
-        run: node test/data-layer.test.js
-
       - name: Generator regression test
         run: node test/generator-regression.js
 

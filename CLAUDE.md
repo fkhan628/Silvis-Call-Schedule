@@ -56,8 +56,9 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 - Edit **only** `index-source.html` (one `<script type="text/babel">` JSX block) and the plain-JS modules
   (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`).
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with `[skip ci]`, Pages redeploys.
-- Before ANY push: `node test/rules.test.js && node test/generator-regression.js && node build.js`; every gate must pass
-  (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake). `build.js`
+- Before ANY push: `npm test && node build.js` (= rules, east-feed, generator regression, data-layer tests, then the build);
+  every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
+  For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
   writes `index.html` locally as a byproduct — `git restore index.html` before committing (CI owns it).
 - Branch + PR for anything touching destructive paths, sync/state, RLS, or many call sites. **A push to `main` is a live deploy.**
 - localStorage keys are prefixed `silvis-` (Davenport uses `dsg-`) so both PWAs coexist in one browser.
