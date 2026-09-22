@@ -76,7 +76,7 @@ function genRulesApi() {
     genRulesCache = {
       eligibility: eligibility, buildContext: buildContext, weekendUnitPatterns: weekendUnitPatterns,
       holidayUnits: holidayUnits, holidayUnitCandidates: holidayUnitCandidates, isHolidayDay: isHolidayDay,
-      talliesFor: talliesFor, resolveWeight: resolveWeight, monthlyCapFor: monthlyCapFor, defaultWeights: defaultWeights
+      talliesFor: talliesFor, runThrough: rdRunThrough, resolveWeight: resolveWeight, monthlyCapFor: monthlyCapFor, defaultWeights: defaultWeights
     };
   }
   return genRulesCache;
@@ -882,11 +882,18 @@ function genRunCandidate(G, rng) {
 
 /* ---------------------------------------------------------- diagnostics */
 
+// Range tallies (talliesFor semantics over `days`): the counts are range-scoped;
+// the run measures are the longest runs TOUCHING the range, each followed
+// across the range edges through rules.runThrough (a run that starts in the
+// locked import before the range reads its full length - review 9/22, item A).
+// maxConsecutive = the run the HARD limit counts (primary-only unless
+// countBackupInConsecutive), maxConsecutiveAnyRole = primary or backup. Real
+// days; holiday-unit days collapse to one only for a surgeon who opted in
+// (Prompt 12 A, 9/22).
 function genRunStats(G, id, days) {
-  var ctx = G.ctx, W = ctx.schedule;
-  var t = { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0 };
-  var units = {}, run = 0, runKeys = {};
-  var countBackup = ctx.countBackupInConsecutive, unitExempt = ctx.holidayFlags.unitExemptFromMaxConsecutive !== false;
+  var ctx = G.ctx, R = G.R, W = ctx.schedule;
+  var t = { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0, maxConsecutiveAnyRole: 0 };
+  var units = {}, prevIn = false, prevAny = false, countBackup = !!ctx.countBackupInConsecutive;
   for (var i = 0; i < days.length; i++) {
     var d = days[i], e = W[d];
     var isP = !!(e && e.primary === id), isB = !!(e && e.backup === id);
@@ -898,12 +905,10 @@ function genRunStats(G, id, days) {
       var u = ctx.holidayByDay[d];
       if (u) { var uk = u.name + ":" + u.days[0]; if (!units[uk]) { units[uk] = true; if (u.tier === "major") t.majorHolidays++; else t.minorHolidays++; } }
     }
-    if (isP || (countBackup && isB)) {
-      var hu = unitExempt ? ctx.holidayByDay[d] : null;
-      var key = hu ? "H:" + hu.name + ":" + hu.days[0] : d;
-      if (!runKeys[key]) { runKeys[key] = true; run++; }
-      if (run > t.maxConsecutive) t.maxConsecutive = run;
-    } else { run = 0; runKeys = {}; }
+    var inRun = isP || (countBackup && isB), anyRun = isP || isB;
+    if (inRun && !prevIn) { var n = R.runThrough(ctx, id, d, false); if (n > t.maxConsecutive) t.maxConsecutive = n; }
+    if (anyRun && !prevAny) { var na = R.runThrough(ctx, id, d, true); if (na > t.maxConsecutiveAnyRole) t.maxConsecutiveAnyRole = na; }
+    prevIn = inRun; prevAny = anyRun;
   }
   return t;
 }
@@ -934,7 +939,9 @@ function genUncoveredReasons(G, open) {
 function genDiagnostics(G, best, meta) {
   var ctx = G.ctx, R = G.R, W = ctx.schedule, ids = ctx.activeIds;
   var ev = best.ev, S = best.S;
-  var warnings = G.warnings.concat(S.warnings);
+  // ctx.warnings (e.g. an ignored legacy blob key) ride along so the Generate panel and
+  // preview-generate.js show them - console.warn alone is invisible to the scheduler (review 9/22).
+  var warnings = G.warnings.concat(S.warnings, ctx.warnings || []);
   var uncovered = genUncoveredReasons(G, ev.open);
   uncovered.forEach(function (u) {
     Object.keys(u.reasons).forEach(function (id) { if (u.reasons[id][0] === "eligible-but-not-placed") warnings.push("open slot " + u.day + " " + u.role + " is fillable by " + id + " - generator bug, report it"); });

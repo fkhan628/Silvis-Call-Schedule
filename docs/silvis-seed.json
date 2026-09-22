@@ -212,12 +212,11 @@
       "Davenport holiday A/B (day + night-before) convention"
     ],
     "countBackupInConsecutive": false,
-    "countBackupInConsecutiveNote": "Default per guide section 5: maxConsecutiveDays counts primary days only. The locked import only fits this reading (Acton P,P,P,B,P on 10/17-10/21).",
+    "countBackupInConsecutiveNote": "Default per guide section 5: maxConsecutiveDays is the HARD limit and counts PRIMARY days only, on real calendar days (9/22, Prompt 12 A: backup is standby). The locked import only fits this reading (Acton P,P,P,B,P on 10/17-10/21). Any-role runs (primary or backup) have a separate SOFT per-surgeon limit, surgeonRules.<id>.maxConsecutiveAnyRole, with a long-run penalty of weights.longRunPerDay per day beyond it; a surgeon with no maxConsecutiveAnyRole has no soft limit.",
     "holidays": {
       "ignoreWeekdayRules": true,
       "anyoneMayCoverUnlessOptedOut": true,
-      "unitExemptFromMaxConsecutive": true,
-      "note": "Faraz 9/21 (evening): 'The day rules are not for holidays. Anyone can be on backup for holidays unless they explicitly want that holiday off.' On a holiday-unit day the weekday-pattern rules (Khan Tue/Thu + Mon/Wed, Burchett recurring whitelist, Acton 2nd/4th Mon/Wed, Fierce Clinton days + Monday-backup-only, Philip Aledo weekday rules) are not applied to primary (since 9/22 they never apply to backup on any day - see backupPolicy). Still applied: vacations, per-surgeon holidayRules.holidaysOff, backupOptOut, maxMajorHolidays, East busy days / forecast, Fierce derived-week locks, Sarkar windows, monthly caps. A holiday unit counts as ONE commitment for maxConsecutiveDays (Khan's 4-day Thanksgiving unit vs his max 3)."
+      "note": "Faraz 9/21 (evening): 'The day rules are not for holidays. Anyone can be on backup for holidays unless they explicitly want that holiday off.' On a holiday-unit day the weekday-pattern rules (Khan Tue/Thu + Mon/Wed, Burchett recurring whitelist, Acton 2nd/4th Mon/Wed, Fierce Clinton days + Monday-backup-only, Philip Aledo weekday rules) are not applied to primary (since 9/22 they never apply to backup on any day - see backupPolicy). Still applied: vacations, per-surgeon holidayRules.holidaysOff, backupOptOut, maxMajorHolidays, East busy days / forecast, Fierce derived-week locks, Sarkar windows, monthly caps. 9/22 (Prompt 12 A): a holiday unit counts as ONE day for the consecutive limits only for a surgeon whose surgeonRules.<id>.holidayUnitCountsAsOneDay is true (Khan: his 4-day Thanksgiving unit vs his max 3); everyone else counts real days. The former group key unitExemptFromMaxConsecutive is gone - rules.js ignores it with a warning if an older blob still carries it."
     },
     "backupPolicy": {
       "openToEveryone": true,
@@ -237,7 +236,8 @@
       "eastUnknown": 1,
       "eastForecastBelowThreshold": 2,
       "smoothingTolerance": 2,
-      "note": "Soft-penalty weights read by rules.js eligibility() and the generator score; string weights in surgeonRules (low/medium/strong/preferred) map through this table."
+      "longRunPerDay": 3,
+      "note": "Soft-penalty weights read by rules.js eligibility() and the generator score; string weights in surgeonRules (low/medium/strong/preferred) map through this table. longRunPerDay (= medium) is the penalty per day by which an any-role run exceeds the surgeon's maxConsecutiveAnyRole (9/22, Prompt 12 A)."
     },
     "availabilityPrecedence": [
       "time_off (+ trailing edge: the day before a vacation blocks PRIMARY)",
@@ -287,6 +287,9 @@
       "availabilityMode": "weekends-plus-weekdays",
       "weekendStyle": "block",
       "maxConsecutiveDays": 3,
+      "maxConsecutiveAnyRole": 4,
+      "holidayUnitCountsAsOneDay": true,
+      "holidayUnitCountsAsOneDayNote": "9/22 (Prompt 12 A): opted in - his 4-day Thanksgiving unit counts as one day against his maxConsecutiveDays 3 and maxConsecutiveAnyRole 4; the other five count real days.",
       "primaryContribution": "weekends",
       "weekendsInPool": true,
       "weekdays": {
@@ -331,7 +334,7 @@
           ],
           "role": "primary",
           "source": "Faraz 9/21 (evening)",
-          "note": "One 4-day unit; locked rows in existingAssignments; exempt from maxConsecutiveDays as a unit."
+          "note": "One 4-day unit; locked rows in existingAssignments; counts as one day for his consecutive limits via holidayUnitCountsAsOneDay (9/22, Prompt 12 A)."
         }
       }
     },
@@ -372,6 +375,8 @@
       "weekendStyle": "split",
       "splitPartner": "s3",
       "maxConsecutiveDays": 2,
+      "maxConsecutiveAnyRole": 3,
+      "holidayUnitCountsAsOneDay": false,
       "monthlyCap": {
         "total": 8,
         "preferred": 7
@@ -502,6 +507,8 @@
       "weekendStyle": "split",
       "splitPartner": "s2",
       "maxConsecutiveDays": 3,
+      "maxConsecutiveAnyRole": 4,
+      "holidayUnitCountsAsOneDay": false,
       "monthlyCap": null,
       "monthlyCapNote": "Faraz 9/21: no specific cap (the group default does not apply)",
       "explicitAvailable": {
@@ -589,6 +596,8 @@
       },
       "weekendStyle": "block",
       "maxConsecutiveDays": 4,
+      "maxConsecutiveAnyRole": 4,
+      "holidayUnitCountsAsOneDay": false,
       "explicitAvailable": {
         "2026-10": {
           "primary": [
@@ -725,6 +734,8 @@
       },
       "weekendStyle": "block",
       "maxConsecutiveDays": 7,
+      "maxConsecutiveAnyRole": 7,
+      "holidayUnitCountsAsOneDay": false,
       "notes": [
         "Derived weeks (from the East feed) are hard locks; outside them he is in the pool under the weekday pattern above (Faraz 9/21)",
         "Must be on site at Silvis whenever he is primary (Faraz 9/21)",
@@ -773,6 +784,8 @@
       ],
       "hardNeverWeekdaysRolesNote": "9/22: Fri/Sun block PRIMARY only (backup is open to everyone on her window days); also the engine default when the key is absent or empty.",
       "maxConsecutiveDays": 2,
+      "maxConsecutiveAnyRole": 2,
+      "holidayUnitCountsAsOneDay": false,
       "monthlyTarget": null,
       "handoffPartnerRequired": true,
       "notes": [

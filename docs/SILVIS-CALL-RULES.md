@@ -23,7 +23,7 @@ the two disagree, fix both.*
 | Outside surgeons | ⟶ **9/22: the roster can carry outside surgeons ("internal locums", e.g. a Davenport surgeon willing to take a shift)** who are **written in by hand** for specific days, never auto-assigned by the generator, and tallied separately. | Khan 9/22 |
 | Backup contract | Backup should never be called if the primary stays true to the location. (Stipend transfer on activation is a group/admin matter — **the app carries no compensation logic or $ display at all.**) | Burchett 9/18, Khan 9/21 |
 | Practice hygiene | No operating at another facility while on Silvis primary. 30-minute response time. | Khan 8/29, Burchett 8/27 |
-| Consecutive days | Default max **2 consecutive 24-h periods**; per-surgeon overrides below (weekend blocks are 3; Fierce weeks are 7). | Burchett 8/27, Khan 8/29 |
+| Consecutive days | Default max **2 consecutive 24-h PRIMARY periods** (hard, real days); per-surgeon overrides below (weekend blocks are 3; Fierce weeks are 7). ⟶ **9/22 (Prompt 12 A): a holiday unit counts as one day only for a surgeon who opted in (Khan); any-role runs (primary or backup) have a SOFT per-surgeon limit (Burchett 3, Sarkar 2, Khan 4, Acton 4, Philip 4, Fierce 7) with a penalty that grows per day beyond it.** | Burchett 8/27, Khan 8/29, review 9/22 |
 | Week-long stints | No more week-long call stints for the general pool (Atwell/Fierce legacy pattern). Fierce's derived weeks are the explicit exception (§3). | Burchett 8/27, Khan 9/21 |
 | Period | **This round: generate through the end of 2026** (range 2026-11-02 → 2027-01-03 so the New Year's weekend is covered). **After that, Generate offers 3-, 6-, 9- and 12-month presets** from the last published day. **Sep 14 – Nov 1 stays exactly as the emails describe it** (locked import, §7); the rules below generate from November onward. | Khan 9/21 |
 | Time off | **Vacations only — there are no "no-call days."** Surgeons **enter their own vacations; nothing is approved** — the app logs them (audit trail) and blocks those days from call. A vacation **cannot be entered over a day the surgeon is already published as primary or backup**: the entry is refused, the conflicting dates are listed, and the surgeon must find a switch (trade) first. A vacation day also blocks the day before it (the 07:00 shift end falls on the vacation day). | Khan 9/21 |
@@ -61,7 +61,7 @@ decides the Trauma Director role.
 - ⟶ **9/22: main contribution = PRIMARY on weekends when available** (Fri+Sat+Sun as a block). He is not a backup filler: his backup count is balanced like everyone else's, and the generator should prefer him as weekend *primary* over weekend *backup* whenever East allows.
 - **Mondays and Wednesdays are auto-offered as primary** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday as primary** — those are his OR days (hard). ⟶ **9/22: backup on any day is fine, Tue/Thu included.** *(Supersedes the earlier "no Mon/Wed nights" statement and the "never Tue/Thu for both roles" reading.)*
 - East feed: **primary** only on days he is **not on call at East (Davenport)**; **backup is allowed even on East call days**. ⟶ **9/22: cross-reference ALL of his Davenport call** — service weeks (Mon–Sat), weeknights, weekends, backup weeks, holiday coverage — from the Davenport app's `schedule_weeks` rows for the surgeon coded FAK, plus the forecast until Davenport publishes.
-- Max consecutive 3 (a holiday unit counts as one commitment). No monthly target.
+- Max consecutive **3** primary days (hard, real days). ⟶ **9/22 (Prompt 12 A): he is the one surgeon who opted in to count a holiday unit as one day** (`holidayUnitCountsAsOneDay`; his 4-day Thanksgiving unit vs his max 3); any-role soft limit **4** with the long-run penalty beyond it. No monthly target.
 - **Thanksgiving 2026: Khan takes Thu 11/26 – Sun 11/29 as one unit, primary** (Faraz 9/21 evening; locked in the seed).
 - **East forecast while Davenport is unpublished** (Faraz 9/21 evening): the Davenport schedule for the next period is not out until the end of 2026. Until it is, the East feed carries a forecast built by running the Davenport generator many times over the next period with the live Davenport inputs; days where Khan is on East call in ≥ 50 % of runs are treated as East-busy for Silvis primary (backup allowed), lower probabilities are a soft penalty, and such days show a “forecast” badge. When Davenport publishes, the real feed replaces the forecast and a conflict report lists any Silvis day needing a trade. Faraz can also enter his published Silvis days as Davenport constraints when he generates DSG.
 
@@ -70,6 +70,7 @@ decides the Trauma Director role.
 - Weekends: available for **backup every weekend incl. Fridays** when not primary; takes primary weekends too.
 - Weekend style: **split** with Acton — one takes Fri+Sun, the other Sat. (the ER-panel author's doc shows exactly this: 9/25 Burchett, 9/26 Acton, 9/27 Burchett.)
 - **Max 2 consecutive 24-h primary periods.** **Monthly cap 7–8 primary days** ⟶ 9/22: backup days do not count toward it; prefers ≤7 in December.
+- ⟶ **9/22 (Prompt 12 A): the 2-day limit is hard on real primary days** — 12/30, 12/31 and 1/1 are three days even though 12/31 + 1/1 is one holiday unit (no opt-in); any-role (primary or backup) soft limit **3**, a growing penalty beyond it.
 - Christmas: prefers to **split it up** (every other day, or 2 on then off).
 - October: available 10/6, 10/10, 10/11, 10/12 (backup only), 10/14, 10/26, 10/28. Not available 10/2–10/4, 10/18, 10/23, 10/24, 10/30, 10/31, 11/1. Takes 10/25 (Sun) with Sarkar on 10/24 (Sat).
 - December (can take primary or backup): 12/1, 12/5, 12/6, 12/9, 12/12, 12/13, 12/14, 12/19, 12/20, 12/23, 12/25, 12/26, 12/27, 12/28, 12/30, 12/31, 1/1, 1/2, 1/3. "I don't need all these dates but am able to do them."
@@ -80,6 +81,7 @@ decides the Trauma Director role.
 - Avoid (soft, medium): **Tuesdays** — [removed].
 - Time off: **Nov 19–22** ([removed]), **Nov 25–29** (Thanksgiving week). **Never on Thanksgiving.** Christmas or New Year's is fine; agrees with Burchett's alternating-days strategy.
 - Weekend style: **split** with Burchett; has also taken full Fri–Sun (10/9–10/11), so max consecutive 3.
+- ⟶ **9/22 (Prompt 12 A): max consecutive 3 primary days is hard on real days** (no holiday-unit opt-in); any-role soft limit **4**.
 - October: primary Oct 5, 7, 9, 17, 18, 19, 21, 23; backup Oct 6, 8, 20. Offered to send a full monthly date list like Burchett.
 - **No specific monthly cap** (Faraz 9/21); no target stated.
 
@@ -90,6 +92,7 @@ decides the Trauma Director role.
 - **No more than one major holiday** (Thanksgiving / Christmas / New Year). **Prefers not a full week at a time** ("call has been getting busier").
 - Backup cap (stated for October, treat as monthly): **≤ 7 days and ≤ 1 weekend** of backup — an explicit backup cap, so it survives the 9/22 "backup doesn't count" rule. The group default primary cap (8) applies to his primary days.
 - Weekend style: **block**; in practice Thu–Sun (10/29–11/1), so max consecutive 4.
+- ⟶ **9/22 (Prompt 12 A): max consecutive 4 primary days is hard on real days**; any-role soft limit **4** with the long-run penalty — this is how "prefers not a full week" is implemented (review item E: 12/22 P, 12/24–25 B, 12/26–29 P is now penalised).
 - October: **cannot 10/15** (personal — hard). Primary 10/8, 10/13, 10/16, 10/27, 10/29–11/1. Backup: not 10/15, 10/7, 10/21, 10/23.
 
 ### Fierce (s5) — derived East weeks + a weekday pattern the rest of the time
@@ -111,10 +114,12 @@ decides the Trauma Director role.
 - **Cap: up to 14 primary call days per month**, counting Silvis primary days and his East primary week (from the feed) ⟶ 9/22: backup days (either site) do not count.
 - He described an ideal of East week → following week Silvis → ~10 days with no call. **Not a rule** (Faraz 9/21): no penalty, no Davenport-side alignment; recorded only as his stated preference.
 - Max consecutive 7 (his derived weeks). Weekend style **block** (Fri–Sun).
+- ⟶ **9/22 (Prompt 12 A): 7 is hard on real primary days**; any-role soft limit **7**.
 
 ### Sarkar (s6) — monthly windows only
 - Available **only** inside windows supplied by administration: **Oct 19–24, Nov 16–21, Dec 14–18, Jan 11–16** (Mon–Sat; Dec is Mon–Fri).
 - ⟶ **9/22: she is PRIMARY 3–4 days of her window week** (primary days count; backup days do not), **mainly every other day when possible** (soft: prefer non-consecutive; hard max 2 consecutive). **A Friday may be taken as a standalone day, separate from Saturday/Sunday**; Saturday standalone is fine too; never a Fri–Sun block; Sunday only if inside a window (never, in practice). Backup on her remaining window days is allowed but not required.
+- ⟶ **9/22 (Prompt 12 A): max 2 consecutive primary days is hard on real days**; any-role soft limit **2**.
 - Her target is her 3–4 primaries per window week, not an equal share. Must always have a handoff partner the next morning. Burchett's October plan (Tue/Thu/Sat with handoff partners, Burchett taking the Sunday) is the model.
 
 ## 4. Weekend unit — how the styles combine
@@ -146,7 +151,7 @@ Default day membership (Faraz's current guess — **editable per year in Setup**
 | Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; Burchett available 12/25–28 |
 | New Year's | major | Thu 12/31 + Fri 1/1/2027 | Eve + Day as one unit; Burchett available 12/30–1/3 |
 
-**The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, and Philip's one-major-holiday limit. A holiday unit counts as one commitment for max-consecutive purposes. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed.
+**The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, and Philip's one-major-holiday limit. ⟶ 9/22 (Prompt 12 A): a holiday unit counts as one day for the consecutive limits **only for a surgeon who opted in** (`surgeonRules.<id>.holidayUnitCountsAsOneDay` — Khan); everyone else counts real days. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed.
 
 Burchett's stated Christmas preference ("2 days on then off") is satisfied by the two-day unit. Holiday fairness is
 tracked separately from shift counts: major and minor counts per surgeon, lifetime, tenure-normalized — the same idea

@@ -20,10 +20,27 @@
 // they are byte-identical, lock collisions are diagnostics warnings).
 //
 // Coverage and the 10 s budget (Prompt 4: "All runs must finish under 10 s
-// total"): 50 seeds x 3 ranges, then one bestOf 200 Nov-Dec run for the tally
-// table (the UI default). bestOf per range is 6 / 5 / 2 (R1 / R2 / R3), chosen
-// on 2026-09-22 from measured per-candidate costs on the dev machine (R1 2.2 ms,
-// R2 8 ms, R3 19 ms; ~77 % of a candidate is inside rules.weekendUnitPatterns
+// total"): 50 seeds x 4 ranges, then one bestOf 200 Nov-Dec run for the tally
+// table (the UI default), plus four short fixture runs (manual lock, backup
+// opt-out, legacy group key, range edge). bestOf per range is 6 / 5 / 2 / 2
+// (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
+// on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
+// milestone range 2026-11-02 -> 2027-01-03 added by Prompt 12 A so the year
+// boundary is inside ONE run and the consecutive-run checks see 12/30 -> 1/1).
+// R4 runs on the EVEN seeds only (25 runs, ~0.5 s): with all 50 seeds the
+// quiet-run total was 8.1 s and a loaded run measured 11.6 s against the 10 s
+// budget (2026-09-22; the machine was shared with two other sessions - the
+// pre-R4 harness itself measured 5.5 s quiet and 10.5 s loaded the same day).
+// The even seeds keep seed 4, the seed that exposed the Burchett 12/30 -> 1/1
+// run before the fix. Whole-file numbers after the Prompt 12 A fix stage
+// (2026-09-22, two standalone runs on the shared dev machine): 7113 ms and
+// 7060 ms total at 2.3 / 8.0 / 20.5 / 9.5 ms per candidate (R1-R4) - the
+// engine's hard and any-role runs are measured in ONE walk per direction in
+// eligibility() (single-walk rewrite; behaviour-identical to the two-walk
+// version on 16 generations and 23,136 eligibility results). If a CI runner
+// lands above ~8 s quiet, drop R4 to bestOf 1 (BEST_OF_DEFAULT [6, 5, 2, 1])
+// before anything else; never raise the budget to hide it.
+// ~77 % of a candidate is inside rules.weekendUnitPatterns
 // and eligibility, so nothing on the generator side can buy the 4x that
 // bestOf 25 everywhere would need - review findings rules-2 / harness-1 /
 // quality-3). The rule assertions run on every winning candidate either way;
@@ -128,6 +145,14 @@ IDS.forEach((id) => VAC[id].forEach((d) => { const b = addDays(d, -1); if (!VAC[
 eq(seed.groupRules.dayBeforeRules.trailingEdgeRoles, [P], "seed: trailing edge is primary-only");
 eq(seed.groupRules.dayBeforeRules.aledoDayBeforeRoles, [P], "seed: day-before-Aledo is primary-only");
 eq(seed.groupRules.countBackupInConsecutive, false, "seed: consecutive counts primary days only");
+// Prompt 12 A (9/22): the hard limit is per surgeon on REAL primary days; the holiday-unit
+// collapse is a per-surgeon opt-in (Khan only); the old group key is gone.
+ok(!("unitExemptFromMaxConsecutive" in seed.groupRules.holidays), "seed: groupRules.holidays.unitExemptFromMaxConsecutive must be gone (Prompt 12 A)");
+eq(IDS.filter((id) => SR[id].holidayUnitCountsAsOneDay === true), [KHAN], "seed: only Khan opted in to the holiday-unit collapse");
+IDS.forEach((id) => ok(typeof SR[id].maxConsecutiveDays === "number", "seed: " + CODE[id] + " has a numeric maxConsecutiveDays"));
+eq(IDS.map((id) => SR[id].maxConsecutiveAnyRole), [4, 3, 4, 4, 7, 2], "seed: soft any-role limits Khan 4, Burchett 3, Acton 4, Philip 4, Fierce 7, Sarkar 2");
+const NAME = {}; seed.roster.forEach((r) => { NAME[r.id] = r.name; });
+const COLLAPSE = new Set(IDS.filter((id) => SR[id].holidayUnitCountsAsOneDay === true));
 // 9/22 (rules doc section 1 "Roles per day"; Prompt 12 item I): backup is open to
 // everyone every day. The outreach / OR-day / Clinton / Aledo rules and the dated
 // whitelists below restrict PRIMARY only. Still blocking backup: vacations, holiday
@@ -233,7 +258,8 @@ const SAW = { "Khan backup on an OR day (Tue/Thu)": 0, "Burchett backup on a day
 const RANGES = [
   { name: "R1 Oct (imports locked)", start: "2026-10-05", end: "2026-11-01" },
   { name: "R2 Nov-Dec", start: "2026-11-02", end: "2026-12-31" },
-  { name: "R3 Jan-Mar", start: "2027-01-01", end: "2027-03-31" }
+  { name: "R3 Jan-Mar", start: "2027-01-01", end: "2027-03-31" },
+  { name: "R4 milestone 2026-11-02..2027-01-03", start: "2026-11-02", end: "2027-01-03" }
 ];
 function lockedIn(day, role) { const e = INPUT[day]; return !!(e && e[role + "Locked"]); }
 function derivedLock(day, role, id) { return DERIVED_ROLE[day] === role && id === FIERCE; }
@@ -272,9 +298,30 @@ function holdsAny(view, d, id) { const e = view[d]; return !!(e && (e.primary ==
 function isPlaced(out, d, role) { const id = out.schedule[d] && out.schedule[d][role]; return !!(id && !lockedIn(d, role) && !derivedLock(d, role, id)); }
 function inUncovered(out, d, role) { return out.diagnostics.uncovered.some((u) => u.day === d && u.role === role); }
 function maxRun(view, days, pred) { let run = 0, best = 0; days.forEach((d) => { if (pred(d)) { run++; if (run > best) best = run; } else run = 0; }); return best; }
+// Prompt 12 A: a holiday-unit day keys to its unit only for a surgeon who opted in (Khan); everyone else counts real days.
+const runKey = (id, d) => (COLLAPSE.has(id) && HOLIDAY[d]) ? "H:" + HOLIDAY[d].name + ":" + HOLIDAY[d].days[0] : d;
+// item G: independent run lengths of the runs TOUCHING `days` (the range days), each run followed across the
+// range edges through the merged view (a run that starts in the locked import before the range reads its full
+// length - review 9/22 item A, fix stage; the same walk helpers ttRunThrough does):
+// maxConsecutive = PRIMARY-only (countBackupInConsecutive:false), maxConsecutiveAnyRole = either role.
+function runLengths(view, days, id) {
+  const longest = (pred) => {
+    let best = 0;
+    days.forEach((d, i) => {
+      if (!pred(d) || (i > 0 && pred(days[i - 1]))) return; // the first counted day of a run inside the range
+      const keys = new Set([runKey(id, d)]);
+      for (let x = addDays(d, -1), g = 0; g < 400 && pred(x); x = addDays(x, -1), g++) keys.add(runKey(id, x));
+      for (let x = addDays(d, 1), g = 0; g < 400 && pred(x); x = addDays(x, 1), g++) keys.add(runKey(id, x));
+      if (keys.size > best) best = keys.size;
+    });
+    return best;
+  };
+  return { maxConsecutive: longest((d) => holder(view, d, P) === id), maxConsecutiveAnyRole: longest((d) => holdsAny(view, d, id)) };
+}
 
 /* ------------------------------------------------------- the checks */
-function checkRun(out, range, seedNo) {
+// deep: also compare diagnostics.tallies[id].range run lengths with runLengths() (every R4 run + the bestOf-200 run).
+function checkRun(out, range, seedNo, deep) {
   CUR.range = range.name; CUR.seed = seedNo; CUR.day = "-";
   const days = daysList(range.start, range.end);
   const months = []; days.forEach((d) => { const m = monthOf(d); if (!months.includes(m)) months.push(m); });
@@ -502,17 +549,34 @@ function checkRun(out, range, seedNo) {
       if (wk.some((d) => out.schedule[d] && (isPlaced(out, d, P) && out.schedule[d][P] === SARKAR || isPlaced(out, d, B) && out.schedule[d][B] === SARKAR))) ok(n <= 4, "Sarkar " + n + " days in week of " + mon);
     });
   });
-  // consecutive PRIMARY runs (primary-only per countBackupInConsecutive:false); a run counts when it contains a placed day
+  // consecutive PRIMARY runs (primary-only per countBackupInConsecutive:false) for ALL SIX at the seed's
+  // maxConsecutiveDays, across the WHOLE range plus the 7 days before it (no month cut - Prompt 12 A / review G);
+  // holiday-unit days collapse to one only for an opted-in surgeon; a run counts when it contains a placed day
   const ctxDays = daysList(addDays(range.start, -7), range.end);
-  function checkRuns(id, limit, label) {
-    let run = [], best = 0;
-    const flush = () => { if (run.length > limit && run.some((d) => isPlaced(out, d, P) && out.schedule[d][P] === id)) { CUR.day = run[0]; fail(label + " " + run.length + " consecutive primary days from " + run[0]); } run = []; };
+  function checkRuns(id) {
+    const limit = SR[id].maxConsecutiveDays;
+    let run = [];
+    const flush = () => {
+      if (run.length) {
+        const n = new Set(run.map((d) => runKey(id, d))).size;
+        if (n > limit && run.some((d) => isPlaced(out, d, P) && out.schedule[d][P] === id)) { CUR.day = run[0]; fail(NAME[id] + " " + n + " consecutive primary days (limit " + limit + "; " + run.length + " real days) from " + run[0] + " to " + run[run.length - 1]); }
+      }
+      run = [];
+    };
     ctxDays.forEach((d) => { if (holder(view, d, P) === id) run.push(d); else flush(); });
     flush();
     N++;
   }
-  checkRuns(BURCHETT, 2, "Burchett");  // item 7
-  checkRuns(SARKAR, 2, "Sarkar");      // item 10
+  IDS.forEach(checkRuns);  // items 7 (Burchett 2), 10 (Sarkar 2) and, since Prompt 12 A, Khan 3 / Acton 3 / Philip 4 / Fierce 7
+  // item G: the preview's run columns must equal the harness's own computation
+  if (deep) {
+    IDS.forEach((id) => {
+      CUR.day = "-";
+      const exp = runLengths(view, days, id), got = (D.tallies[id] && D.tallies[id].range) || {};
+      eq(got.maxConsecutive, exp.maxConsecutive, CODE[id] + " diagnostics.tallies.range.maxConsecutive (primary-only, real days) vs the harness");
+      eq(got.maxConsecutiveAnyRole, exp.maxConsecutiveAnyRole, CODE[id] + " diagnostics.tallies.range.maxConsecutiveAnyRole vs the harness");
+    });
+  }
   // item 8: Philip <= 1 major holiday unit (all units are within a rolling 12 months here)
   const phMajors = HOLIDAY_UNITS.filter((u) => u.tier === "major" && u.days.some((d) => holdsAny(view, d, PHILIP)));
   const phPlacedHoliday = phMajors.some((u) => u.days.some((d) => out.schedule[d] && ROLES.some((role) => isPlaced(out, d, role) && out.schedule[d][role] === PHILIP)));
@@ -556,22 +620,24 @@ function checkRun(out, range, seedNo) {
 }
 
 /* --------------------------------------------------------------- run */
-// Coverage: see the header. bestOf per range; SILVIS_GEN_BEST_OF=n overrides all three (printed, budget not enforced).
+// Coverage: see the header. bestOf per range; SILVIS_GEN_BEST_OF=n overrides every range (printed, budget not enforced).
 const SEEDS = 50;
-const BEST_OF_DEFAULT = [6, 5, 2]; // R1 Oct, R2 Nov-Dec, R3 Jan-Mar
+const BEST_OF_DEFAULT = [6, 5, 2, 2]; // R1 Oct, R2 Nov-Dec, R3 Jan-Mar, R4 milestone (Prompt 12 A)
 const BEST_OF_OVERRIDE = process.env.SILVIS_GEN_BEST_OF ? Math.max(1, Math.floor(+process.env.SILVIS_GEN_BEST_OF)) : null;
 const BEST_OF = RANGES.map((r, i) => BEST_OF_OVERRIDE || BEST_OF_DEFAULT[i]);
 const BUDGET_MS = process.env.SILVIS_GEN_BUDGET_MS ? Math.floor(+process.env.SILVIS_GEN_BUDGET_MS) : 10000;
 const timing = {}; RANGES.forEach((r) => { timing[r.name] = { ms: 0, runs: 0, candidates: 0 }; });
 const r2Results = [];
 const r2Json = new Set();
+const R4_SEED = (s) => s % 2 === 0; // R4 on the even seeds only (budget; see the header)
 for (let s = 1; s <= SEEDS; s++) {
   RANGES.forEach((range, ri) => {
+    if (range.name.indexOf("R4") === 0 && !R4_SEED(s)) return;
     const t = Date.now();
     const out = GEN.generate(ctx, range.start, range.end, { seed: s, bestOf: BEST_OF[ri] });
     const el = Date.now() - t;
     timing[range.name].ms += el; timing[range.name].runs++; timing[range.name].candidates += out.diagnostics.candidatesTried;
-    checkRun(out, range, s);
+    checkRun(out, range, s, range.name.indexOf("R4") === 0);
     if (ri === 1) { r2Results.push({ seed: s, score: out.diagnostics.score.total, out }); r2Json.add(JSON.stringify(out.schedule)); }
   });
 }
@@ -637,7 +703,7 @@ eq([p1(), p1(), p1.int(100)], [p2(), p2(), p2.int(100)], "genPrng is determinist
 const tBig = Date.now();
 const big = GEN.generate(ctx, RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: 200 });
 const bigMs = Date.now() - tBig;
-checkRun(big, RANGES[1], 1); // seed 1, bestOf 200
+checkRun(big, RANGES[1], 1, true); // seed 1, bestOf 200; deep = item G tally comparison
 // 9/22 (item I review): with backup open to everyone the milestone preview has no
 // open slot at all - the three Thursday backups (11/05, 11/19, 12/03) that only the
 // old day rules left open are now fillable. Deterministic (genPrng, seed 1).
@@ -665,6 +731,43 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   DO.uncovered.filter((u) => u.role === B).forEach((u) => ok((u.reasons[ACTON] || []).some((r) => String(r).indexOf("backup-opt-out") === 0), "opt-out run: open backup " + u.day + " does not name backup-opt-out for BDA: " + JSON.stringify(u.reasons[ACTON])));
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
+// Review 9/22 (item A, fix stage): a rules-context warning - here the ignored legacy group key
+// groupRules.holidays.unitExemptFromMaxConsecutive that an older live blob still carries - must reach
+// diagnostics.warnings so the Generate panel and preview-generate.js show it (console.warn is not visible
+// to the scheduler). One cheap R1 run at bestOf 1.
+{
+  const grLegacy = JSON.parse(JSON.stringify(seed.groupRules)); grLegacy.holidays.unitExemptFromMaxConsecutive = true;
+  const inputLeg = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST }, groupRules: grLegacy });
+  const ctxLeg = R.buildContext(inputLeg);
+  CUR.range = "R1 + legacy group key"; CUR.seed = 1; CUR.day = "-";
+  eq(ctxLeg.warnings.filter((w) => /unitExemptFromMaxConsecutive/.test(w)).length, 1, "buildContext: exactly one warning names the legacy key");
+  const outLeg = GEN.generate(ctxLeg, RANGES[0].start, RANGES[0].end, { seed: 1, bestOf: 1 });
+  ctxLeg.warnings.forEach((w) => ok(outLeg.diagnostics.warnings.includes(w), "ctx warning missing from diagnostics.warnings: " + w));
+  eq(outLeg.diagnostics.warnings.filter((w) => /unitExemptFromMaxConsecutive/.test(w)).length, 1, "the legacy-key warning appears exactly once in diagnostics.warnings");
+  CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
+}
+// Review 9/22 (item A, fix stage): the tally run columns follow a run across the RANGE start and the MONTH
+// edge. Philip's locked import primaries 10/29 -> 11/01 (4 days = his max) plus a manual primary lock on
+// 11/02 (kept; reported as a lock violation) form a 5-day run that begins before the range: the range row
+// and the 2026-11 month row must both read 5, not the in-range / in-month cut. One short run at bestOf 1.
+{
+  const inputEdge = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } });
+  CUR.range = "range-edge fixture 2026-11-02..2026-11-08"; CUR.seed = 1; CUR.day = "2026-11-02";
+  eq(["2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01"].map((d) => holder(inputEdge.schedule, d, P)), [PHILIP, PHILIP, PHILIP, PHILIP], "seed: Philip holds 10/29 -> 11/01 primary (locked import)");
+  inputEdge.schedule["2026-11-02"] = { primary: PHILIP, backup: null, primaryLocked: true, backupLocked: false, source: "manual", externalCover: null, note: "harness: range-edge fixture" };
+  const ctxEdge = R.buildContext(inputEdge);
+  if (ctxEdge.warnings.length) fail("buildContext warnings (range-edge fixture): " + JSON.stringify(ctxEdge.warnings));
+  const outEdge = GEN.generate(ctxEdge, "2026-11-02", "2026-11-08", { seed: 1, bestOf: 1 });
+  eq(outEdge.schedule["2026-11-02"].primary, PHILIP, "manual primary lock kept");
+  ok(outEdge.diagnostics.lockViolations.some((l) => l.day === "2026-11-02" && l.role === P && l.id === PHILIP), "the conflicting lock is reported as a lock violation: " + JSON.stringify(outEdge.diagnostics.lockViolations));
+  const expEdge = runLengths(makeView(outEdge), daysList("2026-11-02", "2026-11-08"), PHILIP), gotEdge = outEdge.diagnostics.tallies[PHILIP].range;
+  ok(expEdge.maxConsecutive >= 5 && expEdge.maxConsecutiveAnyRole >= 5, "harness: Philip's run through 11/02 reads at least 5 (got " + JSON.stringify(expEdge) + ")");
+  eq(gotEdge.maxConsecutive, expEdge.maxConsecutive, "AFP diagnostics.tallies.range.maxConsecutive follows the run across the range start");
+  eq(gotEdge.maxConsecutiveAnyRole, expEdge.maxConsecutiveAnyRole, "AFP diagnostics.tallies.range.maxConsecutiveAnyRole follows the run across the range start");
+  const novEdge = outEdge.diagnostics.tallies[PHILIP].months["2026-11"];
+  eq([novEdge.maxConsecutive, novEdge.maxConsecutiveAnyRole], [expEdge.maxConsecutive, expEdge.maxConsecutiveAnyRole], "AFP 2026-11 month row (talliesFor) follows the same run across the month edge");
+  CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
+}
 const sortedR2 = r2Results.slice().sort((a, b) => a.score - b.score);
 const median = sortedR2[Math.floor(sortedR2.length / 2)];
 
@@ -673,15 +776,15 @@ function printTallies(out, title) {
   const D = out.diagnostics;
   console.log("\n" + title);
   console.log("  score " + JSON.stringify(Object.assign({}, D.score, { weights: undefined })) + "; candidates " + D.candidatesTried + "; warnings " + D.warnings.length);
-  console.log("  " + pad("surgeon", 8, true) + pad("month", 8, true) + pad("prim", 6) + pad("bkup", 6) + pad("total", 6) + pad("wkend", 6) + pad("major", 6) + pad("minor", 6) + pad("maxC", 6) + pad("cap", 6) + pad("target", 8));
+  console.log("  " + pad("surgeon", 8, true) + pad("month", 8, true) + pad("prim", 6) + pad("bkup", 6) + pad("total", 6) + pad("wkend", 6) + pad("major", 6) + pad("minor", 6) + pad("maxCP", 6) + pad("maxCA", 6) + pad("cap", 6) + pad("target", 8));
   Object.keys(D.tallies).forEach((id) => {
     const t = D.tallies[id];
     Object.keys(t.months).forEach((m) => {
       const x = t.months[m];
-      console.log("  " + pad(t.code, 8, true) + pad(m, 8, true) + pad(x.primary, 6) + pad(x.backup, 6) + pad(x.total, 6) + pad(x.weekendDays, 6) + pad(x.majorHolidays, 6) + pad(x.minorHolidays, 6) + pad(x.maxConsecutive, 6) + pad(x.cap === null ? "-" : x.cap, 6) + pad(x.target === null ? "-" : x.target, 8));
+      console.log("  " + pad(t.code, 8, true) + pad(m, 8, true) + pad(x.primary, 6) + pad(x.backup, 6) + pad(x.total, 6) + pad(x.weekendDays, 6) + pad(x.majorHolidays, 6) + pad(x.minorHolidays, 6) + pad(x.maxConsecutive, 6) + pad(x.maxConsecutiveAnyRole, 6) + pad(x.cap === null ? "-" : x.cap, 6) + pad(x.target === null ? "-" : x.target, 8));
     });
     const r = t.range;
-    console.log("  " + pad(t.code, 8, true) + pad("RANGE", 8, true) + pad(r.primary, 6) + pad(r.backup, 6) + pad(r.total, 6) + pad(r.weekendDays, 6) + pad(r.majorHolidays, 6) + pad(r.minorHolidays, 6) + pad(r.maxConsecutive, 6) + pad(r.cap === null ? "-" : r.cap, 6) + pad("", 8));
+    console.log("  " + pad(t.code, 8, true) + pad("RANGE", 8, true) + pad(r.primary, 6) + pad(r.backup, 6) + pad(r.total, 6) + pad(r.weekendDays, 6) + pad(r.majorHolidays, 6) + pad(r.minorHolidays, 6) + pad(r.maxConsecutive, 6) + pad(r.maxConsecutiveAnyRole, 6) + pad(r.cap === null ? "-" : r.cap, 6) + pad("", 8));
   });
   console.log("  implied targets (" + D.impliedTargets.rule + "):");
   Object.keys(D.impliedTargets.months).forEach((m) => console.log("    " + m + " " + JSON.stringify(D.impliedTargets.months[m])));
@@ -710,7 +813,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
 
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " + 1 x bestOf 200 + 1 fixture run (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + 1 x bestOf 200 + 4 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

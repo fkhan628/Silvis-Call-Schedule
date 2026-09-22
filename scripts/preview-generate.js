@@ -136,8 +136,11 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   // tallies
   L.push("## Per-surgeon tallies vs cap / target"); L.push("");
   if (dg.tallies && Object.values(dg.tallies).every(v => v && v.months)) {
-    L.push("| Surgeon | Month | Primary | Backup | Total | Weekend days | Major | Minor | Max consec. | Cap | Target |"); L.push("|---|---|---|---|---|---|---|---|---|---|---|");
-    for (const s of roster) { const tl = dg.tallies[s.id]; if (!tl) continue; const months = Object.keys(tl.months).sort(); for (const m of months) { const x = tl.months[m]; L.push(`| ${s.name} | ${m} | ${x.primary} | ${x.backup} | ${x.total} | ${x.weekendDays} | ${x.majorHolidays} | ${x.minorHolidays} | ${x.maxConsecutive} | ${x.cap == null ? "-" : x.cap} | ${x.target == null ? "-" : (Math.round(x.target * 10) / 10)} |`); } if (tl.range) { const x = tl.range; L.push(`| **${s.name}** | **range** | **${x.primary}** | **${x.backup}** | **${x.total}** | **${x.weekendDays}** | **${x.majorHolidays}** | **${x.minorHolidays}** | **${x.maxConsecutive}** | | |`); } }
+    // Max consec. P = consecutive PRIMARY days (the hard limit's measure); Max consec. any = either role (the soft limit's
+    // measure). Real days; a holiday unit is one day only for a surgeon who opted in (Prompt 12 A, 9/22). Both are the
+    // longest runs TOUCHING the month / range, followed across its edges (12/30 -> 1/1 reads 3 in Dec and in Jan).
+    L.push("| Surgeon | Month | Primary | Backup | Total | Weekend days | Major | Minor | Max consec. P | Max consec. any | Cap | Target |"); L.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+    for (const s of roster) { const tl = dg.tallies[s.id]; if (!tl) continue; const months = Object.keys(tl.months).sort(); for (const m of months) { const x = tl.months[m]; L.push(`| ${s.name} | ${m} | ${x.primary} | ${x.backup} | ${x.total} | ${x.weekendDays} | ${x.majorHolidays} | ${x.minorHolidays} | ${x.maxConsecutive} | ${x.maxConsecutiveAnyRole} | ${x.cap == null ? "-" : x.cap} | ${x.target == null ? "-" : (Math.round(x.target * 10) / 10)} |`); } if (tl.range) { const x = tl.range; L.push(`| **${s.name}** | **range** | **${x.primary}** | **${x.backup}** | **${x.total}** | **${x.weekendDays}** | **${x.majorHolidays}** | **${x.minorHolidays}** | **${x.maxConsecutive}** | **${x.maxConsecutiveAnyRole}** | | |`); } }
   } else if (dg.tallies) {
     L.push("```"); L.push(JSON.stringify(dg.tallies, null, 1).slice(0, 20000)); L.push("```");
   } else {

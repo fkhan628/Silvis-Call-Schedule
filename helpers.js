@@ -1342,9 +1342,14 @@ function suFmtTs(iso) {
      its days inside [from, to], as major or minor by unit.tier;
    - maxConsecutive: the longest run of consecutive PRIMARY days that touches
      [from, to], followed across the range edges (a run starting 10/30 and ending
-     11/2 reads 4 in October AND in November). Days of one holiday unit collapse
-     to one commitment when opts.unitExempt !== false (rules.js semantics); pass
-     opts.countBackup to count backup days in runs too. */
+     11/2 reads 4 in October AND in November); pass opts.countBackup to count
+     backup days in that run too (groupRules.countBackupInConsecutive);
+   - maxConsecutiveAnyRole: the same for days held in EITHER role (the soft
+     limit's measure - Prompt 12 A, 9/22).
+     Both are REAL day counts. Days of one holiday unit collapse to one day only
+     when opts.unitCollapse is true - the caller passes THIS surgeon's
+     surgeonRules.<id>.holidayUnitCountsAsOneDay === true (Khan); the old
+     opts.unitExempt (default true) is gone. */
 var TT_WEEKEND_DEFAULT = ["Fri", "Sat", "Sun"];
 var TT_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function ttIsIso(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
@@ -1359,14 +1364,17 @@ function ttHolds(schedule, day, id, role) {
 }
 function ttUnitKey(u) { return u ? (u.name || "?") + ":" + ((u.days && u.days[0]) || "") : ""; }
 // The run of counted days through `day` (inclusive), walked both ways; returns
-// the number of commitments (holiday units collapsed) or 0 when day is not counted.
+// the number of days (one holiday unit = one day only when opts.unitCollapse)
+// or 0 when day is not counted. Counted = primary (plus backup when
+// opts.countBackup), or either role when opts.anyRole.
 function ttRunThrough(schedule, id, day, opts) {
   var o = opts || {};
   var byDay = o.holidayByDay || {};
-  var unitExempt = o.unitExempt !== false;
-  var counts = function (d) { return ttHolds(schedule, d, id, "primary") || (o.countBackup && ttHolds(schedule, d, id, "backup")); };
+  var counts = o.anyRole
+    ? function (d) { return ttHolds(schedule, d, id, "any"); }
+    : function (d) { return ttHolds(schedule, d, id, "primary") || (o.countBackup && ttHolds(schedule, d, id, "backup")); };
   if (!counts(day)) return 0;
-  var keyOf = function (d) { var u = unitExempt ? byDay[d] : null; return u ? "H:" + ttUnitKey(u) : d; };
+  var keyOf = function (d) { var u = o.unitCollapse ? byDay[d] : null; return u ? "H:" + ttUnitKey(u) : d; };
   var keys = {}; keys[keyOf(day)] = true;
   var n = 1, d, guard;
   for (d = ttAdd(day, -1), guard = 0; guard < 400 && counts(d); d = ttAdd(d, -1), guard++) { var k1 = keyOf(d); if (!keys[k1]) { keys[k1] = true; n++; } }
@@ -1377,10 +1385,11 @@ function ttTotalsFor(schedule, surgeonId, from, to, opts) {
   var o = opts || {};
   var weekend = o.weekendDays || TT_WEEKEND_DEFAULT;
   var byDay = o.holidayByDay || {};
-  var t = { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0, holidayUnits: [] };
+  var t = { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0, maxConsecutiveAnyRole: 0, holidayUnits: [] };
   if (!schedule || !surgeonId || !ttIsIso(from) || !ttIsIso(to) || to < from) return t;
   var seenUnits = {};
-  var lastCounted = null; // skip the run walk for days already inside a measured run
+  var oP = Object.assign({}, o, { anyRole: false }), oA = Object.assign({}, o, { anyRole: true });
+  var lastCounted = null, lastAny = null; // skip the run walk for days already inside a measured run
   for (var d = from; d <= to; d = ttAdd(d, 1)) {
     var isP = ttHolds(schedule, d, surgeonId, "primary"), isB = ttHolds(schedule, d, surgeonId, "backup");
     if (isP) t.primary++;
@@ -1392,8 +1401,10 @@ function ttTotalsFor(schedule, surgeonId, from, to, opts) {
       if (u) { var uk = ttUnitKey(u); if (!seenUnits[uk]) { seenUnits[uk] = true; t.holidayUnits.push(u.name || "?"); if (u.tier === "minor") t.minorHolidays++; else t.majorHolidays++; } }
     }
     var inRun = isP || (o.countBackup && isB);
-    if (inRun && lastCounted !== ttAdd(d, -1)) { var n = ttRunThrough(schedule, surgeonId, d, o); if (n > t.maxConsecutive) t.maxConsecutive = n; }
+    if (inRun && lastCounted !== ttAdd(d, -1)) { var n = ttRunThrough(schedule, surgeonId, d, oP); if (n > t.maxConsecutive) t.maxConsecutive = n; }
     if (inRun) lastCounted = d;
+    if ((isP || isB) && lastAny !== ttAdd(d, -1)) { var na = ttRunThrough(schedule, surgeonId, d, oA); if (na > t.maxConsecutiveAnyRole) t.maxConsecutiveAnyRole = na; }
+    if (isP || isB) lastAny = d;
   }
   return t;
 }

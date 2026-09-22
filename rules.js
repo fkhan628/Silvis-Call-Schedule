@@ -196,7 +196,8 @@ function defaultWeights() {
   return {
     low: 1, medium: 3, strong: 10, preferred: -1,
     patternDaily: 5, patternMismatch: 3, backToBackWeekend: 3, backupAfterPrimary: 1,
-    noTargetWeekday: 1, eastUnknown: 1, eastForecastBelowThreshold: 2, smoothingTolerance: 2
+    noTargetWeekday: 1, eastUnknown: 1, eastForecastBelowThreshold: 2, smoothingTolerance: 2,
+    longRunPerDay: 3 // Prompt 12 A (9/22): per day beyond surgeonRules.<id>.maxConsecutiveAnyRole (= medium)
   };
 }
 
@@ -332,6 +333,13 @@ function buildContext(input) {
     _memo: Object.create(null)
   };
 
+  // 9/22 (Prompt 12 A): the holiday-unit collapse is per surgeon now
+  // (surgeonRules.<id>.holidayUnitCountsAsOneDay); an older blob's group key is
+  // never honoured - one warning so Setup can drop it.
+  if (ctx.holidayFlags && Object.prototype.hasOwnProperty.call(ctx.holidayFlags, "unitExemptFromMaxConsecutive")) {
+    ctx.warnings.push("groupRules.holidays.unitExemptFromMaxConsecutive is ignored (Prompt 12 A, 9/22): a holiday unit counts as one day for the consecutive limits only for a surgeon whose surgeonRules.<id>.holidayUnitCountsAsOneDay is true - remove the group key from the blob");
+  }
+
   if (input.eastFeedCoverage && input.eastFeedCoverage.from && input.eastFeedCoverage.to) {
     ctx.eastCoverage = { from: input.eastFeedCoverage.from, to: input.eastFeedCoverage.to,
       fromN: rdInfo(input.eastFeedCoverage.from).n, toN: rdInfo(input.eastFeedCoverage.to).n };
@@ -389,6 +397,10 @@ function buildContext(input) {
       capPreferred: null,
       countsEastDays: false,
       maxConsec: typeof rules.maxConsecutiveDays === "number" ? rules.maxConsecutiveDays : ctx.defaultMaxConsecutive,
+      // 9/22 (Prompt 12 A): the any-role SOFT limit (null = no soft check; there is no
+      // group default) and the per-surgeon holiday-unit collapse (opt-in; Khan today).
+      maxConsecAnyRole: typeof rules.maxConsecutiveAnyRole === "number" ? rules.maxConsecutiveAnyRole : null,
+      unitCollapse: rules.holidayUnitCountsAsOneDay === true,
       holidaysOff: new Set(hr.holidaysOff || []),
       maxMajor: null,
       hardNever: new Set(rules.hardNeverWeekdays || []),
@@ -592,6 +604,11 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // external-cover, slot-locked:, derived-lock:, derived-lock-held:,
 // holds-other-role, monthly-cap:, max-consecutive:, backup-cap:,
 // backup-weekend-cap:, window-week-max:, max-major-holidays:.
+// max-consecutive:<limit> is the HARD primary-only run limit on real days (a
+// holiday unit is one day only for a surgeon who opted in). Its SOFT sibling
+// long-run:<runLength> (Prompt 12 A, 9/22) marks an any-role run (primary or
+// backup) longer than surgeonRules.<id>.maxConsecutiveAnyRole, weighted
+// weights.longRunPerDay * (runLength - limit).
 function rdStatic(ctx, date, role, id, asBlock) {
   var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "");
   var memo = ctx._memo[key];
@@ -795,19 +812,39 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   if (P.capTotal !== null && monthCount > P.capTotal) hard.push("monthly-cap:" + P.capTotal);
   else if (P.capPreferred !== null && monthCount > P.capPreferred) soft.push({ reason: "over-preferred-cap:" + P.capPreferred, weight: W.medium });
 
-  // Max consecutive days (primary-only unless groupRules.countBackupInConsecutive);
-  // days inside one holiday unit count as one commitment when unitExemptFromMaxConsecutive.
+  // Max consecutive days: the HARD limit counts PRIMARY days only (unless
+  // groupRules.countBackupInConsecutive) on REAL calendar days; the days of one
+  // holiday unit collapse to one day only for a surgeon who opted in
+  // (surgeonRules.<id>.holidayUnitCountsAsOneDay - Khan; 9/22, Prompt 12 A).
   var countBackup = ctx.countBackupInConsecutive;
-  if (role === "primary" || countBackup) {
-    var unitExempt = ctx.holidayFlags.unitExemptFromMaxConsecutive !== false;
-    var inRun = function (d) { return holdsRole(d, "primary") || (countBackup && holdsRole(d, "backup")); };
-    var keyOf = function (d) { var u = unitExempt ? ctx.holidayByDay[d] : null; return u ? "H:" + u.name + ":" + u.days[0] : d; };
-    var keys = {}; keys[keyOf(dateStr)] = true;
-    var n = 1, d1, guard;
-    for (d1 = rdAddDays(dateStr, -1), guard = 0; guard < 60 && inRun(d1); d1 = rdAddDays(d1, -1), guard++) { var k1 = keyOf(d1); if (!keys[k1]) { keys[k1] = true; n++; } }
-    for (d1 = rdAddDays(dateStr, 1), guard = 0; guard < 60 && inRun(d1); d1 = rdAddDays(d1, 1), guard++) { var k2 = keyOf(d1); if (!keys[k2]) { keys[k2] = true; n++; } }
-    if (n > P.maxConsec) hard.push("max-consecutive:" + P.maxConsec);
+  var prevDay = rdAddDays(dateStr, -1), nextDay = rdAddDays(dateStr, 1); // computed once: the run walk and the day-neighbour softs below reuse them
+  // Both runs through the evaluated day (held both ways; the slot itself and
+  // assume-slots count) in ONE walk per direction: nHard = the run the hard limit
+  // counts, nAny = the any-role run of the soft check below. The hard run is a
+  // prefix of the any-role run (a counted day is a held day), so it stops at the
+  // first held day that is not counted while the any-role walk goes on. An
+  // isolated day (neither neighbour held) skips the walk - the common case.
+  // Unit keys are tracked only for a surgeon who opted into the collapse.
+  var wantHard = role === "primary" || countBackup;
+  var wantAny = P.maxConsecAnyRole !== null && !!W.longRunPerDay;
+  var nHard = 1, nAny = 1;
+  if ((wantHard || wantAny) && (holdsAny(prevDay) || holdsAny(nextDay))) {
+    var collapse = !!P.unitCollapse, keysH = null, keysA = null, ku;
+    if (collapse) { ku = ctx.holidayByDay[dateStr]; var k0 = ku ? "H:" + ku.name + ":" + ku.days[0] : dateStr; keysH = {}; keysA = {}; keysH[k0] = true; keysA[k0] = true; }
+    for (var dir = -1; dir <= 1; dir += 2) {
+      var hardAlive = wantHard;
+      for (var d1 = dir < 0 ? prevDay : nextDay, guard = 0; guard < 60 && holdsAny(d1); d1 = rdAddDays(d1, dir), guard++) {
+        var k = null;
+        if (collapse) { ku = ctx.holidayByDay[d1]; k = ku ? "H:" + ku.name + ":" + ku.days[0] : d1; }
+        if (!collapse || !keysA[k]) { if (collapse) keysA[k] = true; nAny++; }
+        if (hardAlive) {
+          if (holdsRole(d1, "primary") || (countBackup && holdsRole(d1, "backup"))) { if (!collapse || !keysH[k]) { if (collapse) keysH[k] = true; nHard++; } }
+          else hardAlive = false;
+        }
+      }
+    }
   }
+  if (wantHard && nHard > P.maxConsec) hard.push("max-consecutive:" + P.maxConsec);
 
   // Backup caps (Philip): days per month and weekends per month (a weekend counts once).
   var bc = rules.backupCap;
@@ -843,7 +880,7 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   }
 
   // Handoff partner required (Sarkar): consecutive primary days hand off to herself.
-  if (rules.handoffPartnerRequired && role === "primary" && (holdsRole(rdAddDays(dateStr, -1), "primary") || holdsRole(rdAddDays(dateStr, 1), "primary"))) {
+  if (rules.handoffPartnerRequired && role === "primary" && (holdsRole(prevDay, "primary") || holdsRole(nextDay, "primary"))) {
     soft.push({ reason: "handoff-partner", weight: W.medium });
   }
 
@@ -867,7 +904,13 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   if (hard.length) return blockedResult();
 
   // --- schedule-shape soft penalties ---
-  if (role === "backup" && W.backupAfterPrimary && holdsRole(rdAddDays(dateStr, -1), "primary")) soft.push({ reason: "backup-after-primary", weight: W.backupAfterPrimary });
+  if (role === "backup" && W.backupAfterPrimary && holdsRole(prevDay, "primary")) soft.push({ reason: "backup-after-primary", weight: W.backupAfterPrimary });
+
+  // 9/22 (Prompt 12 A): the any-role run (primary OR backup held, the evaluated
+  // slot and assume-slots included, real days unless he opted in) beyond the
+  // surgeon's SOFT limit. Backup is standby, so this is a penalty that grows per
+  // day, never a block; no maxConsecutiveAnyRole -> no check (no group default).
+  if (wantAny && nAny > P.maxConsecAnyRole) soft.push({ reason: "long-run:" + nAny, weight: W.longRunPerDay * (nAny - P.maxConsecAnyRole) });
 
   if (info.friday) {
     var b2b = false;
@@ -1033,14 +1076,41 @@ function holidayUnitCandidates(ctx, unit, role) {
 
 /* ----------------------------------------------------------- tallies */
 
+// runThrough(ctx, surgeonId, day, anyRole) -> the length of the run of counted
+// days through `day` (inclusive) in ctx.schedule, walked both ways across month
+// and range edges (guard 400 days each way), or 0 when `day` is not counted.
+// Counted = primary (plus backup when groupRules.countBackupInConsecutive), or
+// either role when anyRole. REAL days; the days of one holiday unit collapse to
+// one only for a surgeon who opted in (holidayUnitCountsAsOneDay). The same
+// walk helpers.js ttRunThrough does for the Totals view (review 9/22, item A).
+function rdRunThrough(ctx, surgeonId, day, anyRole) {
+  var sched = ctx.schedule, P = ctx.per[surgeonId];
+  var collapse = !!(P && P.unitCollapse), countBackup = !!ctx.countBackupInConsecutive;
+  function counts(d) { var e = sched[d]; if (!e) return false; if (e.primary === surgeonId) return true; return e.backup === surgeonId && (anyRole || countBackup); }
+  if (!counts(day)) return 0;
+  function keyOf(d) { var u = collapse ? ctx.holidayByDay[d] : null; return u ? "H:" + u.name + ":" + u.days[0] : d; }
+  var keys = {}, n = 1, d, g, k;
+  keys[keyOf(day)] = true;
+  for (d = rdAddDays(day, -1), g = 0; g < 400 && counts(d); d = rdAddDays(d, -1), g++) { k = keyOf(d); if (!keys[k]) { keys[k] = true; n++; } }
+  for (d = rdAddDays(day, 1), g = 0; g < 400 && counts(d); d = rdAddDays(d, 1), g++) { k = keyOf(d); if (!keys[k]) { keys[k] = true; n++; } }
+  return n;
+}
+
 // talliesFor(ctx, surgeonId, 'YYYY-MM') -> { primary, backup, total, weekendDays,
-// majorHolidays, minorHolidays, maxConsecutive } read live from ctx.schedule.
+// majorHolidays, minorHolidays, maxConsecutive, maxConsecutiveAnyRole } read live
+// from ctx.schedule. The counts are month-scoped; the two run measures are the
+// longest runs TOUCHING the month, each followed across the month edges (a run
+// 12/30 -> 1/1 reads 3 in December and in January - review 9/22, item A).
+// maxConsecutive = the run the HARD limit counts (primary-only unless
+// countBackupInConsecutive); maxConsecutiveAnyRole = primary or backup (the
+// SOFT limit's measure). Both are REAL day counts; the days of a holiday unit
+// collapse to one only for a surgeon who opted in (holidayUnitCountsAsOneDay -
+// 9/22, Prompt 12 A).
 function talliesFor(ctx, surgeonId, month) {
   var days = rdMonthDays(month), sched = ctx.schedule;
-  var t = { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0 };
-  var units = {}, run = 0, runKeys = {};
-  var countBackup = ctx.countBackupInConsecutive;
-  var unitExempt = ctx.holidayFlags.unitExemptFromMaxConsecutive !== false;
+  var t = { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0, maxConsecutiveAnyRole: 0 };
+  var units = {}, prevIn = false, prevAny = false;
+  var countBackup = !!ctx.countBackupInConsecutive;
   for (var i = 0; i < days.length; i++) {
     var d = days[i], e = sched[d], info = rdInfo(d);
     var isP = !!(e && e.primary === surgeonId), isB = !!(e && e.backup === surgeonId);
@@ -1052,13 +1122,11 @@ function talliesFor(ctx, surgeonId, month) {
       var u = ctx.holidayByDay[d];
       if (u) { var uk = u.name + ":" + u.days[0]; if (!units[uk]) { units[uk] = true; if (u.tier === "major") t.majorHolidays++; else t.minorHolidays++; } }
     }
-    var counts = isP || (countBackup && isB);
-    if (counts) {
-      var hu = unitExempt ? ctx.holidayByDay[d] : null;
-      var key = hu ? "H:" + hu.name + ":" + hu.days[0] : d;
-      if (!runKeys[key]) { runKeys[key] = true; run++; }
-      if (run > t.maxConsecutive) t.maxConsecutive = run;
-    } else { run = 0; runKeys = {}; }
+    // measure each run once, from its first counted day inside the month (the walk reaches back before it)
+    var inRun = isP || (countBackup && isB), anyRun = isP || isB;
+    if (inRun && !prevIn) { var n = rdRunThrough(ctx, surgeonId, d, false); if (n > t.maxConsecutive) t.maxConsecutive = n; }
+    if (anyRun && !prevAny) { var na = rdRunThrough(ctx, surgeonId, d, true); if (na > t.maxConsecutiveAnyRole) t.maxConsecutiveAnyRole = na; }
+    prevIn = inRun; prevAny = anyRun;
   }
   return t;
 }
@@ -1081,6 +1149,7 @@ if (typeof module !== "undefined") {
     resolveWeight: resolveWeight,
     defaultWeights: defaultWeights,
     talliesFor: talliesFor,
+    runThrough: rdRunThrough,
     monthlyCapFor: monthlyCapFor,
     rdFmt: rdFmt,
     rdParse: rdParse,

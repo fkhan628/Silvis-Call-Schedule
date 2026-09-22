@@ -393,20 +393,98 @@ const capDistinct = makeCtx({ schedule: { "2026-11-09": { backup: FIERCE }, "202
 okElig(R.eligibility(capDistinct, "2026-11-04", P, FIERCE), "7 + 6 + 1 = 14 exactly");
 
 /* ------------------------------------------------ holidays */
+/* ------------------------------------------------ Prompt 12 A (9/22): consecutive-day rules */
+// Seed pins: the holiday-unit collapse is a per-surgeon opt-in (Khan only); the
+// any-role soft limit is per surgeon; the old group key is gone.
+step("Prompt 12 A seed: per-surgeon consecutive keys");
+ok(!("unitExemptFromMaxConsecutive" in seed.groupRules.holidays), "groupRules.holidays.unitExemptFromMaxConsecutive must be gone from the seed");
+eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map(id => seed.surgeonRules[id].holidayUnitCountsAsOneDay), [true, false, false, false, false, false], "only Khan opted in to the unit collapse");
+eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map(id => seed.surgeonRules[id].maxConsecutiveDays), [3, 2, 3, 4, 7, 2], "hard primary-only limits");
+eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map(id => seed.surgeonRules[id].maxConsecutiveAnyRole), [4, 3, 4, 4, 7, 2], "soft any-role limits");
+eq(seed.groupRules.weights.longRunPerDay, 3, "longRunPerDay = the medium weight");
+eq(R.defaultWeights().longRunPerDay, 3, "engine default for longRunPerDay (older blobs without the key)");
+const srNoCollapse = clone(SA.seedToSurgeonRules(seed)); srNoCollapse[KHAN].holidayUnitCountsAsOneDay = false;
+
+step("Prompt 12 A: the hard max-consecutive counts REAL primary days unless the surgeon opted in");
+// Burchett (max 2, no opt-in): locked primary 12/30 + 12/31 (both on his December list) -> 1/1 primary is a third real day.
+// Before Prompt 12 A the New Year unit (12/31 + 1/1) collapsed to one commitment for everyone and 1/1 was ok.
+const burNY = makeCtx({ schedule: { "2026-12-30": { primary: BURCHETT, primaryLocked: true }, "2026-12-31": { primary: BURCHETT, primaryLocked: true } } });
+blocked(R.eligibility(burNY, "2027-01-01", P, BURCHETT), "max-consecutive:2", "Burchett 12/30 + 12/31 + 1/1 = 3 real primary days > 2");
+okElig(R.eligibility(makeCtx({ schedule: { "2026-12-31": { primary: BURCHETT, primaryLocked: true } } }), "2027-01-01", P, BURCHETT), "12/31 + 1/1 = 2 real days is his limit, not over it");
+const burNYb = R.eligibility(burNY, "2027-01-01", B, BURCHETT);
+okElig(burNYb, "the hard limit stays primary-only: backup on 1/1 after two primaries is allowed");
+lacksSoft(burNYb, "long-run", "12/30 P + 12/31 P + 1/1 B = 3 any-role days = his soft limit 3, no penalty");
+const burNY3 = makeCtx({ schedule: { "2026-12-30": { primary: BURCHETT }, "2026-12-31": { primary: BURCHETT }, "2027-01-01": { backup: BURCHETT } } });
+const bur0102 = R.eligibility(burNY3, "2027-01-02", B, BURCHETT);
+okElig(bur0102, "a 4th any-role day is legal...");
+hasSoft(bur0102, "long-run:4", "...but carries the long-run penalty");
+eq((bur0102.soft.find(s => s.reason === "long-run:4") || {}).weight, 3, "weight = longRunPerDay * (4 - 3)");
+// Review 9/22 (item A, fix stage): talliesFor reports the REAL run touching the month, followed across the
+// month edges like helpers ttTotalsFor - Burchett 12/30 -> 1/1 reads 3 in December AND in January, not 2 / 1
+// (the month cut was one of the two reasons the old "Max consec. 2" column hid that run). Counts stay month-scoped.
+const burNY3d = makeCtx({ schedule: { "2026-12-30": { primary: BURCHETT, primaryLocked: true }, "2026-12-31": { primary: BURCHETT, primaryLocked: true }, "2027-01-01": { primary: BURCHETT, primaryLocked: true } } });
+const burDec = R.talliesFor(burNY3d, BURCHETT, "2026-12"), burJan = R.talliesFor(burNY3d, BURCHETT, "2027-01");
+eq([burDec.maxConsecutive, burDec.maxConsecutiveAnyRole], [3, 3], "talliesFor December follows Burchett's 12/30 -> 1/1 primary run across the month edge");
+eq([burJan.maxConsecutive, burJan.maxConsecutiveAnyRole], [3, 3], "talliesFor January sees the same 3-day run from its side");
+eq([burDec.primary, burJan.primary, burDec.total, burJan.total], [2, 1, 2, 1], "the counts stay month-scoped");
+const burMixDec = R.talliesFor(burNY3, BURCHETT, "2026-12"), burMixJan = R.talliesFor(burNY3, BURCHETT, "2027-01");
+eq([burMixDec.maxConsecutive, burMixDec.maxConsecutiveAnyRole], [2, 3], "12/30 P + 12/31 P + 1/1 B: December primary run 2, any-role run 3 across the edge");
+eq([burMixJan.maxConsecutive, burMixJan.maxConsecutiveAnyRole], [0, 3], "January: no primary run, the any-role run through 1/1 is still 3");
+
+step("Prompt 12 A: Khan's opt-in - the Thanksgiving unit is one day, the real days around it still count");
+const khanTg = {}; ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].forEach(d => { khanTg[d] = { primary: KHAN, primaryLocked: true }; });
+const k1sched = Object.assign({ "2026-11-25": { primary: KHAN } }, khanTg);
+okElig(R.eligibility(makeCtx({ schedule: k1sched }), "2026-11-30", P, KHAN), "11/25 + unit(1) + 11/30 = 3 commitments = his max 3");
+blocked(R.eligibility(makeCtx({ schedule: Object.assign({ "2026-11-24": { primary: KHAN } }, k1sched) }), "2026-11-30", P, KHAN), "max-consecutive:3", "11/24 + 11/25 + unit(1) + 11/30 = 4 > 3");
+blocked(R.eligibility(makeCtx({ schedule: k1sched, surgeonRules: srNoCollapse }), "2026-11-30", P, KHAN), "max-consecutive:3", "without his opt-in the unit is 4 real days: 11/25 + 4 + 11/30 = 6");
+const k1b = R.eligibility(makeCtx({ schedule: k1sched }), "2026-11-30", B, KHAN);
+okElig(k1b); lacksSoft(k1b, "long-run", "any-role with his opt-in: 11/25 + unit(1) + 11/30 B = 3 <= his soft limit 4");
+const k1bReal = R.eligibility(makeCtx({ schedule: k1sched, surgeonRules: srNoCollapse }), "2026-11-30", B, KHAN);
+hasSoft(k1bReal, "long-run:6", "without the opt-in the same shape is 6 real any-role days");
+eq((k1bReal.soft.find(s => s.reason === "long-run:6") || {}).weight, 3 * (6 - 4), "weight 3 * (6 - 4) = 6");
+
+step("Prompt 12 A: the any-role soft limit (Philip 4) with the long-run penalty");
+const phSched = { "2026-12-22": { primary: PHILIP }, "2026-12-23": { backup: PHILIP }, "2026-12-24": { backup: PHILIP }, "2026-12-25": { backup: PHILIP }, "2026-12-26": { primary: PHILIP }, "2026-12-27": { primary: PHILIP }, "2026-12-28": { primary: PHILIP } };
+const ph = makeCtx({ schedule: phSched });
+const ph29 = R.eligibility(ph, "2026-12-29", P, PHILIP);
+okElig(ph29, "12/29 primary: a 4th straight primary day = his hard max 4, allowed");
+hasSoft(ph29, "long-run:8", "12/22 .. 12/29 = 8 straight any-role days");
+eq((ph29.soft.find(s => s.reason === "long-run:8") || {}).weight, 3 * (8 - 4), "weight = longRunPerDay * (8 - 4) = 12");
+hasSoft(R.eligibility(ph, "2026-12-29", B, PHILIP), "long-run:8", "a backup slot extends the run the same way");
+const phGap = clone(phSched); delete phGap["2026-12-23"]; // the review's literal shape: 12/22 P, 12/24-25 B, 12/26-28 P (12/23 open)
+const ph29g = R.eligibility(makeCtx({ schedule: phGap }), "2026-12-29", P, PHILIP);
+hasSoft(ph29g, "long-run:6", "with 12/23 open the run through 12/29 is 12/24 .. 12/29 = 6");
+eq((ph29g.soft.find(s => s.reason === "long-run:6") || {}).weight, 3 * (6 - 4), "weight 6");
+lacksSoft(R.eligibility(makeCtx({ schedule: { "2026-12-26": { primary: PHILIP }, "2026-12-27": { primary: PHILIP }, "2026-12-28": { primary: PHILIP } } }), "2026-12-29", P, PHILIP), "long-run", "4 days = the limit itself, no penalty");
+const srNoAny = clone(SA.seedToSurgeonRules(seed)); delete srNoAny[PHILIP].maxConsecutiveAnyRole;
+lacksSoft(R.eligibility(makeCtx({ schedule: phSched, surgeonRules: srNoAny }), "2026-12-29", P, PHILIP), "long-run", "no maxConsecutiveAnyRole -> no soft limit (there is no group default)");
+const phT = R.talliesFor(ph, PHILIP, "2026-12");
+eq([phT.maxConsecutive, phT.maxConsecutiveAnyRole], [3, 7], "talliesFor December: 3 straight primaries, 7 straight any-role days (real days)");
+const k1T = R.talliesFor(makeCtx({ schedule: Object.assign({ "2026-11-30": { primary: KHAN } }, k1sched) }), KHAN, "2026-11");
+eq([k1T.maxConsecutive, k1T.maxConsecutiveAnyRole], [3, 3], "talliesFor Khan November with his opt-in: 11/25 + unit(1) + 11/30 = 3 for both measures");
+const k1Treal = R.talliesFor(makeCtx({ schedule: Object.assign({ "2026-11-30": { primary: KHAN } }, k1sched), surgeonRules: srNoCollapse }), KHAN, "2026-11");
+eq([k1Treal.maxConsecutive, k1Treal.maxConsecutiveAnyRole], [6, 6], "...and 6 real days for both without it");
+
+step("Prompt 12 A: the legacy group key is ignored with ONE warning, never honoured");
+const legacyGroup = clone(seed.groupRules); legacyGroup.holidays.unitExemptFromMaxConsecutive = true;
+const ctxLegacy = makeCtx({ schedule: k1sched, surgeonRules: srNoCollapse, groupRules: legacyGroup });
+eq(ctxLegacy.warnings.filter(w => /unitExemptFromMaxConsecutive/.test(w)).length, 1, "exactly one warning names the legacy key");
+blocked(R.eligibility(ctxLegacy, "2026-11-30", P, KHAN), "max-consecutive:3", "the legacy group key does not collapse the unit for a surgeon who did not opt in");
+eq(makeCtx({ schedule: k1sched }).warnings.filter(w => /unitExemptFromMaxConsecutive/.test(w)).length, 0, "no warning when the key is absent");
+
 step("Thanksgiving 2026 decisions");
 const tg = R.eligibility(ctx, "2026-11-26", P, KHAN);
 okElig(tg, "Khan primary on Thanksgiving Thursday: the Thu block is waived");
 lacks(tg.hard, "hard-never-weekday");
-okElig(R.eligibility(ctx, "2026-11-29", P, KHAN), "4-day unit is one commitment (max consecutive 3)");
+okElig(R.eligibility(ctx, "2026-11-29", P, KHAN), "4-day unit is one day for Khan (holidayUnitCountsAsOneDay; max consecutive 3)");
 okElig(R.eligibility(clean, "2026-11-29", P, KHAN, { assume: ["2026-11-26", "2026-11-27", "2026-11-28"].map(d => ({ date: d, role: P })) }), "unit evaluated with assume");
-const noExempt = clone(seed.groupRules); noExempt.holidays.unitExemptFromMaxConsecutive = false;
-const ctxNoExempt = R.buildContext(SA.seedToContextInput(seed, { groupRules: noExempt, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER }));
-const noEx = R.eligibility(ctxNoExempt, "2026-11-29", P, KHAN);
+// 9/22 Prompt 12 A: the collapse is his opt-in, not a group flag
+const noEx = R.eligibility(makeCtx({ surgeonRules: srNoCollapse }), "2026-11-29", P, KHAN);
 ok(noEx.ok && noEx.lockHolder === true, "the locked holder stays ok...");
-has(noEx.conflicts, "max-consecutive:3", "...but without the unit exemption the 4th locked day is reported as a conflict");
+has(noEx.conflicts, "max-consecutive:3", "...but without his opt-in the 4th locked day is reported as a conflict (real days)");
 const unlockedTg = {}; ["2026-11-26", "2026-11-27", "2026-11-28"].forEach(d => { unlockedTg[d] = { primary: KHAN }; });
-blocked(R.eligibility(R.buildContext(SA.seedToContextInput(seed, { schedule: unlockedTg, groupRules: noExempt, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER })), "2026-11-29", P, KHAN), "max-consecutive:3", "unlocked: without the unit exemption the 4th day breaks his max 3");
-okElig(R.eligibility(makeCtx({ schedule: unlockedTg }), "2026-11-29", P, KHAN), "unlocked with the exemption: fine");
+blocked(R.eligibility(makeCtx({ schedule: unlockedTg, surgeonRules: srNoCollapse }), "2026-11-29", P, KHAN), "max-consecutive:3", "unlocked: without his opt-in the 4th real day breaks his max 3");
+okElig(R.eligibility(makeCtx({ schedule: unlockedTg }), "2026-11-29", P, KHAN), "unlocked with his opt-in: fine");
 okElig(R.eligibility(ctx, "2026-11-26", B, BURCHETT), "Burchett backup on a Thursday: holiday exemption");
 okElig(R.eligibility(ctx, "2026-11-26", B, FIERCE), "Fierce backup on a Thursday: holiday exemption");
 okElig(R.eligibility(ctx, "2026-11-28", B, FIERCE), "Fierce lone Saturday: holiday exemption");
@@ -521,9 +599,10 @@ eq(tOct.total, 13);
 eq(tOct.weekendDays, 6, "9,10,11,17,18,23");
 eq(tOct.maxConsecutive, 3, "9-10-11 and 17-18-19 (backup 20 does not extend the run)");
 const tNov = R.talliesFor(ctx, KHAN, "2026-11");
-eq(tNov, { primary: 4, backup: 0, total: 4, weekendDays: 3, majorHolidays: 1, minorHolidays: 0, maxConsecutive: 1 }, "Thanksgiving unit = 4 shifts, 1 major holiday, 1 commitment");
+eq(tNov, { primary: 4, backup: 0, total: 4, weekendDays: 3, majorHolidays: 1, minorHolidays: 0, maxConsecutive: 1, maxConsecutiveAnyRole: 1 }, "Thanksgiving unit = 4 shifts, 1 major holiday, 1 day for both run measures (Khan opted in)");
+eq(R.talliesFor(makeCtx({ surgeonRules: srNoCollapse }), KHAN, "2026-11").maxConsecutive, 4, "without his opt-in the same unit reads 4 real days");
 eq(R.talliesFor(ctx, SARKAR, "2026-10").primary, 3);
-eq(R.talliesFor(clean, SARKAR, "2026-10"), { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0 });
+eq(R.talliesFor(clean, SARKAR, "2026-10"), { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0, maxConsecutiveAnyRole: 0 });
 eq(R.talliesFor(ctx, FIERCE, "2026-09").backup, 3, "Fierce backup 9/28-9/30");
 
 /* ------------------------------------------------ fix round 1 regressions */

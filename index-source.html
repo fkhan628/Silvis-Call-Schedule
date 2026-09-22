@@ -5186,8 +5186,9 @@ function suPatternLabel(p) {
 // applied. Views: one month, year to date (from Jan 1, or 2026-09-14 for
 // 2026), rolling 12 months, and a fairness view (bar of total vs target / cap
 // with the deviation). Counts only: primary, backup, total, weekend days,
-// holiday units (once per unit), max consecutive primary days, cap, target,
-// deviation, East days for a surgeon whose cap counts them. No $ anywhere.
+// holiday units (once per unit), max consecutive primary days (hard limit) and
+// any-role days (soft limit) in real days, cap, target, deviation, East days
+// for a surgeon whose cap counts them. No $ anywhere.
 // The tallies come from helpers.js ttTotalsFor (unit-tested); cap and East
 // days from the rules context; the target is the surgeon's explicit
 // monthlyTarget, else the implied target from the last generator preview's
@@ -5204,9 +5205,11 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const opts = {
     holidayByDay: ctx ? ctx.holidayByDay : {},
     weekendDays: ctx ? ctx.weekendDays : undefined,
-    unitExempt: ctx ? ctx.holidayFlags.unitExemptFromMaxConsecutive !== false : true,
     countBackup: ctx ? !!ctx.countBackupInConsecutive : false,
   };
+  // Prompt 12 A (9/22): a holiday unit is one day for the run columns only for a surgeon who opted in
+  // (surgeonRules.<id>.holidayUnitCountsAsOneDay - Khan); everyone else shows real days.
+  const collapseFor = (id) => !!(surgeonRules && surgeonRules[id] && surgeonRules[id].holidayUnitCountsAsOneDay === true);
   const hasPreview = !!(preview && preview.schedule && Object.keys(preview.schedule).length);
   const sources = [{ key: "published", label: "Published", sched: schedule || {} }];
   if (hasPreview && withPreview) sources.push({ key: "preview", label: "With preview", sched: suMergePreview(schedule || {}, preview.schedule, preview.respectLocks !== false) });
@@ -5227,14 +5230,15 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const eastFor = (id) => { const P = perOf(id); return P ? ttDaysIn(P.eastDays, range.from, range.to) : 0; };
   const countsEast = (id) => { const P = perOf(id); return !!(P && P.countsEastDays); };
   const maxConsecRule = (id) => { const P = perOf(id); return P ? P.maxConsec : null; };
+  const maxConsecAnyRule = (id) => { const P = perOf(id); return P && typeof P.maxConsecAnyRole === "number" ? P.maxConsecAnyRole : null; };
   const list = (roster || []).filter(s => s && s.id);
   const showEast = list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
   const rows = [];
   list.forEach(s => sources.forEach(src => {
-    const t = ttTotalsFor(src.sched, s.id, range.from, range.to, opts);
+    const t = ttTotalsFor(src.sched, s.id, range.from, range.to, { ...opts, unitCollapse: collapseFor(s.id) });
     const tg = targetFor(s.id), cap = capFor(s.id), east = eastFor(s.id);
     const capUse = countsEast(s.id) ? t.total + east : t.total; // Fierce's 14 counts East days too
-    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.value, targetKind: tg.kind, cap, capUse, east, maxRule: maxConsecRule(s.id), deviation: ttDeviation(t.total, tg.value) });
+    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.value, targetKind: tg.kind, cap, capUse, east, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.total, tg.value) });
   }));
   const capText = (r) => r.cap === null ? "-" : (nMonths > 1 ? r.cap + "/mo" : String(r.cap));
   const targetText = (r) => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
@@ -5242,8 +5246,10 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const periodText = range.label + (mode === "fairness" ? "" : "") ;
   const exportCsv = () => {
     try {
-      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap per month", "Target", "Deviation"];
-      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation]);
+      // The any-role run column is APPENDED so the older column positions (East days .. Deviation) stay where
+      // consumers (and test/ui/smoke.mjs) read them - Prompt 12 A, 9/22.
+      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap per month", "Target", "Deviation", "Max consecutive any role"];
+      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole]);
       const csv = ttCsvText(headers, data);
       const name = "silvis-totals-" + rangeMode + "-" + range.from + "-" + range.to + ".csv";
       const real = downloadTextFile(csv, name, "text/csv");
@@ -5260,6 +5266,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const devFlag = (r) => r.target === null ? undefined : r.t.total > r.target ? "over" : r.t.total < r.target ? "under" : "ok";
   const overCap = (r) => r.cap !== null && r.capUse > r.cap * nMonths;
   const overConsec = (r) => r.maxRule !== null && r.t.maxConsecutive > r.maxRule;
+  const overConsecAny = (r) => r.maxRuleAny !== null && r.t.maxConsecutiveAnyRole > r.maxRuleAny;
   const years = []; for (let y = now.getFullYear() - 1; y <= now.getFullYear() + 2; y++) years.push(y);
   const modeBtn = (k, text) => <button key={k} data-testid={"totals-mode-" + k} onClick={() => setMode(k)} style={css.mini(mode === k)}>{text}</button>;
   return (
@@ -5273,7 +5280,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
         <button data-testid="totals-csv" onClick={exportCsv} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto" }}>Export CSV</button>
       </div>
       <div data-testid="totals-period" style={{ fontSize: 12.5, color: dk ? "#c0c0d8" : "#3a4a58", marginBottom: 8 }}>
-        <strong>{periodText}</strong> - {range.from} to {range.to}. One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges{opts.unitExempt ? " (a holiday unit counts as one commitment)" : ""}.{!loaded ? " Loading schedule..." : ""}
+        <strong>{periodText}</strong> - {range.from} to {range.to}. One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.{!loaded ? " Loading schedule..." : ""}
       </div>
       {!ctx && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules context unavailable - caps, targets, holiday units and East days show as '-' until the setup loads.</div>}
       {mode !== "fairness" ? (
@@ -5282,18 +5289,19 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
             <thead>
               <tr>
                 <th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}
-                <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} title="Longest run of consecutive primary days touching the period (rule limit in brackets)">Max consec. P</th>
+                <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
                 {showEast && <th style={th} title="Days on East (Davenport) call in the period - counted toward the cap for a surgeon whose cap counts them">East days</th>}
                 <th style={th}>Cap{nMonths > 1 ? " /mo" : ""}</th><th style={th}>Target</th><th style={th}>Deviation</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(r => (
-                <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-east={r.east} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
+                <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-maxconsecany={r.t.maxConsecutiveAnyRole} data-east={r.east} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
                   <td style={tdL}><Badge id={r.id}/></td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: r.src === "preview" ? "#7a4fbf" : "#7a8a98" }}>{r.srcLabel}</td>}
                   <td style={td}>{r.t.primary}</td><td style={td}>{r.t.backup}</td><td style={{ ...td, fontWeight: 700 }}>{r.t.total}</td><td style={td}>{r.t.weekendDays}</td>
                   <td style={td} title={r.t.holidayUnits.join(", ") || "none"}>{r.t.majorHolidays} / {r.t.minorHolidays}</td>
                   <td data-col="maxconsec" data-flag={overConsec(r) ? "over" : undefined} style={{ ...td, color: overConsec(r) ? "#c04040" : td.color }}>{r.t.maxConsecutive}{r.maxRule !== null ? " (" + r.maxRule + ")" : ""}</td>
+                  <td data-col="maxconsecany" data-flag={overConsecAny(r) ? "over" : undefined} style={{ ...td, color: overConsecAny(r) ? "#c04040" : td.color }}>{r.t.maxConsecutiveAnyRole}{r.maxRuleAny !== null ? " (" + r.maxRuleAny + ")" : ""}</td>
                   {showEast && <td style={td}>{r.east || (countsEast(r.id) ? 0 : "-")}</td>}
                   <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={countsEast(r.id) ? "This cap counts Silvis + East days: " + r.capUse : undefined}>{capText(r)}</td>
                   <td data-col="target" style={td}>{targetText(r)}</td>
@@ -5577,7 +5585,9 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <SuField label="Availability mode"><select value={get("availabilityMode", "")} onChange={e => set("availabilityMode", e.target.value || undefined)} style={{ ...inp, width: 260 }}>{SU_MODES.map(m => <option key={m} value={m}>{m || "(open - every day unless blocked)"}</option>)}</select></SuField>
           <SuField label="Weekend style"><select value={get("weekendStyle", "")} onChange={e => set("weekendStyle", e.target.value || undefined)} style={{ ...inp, width: 130 }}><option value="">(none)</option><option value="block">block (Fri+Sat+Sun)</option><option value="split">split (Fri+Sun / Sat)</option><option value="saturday-only">saturday-only</option></select></SuField>
           <SuField label="Split partner"><select value={get("splitPartner", "")} onChange={e => set("splitPartner", e.target.value || undefined)} style={{ ...inp, width: 130 }}><option value="">(none)</option>{(roster || []).filter(x => x.id !== sel).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></SuField>
-          <SuField label="Max consecutive days" hint="blank = group default"><input type="number" min="1" max="14" value={get("maxConsecutiveDays", "") === null ? "" : get("maxConsecutiveDays", "")} onChange={e => set("maxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
+          <SuField label="Max consecutive days" hint="blank = group default; hard, primary days only"><input type="number" min="1" max="14" value={get("maxConsecutiveDays", "") === null ? "" : get("maxConsecutiveDays", "")} onChange={e => set("maxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
+          <SuField label="Max consecutive any role (soft)" hint="blank = none; primary or backup, a penalty that grows per day beyond it"><input data-testid="rules-max-consec-any" type="number" min="1" max="14" value={get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", "")} onChange={e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
+          <SuCheck label="a holiday unit counts as one day for the consecutive limits" title="Prompt 12 A (9/22): a per-surgeon opt-in (Khan: his 4-day Thanksgiving unit vs his max 3). Unchecked = real days." checked={draft.holidayUnitCountsAsOneDay === true} onChange={v => set("holidayUnitCountsAsOneDay", v ? true : undefined)} testid="rules-holiday-unit-one-day" />
           <SuField label="Monthly target" hint="blank = no target"><input data-testid="rules-monthly-target" type="number" min="0" max="31" value={get("monthlyTarget", null) === null ? "" : get("monthlyTarget", "")} onChange={e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
           <div>
             <SuField label="Monthly cap">
@@ -5730,7 +5740,6 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <SuCheck label="backup must differ from primary" checked={gget("backupDistinctFromPrimary", true) !== false} onChange={v => gset("backupDistinctFromPrimary", v)} />
           <SuCheck label="holiday units waive weekday rules" checked={gget("holidays.ignoreWeekdayRules", true) !== false} onChange={v => gset("holidays.ignoreWeekdayRules", v)} />
           <SuCheck label="anyone may cover a holiday unless opted out" checked={gget("holidays.anyoneMayCoverUnlessOptedOut", true) !== false} onChange={v => gset("holidays.anyoneMayCoverUnlessOptedOut", v)} />
-          <SuCheck label="a holiday unit counts as one commitment for max consecutive" checked={gget("holidays.unitExemptFromMaxConsecutive", true) !== false} onChange={v => gset("holidays.unitExemptFromMaxConsecutive", v)} />
         </div>
         <div style={css.subT}>Weights</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
@@ -6026,16 +6035,16 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Per-surgeon tallies vs cap / target</div>
         <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="gen-tallies">
-            <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th>Max consec</th><th>Cap</th><th>Target</th></tr></thead>
+            <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th title="Longest run of consecutive primary days touching the month / range (real days; the hard limit's measure)">Max consec. P</th><th title="Longest run of consecutive days in either role (real days; the soft limit's measure)">Max consec. any</th><th>Cap</th><th>Target</th></tr></thead>
             <tbody>
               {ids.map(id => {
                 const t = dg.tallies[id];
                 const rows = months.map(m => { const x = t.months[m] || {}; return (
                   <tr key={id + m} data-tally={id} style={{ color: (x.cap !== null && x.cap !== undefined && x.total > x.cap) ? "#a83232" : undefined }}>
-                    <td>{nameOf(id)}</td><td style={{ fontFamily: mono }}>{m}</td><td>{x.primary}</td><td>{x.backup}</td><td><strong>{x.total}</strong></td><td>{x.weekendDays}</td><td>{x.majorHolidays}</td><td>{x.minorHolidays}</td><td>{x.maxConsecutive}</td><td>{num(x.cap)}</td><td>{num(x.target)}</td>
+                    <td>{nameOf(id)}</td><td style={{ fontFamily: mono }}>{m}</td><td>{x.primary}</td><td>{x.backup}</td><td><strong>{x.total}</strong></td><td>{x.weekendDays}</td><td>{x.majorHolidays}</td><td>{x.minorHolidays}</td><td>{x.maxConsecutive}</td><td>{x.maxConsecutiveAnyRole}</td><td>{num(x.cap)}</td><td>{num(x.target)}</td>
                   </tr>); });
                 const r = t.range || {};
-                rows.push(<tr key={id + "range"} data-tally-range={id} style={{ background: "#f4f6f8", fontWeight: 700 }}><td>{nameOf(id)}</td><td>range</td><td>{r.primary}</td><td>{r.backup}</td><td>{r.total}</td><td>{r.weekendDays}</td><td>{r.majorHolidays}</td><td>{r.minorHolidays}</td><td>{r.maxConsecutive}</td><td>{num(r.cap)}</td><td></td></tr>);
+                rows.push(<tr key={id + "range"} data-tally-range={id} style={{ background: "#f4f6f8", fontWeight: 700 }}><td>{nameOf(id)}</td><td>range</td><td>{r.primary}</td><td>{r.backup}</td><td>{r.total}</td><td>{r.weekendDays}</td><td>{r.majorHolidays}</td><td>{r.minorHolidays}</td><td>{r.maxConsecutive}</td><td>{r.maxConsecutiveAnyRole}</td><td>{num(r.cap)}</td><td></td></tr>);
                 return rows;
               })}
             </tbody>

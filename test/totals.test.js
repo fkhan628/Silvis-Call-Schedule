@@ -116,10 +116,53 @@ console.log("\n[C] holiday units - counted once per unit, tier by unit; unit day
     assert.strictEqual(H.ttTotalsFor(sched, "s1", "2026-12-01", "2026-12-31", { holidayByDay: byDay }).majorHolidays, 1);
     assert.strictEqual(H.ttTotalsFor(sched, "s1", "2027-01-01", "2027-01-31", { holidayByDay: byDay }).majorHolidays, 1);
   });
-  check("max consecutive: unit days are ONE commitment when unitExempt (default) - 11/25 + unit + 11/30 = 3; raw = 6", () => {
-    assert.strictEqual(H.ttTotalsFor(sched, "s1", "2026-11-01", "2026-11-30", { holidayByDay: byDay }).maxConsecutive, 3);
-    assert.strictEqual(H.ttTotalsFor(sched, "s1", "2026-11-01", "2026-11-30", { holidayByDay: byDay, unitExempt: false }).maxConsecutive, 6);
+  check("max consecutive: unit days are ONE commitment only when opts.unitCollapse - 11/25 + unit + 11/30 = 3; raw = 6 is the default (Prompt 12 A)", () => {
+    assert.strictEqual(H.ttTotalsFor(sched, "s1", "2026-11-01", "2026-11-30", { holidayByDay: byDay }).maxConsecutive, 6, "default: real days");
+    assert.strictEqual(H.ttTotalsFor(sched, "s1", "2026-11-01", "2026-11-30", { holidayByDay: byDay, unitCollapse: true }).maxConsecutive, 3, "opted in: the unit is one day");
+    assert.strictEqual(H.ttTotalsFor(sched, "s1", "2026-11-01", "2026-11-30", { holidayByDay: byDay, unitExempt: true }).maxConsecutive, 6, "the old opts.unitExempt is not read any more");
     assert.strictEqual(H.ttTotalsFor(sched, "s1", "2026-11-01", "2026-11-30").maxConsecutive, 6, "without the holiday map every day counts");
+  });
+  check("maxConsecutiveAnyRole: the unit collapse applies to the any-role run the same way (s2 backup on all 4 Thanksgiving days)", () => {
+    const s2 = H.ttTotalsFor(sched, "s2", "2026-11-01", "2026-11-30", { holidayByDay: byDay });
+    assert.deepStrictEqual([s2.maxConsecutive, s2.maxConsecutiveAnyRole], [0, 4], "no primary run; 4 real backup days");
+    const s2c = H.ttTotalsFor(sched, "s2", "2026-11-01", "2026-11-30", { holidayByDay: byDay, unitCollapse: true });
+    assert.deepStrictEqual([s2c.maxConsecutive, s2c.maxConsecutiveAnyRole], [0, 1]);
+    const s1 = H.ttTotalsFor(sched, "s1", "2026-11-01", "2026-11-30", { holidayByDay: byDay, unitCollapse: true });
+    assert.deepStrictEqual([s1.maxConsecutive, s1.maxConsecutiveAnyRole], [3, 3]);
+  });
+}
+
+console.log("\n[C2] maxConsecutiveAnyRole - the any-role run (primary or backup), real days (Prompt 12 A)");
+{
+  // Review 9/22 item E: Philip 12/22 P, 12/23-25 B, 12/26-28 P = 7 straight on-call days, 3 straight primaries.
+  const sched = {
+    "2026-12-22": day("s4", "s1"), "2026-12-23": day("s1", "s4"), "2026-12-24": day("s1", "s4"), "2026-12-25": day("s1", "s4"),
+    "2026-12-26": day("s4", "s2"), "2026-12-27": day("s4", "s2"), "2026-12-28": day("s4", "s2"),
+    "2026-12-30": day("s4", null)
+  };
+  check("Philip: maxConsecutive 3 (12/26-28), maxConsecutiveAnyRole 7 (12/22-28); 12/30 alone does not extend either", () => {
+    const t = H.ttTotalsFor(sched, "s4", "2026-12-01", "2026-12-31");
+    assert.strictEqual(t.maxConsecutive, 3);
+    assert.strictEqual(t.maxConsecutiveAnyRole, 7);
+  });
+  check("the any-role run follows the period edges like the primary run", () => {
+    assert.strictEqual(H.ttTotalsFor(sched, "s4", "2026-12-26", "2026-12-31").maxConsecutiveAnyRole, 7, "a period starting mid-run still reads the whole run");
+    assert.strictEqual(H.ttTotalsFor(sched, "s4", "2026-12-01", "2026-12-22").maxConsecutiveAnyRole, 7);
+    assert.strictEqual(H.ttTotalsFor(sched, "s4", "2026-12-29", "2026-12-31").maxConsecutiveAnyRole, 1, "12/30 alone");
+  });
+  check("ttRunThrough anyRole: 0 off-run, the run length from any day of it; without anyRole a backup day is 0", () => {
+    assert.strictEqual(H.ttRunThrough(sched, "s4", "2026-12-24", { anyRole: true }), 7);
+    assert.strictEqual(H.ttRunThrough(sched, "s4", "2026-12-24"), 0, "backup day: not part of a primary run");
+    assert.strictEqual(H.ttRunThrough(sched, "s4", "2026-12-28"), 3);
+    assert.strictEqual(H.ttRunThrough(sched, "s4", "2026-12-29", { anyRole: true }), 0);
+  });
+  check("a surgeon with primary and backup interleaved: s1 12/22 B + 12/23-25 P is 3 primary / 4 any-role; s2 12/26-28 B is 0 / 3", () => {
+    const s1 = H.ttTotalsFor(sched, "s1", "2026-12-01", "2026-12-31");
+    assert.deepStrictEqual([s1.maxConsecutive, s1.maxConsecutiveAnyRole], [3, 4], "s1 backup 12/22 + primary 12/23-25 = 4 any-role");
+    const s2 = H.ttTotalsFor(sched, "s2", "2026-12-01", "2026-12-31");
+    assert.deepStrictEqual([s2.maxConsecutive, s2.maxConsecutiveAnyRole], [0, 3]);
+    const z = H.ttTotalsFor(sched, "s6", "2026-12-01", "2026-12-31");
+    assert.deepStrictEqual([z.maxConsecutive, z.maxConsecutiveAnyRole], [0, 0]);
   });
 }
 
