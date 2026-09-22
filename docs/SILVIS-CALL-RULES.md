@@ -118,6 +118,7 @@ decides the Trauma Director role.
 - ⟶ **9/22 evening (Faraz): no Tuesdays for Acton — HARD for primary** ("[removed]"). He asked for
   it "if possible"; Faraz made it firm. Backup on Tuesdays stays allowed (standby; the 9/22 backup rule). Note in
   any anon-readable table reads "not Tuesdays" — the reason stays here and in his own words only.
+- ⟶ **Seed keys (Prompt 12 X, 9/22 evening):** `surgeonRules.s3.hardNeverWeekdays: ["Tue"]`, `hardNeverWeekdaysRoles: ["primary"]` (the generic W read — `rules.js rdStatic`, reason `hard-never-weekday:Tue`, lifted for a date only by his own dated `available`/primary row; a lock is not a row, so his published Tue 9/22 keeps its holder with the rule in `conflicts`), `hardNeverWeekdaysNote` (dropped by the importer); no `hardNeverWeekdaysReason` key on purpose (a `*Reason` key reaches the blob as a category token); the old `recurringAvoid` Tuesday entry left the seed with its note. Data only — no code change; editable in Setup → Rules (hard never weekdays + roles).
 - Time off: **Nov 19–22** ([removed]), **Nov 25–29** (Thanksgiving week). **Never on Thanksgiving.** Christmas or New Year's is fine; agrees with Burchett's alternating-days strategy.
 - Weekend style: **split** with Burchett; has also taken full Fri–Sun (10/9–10/11), so max consecutive 3.
 - ⟶ **9/22 (Prompt 12 A): max consecutive 3 primary days is hard on real days** (no holiday-unit opt-in); any-role soft limit **4**.

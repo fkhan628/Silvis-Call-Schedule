@@ -234,6 +234,7 @@ function datedRowLifts(id, d, role, extraRows) {
   return (extraRows || []).some((r) => r.person_id === id && d >= r.start_date && d <= (r.end_date || r.start_date) && ((r.kind === "available" && (!r.role || r.role === "any" || r.role === role)) || (r.kind === "backup_only" && role === B)));
 }
 const W_STATS = { forbiddenNoRow: 0, liftedByRow: 0 }; // placements on a hardNeverWeekdays day: without a row (must stay 0) / with one
+const X_STATS = { actonTuePrimary: [] }; // item X (9/22 evening): every generated Acton PRIMARY on a non-holiday Tuesday, across all runs (must stay empty)
 const actonBlockedRecurring = (d) => ["Mon", "Wed"].includes(weekday(d)) && [2, 4].includes(nthOf(d));
 const otherRoleOf = (role) => (role === P ? B : P);
 // Philip: Aledo days = 1st/3rd Wednesday + the Friday of the Mon-Sun week containing the 3rd Wednesday.
@@ -515,6 +516,7 @@ function checkRun(out, range, seedNo, deep, extraRows) { // extraRows (W): dated
       // item 6 (9/22: outreach days and the governed October restrict primary only)
       if (id === ACTON) {
         if (role === P && !isHoliday(d)) ok(!actonBlockedRecurring(d), "Acton PRIMARY on a 2nd/4th " + weekday(d));
+        if (role === P && !isHoliday(d) && weekday(d) === "Tue") X_STATS.actonTuePrimary.push(range.name + " seed " + seedNo + " " + d); // item X: named pin at the end of the file
         ok(!(d >= "2026-11-19" && d <= "2026-11-22") && !(d >= "2026-11-25" && d <= "2026-11-29"), "Acton on his November time off");
         ok(!(HOLIDAY[d] && HOLIDAY[d].name === "Thanksgiving"), "Acton on a Thanksgiving unit day");
         { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role) && !isHoliday(d)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary, November both roles)"); }
@@ -1072,7 +1074,10 @@ const soleCandidatePrimaries = (out, id, m) => monthDays(m).filter((d) => d >= R
   }));
   CUR.day = "-";
   eq(soleCandidatePrimaries(big, PHILIP, "2026-11"), ["2026-11-10", "2026-11-12", "2026-11-13", "2026-11-24"], "T: Philip is the sole primary candidate on exactly 11/10, 11/12, 11/13, 11/24 once the ER-panel author's November locks are in");
-  eq(soleCandidatePrimaries(big, PHILIP, "2026-12"), [], "T: no sole-candidate day for Philip in December");
+  // Prompt 12 X FLIP (9/22 evening): before X this set was [] (T). With Acton's Tuesday now a hard primary rule, the two
+  // December Tuesdays outside Sarkar's window (12/14-18) and Fierce's derived week (12/7-13) fall to Philip alone - the
+  // Tue/Thu structural gap of rules doc section 8 item 15 (Khan: OR day, Fierce: Clinton, Burchett: off his December list).
+  eq(soleCandidatePrimaries(big, PHILIP, "2026-12"), ["2026-12-22", "2026-12-29"], "X: Philip is the sole primary candidate on exactly Tue 12/22 and Tue 12/29 once Acton is off Tuesdays (was [] before X)");
 }
 // L (9/22, data-driven): Khan = weekend PRIMARY when East allows. On the milestone preview, among the weekends
 // open to him (khanOpenWeekends: primary-eligible all three days) the full-block PRIMARY weekends are at least
@@ -1369,6 +1374,22 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   // hardNeverWeekdays day without a row (the per-slot assertion fails first; this names the pin across all runs)
   eq(W_STATS.forbiddenNoRow, 0, "W: across every run no surgeon was placed on a day his hardNeverWeekdays forbid without a dated row of his (generic over surgeonRules.<id>.hardNeverWeekdays + Roles)");
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 12 X (9/22 evening) ----
+// Faraz: "Acton (s3): never PRIMARY on a Tuesday - promote his Tuesday soft-avoid to a hard primary rule
+// (hardNeverWeekdaysRoles primary: ["Tue"]); backup on Tuesdays stays allowed." Data only: surgeonRules.s3.hardNeverWeekdays
+// ["Tue"] + hardNeverWeekdaysRoles ["primary"]. The generic W pin in checkRun (item 5) now covers him automatically from the
+// seed; this block names the consequence once across every run of the file: no generated Acton PRIMARY on a Tuesday
+// (holiday-unit days excepted - the weekday family is waived there; locks are facts, not placements).
+{
+  CUR.range = "X (Acton Tuesdays)"; CUR.seed = "-"; CUR.day = "-";
+  eq(X_STATS.actonTuePrimary.length, 0, "X: across every run the generator never placed Acton PRIMARY on a Tuesday - " + X_STATS.actonTuePrimary.length + " placement(s), first: " + X_STATS.actonTuePrimary.slice(0, 6).join(", "));
+  ok(HARD_NEVER[ACTON].has("Tue") && hardNeverApplies(ACTON, P) && !hardNeverApplies(ACTON, B), "seed: Acton's hardNeverWeekdays forbid Tuesday PRIMARY only (item X) - the generic W pin covers him");
+  ok(!("hardNeverWeekdaysReason" in SR[ACTON]), "seed: no hardNeverWeekdaysReason key for Acton (a *Reason key reaches the blob as a category token)");
+  eq((SR[ACTON].recurringAvoid || []).map((r) => r.weekday), ["Sun"], "seed: the Tuesday soft avoid left with its note; the Sunday avoid stays");
+  ok(![...SEED_ROWS[ACTON].primary].some((d) => weekday(d) === "Tue"), "seed: none of Acton's dated primary rows is a Tuesday - nothing lifts the block in these runs, so the pin above is not vacuous");
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
 const total = Date.now() - T_FILE;

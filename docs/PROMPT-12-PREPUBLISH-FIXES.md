@@ -372,3 +372,34 @@ dated primary row on an ordinary Tuesday; the other candidates unavailable that 
 with `hard-never-weekday:Tue` as Khan's only reason, the W run places him; `checkRun` now pins `hardNeverWeekdays`
 generically over `surgeonRules.<id>.hardNeverWeekdays + Roles` for every surgeon (Acton's Tuesday from item X is covered
 automatically), lifted only by a dated row for that date and role.
+
+## Item X — Acton's Tuesdays (Faraz, 9/22 evening; appended by Claude Code)
+
+Faraz, verbatim: *"Acton (s3): never PRIMARY on a Tuesday — promote his Tuesday soft-avoid to a hard primary rule
+(hardNeverWeekdaysRoles primary: ["Tue"]); backup on Tuesdays stays allowed. Any note in an anon-readable table says only
+'not Tuesdays' — no reason. rules.test.js case + regression assertion."*
+
+Data only — no code change; the engine is item W's generic `hardNeverWeekdays` read. Seed (`surgeonRules.s3`):
+`hardNeverWeekdays: ["Tue"]`, `hardNeverWeekdaysRoles: ["primary"]`, `hardNeverWeekdaysNote` (a `*Note` key — the importer
+drops it); the `recurringAvoid` Tuesday entry left the seed together with its note (its category token would otherwise reach
+the blob as a reason); no `hardNeverWeekdaysReason` key on purpose (a `*Reason` key becomes a category token in the blob);
+one `notes[]` line `"not Tuesdays (primary), 9/22 evening"` (dropped — it reads as documentation); a `_meta.revisions` entry.
+The reason stays in the rules doc §3 Acton and nowhere else. Importer dry run (read-only, against the live tables): the s3
+inventory reads `hardNeverWeekdaysNote -> drop`, `notes[2] -> drop`, `recurringAvoid[0].note -> category -> outreach` (the
+Sunday avoid) and no `recurringAvoid[1]` entry any more; plan diff `surgeonRules=update` (plus the pending `groupRules=update`
+and `settings=update` from W), `schedule_days` / `availability` / `time_off` 0 changes. Consequences: his November Tuesday
+entries (11/3, 11/17) are backups and unaffected; the ER-panel author's published Tue 9/22 primary is a lock, not a row — it keeps its
+holder with `hard-never-weekday:Tue` in `conflicts`; on the milestone preview Tue 12/22 and 12/29 now have Philip as the
+only primary candidate (the §8 item 15 structural gap — Khan: OR day, Fierce: Clinton, Burchett: off his December list,
+Sarkar: outside her 12/14–18 window; 12/1 is Burchett's first Tuesday, 12/8 is Fierce's derived week, 12/15 is in Sarkar's
+window). Tests: `test/rules.test.js` — three pre-X assertions flipped in place (Acton's Tuesday primary read eligible with
+the soft `recurring-avoid:Tue` at weight 3, backup at weight 1; the closed-policy weight pin now reads his Sunday avoid) and
+a Prompt 12 X block (primary hard with `hard-never-weekday:Tue` as the only reason, backup open with no soft Tuesday term,
+his own dated available/primary row lifts it, date- and role-scoped, the Sunday avoid still soft at 3, the November backup
+locks untouched, the 9/22 lock keeps its holder); `test/generator-regression.js` — `X_STATS` counts every generated Acton
+primary on a non-holiday Tuesday across all runs and the named pin requires zero (fail-before against the old seed: 150
+placements, first `R3 Jan-Mar seed 1 2027-01-19`), plus the seed facts; the T pin "no sole-candidate day for Philip in
+December" flipped to exactly `12/22, 12/29`. `test/importer.test.js` (not on the item's file list — a forced follow-on):
+four lines that indexed `recurringAvoid[1]` (the removed entry) would crash the suite, so they now pin its absence and the
+`hardNeverWeekdaysNote -> drop`. Setup → Rules already edits `hardNeverWeekdays` and its roles (the same checkboxes Khan's
+rule uses).

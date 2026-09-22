@@ -584,9 +584,11 @@ function noteValues(o, p, out) {
 }
 // (1) the two live offenders (review finding F): the seed keeps its wording, the blob gets the category
 eq(seed.surgeonRules[ACTON].holidayRules.neverThanksgivingNote, "[removed]", "seed still says '[removed]' (the seed is not rewritten)");
-eq(seed.surgeonRules[ACTON].recurringAvoid[1].note, "[removed]", "seed still says '[removed]'");
+// Prompt 12 X FLIP (9/22 evening): the second offender - Acton's Tuesday avoid with its '[removed]' note - left the seed
+// entirely (his Tuesday is now the hard primary rule s3.hardNeverWeekdays, with no reason key); the pins below read its absence.
+ok(!seed.surgeonRules[ACTON].recurringAvoid.some((r) => r.weekday === "Tue") && !("hardNeverWeekdaysReason" in seed.surgeonRules[ACTON]), "X: no Tuesday avoid entry and no hardNeverWeekdaysReason key in the seed (the rule carries no reason)");
 eq(plan.blob.surgeonRules[ACTON].holidayRules.neverThanksgivingNote, "family", "'[removed]' -> family");
-eq(plan.blob.surgeonRules[ACTON].recurringAvoid[1].note, "family", "'[removed]' -> family");
+eq(plan.blob.surgeonRules[ACTON].recurringAvoid.map((r) => r.note), ["outreach"], "X: only the Sunday avoid remains in the blob, its note a category token");
 ok(JSON.stringify(plan.blob).indexOf("[removed]") < 0 && JSON.stringify(plan.blob).indexOf("[removed]") < 0, "neither phrase anywhere in the blob");
 ok(sql.indexOf("[removed]") < 0 && sql.indexOf("[removed]") < 0, "neither phrase in the generated SQL");
 // (2) every note-like string left in the blob's surgeonRules is exactly a category token
@@ -624,7 +626,7 @@ eq(IMP.impFindKeys(plan.blob.holidays, NOTE_KEY), [], "blob has no holidays note
 ok(JSON.stringify(seed.holidays).indexOf("dayMembershipNote") >= 0, "the seed keeps its holidays notes");
 eq(plan.blob.surgeonRules[ACTON].timeOff, [{ start: "2026-11-19", end: "2026-11-22" }, { start: "2026-11-25", end: "2026-11-29" }], "blob timeOff carries dates only (no note)");
 // non-note structure untouched
-eq(plan.blob.surgeonRules[ACTON].recurringAvoid[1].weekday, seed.surgeonRules[ACTON].recurringAvoid[1].weekday, "the rule beside the note is unchanged");
+eq(plan.blob.surgeonRules[ACTON].recurringAvoid[0].weekday, seed.surgeonRules[ACTON].recurringAvoid[0].weekday, "the rule beside the note is unchanged"); // X: [1] (the Tuesday avoid) left the seed
 eq(stripNoteKeys(Object.assign({}, plan.blob.surgeonRules[KHAN], { timeOff: null })), stripNoteKeys(Object.assign({}, seed.surgeonRules[KHAN], { timeOff: null })), "Khan rules minus notes == seed minus notes");
 // (4) denylist never fires on the real seed after scrubbing (the plan at the top was built) and nothing personal remains
 const blobStrings = walkStrings(plan.blob, "blob", []);
@@ -633,7 +635,7 @@ eq(blobStrings.filter((x) => DENY.test(x.value) && CATS.indexOf(x.value) < 0).ma
 const inv = plan.noteScrub.inventory;
 ok(Array.isArray(inv) && inv.length > 20, "inventory present (" + (inv && inv.length) + " entries)");
 ok(inv.some((e) => e.path === "surgeonRules.s3.holidayRules.neverThanksgivingNote" && e.action === "category" && e.to === "family"), "inventory: neverThanksgivingNote -> category family");
-ok(inv.some((e) => e.path === "surgeonRules.s3.recurringAvoid[1].note" && e.action === "category" && e.to === "family"), "inventory: recurringAvoid[1].note -> category family");
+ok(!inv.some((e) => e.path === "surgeonRules.s3.recurringAvoid[1].note") && inv.some((e) => e.path === "surgeonRules.s3.hardNeverWeekdaysNote" && e.action === "drop"), "X: inventory has no recurringAvoid[1] entry any more and drops s3.hardNeverWeekdaysNote (no reason reaches the blob)"); // Prompt 12 X FLIP: was 'recurringAvoid[1].note -> category family'
 ok(inv.filter((e) => e.path.indexOf("groupRules.") === 0).every((e) => e.action === "drop"), "every groupRules entry is a drop");
 ok(inv.filter((e) => e.path.indexOf("holidays.") === 0).every((e) => e.action === "drop"), "every holidays entry is a drop");
 eq(inv.filter((e) => e.path.indexOf("holidays.") === 0).length, IMP.impFindKeys(seed.holidays, NOTE_KEY).length, "one drop per holidays note-like key");

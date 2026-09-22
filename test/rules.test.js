@@ -367,7 +367,9 @@ const sun8 = R.eligibility(clean, "2027-01-10", P, ACTON);
 okElig(sun8); hasSoft(sun8, "recurring-avoid:Sun", "Sunday before the 2nd Monday");
 eq(sun8.soft.find(s => s.reason === "recurring-avoid:Sun").weight, 3, "medium = 3");
 const tue10 = R.eligibility(clean, "2027-01-12", P, ACTON);
-okElig(tue10); hasSoft(tue10, "recurring-avoid:Tue");
+// Prompt 12 X FLIP (9/22 evening): before X this read okElig(tue10); hasSoft(tue10, "recurring-avoid:Tue") - Faraz made his
+// Tuesday a hard PRIMARY rule (surgeonRules.s3.hardNeverWeekdays ["Tue"], roles ["primary"]); the soft avoid left the seed.
+blocked(tue10, "hard-never-weekday:Tue", "X: Acton PRIMARY on an ungoverned Tuesday is hard");
 lacksSoft(R.eligibility(clean, "2027-01-17", P, ACTON), "recurring-avoid", "Sunday before the 3rd Monday is not avoided");
 okElig(R.eligibility(clean, "2027-01-04", B, ACTON), "no cap for Acton");
 blocked(R.eligibility(clean, "2026-11-23", P, ACTON), "recurring-unavailable:Mon", "T: in governed November a 4th Monday off his list carries the recurring reason too");
@@ -938,8 +940,10 @@ blocked(R.eligibility(clean, "2026-11-09", B, ACTON), "whitelist-month", "T: 11/
 blocked(R.eligibility(clean, "2026-12-14", P, ACTON), "recurring-unavailable:Mon", "2nd Monday of December");
 okElig(R.eligibility(clean, "2026-12-14", B, ACTON), "Acton backup 12/14 (2nd Monday, outside any derived week)");
 const tueP = R.eligibility(clean, "2027-01-12", P, ACTON), tueB = R.eligibility(clean, "2027-01-12", B, ACTON); // January: ungoverned
-eq((tueP.soft.find(s => s.reason === "recurring-avoid:Tue") || {}).weight, 3, "Acton Tuesday avoid: medium (3) for primary");
-eq((tueB.soft.find(s => s.reason === "recurring-avoid:Tue") || {}).weight, 1, "Acton Tuesday avoid: low (1) for backup");
+// Prompt 12 X FLIP (9/22 evening): before X these read weight 3 (primary) / 1 (backup) for the soft "recurring-avoid:Tue";
+// the avoid is gone - Tuesday is a hard PRIMARY rule for him and backup carries no Tuesday term at all.
+blocked(tueP, "hard-never-weekday:Tue", "X: Acton Tuesday primary is hard (no soft avoid left)");
+okElig(tueB, "X: Acton Tuesday backup stays open"); lacksSoft(tueB, "recurring-avoid:Tue", "X: ...with no soft Tuesday term for backup");
 eq((R.eligibility(clean, "2027-01-10", B, ACTON).soft.find(s => s.reason === "recurring-avoid:Sun") || {}).weight, 1, "Sunday before a 2nd Monday: low (1) for backup");
 eq((R.eligibility(clean, "2027-01-10", P, ACTON).soft.find(s => s.reason === "recurring-avoid:Sun") || {}).weight, 3, "...medium (3) for primary");
 // Philip: the weeks whitelist, the Aledo week (soft) and day-before-Aledo (hard) are primary rules
@@ -1036,7 +1040,9 @@ blocked(R.eligibility(closed, "2026-11-05", B, KHAN), "hard-never-weekday:Thu", 
 blocked(R.eligibility(closed, "2027-01-07", B, BURCHETT), "not-recurring-available", "closed policy: recurring whitelist governs backup (January: ungoverned)");
 blocked(R.eligibility(closed, "2026-12-03", B, BURCHETT), "whitelist-month", "closed policy: governed December governs backup");
 blocked(R.eligibility(closed, "2026-12-14", B, ACTON), "recurring-unavailable:Mon", "closed policy: outreach Monday blocks backup");
-eq((R.eligibility(closed, "2026-11-10", B, ACTON).soft.find(s => s.reason === "recurring-avoid:Tue") || {}).weight, 3, "closed policy: recurring-avoid weighs medium for backup too");
+// Prompt 12 X FLIP (9/22 evening): this pin used Acton's Tuesday avoid on 11/10 backup; that avoid is now the hard primary rule,
+// so the same closed-policy weight check reads his remaining soft avoid (the Sunday before a 2nd Monday, 1/10/2027).
+eq((R.eligibility(closed, "2027-01-10", B, ACTON).soft.find(s => s.reason === "recurring-avoid:Sun") || {}).weight, 3, "closed policy: recurring-avoid weighs medium for backup too");
 blocked(R.eligibility(closed, "2026-11-04", B, PHILIP), "outside-available-weeks", "closed policy: weeks whitelist governs backup");
 hasSoft(R.eligibility(closed, "2026-11-17", B, PHILIP), "aledo-week", "closed policy: aledo-week soft applies to backup");
 hasSoft(R.eligibility(closed, "2026-11-02", B, KHAN), "auto-offer-weekday", "closed policy: auto-offer applies to backup");
@@ -1660,6 +1666,43 @@ blocked(R.eligibility(withRows([], { surgeonRules: srWBoth }), W_TUE, B, KHAN), 
 okElig(R.eligibility(withRows([row(KHAN, "backup_only", W_TUE)], { surgeonRules: srWBoth }), W_TUE, B, KHAN), "W: ...a backup_only row lifts it for backup");
 okElig(R.eligibility(withRows([row(KHAN, "available", W_TUE, "backup")], { surgeonRules: srWBoth }), W_TUE, B, KHAN), "W: ...an available/backup row lifts it for backup too");
 blocked(R.eligibility(withRows([row(KHAN, "backup_only", W_TUE)], { surgeonRules: srWBoth }), W_TUE, P, KHAN), "hard-never-weekday:Tue", "W: ...and a backup_only row lifts nothing for PRIMARY (role-scoped; backup-only-row blocks it as well)");
+
+// ---- Prompt 12 X (9/22 evening) ----
+// Faraz: "Acton (s3): never PRIMARY on a Tuesday - promote his Tuesday soft-avoid to a hard primary rule
+// (hardNeverWeekdaysRoles primary: ["Tue"]); backup on Tuesdays stays allowed. Any note in an anon-readable table says
+// only 'not Tuesdays' - no reason." Data only: surgeonRules.s3.hardNeverWeekdays ["Tue"] + hardNeverWeekdaysRoles
+// ["primary"]; the recurringAvoid Tuesday entry left the seed with its note; no *Reason key (a *Reason key becomes a
+// category token in the blob). The engine is item W's: the same generic hardNeverWeekdays read, lifted only by his own
+// dated available/primary row for that date; a manual/import lock is not a row.
+step("Prompt 12 X seed: Acton's Tuesday is a hard PRIMARY rule - no reason key, no soft Tuesday avoid left");
+eq(seed.surgeonRules[ACTON].hardNeverWeekdays, ["Tue"], "X seed: s3.hardNeverWeekdays = [Tue]");
+eq(seed.surgeonRules[ACTON].hardNeverWeekdaysRoles, ["primary"], "X seed: s3.hardNeverWeekdaysRoles = [primary] (backup on Tuesdays stays allowed)");
+ok(!("hardNeverWeekdaysReason" in seed.surgeonRules[ACTON]), "X seed: no hardNeverWeekdaysReason key (no reason may reach the anon-readable blob)");
+eq((seed.surgeonRules[ACTON].recurringAvoid || []).map(r => r.weekday), ["Sun"], "X seed: the Tuesday soft avoid (and its note) left; the Sunday avoid stays");
+ok(!/family|Tuesday mornings/i.test(JSON.stringify([seed.surgeonRules[ACTON].hardNeverWeekdaysNote, seed.surgeonRules[ACTON].recurringAvoid, seed.surgeonRules[ACTON].notes.filter(n => /Tuesday/i.test(n))])), "X seed: the Tuesday rule carries no reason wording anywhere in s3 (the rules doc is the only place)");
+step("Prompt 12 X: Acton PRIMARY on an ordinary Tuesday is hard; BACKUP stays open; his own dated row lifts it (W); the Sunday avoid stays soft");
+const X_TUE = "2026-12-01"; // an ordinary Tuesday (December is ungoverned for him; no lock, no holiday)
+const xP = R.eligibility(clean, X_TUE, P, ACTON);
+blocked(xP, "hard-never-weekday:Tue", "X: Acton PRIMARY on Tue 12/1 is hard");
+eq(xP.hard, ["hard-never-weekday:Tue"], "X: ...and that is his only hard reason");
+lacksSoft(xP, "recurring-avoid:Tue", "X: no soft Tuesday term for primary either");
+const xB = R.eligibility(clean, X_TUE, B, ACTON);
+okElig(xB, "X: Acton BACKUP on the same Tuesday needs no row");
+lacks(xB.hard, "hard-never-weekday", "X: no hard-never term on his Tuesday backup");
+lacksSoft(xB, "recurring-avoid:Tue", "X: no recurring-avoid:Tue soft term remains anywhere for him (checked on a Tuesday backup)");
+okElig(R.eligibility(withRows([row(ACTON, "available", X_TUE, "primary")]), X_TUE, P, ACTON), "X/W: a dated available/primary row of his on that Tuesday lifts the block");
+blocked(R.eligibility(withRows([row(ACTON, "available", X_TUE, "backup")]), X_TUE, P, ACTON), "hard-never-weekday:Tue", "X/W: a backup-role row lifts nothing for PRIMARY");
+blocked(R.eligibility(withRows([row(ACTON, "available", X_TUE, "primary")]), "2026-12-08", P, ACTON), "hard-never-weekday:Tue", "X/W: the row is date-scoped - the next Tuesday stays blocked");
+const xSun = R.eligibility(clean, "2027-01-10", P, ACTON);
+okElig(xSun, "X: the Sunday before a 2nd Monday is still only avoided"); hasSoft(xSun, "recurring-avoid:Sun", "X: his Sunday avoid still applies (soft)");
+eq(xSun.soft.find(s => s.reason === "recurring-avoid:Sun").weight, 3, "X: ...medium (3) for primary as before");
+// governed November (T): his Tuesday entries there are BACKUPS (11/3, 11/17) - locks he holds, untouched by X
+["2026-11-03", "2026-11-17"].forEach(d => { const r = R.eligibility(ctx, d, B, ACTON); ok(r.ok === true && r.lockHolder === true && r.conflicts.length === 0, "X: his locked November Tuesday backup " + d + " is unaffected: " + JSON.stringify(r)); });
+has(R.eligibility(clean, "2026-11-03", P, ACTON).hard, "hard-never-weekday:Tue", "X: a governed-November Tuesday primary carries the hard-never reason next to whitelist-month");
+// a lock is not a row (W): the ER-panel author's published Tue 9/22 primary (the past) keeps its holder, the rule is reported as a conflict
+const xLock = R.eligibility(ctx, "2026-09-22", P, ACTON);
+ok(xLock.ok === true && xLock.lockHolder === true, "X/W: the published Tue 9/22 primary lock keeps its holder");
+has(xLock.conflicts, "hard-never-weekday:Tue", "X/W: ...with hard-never-weekday:Tue in conflicts (a lock lifts nothing)");
 
 const total = Date.now() - t0;
 if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }
