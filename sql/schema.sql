@@ -7,6 +7,8 @@
 -- (schedule, roster/config, time off, availability, east feed, versions) or
 -- locked to authenticated users with role checks. The service-role key is
 -- server-side only and never appears in client code.
+-- CONTACT DATA: never in anon-readable tables and never in this file. Emails live
+-- only in user_profiles (via Auth signup) and office_contacts (entered in Setup).
 -- ============================================================================
 
 create extension if not exists pgcrypto;
@@ -308,11 +310,10 @@ create policy contacts_write on public.office_contacts for all to authenticated
 -- ============================================================================
 insert into public.call_schedule_data (id, data) values ('main', '{}'::jsonb) on conflict (id) do nothing;
 insert into public.client_versions (id, min_version, message) values ('main', null, null) on conflict (id) do nothing;
--- Office-contact seed: contact data is kept out of the public repo (Faraz 9/21). After applying the schema, add
--- the ER-panel author either in Settings → Office contacts or with this template, filling in her MercyOne address:
+-- Office contacts are entered by hand in Setup (authenticated-read table). Template, kept commented so no
+-- contact data is ever committed:
 -- insert into public.office_contacts (name, email, role) values
---   ('the ER-panel author, RN, TNS', '<mercyone address>', 'Trauma & Pediatric Quality Coordinator — maintains the ER Call Panels Word document')
--- on conflict do nothing;
+--   ('<name>', '<email>', 'Trauma & Pediatric Quality Coordinator — maintains the ER Call Panels Word document');
 
 -- ============================================================================
 -- Verification (run after applying; expectations in comments)

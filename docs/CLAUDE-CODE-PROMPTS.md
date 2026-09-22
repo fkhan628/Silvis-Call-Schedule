@@ -24,13 +24,23 @@ Create the new repo for the Silvis call schedule app. Show me every command befo
 8. Print `git remote -v`, `git log --oneline`, and the repo URL. Stop. (Nothing deploys yet — there is no index.html until Prompt 1 builds one and CI commits it.)
 ```
 
-## Prompt 0B — Orientation (no code changes)
+## Prompt 0B — Sync the contact-free handoff docs, then orientation (no app code changes)
 
 ```
-Read CLAUDE.md, docs/SILVIS-BUILD-GUIDE.md, docs/SILVIS-CALL-RULES.md and docs/silvis-seed.json in full.
-Then clone https://github.com/fkhan628/Call-Schedule-App.git into ../davenport-ref (read-only reference; never edit it)
-and read its CLAUDE.md, build.js, config.js (all of it), helpers.js, the top 120 lines of generator.js, and the
-structure of index-source.html (list the views, the load/publish/snapshot functions, the auth gate, the exports).
+Step 1 — sync docs. The handoff docs were revised after Prompt 0A so that NO copy contains contact data (the repo and
+OneDrive copies are now identical by design; the only contact file is silvis-contacts.md, which stays in OneDrive).
+Byte-copy (Copy-Item, then SHA-256 compare) from "<the OneDrive folder>":
+CLAUDE.md → root; docs\SILVIS-BUILD-GUIDE.md, docs\SILVIS-CALL-RULES.md, docs\CLAUDE-CODE-PROMPTS.md, docs\silvis-seed.json → docs\; sql\schema.sql → sql\.
+Do NOT copy silvis-contacts.md. Add `silvis-contacts.md` to .gitignore. Then prove the tree is clean:
+  git grep -nE "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}" -- . ':!*.yml'   → must print nothing
+  git grep -nE "\b[0-9]{3}[-.][0-9]{3}[-.][0-9]{4}\b"                          → must print nothing
+Commit "Sync contact-free handoff docs" and push. Show the grep output and the commit hash.
+
+Step 2 — orientation. Read CLAUDE.md, docs/SILVIS-BUILD-GUIDE.md (especially §3.1 Contact data policy),
+docs/SILVIS-CALL-RULES.md and docs/silvis-seed.json in full. The Davenport reference clone already exists at
+../davenport-ref (read-only; never edit it): read its CLAUDE.md, build.js, config.js (all of it), helpers.js, the top
+120 lines of generator.js, and the structure of index-source.html (list the views, the load/publish/snapshot functions,
+the auth gate, the exports).
 
 Report back, in prose, no code yet:
 1. The reuse map you will follow (what you'll copy verbatim, adapt, rewrite, drop) — compare it to guide §2 and flag any disagreement.
@@ -39,15 +49,14 @@ Report back, in prose, no code yet:
 Stop and wait for my go-ahead.
 ```
 
-*(After Prompt 1 is green locally, commit and push — that first push to main is what makes CI build `index.html` and
-Pages go live. Watch the Actions run and confirm the bot's `[skip ci]` commit lands.)*
+*(After Prompt 1 is green locally, commit and push — that first push to main is what makes CI build `index.html` and Pages go live. Watch the Actions run and confirm the bot's `[skip ci]` commit lands.)*
 
 ## Prompt 1 — Scaffold the repo from the Davenport clone
 
 ```
 Create the Silvis-Call-Schedule repo scaffold from ../davenport-ref, following guide §2:
 - Copy verbatim: build.js, bump-version.js, .github/workflows/*.yml, app-styles.js, package.json (rename to silvis-call-schedule-build), .gitignore, icons (we'll recolor later), manifest.json (retitle "Silvis Call" / "Silvis Surgical Care Call Schedule", theme color distinct from Davenport's).
-- Copy config.js and immediately: set SUPABASE_URL = "https://bzhsroegtagqhutbnsrp.supabase.co", leave SUPABASE_ANON_KEY as the literal placeholder "PASTE_SILVIS_ANON_KEY" (I will paste it), rename every localStorage key prefix dsg- → silvis-, delete INIT_APPS/APP_PAL/SURGEON_DEPTS/DEPT_LABELS/COUNTS_*/MAY_AUG_*/HAND_SCHEDULE_*/HOLIDAY_PRESETS/NIGHT_KEYS/ALL_SHIFT_KEYS/SHIFT_LABELS/SHIFT_TIMES/SHIFT_ICONS/SCHEDULE_PERIOD_WEEKS/VACATION_DEADLINE_WEEKS_BEFORE/MIN_AVAILABLE_SURGEONS, and replace INIT_SURGEONS with the six-surgeon roster from docs/silvis-seed.json (ids, name, code, fullName, email — home emails only, no Atwell). Keep the DB client, safeguards (payloadLooksWiped, snapshots), auth, dbAuth and biometric objects byte-for-byte — these are the "safety features" and "data management" that must carry over.
+- Copy config.js and immediately: set SUPABASE_URL = "https://bzhsroegtagqhutbnsrp.supabase.co", leave SUPABASE_ANON_KEY as the literal placeholder "PASTE_SILVIS_ANON_KEY" (I will paste it), rename every localStorage key prefix dsg- → silvis-, delete INIT_APPS/APP_PAL/SURGEON_DEPTS/DEPT_LABELS/COUNTS_*/MAY_AUG_*/HAND_SCHEDULE_*/HOLIDAY_PRESETS/NIGHT_KEYS/ALL_SHIFT_KEYS/SHIFT_LABELS/SHIFT_TIMES/SHIFT_ICONS/SCHEDULE_PERIOD_WEEKS/VACATION_DEADLINE_WEEKS_BEFORE/MIN_AVAILABLE_SURGEONS, and replace INIT_SURGEONS with the six-surgeon roster from docs/silvis-seed.json (ids, name, code, fullName, active, roles — NO email field; no Atwell). Contact data never enters config.js or any tracked file (guide §3.1). Keep the DB client, safeguards (payloadLooksWiped, snapshots), auth, dbAuth and biometric objects byte-for-byte — these are the "safety features" and "data management" that must carry over.
 - Copy helpers.js; keep fmt/parse/addD/monOf/getMondays/onVac/icsDate/generateICS/downloadICS/downloadJSON; stub buildICSEvents, slotLabel, tradeLegsText and buildPrintableCalendarHTML with TODO comments referencing Prompt 8 (they must still parse).
 - Copy index-source.html and do ONLY these edits now: <title> and header text → "Silvis Call Schedule"; remove the OneSignal script tags and OneSignalSDKWorker.js; change APP_VERSION to "2026.09.21a"; add rules.js, generator.js and east-feed.js to the module loader list. Do NOT retarget the shift model yet — the app may render broken cells; that is expected until Prompt 6.
 - Create empty-but-valid rules.js, generator.js (exporting generate() that returns { schedule:{}, diagnostics:{ uncovered:[] } }), east-feed.js, test/rules.test.js and test/generator-regression.js (each exits 0 with a "no tests yet" line).
@@ -61,7 +70,7 @@ Run `npm install`, `node build.js`, and show me the gate output. Do not commit; 
 ```
 Read sql/schema.sql. Do not modify it yet. Produce a report that (a) explains each table's purpose in one line, (b) lists every RLS policy with who can read/write, (c) calls out anything you believe is wrong or risky (recursion in silvis_role(), missing indexes, the self-update policy, anon exposure). Wait for my approval.
 
-After approval: I will paste the schema into the Supabase SQL editor and sign up once through the app's auth screen. You then write scripts/verify-rls.sh that runs the three curl checks at the bottom of schema.sql (anon read OK; anon write blocked; scheduler JWT write OK — I will paste a JWT into an env var, never into a file) and prints PASS/FAIL per check. Run it and show the raw HTTP status lines. Stop.
+After approval: I will paste the schema into the Supabase SQL editor, sign up once through the app's auth screen, and promote myself to admin/s1 with the SQL comment at the bottom of the file. You then write scripts/verify-rls.sh that runs the curl checks at the bottom of schema.sql (anon read OK; anon write blocked; scheduler JWT write OK; time_off ON_CALL_CONFLICT trigger fires — I will paste a JWT into an env var, never into a file) and prints PASS/FAIL per check. Run it and show the raw HTTP status lines. Also write docs/ONBOARDING.md: how I invite each surgeon from the Supabase dashboard (Auth → Users → Invite user) using my private contacts file, and how Setup → Users links the new auth user to a roster id and role. Stop.
 ```
 
 ## Prompt 3 — rules.js: patterns + eligibility (pure, tested)
@@ -92,7 +101,7 @@ Run it; show the output; stop. If any assertion fails, fix the generator, not th
 ## Prompt 5 — Seed import + config blob
 
 ```
-Add an importer (Setup → "Import seed") that reads docs/silvis-seed.json (file picker or fetch of the repo copy) and writes: roster → call_schedule_data.data.roster; surgeonRules/groupRules/holidays → the same blob; every dated statement (Sarkar windows, Burchett October/December lists incl. backup_only and unavailable, Acton October primary/backup lists, Philip available weeks, Philip no-backup dates) → availability rows with source "seed"; Acton's Nov 19–22 and Nov 25–29 and Philip's 10/15 → time_off rows (vacations only — there is no no-call kind); holidays.units per year → call_schedule_data.data.holidays; existingAssignments → schedule_days rows with locks, source, externalCover and notes (the email updates in pendingDeltas are already applied inside existingAssignments — show them as an informational list, nothing to apply). The import must be idempotent (re-running updates rather than duplicates: key availability rows on person+kind+role+start+end+source). Snapshot before writing. Show me the diff of what it would write (dry-run mode) before the real run. Then run it for real against the Silvis project, show row counts per table, and stop.
+Add an importer (Setup → "Import seed") that reads docs/silvis-seed.json through a file picker (the repo copy is identical and may also be fetched) and writes: roster (id, name, code, fullName, active, roles — the importer REFUSES a file whose roster or site block contains email or phone fields, and never writes such fields; guide §3.1) → call_schedule_data.data.roster; surgeonRules/groupRules/holidays → the same blob; every dated statement (Sarkar windows, Burchett October/December lists incl. backup_only and unavailable, Acton October primary/backup lists, Philip available weeks, Philip no-backup dates) → availability rows with source "seed"; Acton's Nov 19–22 and Nov 25–29 and Philip's 10/15 → time_off rows (vacations only — there is no no-call kind); holidays.units per year → call_schedule_data.data.holidays; existingAssignments → schedule_days rows with locks, source, externalCover and notes (the email updates in pendingDeltas are already applied inside existingAssignments — show them as an informational list, nothing to apply). The import must be idempotent (re-running updates rather than duplicates: key availability rows on person+kind+role+start+end+source). Snapshot before writing. Show me the diff of what it would write (dry-run mode) before the real run. Then run it for real against the Silvis project, show row counts per table, and stop.
 ```
 
 ## Prompt 6 — Retarget the UI to the daily model (the big one — work in slices)

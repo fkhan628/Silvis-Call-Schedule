@@ -9,18 +9,23 @@ Daily primary + backup trauma / acute-care surgery call schedule generator (Reac
 (`github.com/fkhan628/Call-Schedule-App`, live at `fkhan628.github.io/Call-Schedule-App`) — same stack and pipeline,
 different shift model. Frontend on GitHub Pages, backend on Supabase project `bzhsroegtagqhutbnsrp`
 (`https://bzhsroegtagqhutbnsrp.supabase.co`). Faraz Khan (FAK, roster `s1`) is the scheduler, admin, sole
-developer, one of the six surgeons, and the user you're working with. Live users once launched: 6 surgeons + 2 viewers.
+developer, one of the six surgeons, and the user you're working with. Live users once launched: 6 surgeons + 1 viewer
+(the ER-panel author). Repo: `github.com/fkhan628/Silvis-Call-Schedule` (public); live: `fkhan628.github.io/Silvis-Call-Schedule`.
 
 ## Identity model — get this right
 
 Roster entries are `{ id, name, code, fullName, email, active, roles }`; ids `s1`–`s6`; `name` is the surgeon's
 **last name** (Khan, Burchett, Acton, Philip, Fierce, Sarkar); `code` is a 3-letter chip (FAK, MAB, BDA, AFP, NF, SRK).
-**The schedule stores ids.** There is no Atwell. Emails are HOME addresses only (never MercyOne/MercyHealth).
-**No contact data in the repo (Faraz 9/21):** emails and phone numbers are redacted from `docs/` and `sql/` and must never
-appear in `config.js` or any tracked file. The complete `silvis-seed.json` lives in the OneDrive folder and is imported
-through Setup → Import seed (file picker); live contact data exists only in Supabase (`call_schedule_data.data.roster`,
-`office_contacts`, `user_profiles`).
+**The schedule stores ids.** There is no Atwell. Roster entries carry **no email field**.
 The Davenport app uses a different id namespace (FAK is `s6` there) — the East feed matches on `code`, never on id.
+
+**No contact data in the repo — or in any anon-readable table (Faraz 9/21, guide §3.1):** emails and phone numbers never
+appear in `docs/`, `sql/`, `config.js`, tests or any tracked file (the repo is public), and never in `call_schedule_data`,
+`schedule_days`, `time_off`, `availability`, `east_feed` or `client_versions` (readable with the public anon key). They
+exist only in the private `silvis-contacts.md` in the OneDrive folder (gitignored; Faraz uses it to invite users) and, in
+Supabase, only in `user_profiles` (via Auth signup) and `office_contacts` (entered in Setup) — both authenticated-read.
+Notes in anon-readable tables stay operational, never personal reasons. Surgeons are contacted at home addresses, never
+MercyOne/MercyHealth work addresses.
 
 ## Shift model — the thing that differs from Davenport
 
@@ -37,11 +42,14 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 
 ## Working locations
 
-1. **Git clone** — the only place to edit repo files. Suggested: `<your clone>`.
+1. **Git clone: `<your clone>`** — the ONLY place to edit repo files. Git identity is
+   configured repo-locally. The Davenport reference clone lives beside it at `..\Call-Schedule-App` (read-only for this project).
 2. **OneDrive folder** `<the OneDrive folder>` — non-repo material (the ER-panel author's Word docs,
-   email exports, backups) and the **complete, unredacted** handoff docs +
-   `silvis-seed.json` (the repo's `docs/` are the public copies with contact data removed). Never edit app files there.
-3. **Supabase** — schema in `sql/schema.sql` (applied by hand in the SQL editor); edge functions (phase 2) are not in the repo.
+   email exports, backups), the private `silvis-contacts.md`, and the source copies of `CLAUDE.md`, `docs/` and `sql/`
+   (identical to the repo's — both contact-free). Never edit app files there.
+3. **Supabase** — schema in `sql/schema.sql` (applied by hand in the SQL editor). Edge-function sources live in the repo
+   under `edge-functions/<slug>/index.ts` but are deployed by hand with the Supabase CLI (`--no-verify-jwt`), exactly
+   like Davenport — a git push does NOT deploy functions.
 
 ## Deploy path — repo (the PWA)
 

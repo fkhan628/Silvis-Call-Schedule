@@ -24,25 +24,28 @@ when the two disagree, fix both.*
 | Period | **This round: generate through the end of 2026** (range 2026-11-02 → 2027-01-03 so the New Year's weekend is covered). **After that, Generate offers 3-, 6-, 9- and 12-month presets** from the last published day. **Sep 14 – Nov 1 stays exactly as the emails describe it** (locked import, §7); the rules below generate from November onward. | Khan 9/21 |
 | Time off | **Vacations only — there are no "no-call days."** Surgeons **enter their own vacations; nothing is approved** — the app logs them (audit trail) and blocks those days from call. A vacation **cannot be entered over a day the surgeon is already published as primary or backup**: the entry is refused, the conflicting dates are listed, and the surgeon must find a switch (trade) first. A vacation day also blocks the day before it (the 07:00 shift end falls on the vacation day). | Khan 9/21 |
 | Shift accounting | **Each 24-hour day is one shift.** No half-days, no weighted burden, none of the Davenport split accounting. Primary and backup shifts are counted separately; weekend days and holidays are tracked as well. **Totals are a running yearly tally** (month, year-to-date, rolling 12 months). | Khan 9/21 |
-| Contact info | Use everyone's **home email** (gmail/yahoo), never MercyOne/MercyHealth work addresses. | Khan 9/21 |
+| Contact info | Surgeons are contacted at **home email** addresses, never MercyOne/MercyHealth. **No contact data in this document, the seed, the schema or the repo** — it lives only in `silvis-contacts.md` in the OneDrive folder (gitignored), and in Supabase only in authenticated-read tables (`user_profiles`, `office_contacts`), never in anon-readable ones. | Khan 9/21; Prompt 0A redaction |
 
 ## 2. Roster
 
-| id | Display | Home email | Status | Pool? |
-|---|---|---|---|---|
-| s1 | **Khan** (FAK) | *(home email — private)* | Active; scheduler/admin; also on Davenport (East) call | Weekends; Mon/Wed auto-offered |
-| s2 | **Burchett** (MAB) | *(home email — private)* | Active; Silvis-based; outreach DeWitt / Jackson County | Yes |
-| s3 | **Acton** (BDA) | *(home email — private)* | Active; Silvis-based; outreach Maquoketa | Yes |
-| s4 | **Philip** (AFP) | *(home email — private)* | Active; Silvis-based; outreach Aledo | Yes |
-| s5 | **Fierce** (NF) | *(home email — private)* | Active; alternates with Davenport; Clinton/Dubuque outreach | Derived weeks + weekday pattern |
-| s6 | **Sarkar** (SRK) | *home email TBD* (availability via administration) | Active; one window per month | Window only |
+| id | Display | Status | Pool? |
+|---|---|---|---|
+| s1 | **Khan** (FAK) | Active; scheduler/admin; also on Davenport (East) call | Weekends; Mon/Wed auto-offered |
+| s2 | **Burchett** (MAB) | Active; Silvis-based; outreach DeWitt / Jackson County | Yes |
+| s3 | **Acton** (BDA) | Active; Silvis-based; outreach Maquoketa | Yes |
+| s4 | **Philip** (AFP) | Active; Silvis-based; outreach Aledo | Yes |
+| s5 | **Fierce** (NF) | Active; alternates with Davenport; Clinton/Dubuque outreach | Derived weeks + weekday pattern |
+| s6 | **Sarkar** (SRK) | Active; one window per month (availability relayed by administration) | Window only |
+
+Contact details for all six (and for the ER-panel author / administration) are in the private `silvis-contacts.md`.
 
 **Atwell is not in the roster** (Faraz, 9/21). His legacy primary week 9/28–10/4 is imported as `externalCover: "Atwell"`
 so those days render as covered rather than OPEN and count toward nobody's tallies. If that changes, Faraz will say so.
 
-Other people: **the ER-panel author, RN, TNS** (Trauma & Pediatric Quality Coordinator, Silvis; phone on file — private) maintains the
-official ER Call Panels Word document — she gets a **read-only (viewer) account** plus the panel export. **administration**
-(administration) relays Sarkar's availability; no account. **the COO** (COO) decides the Trauma Director role.
+Other people: **the ER-panel author, RN, TNS** (Trauma & Pediatric Quality Coordinator, Silvis) maintains the official ER Call
+Panels Word document — she gets a **read-only (viewer) account** plus the panel export, and is the one office contact
+entered in Setup. **administration** (administration) relays Sarkar's availability; no account. **the COO** (COO)
+decides the Trauma Director role.
 
 ## 3. Per-surgeon rules
 
@@ -77,7 +80,7 @@ official ER Call Panels Word document — she gets a **read-only (viewer) accoun
 - **No more than one major holiday** (Thanksgiving / Christmas / New Year). **Prefers not a full week at a time** ("call has been getting busier").
 - Backup cap (stated for October, treat as monthly): **≤ 7 days and ≤ 1 weekend** of backup.
 - Weekend style: **block**; in practice Thu–Sun (10/29–11/1), so max consecutive 4.
-- October: **cannot 10/15** ([removed] — hard). Primary 10/8, 10/13, 10/16, 10/27, 10/29–11/1. Backup: not 10/15, 10/7, 10/21, 10/23.
+- October: **cannot 10/15** (personal — hard). Primary 10/8, 10/13, 10/16, 10/27, 10/29–11/1. Backup: not 10/15, 10/7, 10/21, 10/23.
 
 ### Fierce (s5) — derived East weeks + a weekday pattern the rest of the time
 - Takes East call **one week at a time**, alternating between East primary weeks and East backup weeks.
@@ -179,5 +182,5 @@ and every safety feature. Holidays are the same DSG set, as primary + backup uni
 **Still open:**
 
 1. **10/15 (Thu)** — the one open primary day in the locked October import; nobody's rules allow it. The group will discuss.
-2. **Sarkar's home email** — none on record.
+2. **Sarkar's home email** — none on record (goes into the private `silvis-contacts.md`, not here).
 3. **Holiday unit days** — confirm the defaults in §5 (e.g. should a Monday holiday unit include the preceding weekend? Thanksgiving Thursday only?).

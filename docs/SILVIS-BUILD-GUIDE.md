@@ -29,7 +29,8 @@ a feed.
 | Shift model | Daily 24-h primary + backup, 07:00→07:00 (confirmed). Weekend handled as a unit (block / split / daily). Holidays are units (same six as Davenport) with one primary + one backup sticking through the unit. **One 24-h day = one shift** — no partial or weighted shifts. |
 | Fairness | Targets + caps per surgeon (see rules §6), not equal shares. |
 | Reuse | Clone the Davenport repo as the starting point; copy the shell and data layer; rewrite the generator. |
-| Roster | Six surgeons: Khan, Burchett, Acton, Philip, Fierce, Sarkar. **No Atwell** (his 9/28–10/4 week is imported as `externalCover`). Contact emails are **home** addresses, never MercyOne/MercyHealth. |
+| Roster | Six surgeons: Khan, Burchett, Acton, Philip, Fierce, Sarkar. **No Atwell** (his 9/28–10/4 week is imported as `externalCover`). |
+| **Contact data** | **None in the repo, the seed, the docs, the schema, `config.js`, or any anon-readable table.** It lives only in the private `silvis-contacts.md` (OneDrive, gitignored) and, once users exist, in `user_profiles` (via Supabase Auth) and `office_contacts` (entered in Setup) — both authenticated-read only. See §3.1. |
 | **First milestone** | **A published schedule through 2026-12-31.** Generation range 2026-11-02 → 2027-01-03 (covers the New Year's weekend) on top of the locked Sep 14–Nov 1 import. After this round, Generate offers **3 / 6 / 9 / 12-month presets** from the last published day. Everything in phases 0–6 serves the milestone; exports, edge functions and hardening follow. |
 
 ## 2. Repo layout and the reuse map
@@ -78,19 +79,35 @@ restore, export, import, snapshots list + restore, factory reset behind the wipe
 
 ## 3. Identity model
 
-Roster entries are `{ id, name, code, fullName, email, active, roles }`. `id` = `s1`…`s6`; `name` is the
-**last name** (what people read on the calendar); `code` is a 3-letter chip for narrow cells. **The schedule stores ids.**
-Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) — the East feed maps by code (`FAK`).
-`email` is the surgeon's **home** address (gmail/yahoo), never a work address.
+Roster entries are `{ id, name, code, fullName, active, roles }` — **no `email` field**. `id` = `s1`…`s6`; `name` is
+the **last name** (what people read on the calendar); `code` is a 3-letter chip for narrow cells. **The schedule stores
+ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) — the East feed maps by code (`FAK`).
 
-| id | name | code | home email | pool |
-|---|---|---|---|---|
-| s1 | Khan | FAK | *(home email — private)* | weekends; Mon/Wed auto-offered when East is clear; never Tue/Thu; East blocks primary only |
-| s2 | Burchett | MAB | *(home email — private)* | yes |
-| s3 | Acton | BDA | *(home email — private)* | yes |
-| s4 | Philip | AFP | *(home email — private)* | yes |
-| s5 | Fierce | NF | *(home email — private)* | derived weeks (locks) + weekday pattern outside them; cap 14/month |
-| s6 | Sarkar | SRK | TBD | monthly windows only; 3–4 days/week; Sat OK, never Fri/Sun |
+| id | name | code | pool |
+|---|---|---|---|
+| s1 | Khan | FAK | weekends; Mon/Wed auto-offered when East is clear; never Tue/Thu; East blocks primary only |
+| s2 | Burchett | MAB | yes |
+| s3 | Acton | BDA | yes |
+| s4 | Philip | AFP | yes |
+| s5 | Fierce | NF | derived weeks (locks) + weekday pattern outside them; cap 14/month |
+| s6 | Sarkar | SRK | monthly windows only; 3–4 days/week; Sat OK, never Fri/Sun |
+
+### 3.1 Contact data policy (Faraz 9/21 — established by the Prompt 0A redaction)
+
+- **Never in a tracked file**: not in `docs/`, `sql/`, `config.js`, tests, fixtures or commit messages. The repo is public.
+- **Never in an anon-readable table**: `call_schedule_data` (the roster/config blob), `schedule_days`, `time_off`,
+  `availability`, `east_feed`, `client_versions` are readable with the public anon key, so anything in them is as public
+  as the repo. The roster in the blob carries names and codes only.
+- **Where it lives**: the private `silvis-contacts.md` in the OneDrive folder (listed in `.gitignore`), which Faraz uses
+  to invite users; `user_profiles.email` (populated by Supabase Auth at signup, authenticated-read only); and
+  `office_contacts` (entered by hand in Setup, authenticated-read only). Server-side email sending reads
+  `user_profiles` / `office_contacts` with the service-role key inside edge functions.
+- **Onboarding flow**: Faraz invites each surgeon from the Supabase dashboard (Auth → Users → Invite) using the private
+  file; the surgeon sets a password through the emailed link; the app creates their `user_profiles` row as `viewer`;
+  Faraz assigns `person_id` + role in Setup → Users. No email ever passes through the client except the one the user
+  types at login.
+- **Notes are public too**: `note` columns in anon-readable tables and rule notes in the blob stay operational
+  ("unavailable (personal)", "outreach") — never personal reasons. The seed has already been scrubbed to this standard.
 
 There is deliberately **no Atwell entry**. A `DayAssignment` may carry `externalCover: "Atwell"` (primary `null`) for
 the imported 9/28–10/4 week; the UI renders the label instead of OPEN and tallies ignore it.
@@ -118,7 +135,7 @@ Paste `sql/schema.sql` into the Supabase SQL editor once. Summary:
 
 | Table | Purpose | Mirrors Davenport |
 |---|---|---|
-| `call_schedule_data` (`id text pk = 'main'`, `data jsonb`, `updated_at`, `updated_by`) | Roster + `surgeonRules` + `groupRules` + holidays + settings blob | yes (same name) |
+| `call_schedule_data` (`id text pk = 'main'`, `data jsonb`, `updated_at`, `updated_by`) | Roster (names/codes only — **no contact data**) + `surgeonRules` + `groupRules` + holidays + settings blob. Anon-readable. | yes (same name) |
 | `schedule_days` (`day date pk`, `primary_id`, `backup_id`, `primary_locked`, `backup_locked`, `source`, `external_cover`, `note`, `version int`, `updated_by`, `updated_at`) | One row per day. Publish = upsert changed days with compare-and-swap on `version`. | replaces `schedule_weeks` |
 | `time_off` (`id uuid`, `person_id`, `start_date`, `end_date`, `note`, `created_by`, `created_at`) | **Vacations only** (no `kind` column — there are no no-call days). Self-entered by surgeons, no approval; a DB trigger refuses a range that overlaps a published day where that surgeon is primary or backup (see schema). Generator source. | adapted |
 | `availability` (`id uuid`, `person_id`, `kind: available\|unavailable\|avoid\|prefer\|backup_only\|no_backup`, `role: any\|primary\|backup`, `start_date`, `end_date`, `note`, `source`, `created_by`, `created_at`) | Dated availability statements (Sarkar windows, Burchett December list, Philip weeks, Acton October days…). Recurring patterns live in the config blob, not here. | new |
@@ -131,7 +148,7 @@ Davenport's `holidayAssignments`, keyed by year.
 
 ### 4.3 RLS posture (report-first before any change to a live DB)
 
-- **Anon-readable:** `schedule_days`, `call_schedule_data`, `time_off`, `availability`, `east_feed`, `client_versions` — required for the shareable page and the future `calendar-sync` function (which sends no auth header). Nothing sensitive lives in these tables.
+- **Anon-readable:** `schedule_days`, `call_schedule_data`, `time_off`, `availability`, `east_feed`, `client_versions` — required for the shareable page and the `calendar-sync` function (which sends no auth header). **Therefore nothing sensitive may live in them** — no contact data, no personal notes (§3.1).
 - **Authenticated write, role-gated:** all writes require a JWT; `schedule_days`, `call_schedule_data`, `availability`, `east_*`, `office_contacts`, `call_schedule_snapshots` writable only by `scheduler`/`admin` (checked via a `security definer` function `silvis_role()` that reads `user_profiles` for `auth.uid()`); `time_off` insertable/deletable by the surgeon named in the row (own vacations, self-service) and by scheduler/admin; `shift_trade_requests` insertable by the surgeon named in the row, updatable by scheduler/admin (and by the counter-party for accept/decline); `notifications` insert by any authenticated user, read by all authenticated; `user_profiles` read by all authenticated, self-update of display fields only, role changes admin-only; `audit_log` insert by authenticated, read by scheduler/admin.
 - Remember the Davenport lesson: **an RLS-blocked read returns HTTP 200 + `[]`** — the client must treat "empty" and "failed" differently (`db.query` throws on non-2xx; keep that).
 
@@ -227,7 +244,7 @@ buttons, the notification center, the refresh/version banner, and Settings → D
 - **Month grid cell:** two lines — `P Burchett` / `B Acton` — colored per surgeon; open slot = red "OPEN" (the ER-panel author's convention); weekend units get a subtle bracket; locked slots show a padlock; East-derived (Fierce) slots show a small "E".
 - **Week rows list:** the same rows as the ER-panel author's Word document (MON/SUN DATES | PRIMARY | BACKUP) with ranges collapsed (`9/15–9/18 Philip`) — this is also the export format (§9).
 - **Day editor** (click a cell): set primary/backup from a dropdown that shows eligibility — eligible names first, ineligible greyed with the reason; lock toggle; note.
-- **Setup:** roster; **Rules** editor per surgeon (availability mode, recurring patterns with a live "next 8 matching dates" preview, weekend style + partner, max consecutive, monthly cap/target, holiday rules, East feed toggle); **Availability** entry (dated rows by kind, plus quick paste of a date list like Burchett's); vacations (scheduler view of everyone's, with override entry); **Holidays** editor — per year, each unit's days (editable) and its primary + backup, with the major/minor fairness counts beside each name; East feed panel; **Generate** with range presets — *Through end of year* (this round) and *3 / 6 / 9 / 12 months from the last published day* — plus N, "respect locks", preview → publish with diff; import from `silvis-seed.json`; office contacts.
+- **Setup:** roster (names/codes; no contact fields); **Users** (link auth users to roster ids, set roles — the only place emails appear, read from `user_profiles`); **Rules** editor per surgeon (availability mode, recurring patterns with a live "next 8 matching dates" preview, weekend style + partner, max consecutive, monthly cap/target, holiday rules, East feed toggle); **Availability** entry (dated rows by kind, plus quick paste of a date list like Burchett's); vacations (scheduler view of everyone's, with override entry); **Holidays** editor — per year, each unit's days (editable) and its primary + backup, with the major/minor fairness counts beside each name; East feed panel; **Generate** with range presets — *Through end of year* (this round) and *3 / 6 / 9 / 12 months from the last published day* — plus N, "respect locks", preview → publish with diff; import from `silvis-seed.json` (file picker; the importer writes no contact fields and refuses a file that contains any); office contacts (entered by hand — the ER-panel author).
 - **Totals:** per surgeon by month, year-to-date and rolling 12 months: primary shifts, backup shifts, weekend days, major/minor holidays, max consecutive, each vs target/cap; fairness view (deviation from target). One 24-h day = one shift, nothing weighted. **No stipend, pay or $ figures anywhere** (Faraz 9/21).
 - **Time off & trades:** a surgeon enters a vacation range for themselves — no approval; the entry is refused if any day in the range has them published as primary or backup (the conflicting dates are listed with a "propose a trade" shortcut), otherwise it is saved, logged to `audit_log`, and those days are blocked from call. Scheduler can enter for anyone and override. Trades by day+role with eligibility checked for the recipient; an accepted trade is applied to the schedule with an audit entry and notifications (scheduler can revert).
 
@@ -243,7 +260,7 @@ buttons, the notification center, the refresh/version banner, and Settings → D
 All of these are **in scope and carried over from Davenport** (Faraz 9/21):
 
 - **In-app notifications** (`notifications` + per-user `notification_preferences`) — same center, same categories minus vacation approvals: schedule published, manual edit affecting you, trade proposed/accepted/declined/applied, vacation logged, shift reminder.
-- **Email** via the `send-notification` edge function pattern (per-user email prefs).
+- **Email** via the `send-notification` edge function pattern (per-user email prefs); recipients come from `user_profiles.email` / `office_contacts`, read server-side with the service-role key — never from the blob.
 - **Office notifications** — `office_contacts` (the ER-panel author first) receive the schedule-change digest / publish notice through the `office-notifications` edge function pattern, retargeted to day + role.
 - **Calendar sync** — the `calendar-sync` edge function serves a per-surgeon ICS feed URL (`?surgeon=<CODE>`), matched on `code`, reading `schedule_days`; `verify_jwt` must stay OFF (clients send no auth header) — verify with an unauthenticated GET → 200 + `BEGIN:VCALENDAR`. Subscription instructions in Settings.
 - **Shift reminders** — the `daily-reminder` edge function pattern (reminder hour per user, Central time).

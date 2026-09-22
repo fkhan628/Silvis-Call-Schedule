@@ -1,7 +1,6 @@
 {
   "_meta": {
     "generatedOn": "2026-09-21",
-    "redaction": "PUBLIC-REPO COPY (Faraz 9/21): every email and phone value in this file is null. The complete seed lives in the OneDrive folder <the OneDrive folder>/docs/silvis-seed.json and is imported through Setup → Import seed (file picker). Live contact data exists only in Supabase.",
     "sources": [
       "group-email-2026-08-27-to-09-14: the four surgeons' thread on a shared call schedule (Burchett/Acton/Philip/Khan)",
       "burchett-email-2026-08-27: Burchett to Khan; October availability of Burchett/Acton/Philip",
@@ -14,6 +13,7 @@
       "24-hour call runs 07:00 \u2192 07:00 next day \u2014 CONFIRMED by Faraz 9/21.",
       "Surgeon ids s1\u2013s6 and 3-letter codes are placeholders; the display `name` (last name) is what people will read.",
       "Atwell is deliberately NOT in the roster (Faraz 9/21). His 9/28\u201310/4 primary week is imported as externalCover so it shows as covered, not OPEN.",
+      "CONTACT DATA POLICY (Faraz 9/21, via Claude Code's Prompt 0A redaction): this file and every doc in the repo contain NO emails or phone numbers, so the repo and OneDrive copies are identical. Contact data lives in ONE private file, silvis-contacts.md, in the OneDrive folder only (gitignored) and is used by Faraz to invite users \u2014 the app never imports it. In Supabase, contact data exists only in authenticated-read tables (user_profiles via Auth signup; office_contacts entered in Setup), never in anon-readable ones (call_schedule_data, schedule_days, time_off, availability, east_feed, client_versions). Notes in anon-readable tables stay operational \u2014 no personal reasons.",
       "Contact emails are HOME addresses (gmail/yahoo), not work addresses (Faraz 9/21).",
       "Holiday unit day membership (which days belong to each holiday unit) is Faraz's current guess and editable in Setup."
     ]
@@ -32,14 +32,12 @@
     "scheduleAdmin": "s1",
     "traumaCoordinator": {
       "name": "the ER-panel author, RN, TNS",
-      "email": null,
-      "phone": null,
       "role": "Maintains the ER Call Panels Word document",
-      "account": "viewer (read-only) \u2014 Faraz 9/21"
+      "account": "viewer (read-only) \u2014 Faraz 9/21",
+      "contact": "see the private contacts file (OneDrive only)"
     },
     "adminContact": {
       "name": "administration",
-      "email": null,
       "role": "Administration; relays Sarkar availability",
       "account": "none"
     }
@@ -50,7 +48,6 @@
       "name": "Khan",
       "code": "FAK",
       "fullName": "Faraz Khan",
-      "email": null,
       "active": true,
       "roles": [
         "surgeon",
@@ -63,7 +60,6 @@
       "name": "Burchett",
       "code": "MAB",
       "fullName": "Michael Burchett",
-      "email": null,
       "active": true,
       "roles": [
         "surgeon"
@@ -74,7 +70,6 @@
       "name": "Acton",
       "code": "BDA",
       "fullName": "Benjamin Acton",
-      "email": null,
       "active": true,
       "roles": [
         "surgeon"
@@ -85,7 +80,6 @@
       "name": "Philip",
       "code": "AFP",
       "fullName": "Andrew Philip",
-      "email": null,
       "active": true,
       "roles": [
         "surgeon"
@@ -96,7 +90,6 @@
       "name": "Fierce",
       "code": "NF",
       "fullName": "Nathan Fierce",
-      "email": null,
       "active": true,
       "roles": [
         "surgeon"
@@ -107,13 +100,11 @@
       "name": "Sarkar",
       "code": "SRK",
       "fullName": "Dr. Sarkar (first name TBD)",
-      "email": null,
-      "emailNote": "Home email TBD",
       "active": true,
       "roles": [
         "surgeon"
       ],
-      "note": "Availability supplied by administration (admin), one window per month"
+      "note": "Availability supplied by administration, one window per month"
     }
   ],
   "groupRules": {
@@ -398,6 +389,7 @@
       ],
       "holidayRules": {
         "neverThanksgiving": true,
+        "neverThanksgivingNote": "[removed]",
         "christmasOrNewYearOk": true,
         "alternatingDaysOk": true
       },
@@ -508,7 +500,7 @@
         {
           "start": "2026-10-15",
           "end": "2026-10-15",
-          "note": "[removed]"
+          "note": "Unavailable (personal)"
         }
       ],
       "notes": [
@@ -1178,7 +1170,7 @@
   ],
   "openQuestions": [
     "1. 10/15 (Thu) \u2014 the one open primary day in the locked October import; nobody's rules allow it. To be discussed by the group.",
-    "2. Sarkar's home email address (none on record).",
+    "2. Sarkar's home email address (none on record) \u2014 goes in the private contacts file, not here.",
     "3. Holiday unit days: confirm the defaults (Thanksgiving = Thu only; Christmas = 12/24+12/25; New Year's = 12/31+1/1; Memorial/Labor = the Monday; July 4th = the day) \u2014 e.g. should a Monday holiday unit include the preceding weekend?"
   ]
 }
