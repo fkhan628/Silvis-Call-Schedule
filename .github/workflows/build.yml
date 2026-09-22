@@ -31,8 +31,9 @@ on:
       - "test/rules.test.js"
       - "test/east-feed.test.js"
       - "test/data-layer.test.js"
+      - "test/importer.test.js"
+      - "importer.js"
       - "test/generator-regression.js"
-      - "test/data-layer.test.js"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
 permissions:
@@ -81,6 +82,9 @@ jobs:
       # Chromium and live network; run it locally with `npm run smoke`.
       - name: Data-layer unit tests + source pins
         run: node test/data-layer.test.js
+
+      - name: Seed importer tests
+        run: node test/importer.test.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js
