@@ -119,6 +119,26 @@
 //     availability upserts with a byte-compare of restored map vs snapshot vs
 //     export, then a valid import of the export (snapshot first, nothing to
 //     rewrite). The snapshot table is served from an in-harness store.
+//   - Prompt 13 part 3 (the Open shifts board, run BEFORE this run's first
+//     edit): the nav tab 'openshifts' + badge; the board's rows equal an
+//     independent recount of the live rows from today to the app's last
+//     published day; the coverage strip's 60-day open counts = the board's
+//     rows inside the window + the unpublished tail (recounted from the live
+//     rows; empty once the schedule runs 60+ days ahead - Faraz's pin);
+//     Eligible now chips agree with s1's Take button; filters 30 / 60 / all,
+//     role, weekend-only (the badge keeps counting the whole range); Copy
+//     list = one 'Ddd MM/DD - role (unit) - open' line per row; Take this
+//     shift as the mocked s1 -> claim-sheet (Escape closes it, no write) ->
+//     Confirm -> POST rpc/claim_open_slot { p_day, p_role } only (no client
+//     audit / feed / schedule_days write; send-notification shift_claimed to
+//     scheduler + claimer) -> the row leaves the board, the badge drops, the
+//     calendar cell shows s1 (the harness overlays the claimer on the mocked
+//     row); Email the group now (confirm) -> feed open_shifts with data.slots,
+//     broadcast send-notification, audit openshifts.notify, 'last announced'
+//     fills; 390 px in light and dark (no page scroll, table scrolls in its
+//     wrapper with the swipe hint, buttons >= 36 px, table text >= 3:1 in
+//     dark). Screenshots openshifts.png, openshifts-sheet.png,
+//     openshifts-390.png, openshifts-dark.png.
 // Exit code 1 on any failure.
 //
 // Determinism (finding removal-03): React / ReactDOM / the Supabase SDK are
@@ -439,6 +459,12 @@ let minVersionOverride = null; // Prompt 11: { min_version, message } served for
 // follows writes every day back and the 60 s poll cannot resurrect live rows.
 let daysWiped = false;
 const dayStore = {};
+// Prompt 13 part 3 (the Open shifts board): rpc/claim_open_slot is answered
+// like the SQL function would - the write is recorded, the mocked day row takes
+// the claimer (s1) so the app's refetch shows it, and the function's success
+// JSON comes back. A second claim of the same slot is refused with the
+// function's own CLAIM_HELD token so the verbatim-message path can be seen.
+const claimedDays = {}; // day -> { primary_id? , backup_id?, source, updated_by, updated_at } overlaid on every schedule_days GET
 const routeSupabase = async (route) => {
   const req = route.request();
   const url = new URL(req.url());
@@ -482,6 +508,17 @@ const routeSupabase = async (route) => {
       return json(200, [row]);
     }
     return json(200, []);
+  }
+  if (url.pathname === "/rest/v1/rpc/claim_open_slot") {
+    const body = req.postData() || "";
+    writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+    let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+    if (b.p_role !== "primary" && b.p_role !== "backup") return json(400, { message: "CLAIM_BAD_ROLE: role must be primary or backup (got " + (b.p_role || "null") + ")", code: "CL002", details: null, hint: null });
+    const col = b.p_role === "primary" ? "primary_id" : "backup_id";
+    const cur = claimedDays[b.p_day] || {};
+    if (cur[col]) return json(400, { message: `CLAIM_HELD: ${b.p_day} ${b.p_role} is already held by ${cur[col]}`, code: "CL005", details: null, hint: null });
+    claimedDays[b.p_day] = { ...cur, [col]: "s1", source: "claim", updated_by: "s1", updated_at: new Date().toISOString() };
+    return json(200, { ok: true, day: b.p_day, role: b.p_role, person_id: "s1", version: 2 });
   }
   if (method === "POST" || method === "PATCH" || method === "DELETE" || method === "PUT") {
     const body = req.postData() || "";
@@ -538,6 +575,15 @@ const routeSupabase = async (route) => {
     }
     return json(200, (Array.isArray(rows) ? rows : []).map(r => ({ ...r, ...blobReadOverride })));
   }
+  // Prompt 13 part 3: a claimed day reads back with the claimer, version + 1 (what the function's UPDATE leaves).
+  if (Object.keys(claimedDays).length && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
+    let rows = fixtureAnswer(url);
+    if (!rows) {
+      const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+      rows = await res.json().catch(() => []);
+    }
+    return json(200, (Array.isArray(rows) ? rows : []).map(r => claimedDays[r.day] ? { ...r, ...claimedDays[r.day], version: (Number(r.version) || 0) + 1 } : r));
+  }
   const fx = fixtureAnswer(url);
   if (fx) return json(200, fx);
   // Anon READ passthrough: the fake JWT would be rejected by the real project,
@@ -584,7 +630,7 @@ try {
 
   // Every nav tab, screenshot each.
   const tabs = await page.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
-  const expectedTabs = ["setup", "calendar", "myschedule", "timeoff", "totals", "settings"];
+  const expectedTabs = ["setup", "calendar", "openshifts", "myschedule", "timeoff", "totals", "settings"];
   if (JSON.stringify(tabs) !== JSON.stringify(expectedTabs)) fail(`nav tabs are ${JSON.stringify(tabs)}, expected ${JSON.stringify(expectedTabs)}`); else ok("nav tabs: " + tabs.join(", "));
   for (const t of tabs) {
     const before = pageErrors.length;
@@ -1163,7 +1209,7 @@ try {
     const out = {};
     for (const ym of [...new Set(days.map(d => d.slice(0, 7)))]) {
       await showMonth(+ym.slice(0, 4), +ym.slice(5, 7) - 1);
-      const cells = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || "", b: e.getAttribute("data-backup") || "", ext: e.getAttribute("data-ext") || "" })));
+      const cells = await page.$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || "", b: e.getAttribute("data-backup") || "", ext: e.getAttribute("data-ext") || "" })));
       days.filter(d => d.slice(0, 7) === ym).forEach(d => { const c = cells.find(x => x.day === d); if (c) out[d] = { primary: c.p || null, backup: c.b || null, ext: c.ext || null }; });
     }
     return out;
@@ -1192,6 +1238,236 @@ try {
     else ok(`${what}: the app's map equals the live rows on this run's ${Object.keys(obs).length} edited day(s) (${Object.keys(obs).join(", ")}) - observed in the grid${unread.length ? "; not readable: " + unread.join(", ") : ""}; the live-state pins derive from the live rows`);
     return stale;
   };
+
+  // ---- Prompt 13 part 3: the Open shifts board ----
+  // Runs BEFORE this run's first edit, so the board's rows equal the live rows
+  // (today .. the app's last published day, the same openSlots() list the
+  // coverage strip reads). Faraz's pin: the strip's 60-day open counts equal
+  // the board's - the strip = the board's rows inside the next 60 days + the
+  // unpublished tail (days after the published range, recounted here from the
+  // live rows with the strip's own rule; empty once the schedule runs 60+ days
+  // ahead, then the pin is pure equality). Then: badge = row count, the
+  // filters, Copy list, Take this shift as the mocked s1 (the admin is a
+  // surgeon too) -> claim-sheet -> Confirm -> POST rpc/claim_open_slot
+  // { p_day, p_role } -> the row leaves the board after the refetch (no client
+  // audit / feed duplicate; send-notification shift_claimed to the scheduler +
+  // claimer), Email the group now (feed row open_shifts with data.slots, a
+  // broadcast send-notification, audit openshifts.notify, 'last announced'
+  // filled), 390 px in light and dark (no page scroll, table scrolls in its
+  // wrapper with the swipe hint), screenshots openshifts*.png.
+  try {
+    const parseBody = (w) => { try { return JSON.parse(w.body); } catch (e) { return null; } };
+    const noAddr = (s) => !/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(String(s || ""));
+    const plusDays = (d, k) => utcDay(Date.parse(d + "T12:00:00Z") + k * 86400000);
+    const openIn = (d) => { const r = liveByDay[d]; return { p: !(r && (r.primary_id || r.external_cover)), b: !(r && r.backup_id) }; };
+    const isWknd = (d) => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w === 5 || w === 6 || w === 0; };
+    await page.click('button[data-tab="calendar"]');
+    await page.waitForFunction(() => { const el = document.querySelector("[data-testid=cov-open-primary]"); return !!el && el.getAttribute("data-count") !== ""; }, null, { timeout: 10000 });
+    const stripP = await page.$eval("[data-testid=cov-open-primary]", el => Number(el.getAttribute("data-count")));
+    const stripB = await page.$eval("[data-testid=cov-open-backup]", el => Number(el.getAttribute("data-count")));
+    const badgeOf = () => page.$eval('button[data-tab="openshifts"]', el => { const b = el.querySelector("[data-testid=openshifts-badge]"); return b ? Number(b.textContent) : 0; });
+    const badge = await badgeOf();
+    const openBoard = async () => { await page.click('button[data-tab="openshifts"]'); await page.waitForSelector("[data-testid=openshifts-table]", { timeout: 8000 }); };
+    await openBoard();
+    const readBoard = () => page.$eval("[data-testid=openshifts-table]", el => ({
+      from: el.getAttribute("data-from"), to: el.getAttribute("data-to"), total: Number(el.getAttribute("data-total")),
+      rows: Array.from(el.querySelectorAll("tbody tr[data-slot]")).map(r => { const b = r.querySelector("[data-testid=ob-take]"); return { slot: r.getAttribute("data-slot"), day: r.getAttribute("data-day"), role: r.getAttribute("data-role"), take: b ? (b.disabled ? "disabled" : "enabled") : "none", title: b ? (b.getAttribute("title") || "") : "", eligible: Array.from(r.querySelectorAll("[data-eligible-id]")).map(x => x.getAttribute("data-eligible-id")), announced: (r.querySelector("[data-testid=ob-announced]") || { textContent: "" }).textContent.trim(), assign: !!r.querySelector("[data-testid=ob-assign]"), external: !!r.querySelector("[data-testid=ob-external]"), text: r.innerText.replace(/\s+/g, " ") }; }),
+    }));
+    const tailOf = () => page.$eval("[data-testid=openshifts-tail]", el => ({ p: Number(el.getAttribute("data-primary")), b: Number(el.getAttribute("data-backup")), through: el.getAttribute("data-through") })).catch(() => null);
+    await page.click("[data-testid=ob-horizon-all]");
+    await page.waitForTimeout(250);
+    const all = await readBoard();
+    // Expected rows, recounted from the live rows with the board's rule: today
+    // .. the last published day (data-to), THEN every ASSIGNED day after it
+    // (a pre-assigned unit weeks beyond the block - Thanksgiving 11/26-11/29
+    // today - is claimable and must be listed); gap days with no row stay out.
+    const expRows = [];
+    if (all.to && all.to >= todayIso) for (let d = todayIso; d <= all.to; d = plusDays(d, 1)) { const o = openIn(d); if (o.p) expRows.push(d + "|primary"); if (o.b) expRows.push(d + "|backup"); }
+    const laterAssigned = Object.keys(liveByDay).filter(d => d >= todayIso && (!all.to || d > all.to) && (liveByDay[d].primary_id || liveByDay[d].backup_id || liveByDay[d].external_cover)).sort();
+    laterAssigned.forEach(d => { const o = openIn(d); if (o.p) expRows.push(d + "|primary"); if (o.b) expRows.push(d + "|backup"); });
+    if (all.from !== todayIso) fail(`Open shifts: the board starts at ${all.from}, expected today ${todayIso}`);
+    else if (JSON.stringify(all.rows.map(r => r.slot)) !== JSON.stringify(expRows)) fail(`Open shifts: the board lists ${all.rows.length} slot(s) for ${all.from}..${all.to} (+ ${laterAssigned.length} later assigned day(s)), the live rows say ${expRows.length}: board ${JSON.stringify(all.rows.map(r => r.slot).slice(-5))} vs live ${JSON.stringify(expRows.slice(-5))}`);
+    else if (!all.rows.length) { if (dated("2026-11-01", "board rows > 0 on the live data")) fail(`Open shifts: the board has no rows on the live data (${all.from}..${all.to}) - expected 10/15 primary and the October backups`); }
+    else ok(`Open shifts: ${all.rows.length} open slot(s) ${all.from}..${all.to}${laterAssigned.length ? " + " + laterAssigned.length + " later assigned day(s) " + laterAssigned[0] + ".." + laterAssigned[laterAssigned.length - 1] : ""} equal the live rows (${all.rows.filter(r => r.role === "primary").length} primary, ${all.rows.filter(r => r.role === "backup").length} backup), first ${all.rows[0].slot}, last ${all.rows[all.rows.length - 1].slot}`);
+    if (badge !== all.rows.length || all.total !== all.rows.length) fail(`Open shifts: the nav badge reads ${badge} (data-total ${all.total}), the 'all' board has ${all.rows.length} row(s)`); else ok(`Open shifts: nav badge ${badge} = the board's row count for the whole published range${badge ? "" : " (hidden at 0)"}`);
+    // Faraz's pin: the coverage strip's open counts equal the board's for the
+    // next 60 days. strip = board rows inside the window + the tail (open slots
+    // in the window the board cannot list: days with no row after the block),
+    // both sides recounted here from the live rows.
+    const h60 = plusDays(todayIso, 59);
+    const inWin = all.rows.filter(r => r.day <= h60);
+    const boardKeys = new Set(all.rows.map(r => r.slot));
+    const boardP = inWin.filter(r => r.role === "primary").length, boardB = inWin.filter(r => r.role === "backup").length;
+    let tailP = 0, tailB = 0;
+    const tailFrom = all.to && all.to >= todayIso ? plusDays(all.to, 1) : todayIso;
+    for (let d = tailFrom; d <= h60; d = plusDays(d, 1)) { const o = openIn(d); if (o.p && !boardKeys.has(d + "|primary")) tailP++; if (o.b && !boardKeys.has(d + "|backup")) tailB++; }
+    const tail = await tailOf();
+    if (!tail) fail("Open shifts: the 'beyond the published range' footer (openshifts-tail) is missing");
+    else if (tail.p !== tailP || tail.b !== tailB) fail(`Open shifts: the footer says ${tail.p} P / ${tail.b} B unpublished day(s) through ${tail.through}, the live rows say ${tailP} / ${tailB} for the no-row days after ${all.to} up to ${h60}`);
+    else if (stripP !== boardP + tail.p || stripB !== boardB + tail.b) fail(`Open shifts: the coverage strip says ${stripP} open primary / ${stripB} open backup for the next 60 days, the board says ${boardP} / ${boardB} inside the window + ${tail.p} / ${tail.b} unpublished day(s) beyond ${all.to}`);
+    else ok(`Open shifts: coverage strip ${stripP} P / ${stripB} B (next 60 days) = board ${boardP} / ${boardB} (rows through ${h60}) + ${tail.p} / ${tail.b} unpublished no-row day(s) through ${h60}${tail.p + tail.b === 0 ? " (none: pure equality)" : ""}`);
+    // Every row: s1's Take button (enabled, or disabled with the first hard reason as tooltip) exactly where the Eligible now chips include s1; the scheduler's Assign... and Outside cover.
+    const badRows = all.rows.filter(r => !(r.take === "enabled" || (r.take === "disabled" && r.title)) || !r.assign || (r.role === "primary" ? !r.external : r.external));
+    if (badRows.length) fail(`Open shifts: ${badRows.length} row(s) lack the s1 Take button (enabled, or disabled with a reason tooltip), the scheduler's Assign..., or Outside cover on primary rows only, e.g. ${JSON.stringify(badRows[0])}`);
+    else if (all.rows.length) ok(`Open shifts: every row has Take this shift (${all.rows.filter(r => r.take === "enabled").length} enabled for s1, ${all.rows.filter(r => r.take === "disabled").length} disabled with a hard reason${all.rows.some(r => r.take === "disabled") ? ", e.g. \"" + all.rows.find(r => r.take === "disabled").title + "\"" : ""}) and Assign...; Outside cover on the primary rows only`);
+    // (a locked-but-empty slot is the one exception: s1 may be eligible by the rules, yet Take is disabled with 'slot locked' because the function refuses CLAIM_LOCKED)
+    const eligMismatch = all.rows.filter(r => !/slot locked/.test(r.title) && (r.take === "enabled") !== r.eligible.includes("s1"));
+    const lockedRows = all.rows.filter(r => /slot locked/.test(r.title));
+    if (eligMismatch.length) fail(`Open shifts: ${eligMismatch.length} row(s) where the Take button disagrees with the Eligible now chips for s1, e.g. ${eligMismatch[0].slot}`); else if (all.rows.length) ok(`Open shifts: the Take button is enabled exactly on the rows whose Eligible now chips include Khan (s1)${lockedRows.length ? ` (${lockedRows.length} locked-but-empty slot(s) disabled with 'slot locked')` : ""}`);
+    const nobody = all.rows.filter(r => !r.eligible.length);
+    if (nobody.some(r => !/nobody under the current rules/.test(r.text))) fail("Open shifts: a row with no eligible surgeon does not say 'nobody under the current rules': " + nobody.find(r => !/nobody under the current rules/.test(r.text)).text.slice(0, 120));
+    else console.log(`     (${nobody.length} row(s) with nobody eligible under the current rules${nobody.length ? ", e.g. " + nobody[0].slot : ""})`);
+    if (all.rows.some(r => r.announced !== "never")) fail("Open shifts: 'last announced' should read 'never' before any open_shifts notice this run: " + all.rows.find(r => r.announced !== "never").announced);
+    // Filters: 30 / 60 / all, role, weekend-only.
+    const h30 = plusDays(todayIso, 29);
+    await page.click("[data-testid=ob-horizon-30]"); await page.waitForTimeout(150);
+    const b30 = await readBoard();
+    const exp30 = all.rows.filter(r => r.day <= h30).length;
+    if (b30.rows.length !== exp30 || b30.rows.some(r => r.day > h30)) fail(`Open shifts: 'next 30 days' shows ${b30.rows.length} row(s), expected ${exp30} (through ${h30})`); else ok(`Open shifts: filter next 30 days -> ${b30.rows.length} row(s) through ${h30}`);
+    await page.click("[data-testid=ob-horizon-60]"); await page.waitForTimeout(150);
+    const b60 = await readBoard();
+    if (b60.rows.length !== inWin.length || b60.rows.some(r => r.day > h60)) fail(`Open shifts: 'next 60 days' shows ${b60.rows.length} row(s), expected ${inWin.length} (through ${h60})`); else ok(`Open shifts: filter next 60 days -> ${b60.rows.length} row(s) through ${h60}`);
+    await page.selectOption("[data-testid=ob-role]", "primary"); await page.waitForTimeout(150);
+    const bP = await readBoard();
+    if (bP.rows.length !== inWin.filter(r => r.role === "primary").length || bP.rows.some(r => r.role !== "primary")) fail(`Open shifts: role filter 'primary' shows ${bP.rows.length} row(s) (${bP.rows.filter(r => r.role !== "primary").length} not primary), expected ${inWin.filter(r => r.role === "primary").length}`); else ok(`Open shifts: role filter primary -> ${bP.rows.length} row(s)`);
+    await page.selectOption("[data-testid=ob-role]", "all");
+    await page.click("[data-testid=ob-weekend]"); await page.waitForTimeout(150);
+    const bW = await readBoard();
+    if (bW.rows.length !== inWin.filter(r => isWknd(r.day)).length || bW.rows.some(r => !isWknd(r.day))) fail(`Open shifts: weekend-only shows ${bW.rows.length} row(s) (${bW.rows.filter(r => !isWknd(r.day)).length} on a weekday), expected ${inWin.filter(r => isWknd(r.day)).length}`); else ok(`Open shifts: weekend-only -> ${bW.rows.length} Fri/Sat/Sun row(s)`);
+    await page.click("[data-testid=ob-weekend]");
+    await page.click("[data-testid=ob-horizon-all]"); await page.waitForTimeout(150);
+    const badgeStill = await badgeOf();
+    if (badgeStill !== all.rows.length) fail(`Open shifts: the badge followed the filters (${badgeStill}); it must always count the whole range (${all.rows.length})`); else ok("Open shifts: the badge kept counting the whole range while the filters changed");
+    // Copy list: one openSlotsLine per visible row, written with navigator.clipboard.writeText (mocked to record; delegated to the real clipboard).
+    await page.evaluate(() => { window.__obClip = []; const real = navigator.clipboard.writeText.bind(navigator.clipboard); navigator.clipboard.writeText = async (t) => { window.__obClip.push(t); try { await real(t); } catch (e) {} }; });
+    await page.click("[data-testid=ob-copy]");
+    await page.waitForTimeout(300);
+    const clip = await page.evaluate(() => window.__obClip);
+    const lines = (clip[0] || "").split("\n").filter(Boolean);
+    if (clip.length !== 1 || lines.length !== all.rows.length) fail(`Open shifts: Copy list wrote ${clip.length} time(s), ${lines.length} line(s) for ${all.rows.length} row(s)`);
+    else if (!lines.every(l => /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l))) fail("Open shifts: a Copy list line is not 'Ddd MM/DD - role (unit) - open': " + lines.find(l => !/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l)));
+    else if (!noAddr(clip[0])) fail("Open shifts: the Copy list carries an email address");
+    else ok(`Open shifts: Copy list -> ${lines.length} line(s), e.g. "${lines[0]}"${lines.length > 1 ? ` ... "${lines[lines.length - 1]}"` : ""}`);
+    await page.screenshot({ path: path.join(OUT, "openshifts.png"), fullPage: true });
+    // Take this shift as s1 on the first row where s1 is eligible.
+    const target = all.rows.find(r => r.take === "enabled");
+    if (!target) console.log("     (no row where s1 is eligible under the current rules - the claim flow is not exercised)");
+    else {
+      const [cDay, cRole] = target.slot.split("|");
+      const beforeClaim = writes.length;
+      await page.click(`tr[data-slot="${target.slot}"] [data-testid=ob-take]`);
+      await page.waitForSelector("[data-testid=claim-sheet]", { timeout: 5000 });
+      const sheet = await page.$eval("[data-testid=claim-sheet]", el => el.innerText.replace(/\s+/g, " "));
+      await page.screenshot({ path: path.join(OUT, "openshifts-sheet.png"), fullPage: true });
+      const md = `${Number(cDay.slice(5, 7))}/${Number(cDay.slice(8, 10))}`;
+      if (!sheet.includes(md) || !new RegExp("\\b" + cRole + "\\b", "i").test(sheet) || !/07:00/.test(sheet)) fail(`Open shifts: the confirm sheet does not name ${md} ${cRole} and the 07:00 shift: ` + sheet.slice(0, 200));
+      else ok(`Open shifts: Take this shift on ${target.slot} opens the confirm sheet: "${sheet.slice(0, 150)}"`);
+      // Escape closes it without a write; open it again and confirm.
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=claim-sheet]", { state: "detached", timeout: 3000 });
+      if (writes.length !== beforeClaim) fail("Open shifts: closing the sheet with Escape produced a write");
+      await page.click(`tr[data-slot="${target.slot}"] [data-testid=ob-take]`);
+      await page.waitForSelector("[data-testid=claim-sheet]", { timeout: 5000 });
+      await page.click("[data-testid=claim-confirm]");
+      await waitFor(() => writes.slice(beforeClaim).some(w => w.path === "/rest/v1/rpc/claim_open_slot"), 8000);
+      const claimWrite = writes.slice(beforeClaim).find(w => w.path === "/rest/v1/rpc/claim_open_slot");
+      const cb = claimWrite ? parseBody(claimWrite) || {} : {};
+      if (!claimWrite || claimWrite.method !== "POST" || cb.p_day !== cDay || cb.p_role !== cRole || Object.keys(cb).length !== 2) fail(`Open shifts: expected POST /rest/v1/rpc/claim_open_slot { p_day: ${cDay}, p_role: ${cRole} }, saw ${JSON.stringify(claimWrite)}`);
+      else ok(`Open shifts: Confirm -> POST /rest/v1/rpc/claim_open_slot ${claimWrite.body}`);
+      const toast = await page.waitForSelector("text=/You took/", { timeout: 5000 }).then(el => el.innerText()).catch(() => "");
+      if (!/You took/.test(toast)) fail("Open shifts: no 'You took ...' toast after the claim"); else ok(`Open shifts: toast "${toast.trim()}"`);
+      noteEdit(cDay, { [cRole === "primary" ? "primary_id" : "backup_id"]: "s1" });
+      const gone = await waitFor(async () => !(await page.$(`tr[data-slot="${target.slot}"]`)), 10000);
+      if (!gone) fail(`Open shifts: the row ${target.slot} is still on the board after the claim + refetch`); else ok(`Open shifts: the row ${target.slot} left the board after the refetch (the mocked row now holds s1)`);
+      if (await page.$("[data-testid=claim-sheet]")) fail("Open shifts: the confirm sheet stayed open after a successful claim");
+      const after = writes.slice(beforeClaim);
+      const dupAudit = after.filter(w => w.path.startsWith("/rest/v1/audit_log")).map(parseBody).find(b => b && b.action === "schedule.claim");
+      const dupFeed = after.filter(w => w.path.startsWith("/rest/v1/notifications")).length;
+      const dayWrites = after.filter(w => w.path.startsWith("/rest/v1/schedule_days")).length;
+      const mail = after.filter(w => /send-notification/.test(w.path)).map(parseBody).find(b => b && b.type === "shift_claimed");
+      if (dupAudit) fail("Open shifts: the client wrote an audit 'schedule.claim' row on SUCCESS (the SQL function writes it)");
+      else if (dupFeed) fail("Open shifts: the client wrote a notifications row for the claim (the SQL function writes the feed row)");
+      else if (dayWrites) fail(`Open shifts: the client wrote schedule_days directly (${dayWrites}) - the claim must go through the RPC only`);
+      else if (!mail || !Array.isArray(mail.targetIds) || !mail.targetIds.includes("s1") || !mail.data || !/took/.test(String(mail.data.message))) fail("Open shifts: no send-notification shift_claimed targeted at the scheduler + claimer with a message: " + JSON.stringify(mail));
+      else ok(`Open shifts: no client audit / feed / schedule_days write for the claim; send-notification shift_claimed -> targetIds ${JSON.stringify(mail.targetIds)}, "${String(mail.data.message).slice(0, 80)}"`);
+      if (!after.every(w => noAddr(w.body))) fail("Open shifts: a claim write body carries an email address");
+      const badgeAfter = await badgeOf();
+      if (badgeAfter !== all.rows.length - 1) fail(`Open shifts: the badge reads ${badgeAfter} after the claim, expected ${all.rows.length - 1}`); else ok(`Open shifts: badge ${all.rows.length} -> ${badgeAfter} after the claim`);
+      const [cy, cm] = cDay.split("-");
+      await showMonth(Number(cy), Number(cm) - 1);
+      const cellNow = await cellAttr(cDay, cRole === "primary" ? "data-primary" : "data-backup");
+      if (cellNow !== "s1") fail(`Open shifts: the calendar cell ${cDay} ${cRole} reads '${cellNow}' after the claim, expected s1`); else ok(`Open shifts: the calendar cell ${cDay} ${cRole} now shows s1`);
+      // A second claim of a slot the mocked table already holds is refused with the function's token, shown verbatim.
+      await openBoard();
+      await page.click("[data-testid=ob-horizon-all]"); await page.waitForTimeout(150);
+      const held = await page.evaluate((slot) => { const b = document.querySelector(`tr[data-slot="${slot}"] [data-testid=ob-take]`); return !!b; }, target.slot);
+      if (held) fail(`Open shifts: ${target.slot} is still offered after the claim`);
+    }
+    // Email the group now (scheduler): confirm -> feed row open_shifts (data.slots = the whole range) + broadcast send-notification + audit openshifts.notify; 'last announced' fills.
+    const beforeMail = writes.length;
+    const cur0 = await readBoard();
+    page.once("dialog", d => d.accept());
+    await page.click("[data-testid=ob-email]");
+    await waitFor(() => writes.slice(beforeMail).some(w => /send-notification/.test(w.path)), 8000);
+    // the audit row is written after the e-mail outcome is known (the toast states it) - wait for it rather than for time
+    await waitFor(() => writes.slice(beforeMail).some(w => w.path.startsWith("/rest/v1/audit_log") && /openshifts\.notify/.test(w.body || "")), 8000);
+    await page.waitForTimeout(400);
+    const feed = writes.slice(beforeMail).filter(w => w.path.startsWith("/rest/v1/notifications")).map(parseBody).find(n => n && n.type === "open_shifts");
+    const mail2 = writes.slice(beforeMail).filter(w => /send-notification/.test(w.path)).map(parseBody).find(b => b && b.type === "open_shifts");
+    const audit2 = writes.slice(beforeMail).filter(w => w.path.startsWith("/rest/v1/audit_log")).map(parseBody).find(b => b && b.action === "openshifts.notify");
+    const cur = await readBoard();
+    if (!cur0.rows.length) console.log("     (no open slot left - Email the group now has nothing to announce)");
+    else if (!feed || !feed.data || !Array.isArray(feed.data.slots) || feed.data.slots.length !== cur0.rows.length || !feed.data.slots.every(s => s && s.day && (s.role === "primary" || s.role === "backup"))) fail("Open shifts: Email the group now wrote no open_shifts feed row with data.slots for every open slot: " + JSON.stringify(feed && feed.data));
+    else if (String(feed.message).split("\n").filter(l => / - open/.test(l)).length !== cur0.rows.length) fail("Open shifts: the open_shifts feed message does not list one openSlotsLine per slot: " + String(feed.message).slice(0, 200));
+    else if (!mail2 || mail2.targetIds !== undefined || !mail2.data || !/ - open/.test(String(mail2.data.message))) fail("Open shifts: Email the group now must POST send-notification type open_shifts as a broadcast (no targetIds; the server gates per category) with the list in data.message: " + JSON.stringify(mail2));
+    else if (!audit2 || audit2.detail.count !== cur0.rows.length) fail("Open shifts: no audit 'openshifts.notify' with the count: " + JSON.stringify(audit2));
+    else if (cur.rows.some(r => r.announced === "never")) fail(`Open shifts: 'last announced' still reads 'never' on ${cur.rows.filter(r => r.announced === "never").length} row(s) after the notice`);
+    else ok(`Open shifts: Email the group now -> feed open_shifts (${feed.data.slots.length} slots) + send-notification open_shifts (broadcast) + audit openshifts.notify; 'last announced' now "${cur.rows[0].announced}"`);
+    if (!writes.slice(beforeMail).every(w => noAddr(w.body))) fail("Open shifts: a notice write body carries an email address");
+    // 390 px, light: no page scroll, the table scrolls inside its wrapper with the swipe hint, buttons >= 36 px.
+    const mobileProbe = () => page.evaluate(() => {
+      const wrap = document.querySelector("[data-testid=openshifts-wrap]");
+      const btns = Array.from(document.querySelectorAll("[data-testid=openshifts-card] button")).filter(b => b.offsetParent !== null);
+      return { pageW: document.documentElement.scrollWidth, cls: wrap ? wrap.className : "", hint: wrap ? getComputedStyle(wrap, "::after").content : "", wrapScroll: wrap ? wrap.scrollWidth : 0, wrapClient: wrap ? wrap.clientWidth : 0, minBtn: btns.length ? Math.min(...btns.map(b => b.getBoundingClientRect().height)) : 0, bodyBg: getComputedStyle(document.body).backgroundColor };
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
+    const m1 = await mobileProbe();
+    if (m1.pageW > 392) fail(`Open shifts 390px: the page scrolls horizontally (scrollWidth ${m1.pageW})`);
+    else if (!/table-wrap/.test(m1.cls) || !/swipe sideways/.test(m1.hint)) fail("Open shifts 390px: the table wrapper lacks the table-wrap swipe hint: " + JSON.stringify(m1));
+    else if (m1.minBtn && m1.minBtn < 36) fail(`Open shifts 390px: a button is shorter than 36px (${m1.minBtn})`);
+    else ok(`Open shifts 390px (light): no horizontal page scroll (${m1.pageW}), the table scrolls inside its wrapper (${m1.wrapScroll} in ${m1.wrapClient}) with the swipe hint, buttons >= 36px`);
+    await page.screenshot({ path: path.join(OUT, "openshifts-390.png"), fullPage: true });
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Dark')");
+    await openBoard();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(OUT, "openshifts-dark.png"), fullPage: true });
+    const darkText = await page.evaluate(() => {
+      const parseRgb = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); if (!m) return null; const p = m[1].split(",").map(x => parseFloat(x)); return p.length >= 4 && p[3] === 0 ? null : p.slice(0, 3); };
+      const lum = (rgb) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }; return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]); };
+      const ratio = (a, b) => { const la = lum(a), lb = lum(b); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); };
+      const bgOf = (el) => { for (let e = el; e; e = e.parentElement) { const c = parseRgb(getComputedStyle(e).backgroundColor); if (c) return c; } return [26, 26, 46]; };
+      const cells = Array.from(document.querySelectorAll("[data-testid=openshifts-table] tbody td")).slice(0, 40);
+      const worst = cells.map(td => { const fg = parseRgb(getComputedStyle(td).color); return fg ? Math.round(ratio(fg, bgOf(td)) * 100) / 100 : 21; }).reduce((a, b) => Math.min(a, b), 21);
+      return { worst, cells: cells.length };
+    });
+    if (darkText.cells && darkText.worst < 3) fail(`Open shifts dark: a table cell's text is below 3:1 contrast (${darkText.worst})`); else ok(`Open shifts dark: table text contrast >= 3:1 (worst ${darkText.worst} over ${darkText.cells} cells)`);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
+    const m2 = await mobileProbe();
+    if (m2.pageW > 392) fail(`Open shifts 390px (dark): the page scrolls horizontally (scrollWidth ${m2.pageW})`);
+    else if (!/rgb\(26, 26, 46\)/.test(m2.bodyBg)) fail("Open shifts 390px (dark): the body background is not the dark navy: " + m2.bodyBg);
+    else ok(`Open shifts 390px (dark): no horizontal page scroll (${m2.pageW}), body ${m2.bodyBg}`);
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Light')");
+    await page.click('button[data-tab="calendar"]');
+    await page.waitForTimeout(200);
+  } catch (e) { fail("Open shifts board: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-openshifts.png"), fullPage: true }); } catch (e2) {} }
+  await page.setViewportSize({ width: 1180, height: 900 });
+
   const now = new Date();
   // The edit day: the first row-less day from the start of the current month
   // (so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett'),
@@ -2522,6 +2798,10 @@ try {
     await page.waitForTimeout(1500); // let the autosave pass settle (no diff -> no extra day writes)
     await page.click('button[data-tab="setup"]');
     await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
+    // The seed's schedule_days range (the days the importer compares): the
+    // board scenario's claimed day(s) inside it are app-edited (source 'claim')
+    // and must read as BLOCKED / kept in the dry run and the apply below.
+    const planDaysAll = new Set(require(path.join(ROOT, "importer.js")).importPlan(JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8")), { now: new Date().toISOString() }).scheduleDayRows.map(r => r.day));
 
     // ---- Prompt 12 M: outside surgeons - Setup adds 'Locum' (LOC), the day editor writes him in
     //      (locked, source manual-external, no override confirm), Totals lists him under its own heading ----
@@ -2613,10 +2893,21 @@ try {
       const diffText = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
       const applyDisabled = await page.$eval("[data-testid=seed-apply]", el => el.disabled);
       const impWrites = writesSince(before).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
-      if (!/Total changes: 0/.test(total) || !/No changes - the live tables already match the plan\./.test(diffText)) fail("Import dry run: expected zero changes against the live rows: " + total + " | " + diffText.split("\n").slice(-1)[0]);
+      // The board scenario's claim (rpc/claim_open_slot, overlaid on every
+      // schedule_days GET as source 'claim' / updated_by s1) is one more
+      // app-edited day inside the seed's range: the importer must report it as
+      // BLOCKED (kept), never overwrite it. Expect exactly that many.
+      const claimedInPlan = Object.keys(claimedDays).filter(d => planDaysAll.has(d)).sort();
+      const nBlocked = claimedInPlan.length;
+      const totalOk = nBlocked ? new RegExp("^Total changes: 0 \\(\\+" + nBlocked + " blocked: app-edited days kept\\)$").test(total.trim()) : /Total changes: 0$/.test(total.trim());
+      const lastLine = diffText.split("\n").slice(-1)[0];
+      const lastOk = nBlocked ? lastLine === "Total changes: 0 (+" + nBlocked + " blocked)" : /No changes - the live tables already match the plan\./.test(lastLine);
+      // the importer names a blocked day as '10/7 B open -> Khan [BLOCKED: live source 'claim' updated_by 's1' v2 - edited in the app, not overwritten]'
+      const blockedNamed = claimedInPlan.every(d => new RegExp("^\\s*" + (+d.slice(5, 7)) + "/" + (+d.slice(8, 10)) + " [PB] .*\\[BLOCKED: live source 'claim' updated_by 's1'", "m").test(diffText));
+      if (!totalOk || !lastOk || !blockedNamed) fail(`Import dry run: expected zero changes against the live rows${nBlocked ? ` (+${nBlocked} blocked: the claimed day(s) ${claimedInPlan.join(", ")} kept, named with source 'claim')` : ""}: ` + total + " | " + lastLine);
       else if (!applyDisabled) fail("Import dry run: Apply must be disabled when there is nothing to apply");
       else if (impWrites.length) fail("Import dry run wrote something: " + JSON.stringify(impWrites.map(w => w.method + " " + w.path)));
-      else ok("Import seed dry run (docs/silvis-seed.json): 0 changes against the live rows, Apply disabled, no writes");
+      else ok(`Import seed dry run (docs/silvis-seed.json): 0 changes against the live rows${nBlocked ? ` (+${nBlocked} blocked: the claimed ${claimedInPlan.join(", ")} kept as app-edited)` : ""}, Apply disabled, no writes`);
       diffText.split("\n").filter(l => /^(call_schedule_data|schedule_days|availability|time_off)/.test(l)).forEach(l => console.log("     " + l));
       await page.locator("[data-testid=card-setup_import]").screenshot({ path: path.join(OUT, "import-dryrun.png") });
       ok("screenshot test/ui/out/import-dryrun.png");
@@ -2662,11 +2953,15 @@ try {
         await page.click('button[data-tab="calendar"]');
         await showMonth(2026, 10);
         const tgCells = await readCells();
-        const keptExpected = ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].filter(d => { const c = tgCells.find(x => x.day === d); const live = liveByDay[d]; return !!c && (c.b || "") !== ((live && live.backup_id) || ""); }).length;
+        const keptThanksgiving = ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].filter(d => { const c = tgCells.find(x => x.day === d); const live = liveByDay[d]; return !!c && (c.b || "") !== ((live && live.backup_id) || ""); }).length;
+        // ... plus the board scenario's claimed day(s): source 'claim' in the
+        // mocked table, inside the seed's range -> kept (app-edited) as well.
+        const keptClaimed = Object.keys(claimedDays).filter(d => planDaysAll.has(d)).length;
+        const keptExpected = keptThanksgiving + keptClaimed;
         await page.click('button[data-tab="setup"]');
         await openCard("setup_import");
         await page.waitForSelector("[data-testid=seed-apply]", { timeout: 5000 });
-        console.log(`     (Thanksgiving days still carrying in-session generated backups: ${keptExpected} of 4 - the apply must report exactly that many kept)`);
+        console.log(`     (Thanksgiving days still carrying in-session generated backups: ${keptThanksgiving} of 4, plus ${keptClaimed} claimed day(s) - the apply must report exactly ${keptExpected} kept)`);
         const onDialog = (d) => d.accept();
         page.on("dialog", onDialog);
         const beforeApply = writes.length;
@@ -2689,7 +2984,7 @@ try {
         else if (!(blobBody.data && blobBody.data.surgeonRules && blobBody.data.surgeonRules.s2 && blobBody.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra)) || !blobBody.data.roster || "schedule" in blobBody.data) fail("Import apply: the merged blob is wrong: keys " + Object.keys(blobBody.data || {}).join(","));
         else if (aAv < 0 || aAv < aSnap || avBody.length !== 1 || avBody[0].start_date !== extra || avBody[0].person_id !== "s2" || avBody[0].source !== "seed") fail(`Import apply: availability insert wrong (index ${aAv}, snap ${aSnap}): ` + JSON.stringify(avBody));
         else if (aBad.length) fail("Import apply: schedule_days / time_off were written although nothing changed there: " + JSON.stringify(aBad.map(w => w.method + " " + w.path)));
-        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !/availability inserted 1, skipped 36/.test(resText) || !new RegExp("schedule_days inserted 0, updated 0, kept \\(app-edited\\) " + keptExpected + "\\b").test(resText)) fail(`Import apply: result panel wrong (expected 1 availability insert of 37 plan rows, no schedule_days change, ${keptExpected} Thanksgiving day(s) kept because their in-session generated backups differ from the seed-owned live rows): ` + resText);
+        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !/availability inserted 1, skipped 36/.test(resText) || !new RegExp("schedule_days inserted 0, updated 0, kept \\(app-edited\\) " + keptExpected + "\\b").test(resText)) fail(`Import apply: result panel wrong (expected 1 availability insert of 37 plan rows, no schedule_days change, ${keptExpected} day(s) kept = ${keptThanksgiving} Thanksgiving day(s) whose in-session generated backups differ from the seed-owned live rows + ${keptClaimed} claimed day(s)): ` + resText);
         else if (!impAudit) fail("Import apply: no audit_log 'seed.import'");
         else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the 1 missing row (${extra}); no schedule_days / time_off write; audit seed.import; result: "${resText.slice(0, 120)}"`);
         // Roster autosave after the merge must not regress: the extra date stays in the next blob write.

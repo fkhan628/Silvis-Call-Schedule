@@ -173,6 +173,80 @@ function openSlotsLine(slot, nameOfUnit) {
   const reason = typeof s.reason === "string" && s.reason.trim() ? " - " + s.reason.trim() : "";
   return when + " - " + (s.role || "?") + (unitText ? " (" + unitText + ")" : "") + " - open" + reason;
 }
+// obBoardRows(slots, { today, horizonDays, role, weekendOnly }) -> the Open
+// shifts board's visible rows (Prompt 13 part 3): a filtered copy of an
+// openSlots() list, order kept. horizonDays n (> 0) keeps day <= today + n - 1
+// (30 -> today .. today+29); anything else ('all', null, 0) keeps every day.
+// role 'primary' | 'backup' keeps that role; anything else keeps both.
+// weekendOnly keeps Fri / Sat / Sun by CALENDAR day (a holiday-unit day that
+// falls on a weekend day still counts - the filter is about the weekend, not
+// the unit). Entries without an ISO day are dropped; junk input -> []. Pure.
+// The nav badge never goes through this filter - it counts the whole list.
+function obBoardRows(slots, filters) {
+  const f = filters && typeof filters === "object" ? filters : {};
+  const list = (Array.isArray(slots) ? slots : []).filter(s => s && typeof s === "object" && suIsIso(s.day));
+  const n = Number(f.horizonDays);
+  const last = Number.isFinite(n) && n > 0 ? suAddDays(todayOrCentral(f.today), Math.floor(n) - 1) : null;
+  const role = f.role === "primary" || f.role === "backup" ? f.role : null;
+  return list.filter(s => {
+    if (last && s.day > last) return false;
+    if (role && s.role !== role) return false;
+    if (f.weekendOnly) { const w = parse(s.day).getDay(); if (w !== 5 && w !== 6 && w !== 0) return false; }
+    return true;
+  });
+}
+// obLastAnnounced(notifications, day, role) -> created_at (ISO) of the newest
+// feed row of type 'open_shifts' whose data.slots lists { day, role }, else
+// null ('never'). Input order does not matter; junk rows are skipped. Pure.
+function obLastAnnounced(notifications, day, role) {
+  let best = null;
+  (Array.isArray(notifications) ? notifications : []).forEach(n => {
+    if (!n || n.type !== "open_shifts" || typeof n.created_at !== "string" || !n.created_at) return;
+    const slots = n.data && Array.isArray(n.data.slots) ? n.data.slots : [];
+    if (!slots.some(s => s && s.day === day && s.role === role)) return;
+    if (!best || n.created_at > best) best = n.created_at;
+  });
+  return best;
+}
+// obBoardSlots(schedule, today, lastPublishedDay, opts) -> { slots, end, ranges }
+// The Open shifts board's list (Prompt 13 part 3, fix round): openSlots over
+// today..lastPublishedDay (the contiguous published block, suLastContiguousDay),
+// THEN the open slots of every ASSIGNED range after it (suLaterAssignedRanges -
+// e.g. a pre-assigned holiday unit weeks beyond the block; claim_open_slot
+// accepts those days because its range is min..max of schedule_days). Days
+// with no row in a gap stay out - Generate covers them - and so does a stray
+// row nobody holds. No published day (lastPublishedDay null) -> no slots:
+// never today's two phantom rows. `end` echoes the block's last day (null
+// when none), `ranges` the later [{ start, end }] that reach today. opts are
+// openSlots' (holidayByDay / weekendKinds / reasons). Pure.
+function obBoardSlots(schedule, today, lastPublishedDay, opts) {
+  const t = todayOrCentral(today);
+  const end = suIsIso(lastPublishedDay) ? lastPublishedDay : null;
+  if (!end) return { slots: [], end: null, ranges: [] };
+  const slots = openSlots(schedule, t, end, t, opts);
+  const ranges = suLaterAssignedRanges(schedule, end).filter(r => r.end >= t);
+  ranges.forEach(r => { openSlots(schedule, r.start, r.end, t, opts).forEach(s => slots.push(s)); });
+  return { slots: slots, end: end, ranges: ranges };
+}
+// obUnitMates(slots, slot) -> the OTHER open slots of the same unit in the same
+// role (the confirm sheet names them: the schedule keeps one primary + one
+// backup through a unit, so a single-day claim leaves the rest open). A
+// holiday unit matches by name within the same week (a next-year unit of the
+// same name is a different unit); a weekend matches by its Friday and only
+// when the pattern is 'block' (split / daily weekends are meant to be taken
+// day by day; an unknown pattern says nothing). No unit -> []. Pure.
+function obUnitMates(slots, slot) {
+  const s = slot && typeof slot === "object" ? slot : null;
+  const u = s && s.unit && typeof s.unit === "object" ? s.unit : null;
+  if (!s || !u || !suIsIso(s.day) || (s.role !== "primary" && s.role !== "backup")) return [];
+  if (u.kind === "weekend" && u.pattern !== "block") return [];
+  if (u.kind !== "holiday" && u.kind !== "weekend") return [];
+  return (Array.isArray(slots) ? slots : []).filter(o => {
+    if (!o || o === s || o.role !== s.role || o.day === s.day || !suIsIso(o.day) || !o.unit || o.unit.kind !== u.kind) return false;
+    if (u.kind === "holiday") return (o.unit.name || null) === (u.name || null) && Math.abs(suDaysBetween(s.day, o.day)) <= 6;
+    return o.unit.friday === u.friday;
+  });
+}
 
 /* ═══ DAILY MODEL - row <-> assignment ═══
    In-memory: schedule = { "YYYY-MM-DD": { primary, backup, primaryLocked,
@@ -1728,7 +1802,7 @@ if (typeof module !== "undefined" && module.exports) {
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
-    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine,
+    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,

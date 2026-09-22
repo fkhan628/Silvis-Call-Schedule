@@ -248,6 +248,11 @@ function CallSchedule() {
   const [settings, setSettings] = useState({});
   // The office-notification watermark: { at, days: { day: { primary, backup, externalCover } } }.
   const [lastPublished, setLastPublished] = useState(null);
+  // The last generate's operational record (Prompt 13 part 4 writes it on
+  // Accept & Publish; part 3 only READS it for the board's Why column and
+  // weekend kinds): { openSlots: [{ day, role, reason }] | { 'day|role': reason },
+  // weekendUnits | diagnostics.weekendUnits }. undefined until the blob carries it.
+  const [lastGenerate, setLastGenerate] = useState(undefined);
 
   // --- Operational data (own tables) ---
   // schedule: { "YYYY-MM-DD": { primary, backup, primaryLocked, backupLocked, source, externalCover, note } }
@@ -277,6 +282,7 @@ function CallSchedule() {
   const [calSurgeonFilters, setCalSurgeonFilters] = useState([]); // roster ids; [] = everyone (chips dim the rest)
   const [calOnlyOpen, setCalOnlyOpen] = useState(false);          // dim every day without an OPEN slot
   const [editorDay, setEditorDay] = useState(null);               // "YYYY-MM-DD" while the day editor is open
+  const [editorFocus, setEditorFocus] = useState(null);           // "external" when the board's 'Outside cover' opened the editor (it focuses that input)
   // --- East feed inputs (read-only caches of the Davenport project; Setup's
   // East panel refreshes them in Slice E). A failed read keeps the previous
   // rows and is recorded in eastLoadState so the UI says "unknown", never
@@ -574,6 +580,7 @@ function CallSchedule() {
       ? notifications
       : notifications.filter(n => {
           if (n.type === "schedule_published" || n.type === "schedule_changed" || n.type === "manual_edit") return true;
+          if (n.type === "open_shifts") return true; // the open-shifts notice is for everyone (Prompt 13); shift_claimed reaches the claimer through data.surgeon_id below
           if (n.data?.surgeon_id === mySurgeon) return true;
           if (n.data?.from_surgeon_id === mySurgeon || n.data?.to_surgeon_id === mySurgeon) return true;
           return false;
@@ -935,11 +942,11 @@ function CallSchedule() {
     // TRADE_IMMUTABLE / TRADE_NOT_ACCEPTED / TRADE_NOT_FOUND from the trade
     // guard and apply_trade) is shown VERBATIM (PostgREST wraps it as
     // { message, code, details, hint }).
-    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+/;
+    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+/; // CLAIM_* = claim_open_slot's nine refusals (Prompt 13 part 2), shown verbatim
     if (OWN.test(s)) {
       let verbatim = "";
       try { const o = typeof err === "string" ? JSON.parse(err) : err; verbatim = String((o && (o.message || o.details)) || ""); } catch (e) { console.warn("describeDbError: error body is not JSON - extracting the raised message by regex", e); verbatim = ""; }
-      if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
+      if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
       return verbatim;
     }
     if (/23514|check constraint|distinct/i.test(s)) return "The database refused the change (a check constraint failed - e.g. the same person in both roles on one day): " + s.slice(0, 160);
@@ -1246,6 +1253,7 @@ function CallSchedule() {
     if (d.holidays !== undefined) setHolidays(d.holidays);
     if (d.settings && typeof d.settings === "object") setSettings(d.settings);
     if (d.lastPublished !== undefined) setLastPublished(d.lastPublished);
+    if (d.lastGenerate !== undefined) setLastGenerate(d.lastGenerate);
   };
 
   // --- Supabase: Load on mount + real-time sync ---
@@ -1452,6 +1460,7 @@ function CallSchedule() {
   // JSON export. Do not remove them.
   const buildStateBundle = (overrides = {}) => ({
     roster: surgeons, surgeonRules, groupRules, holidays, settings, lastPublished,
+    lastGenerate, // kept in the blob across autosaves once part 4 writes it (the upsert replaces data wholesale)
     schedule, vacations, availability: availabilityRows,
     ...overrides,
   });
@@ -2403,7 +2412,7 @@ function CallSchedule() {
     logAudit("data.reset", "FACTORY RESET - deleted every schedule_days row and reset the config blob", { outcome: "ok", snapshot: resetSnap.counts || null });
     blobLoadedRef.current = true; // we wrote the blob ourselves; local defaults below ARE its content
     setSurgeons(INIT_SURGEONS);
-    setSurgeonRules(undefined); setGroupRules(undefined); setHolidays(undefined); setSettings({}); setLastPublished(null);
+    setSurgeonRules(undefined); setGroupRules(undefined); setHolidays(undefined); setSettings({}); setLastPublished(null); setLastGenerate(undefined);
     setSaveStatus("Reset complete");
     setTimeout(() => setSaveStatus(""), 2000);
   };
@@ -2424,9 +2433,19 @@ function CallSchedule() {
   // Recipient resolution + per-category gating happen SERVER-SIDE (service
   // role reads user_profiles.email / notification_preferences). The client
   // sends only the type, template data and optional targetIds.
+  // Returns the outcome so a caller can word its own toast:
+  //   { ok: true, sent, failed }            the function ran (failed > 0 already toasted)
+  //   { ok: false, skipped: true }          an empty target list - nothing to send
+  //   { ok: false, notEnabled: true }       the deployed function has no category for
+  //                                         this type yet (400 'unknown notification
+  //                                         type') - an INFO toast, never an error:
+  //                                         the in-app row was written, only the
+  //                                         e-mail is not enabled (Prompt 13 part 5
+  //                                         adds open_shifts / shift_claimed)
+  //   { ok: false, status, error }          any other failure (toasted as an error)
   const sendEmailNotif = useCallback(async (type, data, targetIds = null) => {
     // A targeted send with an EMPTY list means "no recipients", not broadcast.
-    if (Array.isArray(targetIds) && targetIds.length === 0) return;
+    if (Array.isArray(targetIds) && targetIds.length === 0) return { ok: false, skipped: true, sent: 0, failed: 0 };
     try {
       const body = { type, data };
       if (Array.isArray(targetIds)) body.targetIds = targetIds;
@@ -2436,11 +2455,19 @@ function CallSchedule() {
         body: JSON.stringify(body),
       });
       const result = await res.json().catch(() => null);
+      const errText = result && typeof result.error === "string" ? result.error : "";
+      if (res.status === 400 && /^unknown notification type/.test(errText)) {
+        console.warn("Email notification: category not enabled on the deployed function yet -", type, errText);
+        showToast("E-mail for this event is not enabled yet - the in-app note was posted.", "info");
+        return { ok: false, notEnabled: true, status: res.status, error: errText, sent: 0, failed: 0 };
+      }
       if (!res.ok || (result && result.failed > 0)) {
         console.warn("Email notification issue:", type, res.status, JSON.stringify(result));
         showToast(res.status === 404 ? "Email function is not deployed yet (Prompt 10) - no email sent." : "Some notification emails didn't send.", "error");
+        return { ok: false, status: res.status, error: errText || `HTTP ${res.status}`, sent: result && Number(result.sent) || 0, failed: result && Number(result.failed) || 0 };
       }
-    } catch(e) { console.warn("Email notification error:", e); showToast("Couldn't send email notifications - check your connection.", "error"); }
+      return { ok: true, sent: result && Number(result.sent) || 0, failed: 0, skippedPrefOff: result && Number(result.skipped_pref_off) || 0 };
+    } catch(e) { console.warn("Email notification error:", e); showToast("Couldn't send email notifications - check your connection.", "error"); return { ok: false, status: 0, error: String(e && e.message || e), sent: 0, failed: 0 }; }
   }, []);
 
   // ====================================================================
@@ -3389,6 +3416,223 @@ function CallSchedule() {
     return new Set(openSlots(base, gridDays[0], gridDays[gridDays.length - 1], todayStr).map(s => openSlotKey(s.day, s.role)));
   }, [schedule, previewGen, gridDays, todayStr]);
 
+  // ====================================================================
+  // OPEN SHIFTS BOARD (Prompt 13 part 3). One list - helpers.js openSlots over
+  // the PUBLISHED schedule from today to the last published day (never a
+  // preview) - feeds the nav badge (whole range), the table (obBoardRows
+  // filters), Copy list (openSlotsLine) and Email the group now. Eligibility is
+  // computed client-side through rules.js eligibility() (hard rules gate the
+  // button; soft warnings are shown in the confirm sheet). The claim itself is
+  // POST rpc/claim_open_slot { p_day, p_role } - the security-definer function
+  // guards data integrity, writes the audit row and the feed row in one
+  // transaction; the client writes NO duplicate on success.
+  // ====================================================================
+  const [obHorizon, setObHorizon] = useState(30);      // 30 | 60 | "all"
+  const [obRole, setObRole] = useState("all");         // all | primary | backup
+  const [obWeekend, setObWeekend] = useState(false);
+  const [claimSheet, setClaimSheet] = useState(null);  // { day, role, unit, soft: [{reason, weight}], mates: [slots] } while the confirm sheet is open
+  const [claimBusy, setClaimBusy] = useState(false);
+  const claimCancelRef = useRef(null);                 // the sheet's Cancel button - focused when the sheet opens
+  const claimReturnRef = useRef(null);                 // the element that opened the sheet - focus goes back to it on close
+  // 'Last announced' must not depend on the feed's 50-row window: the newest
+  // open_shifts rows are fetched on their own when the board opens (auth-only
+  // table: readAuthOnlyTable returns null without a fresh token - kept as is).
+  const [boardNotices, setBoardNotices] = useState([]);
+  useEffect(() => {
+    if (view !== "openshifts" || isPublicMode) return undefined;
+    let alive = true;
+    (async () => {
+      try {
+        const rows = await readAuthOnlyTable("notifications", { eq: { type: "open_shifts" }, order: "created_at.desc", limit: 20 });
+        if (alive && rows) setBoardNotices(rows);
+      } catch (e) { console.warn("open_shifts notices load failed (last announced falls back to the feed):", e); }
+    })();
+    return () => { alive = false; };
+  }, [view, isPublicMode]);
+  const boardAnnounced = useMemo(() => boardNotices.length ? boardNotices.concat(notifications) : notifications, [boardNotices, notifications]);
+  // The last generate's operational reasons, keyed 'day|role' (part 4 persists
+  // them as blob key lastGenerate; either an array of { day, role, reason } or
+  // a ready map is accepted). Absent -> the Why column reads '-'.
+  const boardReasons = useMemo(() => {
+    const src = lastGenerate && typeof lastGenerate === "object" ? lastGenerate.openSlots : null;
+    if (Array.isArray(src)) { const m = {}; src.forEach(s => { if (s && suIsIso(s.day) && (s.role === "primary" || s.role === "backup") && typeof s.reason === "string") m[openSlotKey(s.day, s.role)] = s.reason; }); return m; }
+    return src && typeof src === "object" ? src : {};
+  }, [lastGenerate]);
+  const boardWeekendKinds = useMemo(() => {
+    const fromPreview = previewGen && previewGen.diagnostics ? previewGen.diagnostics.weekendUnits : null;
+    const fromLast = lastGenerate && typeof lastGenerate === "object" ? (lastGenerate.weekendUnits || (lastGenerate.diagnostics && lastGenerate.diagnostics.weekendUnits)) : null;
+    // A preview only overrides the weekends it covers; the published range keeps its last-generate patterns.
+    return { ...openSlotWeekendKinds(fromLast), ...openSlotWeekendKinds(fromPreview) };
+  }, [previewGen, lastGenerate]);
+  // helpers.js obBoardSlots: today..lastPublishedDay (the contiguous published
+  // block) plus the open slots of every ASSIGNED range after it (a pre-assigned
+  // holiday unit weeks beyond the block is claimable - claim_open_slot's range
+  // is min..max of schedule_days). No published day -> no rows.
+  const board = useMemo(() => obBoardSlots(schedule, todayStr, lastPublishedDay, {
+    holidayByDay: rulesCtx ? rulesCtx.holidayByDay : null, weekendKinds: boardWeekendKinds, reasons: boardReasons,
+  }), [schedule, todayStr, lastPublishedDay, rulesCtx, boardWeekendKinds, boardReasons]);
+  const boardSlots = board.slots;
+  const boardEnd = board.end;          // last day of the published block, or null with no schedule on file
+  const boardRanges = board.ranges;    // later assigned [{ start, end }] whose open slots are listed too
+  const boardEndText = boardEnd ? fmtMD(boardEnd) : "-";
+  // Open slots inside the coverage strip's 60-day window that the board cannot
+  // list: days AFTER the published block with no row (nothing to claim -
+  // Generate covers them). Shown as a footer so the strip and the board can
+  // always be reconciled by eye: strip = board rows in the window + this tail.
+  const boardTail = useMemo(() => {
+    const through = suAddDays(todayStr, 59);
+    const from = boardEnd && boardEnd >= todayStr ? suAddDays(boardEnd, 1) : todayStr;
+    const listed = new Set(boardSlots.map(s => openSlotKey(s.day, s.role)));
+    const counts = from <= through ? openSlotCounts(openSlots(schedule, from, through, todayStr).filter(s => !listed.has(openSlotKey(s.day, s.role)))) : { primary: 0, backup: 0, total: 0 };
+    return { from, through, primary: counts.primary, backup: counts.backup };
+  }, [schedule, todayStr, boardEnd, boardSlots]);
+  // Eligibility per open slot for every active surgeon (hard rules decide the
+  // button; soft entries feed the sheet). Only computed while the board is
+  // showing - a few hundred eligibility() calls at most.
+  const boardElig = useMemo(() => {
+    const out = {};
+    if (view !== "openshifts" || !rulesCtx) return out;
+    boardSlots.forEach(s => {
+      out[openSlotKey(s.day, s.role)] = activeSurgeons.map(sg => {
+        let r;
+        try { r = eligibility(rulesCtx, s.day, s.role, sg.id); }
+        catch (e) { console.warn("board eligibility threw for", sg.id, s.role, s.day, e); r = { ok: false, hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)], soft: [] }; }
+        return { id: sg.id, ok: !!r.ok, hard: (r.hard && r.hard.length) ? r.hard : (r.ok ? [] : ["unknown-surgeon"]), soft: r.soft || [] };
+      });
+    });
+    return out;
+  }, [view, boardSlots, rulesCtx, activeSurgeons]);
+  const boardRows = useMemo(() => obBoardRows(boardSlots, { today: todayStr, horizonDays: obHorizon === "all" ? null : obHorizon, role: obRole, weekendOnly: obWeekend }), [boardSlots, todayStr, obHorizon, obRole, obWeekend]);
+  const boardUnitText = (u) => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : "weekend" + (u.pattern ? " " + u.pattern : "");
+  const boardCopyList = async () => {
+    const text = boardRows.map(s => openSlotsLine(s)).join("\n");
+    if (!text) { showToast("Nothing to copy - no open shift matches the filters.", "info"); return; }
+    try {
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+      else {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); document.body.removeChild(ta);
+      }
+      setCopiedUrl("ob"); setTimeout(() => setCopiedUrl(""), 2500);
+      showToast(`Copied ${boardRows.length} line(s) - paste into an email or Word.`, "info");
+    } catch (e) {
+      console.warn("Copy list: clipboard unavailable:", e);
+      showToast("Copy list: the clipboard is blocked here - select the table and copy it instead.", "error");
+    }
+  };
+  // POST rest/v1/rpc/claim_open_slot { p_day, p_role } - the caller must be a
+  // linked surgeon; refusals come back as CLAIM_* sentences (describeDbError
+  // passes them through verbatim).
+  const claimOpenSlotRpc = async (day, role) => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/claim_open_slot`, { method: "POST", headers: dbAuthHeaders(), body: JSON.stringify({ p_day: day, p_role: role }) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { ok: false, error: describeDbError(text) || `HTTP ${res.status}` };
+      let body = null; try { body = text ? JSON.parse(text) : null; } catch (e) { console.warn("claim_open_slot: 2xx with a non-JSON body", text.slice(0, 160), e); body = null; }
+      return { ok: true, result: body };
+    } catch (e) { console.warn("claim_open_slot call failed:", e); return { ok: false, error: "network error - nothing was changed; check your connection and try again" }; }
+  };
+  const openClaimSheet = (slot, opener) => {
+    if (!mySurgeon) return;
+    const me = (boardElig[openSlotKey(slot.day, slot.role)] || []).find(o => o.id === mySurgeon);
+    claimReturnRef.current = opener || null;
+    // The other open days of the same unit in this role (holiday unit; weekend
+    // 'block'): a single-day claim is allowed but the sheet names what stays open.
+    setClaimSheet({ day: slot.day, role: slot.role, unit: slot.unit, soft: me ? me.soft : [], mates: obUnitMates(boardSlots, slot) });
+  };
+  const closeClaimSheet = () => {
+    setClaimSheet(null);
+    const back = claimReturnRef.current; claimReturnRef.current = null;
+    if (back && typeof back.focus === "function" && document.contains(back)) { try { back.focus(); } catch (e) { console.warn("claim sheet: could not return focus", e); } }
+  };
+  // Focus Cancel when the sheet opens (the opener stays behind the backdrop
+  // otherwise) and keep Tab inside the dialog's two buttons.
+  useEffect(() => {
+    if (!claimSheet) return undefined;
+    const t = setTimeout(() => { if (claimCancelRef.current) { try { claimCancelRef.current.focus(); } catch (e) { console.warn("claim sheet: could not focus Cancel", e); } } }, 0);
+    return () => clearTimeout(t);
+  }, [claimSheet]);
+  const claimSheetKeyDown = (e) => {
+    if (e.key !== "Tab") return;
+    const root = e.currentTarget;
+    const focusable = Array.from(root.querySelectorAll("button:not([disabled])"));
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+  const runClaim = async () => {
+    const s = claimSheet;
+    if (!s || claimBusy || !mySurgeon) return;
+    setClaimBusy(true);
+    const label = `${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} ${s.role}`;
+    const a = await claimOpenSlotRpc(s.day, s.role);
+    if (!a.ok) {
+      console.warn("claim_open_slot refused:", a.error);
+      showToast(`Couldn't take ${label}: ${a.error}`, "error");
+      logAudit("schedule.claim", `claim refused: ${label}`, { day: s.day, role: s.role, person: mySurgeon, outcome: "failed", error: String(a.error).slice(0, 300) });
+      setClaimBusy(false); closeClaimSheet();
+      try { if (refreshDaysRef.current) await refreshDaysRef.current(); } catch (e) { console.warn("schedule refetch after a refused claim failed:", e); }
+      return;
+    }
+    setClaimBusy(false); closeClaimSheet();
+    showToast(`You took ${label}`, "success");
+    // The function wrote schedule_days (version + 1, source 'claim'), the audit row and the feed row; refetch so the board and the calendar are right immediately.
+    try { if (refreshDaysRef.current) await refreshDaysRef.current(); } catch (e) { console.warn("schedule refetch after claim_open_slot failed:", e); showToast("Shift taken, but the calendar could not be refreshed - reload to see it.", "error"); }
+    // Part 5d hook: e-mail the scheduler(s) and the claimer (the category is added server-side in part 5).
+    const ids = await schedulerIdsLoud();
+    if (ids) {
+      const targets = [...new Set([...ids, mySurgeon])];
+      const msg = `${nameOf(mySurgeon)} took the open ${s.role} shift on ${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} (07:00 to 07:00).`;
+      sendEmailNotif("shift_claimed", { message: msg, subject: "Open shift taken - " + label, day: s.day, role: s.role, surgeon_id: mySurgeon }, targets);
+    }
+  };
+  useEffect(() => {
+    if (!claimSheet) return undefined;
+    const onKey = (e) => { if (e.key === "Escape" && !claimBusy) closeClaimSheet(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [claimSheet, claimBusy]);
+  useEffect(() => { if (!editorDay) setEditorFocus(null); }, [editorDay]);
+  // Shared composer (part 5 reuses it on Accept & Publish): the notice the
+  // group gets about every open slot in the published range. Operational
+  // wording only (openSlotsLine); no names, no addresses.
+  // Explicit inputs (slots, through) - nothing from the render closure - so
+  // part 5's Accept & Publish hook can pass the list computed from the schedule
+  // it just published rather than the board's pre-publish list.
+  const composeOpenShiftsNotice = (slots, through) => {
+    const list = Array.isArray(slots) ? slots : [];
+    const lines = list.map(s => openSlotsLine(s));
+    const last = list.length ? list[list.length - 1].day : null;
+    const thru = suIsIso(through) ? through : last;
+    const title = `${list.length} open shift${list.length === 1 ? "" : "s"} need${list.length === 1 ? "s" : ""} cover`;
+    const message = `${list.length} open call shift${list.length === 1 ? "" : "s"}${thru ? " through " + fmtMD(thru) : ""} (07:00 to 07:00 each). Take one from the Open shifts board:\n${lines.join("\n")}`;
+    return { title, message, subject: "Silvis call: " + title, slots: list.map(s => ({ day: s.day, role: s.role })), lines, through: thru };
+  };
+  // Email the group now (scheduler only): one feed row of type 'open_shifts'
+  // (data.slots feeds the board's 'last announced'), a broadcast through
+  // send-notification (category open_shifts, gated per user server-side -
+  // part 5 adds the category), and an audit row 'openshifts.notify'. The
+  // toast states what actually happened: the in-app note is written first
+  // (awaited), then the e-mail outcome from sendEmailNotif is read.
+  const notifyOpenShifts = async (origin, slots, through) => {
+    if (!isScheduler) return;
+    const list = Array.isArray(slots) ? slots : [];
+    if (!list.length) { showToast("No open shifts to announce - the published range is fully covered.", "info"); return; }
+    const n = composeOpenShiftsNotice(list, through);
+    const thru = n.through;
+    if (origin === "board" && !confirm(`Email the whole group about ${list.length} open shift${list.length === 1 ? "" : "s"}${thru ? " (through " + fmtMD(thru) + ")" : ""}? Everyone also gets an in-app note.`)) return;
+    await addNotification("open_shifts", n.title, n.message, { slots: n.slots, through: thru, origin: origin || "board" });
+    const mail = await sendEmailNotif("open_shifts", { message: n.message, subject: n.subject, slots: n.slots, through: thru });
+    logAudit("openshifts.notify", `announced ${list.length} open shift(s) through ${thru || "-"}`, { count: list.length, through: thru, origin: origin || "board", slots: n.slots, email: mail && mail.ok ? "sent " + mail.sent : mail && mail.notEnabled ? "not enabled" : "failed" });
+    const what = `In-app note posted about ${list.length} open shift${list.length === 1 ? "" : "s"}`;
+    if (mail && mail.ok) showToast(`${what}; e-mail sent to ${mail.sent} ${mail.sent === 1 ? "person" : "people"}${mail.skippedPrefOff ? ` (${mail.skippedPrefOff} opted out)` : ""}.`, "success");
+    else if (mail && mail.notEnabled) showToast(`${what}; the e-mail for this notice is not enabled yet.`, "info");
+    else showToast(`${what}; the e-mail did not go out - see the message above.`, "error");
+  };
+
   // --- Calendar tools (Prompt 9 exports) ---
   // Group .ics, the shareable read-only page, the printable view and the ER-panel author's
   // ER Call Panels table. Every builder lives in helpers.js and is pure; this
@@ -3789,7 +4033,7 @@ function CallSchedule() {
         </div>
         {!isPublicMode && <div style={css.nav}>
           {(() => {
-            const allTabs = [["setup","Setup"],["calendar","Calendar"],["myschedule","Mine"],["timeoff","Time off & Trades"],["totals","Totals"],["settings","Settings"]];
+            const allTabs = [["setup","Setup"],["calendar","Calendar"],["openshifts","Open shifts"],["myschedule","Mine"],["timeoff","Time off & Trades"],["totals","Totals"],["settings","Settings"]];
             let tabs = allTabs;
             if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
             if (!mySurgeon) tabs = tabs.filter(([k]) => k !== "myschedule");
@@ -3799,6 +4043,9 @@ function CallSchedule() {
                 {l}
                 {k==="timeoff" && pendingTrades > 0 && (
                   <span style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
+                )}
+                {k==="openshifts" && boardSlots.length > 0 && (
+                  <span data-testid="openshifts-badge" title={boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "")} style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{boardSlots.length}</span>
                 )}
               </button>
             );
@@ -3833,7 +4080,7 @@ function CallSchedule() {
             {myNotifications.length === 0 ? (
               <p style={{color:"#8a94a0",fontSize:13,textAlign:"center",padding:20}}>No notifications yet</p>
             ) : myNotifications.map(n => {
-              const tabMap = {schedule_published:"calendar",schedule_changed:"calendar",manual_edit:"calendar",trade_submitted:"timeoff",trade_proposed:"timeoff",trade_accepted:"timeoff",trade_declined:"timeoff",trade_cancelled:"timeoff",trade_applied:"timeoff",vacation_logged:"timeoff",shift_reminder:"myschedule"};
+              const tabMap = {schedule_published:"calendar",schedule_changed:"calendar",manual_edit:"calendar",trade_submitted:"timeoff",trade_proposed:"timeoff",trade_accepted:"timeoff",trade_declined:"timeoff",trade_cancelled:"timeoff",trade_applied:"timeoff",vacation_logged:"timeoff",shift_reminder:"myschedule",open_shifts:"openshifts",shift_claimed:"calendar"};
               const targetTab = tabMap[n.type] || null;
               return (
               <div key={n.id} onClick={()=>{if(targetTab){setView(targetTab);setShowNotifs(false);markNotifsSeen();}}}
@@ -4181,18 +4428,116 @@ function CallSchedule() {
               </div>
             </div>
           </Collapsible>
-
-          {editorDay && (
-            <DayEditor key={editorDay} day={editorDay} entry={schedule[editorDay] || null}
-              roster={surgeons} ctxInputs={ctxInputs} ctxError={rulesCtxState.error}
-              canEdit={isScheduler && !isPublicMode} rulesImported={rulesImported} isPublicMode={isPublicMode}
-              nameOf={nameOf} codeOf={codeOf} colorOf={colorOf} mySurgeon={mySurgeon}
-              vacationNames={vacNamesOn(editorDay)}
-              onSave={(next, meta) => { if (saveDayEdit(editorDay, next, meta)) setEditorDay(null); }}
-              onCancel={() => setEditorDay(null)} onNav={editorNav} onTrade={proposeTradeForDay}
-              css={css} dk={dk}/>
-          )}
           </>;
+        })()}
+
+        {/* Day editor - shared by the calendar and the Open shifts board (Assign... / Outside cover open it on the slot's day; the write still goes through its Save). */}
+        {(view==="calendar" || view==="openshifts") && editorDay && (
+          <DayEditor key={editorDay} day={editorDay} entry={schedule[editorDay] || null}
+            roster={surgeons} ctxInputs={ctxInputs} ctxError={rulesCtxState.error}
+            canEdit={isScheduler && !isPublicMode} rulesImported={rulesImported} isPublicMode={isPublicMode}
+            nameOf={nameOf} codeOf={codeOf} colorOf={colorOf} mySurgeon={mySurgeon}
+            vacationNames={vacNamesOn(editorDay)} focusExternal={editorFocus === "external"}
+            onSave={(next, meta) => { if (saveDayEdit(editorDay, next, meta)) setEditorDay(null); }}
+            onCancel={() => setEditorDay(null)} onNav={editorNav} onTrade={proposeTradeForDay}
+            css={css} dk={dk}/>
+        )}
+
+        {/* ================ OPEN SHIFTS (Prompt 13 part 3) ================ */}
+        {view==="openshifts" && !isPublicMode && (() => {
+          const rows = boardRows;
+          const canAct = !!mySurgeon || isScheduler;
+          const horizonBtn = (v, text) => <button key={String(v)} type="button" data-testid={"ob-horizon-" + v} onClick={() => setObHorizon(v)} style={{...css.mini(obHorizon === v),padding:"6px 10px"}}>{text}</button>;
+          const chip = (o) => { const c = colorOf(o.id); return <span key={o.id} data-eligible-id={o.id} title={o.soft.length ? "allowed - " + o.soft.map(x => reasonLabel(x.reason, nameOf)).join("; ") : "no rule warnings"} style={{background:c.tg,color:c.tx,border:"1px solid " + c.bd,borderRadius:5,padding:"1px 7px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",marginRight:4,marginBottom:2,display:"inline-block"}}>{nameOf(o.id)}</span>; };
+          const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(me.hard[0], nameOf) : reasonLabel("unknown-surgeon");
+          const sheetDate = (d) => { try { return parse(d).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }); } catch (e) { return d; } };
+          return (
+            <div style={css.card} data-testid="openshifts-card">
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                <div style={css.cardT}>Open shifts</div>
+                <span style={{fontSize:11,color:"#7a8a98"}}>{!loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`}</span>
+              </div>
+              <p style={sectionNote}>Every slot the published schedule leaves open, from today to the last published day (and on any day already assigned beyond it, such as a holiday unit) - each is one 24-hour shift, 07:00 to 07:00.{mySurgeon ? " Take any shift the rules allow you: it is written to the schedule at once (no approval) and the scheduler is told." : ""}{isScheduler ? " As the scheduler you can assign anyone from the day editor or write in outside cover." : ""} The generator's reason for leaving a slot open appears after the next Generate.</p>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",marginBottom:10}}>
+                <span style={{fontSize:10,color:"#7a8a98",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}}>Show</span>
+                {horizonBtn(30, "Next 30 days")}{horizonBtn(60, "Next 60 days")}{horizonBtn("all", "All")}
+                <select data-testid="ob-role" value={obRole} onChange={e => setObRole(e.target.value)} style={{...css.inp,...dkInp,padding:"4px 8px",fontSize:12}}>
+                  <option value="all">Both roles</option><option value="primary">Primary only</option><option value="backup">Backup only</option>
+                </select>
+                <label style={{fontSize:12,color:"#5a6a78",display:"inline-flex",alignItems:"center",gap:5,minHeight:36,cursor:"pointer"}}><input type="checkbox" data-testid="ob-weekend" checked={obWeekend} onChange={e => setObWeekend(e.target.checked)}/> weekends only</label>
+                <span style={{flex:"1 1 auto"}}/>
+                <button type="button" data-testid="ob-copy" onClick={boardCopyList} disabled={!rows.length} title="Plain text, one line per slot - ready for an email or Word" style={{...css.btn(copiedUrl==="ob"),padding:"6px 12px",fontSize:11,opacity:rows.length?1:0.5}}>{copiedUrl==="ob" ? "Copied" : "Copy list"}</button>
+                {isScheduler && <button type="button" data-testid="ob-email" onClick={() => notifyOpenShifts("board", boardSlots, boardEnd)} disabled={!boardSlots.length} title="In-app note for everyone + e-mail to those who accept schedule updates; every open slot in the published range" style={{...css.btn(true),padding:"6px 12px",fontSize:11,opacity:boardSlots.length?1:0.5}}>Email the group now</button>}
+              </div>
+              {!rulesCtx && <div data-testid="ob-rules-unavailable" style={{...css.warnBox,marginBottom:10}}>Rules unavailable - the setup has not loaded, so nobody's eligibility can be checked and no shift can be taken until it does.</div>}
+              <div className="table-wrap" data-testid="openshifts-wrap" style={css.tableWrap}>
+                <table className="setup-table" data-testid="openshifts-table" data-from={todayStr} data-to={boardEnd || ""} data-total={boardSlots.length} data-ranges={boardRanges.map(r => r.start + ".." + r.end).join(",")}>
+                  <thead><tr><th>Date</th><th>Role</th><th>Unit</th><th>Why</th><th>Eligible now</th><th>Last announced</th>{canAct && <th>Action</th>}</tr></thead>
+                  <tbody>
+                    {rows.length === 0 && <tr><td colSpan={canAct ? 7 : 6} style={{color:"#1a8040",fontWeight:600,padding:"12px 8px"}}>{!loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered."}</td></tr>}
+                    {rows.map(s => {
+                      const key = openSlotKey(s.day, s.role);
+                      const elig = boardElig[key] || null;
+                      const eligible = elig ? elig.filter(o => o.ok) : [];
+                      const me = elig ? elig.find(o => o.id === mySurgeon) || null : null;
+                      const announced = obLastAnnounced(boardAnnounced, s.day, s.role);
+                      // A locked-but-empty slot is open (a lock never holds a slot) but the function refuses CLAIM_LOCKED - the scheduler assigns it from the editor.
+                      const locked = !!(schedule[s.day] && schedule[s.day][s.role + "Locked"]);
+                      return (
+                        <tr key={key} data-slot={key} data-day={s.day} data-role={s.role}>
+                          <td style={{whiteSpace:"nowrap",fontWeight:700}}>{DAY_HDR[parse(s.day).getDay()]} {fmtMD(s.day)}{s.day === todayStr ? <span style={{fontSize:10,color:"#7a8a98",marginLeft:4,fontWeight:400}}>today</span> : null}</td>
+                          <td style={{whiteSpace:"nowrap"}}><span style={{color:"#c04040",fontWeight:800,fontSize:10,letterSpacing:0.5}}>OPEN</span> {s.role === "primary" ? "Primary (TRAUMA)" : "Backup"}</td>
+                          <td style={{whiteSpace:"nowrap",fontSize:12}}>{boardUnitText(s.unit)}</td>
+                          <td style={{fontSize:12,minWidth:110}}>{s.reason || "-"}</td>
+                          <td style={{fontSize:12,minWidth:150}}>{!rulesCtx ? "-" : eligible.length ? eligible.map(chip) : <span style={{color:"#c04040",fontStyle:"italic"}}>nobody under the current rules</span>}</td>
+                          <td data-testid="ob-announced" style={{whiteSpace:"nowrap",fontSize:12}}>{announced ? fmtAuditTime(announced) : "never"}</td>
+                          {canAct && <td style={{whiteSpace:"nowrap"}}>
+                            <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                              {mySurgeon ? (me && me.ok && !locked
+                                ? <button type="button" data-testid="ob-take" onClick={(e) => openClaimSheet(s, e.currentTarget)} style={{...css.btn(true),padding:"6px 10px",fontSize:11}}>Take this shift</button>
+                                : <button type="button" data-testid="ob-take" disabled title={locked ? "slot locked - ask the scheduler to assign it" : takeTitle(me)} style={{...css.btn(false),padding:"6px 10px",fontSize:11,opacity:0.55,cursor:"not-allowed"}}>Take this shift</button>) : null}
+                              {isScheduler && <button type="button" data-testid="ob-assign" onClick={() => { setEditorFocus(null); setEditorDay(s.day); }} title="Open the day editor on this day" style={{...css.mini(false),padding:"6px 9px"}}>Assign...</button>}
+                              {isScheduler && s.role === "primary" && <button type="button" data-testid="ob-external" onClick={() => { setEditorFocus("external"); setEditorDay(s.day); }} title="Write in someone outside the roster as primary cover (saved from the day editor)" style={{...css.mini(false),padding:"6px 9px"}}>Outside cover</button>}
+                            </div>
+                          </td>}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div data-testid="openshifts-tail" data-primary={boardTail.primary} data-backup={boardTail.backup} data-through={boardTail.through} style={{fontSize:11,color:"#7a8a98",marginTop:8,lineHeight:1.5}}>
+                {boardTail.primary + boardTail.backup > 0
+                  ? <>Not listed: {boardTail.primary} primary / {boardTail.backup} backup day(s) between {fmtMD(boardTail.from)} and {fmtMD(boardTail.through)} have no schedule row yet{boardEnd ? ` (after the last published day, ${boardEndText})` : ""}. The coverage strip counts them as open; Generate covers them.</>
+                  : <>The published schedule runs through {boardEndText} - this board and the coverage strip's next-60-days counts agree.</>}
+              </div>
+              {claimSheet && (
+                <div data-testid="claim-sheet" onClick={() => { if (!claimBusy) closeClaimSheet(); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
+                  <div role="dialog" aria-modal="true" aria-label="Take this shift" onClick={e => e.stopPropagation()} onKeyDown={claimSheetKeyDown} style={{background:dk?"#16213e":"#ffffff",color:dkText,borderRadius:12,padding:"16px 18px",maxWidth:460,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
+                    <h3 style={{margin:"0 0 8px",fontSize:16,color:dkText}}>Take this shift?</h3>
+                    <div style={{fontSize:13,lineHeight:1.7}}>
+                      <div><strong>{DAY_HDR[parse(claimSheet.day).getDay()]} {fmtMD(claimSheet.day)}</strong> - {sheetDate(claimSheet.day)}</div>
+                      <div>Role: <strong>{claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"}</strong> - one 24-hour shift, 07:00 to 07:00.</div>
+                      <div>Unit: {boardUnitText(claimSheet.unit)}</div>
+                    </div>
+                    {claimSheet.mates.length > 0 && (
+                      <div data-testid="claim-unit-mates" style={{...css.warnBox,marginTop:10}}>
+                        <strong>This takes one day only.</strong> The group keeps one primary and one backup through a {claimSheet.unit.kind === "holiday" ? "holiday unit" : "weekend block"}; the other open {claimSheet.role} day{claimSheet.mates.length === 1 ? "" : "s"} of this unit stay{claimSheet.mates.length === 1 ? "s" : ""} open: {claimSheet.mates.map(m => DAY_HDR[parse(m.day).getDay()] + " " + fmtMD(m.day)).join(", ")}. Take {claimSheet.mates.length === 1 ? "it" : "them"} too from the board, or tell the scheduler.
+                      </div>
+                    )}
+                    {claimSheet.soft.length
+                      ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)} <span style={{fontFamily:mono,fontSize:11}}>(weight {x.weight})</span></li>)}</ul></div>
+                      : <div style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
+                    <p style={{fontSize:12,color:"#5a6a78",margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade.</p>
+                    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
+                      <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
+                      <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : "Confirm - take this shift"}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
         })()}
 
         {/* ================ MY SCHEDULE (Prompt 6 Slice G) ================ */}
@@ -5082,7 +5427,15 @@ function Padlock({ title, size, className }) {
 // the read-only detail. Esc closes; Left/Right arrows move a day when the
 // draft is clean and focus is not in a field.
 function DayEditor(props) {
-  const { day, entry, roster, ctxInputs, ctxError, canEdit, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, css, dk } = props;
+  const { day, entry, roster, ctxInputs, ctxError, canEdit, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, css, dk, focusExternal } = props;
+  // focusExternal (optional): the Open shifts board's 'Outside cover' opened
+  // this editor - put the caret in the external-cover input (the write still
+  // goes through Save below).
+  const externalRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!focusExternal || !externalRef.current) return;
+    try { externalRef.current.focus(); externalRef.current.scrollIntoView({ block: "center" }); } catch (e) { console.warn("focusExternal: could not focus the external-cover input", e); }
+  }, [focusExternal, day]);
   const opened = React.useMemo(() => ({ ...emptyDayAssignment(), ...(entry || {}) }), [day]); // eslint-disable-line
   const [draft, setDraft] = React.useState(opened);
   const [overrides, setOverrides] = React.useState([]);   // [{ id, role, reasons }]
@@ -5307,7 +5660,7 @@ function DayEditor(props) {
             </div>
             <div style={{flex:"1 1 160px"}}>
               <label style={label}>External cover (primary)</label>
-              <input data-testid="editor-external" value={draft.externalCover || ""} disabled={!!draft.primary} onChange={e => setDraft(d => ({ ...d, externalCover: e.target.value }))} placeholder={draft.primary ? "clear primary to use" : "e.g. Atwell"} title="Someone outside the roster covering primary; counts toward nobody's tally" style={{...inp,width:"100%",opacity:draft.primary?0.6:1}}/>
+              <input data-testid="editor-external" ref={externalRef} value={draft.externalCover || ""} disabled={!!draft.primary} onChange={e => setDraft(d => ({ ...d, externalCover: e.target.value }))} placeholder={draft.primary ? "clear primary to use" : "e.g. Atwell"} title="Someone outside the roster covering primary; counts toward nobody's tally" style={{...inp,width:"100%",opacity:draft.primary?0.6:1}}/>
             </div>
           </div>
         ) : (

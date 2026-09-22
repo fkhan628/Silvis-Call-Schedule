@@ -194,6 +194,63 @@ check("suCoverageGlance keeps its shape (forecastPrimary unchanged) and a past f
   assert.deepStrictEqual(H.suCoverageGlance({}, "bad", 5), { openPrimary: [], openBackup: [], forecastPrimary: [] });
 });
 
+/* ---- board helpers (Prompt 13 part 3): pure filters the Open shifts view renders ---- */
+check("helpers.js exports obBoardRows and obLastAnnounced (the board's pure row filter and 'last announced' lookup)", () => {
+  ["obBoardRows", "obLastAnnounced"].forEach(n => assert.ok(has(n), "missing helpers.js export " + n));
+});
+check("obBoardRows: horizonDays 30 keeps today..today+29 (inclusive), 60 keeps 60 days, 'all'/null/0 keeps everything; the input order is kept", () => {
+  const all = H.openSlots({}, "2026-11-04", "2027-01-31", "2026-11-04");
+  assert.deepStrictEqual(H.obBoardRows(all, { today: "2026-11-04", horizonDays: 30 }).map(s => s.day).filter((d, i, a) => a.indexOf(d) === i).length, 30);
+  assert.strictEqual(H.obBoardRows(all, { today: "2026-11-04", horizonDays: 30 }).slice(-1)[0].day, "2026-12-03");
+  assert.strictEqual(H.obBoardRows(all, { today: "2026-11-04", horizonDays: 60 }).slice(-1)[0].day, "2027-01-02");
+  assert.deepStrictEqual(H.obBoardRows(all, { today: "2026-11-04", horizonDays: "all" }), all);
+  assert.deepStrictEqual(H.obBoardRows(all, { today: "2026-11-04", horizonDays: null }), all);
+  assert.deepStrictEqual(H.obBoardRows(all, { today: "2026-11-04", horizonDays: 0 }), all);
+  assert.deepStrictEqual(H.obBoardRows(all, {}).length > 0, true, "no filters at all keeps the list");
+});
+check("obBoardRows: role 'primary' / 'backup' filters, anything else keeps both; weekendOnly keeps Fri/Sat/Sun by calendar day (a holiday over a weekend day still counts as a weekend day)", () => {
+  const list = H.openSlots(FX.schedule, FX.from, FX.to, FX.today, FX.opts);
+  const P = H.obBoardRows(list, { today: FX.today, role: "primary" });
+  const B = H.obBoardRows(list, { today: FX.today, role: "backup" });
+  assert.ok(P.length && B.length && P.length + B.length === list.length);
+  assert.ok(P.every(s => s.role === "primary") && B.every(s => s.role === "backup"));
+  assert.deepStrictEqual(H.obBoardRows(list, { today: FX.today, role: "all" }), list);
+  assert.deepStrictEqual(H.obBoardRows(list, { today: FX.today, role: "" }), list);
+  const W = H.obBoardRows(list, { today: FX.today, weekendOnly: true });
+  assert.ok(W.length > 0);
+  W.forEach(s => { const w = H.parse(s.day).getDay(); assert.ok(w === 5 || w === 6 || w === 0, s.day + " is not a weekend day"); });
+  assert.strictEqual(W.length, list.filter(s => { const w = H.parse(s.day).getDay(); return w === 5 || w === 6 || w === 0; }).length);
+  // Thanksgiving Friday 11/27 is a holiday-unit day AND a Friday: weekendOnly keeps it.
+  const holFri = H.obBoardRows([{ day: "2026-11-27", role: "backup", unit: { kind: "holiday", name: "Thanksgiving" }, reason: null }], { today: "2026-11-04", weekendOnly: true });
+  assert.strictEqual(holFri.length, 1);
+  // Filters combine: 30 days + backup + weekend.
+  const combo = H.obBoardRows(list, { today: FX.today, horizonDays: 30, role: "backup", weekendOnly: true });
+  combo.forEach(s => { assert.strictEqual(s.role, "backup"); assert.ok(s.day <= H.suAddDays(FX.today, 29)); });
+});
+check("obBoardRows: junk input never throws - a non-array or entries without a day yield [] / are dropped", () => {
+  assert.deepStrictEqual(H.obBoardRows(null, { today: "2026-11-04" }), []);
+  assert.deepStrictEqual(H.obBoardRows("x", {}), []);
+  assert.deepStrictEqual(H.obBoardRows([null, { role: "primary" }, { day: "nope", role: "backup" }, { day: "2026-11-05", role: "primary" }], { today: "2026-11-04" }).length, 1);
+  assert.deepStrictEqual(H.obBoardRows([{ day: "2026-11-05", role: "primary" }], null).length, 1);
+});
+check("obLastAnnounced(notifications, day, role): newest 'open_shifts' row whose data.slots lists { day, role }; other types / other slots / missing data -> null", () => {
+  const rows = [
+    { type: "open_shifts", created_at: "2026-11-01T12:00:00Z", data: { slots: [{ day: "2026-11-06", role: "primary" }, { day: "2026-11-07", role: "backup" }] } },
+    { type: "open_shifts", created_at: "2026-11-03T09:00:00Z", data: { slots: [{ day: "2026-11-06", role: "primary" }] } },
+    { type: "shift_claimed", created_at: "2026-11-04T09:00:00Z", data: { day: "2026-11-07", role: "backup", slots: [{ day: "2026-11-07", role: "backup" }] } },
+    { type: "open_shifts", created_at: "2026-11-05T09:00:00Z", data: {} },
+    null, { type: "open_shifts" },
+  ];
+  assert.strictEqual(H.obLastAnnounced(rows, "2026-11-06", "primary"), "2026-11-03T09:00:00Z");
+  assert.strictEqual(H.obLastAnnounced(rows, "2026-11-07", "backup"), "2026-11-01T12:00:00Z");
+  assert.strictEqual(H.obLastAnnounced(rows, "2026-11-06", "backup"), null);
+  assert.strictEqual(H.obLastAnnounced(rows, "2026-11-08", "primary"), null);
+  assert.strictEqual(H.obLastAnnounced(null, "2026-11-06", "primary"), null);
+  assert.strictEqual(H.obLastAnnounced([], "2026-11-06", "primary"), null);
+  // Order of the input does not matter (the feed is newest-first in the app, oldest-first here).
+  assert.strictEqual(H.obLastAnnounced(rows.slice().reverse(), "2026-11-06", "primary"), "2026-11-03T09:00:00Z");
+});
+
 /* ---- source pins: no second definition of OPEN ---- */
 {
   const helpersSrc = fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8").replace(/\r\n/g, "\n");
@@ -279,7 +336,162 @@ check("suCoverageGlance keeps its shape (forecastPrimary unchanged) and a past f
     assert.ok(/- "test\/open-shifts\.test\.js"/.test(yml), "build.yml paths list includes test/open-shifts.test.js");
     assert.ok(/- "test\/fixtures\/open-slots\.json"/.test(yml), "build.yml paths list includes test/fixtures/open-slots.json");
   });
+
+  /* ---- Prompt 13 part 3: the Open shifts board (index-source.html) ---- */
+  check("index-source.html: nav has the 'openshifts' tab labelled 'Open shifts' with a count badge that hides at 0 and counts the WHOLE published range (boardSlots)", () => {
+    const tabsLine = appSrc.split("\n").find(l => /const allTabs = \[/.test(l));
+    assert.ok(tabsLine, "allTabs is declared");
+    assert.ok(/\["openshifts","Open shifts"\]/.test(tabsLine), "allTabs lists [\"openshifts\",\"Open shifts\"]: " + tabsLine.trim());
+    assert.ok(/k==="openshifts" && boardSlots\.length > 0/.test(appSrc), "the badge renders only when boardSlots.length > 0");
+    assert.ok(/data-testid="openshifts-badge"/.test(appSrc), "the badge carries data-testid openshifts-badge");
+    assert.ok(/obBoardSlots\(schedule, todayStr, lastPublishedDay, \{/.test(appSrc), "boardSlots = obBoardSlots(schedule, todayStr, lastPublishedDay, { ... }) - the published block plus later assigned ranges, never a preview");
+    assert.ok(!/openSlots\(schedule, todayStr, lastPublishedDay \|\| todayStr/.test(appSrc), "the old today-fallback openSlots call (two phantom rows with no schedule on file) is gone");
+  });
+  check("index-source.html: the board view renders a data-testid openshifts-table filtered through helpers.js obBoardRows and reads 'last announced' through obLastAnnounced", () => {
+    assert.ok(/view==="openshifts" && !isPublicMode/.test(appSrc), "the view block is keyed 'openshifts' and hidden in public mode");
+    assert.ok(/data-testid="openshifts-table"/.test(appSrc), "the table carries data-testid openshifts-table");
+    assert.ok(/obBoardRows\(boardSlots, \{/.test(appSrc), "the rows come from obBoardRows(boardSlots, { ... })");
+    assert.ok(/obLastAnnounced\(boardAnnounced, /.test(appSrc), "last announced reads obLastAnnounced(boardAnnounced, day, role) - the feed plus the open_shifts rows fetched for the board");
+    assert.ok(/data-testid="claim-sheet"/.test(appSrc), "the confirm sheet carries data-testid claim-sheet");
+    assert.ok(/openSlotsLine\(/.test(appSrc), "Copy list uses openSlotsLine");
+  });
+  check("index-source.html: the claim goes to POST rest/v1/rpc/claim_open_slot { p_day, p_role } with dbAuthHeaders() and the server message is shown verbatim (describeDbError passes CLAIM_* through)", () => {
+    const calls = appSrc.split("\n").filter(l => /fetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/rpc\/claim_open_slot`/.test(l));
+    assert.strictEqual(calls.length, 1, "exactly one fetch of rest/v1/rpc/claim_open_slot");
+    const line = calls[0];
+    assert.ok(/method: "POST"/.test(line) && /headers: dbAuthHeaders\(\)/.test(line) && /JSON\.stringify\(\{ p_day: day, p_role: role \}\)/.test(line), "POST with dbAuthHeaders() and { p_day, p_role }: " + line.trim());
+    const own = appSrc.split("\n").find(l => /const OWN = \//.test(l));
+    assert.ok(own && /CLAIM_\[A-Z_\]\+/.test(own), "describeDbError's OWN regex includes CLAIM_[A-Z_]+: " + (own || "").trim());
+    const rx2 = appSrc.split("\n").find(l => /const m = \/\(ON_CALL_CONFLICT\|TRADE_\[A-Z_\]\+/.test(l));
+    assert.ok(rx2 && /CLAIM_\[A-Z_\]\+/.test(rx2), "describeDbError's extraction regex includes CLAIM_[A-Z_]+");
+    // No duplicate audit / feed row from the client on success: the function writes both. The client logs only a failed outcome.
+    const i = appSrc.indexOf("const runClaim = async");
+    const j = appSrc.indexOf("\n  };\n", i);
+    assert.ok(i > 0 && j > i, "runClaim is declared");
+    const body = appSrc.slice(i, j);
+    assert.ok(!/addNotification\(/.test(body), "runClaim writes no feed row (the SQL function does)");
+    assert.ok(/logAudit\("schedule\.claim", [^\n]*outcome: "failed"/.test(body), "runClaim logs schedule.claim with outcome 'failed' on refusal only");
+    assert.strictEqual((body.match(/logAudit\(/g) || []).length, 1, "exactly one logAudit call inside runClaim (the failure path)");
+    assert.ok(/sendEmailNotif\("shift_claimed"/.test(body), "runClaim calls the part 5d hook sendEmailNotif('shift_claimed', ...)");
+    assert.ok(/refreshDaysRef\.current\(\)/.test(body), "runClaim refetches schedule_days");
+  });
+  check("index-source.html: the feed shows open_shifts to everyone; tabMap routes open_shifts -> openshifts and shift_claimed -> calendar", () => {
+    const i = appSrc.indexOf("const myNotifications = useMemo");
+    const j = appSrc.indexOf("}, [notifications, isScheduler, mySurgeon, notifClearedBefore]);", i);
+    assert.ok(i > 0 && j > i, "myNotifications memo located");
+    assert.ok(/n\.type === "open_shifts"/.test(appSrc.slice(i, j)), "open_shifts passes the member filter");
+    const tabMap = appSrc.split("\n").find(l => /const tabMap = \{/.test(l));
+    assert.ok(tabMap && /open_shifts:"openshifts"/.test(tabMap) && /shift_claimed:"calendar"/.test(tabMap), "tabMap has open_shifts -> openshifts and shift_claimed -> calendar: " + (tabMap || "").trim());
+  });
+  check("index-source.html: the DayEditor honours an optional focusExternal prop (the board's 'Outside cover' action) and the editor renders for the board view too", () => {
+    assert.ok(/focusExternal/.test(appSrc.slice(appSrc.indexOf("function DayEditor(props)"))), "DayEditor reads focusExternal");
+    assert.ok(/\(view==="calendar" \|\| view==="openshifts"\) && editorDay &&/.test(appSrc), "the DayEditor is rendered for the calendar and the board views");
+    assert.strictEqual((appSrc.match(/<DayEditor /g) || []).length, 1, "one DayEditor render site");
+  });
+
+  /* ---- fix round (review of part 3) ---- */
+  check("index-source.html (fix round): the table states the later assigned ranges (data-ranges) and reads 'No schedule days on file yet' when nothing is published", () => {
+    assert.ok(/data-ranges=\{/.test(appSrc), "the table carries data-ranges");
+    assert.ok(/No schedule days on file yet/.test(appSrc), "the empty-schedule message exists");
+    assert.ok(/boardRanges/.test(appSrc), "the header names the later ranges (boardRanges)");
+  });
+  check("index-source.html (fix round): a locked-but-empty slot disables Take this shift with a 'slot locked' title (the function refuses CLAIM_LOCKED); the chips are unaffected", () => {
+    assert.ok(/schedule\[s\.day\]\[s\.role \+ "Locked"\]/.test(appSrc), "the row reads schedule[s.day][s.role + 'Locked']");
+    assert.ok(/slot locked - ask the scheduler to assign it/.test(appSrc), "the disabled title reads 'slot locked - ask the scheduler to assign it'");
+  });
+  check("index-source.html (fix round): sendEmailNotif returns its outcome and treats an 'unknown notification type' 400 as an info toast (never an error); notifyOpenShifts(origin, slots, through) awaits it and words its toast by outcome", () => {
+    const i = appSrc.indexOf("const sendEmailNotif = useCallback");
+    const j = appSrc.indexOf("}, []);", i);
+    assert.ok(i > 0 && j > i, "sendEmailNotif located");
+    const body = appSrc.slice(i, j);
+    assert.ok(/unknown notification type/.test(body), "sendEmailNotif recognises 'unknown notification type'");
+    assert.ok(/notEnabled: true/.test(body), "returns notEnabled: true for it");
+    assert.ok(/return \{ ok: true, sent/.test(body), "returns { ok: true, sent, ... } on success");
+    const k = appSrc.indexOf("const notifyOpenShifts = async (origin, slots, through)");
+    assert.ok(k > 0, "notifyOpenShifts(origin, slots, through) takes explicit inputs");
+    const nb = appSrc.slice(k, appSrc.indexOf("\n  };\n", k));
+    assert.ok(/const mail = await sendEmailNotif\("open_shifts"/.test(nb), "notifyOpenShifts awaits sendEmailNotif");
+    assert.ok(!/has been told/.test(nb), "no unconditional success toast");
+    assert.ok(/const composeOpenShiftsNotice = \(slots, through\)/.test(appSrc), "composeOpenShiftsNotice(slots, through) takes explicit inputs");
+    assert.ok(/notifyOpenShifts\("board", boardSlots, boardEnd\)/.test(appSrc), "the board passes (boardSlots, boardEnd)");
+  });
+  check("index-source.html (fix round): 'last announced' also reads the newest open_shifts rows fetched when the board opens (boardNotices), not only the 50-row feed; a preview's weekend kinds are MERGED over lastGenerate's", () => {
+    assert.ok(/readAuthOnlyTable\("notifications", \{ eq: \{ type: "open_shifts" \}/.test(appSrc), "boardNotices: readAuthOnlyTable('notifications', { eq: { type: 'open_shifts' }, ... })");
+    assert.ok(/\{ \.\.\.openSlotWeekendKinds\(fromLast\), \.\.\.openSlotWeekendKinds\(fromPreview\) \}/.test(appSrc), "weekend kinds merge the preview over lastGenerate");
+  });
+  check("index-source.html (fix round): the claim sheet focuses Cancel when it opens, keeps Tab inside, returns focus to the opener on close, and names the unit's other open days (obUnitMates)", () => {
+    assert.ok(/ref=\{claimCancelRef\}/.test(appSrc), "Cancel carries claimCancelRef");
+    assert.ok(/claimCancelRef\.current\.focus\(\)/.test(appSrc), "Cancel is focused when the sheet opens");
+    assert.ok(/claimReturnRef/.test(appSrc), "the opener is remembered for the return focus");
+    assert.ok(/obUnitMates\(boardSlots, /.test(appSrc), "the sheet lists obUnitMates(boardSlots, slot)");
+    assert.ok(/data-testid="claim-unit-mates"/.test(appSrc), "the unit-mates warning carries data-testid claim-unit-mates");
+  });
 }
+
+/* ---- fix round: the board's range union and the sheet's unit mates (pure) ---- */
+check("helpers.js exports obBoardSlots and obUnitMates (the board's range union and the confirm sheet's 'other open days of this unit')", () => {
+  ["obBoardSlots", "obUnitMates"].forEach(n => assert.ok(has(n), "missing helpers.js export " + n));
+});
+check("obBoardSlots: today..lastPublishedDay first, then the open slots of every ASSIGNED range after it (a pre-assigned unit weeks beyond the block); gap days without a row and stray unheld rows stay out; end + ranges reported", () => {
+  const sched = {
+    "2026-11-01": { primary: "s1", backup: null },
+    "2026-11-26": { primary: "s1", backup: null },
+    "2026-11-27": { primary: "s1", backup: null },
+    "2026-11-28": { primary: null, backup: "s2" },
+    "2026-11-29": { primary: "s1", backup: "s2" },
+    "2026-12-05": { primary: null, backup: null },
+  };
+  const out = H.obBoardSlots(sched, "2026-10-31", "2026-11-01");
+  assert.strictEqual(out.end, "2026-11-01");
+  assert.deepStrictEqual(out.ranges, [{ start: "2026-11-26", end: "2026-11-29" }]);
+  assert.deepStrictEqual(dayRole(out.slots), [
+    { day: "2026-10-31", role: "primary" }, { day: "2026-10-31", role: "backup" },
+    { day: "2026-11-01", role: "backup" },
+    { day: "2026-11-26", role: "backup" }, { day: "2026-11-27", role: "backup" }, { day: "2026-11-28", role: "primary" },
+  ]);
+  assert.ok(!out.slots.some(s => s.day > "2026-11-01" && s.day < "2026-11-26"), "gap days (no row) are not listed - Generate covers them");
+  assert.ok(!out.slots.some(s => s.day === "2026-12-05"), "a stray row nobody holds is not an assigned range");
+});
+check("obBoardSlots: no published day (null / undefined) -> no rows, never today's two phantom slots; a block that ended before today still lists later assigned ranges from today; opts reach openSlots; a later range before today contributes nothing", () => {
+  assert.deepStrictEqual(H.obBoardSlots({}, "2026-10-31", null), { slots: [], end: null, ranges: [] });
+  assert.deepStrictEqual(H.obBoardSlots({ "2026-10-31": { primary: null, backup: null } }, "2026-10-31", undefined).slots, []);
+  const sched = { "2026-10-01": { primary: "s1", backup: "s2" }, "2026-11-26": { primary: "s1", backup: null } };
+  const out = H.obBoardSlots(sched, "2026-10-31", "2026-10-01", { holidayByDay: { "2026-11-26": { name: "Thanksgiving" } }, reasons: { "2026-11-26|backup": "nobody eligible" } });
+  assert.strictEqual(out.end, "2026-10-01");
+  assert.deepStrictEqual(out.ranges, [{ start: "2026-11-26", end: "2026-11-26" }]);
+  assert.deepStrictEqual(out.slots.map(s => [s.day, s.role, s.unit && s.unit.name, s.reason]), [["2026-11-26", "backup", "Thanksgiving", "nobody eligible"]]);
+  const past = H.obBoardSlots({ "2026-10-01": { primary: "s1" }, "2026-10-10": { primary: null, backup: "s2" } }, "2026-10-31", "2026-10-01");
+  assert.deepStrictEqual(past.slots, []);
+  assert.deepStrictEqual(past.ranges, []);
+  assert.deepStrictEqual(H.obBoardSlots(null, "2026-10-31", null), { slots: [], end: null, ranges: [] });
+  assert.deepStrictEqual(H.obBoardSlots(null, "2026-10-31", "2026-10-31").ranges, [], "a junk schedule has no later ranges");
+});
+check("obUnitMates(slots, slot): the other OPEN days of the same unit in the same role - a holiday unit always, a weekend only when its pattern is 'block'; other roles / units / years, split-daily-unknown weekends and slots without a unit -> []", () => {
+  const H1 = { kind: "holiday", name: "Thanksgiving" };
+  const wkB = { kind: "weekend", pattern: "block", friday: "2026-11-06" };
+  const wkS = { kind: "weekend", pattern: "split", friday: "2026-11-13" };
+  const wkN = { kind: "weekend", pattern: null, friday: "2026-11-20" };
+  const slots = [
+    { day: "2026-11-26", role: "backup", unit: H1 }, { day: "2026-11-27", role: "backup", unit: H1 }, { day: "2026-11-27", role: "primary", unit: H1 }, { day: "2026-11-29", role: "backup", unit: H1 },
+    { day: "2026-11-06", role: "primary", unit: wkB }, { day: "2026-11-08", role: "primary", unit: wkB }, { day: "2026-11-07", role: "backup", unit: wkB },
+    { day: "2026-11-13", role: "primary", unit: wkS }, { day: "2026-11-14", role: "primary", unit: wkS },
+    { day: "2026-11-20", role: "primary", unit: wkN }, { day: "2026-11-21", role: "primary", unit: wkN },
+    { day: "2026-11-03", role: "primary", unit: null },
+    { day: "2027-11-25", role: "backup", unit: { kind: "holiday", name: "Thanksgiving" } },
+  ];
+  const days = (l) => l.map(s => s.day);
+  assert.deepStrictEqual(days(H.obUnitMates(slots, slots[0])), ["2026-11-27", "2026-11-29"]);
+  assert.deepStrictEqual(days(H.obUnitMates(slots, slots[3])), ["2026-11-26", "2026-11-27"]);
+  assert.deepStrictEqual(days(H.obUnitMates(slots, slots[2])), []);
+  assert.deepStrictEqual(days(H.obUnitMates(slots, slots[4])), ["2026-11-08"]);
+  assert.deepStrictEqual(days(H.obUnitMates(slots, slots[6])), []);
+  assert.deepStrictEqual(H.obUnitMates(slots, slots[7]), []);
+  assert.deepStrictEqual(H.obUnitMates(slots, slots[9]), []);
+  assert.deepStrictEqual(H.obUnitMates(slots, slots[11]), []);
+  assert.deepStrictEqual(H.obUnitMates(null, slots[0]), []);
+  assert.deepStrictEqual(H.obUnitMates(slots, null), []);
+  assert.deepStrictEqual(H.obUnitMates(slots, { day: "2026-11-26", role: "backup" }), []);
+});
 
 console.log(`\nopen-shifts: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
