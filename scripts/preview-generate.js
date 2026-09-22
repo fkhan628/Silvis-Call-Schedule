@@ -135,7 +135,10 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
 
   // tallies
   L.push("## Per-surgeon tallies vs cap / target"); L.push("");
-  if (dg.tallies) {
+  if (dg.tallies && Object.values(dg.tallies).every(v => v && v.months)) {
+    L.push("| Surgeon | Month | Primary | Backup | Total | Weekend days | Major | Minor | Max consec. | Cap | Target |"); L.push("|---|---|---|---|---|---|---|---|---|---|---|");
+    for (const s of roster) { const tl = dg.tallies[s.id]; if (!tl) continue; const months = Object.keys(tl.months).sort(); for (const m of months) { const x = tl.months[m]; L.push(`| ${s.name} | ${m} | ${x.primary} | ${x.backup} | ${x.total} | ${x.weekendDays} | ${x.majorHolidays} | ${x.minorHolidays} | ${x.maxConsecutive} | ${x.cap == null ? "-" : x.cap} | ${x.target == null ? "-" : (Math.round(x.target * 10) / 10)} |`); } if (tl.range) { const x = tl.range; L.push(`| **${s.name}** | **range** | **${x.primary}** | **${x.backup}** | **${x.total}** | **${x.weekendDays}** | **${x.majorHolidays}** | **${x.minorHolidays}** | **${x.maxConsecutive}** | | |`); } }
+  } else if (dg.tallies) {
     L.push("```"); L.push(JSON.stringify(dg.tallies, null, 1).slice(0, 20000)); L.push("```");
   } else {
     const months = {}; for (const d of Object.keys(merged).filter(d => d >= START && d <= END)) { const m = d.slice(0, 7); months[m] = months[m] || {}; const a = merged[d]; if (a.primary) { months[m][a.primary] = months[m][a.primary] || { primary: 0, backup: 0 }; months[m][a.primary].primary++; } if (a.backup) { months[m][a.backup] = months[m][a.backup] || { primary: 0, backup: 0 }; months[m][a.backup].backup++; } }
