@@ -280,6 +280,15 @@ eq(d2.changes, ["10/12 P Philip -> Fierce"], "update rendered as 'M/D P Name -> 
 eq(d2.tables.schedule_days.update, 1); eq(d2.tables.schedule_days.blocked, 1);
 ok(d2.blocked.length === 1 && /^10\/13 B Burchett -> OPEN \[BLOCKED: live source 'manual'/.test(d2.blocked[0]), "app-edited day reported as blocked");
 eq(d2.totalChanges, 1, "blocked rows do not count as changes");
+// an app-FILLED slot on an import-locked day (source still 'import', updated_by = a person) is app-owned: blocked, never overwritten
+const liveFilled = clone(liveEq);
+Object.assign(liveFilled.schedule_days.find((d) => d.day === "2026-11-26"), { backup_id: BURCHETT, updated_by: "s1", version: 2 });
+const d2b = IMP.planDiff(plan, liveFilled);
+eq(d2b.tables.schedule_days.blocked, 1, "app-filled Thanksgiving backup is blocked");
+ok(/^11/26 B Burchett -> OPEN [BLOCKED: live source 'import' updated_by 's1'/.test(d2b.blocked[0] || ""), "blocked line names the app owner: " + d2b.blocked[0]);
+eq(d2b.totalChanges, 0, "and it is not a change");
+ok(/where schedule_days.source = 'import'
+  and coalesce(schedule_days.updated_by, 'seed') = 'seed'/.test(IMP.importSql(plan)), "SQL upsert guard requires seed ownership (updated_by)");
 const d3 = IMP.planDiff(plan, Object.assign({}, liveEq, { availability: liveEq.availability.slice(1).concat([Object.assign({}, liveEq.availability[0], { note: "old" })]) }));
 eq(d3.tables.availability.update, 1, "note change -> update");
 

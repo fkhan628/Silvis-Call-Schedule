@@ -532,6 +532,7 @@ function impSqlScheduleDays(rows) {
     "  updated_by     = 'seed',",
     "  updated_at     = now()",
     "where schedule_days.source = 'import'",
+    "  and coalesce(schedule_days.updated_by, 'seed') = 'seed'",   // an app-filled slot on an import day is app-owned: never overwritten by a re-import
     "  and (schedule_days.primary_id, schedule_days.backup_id, schedule_days.primary_locked, schedule_days.backup_locked, schedule_days.external_cover, schedule_days.note)",
     "      is distinct from",
     "      (excluded.primary_id, excluded.backup_id, excluded.primary_locked, excluded.backup_locked, excluded.external_cover, excluded.note);",
@@ -770,7 +771,7 @@ function planDiff(plan, live) {
     var state;
     if (!l) state = "insert";
     else if (impDaySame(l, r)) state = "unchanged";
-    else if (l.source !== "import") state = "blocked";
+    else if (l.source !== "import" || (l.updated_by || "seed") !== "seed") state = "blocked";   // app-edited (source) or app-filled (updated_by) days are never overwritten
     else state = "update";
     sdT[state]++;
     var m = r.day.slice(0, 7);
@@ -786,7 +787,7 @@ function planDiff(plan, live) {
       }
       if (!dayLines.length) dayLines.push(impShortDay(r.day) + " locks/note change");
       dayLines.forEach(function (t) {
-        if (state === "blocked") { blocked.push(t + " [BLOCKED: live source '" + (l.source || "") + "' v" + l.version + " - edited in the app, not overwritten]"); }
+        if (state === "blocked") { blocked.push(t + " [BLOCKED: live source '" + (l.source || "") + "' updated_by '" + (l.updated_by || "") + "' v" + l.version + " - edited in the app, not overwritten]"); }
         else changes.push(t);
       });
     }
