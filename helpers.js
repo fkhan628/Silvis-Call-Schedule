@@ -1250,6 +1250,161 @@ function suFmtTs(iso) {
 }
 
 // Node entry point for test/data-layer.test.js. A no-op in the browser.
+/* === TOTALS (Prompt 6 Slice F) - pure tally helpers ===
+   One 24-h day = one shift; nothing weighted or split; counts only (no $).
+   tt-prefixed so nothing collides with rules.js / generator.js globals.
+   ttTotalsFor(schedule, surgeonId, from, to, opts) ->
+     { primary, backup, total, weekendDays, majorHolidays, minorHolidays, maxConsecutive, holidayUnits: [names] }
+   - a day counts when schedule[day].primary === surgeonId or .backup === surgeonId;
+     an externally covered day (externalCover set, primary null) is nobody's day;
+   - weekendDays: held days whose weekday is in opts.weekendDays (default Fri/Sat/Sun);
+   - holiday units: opts.holidayByDay { 'YYYY-MM-DD': { name, tier, days } } (the
+     rules ctx map); a unit counts ONCE per call when the surgeon holds any of
+     its days inside [from, to], as major or minor by unit.tier;
+   - maxConsecutive: the longest run of consecutive PRIMARY days that touches
+     [from, to], followed across the range edges (a run starting 10/30 and ending
+     11/2 reads 4 in October AND in November). Days of one holiday unit collapse
+     to one commitment when opts.unitExempt !== false (rules.js semantics); pass
+     opts.countBackup to count backup days in runs too. */
+var TT_WEEKEND_DEFAULT = ["Fri", "Sat", "Sun"];
+var TT_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function ttIsIso(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+function ttAdd(iso, n) { return fmt(addD(parse(iso), n)); }
+function ttDow(iso) { return TT_DOW[parse(iso).getDay()]; }
+function ttHolds(schedule, day, id, role) {
+  var e = schedule ? schedule[day] : null;
+  if (!e || !id) return false;
+  if (role === "primary") return e.primary === id;
+  if (role === "backup") return e.backup === id;
+  return e.primary === id || e.backup === id;
+}
+function ttUnitKey(u) { return u ? (u.name || "?") + ":" + ((u.days && u.days[0]) || "") : ""; }
+// The run of counted days through `day` (inclusive), walked both ways; returns
+// the number of commitments (holiday units collapsed) or 0 when day is not counted.
+function ttRunThrough(schedule, id, day, opts) {
+  var o = opts || {};
+  var byDay = o.holidayByDay || {};
+  var unitExempt = o.unitExempt !== false;
+  var counts = function (d) { return ttHolds(schedule, d, id, "primary") || (o.countBackup && ttHolds(schedule, d, id, "backup")); };
+  if (!counts(day)) return 0;
+  var keyOf = function (d) { var u = unitExempt ? byDay[d] : null; return u ? "H:" + ttUnitKey(u) : d; };
+  var keys = {}; keys[keyOf(day)] = true;
+  var n = 1, d, guard;
+  for (d = ttAdd(day, -1), guard = 0; guard < 400 && counts(d); d = ttAdd(d, -1), guard++) { var k1 = keyOf(d); if (!keys[k1]) { keys[k1] = true; n++; } }
+  for (d = ttAdd(day, 1), guard = 0; guard < 400 && counts(d); d = ttAdd(d, 1), guard++) { var k2 = keyOf(d); if (!keys[k2]) { keys[k2] = true; n++; } }
+  return n;
+}
+function ttTotalsFor(schedule, surgeonId, from, to, opts) {
+  var o = opts || {};
+  var weekend = o.weekendDays || TT_WEEKEND_DEFAULT;
+  var byDay = o.holidayByDay || {};
+  var t = { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0, holidayUnits: [] };
+  if (!schedule || !surgeonId || !ttIsIso(from) || !ttIsIso(to) || to < from) return t;
+  var seenUnits = {};
+  var lastCounted = null; // skip the run walk for days already inside a measured run
+  for (var d = from; d <= to; d = ttAdd(d, 1)) {
+    var isP = ttHolds(schedule, d, surgeonId, "primary"), isB = ttHolds(schedule, d, surgeonId, "backup");
+    if (isP) t.primary++;
+    if (isB) t.backup++;
+    if (isP || isB) {
+      t.total++;
+      if (weekend.indexOf(ttDow(d)) >= 0) t.weekendDays++;
+      var u = byDay[d];
+      if (u) { var uk = ttUnitKey(u); if (!seenUnits[uk]) { seenUnits[uk] = true; t.holidayUnits.push(u.name || "?"); if (u.tier === "minor") t.minorHolidays++; else t.majorHolidays++; } }
+    }
+    var inRun = isP || (o.countBackup && isB);
+    if (inRun && lastCounted !== ttAdd(d, -1)) { var n = ttRunThrough(schedule, surgeonId, d, o); if (n > t.maxConsecutive) t.maxConsecutive = n; }
+    if (inRun) lastCounted = d;
+  }
+  return t;
+}
+// Distinct days in [from, to] found in a Set/array/object of date strings (East days for a cap that counts them).
+function ttDaysIn(days, from, to) {
+  if (!days || !ttIsIso(from) || !ttIsIso(to)) return 0;
+  var list = days instanceof Set ? Array.from(days) : Array.isArray(days) ? days : Object.keys(days);
+  var n = 0, seen = {};
+  list.forEach(function (d) { if (ttIsIso(d) && d >= from && d <= to && !seen[d]) { seen[d] = true; n++; } });
+  return n;
+}
+// ttRangeFor(mode, year, month0, opts) -> { from, to, label, months }
+//   mode "month"   -> that calendar month
+//   mode "ytd"     -> Jan 1 (or opts.floors[year], e.g. 2026 -> "2026-09-14") .. end of that month
+//   mode "rolling" -> the 12 calendar months ending in that month
+function ttRangeFor(mode, year, month0, opts) {
+  var o = opts || {};
+  var y = Number(year), m = Number(month0);
+  var monthStart = function (yy, mm) { return fmt(new Date(yy, mm, 1)); };
+  var monthEnd = function (yy, mm) { return fmt(new Date(yy, mm + 1, 0)); };
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var to = monthEnd(y, m), from, label;
+  if (mode === "ytd") {
+    from = monthStart(y, 0);
+    var floor = o.floors && o.floors[String(y)];
+    if (ttIsIso(floor) && floor > from) from = floor;
+    if (from > to) from = monthStart(y, m);
+    label = "Year to date " + y + " (" + fmtMD(from) + " - " + fmtMD(to) + ")";
+  } else if (mode === "rolling") {
+    var start = new Date(y, m - 11, 1);
+    from = fmt(start);
+    label = "Rolling 12 months (" + MON[start.getMonth()] + " " + start.getFullYear() + " - " + MON[m] + " " + y + ")";
+  } else {
+    from = monthStart(y, m);
+    label = MON[m] + " " + y;
+  }
+  var months = [];
+  for (var c = parse(from); fmt(c) <= to; c = new Date(c.getFullYear(), c.getMonth() + 1, 1)) months.push(c.getFullYear() + "-" + String(c.getMonth() + 1).padStart(2, "0"));
+  return { from: from, to: to, label: label, months: months };
+}
+// Signed deviation text: "+2", "-1", "0", or "-" without a target.
+function ttDeviation(total, target) {
+  if (typeof target !== "number" || isNaN(target)) return "-";
+  var d = Number(total || 0) - target;
+  return d > 0 ? "+" + d : String(d);
+}
+// CSV text (RFC 4180 quoting) from a header array and row arrays. CRLF lines.
+function ttCsvText(headers, rows) {
+  var cell = function (v) {
+    var s = v === null || v === undefined ? "" : String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  var lines = [headers.map(cell).join(",")];
+  (rows || []).forEach(function (r) { lines.push(r.map(cell).join(",")); });
+  return lines.join("\r\n") + "\r\n";
+}
+
+/* === NOTIFICATION MESSAGE COMPOSERS (Prompt 6 Slice G) ===
+   The send-notification function renders data.message verbatim inside a
+   per-category frame and REJECTS a payload without it; the same strings feed
+   the in-app feed. Trade wording lives in tradeProposeMsg / tradeAcceptMsg /
+   tradeDeclineMsg above (day + role legs via slotLabel). */
+function tradeAppliedMsg(req) {
+  return "Trade applied to the schedule: " + tradeLegsText(req, "takes");
+}
+function tradeCancelMsg(req) {
+  return (req.from_surgeon_name || req.from_surgeon_id) + " cancelled the trade: " + tradeLegsText(req, "would have taken");
+}
+// "<Name> logged vacation 11/3-11/5" (one date when start === end); the note is operational and optional.
+function vacationLoggedMsg(name, start, end, note) {
+  var span = start === end || !end ? fmtMD(start) : fmtMD(start) + "-" + fmtMD(end);
+  return name + " logged vacation " + span + (note ? " (" + String(note).trim() + ")" : "");
+}
+// "10/12 P Philip -> Fierce (by Khan)" - change lines from formatDayChange, one per line.
+function manualEditMsg(lines, byName) {
+  var list = (lines || []).filter(Boolean);
+  var body = list.length ? list.join("\n") : "schedule changed";
+  return byName ? body + " (by " + byName + ")" : body;
+}
+// Publish notice: the period plus the change lines (capped, with a count of the rest).
+function schedulePublishedMsg(period, lines, maxLines) {
+  var cap = typeof maxLines === "number" ? maxLines : 40;
+  var list = (lines || []).filter(Boolean);
+  var head = period ? "Call schedule " + period + " was published." : "The call schedule was published.";
+  if (!list.length) return head + " No slot changes since the last notice.";
+  var shown = list.slice(0, cap);
+  var more = list.length - shown.length;
+  return head + "\nChanges (" + list.length + "):\n" + shown.join("\n") + (more > 0 ? "\n... and " + more + " more" : "");
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
@@ -1260,6 +1415,8 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel,
+    tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
+    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso,
     buildWeekRows,
     SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,
     escHtml, holidayNameByDay, monthsOfSchedule, normalizeMonths,

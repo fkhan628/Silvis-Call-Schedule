@@ -63,6 +63,37 @@
 //     dry run warns when the live blob was app-saved and Apply refuses with
 //     zero writes when updated_at moved since the dry run (safe-4; switch
 //     blobReadOverride)
+//   - Slices F + G: Totals for October 2026 renders all six surgeons with
+//     primary / backup / total / weekend-day / max-consecutive numbers equal to
+//     an INDEPENDENT recount of the live schedule_days rows done in this file
+//     (anon fetch), no '$' anywhere, CSV export downloads with one row per
+//     surgeon, the fairness view renders (totals-oct-2026.png, fairness.png);
+//     My schedule shows s1's next call = the first live day on/after today
+//     with s1 in either role, the upcoming list and the sync-URL button
+//     (mine.png); Time off: a range over 2026-11-26 (Khan primary,
+//     Thanksgiving) is refused CLIENT-SIDE with the date listed, a 'propose a
+//     trade' shortcut and NO write, then a clean range records exactly one
+//     time_off POST + one audit 'timeoff.add' + one notification
+//     'vacation_logged' with the composed message (timeoff.png); Trades:
+//     proposing to an ineligible counter-party is blocked with the reason and
+//     no write, a valid proposal POSTs shift_trade_requests + notification
+//     trade_proposed + send-notification with data.message, Accept records
+//     PATCH status=accepted THEN POST rpc/apply_trade in that order and the
+//     row reads applied (trades.png)
+//   - fix round 3 (Slices F + G findings): the Totals recount compares the
+//     VISIBLE cells too and applies this run's own edits (harnessDays) so it is
+//     never skipped (vis-001 / vis-002); Acton gets a monthlyTarget through the
+//     Rules card so the signed deviation, the green target mark and the CSV
+//     Target / Deviation columns are exercised (vis-003); flagged Totals cells
+//     keep their warning colour in dark mode, measured on computed colours
+//     (vis-004; totals-oct-dark.png, fairness-dark.png); trades: a unit day
+//     (Khan's Thanksgiving 11/26-11/29) trades as the WHOLE unit - a single
+//     day needs the scheduler's confirm (dismissed -> no write), the unit
+//     proposal POSTs one row per day with a unit stamp and one notification,
+//     Accept moves all rows (fg-1); with the session token expired a realtime
+//     change on shift_trade_requests is skipped, never read as anon, and the
+//     pending rows survive (datalayer-001); the single-day flow now runs from
+//     Burchett (Khan's only upcoming days are the unit)
 //   - screenshots each tab to test/ui/out/<tab>.png
 // Exit code 1 on any failure.
 //
@@ -151,6 +182,8 @@ const EAST_WEEK = { week_monday: "2026-10-05", data: { dayCall: "s6", nights: { 
 const EAST_BLOB = { surgeons: [{ id: "s6", name: "FAK" }, { id: "s1", name: "AAA" }] };
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 const FAKE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+// The same session, expired an hour ago (datalayer-001: an authenticated-only read must be SKIPPED, not degraded to anon).
+const EXPIRED_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) - 3600 })}.c2ln`;
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json", ".png": "image/png", ".ico": "image/x-icon", ".css": "text/css" };
 const server = http.createServer((req, res) => {
@@ -238,15 +271,18 @@ const installRealtimeMock = async (pg) => {
     });
   });
 };
-const rtSendDayRow = (record, type) => {
+// Inject one postgres_changes frame for `table` (the binding id is the table's
+// position in the app's subscription list, echoed back at join).
+const rtSendRow = (table, record, type) => {
   if (!rt.joined) return false;
-  const id = RT_TABLES.indexOf("schedule_days") + 1;
+  const id = RT_TABLES.indexOf(table) + 1;
   rtSend({
     topic: rt.topic, event: "postgres_changes", ref: null, join_ref: rt.joinRef,
-    payload: { ids: [id], data: { type: type || "UPDATE", schema: "public", table: "schedule_days", commit_timestamp: new Date().toISOString(), columns: [], record, old_record: {}, errors: null } },
+    payload: { ids: [id], data: { type: type || "UPDATE", schema: "public", table, commit_timestamp: new Date().toISOString(), columns: [], record, old_record: {}, errors: null } },
   });
   return true;
 };
+const rtSendDayRow = (record, type) => rtSendRow("schedule_days", record, type);
 const dayRow = (day, over) => ({ day, primary_id: null, backup_id: null, primary_locked: false, backup_locked: false, source: "manual", external_cover: null, note: null, version: 1, updated_by: "s4", updated_at: new Date().toISOString(), ...over });
 
 // ---- Seed fixture fallback (see the header) ----
@@ -313,6 +349,8 @@ const pageErrors = [];
 const consoleErrors = [];
 const consoleWarns = [];
 const writes = [];
+const tradeStore = []; // Slice G: shift_trade_requests rows the app wrote this run (see the Supabase route)
+const tradeGets = [];  // datalayer-001: every GET on shift_trade_requests with the Authorization it carried
 const forcedConsoleErrors = []; // the browser's own "500" line for the snapshot insert the harness forced to fail
 const watchPage = (pg, tag) => {
   pg.on("pageerror", (e) => pageErrors.push(`${tag}: ` + String(e && e.message || e)));
@@ -335,6 +373,19 @@ await installRealtimeMock(page);
 const representation = (method, url, body) => {
   // The seed import's blob merge PATCHes call_schedule_data?id=eq.main and
   // treats zero returned rows as "no row updated" - echo the body like PostgREST.
+  // Slice G: time_off / notifications / audit_log inserts are adopted from the
+  // returned representation (db.insert returns data:null on an empty body and
+  // the app treats that as a failed write, exactly as it should), so those
+  // POSTs echo the row with a generated id. shift_trade_requests and
+  // rpc/apply_trade are served by the tradeStore branch of the route above.
+  const rowTables = ["/rest/v1/time_off", "/rest/v1/notifications", "/rest/v1/audit_log"];
+  if (method === "POST" && rowTables.some(t => url.pathname.startsWith(t))) {
+    try {
+      const b = JSON.parse(body || "{}");
+      const stamp = (r) => ({ id: crypto.randomUUID(), created_at: new Date().toISOString(), ...r });
+      return Array.isArray(b) ? b.map(stamp) : [stamp(b)];
+    } catch (e) { return []; }
+  }
   const echoes = url.pathname.startsWith("/rest/v1/schedule_days") || (method === "PATCH" && url.pathname.startsWith("/rest/v1/call_schedule_data"));
   if (!echoes) return [];
   try {
@@ -358,6 +409,33 @@ await page.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
     // PostgREST does for a row the caller may update (Slice E Users card).
     if (method === "PATCH") { let patch = {}; try { patch = JSON.parse(body); } catch (e) {} return json(200, [{ ...FAKE_PROFILE, ...patch }]); }
     return json(method === "POST" ? 201 : 200, []);
+  }
+  // Slice G: shift_trade_requests is readable by AUTHENTICATED users only, so the
+  // anon passthrough would answer 200 + [] and wipe the list on every refresh.
+  // The harness keeps the rows the app writes (POST -> row with id, PATCH ->
+  // merged row, rpc/apply_trade -> status applied, exactly what the function
+  // does) and serves them on GET - the authenticated picture, recorded.
+  if (url.pathname.startsWith("/rest/v1/shift_trade_requests") || url.pathname === "/rest/v1/rpc/apply_trade") {
+    if (method === "GET") { tradeGets.push({ auth: req.headers()["authorization"] || "", at: Date.now() }); return json(200, tradeStore.slice().sort((a, b) => a.submitted_at < b.submitted_at ? 1 : -1)); }
+    const body = req.postData() || "";
+    writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+    let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+    if (url.pathname === "/rest/v1/rpc/apply_trade") {
+      const row = tradeStore.find(r => r.id === b.p_trade_id);
+      if (!row) return json(400, { message: "TRADE_NOT_FOUND", code: "P0001" });
+      if (row.status !== "accepted") return json(400, { message: "TRADE_NOT_ACCEPTED: status is " + row.status, code: "P0001" });
+      row.status = "applied"; row.decided_at = row.decided_at || new Date().toISOString();
+      return json(200, { ok: true, trade_id: row.id, day: row.day, role: row.role, return_day: row.return_day, return_role: row.return_role });
+    }
+    if (method === "POST") { const row = { id: crypto.randomUUID(), submitted_at: new Date().toISOString(), ...b }; tradeStore.push(row); return json(201, [row]); }
+    if (method === "PATCH") {
+      const id = (url.searchParams.get("id") || "").replace(/^eq\./, "");
+      const row = tradeStore.find(r => r.id === id);
+      if (!row) return json(200, []);
+      Object.assign(row, b);
+      return json(200, [row]);
+    }
+    return json(200, []);
   }
   if (method === "POST" || method === "PATCH" || method === "DELETE" || method === "PUT") {
     const body = req.postData() || "";
@@ -783,11 +861,40 @@ try {
   // One schedule edit through the DAY EDITOR -> schedule_days POST v1 with CAS headers.
   await page.click('button[data-tab="calendar"]');
   await page.waitForTimeout(3300); // past the 3s post-load hydration window of the autosave
+  // The published rows (live anon read from 2026-09-01 on; the fixture rows when
+  // the live table is empty) drive (1) the choice of a row-less edit day below
+  // and (2) the independent Totals recount later. Every day this run edits or
+  // injects is recorded in harnessDays so the recount applies the same edits:
+  // the comparison never depends on which calendar month the run happens in
+  // and is never skipped (vis-002).
+  const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
+  const todayIso = (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; })();
+  let liveRows = [];
+  try {
+    if (fixture) liveRows = fixture.schedule_days.filter(r => r.day >= "2026-09-01");
+    else {
+      const res = await fetch(`https://${SUPABASE_HOST}/rest/v1/schedule_days?select=day,primary_id,backup_id,external_cover,note&day=gte.2026-09-01&order=day.asc`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+      if (!res.ok) throw new Error("live schedule_days read failed: HTTP " + res.status);
+      const rows = await res.json();
+      if (!Array.isArray(rows)) throw new Error("live schedule_days read: body is not an array");
+      liveRows = rows;
+    }
+    if (!liveRows.some(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && (r.primary_id || r.backup_id))) throw new Error("no October 2026 assignments in the live rows - the recount has nothing to compare");
+  } catch (e) { fail("Slices F+G: could not read the live schedule_days rows for the recount: " + errLine(e)); }
+  const liveByDay = {}; liveRows.forEach(r => { liveByDay[r.day] = r; });
+  const harnessDays = {}; // day -> { primary_id, backup_id } as this run leaves them in the app
+  const noteEdit = (d, patch) => { harnessDays[d] = { ...(harnessDays[d] || {}), ...patch }; };
   const now = new Date();
-  const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`; // first of the current month (no imported row there)
-  {
+  // The edit day: the first row-less day from the start of the current month
+  // (so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett'),
+  // scanning forward up to a year once the current month is fully published.
+  const day = (() => { const start = Date.UTC(now.getFullYear(), now.getMonth(), 1); for (let i = 0; i < 366; i++) { const d = utcDay(start + i * 86400000); if (!fixtureHasDay(d) && !liveByDay[d]) return d; } return null; })();
+  if (!day) fail("no row-less day within a year of the current month for the day-editor edit");
+  else if (day.slice(0, 7) !== `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`) console.log(`     (edit day ${day}: the current month is fully published)`);
+  if (day) {
     const beforeWrites = writes.length;
     await editDay(day, "primary", "s2");
+    noteEdit(day, { primary_id: "s2" });
     await page.waitForTimeout(1800); // 800ms debounce + request
     if ((await cellAttr(day, "data-primary")) !== "s2") fail(`day editor save did not update the ${day} cell (data-primary = ${await cellAttr(day, "data-primary")})`); else ok(`day editor: ${day} P -> Burchett saved into the cell`);
     const dayWrite = writes.slice(beforeWrites).find(w => w.path.startsWith("/rest/v1/schedule_days"));
@@ -818,6 +925,7 @@ try {
     const other = days.find(d => d !== day && d.slice(0, 7) === day.slice(0, 7) && !fixtureHasDay(d));
     // (a) foreign UPDATE on a day with no local edit -> adopted into the UI
     rtSendDayRow(dayRow(other, { primary_id: "s4", backup_id: "s5", version: 5 }));
+    noteEdit(other, { primary_id: "s4", backup_id: "s5" });
     const adopted = await waitFor(async () => (await cellAttr(other, "data-primary")) === "s4", 4000);
     if (adopted) ok(`realtime: foreign row for ${other} (primary s4 v5) adopted into the calendar`);
     else fail(`realtime: foreign row for ${other} was not adopted (cell data-primary = ${await cellAttr(other, "data-primary")})`);
@@ -827,6 +935,7 @@ try {
     //     no PATCH followed; now the local edit stays and PATCHes against v1.
     const beforeRace = writes.length;
     await editDay(day, "backup", "s3");
+    noteEdit(day, { backup_id: "s3" });
     rtSendDayRow(dayRow(day, { primary_id: "s2", backup_id: null, version: 1, updated_by: "s1" }));
     await page.waitForTimeout(250);
     const midBackup = await cellAttr(day, "data-backup");
@@ -864,6 +973,7 @@ try {
     if (!adopted3) fail(`keepalive: foreign v3 row for ${third} was not adopted`);
     const beforeFlush = writes.length;
     await editDay(third, "backup", "s2");
+    noteEdit(third, { primary_id: "s4", backup_id: "s2" });
     await page.evaluate(() => {
       Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
       document.dispatchEvent(new Event("visibilitychange"));
@@ -904,6 +1014,548 @@ try {
     await page.click("[data-testid=publish-skip]");
   }
 
+  // ====================== Prompt 6 Slices F + G: Totals, My schedule, Time off, Trades ======================
+  // The recount below is INDEPENDENT of helpers.js: the published schedule_days
+  // rows read above (anon fetch; the fixture rows when the live table is empty)
+  // WITH this run's own edits applied (harnessDays) are tallied here with plain
+  // loops and compared with the Totals table for October 2026 - visible cells
+  // and data-* attributes both. There is no calendar-dependent skip (vis-002).
+  const bodyText = () => page.evaluate(() => document.body.innerText || "");
+  const writesSince = (n, pathPrefix) => writes.slice(n).filter(w => !pathPrefix || w.path.startsWith(pathPrefix));
+  const auditSince = (n, action) => writes.slice(n).map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).find(b => b && b.action === action);
+  const noAddress = (s) => !/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(String(s || ""));
+  const bodyOf = (w) => { try { return JSON.parse(w.body || "null"); } catch (e) { return null; } };
+  const recountByDay = {}; Object.keys(liveByDay).forEach(d => { recountByDay[d] = { ...liveByDay[d] }; });
+  Object.keys(harnessDays).forEach(d => { recountByDay[d] = { day: d, primary_id: null, backup_id: null, ...(recountByDay[d] || {}), ...harnessDays[d] }; });
+  const recountRows = Object.values(recountByDay).sort((a, b) => a.day < b.day ? -1 : 1);
+  const editedInOct = Object.keys(harnessDays).filter(d => d.slice(0, 7) === "2026-10");
+  console.log(`     (recount source: ${fixture ? "seed fixtures" : "live rows"} + this run's ${Object.keys(harnessDays).length} edited day(s) ${Object.keys(harnessDays).sort().join(", ")}${editedInOct.length ? " - " + editedInOct.length + " of them in October 2026, applied to the recount" : ""})`);
+  const IDS = ["s1", "s2", "s3", "s4", "s5", "s6"];
+  const recount = {};
+  IDS.forEach(id => {
+    let p = 0, b = 0, w = 0, best = 0, run = 0, runStart = null;
+    for (let t = Date.UTC(2026, 8, 1); t <= Date.UTC(2026, 10, 30); t += 86400000) {
+      const d = utcDay(t), r = recountByDay[d];
+      const isP = !!(r && r.primary_id === id), isB = !!(r && r.backup_id === id);
+      if (d >= "2026-10-01" && d <= "2026-10-31") {
+        if (isP) p++;
+        if (isB) b++;
+        if ((isP || isB) && [0, 5, 6].includes(new Date(t).getUTCDay())) w++;
+      }
+      // longest run of consecutive PRIMARY days that touches October, followed across the month edges
+      if (isP) { if (!run) runStart = d; run++; if (d >= "2026-10-01" && runStart <= "2026-10-31") best = Math.max(best, run); }
+      else run = 0;
+    }
+    recount[id] = { primary: p, backup: b, total: p + b, weekend: w, maxconsec: best };
+  });
+  const octExternal = recountRows.filter(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && r.external_cover && !r.primary_id).length;
+  const octHoliday = recountRows.some(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && /holiday/i.test(String(r.note || "")));
+  // openCard is shared by the Totals target setup below and the Setup section.
+  const openCard = async (ck) => {
+    const card = page.locator(`[data-testid=card-${ck}]`);
+    if ((await card.count()) === 0) return null;
+    if ((await card.getAttribute("data-open")) !== "1") { await page.click(`[data-testid=card-toggle-${ck}]`); await page.waitForTimeout(200); }
+    return card;
+  };
+  // vis-003: give Acton a monthly target through the Rules card (the save path
+  // Setup drives) so the target mark, the signed deviation and the Target /
+  // Deviation columns are exercised; cleared again in the finally below.
+  const ACTON_TARGET = 10;
+  const setActonTarget = async (value) => {
+    await page.click('button[data-tab="setup"]');
+    await openCard("setup_rules");
+    await page.click("[data-testid=rules-pick-s3]");
+    await page.waitForSelector("[data-testid=rules-monthly-target]", { timeout: 5000 });
+    await page.fill("[data-testid=rules-monthly-target]", value === null ? "" : String(value));
+    // Save is disabled when the draft already equals the saved rules - then there is nothing to write.
+    if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) { await page.click("[data-testid=rules-save]"); await page.waitForTimeout(1200); }
+  };
+  const gotoTotalsOct = async () => {
+    await page.click('button[data-tab="totals"]');
+    await page.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
+    if (!(await page.$("[data-testid=totals-table]"))) await page.click("[data-testid=totals-mode-month]");
+    await page.selectOption("[data-testid=totals-year]", "2026");
+    await page.selectOption("[data-testid=totals-month]", "9");
+    await page.waitForFunction(() => /Oct 2026/.test((document.querySelector("[data-testid=totals-period]") || {}).textContent || ""), null, { timeout: 5000 });
+    await page.waitForTimeout(300);
+  };
+  // Every row: the data-* attributes AND the text the surgeon sees (vis-001).
+  const readTotRows = () => page.$$eval("[data-testid^=totals-row-]", els => els.map(e => {
+    const tds = Array.from(e.children).map(td => td.textContent.trim());
+    const col = (c) => { const td = e.querySelector(`td[data-col="${c}"]`); return td ? td.textContent.trim() : null; };
+    const flag = (c) => { const td = e.querySelector(`td[data-col="${c}"]`); return td ? td.getAttribute("data-flag") : null; };
+    return {
+      id: e.getAttribute("data-testid").replace("totals-row-", ""), source: e.getAttribute("data-source"),
+      primary: Number(e.getAttribute("data-primary")), backup: Number(e.getAttribute("data-backup")), total: Number(e.getAttribute("data-total")), weekend: Number(e.getAttribute("data-weekend")), maxconsec: Number(e.getAttribute("data-maxconsec")), major: Number(e.getAttribute("data-major")), minor: Number(e.getAttribute("data-minor")),
+      visible: { primary: tds[1], backup: tds[2], total: tds[3], weekend: tds[4], maxconsec: col("maxconsec"), cap: col("cap"), target: col("target"), deviation: col("deviation") },
+      flags: { cap: flag("cap"), maxconsec: flag("maxconsec"), deviation: flag("deviation") },
+      text: e.innerText.replace(/\s+/g, " "),
+    };
+  }));
+  const colourProbe = () => page.evaluate(() => {
+    const c = (el) => el ? getComputedStyle(el).color : null;
+    const plain = document.querySelector("[data-testid=totals-table] tbody td[data-col=target]:not([data-flag])");
+    const over = Array.from(document.querySelectorAll("[data-testid=totals-table] tbody td[data-flag=over]")).map(td => ({ row: td.parentElement.getAttribute("data-testid").replace("totals-row-", ""), col: td.getAttribute("data-col"), color: c(td) }));
+    return { plain: c(plain), over };
+  });
+  const expDev = (() => { const d = recount.s3 ? recount.s3.total - ACTON_TARGET : 0; return d > 0 ? "+" + d : String(d); })();
+  let targetSet = false;
+  try {
+    // ---- Totals: October 2026 ----
+    await setActonTarget(ACTON_TARGET);
+    targetSet = true;
+    await gotoTotalsOct();
+    const totRows = await readTotRows();
+    const published = totRows.filter(r => r.source === "published");
+    if (published.length !== 6 || IDS.some(id => !published.find(r => r.id === id))) fail("Totals Oct 2026: expected one published row per surgeon s1..s6, got " + JSON.stringify(published.map(r => r.id)));
+    else {
+      const mismatches = [];
+      published.forEach(r => {
+        const x = recount[r.id];
+        ["primary", "backup", "total", "weekend", "maxconsec"].forEach(k => { if (r[k] !== x[k]) mismatches.push(`${r.id}.${k}: data-* ${r[k]} vs recount ${x[k]}`); });
+        ["primary", "backup", "total", "weekend"].forEach(k => { if (r.visible[k] !== String(x[k])) mismatches.push(`${r.id}.${k}: visible '${r.visible[k]}' vs recount ${x[k]}`); });
+        if (!/^\d+/.test(r.visible.maxconsec || "") || Number((r.visible.maxconsec.match(/^\d+/) || [])[0]) !== x.maxconsec) mismatches.push(`${r.id}.maxconsec: visible '${r.visible.maxconsec}' vs recount ${x.maxconsec}`);
+      });
+      if (mismatches.length) fail("Totals Oct 2026 disagrees with the independent recount (visible cells and/or data-* attributes): " + mismatches.join("; "));
+      else ok("Totals Oct 2026: 6 rows; the VISIBLE primary / backup / total / weekend-day / max-consecutive cells and the data-* attributes all equal the independent recount (" + published.map(r => `${r.id} ${r.visible.primary}+${r.visible.backup}=${r.visible.total} w${r.visible.weekend} c${r.visible.maxconsec}`).join(", ") + ")");
+      const octTotal = published.reduce((s, r) => s + r.total, 0);
+      console.log(`     (October: ${octTotal} tallied shifts across the six; ${octExternal} externally covered primary day(s) excluded; holiday units in October: ${octHoliday ? "yes" : "none"})`);
+      const acton = published.find(r => r.id === "s3");
+      if (!acton || acton.visible.target !== String(ACTON_TARGET) || acton.visible.deviation !== expDev || acton.flags.deviation !== (expDev.startsWith("+") ? "over" : expDev === "0" ? "ok" : "under")) fail(`Totals target: Acton should show Target ${ACTON_TARGET} / Deviation ${expDev} (flag ${expDev.startsWith("+") ? "over" : "under/ok"}), got target '${acton && acton.visible.target}' deviation '${acton && acton.visible.deviation}' flag ${acton && acton.flags.deviation}`);
+      else ok(`Totals target: Acton (monthlyTarget ${ACTON_TARGET} saved through the Rules card) shows Target ${ACTON_TARGET} and Deviation ${expDev} = ${recount.s3.total} - ${ACTON_TARGET}`);
+      const others = published.filter(r => r.id !== "s3");
+      if (others.some(r => r.visible.target !== "-" || r.visible.deviation !== "-")) fail("Totals target: a surgeon without a target shows a target/deviation: " + JSON.stringify(others.map(r => [r.id, r.visible.target, r.visible.deviation])));
+    }
+    const totalsText = await page.$eval("[data-testid=totals-card]", el => el.innerText);
+    if (/\$/.test(totalsText)) fail("Totals: a '$' appears in the card text (no compensation figures anywhere)"); else ok("Totals: no '$' anywhere in the card");
+    const capCells = published.map(r => r.visible.cap);
+    if (!capCells.some(c => c && c !== "-")) fail("Totals: no surgeon shows a cap (rules context missing?): " + capCells.join(",")); else ok("Totals: cap column filled from the rules (" + capCells.join(", ") + "; '-' = no cap)");
+    const eastHdr = await page.$$eval("[data-testid=totals-table] thead th", ths => ths.map(t => t.textContent.trim()));
+    if (!eastHdr.includes("East days")) fail("Totals: the East days column is missing (Fierce's 14-day cap counts East days): " + eastHdr.join(" | ")); else ok("Totals columns: " + eastHdr.join(" | "));
+    await page.screenshot({ path: path.join(OUT, "totals-oct-2026.png"), fullPage: true });
+    ok("screenshot test/ui/out/totals-oct-2026.png");
+    // ---- vis-004: the warning colours survive dark mode (computed colours) ----
+    const light = await colourProbe();
+    if (!light.over.length) fail("Totals: no cell is flagged over (expected at least the over-cap caps and Acton's deviation in October 2026)");
+    else if (!light.over.every(o => o.color === "rgb(192, 64, 64)")) fail("Totals light: flagged cells are not red #c04040: " + JSON.stringify(light.over));
+    else ok(`Totals light: ${light.over.length} flagged cell(s) red - ` + light.over.map(o => `${o.row} ${o.col}`).join(", "));
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Dark')");
+    await gotoTotalsOct();
+    const dark = await colourProbe();
+    if (!dark.over.length || !dark.over.every(o => o.color === "rgb(240, 96, 96)") || dark.over.some(o => o.color === dark.plain)) fail(`Totals dark: flagged cells lost their warning colour (plain td ${dark.plain}): ` + JSON.stringify(dark.over));
+    else ok(`Totals dark: flagged cells keep a warning red ${dark.over[0].color} against the plain cell ${dark.plain} - ` + dark.over.map(o => `${o.row} ${o.col}`).join(", "));
+    await page.screenshot({ path: path.join(OUT, "totals-oct-dark.png"), fullPage: true });
+    ok("screenshot test/ui/out/totals-oct-dark.png");
+    await page.click("[data-testid=totals-mode-fairness]");
+    await page.waitForSelector("[data-testid=fairness-view]", { timeout: 4000 });
+    const fairDarkDev = await page.$eval("[data-testid=fairness-row-s3] span[data-flag]", el => getComputedStyle(el).color).catch(() => null);
+    if (fairDarkDev !== "rgb(240, 96, 96)" && fairDarkDev !== "rgb(90, 175, 232)" && fairDarkDev !== "rgb(64, 192, 96)") fail("Fairness dark: Acton's deviation text has no warning colour: " + fairDarkDev); else ok("Fairness dark: Acton's deviation text keeps its colour (" + fairDarkDev + ")");
+    await page.screenshot({ path: path.join(OUT, "fairness-dark.png"), fullPage: true });
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Light')");
+    await gotoTotalsOct();
+    // Phone width: the page must not scroll sideways; the table scrolls inside its wrapper.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(300);
+    const totMobile = await page.evaluate(() => {
+      const wrap = document.querySelector("[data-testid=totals-table]").parentElement;
+      return { pageScroll: document.documentElement.scrollWidth, wrapScroll: wrap.scrollWidth, wrapClient: wrap.clientWidth, overflowX: getComputedStyle(wrap).overflowX };
+    });
+    if (totMobile.pageScroll > 392) fail(`Totals mobile 390px: the page scrolls horizontally (scrollWidth ${totMobile.pageScroll})`);
+    else if (!(totMobile.wrapScroll > totMobile.wrapClient + 1) || !/auto|scroll/.test(totMobile.overflowX)) fail(`Totals mobile 390px: the table does not scroll inside its card wrapper (${JSON.stringify(totMobile)})`);
+    else ok(`Totals mobile 390px: no page scroll (${totMobile.pageScroll}px); the table scrolls inside the card (${totMobile.wrapScroll} > ${totMobile.wrapClient}, overflow-x ${totMobile.overflowX})`);
+    await page.screenshot({ path: path.join(OUT, "totals-mobile.png"), fullPage: false });
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await page.waitForTimeout(200);
+    // CSV export: a real download, one row per surgeon, no $
+    if (!(await page.$("[data-testid=totals-csv]"))) fail("Totals: CSV export button missing");
+    else {
+      try {
+        const csv = await saveDownload(() => page.click("[data-testid=totals-csv]"));
+        const lines = csv.text.split("\r\n").filter(Boolean);
+        if (csv.name !== "silvis-totals-month-2026-10-01-2026-10-31.csv") fail("Totals CSV filename: " + csv.name);
+        else if (!/^Period,From,To,Source,Surgeon,Code,Primary,Backup,Total,Weekend days/.test(lines[0]) || lines.length !== 7) fail(`Totals CSV shape wrong: ${lines.length} line(s), header "${lines[0]}"`);
+        else if (/\$/.test(csv.text)) fail("Totals CSV contains a '$'");
+        else {
+          const khan = lines.find(l => /,Khan,FAK,/.test(l)) || "";
+          const cols = khan.split(",");
+          const actonCsv = (lines.find(l => /,Acton,BDA,/.test(l)) || "").split(",");
+          if (Number(cols[6]) !== recount.s1.primary || Number(cols[7]) !== recount.s1.backup) fail("Totals CSV: Khan's primary/backup differ from the recount: " + khan);
+          else if (actonCsv[15] !== String(ACTON_TARGET) || actonCsv[16] !== expDev) fail(`Totals CSV: Acton's Target / Deviation columns should read ${ACTON_TARGET} / ${expDev}, got '${actonCsv[15]}' / '${actonCsv[16]}'`);
+          else ok(`Totals CSV: ${csv.name} - header + 6 rows, Khan ${cols[6]} P / ${cols[7]} B matches the recount, Acton Target ${actonCsv[15]} / Deviation ${actonCsv[16]}, no '$'`);
+        }
+      } catch (e) { fail("Totals CSV download: " + errLine(e)); }
+    }
+    // Year to date + rolling 12 render and keep the six rows; fairness view
+    await page.click("[data-testid=totals-mode-ytd]");
+    await page.waitForFunction(() => /Year to date 2026 \(9\/14 - 10\/31\)/.test((document.querySelector("[data-testid=totals-period]") || {}).textContent || ""), null, { timeout: 4000 }).then(() => ok("Totals: year to date 2026 runs from 9/14 (the first published day) to the end of the picked month")).catch(async () => fail("Totals YTD label wrong: " + (await page.$eval("[data-testid=totals-period]", el => el.textContent)).slice(0, 120)));
+    await page.click("[data-testid=totals-mode-rolling]");
+    await page.waitForFunction(() => /Rolling 12 months \(Nov 2025 - Oct 2026\)/.test((document.querySelector("[data-testid=totals-period]") || {}).textContent || ""), null, { timeout: 4000 }).then(() => ok("Totals: rolling 12 months ending Oct 2026 = Nov 2025 - Oct 2026")).catch(async () => fail("Totals rolling label wrong: " + (await page.$eval("[data-testid=totals-period]", el => el.textContent)).slice(0, 120)));
+    const rollingRows = await page.$$eval("[data-testid^=totals-row-]", els => els.length);
+    if (rollingRows !== 6) fail("Totals rolling: expected 6 rows, got " + rollingRows);
+    await page.click("[data-testid=totals-mode-fairness]");
+    await page.waitForSelector("[data-testid=fairness-view]", { timeout: 4000 });
+    const fairRows = await page.$$eval("[data-testid^=fairness-row-]", els => els.map(e => ({ id: e.getAttribute("data-testid").replace("fairness-row-", ""), total: Number(e.getAttribute("data-total")), deviation: e.getAttribute("data-deviation"), mark: !!e.querySelector("[data-testid=fairness-target-mark]"), markColor: e.querySelector("[data-testid=fairness-target-mark]") ? getComputedStyle(e.querySelector("[data-testid=fairness-target-mark]")).backgroundColor : null, text: e.innerText.replace(/\s+/g, " ") })));
+    // vis-001: the visible text of every bar starts with the recounted numbers; vis-003: Acton's row
+    // carries the signed deviation, the green target mark and a matching data-deviation, the other
+    // five read 'no target' with no mark.
+    // the bar text is "<Name> <total> total (<P> P + <B> B) - target ... - cap ... - deviation/no target"
+    const fairBad = fairRows.filter(r => { const x = recount[r.id]; return !x || r.total !== x.total || !new RegExp(`^\\S+ ${x.total} total \\(${x.primary} P \\+ ${x.backup} B\\)`).test(r.text); });
+    const actonFair = fairRows.find(r => r.id === "s3");
+    const noTargetRows = fairRows.filter(r => r.id !== "s3");
+    if (fairRows.length !== 6 || fairBad.length) fail("Fairness view: bars whose visible text or total disagree with the recount: " + JSON.stringify(fairBad.map(r => [r.id, r.total, r.text.slice(0, 60)])));
+    else if (!actonFair || actonFair.deviation !== expDev || !actonFair.text.includes("deviation " + expDev) || !actonFair.mark || actonFair.markColor !== "rgb(26, 128, 64)" || !actonFair.text.includes(" - target " + ACTON_TARGET + " ")) fail(`Fairness view: Acton's row should read 'target ${ACTON_TARGET}', 'deviation ${expDev}', data-deviation ${expDev} and carry a green target mark; got ${JSON.stringify(actonFair)}`);
+    else if (!noTargetRows.every(r => r.deviation === "-" && /no target/.test(r.text) && !r.mark)) fail("Fairness view: a surgeon without a target shows a deviation or a target mark: " + JSON.stringify(noTargetRows.map(r => [r.id, r.deviation, r.mark])));
+    else ok(`Fairness view: 6 bars whose visible text reads '<Name> <total> total (<P> P + <B> B)' per the recount; Acton (target ${ACTON_TARGET}) shows 'deviation ${expDev}' with the green target mark, the other five read 'no target' with no mark - ` + fairRows.map(r => `${r.id} ${r.total} ${r.deviation}`).join(", "));
+    if (/\$/.test(await page.$eval("[data-testid=totals-card]", el => el.innerText))) fail("Fairness view: a '$' appears");
+    const fierceFair = fairRows.find(r => r.id === "s5");
+    if (fierceFair && /East/.test(fierceFair.text)) ok("Fairness view: Fierce's row shows his East days beside the Silvis total (" + fierceFair.text.slice(0, 90) + ")");
+    else console.log("     (Fierce's fairness row shows no East days in October 2026: " + (fierceFair ? fierceFair.text.slice(0, 90) : "row missing") + ")");
+    await page.screenshot({ path: path.join(OUT, "fairness.png"), fullPage: true });
+    ok("screenshot test/ui/out/fairness.png");
+    await page.click("[data-testid=totals-mode-month]");
+  } catch (e) { fail("Totals harness exception: " + errLine(e)); }
+  finally {
+    if (targetSet) {
+      try {
+        await setActonTarget(null);
+        await page.click('button[data-tab="totals"]');
+        await page.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
+        const stillTarget = await page.$eval("[data-testid=totals-row-s3] td[data-col=target]", el => el.textContent.trim()).catch(() => null);
+        if (stillTarget !== "-") fail("Totals: clearing Acton's harness target did not take (Target cell reads '" + stillTarget + "')"); else ok("Totals: Acton's harness target cleared again through the Rules card (Target '-')");
+      } catch (e) { fail("Totals: could not clear Acton's harness target: " + errLine(e)); }
+    }
+  }
+
+  // ---- My schedule: s1's next call ----
+  try {
+    await page.click('button[data-tab="myschedule"]');
+    await page.waitForSelector("[data-testid=next-call]", { timeout: 8000 });
+    await page.waitForFunction(() => { const el = document.querySelector("[data-testid=next-call]"); return el && !/Loading schedule/.test(el.textContent); }, null, { timeout: 8000 });
+    const expectedNext = recountRows.filter(r => r.day >= todayIso && (r.primary_id === "s1" || r.backup_id === "s1")).sort((a, b) => a.day < b.day ? -1 : 1)[0] || null;
+    const nextDay = await page.$eval("[data-testid=next-call]", el => el.getAttribute("data-next-day"));
+    const nextRole = await page.$eval("[data-testid=next-call]", el => el.getAttribute("data-next-role"));
+    const nextText = await page.$eval("[data-testid=next-call]", el => el.innerText.replace(/\s+/g, " "));
+    // vis-001: the rendered date, not only the data-next-day attribute ("Primary - Thu November 26, 2026")
+    const longDate = (d) => { const t = new Date(d + "T12:00:00Z"); return `${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][t.getUTCDay()]} ${["January","February","March","April","May","June","July","August","September","October","November","December"][t.getUTCMonth()]} ${t.getUTCDate()}, ${t.getUTCFullYear()}`; };
+    const expRole = expectedNext ? (expectedNext.primary_id === "s1" ? "primary" : "backup") : null;
+    if (!expectedNext) console.log("     (no published s1 day on/after today - next-call comparison skipped; card reads: " + nextText.slice(0, 100) + ")");
+    else if (nextDay !== expectedNext.day || nextRole !== expRole) fail(`My schedule: next call is ${nextDay} ${nextRole}, the published rows say ${expectedNext.day} ${expRole}`);
+    else if (!nextText.includes(`${expRole === "primary" ? "Primary" : "Backup"} - ${longDate(expectedNext.day)}`)) fail(`My schedule: the card does not render '${expRole === "primary" ? "Primary" : "Backup"} - ${longDate(expectedNext.day)}': ` + nextText.slice(0, 140));
+    else if (!/Next call - (today|tomorrow|in \d+ days)/i.test(nextText) || !/07:00 to 07:00/.test(nextText)) fail("My schedule: next-call card text wrong: " + nextText); // the label is CSS-uppercased in innerText
+    else ok(`My schedule: next call ${nextDay} (${nextRole}) matches the first published s1 day on/after ${todayIso}, rendered as '${longDate(expectedNext.day)}'; card "${nextText.slice(0, 110)}"`);
+    const mineDays = await page.$$eval("[data-testid=mine-day]", els => els.map(e => e.getAttribute("data-day")));
+    const horizon = utcDay(Date.parse(todayIso + "T12:00:00Z") + 90 * 86400000);
+    const expectedCount = recountRows.filter(r => r.day >= todayIso && r.day <= horizon && (r.primary_id === "s1" || r.backup_id === "s1")).length;
+    if (mineDays.length !== expectedCount) fail(`My schedule: upcoming list has ${mineDays.length} day(s), the live rows have ${expectedCount} for s1 in the next 90 days (${todayIso}..${horizon})`);
+    else ok(`My schedule: upcoming list = ${mineDays.length} day(s) in the next 90 days${mineDays.length ? ", first " + mineDays[0] : ""}`);
+    if (mineDays.length && !(await page.$("[data-testid=mine-trade]"))) fail("My schedule: no 'Propose a trade' shortcut on the upcoming rows");
+    if (!(await page.$("[data-testid=copy-sync-url]")) || !(await page.$("[data-testid=download-my-calendar]"))) fail("My schedule: the calendar buttons (download / copy sync URL) are missing"); else ok("My schedule: Download my calendar + Copy my calendar-sync URL buttons present");
+    if (!(await page.$("[data-testid=mine-person]"))) fail("My schedule: the scheduler's person picker is missing");
+    const mineText = await page.$eval("[data-testid=mine-card]", el => el.innerText);
+    if (!noAddress(mineText)) fail("My schedule: an email address is rendered");
+    await page.screenshot({ path: path.join(OUT, "mine.png"), fullPage: true });
+    ok("screenshot test/ui/out/mine.png");
+  } catch (e) { fail("My schedule harness exception: " + errLine(e)); }
+
+  // ---- Time off: refused over a published day (client-side, no write); clean range writes once ----
+  try {
+    await page.click('button[data-tab="timeoff"]');
+    await page.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
+    const form = page.locator("[data-testid=timeoff-card]");
+    await form.locator("select").first().selectOption("s1");
+    const dates = form.locator("input[type=date]");
+    const nov26 = liveByDay["2026-11-26"];
+    if (!nov26 || (nov26.primary_id !== "s1" && nov26.backup_id !== "s1")) console.log("     (live 2026-11-26 does not have s1 on call - the refusal test still runs against whatever the app holds)");
+    const before = writes.length;
+    await dates.nth(0).fill("2026-11-26");
+    await dates.nth(1).fill("2026-11-26");
+    await page.click("[data-testid=vac-add]");
+    await page.waitForSelector("[data-testid=vac-conflict]", { timeout: 5000 });
+    const conflictText = await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "));
+    const conflictWrites = writesSince(before).filter(w => /\/rest\/v1\/(time_off|audit_log|notifications)/.test(w.path) || /send-notification/.test(w.path));
+    const tradeShortcut = await page.$("[data-testid=vac-conflict-trade]");
+    if (conflictWrites.length) fail("Time off refusal: a write went out although the client pre-check refused: " + JSON.stringify(conflictWrites.map(w => w.method + " " + w.path)));
+    else if (!/Khan is published on/.test(conflictText) || !/11\/26 (primary|backup)/.test(conflictText)) fail("Time off refusal panel wrong: " + conflictText);
+    else if (!tradeShortcut) fail("Time off refusal: no 'propose a trade' shortcut beside the conflicting date");
+    else ok("Time off: Khan 2026-11-26 refused client-side - panel lists '11/26 " + (/11\/26 (primary|backup)/.exec(conflictText) || [])[1] + "' with a 'propose a trade' shortcut, NO time_off / audit / notification write");
+    // the shortcut lands on the trade form with the day + role preselected
+    await page.click("[data-testid=vac-conflict-trade]");
+    await page.waitForTimeout(300);
+    const preDay = await page.$eval("[data-testid=trade-day]", el => el.value).catch(() => "");
+    if (preDay !== "2026-11-26") fail("Time off refusal: 'propose a trade' did not preselect 2026-11-26 in the trade form (got '" + preDay + "')"); else ok("Time off refusal: 'propose a trade' preselects 2026-11-26 in the trade form");
+    await page.fill("[data-testid=trade-day]", "");
+    // clean range: two days with no schedule rows at all
+    const before2 = writes.length;
+    await form.locator("select").first().selectOption("s1");
+    await dates.nth(0).fill("2027-03-02");
+    await dates.nth(1).fill("2027-03-03");
+    await page.fill("[data-testid=vac-note]", "harness range");
+    await page.click("[data-testid=vac-add]");
+    await waitFor(() => writesSince(before2, "/rest/v1/notifications").length > 0, 8000);
+    await page.waitForTimeout(700);
+    const toPosts = writesSince(before2, "/rest/v1/time_off").filter(w => w.method === "POST");
+    const audits = writesSince(before2, "/rest/v1/audit_log").map(bodyOf).filter(b => b && b.action === "timeoff.add");
+    const notifs = writesSince(before2, "/rest/v1/notifications").map(bodyOf).filter(Boolean);
+    const vacNotif = notifs.find(n => n.type === "vacation_logged");
+    const toBody = toPosts[0] ? bodyOf(toPosts[0]) : null;
+    const stillRefused = await page.$("[data-testid=vac-conflict]");
+    if (stillRefused) fail("Time off clean range: the app refused 2027-03-02..03: " + (await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "))).slice(0, 160));
+    else if (toPosts.length !== 1 || !toBody || toBody.person_id !== "s1" || toBody.start_date !== "2027-03-02" || toBody.end_date !== "2027-03-03" || toBody.note !== "harness range") fail("Time off clean range: expected exactly one time_off POST { s1, 2027-03-02..03, note }: " + JSON.stringify(toPosts.map(w => w.body)));
+    else if (audits.length !== 1) fail(`Time off clean range: expected exactly one audit 'timeoff.add', got ${audits.length}`);
+    else if (notifs.length !== 1 || !vacNotif) fail(`Time off clean range: expected exactly one notification (vacation_logged), got ${notifs.length}: ` + JSON.stringify(notifs.map(n => n.type)));
+    else if (vacNotif.message !== "Khan logged vacation 3/2-3/3 (harness range)") fail("Time off clean range: composed message wrong: " + vacNotif.message);
+    else ok("Time off clean range: one POST /rest/v1/time_off { s1, 2027-03-02..03 } + one audit timeoff.add + one notification vacation_logged \"" + vacNotif.message + "\"");
+    if (!writesSince(before2).every(w => noAddress(w.body))) fail("Time off: a write body carries an email address");
+    await page.screenshot({ path: path.join(OUT, "timeoff.png"), fullPage: true });
+    ok("screenshot test/ui/out/timeoff.png");
+  } catch (e) { fail("Time off harness exception: " + errLine(e)); }
+
+  // ---- Trades (Slice G + fg-1 / fg-2 / datalayer-001) ----
+  // (A) a single NON-unit day, proposed for Burchett (s2): an ineligible
+  //     counter-party is blocked with the reason and no write; a valid
+  //     proposal POSTs one row; Accept = PATCH accepted THEN rpc/apply_trade.
+  // (B) Khan's Thanksgiving unit (11/26-11/29, one primary through the unit -
+  //     rules doc s5): the picker names the unit; a single day with 'whole
+  //     unit' unticked asks the scheduler to confirm the split (dismissed ->
+  //     no write); the whole-unit proposal POSTs one row per unit day carrying
+  //     the unit stamp and ONE notification; with the session token expired a
+  //     realtime change must NOT wipe the pending rows (datalayer-001); Accept
+  //     moves the unit as one: 4 x PATCH accepted, then 4 x rpc/apply_trade,
+  //     every row applied, one trade_accepted + one trade_applied notification.
+  const readToOpts = () => page.$$eval("[data-testid=trade-to] option", os => os.filter(o => o.value).map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
+  // A return leg the rules allow that is NOT a unit day of the counter-party's
+  // (a split there would need the scheduler's confirm); null = one-way.
+  const pickReturnLeg = async () => {
+    const theirOpts = await page.$$eval("[data-testid=trade-theirs-pick] option", os => os.map(o => o.value).filter(Boolean));
+    for (const v of theirOpts.slice(0, 15)) {
+      await page.selectOption("[data-testid=trade-theirs-pick]", v);
+      await page.waitForTimeout(120);
+      if (!(await page.$("[data-testid=trade-return-reason]")) && !(await page.$("[data-testid=trade-return-unit]"))) return v;
+    }
+    await page.selectOption("[data-testid=trade-theirs-pick]", "");
+    await page.fill("[data-testid=trade-return-day]", "");
+    return null;
+  };
+  const acceptAll = (d) => d.accept();
+  try {
+    await page.waitForSelector("[data-testid=trade-card]", { timeout: 5000 });
+    if (await page.$("[data-testid=trade-rules-unavailable]")) fail("Trades: the 'rules unavailable' warning shows although the setup loaded");
+    else ok("Trades: no 'rules unavailable' warning with the setup loaded (fg-2 box only shows without a rules context)");
+
+    // ----- (A) single non-unit day, from Burchett -----
+    await page.selectOption("[data-testid=trade-from]", "s2");
+    await page.waitForTimeout(150);
+    const mineOpts = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => ({ value: o.value, text: o.textContent })).filter(o => o.value));
+    if (!mineOpts.length) throw new Error("the 'my day + role' picker lists no upcoming days for s2");
+    let picked = null, toOpts = [], fallback = null;
+    for (const o of mineOpts.slice(0, 12)) {
+      await page.selectOption("[data-testid=trade-mine-pick]", o.value);
+      await page.waitForTimeout(150);
+      if (await page.$("[data-testid=trade-unit]")) continue; // unit days are (B)'s business
+      const opts = await readToOpts();
+      if (opts.some(x => x.eligible === "true") && !fallback) fallback = { v: o.value, opts };
+      if (opts.some(x => x.eligible === "true") && opts.some(x => x.eligible === "false")) { picked = o.value; toOpts = opts; break; }
+    }
+    if (!picked && fallback) { picked = fallback.v; toOpts = fallback.opts; await page.selectOption("[data-testid=trade-mine-pick]", picked); await page.waitForTimeout(150); }
+    if (!picked) throw new Error("no non-unit upcoming day of Burchett's with an eligible counter-party (options: " + mineOpts.map(o => o.value).join(", ") + ")");
+    const [pDay, pRole] = picked.split("|");
+    const tradeDayV = await page.$eval("[data-testid=trade-day]", el => el.value), tradeRoleV = await page.$eval("[data-testid=trade-role]", el => el.value);
+    if (tradeDayV !== pDay || tradeRoleV !== pRole) fail(`Trades: picking '${picked}' did not fill the day/role inputs (${tradeDayV} ${tradeRoleV})`); else ok(`Trades: picked Burchett's ${pRole} on ${pDay} (not a unit day); counter-parties: ` + toOpts.map(o => `${o.text} [${o.eligible}]`).join(", "));
+    if (toOpts.some(o => o.eligible === "unknown")) fail("Trades: a counter-party option reads data-eligible=unknown although the rules are loaded (the check must not report unknown here)");
+    const bad = toOpts.find(o => o.eligible === "false"), good = toOpts.find(o => o.eligible === "true");
+    if (!bad) console.log("     (no ineligible counter-party for that day - the block test is skipped)");
+    else {
+      const before = writes.length;
+      await page.selectOption("[data-testid=trade-to]", bad.value);
+      await page.waitForTimeout(200);
+      const reasonBox = await page.$eval("[data-testid=trade-to-reason]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+      await page.click("[data-testid=trade-submit]");
+      await page.waitForTimeout(600);
+      const txt = await bodyText();
+      const blocked = /Blocked: \S+ can't take (Primary|Backup) - /.test(txt);
+      const posts = writesSince(before, "/rest/v1/shift_trade_requests");
+      if (posts.length) fail("Trades: an ineligible counter-party was POSTed anyway: " + JSON.stringify(posts.map(w => w.body)));
+      else if (!blocked) fail("Trades: proposing to the ineligible " + bad.text + " did not toast 'Blocked: ... can't take ... - <reason>'");
+      else if (!/can't take/.test(reasonBox)) fail("Trades: the inline reason box under the counter-party select is missing: " + reasonBox);
+      else ok(`Trades: proposing to ${bad.text.split(" - ")[0]} is blocked - option greyed with '${bad.text.split(" - ")[1]}', inline reason "${reasonBox.slice(0, 90)}", toast, no write`);
+    }
+    if (!good) fail("Trades: no eligible counter-party for Burchett's " + pRole + " on " + pDay + " (options: " + toOpts.map(o => o.text).join(", ") + ")");
+    else {
+      await page.selectOption("[data-testid=trade-to]", good.value);
+      await page.waitForTimeout(200);
+      const returnLeg = await pickReturnLeg();
+      page.on("dialog", acceptAll);
+      const before = writes.length;
+      await page.click("[data-testid=trade-submit]");
+      await waitFor(() => writesSince(before, "/rest/v1/shift_trade_requests").length > 0, 8000);
+      await page.waitForTimeout(800);
+      page.off("dialog", acceptAll);
+      const post = writesSince(before, "/rest/v1/shift_trade_requests").find(w => w.method === "POST");
+      const pb = post ? bodyOf(post) : null;
+      const propNotif = writesSince(before, "/rest/v1/notifications").map(bodyOf).find(n => n && n.type === "trade_proposed");
+      const propMail = writesSince(before).filter(w => /send-notification/.test(w.path)).map(bodyOf).find(b => b && b.type === "trade_proposed");
+      const propAudit = auditSince(before, "trade.propose");
+      const expectedLeg = returnLeg ? returnLeg.split("|") : [null, null];
+      if (!pb || pb.from_surgeon_id !== "s2" || pb.to_surgeon_id !== good.value || pb.day !== pDay || pb.role !== pRole || pb.status !== "pending" || (pb.return_day || null) !== expectedLeg[0] || (pb.return_role || null) !== expectedLeg[1]) fail("Trades: proposal POST body wrong: " + JSON.stringify(pb));
+      else if (!/return=representation/.test(post.prefer || "")) fail("Trades: proposal POST lacks Prefer return=representation");
+      else if (/\[unit /.test(pb.detail)) fail("Trades: a non-unit proposal carries a unit stamp: " + pb.detail);
+      else if (!propNotif || propNotif.message !== pb.detail || !/proposed a trade: .* would take (Primary|Backup) - /.test(propNotif.message)) fail("Trades: trade_proposed notification missing or its message is not the composed detail: " + JSON.stringify(propNotif));
+      else if (!propMail || propMail.data.message !== pb.detail || JSON.stringify(propMail.targetIds) !== JSON.stringify(["s2", good.value])) fail("Trades: send-notification trade_proposed payload wrong (data.message must be the composed text, targetIds both parties): " + JSON.stringify(propMail));
+      else if (!propAudit) fail("Trades: no audit 'trade.propose'");
+      else ok(`Trades: POST /rest/v1/shift_trade_requests { s2 -> ${good.text}, ${pRole} ${pDay}${returnLeg ? ", return " + expectedLeg[1] + " " + expectedLeg[0] : ", one-way (scheduler)"} } + notification trade_proposed + send-notification data.message "${pb.detail.slice(0, 80)}..." + audit trade.propose`);
+      let rowId = pb && pb.id ? pb.id : null;
+      if (!rowId) { rowId = await page.$eval("[data-testid=trade-row][data-status=pending]", el => el.getAttribute("data-trade-id")).catch(() => null); }
+      const pendingRow = page.locator(`[data-testid=trade-row][data-trade-id="${rowId}"]`);
+      if (!rowId || (await pendingRow.count()) !== 1 || (await pendingRow.getAttribute("data-status")) !== "pending" || (await pendingRow.getAttribute("data-group")) !== "1") fail("Trades: the proposed trade is not listed as a single pending row (id " + rowId + ")");
+      else {
+        ok("Trades: proposal listed under Pending trades (id " + rowId.slice(0, 8) + "..., data-group 1)");
+        // Accept -> PATCH status=accepted, THEN POST rpc/apply_trade { p_trade_id }
+        page.on("dialog", acceptAll);
+        const beforeAcc = writes.length;
+        await pendingRow.locator("[data-testid=trade-accept]").click();
+        await waitFor(() => writesSince(beforeAcc).some(w => /\/rest\/v1\/rpc\/apply_trade/.test(w.path)), 10000);
+        await page.waitForTimeout(1200);
+        page.off("dialog", acceptAll);
+        const seq = writesSince(beforeAcc);
+        const patchIdx = seq.findIndex(w => w.method === "PATCH" && w.path === `/rest/v1/shift_trade_requests?id=eq.${rowId}`);
+        const rpcIdx = seq.findIndex(w => w.method === "POST" && w.path === "/rest/v1/rpc/apply_trade");
+        const patchBody = patchIdx >= 0 ? bodyOf(seq[patchIdx]) : null;
+        const rpcBody = rpcIdx >= 0 ? bodyOf(seq[rpcIdx]) : null;
+        const accNotif = seq.filter(w => w.path.startsWith("/rest/v1/notifications")).map(bodyOf).filter(Boolean).map(n => n.type);
+        const appliedMail = seq.filter(w => /send-notification/.test(w.path)).map(bodyOf).find(b => b && b.type === "trade_applied");
+        const statusNow = await pendingRow.getAttribute("data-status").catch(() => null);
+        if (patchIdx < 0 || !patchBody || patchBody.status !== "accepted" || !/return=representation/.test(seq[patchIdx].prefer || "")) fail("Trades accept: no PATCH ?id=eq.<id> { status: accepted } with return=representation; writes: " + JSON.stringify(seq.map(w => w.method + " " + w.path)));
+        else if (rpcIdx < 0 || !rpcBody || rpcBody.p_trade_id !== rowId) fail("Trades accept: no POST /rest/v1/rpc/apply_trade { p_trade_id }: " + JSON.stringify(seq.map(w => w.method + " " + w.path)));
+        else if (rpcIdx < patchIdx) fail(`Trades accept: rpc/apply_trade (#${rpcIdx}) ran BEFORE the status PATCH (#${patchIdx})`);
+        else if (statusNow !== "applied") fail("Trades accept: the row should read applied after a successful apply_trade, got " + statusNow);
+        else if (!accNotif.includes("trade_accepted") || !accNotif.includes("trade_applied")) fail("Trades accept: notifications trade_accepted + trade_applied expected, got " + accNotif.join(","));
+        else if (!appliedMail || !/^Trade applied to the schedule: /.test(appliedMail.data.message)) fail("Trades accept: send-notification trade_applied with the composed data.message missing: " + JSON.stringify(appliedMail));
+        else ok(`Trades accept: PATCH shift_trade_requests?id=eq.<id> { status: accepted } (#${patchIdx}) then POST rpc/apply_trade { p_trade_id } (#${rpcIdx}); row reads applied; notifications trade_accepted + trade_applied; email data.message "${appliedMail.data.message.slice(0, 70)}..."`);
+        const acceptAudit = auditSince(beforeAcc, "trade.accept");
+        if (!acceptAudit) fail("Trades accept: no audit 'trade.accept' (the function writes trade.apply; the client records the acceptance)"); else ok("Trades accept: audit trade.accept written by the client (trade.apply is the function's)");
+        if (!seq.every(w => noAddress(w.body))) fail("Trades: a write body carries an email address");
+      }
+    }
+
+    // ----- (B) Khan's Thanksgiving unit (fg-1) -----
+    await page.selectOption("[data-testid=trade-from]", "s1");
+    await page.waitForTimeout(150);
+    const khanOpts = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => ({ value: o.value, text: o.textContent })).filter(o => o.value));
+    const nov26 = khanOpts.find(o => o.value === "2026-11-26|primary");
+    if (!nov26) throw new Error("Khan's picker has no 2026-11-26 primary (the Thanksgiving unit): " + khanOpts.map(o => o.value).join(", "));
+    if (!/Thanksgiving unit/.test(nov26.text)) fail("Trades unit: the picker option for 11/26 does not name the Thanksgiving unit: " + nov26.text); else ok("Trades unit: the day picker names the unit - '" + nov26.text.trim() + "'");
+    await page.selectOption("[data-testid=trade-mine-pick]", nov26.value);
+    await page.waitForTimeout(200);
+    const unitDays = await page.$eval("[data-testid=trade-unit]", el => el.getAttribute("data-unit-days")).catch(() => null);
+    if (unitDays !== "2026-11-26,2026-11-27,2026-11-28,2026-11-29") fail("Trades unit: the unit box should list 11/26..11/29, got " + unitDays); else ok("Trades unit: unit box beside the picker lists the 4 unit days 2026-11-26..29 (Khan primary through the unit)");
+    const uOpts = await readToOpts();
+    const uGood = uOpts.find(o => o.eligible === "true");
+    if (!uGood) throw new Error("no counter-party eligible for all four Thanksgiving days: " + uOpts.map(o => o.text + " [" + o.eligible + "]").join(", "));
+    ok("Trades unit: counter-parties checked over the WHOLE unit: " + uOpts.map(o => `${o.text} [${o.eligible}]`).join(", "));
+    await page.selectOption("[data-testid=trade-to]", uGood.value);
+    await page.waitForTimeout(150);
+    // (B1) 'whole unit' unticked -> the scheduler must confirm the split; dismissed -> no write
+    await page.click("[data-testid=trade-whole-unit]");
+    await page.waitForTimeout(150);
+    const splitNote = await page.$eval("[data-testid=trade-unit-split]", el => el.textContent).catch(() => "");
+    const dialogs = [];
+    const dismiss = (d) => { dialogs.push(d.message()); d.dismiss(); };
+    page.on("dialog", dismiss);
+    const beforeSplit = writes.length;
+    await page.click("[data-testid=trade-submit]");
+    await page.waitForTimeout(700);
+    page.off("dialog", dismiss);
+    const splitWrites = writesSince(beforeSplit).filter(w => /shift_trade_requests|notifications|send-notification|audit_log/.test(w.path));
+    if (splitWrites.length) fail("Trades unit: a single unit day was written although the split confirm was dismissed: " + JSON.stringify(splitWrites.map(w => w.method + " " + w.path)));
+    else if (!dialogs.some(m => /splits it/.test(m) && /Thanksgiving unit 11\/26-11\/29 \(4 days\)/.test(m))) fail("Trades unit: no split confirm naming the unit (dialogs: " + JSON.stringify(dialogs) + ")");
+    else if (!/split the unit/i.test(splitNote)) fail("Trades unit: the unticked note does not warn about splitting: " + splitNote);
+    else ok(`Trades unit: single day 11/26 with 'whole unit' unticked -> scheduler confirm "${dialogs[0].slice(0, 100)}..." dismissed, NO write (a member is refused outright)`);
+    // (B2) whole unit: one row per day with the unit stamp, ONE notification
+    await page.click("[data-testid=trade-whole-unit]");
+    await page.waitForTimeout(150);
+    const uReturn = await pickReturnLeg();
+    const uLabel = await page.$eval("[data-testid=trade-submit]", el => el.textContent);
+    if (!/Propose unit trade \(4 days\)/.test(uLabel)) fail("Trades unit: the submit button should read 'Propose unit trade (4 days)', got '" + uLabel + "'");
+    page.on("dialog", acceptAll);
+    const beforeUnit = writes.length;
+    await page.click("[data-testid=trade-submit]");
+    await waitFor(() => writesSince(beforeUnit, "/rest/v1/shift_trade_requests").filter(w => w.method === "POST").length >= 4, 10000);
+    await page.waitForTimeout(900);
+    page.off("dialog", acceptAll);
+    const uPosts = writesSince(beforeUnit, "/rest/v1/shift_trade_requests").filter(w => w.method === "POST").map(bodyOf);
+    const uNotifs = writesSince(beforeUnit, "/rest/v1/notifications").map(bodyOf).filter(n => n && n.type === "trade_proposed");
+    const uMails = writesSince(beforeUnit).filter(w => /send-notification/.test(w.path)).map(bodyOf).filter(b => b && b.type === "trade_proposed");
+    const uDays = uPosts.map(p => p.day).sort();
+    const stampRx = /\[unit holiday 2026-11-26 4: Thanksgiving unit 11\/26-11\/29 \(4 days\), day \d of 4\]$/;
+    const firstRow = uPosts.find(p => p.day === "2026-11-26");
+    if (uPosts.length !== 4 || uDays.join(",") !== "2026-11-26,2026-11-27,2026-11-28,2026-11-29") fail("Trades unit: expected 4 POSTs for 11/26..29, got " + JSON.stringify(uDays));
+    else if (!uPosts.every(p => p.from_surgeon_id === "s1" && p.to_surgeon_id === uGood.value && p.role === "primary" && p.status === "pending")) fail("Trades unit: row bodies wrong: " + JSON.stringify(uPosts));
+    else if (!uPosts.every(p => stampRx.test(p.detail))) fail("Trades unit: rows lack the unit stamp in detail: " + uPosts.map(p => p.detail).join(" | "));
+    else if (uReturn ? (uPosts.filter(p => p.return_day).length !== 1 || firstRow.return_day !== uReturn.split("|")[0]) : uPosts.some(p => p.return_day)) fail("Trades unit: the single return day should ride on the first row only: " + JSON.stringify(uPosts.map(p => [p.day, p.return_day])));
+    else if (uNotifs.length !== 1 || !/moved as one/.test(uNotifs[0].message) || !/Primary 11\/26-11\/29/.test(uNotifs[0].message)) fail("Trades unit: expected ONE trade_proposed notification naming the unit range, got " + JSON.stringify(uNotifs.map(n => n.message)));
+    else if (uMails.length !== 1 || uMails[0].data.message !== uNotifs[0].message) fail("Trades unit: expected one send-notification with the same composed message: " + JSON.stringify(uMails));
+    else ok(`Trades unit: whole-unit proposal -> 4 POSTs (11/26..29, ${uGood.text}, primary, unit stamp in detail${uReturn ? ", return " + uReturn.replace("|", " ") + " on the first row" : ", one-way (scheduler)"}) + ONE notification "${uNotifs[0].message.slice(0, 100)}..."`);
+    const unitRows = page.locator('[data-testid=trade-row][data-unit="holiday:2026-11-26"][data-status=pending]');
+    const unitRowCount = await unitRows.count();
+    const groupAttr = unitRowCount ? await unitRows.first().getAttribute("data-group") : null;
+    const acceptLabel = unitRowCount ? await unitRows.first().locator("[data-testid=trade-accept]").textContent() : "";
+    const tagText = unitRowCount ? await unitRows.first().locator("[data-testid=trade-unit-tag]").textContent().catch(() => "") : "";
+    if (unitRowCount !== 4 || groupAttr !== "4" || !/Accept \(4 days\)/.test(acceptLabel) || !/Thanksgiving unit .* day \d of 4/.test(tagText)) fail(`Trades unit: expected 4 pending rows tagged holiday:2026-11-26 with data-group=4, a unit tag and 'Accept (4 days)', got ${unitRowCount} rows, group ${groupAttr}, tag '${tagText}', button '${acceptLabel}'`);
+    else ok(`Trades unit: 4 pending rows carry the unit tag ('${tagText.trim()}'), data-group=4 and 'Accept (4 days)'`);
+    const uIds = (await unitRows.evaluateAll(els => els.map(e => e.getAttribute("data-trade-id")))).sort(); // the ids the mock assigned (the POST bodies carry none)
+    await page.screenshot({ path: path.join(OUT, "trades.png"), fullPage: true });
+    ok("screenshot test/ui/out/trades.png");
+    // (B3) datalayer-001: expired token + realtime change -> the pending rows survive, no anon read
+    {
+      const getsBefore = tradeGets.length;
+      const warnsBefore = consoleWarns.length;
+      await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), EXPIRED_JWT);
+      rtSendRow("shift_trade_requests", { id: "harness-foreign-row", status: "pending" }, "INSERT");
+      await page.waitForTimeout(1500);
+      const still = await unitRows.count();
+      const foreignGet = tradeGets.slice(getsBefore).find(g => g.auth !== "Bearer " + FAKE_JWT);
+      const skipWarn = consoleWarns.slice(warnsBefore).find(t => /shift_trade_requests: read skipped/.test(t));
+      await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT);
+      await page.waitForTimeout(200);
+      if (still !== 4) fail(`datalayer-001: with the token expired a realtime refresh left ${still} of 4 pending rows listed (the list was wiped by an anon 200 + [])`);
+      else if (foreignGet) fail("datalayer-001: shift_trade_requests was read with a non-session Authorization while the token was expired: " + JSON.stringify(foreignGet));
+      else if (!skipWarn) fail("datalayer-001: no console.warn that the authenticated-only read was skipped");
+      else ok("datalayer-001: expired token + realtime change on shift_trade_requests -> the read is SKIPPED (console.warn, no anon GET) and all 4 pending rows stay listed");
+    }
+    // (B4) Accept the unit: 4 PATCH accepted, then 4 rpc/apply_trade, every row applied, one notification each
+    page.on("dialog", acceptAll);
+    const beforeUAcc = writes.length;
+    await unitRows.first().locator("[data-testid=trade-accept]").click();
+    await waitFor(() => writesSince(beforeUAcc).filter(w => w.path === "/rest/v1/rpc/apply_trade").length >= 4, 15000);
+    await page.waitForTimeout(1500);
+    page.off("dialog", acceptAll);
+    const useq = writesSince(beforeUAcc);
+    const uPatches = useq.filter(w => w.method === "PATCH" && w.path.startsWith("/rest/v1/shift_trade_requests?id=eq."));
+    const uRpcs = useq.filter(w => w.method === "POST" && w.path === "/rest/v1/rpc/apply_trade");
+    const patchedIds = uPatches.map(w => w.path.replace("/rest/v1/shift_trade_requests?id=eq.", "")).sort();
+    const rpcIds = uRpcs.map(w => (bodyOf(w) || {}).p_trade_id).sort();
+    const lastPatchIdx = uPatches.length ? useq.lastIndexOf(uPatches[uPatches.length - 1]) : -1;
+    const firstRpcIdx = uRpcs.length ? useq.indexOf(uRpcs[0]) : -1;
+    const appliedCount = await page.locator('[data-testid=trade-row][data-unit="holiday:2026-11-26"][data-status=applied]').count();
+    const uAccNotifs = useq.filter(w => w.path.startsWith("/rest/v1/notifications")).map(bodyOf).filter(Boolean).map(n => n.type);
+    const uAppliedMail = useq.filter(w => /send-notification/.test(w.path)).map(bodyOf).filter(b => b && b.type === "trade_applied");
+    if (uPatches.length !== 4 || JSON.stringify(patchedIds) !== JSON.stringify(uIds) || !uPatches.every(w => (bodyOf(w) || {}).status === "accepted")) fail("Trades unit accept: expected 4 PATCH status=accepted (one per row): " + JSON.stringify(useq.map(w => w.method + " " + w.path)));
+    else if (uRpcs.length !== 4 || JSON.stringify(rpcIds) !== JSON.stringify(uIds)) fail("Trades unit accept: expected 4 rpc/apply_trade, one per row: " + JSON.stringify(rpcIds));
+    else if (firstRpcIdx < lastPatchIdx) fail("Trades unit accept: an apply_trade ran before the last status PATCH (the unit must be accepted whole before any day moves)");
+    else if (appliedCount !== 4) fail("Trades unit accept: expected all 4 rows to read applied, got " + appliedCount);
+    else if (uAccNotifs.filter(t => t === "trade_accepted").length !== 1 || uAccNotifs.filter(t => t === "trade_applied").length !== 1) fail("Trades unit accept: expected exactly one trade_accepted and one trade_applied notification for the unit, got " + uAccNotifs.join(","));
+    else if (uAppliedMail.length !== 1 || !/^Trade applied to the schedule: .*Primary 11\/26-11\/29/.test(uAppliedMail[0].data.message)) fail("Trades unit accept: one send-notification trade_applied naming the unit range expected: " + JSON.stringify(uAppliedMail.map(m => m.data && m.data.message)));
+    else ok(`Trades unit accept: 4 x PATCH accepted, then 4 x rpc/apply_trade (all after the last PATCH); 4 rows applied; one trade_accepted + one trade_applied notification; email "${uAppliedMail[0].data.message.slice(0, 90)}..."`);
+    if (!useq.every(w => noAddress(w.body))) fail("Trades unit: a write body carries an email address");
+    await page.click('button[data-tab="calendar"]');
+  } catch (e) {
+    page.off("dialog", acceptAll);
+    fail("Trades harness exception: " + errLine(e));
+    try { await page.screenshot({ path: path.join(OUT, "failure-trades.png"), fullPage: true }); } catch (e2) {}
+  }
+
   // ====================== Prompt 6 Slice E: the Setup view ======================
   // Every card expanded + screenshotted, then the write paths: Users (last-admin
   // refusal, one allowed PATCH), Rules (pattern preview, save round trip),
@@ -913,15 +1565,7 @@ try {
   // first schedule_days write, publish dialog), Import seed dry run (zero
   // changes, no writes) and a seed with an injected contact KEY (refused).
   const SETUP_CARDS = ["setup_issues", "setup_roster", "setup_users", "setup_rules", "setup_availability", "setup_vacations", "setup_holidays", "setup_east", "setup_generate", "setup_import", "setup_office", "setup_clear"];
-  const openCard = async (ck) => {
-    const card = page.locator(`[data-testid=card-${ck}]`);
-    if ((await card.count()) === 0) return null;
-    if ((await card.getAttribute("data-open")) !== "1") { await page.click(`[data-testid=card-toggle-${ck}]`); await page.waitForTimeout(200); }
-    return card;
-  };
-  const bodyText = () => page.evaluate(() => document.body.innerText || "");
-  const writesSince = (n, pathPrefix) => writes.slice(n).filter(w => !pathPrefix || w.path.startsWith(pathPrefix));
-  const auditSince = (n, action) => writes.slice(n).map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).find(b => b && b.action === action);
+  // (openCard is defined above, before the Totals section that also needs it.)
   try {
     await page.click('button[data-tab="setup"]');
     await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 8000 });
@@ -989,8 +1633,11 @@ try {
       else if ("schedule" in blobW.data || "vacations" in blobW.data) fail("Rules: the blob write carries operational keys");
       else ok("Rules: Save -> audit rules.edit + blob autosave with surgeonRules.s3.maxConsecutiveDays 4 (config keys only)");
       await maxInput.fill("3");
-      await page.click("[data-testid=rules-save]");
-      await page.waitForTimeout(1200);
+      // Save is disabled when the draft already equals the saved rules (a blob
+      // refresh from the 60 s poll can have reset the draft to the live 3 in the
+      // meantime) - then there is nothing to restore.
+      if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) { await page.click("[data-testid=rules-save]"); await page.waitForTimeout(1200); }
+      else console.log("     (Rules: maxConsecutiveDays already back at 3 - the blob refreshed in between; nothing to restore)");
     }
 
     // ---- Availability: paste a date list -> collapsed ranges -> insert missing rows ----
@@ -1276,6 +1923,20 @@ try {
         const diff3 = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
         if (!/Total changes: 2/.test(total3) || !new RegExp("insert s2 available/any " + extra).test(diff3) || !/surgeonRules=update/.test(diff3)) fail(`Import apply dry run (extra ${extra}): expected 2 changes (blob surgeonRules + 1 availability insert): ${total3} | ${diff3.split("\n").filter(l => /insert|surgeonRules/.test(l)).join(" | ")}`);
         else ok(`Import apply dry run: extra Burchett date ${extra} -> 2 changes (surgeonRules=update, insert s2 available/any ${extra})`);
+        // The Thanksgiving days count as 'kept (app-edited)' only while the in-memory
+        // rows still carry the backups that Accept & Publish generated above. The
+        // harness never persists the mocked CAS writes, so the app's 60-second
+        // background poll may already have re-adopted the live rows (backup null)
+        // - a mock artefact, not a product fact. Expect exactly as many kept days
+        // as still differ from the live rows at this moment.
+        await page.click('button[data-tab="calendar"]');
+        await showMonth(2026, 10);
+        const tgCells = await readCells();
+        const keptExpected = ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].filter(d => { const c = tgCells.find(x => x.day === d); const live = liveByDay[d]; return !!c && (c.b || "") !== ((live && live.backup_id) || ""); }).length;
+        await page.click('button[data-tab="setup"]');
+        await openCard("setup_import");
+        await page.waitForSelector("[data-testid=seed-apply]", { timeout: 5000 });
+        console.log(`     (Thanksgiving days still carrying in-session generated backups: ${keptExpected} of 4 - the apply must report exactly that many kept)`);
         const onDialog = (d) => d.accept();
         page.on("dialog", onDialog);
         const beforeApply = writes.length;
@@ -1298,7 +1959,7 @@ try {
         else if (!(blobBody.data && blobBody.data.surgeonRules && blobBody.data.surgeonRules.s2 && blobBody.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra)) || !blobBody.data.roster || "schedule" in blobBody.data) fail("Import apply: the merged blob is wrong: keys " + Object.keys(blobBody.data || {}).join(","));
         else if (aAv < 0 || aAv < aSnap || avBody.length !== 1 || avBody[0].start_date !== extra || avBody[0].person_id !== "s2" || avBody[0].source !== "seed") fail(`Import apply: availability insert wrong (index ${aAv}, snap ${aSnap}): ` + JSON.stringify(avBody));
         else if (aBad.length) fail("Import apply: schedule_days / time_off were written although nothing changed there: " + JSON.stringify(aBad.map(w => w.method + " " + w.path)));
-        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !/availability inserted 1, skipped 36/.test(resText) || !/schedule_days inserted 0, updated 0, kept \(app-edited\) 4\b/.test(resText)) fail("Import apply: result panel wrong (expected 1 availability insert of 37 plan rows, no schedule_days change, the 4 Thanksgiving days kept because their generated backups differ from the seed-owned live rows): " + resText);
+        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !/availability inserted 1, skipped 36/.test(resText) || !new RegExp("schedule_days inserted 0, updated 0, kept \\(app-edited\\) " + keptExpected + "\\b").test(resText)) fail(`Import apply: result panel wrong (expected 1 availability insert of 37 plan rows, no schedule_days change, ${keptExpected} Thanksgiving day(s) kept because their in-session generated backups differ from the seed-owned live rows): ` + resText);
         else if (!impAudit) fail("Import apply: no audit_log 'seed.import'");
         else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the 1 missing row (${extra}); no schedule_days / time_off write; audit seed.import; result: "${resText.slice(0, 120)}"`);
         // Roster autosave after the merge must not regress: the extra date stays in the next blob write.

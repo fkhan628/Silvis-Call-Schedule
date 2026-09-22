@@ -34,6 +34,7 @@ on:
       - "test/importer.test.js"
       - "test/week-rows.test.js"
       - "test/exports.test.js"
+      - "test/totals.test.js"
       - "importer.js"
       - "test/generator-regression.js"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
@@ -93,6 +94,9 @@ jobs:
 
       - name: Export builders tests (ICS, share page, printable, ER panel)
         run: node test/exports.test.js
+
+      - name: Totals helpers tests
+        run: node test/totals.test.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js
