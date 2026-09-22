@@ -134,7 +134,7 @@ eq(derivedSR.d.explicitListMonths, undefined, "no explicit list -> nothing gover
 eq(SA.seedToSurgeonRules(seed)[ACTON].explicitListMonths, ["2026-10"]);
 eq(SA.seedToSurgeonRules(seed)[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
 eq(SA.seedToSurgeonRules(seed)[BURCHETT].explicitListMonths, ["2026-10", "2026-12"]);
-eq(SA.seedToTimeOffRows(seed).length, 3, "three vacation rows (Acton x2, Philip x1)");
+eq(SA.seedToTimeOffRows(seed).length, 7, "seven vacation rows (Acton x2, Philip x1, Burchett x4 - the 2027 weekends stated 9/22 evening)");
 const sched = SA.seedToSchedule(seed);
 eq(sched["2026-09-30"].primaryLocked, true, "externalCover day is primary-locked");
 eq(sched["2026-10-15"].primaryLocked, false, "null slot is never locked");
@@ -170,7 +170,12 @@ ok(R.isHolidayDay(ctx, "2027-01-01") && R.isHolidayDay(ctx, "2027-01-01").year =
 /* ------------------------------------------------ Sarkar */
 step("Sarkar windows");
 ["2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22"].forEach(d => okElig(R.eligibility(clean, d, P, SARKAR), d));
-okElig(R.eligibility(clean, "2026-10-24", P, SARKAR), "Saturday inside the window is fine");
+// windows Mon-Fri since 9/22 evening (the clinic manager): Sat 10/24 is outside the October window now; a Saturday is
+// still fine whenever a window carries one again (synthetic window Oct 19-24 - the pre-9/22 shape)
+blocked(R.eligibility(clean, "2026-10-24", P, SARKAR), "outside-window", "Sat 10/24 is outside the Mon-Fri window (9/22 evening)");
+const srSatWin = clone(SA.seedToSurgeonRules(seed)); srSatWin[SARKAR].availableWindows = srSatWin[SARKAR].availableWindows.map(w => w.start === "2026-10-19" ? { start: w.start, end: "2026-10-24" } : w);
+const satWin = makeCtx({ schedule: {}, surgeonRules: srSatWin });
+okElig(R.eligibility(satWin, "2026-10-24", P, SARKAR), "Saturday inside a window is fine (no hard-never on Sat)");
 blocked(R.eligibility(clean, "2026-10-23", P, SARKAR), "hard-never-weekday:Fri");
 okElig(R.eligibility(clean, "2026-10-23", B, SARKAR), "9/22: hardNeverWeekdaysRoles is [primary] in the seed, so a window Friday is open for backup");
 blocked(R.eligibility(clean, "2026-10-25", P, SARKAR), "outside-window");
@@ -180,7 +185,8 @@ blocked(R.eligibility(clean, "2026-11-15", P, SARKAR), "hard-never-weekday:Sun",
 blocked(R.eligibility(clean, "2026-11-22", B, SARKAR), "outside-window", "Sunday backup outside the window");
 lacks(R.eligibility(clean, "2026-11-22", B, SARKAR).hard, "hard-never-weekday", "9/22: her Fri/Sun rule is primary-only");
 okElig(R.eligibility(clean, "2026-11-16", P, SARKAR), "Nov window");
-okElig(R.eligibility(clean, "2026-11-21", P, SARKAR), "Nov window Saturday");
+okElig(R.eligibility(clean, "2026-11-19", P, SARKAR), "Nov window Thursday");   // windows Mon-Fri since 9/22 evening (was Sat 11/21)
+blocked(R.eligibility(clean, "2026-11-21", P, SARKAR), "outside-window", "Sat 11/21 is outside the Nov 16-20 window (9/22 evening)");
 blocked(R.eligibility(clean, "2026-12-18", P, SARKAR), "hard-never-weekday:Fri", "Dec window is Mon-Fri but Friday is hard-never");
 okElig(R.eligibility(clean, "2026-12-17", P, SARKAR));
 blocked(R.eligibility(clean, "2026-12-19", P, SARKAR), "outside-window");
@@ -191,7 +197,7 @@ const sk = makeCtx({ schedule: {
   "2026-10-19": { primary: SARKAR, backup: null },
   "2026-10-20": { primary: null, backup: SARKAR },
   "2026-10-22": { primary: SARKAR, backup: null },
-  "2026-10-24": { primary: null, backup: SARKAR }
+  "2026-10-23": { primary: null, backup: SARKAR }   // windows Mon-Fri since 9/22 evening (was Sat 10/24 backup); a window Friday backup is open
 } });
 blocked(R.eligibility(sk, "2026-10-21", P, SARKAR), "window-week-max:4", "5th day in the window week");
 lacks(R.eligibility(sk, "2026-10-21", P, SARKAR).hard, "max-consecutive", "backup days do not count toward consecutive");
@@ -201,7 +207,10 @@ hasSoft(R.eligibility(makeCtx({ schedule: { "2026-10-20": { primary: SARKAR } } 
 okElig(R.eligibility(sk2, "2026-10-22", B, SARKAR), "backup after two primaries is legal (primary-only counting)");
 // the seed schedule itself: her locked days evaluate as eligible for herself
 okElig(R.eligibility(ctx, "2026-10-20", P, SARKAR), "locked self");
-okElig(R.eligibility(ctx, "2026-10-24", P, SARKAR), "locked self Saturday");
+okElig(R.eligibility(ctx, "2026-10-22", P, SARKAR), "locked self Thursday");   // windows Mon-Fri since 9/22 evening (was "locked self Saturday" 10/24)
+// 9/22 evening: 10/24 came off Sarkar in the seed (locked-open like 10/15) and sits outside her Mon-Fri window
+eq([ctx.schedule["2026-10-24"].primary, ctx.schedule["2026-10-24"].primaryLocked], [null, false], "seed: 10/24 primary open, not locked (null slot)");
+blocked(R.eligibility(ctx, "2026-10-24", P, SARKAR), "outside-window", "Sarkar is not eligible for the day she came off");
 
 /* ------------------------------------------------ Burchett */
 step("Burchett December list (governed month)");
@@ -221,8 +230,16 @@ okElig(R.eligibility(clean, "2027-01-03", B, BURCHETT), "spill-over date is addi
 okElig(R.eligibility(clean, "2027-01-11", P, BURCHETT), "2nd Monday via recurring whitelist");
 okElig(R.eligibility(clean, "2027-01-05", P, BURCHETT), "1st Tuesday");
 okElig(R.eligibility(clean, "2027-01-13", P, BURCHETT), "2nd Wednesday");
-okElig(R.eligibility(clean, "2027-01-09", P, BURCHETT), "weekend via weekendsAvailable");
-okElig(R.eligibility(clean, "2027-01-08", B, BURCHETT), "Friday backup via weekendsAvailable");
+okElig(R.eligibility(clean, "2027-01-23", P, BURCHETT), "weekend via weekendsAvailable");   // was Sat 1/9 - a vacation since 9/22 evening
+okElig(R.eligibility(clean, "2027-01-08", B, BURCHETT), "Friday backup via weekendsAvailable (the day before his 1/9-10 vacation blocks primary only)");
+// 9/22 evening (Burchett email): the 2027 weekends he cannot work are seed vacations - both roles blocked, the day before primary only
+blocked(R.eligibility(clean, "2027-01-09", P, BURCHETT), "time-off:2027-01-09", "Sat 1/9 vacation (primary)");
+blocked(R.eligibility(clean, "2027-01-10", B, BURCHETT), "time-off:2027-01-10", "Sun 1/10 vacation (backup)");
+blocked(R.eligibility(clean, "2027-01-08", P, BURCHETT), "day-before-vacation", "Fri 1/8 primary: day before the vacation");
+blocked(R.eligibility(clean, "2027-01-16", P, BURCHETT), "time-off:2027-01-16"); blocked(R.eligibility(clean, "2027-01-17", P, BURCHETT), "time-off:2027-01-17");
+["2027-02-12", "2027-02-13", "2027-02-14", "2027-04-09", "2027-04-10", "2027-04-11"].forEach(d => blocked(R.eligibility(clean, d, B, BURCHETT), "time-off:" + d, "Burchett vacation " + d));
+okElig(R.eligibility(clean, "2027-01-15", B, BURCHETT), "Fri 1/15 backup is open (the January entries are Sat+Sun only)");
+lacks(R.eligibility(clean, "2027-01-15", P, BURCHETT).hard, "time-off", "Fri 1/15 is not itself a vacation day");
 blocked(R.eligibility(clean, "2027-01-04", P, BURCHETT), "not-recurring-available", "1st Monday is not on his recurring list");
 blocked(R.eligibility(clean, "2027-01-12", P, BURCHETT), "not-recurring-available", "a Tuesday that is not the 1st");
 step("Burchett October import rows");
@@ -619,10 +636,15 @@ ok(wp[0].kind !== "daily", "cheapest pattern is not daily");
 ok(wp.every(p => p.members.fri !== SARKAR && p.members.sun !== SARKAR), "saturday-only never on Fri/Sun");
 ok(dailies.every(p => p.penalty >= 5), "daily carries weights.patternDaily");
 ok(!dailies.some(p => p.members.fri === p.members.sat && p.members.sat === p.members.sun), "block shapes are not repeated as daily");
-// Sarkar as the Saturday half inside her November window (weekend of 11/20)
+// Sarkar as the Saturday half of a split: only when a window carries the Saturday. Windows are Mon-Fri since
+// 9/22 evening, so the real seed offers her on no weekend day of 11/20; a synthetic Nov 16-21 window (the
+// pre-9/22 shape) keeps the saturday-only style's meaning: Saturday member of a split, never a block.
 const wpS = R.weekendUnitPatterns(clean, "2026-11-20");
-ok(wpS.some(p => p.kind === "split" && p.members.sat === SARKAR), "Sarkar appears as the Saturday member of a split");
-ok(!wpS.some(p => p.kind === "block" && p.members.sat === SARKAR), "but never as a block");
+ok(!wpS.some(p => p.members.fri === SARKAR || p.members.sat === SARKAR || p.members.sun === SARKAR), "real seed: Sarkar on no day of the 11/20 weekend (Sat 11/21 is outside her Mon-Fri window)");
+const srSatNov = clone(SA.seedToSurgeonRules(seed)); srSatNov[SARKAR].availableWindows = srSatNov[SARKAR].availableWindows.map(w => w.start === "2026-11-16" ? { start: w.start, end: "2026-11-21" } : w);
+const wpS2 = R.weekendUnitPatterns(makeCtx({ schedule: {}, surgeonRules: srSatNov }), "2026-11-20");
+ok(wpS2.some(p => p.kind === "split" && p.members.sat === SARKAR), "with a Saturday inside the window Sarkar appears as the Saturday member of a split");
+ok(!wpS2.some(p => p.kind === "block" && p.members.sat === SARKAR), "but never as a block");
 // backup role with primary already set: Khan holds primary Fri-Sun
 const wb = makeCtx({ schedule: { "2026-11-06": { primary: KHAN }, "2026-11-07": { primary: KHAN }, "2026-11-08": { primary: KHAN } } });
 const wpB = R.weekendUnitPatterns(wb, "2026-11-06", "backup");
@@ -653,7 +675,7 @@ eq(tOct.maxConsecutive, 3, "9-10-11 and 17-18-19 (backup 20 does not extend the 
 const tNov = R.talliesFor(ctx, KHAN, "2026-11");
 eq(tNov, { primary: 4, backup: 0, total: 4, weekendDays: 3, majorHolidays: 1, minorHolidays: 0, maxConsecutive: 1, maxConsecutiveAnyRole: 1 }, "Thanksgiving unit = 4 shifts, 1 major holiday, 1 day for both run measures (Khan opted in)");
 eq(R.talliesFor(makeCtx({ surgeonRules: srNoCollapse }), KHAN, "2026-11").maxConsecutive, 4, "without his opt-in the same unit reads 4 real days");
-eq(R.talliesFor(ctx, SARKAR, "2026-10").primary, 3);
+eq(R.talliesFor(ctx, SARKAR, "2026-10").primary, 2, "Sarkar October primaries 10/20 + 10/22 (10/24 came off her 9/22 evening)");
 eq(R.talliesFor(clean, SARKAR, "2026-10"), { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0, maxConsecutiveAnyRole: 0 });
 eq(R.talliesFor(ctx, FIERCE, "2026-09").backup, 3, "Fierce backup 9/28-9/30");
 
@@ -752,11 +774,11 @@ blocked(R.eligibility(ctx, "2026-11-26", B, KHAN), "holds-other-role", "the lock
 step("tests-05: role mask on availability rows");
 okElig(R.eligibility(clean, "2026-11-01", P, PHILIP), "11/1 primary via his October PRIMARY row (spill-over is additive)");
 okElig(R.eligibility(clean, "2026-11-01", B, PHILIP), "9/22: backup is open outside his weeks regardless of the row (row scoping is shown on Sarkar's window in fidelity-02)");
-const maskCtx = withRows([row(ACTON, "unavailable", "2026-11-16", "primary"), row(BURCHETT, "unavailable", "2027-01-09", "backup")]);
+const maskCtx = withRows([row(ACTON, "unavailable", "2026-11-16", "primary"), row(BURCHETT, "unavailable", "2027-01-23", "backup")]);   // Sat 1/23 (1/9 is his vacation since 9/22 evening)
 blocked(R.eligibility(maskCtx, "2026-11-16", P, ACTON), "unavailable-row");
 okElig(R.eligibility(maskCtx, "2026-11-16", B, ACTON), "a primary-only unavailable row leaves backup open");
-blocked(R.eligibility(maskCtx, "2027-01-09", B, BURCHETT), "unavailable-row");
-okElig(R.eligibility(maskCtx, "2027-01-09", P, BURCHETT), "a backup-only unavailable row leaves primary open");
+blocked(R.eligibility(maskCtx, "2027-01-23", B, BURCHETT), "unavailable-row");
+okElig(R.eligibility(maskCtx, "2027-01-23", P, BURCHETT), "a backup-only unavailable row leaves primary open");
 
 step("tests-06: backup cap lower boundary");
 const pb6 = {};
@@ -810,7 +832,7 @@ okElig(R.eligibility(clean, "2026-11-07", B, FIERCE), "Fierce standalone Saturda
 blocked(R.eligibility(clean, "2026-11-02", P, FIERCE), "weekday-pattern:Mon", "Monday primary unchanged");
 okElig(R.eligibility(clean, "2026-11-02", B, FIERCE), "Monday backup unchanged");
 // Sarkar: backup inside her windows only; her Fri/Sun rule is primary-only in the seed
-okElig(R.eligibility(clean, "2026-11-17", B, SARKAR), "Sarkar backup 11/17 inside the Nov 16-21 window");
+okElig(R.eligibility(clean, "2026-11-17", B, SARKAR), "Sarkar backup 11/17 inside the Nov 16-20 window");
 blocked(R.eligibility(clean, "2026-11-25", B, SARKAR), "outside-window", "Sarkar backup 11/25 outside her window");
 blocked(R.eligibility(clean, "2026-11-20", P, SARKAR), "hard-never-weekday:Fri", "a window Friday primary stays hard");
 okElig(R.eligibility(clean, "2026-11-20", B, SARKAR), "a window Friday backup is open");

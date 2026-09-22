@@ -42,6 +42,13 @@ ok(openOctBackups.every((d) => d.backup_locked === false), "open backups are nev
 ok(days.filter((d) => d.backup_id == null).every((d) => d.backup_locked === false), "null backup -> never locked (all)");
 eq(byDay["2026-10-15"].primary_id, null); eq(byDay["2026-10-15"].primary_locked, false, "10/15 primary open and unlocked");
 eq(byDay["2026-10-15"].backup_locked, false);
+// 9/22 evening (item S): Sarkar at two days per week, October locks included - 10/24 came off her.
+// Locked-open like 10/15 (a null slot is never locked); the seed's operational note rides in the row note.
+eq(byDay["2026-10-24"].primary_id, null, "10/24 primary open since 9/22 evening (Sarkar at two days per week)");
+eq(byDay["2026-10-24"].backup_id, null, "10/24 backup was already open");
+eq(byDay["2026-10-24"].primary_locked, false, "10/24 locked-open: a null slot is never locked"); eq(byDay["2026-10-24"].backup_locked, false);
+eq(byDay["2026-10-24"].note, "seed: faraz-2026-09-22-sarkar-two-days - open \u2014 Sarkar at two days per week from 9/22", "10/24 note = provenance + the seed's operational note");
+eq(days.filter((d) => d.primary_id === "s6").map((d) => d.day), ["2026-10-20", "2026-10-22"], "Sarkar keeps exactly 10/20 and 10/22 in the import");
 ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].forEach((d) => {
   eq(byDay[d].primary_id, KHAN, d + " Khan"); eq(byDay[d].primary_locked, true, d + " locked"); eq(byDay[d].backup_locked, false, d + " backup open");
 });
@@ -57,6 +64,7 @@ eq(byDay["2026-10-12"].primary_id, FIERCE, "pendingDelta 10/12 already applied (
 eq(plan.infoDeltas.length, seed.pendingDeltas.length, "every pendingDelta rendered as info");
 ok(plan.infoDeltas.every((l) => /nothing to write/.test(l)), "info deltas say nothing to apply");
 ok(plan.infoDeltas.some((l) => /^10\/12 P Philip -> Fierce/.test(l)), "info delta rendering");
+ok(plan.infoDeltas.some((l) => /^10\/24 P Sarkar -> open \(applied; faraz-2026-09-22-sarkar-two-days\)/.test(l)), "10/24 delta (surgeon null) renders as 'Sarkar -> open': " + plan.infoDeltas.filter((l) => /^10\/24/.test(l)).join(" | "));
 
 /* -------------------------------------------------------- availability */
 step("availability rows vs seed statements (counted independently)");
@@ -104,20 +112,35 @@ const keys = plan.availabilityRows.map((r) => [r.person_id, r.kind, r.role, r.st
 eq(new Set(keys).size, keys.length, "availability keys unique");
 // stats agree
 eq(plan.stats.availability, plan.availabilityRows.length);
-eq(plan.stats.schedule_days, 53); eq(plan.stats.time_off, 3);
-eq(plan.stats.scheduleDays.externalCover, 7); eq(plan.stats.scheduleDays.openBackup, 20); eq(plan.stats.scheduleDays.openPrimary, 1);
+eq(plan.stats.schedule_days, 53); eq(plan.stats.time_off, 7, "stats.time_off: 3 + Burchett's four 2027 weekends (9/22 evening)");
+eq(plan.stats.scheduleDays.externalCover, 7); eq(plan.stats.scheduleDays.openBackup, 20); eq(plan.stats.scheduleDays.openPrimary, 2, "open primaries in the import: 10/15 and, since 9/22 evening, 10/24");
 
 /* ------------------------------------------------------------ time_off */
 step("time_off rows");
 const to = plan.timeOffRows;
-eq(to.length, 3, "2 Acton + 1 Philip");
+eq(to.length, 7, "2 Acton + 1 Philip + 4 Burchett (9/22 evening)");
 eq(to.filter((t) => t.person_id === ACTON).map((t) => t.start_date + ".." + t.end_date), ["2026-11-19..2026-11-22", "2026-11-25..2026-11-29"]);
 eq(to.filter((t) => t.person_id === PHILIP).map((t) => t.start_date + ".." + t.end_date), ["2026-10-15..2026-10-15"]);
-ok(to.every((t) => t.note === "vacation (seed)" && t.created_by === "seed"), "notes scrubbed to 'vacation (seed)'");
-const seedVacNotes = [].concat(...Object.values(seed.surgeonRules).map((r) => (r.timeOff || []).map((t) => t.note))).filter(Boolean);
-ok(seedVacNotes.length === 3, "seed carries 3 personal vacation notes to scrub");
+eq(to.filter((t) => t.person_id === BURCHETT).map((t) => t.start_date + ".." + t.end_date), ["2027-01-09..2027-01-10", "2027-01-16..2027-01-17", "2027-02-12..2027-02-14", "2027-04-09..2027-04-11"], "Burchett's four 2027 weekends exactly as stated (Sat+Sun in January, Fri-Sun in February and April)");
+ok(to.every((t) => t.created_by === "seed"), "created_by 'seed' on every row, public note or not");
+ok(to.filter((t) => t.person_id !== BURCHETT).every((t) => t.note === "vacation (seed)"), "private seed notes (Acton, Philip) still scrubbed to 'vacation (seed)'");
+ok(to.filter((t) => t.person_id === BURCHETT).every((t) => t.note === "unavailable (stated 9/22)"), "public seed notes (public: true) reach time_off as written: " + JSON.stringify(to.filter((t) => t.person_id === BURCHETT).map((t) => t.note)));
+// which seed notes are public is read from the seed here, never from importer.js
+const seedVac = [].concat(...Object.keys(seed.surgeonRules).map((id) => (seed.surgeonRules[id].timeOff || []).map((t) => Object.assign({ id: id }, t))));
+const privateVacNotes = seedVac.filter((t) => t.note && t.public !== true).map((t) => t.note);
+const publicVacNotes = seedVac.filter((t) => t.note && t.public === true).map((t) => t.note);
+eq([privateVacNotes.length, publicVacNotes.length], [3, 4], "seed carries 3 private vacation notes (scrubbed) and 4 public ones (written)");
+ok(seedVac.filter((t) => t.public === true).every((t) => t.id === BURCHETT && t.source === "burchett-email-2026-09-22"), "the public entries are Burchett's, provenance in the seed only");
 const sql = IMP.importSql(plan);
-seedVacNotes.forEach((note) => ok(sql.indexOf(note) < 0 && JSON.stringify(to).indexOf(note) < 0, "seed wording never written: " + note));
+privateVacNotes.forEach((note) => ok(sql.indexOf(note) < 0 && JSON.stringify(to).indexOf(note) < 0, "private seed wording never written: " + note));
+publicVacNotes.forEach((note) => ok(sql.indexOf(note) >= 0 && JSON.stringify(to).indexOf(note) >= 0, "public seed wording written: " + note));
+ok(sql.indexOf("burchett-email-2026-09-22") < 0 && JSON.stringify(to).indexOf("burchett-email-2026-09-22") < 0 && JSON.stringify(plan.blob).indexOf("burchett-email-2026-09-22") < 0, "time_off provenance (source) stays in the seed - not in the rows, the SQL or the blob");
+eq(plan.blob.surgeonRules[BURCHETT].timeOff, [{ start: "2027-01-09", end: "2027-01-10" }, { start: "2027-01-16", end: "2027-01-17" }, { start: "2027-02-12", end: "2027-02-14" }, { start: "2027-04-09", end: "2027-04-11" }], "blob timeOff: dates only - no note, no public flag, no source");
+// the dry-run inventory shows the public notes (path -> public), counted separately from the rule-note scrub
+eq(plan.noteScrub.counts.timeOffPublic, 4, "noteScrub.counts.timeOffPublic = the public notes kept");
+eq(plan.noteScrub.inventory.filter((e) => e.action === "public").map((e) => e.path), ["surgeonRules.s2.timeOff[0].note", "surgeonRules.s2.timeOff[1].note", "surgeonRules.s2.timeOff[2].note", "surgeonRules.s2.timeOff[3].note"], "inventory: one 'public' entry per public time_off note");
+ok(plan.noteScrub.inventory.filter((e) => e.action === "public").every((e) => e.to === "time_off" && e.from === "unavailable (stated 9/22)"), "public entries: from = the note, to = 'time_off'");
+ok(!plan.noteScrub.inventory.some((e) => /timeOff/.test(e.path) && e.action !== "public"), "private time_off notes are replaced, not inventoried (they never enter the scrub)");
 
 /* ---------------------------------------------------------------- blob */
 step("blob");
@@ -178,7 +201,9 @@ function project(ctx) {
   Object.keys(ctx.per).forEach((id) => {
     const P = ctx.per[id];
     per[id] = { vacation: setArr(P.vacation), dayBefore: setArr(P.dayBeforeVacation), avail: P.avail, governed: P.governedMonths, weekDays: setArr(P.weekDays),
-      weeksFromN: P.weeksFromN, windowDays: setArr(P.windowDays), maxConsec: P.maxConsec, capTotal: P.capTotal, capPreferred: P.capPreferred, hardNever: setArr(P.hardNever),
+      weeksFromN: P.weeksFromN, windowDays: setArr(P.windowDays), maxConsec: P.maxConsec,
+      // 9/22 (Prompt 12 K): the cap fields are capPrimary / capPreferred / countsEastDays / eastPrimaryDays (capTotal no longer exists)
+      capPrimary: P.capPrimary, capPreferred: P.capPreferred, countsEastDays: P.countsEastDays, eastPrimaryDays: P.eastPrimaryDays.size, hardNever: setArr(P.hardNever),
       holidaysOff: setArr(P.holidaysOff), maxMajor: P.maxMajor, mode: P.mode, active: P.active };
   });
   const sched = {};
@@ -191,6 +216,13 @@ const appCtx = R.buildContext({ roster: plan.blob.roster, surgeonRules: plan.blo
   timeOffRows: plan.timeOffRows, availabilityRows: plan.availabilityRows, schedule: rowsToSchedule(plan.scheduleDayRows) });
 const testCtx = R.buildContext(SA.seedToContextInput(seed));
 eq(IMP.impCanon(project(appCtx)), IMP.impCanon(project(testCtx)), "same per-surgeon precompute, schedule and holiday units");
+// the cap pin is not vacuous: the projected fields carry the seed's real values (never undefined on both sides)
+// and a perturbed copy of one side no longer compares equal
+eq([project(appCtx).per[FIERCE].capPrimary, project(appCtx).per[FIERCE].countsEastDays, project(appCtx).per[BURCHETT].capPrimary, project(appCtx).per[BURCHETT].capPreferred, project(appCtx).per[KHAN].capPrimary],
+  [14, true, 8, 7, null], "projection carries capPrimary / capPreferred / countsEastDays from the imported rules (K)");
+ok(Object.keys(project(appCtx).per).every((id) => typeof project(appCtx).per[id].eastPrimaryDays === "number"), "projection carries eastPrimaryDays.size");
+const perturbedProj = project(appCtx); perturbedProj.per[FIERCE].capPrimary = 13;
+ok(IMP.impCanon(perturbedProj) !== IMP.impCanon(project(testCtx)), "a perturbed capPrimary on one side breaks the round-trip pin (non-vacuous)");
 eq(appCtx.warnings, [], "no buildContext warnings from imported rows");
 // and eligibility agrees on a spread of days/roles
 let checked = 0;
@@ -206,7 +238,7 @@ ok(checked > 1000, "eligibility identical on " + checked + " (day, role, surgeon
 /* ------------------------------------------------------- seed adapter */
 step("seed adapter delegate keeps its contract");
 eq(SA.seedToAvailabilityRows(seed).length, expected.size, "adapter: one row per dated statement");
-eq(SA.seedToTimeOffRows(seed).length, 3);
+eq(SA.seedToTimeOffRows(seed).length, 7, "adapter: 7 vacation rows (Acton 2, Philip 1, Burchett 4)");
 eq(Object.keys(SA.seedToSchedule(seed)).length, 53);
 eq(SA.seedToSurgeonRules(seed)[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
 
@@ -239,11 +271,21 @@ eq(tp.scheduleDayRows[0].backup_locked, false);
 
 /* ---------------------------------------------------------------- SQL */
 step("SQL idempotency shape");
-ok(/^[\x00-\x7f]*$/.test(sql), "SQL is 7-bit ASCII (non-ASCII escaped inside jsonb)");
+ok(/^[\x00-\x7f]*$/.test(sql), "SQL is 7-bit ASCII (non-ASCII escaped inside jsonb AND in text columns)");
+// a text column carrying non-ASCII (the 10/24 note's em dash) is emitted as an E'' literal with \uXXXX; ASCII strings stay plain '...'
+ok(sql.indexOf("E'seed: faraz-2026-09-22-sarkar-two-days - open \\u2014 Sarkar at two days per week from 9/22'") >= 0, "10/24 note -> E'' literal with \\u2014 (found: " + JSON.stringify((sql.match(/E'seed: faraz[^']*'/) || [])[0]) + ")");
+ok(sql.indexOf("'seed: office-er-call-panels-2026-09-16'") >= 0 && !/E'seed: holly/.test(sql), "ASCII notes keep the plain '...' literal");
+// the non-ASCII test is stateless: consecutive non-ASCII notes, an ASCII one between them and a repeat all classify the same way
+const fxNA = clone(seed);
+fxNA.existingAssignments.filter((a) => ["2026-10-19", "2026-10-20", "2026-10-21"].indexOf(a.date) >= 0).forEach((a, i) => { a.note = i === 1 ? "plain" : "caf" + String.fromCharCode(233) + " " + i; });
+const sqlNA = IMP.importSql(IMP.importPlan(fxNA, { now: NOW }));
+eq((sqlNA.match(/E'seed: [^']*caf\\u00e9 [02]'/g) || []).length, 2, "both non-ASCII notes become E'' literals whatever came before them");
+ok(/'seed: [a-z0-9-]+ - plain'/.test(sqlNA) && !/E'seed: [a-z0-9-]+ - plain'/.test(sqlNA), "the ASCII note between them stays a plain literal");
+ok(/^[\x00-\x7f]*$/.test(sqlNA), "still 7-bit");
 ok(/^begin;/m.test(sql) && /^commit;/m.test(sql), "one transaction");
 const stmts = sql.split(/;\s*\n/).map((s) => s.replace(/^\s*--.*$/gm, "").trim()).filter(Boolean);
 const inserts = stmts.filter((s) => /^insert\s+into/i.test(s));
-ok(inserts.length >= 1 + 1 + 1 + 1 + 3, "snapshot + blob + schedule_days + availability + 3 time_off inserts (" + inserts.length + ")");
+ok(inserts.length >= 1 + 1 + 1 + 1 + 7, "snapshot + blob + schedule_days + availability + 7 time_off inserts (" + inserts.length + ")");
 inserts.forEach((s) => {
   const table = (s.match(/^insert\s+into\s+(\S+)/i) || [])[1];
   if (/call_schedule_snapshots/.test(table)) ok(/\bwhere\s+exists/i.test(s), "snapshot insert is conditional");
@@ -257,7 +299,12 @@ ok(/coalesce\(call_schedule_data\.data, '\{\}'::jsonb\) \|\| /.test(sql), "blob 
 ok(/'\{settings\}'/.test(sql), "settings merged one level deeper");
 ok(/before_seed_import/.test(sql) && sql.indexOf("call_schedule_snapshots") < sql.indexOf("call_schedule_data (id"), "snapshot comes first");
 ok(sql.indexOf("into public.schedule_days") < sql.indexOf("into public.time_off"), "schedule_days before time_off so the ON_CALL_CONFLICT trigger sees the schedule");
-eq((sql.match(/insert into public\.time_off/g) || []).length, 3);
+eq((sql.match(/insert into public\.time_off/g) || []).length, 7, "one guarded insert per time_off row (7)");
+// the stale-row delete guard lists all 7 (person, start, end) tuples - Burchett's four included
+const toGuard = sql.slice(sql.indexOf("delete from public.time_off"), sql.indexOf("insert into public.time_off"));
+const toTuples = to.map((r) => "('" + r.person_id + "', '" + r.start_date + "'::date, '" + r.end_date + "'::date)");
+eq(toTuples.filter((t) => toGuard.indexOf(t) >= 0).length, 7, "time_off delete guard lists the 7 tuples");
+ok(toGuard.indexOf("('s2', '2027-01-09'::date, '2027-01-10'::date)") >= 0 && toGuard.indexOf("('s2', '2027-04-09'::date, '2027-04-11'::date)") >= 0, "Burchett's first and last 2027 ranges are in the guard");
 // simulate applying twice in an in-memory model keyed the way the SQL is: second pass changes nothing
 function applyToModel(model, p) {
   const changed = { sd: 0, av: 0, to: 0 };
@@ -268,16 +315,16 @@ function applyToModel(model, p) {
   return changed;
 }
 const model = { blob: {}, schedule_days: [], availability: [], time_off: [] };
-eq(applyToModel(model, plan), { sd: 53, av: plan.availabilityRows.length, to: 3 }, "first apply writes everything");
+eq(applyToModel(model, plan), { sd: 53, av: plan.availabilityRows.length, to: 7 }, "first apply writes everything");
 eq(applyToModel(model, plan), { sd: 0, av: 0, to: 0 }, "second apply writes nothing");
 ok(model.schedule_days.every((d) => d.version === 1), "versions untouched by the no-op re-run");
 
 /* ------------------------------------------------------------ planDiff */
 step("planDiff");
 const d0 = IMP.planDiff(plan, { blob: {}, availability: [], time_off: [], schedule_days: [] });
-eq(d0.tables.schedule_days.insert, 53); eq(d0.tables.availability.insert, plan.availabilityRows.length); eq(d0.tables.time_off.insert, 3);
+eq(d0.tables.schedule_days.insert, 53); eq(d0.tables.availability.insert, plan.availabilityRows.length); eq(d0.tables.time_off.insert, 7);
 eq(d0.tables.call_schedule_data.insert, 5); eq(d0.blocked, []); eq(d0.changes, []);
-eq(d0.totalChanges, 5 + 53 + plan.availabilityRows.length + 3);
+eq(d0.totalChanges, 5 + 53 + plan.availabilityRows.length + 7);
 const liveEq = { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) };
 liveEq.blob.settings.importedAt = "2020-01-01T00:00:00Z"; // a different import time is not a change
 liveEq.blob.settings.appAdded = true;                        // keys the app added are ignored
@@ -285,7 +332,16 @@ liveEq.blob.extraTopLevel = { keep: 1 };
 const d1 = IMP.planDiff(plan, liveEq);
 eq(d1.totalChanges, 0, "live == plan -> nothing"); eq(d1.changes, []); eq(d1.blocked, []);
 ok(/No changes/.test(d1.text));
-eq(d1.tables.schedule_days.unchanged, 53); eq(d1.tables.availability.unchanged, plan.availabilityRows.length); eq(d1.tables.time_off.unchanged, 3);
+eq(d1.tables.schedule_days.unchanged, 53); eq(d1.tables.availability.unchanged, plan.availabilityRows.length); eq(d1.tables.time_off.unchanged, 7);
+// the expected live diff for the orchestrator (item S): live = tonight's rows before S -> 1 schedule_days update (10/24), 4 time_off inserts, blob update, availability unchanged
+const livePreS = clone(liveEq);
+Object.assign(livePreS.schedule_days.find((d) => d.day === "2026-10-24"), { primary_id: "s6", primary_locked: true, note: "seed: burchett-email-2026-09-17" });
+livePreS.time_off = livePreS.time_off.filter((t) => t.person_id !== BURCHETT);
+livePreS.blob.surgeonRules = clone(plan.blob.surgeonRules); livePreS.blob.surgeonRules.s6.availableWindows[0].end = "2026-10-24";
+const dS = IMP.planDiff(plan, livePreS);
+eq([dS.tables.schedule_days.update, dS.tables.time_off.insert, dS.tables.availability.insert + dS.tables.availability.update + dS.tables.availability.delete, dS.tables.call_schedule_data.update, dS.tables.time_off.delete], [1, 4, 0, 1, 0], "expected live diff: 1 day update, 4 vacation inserts, blob update, availability untouched, no deletes");
+eq(dS.changes, ["10/24 P Sarkar -> OPEN"], "the one day change is 10/24 primary Sarkar -> OPEN");
+eq(dS.tables.time_off.rows, ["insert Burchett 2027-01-09..2027-01-10", "insert Burchett 2027-01-16..2027-01-17", "insert Burchett 2027-02-12..2027-02-14", "insert Burchett 2027-04-09..2027-04-11"]);
 // a changed import day -> update line; an app-edited day -> blocked, never counted as a change
 const liveMod = clone(liveEq);
 liveMod.schedule_days.find((d) => d.day === "2026-10-12").primary_id = PHILIP;
@@ -383,7 +439,7 @@ const eB = edited((fx) => { fx.surgeonRules.s4.timeOff[0].start = "2026-10-16"; 
 const dB = IMP.planDiff(eB.plan, liveEq);
 eq(dB.tables.time_off.insert, 1); eq(dB.tables.time_off.delete, 1);
 ok(dB.tables.time_off.rows.some((l) => /^delete Philip 2026-10-15\.\.2026-10-15 \(seed-owned/.test(l)), "vacation delete rendered");
-ok(/delete from public\.time_off\n where created_by = 'seed'\n   and \(person_id, start_date, end_date\) not in \(\('s3', '2026-11-19'::date, '2026-11-22'::date\)/.test(IMP.importSql(eB.plan)), "guarded set-based delete on time_off");
+ok(/delete from public\.time_off\n where created_by = 'seed'\n   and \(person_id, start_date, end_date\) not in \(\('s2', '2027-01-09'::date, '2027-01-10'::date\), .*\('s3', '2026-11-19'::date, '2026-11-22'::date\)/.test(IMP.importSql(eB.plan)), "guarded set-based delete on time_off (Burchett's rows lead the tuple list)");
 const rB = converges("vacation moved", eB);
 ok(!rB.ctx.per.s4.vacation.has("2026-10-15") && rB.ctx.per.s4.vacation.has("2026-10-16"), "10/15 no longer a vacation day for Philip, 10/16 is");
 // a self-entered vacation (created_by = the surgeon) is never deleted
@@ -414,7 +470,7 @@ eq(IMP.planDiff(plan, liveSetup).tables.availability.delete, 0, "source 'setup' 
 // (g) safety valve: a plan with NO rows for a table never deletes that table's seed-owned rows
 const eG = edited((fx) => { Object.values(fx.surgeonRules).forEach((r) => { delete r.timeOff; }); });
 const dG = IMP.planDiff(eG.plan, liveEq);
-eq(dG.tables.time_off.delete, 0); eq(dG.tables.time_off.kept, 3); eq(dG.kept.length, 3, "3 seed vacations listed as kept");
+eq(dG.tables.time_off.delete, 0); eq(dG.tables.time_off.kept, 7); eq(dG.kept.length, 7, "7 seed vacations listed as kept");
 ok(dG.kept.every((l) => /^time_off .* \[KEPT: plan has no time_off rows/.test(l)), dG.kept.join(" | "));
 eq(dG.totalChanges, 1, "only the blob update counts");
 ok(/-- 5a\. time_off: plan has no rows - seed-owned live rows left alone/.test(IMP.importSql(eG.plan)) && !/delete from public\.time_off/.test(IMP.importSql(eG.plan)), "no time_off delete emitted");
@@ -508,9 +564,10 @@ ok(inv.filter((e) => e.path.indexOf("groupRules.") === 0).every((e) => e.action 
 ok(inv.filter((e) => e.path.indexOf("holidays.") === 0).every((e) => e.action === "drop"), "every holidays entry is a drop");
 eq(inv.filter((e) => e.path.indexOf("holidays.") === 0).length, IMP.impFindKeys(seed.holidays, NOTE_KEY).length, "one drop per holidays note-like key");
 eq(inv.filter((e) => e.path.indexOf("groupRules.") === 0).length, IMP.impFindKeys(seed.groupRules, NOTE_KEY).length, "one drop per groupRules note-like key");
-ok(inv.every((e) => (e.action === "category" && CATS.indexOf(e.to) >= 0) || (e.action === "drop" && e.to === null)), "inventory actions are category/drop only");
+ok(inv.every((e) => (e.action === "category" && CATS.indexOf(e.to) >= 0) || (e.action === "drop" && e.to === null) || (e.action === "public" && e.to === "time_off") || (e.action === "private-name" && e.to === null)), "inventory actions are category/drop, plus 'public' / 'private-name' for time_off notes (item S)");
+ok(!inv.some((e) => e.action === "private-name"), "the real seed has no public note naming a surgeon");
 eq(inv.map((e) => e.path), inv.map((e) => e.path).slice().sort(), "inventory sorted by path");
-eq(plan.noteScrub.counts, { category: inv.filter((e) => e.action === "category").length, drop: inv.filter((e) => e.action === "drop").length }, "counts agree with the inventory");
+eq(plan.noteScrub.counts, { category: inv.filter((e) => e.action === "category").length, drop: inv.filter((e) => e.action === "drop").length, timeOffPublic: inv.filter((e) => e.action === "public").length }, "counts agree with the inventory");
 // (6) refusals: unclassifiable surgeon note -> NOTE_UNCLASSIFIED; denylist word in a non-note string -> NOTE_DENYLIST
 function refusesWith(prefix, mutate, label) {
   const fx = clone(seed);
@@ -562,5 +619,44 @@ ok(rawSr[ACTON].holidayRules.neverThanksgivingNote === "[removed]", "impScrubRul
 eq(IMP.impScrubRuleNotes({}, {}), { surgeonRules: {}, groupRules: {}, holidays: {}, inventory: [] });
 eq(IMP.impScrubRuleNotes({}, {}, { units: { 2026: [{ name: "x", days: ["2026-12-25"], note: "doc" }] } }).holidays, { units: { 2026: [{ name: "x", days: ["2026-12-25"] }] } }, "holidays: every note-like key dropped");
 eq(IMP.impScrubRuleNotes(undefined, undefined).inventory, []);
+
+/* ------------------------------------ public time_off notes (item S, 9/22 evening) */
+step("public time_off notes: written only with public: true AND past the denylist / roster-name gate; privacy default unchanged");
+// a public note that trips the item-F denylist REFUSES the import (path + word, never the text)
+const mTo = refusesWith("NOTE_DENYLIST: surgeonRules.s2.timeOff[0].note (\"family\")", (fx) => { fx.surgeonRules.s2.timeOff[0].note = "family weekend"; }, "public note with a denylist word");
+ok(mTo.indexOf("weekend") < 0, "the refusal names the path and the word, never the note text");
+refusesWith("NOTE_DENYLIST: surgeonRules.s2.timeOff[3].note (\"Hosting\")", (fx) => { fx.surgeonRules.s2.timeOff[3].note = "Hosting visitors"; }, "public note, denylist is case-insensitive");
+// a public note naming a roster last name is neither written nor refused: it falls back to the private default
+// (design decision d: the denylist gate refuses, a surname falls back) and the dry run lists the path as 'private-name', never the text
+const fxName = clone(seed); fxName.surgeonRules.s2.timeOff[1].note = "Burchett away"; fxName.surgeonRules.s2.timeOff[2].note = "covering for sarkar";
+const planName = IMP.importPlan(fxName, { now: NOW });
+eq(planName.timeOffRows.filter((t) => t.person_id === BURCHETT).map((t) => t.note), ["unavailable (stated 9/22)", "vacation (seed)", "vacation (seed)", "unavailable (stated 9/22)"], "a public note naming a roster last name (any case) falls back to 'vacation (seed)'");
+eq(planName.noteScrub.counts.timeOffPublic, 2, "a surname fallback is not counted as public");
+eq(planName.noteScrub.inventory.filter((e) => e.action === "private-name").map((e) => [e.path, e.to, "from" in e]), [["surgeonRules.s2.timeOff[1].note", null, false], ["surgeonRules.s2.timeOff[2].note", null, false]], "inventory: 'private-name' entries carry the path only, never the note");
+ok(JSON.stringify(planName).indexOf("Burchett away") < 0 && JSON.stringify(planName).indexOf("covering for") < 0 && IMP.importSql(planName).indexOf("covering for") < 0, "the surname note reaches neither the plan nor the SQL");
+// a denylist word wins over the surname fallback: the import is refused, not defaulted
+refusesWith("NOTE_DENYLIST: surgeonRules.s2.timeOff[0].note (\"family\")", (fx) => { fx.surgeonRules.s2.timeOff[0].note = "family time with Acton"; }, "denylist word beside a surname still refuses");
+// a public note with an email / phone is caught by the existing contact guard (input side)
+refuses((fx) => { fx.surgeonRules.s2.timeOff[0].note = "reach me at someone@example.test"; }, "email in a public time_off note");
+refuses((fx) => { fx.surgeonRules.s2.timeOff[0].note = "cell 555-555-0100"; }, "phone in a public time_off note");
+// privacy default: without public: true the note is replaced, denylist word or not (never refused, never written)
+const fxPriv = clone(seed); fxPriv.surgeonRules.s3.timeOff[0].note = "family weekend"; fxPriv.surgeonRules.s2.timeOff[0].public = false; fxPriv.surgeonRules.s2.timeOff[1].public = "yes";
+const planPriv = IMP.importPlan(fxPriv, { now: NOW });
+eq(planPriv.timeOffRows.filter((t) => t.person_id === ACTON)[0].note, "vacation (seed)", "a private note with a denylist word is replaced, not refused");
+eq(planPriv.timeOffRows.filter((t) => t.person_id === BURCHETT).map((t) => t.note), ["vacation (seed)", "vacation (seed)", "unavailable (stated 9/22)", "unavailable (stated 9/22)"], "public: false and a non-boolean public read as private; only boolean true passes the note through");
+eq(planPriv.noteScrub.counts.timeOffPublic, 2, "the public count follows the flags");
+// public: true without a note -> the default wording; public: true with an operational note that passes -> written
+const fxNoNote = clone(seed); delete fxNoNote.surgeonRules.s2.timeOff[0].note; fxNoNote.surgeonRules.s2.timeOff[1].note = "out of town (stated 9/22)";
+const planNoNote = IMP.importPlan(fxNoNote, { now: NOW });
+eq(planNoNote.timeOffRows.filter((t) => t.person_id === BURCHETT).slice(0, 2).map((t) => t.note), ["vacation (seed)", "out of town (stated 9/22)"], "public without a note -> 'vacation (seed)'; a passing operational note is written as is");
+ok(planNoNote.timeOffRows.every((t) => t.created_by === "seed"), "created_by stays 'seed' whatever the note");
+// the blob copy never sees the flag, the note or the source, whichever way the seed is flagged
+eq(planPriv.blob.surgeonRules[BURCHETT].timeOff.map((t) => Object.keys(t).sort().join(",")), ["end,start", "end,start", "end,start", "end,start"], "blob timeOff keys are start/end only");
+// the seed adapter (tests' ctx) sees the same rows, so a bad public note fails the tests' ctx too
+let adapterMsg = null;
+try { SA.seedToTimeOffRows(clone(fxPriv) && Object.assign(clone(seed), { surgeonRules: Object.assign(clone(seed.surgeonRules), { s2: Object.assign(clone(seed.surgeonRules.s2), { timeOff: [{ start: "2027-01-09", end: "2027-01-10", note: "family", public: true }] }) }) })); } catch (e) { adapterMsg = e.message; }
+ok(adapterMsg && adapterMsg.indexOf("NOTE_DENYLIST: surgeonRules.s2.timeOff[0].note (\"family\")") === 0, "seed adapter path refuses the same way: " + (adapterMsg || "no error").slice(0, 80));
+// the tiny seed's private note still scrubs (regression of the earlier pin)
+eq(tp.timeOffRows[0].note, "vacation (seed)");
 
 console.log("ok " + n + " assertions");

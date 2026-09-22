@@ -153,7 +153,8 @@ function printStats(plan) {
 function printNoteScrub(plan) {
   const ns = plan.noteScrub || { inventory: [], counts: { category: 0, drop: 0 } };
   console.log("\nrule notes scrubbed before the blob (importer.js, guide 3.1): " + ns.counts.category + " mapped to a category, " +
-    ns.counts.drop + " dropped (engine/seed documentation, every groupRules and holidays note); the seed keeps its wording");
+    ns.counts.drop + " dropped (engine/seed documentation, every groupRules and holidays note); the seed keeps its private wording; " +
+    (ns.counts.timeOffPublic || 0) + " public vacation note(s) written to time_off as stated (public: true)");
   ns.inventory.forEach((e) => console.log("  " + e.path + " -> " + e.action + (e.action === "category" ? " -> " + e.to : "")));
 }
 

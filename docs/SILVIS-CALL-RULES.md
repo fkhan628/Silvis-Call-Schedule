@@ -212,8 +212,9 @@ flagged `externalCover`; 16 open backup days). Import them as **locked** slots. 
 - 10/12 primary → Fierce, **single day only** (Burchett 9/18); the full-week derivation rule applies from November.
 - 10/23 primary → Acton (Burchett 9/18).
 - 10/20, 10/22, 10/24 primary → Sarkar; 10/25 primary → Burchett (Burchett's 9/17 October plan). ⟶ 9/22 evening: **10/24 taken back off Sarkar** (two days a week, October included) — open primary.
+- Seed keys touched 9/22 evening (Prompt 12 S): `existingAssignments` 2026-10-24 -> `primary: null`, `source: "faraz-2026-09-22-sarkar-two-days"`, `note` (locked-open like 10/15); `pendingDeltas` gains the 10/24 row (`surgeon: null`, `replaces: "s6"`, `status: "applied"`); `surgeonRules.s6.availableWindows` = the four Mon-Fri ranges + `availableWindowsNote`; `surgeonRules.s2.timeOff` = the four 2027 weekends (`public: true`, note `"unavailable (stated 9/22)"`, `source: "burchett-email-2026-09-22"`) + one `notes` line; `_meta.revisions`, `answeredQuestions`, `openQuestions` 6-7. The importer writes a `public: true` vacation note to `time_off` only when it passes the item-F denylist and names no roster surname: a denylist word refuses the import, a surname falls back to `vacation (seed)` (dry run: `-> private-name`); a private note is always `vacation (seed)`.
 
-**The only open primary day in the import is 10/15 (Thu)** — Philip cannot (hard), Burchett and Acton did not offer it,
+**The open primary days in the import are 10/15 (Thu) and, since 9/22 evening, Sat 10/24 (see below).** 10/15: Philip cannot (hard), Burchett and Acton did not offer it,
 Khan never takes Thursdays, and Fierce is in Clinton on Thursdays. It needs a human decision. Nothing is scheduled from
 11/2 onward.
 
@@ -259,12 +260,12 @@ the October locks too: Sarkar keeps 10/20 and 10/22 and comes off Sat 10/24**, w
 
 **Still open:**
 
-1. **10/15 (Thu)** — the one open primary day in the locked October import; nobody's rules allow it. The group will discuss. (Imported unlocked; the generator lists it as uncovered with reasons.)
+1. **10/15 (Thu)** — one of the two open primary days in the locked October import (the other is Sat 10/24, item 6); nobody's rules allow it. The group will discuss. (Imported unlocked; the generator lists it as uncovered with reasons.)
 2. **Sarkar's home email** — none on record (goes into the private `silvis-contacts.md`, not here).
 3. **Holiday unit days for 2027 and the minor holidays** — should a Monday holiday unit include the preceding weekend? (Christmas and New Year's stay Eve + Day.)
 4. ~~Khan as backup on ordinary Tue/Thu~~ — answered 9/22: backup is open to everyone.
 5. **Philip's monthly cap** — none stated; the group default (8 primary) applies from November although his own October was 15 days.
 6. **Sat 10/24 primary** — open since Sarkar dropped to two days (Faraz 9/22 evening); who covers it (see §7 candidates).
 7. **Sarkar's day count after her first window** — soft target 2 for now; tighten or raise `daysPerWindowWeek` in Setup → Rules once she has been here.
-6. **Thanksgiving 11/26–29 for Khan** — recorded by Claude Code as confirmed in an evening chat; the daytime record said pending. Re-confirm before publishing (Prompt 12 B).
-7. **Backup opt-outs** — the 9/22 rule says anyone may opt out of backup explicitly; nobody has. Ask the group once.
+8. **Thanksgiving 11/26–29 for Khan** — recorded by Claude Code as confirmed in an evening chat; the daytime record said pending. Re-confirm before publishing (Prompt 12 B).
+9. **Backup opt-outs** — the 9/22 rule says anyone may opt out of backup explicitly; nobody has. Ask the group once.

@@ -19,7 +19,8 @@
     ],
     "revisions": [
       "2026-09-22 (Claude Code, from Faraz's 9/21 evening decisions): Thanksgiving 2026 = Khan primary Thu 11/26 - Sun 11/29 as one unit (locked rows added to existingAssignments); day rules do not apply on holiday-unit days and anyone may take a holiday unless opted out; Fierce East weeks stated by Faraz (primary 11/9, backup 10/12 + 12/7); East forecast while Davenport is unpublished; plus the implemented defaults listed under groupRules (countBackupInConsecutive, weights, availabilityPrecedence, holidays, eastFeed). See docs/ORIENTATION-2026-09-21.md section 3.",
-      "2026-09-22 (Claude Code, Prompt 12 item I, from Faraz's 9/22 answers): backup is open to everyone - hardNeverWeekdaysRoles [\"primary\"] for Khan and Sarkar (also the engine default when the key is absent), Fierce weekdayPattern backup:true on every weekday, surgeonRules.<id>.backupOptOut (all false), groupRules.backupPolicy; rules.js applies recurringUnavailable, weekdays.allowed, governed months, the recurring whitelist, availableWeeks and the Aledo week to primary only, and a recurringAvoid entry weighs low for backup."
+      "2026-09-22 (Claude Code, Prompt 12 item I, from Faraz's 9/22 answers): backup is open to everyone - hardNeverWeekdaysRoles [\"primary\"] for Khan and Sarkar (also the engine default when the key is absent), Fierce weekdayPattern backup:true on every weekday, surgeonRules.<id>.backupOptOut (all false), groupRules.backupPolicy; rules.js applies recurringUnavailable, weekdays.allowed, governed months, the recurring whitelist, availableWeeks and the Aledo week to primary only, and a recurringAvoid entry weighs low for backup.",
+      "2026-09-22 evening (Claude Code, Prompt 12 item S, from the emails Faraz forwarded 9/22 evening): Sarkar's windows are Mon-Fri per the clinic manager (s6.availableWindows Oct 19-23, Nov 16-20, Dec 14-18, Jan 11-15 + availableWindowsNote; the Saturdays 10/24, 11/21, 1/16 are gone); Faraz applied her two-days figure to the October locks, so existingAssignments 2026-10-24 primary s6 -> null (locked-open like 10/15, source faraz-2026-09-22-sarkar-two-days, note) and pendingDeltas logs it as applied; Burchett's 2027 weekends he cannot work (1/9-10, 1/16-17, 2/12-14, 4/9-11; Burchett email 9/22) are s2.timeOff vacations with public: true notes 'unavailable (stated 9/22)' - the importer writes a public note to time_off only when it passes the item-F denylist and names no roster surname, otherwise 'vacation (seed)'; source stays in the seed. daysPerWindowWeek and the rest of s6 are item N's."
     ]
   },
   "site": {
@@ -222,7 +223,7 @@
     "backupPolicy": {
       "openToEveryone": true,
       "source": "Faraz 9/22",
-      "note": "Backup is open to everyone, on-site or off-site, every day: outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed months and the weeks whitelist restrict PRIMARY only. Still blocking backup: vacations, holiday opt-outs, explicit unavailable / no_backup rows, East-derived weeks, the other role the same day, backup caps, Sarkar's windows and an explicit surgeonRules.<id>.backupOptOut (Setup -> Rules: 'Does not take backup'; nobody has opted out - rules doc section 8 item 7). Soft avoids (recurringAvoid) weigh low for backup and medium for primary. rules.js READS openToEveryone: false restores the pre-9/22 reading (the day rules, the dated whitelists, the Aledo week and the hardNeverWeekdays default govern both roles again); an explicit hardNeverWeekdaysRoles list and backupOptOut are honoured either way, and an absent key means open. Still counting backup until their own items land: monthly caps (item K) and max-consecutive when countBackupInConsecutive is true. Sarkar's window-week minimum bonus is a primary soft: backup inside a window is allowed but never targeted."
+      "note": "Backup is open to everyone, on-site or off-site, every day: outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed months and the weeks whitelist restrict PRIMARY only. Still blocking backup: vacations, holiday opt-outs, explicit unavailable / no_backup rows, East-derived weeks, the other role the same day, backup caps, Sarkar's windows and an explicit surgeonRules.<id>.backupOptOut (Setup -> Rules: 'Does not take backup'; nobody has opted out - rules doc section 8 item 9). Soft avoids (recurringAvoid) weigh low for backup and medium for primary. rules.js READS openToEveryone: false restores the pre-9/22 reading (the day rules, the dated whitelists, the Aledo week and the hardNeverWeekdays default govern both roles again); an explicit hardNeverWeekdaysRoles list and backupOptOut are honoured either way, and an absent key means open. Still counting backup until their own items land: monthly caps (item K) and max-consecutive when countBackupInConsecutive is true. Sarkar's window-week minimum bonus is a primary soft: backup inside a window is allowed but never targeted."
     },
     "weights": {
       "low": 1,
@@ -437,13 +438,44 @@
       "notes": [
         "In DeWitt and/or Jackson County most days",
         "Total primary+backup per month \u2264 7\u20138; more than 2 consecutive 24h periods 'no longer an option'",
-        "9/22 (Faraz, Prompt 12 K): the 7\u20138 is read as PRIMARY days per month (monthlyCap.primary 8 hard, preferred 7 soft); backup days never count toward it"
+        "9/22 (Faraz, Prompt 12 K): the 7\u20138 is read as PRIMARY days per month (monthlyCap.primary 8 hard, preferred 7 soft); backup days never count toward it",
+        "9/22 evening: cannot work the 2027 weekends 1/9-10, 1/16-17, 2/12-14, 4/9-11 - entered as vacations (both roles; the day before blocks primary)"
       ],
       "explicitListMonths": [
         "2026-10",
         "2026-12"
       ],
-      "explicitAvailableNote": "10/25 added 2026-09-22: it is in his own October plan (locked primary) but was missing from the list."
+      "explicitAvailableNote": "10/25 added 2026-09-22: it is in his own October plan (locked primary) but was missing from the list.",
+      "timeOff": [
+        {
+          "start": "2027-01-09",
+          "end": "2027-01-10",
+          "note": "unavailable (stated 9/22)",
+          "public": true,
+          "source": "burchett-email-2026-09-22"
+        },
+        {
+          "start": "2027-01-16",
+          "end": "2027-01-17",
+          "note": "unavailable (stated 9/22)",
+          "public": true,
+          "source": "burchett-email-2026-09-22"
+        },
+        {
+          "start": "2027-02-12",
+          "end": "2027-02-14",
+          "note": "unavailable (stated 9/22)",
+          "public": true,
+          "source": "burchett-email-2026-09-22"
+        },
+        {
+          "start": "2027-04-09",
+          "end": "2027-04-11",
+          "note": "unavailable (stated 9/22)",
+          "public": true,
+          "source": "burchett-email-2026-09-22"
+        }
+      ]
     },
     "s3": {
       "name": "Acton",
@@ -755,11 +787,11 @@
       "availableWindows": [
         {
           "start": "2026-10-19",
-          "end": "2026-10-24"
+          "end": "2026-10-23"
         },
         {
           "start": "2026-11-16",
-          "end": "2026-11-21"
+          "end": "2026-11-20"
         },
         {
           "start": "2026-12-14",
@@ -767,9 +799,10 @@
         },
         {
           "start": "2027-01-11",
-          "end": "2027-01-16"
+          "end": "2027-01-15"
         }
       ],
+      "availableWindowsNote": "the clinic manager 9/22 evening: the windows run Mon-Fri (Oct 19-23, Nov 16-20, Dec 14-18, Jan 11-15); the earlier lists via administration / Burchett 9/17 carried Saturdays (Oct 24, Nov 21, Jan 16). Supersedes the Mon-Sat wording in notes[0]; 10/24 came off her in existingAssignments the same evening.",
       "daysPerWindowWeek": {
         "min": 3,
         "max": 4,
@@ -1218,10 +1251,11 @@
     },
     {
       "date": "2026-10-24",
-      "primary": "s6",
+      "primary": null,
       "backup": null,
-      "source": "burchett-email-2026-09-17",
-      "locked": true
+      "source": "faraz-2026-09-22-sarkar-two-days",
+      "locked": true,
+      "note": "open \u2014 Sarkar at two days per week from 9/22"
     },
     {
       "date": "2026-10-25",
@@ -1362,6 +1396,15 @@
       "replaces": null,
       "source": "burchett-email-2026-09-17",
       "status": "applied"
+    },
+    {
+      "date": "2026-10-24",
+      "role": "primary",
+      "surgeon": null,
+      "replaces": "s6",
+      "source": "faraz-2026-09-22-sarkar-two-days",
+      "status": "applied",
+      "note": "the clinic manager's 9/22 email: Sarkar at two days per week for Oct 19-23; Faraz 9/22 evening: October locks included, so 10/24 comes off Sarkar (open primary, locked-open like 10/15)"
     }
   ],
   "answeredQuestions": [
@@ -1381,13 +1424,19 @@
     "East feed: the Davenport schedule for the next period is not out until the end of 2026; Silvis includes Khan meanwhile and avoids his most likely East days via a forecast from repeated Davenport generator runs (Faraz 9/21 evening).",
     "Fierce East weeks: East primary week of 11/9; East backup weeks of 10/12 and 12/7 (Faraz 9/21 evening).",
     "Porting stance: not a verbatim translation - use the bones and safety features and adjust whatever will not work for Silvis (Faraz 9/21 evening).",
-    "Backup (Faraz 9/22): open to everyone every day - outreach / OR / Clinton / Aledo days restrict primary only - unless a surgeon explicitly opts out (surgeonRules.<id>.backupOptOut; nobody has)."
+    "Backup (Faraz 9/22): open to everyone every day - outreach / OR / Clinton / Aledo days restrict primary only - unless a surgeon explicitly opts out (surgeonRules.<id>.backupOptOut; nobody has).",
+    "Sarkar windows (the clinic manager, 9/22 evening, after meeting her): Oct 19-23, Nov 16-20, Dec 14-18, Jan 11-15 - Mon-Fri (s6.availableWindows); the Saturdays in the earlier administration / Burchett 9/17 lists are no longer stated.",
+    "Sarkar day count (the clinic manager 9/22 evening): starts with 2 primary days per window week, open to more after she sees how call goes - supersedes the 9/22 daytime '3-4'. Faraz 9/22 evening: none of her rules are hard and fast yet (she will adjust once she is here) - the 2 is a SOFT target, only her windows are hard (item N owns daysPerWindowWeek).",
+    "October locks (Faraz 9/22 evening): the two-days figure applies to October too - Sarkar keeps 10/20 and 10/22 and comes off Sat 10/24, which is now the second open primary of the import (locked-open like 10/15; existingAssignments source faraz-2026-09-22-sarkar-two-days; pendingDeltas applied).",
+    "Burchett 2027 weekends (Burchett email 9/22 evening; Faraz: 'can essentially be considered vacations'): Sat 1/9-Sun 1/10, Sat 1/16-Sun 1/17, Fri 2/12-Sun 2/14, Fri 4/9-Sun 4/11 - s2.timeOff (source burchett-email-2026-09-22, public note 'unavailable (stated 9/22)'); both roles blocked, the day before blocks primary, like any vacation. Outside the milestone range."
   ],
   "openQuestions": [
-    "1. 10/15 (Thu) \u2014 the one open primary day in the locked October import; nobody's rules allow it. To be discussed by the group. (Imported unlocked; shows as uncovered with reasons.)",
+    "1. 10/15 (Thu) \u2014 one of the two open primary days in the locked October import (the other is Sat 10/24, item 6); nobody's rules allow it. To be discussed by the group. (Imported unlocked; shows as uncovered with reasons.)",
     "2. Sarkar's home email address (none on record) \u2014 goes in the private contacts file, not here.",
     "3. Holiday unit days for 2027 and the minor holidays: should a Monday holiday unit include the preceding weekend? (Thanksgiving 2026 is settled: Thu\u2013Sun with Khan. Christmas and New Year's stay Eve+Day.)",
-    "4. ~~Khan as BACKUP on ordinary Tuesdays/Thursdays~~ - answered 9/22: backup is open to everyone (surgeonRules.s1.hardNeverWeekdaysRoles = [\"primary\"]). Open instead: does anyone want an explicit backup opt-out (surgeonRules.<id>.backupOptOut, Setup -> Rules 'Does not take backup')? Nobody so far - ask the group once (rules doc section 8 item 7).",
-    "5. Philip's monthly cap: none stated; the group default (8 total) applies from November. His own October was 15 days."
+    "4. ~~Khan as BACKUP on ordinary Tuesdays/Thursdays~~ - answered 9/22: backup is open to everyone (surgeonRules.s1.hardNeverWeekdaysRoles = [\"primary\"]). Open instead: does anyone want an explicit backup opt-out (surgeonRules.<id>.backupOptOut, Setup -> Rules 'Does not take backup')? Nobody so far - ask the group once (rules doc section 8 item 9).",
+    "5. Philip's monthly cap: none stated; the group default (8 total) applies from November. His own October was 15 days.",
+    "6. Sat 10/24 primary - open since Sarkar dropped to two days (9/22 evening); who covers it (rules doc section 7 candidates: Acton, Khan if East is clear, Philip, or an outside surgeon; Burchett said he cannot). Locked-open like 10/15; listed with reasons.",
+    "7. Sarkar's day count after her first window (soft target 2) - tighten or raise daysPerWindowWeek in Setup -> Rules once she has been here (item N)."
   ]
 }

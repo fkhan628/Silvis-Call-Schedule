@@ -37,6 +37,21 @@
 // reaches the blob either way; (2) the denylist is a word list, not a
 // classifier: a non-note prose key is only checked for those words.
 //
+// Public time_off notes (Prompt 12 S, 9/22 evening): a time_off row's note is
+// 'vacation (seed)' by default - the seed's vacation wording is private and never
+// written. A seed entry may opt a note in with public: true (boolean); it is then
+// written as is ONLY when it passes the item-F denylist AND names no roster last
+// name. A public note that trips the denylist REFUSES the import
+// (NOTE_DENYLIST: surgeonRules.<id>.timeOff[i].note ("<word>")), never silently
+// defaulted, because the author asked for it to be public; a public note that
+// names a roster surgeon (last names read from seed.roster, never a list in
+// code) falls back to the private default and the dry run lists the path as
+// '<path> -> private-name'. public: true without a note, public: false or a
+// non-boolean public read as private. created_by stays 'seed'; the entry's
+// source (provenance) stays in the seed; the blob's copy of timeOff stays
+// { start, end }. Kept public notes appear in the dry-run inventory as
+// '<path> -> public' and in plan.noteScrub.counts.timeOffPublic.
+//
 // Ownership + stale rows: the seed OWNS availability rows with source 'seed',
 // time_off rows with created_by 'seed' and schedule_days rows still
 // source 'import' / updated_by 'seed'. A live row of those kinds that is no
@@ -61,7 +76,9 @@
 //   surgeonRules[id].availableWeeks / availableWindows -> NO rows (rules.js reads them
 //                                            from the blob; a dated available row lifts weekday
 //                                            patterns and would open Sarkar's hard-never Friday)
-//   surgeonRules[id].timeOff              -> time_off (note 'vacation (seed)', never the seed wording)
+//   surgeonRules[id].timeOff              -> time_off (note 'vacation (seed)'; the seed wording only with
+//                                            public: true and past the denylist / roster-name gate; source
+//                                            stays in the seed)
 //   existingAssignments[]                 -> schedule_days (source 'import', provenance in note,
 //                                            null slot never locked)
 //   pendingDeltas[]                       -> informational only (already applied in existingAssignments)
@@ -429,14 +446,50 @@ function impSeedSurgeonRules(seed) {
   return out;
 }
 
-// surgeonRules[].timeOff -> time_off rows (vacations only; scrubbed note).
-function impSeedTimeOffRows(seed) {
+var IMP_TIME_OFF_DEFAULT_NOTE = "vacation (seed)";
+
+// Roster last names as a word-boundary, case-insensitive matcher (null when the
+// seed has no names). Built from the seed, never from a list in code.
+function impRosterNameRegex(seed) {
+  var names = ((seed && seed.roster) || []).map(function (r) { return r && r.name; }).filter(function (s) { return typeof s === "string" && s.length; })
+    .map(function (s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); });
+  return names.length ? new RegExp("\\b(" + names.join("|") + ")\\b", "i") : null;
+}
+
+// The note a time_off row gets (header: public time_off notes). Throws
+// NOTE_DENYLIST (path + matched word, never the text) when a public note trips
+// the denylist; a public note that names a roster surgeon falls back to the
+// private default instead. `inv`, when given, receives one
+// { path, action: 'public', from, to: 'time_off' } entry per kept public note
+// and one { path, action: 'private-name', to: null } entry (path only, never
+// the text) per surname fallback.
+function impTimeOffNote(t, path, nameRe, inv) {
+  if (!(t && t.public === true && typeof t.note === "string" && t.note.length)) return IMP_TIME_OFF_DEFAULT_NOTE;
+  var m = t.note.match(IMP_NOTE_DENYLIST);
+  if (m) {
+    throw new Error("NOTE_DENYLIST: " + path + " (\"" + m[1] + "\") - a public: true vacation note would carry a personal word into the anon-readable time_off table (guide 3.1); reword it or drop public and re-run");
+  }
+  if (nameRe && nameRe.test(t.note)) {
+    if (inv) inv.push({ path: path, action: "private-name", to: null });
+    return IMP_TIME_OFF_DEFAULT_NOTE;
+  }
+  if (inv) inv.push({ path: path, action: "public", from: t.note, to: "time_off" });
+  return t.note;
+}
+
+// surgeonRules[].timeOff -> time_off rows (vacations only; note 'vacation (seed)'
+// unless the entry says public: true and the note passes the gate).
+// opts.inventory: array that receives the kept public notes (importPlan).
+function impSeedTimeOffRows(seed, opts) {
+  opts = opts || {};
   var rows = [];
   var sr = (seed && seed.surgeonRules) || {};
+  var nameRe = impRosterNameRegex(seed);
   Object.keys(sr).forEach(function (id) {
-    ((sr[id] && sr[id].timeOff) || []).forEach(function (t) {
+    ((sr[id] && sr[id].timeOff) || []).forEach(function (t, i) {
       impDayNum(t.start); if (t.end) impDayNum(t.end);
-      rows.push({ person_id: id, start_date: t.start, end_date: t.end || t.start, note: "vacation (seed)", created_by: "seed" });
+      var note = impTimeOffNote(t, "surgeonRules." + id + ".timeOff[" + i + "].note", nameRe, opts.inventory || null);
+      rows.push({ person_id: id, start_date: t.start, end_date: t.end || t.start, note: note, created_by: "seed" });
     });
   });
   return rows;
@@ -577,25 +630,34 @@ function importPlan(seed, options) {
   impRefuseNoteDenylist(blob);                                        // throws NOTE_DENYLIST
 
   var infoDeltas = ((seed.pendingDeltas) || []).map(function (d) {
-    var who = impRosterName(seed, d.surgeon);
+    var who = d.surgeon ? impRosterName(seed, d.surgeon) : "open";      // surgeon null = the slot was opened (10/24, 9/22 evening)
     var was = d.replaces ? impRosterName(seed, d.replaces) : "open";
     return impShortDay(d.date) + " " + (d.role === "backup" ? "B" : "P") + " " + was + " -> " + who +
       " (" + (d.status || "applied") + "; " + (d.source || "seed") + ") - already applied inside existingAssignments, nothing to write";
   });
 
+  // time_off rows; kept public notes join the scrub inventory as 'public' entries
+  // (path -> public in the dry run) and surname fallbacks as 'private-name' - the
+  // scrub itself never sees timeOff notes.
+  var publicInv = [];
+  var timeOffRows = impSeedTimeOffRows(seed, { inventory: publicInv });     // throws NOTE_DENYLIST
+  var inventory = scrub.inventory.concat(publicInv);
+  inventory.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; });
+
   var plan = {
     blob: blob,
     availabilityRows: impSeedAvailabilityRows(seed),
-    timeOffRows: impSeedTimeOffRows(seed),
+    timeOffRows: timeOffRows,
     scheduleDayRows: impSeedScheduleRows(seed),
     infoDeltas: infoDeltas,
     refusals: [],
     generatedAt: now,
     noteScrub: {
-      inventory: scrub.inventory,
+      inventory: inventory,
       counts: {
         category: scrub.inventory.filter(function (e) { return e.action === "category"; }).length,
-        drop: scrub.inventory.filter(function (e) { return e.action === "drop"; }).length
+        drop: scrub.inventory.filter(function (e) { return e.action === "drop"; }).length,
+        timeOffPublic: publicInv.filter(function (e) { return e.action === "public"; }).length   // surname fallbacks are inventoried, not counted as public
       }
     }
   };
@@ -606,15 +668,23 @@ function importPlan(seed, options) {
 
 /* --------------------------------------------------------------- SQL */
 
+// Text literal. ASCII strings are plain '...'; a string with any non-ASCII
+// character (an em dash in a day note) becomes an E'...' literal with \uXXXX
+// escapes (backslashes doubled) so the generated file stays 7-bit clean.
 function impSqlStr(v) {
   if (v === null || v === undefined) return "null";
-  return "'" + String(v).replace(/'/g, "''") + "'";
+  var s = String(v);
+  if (!IMP_NON_ASCII_ANY.test(s)) return "'" + s.replace(/'/g, "''") + "'";   // non-global sibling: no lastIndex state
+  return "E'" + s.replace(/\\/g, "\\\\").replace(/'/g, "''").replace(IMP_NON_ASCII, function (c) {
+    return "\\u" + ("0000" + c.charCodeAt(0).toString(16)).slice(-4);
+  }) + "'";
 }
 
 function impSqlBool(v) { return v ? "true" : "false"; }
 
 // JSON -> quoted jsonb literal; non-ASCII escaped so the file stays 7-bit clean.
 var IMP_NON_ASCII = new RegExp("[" + String.fromCharCode(128) + "-" + String.fromCharCode(65535) + "]", "g"); // built from codes so this file stays 7-bit
+var IMP_NON_ASCII_ANY = new RegExp(IMP_NON_ASCII.source);   // for .test(): a global regex keeps lastIndex between calls
 
 function impSqlJson(v) {
   var s = JSON.stringify(v).replace(IMP_NON_ASCII, function (c) {
