@@ -51,9 +51,11 @@ their own heading. They must be written in by hand for each day they agree to co
 **Atwell is not in the roster** (Faraz, 9/21). His legacy primary week 9/28–10/4 is imported as `externalCover: "Atwell"`
 so those days render as covered rather than OPEN and count toward nobody's tallies. If that changes, Faraz will say so.
 
-Other people: **the ER-panel author, RN, TNS** (Trauma & Pediatric Quality Coordinator, Silvis) maintains the official ER Call
-Panels Word document — she gets a **read-only (viewer) account** plus the panel export, and is the one office contact
-entered in Setup. **administration** (administration) relays Sarkar's availability; no account. **the COO** (COO)
+Other people: **the ER-panel author, RN, TNS** (Trauma & Pediatric Quality Coordinator, Silvis) has maintained the ER Call
+Panels Word document until now. ⟶ **9/22 evening (Faraz): once the app goes live, the app is the source of truth and
+the ER-panel author's document is retired** — she gets a **read-only (viewer) account**, the weekly office digest, and the ER Call
+Panels export whenever a paper copy is wanted; she is the one office contact entered in Setup. Nothing is corrected in
+her document from now on; corrections go into the app. **administration** (administration) relays Sarkar's availability; no account. **the COO** (COO)
 decides the Trauma Director role.
 
 ## 3. Per-surgeon rules
@@ -64,6 +66,8 @@ decides the Trauma Director role.
 - **Mondays and Wednesdays are auto-offered as primary** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday as primary** — those are his OR days (hard). ⟶ **9/22: backup on any day is fine, Tue/Thu included.** *(Supersedes the earlier "no Mon/Wed nights" statement and the "never Tue/Thu for both roles" reading.)*
 - East feed: **primary** only on days he is **not on call at East (Davenport)**; **backup is allowed even on East call days**. ⟶ **9/22: cross-reference ALL of his Davenport call** — service weeks (Mon–Sat), weeknights, weekends, backup weeks, holiday coverage — from the Davenport app's `schedule_weeks` rows for the surgeon coded FAK, plus the forecast until Davenport publishes.
 - Max consecutive **3** primary days (hard, real days). ⟶ **9/22 (Prompt 12 A): he is the one surgeon who opted in to count a holiday unit as one day** (`holidayUnitCountsAsOneDay`; his 4-day Thanksgiving unit vs his max 3); any-role soft limit **4** with the long-run penalty beyond it. No monthly target.
+- ⟶ **9/22 evening — standing East rule: on Davenport call every Christmas Eve and Christmas Day.** Never Silvis primary
+  on 12/24–12/25 in any year (the Christmas unit is someone else's); backup allowed as on any East day.
 - **Thanksgiving 2026: Khan takes Thu 11/26 – Sun 11/29 as one unit, primary** (Faraz 9/21 evening; locked in the seed).
 - **East forecast while Davenport is unpublished** (Faraz 9/21 evening): the Davenport schedule for the next period is not out until the end of 2026. Until it is, the East feed carries a forecast built by running the Davenport generator many times over the next period with the live Davenport inputs; days where Khan is on East call in ≥ 50 % of runs are treated as East-busy for Silvis primary (backup allowed), lower probabilities are a soft penalty, and such days show a “forecast” badge. When Davenport publishes, the real feed replaces the forecast and a conflict report lists any Silvis day needing a trade. Faraz can also enter his published Silvis days as Davenport constraints when he generates DSG.
 
@@ -78,7 +82,7 @@ decides the Trauma Director role.
 - December (can take primary or backup): 12/1, 12/5, 12/6, 12/9, 12/12, 12/13, 12/14, 12/19, 12/20, 12/23, 12/25, 12/26, 12/27, 12/28, 12/30, 12/31, 1/1, 1/2, 1/3. "I don't need all these dates but am able to do them."
 - ⟶ **November (Burchett 9/17 "November Silvis Trauma Call days"; the ER-panel author entered them on 9/22): primary Tue 11/3,
   Sat 11/7, Sun 11/8, Wed 11/11, Fri 11/20, Mon 11/23, Wed 11/25; backup Mon 11/2, Wed 11/4, Fri 11/6, Mon 11/9,
-  Sat 11/14, Sun 11/15, Mon 11/16, Wed 11/18.** These match his recurring pattern exactly (1st Tue, 2nd/4th Mon and Wed,
+  Sat 11/14, Sun 11/15, Mon 11/16, Wed 11/18.** ⟶ 9/22 evening: backup 11/9, 11/14, 11/15 and 11/16 go to Fierce instead (his derived week, Faraz's call), and **Khan takes Wed 11/25 primary from Burchett this year** — a one-off for 2026, locked, not a rule and not part of the Thanksgiving unit (which stays Thu 11/26 – Sun 11/29); his other entries stand. These match his recurring pattern exactly (1st Tue, 2nd/4th Mon and Wed,
   weekends) but are narrower than it — a whitelist for November (governed month, both roles) and, since the ER-panel author has
   published them, **locked assignments** (§7). He also offered Thanksgiving Day 11/26 with 11/27–28 off and 11/29 —
   superseded by Khan's Thu–Sun unit. Holidays: "every other day or 2-day blocks."
@@ -171,15 +175,26 @@ over. Instead each holiday is a **unit of one or more days with one primary and 
 whole unit** (Faraz 9/21: "that person will probably stick through for each eve, day"). A holiday unit takes precedence
 over any weekend unit it overlaps; the leftover weekend days form a reduced weekend unit.
 
-Default day membership (Faraz's current guess — **editable per year in Setup**, open question #3):
+⟶ **Confirmed 9/22 evening (Faraz): the minor holidays are July 4, Labor Day and Memorial Day** — the tiers in the
+table below stand as the rule. ⟶ **9/22 evening (Faraz): a minor holiday that falls on a Monday absorbs the weekend
+before it** — the unit is **Sat–Mon** (one primary + one backup through all three days); the Friday stays a standalone
+weekend day (the reduced weekend unit). So Memorial Day 2027 = Sat 5/29 – Mon 5/31 and Labor Day 2027 = Sat 9/4 – Mon 9/6.
+July 4 is its own day when it is not a Monday (2027: Sun 7/4 alone, the holiday unit taking precedence over that
+weekend's unit; 2028: Tue 7/4). Day membership stays **editable per year in Setup**; still to set when 2027 is
+generated: Thanksgiving 2027 Thu-only vs Thu–Sun.
+
+⟶ **9/22 evening — standing East rule: Khan is on Davenport call every Christmas Eve and Christmas Day.** That is
+treated like a published East busy day every year, independent of the feed and the forecast: Khan is never Silvis
+**primary** on 12/24 or 12/25 (so never the Christmas unit's primary); backup on those days follows his normal
+East-day rule (allowed).
 
 | Holiday | Tier | 2026 unit days | Notes |
 |---|---|---|---|
-| Memorial Day | minor | Mon 5/25 (past) | 2027: Mon 5/31 |
-| July 4th | minor | Sat 7/4 (past) | 2027: Sun 7/4 |
-| Labor Day | minor | Mon 9/7 (past) | 2027: Mon 9/6 |
+| Memorial Day | minor | Mon 5/25 (past) | 2027: **Sat 5/29 – Mon 5/31** (Monday absorbs the weekend) |
+| July 4th | minor | Sat 7/4 (past) | 2027: Sun 7/4 (decide whether the unit is the Sunday or Sat–Sun); 2028: Tue 7/4 |
+| Labor Day | minor | Mon 9/7 (past) | 2027: **Sat 9/4 – Mon 9/6** (Monday absorbs the weekend) |
 | Thanksgiving | major | **Thu 11/26 – Sun 11/29 (one unit; Khan primary — Faraz 9/21)** | Acton never (opted out); Philip ≤ 1 major; backup: anyone not opted out |
-| Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; Burchett available 12/25–28 |
+| Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; **Khan never primary (East, every year)**; Burchett available 12/25–28 |
 | New Year's | major | Thu 12/31 + Fri 1/1/2027 | Eve + Day as one unit; Burchett available 12/30–1/3 |
 
 **The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, and Philip's one-major-holiday limit. ⟶ 9/22 (Prompt 12 A): a holiday unit counts as one day for the consecutive limits **only for a surgeon who opted in** (`surgeonRules.<id>.holidayUnitCountsAsOneDay` — Khan); everyone else counts real days. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed.
@@ -279,14 +294,17 @@ is still open in **October**. Two consequences:
    The generator fills the rest of November around them. Both surgeons' November lists also become governed-month
    whitelists, so neither is placed on a November day he did not offer. Open primaries left for the generator after
    the locks: 11/5, 11/9, 11/10, 11/12, 11/13, 11/17, 11/19, 11/21, 11/22, 11/24, 11/30 (11/26–29 is Khan's unit).
-2. **One conflict inside her entries:** Burchett as backup on **11/9, 11/14, 11/15** falls inside Fierce's derived
-   Silvis-backup week (East primary week of 11/9 → Silvis backup 11/9–11/15). Decision needed (§8 item 8). Suggested:
-   keep what the ER-panel author published (Burchett those three days), Fierce backs up 11/10–11/13, and Fierce is told.
+2. **One conflict inside her entries:** Burchett as backup on **11/9, 11/14, 11/15, 11/16** falls inside Fierce's
+   derived Silvis-backup week (East primary week of 11/9). ⟶ **Decided (Faraz 9/22 evening): Fierce takes backup
+   11/9 through 11/16** (Mon–Mon, the derived week plus the Monday). Burchett's published backup on those four days is
+   superseded, and **11/25 primary goes to Khan for 2026** (Faraz's one-off, locked; the Thanksgiving unit itself is still
+   Thu–Sun). His other November entries (primary 11/3, 11/7, 11/8, 11/11, 11/20, 11/23; backup 11/2, 11/4, 11/6, 11/18)
+   stand. (No correction to the ER-panel author's document — it is retired when the app goes live; §2.)
 
 **October per the ER-panel author's document** — open primary: 10/15, 10/20, 10/22, 10/24, 10/25; open backup: 10/15, 10/21,
 10/23, 10/24, 10/25, 10/30, 10/31, 11/1. So the ER-panel author does **not** yet have Sarkar on 10/20 and 10/22 (Burchett's 9/17
-plan, now consistent with the clinic manager's two-days statement) nor Burchett on 10/25 (his own plan). Faraz to send her
-those three, confirm 10/25 with Burchett, and tell her 10/24 is open. The eight open October backups are fillable by
+plan, now consistent with the clinic manager's two-days statement) nor Burchett on 10/25 (his own plan). ⟶ Nothing goes back into her document: the app carries 10/20, 10/22 (Sarkar),
+10/25 (Burchett, to confirm) and the open 10/15 and 10/24, and the app is the source of truth from go-live. The eight open October backups are fillable by
 anyone under the 9/22 backup rule: run the generator over 10/15 – 11/1 in **fill-open-only** mode (locks untouched)
 before publishing, or assign them by hand.
 
@@ -324,13 +342,13 @@ the October locks too: Sarkar keeps 10/20 and 10/22 and comes off Sat 10/24**, w
 
 1. **10/15 (Thu)** — one of the two open primary days in the locked October import (the other is Sat 10/24, item 6); nobody's rules allow it. The group will discuss. (Imported unlocked; the generator lists it as uncovered with reasons.)
 2. **Sarkar's home email** — none on record (goes into the private `silvis-contacts.md`, not here).
-3. **Holiday unit days for 2027 and the minor holidays** — should a Monday holiday unit include the preceding weekend? (Christmas and New Year's stay Eve + Day.)
+3. **Holiday unit days for 2027** — tiers confirmed and Monday minors absorb the weekend before (Sat–Mon), decided 9/22 evening; Christmas and New Year's stay Eve + Day. Still to set when 2027 is generated: Thanksgiving 2027 Thu-only or Thu–Sun.
 4. ~~Khan as backup on ordinary Tue/Thu~~ — answered 9/22: backup is open to everyone.
 5. **Philip's monthly cap** — none stated; the group default (8 primary) applies from November although his own October was 15 days.
 6. **Sat 10/24 primary** — open since Sarkar dropped to two days (Faraz 9/22 evening); who covers it (see §7 candidates).
 7. **Sarkar's day count after her first window** — soft target 2 for now; tighten or raise `daysPerWindowWeek` in Setup → Rules once she has been here.
 8. **Thanksgiving 11/26–29 for Khan** — recorded by Claude Code as confirmed in an evening chat; the daytime record said pending. Re-confirm before publishing (Prompt 12 B).
 9. **Backup opt-outs** — the 9/22 rule says anyone may opt out of backup explicitly; nobody has. Ask the group once.
-10. **11/9, 11/14, 11/15 backup** — the ER-panel author published Burchett; Fierce's derived backup week claims the same days. Keep the ER-panel author's entries and give Fierce 11/10–11/13, or give Fierce the whole week and change the ER-panel author's document?
+10. ~~11/9, 11/14, 11/15 backup~~ — decided 9/22 evening: **Fierce is backup 11/9–11/16** and **Khan is primary 11/25 (2026 only)**; Burchett's four backup days and his 11/25 are superseded (in the app; the ER-panel author's document is retired).
 11. **October's eight open backups + 10/24 primary** — fill by generator (fill-open-only over 10/15 – 11/1) or by hand before publishing?
 12. **Burchett 10/25** — in his own 9/17 plan but not in the ER-panel author's document; confirm it stands now that Sarkar is off 10/24.
