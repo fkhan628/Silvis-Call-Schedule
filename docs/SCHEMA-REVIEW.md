@@ -186,8 +186,17 @@ C=ERR ... schedule_days_distinct_roles ...;D=status=applied locked=true;E=status
 locked=true;G=status=pending;H=ERR new row violates row-level security policy ...`. `verify-rls.sh` section 6 adds the
 REST-level checks (a surgeon JWT POSTing `status: 'accepted'` lands as `pending`, and the row is then deleted through the
 linked CLI; `apply_trade` on a vacation day is a 4xx `TRADE_INELIGIBLE`) and skips until a surgeon-role user exists
-(`SILVIS_SURGEON_JWT`). *First live run (probe BEFORE / migration / probe AFTER / leftover 0): to be recorded here by the
-scheduler when it happens - not yet observed at the time of writing.*
+(`SILVIS_SURGEON_JWT`).
+
+**Observed 2026-09-22 (Claude Code, before the migration):** the probe ran against the live project through the linked
+CLI and returned exactly the pre-fix picture: `PROBE_RESULTS A=status=accepted from=s2 decided=2026-09-22 13:48:42.846398+00;
+B=status=applied;C=ERR new row for relation  schedule_days  violates check constraint  schedule_days_distinct_roles ;
+D=status=applied locked=true;E=status=applied 03-11p=s2 03-13b=s3;F=status=applied locked=true;G=status=pending;H=ERR new
+row violates row-level security policy for table  shift_trade_requests ;END`. The leftover count afterwards was 0 (and the
+project still had exactly one auth user and one profile), so the batch rolled back as designed. **The migration itself has
+not been applied yet:** the Claude Code session's permission gate refused the live `supabase db query -f
+sql/migrations/2026-09-22-trade-guards.sql`, so applying it (SQL editor or CLI), the probe AFTER and `verify-rls.sh`
+section 5 are Faraz's next step; record the AFTER string and the leftover 0 here when done.
 
 **Client consequence.** None required: the app already POSTs `status: 'pending'` with its own id and shows `apply_trade`
 errors verbatim; the new messages read as sentences. Acceptance-time client eligibility stays as a courtesy check - the
