@@ -3783,7 +3783,7 @@ function CallSchedule() {
           </Collapsible>
 
           <Collapsible css={css} ck="setup_holidays" defaultOpen={false} title="Holidays (units per year)">
-            <HolidaysCard css={css} holidays={holidays} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported}/>
+            <HolidaysCard css={css} holidays={holidays} groupRules={groupRules} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_east" defaultOpen={false} title="East feed (Davenport, read-only)">
@@ -5888,7 +5888,12 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
 }
 
 // --- Holiday units per year (blob) + who covers them now (schedule_days) ---
-function HolidaysCard({ css, holidays, schedule, roster, nameOf, onSave, onEditDay, showToast, rulesImported }) {
+// Prompt 12 U (Faraz 9/22 evening): "Add year" pre-fills the new year from
+// helpers.defaultHolidayUnits(year, groupRules.holidays + holidays.rules.tiers)
+// - a minor holiday on a Monday absorbs the weekend before it (Sat-Mon) when
+// groupRules.holidays.mondayMinorAbsorbsWeekend is true. Every unit and day
+// stays editable; the stored days are what the engine reads.
+function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onSave, onEditDay, showToast, rulesImported }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const [draft, setDraft] = React.useState(() => suClone(holidays && holidays.units ? holidays : { units: {} }));
   const [dirty, setDirty] = React.useState(false);
@@ -5904,7 +5909,13 @@ function HolidaysCard({ css, holidays, schedule, roster, nameOf, onSave, onEditD
   };
   const addUnit = (y) => { setDirty(true); setDraft(d => { const n = suClone(d); (n.units[y] = n.units[y] || []).push({ name: SU_HOLIDAY_NAMES[0], tier: "major", days: [y + "-01-01"] }); return n; }); };
   const removeUnit = (y, i) => { setDirty(true); setDraft(d => { const n = suClone(d); n.units[y] = n.units[y].filter((_, j) => j !== i); return n; }); };
-  const addYear = () => { const y = newYear.trim(); if (!/^\d{4}$/.test(y)) { showToast("Enter a 4-digit year.", "error"); return; } if (units[y]) { showToast(y + " already exists.", "info"); return; } setDirty(true); setDraft(d => { const n = suClone(d); n.units[y] = []; return n; }); setNewYear(""); };
+  const addYear = () => {
+    const y = newYear.trim(); if (!/^\d{4}$/.test(y)) { showToast("Enter a 4-digit year.", "error"); return; } if (units[y]) { showToast(y + " already exists.", "info"); return; }
+    const tiers = (draft.rules && draft.rules.tiers) || (holidays && holidays.rules && holidays.rules.tiers) || undefined;
+    // name / tier / days only: the builder's per-unit note never reaches the blob (the importer drops holiday notes by design)
+    const prefill = defaultHolidayUnits(y, { ...((groupRules && groupRules.holidays) || {}), tiers }).map(u => ({ name: u.name, tier: u.tier, days: u.days }));
+    setDirty(true); setDraft(d => { const n = suClone(d); n.units[y] = prefill; return n; }); setNewYear("");
+  };
   const save = () => {
     for (const y of years) for (const u of units[y]) {
       if (!u.name || !Array.isArray(u.days) || !u.days.length || !u.days.every(suIsIso)) { showToast(`Unit "${u.name || "?"}" in ${y} needs a name and at least one valid date.`, "error"); return; }
@@ -5960,6 +5971,7 @@ function HolidaysCard({ css, holidays, schedule, roster, nameOf, onSave, onEditD
         {dirty && <button onClick={() => { setDraft(suClone(holidays && holidays.units ? holidays : { units: {} })); setDirty(false); }} style={css.mini(false)}>Revert</button>}
         <span style={{ fontSize: 11, color: "#7a8a98" }}>{dirty ? "Unsaved changes" : "Saved in the shared setup (autosave)."}</span>
       </div>
+      <p data-testid="holidays-prefill-hint" style={{ fontSize: 11, color: "#7a8a98", margin: "6px 0 0" }}>{(groupRules && groupRules.holidays && groupRules.holidays.mondayMinorAbsorbsWeekend === true) ? "New years are pre-filled from the group rule (minor Monday holidays absorb the weekend before); edit any unit's days." : "New years are pre-filled with single-day holidays (the Monday-minor group rule is off in the shared setup); edit any unit's days."}</p>
     </div>
   );
 }

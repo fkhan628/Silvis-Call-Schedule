@@ -222,6 +222,7 @@ weekend day (the reduced weekend unit). So Memorial Day 2027 = Sat 5/29 – Mon 
 July 4 is its own day when it is not a Monday (2027: Sun 7/4 alone, the holiday unit taking precedence over that
 weekend's unit; 2028: Tue 7/4). Day membership stays **editable per year in Setup**; still to set when 2027 is
 generated: Thanksgiving 2027 Thu-only vs Thu–Sun.
+Seed keys (Prompt 12 U): `groupRules.holidays.mondayMinorAbsorbsWeekend` (true) — read by the per-year unit builder (`helpers.defaultHolidayUnits`) that Setup's Add year pre-fills; stored days stay authoritative and editable in Setup **until the next seed re-import** (`scripts/import-seed.js --apply` replaces `blob.holidays` from the seed wholesale — mirror Setup holiday edits into `docs/silvis-seed.json` before re-importing, or stop re-importing the blob after go-live); 2026 left as built.
 
 ⟶ **9/22 evening — standing East rule: Khan is on Davenport call every Christmas Eve and Christmas Day.** That is
 treated like a published East busy day every year, independent of the feed and the forecast: Khan is never Silvis

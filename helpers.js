@@ -1495,6 +1495,69 @@ function schedulePublishedMsg(period, lines, maxLines) {
   return head + "\nChanges (" + list.length + "):\n" + shown.join("\n") + (more > 0 ? "\n... and " + more + " more" : "");
 }
 
+/* === HOLIDAY UNIT BUILDER (Prompt 12 U, Faraz 9/22 evening) ===
+   defaultHolidayUnits(year, opts) -> the six holiday units of `year` in the
+   seed's shape and order: [{ name, tier, days[, note] }] for Memorial Day,
+   July 4th, Labor Day, Thanksgiving, Christmas, New Year's. Memorial Day =
+   last Monday of May, July 4th = 07-04, Labor Day = first Monday of
+   September, Thanksgiving = fourth Thursday of November (a single day by
+   default - the rules doc leaves Thu-only vs Thu-Sun open per year),
+   Christmas = 12-24 + 12-25, New Year's = 12-31 + 01-01 of the next year,
+   keyed under the eve's year like the seed. opts.tiers is the seed's
+   holidays.rules.tiers shape ({ major: [names], minor: [names] }); a name in
+   neither list keeps the standard tier. opts.mondayMinorAbsorbsWeekend ===
+   true (the seed's groupRules.holidays flag): a MINOR holiday whose date is a
+   Monday becomes [Sat, Sun, Mon] - "the unit is Sat-Mon; the Friday stays a
+   standalone weekend day (the reduced weekend unit)"; any other date stays a
+   single day (July 4 on a Monday - 2033 - absorbs; on a Sunday or a Tuesday
+   it does not). Setup's Add year pre-fills a new year from this; the stored
+   days remain authoritative and editable, and the engine reads only stored
+   days. Pure, generic (no surgeon or year branches): local-midnight Date
+   arithmetic through parse/fmt/addD above, never new Date("YYYY-MM-DD")
+   (UTC parsing, which shifts a day west of Greenwich). */
+var HU_ORDER = ["Memorial Day", "July 4th", "Labor Day", "Thanksgiving", "Christmas", "New Year's"];
+var HU_STANDARD_TIER = { "Memorial Day": "minor", "July 4th": "minor", "Labor Day": "minor", "Thanksgiving": "major", "Christmas": "major", "New Year's": "major" };
+// The nth weekday (0 = Sun .. 6 = Sat) of month (1-12) as "YYYY-MM-DD":
+// nth >= 1 counts from the first of the month, nth = -1 is the last one.
+function huNthWeekday(year, month, weekday, nth) {
+  if (nth > 0) {
+    var first = new Date(year, month - 1, 1);
+    return fmt(addD(first, (weekday - first.getDay() + 7) % 7 + (nth - 1) * 7));
+  }
+  var last = new Date(year, month, 0);                    // day 0 of the next month = the last day of this one
+  return fmt(addD(last, -((last.getDay() - weekday + 7) % 7)));
+}
+function defaultHolidayUnits(year, opts) {
+  var y = typeof year === "string" && /^\d{4}$/.test(year) ? Number(year) : year;
+  if (typeof y !== "number" || !isFinite(y) || Math.floor(y) !== y || y < 1000 || y > 9998) throw new Error("defaultHolidayUnits: year must be a 4-digit year, got " + JSON.stringify(year));
+  opts = opts || {};
+  var absorb = opts.mondayMinorAbsorbsWeekend === true;
+  var tierOf = {};
+  Object.keys(HU_STANDARD_TIER).forEach(function (n) { tierOf[n] = HU_STANDARD_TIER[n]; });
+  if (opts.tiers && typeof opts.tiers === "object") {
+    ["major", "minor"].forEach(function (t) { (Array.isArray(opts.tiers[t]) ? opts.tiers[t] : []).forEach(function (n) { tierOf[n] = t; }); });
+  }
+  var ys = String(y), ns = String(y + 1);
+  var single = {
+    "Memorial Day": huNthWeekday(y, 5, 1, -1),
+    "July 4th": ys + "-07-04",
+    "Labor Day": huNthWeekday(y, 9, 1, 1),
+    "Thanksgiving": huNthWeekday(y, 11, 4, 4)
+  };
+  return HU_ORDER.map(function (name) {
+    var tier = tierOf[name], days, note = null;
+    if (name === "Christmas") { days = [ys + "-12-24", ys + "-12-25"]; note = "Eve + Day as one unit"; }
+    else if (name === "New Year's") { days = [ys + "-12-31", ns + "-01-01"]; note = "Eve + Day as one unit"; }
+    else {
+      var d = single[name], dt = parse(d);
+      days = absorb && tier === "minor" && dt.getDay() === 1 ? [fmt(addD(dt, -2)), fmt(addD(dt, -1)), d] : [d];
+    }
+    var unit = { name: name, tier: tier, days: days };
+    if (note) unit.note = note;
+    return unit;
+  });
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
@@ -1513,5 +1576,6 @@ if (typeof module !== "undefined" && module.exports) {
     icsDate, icsEscape, icsFold, icsVTimezone, buildICSEvents, icsFileName, generateICS,
     generateShareHTML, buildPrintableCalendarHTML,
     buildErCallPanelsHTML, buildErCallPanelsText, buildErCallPanelsDocument, erPanelSpan,
+    defaultHolidayUnits, huNthWeekday, HU_ORDER, HU_STANDARD_TIER,
   };
 }

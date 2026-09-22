@@ -238,3 +238,48 @@ R. Orange opening + SSC icon (supersedes item O.4). Replace icon-512.png, icon-1
    "DSG" — both empty except in history comments. Note in the report that installed PWAs pick the icon up on their next
    manifest refresh (iOS may need remove + re-add).
 ```
+
+## U. Minor Monday holidays absorb the weekend before (Faraz 9/22 evening; wave 5)
+
+Faraz, 9/22 evening, verbatim:
+
+> "A minor holiday that falls on a Monday absorbs the weekend before it: the unit is Sat-Mon; the Friday stays a
+> standalone weekend day (the reduced weekend unit). groupRules.holidays.mondayMinorAbsorbsWeekend = true, applied
+> when a year's units are built (2027: Memorial Day 5/29-5/31, Labor Day 9/4-9/6); days stay editable per year.
+> July 4 stays its own day when not a Monday (2027: Sun 7/4; 2028: Tue 7/4). Nothing in the milestone range changes."
+
+The same evening he confirmed the tiers: minor = July 4, Labor Day, Memorial Day; major = New Year's, Thanksgiving,
+Christmas (the seed's `holidays.rules.tiers`, unchanged).
+
+Delivered (data plus one generic builder, no surgeon- or year-specific code):
+- Seed: `groupRules.holidays.mondayMinorAbsorbsWeekend: true` (+ `...Note`), `holidays.rules.mondayMinor`,
+  `dayMembershipNote` extended, `holidays.units["2027"]` Memorial Day → 5/29–5/31 and Labor Day → 9/4–9/6 (July 4th,
+  Thanksgiving, Christmas, New Year's 2027 unchanged), `holidays.units["2026"]` byte-identical, `_meta.revisions`.
+- `helpers.defaultHolidayUnits(year, opts)`: the six units in the seed's shape and order (Memorial Day = last Monday of
+  May, July 4th, Labor Day = first Monday of September, Thanksgiving = fourth Thursday as a single day by default,
+  Christmas 12/24 + 12/25, New Year's 12/31 + 1/1 keyed under the eve's year); tiers from `opts.tiers`; a MINOR holiday
+  on a Monday becomes Sat–Mon only when `opts.mondayMinorAbsorbsWeekend === true`.
+- Setup → Holidays: "Add year" pre-fills the new year from the builder (group flag + the tiers); every unit and day
+  stays editable or removable; the `holidays.edit` audit entry is unchanged; one hint line under the editor.
+- Tests: `test/holidays.test.js` (new, in `npm test`): builder cases (2027 / 2028 / 2033 / 2026 / tiers / 2026–2040
+  independent UTC arithmetic), the seed ⇔ builder pin, and the engine proof — from the seed, `holidayUnits` returns
+  Memorial Day 5/29–5/31 and Labor Day 9/4–9/6 with the Fridays free, and a generator run holds one primary and one
+  backup through all three days while the Friday is a reduced weekend unit (`diagnostics.weekendUnits`:
+  `present: [Fri]`, `preempted: [Sat, Sun]`, `reduced: true` — the generator's real shape). A seed pin in
+  `test/generator-regression.js` (2027 minors Sat–Mon, 2026 unchanged) and a `test/rules.test.js` case (the flag reaches
+  `ctx.holidayFlags` without a warning and changes no milestone-day unit membership or eligibility).
+- Decisions: Sat–Mon (not Fri–Mon) per his text; 2026 units left as built; Thanksgiving 2027 builder default = the
+  Thursday only (Thu–Sun still to set); July 4 2027 = the Sunday alone (his table note asks Sat–Sun — recorded as an
+  open question in `dayMembershipNote`, not baked in).
+- Live: the seed re-import (dry run → diff shown to Faraz → apply) carries the flag and the 2027 unit days to the blob.
+  Sequence it before (or with) the Pages deploy that carries this JSX: the hint under the editor reads the flag from
+  the shared setup and says "the Monday-minor group rule is off" until the re-import lands.
+- Review fixes (same evening): CI step "Holiday unit builder tests" (`node test/holidays.test.js`) added to
+  `.github/workflows/build.yml` after the totals step (the workflow lists suites explicitly and does not run `npm test`);
+  Add year keeps name / tier / days only (the builder's "Eve + Day as one unit" note never reaches the anon-readable blob,
+  which the importer would drop anyway); the hint is conditional on the flag; `test/holidays.test.js` runs the generator
+  at 1500 ms per call under a 4000 ms file limit that honours `SILVIS_GEN_BUDGET_MS`. Caveat now in the rules doc §5 and
+  the guide §15: Setup holiday edits survive only until the next seed re-import (the importer replaces `blob.holidays`
+  wholesale) — mirror them into the seed first, or stop re-importing the blob after go-live. Not done: a smoke step for
+  the Add year path (`test/ui/smoke.mjs` is wave 4's file); the flow was observed by lifting the handler's prefill
+  expression against the real `helpers.js` instead.

@@ -35,6 +35,7 @@ on:
       - "test/week-rows.test.js"
       - "test/exports.test.js"
       - "test/totals.test.js"
+      - "test/holidays.test.js"
       - "test/schema.test.js"
       - "importer.js"
       - "test/generator-regression.js"
@@ -104,6 +105,9 @@ jobs:
 
       - name: Totals helpers tests
         run: node test/totals.test.js
+
+      - name: Holiday unit builder tests
+        run: node test/holidays.test.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js

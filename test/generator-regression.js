@@ -1226,6 +1226,35 @@ console.log("  median candidate range totals: " + Object.keys(median.out.diagnos
 
 console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this harness");
 
+// ---- Prompt 12 U (9/22 evening) ----
+// Seed pin, no generator run: a MINOR holiday on a Monday absorbs the weekend
+// before it (Sat-Mon) from 2027 on - Memorial Day 5/29-5/31, Labor Day 9/4-9/6,
+// July 4 2027 (a Sunday) alone - and 2026's units stay exactly as built before
+// the rule, so the milestone range 2026-11-02 -> 2027-01-03 does not move.
+// The Friday before each Sat-Mon unit is not a unit day in ctx (it is the
+// reduced weekend unit; test/holidays.test.js proves the generator's handling).
+{
+  CUR.range = "seed-U"; CUR.seed = "-"; CUR.day = "-";
+  const unitDays = (y, name) => { const u = (seed.holidays.units[y] || []).find((x) => x.name === name); return u ? u.days : null; };
+  eq(seed.groupRules.holidays.mondayMinorAbsorbsWeekend, true, "seed: groupRules.holidays.mondayMinorAbsorbsWeekend (Prompt 12 U)");
+  eq(unitDays("2027", "Memorial Day"), ["2027-05-29", "2027-05-30", "2027-05-31"], "seed 2027 Memorial Day is Sat-Mon");
+  eq(unitDays("2027", "Labor Day"), ["2027-09-04", "2027-09-05", "2027-09-06"], "seed 2027 Labor Day is Sat-Mon");
+  eq(unitDays("2027", "July 4th"), ["2027-07-04"], "seed 2027 July 4th (a Sunday) stays its own day");
+  eq(unitDays("2026", "Memorial Day"), ["2026-05-25"], "seed 2026 Memorial Day left as built (past)");
+  eq(unitDays("2026", "July 4th"), ["2026-07-04"], "seed 2026 July 4th left as built (past)");
+  eq(unitDays("2026", "Labor Day"), ["2026-09-07"], "seed 2026 Labor Day left as built (past)");
+  eq(unitDays("2026", "Thanksgiving"), ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"], "seed 2026 Thanksgiving unchanged (Thu-Sun)");
+  eq(unitDays("2026", "Christmas"), ["2026-12-24", "2026-12-25"], "seed 2026 Christmas unchanged");
+  eq(unitDays("2026", "New Year's"), ["2026-12-31", "2027-01-01"], "seed 2026 New Year's unchanged");
+  [["2027-05-28", "2027-05-29", "Memorial Day"], ["2027-09-03", "2027-09-04", "Labor Day"]].forEach(([fri, sat, name]) => {
+    CUR.day = fri;
+    ok(!ctx.holidayByDay[fri] && !HOLIDAY[fri], "the Friday before the " + name + " unit is not a unit day (reduced weekend unit)");
+    CUR.day = sat;
+    ok(ctx.holidayByDay[sat] && ctx.holidayByDay[sat].name === name && ctx.holidayByDay[sat].days.length === 3, "ctx: " + sat + " opens the 3-day " + name + " unit");
+  });
+  CUR.range = "-"; CUR.day = "-";
+}
+
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
 console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 7 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");

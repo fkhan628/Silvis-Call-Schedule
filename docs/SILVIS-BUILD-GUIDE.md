@@ -400,6 +400,15 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
 - **UI, from Faraz's first look at the live app (9/22, Prompt 12 P–Q)**: the week-rows / ER Call Panels primary column
   is headed **TRAUMA** (no "cardiothoracic"); an unassigned slot is **OPEN only from today forward** — earlier days
   render blank, never red.
+- **Minor Monday holidays absorb the weekend before (Faraz 9/22 evening, Prompt 12 U)**: a minor holiday (Memorial Day,
+  July 4th, Labor Day) that falls on a Monday is a **Sat–Mon** unit; the Friday is the reduced weekend unit. Data, not
+  code: `groupRules.holidays.mondayMinorAbsorbsWeekend` (true), applied when a year's units are built —
+  `helpers.defaultHolidayUnits(year, opts)` (generic, pure) pre-fills Setup → Holidays → Add year (name / tier / days
+  only — no notes reach the blob); stored unit days stay authoritative and editable per year **until the next seed
+  re-import**: the importer replaces `blob.holidays` from the seed wholesale (no app-edited guard, unlike
+  `schedule_days`), so mirror Setup holiday edits into `docs/silvis-seed.json` before re-importing, or stop re-importing
+  the blob after go-live. 2027: Memorial Day 5/29–5/31, Labor Day 9/4–9/6, July 4 (a Sunday) alone; 2026 left as built
+  (the milestone range does not move). Proof: `test/holidays.test.js` (CI step "Holiday unit builder tests").
 
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
 

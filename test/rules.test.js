@@ -1395,6 +1395,25 @@ has(a18.conflicts, "day-before-vacation", "T: ...kept as a fact, the day before 
 eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].filter(id => R.eligibility(ctx, "2026-11-05", P, id).ok), [], "T: 11/5 (Thu) primary has no eligible surgeon once Acton is its locked backup (rules doc section 8 item 13)");
 has(R.eligibility(ctx, "2026-11-05", P, ACTON).hard, "whitelist-month", "T: Acton did not offer 11/5 as primary (and holds its locked backup)");
 
+// ---- Prompt 12 U (9/22 evening) ----
+// groupRules.holidays.mondayMinorAbsorbsWeekend is DATA the per-year unit builder
+// (helpers.defaultHolidayUnits, Setup's Add year) reads; the engine reads only the
+// stored unit days. The flag reaches ctx without a warning and changes nothing on a
+// milestone day: unit membership and eligibility are identical with the flag removed.
+step("U: mondayMinorAbsorbsWeekend reaches ctx.holidayFlags, warns nothing, leaves the milestone units and eligibility alone");
+eq(seed.groupRules.holidays.mondayMinorAbsorbsWeekend, true, "seed: groupRules.holidays.mondayMinorAbsorbsWeekend");
+eq(ctx.holidayFlags.mondayMinorAbsorbsWeekend, true, "buildContext keeps the flag in ctx.holidayFlags (data; no code branch in rules.js reads it)");
+eq(ctx.warnings.filter(w => /mondayMinor/i.test(w)), [], "no buildContext warning about the key");
+eq(R.isHolidayDay(ctx, "2026-11-27").days, ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"], "Khan's Thanksgiving Friday is still a day of the 4-day 2026 unit");
+eq(R.isHolidayDay(ctx, "2026-12-25").days, ["2026-12-24", "2026-12-25"], "Christmas 2026 still Thu 12/24 + Fri 12/25");
+eq(R.isHolidayDay(ctx, "2027-01-01").days, ["2026-12-31", "2027-01-01"], "New Year's still 12/31 + 1/1");
+const noFlagSeed = clone(seed); delete noFlagSeed.groupRules.holidays.mondayMinorAbsorbsWeekend;
+const noFlag = R.buildContext(SA.seedToContextInput(noFlagSeed, { eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, eastBusyDays: {} }));
+["2026-11-27", "2026-11-30", "2026-12-24", "2026-12-31", "2027-01-01"].forEach(d => ctx.activeIds.forEach(id => {
+  eq(R.eligibility(ctx, d, P, id), R.eligibility(noFlag, d, P, id), "primary eligibility " + d + " " + id + " is independent of the flag");
+  eq(R.eligibility(ctx, d, B, id), R.eligibility(noFlag, d, B, id), "backup eligibility " + d + " " + id + " is independent of the flag");
+}));
+
 const total = Date.now() - t0;
 if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }
 console.log("ok " + N + " assertions (" + total + " ms)");
