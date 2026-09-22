@@ -74,6 +74,12 @@ decides the Trauma Director role.
 - Christmas: prefers to **split it up** (every other day, or 2 on then off).
 - October: available 10/6, 10/10, 10/11, 10/12 (backup only), 10/14, 10/26, 10/28. Not available 10/2–10/4, 10/18, 10/23, 10/24, 10/30, 10/31, 11/1. Takes 10/25 (Sun) with Sarkar on 10/24 (Sat).
 - December (can take primary or backup): 12/1, 12/5, 12/6, 12/9, 12/12, 12/13, 12/14, 12/19, 12/20, 12/23, 12/25, 12/26, 12/27, 12/28, 12/30, 12/31, 1/1, 1/2, 1/3. "I don't need all these dates but am able to do them."
+- ⟶ **November (Burchett 9/17 "November Silvis Trauma Call days"; the ER-panel author entered them on 9/22): primary Tue 11/3,
+  Sat 11/7, Sun 11/8, Wed 11/11, Fri 11/20, Mon 11/23, Wed 11/25; backup Mon 11/2, Wed 11/4, Fri 11/6, Mon 11/9,
+  Sat 11/14, Sun 11/15, Mon 11/16, Wed 11/18.** These match his recurring pattern exactly (1st Tue, 2nd/4th Mon and Wed,
+  weekends) but are narrower than it — a whitelist for November (governed month, both roles) and, since the ER-panel author has
+  published them, **locked assignments** (§7). He also offered Thanksgiving Day 11/26 with 11/27–28 off and 11/29 —
+  superseded by Khan's Thu–Sun unit. Holidays: "every other day or 2-day blocks."
 - ⟶ **9/22 evening (Burchett email): weekends in early 2027 he CANNOT work, either role:** **Sat 1/9–Sun 1/10, Sat 1/16–Sun 1/17,
   Fri 2/12–Sun 2/14, Fri 4/9–Sun 4/11.** Exactly as listed — the two January entries are Sat+Sun only, so Fri 1/8 and
   Fri 1/15 are not excluded. ⟶ **Faraz 9/22: "can essentially be considered vacations"** — entered as four `time_off`
@@ -88,6 +94,10 @@ decides the Trauma Director role.
 - Weekend style: **split** with Burchett; has also taken full Fri–Sun (10/9–10/11), so max consecutive 3.
 - ⟶ **9/22 (Prompt 12 A): max consecutive 3 primary days is hard on real days** (no holiday-unit opt-in); any-role soft limit **4**.
 - October: primary Oct 5, 7, 9, 17, 18, 19, 21, 23; backup Oct 6, 8, 20. Offered to send a full monthly date list like Burchett.
+- ⟶ **November (Burchett's 9/17 relay of "the days Acton submitted"; the ER-panel author entered them into the official
+  document on 9/22): primary Mon 11/2, Wed 11/4, Fri 11/6, Sat 11/14, Sun 11/15, Mon 11/16, Wed 11/18; backup Tue 11/3,
+  Thu 11/5, Tue 11/17.** A whitelist for November (governed month, both roles) — and, because the ER-panel author has published
+  them, **locked assignments** (§7). 11/14–16 is three consecutive primaries (his max).
 - **No specific monthly cap** (Faraz 9/21); no target stated.
 
 ### Philip (s4) — whitelist of weeks (primary)
@@ -228,6 +238,27 @@ Candidates by the rules: Acton (a Saturday is allowed; he is primary Fri 10/23, 
 Khan (weekend primary if East is clear that day), Philip (his October list is the model — check it), or an outside
 surgeon written in. Burchett said he cannot do 10/24.
 
+### ⟶ 9/22 evening — the ER-panel author's updated document ("ER Sp Trauma 9-14-26 thru 12-13-26", sent 12:49)
+
+the ER-panel author entered Burchett's and Acton's **November** days from the 9/17 email into the official schedule and listed what
+is still open in **October**. Two consequences:
+
+1. **November is no longer a blank sheet.** The 25 entries she made (Burchett 7 primary + 8 backup, Acton 7 primary +
+   3 backup, §3) are published to the group and are imported as **locked assignments**, exactly like Sep 14 – Nov 1.
+   The generator fills the rest of November around them. Both surgeons' November lists also become governed-month
+   whitelists, so neither is placed on a November day he did not offer. Open primaries left for the generator after
+   the locks: 11/5, 11/9, 11/10, 11/12, 11/13, 11/17, 11/19, 11/21, 11/22, 11/24, 11/30 (11/26–29 is Khan's unit).
+2. **One conflict inside her entries:** Burchett as backup on **11/9, 11/14, 11/15** falls inside Fierce's derived
+   Silvis-backup week (East primary week of 11/9 → Silvis backup 11/9–11/15). Decision needed (§8 item 8). Suggested:
+   keep what the ER-panel author published (Burchett those three days), Fierce backs up 11/10–11/13, and Fierce is told.
+
+**October per the ER-panel author's document** — open primary: 10/15, 10/20, 10/22, 10/24, 10/25; open backup: 10/15, 10/21,
+10/23, 10/24, 10/25, 10/30, 10/31, 11/1. So the ER-panel author does **not** yet have Sarkar on 10/20 and 10/22 (Burchett's 9/17
+plan, now consistent with the clinic manager's two-days statement) nor Burchett on 10/25 (his own plan). Faraz to send her
+those three, confirm 10/25 with Burchett, and tell her 10/24 is open. The eight open October backups are fillable by
+anyone under the 9/22 backup rule: run the generator over 10/15 – 11/1 in **fill-open-only** mode (locks untouched)
+before publishing, or assign them by hand.
+
 ## 8. Answered (9/21) and still open
 
 **Answered by Faraz on 9/21:** shift boundary 07:00→07:00; October stays as the emails describe it (Fierce 10/12 single
@@ -269,3 +300,6 @@ the October locks too: Sarkar keeps 10/20 and 10/22 and comes off Sat 10/24**, w
 7. **Sarkar's day count after her first window** — soft target 2 for now; tighten or raise `daysPerWindowWeek` in Setup → Rules once she has been here.
 8. **Thanksgiving 11/26–29 for Khan** — recorded by Claude Code as confirmed in an evening chat; the daytime record said pending. Re-confirm before publishing (Prompt 12 B).
 9. **Backup opt-outs** — the 9/22 rule says anyone may opt out of backup explicitly; nobody has. Ask the group once.
+10. **11/9, 11/14, 11/15 backup** — the ER-panel author published Burchett; Fierce's derived backup week claims the same days. Keep the ER-panel author's entries and give Fierce 11/10–11/13, or give Fierce the whole week and change the ER-panel author's document?
+11. **October's eight open backups + 10/24 primary** — fill by generator (fill-open-only over 10/15 – 11/1) or by hand before publishing?
+12. **Burchett 10/25** — in his own 9/17 plan but not in the ER-panel author's document; confirm it stands now that Sarkar is off 10/24.
