@@ -995,9 +995,266 @@ ${table}
 </body></html>`;
 }
 
+/* === Setup view helpers (Prompt 6 Slice E) - pure, prefixed su* so no name
+   collides with config.js / rules.js / east-feed.js / generator.js. The
+   Setup cards (roster, availability paste box, holidays, generate preview,
+   seed import, setup issues) call these; index-source.html only wires state. */
+function suIsIso(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+function suAddDays(iso, n) { return fmt(addD(parse(iso), n)); }
+function suDaysBetween(a, b) { return Math.round((parse(b) - parse(a)) / 86400000); }
+function suMakeDate(y, m, d) {
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  return fmt(dt);
+}
+// suParseDateList(text, defaultYear) -> { dates: [ISO...] sorted unique, bad: [token...] }
+// Accepts "10/6, 10/10, 10/11", "10/6/2026", ISO dates, and ranges "10/6-10/8",
+// "10/6 - 10/8" or "2026-10-06..2026-10-08". M/D tokens take defaultYear.
+function suParseDateList(text, defaultYear) {
+  const out = new Set(), bad = [];
+  const yr = Number(defaultYear) || new Date().getFullYear();
+  const one = (tok) => {
+    let m;
+    if ((m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(tok))) return suMakeDate(+m[1], +m[2], +m[3]);
+    if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(tok))) return suMakeDate(+m[3], +m[1], +m[2]);
+    if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/.exec(tok))) return suMakeDate(2000 + +m[3], +m[1], +m[2]);
+    if ((m = /^(\d{1,2})\/(\d{1,2})$/.exec(tok))) return suMakeDate(yr, +m[1], +m[2]);
+    return null;
+  };
+  const addRange = (a, b, tok) => {
+    if (!a || !b || b < a || suDaysBetween(a, b) > 366) { bad.push(tok); return; }
+    for (let d = a; d <= b; d = suAddDays(d, 1)) out.add(d);
+  };
+  const norm = String(text || "").replace(/(\d)\s+(?:-|to)\s+(\d)/g, "$1-$2").replace(/(\d)\s*\.\.\s*(\d)/g, "$1..$2");
+  norm.split(/[,\s;]+/).map(t => t.trim()).filter(Boolean).forEach(tok => {
+    let m;
+    if (tok.indexOf("..") > 0) { const p = tok.split(".."); addRange(one(p[0]), one(p[1]), tok); return; }
+    if ((m = /^(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)-(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)$/.exec(tok))) { addRange(one(m[1]), one(m[2]), tok); return; }
+    const d = one(tok);
+    if (d) out.add(d); else bad.push(tok);
+  });
+  return { dates: Array.from(out).sort(), bad: bad };
+}
+// suCollapseDates([ISO...]) -> [{ start, end }] consecutive runs merged.
+function suCollapseDates(dates) {
+  const list = Array.from(new Set((dates || []).filter(suIsIso))).sort();
+  const out = [];
+  list.forEach(d => {
+    const last = out[out.length - 1];
+    if (last && suAddDays(last.end, 1) === d) { last.end = d; return; }
+    out.push({ start: d, end: d });
+  });
+  return out;
+}
+// suNextMatchingDates(matcher, pattern, fromIso, n, horizonDays) -> the next n
+// dates on/after fromIso for which matcher(date, pattern) is true.
+function suNextMatchingDates(matcher, pattern, fromIso, n, horizonDays) {
+  const out = [];
+  if (typeof matcher !== "function" || !pattern || !suIsIso(fromIso)) return out;
+  const limit = horizonDays || 730;
+  for (let k = 0; k < limit && out.length < (n || 8); k++) {
+    const d = suAddDays(fromIso, k);
+    let hit = false;
+    try { hit = !!matcher(d, pattern); } catch (e) { return out; }
+    if (hit) out.push(d);
+  }
+  return out;
+}
+// suHolidayCoverage(schedule, unit) -> who covers the unit right now.
+//   { primary: id | "ext:<name>" | null | "mixed", backup: id | null | "mixed", days: [{ day, p, b }], openSlots }
+function suHolidayCoverage(schedule, unit) {
+  const sched = schedule || {};
+  const days = ((unit && unit.days) || []).slice().sort().map(day => {
+    const a = sched[day] || null;
+    return { day: day, p: dayHolder(a, "primary"), b: dayHolder(a, "backup") };
+  });
+  const uniform = (key) => { const vals = days.map(x => x[key]); const first = vals[0] === undefined ? null : vals[0]; return vals.every(v => v === first) ? first : "mixed"; };
+  return { primary: days.length ? uniform("p") : null, backup: days.length ? uniform("b") : null, days: days, openSlots: days.filter(x => !x.p).length + days.filter(x => !x.b).length };
+}
+// suHolidayCounts(schedule, unitsByYear, sinceIso) -> { id: { major, minor } }:
+// units (start day on/after sinceIso) on which the surgeon holds primary or
+// backup on at least one day. A unit counts once per surgeon.
+function suHolidayCounts(schedule, unitsByYear, sinceIso) {
+  const out = {};
+  const sched = schedule || {};
+  Object.keys(unitsByYear || {}).forEach(y => (unitsByYear[y] || []).forEach(u => {
+    const days = (u && Array.isArray(u.days) ? u.days : []).slice().sort();
+    if (!days.length || (sinceIso && days[0] < sinceIso)) return;
+    const held = new Set();
+    days.forEach(d => { const a = sched[d]; if (a && a.primary) held.add(a.primary); if (a && a.backup) held.add(a.backup); });
+    held.forEach(id => { const t = out[id] || (out[id] = { major: 0, minor: 0 }); if ((u.tier || "major") === "major") t.major++; else t.minor++; });
+  }));
+  return out;
+}
+// suOpenPrimaryDays(schedule, fromIso, count) -> days in [from, from+count) with no primary and no external cover.
+function suOpenPrimaryDays(schedule, fromIso, count) {
+  const out = [];
+  const sched = schedule || {};
+  for (let k = 0; k < (count || 60); k++) {
+    const d = suAddDays(fromIso, k);
+    if (!dayHolder(sched[d] || null, "primary")) out.push(d);
+  }
+  return out;
+}
+// suAgeDays(isoTimestamp, nowMs) -> whole days since the timestamp, or null when unparseable.
+function suAgeDays(ts, nowMs) {
+  if (!ts) return null;
+  const t = new Date(ts).getTime();
+  if (isNaN(t)) return null;
+  return Math.floor(((nowMs || Date.now()) - t) / 86400000);
+}
+// suLastAssignedDay(schedule) -> the last day carrying any assignment (null when none).
+function suLastAssignedDay(schedule) {
+  const days = Object.keys(schedule || {}).filter(d => { const a = schedule[d]; return a && (a.primary || a.backup || a.externalCover); }).sort();
+  return days.length ? days[days.length - 1] : null;
+}
+// suLastContiguousDay(schedule) -> the last day of the longest contiguous run
+// of schedule ROWS (a day with both slots open, such as 10/15, still counts:
+// it is a published row), or null when the map is empty. Ties go to the later
+// run. This is the "last published day" the Generate presets start after:
+// stray rows away from the main block (a one-off edit on an early day, the
+// pre-assigned Thanksgiving unit weeks after the import) never move it, unlike
+// suLastAssignedDay, which returns the last ASSIGNED day anywhere on file.
+function suLastContiguousDay(schedule) {
+  const days = Object.keys(schedule || {}).filter(suIsIso).sort();
+  if (!days.length) return null;
+  let bestEnd = days[0], bestLen = 1, runStart = 0;
+  for (let i = 1; i <= days.length; i++) {
+    if (i < days.length && suAddDays(days[i - 1], 1) === days[i]) continue;
+    const len = i - runStart;
+    if (len >= bestLen) { bestLen = len; bestEnd = days[i - 1]; }
+    runStart = i;
+  }
+  return bestEnd;
+}
+// suLaterAssignedRanges(schedule, afterDay) -> [{ start, end }] the assigned days
+// strictly after afterDay, collapsed into ranges (the Generate panel names them
+// so a pre-assigned unit beyond the published block stays visible).
+function suLaterAssignedRanges(schedule, afterDay) {
+  const days = Object.keys(schedule || {}).filter(d => {
+    if (!suIsIso(d) || (afterDay && d <= afterDay)) return false;
+    const a = schedule[d];
+    return !!(a && (a.primary || a.backup || a.externalCover));
+  });
+  return suCollapseDates(days);
+}
+// suLockedSlotChanges(current, next) -> the primary/backup changes (diffScheduleDays
+// shape) that land on a slot LOCKED in the current map. Accept & Publish must
+// confirm before writing any of these: they are published, locked days.
+function suLockedSlotChanges(current, next) {
+  const cur = current || {};
+  return diffScheduleDays(cur, next).filter(c => {
+    if (c.role !== "primary" && c.role !== "backup") return false;
+    const a = cur[c.day];
+    if (!a) return false;
+    return c.role === "primary" ? !!(a.primaryLocked && (a.primary || a.externalCover)) : !!(a.backupLocked && a.backup);
+  });
+}
+// suSetupIssues(input) -> [warning strings]. Pure; the Setup issues card renders them.
+//   input: { roster, surgeonRules, groupRules, holidays, schedule, eastFeedRows, eastForecastRows, today }
+function suSetupIssues(input) {
+  const i = input || {};
+  const out = [];
+  const roster = Array.isArray(i.roster) ? i.roster : [];
+  const today = suIsIso(i.today) ? i.today : fmt(new Date());
+  const ids = {}, codes = {};
+  roster.forEach(r => {
+    if (!r) return;
+    if (r.id) ids[r.id] = (ids[r.id] || 0) + 1;
+    const c = String(r.code || "").toUpperCase();
+    if (c) codes[c] = (codes[c] || 0) + 1;
+    if (!r.id || !r.name || !r.code) out.push("Roster entry " + (r.id || "(no id)") + " is missing an id, last name or code");
+  });
+  Object.keys(ids).forEach(k => { if (ids[k] > 1) out.push("Roster id " + k + " is used " + ids[k] + " times"); });
+  Object.keys(codes).forEach(k => { if (codes[k] > 1) out.push("Roster code " + k + " is used " + codes[k] + " times"); });
+  if (i.surgeonRules === undefined || i.groupRules === undefined || i.holidays === undefined) out.push("Rules not imported yet (Setup > Import seed)");
+  else {
+    roster.forEach(r => { if (r && r.id && r.active !== false && !(i.surgeonRules && i.surgeonRules[r.id])) out.push("No rules for " + (r.name || r.id) + " (" + r.id + ") - every active surgeon needs a surgeonRules entry"); });
+  }
+  const sched = i.schedule || {};
+  const days = Object.keys(sched).sort();
+  if (!days.length) out.push("No schedule days yet");
+  else {
+    const years = new Set(days.map(d => d.slice(0, 4)));
+    const units = (i.holidays && i.holidays.units) || {};
+    years.forEach(y => { if (!(units[y] && units[y].length)) out.push("No holiday units for " + y + " although the schedule has days in " + y); });
+  }
+  const feedAges = (i.eastFeedRows || []).map(r => suAgeDays(r.fetched_at, i.nowMs)).filter(a => a !== null);
+  if (!(i.eastFeedRows || []).length) out.push("East feed cache is empty - refresh it in Setup > East feed");
+  else if (feedAges.length && Math.min.apply(null, feedAges) > 14) out.push("East feed coverage is " + Math.min.apply(null, feedAges) + " days old - refresh it");
+  const fcAges = (i.eastForecastRows || []).map(r => suAgeDays(r.generated_at || (r.data && r.data.generatedAt), i.nowMs)).filter(a => a !== null);
+  if ((i.eastForecastRows || []).length && fcAges.length && Math.min.apply(null, fcAges) > 7) out.push("East forecast is " + Math.min.apply(null, fcAges) + " days old - rerun scripts/east-forecast.js");
+  const openP = suOpenPrimaryDays(sched, today, 60);
+  if (openP.length) out.push(openP.length + " open primary day(s) in the next 60 days (first " + fmtMD(openP[0]) + ")");
+  return out;
+}
+// suMergePreview(current, preview, respectLocks) -> the schedule map with the
+// generator's preview days applied. With respectLocks a slot that is locked in
+// the current map keeps its holder (the generator seeds locks itself; this is
+// the belt to its braces). Days outside the preview are untouched.
+function suMergePreview(current, preview, respectLocks) {
+  const next = Object.assign({}, current || {});
+  Object.keys(preview || {}).forEach(day => {
+    const p = preview[day] || emptyDayAssignment();
+    const cur = next[day] || emptyDayAssignment();
+    const a = Object.assign(emptyDayAssignment(), p);
+    if (respectLocks && cur.primaryLocked && (cur.primary || cur.externalCover)) { a.primary = cur.primary; a.externalCover = cur.externalCover; a.primaryLocked = true; }
+    if (respectLocks && cur.backupLocked && cur.backup) { a.backup = cur.backup; a.backupLocked = true; }
+    if (a.primary && a.primary === a.backup) a.backup = cur.backup === a.primary ? null : cur.backup;
+    next[day] = a;
+  });
+  return next;
+}
+// suSeedDayMerge(current, planRows, liveRows) -> { next, inserted, updated, skipped, changedDays }
+// Seed rows land only on days that are missing everywhere, or whose LIVE row
+// is still seed-owned (source "import" AND updated_by "seed") and whose
+// in-memory day still equals that live row. Any other day - edited in the app
+// (another source or updated_by), or carrying an unsaved local change such as
+// a generated backup on a locked import day - is never overwritten. Mirrors
+// the importer's SQL ownership rule (importer.js header) on the client.
+function suSeedDayMerge(current, planRows, liveRows) {
+  const next = Object.assign({}, current || {});
+  const live = {};
+  (liveRows || []).forEach(r => { if (r && r.day) live[String(r.day).slice(0, 10)] = r; });
+  let inserted = 0, updated = 0, skipped = 0;
+  const changedDays = [];
+  (planRows || []).forEach(r => {
+    if (!r || !suIsIso(r.day)) return;
+    const cur = next[r.day];
+    const lv = live[r.day] || null;
+    const a = dayRowToAssignment(r);
+    if (!cur && !lv) { next[r.day] = a; inserted++; changedDays.push(r.day); return; }
+    const seedOwned = !!lv && lv.source === "import" && (lv.updated_by || "") === "seed";
+    const localClean = !!lv && sameDayAssignment(r.day, cur, dayRowToAssignment(lv));
+    if (!seedOwned || !localClean || (cur && cur.source !== "import")) { skipped++; return; }
+    if (sameDayAssignment(r.day, cur, a)) return;
+    next[r.day] = a; updated++; changedDays.push(r.day);
+  });
+  return { next: next, inserted: inserted, updated: updated, skipped: skipped, changedDays: changedDays };
+}
+function suAvailKey(r) { return [r.person_id, r.kind, r.role || "any", String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10), r.source || ""].join("|"); }
+function suMissingAvailability(planRows, liveRows) {
+  const have = new Set((liveRows || []).map(suAvailKey));
+  return (planRows || []).filter(r => !have.has(suAvailKey(r)));
+}
+function suTimeOffKey(r) { return [r.person_id, String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10)].join("|"); }
+function suMissingTimeOff(planRows, liveRows) {
+  const have = new Set((liveRows || []).map(suTimeOffKey));
+  return (planRows || []).filter(r => !have.has(suTimeOffKey(r)));
+}
+// suFmtTs(iso) -> "Sep 22, 2:14 PM" style label (never throws).
+function suFmtTs(iso) {
+  if (!iso) return "never";
+  try { const d = new Date(iso); if (isNaN(d.getTime())) return String(iso); return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+  catch (e) { return String(iso); }
+}
+
 // Node entry point for test/data-layer.test.js. A no-op in the browser.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
+    suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suAgeDays, suLastAssignedDay, suLastContiguousDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
+    suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,

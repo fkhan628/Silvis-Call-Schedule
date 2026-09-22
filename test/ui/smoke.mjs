@@ -1,4 +1,4 @@
-// Silvis Call Schedule - Playwright smoke harness (Prompt 6 Slices A-D + fix round 1).
+// Silvis Call Schedule - Playwright smoke harness (Prompt 6 Slices A-E + fix round 1 + Prompt 9).
 //
 // Serves the built index.html from a tiny static server, intercepts the Silvis
 // Supabase host (fake signed-in scheduler; writes answered 2xx + recorded with a
@@ -43,6 +43,26 @@
 //     instead of passing on the all-OPEN pre-load picture (finding vis-008)
 //   - opens the publish dialog and asserts the diff line carries a real arrow
 //     character, not the text "\u2192" (finding removal-02)
+//   - Slice E (Setup): every card expanded + screenshot (setup-<card>.png), Users
+//     last-admin refusal + PATCH ?id=eq.<uuid>, Rules pattern preview + save,
+//     Availability paste box, vacation conflict panel, Holidays coverage, East
+//     status, Generate preview (no writes; generate-preview.png), Accept & Publish
+//     with a FAILING snapshot (no writes) then for real (snapshot before the
+//     first schedule_days write, publish dialog), Import seed dry run (0 changes,
+//     no writes; import-dryrun.png) and a seed with an injected contact key
+//     (refused). Switch: failSnapshotInsert makes the snapshot POST answer 500.
+//   - fix round 2 (Slice E findings): the Generate presets start after the LAST
+//     PUBLISHED day (end of the contiguous block, 2026-11-01 -> 'Through end of
+//     year' = 2026-11-02 to 2027-01-03, wire-1); Accept with 'respect locks'
+//     OFF confirms BEFORE any write and a dismissed confirm writes nothing
+//     (safe-2); the publish dialog closes with 'Skip the notice' and says the
+//     changes are already saved (safe-2); an east_feed upsert aborted at the
+//     network level warns + toasts with the status unchanged, then a real
+//     Refresh's upsert payload is asserted against a mocked Davenport host
+//     (safe-1 / wire-2; switch abortEastFeedPost, EAST_HOST route); the import
+//     dry run warns when the live blob was app-saved and Apply refuses with
+//     zero writes when updated_at moved since the dry run (safe-4; switch
+//     blobReadOverride)
 //   - screenshots each tab to test/ui/out/<tab>.png
 // Exit code 1 on any failure.
 //
@@ -116,6 +136,19 @@ const EXPECTED_CONSOLE_ERRORS = [
 
 const FAKE_UID = "00000000-0000-4000-8000-000000000001";
 const FAKE_EMAIL = "scheduler@example.com";
+// The one mocked profile row (admin, linked to s1). Its email column stays
+// null on purpose: the Users card displays user_profiles.email and this run
+// must never put an address on screen or in a screenshot.
+const FAKE_PROFILE = { id: FAKE_UID, person_id: "s1", role: "admin", display_name: "Khan", email: null, created_at: "2026-09-22T00:00:00Z" };
+let failSnapshotInsert = false; // Slice E harness switch (see the Supabase route)
+let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
+let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_by } stamped onto every call_schedule_data GET row
+// Davenport (East) project mock - fetchEastWeeks reads schedule_weeks + the
+// roster blob from this host with its public key; the harness answers both so
+// a Refresh never leaves the machine and the upsert payload is deterministic.
+const EAST_HOST = "xqongyahdnkozqunpwmu.supabase.co";
+const EAST_WEEK = { week_monday: "2026-10-05", data: { dayCall: "s6", nights: { mon: "s1", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" }, off: [], isBackup: false, dayCallOverrides: {} } };
+const EAST_BLOB = { surgeons: [{ id: "s6", name: "FAK" }, { id: "s1", name: "AAA" }] };
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 const FAKE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
 
@@ -265,16 +298,33 @@ await context.addInitScript(({ token, version }) => {
   } catch (e) {}
 }, { token: FAKE_JWT, version: APP_VERSION });
 await context.route(cdnMatcher, routeCdn);
+// Davenport (East) project: answered from the canned week + roster blob above (GET only, like the app).
+await context.route((url) => url.hostname === EAST_HOST, async (route) => {
+  const url = new URL(route.request().url());
+  const json = (body) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+  if (route.request().method() !== "GET") return route.fulfill({ status: 405, contentType: "application/json", body: "[]" });
+  if (url.pathname.startsWith("/rest/v1/schedule_weeks")) return json([EAST_WEEK]);
+  if (url.pathname.startsWith("/rest/v1/call_schedule_data")) return json([{ id: "main", data: EAST_BLOB }]);
+  return json([]);
+});
 const page = await context.newPage();
 
 const pageErrors = [];
 const consoleErrors = [];
 const consoleWarns = [];
 const writes = [];
+const forcedConsoleErrors = []; // the browser's own "500" line for the snapshot insert the harness forced to fail
 const watchPage = (pg, tag) => {
   pg.on("pageerror", (e) => pageErrors.push(`${tag}: ` + String(e && e.message || e)));
-  pg.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()); if (msg.type() === "warning") consoleWarns.push(msg.text()); });
-  pg.on("requestfailed", (r) => failedRequests.push(`${tag}: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`));
+  pg.on("console", (msg) => {
+    if (msg.type() === "error") {
+      if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
+      else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
+      else consoleErrors.push(msg.text());
+    }
+    if (msg.type() === "warning") consoleWarns.push(msg.text());
+  });
+  pg.on("requestfailed", (r) => { if (abortEastFeedPost && /\/rest\/v1\/east_feed/.test(r.url())) return; failedRequests.push(`${tag}: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`); });
 };
 watchPage(page, "main");
 await installRealtimeMock(page);
@@ -283,7 +333,10 @@ await installRealtimeMock(page);
 // PATCH with Prefer: return=representation gets its own body back (so the
 // CAS path sees a version, exactly like the real table), everything else [].
 const representation = (method, url, body) => {
-  if (!url.pathname.startsWith("/rest/v1/schedule_days")) return [];
+  // The seed import's blob merge PATCHes call_schedule_data?id=eq.main and
+  // treats zero returned rows as "no row updated" - echo the body like PostgREST.
+  const echoes = url.pathname.startsWith("/rest/v1/schedule_days") || (method === "PATCH" && url.pathname.startsWith("/rest/v1/call_schedule_data"));
+  if (!echoes) return [];
   try {
     const b = JSON.parse(body || "{}");
     return Array.isArray(b) ? b : [b];
@@ -298,14 +351,43 @@ await page.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
     return json(200, { id: FAKE_UID, email: FAKE_EMAIL, aud: "authenticated", role: "authenticated" });
   }
   if (url.pathname.startsWith("/rest/v1/user_profiles")) {
-    if (method === "GET") return json(200, [{ id: FAKE_UID, person_id: "s1", role: "admin", display_name: "Khan", email: null }]);
-    writes.push({ method, path: url.pathname + url.search, body: req.postData() || "" });
+    if (method === "GET") return json(200, [FAKE_PROFILE]);
+    const body = req.postData() || "";
+    writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+    // A PATCH with Prefer: return=representation answers the merged row, like
+    // PostgREST does for a row the caller may update (Slice E Users card).
+    if (method === "PATCH") { let patch = {}; try { patch = JSON.parse(body); } catch (e) {} return json(200, [{ ...FAKE_PROFILE, ...patch }]); }
     return json(method === "POST" ? 201 : 200, []);
   }
   if (method === "POST" || method === "PATCH" || method === "DELETE" || method === "PUT") {
     const body = req.postData() || "";
-    writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+    // Harness switch (Slice E): make the snapshot insert FAIL so the
+    // snapshot-before-destructive contract can be asserted (nothing may be
+    // written when the capture fails). The attempt is still recorded.
+    if (failSnapshotInsert && method === "POST" && url.pathname.startsWith("/rest/v1/call_schedule_snapshots")) {
+      writes.push({ method, path: url.pathname + url.search, body: "(snapshot body omitted)", prefer: req.headers()["prefer"] || "", forcedFail: true });
+      return json(500, { message: "harness: snapshot insert forced to fail" });
+    }
+    // Harness switch (fix round 2, safe-1 / wire-2): the east_feed upsert dies at
+    // the network level (a rejected fetch, not an HTTP error) - the app must
+    // warn + toast and leave the cache alone. The attempt is still recorded.
+    if (abortEastFeedPost && method === "POST" && url.pathname.startsWith("/rest/v1/east_feed")) {
+      writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", aborted: true });
+      return route.abort("failed");
+    }
+    writes.push({ method, path: url.pathname + url.search, body: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? "(snapshot body omitted)" : body, prefer: req.headers()["prefer"] || "", snapshotReason: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? (() => { try { return JSON.parse(body).reason; } catch (e) { return null; } })() : undefined });
     return json(method === "POST" ? 201 : 200, representation(method, url, body));
+  }
+  // Harness switch (fix round 2, safe-4): stamp a foreign updated_at / updated_by
+  // onto the blob row so the import's dry run and its pre-apply re-read see a
+  // setup that "changed since the dry run".
+  if (blobReadOverride && method === "GET" && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
+    let rows = fixtureAnswer(url);
+    if (!rows) {
+      const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+      rows = await res.json().catch(() => []);
+    }
+    return json(200, (Array.isArray(rows) ? rows : []).map(r => ({ ...r, ...blobReadOverride })));
   }
   const fx = fixtureAnswer(url);
   if (fx) return json(200, fx);
@@ -816,7 +898,443 @@ try {
     else if (arrowLines.length === 0) fail("publish dialog has no line with the arrow character; dialog text: " + text.slice(0, 300).replace(/\n/g, " | "));
     else if (!arrowLines.some(l => /P OPEN \u2192 Burchett$/.test(l.trim()))) fail("publish dialog arrow lines do not include the edit '<m/d> P OPEN -> Burchett': " + arrowLines.join(" | "));
     else ok(`publish dialog: ${arrowLines.length} change line(s) with a real arrow, e.g. "${arrowLines[0].trim()}"`);
-    await page.click("button:has-text('Cancel')");
+    // finding safe-2: the close button must not read as undo - the changes are already saved
+    if (!/already saved for every viewer/.test(text) || !(await page.$("[data-testid=publish-skip]:has-text('Skip the notice')"))) fail("publish dialog: expected the 'already saved' note and a 'Skip the notice' close button (not 'Cancel'): " + text.slice(0, 200).replace(/\n/g, " | "));
+    else ok("publish dialog: says the changes are already saved and closes with 'Skip the notice' (no 'Cancel' that could read as undo)");
+    await page.click("[data-testid=publish-skip]");
+  }
+
+  // ====================== Prompt 6 Slice E: the Setup view ======================
+  // Every card expanded + screenshotted, then the write paths: Users (last-admin
+  // refusal, one allowed PATCH), Rules (pattern preview, save round trip),
+  // Availability paste box, vacation conflict panel, Holidays coverage, East
+  // status, Generate preview (no writes) -> Accept & Publish with a FAILING
+  // snapshot (no writes) -> Accept & Publish for real (snapshot before the
+  // first schedule_days write, publish dialog), Import seed dry run (zero
+  // changes, no writes) and a seed with an injected contact KEY (refused).
+  const SETUP_CARDS = ["setup_issues", "setup_roster", "setup_users", "setup_rules", "setup_availability", "setup_vacations", "setup_holidays", "setup_east", "setup_generate", "setup_import", "setup_office", "setup_clear"];
+  const openCard = async (ck) => {
+    const card = page.locator(`[data-testid=card-${ck}]`);
+    if ((await card.count()) === 0) return null;
+    if ((await card.getAttribute("data-open")) !== "1") { await page.click(`[data-testid=card-toggle-${ck}]`); await page.waitForTimeout(200); }
+    return card;
+  };
+  const bodyText = () => page.evaluate(() => document.body.innerText || "");
+  const writesSince = (n, pathPrefix) => writes.slice(n).filter(w => !pathPrefix || w.path.startsWith(pathPrefix));
+  const auditSince = (n, action) => writes.slice(n).map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).find(b => b && b.action === action);
+  try {
+    await page.click('button[data-tab="setup"]');
+    await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 8000 });
+    for (const ck of SETUP_CARDS) {
+      const before = pageErrors.length;
+      const card = await openCard(ck);
+      if (!card) { fail(`setup card ${ck} is missing`); continue; }
+      await page.waitForTimeout(300);
+      const name = ck.replace(/^setup_/, "");
+      await card.screenshot({ path: path.join(OUT, `setup-${name}.png`) });
+      if (pageErrors.length > before) fail(`setup card ${ck}: pageerror ${pageErrors.slice(before).join(" | ")}`); else ok(`setup card ${ck}: expanded, screenshot test/ui/out/setup-${name}.png`);
+    }
+    // Setup issues render as a list or "None."
+    const issues = await page.$eval("[data-testid=setup-issues]", el => el.innerText.trim()).catch(() => null);
+    if (issues === null) fail("setup issues card has no [data-testid=setup-issues] content"); else ok("setup issues: " + (issues === "None." ? "none" : issues.split("\n").length + " warning(s), e.g. \"" + issues.split("\n")[0] + "\""));
+
+    // ---- Users: refuse to demote the last admin; an allowed PATCH goes to ?id=eq.<uuid> ----
+    {
+      const before = writes.length;
+      await page.waitForSelector(`[data-testid=user-role-${FAKE_UID}]`, { timeout: 5000 });
+      await page.selectOption(`[data-testid=user-role-${FAKE_UID}]`, "viewer");
+      await page.waitForTimeout(500);
+      const refused = /last admin/.test(await bodyText());
+      const patches = writesSince(before, "/rest/v1/user_profiles");
+      const roleNow = await page.$eval(`[data-testid=user-role-${FAKE_UID}]`, el => el.value);
+      if (patches.length || !refused || roleNow !== "admin") fail(`Users: demoting the last admin must be refused (toast, no PATCH, select back to admin): patches=${patches.length} refused=${refused} role=${roleNow}`);
+      else ok("Users: demoting the last admin is refused client-side (toast names the reason, no user_profiles write, select snaps back to admin)");
+      const before2 = writes.length;
+      await page.fill(`[data-user="${FAKE_UID}"] input[type=text]`, "Khan (harness)");
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(600);
+      const dn = writesSince(before2).find(w => w.method === "PATCH" && w.path === `/rest/v1/user_profiles?id=eq.${FAKE_UID}`);
+      const dnBody = dn ? JSON.parse(dn.body || "{}") : null;
+      const dnAudit = auditSince(before2, "users.link");
+      if (!dn || dnBody.display_name !== "Khan (harness)" || !/return=representation/.test(dn.prefer || "")) fail("Users: display-name save did not PATCH user_profiles?id=eq.<uuid> with return=representation: " + JSON.stringify(dn));
+      else if (!dnAudit) fail("Users: no audit_log 'users.link' after the account PATCH");
+      else if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(JSON.stringify(dnAudit))) fail("Users: the audit row carries an email address");
+      else ok(`Users: PATCH /rest/v1/user_profiles?id=eq.${FAKE_UID.slice(0, 8)}... { display_name } with return=representation; audit users.link (no address in it)`);
+      const usersText = await page.$eval("[data-testid=users-table]", el => el.innerText);
+      if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(usersText)) fail("Users: an email address is rendered although the mocked profile has none"); else ok("Users: no address rendered for the mocked profile (email null -> '(none on file)')");
+    }
+
+    // ---- Rules editor: pattern preview (next 8 matching dates) + save round trip ----
+    {
+      await openCard("setup_rules");
+      await page.click("[data-testid=rules-pick-s3]");
+      await page.waitForSelector("[data-testid=pattern-row]", { timeout: 5000 });
+      const previews = await page.$$eval("[data-testid=pattern-preview]", els => els.map(e => e.textContent));
+      const first = previews[0] || "";
+      const dates = first.match(/\d{4}-\d{2}-\d{2}/g) || [];
+      const dow = (s) => new Date(s + "T12:00:00").getUTCDay();
+      const nthOk = dates.every(d => dow(d) === 1 && ([2, 4].includes(Math.floor((Number(d.slice(8, 10)) - 1) / 7) + 1)));
+      if (dates.length !== 8 || !nthOk) fail("Rules: the first pattern preview should list the next 8 2nd/4th Mondays: " + first.slice(0, 200)); else ok(`Rules (Acton): pattern preview lists 8 dates, all 2nd/4th Mondays: ${dates[0]} .. ${dates[7]}`);
+      await page.locator("[data-testid=rules-editor]").screenshot({ path: path.join(OUT, "setup-rules-acton.png") });
+      // save round trip: maxConsecutiveDays 3 -> 4 -> audit + blob autosave carries it, then back to 3
+      const before = writes.length;
+      const maxInput = page.locator("[data-testid=rules-editor] input[type=number][max='14']").first();
+      await maxInput.fill("4");
+      await page.click("[data-testid=rules-save]");
+      await page.waitForTimeout(1500);
+      const ruleAudit = auditSince(before, "rules.edit");
+      const blobW = writesSince(before, "/rest/v1/call_schedule_data").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).find(b => b && b.data && b.data.surgeonRules && b.data.surgeonRules.s3);
+      if (!ruleAudit) fail("Rules: no audit_log 'rules.edit' after Save");
+      else if (!blobW || blobW.data.surgeonRules.s3.maxConsecutiveDays !== 4) fail("Rules: the blob autosave after Save does not carry surgeonRules.s3.maxConsecutiveDays = 4: " + JSON.stringify(blobW && blobW.data.surgeonRules && blobW.data.surgeonRules.s3 && blobW.data.surgeonRules.s3.maxConsecutiveDays));
+      else if ("schedule" in blobW.data || "vacations" in blobW.data) fail("Rules: the blob write carries operational keys");
+      else ok("Rules: Save -> audit rules.edit + blob autosave with surgeonRules.s3.maxConsecutiveDays 4 (config keys only)");
+      await maxInput.fill("3");
+      await page.click("[data-testid=rules-save]");
+      await page.waitForTimeout(1200);
+    }
+
+    // ---- Availability: paste a date list -> collapsed ranges -> insert missing rows ----
+    {
+      await openCard("setup_availability");
+      await page.selectOption("[data-testid=paste-person]", "s2");
+      await page.selectOption("[data-testid=paste-year]", "2027");
+      await page.fill("[data-testid=paste-text]", "1/5, 1/6, 1/7, 1/12, bogus");
+      await page.waitForTimeout(200);
+      const prev = await page.$eval("[data-testid=paste-preview]", el => el.innerText.replace(/\s+/g, " "));
+      if (!/4 date\(s\) in 2 range\(s\): 1\/5-1\/7, 1\/12/.test(prev) || !/Not understood: bogus/.test(prev)) fail("Availability paste preview wrong: " + prev); else ok("Availability paste: '1/5, 1/6, 1/7, 1/12, bogus' -> 4 dates in 2 ranges (1/5-1/7, 1/12), 'bogus' reported");
+      const before = writes.length;
+      await page.click("[data-testid=paste-insert]");
+      await page.waitForTimeout(1200);
+      const ins = writesSince(before, "/rest/v1/availability").find(w => w.method === "POST");
+      const rows = ins ? JSON.parse(ins.body || "[]") : [];
+      const avAudit = auditSince(before, "availability.add");
+      if (!ins || rows.length !== 2 || rows[0].start_date !== "2027-01-05" || rows[0].end_date !== "2027-01-07" || rows[1].start_date !== "2027-01-12" || rows[0].source !== "setup" || rows[0].person_id !== "s2") fail("Availability paste: insert body wrong: " + JSON.stringify(rows));
+      else if (!avAudit) fail("Availability paste: no audit 'availability.add'");
+      else ok("Availability paste: POST /rest/v1/availability with 2 collapsed rows (2027-01-05..07, 2027-01-12; kind available, source setup) + audit availability.add");
+    }
+
+    // ---- Vacations: the client pre-check refuses with the conflicting dates and a 'go to day' link ----
+    {
+      await openCard("setup_vacations");
+      const before = writes.length;
+      const form = page.locator("[data-testid=card-setup_vacations]");
+      await form.locator("select").first().selectOption("s3");
+      const dateInputs = form.locator("input[type=date]");
+      await dateInputs.nth(0).fill("2026-10-10");
+      await dateInputs.nth(1).fill("2026-10-10");
+      await form.locator("button:has-text('Add vacation')").click();
+      await page.waitForSelector("[data-testid=vac-conflict]", { timeout: 5000 });
+      const conflictText = await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "));
+      const toPosts = writesSince(before, "/rest/v1/time_off");
+      if (toPosts.length) fail("Vacation conflict: a time_off write was sent although the client pre-check refused: " + JSON.stringify(toPosts.map(w => w.method + " " + w.path)));
+      else if (!/Acton is published on/.test(conflictText) || !/10\/10 primary - go to day/.test(conflictText)) fail("Vacation conflict panel wrong: " + conflictText);
+      else ok("Vacation pre-check: Acton 10/10 refused with the conflicting date and a 'go to day' link, no time_off write");
+      // Two conflicts are expected: 10/9 (trailing edge - Acton is PRIMARY the day before) and 10/10 itself.
+      const conflictDays = await page.$$eval("[data-testid=vac-conflict-day]", els => els.map(e => e.textContent.trim()));
+      if (conflictDays.length !== 2 || !conflictDays[0].startsWith("10/9 primary") || !conflictDays[1].startsWith("10/10 primary")) fail("Vacation conflict: expected the trailing-edge 10/9 primary and 10/10 primary links: " + JSON.stringify(conflictDays)); else ok("Vacation conflict: lists the trailing-edge day too (10/9 primary, 10/10 primary)");
+      await page.click("[data-testid=vac-conflict-day]:has-text('10/10')");
+      await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      const edT = await page.$eval("[data-testid=editor-title]", el => el.textContent);
+      if (!/October 10, 2026/.test(edT)) fail("'go to day' did not open the day editor on 10/10: " + edT); else ok("'go to day' opens the calendar day editor on Sat October 10, 2026");
+      await page.keyboard.press("Escape");
+      await page.click('button[data-tab="setup"]');
+      await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
+    }
+
+    // ---- Holidays: 2026 units with live coverage ----
+    {
+      await openCard("setup_holidays");
+      const holText = await page.$eval("[data-testid=hol-year-2026]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+      if (!/Thanksgiving/.test(holText) || !/P Khan/.test(holText)) fail("Holidays 2026: Thanksgiving row with 'P Khan' coverage expected: " + holText.slice(0, 300)); else ok("Holidays 2026: units listed with coverage from schedule_days (Thanksgiving P Khan)");
+      const counts = await page.$eval("[data-testid=hol-count-s1]", el => el.textContent);
+      if (!/Khan \d+\/\d+/.test(counts)) fail("Holidays: per-surgeon major/minor counts missing: " + counts); else ok("Holidays: per-surgeon counts beside each name (" + counts + ")");
+    }
+
+    // ---- East feed: status line + derived weeks ----
+    {
+      await openCard("setup_east");
+      const st = await page.$eval("[data-testid=east-status]", el => el.innerText.replace(/\s+/g, " "));
+      if (!/East feed: fetched .+, \d+ week\(s\), coverage \d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}, next derived primary week/.test(st)) fail("East status line wrong: " + st); else ok("East status: " + st.slice(0, 140));
+      const derived = await page.$eval("[data-testid=east-derived]", el => el.innerText.trim().split("\n").length).catch(() => 0);
+      if (!derived) fail("East: no derived weeks listed (feed/stated weeks expected)"); else ok(`East: ${derived} derived week(s) listed with source feed/stated`);
+      // fix round 2 (safe-1 / wire-2): the east_feed upsert dying at the network level
+      // (route.abort, not an HTTP error) must warn + toast, log no audit row and
+      // leave the status line alone - then the same Refresh succeeds and the
+      // upsert payload is asserted (Davenport is mocked: one week, FAK = s6).
+      {
+        const statusBefore = st;
+        abortEastFeedPost = true;
+        const before = writes.length;
+        await page.click("[data-testid=east-refresh]");
+        await waitFor(() => writesSince(before, "/rest/v1/east_feed").length > 0, 20000);
+        await page.waitForTimeout(900);
+        const posts = writesSince(before, "/rest/v1/east_feed");
+        const txt = await bodyText();
+        const toasted = /East feed refresh FAILED - the cached weeks are unchanged/.test(txt);
+        const warned = consoleWarns.some(w => /East feed refresh failed/.test(w));
+        const refreshAudit = auditSince(before, "east.refresh");
+        const statusAfter = await page.$eval("[data-testid=east-status]", el => el.innerText.replace(/\s+/g, " "));
+        const stillBusy = await page.$eval("[data-testid=east-refresh]", el => el.disabled);
+        if (posts.length !== 1 || !posts[0].aborted) fail("East refresh (aborted upsert): expected exactly one aborted east_feed POST, saw " + JSON.stringify(posts.map(w => w.method + " " + w.path + (w.aborted ? " [aborted]" : ""))));
+        else if (!toasted) fail("East refresh (aborted upsert): no 'East feed refresh FAILED' toast - the failure was silent");
+        else if (!warned) fail("East refresh (aborted upsert): no console.warn 'East feed refresh failed'");
+        else if (refreshAudit) fail("East refresh (aborted upsert): an audit 'east.refresh' row was logged although the upsert failed");
+        else if (statusAfter !== statusBefore) fail("East refresh (aborted upsert): the status line changed although the upsert failed: " + statusAfter.slice(0, 140));
+        else if (stillBusy) fail("East refresh (aborted upsert): the Refresh button stayed disabled (finally did not run)");
+        else ok("East refresh with the east_feed POST aborted at the network level: console.warn + error toast, no audit row, status line unchanged, button re-enabled (no unhandled rejection)");
+        abortEastFeedPost = false;
+        const before2 = writes.length;
+        await page.click("[data-testid=east-refresh]");
+        await waitFor(() => !!auditSince(before2, "east.refresh"), 20000);
+        await page.waitForTimeout(400);
+        const post2 = writesSince(before2, "/rest/v1/east_feed").find(w => w.method === "POST");
+        let rows2 = []; try { rows2 = JSON.parse(post2 ? post2.body : "[]"); } catch (e) {}
+        const txt2 = await bodyText();
+        if (!post2 || !/resolution=merge-duplicates/.test(post2.prefer || "") || rows2.length !== 1 || rows2[0].week_monday !== "2026-10-05" || !rows2[0].data || rows2[0].data.dayCall !== "s6" || !rows2[0].fetched_at) fail("East refresh: upsert payload wrong: " + JSON.stringify({ prefer: post2 && post2.prefer, rows: rows2 }).slice(0, 300));
+        else if (!/East feed refreshed: 1 published week\(s\) cached/.test(txt2)) fail("East refresh: success toast missing after the upsert");
+        else ok("East refresh: POST /rest/v1/east_feed (merge-duplicates) with the 1 mocked Davenport week (2026-10-05, dayCall s6, fetched_at) + audit east.refresh + success toast");
+      }
+    }
+
+    // ---- Generate: presets start after the LAST PUBLISHED day (end of the contiguous block, 2026-11-01),
+    //      not after the pre-assigned Thanksgiving unit (finding wire-1) ----
+    await openCard("setup_generate");
+    {
+      const teoy = await page.getAttribute("[data-testid=gen-preset-through-end-of-year]", "title");
+      const three = await page.getAttribute("[data-testid=gen-preset-3-months]", "title");
+      const startDefault = await page.$eval("[data-testid=gen-start]", el => el.value);
+      const endDefault = await page.$eval("[data-testid=gen-end]", el => el.value);
+      const lp = await page.$eval("[data-testid=gen-last-published]", el => el.textContent);
+      if (teoy !== "2026-11-02 to 2027-01-03" || three !== "2026-11-02 to 2027-01-31" || startDefault !== "2026-11-02" || endDefault !== "2027-01-03") fail(`Generate presets: expected 'Through end of year' = 2026-11-02 to 2027-01-03 (default range) and '3 months' = ..2027-01-31, got teoy=${teoy} 3m=${three} start=${startDefault} end=${endDefault}`);
+      else if (!/Last published day on file: 2026-11-01/.test(lp) || !/Later locked days on file: 11\/26-11\/29 \(Thanksgiving\)/.test(lp)) fail("Generate panel text: expected 'Last published day on file: 2026-11-01' and 'Later locked days on file: 11/26-11/29 (Thanksgiving)': " + lp);
+      else ok("Generate presets: 'Through end of year' = 2026-11-02 to 2027-01-03 is the default range (milestone), 3 months ..2027-01-31; panel names the last published day 2026-11-01 and the later locked 11/26-11/29 (Thanksgiving)");
+    }
+
+    // ---- Accept with 'respect locks' OFF over the locked import (10/5-10/11): a confirm BEFORE any write;
+    //      dismissed -> zero writes (no snapshot, no schedule_days), preview kept (finding safe-2) ----
+    {
+      await page.fill("[data-testid=gen-start]", "2026-10-05");
+      await page.fill("[data-testid=gen-end]", "2026-10-11");
+      await page.fill("[data-testid=gen-n]", "3");
+      await page.fill("[data-testid=gen-seed]", "7");
+      await page.uncheck("[data-testid=gen-respect-locks]");
+      await page.click("[data-testid=gen-run]");
+      await page.waitForSelector("[data-testid=gen-diagnostics]", { timeout: 90000 });
+      await page.waitForTimeout(500);
+      const dialogs = [];
+      const onDlg = (d) => { dialogs.push(d.message()); d.dismiss(); };
+      page.on("dialog", onDlg);
+      const before = writes.length;
+      await page.click("[data-testid=gen-accept]");
+      await page.waitForTimeout(1500);
+      page.off("dialog", onDlg);
+      const bad = writesSince(before).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|audit_log)/.test(w.path));
+      const kept = await page.$("[data-testid=gen-preview]");
+      const txt = await bodyText();
+      if (dialogs.length !== 1 || !/This replaces \d+ locked \/ published slot\(s\)/.test(dialogs[0]) || !/'respect locks' OFF/.test(dialogs[0])) fail("Accept (respect locks off): expected one confirm naming the locked / published slots and the OFF checkbox, got " + JSON.stringify(dialogs));
+      else if (bad.length) fail("Accept (respect locks off, confirm dismissed): something was written: " + JSON.stringify(bad.map(w => w.method + " " + w.path)));
+      else if (!kept || !/Nothing was written - the preview is kept/.test(txt)) fail(`Accept (respect locks off, dismissed): preview kept=${!!kept}, toast=${/Nothing was written/.test(txt)}`);
+      else ok(`Accept with 'respect locks' OFF over 10/5-10/11: confirm BEFORE any write ("${dialogs[0].split("\n")[0].slice(0, 110)}"); dismissed -> zero snapshot / schedule_days / audit writes, preview kept`);
+      await page.click("[data-testid=gen-discard]");
+      await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
+      await page.check("[data-testid=gen-respect-locks]");
+    }
+
+    // ---- Generate: preview 2026-11-02 .. 2026-11-30, N=10, seed 7 -> diagnostics, no writes ----
+    await page.fill("[data-testid=gen-start]", "2026-11-02");
+    await page.fill("[data-testid=gen-end]", "2026-11-30");
+    await page.fill("[data-testid=gen-n]", "10");
+    await page.fill("[data-testid=gen-seed]", "7");
+    const beforeGen = writes.length;
+    await page.click("[data-testid=gen-run]");
+    await page.waitForSelector("[data-testid=gen-diagnostics]", { timeout: 90000 });
+    await page.waitForTimeout(1200);
+    const genForbidden = writesSince(beforeGen).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
+    if (genForbidden.length) fail("Generate preview wrote something: " + JSON.stringify(genForbidden.map(w => w.method + " " + w.path))); else ok("Generate preview: no schedule_days / snapshot / availability / time_off write (preview is read-only)");
+    const meta = await page.$eval("[data-testid=gen-preview-meta]", el => el.textContent);
+    if (!/11\/2 - 11\/30 \(29 days\), seed 7, best of 10/.test(meta)) fail("Generate preview meta wrong: " + meta); else ok("Generate preview: " + meta.slice(0, 120));
+    const tallyRange = await page.$$eval("[data-testid=gen-tallies] tr[data-tally-range]", els => els.length);
+    const tallyRows = await page.$$eval("[data-testid=gen-tallies] tr[data-tally]", els => els.map(e => e.innerText.replace(/\t/g, " | ")));
+    if (tallyRange !== 6 || tallyRows.length !== 6) fail(`Generate tallies: expected 6 month rows + 6 range rows, got ${tallyRows.length} + ${tallyRange}`); else ok("Generate tallies: 6 surgeons x (2026-11 + range) rows vs cap/target");
+    tallyRows.forEach(r => console.log("     " + r));
+    const unc = Number(await page.$eval("[data-testid=gen-diagnostics]", el => el.getAttribute("data-uncovered-count")));
+    const uncRows = await page.$$eval("[data-testid=gen-uncovered] tr[data-uncovered]", els => els.map(e => e.getAttribute("data-uncovered"))).catch(() => []);
+    if (unc > 0 && uncRows.length !== unc) fail(`Generate uncovered: ${unc} open slot(s) but ${uncRows.length} row(s) rendered`); else ok(`Generate uncovered: ${unc} open slot(s)${unc ? " rendered with per-surgeon reasons: " + uncRows.join(", ") : ""}`);
+    const scoreText = await page.$eval("[data-testid=gen-score]", el => el.innerText.replace(/\s+/g, " "));
+    if (!/total/.test(scoreText)) fail("Generate score breakdown missing: " + scoreText); else ok("Generate score: " + scoreText.slice(0, 120));
+    await page.locator("[data-testid=card-setup_generate]").screenshot({ path: path.join(OUT, "generate-diagnostics.png") });
+    ok("screenshot test/ui/out/generate-diagnostics.png");
+    // the calendar shows the preview days with the distinct style
+    await page.click('button[data-tab="calendar"]');
+    await page.waitForSelector("[data-testid=preview-banner]", { timeout: 5000 });
+    const monthLabel = await page.$eval("[data-testid=cal-month]", el => el.textContent.trim());
+    const previewCells = await page.$$eval('[data-testid=cal-grid] .cal-cell[data-preview="1"]', els => els.map(e => e.getAttribute("data-day")));
+    const previewStyled = await page.$eval('[data-testid=cal-grid] .cal-cell[data-preview="1"]', el => getComputedStyle(el).outlineStyle).catch(() => "");
+    if (monthLabel !== "November 2026" || previewCells.length !== 29 || previewCells[0] !== "2026-11-02" || previewStyled !== "dashed") fail(`Calendar preview: month ${monthLabel}, ${previewCells.length} preview cells (${previewCells[0]}..), outline ${previewStyled}`); else ok("Calendar preview: November 2026, 29 cells 11/2..11/30 drawn with the dashed preview outline + banner");
+    await page.screenshot({ path: path.join(OUT, "generate-preview.png"), fullPage: true });
+    ok("screenshot test/ui/out/generate-preview.png");
+    await page.click('button[data-tab="setup"]');
+    await page.waitForSelector("[data-testid=gen-accept]", { timeout: 5000 });
+
+    // ---- Accept & Publish with a FAILING snapshot: nothing is written, the preview is kept ----
+    failSnapshotInsert = true;
+    const beforeFail = writes.length;
+    await page.click("[data-testid=gen-accept]");
+    await waitFor(() => writesSince(beforeFail, "/rest/v1/call_schedule_snapshots").length > 0, 30000);
+    await page.waitForTimeout(1500);
+    const snapFails = writesSince(beforeFail, "/rest/v1/call_schedule_snapshots");
+    const dayAfterFail = writesSince(beforeFail, "/rest/v1/schedule_days");
+    const keptPreview = await page.$("[data-testid=gen-preview]");
+    const failToast = /Couldn't save a backup snapshot - NOTHING was published/.test(await bodyText());
+    if (snapFails.length !== 1 || !snapFails[0].forcedFail) fail("Accept (snapshot failing): expected exactly one failed snapshot insert, saw " + JSON.stringify(snapFails.map(w => w.method + " " + w.path + (w.forcedFail ? " [forced fail]" : ""))));
+    else if (dayAfterFail.length) fail("Accept (snapshot failing): schedule_days was written although the snapshot failed: " + JSON.stringify(dayAfterFail.map(w => w.method + " " + w.path)));
+    else if (!keptPreview || !failToast) fail(`Accept (snapshot failing): preview kept=${!!keptPreview}, toast=${failToast}`);
+    else ok("Accept & Publish with a failing snapshot: one snapshot POST (500), ZERO schedule_days writes, preview kept, toast says nothing was published");
+    failSnapshotInsert = false;
+
+    // ---- Accept & Publish for real: snapshot BEFORE the first schedule_days write, then the publish dialog ----
+    const beforeOk = writes.length;
+    await page.click("[data-testid=gen-accept]");
+    await page.waitForSelector("[data-testid=publish-dialog]", { timeout: 60000 });
+    await page.waitForTimeout(500);
+    const seq = writesSince(beforeOk);
+    const snapIdx = seq.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/call_schedule_snapshots"));
+    const dayIdx = seq.findIndex(w => w.path.startsWith("/rest/v1/schedule_days"));
+    const dayWrites = seq.filter(w => w.path.startsWith("/rest/v1/schedule_days"));
+    const casShaped = dayWrites.every(w => (w.method === "POST" && /"version":1/.test(w.body) && /return=representation/.test(w.prefer || "")) || (w.method === "PATCH" && /schedule_days\?day=eq\.\d{4}-\d{2}-\d{2}&version=eq\.\d+/.test(w.path)));
+    const genAudit = auditSince(beforeOk, "schedule.generate_publish");
+    if (snapIdx < 0) fail("Accept & Publish: no snapshot insert recorded");
+    else if (seq[snapIdx].snapshotReason !== "generate_publish") fail("Accept & Publish: snapshot reason is " + seq[snapIdx].snapshotReason + ", expected generate_publish");
+    else if (dayIdx < 0) fail("Accept & Publish: no schedule_days write recorded");
+    else if (dayIdx < snapIdx) fail(`Accept & Publish: a schedule_days write (#${dayIdx}) happened BEFORE the snapshot insert (#${snapIdx})`);
+    else if (dayWrites.length < 20 || !casShaped) fail(`Accept & Publish: ${dayWrites.length} schedule_days write(s), CAS-shaped=${casShaped}: ` + JSON.stringify(dayWrites.slice(0, 3).map(w => w.method + " " + w.path)));
+    else if (!genAudit) fail("Accept & Publish: no audit_log 'schedule.generate_publish'");
+    else ok(`Accept & Publish: snapshot 'generate_publish' (#${snapIdx}) precedes the first schedule_days write (#${dayIdx}); ${dayWrites.length} CAS writes (${dayWrites.filter(w => w.method === "POST").length} POST v1, ${dayWrites.filter(w => w.method === "PATCH").length} PATCH ?day&version); audit schedule.generate_publish; publish dialog opened`);
+    const dlgText = await page.$eval("[data-testid=publish-dialog]", el => el.innerText);
+    if (!/Publish schedule changes/.test(dlgText) || !/→/.test(dlgText)) fail("publish dialog after Accept lacks the diff lines: " + dlgText.slice(0, 200)); else ok("publish dialog after Accept: diff since last publish with arrow lines (" + (dlgText.match(/→/g) || []).length + ")");
+    await page.screenshot({ path: path.join(OUT, "generate-publish-dialog.png"), fullPage: false });
+    await page.click("[data-testid=publish-dialog] [data-testid=publish-skip]");
+    await page.waitForSelector("[data-testid=publish-dialog]", { state: "detached", timeout: 3000 });
+    if (await page.$("[data-testid=gen-preview]")) fail("Accept & Publish: the preview is still shown after acceptance"); else ok("Accept & Publish: preview cleared");
+    await page.click('button[data-tab="calendar"]');
+    await page.waitForTimeout(400);
+    const nov3 = await cellAttr("2026-11-03", "data-primary");
+    const nov3prev = await cellAttr("2026-11-03", "data-preview");
+    if (!nov3 || nov3prev === "1") fail(`Accept & Publish: 2026-11-03 should now be a saved assignment (primary '${nov3}', preview '${nov3prev}')`); else ok(`Accept & Publish: 2026-11-03 is a saved assignment (P ${nov3}), no longer a preview`);
+    await page.waitForTimeout(1500); // let the autosave pass settle (no diff -> no extra day writes)
+    await page.click('button[data-tab="setup"]');
+    await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
+
+    // ---- Import seed: dry run shows zero changes against the live rows and writes nothing ----
+    {
+      await openCard("setup_import");
+      const before = writes.length;
+      await page.setInputFiles("[data-testid=seed-file]", path.join(ROOT, "docs", "silvis-seed.json"));
+      await page.waitForSelector("[data-testid=seed-dryrun]", { timeout: 60000 });
+      await page.waitForTimeout(500);
+      const total = await page.$eval("[data-testid=seed-total]", el => el.innerText.replace(/\s+/g, " "));
+      const diffText = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
+      const applyDisabled = await page.$eval("[data-testid=seed-apply]", el => el.disabled);
+      const impWrites = writesSince(before).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
+      if (!/Total changes: 0/.test(total) || !/No changes - the live tables already match the plan\./.test(diffText)) fail("Import dry run: expected zero changes against the live rows: " + total + " | " + diffText.split("\n").slice(-1)[0]);
+      else if (!applyDisabled) fail("Import dry run: Apply must be disabled when there is nothing to apply");
+      else if (impWrites.length) fail("Import dry run wrote something: " + JSON.stringify(impWrites.map(w => w.method + " " + w.path)));
+      else ok("Import seed dry run (docs/silvis-seed.json): 0 changes against the live rows, Apply disabled, no writes");
+      diffText.split("\n").filter(l => /^(call_schedule_data|schedule_days|availability|time_off)/.test(l)).forEach(l => console.log("     " + l));
+      await page.locator("[data-testid=card-setup_import]").screenshot({ path: path.join(OUT, "import-dryrun.png") });
+      ok("screenshot test/ui/out/import-dryrun.png");
+      // a seed with an injected contact KEY (no address anywhere - the key name alone is refused)
+      const seedObj = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+      seedObj.roster[0] = { ...seedObj.roster[0], email: "redacted" };
+      const before2 = writes.length;
+      await page.setInputFiles("[data-testid=seed-file]", { name: "seed-with-contact-key.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(seedObj)) });
+      await page.waitForSelector("[data-testid=seed-error]", { timeout: 10000 });
+      const errText2 = await page.$eval("[data-testid=seed-error]", el => el.innerText);
+      const dry = await page.$("[data-testid=seed-dryrun]");
+      const refToast = /Seed REFUSED: it carries contact data/.test(await bodyText());
+      if (!/CONTACT_DATA_REFUSED/.test(errText2) || !/roster\[0\]\.email/.test(errText2)) fail("Import: the seed with an email key was not refused with CONTACT_DATA_REFUSED at roster[0].email: " + errText2.slice(0, 200));
+      else if (dry) fail("Import: a dry-run panel is shown for the refused seed");
+      else if (writesSince(before2).length) fail("Import: the refused seed produced writes: " + JSON.stringify(writesSince(before2).map(w => w.method + " " + w.path)));
+      else if (!refToast) fail("Import: the refusal did not toast loudly");
+      else ok("Import: a seed with an injected email KEY is refused loudly (CONTACT_DATA_REFUSED at roster[0].email; no dry run, no writes, toast)");
+      // Apply path: a seed with ONE extra Burchett December date -> dry run shows the blob update
+      // + 1 availability insert -> Apply (confirm accepted) -> snapshot 'seed_import' BEFORE the
+      // blob PATCH and the availability POST; no schedule_days / time_off write; audit seed.import.
+      const seed3 = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+      const decList = seed3.surgeonRules.s2.explicitAvailable["2026-12"];
+      const has = (d) => decList.includes(d);
+      let extra = null;
+      for (let day = 2; day <= 30 && !extra; day++) { const d = "2026-12-" + String(day).padStart(2, "0"), p = "2026-12-" + String(day - 1).padStart(2, "0"), n = "2026-12-" + String(day + 1).padStart(2, "0"); if (!has(d) && !has(p) && !has(n)) extra = d; }
+      if (!extra || !Array.isArray(decList)) fail("Import apply: could not pick an isolated extra December date for Burchett");
+      else {
+        decList.push(extra);
+        const before3 = writes.length;
+        await page.setInputFiles("[data-testid=seed-file]", { name: "seed-plus-one-date.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(seed3)) });
+        await page.waitForSelector("[data-testid=seed-dryrun]", { timeout: 60000 });
+        await page.waitForTimeout(400);
+        const total3 = await page.$eval("[data-testid=seed-total]", el => el.innerText.replace(/\s+/g, " "));
+        const diff3 = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
+        if (!/Total changes: 2/.test(total3) || !new RegExp("insert s2 available/any " + extra).test(diff3) || !/surgeonRules=update/.test(diff3)) fail(`Import apply dry run (extra ${extra}): expected 2 changes (blob surgeonRules + 1 availability insert): ${total3} | ${diff3.split("\n").filter(l => /insert|surgeonRules/.test(l)).join(" | ")}`);
+        else ok(`Import apply dry run: extra Burchett date ${extra} -> 2 changes (surgeonRules=update, insert s2 available/any ${extra})`);
+        const onDialog = (d) => d.accept();
+        page.on("dialog", onDialog);
+        const beforeApply = writes.length;
+        await page.click("[data-testid=seed-apply]");
+        await page.waitForSelector("[data-testid=seed-result]", { timeout: 60000 });
+        page.off("dialog", onDialog);
+        await page.waitForTimeout(800);
+        const aseq = writesSince(beforeApply);
+        const aSnap = aseq.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/call_schedule_snapshots"));
+        // fix round 2 (safe-4): the PATCH is a compare-and-swap on the stamp seen at dry-run time (?id=eq.main&updated_at=eq.<seen>)
+        const aBlob = aseq.findIndex(w => w.method === "PATCH" && /^\/rest\/v1\/call_schedule_data\?id=eq\.main&updated_at=eq\.\d{4}-\d{2}-\d{2}T/.test(w.path));
+        const aAv = aseq.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/availability"));
+        const aBad = aseq.filter(w => w.path.startsWith("/rest/v1/schedule_days") || w.path.startsWith("/rest/v1/time_off"));
+        const avBody = aAv >= 0 ? JSON.parse(aseq[aAv].body || "[]") : [];
+        const blobBody = aBlob >= 0 ? JSON.parse(aseq[aBlob].body || "{}") : {};
+        const resText = await page.$eval("[data-testid=seed-result]", el => el.innerText.replace(/\s+/g, " "));
+        const impAudit = auditSince(beforeApply, "seed.import");
+        if (aSnap < 0 || aseq[aSnap].snapshotReason !== "seed_import") fail("Import apply: no snapshot 'seed_import' recorded: " + JSON.stringify(aseq.map(w => w.method + " " + w.path)));
+        else if (aBlob < 0 || aBlob < aSnap) fail(`Import apply: blob PATCH missing or before the snapshot (snap #${aSnap}, blob #${aBlob})`);
+        else if (!(blobBody.data && blobBody.data.surgeonRules && blobBody.data.surgeonRules.s2 && blobBody.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra)) || !blobBody.data.roster || "schedule" in blobBody.data) fail("Import apply: the merged blob is wrong: keys " + Object.keys(blobBody.data || {}).join(","));
+        else if (aAv < 0 || aAv < aSnap || avBody.length !== 1 || avBody[0].start_date !== extra || avBody[0].person_id !== "s2" || avBody[0].source !== "seed") fail(`Import apply: availability insert wrong (index ${aAv}, snap ${aSnap}): ` + JSON.stringify(avBody));
+        else if (aBad.length) fail("Import apply: schedule_days / time_off were written although nothing changed there: " + JSON.stringify(aBad.map(w => w.method + " " + w.path)));
+        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !/availability inserted 1, skipped 36/.test(resText) || !/schedule_days inserted 0, updated 0, kept \(app-edited\) 4\b/.test(resText)) fail("Import apply: result panel wrong (expected 1 availability insert of 37 plan rows, no schedule_days change, the 4 Thanksgiving days kept because their generated backups differ from the seed-owned live rows): " + resText);
+        else if (!impAudit) fail("Import apply: no audit_log 'seed.import'");
+        else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the 1 missing row (${extra}); no schedule_days / time_off write; audit seed.import; result: "${resText.slice(0, 120)}"`);
+        // Roster autosave after the merge must not regress: the extra date stays in the next blob write.
+        await page.waitForTimeout(1200);
+        const laterBlob = writesSince(beforeApply, "/rest/v1/call_schedule_data").filter(w => w.method === "POST").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).filter(Boolean).slice(-1)[0];
+        if (laterBlob && !(laterBlob.data && laterBlob.data.surgeonRules && laterBlob.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra))) fail("Import apply: the autosave after the merge dropped the merged blob keys (adoptBlob did not take)"); else ok("Import apply: the autosave that follows carries the merged blob (adoptBlob took)");
+        // fix round 2 (safe-4): (1) the dry run warns when the live blob was last saved in the
+        // app (updated_by not 'seed') and names the keys Apply would replace; (2) Apply re-reads
+        // the stamp first and refuses - zero writes, no snapshot - when it moved since the dry run.
+        blobReadOverride = { updated_at: "2026-09-22T10:00:00.000000+00:00", updated_by: "s1" };
+        await page.setInputFiles("[data-testid=seed-file]", { name: "seed-plus-one-date-2.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(seed3)) });
+        await page.waitForSelector("[data-testid=seed-dryrun]", { timeout: 60000 });
+        await page.waitForTimeout(400);
+        const blobWarn = await page.$eval("[data-testid=seed-blob-warning]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+        if (!/last saved in the app by Khan/.test(blobWarn) || !/surgeonRules/.test(blobWarn) || !/replaces these top-level keys wholesale/.test(blobWarn)) fail("Import dry run (app-saved blob): expected the warning naming Khan and the replaced key surgeonRules: " + blobWarn.slice(0, 240));
+        else ok("Import dry run (blob updated_by s1): warns that the setup was last saved in the app by Khan and that Apply replaces surgeonRules wholesale");
+        blobReadOverride = { updated_at: "2026-09-22T10:05:00.000000+00:00", updated_by: "s1" };
+        const onDialog2 = (d) => d.accept();
+        page.on("dialog", onDialog2);
+        const beforeStale = writes.length;
+        await page.click("[data-testid=seed-apply]");
+        const staleToast = await waitFor(async () => /changed since the dry run/.test(await bodyText()), 20000);
+        page.off("dialog", onDialog2);
+        await page.waitForTimeout(700);
+        blobReadOverride = null;
+        const staleWrites = writesSince(beforeStale).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off|audit_log)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
+        const staleErr = await page.$eval("[data-testid=seed-error]", el => el.innerText).catch(() => "");
+        if (!staleToast) fail("Import apply (setup changed since the dry run): no 'changed since the dry run' toast");
+        else if (staleWrites.length) fail("Import apply (setup changed since the dry run): something was written: " + JSON.stringify(staleWrites.map(w => w.method + " " + w.path)));
+        else if (!/Setup changed since the dry run/.test(staleErr)) fail("Import apply (setup changed): the card does not say the dry run is stale: " + staleErr.slice(0, 200));
+        else ok("Import apply with call_schedule_data.updated_at moved since the dry run: refused before the snapshot (toast + card), zero snapshot / blob / availability / time_off / schedule_days / audit writes");
+      }
+    }
+  } catch (e) {
+    fail("Slice E harness exception: " + (e && e.stack || e));
+    try { await page.screenshot({ path: path.join(OUT, "failure-setup.png"), fullPage: true }); } catch (e2) {}
   }
 
   // Public read-only mode renders without auth.
@@ -868,6 +1386,7 @@ if (pageErrors.length) fail("pageerrors: " + pageErrors.join(" | ")); else ok("n
 const unexpected = consoleErrors.filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 const expected = consoleErrors.filter(t => EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 if (expected.length) console.log(`     (${expected.length} expected console error(s) ignored: ${[...new Set(expected)].slice(0, 3).join(" | ")})`);
+if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from the snapshot insert the harness forced to 500 - expected)`);
 if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ")); else ok("no unexpected console errors");
 
 console.log(`\ncdn cache: ${cdnHits} hit(s), ${cdnMisses} miss(es) (${path.relative(ROOT, CDN_CACHE)})`);

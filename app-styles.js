@@ -19,6 +19,14 @@ const css = {
   // Calendar tools card (Prompt 9 exports): one block per export family.
   toolBlock: { paddingBottom:12, marginBottom:12, borderBottom:"1px solid #e8ecf0" },
   toolTitle: { fontSize:12, fontWeight:700, color:"#1a2a3a", margin:"0 0 6px" },
+  // Setup view (Prompt 6 Slice E): sub-section titles, compact controls, notice boxes.
+  subT: { fontSize:12, fontWeight:700, color:"#1a2a3a", margin:"12px 0 6px" },
+  mini: (a) => ({ background:a?"#1a6fa8":"transparent", border:`1px solid ${a?"#1a6fa8":"#c8d0d8"}`, color:a?"#ffffff":"#5a6a78", borderRadius:6, padding:"3px 9px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:font }),
+  danger: { background:"none", border:"1px solid #e8c0c0", color:"#904040", borderRadius:6, padding:"3px 9px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:font },
+  warnBox: { fontSize:12, color:"#7a5a20", background:"#fbf1d8", border:"1px solid #e8d090", borderRadius:6, padding:"8px 10px", lineHeight:1.5 },
+  errBox: { fontSize:12, color:"#8a3030", background:"#fdeaea", border:"1px solid #e0a8a8", borderRadius:6, padding:"8px 10px", lineHeight:1.5 },
+  okBox: { fontSize:12, color:"#1a6030", background:"#e8f8e8", border:"1px solid #a0d8a0", borderRadius:6, padding:"8px 10px", lineHeight:1.5 },
+  tableWrap: { overflowX:"auto", border:"1px solid #e0e4ea", borderRadius:6 },
   badge: (i, name) => { const c = (typeof surgeonColors==="function") ? surgeonColors(name, i) : PAL[i%7]; return { display:"inline-flex", alignItems:"center", background:c.tg, color:c.tx, border:`1px solid ${c.bd}`, borderRadius:5, padding:"2px 9px", fontSize:12, fontWeight:600, whiteSpace:"nowrap", letterSpacing:0.3 }; },
 };
 
