@@ -144,15 +144,89 @@ function openSlotCounts(list) {
   (Array.isArray(list) ? list : []).forEach(s => { if (s && (s.role === "primary" || s.role === "backup")) { out[s.role]++; out.total++; } });
   return out;
 }
-// openSlotWeekendKinds(diagnostics.weekendUnits) -> { '<friday>': 'block'|'split'|'daily' }
-// (locked / open / unfilled units carry no pattern and are left out).
+// openSlotWeekendKinds(diagnostics.weekendUnits | { '<friday>': kind }) -> { '<friday>': 'block'|'split'|'daily' }
+// (locked / open / unfilled units carry no pattern and are left out). The map
+// form is the persisted lastGenerate.weekendKinds (part 4), validated the same way.
 function openSlotWeekendKinds(weekendUnits) {
   const out = {};
-  (Array.isArray(weekendUnits) ? weekendUnits : []).forEach(u => {
-    if (!u || !suIsIso(u.friday)) return;
-    if (u.kind === "block" || u.kind === "split" || u.kind === "daily") out[u.friday] = u.kind;
-  });
+  const keep = (friday, kind) => { if (suIsIso(friday) && (kind === "block" || kind === "split" || kind === "daily")) out[friday] = kind; };
+  if (Array.isArray(weekendUnits)) weekendUnits.forEach(u => { if (u && typeof u === "object") keep(u.friday, u.kind); });
+  else if (weekendUnits && typeof weekendUnits === "object") Object.keys(weekendUnits).forEach(f => keep(f, weekendUnits[f]));
   return out;
+}
+/* openSlotReason(reasonsById) -> 'no eligible surgeon - <categories>' (Prompt 13 part 4).
+   reasonsById is one diagnostics.uncovered[i].reasons: { surgeonId: [hardCode...] }
+   where a hard code is a rules.js vocabulary entry (rules.HARD_REASONS) with an
+   optional ':detail' and, on a holiday-unit day, an '@YYYY-MM-DD' suffix. Only
+   the code's PREFIX is read: it maps to one category of the fixed table below,
+   the categories are unioned across the surgeons and joined in table order;
+   a prefix the table does not know (a renamed rule) reads 'other rules'. The
+   generator's two placeholders (eligible-but-not-placed, holiday-unit:
+   eligible-but-unit-not-filled - generator.js flags them 'generator bug,
+   report it') mean someone WAS eligible, so they never read as a rules outcome:
+   the sentence is 'generator could not place - report it', with the other
+   surgeons' categories in parentheses when there are any. The sentence is
+   written to the anon-readable blob and shown on the board, so it never
+   carries an id, a name, a date or any free text from the input -
+   test/open-shifts.test.js runs every vocabulary code through the importer's
+   denylist gate (Prompt 12 F). No category at all (no active surgeon, junk
+   input) -> 'no eligible surgeon'. */
+const OPEN_SLOT_REASON_TABLE = [
+  ["vacations", ["time-off", "day-before-vacation"]],
+  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row"]],
+  ["East feed busy", ["east-busy", "east-forecast-busy"]],
+  ["East-derived week", ["derived-lock", "derived-lock-held"]],
+  ["caps reached", ["monthly-cap", "backup-cap", "backup-weekend-cap", "max-consecutive", "max-major-holidays"]],
+  ["already on call that day", ["holds-other-role"]],
+  ["holiday opt-outs", ["holiday-opt-out"]],
+  ["backup opt-outs", ["backup-opt-out"]],
+  ["locks", ["slot-locked", "external-cover", "external-surgeon", "inactive", "unknown-surgeon"]], // external-surgeon: item M, an outside surgeon is never a candidate
+];
+const OPEN_SLOT_REASON_OTHER = "other rules";
+// generator.js placeholders (not rules codes): the surgeon passed eligibility, the generator still left the slot open.
+const OPEN_SLOT_REASON_UNPLACED = "generator could not place - report it";
+const OPEN_SLOT_UNPLACED_CODES = ["eligible-but-not-placed", "holiday-unit"];
+const OPEN_SLOT_REASON_BY_CODE = {};
+OPEN_SLOT_REASON_TABLE.forEach(row => row[1].forEach(code => { OPEN_SLOT_REASON_BY_CODE[code] = row[0]; }));
+OPEN_SLOT_UNPLACED_CODES.forEach(code => { OPEN_SLOT_REASON_BY_CODE[code] = OPEN_SLOT_REASON_UNPLACED; });
+function openSlotReasonCategory(code) {
+  const core = String(code).split("@")[0].split(":")[0].trim();
+  return OPEN_SLOT_REASON_BY_CODE[core] || OPEN_SLOT_REASON_OTHER;
+}
+function openSlotReason(reasonsById) {
+  const seen = {};
+  const src = reasonsById && typeof reasonsById === "object" ? reasonsById : {};
+  Object.keys(src).forEach(id => {
+    const list = Array.isArray(src[id]) ? src[id] : [src[id]];
+    list.forEach(code => { if (typeof code === "string") seen[openSlotReasonCategory(code)] = true; });
+  });
+  const cats = OPEN_SLOT_REASON_TABLE.map(row => row[0]).concat([OPEN_SLOT_REASON_OTHER]).filter(c => seen[c]);
+  if (seen[OPEN_SLOT_REASON_UNPLACED]) return cats.length ? OPEN_SLOT_REASON_UNPLACED + " (other surgeons: " + cats.join(", ") + ")" : OPEN_SLOT_REASON_UNPLACED;
+  return cats.length ? "no eligible surgeon - " + cats.join(", ") : "no eligible surgeon";
+}
+/* lastGenerateFromDiagnostics(diagnostics, atIso) -> { at, range: { start, end },
+   openSlots: [{ day, role, reason }], weekendKinds: { '<friday>': kind } } - the
+   record Accept & Publish stores as call_schedule_data.data.lastGenerate (a blob
+   key next to lastPublished, so it survives every autosave and reload). The
+   blob is anon-readable: the record carries the rendered operational sentence
+   per open slot and NOTHING else from the diagnostics (no ids, tallies,
+   penalties, nor the reasons map). openSlots are sorted by day then role
+   (primary first); junk days / roles are dropped; a missing atIso is stamped
+   now. Never throws. The board reads openSlots as its Why column and
+   weekendKinds as the unit patterns (openSlots(..., { reasons, weekendKinds })). */
+function lastGenerateFromDiagnostics(diagnostics, atIso) {
+  const dg = diagnostics && typeof diagnostics === "object" ? diagnostics : {};
+  const range = dg.range && typeof dg.range === "object" ? dg.range : {};
+  const openSlots = (Array.isArray(dg.uncovered) ? dg.uncovered : [])
+    .filter(u => u && typeof u === "object" && openSlotIsDay(u.day) && OPEN_SLOT_ROLES.indexOf(u.role) >= 0)
+    .map(u => ({ day: u.day, role: u.role, reason: openSlotReason(u.reasons) }))
+    .sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : OPEN_SLOT_ROLES.indexOf(a.role) - OPEN_SLOT_ROLES.indexOf(b.role));
+  return {
+    at: typeof atIso === "string" && atIso ? atIso : new Date().toISOString(),
+    range: { start: openSlotIsDay(range.start) ? range.start : null, end: openSlotIsDay(range.end) ? range.end : null },
+    openSlots: openSlots,
+    weekendKinds: openSlotWeekendKinds(dg.weekendUnits),
+  };
 }
 // openSlotsLine(slot, nameOfUnit?) -> 'Fri 11/06 - primary (weekend block) - open'
 // - the plain-text line the board's Copy list and the reminder e-mail use:
@@ -1803,6 +1877,7 @@ if (typeof module !== "undefined" && module.exports) {
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
+    openSlotReason, lastGenerateFromDiagnostics,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,

@@ -2796,6 +2796,29 @@ try {
     const nov3prev = await cellAttr("2026-11-03", "data-preview");
     if (!nov3 || nov3prev === "1") fail(`Accept & Publish: 2026-11-03 should now be a saved assignment (primary '${nov3}', preview '${nov3prev}')`); else ok(`Accept & Publish: 2026-11-03 is a saved assignment (P ${nov3}), no longer a preview`);
     await page.waitForTimeout(1500); // let the autosave pass settle (no diff -> no extra day writes)
+    // Prompt 13 part 4 (WHY IS IT OPEN): the accept stored lastGenerate in state and the
+    // autosave's blob leg wrote it - the record the anon-readable blob will carry, observed
+    // in the recorded write body: shape, the preview's range, operational sentences only
+    // (no roster name / code), and past the importer's denylist gate (Prompt 12 F).
+    {
+      const blobWrites = writesSince(beforeOk, "/rest/v1/call_schedule_data").map(w => { try { return JSON.parse(w.body || "{}"); } catch (e) { return null; } });
+      const lgBody = blobWrites.find(b => b && b.data && b.data.lastGenerate);
+      if (!lgBody) fail(`Accept & Publish: no call_schedule_data write after the accept carries data.lastGenerate (${blobWrites.length} blob write(s), keys: ${blobWrites.map(b => b && b.data ? Object.keys(b.data).join("+") : "?").join(" | ")})`);
+      else {
+        const lg = lgBody.data.lastGenerate;
+        const sentence = /^(no eligible surgeon( - .+)?|generator could not place - report it( \(other surgeons: .+\))?)$/;
+        const rosterWord = /\b(Khan|Burchett|Acton|Philip|Fierce|Sarkar|FAK|MAB|BDA|AFP|NF|SRK|s[1-6])\b/;
+        const slots = Array.isArray(lg.openSlots) ? lg.openSlots : null;
+        const badSlot = slots ? slots.find(s => !s || !/^\d{4}-\d{2}-\d{2}$/.test(s.day) || !/^(primary|backup)$/.test(s.role) || typeof s.reason !== "string" || !sentence.test(s.reason) || rosterWord.test(s.reason)) : null;
+        let denied = null; try { require(path.join(ROOT, "importer.js")).impRefuseNoteDenylist({ lastGenerate: lg }); } catch (e) { denied = String(e && e.message || e).split("\n")[0]; }
+        const extraKeys = Object.keys(lg).filter(k => !["at", "range", "openSlots", "weekendKinds"].includes(k));
+        if (!slots || !lg.range || typeof lg.weekendKinds !== "object" || !lg.weekendKinds || typeof lg.at !== "string" || extraKeys.length) fail("Accept & Publish: lastGenerate shape wrong (extra keys: " + extraKeys.join(",") + "): " + JSON.stringify(lg).slice(0, 300));
+        else if (lg.range.start !== "2026-11-02" || !/^\d{4}-\d{2}-\d{2}$/.test(lg.range.end)) fail("Accept & Publish: lastGenerate.range is not the preview's 11/2..: " + JSON.stringify(lg.range));
+        else if (badSlot) fail("Accept & Publish: lastGenerate.openSlots carries a non-operational entry: " + JSON.stringify(badSlot));
+        else if (denied) fail("Accept & Publish: lastGenerate fails the importer denylist gate: " + denied);
+        else ok(`Accept & Publish: blob autosave carries data.lastGenerate { at, range ${lg.range.start}..${lg.range.end}, ${slots.length} open slot(s), ${Object.keys(lg.weekendKinds).length} weekend kind(s) } - every reason operational (${slots.slice(0, 2).map(s => s.day + " " + s.role + ": " + s.reason).join("; ") || "none open"}), past the importer denylist`);
+      }
+    }
     await page.click('button[data-tab="setup"]');
     await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
     // The seed's schedule_days range (the days the importer compares): the

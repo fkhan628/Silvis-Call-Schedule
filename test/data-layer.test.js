@@ -565,6 +565,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(pub.indexOf("setLastPublished(") > pub.indexOf("if (!res.ok)"), "watermark stored only after a 2xx");
     assert.ok(src.includes("const triggerDigestTest"));
   });
+  check("lastGenerate (Prompt 13 part 4) travels through the state bundle exactly like lastPublished: in buildStateBundle, read back by adoptBlob, written from acceptMerged after the CAS write succeeded, watched by the autosave", () => {
+    const bundle = src.slice(src.indexOf("const buildStateBundle = "), src.indexOf("const blobFromBundle = "));
+    assert.ok(/settings, lastPublished,\s*\n\s*lastGenerate,/.test(bundle), "buildStateBundle lists lastGenerate next to lastPublished");
+    assert.ok(src.includes("if (d.lastGenerate !== undefined) setLastGenerate(d.lastGenerate);"), "adoptBlob reads d.lastGenerate");
+    const acc = src.slice(src.indexOf("const acceptMerged = async"), src.indexOf("// --- Seed import"));
+    const okAt = acc.indexOf("if (r && r.ok) {"), setAt = acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString()));");
+    assert.ok(okAt > 0 && setAt > okAt && setAt < acc.indexOf("} else if (r && r.blocked)"), "acceptMerged stores the record only in the r.ok branch (a blocked / failed write leaves the old reasons)");
+    assert.ok(src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows]);"), "autosave dependencies include lastGenerate");
+    assert.ok(src.includes("setLastPublished(null); setLastGenerate(undefined);"), "the state reset clears lastGenerate together with lastPublished");
+    assert.strictEqual(count("setLastGenerate("), 3, "adoptBlob + acceptMerged + the state reset only - nothing else writes the record");
+  });
   const WEEKLY = ["apps", "appShifts", "noCall", "vacReq", "vacation_requests", "OneSignal", "backupMondays", "fierceBackup", "schedule_weeks", "dayCall", "nights.", "wknd", "SHIFT_LABELS", "NIGHT_KEYS", "COUNTS_", "SURGEON_DEPTS", "call_schedule_config", "send-push", "MIN_AVAILABLE_SURGEONS", "VACATION_DEADLINE", "app_shifts_data", "appDayOff", "AppBadge", "APP_PAL", "holidayAssignments", "pendingLocks", "numWeeks", "startMondayOverride", "priorCounts", "year1Counts", "swapShift", "detectCascadeChanges", "openWeekEditor", "buildPrefs", "doGenerate", "rollForwardCounts", "kind: \"nocall\""];
   check("weekly-model identifiers are absent from index-source.html, config.js, helpers.js and app-styles.js", () => {
     const files = ["index-source.html", "config.js", "helpers.js", "app-styles.js"];

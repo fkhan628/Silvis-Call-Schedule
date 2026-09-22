@@ -863,6 +863,23 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // "weekends"; both are skipped under skipPatternSoft (weekendUnitPatterns
 // carries the unit-level term instead) and neither applies on a holiday-unit
 // day; weekend-primary also needs the whole Fri/Sat/Sun free of holiday units.
+// The same vocabulary as data (Prompt 13 part 4): helpers.openSlotReason maps
+// every code to an operational category for the anon-readable blob;
+// test/open-shifts.test.js pins this array equal to the comment above and a
+// superset of every hard.push("...") literal in this file. P13R (rebase onto
+// the Prompt 12 head): window-week-max: left with item N (soft only now),
+// external-surgeon joined with item M.
+var HARD_REASONS = [
+  "unknown-surgeon", "bad-role:", "inactive",
+  "backup-opt-out", "holiday-opt-out:", "time-off:", "day-before-vacation",
+  "unavailable-row", "no-backup-row", "backup-only-row", "east-busy", "east-forecast-busy:",
+  "hard-never-weekday:", "recurring-unavailable:", "weekday-not-allowed:",
+  "weekend-block-only", "weekday-pattern:", "day-before-aledo", "whitelist-month",
+  "not-recurring-available", "outside-available-weeks", "outside-window",
+  "external-cover", "external-surgeon", "slot-locked:", "derived-lock:", "derived-lock-held:",
+  "holds-other-role", "monthly-cap:", "max-consecutive:", "backup-cap:",
+  "backup-weekend-cap:", "max-major-holidays:"
+];
 function rdStatic(ctx, date, role, id, asBlock) {
   var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "");
   var memo = ctx._memo[key];
@@ -1570,6 +1587,7 @@ function eastConflicts(ctx, days) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    HARD_REASONS: HARD_REASONS,
     matchesPattern: matchesPattern,
     buildContext: buildContext,
     eligibility: eligibility,

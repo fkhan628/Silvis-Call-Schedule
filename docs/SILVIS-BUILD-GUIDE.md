@@ -537,6 +537,27 @@ slots remain (`send-notification` category `open_shifts`, honouring `schedule_up
 the next 30 days (`daily-reminder` mode `open-shifts`, cron job `silvis-open-shifts-weekly`, Vault secret like the
 others). Reasons persisted in `call_schedule_data.data.lastGenerate` are operational wording only (anon-readable blob).
 
+**Why it is open (Prompt 13 part 4).** Accept & Publish, once the CAS write of the generated days succeeded, stores
+`helpers.lastGenerateFromDiagnostics(diagnostics, at)` as blob key `call_schedule_data.data.lastGenerate =
+{ at, range: { start, end }, openSlots: [{ day, role, reason }], weekendKinds: { '<friday>': 'block'|'split'|'daily' } }`
+(next to `lastPublished`: in the state bundle, read back by `adoptBlob`, kept across every autosave). Nothing else from
+the diagnostics is persisted. Each `reason` is `helpers.openSlotReason(reasonsById)` — the per-surgeon hard codes of
+`diagnostics.uncovered[i].reasons` reduced by PREFIX to a fixed category table (`vacations`; `weekday patterns and
+stated availability`; `East feed busy`; `East-derived week`; `caps reached`; `already on call that day`;
+`holiday opt-outs`; `backup opt-outs`; `locks`; unknown codes `other rules`), unioned across surgeons and rendered as
+`no eligible surgeon - vacations, caps reached` (`no eligible surgeon` when nothing applies). The generator's two
+placeholders (`eligible-but-not-placed`, `holiday-unit:eligible-but-unit-not-filled` — someone WAS eligible, the
+generator still left the slot open) never read as a rules outcome: they render the fixed sentence `generator could not
+place - report it`, with the other surgeons' categories in parentheses when there are any. The blob is anon-readable,
+so the sentence never carries an id, a name, a date or free text from the diagnostics — never a name-plus-reason pair.
+`rules.HARD_REASONS` exports the vocabulary as data and `test/open-shifts.test.js` renders every code through the
+importer's denylist gate (`impRefuseNoteDenylist`, Prompt 12 F) and pins the fixture `test/fixtures/last-generate-diagnostics.json`;
+the Playwright smoke reads the recorded blob write after Accept & Publish and checks the same. The board's Why column and
+unit patterns read this record, and a live preview overlays the slots and weekends it covers (rendered through the same
+`openSlotReason`). Each Accept replaces the record wholesale (design decision, open for Faraz): an open slot from an
+earlier generate that lies outside the newest range stays listed on the board but its Why column reads `-` until the
+slot is filled or regenerated.
+
 **The claim boundary (Prompt 13 part 2).** The JS eligibility rules (OR days, Clinton/Aledo days, caps, weekday
 patterns, consecutive runs, East busy days, holiday opt-outs) are enforced in the client before the "Take this shift"
 button is offered - `eligibility()` must pass the hard rules; soft-rule warnings are shown, not blocking - and NOT in

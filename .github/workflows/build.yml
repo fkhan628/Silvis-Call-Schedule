@@ -39,6 +39,7 @@ on:
       - "test/publish.test.js"
       - "test/open-shifts.test.js"
       - "test/fixtures/open-slots.json"
+      - "test/fixtures/last-generate-diagnostics.json"
       - "test/schema.test.js"
       - "importer.js"
       - "test/generator-regression.js"

@@ -493,5 +493,164 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   assert.deepStrictEqual(H.obUnitMates(slots, { day: "2026-11-26", role: "backup" }), []);
 });
 
+/* ---- Prompt 13 part 4: WHY IS IT OPEN - persist the reasons ----
+   helpers.openSlotReason(reasonsById) renders the generator's per-surgeon hard
+   codes as ONE operational sentence (fixed category table, union across the
+   surgeons, never an id / name / free text); lastGenerateFromDiagnostics(dg, at)
+   builds the blob record call_schedule_data.data.lastGenerate. That blob is
+   anon-readable, so every string the generator can make us write is run through
+   the importer's denylist gate (Prompt 12 item F) here. */
+{
+  const R = require(path.join(ROOT, "rules.js"));
+  const IMP = require(path.join(ROOT, "importer.js"));
+  const LG = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "last-generate-diagnostics.json"), "utf8"));
+  const CATEGORIES = ["vacations", "weekday patterns and stated availability", "East feed busy", "East-derived week", "caps reached", "already on call that day", "holiday opt-outs", "backup opt-outs", "locks", "other rules"];
+  const NAMES = [].concat(...LG.roster.map(r => [r.id, r.name, r.code]));
+  const noNames = (text, what) => NAMES.forEach(n => assert.ok(!new RegExp("\\b" + n + "\\b").test(text), (what || "reason") + " leaks '" + n + "': " + text));
+  const oneReason = (code) => H.openSlotReason({ s1: [code], s2: [code], s3: [code], s4: [code], s5: [code], s6: [code] });
+  const rulesSrc = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8").replace(/\r\n/g, "\n");
+  const appSrc = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+
+  check("helpers.js exports openSlotReason and lastGenerateFromDiagnostics; rules.js exports HARD_REASONS", () => {
+    ["openSlotReason", "lastGenerateFromDiagnostics"].forEach(n => assert.ok(has(n), "missing helpers.js export " + n));
+    assert.ok(Array.isArray(R.HARD_REASONS) && R.HARD_REASONS.length > 20, "rules.js exports HARD_REASONS (array of hard-reason codes)");
+  });
+  check("rules.HARD_REASONS equals the vocabulary comment above rdStatic and covers every hard.push(\"...\") literal in rules.js", () => {
+    const i = rulesSrc.indexOf("// Hard reason vocabulary");
+    assert.ok(i > 0, "the vocabulary comment exists");
+    const j = rulesSrc.indexOf("):", i);
+    const k = rulesSrc.indexOf(".\n", j);
+    const fromComment = rulesSrc.slice(j + 2, k).replace(/\n\/\/ ?/g, " ").split(",").map(s => s.trim()).filter(Boolean);
+    assert.deepStrictEqual(R.HARD_REASONS.slice().sort(), fromComment.slice().sort(), "HARD_REASONS and the comment list the same codes");
+    // every code literal ("time-off:", "inactive") whatever its shape; only the comment's own hard.push("...") placeholder is excluded,
+    // and the count is pinned so a new literal (of any spelling) has to be added to HARD_REASONS and here
+    const pushed = [...new Set((rulesSrc.match(/hard\.push\("([^"]+)"/g) || []).map(m => /"([^"]+)"/.exec(m)[1]).filter(c => c !== "..."))];
+    assert.strictEqual(pushed.length, 30, "hard.push literal count changed - update HARD_REASONS, the vocabulary comment and this pin: " + pushed.join(", "));
+    pushed.forEach(c => assert.ok(R.HARD_REASONS.includes(c), "pushed code not in HARD_REASONS: " + c));
+    ["whitelist-month", "outside-available-weeks", "bad-role:"].forEach(c => assert.ok(R.HARD_REASONS.includes(c), "code assigned outside hard.push missing: " + c));
+  });
+  check("openSlotReason: each category of the fixed table renders from its own codes (detail after ':' and '@day' suffixes ignored)", () => {
+    const table = {
+      "vacations": ["time-off:2026-11-05", "day-before-vacation"],
+      "weekday patterns and stated availability": ["hard-never-weekday:Mon", "weekday-not-allowed:Tue", "recurring-unavailable:Thu", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern:Wed", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row"],
+      "East feed busy": ["east-busy", "east-forecast-busy:2026-12-01"],
+      "East-derived week": ["derived-lock:2026-11-09", "derived-lock-held:2026-11-10"],
+      "caps reached": ["monthly-cap:8", "backup-cap:7", "backup-weekend-cap:1", "max-consecutive:2", "max-major-holidays:1"],
+      "already on call that day": ["holds-other-role"],
+      "holiday opt-outs": ["holiday-opt-out:Thanksgiving"],
+      "backup opt-outs": ["backup-opt-out"],
+      "locks": ["slot-locked:import", "external-cover", "inactive", "unknown-surgeon"],
+      "other rules": ["bad-role:nurse", "something-new:1", ""],
+    };
+    Object.keys(table).forEach(cat => table[cat].forEach(code => {
+      assert.strictEqual(oneReason(code), "no eligible surgeon - " + cat, "code " + JSON.stringify(code));
+      assert.strictEqual(oneReason(code + "@2026-11-26"), "no eligible surgeon - " + cat, "code " + JSON.stringify(code) + " on a holiday-unit day");
+    }));
+  });
+  check("openSlotReason: the generator's two placeholders (someone WAS eligible, the generator failed to place) never read as a rules outcome - 'generator could not place - report it', with the other surgeons' categories in parentheses when there are any", () => {
+    const UNPLACED = "generator could not place - report it";
+    ["eligible-but-not-placed", "holiday-unit:eligible-but-unit-not-filled", "eligible-but-not-placed@2026-11-26", "holiday-unit:eligible-but-unit-not-filled@2026-11-27"].forEach(code => {
+      assert.strictEqual(oneReason(code), UNPLACED, "code " + JSON.stringify(code));
+      assert.strictEqual(H.openSlotReason({ s1: [code] }), UNPLACED, "a single surgeon, code " + JSON.stringify(code));
+    });
+    assert.strictEqual(H.openSlotReason({ s1: ["time-off:2026-11-26"], s2: ["eligible-but-not-placed"], s3: ["monthly-cap:8"] }), UNPLACED + " (other surgeons: vacations, caps reached)");
+    assert.strictEqual(H.openSlotReason({ s1: ["holiday-unit:eligible-but-unit-not-filled"], s2: ["eligible-but-not-placed"], s3: ["what-is-this"] }), UNPLACED + " (other surgeons: other rules)");
+    assert.strictEqual(H.openSlotReason({ s1: ["eligible-but-not-placed"], s2: ["bad-role:x"] }), UNPLACED + " (other surgeons: other rules)", "bad-role is still 'other rules'");
+    assert.strictEqual(H.openSlotReason({ s1: ["holiday-unit"] }), UNPLACED, "the prefix before ':' is the code");
+    assert.strictEqual(H.openSlotReason({ s1: ["eligible-but-not-placed:Khan FAK"], Khan: ["eligible-but-not-placed"] }).indexOf("Khan"), -1, "no detail or key from the input");
+    IMP.impRefuseNoteDenylist({ lastGenerate: { openSlots: [{ day: "2026-11-05", role: "backup", reason: UNPLACED }, { day: "2026-11-26", role: "primary", reason: UNPLACED + " (other surgeons: " + CATEGORIES.join(", ") + ")" }] } });
+  });
+  check("openSlotReason: a mix unions the categories in table order, once each; empty / junk input -> 'no eligible surgeon'; never an id, name or code from the input", () => {
+    const mixed = H.openSlotReason({ s1: ["monthly-cap:8", "holds-other-role"], s2: ["time-off:2026-11-05"], s3: ["east-busy", "time-off:2026-11-06"], s4: ["weekday-pattern:Thu"], s5: ["derived-lock:2026-11-09"], s6: ["backup-opt-out"] });
+    assert.strictEqual(mixed, "no eligible surgeon - vacations, weekday patterns and stated availability, East feed busy, East-derived week, caps reached, already on call that day, backup opt-outs");
+    assert.strictEqual(H.openSlotReason({}), "no eligible surgeon");
+    assert.strictEqual(H.openSlotReason(null), "no eligible surgeon");
+    assert.strictEqual(H.openSlotReason({ s1: [] }), "no eligible surgeon");
+    assert.strictEqual(H.openSlotReason({ s1: "time-off:2026-11-05" }), "no eligible surgeon - vacations", "a bare string is accepted like a one-item list");
+    assert.strictEqual(H.openSlotReason({ s1: [null, 3, "east-busy"] }), "no eligible surgeon - East feed busy", "non-strings are skipped");
+    // Names / codes smuggled into a detail never reach the sentence.
+    const smuggled = H.openSlotReason({ s1: ["time-off:Khan FAK s1"], Khan: ["monthly-cap:Burchett"], FAK: ["what-is-this:Acton wife funeral"] });
+    assert.strictEqual(smuggled, "no eligible surgeon - vacations, caps reached, other rules");
+    noNames(smuggled);
+    noNames(mixed);
+    assert.ok(!/[:@]/.test(mixed) && !/\d/.test(mixed), "no detail / date text in the sentence: " + mixed);
+  });
+  check("EVERY hard code in rules.HARD_REASONS renders to a named category (bad-role: -> other rules) and every sentence passes the importer denylist gate (item F) with no surgeon name", () => {
+    const all = R.HARD_REASONS.map(c => c + (c.endsWith(":") ? "x" : ""));
+    const rendered = {};
+    all.forEach(code => {
+      const text = oneReason(code);
+      rendered[code] = text;
+      assert.ok(text.indexOf("no eligible surgeon - ") === 0, code + " -> " + text);
+      const cat = text.slice("no eligible surgeon - ".length);
+      assert.ok(CATEGORIES.includes(cat), code + " renders an unknown category: " + cat);
+      assert.strictEqual(cat === "other rules", code === "bad-role:x", code + " must map to a named category, got " + cat);
+      noNames(text, code);
+    });
+    // the union of all codes at once, and every single one, through the blob gate
+    const everything = H.openSlotReason({ s1: all, s2: all.slice().reverse() });
+    assert.strictEqual(everything, "no eligible surgeon - " + CATEGORIES.join(", "));
+    IMP.impRefuseNoteDenylist({ lastGenerate: { openSlots: Object.keys(rendered).map(c => ({ day: "2026-11-05", role: "primary", reason: rendered[c] })).concat([{ day: "2026-11-06", role: "backup", reason: everything }]) } });
+    IMP.impRefuseNoteDenylist({ lastGenerate: { openSlots: CATEGORIES.map(c => ({ day: "2026-11-05", role: "primary", reason: "no eligible surgeon - " + c })) } });
+  });
+  check("lastGenerateFromDiagnostics(diagnostics, at) on the fixture: { at, range: { start, end }, openSlots sorted by day then role, weekendKinds } - reasons are the rendered sentences, never the reasons map", () => {
+    const out = H.lastGenerateFromDiagnostics(LG.diagnostics, LG.at);
+    assert.deepStrictEqual(out, LG.expected);
+    assert.deepStrictEqual(Object.keys(out).sort(), ["at", "openSlots", "range", "weekendKinds"], "no extra keys (the diagnostics are NOT persisted)");
+    noNames(JSON.stringify(out), "lastGenerate record");
+    IMP.impRefuseNoteDenylist({ lastGenerate: out });
+    // the board consumes the record as-is
+    const reasons = {}; out.openSlots.forEach(s => { reasons[H.openSlotKey(s.day, s.role)] = s.reason; });
+    const sched = { "2026-11-05": { primary: null, backup: null }, "2026-11-07": { primary: "s1", backup: null } };
+    const slots = H.openSlots(sched, "2026-11-05", "2026-11-07", "2026-11-05", { reasons, weekendKinds: out.weekendKinds });
+    assert.deepStrictEqual(slots.map(s => [s.day, s.role, s.reason, s.unit && s.unit.pattern]), [
+      ["2026-11-05", "primary", LG.expected.openSlots[0].reason, null], ["2026-11-05", "backup", LG.expected.openSlots[1].reason, null],
+      ["2026-11-06", "primary", null, "block"], ["2026-11-06", "backup", null, "block"], ["2026-11-07", "backup", LG.expected.openSlots[2].reason, "block"],
+    ]);
+  });
+  check("lastGenerateFromDiagnostics: junk / partial diagnostics -> an empty record (never throws); a missing 'at' is stamped now (ISO); openSlotWeekendKinds accepts a ready { friday: kind } map (the persisted form) and drops junk entries", () => {
+    const before = Date.now();
+    const empty = H.lastGenerateFromDiagnostics(null);
+    assert.deepStrictEqual(Object.keys(empty).sort(), ["at", "openSlots", "range", "weekendKinds"]);
+    assert.deepStrictEqual([empty.range, empty.openSlots, empty.weekendKinds], [{ start: null, end: null }, [], {}]);
+    assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(empty.at) && Date.parse(empty.at) >= before, "at is an ISO timestamp of now");
+    assert.deepStrictEqual(H.lastGenerateFromDiagnostics({ uncovered: "nope", weekendUnits: {} }, "2026-09-22T15:00:00.000Z"), { at: "2026-09-22T15:00:00.000Z", range: { start: null, end: null }, openSlots: [], weekendKinds: {} });
+    assert.deepStrictEqual(H.lastGenerateFromDiagnostics({ range: { start: "2026-11-02", end: "2026-11-30" }, uncovered: [{ day: "2026-13-40", role: "primary", reasons: {} }, { day: "2026-11-03", role: "nurse", reasons: {} }, { day: "2026-11-03", role: "backup" }] }, "x").openSlots,
+      [{ day: "2026-11-03", role: "backup", reason: "no eligible surgeon" }], "junk days / roles dropped; a slot without a reasons map still renders");
+    assert.deepStrictEqual(H.openSlotWeekendKinds({ "2026-11-06": "block", "2026-11-13": "daily", "2026-11-20": "locked", "bad": "split", "2026-11-27": 7 }), { "2026-11-06": "block", "2026-11-13": "daily" });
+    assert.deepStrictEqual(H.openSlotWeekendKinds(LG.diagnostics.weekendUnits), LG.expected.weekendKinds);
+  });
+  check("a real generator run (seed 1, best of 1, Nov-Dec 2026 over the seed) yields a record whose every reason passes the denylist gate and names nobody", () => {
+    const SA = require(path.join(__dirname, "seed-adapter.js"));
+    const GEN = require(path.join(ROOT, "generator.js"));
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const ctx = R.buildContext(SA.seedToContextInput(seed, {}));
+    const out = GEN.generate(ctx, "2026-11-02", "2026-12-31", { seed: 1, bestOf: 1 });
+    const rec = H.lastGenerateFromDiagnostics(out.diagnostics, "2026-09-22T15:00:00.000Z");
+    assert.deepStrictEqual(rec.range, { start: "2026-11-02", end: "2026-12-31" });
+    assert.strictEqual(rec.openSlots.length, (out.diagnostics.uncovered || []).length, "one record per uncovered slot");
+    const roster = [].concat(...seed.roster.map(r => [r.id, r.name, r.code]));
+    rec.openSlots.forEach(s => {
+      assert.ok(/^(no eligible surgeon( - .+)?|generator could not place - report it( \(other surgeons: .+\))?)$/.test(s.reason), s.day + " " + s.role + ": " + s.reason);
+      roster.forEach(n => assert.ok(!new RegExp("\\b" + n + "\\b").test(s.reason), s.day + " leaks " + n));
+    });
+    IMP.impRefuseNoteDenylist({ lastGenerate: rec });
+    assert.ok(Object.keys(rec.weekendKinds).length >= 4, "weekend kinds carried over: " + JSON.stringify(rec.weekendKinds));
+  });
+  check("index-source.html: Accept & Publish stores lastGenerateFromDiagnostics(pv.diagnostics, ...) only after the CAS write succeeded (r.ok); the autosave watches lastGenerate; the board reads lastGenerate.weekendKinds", () => {
+    const acc = appSrc.slice(appSrc.indexOf("const acceptMerged = async"), appSrc.indexOf("// --- Seed import"));
+    const okAt = acc.indexOf("if (r && r.ok) {"), setAt = acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics,");
+    assert.ok(okAt > 0 && setAt > okAt && setAt < acc.indexOf("} else if (r && r.blocked)"), "setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, ...)) sits inside the r.ok branch");
+    assert.ok(/\}, \[loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows\]\);/.test(appSrc), "the autosave effect lists lastGenerate in its dependencies");
+    assert.ok(/lastGenerate\.weekendKinds/.test(appSrc), "boardWeekendKinds reads the persisted weekendKinds map");
+    assert.ok(/\{ \.\.\.openSlotWeekendKinds\(fromLast\), \.\.\.openSlotWeekendKinds\(fromPreview\) \}/.test(appSrc), "the preview still overlays the persisted kinds");
+    // design (b): the board's reasons come from lastGenerate with a live-preview fallback, rendered through the same openSlotReason
+    const br = appSrc.slice(appSrc.indexOf("const boardReasons = useMemo("), appSrc.indexOf("const boardWeekendKinds = useMemo("));
+    assert.ok(br.length > 0 && br.includes("previewGen.diagnostics.uncovered"), "boardReasons reads previewGen.diagnostics.uncovered");
+    assert.ok(br.includes("openSlotReason(u.reasons)"), "the preview's slots are rendered through openSlotReason (never the raw reasons map)");
+    assert.ok(br.includes("return { ...fromLast, ...fromPreview };") && /\}, \[previewGen, lastGenerate\]\);\s*$/.test(br), "the preview overlays the persisted reasons and the memo depends on both");
+  });
+}
+
 console.log(`\nopen-shifts: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

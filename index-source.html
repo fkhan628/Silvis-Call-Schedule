@@ -248,10 +248,12 @@ function CallSchedule() {
   const [settings, setSettings] = useState({});
   // The office-notification watermark: { at, days: { day: { primary, backup, externalCover } } }.
   const [lastPublished, setLastPublished] = useState(null);
-  // The last generate's operational record (Prompt 13 part 4 writes it on
-  // Accept & Publish; part 3 only READS it for the board's Why column and
-  // weekend kinds): { openSlots: [{ day, role, reason }] | { 'day|role': reason },
-  // weekendUnits | diagnostics.weekendUnits }. undefined until the blob carries it.
+  // The last generate's operational record, blob key lastGenerate (Prompt 13
+  // part 4 writes helpers.lastGenerateFromDiagnostics on Accept & Publish once
+  // the days are on file; the board reads it for the Why column and weekend
+  // kinds): { at, range: { start, end }, openSlots: [{ day, role, reason }],
+  // weekendKinds: { friday: kind } }. The reasons are operational wording only
+  // (the blob is anon-readable). undefined until the blob carries it.
   const [lastGenerate, setLastGenerate] = useState(undefined);
 
   // --- Operational data (own tables) ---
@@ -1536,7 +1538,7 @@ function CallSchedule() {
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, schedule, vacations, availabilityRows]);
+  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows]);
 
   // --- Flush pending save when app is backgrounded or closing ---
   // The auto-save above has an 800ms debounce; an edit made right before
@@ -2185,6 +2187,11 @@ function CallSchedule() {
     logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, changes: changes.length, uncovered: (pv.diagnostics.uncovered || []).length, snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
     if (r && r.ok) {
       setSaveStatus("Generated days saved"); setTimeout(() => setSaveStatus(""), 2000);
+      // WHY IS IT OPEN (Prompt 13 part 4): the generator's reasons, rendered to
+      // operational wording, become blob key lastGenerate (next to lastPublished)
+      // so the board still explains each open slot after a reload. Written only
+      // once the days are on file: a blocked / failed write keeps the old record.
+      setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString()));
       showToast(`Saved ${changes.length} generated slot change(s). Review the publish diff.`, "success");
       publishRef.current();
     } else if (r && r.blocked) {
@@ -3452,15 +3459,21 @@ function CallSchedule() {
   const boardAnnounced = useMemo(() => boardNotices.length ? boardNotices.concat(notifications) : notifications, [boardNotices, notifications]);
   // The last generate's operational reasons, keyed 'day|role' (part 4 persists
   // them as blob key lastGenerate; either an array of { day, role, reason } or
-  // a ready map is accepted). Absent -> the Why column reads '-'.
+  // a ready map is accepted). A live preview overlays the slots IT leaves open,
+  // rendered through the same openSlotReason (never the raw per-surgeon map),
+  // exactly like the weekend kinds below. Absent -> the Why column reads '-'.
   const boardReasons = useMemo(() => {
+    const toMap = (list) => { const m = {}; (Array.isArray(list) ? list : []).forEach(s => { if (s && suIsIso(s.day) && (s.role === "primary" || s.role === "backup") && typeof s.reason === "string") m[openSlotKey(s.day, s.role)] = s.reason; }); return m; };
     const src = lastGenerate && typeof lastGenerate === "object" ? lastGenerate.openSlots : null;
-    if (Array.isArray(src)) { const m = {}; src.forEach(s => { if (s && suIsIso(s.day) && (s.role === "primary" || s.role === "backup") && typeof s.reason === "string") m[openSlotKey(s.day, s.role)] = s.reason; }); return m; }
-    return src && typeof src === "object" ? src : {};
-  }, [lastGenerate]);
+    const fromLast = Array.isArray(src) ? toMap(src) : (src && typeof src === "object" ? src : {});
+    const unc = previewGen && previewGen.diagnostics && Array.isArray(previewGen.diagnostics.uncovered) ? previewGen.diagnostics.uncovered : [];
+    const fromPreview = toMap(unc.map(u => u && typeof u === "object" ? { day: u.day, role: u.role, reason: openSlotReason(u.reasons) } : null));
+    return { ...fromLast, ...fromPreview };
+  }, [previewGen, lastGenerate]);
   const boardWeekendKinds = useMemo(() => {
     const fromPreview = previewGen && previewGen.diagnostics ? previewGen.diagnostics.weekendUnits : null;
-    const fromLast = lastGenerate && typeof lastGenerate === "object" ? (lastGenerate.weekendUnits || (lastGenerate.diagnostics && lastGenerate.diagnostics.weekendUnits)) : null;
+    // lastGenerate.weekendKinds is the persisted { friday: kind } map (part 4); the raw diagnostics forms are still accepted.
+    const fromLast = lastGenerate && typeof lastGenerate === "object" ? (lastGenerate.weekendKinds || lastGenerate.weekendUnits || (lastGenerate.diagnostics && lastGenerate.diagnostics.weekendUnits)) : null;
     // A preview only overrides the weekends it covers; the published range keeps its last-generate patterns.
     return { ...openSlotWeekendKinds(fromLast), ...openSlotWeekendKinds(fromPreview) };
   }, [previewGen, lastGenerate]);
