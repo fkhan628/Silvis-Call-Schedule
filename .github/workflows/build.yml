@@ -35,6 +35,7 @@ on:
       - "test/week-rows.test.js"
       - "test/exports.test.js"
       - "test/totals.test.js"
+      - "test/schema.test.js"
       - "importer.js"
       - "test/generator-regression.js"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
@@ -85,6 +86,12 @@ jobs:
       # Chromium and live network; run it locally with `npm run smoke`.
       - name: Data-layer unit tests + source pins
         run: node test/data-layer.test.js
+
+      # Static schema pins (no database): sql/schema.sql and the 2026-09-22
+      # trade-guards migration define the same trigger + apply_trade() checks,
+      # and nothing under sql/ carries contact data.
+      - name: Schema static tests
+        run: node test/schema.test.js
 
       - name: Seed importer tests
         run: node test/importer.test.js

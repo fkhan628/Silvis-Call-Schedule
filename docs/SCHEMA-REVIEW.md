@@ -103,3 +103,92 @@ user_profiles` bypasses RLS; policies that call it never re-enter policy evaluat
    path with a throw-away `s9test` id, cleaned up afterwards).
 
 Result at the time of writing is recorded in the Prompt 2 update.
+
+## 2026-09-22 - trade guards (Prompt 12 D)
+
+*Answers REVIEW-2026-09-22 section 3 D. Report-first: the definitions live in `sql/schema.sql` and, byte-identically,
+in `sql/migrations/2026-09-22-trade-guards.sql`; the migration is what the scheduler runs against the live project.
+`test/schema.test.js` (in `npm test` and CI) pins both files, the check order and the absence of contact data in `sql/`.*
+
+**The hole.** `trade_insert` (RLS) checked only `from_surgeon_id = silvis_person_id()`, `trade_update_guard` runs only
+on UPDATE, and `apply_trade()` checked party / status / staleness only. A signed-in surgeon could INSERT a trade from
+their own id with `status = 'accepted'` naming any counterparty and call `apply_trade()` at once; the swap ignored the
+receiver's vacations, the import locks (a locked day transferred with its lock flag intact) and the roster.
+
+**1. `trade_insert_guard()` - `BEFORE INSERT` trigger `trade_insert_guard_trg` on `shift_trade_requests`.**
+For a caller who is not scheduler/admin (and not a server-side role: the CLI's `postgres`, `service_role`, which have no
+`auth.uid()`), the row is normalised before RLS's `WITH CHECK` sees it: `status := 'pending'`,
+`from_surgeon_id := silvis_person_id()` (an unlinked account gets `TRADE_FORBIDDEN: your account is not linked to a
+roster entry`), `submitted_at := now()`, `decided_at := null`. Display names are left as given. For everyone,
+`from_surgeon_id = to_surgeon_id` raises `TRADE_INELIGIBLE: a trade needs two different surgeons` (checked after the
+normalisation, so a forced `from` that collides with `to` is caught too). A scheduler may still record an already-accepted
+trade on someone's behalf. The server-side bypass (`auth.uid() is null and current_user in ('postgres', 'supabase_admin',
+'service_role')`) is a standing exception the binding design did not name: no client path reaches it (PostgREST runs as
+anon/authenticated), but a future SECURITY DEFINER function owned by postgres that inserted a trade row would inherit
+it silently - keep trade inserts out of security-definer code. `test/schema.test.js` pins the exact role list. Faraz may
+drop it; then the probe must stage its `accepted` fixtures as its throwaway scheduler user instead of as postgres.
+
+**2. `apply_trade()` - eligibility before any write.** After the existing party / `accepted` / stale checks and before
+the first `update public.schedule_days`, each leg's *receiver* (leg 1: `to_surgeon_id`; return leg: `from_surgeon_id`)
+is checked, in this order, raising `TRADE_INELIGIBLE: <plain-English reason>` (errcode `P0001`; the app shows it verbatim):
+
+| | Check | Message |
+|---|---|---|
+| (a) | roster in `call_schedule_data` `main` present (fail closed); receiver is an **active** roster entry (pool or external - any active entry; like every client path, an entry with no `active` key counts as active: `coalesce(r ->> 'active', 'true') <> 'false'`) | `roster unavailable` / `<id> is not an active roster surgeon` |
+| (b) | the leg's day is not inside a `time_off` range of the receiver; for a **primary** leg, not the day before one either (SILVIS-CALL-RULES: a vacation day also blocks the day before it - the same rule the `time_off` trigger enforces from the other side). Like that trigger, the SQL side hardcodes primary; the client reads `groupRules.dayBeforeRules.trailingEdgeRoles` (default `['primary']`). One step beyond Prompt 12's wording ("inside a time_off range"); pinned by the test; drop the two `starts a vacation on` blocks in both files if strictly-inside is wanted | `<Name> is on vacation on <day>` / `<Name> starts a vacation on <day+1> (primary the day before is blocked)` |
+| (c) | the leg's role is not locked that day unless the caller is the scheduler; the transfer sets the transferred role's lock flag to `false` (a traded slot is no longer the locked import) | `<day> <role> is locked; ask the scheduler` |
+| (d) | the receiver does not already hold the other role that day (readable message ahead of the `schedule_days_distinct_roles` constraint). Evaluated per leg against the pre-swap row, so a same-day role *swap* (A's primary for B's backup on one day) is refused here - it tripped the constraint before and the client refuses it too; not a supported trade shape | `<Name> already holds <other role> on <day>` |
+
+Unchanged: `security definer`, `set search_path = public`, `version + 1`, `source = 'trade'`, the `silvis.apply_trade`
+bypass token for the status transition, the audit row, `revoke ... from public, anon` / `grant ... to authenticated`.
+
+**3. The probe - `sql/probes/trade-guards-probe.sql` (persists nothing).** One multi-statement batch with no
+`BEGIN`/`COMMIT`: with `--linked` the CLI submits the file as one multi-statement request through the Management API,
+which runs it in a single implicit transaction (observed 2026-09-22 on this project: a batch ending in RAISE persists
+nothing), and its last statement is a `DO` block that **raises** `PROBE_RESULTS A=...;B=...;END` (the `;END` sentinel
+marks where the message stops and the CLI's own suffix such as ` (SQLSTATE P0001)` begins), which aborts and rolls back
+everything (fixtures on 2030-03 days, the `time_off` row, the trades, two throwaway `auth.users` rows `probe-<uuid>@example.test`
+whose profiles `handle_new_auth_user` creates and which are linked to `s2`/surgeon and `s1`/scheduler). Each case acts
+as that user with `SET LOCAL ROLE authenticated` + `request.jwt.claims` `sub` (what PostgREST sets; `auth.uid()` reads it)
+inside an inner `BEGIN ... EXCEPTION` block so the error text is captured (a caught exception's subtransaction rollback
+also restores the `postgres` role; the success path resets it explicitly). Cases: **A** surgeon inserts `accepted` with
+`decided_at = now()` -> stored `pending`, `decided_at` null; **B** receiver on vacation -> refused; **C** receiver already holds the other role -> refused;
+**D** locked slot, surgeon applies -> refused; **E** control: a clean accepted trade with a return leg applies (days
+swap, trade `applied`); **F** locked slot, scheduler applies -> applies and the lock clears; **G** `from = to` -> refused;
+**H** a surgeon naming someone else as `from` -> forced to their own id. The probe header lists the BEFORE-fix picture per
+case (A stores `accepted`; B and D apply; C fails only through the check constraint; F leaves the lock set; G stores;
+H is an RLS error).
+
+Run it (absolute path; the workdir is a directory linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`):
+
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/trade-guards-probe.sql      # before: shows the hole
+    supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-22-trade-guards.sql
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/trade-guards-probe.sql      # after
+    SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh                                            # section 5 grades each case + leftover count
+
+After EVERY probe run the rollback is observed, never assumed (verify-rls.sh does this itself; by hand after the two
+manual runs above):
+
+    supabase db query --linked --workdir <dir> -o json "select ((select count(*) from public.schedule_days where day between '2030-03-01' and '2030-03-31' and source = 'probe') + (select count(*) from public.shift_trade_requests where detail like 'probe %') + (select count(*) from public.time_off where note = 'probe') + (select count(*) from auth.users where email like 'probe-%@example.test'))::int as leftover"
+
+`leftover` must be 0. If it is not, the batch did not run as one transaction: clean up at once (`delete from
+public.shift_trade_requests where detail like 'probe %'; delete from public.time_off where note = 'probe'; delete from
+public.schedule_days where day between '2030-03-01' and '2030-03-31' and source = 'probe'; delete from auth.users where
+email like 'probe-%@example.test';` - `user_profiles` rows cascade) and report before going on.
+
+Expected after the migration: `PROBE_RESULTS A=status=pending from=s2 decided=null;B=ERR TRADE_INELIGIBLE: Burchett is on
+vacation on 2030-03-05;C=ERR TRADE_INELIGIBLE: Burchett already holds backup on 2030-03-07;D=ERR TRADE_INELIGIBLE:
+2030-03-09 primary is locked  ask the scheduler;E=status=applied 03-11p=s2 03-13b=s3;F=status=applied locked=false;G=ERR
+TRADE_INELIGIBLE: a trade needs two different surgeons;H=status=pending from=s2;END` (the probe flattens `;`, quotes and
+newlines out of the values so the message survives the CLI's wrapping - hence the two spaces in D - and the reader cuts
+at `;END`). Before the migration the same run shows the hole: `A=status=accepted from=s2 decided=<timestamp>;B=status=applied;
+C=ERR ... schedule_days_distinct_roles ...;D=status=applied locked=true;E=status=applied 03-11p=s2 03-13b=s3;F=status=applied
+locked=true;G=status=pending;H=ERR new row violates row-level security policy ...`. `verify-rls.sh` section 6 adds the
+REST-level checks (a surgeon JWT POSTing `status: 'accepted'` lands as `pending`, and the row is then deleted through the
+linked CLI; `apply_trade` on a vacation day is a 4xx `TRADE_INELIGIBLE`) and skips until a surgeon-role user exists
+(`SILVIS_SURGEON_JWT`). *First live run (probe BEFORE / migration / probe AFTER / leftover 0): to be recorded here by the
+scheduler when it happens - not yet observed at the time of writing.*
+
+**Client consequence.** None required: the app already POSTs `status: 'pending'` with its own id and shows `apply_trade`
+errors verbatim; the new messages read as sentences. Acceptance-time client eligibility stays as a courtesy check - the
+server is now the authority.
