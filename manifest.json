@@ -1,0 +1,25 @@
+{
+  "name": "Silvis Surgical Care Call Schedule",
+  "short_name": "Silvis Call",
+  "description": "Daily primary + backup trauma / acute-care surgery call schedule for Silvis Surgical Care",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f0f2f5",
+  "theme_color": "#1f7a5c",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

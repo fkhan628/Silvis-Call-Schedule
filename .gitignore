@@ -6,3 +6,5 @@ node_modules/
 .env*
 # Contact data never enters the repo (guide §3.1); the only contact file lives in OneDrive.
 silvis-contacts.md
+# npm lockfile is not tracked (CI runs npm install against exact-pinned devDependencies, as Davenport does)
+package-lock.json
