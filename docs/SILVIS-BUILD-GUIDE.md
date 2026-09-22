@@ -348,3 +348,44 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
 | 7 Exports | ICS, share page, print, the ER-panel author's panel copy | the ER-panel author pastes the table into Word with no cleanup |
 | 8 Edge functions | calendar-sync, office-notifications, send-notification (email), daily-reminder — ported from the Davenport copies and retargeted to `schedule_days` | unauthenticated GET → `BEGIN:VCALENDAR`; a real office email received; a real reminder received |
 | 9 Hardening | audit log everywhere, refresh banner, data management verified end-to-end (backup → wipe → restore), mobile pass | 6 surgeons + the ER-panel author onboarded |
+
+## 15. Amendments of 2026-09-22 (Faraz, in Cowork) — override anything above that conflicts
+
+- **Backup is open to everyone, every day**, on-site or off-site, unless a surgeon explicitly opts out
+  (`surgeonRules.<id>.backupOptOut`). Outreach days, OR days, Clinton/Aledo days and weekday patterns restrict **primary
+  only**. Vacations, East busy days (primary only), holiday opt-outs, derived-week locks and "holds the other role" still
+  apply to backup. (Resolves the open Thursday backups.)
+- **Fairness = everyone as equal as possible**: implied equal shares of primary slots and, separately, of backup slots
+  for every pool member; no neutral/zero terms; primary spread then backup spread in the score; smoothing moves backup
+  days too. Sarkar targets her 3–4 primaries per window week instead.
+- **Caps count primary days only**; backup does not count toward any total cap (Burchett's 8, Fierce's 14). Philip's
+  explicit backup cap (≤ 7 days, ≤ 1 weekend) remains.
+- **Khan contributes primary on weekends when available**; his backup count is balanced like everyone else's; East
+  cross-reference covers all Davenport call (service weeks, nights, weekends, backup weeks, holiday coverage, forecast).
+- **Outside surgeons ("internal locums")**: roster entries of `type: "external"`, written in by hand in the day editor,
+  never generated, tallied separately, exported like anyone else. Legacy `externalCover` stays for the Atwell import.
+- **Sarkar**: primary 3–4 days per window week (primary counts only), alternating days when possible (soft), Friday and
+  Saturday allowed as standalone days, never a Fri–Sun block, max 2 consecutive (hard), backup optional inside windows.
+- **Day-before rules stay primary-only** under the open-backup rule.
+- **Theme**: University of Illinois blue and orange, softened — navy #13294B as the structural color, orange #FF5F05 as
+  an accent only (darkened #C2410C for text on white), red reserved for OPEN; dark mode on deep navy. See Prompt 12 O.
+- The repo's `docs/silvis-seed.json` is canonical from the overnight build onward; docs flow repo → OneDrive.
+- **UI, from Faraz's first look at the live app (9/22, Prompt 12 P–Q)**: the week-rows / ER Call Panels primary column
+  is headed **TRAUMA** (no "cardiothoracic"); an unassigned slot is **OPEN only from today forward** — earlier days
+  render blank, never red.
+
+## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
+
+After generation some slots may stay open. One pure definition (`openSlots(schedule, from, to, today)` in `helpers.js`,
+mirrored in the edge function) feeds everything: the coverage strip, the "only OPEN" filter, a new **Open shifts** view
+(nav badge with the count; table of open slots from today to the end of the published range with weekday, role, unit,
+the generator's operational reason, who is eligible now, when it was last announced), and the notifications.
+**Any surgeon may claim** an open slot ("Take this shift"): the client offers the button only when `eligibility()`
+passes the hard rules (soft-rule warnings are shown, not blocking); the write goes through a security-definer
+`claim_open_slot(day, role)` that guards data integrity (open, unlocked, not past, not external-covered, distinct roles,
+no vacation conflict, inside the published range), logs `schedule.claim`, and adds an in-app feed row. The scheduler
+assigns from the day editor as before, or writes in outside cover. **The group is told** on Accept & Publish when open
+slots remain (`send-notification` category `open_shifts`, honouring `schedule_updates_email`), on demand from the board
+("Email the group now", logged as `openshifts.notify`), and every **Monday 07:00 Central** while any open slot lies in
+the next 30 days (`daily-reminder` mode `open-shifts`, cron job `silvis-open-shifts-weekly`, Vault secret like the
+others). Reasons persisted in `call_schedule_data.data.lastGenerate` are operational wording only (anon-readable blob).
