@@ -285,6 +285,16 @@ create table if not exists public.office_contacts (
   created_at  timestamptz not null default now()
 );
 
+-- Office digest baseline (edge function office-notifications; service role only, no policies on purpose:
+-- RLS enabled with no policy = nothing readable/writable with anon or user JWTs).
+create table if not exists public.office_notification_state (
+  id               text primary key,          -- 'digest_snapshot'
+  snapshot         jsonb,                     -- { v, days: { day: { p, b, x } }, vacations, vacSource, window, captured_at }
+  last_digest_at   timestamptz,
+  last_publish_at  timestamptz,
+  updated_at       timestamptz not null default now()
+);
+
 -- ============================================================================
 -- Row Level Security
 -- ============================================================================
@@ -303,6 +313,7 @@ alter table public.audit_log               enable row level security;
 alter table public.call_schedule_snapshots enable row level security;
 alter table public.client_versions         enable row level security;
 alter table public.office_contacts         enable row level security;
+alter table public.office_notification_state enable row level security;
 
 -- Anon-readable tables (shareable page + calendar-sync need these without a JWT)
 do $$ declare t text; begin
