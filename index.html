@@ -79,6 +79,19 @@
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
       .cal-legend { font-size: 10px !important; }
+      /* Prompt 11 mobile pass: the PREVIEW tag no longer clips or sits on the
+         B line / vacation dots (smaller, no tracking, and the cell grows). */
+      .cal-cell.cal-preview { min-height: 78px; padding-bottom: 12px; }
+      .cal-preview-tag { font-size: 7px; letter-spacing: 0; left: 2px; bottom: 1px; }
+      /* Tables wider than the phone scroll INSIDE their card (never the page):
+         a right-edge shade + caption say so, because the action column
+         (Delete / Remove / Save / coverage) sits past the edge. */
+      .table-wrap { background: linear-gradient(90deg, #ffffff 30%, rgba(255,255,255,0)), linear-gradient(90deg, rgba(255,255,255,0), #ffffff 70%) 100% 0, radial-gradient(farthest-side at 0 50%, rgba(0,0,0,0.22), rgba(0,0,0,0)), radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,0.22), rgba(0,0,0,0)) 100% 0; background-repeat: no-repeat; background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%; background-attachment: local, local, scroll, scroll; }
+      .table-wrap::after { content: "swipe sideways for more columns"; display: block; font-size: 10px; color: #7a8a98; padding: 3px 8px; font-style: italic; }
+      .setup-table input[type="text"] { max-width: 150px !important; }
+      input[type="checkbox"] { width: 20px; height: 20px; }
+      .trade-pick { width: 100% !important; }
+      .trade-pick-wrap { flex: 1 1 100%; }
     }
   </style>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -98,7 +111,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.22l";
+    var APP_VERSION = "2026.09.22m";
     (function() {
       var stored = localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
@@ -121,7 +134,7 @@
           // cache entry that served THIS (stale) build within max-age.
           url.searchParams.set("_v", APP_VERSION + "-" + Date.now());
           window.location.replace(url.toString());
-        }).catch(function() { window.location.reload(true); });
+        }).catch(function(e) { console.warn("nukeAndReload: cache/service-worker clear failed - plain reload:", e); window.location.reload(true); });
       }
 
       if (mismatch) {
@@ -162,6 +175,7 @@ function CallSchedule() {
       const params = new URLSearchParams(window.location.search);
       return params.get("public") === "1";
     } catch (e) {
+      console.warn("isPublicMode: could not read the URL query (treated as signed-in mode):", e);
       return false;
     }
   }, []);
@@ -204,6 +218,7 @@ function CallSchedule() {
     try {
       return localStorage.getItem("silvis-dark-mode") === "true";
     } catch (e) {
+      console.warn("Couldn't read the dark-mode setting (light mode used):", e);
       return false;
     }
   });
@@ -366,7 +381,10 @@ function CallSchedule() {
         const res = await fetch(`version.json?t=${Date.now()}`, {
           cache: "no-store"
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.warn(`version check: version.json answered HTTP ${res.status} (ignored until the next check)`);
+          return;
+        }
         const j = await res.json();
         const v = j && j.version;
         if (typeof v !== "string" || !/^\d{4}\.\d{2}\.\d{2}[a-z]*$/.test(v)) return;
@@ -396,6 +414,7 @@ function CallSchedule() {
     try {
       return localStorage.getItem("silvis-notif-seen") || "2000-01-01T00:00:00Z";
     } catch (e) {
+      console.warn("Couldn't read the notifications-seen marker (every alert reads as unread):", e);
       return "2000-01-01T00:00:00Z";
     }
   });
@@ -403,6 +422,7 @@ function CallSchedule() {
     try {
       return localStorage.getItem("silvis-notif-cleared") || "2000-01-01T00:00:00Z";
     } catch (e) {
+      console.warn("Couldn't read the notifications-cleared marker:", e);
       return "2000-01-01T00:00:00Z";
     }
   });
@@ -410,10 +430,14 @@ function CallSchedule() {
     try {
       return typeof Notification !== "undefined" && Notification.permission || "unsupported";
     } catch (e) {
+      console.warn("Notification.permission unavailable (pop-ups read as unsupported):", e);
       return "unsupported";
     }
   });
   const [notifPrefs, setNotifPrefs] = useState({});
+  const [notifPrefsLoadFailed, setNotifPrefsLoadFailed] = useState(false);
+  const [lastSnapshotAt, setLastSnapshotAt] = useState(null);
+  const noteSnapshotTaken = () => setLastSnapshotAt(new Date().toISOString());
   const notifPrefsRef = useRef(notifPrefs);
   useEffect(() => {
     notifPrefsRef.current = notifPrefs;
@@ -527,13 +551,17 @@ function CallSchedule() {
     const result = await biometric.authenticate();
     if (result.success) {
       const {
-        user
+        user,
+        error
       } = await auth.getUser();
       if (user) {
         await adoptSignedInUser(user);
         setBiometricPending(false);
         setAuthBusy(false);
         return;
+      } else if (error === "network") {
+        console.warn("Biometric unlock: the session check hit a network error - session kept, try again");
+        setAuthError("Couldn't reach the server to confirm your session - check your connection and try again.");
       } else {
         setBiometricPending(false);
         setAuthError("Session expired. Please sign in with your password to refresh.");
@@ -606,6 +634,7 @@ function CallSchedule() {
         setAuthPassword("");
       }
     } catch (e) {
+      console.warn("Auth submit failed:", e);
       setAuthError(e.message || "Auth error");
     }
     setAuthBusy(false);
@@ -687,6 +716,7 @@ function CallSchedule() {
         minute: "2-digit"
       });
     } catch (e) {
+      console.warn("fmtAuditTime: could not format", iso, e);
       return iso;
     }
   };
@@ -843,6 +873,7 @@ function CallSchedule() {
         const o = typeof err === "string" ? JSON.parse(err) : err;
         verbatim = String(o && (o.message || o.details) || "");
       } catch (e) {
+        console.warn("describeDbError: error body is not JSON - extracting the raised message by regex", e);
         verbatim = "";
       }
       if (!OWN.test(verbatim)) {
@@ -995,10 +1026,14 @@ function CallSchedule() {
     const r = await deleteTimeOffRow(rowId);
     if (!r.ok) return r;
     adoptTimeOffRows(timeOffRows.filter(x => x.id !== rowId));
-    if (row) logAudit("vacation.remove", `Removed vacation for ${nameOf(personId)}: ${row.start_date}${row.start_date !== row.end_date ? " -> " + row.end_date : ""}`, {
+    if (row) logAudit("timeoff.remove", `Removed vacation for ${nameOf(personId)}: ${row.start_date}${row.start_date !== row.end_date ? " -> " + row.end_date : ""}`, {
       person_id: personId,
+      row_id: rowId,
       start: row.start_date,
       end: row.end_date
+    });else logAudit("timeoff.remove", `Removed vacation row ${rowId} for ${nameOf(personId)} (dates unknown - the local list was stale)`, {
+      person_id: personId,
+      row_id: rowId
     });
     return r;
   };
@@ -1039,10 +1074,15 @@ function CallSchedule() {
         end_date: newEnd
       });
       adoptTimeOffRows(timeOffRows.map(r => r.id === rowId ? updated : r));
-      logAudit("vacation.edit", `Changed vacation for ${nameOf(personId)}: ${old ? old.start_date + "->" + old.end_date : "?"} to ${newStart}->${newEnd}`, {
+      logAudit("timeoff.edit", `Changed vacation for ${nameOf(personId)}: ${old ? old.start_date + "->" + old.end_date : "?"} to ${newStart}->${newEnd}`, {
         person_id: personId,
-        newStart,
-        newEnd
+        row_id: rowId,
+        before: old ? {
+          start: old.start_date,
+          end: old.end_date
+        } : null,
+        start: newStart,
+        end: newEnd
       });
       return {
         ok: true
@@ -1680,6 +1720,12 @@ function CallSchedule() {
               console.warn(`Keepalive flush (${source}): schedule_days ${day} not sent -`, e);
               pendingSaveRef.current = payload;
             };
+            const checkDay = res => {
+              if (!res.ok) {
+                console.warn(`Keepalive flush (${source}): schedule_days ${day} rejected with HTTP ${res.status} - re-armed for the next sync`);
+                pendingSaveRef.current = payload;
+              }
+            };
             if (typeof ver === "number") {
               fetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${day}&version=eq.${ver}`, {
                 method: "PATCH",
@@ -1690,7 +1736,7 @@ function CallSchedule() {
                   updated_by: by,
                   updated_at: ts
                 }))
-              }).catch(rearm);
+              }).then(checkDay).catch(rearm);
             } else {
               fetch(`${SUPABASE_URL}/rest/v1/schedule_days`, {
                 method: "POST",
@@ -1701,7 +1747,7 @@ function CallSchedule() {
                   updated_by: by,
                   updated_at: ts
                 }))
-              }).catch(rearm);
+              }).then(checkDay).catch(rearm);
             }
             sent++;
           }
@@ -1726,8 +1772,13 @@ function CallSchedule() {
           updated_by: by,
           updated_at: ts
         })
-      }).then(() => {
-        blobTsRef.current = ts;
+      }).then(res => {
+        if (res.ok) {
+          blobTsRef.current = ts;
+          return;
+        }
+        console.warn(`Keepalive blob save (${source}) rejected with HTTP ${res.status} - re-armed for the next autosave`);
+        pendingSaveRef.current = payload;
       }).catch(e => {
         console.warn(`Keepalive save failed (${source}):`, e);
         pendingSaveRef.current = payload;
@@ -1757,7 +1808,21 @@ function CallSchedule() {
     if (!loaded || sessionSnapRef.current) return;
     if (!isScheduler) return;
     sessionSnapRef.current = true;
-    snapshots.captureIfStale("periodic_session", 6);
+    snapshots.captureIfStale("periodic_session", 6).then(r => {
+      if (r && r.ok && !r.skipped) {
+        noteSnapshotTaken();
+        console.info("Periodic session snapshot saved", r.counts || "");
+      } else if (r && r.ok && r.skipped === "fresh") console.info("Periodic session snapshot skipped - a snapshot newer than 6 h exists");else if (r && r.ok) console.warn("Periodic session snapshot skipped:", r.skipped);else {
+        console.warn("Periodic session snapshot FAILED:", r && r.error);
+        showToast("The automatic backup snapshot failed - " + (r && r.error || "unknown error") + ". Export a JSON backup from Settings before any destructive change.", "error");
+      }
+    }).catch(e => {
+      console.warn("Periodic session snapshot threw:", e);
+      showToast("The automatic backup snapshot failed - check your connection.", "error");
+    });
+    snapshots.list(1).then(rows => {
+      if (Array.isArray(rows) && rows[0] && rows[0].created_at) setLastSnapshotAt(rows[0].created_at);
+    }).catch(e => console.warn("last-snapshot lookup failed:", e));
   }, [loaded, isScheduler]);
   useEffect(() => {
     if (eastIdByCode && eastIdByCode._source !== "failed") return;
@@ -1910,6 +1975,14 @@ function CallSchedule() {
       day,
       overrides
     });
+    const lockChanges = ["primary", "backup"].filter(r => !!before[r + "Locked"] !== !!after[r + "Locked"]).map(r => ({
+      role: r,
+      locked: !!after[r + "Locked"]
+    }));
+    if (lockChanges.length) logAudit("schedule.lock", fmtMD(day) + ": " + lockChanges.map(c => c.role + (c.locked ? " locked" : " unlocked")).join(", "), {
+      day,
+      changes: lockChanges
+    });
     const roleChanged = before.primary !== after.primary || before.backup !== after.backup || (before.externalCover || null) !== (after.externalCover || null);
     const affected = [...new Set([before.primary, before.backup, after.primary, after.backup].filter(Boolean))];
     if (roleChanged && affected.length) {
@@ -1972,13 +2045,17 @@ function CallSchedule() {
     });
     setSchedule(next);
     scheduleRef.current = next;
-    logAudit("schedule.clear", `Cleared ${cleared} slot(s) ${fmtMD(start)} - ${fmtMD(end)}`, {
-      start,
-      end,
-      cleared
-    });
+    noteSnapshotTaken();
     intentionalScheduleWipeRef.current = true;
     const r = await syncScheduleDays(next);
+    const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";
+    logAudit("schedule.clear", `Cleared ${cleared} slot(s) ${fmtMD(start)} - ${fmtMD(end)}${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, {
+      start,
+      end,
+      cleared,
+      outcome,
+      error: r && r.error ? String(r.error).slice(0, 160) : null
+    });
     if (r && r.ok) {
       setSaveStatus("Schedule cleared");
       setTimeout(() => setSaveStatus(""), 2000);
@@ -2482,19 +2559,22 @@ function CallSchedule() {
     setSchedule(next);
     scheduleRef.current = next;
     setPreviewGen(null);
-    logAudit("schedule.generate_publish", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)`, {
+    noteSnapshotTaken();
+    setSaveStatus("Saving generated days");
+    const r = await syncScheduleDays(next);
+    const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";
+    logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, {
       start: pv.start,
       end: pv.end,
       seed: String(pv.seed),
       bestOf: pv.bestOf,
       respectLocks: pv.respectLocks,
       changes: changes.length,
-      score: pv.diagnostics && pv.diagnostics.score,
       uncovered: (pv.diagnostics.uncovered || []).length,
-      snapshot: snap.counts || null
+      snapshot: snap.counts || null,
+      outcome,
+      error: r && r.error ? String(r.error).slice(0, 160) : null
     });
-    setSaveStatus("Saving generated days");
-    const r = await syncScheduleDays(next);
     if (r && r.ok) {
       setSaveStatus("Generated days saved");
       setTimeout(() => setSaveStatus(""), 2000);
@@ -2655,6 +2735,7 @@ function CallSchedule() {
       setSaveStatus("");
       return;
     }
+    noteSnapshotTaken();
     const plan = st.plan;
     const ts = new Date().toISOString();
     const by = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || (authUser === null || authUser === void 0 ? void 0 : authUser.id) || null;
@@ -2796,7 +2877,7 @@ function CallSchedule() {
       setTimeout(() => setSaveStatus(""), 2000);
       return;
     }
-    logAudit("system.factory_reset", "FACTORY RESET - wiped the schedule and reset the config blob");
+    noteSnapshotTaken();
     allowWipeSaveRef.current = true;
     everHadRealDataRef.current = false;
     try {
@@ -2811,6 +2892,12 @@ function CallSchedule() {
       console.error("Factory reset: schedule_days delete failed:", e);
       allowWipeSaveRef.current = false;
       everHadRealDataRef.current = true;
+      logAudit("data.reset", "Factory reset ABORTED - the schedule_days delete failed; nothing was changed", {
+        outcome: "aborted",
+        step: "schedule_days_delete",
+        error: String((e === null || e === void 0 ? void 0 : e.message) || e).slice(0, 160),
+        snapshot: resetSnap.counts || null
+      });
       showToast("Couldn't delete the stored schedule - reset cancelled. Nothing was changed: the schedule, roster and rules are as they were. (" + String((e === null || e === void 0 ? void 0 : e.message) || e).slice(0, 120) + ")", "error");
       setSaveStatus("Reset cancelled");
       setTimeout(() => setSaveStatus(""), 2000);
@@ -2834,11 +2921,21 @@ function CallSchedule() {
       if (blobClearErr) throw new Error(`blob clear failed: ${String(blobClearErr).slice(0, 200)}`);
     } catch (e) {
       console.error("Factory reset: config blob reset failed after the schedule was deleted:", e);
+      logAudit("data.reset", "FACTORY RESET - PARTIAL: every schedule_days row deleted, the config blob reset FAILED and is unchanged", {
+        outcome: "partial",
+        step: "blob_reset",
+        error: String((e === null || e === void 0 ? void 0 : e.message) || e).slice(0, 160),
+        snapshot: resetSnap.counts || null
+      });
       showToast("Partial reset: the schedule rows WERE deleted (restore the 'Before factory reset' snapshot in Settings to get them back), but the roster/rules blob could not be reset and is unchanged. (" + String((e === null || e === void 0 ? void 0 : e.message) || e).slice(0, 120) + ")", "error");
       setSaveStatus("Reset incomplete - schedule deleted, setup kept");
       setTimeout(() => setSaveStatus(""), 6000);
       return;
     }
+    logAudit("data.reset", "FACTORY RESET - deleted every schedule_days row and reset the config blob", {
+      outcome: "ok",
+      snapshot: resetSnap.counts || null
+    });
     blobLoadedRef.current = true;
     setSurgeons(INIT_SURGEONS);
     setSurgeonRules(undefined);
@@ -3186,6 +3283,7 @@ function CallSchedule() {
       try {
         rows = JSON.parse(text);
       } catch (e) {
+        console.warn("trade status write: 2xx with a non-JSON body (treated as no row updated)", text.slice(0, 160), e);
         rows = [];
       }
       if (!Array.isArray(rows) || rows.length !== 1) return {
@@ -3222,6 +3320,7 @@ function CallSchedule() {
       try {
         body = text ? JSON.parse(text) : null;
       } catch (e) {
+        console.warn("apply_trade: 2xx with a non-JSON body", text.slice(0, 160), e);
         body = null;
       }
       return {
@@ -3559,17 +3658,18 @@ function CallSchedule() {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/notification_preferences?select=*`, {
           headers: dbAuthHeaders()
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 120)}`);
         const rows = await res.json();
-        if (Array.isArray(rows)) {
-          const prefs = {};
-          rows.forEach(r => {
-            prefs[r.person_id] = r;
-          });
-          setNotifPrefs(prefs);
-        }
+        if (!Array.isArray(rows)) throw new Error("unexpected response body");
+        const prefs = {};
+        rows.forEach(r => {
+          prefs[r.person_id] = r;
+        });
+        setNotifPrefs(prefs);
+        setNotifPrefsLoadFailed(false);
       } catch (e) {
         console.warn("Load notif prefs error:", e);
+        setNotifPrefsLoadFailed(true);
       }
     })();
   }, [loaded, reloadTrigger, authUser]);
@@ -3705,9 +3805,18 @@ function CallSchedule() {
         error
       } = await db.update("office_contacts", id, patch);
       if (error) {
+        console.warn("Office contact update failed:", error);
         setOfficeContacts(before);
         showToast("Couldn't update the contact: " + describeDbError(error), "error");
+        return;
       }
+      const c = before.find(x => x.id === id);
+      logAudit("office_contact.update", `Office contact ${c ? c.name : id}: ${Object.keys(patch).map(k => k + " -> " + String(patch[k])).join(", ")}`, {
+        id,
+        patch: {
+          active: patch.active
+        }
+      });
     } catch (e) {
       console.warn("Office contact update failed:", e);
       setOfficeContacts(before);
@@ -3770,6 +3879,7 @@ function CallSchedule() {
       const nice = d => `${MO[d.getMonth()].slice(0, 3)} ${d.getDate()}`;
       return `${nice(f)} - ${nice(l)}`;
     } catch (e) {
+      console.warn("computePeriodLabel failed - the publish dialog opens with a blank period label:", e);
       return "";
     }
   };
@@ -3912,12 +4022,14 @@ function CallSchedule() {
       });
       if (!res.ok) {
         const t = await res.text().catch(() => "");
+        console.warn("Paint vacations: time_off bulk insert failed", res.status, t.slice(0, 300));
+        showToast("Paint vacations: nothing was saved - " + describeDbError(t), "error");
         return {
           ok: false,
           error: describeDbError(t)
         };
       }
-      logAudit("vacation.paint", `Painted ${rows.length} vacation entr${rows.length === 1 ? "y" : "ies"} (bulk)`, {
+      logAudit("timeoff.paint", `Painted ${rows.length} vacation entr${rows.length === 1 ? "y" : "ies"} (bulk)`, {
         entries: rows.map(r => ({
           person_id: r.person_id,
           start: r.start_date,
@@ -3929,6 +4041,8 @@ function CallSchedule() {
         ok: true
       };
     } catch (e) {
+      console.warn("Paint vacations: commit threw", e);
+      showToast("Paint vacations: nothing was saved - check your connection and try again.", "error");
       return {
         ok: false,
         error: String((e === null || e === void 0 ? void 0 : e.message) || e)
@@ -3948,7 +4062,10 @@ function CallSchedule() {
     try {
       const rows = await snapshots.list(15);
       setSnapshotLoadFailed(rows === null);
-      if (rows !== null) setSnapshotList(rows);
+      if (rows !== null) {
+        setSnapshotList(rows);
+        if (rows[0] && rows[0].created_at) setLastSnapshotAt(rows[0].created_at);
+      }
     } finally {
       setSnapshotsLoading(false);
     }
@@ -4040,11 +4157,13 @@ function CallSchedule() {
     const r = await snapshots.restore(snap.id, applyScheduleViaCAS, applyTablesUpsert);
     setRestoreBusyId(null);
     if (!r.ok) {
+      console.warn("Snapshot restore failed:", r.error);
       showToast("Restore failed: " + (r.error || "unknown error"), "error");
       setSaveStatus("");
       return;
     }
-    logAudit("system.restore_snapshot", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}`, {
+    noteSnapshotTaken();
+    logAudit("snapshot.restore", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}`, {
       snapshot_id: snap.id,
       reason: snap.reason,
       created_at: snap.created_at,
@@ -4060,25 +4179,29 @@ function CallSchedule() {
     try {
       obj = JSON.parse(await file.text());
     } catch (e) {
-      showToast("That file is not valid JSON.", "error");
+      console.warn("Import backup: file is not valid JSON", file.name, e);
+      showToast("Import backup: that file is not valid JSON.", "error");
       return;
     }
     let normalized;
     try {
       normalized = snapshots.normalizePayload(obj);
     } catch (e) {
-      showToast("Backup shape invalid: " + (e && e.message || e), "error");
+      console.warn("Import backup: shape invalid", file.name, e);
+      showToast("Import backup refused - backup shape invalid: " + (e && e.message || e), "error");
       return;
     }
     if (!confirm(`Import this backup?\n\n${normalized.schedule_days.length} schedule day(s), ${normalized.time_off.length} vacation row(s), ${normalized.availability.length} availability row(s), config keys: ${Object.keys(normalized.config).join(", ") || "(none)"}.\n\nIt replaces the current schedule and setup for everyone (a snapshot is saved first).`)) return;
     setSaveStatus("Importing backup");
     const r = await snapshots.applyPayload(obj, applyScheduleViaCAS, applyTablesUpsert, "before_import");
     if (!r.ok) {
+      console.warn("Import backup failed:", r.error);
       showToast("Import failed: " + (r.error || "unknown error"), "error");
       setSaveStatus("");
       return;
     }
-    logAudit("system.import_backup", `Imported JSON backup (${file.name})`, {
+    noteSnapshotTaken();
+    logAudit("data.import", `Imported JSON backup (${file.name})`, {
       counts: r.counts,
       file: file.name
     });
@@ -4106,7 +4229,10 @@ function CallSchedule() {
       setSaveStatus(downloaded ? "Backup exported" : "Backup opened - use Share, then Save to Files");
       setTimeout(() => setSaveStatus(""), 3000);
     } catch (e) {
-      alert("Export failed: " + (e && e.message ? e.message : String(e)));
+      console.error("Export backup failed:", e);
+      setSaveStatus("Export failed");
+      setTimeout(() => setSaveStatus(""), 3000);
+      showToast("Export backup failed: " + (e && e.message ? e.message : String(e)), "error");
     }
   };
   const dk = darkMode;
@@ -4148,6 +4274,8 @@ function CallSchedule() {
       setCopiedUrl(label);
       setTimeout(() => setCopiedUrl(""), 2500);
     } catch (e) {
+      console.warn("Copy URL: clipboard unavailable - falling back to a prompt:", e);
+      showToast("Copy URL: the clipboard is blocked here - copy it from the box instead.", "error");
       prompt("Copy this URL:", text);
     }
   };
@@ -4160,7 +4288,7 @@ function CallSchedule() {
         });
         return;
       } catch (e) {
-        console.debug("Share dismissed or unavailable (falling back to copy):", e);
+        if (e && e.name === "AbortError") console.debug("Share sheet dismissed by the user (falling back to copy)");else console.warn("Share today: navigator.share failed (falling back to copy):", e);
       }
     }
     try {
@@ -4301,6 +4429,24 @@ function CallSchedule() {
     return out;
   }, [ctxInputs]);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
+  const glance = useMemo(() => suCoverageGlance(schedule, todayStr, 60, ctxInputs.eastForecast, forecastThreshold), [schedule, todayStr, ctxInputs, forecastThreshold]);
+  const eastCoverageEnd = useMemo(() => {
+    if (typeof coverageOf !== "function") return null;
+    const cov = coverageOf(eastFeedRows.map(r => ({
+      weekMonday: r.week_monday,
+      data: r.data || {}
+    })));
+    return cov && cov.to ? cov.to : null;
+  }, [eastFeedRows]);
+  const snapshotAgeText = iso => {
+    if (!iso) return "none on file";
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return "unknown";
+    const h = Math.floor((Date.now() - t) / 3600000);
+    if (h < 1) return "under an hour ago";
+    if (h < 48) return h + " h ago";
+    return Math.floor(h / 24) + " days ago";
+  };
   const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr), [schedule, surgeons, monthStartStr, monthEndStr]);
   const errText = e => e && e.message ? e.message : String(e);
   const toolMonthList = () => {
@@ -4780,11 +4926,16 @@ function CallSchedule() {
   }), toast && React.createElement("div", {
     role: "status",
     "aria-live": "polite",
+    "data-testid": "toast",
     onClick: () => setToast(null),
-    style: {
+    style: _objectSpread(_objectSpread({
       position: "fixed",
-      left: "50%",
-      bottom: 24,
+      left: "50%"
+    }, paintSheet ? {
+      top: 12
+    } : {
+      bottom: 24
+    }), {}, {
       transform: "translateX(-50%)",
       zIndex: 9999,
       maxWidth: "90vw",
@@ -4798,7 +4949,7 @@ function CallSchedule() {
       boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
       cursor: "pointer",
       letterSpacing: 0.2
-    }
+    })
   }, toast.msg), showPublishDialog && !isPublicMode && React.createElement("div", {
     "data-testid": "publish-dialog",
     onClick: () => setShowPublishDialog(false),
@@ -6148,7 +6299,71 @@ function CallSchedule() {
     });
     return React.createElement(React.Fragment, null, React.createElement("div", {
       style: css.card
-    }, React.createElement("div", {
+    }, (() => {
+      const covItem = (key, text, days, color) => {
+        const n = days.length;
+        const first = n ? days[0] : null;
+        return React.createElement("button", {
+          key: key,
+          type: "button",
+          "data-testid": key,
+          "data-count": loaded ? n : "",
+          "data-first": first || "",
+          disabled: !loaded || !n,
+          onClick: () => {
+            if (first) goToDay(first);
+          },
+          title: n ? "Open " + fmtMD(first) + " in the day editor" : "none in the next 60 days",
+          style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+            color: !loaded ? dkSubtext : n ? color : "#1a8040",
+            borderColor: !loaded ? "#c8d0d8" : n ? color : "#a0d8b0",
+            fontFamily: font,
+            cursor: n ? "pointer" : "default"
+          })
+        }, React.createElement("span", {
+          style: {
+            fontFamily: mono,
+            fontWeight: 800
+          }
+        }, loaded ? n : "..."), " ", text, n ? " - first " + fmtMD(first) : "");
+      };
+      return React.createElement("div", {
+        "data-testid": "coverage-strip",
+        style: {
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6,
+          alignItems: "center",
+          marginBottom: 10,
+          fontSize: 11.5,
+          color: dkSubtext,
+          padding: "6px 8px",
+          borderRadius: 6,
+          background: dk ? "#141c30" : "#f4f6f8",
+          border: "1px solid " + dkCardBorder
+        }
+      }, React.createElement("span", {
+        style: {
+          fontWeight: 700,
+          color: dkText,
+          marginRight: 2
+        }
+      }, "Next 60 days:"), covItem("cov-open-primary", "open primary", glance.openPrimary, "#c04040"), covItem("cov-open-backup", "open backup", glance.openBackup, "#c04040"), covItem("cov-forecast-primary", "forecast-busy as primary", glance.forecastPrimary.map(x => x.day), "#8a5a10"), React.createElement("span", {
+        "data-testid": "cov-east-end",
+        "data-value": eastCoverageEnd || "",
+        title: "Last day covered by a published Davenport week in the East feed cache"
+      }, "East feed through ", React.createElement("strong", {
+        style: {
+          fontFamily: mono
+        }
+      }, eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown")), React.createElement("span", {
+        "data-testid": "cov-last-published",
+        "data-value": lastPublished && lastPublished.at || ""
+      }, "last published ", React.createElement("strong", null, lastPublished && lastPublished.at ? fmtAuditTime(lastPublished.at) : "never")), isScheduler && !isPublicMode && React.createElement("span", {
+        "data-testid": "cov-last-snapshot",
+        "data-value": lastSnapshotAt || ""
+      }, "last snapshot ", React.createElement("strong", null, snapshotAgeText(lastSnapshotAt))));
+    })(), React.createElement("div", {
       style: {
         display: "flex",
         alignItems: "center",
@@ -6581,6 +6796,7 @@ function CallSchedule() {
     }, React.createElement("p", {
       style: sectionNote
     }, "the ER-panel author's layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too."), React.createElement("div", {
+      className: "table-wrap",
       style: {
         overflowX: "auto"
       }
@@ -6842,6 +7058,7 @@ function CallSchedule() {
       })
     }, "Whole weeks: the table runs ", fmtMD(erSpan.from), " - ", fmtMD(erSpan.to), " (the Mon-Sun weeks around ", fmtMD(erFrom), " - ", fmtMD(erTo), "), so no covered day is left out of a week row."), React.createElement("div", {
       "data-testid": "er-panel-preview",
+      className: "table-wrap",
       ref: erPreviewRef,
       style: {
         overflowX: "auto",
@@ -7307,10 +7524,13 @@ function CallSchedule() {
       }
     }, React.createElement(Badge, {
       id: fromId
-    }))), React.createElement("div", null, React.createElement("label", {
+    }))), React.createElement("div", {
+      className: "trade-pick-wrap"
+    }, React.createElement("label", {
       style: label
     }, "My day + role"), React.createElement("select", {
       "data-testid": "trade-mine-pick",
+      className: "trade-pick",
       value: dayOk && holder === fromId ? tradeDay + "|" + tradeRole : "",
       onChange: e => {
         const v = e.target.value.split("|");
@@ -7320,7 +7540,8 @@ function CallSchedule() {
         }
       },
       style: _objectSpread(_objectSpread({}, inp), {}, {
-        width: 200
+        width: 260,
+        maxWidth: "100%"
       })
     }, React.createElement("option", {
       value: ""
@@ -7385,17 +7606,21 @@ function CallSchedule() {
         color: "#8a3030",
         fontWeight: 600
       }
-    }, isScheduler ? "Unchecked: this single day would split the unit - you will be asked to confirm." : "A single day of a unit cannot be traded - tick the box to trade the whole unit.")), React.createElement("div", null, React.createElement("label", {
+    }, isScheduler ? "Unchecked: this single day would split the unit - you will be asked to confirm." : "A single day of a unit cannot be traded - tick the box to trade the whole unit.")), React.createElement("div", {
+      className: "trade-pick-wrap"
+    }, React.createElement("label", {
       style: label
     }, "Trade with"), React.createElement("select", {
       "data-testid": "trade-to",
+      className: "trade-pick",
       value: tradeTo,
       onChange: e => {
         setTradeTo(e.target.value);
         setTradeReturnDay("");
       },
       style: _objectSpread(_objectSpread({}, inp), {}, {
-        width: 230
+        width: 230,
+        maxWidth: "100%"
       })
     }, React.createElement("option", {
       value: ""
@@ -7421,10 +7646,13 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
         flex: "1 1 100%"
       })
-    }, "Allowed with a note: ", toElig.soft.map(softTag).join(", "), "."), React.createElement("div", null, React.createElement("label", {
+    }, "Allowed with a note: ", toElig.soft.map(softTag).join(", "), "."), React.createElement("div", {
+      className: "trade-pick-wrap"
+    }, React.createElement("label", {
       style: label
     }, "Their day + role (return)"), React.createElement("select", {
       "data-testid": "trade-theirs-pick",
+      className: "trade-pick",
       value: suIsIso(tradeReturnDay) && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeReturnDay + "|" + tradeReturnRole : "",
       onChange: e => {
         const v = e.target.value.split("|");
@@ -7434,7 +7662,8 @@ function CallSchedule() {
         } else setTradeReturnDay("");
       },
       style: _objectSpread(_objectSpread({}, inp), {}, {
-        width: 200
+        width: 260,
+        maxWidth: "100%"
       }),
       disabled: !tradeTo
     }, React.createElement("option", {
@@ -7907,7 +8136,12 @@ function CallSchedule() {
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "Emails go to your sign-in address. Choose which events email you and when the daily reminder arrives (Central time)."), !mySurgeon ? React.createElement("p", {
+  }, "Emails go to your sign-in address. Choose which events email you and when the daily reminder arrives (Central time)."), notifPrefsLoadFailed && React.createElement("div", {
+    "data-testid": "notif-prefs-load-failed",
+    style: _objectSpread(_objectSpread({}, css.errBox), {}, {
+      marginBottom: 8
+    })
+  }, "Couldn't load your saved notification settings - the switches below show the DEFAULTS, not what is saved. Reload before changing anything here."), !mySurgeon ? React.createElement("p", {
     style: muted
   }, "Available once your account is linked to a roster entry.") : (() => {
     const myPref = notifPrefs[mySurgeon] || {};
@@ -8324,6 +8558,7 @@ function CallSchedule() {
       alignItems: "center"
     }
   }, React.createElement("button", {
+    "data-testid": "export-backup",
     onClick: exportBackup,
     style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
       padding: "8px 16px",
@@ -8332,6 +8567,7 @@ function CallSchedule() {
     })
   }, "Export backup (JSON)"), React.createElement("input", {
     ref: importFileRef,
+    "data-testid": "import-file",
     type: "file",
     accept: "application/json,.json",
     style: {
@@ -8379,6 +8615,7 @@ function CallSchedule() {
       lineHeight: 1.4
     }
   }, "Deletes every schedule day and resets the config blob for everyone. A snapshot is saved automatically first (if it can't be, nothing happens). Requires typing ", React.createElement("strong", null, "RESET"), "."), React.createElement("button", {
+    "data-testid": "reset-all-data",
     onClick: resetAllData,
     style: {
       background: "none",
@@ -8431,6 +8668,9 @@ function CallSchedule() {
     }
   }, "No snapshots yet."), !snapshotsLoading && snapshotList && snapshotList.map(sn => React.createElement("div", {
     key: sn.id,
+    "data-testid": "snapshot-row",
+    "data-snapshot-id": sn.id,
+    "data-reason": sn.reason || "",
     style: {
       display: "flex",
       alignItems: "center",
@@ -8462,6 +8702,7 @@ function CallSchedule() {
     hour: "numeric",
     minute: "2-digit"
   }))), React.createElement("button", {
+    "data-testid": "snapshot-restore",
     disabled: !!restoreBusyId,
     onClick: () => restoreSnapshot(sn),
     style: {
@@ -8596,6 +8837,7 @@ function MonthPainterSheet({
     try {
       r = await onCommit(draftEntries);
     } catch (e) {
+      console.warn("Paint vacations: commit threw", e);
       r = {
         ok: false,
         error: String((e === null || e === void 0 ? void 0 : e.message) || e)
@@ -9078,6 +9320,7 @@ async function readAuthOnlyTable(table, opts) {
   try {
     token = localStorage.getItem("silvis-auth-token");
   } catch (e) {
+    console.warn(table + ": session token read failed", e);
     token = null;
   }
   if (!token || !jwtIsFresh(token)) {
@@ -9810,11 +10053,18 @@ function DayEditor(props) {
       marginBottom: 8
     }
   }, hint), React.createElement("div", {
+    "data-testid": "editor-footer",
     style: {
       display: "flex",
       alignItems: "center",
       gap: 8,
-      flexWrap: "wrap"
+      flexWrap: "wrap",
+      position: "sticky",
+      bottom: -16,
+      background: panelBg,
+      margin: "0 -18px -16px",
+      padding: "8px 18px 12px",
+      borderTop: "1px solid " + border
     }
   }, !isPublicMode && (canEdit || myRole) && React.createElement("button", {
     type: "button",
@@ -10160,6 +10410,7 @@ function TotalsCard({
       marginBottom: 8
     })
   }, "Rules context unavailable - caps, targets, holiday units and East days show as '-' until the setup loads."), mode !== "fairness" ? React.createElement("div", {
+    className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     "data-testid": "totals-table",
@@ -10535,6 +10786,7 @@ function RosterEditor({
       lineHeight: 1.5
     }
   }, "Names and codes only - the schedule stores ids, the calendar shows last names, narrow cells show the code. Contact details never live here (accounts are linked under Users; addresses stay in Supabase Auth)."), React.createElement("div", {
+    className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     className: "setup-table"
@@ -10661,6 +10913,7 @@ function UsersCard({
       fontStyle: "italic"
     }
   }, "No accounts loaded yet."), !loading && profiles && profiles.length > 0 && React.createElement("div", {
+    className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     className: "setup-table",
@@ -10891,7 +11144,13 @@ function PatternListEditor({
         fontFamily: font,
         color: "#7a8a98"
       }
-    }, suPatternLabel(p), " - next 8: "), next.length ? next.join(", ") : "no matching date in the next two years"));
+    }, suPatternLabel(p), " - next 8: "), next.error ? React.createElement("span", {
+      "data-testid": "pattern-error",
+      style: {
+        color: "#a83232",
+        fontFamily: font
+      }
+    }, "pattern is invalid - the rules engine refused it (", next.error, ")") : next.length ? next.join(", ") : "no matching date in the next two years"));
   }), React.createElement("button", {
     onClick: () => onChange([...items, {
       weekday: "Mon",
@@ -10993,6 +11252,7 @@ function RulesEditor({
       setRawErr("");
       setRawOpen(false);
     } catch (e) {
+      console.warn("Rules JSON not applied:", e);
       setRawErr(String(e && e.message || e));
     }
   };
@@ -11374,6 +11634,7 @@ function RulesEditor({
       weekdayPattern: {}
     } : undefined)
   }), wp && React.createElement("div", {
+    className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     className: "setup-table"
@@ -11763,6 +12024,7 @@ function RulesEditor({
         setGroupRawOpen(false);
         setGroupRawErr("");
       } catch (e) {
+        console.warn("Group rules JSON not applied:", e);
         setGroupRawErr(String(e && e.message || e));
       }
     },
@@ -12105,6 +12367,7 @@ function AvailabilityCard({
     onClick: () => setFilter(s.id),
     style: css.mini(filter === s.id)
   }, s.name, " (", (rows || []).filter(r => r.person_id === s.id).length, ")"))), React.createElement("div", {
+    className: "table-wrap",
     style: _objectSpread(_objectSpread({}, css.tableWrap), {}, {
       maxHeight: 320,
       overflowY: "auto"
@@ -12299,6 +12562,7 @@ function HolidaysCard({
       marginLeft: 8
     })
   }, "Add unit")), React.createElement("div", {
+    className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     className: "setup-table",
@@ -12601,6 +12865,7 @@ function EastFeedCard({
       margin: "0 0 4px"
     })
   }, "Overrides (days Faraz knows differ from the feed)"), React.createElement("div", {
+    className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     className: "setup-table",
@@ -12788,13 +13053,28 @@ function GenDiagnostics({
       fontSize: 12,
       fontFamily: mono
     }
-  }, scoreKeys.map(k => React.createElement("span", {
-    key: k
-  }, React.createElement("span", {
-    style: {
-      color: "#7a8a98"
+  }, scoreKeys.map(k => {
+    const v = dg.score[k];
+    if (v && typeof v === "object") {
+      const ks = Object.keys(v);
+      return React.createElement("span", {
+        key: k,
+        "data-testid": "gen-score-" + k,
+        title: JSON.stringify(v)
+      }, React.createElement("span", {
+        style: {
+          color: "#7a8a98"
+        }
+      }, k), " ", ks.length, " key", ks.length === 1 ? "" : "s", ": ", ks.slice(0, 4).map(x => x + "=" + v[x]).join(", "), ks.length > 4 ? ", ..." : "");
     }
-  }, k), " ", typeof dg.score[k] === "number" ? Number.isInteger(dg.score[k]) ? dg.score[k] : dg.score[k].toFixed(2) : String(dg.score[k]))), React.createElement("span", null, React.createElement("span", {
+    return React.createElement("span", {
+      key: k
+    }, React.createElement("span", {
+      style: {
+        color: "#7a8a98"
+      }
+    }, k), " ", typeof v === "number" ? Number.isInteger(v) ? v : v.toFixed(2) : String(v));
+  }), React.createElement("span", null, React.createElement("span", {
     style: {
       color: "#7a8a98"
     }
@@ -12805,6 +13085,7 @@ function GenDiagnostics({
       margin: "0 0 4px"
     })
   }, "Per-surgeon tallies vs cap / target"), React.createElement("div", {
+    className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     className: "setup-table",
@@ -12849,6 +13130,7 @@ function GenDiagnostics({
       margin: 0
     }
   }, "Every slot in the range is covered.") : React.createElement("div", {
+    className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     className: "setup-table",
