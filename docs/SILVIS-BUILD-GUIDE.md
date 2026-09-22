@@ -416,3 +416,33 @@ slots remain (`send-notification` category `open_shifts`, honouring `schedule_up
 ("Email the group now", logged as `openshifts.notify`), and every **Monday 07:00 Central** while any open slot lies in
 the next 30 days (`daily-reminder` mode `open-shifts`, cron job `silvis-open-shifts-weekly`, Vault secret like the
 others). Reasons persisted in `call_schedule_data.data.lastGenerate` are operational wording only (anon-readable blob).
+
+## 17. Offers — paint the dates you'll cover; the generator fills the gaps (Faraz 9/22 evening; Prompt 14)
+
+Silvis is an **offers** problem where Davenport is a rules problem: the schedule has always been assembled from the
+days each surgeon emails in, relayed through whoever is collecting them and retyped by the ER-panel author. From Prompt 14 the
+app is where offers live. **Surgeons may enter offers for any future date, whenever they like** (`call_offers`, one row
+per person and day, primary / backup / either). A **period** (default 3 months, preset 6; `groupRules.offerPeriods`)
+is the generation window: the days inside the next period **freeze six weeks before the current period ends** (= six
+weeks before the next one starts; `offers_close_at`, editable per period), the schedule is due four weeks before
+(`publish_by`), and reminders go out 14 and 3 days before the freeze to anyone with nothing entered for that period who
+has not chosen **"go by my rules"**. Status per surgeon per period is derived, never typed: submitted / rules-only /
+not started. A daily cron mode (`daily-reminder` mode `offers`, job `silvis-offers-daily`, Vault secret like the
+others) sends the reminders and the close summary; it never generates or publishes.
+
+**Entry is phone-first, modelled on Davenport's Paint Month sheet:** a full-screen vertical day list (one tall row per
+day, month navigation forward without limit), brushes Primary / Backup / Either / Clear, tap to paint, tap-start /
+tap-end for a range, greyed rows that say why a day cannot be offered (past, your vacation, East busy, your derived
+week, outside your window, frozen), what is already published that day and how many others offered it, a running count
+against the person's cap, drafts kept locally and **one Save = one batch write + one audit entry**, a failed save that
+writes nothing. A paste-a-date-list box remains for typists.
+
+**Eligibility becomes offers-first:** a surgeon who submitted for the period is eligible only on offered days in the
+offered role (vacations, East busy days, derived-week locks, holiday opt-outs and caps still apply); a rules-only or
+silent surgeon is scheduled by the existing rules. The generator places offers before anything else (an offer is not a
+demand — fairness and caps still decide, and unplaced offers are reported per surgeon), fills the remaining slots from
+rules-only surgeons, then repairs and smooths as before; whatever stays open goes to the open-shifts board (§16), and a
+claim is an offer made on the spot. Every dated list in the seed (Burchett's October/December, Acton's October/November,
+Burchett's November, Philip's weeks, Fierce's single days) is migrated into `call_offers` (`source: email-relay`) so
+there is one mechanism, not two; recurring patterns, derived weeks and windows stay rules. the ER-panel author's Word document
+becomes an **export** from the app, never again the place the schedule is assembled. Published assignments remain locks.
