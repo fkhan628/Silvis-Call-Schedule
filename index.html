@@ -34,6 +34,43 @@
       select, input[type="date"], input[type="text"], input[type="password"], input[type="email"] { font-size: 16px !important; min-height: 38px; }
       button { min-height: 36px; }
     }
+    /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
+       that inline styles cannot (grid + the phone breakpoint); colors stay
+       inline so dark mode's selectors keep working. */
+    .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+    .cal-hdr { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; padding: 4px 0; }
+    .cal-cell { min-height: 84px; border: 1px solid #e0e4ea; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
+    .cal-cell:focus-visible { outline: 2px solid #1a6fa8; outline-offset: 1px; }
+    .cal-line { display: flex; align-items: center; gap: 3px; margin-top: 2px; min-width: 0; }
+    .cal-pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; padding: 0 5px; font-weight: 600; border: 1px solid transparent; }
+    .cal-code { display: none; }
+    .cal-role { font-size: 9px; font-weight: 800; color: #8a94a0; width: 8px; flex-shrink: 0; }
+    .cal-lock { flex-shrink: 0; }
+    .cal-skel { display: inline-block; width: 58%; height: 9px; border-radius: 4px; background: #e4e8ee; opacity: 0.9; }
+    .cal-mobile-note { display: none; }
+    .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
+    .cal-dots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+    .week-rows td, .week-rows th { vertical-align: top; }
+    /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
+       role letter, holiday name, weekend label and NOTE tag give way (line
+       order = role, the cell title still spells everything out), the pill
+       shows the 3-letter code and never shrinks below its text (vis-001; the
+       harness asserts no pill is clipped), the padlock shrinks to 7px. */
+    @media (max-width: 600px) {
+      .cal-grid { gap: 2px; }
+      .cal-cell { min-height: 66px; padding: 3px 2px 2px; font-size: 10px; border-radius: 4px; }
+      .cal-line { gap: 1px; }
+      .cal-pill { padding: 0 1px; flex-shrink: 0; max-width: none; }
+      .cal-pill.cal-open { padding: 0; letter-spacing: 0 !important; font-size: 9.5px; }
+      .cal-role { display: none; }
+      .cal-lock { width: 6px; height: 6px; }
+      .cal-name { display: none; }
+      .cal-code { display: inline; }
+      .cal-hol, .cal-wk-label, .cal-note { display: none; }
+      .cal-mobile-note { display: inline; }
+      .cal-badges { top: 2px; right: 2px; }
+      .cal-legend { font-size: 10px !important; }
+    }
   </style>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -52,7 +89,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.22e";
+    var APP_VERSION = "2026.09.22f";
     (function() {
       var stored = localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
@@ -132,7 +169,22 @@ function CallSchedule() {
   const [availabilityRows, setAvailabilityRows] = useState([]);
   const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
   const [calYear, setCalYear] = useState(() => new Date().getFullYear());
-  const [calSurgeonFilter, setCalSurgeonFilter] = useState("");
+  const [calYearText, setCalYearText] = useState(() => String(new Date().getFullYear()));
+  useEffect(() => {
+    setCalYearText(String(calYear));
+  }, [calYear]);
+  const [calSurgeonFilters, setCalSurgeonFilters] = useState([]);
+  const [calOnlyOpen, setCalOnlyOpen] = useState(false);
+  const [editorDay, setEditorDay] = useState(null);
+  const [eastFeedRows, setEastFeedRows] = useState([]);
+  const [eastForecastRows, setEastForecastRows] = useState([]);
+  const [eastOverrideRows, setEastOverrideRows] = useState([]);
+  const [eastLoadState, setEastLoadState] = useState({
+    feed: "pending",
+    forecast: "pending",
+    overrides: "pending"
+  });
+  const [eastIdByCode, setEastIdByCode] = useState(null);
   const [auditEntries, setAuditEntries] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [showPastVacations, setShowPastVacations] = useState(false);
@@ -694,6 +746,29 @@ function CallSchedule() {
       return false;
     }
   };
+  const loadEastTables = async quiet => {
+    const one = async (table, order, set, key) => {
+      try {
+        const rows = await db.query(table, {
+          order
+        });
+        set(Array.isArray(rows) ? rows : []);
+        setEastLoadState(s => _objectSpread(_objectSpread({}, s), {}, {
+          [key]: "ok"
+        }));
+        return true;
+      } catch (e) {
+        console.warn(`${table} load failed`, e);
+        setEastLoadState(s => _objectSpread(_objectSpread({}, s), {}, {
+          [key]: "failed"
+        }));
+        return false;
+      }
+    };
+    const r = await Promise.all([one("east_feed", "week_monday.asc", setEastFeedRows, "feed"), one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"), one("east_overrides", "day.asc", setEastOverrideRows, "overrides")]);
+    if (!quiet && r.some(x => !x)) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
+    return r.every(Boolean);
+  };
   const vacationConflicts = (personId, start, end) => {
     const out = [];
     const sched = scheduleRef.current || {};
@@ -1177,6 +1252,7 @@ function CallSchedule() {
       }
       await loadTimeOff();
       await loadAvailability();
+      await loadEastTables();
       setLoaded(true);
       loadedAtRef.current = Date.now();
     })();
@@ -1264,7 +1340,7 @@ function CallSchedule() {
       }
     };
     const refreshAll = async () => {
-      await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true)]);
+      await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true)]);
     };
     const onDayChange = payload => {
       try {
@@ -1470,6 +1546,12 @@ function CallSchedule() {
         "Authorization": `Bearer ${token}`,
         "Prefer": "resolution=merge-duplicates,return=minimal"
       };
+      const dayHdrs = {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${token}`,
+        "Prefer": "return=minimal"
+      };
       try {
         const cur = payload.schedule || {};
         const base = lastSyncRef.current || {};
@@ -1477,27 +1559,45 @@ function CallSchedule() {
         if (chk.wipe && !intentionalScheduleWipeRef.current) {
           console.warn(`Keepalive flush (${source}): wipe-shaped diff skipped.`);
         } else {
-          const rows = [];
+          let sent = 0;
           for (const day of Object.keys(Object.assign({}, base, cur))) {
             if (sameAssignment(day, base[day], cur[day])) continue;
             const ver = dayVersionsRef.current[day];
-            rows.push(_objectSpread(_objectSpread({}, assignmentToDayRow(day, cur[day] || emptyDayAssignment())), {}, {
-              version: (typeof ver === "number" ? ver : 0) + 1,
-              updated_by: by,
-              updated_at: ts
-            }));
+            const row = assignmentToDayRow(day, cur[day] || emptyDayAssignment());
+            const rearm = e => {
+              console.warn(`Keepalive flush (${source}): schedule_days ${day} not sent -`, e);
+              pendingSaveRef.current = payload;
+            };
+            if (typeof ver === "number") {
+              fetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${day}&version=eq.${ver}`, {
+                method: "PATCH",
+                keepalive: true,
+                headers: dayHdrs,
+                body: JSON.stringify(_objectSpread(_objectSpread({}, row), {}, {
+                  version: ver + 1,
+                  updated_by: by,
+                  updated_at: ts
+                }))
+              }).catch(rearm);
+            } else {
+              fetch(`${SUPABASE_URL}/rest/v1/schedule_days`, {
+                method: "POST",
+                keepalive: true,
+                headers: dayHdrs,
+                body: JSON.stringify(_objectSpread(_objectSpread({}, row), {}, {
+                  version: 1,
+                  updated_by: by,
+                  updated_at: ts
+                }))
+              }).catch(rearm);
+            }
+            sent++;
           }
-          if (rows.length) {
-            fetch(`${SUPABASE_URL}/rest/v1/schedule_days?on_conflict=day`, {
-              method: "POST",
-              keepalive: true,
-              headers: hdrs,
-              body: JSON.stringify(rows)
-            }).catch(() => {});
-          }
+          if (sent) console.warn(`Keepalive flush (${source}): ${sent} schedule_days CAS write(s) sent; they re-sync on the next foreground if any did not land.`);
         }
       } catch (e) {
         console.warn("Unload flush (schedule_days) failed:", e);
+        pendingSaveRef.current = payload;
       }
       if (!canWriteBlob) return;
       if (!blobLoadedRef.current) {
@@ -1547,70 +1647,174 @@ function CallSchedule() {
     sessionSnapRef.current = true;
     snapshots.captureIfStale("periodic_session", 6);
   }, [loaded, isScheduler]);
-  const setDayRole = (day, role, id) => {
-    if (!isScheduler) return;
-    const cur = schedule[day] || emptyDayAssignment();
-    const value = id || null;
-    if (value && (role === "primary" && cur.backup === value || role === "backup" && cur.primary === value)) {
-      showToast("Primary and backup must be different people.", "error");
+  useEffect(() => {
+    if (eastIdByCode && eastIdByCode._source !== "failed") return;
+    const needCodes = surgeons.filter(s => {
+      const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
+      return ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code;
+    }).map(s => String(s.code).toUpperCase());
+    if (!needCodes.length) return;
+    const fc = eastForecastRows.find(r => r && r.data && r.data.fakId);
+    if (fc && needCodes.length === 1 && needCodes[0] === "FAK") {
+      setEastIdByCode({
+        FAK: fc.data.fakId,
+        _source: "forecast"
+      });
       return;
     }
-    if (role === "primary" && cur.primaryLocked || role === "backup" && cur.backupLocked) {
-      if (!confirm(`${fmtMD(day)} ${role} is LOCKED. Change it anyway?`)) return;
-    }
-    if (value) {
+    if (!eastFeedRows.length || eastIdByCode && eastIdByCode._source === "failed") return;
+    let cancelled = false;
+    (async () => {
       try {
-        const ctx = buildContext({
-          roster: surgeons,
-          surgeonRules,
-          groupRules,
-          holidays,
-          timeOff: vacations,
-          availability: availabilityRows,
-          schedule,
-          eastBusy: null
+        const rows = await eastGetJson("call_schedule_data?id=eq.main&select=data");
+        let blob = rows[0] && rows[0].data;
+        if (typeof blob === "string") blob = JSON.parse(blob);
+        const m = {
+          _source: "davenport"
+        };
+        (blob && Array.isArray(blob.surgeons) ? blob.surgeons : []).forEach(s => {
+          if (s && s.name && s.id) m[String(s.name).toUpperCase()] = s.id;
         });
-        if (!ctx || !ctx._placeholder) {
-          const el = eligibility(ctx, day, role, value);
-          if (el && el.ok === false) {
-            const why = (el.hard || []).join("; ") || "rule block";
-            if (!confirm(`${nameOf(value)} is not eligible for ${role} on ${fmtMD(day)}:\n${why}\n\nOverride and assign anyway?`)) return;
-            logAudit("schedule.override", `Override: ${nameOf(value)} ${role} ${fmtMD(day)} despite: ${why}`, {
-              day,
-              role,
-              surgeon_id: value,
-              reasons: el.hard
-            });
-          }
-        }
+        if (!cancelled) setEastIdByCode(m);
       } catch (e) {
-        console.warn("eligibility check failed (assignment proceeds with a warning):", e);
-        showToast("Couldn't run the eligibility check - assignment saved without it.", "error");
+        console.warn("Davenport roster read failed - East ids unresolved, East days show as unknown:", e);
+        if (!cancelled) setEastIdByCode({
+          _source: "failed"
+        });
       }
-    }
-    pushUndo(schedule);
-    const nextDay = _objectSpread(_objectSpread({}, cur), {}, {
-      [role]: value,
-      source: "manual"
-    });
-    if (role === "primary" && value) nextDay.externalCover = null;
-    setSchedule(p => _objectSpread(_objectSpread({}, p), {}, {
-      [day]: nextDay
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [surgeons, surgeonRules, eastFeedRows, eastForecastRows, eastIdByCode]);
+  const ctxInputs = useMemo(() => {
+    const weeks = eastFeedRows.map(r => ({
+      weekMonday: r.week_monday,
+      data: r.data || {}
     }));
-    logAudit("schedule.edit", `${fmtMD(day)} ${role === "primary" ? "P" : "B"} ${holderLabel(dayHolder(cur, role), nameOf)} -> ${holderLabel(value, nameOf)}`, {
-      day,
-      role,
-      from: cur[role] || null,
-      to: value
+    const forecast = forecastFromFeedRows(eastForecastRows);
+    const eastBusyDays = {},
+      eastForecast = {},
+      eastDerived = [],
+      eastMeta = {};
+    let unresolved = false;
+    surgeons.forEach(s => {
+      const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed || null;
+      if (!ef || !ef.enabled) return;
+      const meta = {
+        code: s.code,
+        busyDays: false,
+        derivedWeeks: false,
+        forecast: false,
+        eastId: null
+      };
+      if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {
+        meta.busyDays = true;
+        meta.eastId = eastIdByCode && eastIdByCode[String(s.code || "").toUpperCase()] || null;
+        let busy = new Set();
+        if (meta.eastId) busy = deriveKhanBusyDays(weeks, meta.eastId, {
+          eastBackupCountsAsBusy: ef.eastBackupCountsAsBusy !== false
+        }).busy;else if (weeks.length) unresolved = true;
+        eastBusyDays[s.id] = applyOverrides(busy, eastOverrideRows, s.id);
+        if (ef.forecast && Object.keys(forecast).length) {
+          eastForecast[s.id] = forecast;
+          meta.forecast = true;
+        }
+      }
+      if (ef.deriveFrom || ef.statedWeeks) {
+        meta.derivedWeeks = true;
+        deriveFierceWeeks(weeks, {
+          statedWeeks: ef.statedWeeks || null
+        }).forEach(w => {
+          eastDerived.push({
+            surgeonId: s.id,
+            weekMonday: w.weekMonday,
+            silvisRole: w.silvisRole,
+            source: w.source
+          });
+        });
+      }
+      eastMeta[s.id] = meta;
     });
-    const affected = [cur[role], value].filter(Boolean);
-    if (affected.length) {
-      addNotification("schedule_changed", "Schedule changed", `${fmtMD(day)} ${role}: ${holderLabel(dayHolder(cur, role), nameOf)} -> ${holderLabel(value, nameOf)}`, {
-        surgeon_id: value || cur[role],
+    const coverage = unresolved ? null : coverageOf(weeks);
+    return {
+      roster: surgeons,
+      surgeonRules: surgeonRules || {},
+      groupRules: groupRules || {},
+      holidays: holidays || {},
+      timeOffRows,
+      availabilityRows,
+      schedule,
+      eastBusyDays,
+      eastForecast,
+      eastDerived,
+      eastFeedCoverage: coverage,
+      eastMeta
+    };
+  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode]);
+  const rulesCtxState = useMemo(() => safeBuildContext(ctxInputs), [ctxInputs]);
+  const rulesCtx = rulesCtxState.ctx;
+  useEffect(() => {
+    if (rulesCtxState.error) showToast("Couldn't build the rules context - eligibility checks are unavailable (" + rulesCtxState.error.slice(0, 90) + ").", "error");else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) console.warn("rules context warnings:", rulesCtx.warnings);
+  }, [rulesCtxState]);
+  const saveDayEdit = (day, next, meta) => {
+    if (!isScheduler || isPublicMode) {
+      showToast("Only the scheduler can change the schedule.", "error");
+      return false;
+    }
+    const before = schedule[day] || emptyDayAssignment();
+    const after = _objectSpread(_objectSpread({}, emptyDayAssignment()), next);
+    if (after.primary && after.primary === after.backup) {
+      showToast("Primary and backup must be different people.", "error");
+      return false;
+    }
+    if (after.primary) after.externalCover = null;
+    after.externalCover = (after.externalCover || "").trim() || null;
+    const overrides = meta && meta.overrides || [];
+    let note = (after.note || "").replace(/^\[override:[^\]]*\]\s*/, "").trim();
+    if (overrides.length) {
+      const tag = "[override: " + overrides.map(o => nameOf(o.id) + " " + o.role + ": " + o.reasons.join(", ")).join("; ") + "]";
+      note = note ? tag + " " + note : tag;
+    }
+    after.note = note || null;
+    after.source = "manual";
+    if (sameAssignment(day, before, after)) return true;
+    pushUndo(schedule);
+    setSchedule(p => _objectSpread(_objectSpread({}, p), {}, {
+      [day]: after
+    }));
+    const lines = diffScheduleDays({
+      [day]: before
+    }, {
+      [day]: after
+    }).map(c => formatDayChange(c, nameOf));
+    logAudit("schedule.day_edit", fmtMD(day) + ": " + (lines.join("; ") || "edited"), {
+      day,
+      before: assignmentToDayRow(day, before),
+      after: assignmentToDayRow(day, after),
+      overrides
+    });
+    if (overrides.length) logAudit("schedule.override", "Override on " + fmtMD(day) + ": " + overrides.map(o => nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", ")).join("; "), {
+      day,
+      overrides
+    });
+    const roleChanged = before.primary !== after.primary || before.backup !== after.backup || (before.externalCover || null) !== (after.externalCover || null);
+    const affected = [...new Set([before.primary, before.backup, after.primary, after.backup].filter(Boolean))];
+    if (roleChanged && affected.length) {
+      addNotification("schedule_changed", "Schedule changed", fmtMD(day) + ": " + lines.filter(l => / [PB] /.test(l)).join("; "), {
+        surgeon_id: after.primary || after.backup || before.primary || before.backup,
         day,
-        role
+        affected
       });
     }
+    return true;
+  };
+  const proposeTradeForDay = (day, role) => {
+    setTradeDay(day);
+    setTradeRole(role === "backup" ? "backup" : "primary");
+    if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);
+    setEditorDay(null);
+    setView("timeoff");
   };
   const clearSchedule = async () => {
     if (!isScheduler) return;
@@ -2473,6 +2677,7 @@ function CallSchedule() {
   const todayAssign = schedule[todayStr] || null;
   const buildTonightMsg = () => {
     const a = todayAssign;
+    if (!a && !loaded) return "Silvis call today: loading schedule";
     const p = a ? holderLabel(dayHolder(a, "primary"), nameOf) : "OPEN";
     const b = a ? holderLabel(dayHolder(a, "backup"), nameOf) : "OPEN";
     return `Silvis call today: P ${p} / B ${b}`;
@@ -2554,12 +2759,21 @@ function CallSchedule() {
       letterSpacing: 0.5
     }
   }, "OPEN");
+  const LoadingTag = () => React.createElement("span", {
+    "data-testid": "loading-holder",
+    style: {
+      color: dkSubtext,
+      fontStyle: "italic",
+      fontSize: 11
+    }
+  }, "loading");
   const HolderTag = ({
     a,
     role,
     small
   }) => {
     const v = dayHolder(a, role);
+    if (!v && !loaded) return React.createElement(LoadingTag, null);
     if (!v) return React.createElement(OpenTag, null);
     if (typeof v === "string" && v.indexOf("ext:") === 0) return React.createElement("span", {
       style: {
@@ -2577,10 +2791,13 @@ function CallSchedule() {
       small: small
     });
   };
-  const monthDays = useMemo(() => {
-    const n = new Date(calYear, calMonth + 1, 0).getDate();
+  const monthStartStr = fmt(new Date(calYear, calMonth, 1));
+  const monthEndStr = fmt(new Date(calYear, calMonth + 1, 0));
+  const gridDays = useMemo(() => {
+    const first = new Date(calYear, calMonth, 1);
+    const last = new Date(calYear, calMonth + 1, 0);
     const out = [];
-    for (let d = 1; d <= n; d++) out.push(fmt(new Date(calYear, calMonth, d)));
+    for (let d = monOf(first); d <= last || out.length % 7 !== 0; d = addD(d, 1)) out.push(fmt(d));
     return out;
   }, [calYear, calMonth]);
   const prevMonth = () => {
@@ -2594,6 +2811,56 @@ function CallSchedule() {
       setCalMonth(0);
       setCalYear(y => y + 1);
     } else setCalMonth(m => m + 1);
+  };
+  const goToday = () => {
+    const n = new Date();
+    setCalMonth(n.getMonth());
+    setCalYear(n.getFullYear());
+  };
+  const toggleCalFilter = id => setCalSurgeonFilters(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  const colorOf = id => surgeonColors(codeOf(id), sMap[id] ? sMap[id].idx : 0);
+  const textColorOf = id => surgeonTextColor(colorOf(id), codeOf(id), dk);
+  const vacByDay = useMemo(() => {
+    const map = {};
+    if (!gridDays.length) return map;
+    const lo = gridDays[0],
+      hi = gridDays[gridDays.length - 1];
+    Object.keys(vacations).forEach(pid => (vacations[pid] || []).forEach(([vs, ve]) => {
+      if (!vs || !ve || ve < lo || vs > hi) return;
+      const stop = ve > hi ? hi : ve;
+      for (let d = parse(vs < lo ? lo : vs); fmt(d) <= stop; d = addD(d, 1)) {
+        const ds = fmt(d);
+        (map[ds] = map[ds] || []).push(pid);
+      }
+    }));
+    return map;
+  }, [vacations, gridDays]);
+  const vacNamesOn = d => Object.keys(vacations).filter(pid => onVac(pid, d, vacations)).map(nameOf);
+  const forecastByDay = useMemo(() => {
+    const out = {};
+    Object.keys(ctxInputs.eastForecast || {}).forEach(id => {
+      const fc = ctxInputs.eastForecast[id] || {};
+      Object.keys(fc).forEach(d => {
+        if (out[d] === undefined || fc[d] > out[d].p) out[d] = {
+          p: fc[d],
+          id
+        };
+      });
+    });
+    return out;
+  }, [ctxInputs]);
+  const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
+  const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr), [schedule, surgeons, monthStartStr, monthEndStr]);
+  const editorNav = delta => {
+    if (!editorDay) return;
+    const nd = fmt(addD(parse(editorDay), delta));
+    setEditorDay(nd);
+    const m = parse(nd).getMonth(),
+      y = parse(nd).getFullYear();
+    if (m !== calMonth || y !== calYear) {
+      setCalMonth(m);
+      setCalYear(y);
+    }
   };
   const myDays = useMemo(() => {
     if (!mySurgeon) return [];
@@ -3443,7 +3710,9 @@ function CallSchedule() {
       fontFamily: font
     }
   }, "SSC")), React.createElement("div", null, React.createElement("h1", {
-    style: css.h1
+    style: _objectSpread(_objectSpread({}, css.h1), {}, {
+      color: dkText
+    })
   }, "Silvis Call Schedule"), React.createElement("p", {
     style: css.sub
   }, isPublicMode ? React.createElement(React.Fragment, null, React.createElement("span", {
@@ -4046,227 +4315,574 @@ function CallSchedule() {
       cursor: "pointer",
       fontFamily: font
     }
-  }, "Clear range")))), view === "calendar" && React.createElement(React.Fragment, null, React.createElement("div", {
-    style: css.card
-  }, React.createElement("div", {
-    style: {
-      display: "flex",
+  }, "Clear range")))), view === "calendar" && (() => {
+    const SlotLine = ({
+      role,
+      holder,
+      locked
+    }) => {
+      const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
+      let body;
+      if (!holder && !loaded) body = React.createElement("span", {
+        className: "cal-skel",
+        "data-testid": "loading-slot",
+        style: {
+          background: dk ? "#243250" : "#e4e8ee"
+        }
+      });else if (!holder) body = React.createElement("span", {
+        className: "cal-pill cal-open",
+        style: {
+          color: "#c04040",
+          fontWeight: 800,
+          letterSpacing: 0.4
+        }
+      }, "OPEN");else if (isExt) {
+        const ext = holder.slice(4);
+        body = React.createElement("span", {
+          className: "cal-pill cal-ext",
+          title: ext + " (external cover, outside the roster)",
+          style: {
+            color: dk ? "#a0a8b0" : "#6a7a88",
+            fontStyle: "italic",
+            background: dk ? "#1e2a44" : "#eef1f4",
+            borderColor: dk ? "#2a3a5e" : "#d8dee6"
+          }
+        }, React.createElement("span", {
+          className: "cal-name"
+        }, ext), React.createElement("span", {
+          className: "cal-code"
+        }, ext.slice(0, 3).toUpperCase()));
+      } else {
+        const c = colorOf(holder);
+        body = React.createElement("span", {
+          className: "cal-pill",
+          title: nameOf(holder),
+          style: {
+            background: c.tg,
+            color: c.tx,
+            borderColor: c.bd
+          }
+        }, React.createElement("span", {
+          className: "cal-name"
+        }, nameOf(holder)), React.createElement("span", {
+          className: "cal-code"
+        }, codeOf(holder)));
+      }
+      return React.createElement("div", {
+        className: "cal-line"
+      }, React.createElement("span", {
+        className: "cal-role"
+      }, role), body, locked ? React.createElement(Padlock, {
+        className: "cal-lock",
+        title: (role === "P" ? "Primary" : "Backup") + " locked"
+      }) : null);
+    };
+    const badge = (solid, color) => ({
+      display: "inline-flex",
       alignItems: "center",
-      justifyContent: "space-between",
-      flexWrap: "wrap",
-      gap: 8,
-      marginBottom: 10
-    }
-  }, React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 6
-    }
-  }, React.createElement("button", {
-    onClick: prevMonth,
-    "aria-label": "Previous month",
-    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-      minWidth: 40,
-      padding: "5px 10px"
-    })
-  }, "‹"), React.createElement("span", {
-    "data-testid": "cal-month",
-    style: {
-      fontSize: 15,
-      fontWeight: 700,
-      color: dkText,
-      minWidth: 170,
-      textAlign: "center"
-    }
-  }, MO[calMonth], " ", calYear), React.createElement("button", {
-    onClick: nextMonth,
-    "aria-label": "Next month",
-    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-      minWidth: 40,
-      padding: "5px 10px"
-    })
-  }, "›"), React.createElement("button", {
-    onClick: () => {
-      const n = new Date();
-      setCalMonth(n.getMonth());
-      setCalYear(n.getFullYear());
-    },
-    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-      padding: "5px 10px",
-      fontSize: 11
-    })
-  }, "Today")), React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 6,
-      flexWrap: "wrap"
-    }
-  }, React.createElement("select", {
-    value: calSurgeonFilter,
-    onChange: e => setCalSurgeonFilter(e.target.value),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      fontSize: 12
-    })
-  }, React.createElement("option", {
-    value: ""
-  }, "All surgeons"), surgeons.map(s => React.createElement("option", {
-    key: s.id,
-    value: s.id
-  }, s.name))), !isPublicMode && React.createElement("button", {
-    onClick: shareTonightMsg,
-    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-      padding: "5px 10px",
-      fontSize: 11
-    })
-  }, copied ? "Copied" : "Share today"))), todayAssign && React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      color: dkText,
-      background: dk ? "#16213e" : "#f8f9fb",
-      border: `1px solid ${dkCardBorder}`,
-      borderRadius: 6,
-      padding: "6px 10px",
-      marginBottom: 10,
-      display: "flex",
-      gap: 8,
-      alignItems: "center",
-      flexWrap: "wrap"
-    }
-  }, React.createElement("strong", null, "Today ", fmtMD(todayStr), ":"), " P ", React.createElement(HolderTag, {
-    a: todayAssign,
-    role: "primary",
-    small: true
-  }), " B ", React.createElement(HolderTag, {
-    a: todayAssign,
-    role: "backup",
-    small: true
-  })), !loaded && React.createElement("p", {
-    style: muted
-  }, "Loading schedule"), loaded && Object.keys(schedule).length === 0 && React.createElement("p", {
-    style: _objectSpread(_objectSpread({}, muted), {}, {
+      justifyContent: "center",
+      width: 13,
+      height: 13,
+      borderRadius: 3,
+      fontSize: 9,
+      fontWeight: 800,
+      lineHeight: 1,
+      background: solid ? color : "transparent",
+      color: solid ? "#fff" : color,
+      border: "1px solid " + color
+    });
+    const entryStyle = e => e.kind === "open" ? {
+      color: "#c04040",
+      fontWeight: 800
+    } : e.kind === "external" ? {
+      color: dk ? "#a0a8b0" : "#6a7a88",
       fontStyle: "italic"
-    })
-  }, "No schedule days in the database yet."), React.createElement("div", {
-    style: {
-      display: "flex",
-      flexDirection: "column"
-    }
-  }, monthDays.map(d => {
-    const a = schedule[d] || null;
-    const dow = parse(d).getDay();
-    const involved = !calSurgeonFilter || a && (a.primary === calSurgeonFilter || a.backup === calSurgeonFilter);
-    const rowBg = d === todayStr ? dk ? "#1a3a5e" : "#eaf3fb" : isWeekendDay(d) ? dk ? "#141c30" : "#f6f8fa" : "transparent";
-    return React.createElement("div", {
-      key: d,
-      "data-day": d,
+    } : {
+      color: textColorOf(e.id),
+      fontWeight: 600
+    };
+    const chipStyle = (on, c) => ({
+      background: on ? c.tg : "transparent",
+      color: on ? c.tx : dk ? "#8a8aaa" : "#6a7a88",
+      border: "1px solid " + (on ? c.bd : dk ? "#2a3a5e" : "#c8d0d8"),
+      borderRadius: 6,
+      padding: "3px 8px",
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: "pointer",
+      fontFamily: mono,
+      letterSpacing: 0.3
+    });
+    return React.createElement(React.Fragment, null, React.createElement("div", {
+      style: css.card
+    }, React.createElement("div", {
       style: {
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: "5px 8px",
-        borderBottom: `1px solid ${dkCardBorder}`,
-        background: rowBg,
-        opacity: involved ? 1 : 0.35,
-        borderLeft: dow === 5 ? "3px solid #b8cfe0" : "3px solid transparent"
+        justifyContent: "space-between",
+        flexWrap: "wrap",
+        gap: 8,
+        marginBottom: 10
       }
     }, React.createElement("div", {
-      style: {
-        width: 70,
-        flexShrink: 0,
-        fontFamily: mono,
-        fontSize: 12,
-        color: dkText
-      }
-    }, DAY_HDR[dow], " ", fmtMD(d)), React.createElement("div", {
       style: {
         display: "flex",
         alignItems: "center",
         gap: 6,
-        flex: "1 1 auto",
         flexWrap: "wrap"
       }
-    }, React.createElement("span", {
-      style: {
-        fontSize: 10,
-        fontWeight: 700,
-        color: "#7a8a98"
-      }
-    }, "P"), isScheduler && !isPublicMode ? React.createElement("select", {
-      value: a && a.primary || "",
-      onChange: e => setDayRole(d, "primary", e.target.value),
-      style: _objectSpread(_objectSpread({}, inp), {}, {
-        padding: "2px 6px",
-        fontSize: 12,
-        minWidth: 110,
-        color: a && a.primary ? undefined : "#c04040",
-        fontWeight: a && a.primary ? 500 : 800
+    }, React.createElement("button", {
+      onClick: prevMonth,
+      "aria-label": "Previous month",
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        minWidth: 40,
+        padding: "5px 10px"
       })
-    }, React.createElement("option", {
-      value: ""
-    }, a && a.externalCover ? a.externalCover + " (ext)" : "OPEN"), activeSurgeons.map(s => React.createElement("option", {
-      key: s.id,
-      value: s.id
-    }, s.name))) : React.createElement(HolderTag, {
-      a: a,
+    }, "‹"), React.createElement("span", {
+      "data-testid": "cal-month",
+      style: {
+        fontSize: 15,
+        fontWeight: 700,
+        color: dkText,
+        minWidth: 150,
+        textAlign: "center"
+      }
+    }, MO[calMonth], " ", calYear), React.createElement("button", {
+      onClick: nextMonth,
+      "aria-label": "Next month",
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        minWidth: 40,
+        padding: "5px 10px"
+      })
+    }, "›"), React.createElement("button", {
+      onClick: goToday,
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "5px 10px",
+        fontSize: 11
+      })
+    }, "Today"), React.createElement("select", {
+      "data-testid": "cal-month-select",
+      "aria-label": "Month",
+      value: calMonth,
+      onChange: e => setCalMonth(Number(e.target.value)),
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        fontSize: 12,
+        padding: "4px 6px"
+      })
+    }, MO.map((m, i) => React.createElement("option", {
+      key: m,
+      value: i
+    }, m))), React.createElement("input", {
+      "data-testid": "cal-year-input",
+      "aria-label": "Year",
+      type: "number",
+      inputMode: "numeric",
+      min: "2020",
+      max: "2100",
+      value: calYearText,
+      onChange: e => {
+        const t = e.target.value;
+        setCalYearText(t);
+        const y = Number(t);
+        if (/^\d{4}$/.test(t) && y >= 2020 && y <= 2100) setCalYear(y);
+      },
+      onBlur: () => setCalYearText(String(calYear)),
+      onKeyDown: e => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          setCalYearText(String(calYear));
+          e.currentTarget.blur();
+        }
+      },
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 78,
+        fontSize: 12,
+        padding: "4px 6px"
+      })
+    })), React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        flexWrap: "wrap"
+      }
+    }, activeSurgeons.map(s => {
+      const on = calSurgeonFilters.includes(s.id);
+      return React.createElement("button", {
+        key: s.id,
+        "data-filter": s.code,
+        "aria-pressed": on,
+        title: "Show " + s.name + (on ? " (on)" : ""),
+        onClick: () => toggleCalFilter(s.id),
+        style: chipStyle(on, colorOf(s.id))
+      }, s.code);
+    }), calSurgeonFilters.length > 0 && React.createElement("button", {
+      onClick: () => setCalSurgeonFilters([]),
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "3px 8px",
+        fontSize: 11
+      })
+    }, "All"), React.createElement("label", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 11,
+        color: dkSubtext,
+        cursor: "pointer",
+        marginLeft: 4
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      "data-testid": "cal-only-open",
+      checked: calOnlyOpen,
+      onChange: e => setCalOnlyOpen(e.target.checked)
+    }), " only OPEN"))), React.createElement("div", {
+      "data-testid": "today-banner",
+      style: {
+        fontSize: 12.5,
+        color: dkText,
+        background: dk ? "#16213e" : "#f8f9fb",
+        border: "1px solid " + dkCardBorder,
+        borderRadius: 6,
+        padding: "6px 10px",
+        marginBottom: 10,
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }
+    }, React.createElement("strong", null, "On call today ", fmtMD(todayStr), ":"), React.createElement("span", null, "P"), " ", React.createElement(HolderTag, {
+      a: todayAssign,
       role: "primary",
       small: true
-    }), a && a.primaryLocked && React.createElement("span", {
-      title: "locked",
-      style: {
-        fontSize: 10,
-        color: "#7a8a98"
-      }
-    }, "[L]"), React.createElement("span", {
-      style: {
-        fontSize: 10,
-        fontWeight: 700,
-        color: "#7a8a98",
-        marginLeft: 6
-      }
-    }, "B"), isScheduler && !isPublicMode ? React.createElement("select", {
-      value: a && a.backup || "",
-      onChange: e => setDayRole(d, "backup", e.target.value),
-      style: _objectSpread(_objectSpread({}, inp), {}, {
-        padding: "2px 6px",
-        fontSize: 12,
-        minWidth: 110,
-        color: a && a.backup ? undefined : "#c04040",
-        fontWeight: a && a.backup ? 500 : 800
-      })
-    }, React.createElement("option", {
-      value: ""
-    }, "OPEN"), activeSurgeons.map(s => React.createElement("option", {
-      key: s.id,
-      value: s.id
-    }, s.name))) : React.createElement(HolderTag, {
-      a: a,
+    }), React.createElement("span", null, "B"), " ", React.createElement(HolderTag, {
+      a: todayAssign,
       role: "backup",
       small: true
-    }), a && a.backupLocked && React.createElement("span", {
-      title: "locked",
+    }), React.createElement("span", {
       style: {
-        fontSize: 10,
-        color: "#7a8a98"
+        fontFamily: mono,
+        fontSize: 11,
+        color: dkSubtext
       }
-    }, "[L]"), a && a.source === "east-derived" && React.createElement("span", {
-      title: "East-derived",
-      style: {
-        fontSize: 10,
-        fontWeight: 800,
-        color: "#1a6fa8"
-      }
-    }, "E"), a && a.note && React.createElement("span", {
-      style: _objectSpread(_objectSpread({}, muted), {}, {
-        fontStyle: "italic"
+    }, buildTonightMsg()), !isPublicMode && React.createElement("button", {
+      onClick: shareTonightMsg,
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "4px 10px",
+        fontSize: 11,
+        marginLeft: "auto"
       })
-    }, a.note)));
-  })), isScheduler && !isPublicMode && React.createElement("p", {
-    style: _objectSpread(_objectSpread({}, muted), {}, {
-      marginTop: 8
-    })
-  }, "Edits save automatically (per-day compare-and-swap). The full day editor with eligibility comes in Slice D."))), view === "myschedule" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
+    }, copied ? "Copied" : "Share today")), !loaded && React.createElement("p", {
+      style: muted
+    }, "Loading schedule"), loaded && Object.keys(schedule).length === 0 && React.createElement("p", {
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        fontStyle: "italic",
+        marginBottom: 8
+      })
+    }, "No schedule days in the database yet - every day shows OPEN."), !rulesImported && loaded && React.createElement("p", {
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        marginBottom: 8
+      })
+    }, "Rules not imported yet: East and holiday badges appear once Setup imports the seed (Slice E)."), React.createElement("div", {
+      className: "cal-grid",
+      "data-testid": "cal-grid"
+    }, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((h, i) => React.createElement("div", {
+      key: h,
+      className: "cal-hdr",
+      style: {
+        color: i >= 4 ? "#3d6a8c" : dkSubtext,
+        background: i >= 4 ? dk ? "#141c30" : "#eef3f8" : "transparent",
+        borderRadius: i === 4 ? "6px 0 0 6px" : i === 6 ? "0 6px 6px 0" : 0
+      }
+    }, h, i === 4 ? React.createElement("span", {
+      className: "cal-wk-label",
+      style: {
+        fontWeight: 500,
+        letterSpacing: 0,
+        textTransform: "none",
+        marginLeft: 4,
+        fontSize: 9
+      }
+    }, "weekend unit") : null)), gridDays.map(d => {
+      const a = schedule[d] || null;
+      const dt = parse(d);
+      const dow = dt.getDay();
+      const inMonth = d >= monthStartStr && d <= monthEndStr;
+      const isWk = dow === 5 || dow === 6 || dow === 0;
+      const hol = rulesCtx ? isHolidayDay(rulesCtx, d) : null;
+      const derived = rulesCtx ? rulesCtx.derivedByDay[d] : null;
+      const fc = forecastByDay[d];
+      const pH = dayHolder(a, "primary");
+      const bH = a ? a.backup : null;
+      const openP = !pH,
+        openB = !bH;
+      const inFilter = calSurgeonFilters.length === 0 || a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup));
+      const dim = !inFilter || calOnlyOpen && !(openP || openB);
+      const isToday = d === todayStr;
+      const bg = hol ? dk ? "#3a3418" : "#fdf6dc" : isWk ? dk ? "#141c30" : "#f3f6f9" : dk ? "#16213e" : "#ffffff";
+      const bracket = isWk ? {
+        borderTop: "2px solid #a9c4da",
+        borderTopLeftRadius: dow === 5 ? 8 : 6,
+        borderTopRightRadius: dow === 0 ? 8 : 6
+      } : {};
+      const derivedWho = derived ? Object.keys(derived).map(r => nameOf(derived[r]) + " Silvis " + r).join(", ") : "";
+      const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + holderLabel(pH, nameOf), "B " + holderLabel(bH, nameOf)];
+      if (hol) titleBits.push(hol.name + " (holiday unit)");
+      if (derivedWho) titleBits.push("East-derived: " + derivedWho);
+      if (a && a.note) titleBits.push("note: " + a.note);
+      return React.createElement("div", {
+        key: d,
+        className: "cal-cell",
+        role: "button",
+        tabIndex: 0,
+        "data-day": d,
+        "data-primary": a && a.primary || "",
+        "data-backup": bH || "",
+        "data-ext": a && a.externalCover || "",
+        "data-open": (openP ? "P" : "") + (openB ? "B" : ""),
+        onClick: () => setEditorDay(d),
+        onKeyDown: e => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setEditorDay(d);
+          }
+        },
+        title: titleBits.join(" | "),
+        style: _objectSpread(_objectSpread({
+          background: bg,
+          border: isToday ? "2px solid #1a6fa8" : "1px solid " + dkCardBorder
+        }, bracket), {}, {
+          opacity: dim ? 0.28 : inMonth ? 1 : 0.5,
+          color: dkText,
+          boxShadow: isToday ? "0 0 0 2px rgba(26,111,168,0.18)" : "none"
+        })
+      }, React.createElement("div", {
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          minWidth: 0,
+          paddingRight: 30
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: mono,
+          fontSize: 11,
+          fontWeight: isToday ? 800 : 600,
+          color: isToday ? "#1a6fa8" : inMonth ? dkText : "#9aa4ae"
+        }
+      }, dt.getDate()), hol && React.createElement("span", {
+        className: "cal-hol",
+        title: hol.name + " - holiday unit (" + hol.tier + ")",
+        style: {
+          fontSize: 9,
+          fontWeight: 700,
+          color: "#8a6a10",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          minWidth: 0
+        }
+      }, hol.name)), React.createElement("div", {
+        className: "cal-badges"
+      }, derived && React.createElement("span", {
+        "data-badge": "E",
+        title: "East-derived week: " + derivedWho,
+        style: badge(true, "#1a6fa8")
+      }, "E"), fc && fc.p >= 0.2 && React.createElement("span", {
+        "data-badge": fc.p >= forecastThreshold ? "F" : "f",
+        title: "East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)",
+        style: badge(fc.p >= forecastThreshold, "#8a5a10")
+      }, "F")), React.createElement(SlotLine, {
+        role: "P",
+        holder: pH,
+        locked: !!(a && a.primaryLocked)
+      }), React.createElement(SlotLine, {
+        role: "B",
+        holder: bH,
+        locked: !!(a && a.backupLocked)
+      }), (vacByDay[d] || []).length > 0 && React.createElement("div", {
+        className: "cal-dots",
+        title: "On vacation: " + vacByDay[d].map(nameOf).join(", ")
+      }, vacByDay[d].map(pid => React.createElement("span", {
+        key: pid,
+        "data-vac": pid,
+        style: {
+          width: 6,
+          height: 6,
+          borderRadius: 3,
+          background: textColorOf(pid),
+          display: "inline-block"
+        }
+      }))), a && a.note && React.createElement("span", {
+        className: "cal-note",
+        title: a.note,
+        style: {
+          position: "absolute",
+          bottom: 2,
+          right: 4,
+          fontSize: 8,
+          color: "#9aa4ae",
+          fontWeight: 700,
+          letterSpacing: 0.5
+        }
+      }, "NOTE"));
+    })), React.createElement("div", {
+      className: "cal-legend",
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "6px 14px",
+        alignItems: "center",
+        marginTop: 10,
+        fontSize: 11,
+        color: dkSubtext,
+        lineHeight: 1.6
+      }
+    }, activeSurgeons.map(s => {
+      const c = colorOf(s.id);
+      return React.createElement("span", {
+        key: s.id,
+        style: {
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 10,
+          height: 10,
+          borderRadius: 3,
+          background: c.tg,
+          border: "1px solid " + c.bd,
+          display: "inline-block"
+        }
+      }), s.name, " ", React.createElement("span", {
+        style: {
+          fontFamily: mono,
+          fontSize: 10
+        }
+      }, s.code));
+    }), React.createElement("span", {
+      className: "cal-mobile-note"
+    }, "top line = primary, bottom line = backup (tap a day for details)"), React.createElement("span", null, React.createElement("span", {
+      style: {
+        color: "#c04040",
+        fontWeight: 800
+      }
+    }, "OPEN"), " = nobody assigned"), React.createElement("span", null, React.createElement("span", {
+      style: {
+        fontStyle: "italic"
+      }
+    }, "Atwell"), " = external cover"), React.createElement("span", {
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3
+      }
+    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", {
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3
+      }
+    }, React.createElement("span", {
+      style: badge(true, "#1a6fa8")
+    }, "E"), " East-derived week"), React.createElement("span", {
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3
+      }
+    }, React.createElement("span", {
+      style: badge(true, "#8a5a10")
+    }, "F"), " East forecast at or above ", Math.round(forecastThreshold * 100), "%, ", React.createElement("span", {
+      style: badge(false, "#8a5a10")
+    }, "F"), " 20% or more"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), React.createElement("span", null, "blue outline = today"), isScheduler && !isPublicMode && React.createElement("span", null, "Click a day to edit (eligibility-checked); saves per day with compare-and-swap."))), React.createElement(Collapsible, {
+      css: css,
+      ck: "cal_weekrows",
+      defaultOpen: true,
+      title: "Week rows (ER Call Panels layout)"
+    }, React.createElement("p", {
+      style: sectionNote
+    }, "the ER-panel author's layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too."), React.createElement("div", {
+      style: {
+        overflowX: "auto"
+      }
+    }, React.createElement("table", {
+      className: "week-rows",
+      "data-testid": "week-rows",
+      style: {
+        width: "100%",
+        borderCollapse: "collapse",
+        fontSize: 12
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: thS
+    }, "MON/SUN DATES"), React.createElement("th", {
+      style: thS
+    }, "TRAUMA & CARDIOTHORACIC SURGERY TRAUMA"), React.createElement("th", {
+      style: thS
+    }, "TRAUMA BACKUP"))), React.createElement("tbody", null, !loaded && React.createElement("tr", null, React.createElement("td", {
+      colSpan: 3,
+      style: _objectSpread(_objectSpread({}, tdS), {}, {
+        fontFamily: font,
+        fontStyle: "italic",
+        color: dkSubtext
+      })
+    }, "Loading schedule")), loaded && weekRows.map(r => React.createElement("tr", {
+      key: r.monday,
+      "data-week": r.monday,
+      style: {
+        borderTop: "1px solid " + dkCardBorder
+      }
+    }, React.createElement("td", {
+      style: _objectSpread(_objectSpread({}, tdS), {}, {
+        whiteSpace: "nowrap",
+        fontSize: 12
+      })
+    }, r.label), React.createElement("td", {
+      style: _objectSpread(_objectSpread({}, tdS), {}, {
+        fontFamily: font
+      })
+    }, r.primary.map(e => React.createElement("div", {
+      key: e.start,
+      "data-kind": e.kind,
+      style: entryStyle(e)
+    }, e.text))), React.createElement("td", {
+      style: _objectSpread(_objectSpread({}, tdS), {}, {
+        fontFamily: font
+      })
+    }, r.backup.map(e => React.createElement("div", {
+      key: e.start,
+      "data-kind": e.kind,
+      style: entryStyle(e)
+    }, e.text))))))))), editorDay && React.createElement(DayEditor, {
+      key: editorDay,
+      day: editorDay,
+      entry: schedule[editorDay] || null,
+      roster: surgeons,
+      ctxInputs: ctxInputs,
+      ctxError: rulesCtxState.error,
+      canEdit: isScheduler && !isPublicMode,
+      rulesImported: rulesImported,
+      isPublicMode: isPublicMode,
+      nameOf: nameOf,
+      codeOf: codeOf,
+      colorOf: colorOf,
+      mySurgeon: mySurgeon,
+      vacationNames: vacNamesOn(editorDay),
+      onSave: (next, meta) => {
+        if (saveDayEdit(editorDay, next, meta)) setEditorDay(null);
+      },
+      onCancel: () => setEditorDay(null),
+      onNav: editorNav,
+      onTrade: proposeTradeForDay,
+      css: css,
+      dk: dk
+    }));
+  })(), view === "myschedule" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
     style: css.cardT
@@ -6135,6 +6751,805 @@ function Collapsible({
       marginTop: 12
     }
   }, children));
+}
+function safeBuildContext(inputs) {
+  try {
+    return {
+      ctx: buildContext(inputs),
+      error: null
+    };
+  } catch (e) {
+    console.warn("buildContext failed - eligibility unavailable:", e);
+    return {
+      ctx: null,
+      error: String(e && e.message || e)
+    };
+  }
+}
+const REASON_WORDS = {
+  "external-cover": "primary is covered externally",
+  "inactive": "inactive on the roster",
+  "unavailable-row": "stated unavailable",
+  "no-backup-row": "stated no backup",
+  "backup-only-row": "stated backup only",
+  "east-busy": "on East (Davenport) call",
+  "day-before-vacation": "vacation starts the next morning",
+  "weekend-block-only": "weekends only as a full Fri-Sun block",
+  "day-before-aledo": "Aledo clinic the next day",
+  "whitelist-month": "not on this month's stated list",
+  "outside-available-weeks": "outside the listed weeks",
+  "outside-window": "outside the availability window",
+  "not-recurring-available": "not a recurring available day",
+  "holds-other-role": "already holds the other role that day",
+  "unknown-surgeon": "not on the roster",
+  "bad-role": "unknown role"
+};
+function reasonLabel(code, nameOf) {
+  const s = String(code || "");
+  const i = s.indexOf(":");
+  const key = i < 0 ? s : s.slice(0, i);
+  const arg = i < 0 ? "" : s.slice(i + 1);
+  const who = id => typeof nameOf === "function" ? nameOf(id) : id;
+  switch (key) {
+    case "slot-locked":
+      return "slot locked to " + who(arg);
+    case "derived-lock":
+      return "East week: Silvis " + arg + " that week";
+    case "derived-lock-held":
+      return "East week slot belongs to " + who(arg);
+    case "hard-never-weekday":
+      return "never on " + arg;
+    case "recurring-unavailable":
+      return "recurring unavailable on " + arg;
+    case "weekday-not-allowed":
+      return arg + " is not one of the allowed weekdays";
+    case "weekday-pattern":
+      return "weekday pattern excludes " + arg;
+    case "holiday-opt-out":
+      return "opted out of " + arg;
+    case "time-off":
+      return "on vacation";
+    case "east-forecast-busy":
+      return "East forecast " + Math.round(Number(arg) * 100) + "% (treated as busy)";
+    case "monthly-cap":
+      return "monthly cap of " + arg + " reached";
+    case "max-consecutive":
+      return "more than " + arg + " consecutive days";
+    case "backup-cap":
+      return "backup cap of " + arg + " per month reached";
+    case "backup-weekend-cap":
+      return "backup weekend cap of " + arg + " reached";
+    case "window-week-max":
+      return "over " + arg + " days in the window week";
+    case "max-major-holidays":
+      return "already holds " + arg + " major holiday(s) in 12 months";
+    default:
+      return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " (" + arg + ")" : "") : s;
+  }
+}
+function softTag(soft) {
+  const s = String(soft && soft.reason || "");
+  const i = s.indexOf(":");
+  const key = i < 0 ? s : s.slice(0, i);
+  const arg = i < 0 ? "" : s.slice(i + 1);
+  switch (key) {
+    case "recurring-avoid":
+      return "avoid: " + arg;
+    case "avoid-row":
+      return "avoid";
+    case "prefer-row":
+    case "preferred":
+      return "preferred";
+    case "east-forecast":
+      return "East " + Math.round(Number(arg) * 100) + "%";
+    case "east-unknown":
+      return "East unknown";
+    case "auto-offer-weekday":
+      return "auto-offer";
+    case "over-preferred-cap":
+      return "over preferred cap " + arg;
+    case "over-target":
+      return "over target +" + arg;
+    case "under-target":
+      return "under target";
+    case "window-week-below-min":
+      return "under window min " + arg;
+    case "handoff-partner":
+      return "handoff";
+    case "back-to-back-weekend":
+      return "back-to-back weekend";
+    case "backup-after-primary":
+      return "backup after primary";
+    case "pattern-mismatch":
+      return "style: " + arg;
+    case "aledo-week":
+      return "Aledo week";
+    case "holiday-waiver":
+      return "holiday waiver";
+    default:
+      return s;
+  }
+}
+function eastStatusLines(ctx, ctxInputs, day, nameOf) {
+  const out = [];
+  const meta = ctxInputs && ctxInputs.eastMeta || {};
+  Object.keys(meta).forEach(id => {
+    const m = meta[id];
+    const P = ctx && ctx.per ? ctx.per[id] : null;
+    const name = nameOf(id);
+    if (m.busyDays) {
+      if (!m.eastId) out.push({
+        id,
+        text: name + ": East id unresolved - status unknown",
+        tone: "warn"
+      });else if (P && P.eastBusy.has(day)) out.push({
+        id,
+        text: name + ": East call (published) - Silvis primary blocked",
+        tone: "busy"
+      });else {
+        const p = P && P.eastForecast ? P.eastForecast[day] : undefined;
+        if (typeof p === "number") out.push({
+          id,
+          text: name + ": East forecast " + Math.round(p * 100) + "% (" + (p >= ctx.forecastThreshold ? "treated as busy" : "below the " + Math.round(ctx.forecastThreshold * 100) + "% threshold") + ")",
+          tone: p >= ctx.forecastThreshold ? "busy" : "ok"
+        });else if (ctx && ctx.eastCoverage && day >= ctx.eastCoverage.from && day <= ctx.eastCoverage.to) out.push({
+          id,
+          text: name + ": no East call (published)",
+          tone: "ok"
+        });else out.push({
+          id,
+          text: name + ": East unknown (no published week or forecast for this day)",
+          tone: "warn"
+        });
+      }
+    }
+    if (m.derivedWeeks && P) {
+      const dRole = P.derived[day];
+      if (dRole) out.push({
+        id,
+        text: name + ": East week -> Silvis " + dRole + " (derived)",
+        tone: "busy"
+      });else if (P.eastDays.has(day)) out.push({
+        id,
+        text: name + ": on East call this week (not derived - before the derive-from date)",
+        tone: "warn"
+      });else out.push({
+        id,
+        text: name + ": no East week",
+        tone: "ok"
+      });
+    }
+  });
+  return out;
+}
+function Padlock({
+  title,
+  size,
+  className
+}) {
+  const s = size || 9;
+  return React.createElement("svg", {
+    role: "img",
+    "aria-label": title || "locked",
+    className: className,
+    width: s,
+    height: s,
+    viewBox: "0 0 10 10",
+    style: {
+      flexShrink: 0,
+      display: "inline-block"
+    }
+  }, React.createElement("title", null, title || "locked"), React.createElement("rect", {
+    x: "1.5",
+    y: "4.5",
+    width: "7",
+    height: "5",
+    rx: "1",
+    fill: "#7a8a98"
+  }), React.createElement("path", {
+    d: "M3 4.7V3a2 2 0 0 1 4 0v1.7",
+    fill: "none",
+    stroke: "#7a8a98",
+    strokeWidth: "1.3"
+  }));
+}
+function DayEditor(props) {
+  const {
+    day,
+    entry,
+    roster,
+    ctxInputs,
+    ctxError,
+    canEdit,
+    rulesImported,
+    isPublicMode,
+    nameOf,
+    codeOf,
+    colorOf,
+    mySurgeon,
+    vacationNames,
+    onSave,
+    onCancel,
+    onNav,
+    onTrade,
+    css,
+    dk
+  } = props;
+  const opened = React.useMemo(() => _objectSpread(_objectSpread({}, emptyDayAssignment()), entry || {}), [day]);
+  const [draft, setDraft] = React.useState(opened);
+  const [overrides, setOverrides] = React.useState([]);
+  const [pending, setPending] = React.useState(null);
+  const [hint, setHint] = React.useState("");
+  const norm = a => JSON.stringify(assignmentToDayRow(day, a));
+  const dirty = norm(draft) !== norm(opened);
+  const draftState = React.useMemo(() => safeBuildContext(_objectSpread(_objectSpread({}, ctxInputs), {}, {
+    schedule: _objectSpread(_objectSpread({}, ctxInputs.schedule), {}, {
+      [day]: _objectSpread(_objectSpread({}, draft), {}, {
+        source: draft.source || "manual"
+      })
+    })
+  })), [ctxInputs, day, draft]);
+  const ctx = draftState.ctx;
+  const hol = ctx ? isHolidayDay(ctx, day) : null;
+  const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
+  const evalRole = role => {
+    const list = roster.map(s => {
+      let r;
+      try {
+        r = ctx ? eligibility(ctx, day, role, s.id) : {
+          ok: true,
+          hard: [],
+          soft: []
+        };
+      } catch (e) {
+        console.warn("eligibility threw for", s.id, role, day, e);
+        r = {
+          ok: true,
+          hard: [],
+          soft: [],
+          error: true
+        };
+      }
+      return {
+        id: s.id,
+        name: s.name,
+        code: s.code,
+        active: s.active !== false,
+        ok: !!r.ok,
+        hard: r.hard || [],
+        soft: r.soft || [],
+        lockHolder: !!r.lockHolder,
+        conflicts: r.conflicts || [],
+        error: !!r.error
+      };
+    });
+    return list.filter(o => o.active && o.ok).concat(list.filter(o => o.active && !o.ok)).concat(list.filter(o => !o.active && o.id === draft[role]));
+  };
+  const opts = React.useMemo(() => ({
+    primary: evalRole("primary"),
+    backup: evalRole("backup")
+  }), [ctx, day, draft, roster]);
+  const pick = (role, value) => {
+    setHint("");
+    if (!value) {
+      setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+        [role]: null
+      }));
+      setOverrides(o => o.filter(x => x.role !== role));
+      return;
+    }
+    const opt = opts[role].find(o => o.id === value);
+    if (opt && !opt.ok) {
+      setPending({
+        id: value,
+        role,
+        reasons: opt.hard.slice()
+      });
+      return;
+    }
+    setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+      [role]: value
+    }, role === "primary" ? {
+      externalCover: null
+    } : {}));
+    setOverrides(o => o.filter(x => x.role !== role));
+  };
+  const confirmOverride = () => {
+    if (!pending) return;
+    const p = pending;
+    setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+      [p.role]: p.id
+    }, p.role === "primary" ? {
+      externalCover: null
+    } : {}));
+    setOverrides(o => o.filter(x => x.role !== p.role).concat([p]));
+    setPending(null);
+  };
+  const clearRole = role => {
+    if (draft[role + "Locked"]) {
+      setHint((role === "primary" ? "Primary" : "Backup") + " is locked - unlock it first.");
+      return;
+    }
+    pick(role, "");
+  };
+  const toggleLock = role => setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+    [role + "Locked"]: !d[role + "Locked"]
+  }));
+  const save = () => {
+    if (!dirty) {
+      onCancel();
+      return;
+    }
+    if (draft.primary && draft.primary === draft.backup) {
+      setHint("Primary and backup must be different people.");
+      return;
+    }
+    onSave(_objectSpread({}, draft), {
+      overrides
+    });
+  };
+  React.useEffect(() => {
+    const onKey = e => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (pending) setPending(null);else onCancel();
+        return;
+      }
+      const tag = (e.target && e.target.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        if (dirty) {
+          setHint("Save or cancel your changes before moving to another day.");
+          return;
+        }
+        onNav(e.key === "ArrowLeft" ? -1 : 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pending, dirty, onCancel, onNav]);
+  const dt = parse(day);
+  const title = DAY_HDR[dt.getDay()] + " " + MO[dt.getMonth()] + " " + dt.getDate() + ", " + dt.getFullYear();
+  const panelBg = dk ? "#16213e" : "#ffffff";
+  const text = dk ? "#e0e0f0" : "#2c3e50";
+  const sub = dk ? "#8a8aaa" : "#7a8a98";
+  const border = dk ? "#2a3a5e" : "#e0e4ea";
+  const inp = _objectSpread(_objectSpread({}, css.inp), dk ? {
+    background: "#0f3460",
+    border: "1px solid #2a3a5e",
+    color: "#e0e0f0"
+  } : {});
+  const label = {
+    fontSize: 10,
+    color: sub,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    display: "block",
+    marginBottom: 3
+  };
+  const pill = id => {
+    const c = colorOf(id);
+    return React.createElement("span", {
+      style: {
+        background: c.tg,
+        color: c.tx,
+        border: "1px solid " + c.bd,
+        borderRadius: 5,
+        padding: "1px 8px",
+        fontSize: 12,
+        fontWeight: 700
+      }
+    }, nameOf(id));
+  };
+  const holderView = role => {
+    const v = role === "primary" ? draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null) : draft.backup;
+    if (!v) return React.createElement("span", {
+      style: {
+        color: "#c04040",
+        fontWeight: 800
+      }
+    }, "OPEN");
+    if (String(v).indexOf("ext:") === 0) return React.createElement("span", {
+      style: {
+        fontStyle: "italic",
+        color: sub
+      }
+    }, String(v).slice(4), " (external cover)");
+    return pill(v);
+  };
+  const myRole = mySurgeon && entry ? entry.primary === mySurgeon ? "primary" : entry.backup === mySurgeon ? "backup" : null : null;
+  const optionLabel = o => {
+    if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");
+    const tags = o.soft.map(softTag).filter(Boolean);
+    return o.name + (o.lockHolder ? " (locked holder)" : "") + (tags.length ? " (" + tags.join(", ") + ")" : "");
+  };
+  const roleBlock = role => {
+    const list = opts[role];
+    const locked = !!draft[role + "Locked"];
+    const cur = list.find(o => o.id === draft[role]) || null;
+    const ineligible = list.filter(o => !o.ok);
+    const ov = overrides.find(x => x.role === role);
+    return React.createElement("div", {
+      "data-testid": "editor-" + role + "-block",
+      style: {
+        border: "1px solid " + border,
+        borderRadius: 8,
+        padding: "10px 12px",
+        marginBottom: 10,
+        background: dk ? "#1a2540" : "#fafbfc"
+      }
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        marginBottom: 6
+      }
+    }, React.createElement("span", {
+      style: _objectSpread(_objectSpread({}, label), {}, {
+        marginBottom: 0,
+        minWidth: 60
+      })
+    }, role === "primary" ? "Primary" : "Backup"), holderView(role), locked && React.createElement(Padlock, {
+      title: role + " locked",
+      size: 11
+    }), cur && cur.lockHolder && cur.conflicts.length > 0 && React.createElement("span", {
+      title: cur.conflicts.join(", "),
+      style: {
+        fontSize: 10,
+        color: "#8a5a10",
+        fontWeight: 700
+      }
+    }, "locked holder breaks: ", cur.conflicts.map(c => reasonLabel(c, nameOf)).join("; ")), ov && React.createElement("span", {
+      "data-testid": "override-tag-" + role,
+      style: {
+        fontSize: 10,
+        color: "#a83232",
+        fontWeight: 700
+      }
+    }, "override: ", ov.reasons.join(", "))), canEdit && React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }
+    }, React.createElement("select", {
+      "data-testid": "editor-" + role,
+      "aria-label": role,
+      value: draft[role] || "",
+      disabled: locked,
+      onChange: e => pick(role, e.target.value),
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        minWidth: 230,
+        fontSize: 13,
+        opacity: locked ? 0.6 : 1
+      })
+    }, React.createElement("option", {
+      value: "",
+      "data-eligible": "true"
+    }, role === "primary" && draft.externalCover ? draft.externalCover + " (external cover)" : "OPEN"), list.map(o => React.createElement("option", {
+      key: o.id,
+      value: o.id,
+      "data-eligible": o.ok ? "true" : "false",
+      style: o.ok ? {} : {
+        color: "#a0a8b0"
+      }
+    }, optionLabel(o)))), React.createElement("label", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 11,
+        color: sub,
+        cursor: "pointer"
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      "data-testid": "editor-lock-" + role,
+      checked: locked,
+      onChange: () => toggleLock(role)
+    }), " Lock ", role), React.createElement("button", {
+      type: "button",
+      "data-testid": "editor-clear-" + role,
+      onClick: () => clearRole(role),
+      disabled: locked || !draft[role],
+      title: locked ? "Unlock first" : "Set to OPEN",
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "4px 10px",
+        fontSize: 11,
+        opacity: locked || !draft[role] ? 0.5 : 1
+      })
+    }, "Clear")), canEdit && cur && cur.ok && cur.soft.length > 0 && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#8a5a10",
+        marginTop: 5
+      }
+    }, "Soft penalties for ", cur.name, ": ", cur.soft.map(softTag).join(", ")), canEdit && ineligible.length > 0 && React.createElement("div", {
+      "data-testid": "editor-" + role + "-reasons",
+      style: {
+        fontSize: 11,
+        color: sub,
+        marginTop: 6,
+        lineHeight: 1.5
+      }
+    }, React.createElement("span", {
+      style: {
+        fontWeight: 700
+      }
+    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf)).join("; ")));
+  };
+  return React.createElement("div", {
+    "data-testid": "day-editor",
+    onClick: onCancel,
+    style: {
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 9500,
+      padding: 14
+    }
+  }, React.createElement("div", {
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "Day editor " + day,
+    onClick: e => e.stopPropagation(),
+    style: {
+      background: panelBg,
+      color: text,
+      borderRadius: 12,
+      padding: "16px 18px",
+      maxWidth: 600,
+      width: "100%",
+      maxHeight: "92vh",
+      overflowY: "auto",
+      boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
+      fontFamily: font
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      marginBottom: 8
+    }
+  }, React.createElement("button", {
+    type: "button",
+    "aria-label": "Previous day",
+    onClick: () => {
+      if (dirty) setHint("Save or cancel your changes before moving to another day.");else onNav(-1);
+    },
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minWidth: 34,
+      padding: "4px 8px"
+    })
+  }, "‹"), React.createElement("h3", {
+    "data-testid": "editor-title",
+    style: {
+      margin: 0,
+      fontSize: 16,
+      color: text,
+      flex: 1,
+      textAlign: "center"
+    }
+  }, title), React.createElement("button", {
+    type: "button",
+    "aria-label": "Next day",
+    onClick: () => {
+      if (dirty) setHint("Save or cancel your changes before moving to another day.");else onNav(1);
+    },
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minWidth: 34,
+      padding: "4px 8px"
+    })
+  }, "›"), React.createElement("button", {
+    type: "button",
+    "aria-label": "Close",
+    onClick: onCancel,
+    style: {
+      background: "none",
+      border: "none",
+      color: sub,
+      fontSize: 20,
+      cursor: "pointer",
+      padding: "0 4px",
+      marginLeft: 4
+    }
+  }, "x")), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: sub,
+      lineHeight: 1.6,
+      marginBottom: 10
+    }
+  }, React.createElement("div", null, hol ? React.createElement(React.Fragment, null, React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: "#8a6a10"
+    }
+  }, hol.name), " holiday unit (", hol.tier, "): ", hol.days.map(fmtMD).join(", "), " - one primary and one backup stick through the unit.") : "Not in a holiday unit."), east.length === 0 ? React.createElement("div", null, "East: ", rulesImported ? "no East features configured" : "rules not imported yet") : east.map(l => React.createElement("div", {
+    key: l.id + l.text,
+    "data-testid": "east-status",
+    style: {
+      color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : sub
+    }
+  }, "East - ", l.text)), React.createElement("div", null, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off"), ctxError && React.createElement("div", {
+    style: {
+      color: "#a83232",
+      fontWeight: 700
+    }
+  }, "Eligibility unavailable: ", ctxError), !rulesImported && React.createElement("div", null, "Rules not imported yet - eligibility reflects locks, vacations and availability rows only."), entry && entry.source && React.createElement("div", null, "Source: ", entry.source)), roleBlock("primary"), roleBlock("backup"), pending && React.createElement("div", {
+    "data-testid": "override-confirm",
+    role: "alertdialog",
+    style: {
+      border: "1px solid #c05050",
+      background: dk ? "#3a1a1a" : "#fdeaea",
+      borderRadius: 8,
+      padding: "10px 12px",
+      marginBottom: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 800,
+      color: "#a83232",
+      marginBottom: 4
+    }
+  }, nameOf(pending.id), " is not eligible for ", pending.role, " on ", fmtMD(day)), React.createElement("ul", {
+    style: {
+      margin: "0 0 8px",
+      paddingLeft: 18,
+      fontSize: 12,
+      color: dk ? "#e0b0b0" : "#8a3030",
+      lineHeight: 1.5
+    }
+  }, pending.reasons.map(r => React.createElement("li", {
+    key: r
+  }, React.createElement("span", {
+    style: {
+      fontFamily: mono
+    }
+  }, r), " - ", reasonLabel(r, nameOf)))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: sub,
+      marginBottom: 8
+    }
+  }, "Overriding assigns anyway and prefixes the day's note with [override: ...]; the audit log records it."), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      justifyContent: "flex-end"
+    }
+  }, React.createElement("button", {
+    type: "button",
+    onClick: () => setPending(null),
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "5px 12px",
+      fontSize: 12
+    })
+  }, "Keep as is"), React.createElement("button", {
+    type: "button",
+    "data-testid": "override-accept",
+    onClick: confirmOverride,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "5px 12px",
+      fontSize: 12,
+      background: "linear-gradient(135deg,#a83232,#c04a4a)",
+      borderColor: "#a83232"
+    })
+  }, "Override and assign"))), canEdit ? React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: "1 1 200px"
+    }
+  }, React.createElement("label", {
+    style: label
+  }, "Note"), React.createElement("input", {
+    "data-testid": "editor-note",
+    value: draft.note || "",
+    onChange: e => setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+      note: e.target.value
+    })),
+    placeholder: "operational note (shown on the day)",
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: "100%"
+    })
+  })), React.createElement("div", {
+    style: {
+      flex: "1 1 160px"
+    }
+  }, React.createElement("label", {
+    style: label
+  }, "External cover (primary)"), React.createElement("input", {
+    "data-testid": "editor-external",
+    value: draft.externalCover || "",
+    disabled: !!draft.primary,
+    onChange: e => setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+      externalCover: e.target.value
+    })),
+    placeholder: draft.primary ? "clear primary to use" : "e.g. Atwell",
+    title: "Someone outside the roster covering primary; counts toward nobody's tally",
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: "100%",
+      opacity: draft.primary ? 0.6 : 1
+    })
+  }))) : React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: sub,
+      marginBottom: 10
+    }
+  }, draft.note ? React.createElement(React.Fragment, null, "Note: ", draft.note) : "No note."), hint && React.createElement("div", {
+    role: "status",
+    "data-testid": "editor-hint",
+    style: {
+      fontSize: 12,
+      color: "#a83232",
+      fontWeight: 700,
+      marginBottom: 8
+    }
+  }, hint), React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap"
+    }
+  }, !isPublicMode && (canEdit || myRole) && React.createElement("button", {
+    type: "button",
+    "data-testid": "editor-trade",
+    onClick: () => onTrade(day, myRole || (entry && entry.primary ? "primary" : "backup")),
+    style: {
+      background: "none",
+      border: "none",
+      color: "#1a6fa8",
+      fontSize: 12,
+      cursor: "pointer",
+      fontFamily: font,
+      textDecoration: "underline",
+      padding: 0
+    }
+  }, "Propose a trade for this day"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: sub
+    }
+  }, "Esc closes - arrow keys move a day"), React.createElement("button", {
+    type: "button",
+    onClick: onCancel,
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "7px 14px",
+      fontSize: 12
+    })
+  }, canEdit ? "Cancel" : "Close"), canEdit && React.createElement("button", {
+    type: "button",
+    "data-testid": "editor-save",
+    onClick: save,
+    disabled: !dirty,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "7px 16px",
+      fontSize: 12,
+      opacity: dirty ? 1 : 0.5
+    })
+  }, "Save"))));
 }
 class ErrorBoundary extends React.Component {
   constructor(props) {
