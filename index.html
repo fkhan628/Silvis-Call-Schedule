@@ -98,7 +98,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.22k";
+    var APP_VERSION = "2026.09.22l";
     (function() {
       var stored = localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
@@ -291,6 +291,12 @@ function CallSchedule() {
   const [tradeRole, setTradeRole] = useState("primary");
   const [tradeReturnDay, setTradeReturnDay] = useState("");
   const [tradeReturnRole, setTradeReturnRole] = useState("primary");
+  const [tradeWholeUnit, setTradeWholeUnit] = useState(true);
+  const [tradeBusy, setTradeBusy] = useState("");
+  const [tradeApplyErr, setTradeApplyErr] = useState({});
+  const [minePerson, setMinePerson] = useState("");
+  const refreshDaysRef = useRef(null);
+  const refreshTradesRef = useRef(null);
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState("");
@@ -382,7 +388,7 @@ function CallSchedule() {
     };
   }, []);
   useEffect(() => {
-    if (!isScheduler && (view === "setup" || view === "totals")) setView("calendar");
+    if (!isScheduler && view === "setup") setView("calendar");
   }, [isScheduler, view]);
   const [notifications, setNotifications] = useState([]);
   const [showNotifs, setShowNotifs] = useState(false);
@@ -425,7 +431,7 @@ function CallSchedule() {
   const myNotifications = useMemo(() => {
     const base = isScheduler || !mySurgeon ? notifications : notifications.filter(n => {
       var _n$data, _n$data2, _n$data3;
-      if (n.type === "schedule_published" || n.type === "schedule_changed") return true;
+      if (n.type === "schedule_published" || n.type === "schedule_changed" || n.type === "manual_edit") return true;
       if (((_n$data = n.data) === null || _n$data === void 0 ? void 0 : _n$data.surgeon_id) === mySurgeon) return true;
       if (((_n$data2 = n.data) === null || _n$data2 === void 0 ? void 0 : _n$data2.from_surgeon_id) === mySurgeon || ((_n$data3 = n.data) === null || _n$data3 === void 0 ? void 0 : _n$data3.to_surgeon_id) === mySurgeon) return true;
       return false;
@@ -830,7 +836,8 @@ function CallSchedule() {
   const vacationConflicts = (personId, start, end) => vacationConflictItems(personId, start, end).map(c => `${fmtMD(c.day)} (${c.role})`);
   const describeDbError = err => {
     const s = typeof err === "string" ? err : JSON.stringify(err || {});
-    if (/ON_CALL_CONFLICT/.test(s)) {
+    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+/;
+    if (OWN.test(s)) {
       let verbatim = "";
       try {
         const o = typeof err === "string" ? JSON.parse(err) : err;
@@ -838,15 +845,31 @@ function CallSchedule() {
       } catch (e) {
         verbatim = "";
       }
-      if (!/ON_CALL_CONFLICT/.test(verbatim)) {
-        const m = /ON_CALL_CONFLICT:[^"}\\]*/.exec(s);
+      if (!OWN.test(verbatim)) {
+        const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+)[^"}\\]*/.exec(s);
         verbatim = m ? m[0] : s.slice(0, 240);
       }
       return verbatim;
     }
+    if (/23514|check constraint|distinct/i.test(s)) return "The database refused the change (a check constraint failed - e.g. the same person in both roles on one day): " + s.slice(0, 160);
     if (/42501|row-level security/i.test(s)) return "Your account doesn't have permission for that.";
     if (/JWT|401/.test(s)) return "Your session expired - sign in again.";
     return s.slice(0, 200);
+  };
+  const schedulerIdsLoud = async () => {
+    if (schedulerAdminIds.length) return schedulerAdminIds;
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?select=person_id,role&role=in.(scheduler,admin)&person_id=not.is.null`, {
+        headers: dbAuthHeaders()
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 160)}`);
+      const rows = await res.json();
+      return [...new Set((Array.isArray(rows) ? rows : []).map(r => r && r.person_id).filter(Boolean))];
+    } catch (e) {
+      console.warn("scheduler lookup failed - the email to the scheduler was skipped:", e);
+      showToast("Couldn't look up the scheduler's account - the in-app note was posted but no email was sent.", "error");
+      return null;
+    }
   };
   const toAdd = async (personId, start, end, note) => {
     if (!personId || !start || !end) return {
@@ -898,14 +921,25 @@ function CallSchedule() {
         };
       }
       adoptTimeOffRows([...timeOffRows, data]);
-      logAudit("vacation.add", `Added vacation for ${nameOf(personId)}: ${start}${start !== end ? " -> " + end : ""}`, {
+      logAudit("timeoff.add", `Added vacation for ${nameOf(personId)}: ${start}${start !== end ? " -> " + end : ""}`, {
         person_id: personId,
         start,
-        end
+        end,
+        note: (note || "").trim() || null
       });
-      addNotification("vacation_logged", "Vacation logged", `${nameOf(personId)}: ${fmtMD(start)}${start !== end ? " - " + fmtMD(end) : ""}`, {
-        surgeon_id: personId
+      const actor = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || null;
+      const msg = vacationLoggedMsg(nameOf(personId), start, end, (note || "").trim()) + (actor && actor !== personId ? " - entered by " + nameOf(actor) : "");
+      addNotification("vacation_logged", "Vacation logged", msg, {
+        surgeon_id: personId,
+        entered_by: actor
       });
+      (async () => {
+        const ids = await schedulerIdsLoud();
+        if (ids && ids.length) sendEmailNotif("vacation_logged", {
+          message: msg,
+          subject: "Vacation logged - " + nameOf(personId)
+        }, ids.filter(id => id !== personId));
+      })();
       return {
         ok: true,
         row: data
@@ -946,6 +980,18 @@ function CallSchedule() {
   };
   const toRemove = async (personId, rowId) => {
     const row = timeOffRows.find(r => r.id === rowId);
+    if (!isScheduler && personId !== mySurgeon) {
+      showToast("You can only remove your own vacations.", "error");
+      return {
+        ok: false
+      };
+    }
+    if (!isScheduler && row && String(row.start_date).slice(0, 10) <= todayStr) {
+      showToast("That vacation has started or passed - it stays on record. Ask the scheduler if it needs to go.", "error");
+      return {
+        ok: false
+      };
+    }
     const r = await deleteTimeOffRow(rowId);
     if (!r.ok) return r;
     adoptTimeOffRows(timeOffRows.filter(x => x.id !== rowId));
@@ -1277,20 +1323,20 @@ function CallSchedule() {
         const loadedDays = await loadScheduleDays();
         adoptLoadedDays(loadedDays);
         try {
-          const trades = await db.query("shift_trade_requests", {
+          const trades = await readAuthOnlyTable("shift_trade_requests", {
             order: "submitted_at.desc",
             limit: 100
           });
-          if (Array.isArray(trades)) setTradeRequests(trades);
+          if (trades) setTradeRequests(trades);
         } catch (e) {
           console.warn("Trade requests load failed:", e);
         }
         try {
-          const notifs = await db.query("notifications", {
+          const notifs = await readAuthOnlyTable("notifications", {
             order: "created_at.desc",
             limit: 50
           });
-          if (Array.isArray(notifs)) setNotifications(notifs);
+          if (notifs) setNotifications(notifs);
         } catch (e) {
           console.warn("Notifications load failed:", e);
         }
@@ -1366,22 +1412,22 @@ function CallSchedule() {
     };
     const refreshTradeReqs = async () => {
       try {
-        const trades = await db.query("shift_trade_requests", {
+        const trades = await readAuthOnlyTable("shift_trade_requests", {
           order: "submitted_at.desc",
           limit: 100
         });
-        if (Array.isArray(trades)) setTradeRequests(trades);
+        if (trades) setTradeRequests(trades);
       } catch (e) {
         console.warn("Background trade-requests refresh failed:", e);
       }
     };
     const refreshNotifs = async () => {
       try {
-        const notifs = await db.query("notifications", {
+        const notifs = await readAuthOnlyTable("notifications", {
           order: "created_at.desc",
           limit: 50
         });
-        if (Array.isArray(notifs)) setNotifications(notifs);
+        if (notifs) setNotifications(notifs);
       } catch (e) {
         console.warn("Background notifications refresh failed:", e);
       }
@@ -1406,6 +1452,8 @@ function CallSchedule() {
     const refreshAll = async () => {
       await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true)]);
     };
+    refreshDaysRef.current = refreshDays;
+    refreshTradesRef.current = refreshTradeReqs;
     const onDayChange = payload => {
       try {
         const nw = payload.new,
@@ -1865,11 +1913,16 @@ function CallSchedule() {
     const roleChanged = before.primary !== after.primary || before.backup !== after.backup || (before.externalCover || null) !== (after.externalCover || null);
     const affected = [...new Set([before.primary, before.backup, after.primary, after.backup].filter(Boolean))];
     if (roleChanged && affected.length) {
-      addNotification("schedule_changed", "Schedule changed", fmtMD(day) + ": " + lines.filter(l => / [PB] /.test(l)).join("; "), {
+      const msg = manualEditMsg(lines.filter(l => / [PB] /.test(l)), (userProfile === null || userProfile === void 0 ? void 0 : userProfile.display_name) || nameOf(mySurgeon));
+      addNotification("manual_edit", "Schedule changed", msg, {
         surgeon_id: after.primary || after.backup || before.primary || before.backup,
         day,
         affected
       });
+      sendEmailNotif("manual_edit", {
+        message: msg,
+        subject: "Schedule changed - " + fmtMD(day)
+      }, affected);
     }
     return true;
   };
@@ -2842,84 +2895,617 @@ function CallSchedule() {
       showToast("Couldn't send email notifications - check your connection.", "error");
     }
   }, []);
-  const submitTradeRequest = useCallback(async () => {
-    if (!tradeFrom || !tradeTo || !tradeDay || !tradeRole) {
+  const tradeEligibility = (day, role, candidateId, opts) => {
+    if (!suIsIso(day) || !candidateId) return {
+      ok: false,
+      hard: ["bad-input"],
+      soft: []
+    };
+    if (!rulesCtx) return {
+      ok: false,
+      hard: ["rules-unavailable"],
+      soft: [],
+      unknown: true
+    };
+    try {
+      return eligibility(rulesCtx, day, role, candidateId, _objectSpread({
+        ignoreLocks: true
+      }, opts || {}));
+    } catch (e) {
+      console.warn("trade eligibility check failed:", e);
+      const msg = String(e && e.message || e).slice(0, 80);
+      return {
+        ok: false,
+        hard: ["rules-unavailable:" + msg],
+        soft: [],
+        unknown: true,
+        error: msg
+      };
+    }
+  };
+  const tradeEligibilityOver = (days, role, candidateId) => {
+    const soft = [];
+    for (let i = 0; i < days.length; i++) {
+      const r = tradeEligibility(days[i], role, candidateId, {
+        assume: days.filter(x => x !== days[i]).map(x => ({
+          date: x,
+          role
+        }))
+      });
+      if (!r.ok) return _objectSpread(_objectSpread({}, r), {}, {
+        day: days[i]
+      });
+      (r.soft || []).forEach(s => {
+        if (!soft.some(x => x.reason === s.reason)) soft.push(s);
+      });
+    }
+    return {
+      ok: true,
+      hard: [],
+      soft
+    };
+  };
+  const tradeReasonText = r => r && r.hard && r.hard.length ? reasonLabel(r.hard[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
+  const rulesUnknownGate = (elig, whoId, what, verb) => {
+    if (elig.error) showToast("Eligibility check failed: " + elig.error, "error");
+    if (!isScheduler) {
+      showToast(`Can't ${verb}: the rules have not loaded yet - try again in a moment.`, "error");
+      return false;
+    }
+    return confirm(`The rules have not loaded, so ${nameOf(whoId)}'s eligibility for ${what} could not be checked. ${verb === "accept" ? "Accept" : "Propose"} anyway as the scheduler?`);
+  };
+  const tradeUnitOf = (day, role, holderId) => {
+    if (!rulesCtx || !suIsIso(day) || !holderId) return null;
+    const sched = scheduleRef.current || schedule || {};
+    const holds = d => !!(sched[d] && sched[d][role] === holderId);
+    const hol = rulesCtx.holidayByDay ? rulesCtx.holidayByDay[day] : null;
+    if (hol) {
+      const held = hol.days.filter(holds);
+      return held.length > 1 ? {
+        kind: "holiday",
+        name: hol.name,
+        days: held
+      } : null;
+    }
+    const P = rulesCtx.per ? rulesCtx.per[holderId] : null;
+    if (!P || P.weekendStyle !== "block") return null;
+    const dow = parse(day).getDay();
+    if (dow !== 5 && dow !== 6 && dow !== 0) return null;
+    const fri = fmt(addD(parse(day), dow === 5 ? 0 : dow === 6 ? -1 : -2));
+    const days = [fri, fmt(addD(parse(fri), 1)), fmt(addD(parse(fri), 2))];
+    if (days.some(d => rulesCtx.holidayByDay[d])) return null;
+    return days.every(holds) ? {
+      kind: "weekend-block",
+      name: "weekend block",
+      days
+    } : null;
+  };
+  const unitText = u => `${u.name} unit ${fmtMD(u.days[0])}-${fmtMD(u.days[u.days.length - 1])} (${u.days.length} days)`;
+  const tradeUnitStamp = (u, i) => `[unit ${u.kind} ${u.days[0]} ${u.days.length}: ${unitText(u)}, day ${i + 1} of ${u.days.length}]`;
+  const tradeUnitTag = r => {
+    const m = /\[unit (holiday|weekend-block) (\d{4}-\d{2}-\d{2}) (\d+): ([^\]]+), day (\d+) of \d+\]/.exec(String(r && r.detail || ""));
+    return m ? {
+      kind: m[1],
+      start: m[2],
+      n: Number(m[3]),
+      text: m[4],
+      index: Number(m[5])
+    } : null;
+  };
+  const tradeGroupOf = (r, status) => {
+    const tag = tradeUnitTag(r);
+    if (!tag) return [r];
+    const st = status || r.status;
+    const same = x => {
+      const t = tradeUnitTag(x);
+      return !!t && t.kind === tag.kind && t.start === tag.start && t.n === tag.n && x.from_surgeon_id === r.from_surgeon_id && x.to_surgeon_id === r.to_surgeon_id && x.role === r.role && x.status === st;
+    };
+    return [r].concat(tradeRequests.filter(x => x.id !== r.id && same(x))).sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
+  };
+  const roleWordOf = r => r === "primary" ? "Primary" : "Backup";
+  const upcomingDaysOf = (pid, horizonDays) => {
+    if (!pid) return [];
+    const limit = typeof horizonDays === "number" ? fmt(addD(parse(todayStr), horizonDays)) : null;
+    return Object.keys(schedule).sort().filter(d => d >= todayStr && (!limit || d <= limit) && schedule[d] && (schedule[d].primary === pid || schedule[d].backup === pid)).map(d => {
+      const a = schedule[d];
+      const role = a.primary === pid ? "primary" : "backup";
+      return {
+        day: d,
+        role,
+        other: role === "primary" ? dayHolder(a, "backup") : dayHolder(a, "primary"),
+        locked: role === "primary" ? a.primaryLocked : a.backupLocked,
+        a
+      };
+    });
+  };
+  const tradeNamed = r => _objectSpread(_objectSpread({}, r), {}, {
+    from_surgeon_name: r.from_surgeon_name || nameOf(r.from_surgeon_id),
+    to_surgeon_name: r.to_surgeon_name || nameOf(r.to_surgeon_id)
+  });
+  const submitTradeRequest = async () => {
+    if (isPublicMode) return;
+    const fromId = isScheduler ? tradeFrom : mySurgeon || "";
+    if (!fromId || !tradeTo || !tradeDay || !tradeRole) {
       showToast("Pick both surgeons, the day and the role.", "error");
       return;
     }
-    if (tradeFrom === tradeTo) {
+    if (fromId === tradeTo) {
       showToast("Pick a different surgeon to trade with.", "error");
+      return;
+    }
+    if (!isScheduler && fromId !== mySurgeon) {
+      showToast("You can only propose trades for your own days.", "error");
       return;
     }
     const sched = scheduleRef.current || {};
     const holder = sched[tradeDay] ? sched[tradeDay][tradeRole] : null;
-    if (holder !== tradeFrom) {
-      showToast(`${nameOf(tradeFrom)} is not ${tradeRole} on ${fmtMD(tradeDay)} (that slot is ${holderLabel(holder, nameOf)}).`, "error");
+    if (holder !== fromId) {
+      showToast(`${nameOf(fromId)} is not ${tradeRole} on ${fmtMD(tradeDay)} (that slot is ${holderLabel(holder, nameOf)}).`, "error");
       return;
     }
+    const unit = tradeUnitOf(tradeDay, tradeRole, fromId);
+    const whole = !!unit && tradeWholeUnit;
+    if (unit && !whole) {
+      if (!isScheduler) {
+        showToast(`Blocked: ${fmtMD(tradeDay)} is ${reasonLabel("unit-split:" + unitText(unit))}.`, "error");
+        return;
+      }
+      if (!confirm(`${fmtMD(tradeDay)} is part of the ${unitText(unit)}. One primary and one backup stick through a unit; moving this day alone splits it. Split the unit anyway as the scheduler?`)) return;
+    }
+    const days = whole ? unit.days : [tradeDay];
+    const givenLabel = whole ? "the " + unitText(unit) : slotLabel(tradeDay, tradeRole);
+    const elig = whole ? tradeEligibilityOver(days, tradeRole, tradeTo) : tradeEligibility(tradeDay, tradeRole, tradeTo);
+    if (!elig.ok) {
+      if (!elig.unknown) {
+        showToast(`Blocked: ${nameOf(tradeTo)} can't take ${givenLabel} - ${tradeReasonText(elig)}.`, "error");
+        return;
+      }
+      if (!rulesUnknownGate(elig, tradeTo, givenLabel, "propose")) return;
+    }
+    let retDays = [],
+      retUnit = null;
     if (tradeReturnDay) {
       const rHolder = sched[tradeReturnDay] ? sched[tradeReturnDay][tradeReturnRole] : null;
       if (rHolder !== tradeTo) {
         showToast(`${nameOf(tradeTo)} is not ${tradeReturnRole} on ${fmtMD(tradeReturnDay)} (that slot is ${holderLabel(rHolder, nameOf)}).`, "error");
         return;
       }
+      retUnit = tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo);
+      if (retUnit && whole && retUnit.days.length === days.length) retDays = retUnit.days;else if (retUnit) {
+        if (!isScheduler) {
+          showToast(`Blocked: ${nameOf(tradeTo)}'s ${fmtMD(tradeReturnDay)} is ${reasonLabel("unit-split:" + unitText(retUnit))}${whole ? " (it does not match the " + days.length + "-day unit you give)" : ""}.`, "error");
+          return;
+        }
+        if (!confirm(`${nameOf(tradeTo)}'s ${fmtMD(tradeReturnDay)} is part of the ${unitText(retUnit)}; taking that day alone splits it. Split it anyway as the scheduler?`)) return;
+        retUnit = null;
+        retDays = [tradeReturnDay];
+      } else retDays = [tradeReturnDay];
+      const retLabel = retDays.length > 1 ? "the " + unitText(retUnit) : slotLabel(tradeReturnDay, tradeReturnRole);
+      const rElig = retDays.length > 1 ? tradeEligibilityOver(retDays, tradeReturnRole, fromId) : tradeEligibility(tradeReturnDay, tradeReturnRole, fromId);
+      if (!rElig.ok) {
+        if (!rElig.unknown) {
+          showToast(`Blocked: ${nameOf(fromId)} can't take ${retLabel} in return - ${tradeReasonText(rElig)}.`, "error");
+          return;
+        }
+        if (!rulesUnknownGate(rElig, fromId, retLabel + " in return", "propose")) return;
+      }
     } else if (!isScheduler) {
-      alert("A return shift is required. All trades are two-way - pick the day and role you'll take in return.");
+      showToast("A return shift is required - pick the day and role you'll take in return. One-way trades are the scheduler's call.", "error");
       return;
     } else if (!confirm("No return shift specified. One-way trades are for emergencies only. Submit anyway?")) return;
-    const fromName = nameOf(tradeFrom),
+    const fromName = nameOf(fromId),
       toName = nameOf(tradeTo);
+    setTradeBusy("propose");
     try {
-      const req = {
-        from_surgeon_id: tradeFrom,
-        from_surgeon_name: fromName,
-        to_surgeon_id: tradeTo,
-        to_surgeon_name: toName,
-        day: tradeDay,
-        role: tradeRole,
-        return_day: tradeReturnDay || null,
-        return_role: tradeReturnDay ? tradeReturnRole : null,
-        status: "pending",
-        submitted_at: new Date().toISOString()
-      };
-      req.detail = tradeProposeMsg(req);
-      const {
-        data: inserted,
-        error
-      } = await db.insert("shift_trade_requests", req);
-      if (error || !inserted) {
-        console.warn("trade insert failed", error);
-        showToast("Couldn't submit the trade: " + describeDbError(error), "error");
-        return;
+      const rows = days.map((d, i) => {
+        const back = retDays.length === days.length ? retDays[i] : i === 0 ? retDays[0] || null : null;
+        const req = {
+          from_surgeon_id: fromId,
+          from_surgeon_name: fromName,
+          to_surgeon_id: tradeTo,
+          to_surgeon_name: toName,
+          day: d,
+          role: tradeRole,
+          return_day: back || null,
+          return_role: back ? tradeReturnRole : null,
+          status: "pending",
+          submitted_at: new Date().toISOString()
+        };
+        req.detail = tradeProposeMsg(req) + (whole ? " " + tradeUnitStamp(unit, i) : "");
+        return req;
+      });
+      const inserted = [];
+      for (const req of rows) {
+        const {
+          data: row,
+          error
+        } = await db.insert("shift_trade_requests", req);
+        if (error || !row) {
+          console.warn("trade insert failed", error);
+          showToast(`Couldn't submit the trade${inserted.length ? ` (${inserted.length} of ${rows.length} unit days were submitted - cancel them or ask the scheduler)` : ""}: ` + describeDbError(error), "error");
+          break;
+        }
+        inserted.push(row);
       }
-      setTradeRequests(prev => [inserted, ...prev]);
-      logAudit("trade.propose", req.detail, {
-        from: tradeFrom,
+      if (!inserted.length) return;
+      setTradeRequests(prev => [...inserted.slice().reverse(), ...prev.filter(r => !inserted.some(x => x.id === r.id))]);
+      const first = inserted[0];
+      const msg = !whole ? first.detail : `${fromName} proposed a trade: ${toName} would take ${roleWordOf(tradeRole)} ${fmtMD(days[0])}-${fmtMD(days[days.length - 1])} (the ${unitText(unit)}, moved as one)` + (retDays.length > 1 ? `; ${fromName} would take ${roleWordOf(tradeReturnRole)} ${fmtMD(retDays[0])}-${fmtMD(retDays[retDays.length - 1])} in return` : retDays.length === 1 ? `; ${fromName} would take ${slotLabel(retDays[0], tradeReturnRole)} in return` : " (one-way - no return shift)");
+      logAudit("trade.propose", msg, {
+        trade_id: first.id,
+        trade_ids: inserted.map(r => r.id),
+        from: fromId,
         to: tradeTo,
         day: tradeDay,
         role: tradeRole,
-        return_day: req.return_day,
-        return_role: req.return_role
+        days,
+        return_day: first.return_day,
+        return_role: first.return_role,
+        return_days: retDays,
+        unit: unit ? unit.name : null
       });
-      await addNotification("trade_submitted", "Shift trade proposed", req.detail, {
-        from_surgeon_id: tradeFrom,
-        to_surgeon_id: tradeTo
+      await addNotification("trade_proposed", "Shift trade proposed", msg, {
+        from_surgeon_id: fromId,
+        to_surgeon_id: tradeTo,
+        trade_id: first.id,
+        trade_ids: inserted.map(r => r.id),
+        day: tradeDay
       });
-      sendEmailNotif("trade_submitted", {
-        from_name: fromName,
-        to_name: toName,
-        day: tradeDay,
-        role: tradeRole,
-        detail: req.detail
-      }, [tradeFrom, tradeTo]);
+      sendEmailNotif("trade_proposed", {
+        message: msg,
+        subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole))
+      }, [fromId, tradeTo]);
       setTradeDay("");
       setTradeReturnDay("");
-      showToast("Trade proposed.", "success");
+      if (inserted.length === rows.length) showToast(whole ? `Trade proposed for the ${unitText(unit)} - ${inserted.length} rows.` : "Trade proposed.", "success");
     } catch (e) {
       console.warn("Submit trade error:", e);
       showToast("Couldn't submit the trade - check your connection and try again.", "error");
+    } finally {
+      setTradeBusy("");
     }
-  }, [tradeFrom, tradeTo, tradeDay, tradeRole, tradeReturnDay, tradeReturnRole, surgeons, addNotification, sendEmailNotif, isScheduler]);
+  };
+  const patchTradeStatus = async (trade, status) => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/shift_trade_requests?id=eq.${encodeURIComponent(trade.id)}`, {
+        method: "PATCH",
+        headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+          Prefer: "return=representation"
+        }),
+        body: JSON.stringify({
+          status,
+          decided_at: new Date().toISOString()
+        })
+      });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return {
+        ok: false,
+        error: describeDbError(text) || `HTTP ${res.status}`
+      };
+      let rows = [];
+      try {
+        rows = JSON.parse(text);
+      } catch (e) {
+        rows = [];
+      }
+      if (!Array.isArray(rows) || rows.length !== 1) return {
+        ok: false,
+        error: "no row was updated - the trade was already decided, or your account is not a party to it (list reloaded)"
+      };
+      return {
+        ok: true,
+        row: rows[0]
+      };
+    } catch (e) {
+      console.warn("trade status write failed:", e);
+      return {
+        ok: false,
+        error: "network error - check your connection and try again"
+      };
+    }
+  };
+  const applyTradeRpc = async trade => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/apply_trade`, {
+        method: "POST",
+        headers: dbAuthHeaders(),
+        body: JSON.stringify({
+          p_trade_id: trade.id
+        })
+      });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return {
+        ok: false,
+        error: describeDbError(text) || `HTTP ${res.status}`
+      };
+      let body = null;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch (e) {
+        body = null;
+      }
+      return {
+        ok: true,
+        result: body
+      };
+    } catch (e) {
+      console.warn("apply_trade call failed:", e);
+      return {
+        ok: false,
+        error: "network error - the trade stays accepted; use Retry apply"
+      };
+    }
+  };
+  const runApplyTrade = async (trade, opts) => {
+    const t = tradeNamed(trade);
+    const a = await applyTradeRpc(t);
+    if (!a.ok) {
+      console.warn("apply_trade refused:", a.error);
+      setTradeApplyErr(prev => _objectSpread(_objectSpread({}, prev), {}, {
+        [t.id]: a.error
+      }));
+      showToast("The trade is accepted but NOT applied: " + a.error, "error");
+      if (refreshTradesRef.current) refreshTradesRef.current();
+      return false;
+    }
+    setTradeApplyErr(prev => {
+      const n = _objectSpread({}, prev);
+      delete n[t.id];
+      return n;
+    });
+    const applied = _objectSpread(_objectSpread({}, t), {}, {
+      status: "applied",
+      decided_at: t.decided_at || new Date().toISOString()
+    });
+    setTradeRequests(prev => prev.map(r => r.id === t.id ? applied : r));
+    try {
+      if (refreshDaysRef.current) await refreshDaysRef.current();
+    } catch (e) {
+      console.warn("schedule refetch after apply_trade failed:", e);
+      showToast("Trade applied, but the calendar could not be refreshed - reload to see it.", "error");
+    }
+    if (refreshTradesRef.current) refreshTradesRef.current();
+    if (opts && opts.silent) return true;
+    const msg = tradeAppliedMsg(applied);
+    await addNotification("trade_applied", "Shift trade applied", msg, {
+      from_surgeon_id: t.from_surgeon_id,
+      to_surgeon_id: t.to_surgeon_id,
+      trade_id: t.id,
+      day: t.day
+    });
+    sendEmailNotif("trade_applied", {
+      message: msg,
+      subject: "Shift trade applied - " + slotLabel(t.day, t.role)
+    }, [t.from_surgeon_id, t.to_surgeon_id]);
+    showToast("Trade applied to the schedule.", "success");
+    return true;
+  };
+  const acceptTrade = async trade => {
+    if (!trade || trade.status !== "pending" || tradeBusy) return;
+    const t = tradeNamed(trade);
+    if (!isScheduler && t.to_surgeon_id !== mySurgeon) {
+      showToast("Only the surgeon asked can accept this trade.", "error");
+      return;
+    }
+    const group = tradeGroupOf(t, "pending").map(tradeNamed);
+    const gDays = group.map(g => g.day);
+    const tag = tradeUnitTag(t);
+    const what = group.length > 1 ? "the " + (tag ? tag.text : gDays.length + " unit days") : slotLabel(t.day, t.role);
+    const elig = group.length > 1 ? tradeEligibilityOver(gDays, t.role, t.to_surgeon_id) : tradeEligibility(t.day, t.role, t.to_surgeon_id);
+    if (!elig.ok) {
+      const why = tradeReasonText(elig);
+      if (elig.unknown) {
+        if (!rulesUnknownGate(elig, t.to_surgeon_id, what, "accept")) return;
+      } else if (!isScheduler) {
+        showToast(`Can't accept: ${nameOf(t.to_surgeon_id)} can't take ${what} - ${why}. Ask the scheduler.`, "error");
+        return;
+      } else if (!confirm(`The rules say ${nameOf(t.to_surgeon_id)} can't take ${what} (${why}). Accept anyway as the scheduler?`)) return;
+    }
+    const retRows = group.filter(g => g.return_day);
+    if (retRows.length) {
+      const rRole = retRows[0].return_role;
+      const retDays = retRows.map(g => g.return_day);
+      const rWhat = retRows.length > 1 ? `${roleWordOf(rRole)} ${fmtMD(retDays[0])}-${fmtMD(retDays[retDays.length - 1])} (${retDays.length} days)` : slotLabel(retRows[0].return_day, rRole);
+      const rElig = retRows.length > 1 ? tradeEligibilityOver(retDays, rRole, t.from_surgeon_id) : tradeEligibility(retRows[0].return_day, rRole, t.from_surgeon_id);
+      if (!rElig.ok) {
+        const why = tradeReasonText(rElig);
+        if (rElig.unknown) {
+          if (!rulesUnknownGate(rElig, t.from_surgeon_id, rWhat + " in return", "accept")) return;
+        } else if (!isScheduler) {
+          showToast(`Can't accept: ${nameOf(t.from_surgeon_id)} can't take ${rWhat} in return - ${why}. Ask the scheduler.`, "error");
+          return;
+        } else if (!confirm(`The rules say ${nameOf(t.from_surgeon_id)} can't take ${rWhat} (${why}). Accept anyway as the scheduler?`)) return;
+      }
+    }
+    setTradeBusy(t.id);
+    try {
+      const accepted = [];
+      for (const g of group) {
+        const p = await patchTradeStatus(g, "accepted");
+        if (!p.ok) {
+          showToast(`Couldn't accept the trade${accepted.length ? ` (${accepted.length} of ${group.length} unit days are accepted - use Retry apply on them)` : ""}: ` + p.error, "error");
+          if (refreshTradesRef.current) refreshTradesRef.current();
+          if (!accepted.length) return;
+          break;
+        }
+        const row = _objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
+          status: "accepted"
+        });
+        accepted.push(row);
+        setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
+      }
+      const first = accepted[0],
+        last = accepted[accepted.length - 1];
+      const unitName = tag ? "the " + tag.text : accepted.length + " unit days";
+      const msg = accepted.length > 1 ? `${first.to_surgeon_name} accepted the trade: ${first.to_surgeon_name} takes ${roleWordOf(first.role)} ${fmtMD(first.day)}-${fmtMD(last.day)} (${unitName}, moved as one)${first.return_day ? "; " + first.from_surgeon_name + " takes " + slotLabel(first.return_day, first.return_role) + (retRows.length > 1 ? " and " + (retRows.length - 1) + " more return day(s)" : "") : ""}` : tradeAcceptMsg(first);
+      logAudit("trade.accept", msg, {
+        trade_id: first.id,
+        trade_ids: accepted.map(r => r.id),
+        day: first.day,
+        role: first.role,
+        days: accepted.map(r => r.day),
+        return_day: first.return_day,
+        return_role: first.return_role,
+        from: first.from_surgeon_id,
+        to: first.to_surgeon_id
+      });
+      await addNotification("trade_accepted", "Shift trade accepted", msg, {
+        from_surgeon_id: first.from_surgeon_id,
+        to_surgeon_id: first.to_surgeon_id,
+        trade_id: first.id,
+        trade_ids: accepted.map(r => r.id),
+        day: first.day
+      });
+      let appliedAll = true;
+      for (let i = 0; i < accepted.length; i++) {
+        if (!(await runApplyTrade(accepted[i], {
+          silent: accepted.length > 1
+        }))) {
+          appliedAll = false;
+          break;
+        }
+      }
+      if (accepted.length > 1 && appliedAll) {
+        const amsg = `Trade applied to the schedule: ${first.to_surgeon_name} takes ${roleWordOf(first.role)} ${fmtMD(first.day)}-${fmtMD(last.day)} (${unitName})${first.return_day ? "; " + first.from_surgeon_name + " takes " + slotLabel(first.return_day, first.return_role) + (retRows.length > 1 ? " and " + (retRows.length - 1) + " more return day(s)" : "") : ""}`;
+        await addNotification("trade_applied", "Shift trade applied", amsg, {
+          from_surgeon_id: first.from_surgeon_id,
+          to_surgeon_id: first.to_surgeon_id,
+          trade_id: first.id,
+          trade_ids: accepted.map(r => r.id),
+          day: first.day
+        });
+        sendEmailNotif("trade_applied", {
+          message: amsg,
+          subject: "Shift trade applied - " + (tag ? tag.text : slotLabel(first.day, first.role))
+        }, [first.from_surgeon_id, first.to_surgeon_id]);
+        showToast(`Trade applied to the schedule (${accepted.length} days).`, "success");
+      }
+    } catch (e) {
+      console.warn("accept trade error:", e);
+      showToast("Couldn't accept the trade - check your connection and try again.", "error");
+    } finally {
+      setTradeBusy("");
+    }
+  };
+  const retryApplyTrade = async trade => {
+    if (!trade || trade.status !== "accepted" || tradeBusy) return;
+    setTradeBusy(trade.id);
+    try {
+      await runApplyTrade(trade);
+    } catch (e) {
+      console.warn("retry apply error:", e);
+      showToast("Couldn't apply the trade - check your connection and try again.", "error");
+    } finally {
+      setTradeBusy("");
+    }
+  };
+  const declineTrade = async trade => {
+    if (!trade || trade.status !== "pending" || tradeBusy) return;
+    const t = tradeNamed(trade);
+    if (!isScheduler && t.to_surgeon_id !== mySurgeon) {
+      showToast("Only the surgeon asked can decline this trade.", "error");
+      return;
+    }
+    const group = tradeGroupOf(t, "pending").map(tradeNamed);
+    setTradeBusy(t.id);
+    try {
+      const done = [];
+      for (const g of group) {
+        const p = await patchTradeStatus(g, "declined");
+        if (!p.ok) {
+          showToast(`Couldn't decline the trade${done.length ? ` (${done.length} of ${group.length} unit days were declined)` : ""}: ` + p.error, "error");
+          if (refreshTradesRef.current) refreshTradesRef.current();
+          if (!done.length) return;
+          break;
+        }
+        const row = _objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
+          status: "declined"
+        });
+        done.push(row);
+        setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
+      }
+      const first = done[0],
+        tag = tradeUnitTag(first);
+      const msg = done.length > 1 ? `${first.to_surgeon_name} declined the trade: ${tag ? "the " + tag.text : done.length + " unit days"} (${done.length} days) - ${tradeLegsText(first, "would have taken")}` : tradeDeclineMsg(first);
+      logAudit("trade.decline", msg, {
+        trade_id: first.id,
+        trade_ids: done.map(r => r.id),
+        day: first.day,
+        role: first.role,
+        from: first.from_surgeon_id,
+        to: first.to_surgeon_id
+      });
+      await addNotification("trade_declined", "Shift trade declined", msg, {
+        from_surgeon_id: first.from_surgeon_id,
+        to_surgeon_id: first.to_surgeon_id,
+        trade_id: first.id,
+        trade_ids: done.map(r => r.id),
+        day: first.day
+      });
+      sendEmailNotif("trade_declined", {
+        message: msg,
+        subject: "Shift trade declined - " + (tag ? tag.text : slotLabel(first.day, first.role))
+      }, [first.from_surgeon_id, first.to_surgeon_id]);
+      showToast(done.length > 1 ? `Trade declined (${done.length} days).` : "Trade declined.", "info");
+    } catch (e) {
+      console.warn("decline trade error:", e);
+      showToast("Couldn't decline the trade - check your connection and try again.", "error");
+    } finally {
+      setTradeBusy("");
+    }
+  };
+  const cancelTrade = async trade => {
+    if (!trade || trade.status !== "pending" || tradeBusy) return;
+    const t = tradeNamed(trade);
+    if (!isScheduler && t.from_surgeon_id !== mySurgeon) {
+      showToast("Only the proposer can cancel this trade.", "error");
+      return;
+    }
+    const group = tradeGroupOf(t, "pending").map(tradeNamed);
+    if (!confirm(group.length > 1 ? `Cancel this unit trade proposal (${group.length} days)?` : "Cancel this trade proposal?")) return;
+    setTradeBusy(t.id);
+    try {
+      const done = [];
+      for (const g of group) {
+        const p = await patchTradeStatus(g, "cancelled");
+        if (!p.ok) {
+          showToast(`Couldn't cancel the trade${done.length ? ` (${done.length} of ${group.length} unit days were cancelled)` : ""}: ` + p.error, "error");
+          if (refreshTradesRef.current) refreshTradesRef.current();
+          if (!done.length) return;
+          break;
+        }
+        const row = _objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
+          status: "cancelled"
+        });
+        done.push(row);
+        setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
+      }
+      const first = done[0],
+        tag = tradeUnitTag(first);
+      const msg = done.length > 1 ? `${first.from_surgeon_name} cancelled the trade: ${tag ? "the " + tag.text : done.length + " unit days"} (${done.length} days) - ${tradeLegsText(first, "would have taken")}` : tradeCancelMsg(first);
+      logAudit("trade.cancel", msg, {
+        trade_id: first.id,
+        trade_ids: done.map(r => r.id),
+        day: first.day,
+        role: first.role,
+        from: first.from_surgeon_id,
+        to: first.to_surgeon_id
+      });
+      await addNotification("trade_cancelled", "Shift trade cancelled", msg, {
+        from_surgeon_id: first.from_surgeon_id,
+        to_surgeon_id: first.to_surgeon_id,
+        trade_id: first.id,
+        trade_ids: done.map(r => r.id),
+        day: first.day
+      });
+      showToast(done.length > 1 ? `Trade cancelled (${done.length} days).` : "Trade cancelled.", "info");
+    } catch (e) {
+      console.warn("cancel trade error:", e);
+      showToast("Couldn't cancel the trade - check your connection and try again.", "error");
+    } finally {
+      setTradeBusy("");
+    }
+  };
   const markNotifsSeen = () => {
     const now = new Date().toISOString();
     setNotifLastSeen(now);
@@ -3236,6 +3822,8 @@ function CallSchedule() {
       });
       await addNotification("schedule_published", "Schedule published", publishLabel ? `Call schedule ${publishLabel} was published.` : "The call schedule was published.", {});
       sendEmailNotif("schedule_published", {
+        message: schedulePublishedMsg(publishLabel || "", lines),
+        subject: "Schedule published" + (publishLabel ? " - " + publishLabel : ""),
         period: publishLabel || "",
         change_lines: lines
       });
@@ -3850,31 +4438,6 @@ function CallSchedule() {
       setCalYear(y);
     }
   };
-  const myDays = useMemo(() => {
-    if (!mySurgeon) return [];
-    return Object.keys(schedule).sort().filter(d => schedule[d] && (schedule[d].primary === mySurgeon || schedule[d].backup === mySurgeon)).map(d => ({
-      day: d,
-      role: schedule[d].primary === mySurgeon ? "primary" : "backup",
-      locked: schedule[d].primary === mySurgeon ? schedule[d].primaryLocked : schedule[d].backupLocked
-    }));
-  }, [schedule, mySurgeon]);
-  const yearTally = useMemo(() => {
-    const y = String(new Date().getFullYear());
-    const t = {};
-    surgeons.forEach(s => {
-      t[s.id] = {
-        primary: 0,
-        backup: 0
-      };
-    });
-    Object.keys(schedule).forEach(d => {
-      if (d.slice(0, 4) !== y) return;
-      const a = schedule[d];
-      if (a.primary && t[a.primary]) t[a.primary].primary++;
-      if (a.backup && t[a.backup]) t[a.backup].backup++;
-    });
-    return t;
-  }, [schedule, surgeons]);
   const rulesImported = surgeonRules !== undefined && groupRules !== undefined && holidays !== undefined;
   const setupIssues = useMemo(() => suSetupIssues({
     roster: surgeons,
@@ -3887,7 +4450,6 @@ function CallSchedule() {
     today: todayStr
   }), [surgeons, surgeonRules, groupRules, holidays, schedule, eastFeedRows, eastForecastRows, todayStr]);
   const lastScheduledDay = Object.keys(schedule).sort().slice(-1)[0] || null;
-  const isPastDay = d => d < todayStr;
   const inp = _objectSpread(_objectSpread({}, css.inp), dkInp);
   const label = {
     fontSize: 10,
@@ -3908,21 +4470,6 @@ function CallSchedule() {
     margin: "0 0 10px",
     lineHeight: 1.5
   };
-  const StubNote = ({
-    slice,
-    text
-  }) => React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      color: "#7a5a20",
-      background: "#fbf1d8",
-      border: "1px solid #e8d090",
-      borderRadius: 6,
-      padding: "6px 10px",
-      marginBottom: 12,
-      lineHeight: 1.5
-    }
-  }, "Placeholder until ", slice, ". ", text);
   const dowShort = d => DAY_HDR[parse(d).getDay()];
   const isWeekendDay = d => {
     const w = parse(d).getDay();
@@ -4011,7 +4558,7 @@ function CallSchedule() {
         fontSize: 10,
         color: "#a0a8b0"
       }
-    }, "past"), allowEdit && (isScheduler || r.pid === mySurgeon) && r.id && React.createElement("span", {
+    }, "past"), allowEdit && r.id && (isScheduler || r.pid === mySurgeon && r.vs > todayStr) && React.createElement("span", {
       style: {
         marginLeft: "auto",
         display: "flex",
@@ -4088,14 +4635,17 @@ function CallSchedule() {
     }
   }, React.createElement("label", {
     style: label
-  }, "Note (optional)"), React.createElement("input", {
+  }, "Note (optional, operational)"), React.createElement("input", {
+    "data-testid": "vac-note",
     value: vacNote,
     onChange: e => setVacNote(e.target.value),
-    placeholder: "conference, family...",
+    placeholder: "e.g. conference - notes are visible to the whole group",
+    title: "Operational notes only (visible to the whole group and the shareable page) - no personal reasons",
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: "100%"
     })
   })), React.createElement("button", {
+    "data-testid": "vac-add",
     onClick: addVac,
     style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
       padding: "7px 16px"
@@ -4110,13 +4660,32 @@ function CallSchedule() {
       alignItems: "center",
       flexWrap: "wrap"
     })
-  }, React.createElement("span", null, React.createElement("strong", null, "Refused:"), " ", nameOf(vacConflict.personId), " is published on ", vacConflict.items.length, " day(s) in ", fmtMD(vacConflict.start), " - ", fmtMD(vacConflict.end), " - trade those shifts first:"), vacConflict.items.map(c => React.createElement("button", {
+  }, React.createElement("span", null, React.createElement("strong", null, "Refused:"), " ", nameOf(vacConflict.personId), " is published on ", vacConflict.items.length, " day(s) in ", fmtMD(vacConflict.start), " - ", fmtMD(vacConflict.end), " - trade those shifts first:"), vacConflict.items.map(c => React.createElement("span", {
     key: c.day + c.role,
+    style: {
+      display: "inline-flex",
+      gap: 3,
+      alignItems: "center"
+    }
+  }, isScheduler && React.createElement("button", {
     "data-testid": "vac-conflict-day",
     onClick: () => goToDay(c.day),
     title: "Open the day editor for " + c.day,
     style: css.mini(false)
-  }, fmtMD(c.day), " ", c.role, " - go to day")), React.createElement("button", {
+  }, fmtMD(c.day), " ", c.role, " - go to day"), !isScheduler && React.createElement("span", {
+    "data-testid": "vac-conflict-item",
+    style: {
+      fontWeight: 600
+    }
+  }, fmtMD(c.day), " ", c.role), React.createElement("button", {
+    "data-testid": "vac-conflict-trade",
+    onClick: () => proposeTradeForDay(c.day, c.role),
+    title: "Propose a trade for " + slotLabel(c.day, c.role),
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      color: "#6030a0",
+      borderColor: "#c0a8e0"
+    })
+  }, "propose a trade"))), React.createElement("button", {
     onClick: () => setVacConflict(null),
     "aria-label": "Dismiss",
     style: {
@@ -4445,6 +5014,11 @@ function CallSchedule() {
         label[style*="color:#5a6a78"], label[style*="color:#3a4a58"] { color: #9aa0b8 !important; }
         span[style*="color:#1a8040"] { color: #40c060 !important; }
         span[style*="color:#c04040"] { color: #f06060 !important; }
+        /* vis-004: flagged table cells keep their warning colour under the td override above
+           (over cap / over the max-consecutive rule / deviation from target) */
+        td[data-flag="over"], span[data-flag="over"] { color: #f06060 !important; }
+        td[data-flag="under"], span[data-flag="under"] { color: #5aafe8 !important; }
+        td[data-flag="ok"], span[data-flag="ok"] { color: #40c060 !important; }
       `), authLoading ? React.createElement("div", {
     style: {
       display: "flex",
@@ -4879,7 +5453,7 @@ function CallSchedule() {
   }, (() => {
     const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["myschedule", "Mine"], ["timeoff", "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
     let tabs = allTabs;
-    if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup" && k !== "totals");
+    if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
     if (!mySurgeon) tabs = tabs.filter(([k]) => k !== "myschedule");
     const pendingTrades = myTradeRequests.filter(r => r.status === "pending").length;
     return tabs.map(([k, l]) => React.createElement("button", {
@@ -5017,9 +5591,12 @@ function CallSchedule() {
     const tabMap = {
       schedule_published: "calendar",
       schedule_changed: "calendar",
+      manual_edit: "calendar",
       trade_submitted: "timeoff",
+      trade_proposed: "timeoff",
       trade_accepted: "timeoff",
       trade_declined: "timeoff",
+      trade_cancelled: "timeoff",
       trade_applied: "timeoff",
       vacation_logged: "timeoff",
       shift_reminder: "myschedule"
@@ -6301,80 +6878,241 @@ function CallSchedule() {
       css: css,
       dk: dk
     }));
-  })(), view === "myschedule" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
-    style: css.card
+  })(), view === "myschedule" && !isPublicMode && (() => {
+    const pid = isScheduler && minePerson && sMap[minePerson] ? minePerson : mySurgeon;
+    if (!pid) return React.createElement("div", {
+      style: css.card
+    }, React.createElement("div", {
+      style: css.cardT
+    }, "My schedule"), React.createElement("p", {
+      style: muted
+    }, "Your account is not linked to a roster entry yet - the scheduler will link it."));
+    const upcoming = upcomingDaysOf(pid, 90);
+    const next = upcomingDaysOf(pid, null)[0] || null;
+    const P = rulesCtx && rulesCtx.per ? rulesCtx.per[pid] : null;
+    const badgesFor = d => {
+      const out = [];
+      const u = rulesCtx && rulesCtx.holidayByDay ? rulesCtx.holidayByDay[d] : null;
+      if (u) out.push({
+        k: "H",
+        text: u.name,
+        title: u.name + " (" + (u.tier || "major") + " holiday unit)",
+        bg: "#fbf1d8",
+        fg: "#7a5a20"
+      });
+      if (P && P.derived[d]) out.push({
+        k: "E",
+        text: "E",
+        title: "East week: Silvis " + P.derived[d] + " (derived from the Davenport feed)",
+        bg: "#e8e0f8",
+        fg: "#5a3a90"
+      });
+      const fc = P && P.eastForecast ? P.eastForecast[d] : undefined;
+      if (typeof fc === "number" && rulesCtx && fc >= rulesCtx.forecastThreshold) out.push({
+        k: "F",
+        text: "F",
+        title: "East forecast " + Math.round(fc * 100) + "% (treated as busy)",
+        bg: "#e0eef8",
+        fg: "#1a5a88"
+      });
+      return out;
+    };
+    const countdown = d => {
+      const n = suDaysBetween(todayStr, d);
+      return n === 0 ? "today" : n === 1 ? "tomorrow" : "in " + n + " days";
+    };
+    const roleWord = r => r === "primary" ? "Primary" : "Backup";
+    const syncUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(pid)}`;
+    const pidVacs = (vacations[pid] || []).filter(([vs, ve]) => ve >= todayStr).length;
+    return React.createElement(React.Fragment, null, React.createElement("div", {
+      style: css.card,
+      "data-testid": "mine-card"
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginBottom: 10,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("div", {
+      style: _objectSpread(_objectSpread({}, css.cardT), {}, {
+        margin: 0
+      })
+    }, "My schedule"), isScheduler ? React.createElement("select", {
+      "data-testid": "mine-person",
+      value: pid,
+      onChange: e => setMinePerson(e.target.value),
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 130
+      }),
+      title: "As the scheduler you can view anyone's schedule"
+    }, surgeons.map(s => React.createElement("option", {
+      key: s.id,
+      value: s.id
+    }, s.name))) : React.createElement(Badge, {
+      id: pid
+    }), React.createElement("span", {
+      style: {
+        marginLeft: "auto",
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("button", {
+      "data-testid": "download-my-calendar",
+      onClick: () => downloadMyCal(pid),
+      title: "One 07:00-to-07:00 event per shift (America/Chicago), importable into Google, Apple or Outlook calendars",
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "5px 12px",
+        fontSize: 11
+      })
+    }, "Download my calendar"), React.createElement("button", {
+      "data-testid": "copy-sync-url",
+      onClick: () => copyText(syncUrl, "mine-sync"),
+      title: "Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl,
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "5px 12px",
+        fontSize: 11
+      })
+    }, copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"))), React.createElement("div", {
+      "data-testid": "next-call",
+      "data-next-day": next ? next.day : "",
+      "data-next-role": next ? next.role : "",
+      style: {
+        padding: "12px 14px",
+        borderRadius: 8,
+        marginBottom: 12,
+        background: next ? next.role === "primary" ? "linear-gradient(135deg,#1a6fa8,#2488c8)" : "linear-gradient(135deg,#8a6a20,#b08a30)" : dk ? "#16213e" : "#f0f2f5",
+        color: next ? "#fff" : dkText
+      }
+    }, !loaded ? React.createElement("span", {
+      style: {
+        fontStyle: "italic"
+      }
+    }, "Loading schedule") : !next ? React.createElement("span", null, "No upcoming call on file for ", nameOf(pid), ".") : React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: 1,
+        textTransform: "uppercase",
+        opacity: 0.85
+      }
+    }, "Next call - ", countdown(next.day)), React.createElement("div", {
+      style: {
+        fontSize: 18,
+        fontWeight: 700,
+        marginTop: 2
+      }
+    }, roleWord(next.role), " - ", dowShort(next.day), " ", MO[parse(next.day).getMonth()], " ", parse(next.day).getDate(), ", ", parse(next.day).getFullYear()), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        marginTop: 4,
+        opacity: 0.95
+      }
+    }, next.role === "primary" ? "Backup" : "Primary", ": ", holderLabel(next.other, nameOf), " - 07:00 to 07:00 next day", next.locked ? " - locked" : "", badgesFor(next.day).map(b => " - " + b.title).join("")))), React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "baseline",
+        gap: 8,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("div", {
+      style: css.subT
+    }, "Upcoming - next 90 days (", upcoming.length, ")"), React.createElement("span", {
+      style: muted
+    }, "H holiday unit - E East-derived week - F East forecast busy")), upcoming.length === 0 ? React.createElement("p", {
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        fontStyle: "italic"
+      })
+    }, "No call in the next 90 days.") : React.createElement("div", {
+      "data-testid": "mine-upcoming",
+      style: {
+        maxHeight: 420,
+        overflowY: "auto"
+      }
+    }, upcoming.map(x => React.createElement("div", {
+      key: x.day,
+      "data-testid": "mine-day",
+      "data-day": x.day,
+      "data-role": x.role,
+      style: {
+        display: "flex",
+        gap: 10,
+        alignItems: "center",
+        padding: "5px 8px",
+        borderBottom: `1px solid ${dkCardBorder}`,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("span", {
+      style: {
+        fontFamily: mono,
+        fontSize: 12,
+        color: dkText,
+        width: 92
+      }
+    }, dowShort(x.day), " ", fmtMD(x.day)), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        width: 58,
+        color: x.role === "primary" ? "#1a6fa8" : "#7a5a20"
+      }
+    }, roleWord(x.role)), React.createElement("span", {
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        minWidth: 120
+      })
+    }, x.role === "primary" ? "backup" : "primary", ": ", holderLabel(x.other, nameOf)), x.locked && React.createElement(Padlock, {
+      title: "locked",
+      size: 9
+    }), badgesFor(x.day).map(b => React.createElement("span", {
+      key: b.k,
+      title: b.title,
+      "data-badge": b.k,
+      style: {
+        fontSize: 9,
+        fontWeight: 800,
+        padding: "0 5px",
+        borderRadius: 4,
+        background: b.bg,
+        color: b.fg
+      }
+    }, b.text)), React.createElement("button", {
+      "data-testid": "mine-trade",
+      onClick: () => proposeTradeForDay(x.day, x.role),
+      style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+        marginLeft: "auto",
+        color: "#6030a0",
+        borderColor: "#c0a8e0"
+      })
+    }, "Propose a trade"))))), React.createElement("div", {
+      style: css.card
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        marginBottom: 8
+      }
+    }, React.createElement("div", {
+      style: _objectSpread(_objectSpread({}, css.cardT), {}, {
+        margin: 0
+      })
+    }, "My vacations (", pidVacs, " upcoming)"), React.createElement("button", {
+      onClick: () => setView("timeoff"),
+      style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+        marginLeft: "auto"
+      })
+    }, "Enter a vacation")), renderVacationList([pid], true)));
+  })(), view === "timeoff" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
+    style: css.card,
+    "data-testid": "timeoff-card"
   }, React.createElement("div", {
     style: css.cardT
-  }, "My schedule"), React.createElement(StubNote, {
-    slice: "Slice G",
-    text: "Next-call summary, vacations and trades for you live here later."
-  }), !mySurgeon ? React.createElement("p", {
-    style: muted
-  }, "Your account is not linked to a roster entry yet.") : React.createElement(React.Fragment, null, React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      marginBottom: 10,
-      flexWrap: "wrap"
-    }
-  }, React.createElement(Badge, {
-    id: mySurgeon
-  }), React.createElement("span", {
-    style: muted
-  }, myDays.filter(x => !isPastDay(x.day)).length, " upcoming day(s), ", myDays.length, " total on file"), React.createElement("button", {
-    "data-testid": "download-my-calendar",
-    onClick: () => downloadMyCal(mySurgeon),
-    title: "One 07:00-to-07:00 event per shift (America/Chicago), importable into Google, Apple or Outlook calendars",
-    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-      padding: "5px 12px",
-      fontSize: 11,
-      marginLeft: "auto"
-    })
-  }, "Download my calendar")), myDays.length === 0 ? React.createElement("p", {
-    style: _objectSpread(_objectSpread({}, muted), {}, {
-      fontStyle: "italic"
-    })
-  }, "No days assigned to you yet.") : React.createElement("div", {
-    style: {
-      maxHeight: 420,
-      overflowY: "auto"
-    }
-  }, myDays.map(x => React.createElement("div", {
-    key: x.day,
-    style: {
-      display: "flex",
-      gap: 10,
-      alignItems: "center",
-      padding: "5px 8px",
-      borderBottom: `1px solid ${dkCardBorder}`,
-      opacity: isPastDay(x.day) ? 0.5 : 1
-    }
-  }, React.createElement("span", {
-    style: {
-      fontFamily: mono,
-      fontSize: 12,
-      color: dkText,
-      width: 90
-    }
-  }, dowShort(x.day), " ", fmtMD(x.day)), React.createElement("span", {
-    style: {
-      fontSize: 11,
-      fontWeight: 700,
-      color: x.role === "primary" ? "#1a6fa8" : "#7a5a20"
-    }
-  }, x.role === "primary" ? "Primary" : "Backup"), x.locked && React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: "#7a8a98"
-    }
-  }, "[L]"))))))), view === "timeoff" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
-    style: css.card
-  }, React.createElement("div", {
-    style: css.cardT
-  }, "My vacations"), React.createElement("p", {
+  }, isScheduler ? "Vacations" : "My vacations"), React.createElement("p", {
     style: sectionNote
-  }, "Enter your own vacations - no approval. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first."), !mySurgeon && !isScheduler ? React.createElement("p", {
+  }, "Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record", isScheduler ? " (as the scheduler you can enter or remove anyone's)" : "", ". Notes are operational and visible to the whole group."), !mySurgeon && !isScheduler ? React.createElement("p", {
     style: muted
   }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement(React.Fragment, null, renderVacationForm(isScheduler ? activeSurgeons : activeSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
     style: {
@@ -6390,188 +7128,413 @@ function CallSchedule() {
     type: "checkbox",
     checked: showPastVacations,
     onChange: e => setShowPastVacations(e.target.checked)
-  }), " Show past"), renderVacationList(isScheduler ? surgeons.map(s => s.id) : [mySurgeon], true))), React.createElement("div", {
-    style: css.card
-  }, React.createElement("div", {
-    style: css.cardT
-  }, "Propose a shift trade"), React.createElement(StubNote, {
-    slice: "Slice G",
-    text: "Trades can be proposed here now; accepting and applying them arrives with Slice G."
-  }), React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 8,
-      flexWrap: "wrap",
-      alignItems: "flex-end"
-    }
-  }, React.createElement("div", null, React.createElement("label", {
-    style: label
-  }, "From"), React.createElement("select", {
-    value: tradeFrom,
-    onChange: e => setTradeFrom(e.target.value),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 120
-    }),
-    disabled: !isScheduler
-  }, React.createElement("option", {
-    value: ""
-  }, "Select"), activeSurgeons.map(s => React.createElement("option", {
-    key: s.id,
-    value: s.id
-  }, s.name)))), React.createElement("div", null, React.createElement("label", {
-    style: label
-  }, "Trade with"), React.createElement("select", {
-    value: tradeTo,
-    onChange: e => setTradeTo(e.target.value),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 120
-    })
-  }, React.createElement("option", {
-    value: ""
-  }, "Select"), activeSurgeons.filter(s => s.id !== tradeFrom).map(s => React.createElement("option", {
-    key: s.id,
-    value: s.id
-  }, s.name)))), React.createElement("div", null, React.createElement("label", {
-    style: label
-  }, "Your day"), React.createElement("input", {
-    type: "date",
-    value: tradeDay,
-    onChange: e => setTradeDay(e.target.value),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 145
-    })
-  })), React.createElement("div", null, React.createElement("label", {
-    style: label
-  }, "Role"), React.createElement("select", {
-    value: tradeRole,
-    onChange: e => setTradeRole(e.target.value),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 110
-    })
-  }, React.createElement("option", {
-    value: "primary"
-  }, "Primary"), React.createElement("option", {
-    value: "backup"
-  }, "Backup"))), React.createElement("div", null, React.createElement("label", {
-    style: label
-  }, "Their day (return)"), React.createElement("input", {
-    type: "date",
-    value: tradeReturnDay,
-    onChange: e => setTradeReturnDay(e.target.value),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 145
-    })
-  })), React.createElement("div", null, React.createElement("label", {
-    style: label
-  }, "Return role"), React.createElement("select", {
-    value: tradeReturnRole,
-    onChange: e => setTradeReturnRole(e.target.value),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 110
-    })
-  }, React.createElement("option", {
-    value: "primary"
-  }, "Primary"), React.createElement("option", {
-    value: "backup"
-  }, "Backup"))), React.createElement("button", {
-    onClick: submitTradeRequest,
-    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
-      padding: "7px 18px",
-      background: "linear-gradient(135deg,#6030a0,#8050c0)",
-      borderColor: "#6030a0"
-    })
-  }, "Propose trade"))), React.createElement("div", {
-    style: css.card
-  }, React.createElement("div", {
-    style: css.cardT
-  }, "Trade requests"), myTradeRequests.length === 0 ? React.createElement("p", {
-    style: _objectSpread(_objectSpread({}, muted), {}, {
-      fontStyle: "italic"
-    })
-  }, "No trade requests.") : React.createElement("div", {
-    style: {
-      display: "flex",
-      flexDirection: "column",
-      gap: 6
-    }
-  }, myTradeRequests.map(r => React.createElement("div", {
-    key: r.id,
-    style: {
+  }), " Show past"), renderVacationList(isScheduler ? surgeons.map(s => s.id) : [mySurgeon], true))), (() => {
+    const fromId = isScheduler ? tradeFrom || mySurgeon || "" : mySurgeon || "";
+    const mine = upcomingDaysOf(fromId, null);
+    const theirs = upcomingDaysOf(tradeTo, null);
+    const dayOk = suIsIso(tradeDay);
+    const holder = dayOk && schedule[tradeDay] ? schedule[tradeDay][tradeRole] : null;
+    const unit = dayOk && holder === fromId ? tradeUnitOf(tradeDay, tradeRole, fromId) : null;
+    const whole = !!unit && tradeWholeUnit;
+    const offerDays = whole ? unit.days : [tradeDay];
+    const eligOf = cand => whole ? tradeEligibilityOver(offerDays, tradeRole, cand) : tradeEligibility(tradeDay, tradeRole, cand);
+    const cands = activeSurgeons.filter(s => s.id !== fromId).map(s => ({
+      s,
+      e: dayOk ? eligOf(s.id) : null
+    }));
+    cands.sort((a, b) => (a.e && !a.e.ok ? 1 : 0) - (b.e && !b.e.ok ? 1 : 0));
+    const toElig = dayOk && tradeTo ? eligOf(tradeTo) : null;
+    const retUnit = suIsIso(tradeReturnDay) && tradeTo && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo) : null;
+    const retPaired = !!(retUnit && whole && retUnit.days.length === offerDays.length);
+    const retElig = suIsIso(tradeReturnDay) && fromId ? retPaired ? tradeEligibilityOver(retUnit.days, tradeReturnRole, fromId) : tradeEligibility(tradeReturnDay, tradeReturnRole, fromId) : null;
+    const unitOfDay = d => rulesCtx && rulesCtx.holidayByDay ? rulesCtx.holidayByDay[d] : null;
+    const givenLabel = whole ? "the " + unitText(unit) : slotLabel(tradeDay, tradeRole);
+    const pending = myTradeRequests.filter(r => r.status === "pending" || r.status === "accepted");
+    const done = myTradeRequests.filter(r => r.status === "applied" || r.status === "declined" || r.status === "cancelled");
+    const statusColor = st => st === "pending" ? "#c09030" : st === "declined" || st === "cancelled" ? "#c04040" : st === "accepted" ? "#6030a0" : "#1a8040";
+    const tenseFor = st => st === "accepted" || st === "applied" ? "takes" : st === "declined" || st === "cancelled" ? "would have taken" : "would take";
+    const rowBox = {
       padding: "8px 12px",
       background: dk ? "#16213e" : "#f8f9fb",
       borderRadius: 6,
       border: `1px solid ${dkCardBorder}`
-    }
-  }, React.createElement("div", {
-    style: {
-      display: "flex",
-      justifyContent: "space-between",
-      gap: 8,
-      flexWrap: "wrap"
-    }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 12.5,
-      color: dkText
-    }
-  }, tradeLegsText(_objectSpread(_objectSpread({}, r), {}, {
-    from_surgeon_name: r.from_surgeon_name || nameOf(r.from_surgeon_id),
-    to_surgeon_name: r.to_surgeon_name || nameOf(r.to_surgeon_id)
-  }), r.status === "accepted" || r.status === "applied" ? "takes" : r.status === "declined" ? "would have taken" : "would take")), React.createElement("span", {
-    style: {
-      fontSize: 10,
-      fontWeight: 700,
-      textTransform: "uppercase",
-      color: r.status === "pending" ? "#c09030" : r.status === "declined" || r.status === "cancelled" ? "#c04040" : "#1a8040"
-    }
-  }, r.status)), React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: "#9aa4ae",
-      fontFamily: mono,
-      marginTop: 2
-    }
-  }, "proposed ", fmtAuditTime(r.submitted_at), r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : "")))))), view === "totals" && !isPublicMode && isScheduler && React.createElement(React.Fragment, null, React.createElement("div", {
-    style: css.card
-  }, React.createElement("div", {
-    style: css.cardT
-  }, "Totals ", new Date().getFullYear()), React.createElement(StubNote, {
-    slice: "Slice F",
-    text: "By month / year-to-date / rolling 12 months, weekend days, major/minor holidays, max consecutive, each vs target and cap, plus the fairness view. One 24-h day = one shift; nothing weighted."
-  }), React.createElement("table", {
-    style: {
-      width: "100%",
-      borderCollapse: "collapse"
-    }
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
-    style: thS
-  }, "Surgeon"), React.createElement("th", {
-    style: thS
-  }, "Primary"), React.createElement("th", {
-    style: thS
-  }, "Backup"), React.createElement("th", {
-    style: thS
-  }, "Total"))), React.createElement("tbody", null, surgeons.map(s => {
-    var _yearTally$s$id$prima, _yearTally$s$id, _yearTally$s$id$backu, _yearTally$s$id2, _yearTally$s$id$prima2, _yearTally$s$id3, _yearTally$s$id$backu2, _yearTally$s$id4;
-    return React.createElement("tr", {
-      key: s.id,
+    };
+    const tradeRow = r => {
+      const named = tradeNamed(r);
+      const canAnswer = r.status === "pending" && (isScheduler || r.to_surgeon_id === mySurgeon);
+      const canCancel = r.status === "pending" && (isScheduler || r.from_surgeon_id === mySurgeon);
+      const canRetry = r.status === "accepted" && (isScheduler || r.from_surgeon_id === mySurgeon || r.to_surgeon_id === mySurgeon);
+      const busy = tradeBusy === r.id;
+      const err = tradeApplyErr[r.id];
+      const tag = tradeUnitTag(r);
+      const groupN = tag ? tradeGroupOf(r).length : 1;
+      return React.createElement("div", {
+        key: r.id,
+        "data-testid": "trade-row",
+        "data-trade-id": r.id,
+        "data-status": r.status,
+        "data-unit": tag ? tag.kind + ":" + tag.start : undefined,
+        "data-group": groupN,
+        style: rowBox
+      }, React.createElement("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+          alignItems: "center"
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 12.5,
+          color: dkText
+        }
+      }, tradeLegsText(named, tenseFor(r.status)), tag && React.createElement("span", {
+        "data-testid": "trade-unit-tag",
+        title: "A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together",
+        style: {
+          marginLeft: 8,
+          fontSize: 10,
+          fontWeight: 700,
+          color: "#7a5a20",
+          background: "#fbf1d8",
+          borderRadius: 4,
+          padding: "1px 6px",
+          whiteSpace: "nowrap"
+        }
+      }, tag.text, " - day ", tag.index, " of ", tag.n)), React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          color: statusColor(r.status)
+        }
+      }, r.status === "accepted" ? "accepted - not applied yet" : r.status)), React.createElement("div", {
+        style: {
+          fontSize: 10,
+          color: "#9aa4ae",
+          fontFamily: mono,
+          marginTop: 2
+        }
+      }, "proposed by ", named.from_surgeon_name, " ", fmtAuditTime(r.submitted_at), r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""), err && React.createElement("div", {
+        "data-testid": "trade-apply-error",
+        style: _objectSpread(_objectSpread({}, css.errBox), {}, {
+          marginTop: 6
+        })
+      }, "Apply failed: ", err), (canAnswer || canCancel || canRetry || isScheduler && r.status === "applied") && React.createElement("div", {
+        style: {
+          display: "flex",
+          gap: 6,
+          marginTop: 6,
+          flexWrap: "wrap"
+        }
+      }, canAnswer && React.createElement("button", {
+        "data-testid": "trade-accept",
+        disabled: busy,
+        onClick: () => acceptTrade(r),
+        style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+          padding: "4px 12px",
+          fontSize: 11
+        })
+      }, busy ? "Working" : groupN > 1 ? `Accept (${groupN} days)` : "Accept"), canAnswer && React.createElement("button", {
+        "data-testid": "trade-decline",
+        disabled: busy,
+        onClick: () => declineTrade(r),
+        style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+          padding: "4px 12px",
+          fontSize: 11
+        })
+      }, groupN > 1 ? `Decline (${groupN} days)` : "Decline"), canCancel && React.createElement("button", {
+        "data-testid": "trade-cancel",
+        disabled: busy,
+        onClick: () => cancelTrade(r),
+        style: css.danger
+      }, groupN > 1 ? `Cancel (${groupN} days)` : "Cancel"), canRetry && React.createElement("button", {
+        "data-testid": "trade-retry",
+        disabled: busy,
+        onClick: () => retryApplyTrade(r),
+        style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+          padding: "4px 12px",
+          fontSize: 11,
+          background: "linear-gradient(135deg,#6030a0,#8050c0)",
+          borderColor: "#6030a0"
+        })
+      }, busy ? "Working" : "Retry apply"), isScheduler && (r.status === "applied" || r.status === "accepted") && React.createElement("button", {
+        onClick: () => goToDay(r.day),
+        title: "The scheduler reverts a trade by editing the day",
+        style: css.mini(false)
+      }, "Open ", fmtMD(r.day), " in the day editor")));
+    };
+    return React.createElement(React.Fragment, null, React.createElement("div", {
+      style: css.card,
+      "data-testid": "trade-card"
+    }, React.createElement("div", {
+      style: css.cardT
+    }, "Propose a shift trade"), React.createElement("p", {
+      style: sectionNote
+    }, "By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. ", isScheduler ? "As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor." : "All trades are two-way: pick the day and role you take in return."), !fromId ? React.createElement("p", {
+      style: muted
+    }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement("div", {
       style: {
-        borderTop: `1px solid ${dkCardBorder}`
+        display: "flex",
+        gap: 8,
+        flexWrap: "wrap",
+        alignItems: "flex-end"
       }
-    }, React.createElement("td", {
-      style: _objectSpread(_objectSpread({}, tdS), {}, {
-        fontFamily: font
+    }, !rulesCtx && React.createElement("div", {
+      "data-testid": "trade-rules-unavailable",
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        flex: "1 1 100%"
       })
+    }, "Rules unavailable - the setup has not loaded, so nobody's eligibility can be checked. Members cannot propose or accept until it does; the scheduler is asked to confirm each step."), React.createElement("div", null, React.createElement("label", {
+      style: label
+    }, "From"), isScheduler ? React.createElement("select", {
+      "data-testid": "trade-from",
+      value: fromId,
+      onChange: e => {
+        setTradeFrom(e.target.value);
+        setTradeDay("");
+      },
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 120
+      })
+    }, activeSurgeons.map(s => React.createElement("option", {
+      key: s.id,
+      value: s.id
+    }, s.name))) : React.createElement("div", {
+      style: {
+        paddingTop: 4
+      }
     }, React.createElement(Badge, {
-      id: s.id
-    })), React.createElement("td", {
-      style: tdS
-    }, (_yearTally$s$id$prima = (_yearTally$s$id = yearTally[s.id]) === null || _yearTally$s$id === void 0 ? void 0 : _yearTally$s$id.primary) !== null && _yearTally$s$id$prima !== void 0 ? _yearTally$s$id$prima : 0), React.createElement("td", {
-      style: tdS
-    }, (_yearTally$s$id$backu = (_yearTally$s$id2 = yearTally[s.id]) === null || _yearTally$s$id2 === void 0 ? void 0 : _yearTally$s$id2.backup) !== null && _yearTally$s$id$backu !== void 0 ? _yearTally$s$id$backu : 0), React.createElement("td", {
-      style: tdS
-    }, ((_yearTally$s$id$prima2 = (_yearTally$s$id3 = yearTally[s.id]) === null || _yearTally$s$id3 === void 0 ? void 0 : _yearTally$s$id3.primary) !== null && _yearTally$s$id$prima2 !== void 0 ? _yearTally$s$id$prima2 : 0) + ((_yearTally$s$id$backu2 = (_yearTally$s$id4 = yearTally[s.id]) === null || _yearTally$s$id4 === void 0 ? void 0 : _yearTally$s$id4.backup) !== null && _yearTally$s$id$backu2 !== void 0 ? _yearTally$s$id$backu2 : 0)));
-  }))))), view === "settings" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
+      id: fromId
+    }))), React.createElement("div", null, React.createElement("label", {
+      style: label
+    }, "My day + role"), React.createElement("select", {
+      "data-testid": "trade-mine-pick",
+      value: dayOk && holder === fromId ? tradeDay + "|" + tradeRole : "",
+      onChange: e => {
+        const v = e.target.value.split("|");
+        if (v[0]) {
+          setTradeDay(v[0]);
+          setTradeRole(v[1]);
+        }
+      },
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 200
+      })
+    }, React.createElement("option", {
+      value: ""
+    }, mine.length ? "Pick one of my upcoming days" : "No upcoming days on file"), mine.map(x => React.createElement("option", {
+      key: x.day + x.role,
+      value: x.day + "|" + x.role
+    }, slotLabel(x.day, x.role), unitOfDay(x.day) ? " - " + unitOfDay(x.day).name + " unit" : "")))), React.createElement("div", null, React.createElement("label", {
+      style: label
+    }, "or date"), React.createElement("input", {
+      "data-testid": "trade-day",
+      type: "date",
+      value: tradeDay,
+      onChange: e => setTradeDay(e.target.value),
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 145
+      })
+    })), React.createElement("div", null, React.createElement("label", {
+      style: label
+    }, "Role"), React.createElement("select", {
+      "data-testid": "trade-role",
+      value: tradeRole,
+      onChange: e => setTradeRole(e.target.value),
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 100
+      })
+    }, React.createElement("option", {
+      value: "primary"
+    }, "Primary"), React.createElement("option", {
+      value: "backup"
+    }, "Backup"))), dayOk && holder !== fromId && React.createElement("div", {
+      "data-testid": "trade-holder-warning",
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        flex: "1 1 100%"
+      })
+    }, nameOf(fromId), " is not ", tradeRole, " on ", fmtMD(tradeDay), " - that slot is ", holderLabel(holder, nameOf), "."), unit && React.createElement("div", {
+      "data-testid": "trade-unit",
+      "data-unit-kind": unit.kind,
+      "data-unit-days": unit.days.join(","),
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        flex: "1 1 100%",
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        flexWrap: "wrap"
+      })
+    }, React.createElement("span", null, React.createElement("strong", null, fmtMD(tradeDay), " is part of the ", unitText(unit), "."), " One primary and one backup stick through a unit, so it trades as a whole: one row per day, accepted or declined together."), React.createElement("label", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        cursor: "pointer",
+        fontWeight: 600
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      "data-testid": "trade-whole-unit",
+      checked: tradeWholeUnit,
+      onChange: e => setTradeWholeUnit(e.target.checked)
+    }), " Trade the whole unit"), !tradeWholeUnit && React.createElement("span", {
+      "data-testid": "trade-unit-split",
+      style: {
+        color: "#8a3030",
+        fontWeight: 600
+      }
+    }, isScheduler ? "Unchecked: this single day would split the unit - you will be asked to confirm." : "A single day of a unit cannot be traded - tick the box to trade the whole unit.")), React.createElement("div", null, React.createElement("label", {
+      style: label
+    }, "Trade with"), React.createElement("select", {
+      "data-testid": "trade-to",
+      value: tradeTo,
+      onChange: e => {
+        setTradeTo(e.target.value);
+        setTradeReturnDay("");
+      },
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 230
+      })
+    }, React.createElement("option", {
+      value: ""
+    }, "Select"), cands.map(({
+      s,
+      e
+    }) => {
+      const bad = e && !e.ok;
+      return React.createElement("option", {
+        key: s.id,
+        value: s.id,
+        "data-eligible": e ? e.unknown ? "unknown" : String(!bad) : "unknown",
+        style: bad ? {
+          color: "#a0a8b0"
+        } : undefined
+      }, s.name, bad ? " - " + (e.unknown ? "rules not loaded" : e.hard[0]) : "");
+    }))), toElig && !toElig.ok && React.createElement("div", {
+      "data-testid": "trade-to-reason",
+      style: _objectSpread(_objectSpread({}, css.errBox), {}, {
+        flex: "1 1 100%"
+      })
+    }, nameOf(tradeTo), " can't take ", givenLabel, ": ", tradeReasonText(toElig), ". ", toElig.unknown ? "" : "Pick someone else or ask the scheduler."), toElig && toElig.ok && toElig.soft && toElig.soft.length > 0 && React.createElement("div", {
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        flex: "1 1 100%"
+      })
+    }, "Allowed with a note: ", toElig.soft.map(softTag).join(", "), "."), React.createElement("div", null, React.createElement("label", {
+      style: label
+    }, "Their day + role (return)"), React.createElement("select", {
+      "data-testid": "trade-theirs-pick",
+      value: suIsIso(tradeReturnDay) && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeReturnDay + "|" + tradeReturnRole : "",
+      onChange: e => {
+        const v = e.target.value.split("|");
+        if (v[0]) {
+          setTradeReturnDay(v[0]);
+          setTradeReturnRole(v[1]);
+        } else setTradeReturnDay("");
+      },
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 200
+      }),
+      disabled: !tradeTo
+    }, React.createElement("option", {
+      value: ""
+    }, isScheduler ? "None (one-way)" : tradeTo ? "Pick one of their days" : "Pick a surgeon first"), theirs.map(x => React.createElement("option", {
+      key: x.day + x.role,
+      value: x.day + "|" + x.role
+    }, slotLabel(x.day, x.role), unitOfDay(x.day) ? " - " + unitOfDay(x.day).name + " unit" : "")))), React.createElement("div", null, React.createElement("label", {
+      style: label
+    }, "or date"), React.createElement("input", {
+      "data-testid": "trade-return-day",
+      type: "date",
+      value: tradeReturnDay,
+      onChange: e => setTradeReturnDay(e.target.value),
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 145
+      })
+    })), React.createElement("div", null, React.createElement("label", {
+      style: label
+    }, "Return role"), React.createElement("select", {
+      "data-testid": "trade-return-role",
+      value: tradeReturnRole,
+      onChange: e => setTradeReturnRole(e.target.value),
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        width: 100
+      })
+    }, React.createElement("option", {
+      value: "primary"
+    }, "Primary"), React.createElement("option", {
+      value: "backup"
+    }, "Backup"))), retUnit && React.createElement("div", {
+      "data-testid": "trade-return-unit",
+      "data-paired": retPaired ? "1" : "0",
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        flex: "1 1 100%"
+      })
+    }, nameOf(tradeTo), "'s ", fmtMD(tradeReturnDay), " is part of the ", unitText(retUnit), retPaired ? " - it comes back as a whole unit, day for day." : isScheduler ? " - taking that day alone would split it (you will be asked to confirm)." : " - it can only come back as a whole unit matching the " + offerDays.length + "-day unit you give; pick another day."), retElig && !retElig.ok && React.createElement("div", {
+      "data-testid": "trade-return-reason",
+      style: _objectSpread(_objectSpread({}, css.errBox), {}, {
+        flex: "1 1 100%"
+      })
+    }, nameOf(fromId), " can't take ", retPaired ? "the " + unitText(retUnit) : slotLabel(tradeReturnDay, tradeReturnRole), " in return: ", tradeReasonText(retElig), "."), React.createElement("button", {
+      "data-testid": "trade-submit",
+      disabled: tradeBusy === "propose",
+      onClick: submitTradeRequest,
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "7px 18px",
+        background: "linear-gradient(135deg,#6030a0,#8050c0)",
+        borderColor: "#6030a0"
+      })
+    }, tradeBusy === "propose" ? "Submitting" : whole ? `Propose unit trade (${offerDays.length} days)` : "Propose trade"))), React.createElement("div", {
+      style: css.card,
+      "data-testid": "trades-pending"
+    }, React.createElement("div", {
+      style: css.cardT
+    }, "Pending trades (", pending.length, ")"), React.createElement("p", {
+      style: sectionNote
+    }, isScheduler ? "Every open trade. The surgeon asked answers; you can answer or cancel any of them." : "Trades waiting on you show Accept / Decline; ones you proposed show Cancel."), pending.length === 0 ? React.createElement("p", {
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        fontStyle: "italic"
+      })
+    }, "No pending trades.") : React.createElement("div", {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 6
+      }
+    }, pending.map(tradeRow))), React.createElement("div", {
+      style: css.card,
+      "data-testid": "trades-completed"
+    }, React.createElement("div", {
+      style: css.cardT
+    }, "Completed trades (", done.length, ")"), done.length === 0 ? React.createElement("p", {
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        fontStyle: "italic"
+      })
+    }, "No completed trades.") : React.createElement("div", {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 6
+      }
+    }, done.slice(0, 40).map(tradeRow))));
+  })()), view === "totals" && !isPublicMode && React.createElement(TotalsCard, {
+    css: css,
+    dk: dk,
+    roster: surgeons,
+    schedule: schedule,
+    ctx: rulesCtx,
+    surgeonRules: surgeonRules,
+    preview: previewGen,
+    today: todayStr,
+    nameOf: nameOf,
+    Badge: Badge,
+    showToast: showToast,
+    ytdFloors: {
+      "2026": "2026-09-14"
+    },
+    loaded: loaded
+  }), view === "settings" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
     style: css.cardT
@@ -8110,6 +9073,20 @@ const REASON_WORDS = {
   "unknown-surgeon": "not on the roster",
   "bad-role": "unknown role"
 };
+async function readAuthOnlyTable(table, opts) {
+  let token = null;
+  try {
+    token = localStorage.getItem("silvis-auth-token");
+  } catch (e) {
+    token = null;
+  }
+  if (!token || !jwtIsFresh(token)) {
+    console.warn(table + ": read skipped - the session token is missing or expired; an anon read would answer 200 + [] and wipe the current list (kept as is until the session refreshes)");
+    return null;
+  }
+  const rows = await db.query(table, opts);
+  return Array.isArray(rows) ? rows : null;
+}
 function reasonLabel(code, nameOf) {
   const s = String(code || "");
   const i = s.indexOf(":");
@@ -8117,6 +9094,10 @@ function reasonLabel(code, nameOf) {
   const arg = i < 0 ? "" : s.slice(i + 1);
   const who = id => typeof nameOf === "function" ? nameOf(id) : id;
   switch (key) {
+    case "rules-unavailable":
+      return "the rules have not loaded yet - try again in a moment" + (arg ? " (" + arg + ")" : "");
+    case "unit-split":
+      return "part of the " + arg + " - trade the whole unit";
     case "slot-locked":
       return "slot locked to " + who(arg);
     case "derived-lock":
@@ -8941,6 +9922,461 @@ function suPatternLabel(p) {
   if (k === "before") return p.weekday + " before the " + suPatternValueText(p).replace(/,/g, "/") + " Monday";
   return "every " + p.weekday;
 }
+const TOTALS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function TotalsCard({
+  css,
+  dk,
+  roster,
+  schedule,
+  ctx,
+  surgeonRules,
+  preview,
+  today,
+  nameOf,
+  Badge,
+  showToast,
+  ytdFloors,
+  loaded
+}) {
+  const now = parse(today);
+  const [mode, setMode] = useState("month");
+  const [year, setYear] = useState(now.getFullYear());
+  const [month0, setMonth0] = useState(now.getMonth());
+  const [withPreview, setWithPreview] = useState(false);
+  const rangeMode = mode === "fairness" ? "month" : mode;
+  const range = ttRangeFor(rangeMode, year, month0, {
+    floors: ytdFloors || {}
+  });
+  const opts = {
+    holidayByDay: ctx ? ctx.holidayByDay : {},
+    weekendDays: ctx ? ctx.weekendDays : undefined,
+    unitExempt: ctx ? ctx.holidayFlags.unitExemptFromMaxConsecutive !== false : true,
+    countBackup: ctx ? !!ctx.countBackupInConsecutive : false
+  };
+  const hasPreview = !!(preview && preview.schedule && Object.keys(preview.schedule).length);
+  const sources = [{
+    key: "published",
+    label: "Published",
+    sched: schedule || {}
+  }];
+  if (hasPreview && withPreview) sources.push({
+    key: "preview",
+    label: "With preview",
+    sched: suMergePreview(schedule || {}, preview.schedule, preview.respectLocks !== false)
+  });
+  const dg = preview && preview.diagnostics;
+  const nMonths = range.months.length;
+  const targetFor = id => {
+    const r = surgeonRules && surgeonRules[id];
+    if (r && typeof r.monthlyTarget === "number") return {
+      value: r.monthlyTarget * nMonths,
+      kind: "explicit"
+    };
+    if (dg && dg.tallies && dg.tallies[id] && dg.tallies[id].months) {
+      let sum = 0,
+        all = nMonths > 0;
+      range.months.forEach(m => {
+        const t = dg.tallies[id].months[m];
+        if (t && typeof t.target === "number") sum += t.target;else all = false;
+      });
+      if (all) return {
+        value: sum,
+        kind: "implied"
+      };
+    }
+    return {
+      value: null,
+      kind: "none"
+    };
+  };
+  const capFor = id => ctx && typeof monthlyCapFor === "function" ? monthlyCapFor(ctx, id).total : null;
+  const perOf = id => ctx && ctx.per ? ctx.per[id] : null;
+  const eastFor = id => {
+    const P = perOf(id);
+    return P ? ttDaysIn(P.eastDays, range.from, range.to) : 0;
+  };
+  const countsEast = id => {
+    const P = perOf(id);
+    return !!(P && P.countsEastDays);
+  };
+  const maxConsecRule = id => {
+    const P = perOf(id);
+    return P ? P.maxConsec : null;
+  };
+  const list = (roster || []).filter(s => s && s.id);
+  const showEast = list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
+  const rows = [];
+  list.forEach(s => sources.forEach(src => {
+    const t = ttTotalsFor(src.sched, s.id, range.from, range.to, opts);
+    const tg = targetFor(s.id),
+      cap = capFor(s.id),
+      east = eastFor(s.id);
+    const capUse = countsEast(s.id) ? t.total + east : t.total;
+    rows.push({
+      id: s.id,
+      name: s.name,
+      code: s.code,
+      src: src.key,
+      srcLabel: src.label,
+      t,
+      target: tg.value,
+      targetKind: tg.kind,
+      cap,
+      capUse,
+      east,
+      maxRule: maxConsecRule(s.id),
+      deviation: ttDeviation(t.total, tg.value)
+    });
+  }));
+  const capText = r => r.cap === null ? "-" : nMonths > 1 ? r.cap + "/mo" : String(r.cap);
+  const targetText = r => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
+  const anyImplied = rows.some(r => r.targetKind === "implied");
+  const periodText = range.label + (mode === "fairness" ? "" : "");
+  const exportCsv = () => {
+    try {
+      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap per month", "Target", "Deviation"];
+      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation]);
+      const csv = ttCsvText(headers, data);
+      const name = "silvis-totals-" + rangeMode + "-" + range.from + "-" + range.to + ".csv";
+      const real = downloadTextFile(csv, name, "text/csv");
+      showToast(real ? "Downloaded " + name : "Opened the CSV in a new view (this browser blocks downloads) - save it from there.", real ? "success" : "info");
+    } catch (e) {
+      console.warn("totals CSV export failed:", e);
+      showToast("Couldn't export the CSV: " + (e && e.message ? e.message : String(e)), "error");
+    }
+  };
+  const th = {
+    textAlign: "right",
+    padding: "7px 8px",
+    color: "#5a6a78",
+    fontWeight: 600,
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    whiteSpace: "nowrap"
+  };
+  const thL = _objectSpread(_objectSpread({}, th), {}, {
+    textAlign: "left"
+  });
+  const td = {
+    padding: "6px 8px",
+    fontFamily: mono,
+    fontSize: 12.5,
+    textAlign: "right",
+    color: dk ? "#e0e0f0" : "#2c3e50",
+    whiteSpace: "nowrap"
+  };
+  const tdL = _objectSpread(_objectSpread({}, td), {}, {
+    textAlign: "left",
+    fontFamily: font
+  });
+  const border = dk ? "#2a3a5e" : "#e8ecf0";
+  const devColor = r => r.target === null ? "#8a94a0" : r.t.total > r.target ? "#c04040" : r.t.total < r.target ? "#1a6fa8" : "#1a8040";
+  const devFlag = r => r.target === null ? undefined : r.t.total > r.target ? "over" : r.t.total < r.target ? "under" : "ok";
+  const overCap = r => r.cap !== null && r.capUse > r.cap * nMonths;
+  const overConsec = r => r.maxRule !== null && r.t.maxConsecutive > r.maxRule;
+  const years = [];
+  for (let y = now.getFullYear() - 1; y <= now.getFullYear() + 2; y++) years.push(y);
+  const modeBtn = (k, text) => React.createElement("button", {
+    key: k,
+    "data-testid": "totals-mode-" + k,
+    onClick: () => setMode(k),
+    style: css.mini(mode === k)
+  }, text);
+  return React.createElement("div", {
+    style: css.card,
+    "data-testid": "totals-card"
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.cardT), {}, {
+      margin: 0
+    })
+  }, "Totals"), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 4,
+      flexWrap: "wrap"
+    }
+  }, modeBtn("month", "By month"), modeBtn("ytd", "Year to date"), modeBtn("rolling", "Rolling 12 months"), modeBtn("fairness", "Fairness")), React.createElement("select", {
+    "data-testid": "totals-month",
+    value: month0,
+    onChange: e => setMonth0(Number(e.target.value)),
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12
+    })
+  }, TOTALS_MON.map((m, i) => React.createElement("option", {
+    key: m,
+    value: i
+  }, m))), React.createElement("select", {
+    "data-testid": "totals-year",
+    value: year,
+    onChange: e => setYear(Number(e.target.value)),
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12
+    })
+  }, years.map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, y))), hasPreview && React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 5,
+      fontSize: 11,
+      color: "#7a4fbf",
+      cursor: "pointer"
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    "data-testid": "totals-with-preview",
+    checked: withPreview,
+    onChange: e => setWithPreview(e.target.checked)
+  }), " add rows with the Generate preview applied"), React.createElement("button", {
+    "data-testid": "totals-csv",
+    onClick: exportCsv,
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "5px 12px",
+      fontSize: 11,
+      marginLeft: "auto"
+    })
+  }, "Export CSV")), React.createElement("div", {
+    "data-testid": "totals-period",
+    style: {
+      fontSize: 12.5,
+      color: dk ? "#c0c0d8" : "#3a4a58",
+      marginBottom: 8
+    }
+  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ". One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges", opts.unitExempt ? " (a holiday unit counts as one commitment)" : "", ".", !loaded ? " Loading schedule..." : ""), !ctx && React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+      marginBottom: 8
+    })
+  }, "Rules context unavailable - caps, targets, holiday units and East days show as '-' until the setup loads."), mode !== "fairness" ? React.createElement("div", {
+    style: css.tableWrap
+  }, React.createElement("table", {
+    "data-testid": "totals-table",
+    style: {
+      width: "100%",
+      borderCollapse: "collapse",
+      minWidth: 760
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: thL
+  }, "Surgeon"), sources.length > 1 && React.createElement("th", {
+    style: thL
+  }, "Source"), React.createElement("th", {
+    style: th
+  }, "Primary"), React.createElement("th", {
+    style: th
+  }, "Backup"), React.createElement("th", {
+    style: th
+  }, "Total"), React.createElement("th", {
+    style: th
+  }, "Weekend days"), React.createElement("th", {
+    style: th,
+    title: "Holiday units held (once per unit): major / minor"
+  }, "Holidays maj/min"), React.createElement("th", {
+    style: th,
+    title: "Longest run of consecutive primary days touching the period (rule limit in brackets)"
+  }, "Max consec. P"), showEast && React.createElement("th", {
+    style: th,
+    title: "Days on East (Davenport) call in the period - counted toward the cap for a surgeon whose cap counts them"
+  }, "East days"), React.createElement("th", {
+    style: th
+  }, "Cap", nMonths > 1 ? " /mo" : ""), React.createElement("th", {
+    style: th
+  }, "Target"), React.createElement("th", {
+    style: th
+  }, "Deviation"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
+    key: r.id + r.src,
+    "data-testid": "totals-row-" + r.id,
+    "data-source": r.src,
+    "data-primary": r.t.primary,
+    "data-backup": r.t.backup,
+    "data-total": r.t.total,
+    "data-weekend": r.t.weekendDays,
+    "data-major": r.t.majorHolidays,
+    "data-minor": r.t.minorHolidays,
+    "data-maxconsec": r.t.maxConsecutive,
+    "data-east": r.east,
+    style: {
+      borderTop: "1px solid " + border,
+      opacity: r.src === "preview" ? 0.85 : 1,
+      fontStyle: r.src === "preview" ? "italic" : "normal"
+    }
+  }, React.createElement("td", {
+    style: tdL
+  }, React.createElement(Badge, {
+    id: r.id
+  })), sources.length > 1 && React.createElement("td", {
+    style: _objectSpread(_objectSpread({}, tdL), {}, {
+      fontSize: 11,
+      color: r.src === "preview" ? "#7a4fbf" : "#7a8a98"
+    })
+  }, r.srcLabel), React.createElement("td", {
+    style: td
+  }, r.t.primary), React.createElement("td", {
+    style: td
+  }, r.t.backup), React.createElement("td", {
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      fontWeight: 700
+    })
+  }, r.t.total), React.createElement("td", {
+    style: td
+  }, r.t.weekendDays), React.createElement("td", {
+    style: td,
+    title: r.t.holidayUnits.join(", ") || "none"
+  }, r.t.majorHolidays, " / ", r.t.minorHolidays), React.createElement("td", {
+    "data-col": "maxconsec",
+    "data-flag": overConsec(r) ? "over" : undefined,
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      color: overConsec(r) ? "#c04040" : td.color
+    })
+  }, r.t.maxConsecutive, r.maxRule !== null ? " (" + r.maxRule + ")" : ""), showEast && React.createElement("td", {
+    style: td
+  }, r.east || (countsEast(r.id) ? 0 : "-")), React.createElement("td", {
+    "data-col": "cap",
+    "data-flag": overCap(r) ? "over" : undefined,
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      color: overCap(r) ? "#c04040" : td.color
+    }),
+    title: countsEast(r.id) ? "This cap counts Silvis + East days: " + r.capUse : undefined
+  }, capText(r)), React.createElement("td", {
+    "data-col": "target",
+    style: td
+  }, targetText(r)), React.createElement("td", {
+    "data-col": "deviation",
+    "data-flag": devFlag(r),
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      color: devColor(r),
+      fontWeight: 600
+    })
+  }, r.deviation)))))) : React.createElement("div", {
+    "data-testid": "fairness-view"
+  }, React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#5a6a78",
+      margin: "0 0 10px",
+      lineHeight: 1.5
+    }
+  }, "Total days in ", range.label, " against each surgeon's target (green mark) and cap (red mark). Fairness at Silvis is per-surgeon targets and caps, not equal shares - a surgeon without a target shows '-'."), (() => {
+    const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, r.target === null ? 0 : r.target)));
+    const pct = v => Math.min(100, Math.round(v / scale * 100));
+    return rows.map(r => React.createElement("div", {
+      key: r.id + r.src,
+      "data-testid": "fairness-row-" + r.id,
+      "data-source": r.src,
+      "data-total": r.t.total,
+      "data-deviation": r.deviation,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 0",
+        borderTop: "1px solid " + border,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 110,
+        display: "flex",
+        gap: 6,
+        alignItems: "center"
+      }
+    }, React.createElement(Badge, {
+      id: r.id
+    }), r.src === "preview" && React.createElement("span", {
+      style: {
+        fontSize: 9,
+        color: "#7a4fbf"
+      }
+    }, "preview")), React.createElement("div", {
+      style: {
+        flex: "1 1 220px",
+        position: "relative",
+        height: 18,
+        background: dk ? "#16213e" : "#eef1f4",
+        borderRadius: 4,
+        overflow: "hidden"
+      }
+    }, React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: 0,
+        top: 0,
+        bottom: 0,
+        width: pct(r.t.total) + "%",
+        background: overCap(r) ? "#c04040" : "linear-gradient(90deg,#1a6fa8,#2488c8)",
+        borderRadius: 4
+      }
+    }), countsEast(r.id) && r.east > 0 && React.createElement("div", {
+      title: "+ " + r.east + " East day(s) counted toward the cap",
+      style: {
+        position: "absolute",
+        left: pct(r.t.total) + "%",
+        top: 0,
+        bottom: 0,
+        width: pct(r.capUse) - pct(r.t.total) + "%",
+        background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)"
+      }
+    }), r.target !== null && React.createElement("div", {
+      "data-testid": "fairness-target-mark",
+      title: "target " + r.target,
+      style: {
+        position: "absolute",
+        left: pct(r.target) + "%",
+        top: 0,
+        bottom: 0,
+        width: 2,
+        background: "#1a8040"
+      }
+    }), r.cap !== null && React.createElement("div", {
+      title: "cap " + r.cap * nMonths,
+      style: {
+        position: "absolute",
+        left: pct(r.cap * nMonths) + "%",
+        top: 0,
+        bottom: 0,
+        width: 2,
+        background: "#c04040"
+      }
+    })), React.createElement("div", {
+      style: {
+        fontFamily: mono,
+        fontSize: 12,
+        color: dk ? "#e0e0f0" : "#2c3e50",
+        minWidth: 250
+      }
+    }, r.t.total, " total (", r.t.primary, " P + ", r.t.backup, " B)", showEast && countsEast(r.id) ? " + " + r.east + " East" : "", " - target ", r.target === null ? "-" : r.target, r.targetKind === "implied" ? "*" : "", " - cap ", r.cap === null ? "-" : r.cap * nMonths, " - ", React.createElement("span", {
+      "data-flag": devFlag(r),
+      style: {
+        color: devColor(r),
+        fontWeight: 700
+      }
+    }, r.deviation === "-" ? "no target" : "deviation " + r.deviation))));
+  })()), anyImplied && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#7a8a98",
+      marginTop: 8
+    }
+  }, "* implied target from the last Generate preview's diagnostics (no explicit monthlyTarget in Setup)."), showEast && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#7a8a98",
+      marginTop: 4
+    }
+  }, "East days: days on Davenport call (published weeks, derived weeks and overrides) inside the period; a cap that counts them reads Silvis + East."));
+}
 function SuField({
   label,
   children,
@@ -9677,6 +11113,7 @@ function RulesEditor({
     label: "Monthly target",
     hint: "blank = no target"
   }, React.createElement("input", {
+    "data-testid": "rules-monthly-target",
     type: "number",
     min: "0",
     max: "31",
