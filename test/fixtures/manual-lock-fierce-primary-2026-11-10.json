@@ -1,0 +1,18 @@
+{
+  "_meta": {
+    "purpose": "Regression case for reviewer finding rules-1 (2026-09-22): an import/manual lock on Fierce in the OTHER role of one of his derived days must beat the derived lock. 2026-11-10 (Tue) lies inside his synthetic East-primary week of 2026-11-09 (Silvis backup Mon-Sun); a manual lock makes him PRIMARY that day. The generator skips the derived backup lock with a warning and the backup slot must be fillable by the other surgeons (or open with reasons that never cite the skipped derived lock).",
+    "shape": "schedule fragment merged over the seed's existingAssignments before rules.buildContext (guide section 4.1)",
+    "contact_data": "none"
+  },
+  "schedule": {
+    "2026-11-10": {
+      "primary": "s5",
+      "backup": null,
+      "primaryLocked": true,
+      "backupLocked": false,
+      "source": "manual",
+      "externalCover": null,
+      "note": "regression fixture: manual primary lock inside a derived backup week"
+    }
+  }
+}
