@@ -316,26 +316,195 @@ function buildWeekRows(schedule, roster, rangeStart, rangeEnd, opts) {
   return rows;
 }
 
-/* ═══ ICS Calendar Generation ═══ */
+/* === Export-builder shared helpers (Prompt 9) === */
+const EXPORT_MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+// Fallback pill colours for Node / a roster code config.js does not pin.
+const EXPORT_PAL = [
+  { tx:"#2c5888", bd:"#9cb8d4", tg:"#dde8f4" }, { tx:"#8a6a10", bd:"#e0c870", tg:"#fcf3d0" }, { tx:"#3a7048", bd:"#a8c8a8", tg:"#e4f0e0" },
+  { tx:"#b06050", bd:"#e8b0a0", tg:"#fcdcd0" }, { tx:"#2a3040", bd:"#707888", tg:"#d8dce4" }, { tx:"#a04878", bd:"#e0a8c4", tg:"#fce0ec" },
+  { tx:"#4a5a68", bd:"#b8c0c8", tg:"#e8ecf0" },
+];
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+// Pill colours for a roster entry: config.js surgeonColors (by code) in the
+// browser, the local palette by index elsewhere.
+function exportColorsFor(entry, idx) {
+  if (typeof surgeonColors === "function" && entry) {
+    try { const c = surgeonColors(entry.code || entry.name, idx); if (c && c.tx) return c; } catch (e) { /* fall through */ }
+  }
+  return EXPORT_PAL[(idx || 0) % EXPORT_PAL.length];
+}
+// holidayNameByDay(holidays) -> { "YYYY-MM-DD": "Thanksgiving" }. Accepts the
+// blob shape (call_schedule_data.data.holidays = { units: { "2026": [ { name,
+// days } ] } }), a flat array of units, the rules-context holidayByDay map
+// ({ day: { name, tier } }) or a plain { day: name } map. Anything else -> {}.
+function holidayNameByDay(holidays) {
+  const out = {};
+  if (!holidays || typeof holidays !== "object") return out;
+  const addUnit = (u) => { if (u && Array.isArray(u.days)) u.days.forEach(d => { if (typeof d === "string") out[d] = String(u.name || "Holiday"); }); };
+  if (Array.isArray(holidays)) { holidays.forEach(addUnit); return out; }
+  if (holidays.units && typeof holidays.units === "object") {
+    Object.keys(holidays.units).forEach(y => (Array.isArray(holidays.units[y]) ? holidays.units[y] : []).forEach(addUnit));
+    return out;
+  }
+  Object.keys(holidays).forEach(k => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) return;
+    const v = holidays[k];
+    if (typeof v === "string") out[k] = v; else if (v && typeof v === "object" && v.name) out[k] = String(v.name);
+  });
+  return out;
+}
+// Months covered by a schedule map, as [{ year, month }] (month 0-based).
+function monthsOfSchedule(schedule) {
+  const keys = Object.keys(schedule || {}).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  if (!keys.length) { const n = new Date(); return [{ year: n.getFullYear(), month: n.getMonth() }]; }
+  const out = [];
+  let cur = new Date(Number(keys[0].slice(0, 4)), Number(keys[0].slice(5, 7)) - 1, 1);
+  const last = keys[keys.length - 1];
+  while (fmt(cur).slice(0, 7) <= last.slice(0, 7)) { out.push({ year: cur.getFullYear(), month: cur.getMonth() }); cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1); }
+  return out;
+}
+// normalizeMonths(months, schedule): accepts [{year, month}], ["2026-11"],
+// { startYear, startMonth, numMonths } or nothing (-> the schedule's span).
+function normalizeMonths(months, schedule) {
+  if (Array.isArray(months) && months.length) {
+    return months.map(m => {
+      if (typeof m === "string") { const mm = /^(\d{4})-(\d{2})/.exec(m); return mm ? { year: Number(mm[1]), month: Number(mm[2]) - 1 } : null; }
+      if (m && typeof m === "object" && typeof m.year === "number" && typeof m.month === "number") return { year: m.year, month: m.month };
+      return null;
+    }).filter(Boolean);
+  }
+  if (months && typeof months === "object" && typeof months.startYear === "number") {
+    const out = []; const n = Math.max(1, Number(months.numMonths) || 1);
+    for (let i = 0; i < n; i++) { const d = new Date(months.startYear, (months.startMonth || 0) + i, 1); out.push({ year: d.getFullYear(), month: d.getMonth() }); }
+    return out;
+  }
+  return monthsOfSchedule(schedule);
+}
+function monthLabel(ym) { return EXPORT_MONTH_NAMES[ym.month] + " " + ym.year; }
+function monthRange(ym) { return { start: fmt(new Date(ym.year, ym.month, 1)), end: fmt(new Date(ym.year, ym.month + 1, 0)) }; }
+
+/* ═══ ICS Calendar Generation ═══
+   Client-side twin of edge-functions/calendar-sync/index.ts: same SUMMARY
+   strings, same 07:00 -> 07:00 next-day boundaries, same stable UID, same
+   DESCRIPTION lines. The server converts Central wall-clock to UTC per
+   endpoint; the download instead writes the LOCAL wall-clock with
+   TZID=America/Chicago and ships the CST/CDT rules in a VTIMEZONE block, so
+   every calendar app resolves each endpoint with its own offset (a shift
+   spanning the November fall-back still runs 07:00 to 07:00). */
+const ICS_TZID = "America/Chicago";
+const ICS_SHIFT_START = "T070000";
+const ICS_UID_DOMAIN = "silvis-call";
+const ICS_ROLE_LABEL = { primary: "Primary", backup: "Backup" };
+
 function icsDate(y,m,d,h,min) {
   return `${y}${String(m).padStart(2,"0")}${String(d).padStart(2,"0")}T${String(h).padStart(2,"0")}${String(min||0).padStart(2,"0")}00`;
 }
-
-// TODO(Prompt 9): build 07:00 -> 07:00 next-day events ("Silvis Primary Call" /
-// "Silvis Backup Call", America/Chicago) from the daily schedule. Placeholder
-// returns no events so the ICS buttons render without throwing.
-function buildICSEvents(schedule, surgeonId, surgeonName) {
-  return [];
+// RFC 5545 3.3.11 text escaping.
+function icsEscape(text) {
+  return String(text == null ? "" : text).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+}
+// RFC 5545 3.1 line folding at 75 octets (notes can be long).
+function icsFold(line) {
+  const enc = (typeof TextEncoder !== "undefined") ? new TextEncoder() : null;
+  const octets = (s) => enc ? enc.encode(s).length : Buffer.byteLength(s, "utf8");
+  if (octets(line) <= 75) return line;
+  const out = []; let cur = "", curLen = 0;
+  for (const ch of line) {
+    const l = octets(ch);
+    const limit = out.length === 0 ? 75 : 74;
+    if (curLen + l > limit) { out.push(cur); cur = " " + ch; curLen = 1 + l; }
+    else { cur += ch; curLen += l; }
+  }
+  if (cur) out.push(cur);
+  return out.join("\r\n");
+}
+// America/Chicago: CDT from the second Sunday of March 02:00, CST from the
+// first Sunday of November 02:00 (US rules since 2007).
+function icsVTimezone(tzid) {
+  if (tzid && tzid !== ICS_TZID) return `BEGIN:VTIMEZONE\r\nTZID:${tzid}\r\nEND:VTIMEZONE`;
+  return [
+    "BEGIN:VTIMEZONE", "TZID:America/Chicago", "X-LIC-LOCATION:America/Chicago",
+    "BEGIN:DAYLIGHT", "TZOFFSETFROM:-0600", "TZOFFSETTO:-0500", "TZNAME:CDT", "DTSTART:19700308T020000", "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU", "END:DAYLIGHT",
+    "BEGIN:STANDARD", "TZOFFSETFROM:-0500", "TZOFFSETTO:-0600", "TZNAME:CST", "DTSTART:19701101T020000", "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU", "END:STANDARD",
+    "END:VTIMEZONE",
+  ].join("\r\n");
 }
 
-function generateICS(events, calName) {
-  const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2,9)}@callsched`;
-  let ics = `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Silvis Call Schedule//EN\r\nCALSCALE:GREGORIAN\r\nX-WR-CALNAME:${calName}\r\n`;
-  events.forEach(e => {
-    ics += `BEGIN:VEVENT\r\nUID:${uid()}\r\nDTSTART:${e.start}\r\nDTEND:${e.end}\r\nSUMMARY:${e.summary}\r\nDESCRIPTION:${e.desc}\r\nEND:VEVENT\r\n`;
+// buildICSEvents(schedule, surgeonId, roster, { from, to }) -> events sorted by
+// day (primary before backup). surgeonId null = the whole group (summaries
+// carry " - <Name>"). Null slots are skipped and an externalCover is not an
+// event (it is not a roster member); the backup event of such a day still
+// names the cover in its description. from/to (YYYY-MM-DD, inclusive) are
+// optional. Each event: { uid, day, role, surgeonId, tzid, start, end,
+// summary, desc } with start/end as LOCAL wall-clock stamps (07:00).
+function buildICSEvents(schedule, surgeonId, roster, range) {
+  const sched = schedule || {};
+  const r = range || {};
+  const list = Array.isArray(roster) ? roster : [];
+  const nameById = {}; list.forEach(x => { if (x && x.id) nameById[x.id] = x.name || x.id; });
+  const nameOf = (id) => id ? (nameById[id] || id) : "OPEN";
+  const only = surgeonId || null;
+  const events = [];
+  Object.keys(sched).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().forEach(day => {
+    if (r.from && day < r.from) return;
+    if (r.to && day > r.to) return;
+    const a = sched[day];
+    if (!a) return;
+    const next = fmt(addD(parse(day), 1));
+    const primaryLabel = a.primary ? nameOf(a.primary) : (a.externalCover ? `${a.externalCover} (external cover)` : "OPEN");
+    const backupLabel = nameOf(a.backup || null);
+    ["primary", "backup"].forEach(role => {
+      const id = role === "primary" ? a.primary : a.backup;
+      if (!id) return;
+      if (only && id !== only) return;
+      const summary = only ? `Silvis ${ICS_ROLE_LABEL[role]} Call` : `Silvis ${ICS_ROLE_LABEL[role]} Call - ${nameOf(id)}`;
+      const descLines = [`Primary: ${primaryLabel}`, `Backup: ${backupLabel}`, "Shift: 07:00 to 07:00 next day (Central)"];
+      if (a.note) descLines.push(`Note: ${a.note}`);
+      events.push({
+        uid: `silvis-${day}-${role}@${ICS_UID_DOMAIN}`, day, role, surgeonId: id, tzid: ICS_TZID,
+        start: day.replace(/-/g, "") + ICS_SHIFT_START, end: next.replace(/-/g, "") + ICS_SHIFT_START,
+        summary, desc: descLines.join("\n"),
+      });
+    });
   });
-  ics += `END:VCALENDAR\r\n`;
-  return ics;
+  return events;
+}
+
+// File names: per surgeon "silvis-call-<lastname>.ics", group "silvis-call-all.ics".
+function icsFileName(surgeonOrName) {
+  const name = surgeonOrName && typeof surgeonOrName === "object" ? surgeonOrName.name : surgeonOrName;
+  const slug = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `silvis-call-${slug || "all"}.ics`;
+}
+
+// generateICS(events, calName, opts) -> the VCALENDAR text. Events carrying
+// `tzid` are written as DTSTART;TZID=<tz>:<local stamp> and the calendar gets
+// one VTIMEZONE block for that zone (opts.tz === false suppresses both);
+// events without tzid keep the old floating/UTC form. UIDs come from the
+// event when present (stable per day + role) - a random one otherwise.
+function generateICS(events, calName, opts) {
+  const o = opts || {};
+  const evs = Array.isArray(events) ? events : [];
+  const zones = [];
+  evs.forEach(e => { if (e && e.tzid && zones.indexOf(e.tzid) < 0) zones.push(e.tzid); });
+  const useTz = o.tz !== false && zones.length > 0;
+  const now = new Date();
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const stamp = `${now.getUTCFullYear()}${pad2(now.getUTCMonth() + 1)}${pad2(now.getUTCDate())}T${pad2(now.getUTCHours())}${pad2(now.getUTCMinutes())}00Z`;
+  const randomUid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}@${ICS_UID_DOMAIN}`;
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Silvis Call Schedule//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", icsFold(`X-WR-CALNAME:${icsEscape(calName || "Silvis Call")}`)];
+  if (useTz) { lines.push(`X-WR-TIMEZONE:${zones[0]}`); zones.forEach(z => lines.push(icsVTimezone(z))); }
+  evs.forEach(e => {
+    if (!e) return;
+    lines.push("BEGIN:VEVENT", `UID:${e.uid || randomUid()}`, `DTSTAMP:${stamp}`);
+    if (useTz && e.tzid) lines.push(`DTSTART;TZID=${e.tzid}:${e.start}`, `DTEND;TZID=${e.tzid}:${e.end}`);
+    else lines.push(`DTSTART:${e.start}`, `DTEND:${e.end}`);
+    lines.push(icsFold(`SUMMARY:${icsEscape(e.summary)}`), icsFold(`DESCRIPTION:${icsEscape(e.desc)}`), "END:VEVENT");
+  });
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n") + "\r\n";
 }
 
 function downloadICS(content, filename) {
@@ -352,8 +521,17 @@ function downloadICS(content, filename) {
 // back to opening the JSON in a new view (standalone iOS PWAs ignore the
 // <a download> attribute and would otherwise silently do nothing).
 function downloadJSON(obj, filename) {
-  const text = JSON.stringify(obj, null, 2);
-  const blob = new Blob([text], { type: "application/json" });
+  return downloadBlobFile(new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" }), filename);
+}
+
+// downloadTextFile(text, filename, mime) - the share page / ER panel .html
+// downloads. Same iOS-standalone fallback as downloadJSON. Returns true when a
+// real download was triggered.
+function downloadTextFile(text, filename, mime) {
+  return downloadBlobFile(new Blob([String(text)], { type: (mime || "text/plain") + ";charset=utf-8" }), filename);
+}
+
+function downloadBlobFile(blob, filename) {
   const url = URL.createObjectURL(blob);
 
   const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
@@ -400,14 +578,421 @@ function surgeonTextColor(c, code, dark) {
   return SURGEON_DARK_TEXT_BY_CODE[code] || col.bd || "#c0c8d8";
 }
 
-/* ═══ Printable month ═══
-   TODO(Prompt 9): rebuild for the daily model (two lines per day cell:
-   P name / B name; OPEN in red; externalCover label). Placeholder returns a
-   minimal document so the Print button never throws. */
+/* ═══ Shareable read-only page (Prompt 9) ═══
+   generateShareHTML(schedule, roster, { months, holidays, vacations,
+   generatedAt, appUrl }) -> one self-contained HTML string: inline CSS, the
+   Outfit web font with a system fallback, NO scripts. Per month: the Mon..Sun
+   grid the app shows (two lines per day, "P <name>" / "B <name>", OPEN in
+   red, an externalCover in italics, holiday unit names, vacation lines) and
+   the ER-panel author's week-rows table for that month (buildWeekRows). `months` follows
+   normalizeMonths(); default = the schedule's span. */
+function generateShareHTML(schedule, roster, opts) {
+  const o = opts || {};
+  const sched = schedule || {};
+  const list = (roster || []).filter(r => r && r.id);
+  const months = normalizeMonths(o.months, sched);
+  const holByDay = holidayNameByDay(o.holidays);
+  const vacations = o.vacations || {};
+  const generatedAt = o.generatedAt ? new Date(o.generatedAt) : new Date();
+  const nameById = {}, colorById = {};
+  list.forEach((r, i) => { nameById[r.id] = r.name || r.id; colorById[r.id] = exportColorsFor(r, i); });
+  const nameOf = (id) => nameById[id] || id;
+  const pill = (id) => { const c = colorById[id] || EXPORT_PAL[6]; return `<span class="bdg" style="background:${c.tg};color:${c.tx};border-color:${c.bd}">${escHtml(nameOf(id))}</span>`; };
+  const holderHtml = (a, role) => {
+    if (role === "primary") {
+      if (a && a.primary) return pill(a.primary);
+      if (a && a.externalCover) return `<span class="ext">${escHtml(a.externalCover)} (ext)</span>`;
+      return `<span class="open">OPEN</span>`;
+    }
+    return (a && a.backup) ? pill(a.backup) : `<span class="open">OPEN</span>`;
+  };
+  const entryHtml = (e) => e.kind === "open" ? `<div class="wr-open">${escHtml(e.text)}</div>` : e.kind === "external" ? `<div class="wr-ext">${escHtml(e.text)}</div>` : `<div class="wr-s" style="color:${(colorById[e.id] || EXPORT_PAL[6]).tx}">${escHtml(e.text)}</div>`;
+
+  let body = "";
+  months.forEach(ym => {
+    const range = monthRange(ym);
+    const first = parse(range.start), last = parse(range.end);
+    let grid = `<div class="cg">` + ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((h, i) => `<div class="ch${i >= 4 ? " wk" : ""}">${h}</div>`).join("");
+    for (let d = monOf(first); d <= last || (fmt(d) > range.end && parse(fmt(d)).getDay() !== 1); d = addD(d, 1)) {
+      const ds = fmt(d);
+      if (ds < range.start || ds > range.end) { grid += `<div class="ce"></div>`; continue; }
+      const a = sched[ds] || null;
+      const dow = d.getDay();
+      const isWk = dow === 5 || dow === 6 || dow === 0;
+      const hol = holByDay[ds];
+      const cls = "cd" + (hol ? " hol" : isWk ? " we" : "");
+      let inner = `<div class="dn"><span>${d.getDate()}</span>${hol ? `<span class="ht">${escHtml(hol)}</span>` : ""}</div>`;
+      inner += `<div class="ln"><span class="rl">P</span>${holderHtml(a, "primary")}</div>`;
+      inner += `<div class="ln"><span class="rl">B</span>${holderHtml(a, "backup")}</div>`;
+      const vac = list.filter(s => onVac(s.id, ds, vacations)).map(s => escHtml(s.name));
+      if (vac.length) inner += `<div class="vl">VAC ${vac.join(", ")}</div>`;
+      if (a && a.note) inner += `<div class="nt" title="${escHtml(a.note)}">NOTE</div>`;
+      grid += `<div class="${cls}" data-day="${ds}">${inner}</div>`;
+    }
+    grid += `</div>`;
+    const rows = buildWeekRows(sched, list, range.start, range.end);
+    let table = `<table class="wr" data-month="${range.start.slice(0, 7)}"><thead><tr><th>MON/SUN DATES</th><th>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA</th><th>TRAUMA BACKUP</th></tr></thead><tbody>`;
+    rows.forEach(r => { table += `<tr data-week="${r.monday}"><td class="wd">${escHtml(r.label)}</td><td>${r.primary.map(entryHtml).join("")}</td><td>${r.backup.map(entryHtml).join("")}</td></tr>`; });
+    table += `</tbody></table>`;
+    body += `<section class="mo" data-month="${range.start.slice(0, 7)}"><h2 class="mh">${escHtml(monthLabel(ym))}</h2>${grid}<h3 class="wh">Week rows - ${escHtml(monthLabel(ym))}</h3><div class="tw">${table}</div></section>`;
+  });
+
+  const legend = list.map((s, i) => { const c = colorById[s.id]; return `<span><span class="sw" style="background:${c.tg};border-color:${c.bd}"></span>${escHtml(s.name)} <code>${escHtml(s.code || "")}</code></span>`; }).join("");
+  const span = months.length === 1 ? monthLabel(months[0]) : `${monthLabel(months[0])} to ${monthLabel(months[months.length - 1])}`;
+  const stamp = `${generatedAt.getMonth() + 1}/${generatedAt.getDate()}/${generatedAt.getFullYear()} ${String(generatedAt.getHours()).padStart(2, "0")}:${String(generatedAt.getMinutes()).padStart(2, "0")}`;
+  const css = `
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Outfit',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f0f2f5;color:#2c3e50;padding:16px;max-width:1100px;margin:0 auto}
+.hd{text-align:center;margin-bottom:16px;padding:18px;background:#fff;border:1px solid #dce2e8;border-radius:12px}
+.hd h1{font-size:20px;color:#1a2a3a;margin-bottom:4px}.hd p{font-size:12px;color:#6a7a88;line-height:1.5}
+.hd a{color:#1a6fa8}
+.ro{text-align:center;margin-bottom:16px;padding:8px 16px;background:#fff;border:1px solid #dce2e8;border-radius:8px;font-size:11px;color:#1a6fa8}
+.mo{background:#fff;border:1px solid #dce2e8;border-radius:10px;margin-bottom:16px;padding:14px;overflow:hidden}
+.mh{font-size:16px;font-weight:700;color:#1a2a3a;margin-bottom:10px;text-align:center}
+.wh{font-size:12px;font-weight:700;color:#1a6fa8;margin:14px 0 6px;text-transform:uppercase;letter-spacing:1px}
+.cg{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+.ch{text-align:center;font-size:10px;font-weight:700;color:#8a94a0;padding:4px 0;text-transform:uppercase;letter-spacing:1px}
+.ch.wk{color:#3d6a8c;background:#eef3f8;border-radius:4px}
+.ce{background:#f8f9fb;min-height:74px;border-radius:3px}
+.cd{background:#fff;border:1px solid #e8ecf0;min-height:74px;padding:3px 4px;border-radius:3px;font-size:11px;line-height:1.35;overflow:hidden}
+.cd.we{background:#f3f6f9;border-top:2px solid #a9c4da}
+.cd.hol{background:#fdf6dc;border-color:#e8d890}
+.dn{display:flex;justify-content:space-between;align-items:center;gap:4px;margin-bottom:2px;font-size:11px;font-weight:600;color:#4a5a68;font-family:ui-monospace,Menlo,Consolas,monospace}
+.ht{font-size:9px;font-weight:700;color:#8a6a10;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'Outfit',sans-serif}
+.ln{display:flex;align-items:center;gap:3px;margin-top:2px;min-width:0}
+.rl{font-size:9px;font-weight:800;color:#8a94a0;width:8px;flex-shrink:0}
+.bdg{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:4px;padding:0 5px;font-weight:600;border:1px solid transparent}
+.open{color:#c04040;font-weight:800;letter-spacing:.4px}
+.ext{color:#6a7a88;font-style:italic;background:#eef1f4;border:1px solid #d8dee6;border-radius:4px;padding:0 5px}
+.vl{font-size:9px;color:#7a8a98;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nt{font-size:8px;color:#9aa4ae;font-weight:700;letter-spacing:.5px;text-align:right}
+.tw{overflow-x:auto}
+.wr{width:100%;border-collapse:collapse;font-size:12px}
+.wr th{text-align:left;padding:7px 8px;color:#5a6a78;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #dce2e8}
+.wr td{padding:7px 8px;vertical-align:top;border-top:1px solid #eef1f4}
+.wr .wd{white-space:nowrap;font-family:ui-monospace,Menlo,Consolas,monospace;color:#4a5a68}
+.wr-open{color:#c04040;font-weight:800}.wr-ext{color:#6a7a88;font-style:italic}.wr-s{font-weight:600}
+.lg{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;font-size:11px;color:#6a7a88;background:#fff;border:1px solid #dce2e8;border-radius:10px;padding:10px 14px;margin-bottom:16px;line-height:1.6}
+.lg span{display:inline-flex;align-items:center;gap:4px}.lg code{font-size:10px;color:#8a94a0}
+.sw{width:10px;height:10px;border-radius:3px;border:1px solid;display:inline-block}
+.ft{text-align:center;font-size:11px;color:#8a94a0;padding:8px 0 20px}
+@media (max-width:600px){body{padding:8px}.cd,.ce{min-height:62px}.bdg{padding:0 3px}.cd{font-size:10px}}
+@media print{body{background:#fff;padding:0;max-width:none}.mo{page-break-inside:avoid;box-shadow:none}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+`;
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Silvis Call Schedule - ${escHtml(span)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+<style>${css}</style></head>
+<body>
+<div class="hd"><h1>Silvis Surgical Care - Trauma / Acute Care Surgery Call</h1><p>${escHtml(span)} &middot; primary (P, in Silvis) and backup (B) &middot; one 24-hour shift per day, 07:00 to 07:00${o.appUrl ? ` &middot; live schedule: <a href="${escHtml(o.appUrl)}">${escHtml(o.appUrl)}</a>` : ""}</p></div>
+<div class="ro">Read-only snapshot generated ${escHtml(stamp)}. Changes made after this time are not shown - the live app is the source of truth.</div>
+<div class="lg">${legend}<span><span class="open">OPEN</span> = nobody assigned</span><span><span class="ext">Atwell (ext)</span> = external cover</span><span>Fri-Sun tinted = weekend unit</span><span>gold = holiday unit</span><span>VAC = on vacation</span></div>
+${body}
+<div class="ft">Silvis Call Schedule &middot; generated ${escHtml(stamp)}</div>
+</body></html>`;
+}
+
+/* ═══ Printable month (Prompt 9) ═══
+   buildPrintableCalendarHTML({ startYear, startMonth, numMonths, schedule,
+   roster, holidays, vacations }) -> a print-ready document: Davenport's page
+   assembly and print CSS (letter portrait, one month per page, Sunday-first
+   grid, mini calendars in the leading empty cells, vacation bars laid out in
+   lanes) with the daily-model cell content: "P <Name>" / "B <Name>" (OPEN in
+   red, an external cover in italics), the holiday unit name, and one bar per
+   surgeon vacation ("<Name> VAC"). Opened with window.open + document.write;
+   the toolbar offers Print / Close and hides itself when printing. */
 function buildPrintableCalendarHTML(opts) {
   const o = opts || {};
-  const title = "Silvis Call Schedule - printable view (available after Prompt 9)";
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${title}</title></head><body style="font-family:Arial,Helvetica,sans-serif;padding:24px;color:#333"><h2>${title}</h2><p>Requested: ${o.numMonths || "?"} month(s) from ${o.startYear || "?"}-${(o.startMonth != null ? o.startMonth + 1 : "?")}.</p></body></html>`;
+  const startYear = Number(o.startYear), startMonth = Number(o.startMonth);
+  const numMonths = Math.max(1, Number(o.numMonths) || 1);
+  const sched = o.schedule || {};
+  const list = (o.roster || o.surgeons || []).filter(r => r && r.id);
+  const vacations = o.vacations || {};
+  const holByDay = holidayNameByDay(o.holidays);
+  const MONTH_NAMES = EXPORT_MONTH_NAMES;
+  const nameById = {}; list.forEach(r => { nameById[r.id] = r.name || r.id; });
+  const nameOf = (id) => nameById[id] || id;
+
+  // Vacation bars for the whole range, one per (surgeon, range).
+  const bars = [];
+  Object.keys(vacations).forEach(pid => {
+    if (!nameById[pid]) return;
+    (vacations[pid] || []).forEach(([start, end]) => { if (start && end) bars.push({ label: `${nameOf(pid)} VAC`, start, end, type: "surgeon" }); });
+  });
+
+  function cellLinesFor(ds) {
+    const a = sched[ds] || null;
+    const p = (a && a.primary) ? `<span class="who">${escHtml(nameOf(a.primary))}</span>`
+      : (a && a.externalCover) ? `<span class="ext">${escHtml(a.externalCover)} (ext)</span>`
+      : `<span class="open">OPEN</span>`;
+    const b = (a && a.backup) ? `<span class="who">${escHtml(nameOf(a.backup))}</span>` : `<span class="open">OPEN</span>`;
+    return `<div class="shift"><span class="role">P</span> ${p}</div><div class="shift"><span class="role">B</span> ${b}</div>`;
+  }
+
+  function buildWeeks(year, month) {
+    const first = new Date(year, month, 1);
+    const last = new Date(year, month + 1, 0);
+    const gridStart = new Date(first);
+    gridStart.setDate(first.getDate() - first.getDay());
+    const weeks = [];
+    let cursor = new Date(gridStart);
+    while (cursor <= last || cursor.getDay() !== 0) {
+      const week = [];
+      for (let i = 0; i < 7; i++) {
+        week.push({ date: new Date(cursor), ds: fmt(cursor), dayNum: cursor.getDate(), inMonth: cursor.getMonth() === month });
+        cursor = addD(cursor, 1);
+      }
+      weeks.push(week);
+      if (weeks.length > 6) break;
+    }
+    return weeks;
+  }
+
+  function computeBarsForWeek(week) {
+    const inMonthDays = week.filter(d => d.inMonth);
+    if (inMonthDays.length === 0) return { bars: [], laneCount: 0 };
+    const firstInMonthCol = week.findIndex(d => d.inMonth);
+    const lastInMonthCol = week.length - 1 - [...week].reverse().findIndex(d => d.inMonth);
+    const weekStart = week[firstInMonthCol].ds;
+    const weekEnd = week[lastInMonthCol].ds;
+    const weekBars = [];
+    bars.forEach(b => {
+      if (b.end < weekStart || b.start > weekEnd) return;
+      const segStart = b.start < weekStart ? weekStart : b.start;
+      const segEnd = b.end > weekEnd ? weekEnd : b.end;
+      const startCol = week.findIndex(d => d.ds === segStart);
+      const endCol = week.findIndex(d => d.ds === segEnd);
+      if (startCol === -1 || endCol === -1) return;
+      weekBars.push({ label: b.label, type: b.type, startCol, span: endCol - startCol + 1 });
+    });
+    weekBars.sort((a, b) => a.startCol - b.startCol);
+    const lanes = [];
+    weekBars.forEach(bar => {
+      const endCol = bar.startCol + bar.span - 1;
+      let placed = false;
+      for (let i = 0; i < lanes.length; i++) {
+        const conflict = lanes[i].some(seg => !(bar.startCol > seg.endCol || endCol < seg.startCol));
+        if (!conflict) { lanes[i].push({ startCol: bar.startCol, endCol }); bar.lane = i; placed = true; break; }
+      }
+      if (!placed) { lanes.push([{ startCol: bar.startCol, endCol }]); bar.lane = lanes.length - 1; }
+    });
+    return { bars: weekBars, laneCount: lanes.length };
+  }
+
+  function buildMiniCal(year, month) {
+    const first = new Date(year, month, 1);
+    const last = new Date(year, month + 1, 0);
+    const startDow = first.getDay();
+    const days = last.getDate();
+    let html = `<div class="mini-cal"><div class="mini-name">${MONTH_NAMES[month]} ${year}</div><div class="mini-grid">`;
+    ["S","M","T","W","T","F","S"].forEach(d => { html += `<div class="mini-dow">${d}</div>`; });
+    for (let i = 0; i < startDow; i++) html += `<div class="mini-day empty">0</div>`;
+    for (let d = 1; d <= days; d++) html += `<div class="mini-day">${d}</div>`;
+    html += `</div></div>`;
+    return html;
+  }
+
+  function renderMonth(year, month) {
+    const weeks = buildWeeks(year, month);
+    const firstWeek = weeks[0];
+    const emptyLeading = firstWeek.filter(d => !d.inMonth).length;
+    let miniPrev = null, miniNext = null;
+    if (emptyLeading >= 2) { miniPrev = { col: 0 }; miniNext = { col: 1 }; }
+    else if (emptyLeading === 1) { miniPrev = { col: 0 }; }
+    const prevMonth = month === 0 ? { y: year - 1, m: 11 } : { y: year, m: month - 1 };
+    const nextMonth = month === 11 ? { y: year + 1, m: 0 } : { y: year, m: month + 1 };
+
+    let html = `<div class="page" data-month="${year}-${String(month + 1).padStart(2, "0")}">`;
+    html += `<div class="month-title">${MONTH_NAMES[month]} ${year}</div>`;
+    html += `<div class="dow-row">`;
+    ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].forEach(d => html += `<div class="dow">${d}</div>`);
+    html += `</div>`;
+
+    weeks.forEach((week, weekIdx) => {
+      const { bars: weekBars, laneCount } = computeBarsForWeek(week);
+      const barZoneHeight = laneCount * 14 + 4;
+      const cellMinHeight = 85 + barZoneHeight;
+      html += `<div class="week-row" style="min-height:${cellMinHeight}px">`;
+      week.forEach((d, col) => {
+        if (weekIdx === 0 && miniPrev && col === miniPrev.col) { html += `<div class="cell empty">${buildMiniCal(prevMonth.y, prevMonth.m)}</div>`; return; }
+        if (weekIdx === 0 && miniNext && col === miniNext.col) { html += `<div class="cell empty">${buildMiniCal(nextMonth.y, nextMonth.m)}</div>`; return; }
+        if (!d.inMonth) { html += `<div class="cell empty"></div>`; return; }
+        html += `<div class="cell" data-day="${d.ds}">`;
+        html += `<div class="day-num">${d.dayNum}</div>`;
+        html += cellLinesFor(d.ds);
+        const hol = holByDay[d.ds];
+        if (hol) html += `<div class="holiday-note">${escHtml(hol)}</div>`;
+        html += `</div>`;
+      });
+      if (weekBars.length) {
+        html += `<div class="bars-layer">`;
+        weekBars.forEach(bar => {
+          const leftPct = (bar.startCol / 7) * 100;
+          const widthPct = (bar.span / 7) * 100;
+          const bottom = (laneCount - 1 - bar.lane) * 14;
+          html += `<div class="bar vac-surgeon" style="left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);bottom:${bottom}px">${escHtml(bar.label)}</div>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`;
+    });
+
+    const today = new Date();
+    const printed = `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`;
+    html += `<div class="footer">Silvis Surgical Care - Trauma / Acute Care Surgery Call &middot; P = primary (in Silvis), B = backup &middot; 07:00 to 07:00 &middot; Printed ${printed}</div>`;
+    html += `</div>`;
+    return html;
+  }
+
+  // Davenport print CSS, kept as-is apart from the cell-content classes
+  // (.shift .role/.who/.open/.ext) and the dropped APP / Fierce bar types.
+  const css = `
+    @page { size: letter portrait; margin: 0.4in; }
+    body { margin: 0; padding: 20px; background: #e8e5dd; font-family: Arial, Helvetica, sans-serif; }
+    .toolbar { max-width: 800px; margin: 0 auto 16px; text-align: center; }
+    .toolbar button { font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 600; padding: 8px 18px; background: linear-gradient(135deg,#1a6fa8,#2488c8); color: #fff; border: 1px solid #1a6fa8; border-radius: 6px; cursor: pointer; margin: 0 4px; }
+    .toolbar button.secondary { background: #f0f2f5; color: #5a6a78; border: 1px solid #c8d0d8; }
+    .toolbar button:hover { opacity: 0.92; }
+    .toolbar .hint { color:#5a6a78; font-size:12px; margin-left:10px; }
+    .page { width: 800px; margin: 0 auto 28px; background: #fdfbf5; border: 1.5px solid #8a1838; padding: 0; box-shadow: 0 2px 12px rgba(0,0,0,0.12); position: relative; }
+    /* Force browsers to print background colours (economy mode would strip
+       the maroon borders, the navy DOW ribbon, the vacation bars and the mini calendars). */
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    @media print {
+      body { background: white; padding: 0; }
+      .toolbar { display: none; }
+      .page { margin: 0 auto; box-shadow: none; page-break-after: always; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      .page:last-child { page-break-after: auto; }
+    }
+    .month-title { text-align: center; font-family: Georgia, "Times New Roman", serif; font-size: 18pt; font-weight: 400; color: #7a1038; letter-spacing: 0.3px; padding: 10px 0 12px; }
+    .dow-row { display: grid; grid-template-columns: repeat(7, 1fr); background: linear-gradient(180deg, #202048 0%, #2a2a55 35%, #4a4a78 50%, #2a2a55 65%, #1a1a3a 100%); border-top: 1px solid #8a1838; border-bottom: 1px solid #8a1838; height: 20px; }
+    .dow { font-family: Georgia, "Times New Roman", serif; font-style: italic; font-size: 9pt; color: #ffffff; text-align: right; padding: 2px 6px 0 0; letter-spacing: 0.2px; }
+    .week-row { position: relative; display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid #8a1838; min-height: 120px; }
+    .week-row:last-child { border-bottom: none; }
+    .cell { position: relative; border-right: 1px solid #8a1838; padding: 3px 5px; min-height: 120px; box-sizing: border-box; }
+    .cell:last-child { border-right: none; }
+    .cell.empty { background: #fdfbf5; }
+    .day-num { font-family: Georgia, "Times New Roman", serif; font-size: 12pt; font-weight: 400; color: #7a1038; text-align: center; line-height: 1.1; margin-top: 2px; }
+    .shift { font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #000000; text-align: center; margin-top: 4px; letter-spacing: 0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .shift .role { font-weight: 700; color: #7a1038; font-size: 7.5pt; }
+    .shift .who { font-weight: 600; }
+    .shift .open { color: #c00000; font-weight: 700; letter-spacing: 0.4px; }
+    .shift .ext { font-style: italic; color: #505860; }
+    .holiday-note { font-family: Arial, Helvetica, sans-serif; font-size: 7.5pt; color: #7a1038; text-align: center; margin-top: 2px; font-weight: 600; letter-spacing: 0.2px; }
+    .mini-cal { background: #f5ebc8; border: 0.5px solid #d4c890; margin: 8px 6px; padding: 3px 4px; font-family: Georgia, "Times New Roman", serif; }
+    .mini-name { text-align: center; font-size: 8pt; font-weight: 400; color: #000; margin-bottom: 2px; font-style: italic; }
+    .mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; font-size: 7pt; text-align: center; }
+    .mini-dow { font-style: italic; color: #000; font-weight: 400; padding: 1px 0; }
+    .mini-day { color: #000; padding: 0.5px 0; font-family: Georgia, serif; }
+    .mini-day.empty { visibility: hidden; }
+    .bars-layer { position: absolute; left: 0; right: 0; bottom: 2px; pointer-events: none; }
+    .bar { position: absolute; height: 13px; line-height: 13px; font-family: Arial, Helvetica, sans-serif; font-size: 7.5pt; font-weight: 400; text-align: center; white-space: nowrap; overflow: hidden; border: 0.5px solid; letter-spacing: 0.2px; }
+    .bar.vac-surgeon { background-image: repeating-linear-gradient(135deg, #c8d0dc 0px, #c8d0dc 3px, #bec6d2 3px, #bec6d2 4px); border-color: #98a0ac; color: #202020; }
+    .footer { text-align: center; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #000; padding: 6px 0 8px; border-top: 1px solid #8a1838; }
+  `;
+
+  let pages = "";
+  let y = startYear, m = startMonth;
+  for (let i = 0; i < numMonths; i++) {
+    pages += renderMonth(y, m);
+    m++;
+    if (m > 11) { m = 0; y++; }
+  }
+  const firstMonthLabel = `${MONTH_NAMES[startMonth]} ${startYear}`;
+  const title = numMonths === 1 ? `${firstMonthLabel} - Silvis Call Schedule` : `Silvis Call Schedule - ${numMonths} months from ${firstMonthLabel}`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>${escHtml(title)}</title>
+<style>${css}</style>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="window.print()">Print</button>
+  <button class="secondary" onclick="
+    try { window.close(); } catch(e) {}
+    setTimeout(function() {
+      if (!window.closed) {
+        document.body.innerHTML = '<div style=\\'text-align:center;padding:60px 20px;font-family:Arial,Helvetica,sans-serif;color:#5a6a78\\'>You can close this tab now.</div>';
+      }
+    }, 100);
+  ">Close</button>
+  <span class="hint">Use your browser's print dialog. Choose Letter portrait, default margins. If colours do not print, enable Background graphics under More settings.</span>
+</div>
+${pages}
+</body>
+</html>`;
+}
+
+/* ═══ ER Call Panels export for the ER-panel author (Prompt 9) ═══
+   buildErCallPanelsHTML(schedule, roster, from, to, opts) -> an HTML <table>
+   in her exact layout: header MON/SUN DATES | TRAUMA & CARDIOTHORACIC SURGERY
+   TRAUMA | TRAUMA BACKUP, one row per Mon-Sun week that intersects from..to,
+   entries "M/D Name" one per line, consecutive same-surgeon days collapsed to
+   "M/D-M/D Name", open days "M/D OPEN" in red, an external cover "M/D Atwell".
+   Everything is inline-styled so a text/html clipboard paste lands in Word as
+   a real table. Rows are WHOLE Mon-Sun weeks, like her document: a range that
+   starts or ends mid-week is widened to the surrounding Mondays/Sundays
+   (erPanelSpan) so the row label "9/28 - 10/4" always matches the days
+   listed under it - a clipped row would silently drop covered days under a
+   header that claims the full week. opts.clipToRange=true is an explicit
+   opt-in for callers that want only the in-range days (then the label is
+   the clipped span). buildWeekRows does the collapsing. */
+function erPanelSpan(from, to) {
+  const isDay = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  if (!isDay(from) || !isDay(to) || to < from) return { from: from, to: to, widened: false };
+  const f = fmt(monOf(parse(from))), t = fmt(addD(monOf(parse(to)), 6));
+  return { from: f, to: t, widened: f !== from || t !== to };
+}
+function erPanelRows(schedule, roster, from, to, opts) {
+  const clip = !!(opts && opts.clipToRange);
+  const rows = buildWeekRows(schedule, roster, from, to, { clipToRange: clip });
+  if (clip) rows.forEach(r => { if (r.days.length) { const a = r.days[0], b = r.days[r.days.length - 1]; r.label = a === b ? fmtMD(a) : fmtMD(a) + " - " + fmtMD(b); } });
+  return rows;
+}
+function buildErCallPanelsHTML(schedule, roster, from, to, opts) {
+  const rows = erPanelRows(schedule, roster, from, to, opts);
+  const font = "font-family:Calibri,Arial,Helvetica,sans-serif;font-size:11pt";
+  const thS = `style="border:1px solid #000000;padding:4px 8px;${font};font-weight:bold;text-align:left;vertical-align:top;background:#ffffff"`;
+  const tdS = `style="border:1px solid #000000;padding:4px 8px;${font};vertical-align:top;white-space:nowrap"`;
+  const entry = (e) => e.kind === "open"
+    ? `<span data-kind="open" style="color:#ff0000;font-weight:bold">${escHtml(e.text)}</span>`
+    : `<span data-kind="${e.kind}">${escHtml(e.text)}</span>`;
+  let html = `<table data-export="er-call-panels" style="border-collapse:collapse;border:1px solid #000000"><thead><tr>`;
+  html += `<th ${thS}>MON/SUN DATES</th><th ${thS}>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA</th><th ${thS}>TRAUMA BACKUP</th></tr></thead><tbody>`;
+  rows.forEach(r => {
+    html += `<tr data-week="${r.monday}"><td ${tdS}>${escHtml(r.label)}</td><td ${tdS}>${r.primary.map(entry).join("<br>")}</td><td ${tdS}>${r.backup.map(entry).join("<br>")}</td></tr>`;
+  });
+  html += `</tbody></table>`;
+  return html;
+}
+
+// Plain-text twin for the clipboard's text/plain flavour and for reports: one
+// line per week, tab-separated columns, entries joined with "; ".
+function buildErCallPanelsText(schedule, roster, from, to, opts) {
+  const rows = erPanelRows(schedule, roster, from, to, opts);
+  const lines = ["MON/SUN DATES\tTRAUMA & CARDIOTHORACIC SURGERY TRAUMA\tTRAUMA BACKUP"];
+  rows.forEach(r => lines.push(`${r.label}\t${r.primary.map(e => e.text).join("; ")}\t${r.backup.map(e => e.text).join("; ")}`));
+  return lines.join("\n");
+}
+
+// Standalone document around the table (the "Download .html" button).
+function buildErCallPanelsDocument(schedule, roster, from, to, opts) {
+  const table = buildErCallPanelsHTML(schedule, roster, from, to, opts);
+  const span = (opts && opts.clipToRange) ? { from: from, to: to } : erPanelSpan(from, to);
+  const title = `ER Call Panels - Silvis Surgical Care - ${fmtMD(span.from)} to ${fmtMD(span.to)}`;
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>${escHtml(title)}</title>
+<style>body{font-family:Calibri,Arial,Helvetica,sans-serif;font-size:11pt;color:#000;padding:24px;background:#fff}h1{font-size:14pt;margin:0 0 4px}p{margin:0 0 12px;font-size:9pt;color:#444}@media print{body{padding:0}}</style>
+</head><body>
+<h1>${escHtml(title)}</h1>
+<p>Trauma / acute care surgery call (primary in Silvis; backup). Open days in red. Select the table and copy it into the Word document.</p>
+${table}
+</body></html>`;
 }
 
 // Node entry point for test/data-layer.test.js. A no-op in the browser.
@@ -420,6 +1005,9 @@ if (typeof module !== "undefined" && module.exports) {
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel,
     buildWeekRows,
     SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,
-    icsDate, buildICSEvents, generateICS,
+    escHtml, holidayNameByDay, monthsOfSchedule, normalizeMonths,
+    icsDate, icsEscape, icsFold, icsVTimezone, buildICSEvents, icsFileName, generateICS,
+    generateShareHTML, buildPrintableCalendarHTML,
+    buildErCallPanelsHTML, buildErCallPanelsText, buildErCallPanelsDocument, erPanelSpan,
   };
 }

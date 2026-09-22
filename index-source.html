@@ -239,6 +239,12 @@ function CallSchedule() {
   // Calendar view defaults to the current month.
   const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
   const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+  // Calendar tools (Prompt 9 exports): month count for the share page /
+  // printable view (from the visible month), and the ER Call Panels range
+  // (null = the visible month; the date inputs and the presets set it).
+  const [toolMonths, setToolMonths] = useState(1);
+  const [erRange, setErRange] = useState(null);
+  const erPreviewRef = useRef(null);
   // The year field's own text (vis-002): a controlled number input that only
   // accepts in-range values swallows every keystroke ("2", "20", "202" are all
   // out of range), so the text is local and commits to calYear once it is a
@@ -2241,13 +2247,17 @@ function CallSchedule() {
       showToast("Couldn't copy - long-press the message to copy it manually.", "error");
     }
   };
+  // Per-surgeon .ics (helpers.js buildICSEvents / generateICS): the same
+  // SUMMARY strings, 07:00 boundaries and UIDs as the calendar-sync feed,
+  // written as America/Chicago local times with a VTIMEZONE block.
   const downloadMyCal = (surgeonId) => {
     const s = surgeons.find(x => x.id === surgeonId);
     if (!s) return;
-    const events = buildICSEvents(schedule, s.id, s.name);
-    if (events.length === 0) showToast("Calendar export is rebuilt in Prompt 9 - the file is empty for now.", "info");
-    const ics = generateICS(events, `${s.name} Silvis Call`);
-    downloadICS(ics, `silvis-call-${s.name.toLowerCase()}.ics`);
+    try {
+      const events = buildICSEvents(schedule, s.id, surgeons, {});
+      if (events.length === 0) showToast(`${s.name} has no assignments on file - the calendar file is empty.`, "info");
+      downloadICS(generateICS(events, `Silvis Call - ${s.name}`), icsFileName(s));
+    } catch(e) { console.error("Calendar export failed:", e); showToast("Calendar export failed: " + (e && e.message ? e.message : String(e)), "error"); }
   };
 
   const Badge = ({id,small}) => {
@@ -2313,6 +2323,81 @@ function CallSchedule() {
   }, [ctxInputs]);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
   const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr), [schedule, surgeons, monthStartStr, monthEndStr]);
+
+  // --- Calendar tools (Prompt 9 exports) ---
+  // Group .ics, the shareable read-only page, the printable view and the ER-panel author's
+  // ER Call Panels table. Every builder lives in helpers.js and is pure; this
+  // block only wires state, downloads and the clipboard. Failures toast -
+  // never a silent no-op.
+  const errText = (e) => (e && e.message ? e.message : String(e));
+  const toolMonthList = () => { const out = []; for (let i = 0; i < toolMonths; i++) { const d = new Date(calYear, calMonth + i, 1); out.push({ year: d.getFullYear(), month: d.getMonth() }); } return out; };
+  const toolRangeEnd = () => fmt(new Date(calYear, calMonth + toolMonths, 0));
+  const downloadGroupCal = () => {
+    try {
+      const events = buildICSEvents(schedule, null, surgeons, {});
+      if (events.length === 0) showToast("No assignments on file - the calendar file is empty.", "info");
+      downloadICS(generateICS(events, "Silvis Call - All"), icsFileName(null));
+    } catch(e) { console.error("Group calendar export failed:", e); showToast("Calendar export failed: " + errText(e), "error"); }
+  };
+  const buildSharePage = () => generateShareHTML(schedule, surgeons, { months: toolMonthList(), holidays, vacations, generatedAt: new Date(), appUrl: location.origin + location.pathname });
+  const downloadSharePage = () => {
+    try {
+      const ok = downloadTextFile(buildSharePage(), `silvis-call-${monthStartStr}-${toolRangeEnd()}.html`, "text/html");
+      showToast(ok ? "Read-only page downloaded." : "Read-only page opened - use Share, then Save to Files.", "info");
+    } catch(e) { console.error("Share page failed:", e); showToast("Share page failed: " + errText(e), "error"); }
+  };
+  const copySharePage = async () => {
+    try {
+      const html = buildSharePage();
+      if (!(navigator.clipboard && window.isSecureContext)) throw new Error("clipboard unavailable in this context");
+      await navigator.clipboard.writeText(html);
+      setCopiedUrl("share"); setTimeout(() => setCopiedUrl(""), 2500);
+    } catch(e) { console.warn("Copy share page failed:", e); showToast("Couldn't copy - use 'Share read-only page' to download the file instead.", "error"); }
+  };
+  const openPrintable = () => {
+    try {
+      const html = buildPrintableCalendarHTML({ startYear: calYear, startMonth: calMonth, numMonths: toolMonths, schedule, roster: surgeons, holidays, vacations });
+      const w = window.open("", "_blank");
+      if (!w) { showToast("Popup blocked - allow popups for this site and try again.", "error"); return; }
+      w.document.open(); w.document.write(html); w.document.close();
+    } catch(e) { console.error("Print generation failed:", e); showToast("Printable view failed: " + errText(e), "error"); }
+  };
+  const erFrom = erRange ? erRange.from : monthStartStr;
+  const erTo = erRange ? erRange.to : monthEndStr;
+  const erRangeOk = /^\d{4}-\d{2}-\d{2}$/.test(erFrom) && /^\d{4}-\d{2}-\d{2}$/.test(erTo) && erFrom <= erTo;
+  // the ER-panel author's rows are whole Mon-Sun weeks, so a mid-week From/To is widened to
+  // the surrounding Monday/Sunday (helpers.js erPanelSpan); the note under the
+  // buttons says so and the download is named for the span it really covers.
+  const erSpan = erRangeOk ? erPanelSpan(erFrom, erTo) : { from: erFrom, to: erTo, widened: false };
+  const erPanelHtml = useMemo(() => erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo) : "", [schedule, surgeons, erFrom, erTo, erRangeOk]);
+  // Copy for Word: text/html + text/plain in one ClipboardItem so Word pastes
+  // a real table. When the rich clipboard is unavailable (http, an old
+  // browser, permission denied) the rendered preview is selected instead and
+  // a toast says to press Ctrl+C - the selection copies as a table too.
+  const copyErForWord = async () => {
+    if (!erRangeOk) return;
+    const html = erPanelHtml;
+    const text = buildErCallPanelsText(schedule, surgeons, erFrom, erTo);
+    try {
+      if (!(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem && window.isSecureContext)) throw new Error("rich clipboard unavailable");
+      await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([text], { type: "text/plain" }) })]);
+      setCopiedUrl("er"); setTimeout(() => setCopiedUrl(""), 2500);
+      showToast("Copied - paste into the Word document (Ctrl+V); it lands as a table.", "info");
+    } catch(e) {
+      console.warn("Copy for Word failed - selecting the preview instead:", e);
+      try {
+        const el = erPreviewRef.current;
+        const range = document.createRange(); range.selectNodeContents(el);
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      } catch(e2) { console.warn("Could not select the preview:", e2); }
+      showToast("Clipboard blocked - the table below is selected; press Ctrl+C (Cmd+C on Mac) to copy it.", "error");
+    }
+  };
+  const downloadErHtml = () => {
+    if (!erRangeOk) return;
+    try { downloadTextFile(buildErCallPanelsDocument(schedule, surgeons, erFrom, erTo), `silvis-er-call-panels-${erSpan.from}-${erSpan.to}.html`, "text/html"); }
+    catch(e) { console.error("ER panel download failed:", e); showToast("Download failed: " + errText(e), "error"); }
+  };
   // Arrow keys in the editor move a day; the grid follows into the new month.
   const editorNav = (delta) => {
     if (!editorDay) return;
@@ -2930,6 +3015,46 @@ function CallSchedule() {
             </div>
           </Collapsible>
 
+          <Collapsible css={css} ck="cal_tools" defaultOpen={false} title="Calendar tools (exports)">
+            <div data-testid="calendar-tools">
+              <div style={css.toolBlock}>
+                <div style={{...css.toolTitle,color:dkText}}>Calendar files (.ics)</div>
+                <p style={sectionNote}>One event per shift, 07:00 to 07:00 the next day in Central time (the file carries the America/Chicago clock-change rules). Import the file once; for a feed that keeps itself current use the subscribe links in Settings.</p>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {activeSurgeons.map(s => <button key={s.id} data-testid={"ics-" + s.code} onClick={()=>downloadMyCal(s.id)} title={"Download " + icsFileName(s)} style={{...css.badge(sMap[s.id]?.idx||0, s.name),cursor:"pointer",padding:"4px 10px",fontSize:11}}>{s.name}</button>)}
+                  <button data-testid="ics-all" onClick={downloadGroupCal} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Full group</button>
+                </div>
+              </div>
+              <div style={css.toolBlock}>
+                <div style={{...css.toolTitle,color:dkText}}>Share and print</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <label style={{fontSize:12,color:dkSubtext,display:"flex",alignItems:"center",gap:6}}>Months from {MO[calMonth]} {calYear}:
+                    <select data-testid="tool-months" aria-label="Months" value={toolMonths} onChange={e=>setToolMonths(Number(e.target.value))} style={{...inp,fontSize:12,padding:"4px 6px"}}>{[1,2,3,4,6,12].map(n=><option key={n} value={n}>{n}</option>)}</select>
+                  </label>
+                  <button data-testid="share-download" onClick={downloadSharePage} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Share read-only page</button>
+                  <button data-testid="share-copy" onClick={copySharePage} style={{...css.btn(copiedUrl==="share"),padding:"5px 12px",fontSize:11}}>{copiedUrl==="share" ? "Copied" : "Copy"}</button>
+                  <button data-testid="print-open" onClick={openPrintable} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Open printable view</button>
+                </div>
+                <p style={{...muted,marginTop:6,lineHeight:1.5}}>The read-only page is one self-contained file (month grids plus the week rows) that opens in any browser with no sign-in - attach it to an email or drop it on a shared drive. Copy puts the same page on the clipboard. The printable view opens in a new tab; use the browser's print dialog to print or save as PDF.</p>
+              </div>
+              <div style={{...css.toolBlock,borderBottom:"none",marginBottom:0,paddingBottom:0}}>
+                <div style={{...css.toolTitle,color:dkText}}>ER Call Panels (the ER-panel author's layout)</div>
+                <p style={sectionNote}>One row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Copy for Word pastes as a table into the ER-panel author's document.</p>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginBottom:8}}>
+                  <label style={{fontSize:12,color:dkSubtext,display:"flex",alignItems:"center",gap:4}}>From <input data-testid="er-from" aria-label="From" type="date" value={erFrom} onChange={e=>setErRange({from:e.target.value,to:erTo})} style={{...inp,fontSize:12,padding:"4px 6px"}}/></label>
+                  <label style={{fontSize:12,color:dkSubtext,display:"flex",alignItems:"center",gap:4}}>To <input data-testid="er-to" aria-label="To" type="date" value={erTo} onChange={e=>setErRange({from:erFrom,to:e.target.value})} style={{...inp,fontSize:12,padding:"4px 6px"}}/></label>
+                  <button data-testid="er-preset-1213" onClick={()=>setErRange({from:"2026-11-02",to:"2026-12-13"})} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>11/2 through 12/13</button>
+                  <button data-testid="er-reset" onClick={()=>setErRange(null)} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>Visible month</button>
+                  <button data-testid="er-copy" onClick={copyErForWord} disabled={!erRangeOk} style={{...css.btn(copiedUrl==="er"),padding:"5px 12px",fontSize:11,opacity:erRangeOk?1:0.5}}>{copiedUrl==="er" ? "Copied" : "Copy for Word"}</button>
+                  <button data-testid="er-download" onClick={downloadErHtml} disabled={!erRangeOk} style={{...css.btn(false),padding:"5px 12px",fontSize:11,opacity:erRangeOk?1:0.5}}>Download .html</button>
+                </div>
+                {!erRangeOk && <p style={{...muted,color:"#c04040",marginBottom:6}}>Enter a valid range (From on or before To).</p>}
+                {erRangeOk && erSpan.widened && <p data-testid="er-span-note" style={{...muted,marginBottom:6}}>Whole weeks: the table runs {fmtMD(erSpan.from)} - {fmtMD(erSpan.to)} (the Mon-Sun weeks around {fmtMD(erFrom)} - {fmtMD(erTo)}), so no covered day is left out of a week row.</p>}
+                <div data-testid="er-panel-preview" ref={erPreviewRef} style={{overflowX:"auto",background:"#ffffff",color:"#000000",padding:10,borderRadius:6,border:"1px solid " + dkCardBorder}} dangerouslySetInnerHTML={{__html: erPanelHtml}}/>
+              </div>
+            </div>
+          </Collapsible>
+
           {editorDay && (
             <DayEditor key={editorDay} day={editorDay} entry={schedule[editorDay] || null}
               roster={surgeons} ctxInputs={ctxInputs} ctxError={rulesCtxState.error}
@@ -2953,7 +3078,7 @@ function CallSchedule() {
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
                   <Badge id={mySurgeon}/>
                   <span style={muted}>{myDays.filter(x => !isPastDay(x.day)).length} upcoming day(s), {myDays.length} total on file</span>
-                  <button onClick={()=>downloadMyCal(mySurgeon)} style={{...css.btn(false),padding:"5px 12px",fontSize:11,marginLeft:"auto"}}>Download my calendar</button>
+                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(mySurgeon)} title="One 07:00-to-07:00 event per shift (America/Chicago), importable into Google, Apple or Outlook calendars" style={{...css.btn(false),padding:"5px 12px",fontSize:11,marginLeft:"auto"}}>Download my calendar</button>
                 </div>
                 {myDays.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No days assigned to you yet.</p> : (
                   <div style={{maxHeight:420,overflowY:"auto"}}>

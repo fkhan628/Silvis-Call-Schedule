@@ -16,6 +16,9 @@ const css = {
   cardT: { fontSize:13, fontWeight:700, color:"#1a6fa8", margin:"0 0 12px", textTransform:"uppercase", letterSpacing:1.2 },
   inp: { background:"#f8f9fb", border:"1px solid #d0d8e0", borderRadius:5, padding:"6px 10px", color:"#2c3e50", fontSize:13, fontFamily:font, outline:"none" },
   btn: a => ({ background:a?"linear-gradient(135deg,#1a6fa8,#2488c8)":"#f0f2f5", border:`1px solid ${a?"#1a6fa8":"#c8d0d8"}`, color:a?"#ffffff":"#5a6a78", borderRadius:7, padding:"7px 16px", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:font }),
+  // Calendar tools card (Prompt 9 exports): one block per export family.
+  toolBlock: { paddingBottom:12, marginBottom:12, borderBottom:"1px solid #e8ecf0" },
+  toolTitle: { fontSize:12, fontWeight:700, color:"#1a2a3a", margin:"0 0 6px" },
   badge: (i, name) => { const c = (typeof surgeonColors==="function") ? surgeonColors(name, i) : PAL[i%7]; return { display:"inline-flex", alignItems:"center", background:c.tg, color:c.tx, border:`1px solid ${c.bd}`, borderRadius:5, padding:"2px 9px", fontSize:12, fontWeight:600, whiteSpace:"nowrap", letterSpacing:0.3 }; },
 };
 

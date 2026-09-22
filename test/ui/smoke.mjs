@@ -20,6 +20,16 @@
 //     at 3:1+ contrast measured on computed colours (vis-003). Screenshots:
 //     calendar-oct-2026.png, calendar-nov-2026.png, week-rows-oct-2026.png,
 //     day-editor-2026-10-15.png, calendar-mobile.png, calendar-oct-dark.png
+//   - Prompt 9 exports, from the Calendar tools card: the group and per-surgeon
+//     .ics downloads (VTIMEZONE, TZID lines, stable UIDs, summary naming), the
+//     shareable read-only page (downloaded, re-opened through the static
+//     server, 10/15 OPEN red, week rows present, screenshot share-page.png),
+//     the printable popup (P/B strings, OPEN red, external cover, screenshot
+//     printable-page.png), the ER-panel author's ER Call Panels (header text, visible-month
+//     default, the 11/2-12/13 preset with its rows printed and screenshotted
+//     to er-panel-2026-11-02-to-12-13.png, typed range, Copy for Word writing
+//     text/html + text/plain, the .html download) and My schedule's
+//     "Download my calendar" (silvis-call-khan.ics)
 //   - makes one schedule edit THROUGH THE DAY EDITOR and asserts a schedule_days
 //     POST (version 1) was sent
 //   - injects a foreign realtime row and asserts it is adopted
@@ -426,6 +436,154 @@ try {
   if (!/rgb\(192, 64, 64\)/.test(openRed)) fail("week rows: OPEN entry is not red (#c04040): " + openRed); else ok("week rows: OPEN entries are red");
   await page.locator("[data-testid=week-rows]").screenshot({ path: path.join(OUT, "week-rows-oct-2026.png") });
   ok("screenshot test/ui/out/week-rows-oct-2026.png");
+
+  // ---- Prompt 9: exports (Calendar tools card + My schedule .ics) ----
+  // Real downloads are captured and read back; the share page is re-opened
+  // through the static server (test/ui/out is under ROOT) and the printable
+  // view is the popup window.open produced. October 2026 is still showing.
+  const errLine = (e) => String(e && e.message || e).split("\n")[0];
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+  const saveDownload = async (trigger) => {
+    const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 8000 }), trigger()]);
+    const name = dl.suggestedFilename();
+    const target = path.join(OUT, name);
+    await dl.saveAs(target);
+    return { name, target, text: fs.readFileSync(target, "utf8") };
+  };
+  if (!(await page.$("[data-testid=calendar-tools]"))) { await page.click("text=Calendar tools (exports)"); await page.waitForSelector("[data-testid=calendar-tools]", { timeout: 3000 }); }
+  ok("calendar tools card opened");
+  // (a) group .ics
+  try {
+    const g = await saveDownload(() => page.click("[data-testid=ics-all]"));
+    const n = (g.text.match(/BEGIN:VEVENT/g) || []).length;
+    if (g.name !== "silvis-call-all.ics") fail("group ics filename: " + g.name);
+    else if (!g.text.startsWith("BEGIN:VCALENDAR\r\n") || !g.text.includes("BEGIN:VTIMEZONE") || !/DTSTART;TZID=America\/Chicago:\d{8}T070000\r\n/.test(g.text) || !/SUMMARY:Silvis Primary Call - \w+\r\n/.test(g.text) || !/UID:silvis-\d{4}-\d{2}-\d{2}-primary@silvis-call/.test(g.text)) fail("group ics content wrong: " + g.text.slice(0, 400).replace(/\r\n/g, " | "));
+    else ok(`group ics: ${g.name} (${n} events, VTIMEZONE + TZID lines, 'Silvis Primary Call - <Name>', stable UIDs)`);
+  } catch (e) { fail("group ics download: " + errLine(e)); }
+  // (b) per-surgeon .ics from the tools card (Khan)
+  try {
+    const k = await saveDownload(() => page.click("[data-testid=ics-FAK]"));
+    const n = (k.text.match(/BEGIN:VEVENT/g) || []).length;
+    if (k.name !== "silvis-call-khan.ics") fail("per-surgeon ics filename: " + k.name);
+    else if (/SUMMARY:Silvis (Primary|Backup) Call - /.test(k.text) || (n > 0 && !/SUMMARY:Silvis (Primary|Backup) Call\r\n/.test(k.text))) fail("per-surgeon ics summaries wrong: " + (k.text.match(/SUMMARY:[^\r]*/g) || []).slice(0, 3).join(" | "));
+    else ok(`per-surgeon ics: ${k.name} (${n} events, summaries without a name suffix)`);
+  } catch (e) { fail("per-surgeon ics download: " + errLine(e)); }
+  // (c) share page: download 2 months, re-open through the static server, screenshot
+  try {
+    await page.selectOption("[data-testid=tool-months]", "2");
+    const s = await saveDownload(() => page.click("[data-testid=share-download]"));
+    const grids = (s.text.match(/<section class="mo" data-month="/g) || []).length, tables = (s.text.match(/<table class="wr" data-month="/g) || []).length;
+    if (s.name !== "silvis-call-2026-10-01-2026-11-30.html") fail("share page filename: " + s.name);
+    else if (grids !== 2 || tables !== 2 || /<script/i.test(s.text)) fail(`share page: ${grids} grid(s), ${tables} week-row table(s), script=${/<script/i.test(s.text)}`);
+    else ok(`share page: ${s.name} - 2 month grids + 2 week-row tables, no scripts, ${s.text.length} bytes`);
+    const sharePage = await context.newPage();
+    watchPage(sharePage, "share");
+    await sharePage.goto(BASE + "test/ui/out/" + s.name, { waitUntil: "load" });
+    await sharePage.waitForSelector(".mo .cg .cd", { timeout: 5000 });
+    const shareOpen = await sharePage.$eval('.cd[data-day="2026-10-15"] .open', el => getComputedStyle(el).color).catch(() => "");
+    if (!/rgb\(192, 64, 64\)/.test(shareOpen)) fail("share page: 10/15 P OPEN is not red: " + shareOpen); else ok("share page renders: 10/15 P OPEN in red");
+    const shareAtwell = await sharePage.$eval('table.wr[data-month="2026-10"] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
+    if (!/9\/28-10\/4 Atwell/.test(shareAtwell)) fail("share page week rows lack '9/28-10/4 Atwell': " + shareAtwell); else ok("share page week rows: '9/28-10/4 Atwell' under the October grid");
+    const shareScroll = await sharePage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+    if (!shareScroll) fail("share page scrolls horizontally at 1180px"); else ok("share page: no horizontal scroll");
+    await sharePage.screenshot({ path: path.join(OUT, "share-page.png"), fullPage: true });
+    ok("screenshot test/ui/out/share-page.png");
+    await sharePage.close();
+    await page.selectOption("[data-testid=tool-months]", "1");
+  } catch (e) { fail("share page: " + errLine(e)); }
+  // (d) printable view: the popup, P/B strings, OPEN red, screenshot
+  try {
+    const [pop] = await Promise.all([context.waitForEvent("page", { timeout: 8000 }), page.click("[data-testid=print-open]")]);
+    watchPage(pop, "print");
+    await pop.waitForSelector(".page .cell .shift", { timeout: 8000 });
+    const printTitle = await pop.title();
+    const printCell = await pop.$eval('.cell[data-day="2026-10-05"]', el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
+    if (!/P (Khan|Burchett|Acton|Philip|Fierce|Sarkar|OPEN)/.test(printCell) || !/B (Khan|Burchett|Acton|Philip|Fierce|Sarkar|OPEN)/.test(printCell)) fail("printable 10/5 cell lacks 'P <Name>' / 'B <Name>': " + printCell); else ok(`printable view '${printTitle}': 10/5 cell reads "${printCell}"`);
+    const printOpen = await pop.$eval('.cell[data-day="2026-10-15"] .shift .open', el => getComputedStyle(el).color).catch(() => "");
+    if (!/rgb\(192, 0, 0\)/.test(printOpen)) fail("printable: 10/15 OPEN not red: " + printOpen); else ok("printable view: 10/15 P OPEN in red");
+    const printAtwell = await pop.$eval('.cell[data-day="2026-10-01"] .shift .ext', el => el.textContent).catch(() => "");
+    if (!/Atwell/.test(printAtwell)) fail("printable: 10/1 external cover missing: " + printAtwell); else ok("printable view: 10/1 shows '" + printAtwell + "'");
+    await pop.screenshot({ path: path.join(OUT, "printable-page.png"), fullPage: true });
+    ok("screenshot test/ui/out/printable-page.png");
+    await pop.close();
+  } catch (e) { fail("printable view: " + errLine(e)); }
+  // (e) ER Call Panels: default = visible month; preset 11/2-12/13; copy; download
+  try {
+    const defHdr = await page.$eval("[data-testid=er-panel-preview] thead", el => el.innerText.replace(/\s+/g, " ").trim());
+    if (defHdr !== "MON/SUN DATES TRAUMA & CARDIOTHORACIC SURGERY TRAUMA TRAUMA BACKUP") fail("ER panel header: " + defHdr); else ok("ER panel header: " + defHdr);
+    const defWeeks = await page.$$eval("[data-testid=er-panel-preview] tr[data-week]", els => els.map(e => e.getAttribute("data-week")));
+    if (defWeeks[0] !== "2026-09-28" || defWeeks[defWeeks.length - 1] !== "2026-10-26") fail("ER panel default range is not the visible month (Oct 2026): " + defWeeks.join(",")); else ok(`ER panel default range = visible month: ${defWeeks.length} week rows ${defWeeks[0]}..${defWeeks[defWeeks.length - 1]}`);
+    // exp-001: rows are whole Mon-Sun weeks - the 9/28 row lists 9/28-10/4
+    // under its "9/28 - 10/4" label (never a clipped "10/1-10/4" under a
+    // full-week label), the 10/26 row keeps Sunday 11/1, and the note says
+    // the visible-month range was widened to whole weeks.
+    const erRow928 = await page.$eval('[data-testid=er-panel-preview] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/[\t\n]+/g, " | "));
+    if (!/^9\/28 - 10\/4 \| 9\/28-10\/4 Atwell/.test(erRow928) || /10\/1-10\/4/.test(erRow928)) fail("ER panel: the 9/28 row must list the whole week ('9/28-10/4 Atwell' under '9/28 - 10/4'): " + erRow928); else ok("ER panel: first row is the whole week - '9/28 - 10/4 | 9/28-10/4 Atwell'");
+    const erRow1026 = await page.$eval('[data-testid=er-panel-preview] tr[data-week="2026-10-26"]', tr => tr.innerText.replace(/[\t\n]+/g, " | "));
+    if (!/^10\/26 - 11\/1 \| /.test(erRow1026) || !/11\/1/.test(erRow1026.split(" | ").slice(1).join(" | "))) fail("ER panel: the 10/26 row must keep Sunday 11/1: " + erRow1026); else ok("ER panel: last October row keeps Sunday 11/1 - '" + erRow1026.slice(0, 60) + "...'");
+    const erSpanNote = await page.$eval("[data-testid=er-span-note]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
+    if (!/^Whole weeks: the table runs 9\/28 - 11\/1 \(the Mon-Sun weeks around 10\/1 - 10\/31\)/.test(erSpanNote)) fail("ER panel: widened-range note missing or wrong: '" + erSpanNote + "'"); else ok("ER panel: note says the month was widened to whole weeks 9/28 - 11/1");
+    const erOpenRed = await page.$eval('[data-testid=er-panel-preview] [data-kind="open"]', el => getComputedStyle(el).color);
+    if (!/rgb\(255, 0, 0\)/.test(erOpenRed)) fail("ER panel OPEN not red: " + erOpenRed); else ok("ER panel: OPEN entries red (#ff0000)");
+    await page.click("[data-testid=er-preset-1213]");
+    await page.waitForFunction(() => { const r = document.querySelectorAll("[data-testid=er-panel-preview] tr[data-week]"); return r.length === 6 && r[0].getAttribute("data-week") === "2026-11-02"; }, null, { timeout: 3000 });
+    const erFromV = await page.$eval("[data-testid=er-from]", el => el.value), erToV = await page.$eval("[data-testid=er-to]", el => el.value);
+    if (erFromV !== "2026-11-02" || erToV !== "2026-12-13") fail(`ER preset set ${erFromV}..${erToV}`); else ok("ER panel preset: 2026-11-02 .. 2026-12-13, 6 week rows");
+    const erNoteOnAligned = await page.$("[data-testid=er-span-note]");
+    if (erNoteOnAligned) fail("ER panel: the widened-range note must not show for a Mon..Sun range (11/2..12/13)"); else ok("ER panel: no widened-range note for the Mon..Sun preset");
+    const erRowsText = await page.$$eval("[data-testid=er-panel-preview] tbody tr", trs => trs.map(tr => Array.from(tr.children).map(td => td.innerText.replace(/\n/g, "; ")).join(" | ")));
+    erRowsText.forEach(r => console.log("     " + r));
+    await page.locator("[data-testid=er-panel-preview]").screenshot({ path: path.join(OUT, "er-panel-2026-11-02-to-12-13.png") });
+    ok("screenshot test/ui/out/er-panel-2026-11-02-to-12-13.png");
+    await page.fill("[data-testid=er-from]", "2026-11-16"); await page.fill("[data-testid=er-to]", "2026-11-22");
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=er-panel-preview] tr[data-week]").length === 1, null, { timeout: 3000 }).then(() => ok("ER panel: typed range 11/16..11/22 -> one week row")).catch(() => fail("ER panel: typed range did not narrow to one row"));
+    await page.click("[data-testid=er-preset-1213]");
+    await page.waitForTimeout(200);
+    // Copy for Word is asserted on a MOCK of navigator.clipboard.write: it
+    // records every ClipboardItem flavour the app hands over (the real system
+    // clipboard is not readable on every runner), then delegates to the real
+    // write so the production path still runs end to end.
+    await page.evaluate(() => {
+      window.__clipWrites = [];
+      const real = navigator.clipboard.write.bind(navigator.clipboard);
+      navigator.clipboard.write = async (items) => {
+        const rec = [];
+        for (const it of items) { const flavours = {}; for (const t of it.types) flavours[t] = await (await it.getType(t)).text(); rec.push(flavours); }
+        window.__clipWrites.push(rec);
+        return real(items);
+      };
+    });
+    await page.click("[data-testid=er-copy]");
+    await page.waitForTimeout(500);
+    const clipWrites = await page.evaluate(() => window.__clipWrites || []);
+    const toastText = (((await page.evaluate(() => document.body.innerText)) || "").match(/(Copied - paste into the Word document[^\n]*|Clipboard blocked[^\n]*)/) || [])[1] || "";
+    const item = clipWrites.length === 1 && clipWrites[0].length === 1 ? clipWrites[0][0] : null;
+    const clipHtml = item ? item["text/html"] || "" : "", clipText = item ? item["text/plain"] || "" : "";
+    if (!item) fail(`Copy for Word: expected exactly one navigator.clipboard.write call with one ClipboardItem, saw ${JSON.stringify(clipWrites.map(w => w.map(i => Object.keys(i))))}; toast "${toastText}"`);
+    else if (!clipHtml.startsWith('<table data-export="er-call-panels"') || (clipHtml.match(/<tr data-week=/g) || []).length !== 6 || !/MON\/SUN DATES<\/th><th [^>]*>TRAUMA &amp; CARDIOTHORACIC SURGERY TRAUMA<\/th><th [^>]*>TRAUMA BACKUP<\/th>/.test(clipHtml) || !/<span data-kind="open" style="color:#ff0000;font-weight:bold">/.test(clipHtml)) fail("Copy for Word: text/html flavour is not the 6-row ER table: " + clipHtml.slice(0, 200));
+    else if (!/^MON\/SUN DATES\tTRAUMA & CARDIOTHORACIC SURGERY TRAUMA\tTRAUMA BACKUP\n11\/2 - 11\/8\t/.test(clipText) || clipText.split("\n").length !== 7) fail("Copy for Word: text/plain flavour wrong: " + clipText.slice(0, 120));
+    else if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(clipHtml + clipText)) fail("Copy for Word: an email address is on the clipboard");
+    else if (!/^Copied - paste into the Word document/.test(toastText)) fail(`Copy for Word: flavours written but the toast reads "${toastText}"`);
+    else ok(`Copy for Word: one clipboard write with ${Object.keys(item).join(" + ")} - 6-row ER table (inline styles, red OPEN spans) + tab-separated text; toast "${toastText}"`);
+    const clip = await page.evaluate(async () => {
+      try { const items = await navigator.clipboard.read(); const out = {}; for (const it of items) for (const t of it.types) out[t] = await (await it.getType(t)).text(); return { ok: true, types: Object.keys(out), rows: ((out["text/html"] || "").match(/<tr data-week=/g) || []).length }; }
+      catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+    });
+    console.log(`     (system clipboard read-back: ${clip.ok ? clip.types.join(" + ") + ", " + clip.rows + " rows in text/html" : "unavailable - " + clip.error})`);
+    const erDl = await saveDownload(() => page.click("[data-testid=er-download]"));
+    if (erDl.name !== "silvis-er-call-panels-2026-11-02-2026-12-13.html" || !erDl.text.includes('data-export="er-call-panels"') || (erDl.text.match(/<tr data-week=/g) || []).length !== 6) fail("ER panel download wrong: " + erDl.name); else ok("ER panel download: " + erDl.name + " (6 week rows)");
+    await page.click("[data-testid=er-reset]");
+  } catch (e) { fail("ER panel: " + errLine(e)); }
+  // (f) My schedule: Download my calendar -> silvis-call-khan.ics
+  try {
+    await page.click('button[data-tab="myschedule"]');
+    await page.waitForSelector("[data-testid=download-my-calendar]", { timeout: 5000 });
+    const mine = await saveDownload(() => page.click("[data-testid=download-my-calendar]"));
+    const n = (mine.text.match(/BEGIN:VEVENT/g) || []).length;
+    if (mine.name !== "silvis-call-khan.ics" || !mine.text.includes("BEGIN:VTIMEZONE") || (n > 0 && !/UID:silvis-\d{4}-\d{2}-\d{2}-(primary|backup)@silvis-call/.test(mine.text))) fail("My schedule ics wrong: " + mine.name + " " + mine.text.slice(0, 200).replace(/\r\n/g, " | ")); else ok(`My schedule: ${mine.name} (${n} events, stable UIDs, VTIMEZONE)`);
+    await page.screenshot({ path: path.join(OUT, "myschedule-export.png"), fullPage: false });
+  } catch (e) { fail("My schedule ics: " + errLine(e)); }
+  await showMonth(2026, 9);
 
   // ---- Slice D: the day editor for 2026-10-15 ----
   await page.click('[data-day="2026-10-15"]');

@@ -33,6 +33,7 @@ on:
       - "test/data-layer.test.js"
       - "test/importer.test.js"
       - "test/week-rows.test.js"
+      - "test/exports.test.js"
       - "importer.js"
       - "test/generator-regression.js"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
@@ -89,6 +90,9 @@ jobs:
 
       - name: Week-rows builder tests
         run: node test/week-rows.test.js
+
+      - name: Export builders tests (ICS, share page, printable, ER panel)
+        run: node test/exports.test.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js
