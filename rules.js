@@ -43,6 +43,19 @@
 //                 unless eastFeed.enabled blocks a role (eastBlocksPrimary /
 //                 eastBlocksBackup); standingEastDays(ctx, id, from, to)
 //                 lists the concrete days of a range.
+//   eastOverrides { [surgeonId]: { 'YYYY-MM-DD': true | false } } - the
+//                 east_overrides rows grouped per person (east-feed.js
+//                 overridesByPerson). Prompt 12 C (9/22): precedence is
+//                 published > override > forecast. true = 'east-busy' that day
+//                 whatever the feed or forecast says; false = the day is clear -
+//                 it is removed from the busy set AND the forecast is not
+//                 consulted for it (a busy:false override clears a forecast-busy
+//                 day). Either value counts as a known answer (no east-unknown).
+//                 Non-date keys / non-boolean values are dropped with a warning.
+//                 applyOverrides on the busy set (older callers) still works.
+//   eastForecast  { [surgeonId]: { 'YYYY-MM-DD': probability } } - consulted
+//                 only OUTSIDE the published coverage (eastFeedCoverage); inside
+//                 it published rows win and the forecast is ignored entirely.
 //   surgeonRules[id].explicitListMonths  ['YYYY-MM', ...] or { month, roles }.
 //                 The role scope is read literally (Prompt 12 I + T, 9/22): a
 //                 plain 'YYYY-MM' entry governs PRIMARY only (backup is open to
@@ -333,6 +346,21 @@ function rdBusySet(ctx, id, v) {
   return out;
 }
 
+// eastOverrides[id] -> { 'YYYY-MM-DD': true | false }. Non-date keys and
+// non-boolean values are dropped with ONE ctx warning per surgeon (an override
+// that silently did nothing would be the worst outcome - Prompt 12 C, 9/22).
+function rdOverrideMap(ctx, id, v) {
+  var out = Object.create(null);
+  if (!v || typeof v !== "object") return out;
+  var bad = [];
+  Object.keys(v).forEach(function (d) {
+    if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) && typeof v[d] === "boolean") out[d] = v[d];
+    else bad.push(d + "=" + JSON.stringify(v[d]));
+  });
+  if (bad.length) ctx.warnings.push("eastOverrides[" + id + "]: ignored " + bad.length + " entr" + (bad.length === 1 ? "y" : "ies") + " [" + bad.slice(0, 3).join(", ") + "] - pass { 'YYYY-MM-DD': true|false } (east-feed.js overridesByPerson)");
+  return out;
+}
+
 // buildContext(input) -> ctx. See the file header and the docs for the input
 // shape. Everything per surgeon is precomputed once here so eligibility() is
 // O(1)-ish per call.
@@ -449,6 +477,7 @@ function buildContext(input) {
       blocksPrimary: !!ef.eastBlocksPrimary,
       blocksBackup: !!ef.eastBlocksBackup,
       eastBusy: rdBusySet(ctx, id, input.eastBusyDays && input.eastBusyDays[id]),
+      eastOverrides: rdOverrideMap(ctx, id, input.eastOverrides && input.eastOverrides[id]), // C: { day: true|false }
       eastForecast: (input.eastForecast && input.eastForecast[id]) || null,
       // Prompt 12 V (9/22 evening): surgeonRules.<id>.eastStanding [{ name, days: ["MM-DD"] }] -
       // standing East call in EVERY year (Khan: Christmas 12-24 + 12-25), treated like a
@@ -566,6 +595,16 @@ function buildContext(input) {
     if (P.hasWindows) {
       rules.availableWindows.forEach(function (w) { rdEachDayInRange(w.start, w.end, function (d) { P.windowDays.add(d); }); });
     }
+    // C (fix round 9/22, finding 7): an override for a surgeon whose East feature blocks
+    // no role could never change an answer - warn and drop it, never silently inert.
+    var ovKeys = Object.keys(P.eastOverrides);
+    if (ovKeys.length && !P.blocksPrimary && !P.blocksBackup) {
+      ctx.warnings.push("eastOverrides[" + id + "]: " + ovKeys.length + " entr" + (ovKeys.length === 1 ? "y" : "ies") + " ignored - this surgeon's East feature blocks no role (surgeonRules." + id + ".eastFeed.eastBlocksPrimary / eastBlocksBackup)");
+      P.eastOverrides = Object.create(null);
+    }
+    // C: overrides beat the published busy set - true adds the day, false removes it.
+    // (The forecast side of a false override is handled in rdStatic.)
+    Object.keys(P.eastOverrides).forEach(function (d) { if (P.eastOverrides[d] === true) P.eastBusy.add(d); else P.eastBusy.delete(d); });
     P.eastBusy.forEach(function (d) { P.eastDays.add(d); });
     ctx.per[id] = P;
   });
@@ -682,12 +721,21 @@ function standingEastDays(ctx, surgeonId, from, to) {
   return out.sort();
 }
 
+// Inside the PUBLISHED East coverage (ctx.eastCoverage = coverageOf of the cached
+// Davenport weeks)? Prompt 12 C (9/22): published rows win - the forecast is never
+// consulted for such a day, only the busy set derived from the published rows.
+function rdInPublishedCoverage(ctx, info) {
+  return !!ctx.eastCoverage && info.n >= ctx.eastCoverage.fromN && info.n <= ctx.eastCoverage.toN;
+}
+// Is the East answer for this day KNOWN (no 'east-unknown' soft)? Busy, inside the
+// published coverage, an explicit override (either value), or a forecast entry
+// (which by construction only matters outside the coverage).
 function rdEastCovered(ctx, P, info) {
   if (P.eastBusy.has(info.s)) return true;
   if (rdStandingName(P, info.s)) return true; // Prompt 12 V: a standing East day is known, feed or no feed
-  if (P.eastForecast && P.eastForecast[info.s] != null) return true;
-  if (!ctx.eastCoverage) return false;
-  return info.n >= ctx.eastCoverage.fromN && info.n <= ctx.eastCoverage.toN;
+  if (rdInPublishedCoverage(ctx, info)) return true;
+  if (P.eastOverrides && P.eastOverrides[info.s] !== undefined) return true;
+  return !!(P.eastForecast && P.eastForecast[info.s] != null);
 }
 
 // Was the derived lock for (date, role) overridden by an import/manual lock?
@@ -833,6 +881,10 @@ function rdStatic(ctx, date, role, id, asBlock) {
   }
 
   // East feed: busy days / forecast / unknown for the roles East blocks.
+  // Precedence (Prompt 12 C, 9/22): published > override > forecast. P.eastBusy
+  // already carries the published busy days WITH the overrides applied (true added,
+  // false removed - buildContext). The forecast is consulted only OUTSIDE the
+  // published coverage and never on a day an override busy:false cleared.
   if (P.eastEnabled && (role === "primary" ? P.blocksPrimary : P.blocksBackup)) {
     // Prompt 12 V (9/22 evening): a standing East day (surgeonRules.<id>.eastStanding, every
     // year) is a published busy day - the same hard code, ahead of the forecast and of
@@ -840,7 +892,8 @@ function rdStatic(ctx, date, role, id, asBlock) {
     var standing = rdStandingName(P, date);
     if (P.eastBusy.has(date) || standing) { hard.push("east-busy"); if (standing) res.eastStanding = standing; }
     else {
-      var prob = P.eastForecast ? P.eastForecast[date] : undefined;
+      var fcApplies = !rdInPublishedCoverage(ctx, info) && !(P.eastOverrides && P.eastOverrides[date] === false);
+      var prob = (fcApplies && P.eastForecast) ? P.eastForecast[date] : undefined;
       if (typeof prob === "number") {
         if (prob >= ctx.forecastThreshold) hard.push("east-forecast-busy:" + prob.toFixed(2));
         else if (prob > 0) soft.push({ reason: "east-forecast:" + prob.toFixed(2), weight: W.eastForecastBelowThreshold });
@@ -1391,11 +1444,85 @@ function monthlyCapFor(ctx, surgeonId) {
   return { primary: primary, preferred: P ? P.capPreferred : null, total: primary };
 }
 
+/* ------------------------------------------------------ East conflict report */
+// eastConflicts(ctx, days) -> [{ day, role, id, reasons }]   (Prompt 12 C.4, 9/22)
+// For every day in `days` whose ctx.schedule row holds a surgeon in a role, the
+// East-related HARD reasons that make that holder ineligible now: east-busy,
+// east-forecast-busy:, derived-lock: (the derived surgeon held in the OTHER role
+// of his derived week) and derived-lock-held: (someone else in his derived
+// slot). Locks are evaluated too (ignoreLocks; a lock holder's `conflicts` are
+// read) - a locked row is a fact, the report says it now collides with East. A
+// holder who IS the derived surgeon in the derived role is fine. The derived
+// checks are made explicitly here because eligibility() applies the yield rule
+// (a held row beats a derived lock, rdDerivedOverridden) and would otherwise
+// stay silent about a locked collision; when the derived surgeon himself is
+// held in the other role the day is reported once, on HIS row, not on the
+// other role's holder (that slot is his to lose, not theirs). Read-only: the
+// schedule is never touched. Rows come out by day, primary before backup.
+// Fix round (review 9/22, finding 9) - "a derived week that no longer matches":
+// for a holder whose rules carry outsideDerivedWeeks.weekdayPattern the pattern
+// reasons that fire only outside his derived weeks (weekday-pattern:,
+// weekend-block-only) count too, on days OUTSIDE his current derived weeks and
+// from his eastFeed.deriveFrom on (before it nothing was derived): when a
+// derived week moves away, the primary rows he kept there fall under the
+// pattern. Every holder is evaluated as a block member when he holds the whole
+// Fri+Sat+Sun block in that role (rdHoldsFullBlock, as the generator does), so a
+// legitimate weekend block is never reported. A former derived week where he
+// holds BACKUP cannot be detected here (backup is open to him every day) -
+// diagnostics.derivedYields and the calendar's E badges cover it.
+var RD_EAST_CONFLICT_PREFIXES = ["east-busy", "east-forecast-busy:", "derived-lock:", "derived-lock-held:"];
+var RD_EAST_PATTERN_PREFIXES = ["weekday-pattern:", "weekend-block-only"];
+function rdStartsWithAny(r, prefixes) {
+  for (var k = 0; k < prefixes.length; k++) { var p = prefixes[k]; if (r === p || r.indexOf(p) === 0) return true; }
+  return false;
+}
+function rdIsEastConflictReason(r) { return rdStartsWithAny(r, RD_EAST_CONFLICT_PREFIXES); }
+// Does `id` hold `role` on all three days of the Fri+Sat+Sun block containing `day`?
+// (Mirrors generator.js genHoldsFullBlock: Fri = weekday index 4.)
+function rdHoldsFullBlock(ctx, day, role, id) {
+  var info = rdInfo(day);
+  if (info.wdi < 4) return false;
+  var fri = rdAddDays(day, 4 - info.wdi);
+  for (var k = 0; k < 3; k++) { var e = ctx.schedule[rdAddDays(fri, k)]; if (!e || e[role] !== id) return false; }
+  return true;
+}
+function eastConflicts(ctx, days) {
+  var out = [];
+  (days || []).forEach(function (day) {
+    var e = ctx.schedule[day];
+    if (!e) return;
+    var dslot = ctx.derivedByDay[day] || null;
+    ["primary", "backup"].forEach(function (role) {
+      var id = e[role];
+      if (!id || !ctx.per[id]) return;
+      var P = ctx.per[id];
+      var other = role === "primary" ? "backup" : "primary";
+      // Pattern reasons count only from his eastFeed.deriveFrom on (before it nothing was
+      // ever derived - Faraz's single locked 10/12 must not be listed) and outside his
+      // current derived weeks.
+      var efc = P.rules && P.rules.eastFeed;
+      var deriveFromN = efc && efc.deriveFrom ? rdInfo(efc.deriveFrom).n : null;
+      var patternCounts = !!(P.rules && P.rules.outsideDerivedWeeks && P.rules.outsideDerivedWeeks.weekdayPattern) && deriveFromN !== null && rdInfo(day).n >= deriveFromN && !P.derived[day];
+      var r = eligibility(ctx, day, role, id, { ignoreLocks: true, asBlockMember: rdHoldsFullBlock(ctx, day, role, id) });
+      var reasons = (r.lockHolder ? (r.conflicts || []) : (r.hard || [])).filter(function (x) { return rdIsEastConflictReason(x) || (patternCounts && rdStartsWithAny(x, RD_EAST_PATTERN_PREFIXES)); });
+      if (dslot) {
+        if (dslot[role] && dslot[role] !== id && e[other] !== dslot[role]) reasons.push("derived-lock-held:" + dslot[role]);
+        if (dslot[other] === id) reasons.push("derived-lock:" + other);
+      }
+      var seen = Object.create(null);
+      reasons = reasons.filter(function (x) { if (seen[x]) return false; seen[x] = true; return true; });
+      if (reasons.length) out.push({ day: day, role: role, id: id, reasons: reasons });
+    });
+  });
+  return out;
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     matchesPattern: matchesPattern,
     buildContext: buildContext,
     eligibility: eligibility,
+    eastConflicts: eastConflicts,
     weekendUnitPatterns: weekendUnitPatterns,
     holidayUnits: holidayUnits,
     holidayUnitCandidates: holidayUnitCandidates,

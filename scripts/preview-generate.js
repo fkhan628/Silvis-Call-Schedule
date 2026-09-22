@@ -96,7 +96,14 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
 
   // East: derive per surgeon from rules (no name branches)
   const weeks = feedRows.map(r => ({ weekMonday: r.week_monday, data: r.data }));
-  const forecast = typeof EF.forecastFromFeedRows === "function" ? EF.forecastFromFeedRows(forecastRows.map(r => ({ weekMonday: r.week_monday, data: r.data }))) : {};
+  // Prompt 12 C (9/22): published > override > forecast. The forecast is pruned to
+  // the weeks Davenport has NOT published (rules.js ignores it inside the coverage
+  // anyway), and the east_overrides rows go to buildContext as their own input
+  // (input.eastOverrides) so a busy:false override clears a forecast-busy day too.
+  const eastFeedCoverage = EF.coverageOf ? EF.coverageOf(weeks) : null;
+  const forecastAll = typeof EF.forecastFromFeedRows === "function" ? EF.forecastFromFeedRows(forecastRows.map(r => ({ weekMonday: r.week_monday, data: r.data }))) : {};
+  const forecast = typeof EF.forecastOutsideCoverage === "function" ? EF.forecastOutsideCoverage(forecastAll, eastFeedCoverage) : forecastAll;
+  const eastOverrides = typeof EF.overridesByPerson === "function" ? EF.overridesByPerson(overrideRows) : {};
   const fakIdEast = (forecastRows[0] && forecastRows[0].data && forecastRows[0].data.fakId) || null;
   const eastBusyDays = {}, eastForecast = {}, eastDerived = [];
   for (const s of roster) {
@@ -117,9 +124,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
       for (const w of EF.deriveFierceWeeks(weeks, { deriveFrom: ef.deriveFrom, statedWeeks: ef.statedWeeks })) eastDerived.push({ weekMonday: w.weekMonday, surgeonId: s.id, silvisRole: w.silvisRole, source: w.source });
     }
   }
-  const eastFeedCoverage = EF.coverageOf ? EF.coverageOf(weeks) : null;
-
-  const input = { roster, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastBusyDays, eastForecast, eastFeedCoverage, eastDerived, rangeStart: START, rangeEnd: END };
+  const input = { roster, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastBusyDays, eastForecast, eastOverrides, eastFeedCoverage, eastDerived, rangeStart: START, rangeEnd: END };
   const ctx = R.buildContext(input);
   const t1 = Date.now();
   const result = G.generate(ctx, START, END, { seed: SEED, bestOf: BEST_OF, respectLocks: true });
@@ -227,7 +232,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     L.push("");
   }
 
-  for (const key of ["holidayUnits", "weekendUnits", "lockViolations", "eastForecast", "eastUnknownDays", "impliedTargets", "warnings"]) {
+  for (const key of ["holidayUnits", "weekendUnits", "lockViolations", "eastConflicts", "eastForecast", "eastUnknownDays", "impliedTargets", "warnings"]) {
     if (dg[key] == null) continue;
     L.push(`## diagnostics.${key}`); L.push(""); L.push("```"); L.push(JSON.stringify(dg[key], null, 1).slice(0, 12000)); L.push("```"); L.push("");
   }
@@ -278,7 +283,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     L.push("| Surgeon | +Primary | +Backup | Days |"); L.push("|---|---|---|---|");
     roster.forEach(r => { const t = talliesDelta[r.id]; if (!t || (!t.primary && !t.backup)) return; L.push(`| ${r.name} | ${t.primary} | ${t.backup} | ${t.days.join(", ")} |`); });
     L.push("");
-    for (const key of ["fixedViolations", "lockViolations", "derivedYields", "warnings"]) {
+    for (const key of ["fixedViolations", "lockViolations", "eastConflicts", "derivedYields", "warnings"]) {
       if (bd[key] == null || (Array.isArray(bd[key]) && !bd[key].length)) continue;
       L.push(`### backfill diagnostics.${key}`); L.push(""); L.push("```"); L.push(JSON.stringify(bd[key], null, 1).slice(0, 8000)); L.push("```"); L.push("");
     }

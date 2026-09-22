@@ -397,13 +397,16 @@ okElig(R.eligibility(busy, "2026-11-08", P, KHAN));
 const busySet = makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: new Set(["2026-11-02"]) } });
 blocked(R.eligibility(busySet, "2026-11-02", P, KHAN), "east-busy", "Set input accepted");
 step("Khan East forecast and unknown coverage");
-const fc = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2026-11-04": 0.7, "2026-11-11": 0.2, "2026-11-18": 0.5 } } });
-blocked(R.eligibility(fc, "2026-11-04", P, KHAN), "east-forecast-busy:0.70");
-okElig(R.eligibility(fc, "2026-11-04", B, KHAN), "forecast never blocks backup");
-blocked(R.eligibility(fc, "2026-11-18", P, KHAN), "east-forecast-busy", "threshold is inclusive (>= 0.5)");
-const fc11 = R.eligibility(fc, "2026-11-11", P, KHAN);
+// Prompt 12 C (9/22): the forecast is consulted only OUTSIDE the published coverage
+// (EAST_COVER ends 2027-01-31) - these Wednesdays are in February 2027.
+const fc = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2027-02-03": 0.7, "2027-02-10": 0.2, "2027-02-17": 0.5 } } });
+blocked(R.eligibility(fc, "2027-02-03", P, KHAN), "east-forecast-busy:0.70");
+okElig(R.eligibility(fc, "2027-02-03", B, KHAN), "forecast never blocks backup");
+blocked(R.eligibility(fc, "2027-02-17", P, KHAN), "east-forecast-busy", "threshold is inclusive (>= 0.5)");
+const fc11 = R.eligibility(fc, "2027-02-10", P, KHAN);
 okElig(fc11); hasSoft(fc11, "east-forecast:0.20");
 eq(fc11.soft.find(s => s.reason.startsWith("east-forecast")).weight, 2);
+lacksSoft(fc11, "east-unknown", "a forecast entry outside coverage is not 'unknown'");
 const unk = R.eligibility(clean, "2027-02-03", P, KHAN); // Wednesday outside coverage (ends 2027-01-31)
 okElig(unk); hasSoft(unk, "east-unknown");
 eq(unk.soft.find(s => s.reason === "east-unknown").weight, 1);
@@ -1500,6 +1503,73 @@ ok(vXmasB.indexOf(KHAN) >= 0, "Khan IS a Christmas 2026 backup candidate: " + vX
 const srNoSt = clone(SA.seedToContextInput(seed).surgeonRules); delete srNoSt[KHAN].eastStanding;
 const vNoSt = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, surgeonRules: srNoSt, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, eastBusyDays: {} }));
 ok(R.holidayUnitCandidates(vNoSt, vUnits[0], P).indexOf(KHAN) >= 0, "fixture: without eastStanding he is a Christmas primary candidate (so the exclusion above is V's)");
+
+/* ------------------------------------------------ Prompt 12 C: East precedence + conflict report */
+// Published coverage > override > forecast (review item C, 9/22). EAST_COVER in these
+// tests is 2026-11-01..2027-01-31; 2026-11-04 and 2027-02-03 are Wednesdays (Khan's
+// auto-offered weekday), so nothing but East decides the primary answer.
+step("C.1: a forecast is never consulted inside the published coverage");
+const cStale = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2026-11-04": 0.9, "2026-11-11": 0.3 } } });
+const cFree = R.eligibility(cStale, "2026-11-04", P, KHAN);
+okElig(cFree, "C.1: published-free day inside coverage + stale forecast 0.9 -> eligible primary (published rows win)");
+lacksSoft(cFree, "east-forecast", "C.1: no soft forecast term inside coverage either");
+lacksSoft(cFree, "east-unknown", "C.1: a covered day is known-clear");
+lacksSoft(R.eligibility(cStale, "2026-11-11", P, KHAN), "east-forecast", "C.1: a below-threshold forecast inside coverage adds no soft penalty");
+lacks(R.eligibility(cStale, "2026-11-04", P, KHAN).hard, "east-forecast-busy", "C.1: no east-forecast-busy inside coverage");
+step("C.1: outside coverage the forecast rule stands");
+const cOut = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2027-02-03": 0.9, "2027-02-10": 0.2 } } });
+blocked(R.eligibility(cOut, "2027-02-03", P, KHAN), "east-forecast-busy:0.90", "C.1: a forecast-busy day outside coverage still blocks primary");
+const cOutLow = R.eligibility(cOut, "2027-02-10", P, KHAN);
+okElig(cOutLow); hasSoft(cOutLow, "east-forecast:0.20"); lacksSoft(cOutLow, "east-unknown");
+step("C.3: east_overrides as a first-class input (busy:false clears forecast AND busy; busy:true busies)");
+const cOvF = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2027-02-03": 0.9 } }, eastOverrides: { [KHAN]: { "2027-02-03": false } } });
+const cOvFr = R.eligibility(cOvF, "2027-02-03", P, KHAN);
+okElig(cOvFr, "C.3: override busy:false clears a forecast-busy day (overrides apply AFTER the forecast)");
+lacksSoft(cOvFr, "east-forecast", "C.3: ...and its soft term"); lacksSoft(cOvFr, "east-unknown", "C.3: an explicit override is a known answer, not 'unknown'");
+const cOvB = makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: ["2026-11-02", "2026-11-04"] }, eastOverrides: { [KHAN]: { "2026-11-02": false } } });
+okElig(R.eligibility(cOvB, "2026-11-02", P, KHAN), "C.3: override busy:false clears a published busy day");
+blocked(R.eligibility(cOvB, "2026-11-04", P, KHAN), "east-busy", "C.3: the other busy day stays busy");
+ok(!cOvB.per[KHAN].eastBusy.has("2026-11-02") && cOvB.per[KHAN].eastBusy.has("2026-11-04"), "C.3: P.eastBusy reflects the override (display + tallies)");
+const cOvT = makeCtx({ schedule: {}, eastOverrides: { [KHAN]: { "2026-11-02": true } } });
+blocked(R.eligibility(cOvT, "2026-11-02", P, KHAN), "east-busy", "C.3: override busy:true busies a free day for primary");
+okElig(R.eligibility(cOvT, "2026-11-02", B, KHAN), "C.3: ...backup stays open on an East day");
+ok(cOvT.per[KHAN].eastBusy.has("2026-11-02"), "C.3: an override true lands in P.eastBusy");
+const cOvTF = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2027-02-10": 0.1 } }, eastOverrides: { [KHAN]: { "2027-02-10": true } } });
+blocked(R.eligibility(cOvTF, "2027-02-10", P, KHAN), "east-busy", "C.3: override busy:true beats a low forecast");
+const cOvBad = makeCtx({ schedule: {}, eastOverrides: { [KHAN]: { "2026-11-02": "yes", "nonsense": true } } });
+ok(cOvBad.warnings.some(w => /eastOverrides\[s1\]/.test(w)), "C.3: a malformed override map warns instead of silently doing nothing: " + JSON.stringify(cOvBad.warnings));
+okElig(R.eligibility(cOvBad, "2026-11-02", P, KHAN), "C.3: ...and a non-boolean value is ignored");
+step("C.4: eastConflicts(ctx, days) - the conflict report over held slots");
+ok(typeof R.eastConflicts === "function", "C.4: rules.eastConflicts is exported");
+const cFx = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "east-conflicts-2026-11.json"), "utf8"));
+const cCtx = makeCtx({ schedule: clone(cFx.schedule), eastBusyDays: cFx.eastBusyDays, eastForecast: cFx.eastForecast });
+const cRep = R.eastConflicts(cCtx, Object.keys(cFx.schedule).sort());
+eq(cRep, cFx.expected, "C.4: the report lists exactly the fixture's conflicts (Khan primary on an East day, someone else in Fierce's derived slot, Fierce in the other role, a forecast-busy generated primary) and not Fierce holding his own derived role");
+eq(R.eastConflicts(cCtx, ["2026-11-11", "2026-11-16"]), [], "C.4: the derived surgeon in the derived role and an open day report nothing");
+eq(R.eastConflicts(cCtx, []), [], "C.4: no days, no report");
+ok(cCtx.schedule["2026-11-06"].primary === KHAN && cCtx.schedule["2026-11-06"].primaryLocked === true, "C.4: the report never changes the schedule");
+// Fix round (review 9/22, finding 9): "a Fierce derived week that no longer matches" -
+// for a holder whose rules carry outsideDerivedWeeks the pattern reasons that fire only
+// outside his derived weeks (weekday-pattern:, weekend-block-only) are East conflicts
+// too; a full Fri+Sat+Sun primary block is evaluated as a block and is fine.
+const cRepKeys = cRep.map(r => r.day + " " + r.role + " " + r.reasons.join(","));
+has(cRepKeys, "2026-11-30 primary weekday-pattern:Mon", "C fix 9: Fierce primary on a Monday outside his derived weeks (a week that is no longer derived) is listed");
+has(cRepKeys, "2026-12-04 primary weekend-block-only", "C fix 9: a standalone Friday primary outside his derived weeks is listed");
+ok(!cRep.some(r => r.day >= "2026-11-20" && r.day <= "2026-11-22"), "C fix 9: his full Fri+Sat+Sun primary block 11/20-22 is NOT listed (evaluated as a block): " + JSON.stringify(cRep));
+ok(!cRep.some(r => r.day === "2026-10-12"), "C fix 9: his locked Monday 10/12 primary lies BEFORE eastFeed.deriveFrom (October is not derived) - the pattern reasons do not count there: " + JSON.stringify(cRep.filter(r => r.day === "2026-10-12")));
+// Fix round (finding 3/8): with no published coverage at all (the app passes null while an
+// East id is unresolved) the forecast is still consulted - never a soft 'east-unknown'.
+step("C fix: no published coverage -> the forecast still applies");
+const cNoCov = makeCtx({ schedule: {}, eastFeedCoverage: null, eastForecast: { [KHAN]: { "2026-11-04": 0.9 } } });
+blocked(R.eligibility(cNoCov, "2026-11-04", P, KHAN), "east-forecast-busy:0.90", "C fix: coverage null + forecast 0.9 -> hard block (the app must prune with the coverage it passes, not a wider one)");
+// Fix round (finding 7): an east_overrides map for a surgeon whose East feature blocks no
+// role can never change an answer - it warns and is ignored, never silently inert.
+step("C fix: an override for a surgeon whose East feature blocks no role warns and is ignored");
+const cOvInert = makeCtx({ schedule: {}, eastOverrides: { [FIERCE]: { "2026-11-04": true, "2026-11-18": false } } });
+ok(cOvInert.warnings.some(w => /eastOverrides\[s5\]: 2 entries ignored - this surgeon's East feature blocks no role/.test(w)), "C fix 7: inert override map warns: " + JSON.stringify(cOvInert.warnings));
+ok(!cOvInert.per[FIERCE].eastBusy.has("2026-11-04") && !cOvInert.per[FIERCE].eastDays.has("2026-11-04") && cOvInert.per[FIERCE].eastOverrides["2026-11-04"] === undefined, "C fix 7: ...and the entries never land in his override / busy / East-day sets");
+okElig(R.eligibility(cOvInert, "2026-11-04", P, FIERCE), "C fix 7: ...eligibility unchanged (a Wednesday primary is open to Fierce)");
+ok(!makeCtx({ schedule: {}, eastOverrides: { [KHAN]: { "2026-11-04": true } } }).warnings.some(w => /blocks no role/.test(w)), "C fix 7: Khan's East feature blocks primary - no such warning for him");
 
 const total = Date.now() - t0;
 if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }

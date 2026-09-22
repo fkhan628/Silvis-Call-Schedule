@@ -79,7 +79,7 @@ decides the Trauma Director role.
   of the Thanksgiving unit: the unit is 11/26–11/29 only, no eve at Silvis** — 11/25 belongs to no holiday unit; Christmas
   12/24–25 and New Year's 12/31–1/1 keep their eves. the ER-panel author's document had Burchett on 11/25 — superseded (`pendingDeltas`, applied);
   **11/25 backup is open.** His run reads 11/25 + the unit (one day for him) = 2 commitments under his max 3.
-- **East forecast while Davenport is unpublished** (Faraz 9/21 evening): the Davenport schedule for the next period is not out until the end of 2026. Until it is, the East feed carries a forecast built by running the Davenport generator many times over the next period with the live Davenport inputs; days where Khan is on East call in ≥ 50 % of runs are treated as East-busy for Silvis primary (backup allowed), lower probabilities are a soft penalty, and such days show a “forecast” badge. When Davenport publishes, the real feed replaces the forecast and a conflict report lists any Silvis day needing a trade. Faraz can also enter his published Silvis days as Davenport constraints when he generates DSG.
+- **East forecast while Davenport is unpublished** (Faraz 9/21 evening): the Davenport schedule for the next period is not out until the end of 2026. Until it is, the East feed carries a forecast built by running the Davenport generator many times over the next period with the live Davenport inputs; days where Khan is on East call in ≥ 50 % of runs are treated as East-busy for Silvis primary (backup allowed), lower probabilities are a soft penalty, and such days show a “forecast” badge. When Davenport publishes, the real feed replaces the forecast and a conflict report lists any Silvis day needing a trade. Faraz can also enter his published Silvis days as Davenport constraints when he generates DSG. ⟶ **9/22 (Prompt 12 C): precedence published > override > forecast** — inside Davenport's published coverage the forecast is never consulted (published rows win: a published-free day with a stale forecast is eligible); an `east_overrides` `busy:false` clears a published or forecast-busy day and `busy:true` busies it whatever the feed says (an override for a surgeon whose East feature blocks no role is ignored with a warning); *Refresh from Davenport* deletes the `east_forecast` rows for weeks that are now published (count in the `east.refresh` audit row; "count unknown" when the delete returned no rows, never a confident 0); the East feed card ("Conflicts with the published schedule") and `diagnostics.eastConflicts` list the held Silvis slots the new East data makes ineligible.
 
 ### Burchett (s2) — recurring whitelist (primary) + weekends
 - Typically available **for primary**: **2nd & 4th Monday** (unless in Jackson County), **1st Tuesday**, **2nd & 4th Wednesday**. Otherwise in DeWitt / Jackson County most days. ⟶ **9/22: backup on any day** (off-site is fine for standby).
@@ -162,6 +162,14 @@ decides the Trauma Director role.
   IS the derived surgeon in `diagnostics.derivedConfirmed`. A derived week is *whole* when every day is the derived lock, a
   same-holder explicit lock, or a listed yield. After this amendment November shows **no yield** (`derivedConfirmed` = 11/9–11/15,
   holder Fierce).
+- ⟶ **9/22 (Prompt 12 C) — conflict report:** when a refresh adds or moves a derived week, the East feed card ("Conflicts with the
+  published schedule") and `diagnostics.eastConflicts` list every held Silvis slot the new East data makes ineligible: someone else
+  in his derived slot (`derived-lock-held`), Fierce held in the other role of his derived week (`derived-lock`, plus `east-busy` for a
+  primary in an East primary week), and — for a week that is no longer derived — his primary rows that now fall under his weekday
+  pattern (`weekday-pattern`, `weekend-block-only`; a full Fri+Sat+Sun block is fine; only from his `deriveFrom` 11/2 on — the single
+  locked 10/12 is never listed). A former derived week where he holds **backup**
+  raises nothing (backup is open to him every day); the calendar's E badges and `diagnostics.derivedYields` cover it. Locked rows
+  are listed too; the report never edits the schedule — open the day to trade or reassign.
 - **Outside those weeks he is in the pool and can be primary**, under his weekday pattern (via Faraz, 9/21):
 
   | Day | Where he is | Silvis eligibility |

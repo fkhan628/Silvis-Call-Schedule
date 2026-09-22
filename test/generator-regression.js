@@ -123,10 +123,14 @@ const DERIVED = [
   { weekMonday: "2026-12-07", surgeonId: FIERCE, silvisRole: P }  // East backup week  -> Silvis primary
 ];
 const KHAN_BUSY = ["2026-11-13", "2026-11-14", "2026-11-15", "2026-11-23", "2026-11-24", "2026-11-25", "2026-11-26", "2026-11-27", "2026-11-28", "2026-12-11", "2026-12-12", "2026-12-13"];
-const EAST_COVER = { from: "2026-11-02", to: "2026-12-31" };
+// Prompt 12 C (9/22): published coverage ends where the forecast (11/16 on) begins - they never
+// overlap (the refresh prunes forecast rows inside the coverage; rules.js never consults the
+// forecast inside it). Matches Davenport's real published-through (week of 11/9).
+const EAST_COVER = { from: "2026-11-02", to: "2026-11-15" };
 const FORECAST = forecastFile.busyProbabilityByDay;
 const THRESHOLD = seed.groupRules.eastFeed.forecast.busyThreshold;
-const KHAN_NO_PRIMARY = new Set(KHAN_BUSY.concat(Object.keys(FORECAST).filter((d) => FORECAST[d] >= THRESHOLD)));
+// Restated independently: a forecast day counts ONLY outside the published coverage (published rows win).
+const KHAN_NO_PRIMARY = new Set(KHAN_BUSY.concat(Object.keys(FORECAST).filter((d) => FORECAST[d] >= THRESHOLD && !(d >= EAST_COVER.from && d <= EAST_COVER.to))));
 const DERIVED_ROLE = {};   // day -> forced Silvis role (from deriveFrom on)
 const FIERCE_EAST_DAYS = new Set(); // every day of every derived week (East call either way; the Totals "East days" column)
 // 9/22 (Prompt 12 K): only the days of an East PRIMARY week (derived Silvis backup, silvisRole B)

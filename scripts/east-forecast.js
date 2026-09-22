@@ -20,22 +20,30 @@
 //
 // Usage:
 //   node scripts/east-forecast.js [--start YYYY-MM-DD] [--weeks N] [--runs N]
-//                                 [--threshold 0.2] [--budget-sec 240] [--sql]
+//                                 [--threshold 0.2] [--budget-sec 900] [--sql]
 //                                 [--ref path/to/davenport-ref]
 //   --start     first Monday of the forecast period
 //               (default: last published Davenport week_monday + 7 days)
 //   --weeks     number of weeks (default: blob.numWeeks, else 14)
-//   --runs      generate() runs to aggregate (default 100, auto-reduced to fit
-//               --budget-sec after timing the first run; the script says so)
+//   --runs      generate() runs to aggregate (default: the seed's
+//               groupRules.eastFeed.forecast.runs, 200 today - Prompt 12 C.5;
+//               auto-reduced to fit --budget-sec after timing the first run;
+//               the script says so and the JSON records BOTH numbers)
 //   --threshold table cut-off for the printed day list (default 0.2)
+//   --budget-sec wall-clock budget for the runs (default 900 s - sized so the
+//               seed's 200 runs fit at ~4 s per generate())
 //   --sql       also print east_forecast upsert SQL (one row per forecast week)
 //   --ref       Davenport clone (default ../../davenport-ref relative to this
 //               file, or env DAVENPORT_REF)
 //
 // Output: docs/east-forecast-latest.json =
-//   { generatedAt, davenportPublishedThrough, period:{start,end,numWeeks}, runs,
-//     fakId, busyProbabilityByDay:{date:p}, reasonCountsByDay:{date:{reason:n}},
+//   { generatedAt, davenportPublishedThrough, period:{start,end,numWeeks},
+//     requestedRuns, runs (actually executed), fakId, busyProbabilityByDay:{date:p},
+//     reasonCountsByDay:{date:{reason:n}},
 //     fierceWeekProbability:{weekMonday:{eastPrimary:p, eastBackup:p}}, notes:[] }
+//
+// Module use (tests): require() exports { parseArgs, defaultForecastRuns } and
+// runs nothing - main is guarded by require.main === module.
 //
 // How generate()'s arguments are built: exactly like the Davenport app's
 // doGenerate (davenport-ref/index-source.html ~3751-3846) and buildTimeOffMaps
@@ -51,13 +59,29 @@ const ROOT = path.join(__dirname, "..");
 const ef = require(path.join(ROOT, "east-feed.js"));
 
 // ---------------------------------------------------------------- CLI
+// Default run count = docs/silvis-seed.json groupRules.eastFeed.forecast.runs
+// (200; Prompt 12 C.5 - the seed's number is what runs unless --runs says
+// otherwise). A missing / malformed seed value falls back to 100 with a note
+// on stderr so the default is never silently something else.
+const FALLBACK_RUNS = 100;
+function defaultForecastRuns(seedPath) {
+  try {
+    const seed = JSON.parse(fs.readFileSync(seedPath || path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const n = seed && seed.groupRules && seed.groupRules.eastFeed && seed.groupRules.eastFeed.forecast && seed.groupRules.eastFeed.forecast.runs;
+    if (Number.isInteger(n) && n > 0) return n;
+    console.error("east-forecast: groupRules.eastFeed.forecast.runs missing or invalid in the seed (" + JSON.stringify(n) + ") - defaulting to " + FALLBACK_RUNS + " runs");
+  } catch (e) {
+    console.error("east-forecast: could not read docs/silvis-seed.json for the default run count (" + (e && e.message || e) + ") - defaulting to " + FALLBACK_RUNS + " runs");
+  }
+  return FALLBACK_RUNS;
+}
 function parseArgs(argv) {
-  const a = { start: null, weeks: null, runs: 100, threshold: 0.2, budgetSec: 240, sql: false, ref: process.env.DAVENPORT_REF || path.join(ROOT, "..", "davenport-ref") };
+  const a = { start: null, weeks: null, runs: defaultForecastRuns(), runsFrom: "seed", threshold: 0.2, budgetSec: 900, sql: false, ref: process.env.DAVENPORT_REF || path.join(ROOT, "..", "davenport-ref") };
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i], v = argv[i + 1];
     if (k === "--start") { a.start = v; i++; }
     else if (k === "--weeks") { a.weeks = parseInt(v, 10); i++; }
-    else if (k === "--runs") { a.runs = parseInt(v, 10); i++; }
+    else if (k === "--runs") { a.runs = parseInt(v, 10); a.runsFrom = "--runs"; i++; }
     else if (k === "--threshold") { a.threshold = parseFloat(v); i++; }
     else if (k === "--budget-sec") { a.budgetSec = parseFloat(v); i++; }
     else if (k === "--sql") { a.sql = true; }
@@ -222,11 +246,12 @@ function round3(x) { return Math.round(x * 1000) / 1000; }
 function sqlStr(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
 
 // ---------------------------------------------------------------- main
-(async () => {
+async function main() {
   const args = parseArgs(process.argv);
   const notes = [];
   const t0 = Date.now();
 
+  console.log("east-forecast: requested runs " + args.runs + " (" + (args.runsFrom === "seed" ? "seed groupRules.eastFeed.forecast.runs" : "--runs") + "), budget " + args.budgetSec + " s");
   console.log("east-forecast: loading Davenport modules from " + args.ref);
   const dav = loadDavenport(args.ref);
   console.log("east-forecast: fetching live Davenport inputs (GET only, anon key) from " + ef.EAST_PROJECT.url);
@@ -274,7 +299,7 @@ function sqlStr(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
   console.log("  one generate() took " + msPer + " ms (best-of-50 inside); " + args.runs + " runs ~ " + Math.round(args.runs * msPer / 1000) + " s");
   if (args.runs * msPer > budgetMs) {
     runs = fit;
-    notes.push("runs reduced from " + args.runs + " to " + runs + " to stay within ~" + args.budgetSec + " s (one generate() = " + msPer + " ms)");
+    notes.push("runs reduced from " + args.runs + " (requested) to " + runs + " (executed) to stay within ~" + args.budgetSec + " s (one generate() = " + msPer + " ms); the JSON records both as requestedRuns / runs");
     console.log("  -> " + runs + " runs to fit the " + args.budgetSec + " s budget (say --runs/--budget-sec to change)");
   }
 
@@ -326,7 +351,8 @@ function sqlStr(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
     generatedAt: new Date().toISOString(),
     davenportPublishedThrough: inp.publishedThrough,
     period: { start: inp.startStr, end: inp.endStr, numWeeks: inp.numWeeks },
-    runs,
+    requestedRuns: args.runs,   // what was asked for (seed groupRules.eastFeed.forecast.runs unless --runs)
+    runs,                       // what actually ran (budget-reduced when the note says so)
     fakId: inp.fakId,
     busyProbabilityByDay,
     reasonCountsByDay: reasonCounts,
@@ -336,7 +362,7 @@ function sqlStr(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
   };
   const outPath = path.join(ROOT, "docs", "east-forecast-latest.json");
   fs.writeFileSync(outPath, JSON.stringify(out, null, 2) + "\n");
-  console.log("\nwrote " + outPath);
+  console.log("\nwrote " + outPath + " (requestedRuns " + out.requestedRuns + ", runs executed " + out.runs + ")");
 
   // ---- table
   console.log("\nDays with P(FAK on East call) >= " + args.threshold + "   [" + inp.startStr + " .. " + inp.endStr + ", " + runs + " runs]");
@@ -391,4 +417,9 @@ function sqlStr(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
     console.log("-- " + rowsSql.length + " rows; round-trip through east-feed.js verified (forecast readable, invisible to published derivers)");
   }
   console.log("\ndone in " + Math.round((Date.now() - t0) / 1000) + " s. Nothing was written to the Davenport project.");
-})().catch(e => { console.error("east-forecast FAILED: " + (e && e.stack || e)); process.exit(1); });
+}
+
+if (require.main === module) {
+  main().catch(e => { console.error("east-forecast FAILED: " + (e && e.stack || e)); process.exit(1); });
+}
+module.exports = { parseArgs, defaultForecastRuns, FALLBACK_RUNS };

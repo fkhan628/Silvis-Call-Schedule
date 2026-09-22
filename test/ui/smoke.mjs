@@ -410,6 +410,10 @@ const representation = (method, url, body) => {
       return Array.isArray(b) ? b.map(stamp) : [stamp(b)];
     } catch (e) { return []; }
   }
+  // Prompt 12 C.2 (fix round 9/22, finding 4): the east_forecast prune DELETE answers
+  // ONE fake row, so the East refresh assertion proves the app COUNTS the returned
+  // representation (a hard-coded 0 would fail).
+  if (method === "DELETE" && url.pathname.startsWith("/rest/v1/east_forecast")) return [{ week_monday: "2026-10-05" }];
   const echoes = url.pathname.startsWith("/rest/v1/schedule_days") || (method === "PATCH" && url.pathname.startsWith("/rest/v1/call_schedule_data"));
   if (!echoes) return [];
   try {
@@ -1931,6 +1935,26 @@ try {
         if (!post2 || !/resolution=merge-duplicates/.test(post2.prefer || "") || rows2.length !== 1 || rows2[0].week_monday !== "2026-10-05" || !rows2[0].data || rows2[0].data.dayCall !== "s6" || !rows2[0].fetched_at) fail("East refresh: upsert payload wrong: " + JSON.stringify({ prefer: post2 && post2.prefer, rows: rows2 }).slice(0, 300));
         else if (!/East feed refreshed: 1 published week\(s\) cached/.test(txt2)) fail("East refresh: success toast missing after the upsert");
         else ok("East refresh: POST /rest/v1/east_feed (merge-duplicates) with the 1 mocked Davenport week (2026-10-05, dayCall s6, fetched_at) + audit east.refresh + success toast");
+        // Prompt 12 C.2 (9/22): after the upsert the refresh DELETEs the east_forecast
+        // rows whose week_monday lies inside the new published coverage (the mocked
+        // week 2026-10-05 -> 2026-10-05..2026-10-11; the harness answers ONE fake row),
+        // counts them with return=representation, and says so in the audit row + toast.
+        const fcDel = writesSince(before2, "/rest/v1/east_forecast").find(w => w.method === "DELETE");
+        const refreshAudit2 = auditSince(before2, "east.refresh");
+        const fcDeleted = refreshAudit2 && refreshAudit2.detail ? refreshAudit2.detail.forecastRowsDeleted : undefined;
+        if (!fcDel) fail("East refresh (C.2): no DELETE on /rest/v1/east_forecast after the upsert - stale forecast rows inside the published coverage are never pruned");
+        else if (fcDel.path !== "/rest/v1/east_forecast?week_monday=gte.2026-10-05&week_monday=lte.2026-10-11") fail("East refresh (C.2): the forecast DELETE window is not the new published coverage: " + fcDel.path);
+        else if (!/return=representation/.test(fcDel.prefer || "")) fail("East refresh (C.2): the forecast DELETE lacks Prefer: return=representation (nothing to count): " + fcDel.prefer);
+        else if (fcDel.path.indexOf("east_forecast") < 0 || writesSince(before2).findIndex(w => w === fcDel) < writesSince(before2).findIndex(w => w === post2)) fail("East refresh (C.2): the forecast DELETE ran before the east_feed upsert");
+        else if (fcDeleted !== 1) fail("East refresh (C.2): audit east.refresh detail.forecastRowsDeleted should be 1 (the harness answered one row - the app must COUNT the representation), got " + JSON.stringify(fcDeleted) + " in " + JSON.stringify(refreshAudit2 && refreshAudit2.detail));
+        else if (!/1 forecast row\(s\) inside the published coverage deleted/.test((refreshAudit2 && refreshAudit2.detail && refreshAudit2.detail.summary) || "")) fail("East refresh (C.2): the audit summary does not name the deleted count: " + JSON.stringify(refreshAudit2 && refreshAudit2.detail && refreshAudit2.detail.summary));
+        else if (!/1 forecast row\(s\)/.test(txt2)) fail("East refresh (C.2): the success toast does not say how many forecast rows were deleted: " + txt2.slice(0, 200));
+        else ok("East refresh (C.2): DELETE /rest/v1/east_forecast?week_monday=gte.2026-10-05&week_monday=lte.2026-10-11 (return=representation) after the upsert; audit detail forecastRowsDeleted 1 (counted from the representation); audit summary + toast name the count");
+        // Prompt 12 C.4: the conflict report over the published schedule lives in the card.
+        const conflicts = await page.$eval("[data-testid=east-conflicts]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => null);
+        if (conflicts === null) fail("East card (C.4): no [data-testid=east-conflicts] conflict report");
+        else if (!(conflicts === "none" || /\d{4}-\d{2}-\d{2} (primary|backup) /.test(conflicts))) fail("East card (C.4): the conflict report is neither 'none' nor day/role rows: " + conflicts.slice(0, 160));
+        else ok("East card (C.4): conflicts with the published schedule: " + (conflicts === "none" ? "none" : conflicts.slice(0, 120)));
       }
     }
 

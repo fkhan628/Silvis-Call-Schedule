@@ -499,6 +499,60 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes("calendar-sync?surgeon=${s.code}"));
     assert.ok(src.includes("not linked to a roster entry yet"));
   });
+  // Prompt 12 C (9/22): the East refresh prunes east_forecast rows that the new
+  // published coverage now covers, says how many in the audit row + toast, the
+  // ctx builder passes the forecast pruned to unpublished weeks plus the
+  // overrides as their own input, and the East card carries the conflict report.
+  check("C.2: refreshEastFeed DELETEs east_forecast rows inside the new published coverage (counted with return=representation) and records forecastRowsDeleted in the east.refresh audit row", () => {
+    const fn = src.slice(src.indexOf("const refreshEastFeed = async"), src.indexOf("const saveEastOverride = async"));
+    assert.ok(fn.length > 0, "refreshEastFeed not found");
+    const del = fn.match(/rest\/v1\/east_forecast\?week_monday=gte\.\$\{[^}]+\}&week_monday=lte\.\$\{[^}]+\}`, \{ method: "DELETE", headers: \{ \.\.\.dbAuthHeaders\(\), Prefer: "return=representation" \}/);
+    assert.ok(del, "no DELETE of east_forecast by week_monday range with return=representation inside refreshEastFeed");
+    assert.ok(fn.indexOf("coverageOf(feed.weeks)") > 0 && fn.indexOf("coverageOf(feed.weeks)") < fn.indexOf("east_forecast?week_monday"), "the coverage is computed from the fetched published weeks before the delete");
+    assert.ok(fn.indexOf("/rest/v1/east_feed") < fn.indexOf("east_forecast?week_monday"), "the delete follows the east_feed upsert");
+    assert.match(fn, /logAudit\("east\.refresh",[\s\S]*forecastRowsDeleted/, "the east.refresh audit detail lacks forecastRowsDeleted");
+    assert.ok(/couldn't delete the forecast rows/i.test(fn), "a failed forecast delete must toast (never silent)");
+    assert.ok(/forecast row\(s\)/.test(fn), "the success toast names the forecast row count");
+    // Fix round (review 9/22, findings 5 + 10): a 2xx without an array body records
+    // null (count unknown) - never a confident 0 - and the failure is carried by ONE
+    // final toast (tone error) after the audit row, not by an earlier toast the
+    // summary toast would overwrite (showToast is a single slot).
+    assert.ok(fn.includes("Array.isArray(deleted) ? deleted.length : null"), "a non-array DELETE representation must record forecastRowsDeleted null (count unknown), never 0");
+    assert.ok(/count unknown/.test(fn), "the audit / toast must say 'count unknown' when the delete succeeded without a representation");
+    const toasts = fn.match(/couldn't delete the forecast rows/g) || [];
+    assert.strictEqual(toasts.length, 1, "exactly one toast carries the prune failure (found " + toasts.length + ")");
+    assert.ok(fn.lastIndexOf("couldn't delete the forecast rows") > fn.indexOf('logAudit("east.refresh"'), "the failure text must be in the FINAL toast (after the audit row), not in an earlier toast that the summary toast overwrites");
+    assert.ok(/forecastDeleteError \? "error" : "success"/.test(fn), "the final toast's tone is 'error' when the prune failed");
+  });
+  check("C.1/C.3: the ctx builder passes the forecast pruned to unpublished weeks (forecastOutsideCoverage) and east_overrides grouped per person as input.eastOverrides", () => {
+    const cb = src.slice(src.indexOf("const ctxInputs = useMemo(() => {"), src.indexOf("const rulesCtxState = useMemo"));
+    assert.ok(cb.includes("forecastOutsideCoverage("), "ctx builder does not prune the forecast to the unpublished weeks");
+    assert.ok(cb.includes("overridesByPerson(eastOverrideRows)"), "ctx builder does not group east_overrides per person");
+    assert.match(cb, /eastOverrides[,:]/, "ctx builder does not pass eastOverrides to buildContext");
+    // Fix round (findings 3 + 8): prune with the SAME coverage the engine gets - the
+    // unresolved-aware one (null while an East id is unresolved) - computed AFTER the
+    // resolve loop, so a hard forecast block is never downgraded to 'east-unknown'.
+    const covAt = cb.indexOf("const coverage = unresolved ? null : publishedCoverage;");
+    assert.ok(covAt >= 0, "the unresolved-aware coverage line is missing");
+    assert.ok(cb.includes("forecastOutsideCoverage(forecastAll, coverage)"), "the forecast must be pruned with `coverage` (unresolved-aware), not with publishedCoverage");
+    assert.ok(covAt < cb.indexOf("forecastOutsideCoverage(forecastAll, coverage)"), "the prune must follow the unresolved-aware coverage computation");
+  });
+  check("C.4/C.5: the East card carries the conflict report (data-testid east-conflicts) and the corrected forecast sentence", () => {
+    assert.ok(src.includes('data-testid="east-conflicts"'), "no east-conflicts list in the East card");
+    assert.ok(src.includes("Refreshing the feed caches Davenport's published weeks and deletes forecast rows for weeks that are now published; the forecast only ever fills weeks Davenport has not published."), "the corrected sentence is missing");
+    assert.strictEqual(src.includes("Published weeks replace the forecast automatically"), false, "the old (untrue) sentence is still there");
+    assert.ok(src.includes("eastConflicts(rulesCtx"), "the conflict report is not computed from rulesCtx over the schedule map");
+    // Fix round (findings 2 + 12): the card's own forecast strip reads the PRUNED map
+    // (published coverage applied) and says how many forecast rows are ignored.
+    const cs = src.indexOf("function EastFeedCard(");
+    const card = src.slice(cs, src.indexOf("\nfunction ", cs + 10));
+    assert.ok(card.includes("forecastOutsideCoverage(forecastFromFeedRows(forecastRows || []), cov)"), "EastFeedCard must prune its forecast strip with the published coverage (cov)");
+    assert.ok(card.includes("inside the published coverage (ignored)"), "EastFeedCard must say how many forecast rows lie inside the published coverage and are ignored");
+    // Fix round (finding 13): the calendar F badge honours an override busy:false.
+    const bs = src.indexOf("const badgesFor = (d) => {");
+    const badges = src.slice(bs, src.indexOf("return out;", bs));
+    assert.ok(badges.includes("P.eastOverrides[d] === false"), "badgesFor must skip the F badge on an override busy:false day");
+  });
   check("edge-function base is derived from SUPABASE_URL (no Edge Function URL setting)", () => {
     assert.strictEqual(src.includes("edgeFunctionUrl"), false);
     assert.ok(src.includes("${EDGE_FN_BASE}/office-notifications"));

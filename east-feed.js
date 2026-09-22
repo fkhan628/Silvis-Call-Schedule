@@ -251,9 +251,50 @@ function forecastFromFeedRows(rows) {
   return out;
 }
 
+// forecastOutsideCoverage(forecast, coverage) -> { 'YYYY-MM-DD': probability }
+//   Prompt 12 C (9/22): published rows win. Keeps only the forecast days OUTSIDE
+//   the published coverage { from, to } (inclusive), drops malformed keys / NaN
+//   probabilities, never mutates the input. rules.js ignores the forecast
+//   inside ctx.eastCoverage anyway; pruning here keeps every consumer of
+//   ctxInputs.eastForecast (badges, coverage strip, day editor, preview
+//   script) consistent with the engine. coverage null -> the validated map.
+function forecastOutsideCoverage(forecast, coverage) {
+  const out = {};
+  const from = coverage && efIsDateStr(coverage.from) ? coverage.from : null;
+  const to = coverage && efIsDateStr(coverage.to) ? coverage.to : null;
+  Object.keys(forecast || {}).forEach(ds => {
+    if (!efIsDateStr(ds)) return;
+    const p = Number(forecast[ds]);
+    if (Number.isNaN(p)) return;
+    if (from && to && ds >= from && ds <= to) return;
+    out[ds] = p;
+  });
+  return out;
+}
+
+// overridesByPerson(overrideRows) -> { [person_id]: { 'YYYY-MM-DD': true|false } }
+//   Silvis east_overrides rows grouped per person for rules.buildContext
+//   input.eastOverrides (Prompt 12 C: published > override > forecast - a
+//   busy:false override clears a forecast-busy day too, which applyOverrides on
+//   the busy set alone cannot). Rows with a malformed day, no person_id or a
+//   non-boolean busy are dropped. The last row for a (person, day) wins.
+function overridesByPerson(overrideRows) {
+  const out = {};
+  (overrideRows || []).forEach(r => {
+    if (!r || typeof r.person_id !== "string" || !r.person_id || typeof r.busy !== "boolean") return;
+    const day = String(r.day || "").slice(0, 10);
+    if (!efIsDateStr(day)) return;
+    (out[r.person_id] = out[r.person_id] || {})[day] = r.busy;
+  });
+  return out;
+}
+
 // applyOverrides(busySet, overrideRows, personId) -> new Set
 //   overrideRows: Silvis east_overrides rows [{ day, person_id, busy }]
 //   busy:true adds the day, busy:false removes it. Applied LAST by callers.
+//   Kept for older callers; the app and the preview script now ALSO pass the
+//   rows as input.eastOverrides (overridesByPerson) so the forecast side of a
+//   busy:false override is honoured by rules.js.
 function applyOverrides(busySet, overrideRows, personId) {
   const out = new Set(busySet || []);
   (overrideRows || []).forEach(r => {
@@ -288,6 +329,7 @@ if (typeof module !== "undefined") {
     EAST_PROJECT, eastGetJson, eastResolveFakId, fetchEastWeeks,
     deriveKhanBusyDays, deriveFierceWeeks, coverageOf, applyOverrides,
     forecastToBusy, toEastFeedRows, efIsForecastRow, forecastFromFeedRows,
+    forecastOutsideCoverage, overridesByPerson,
     efFmt, efParse, efAddD, efDayOffsets,
   };
 }

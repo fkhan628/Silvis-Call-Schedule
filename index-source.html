@@ -1676,8 +1676,18 @@ function CallSchedule() {
 
   const ctxInputs = useMemo(() => {
     const weeks = eastFeedRows.map(r => ({ weekMonday: r.week_monday, data: r.data || {} }));
-    const forecast = forecastFromFeedRows(eastForecastRows);
+    // Prompt 12 C (9/22): published > override > forecast. The forecast is pruned
+    // to the weeks Davenport has NOT published (published coverage = coverageOf of
+    // the cached weeks; rules.js ignores the forecast inside it anyway - pruning
+    // here keeps the badges, the coverage strip and the day editor consistent),
+    // and the east_overrides rows go to buildContext as their own input
+    // (eastOverrides, grouped per person) so a busy:false override clears a
+    // forecast-busy day too. applyOverrides on the busy set stays for the display.
+    const publishedCoverage = coverageOf(weeks);
+    const forecastAll = forecastFromFeedRows(eastForecastRows);
+    const eastOverrides = overridesByPerson(eastOverrideRows);
     const eastBusyDays = {}, eastForecast = {}, eastDerived = [], eastMeta = {};
+    const forecastIds = []; // surgeons whose eastFeed.forecast is on - filled after the prune below
     let unresolved = false;
     surgeons.forEach(s => {
       const ef = (surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed) || null;
@@ -1690,7 +1700,7 @@ function CallSchedule() {
         if (meta.eastId) busy = deriveKhanBusyDays(weeks, meta.eastId, { eastBackupCountsAsBusy: ef.eastBackupCountsAsBusy !== false }).busy;
         else if (weeks.length) unresolved = true;
         eastBusyDays[s.id] = applyOverrides(busy, eastOverrideRows, s.id);
-        if (ef.forecast && Object.keys(forecast).length) { eastForecast[s.id] = forecast; meta.forecast = true; }
+        if (ef.forecast) forecastIds.push(s.id);
       }
       if (ef.deriveFrom || ef.statedWeeks) {
         meta.derivedWeeks = true;
@@ -1702,15 +1712,29 @@ function CallSchedule() {
     });
     // Coverage is claimed only when every busy-days surgeon resolved: an
     // unresolved id must read as "unknown" (soft penalty), never as "clear".
-    const coverage = unresolved ? null : coverageOf(weeks);
+    const coverage = unresolved ? null : publishedCoverage;
+    // Fix round (9/22, findings 3 + 8): prune the forecast with the SAME coverage the
+    // engine receives. While an East id is unresolved the coverage is null and the
+    // forecast stays whole, so a hard forecast block is never downgraded to a soft
+    // 'east-unknown' by the pruning; once resolved, published rows win.
+    const forecast = forecastOutsideCoverage(forecastAll, coverage);
+    if (Object.keys(forecast).length) forecastIds.forEach(id => { eastForecast[id] = forecast; eastMeta[id].forecast = true; });
     return {
       roster: surgeons, surgeonRules: surgeonRules || {}, groupRules: groupRules || {}, holidays: holidays || {},
       timeOffRows, availabilityRows, schedule,
-      eastBusyDays, eastForecast, eastDerived, eastFeedCoverage: coverage, eastMeta,
+      eastBusyDays, eastForecast, eastOverrides, eastDerived, eastFeedCoverage: coverage, eastMeta,
     };
   }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode]);
   const rulesCtxState = useMemo(() => safeBuildContext(ctxInputs), [ctxInputs]);
   const rulesCtx = rulesCtxState.ctx;
+  // Prompt 12 C.4 (9/22): the East conflict report over the WHOLE schedule map
+  // (published schedule_days rows) - recomputed whenever the ctx changes, which is
+  // after every load / East refresh / override save. Shown in the East feed card.
+  const eastConflictRows = useMemo(() => {
+    if (!rulesCtx || typeof eastConflicts !== "function") return [];
+    try { return eastConflicts(rulesCtx, Object.keys(schedule || {}).sort()); }
+    catch (e) { console.warn("East conflict report failed", e); return []; }
+  }, [rulesCtx, schedule]);
   useEffect(() => {
     if (rulesCtxState.error) showToast("Couldn't build the rules context - eligibility checks are unavailable (" + rulesCtxState.error.slice(0, 90) + ").", "error");
     else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) console.warn("rules context warnings:", rulesCtx.warnings);
@@ -1953,12 +1977,45 @@ function CallSchedule() {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/east_feed`, { method: "POST", headers: { ...dbAuthHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) });
         if (!res.ok) { const t = await res.text().catch(() => ""); console.warn("east_feed upsert failed", res.status, t); showToast("Fetched " + rows.length + " week(s) but couldn't cache them: " + describeDbError(t), "error"); return; }
       }
+      // Prompt 12 C.2 (9/22): published rows win - delete the east_forecast rows
+      // whose week_monday now lies inside the published coverage of the weeks just
+      // fetched (the forecast only ever fills weeks Davenport has not published).
+      // return=representation so the deleted rows come back and can be counted; a
+      // failed delete is a console.warn + a null count in the audit row + the ONE
+      // final toast below (tone error), never silent (rules.js ignores a stale
+      // forecast inside the coverage anyway). Fix round (9/22, finding 5): a 2xx
+      // without an array body is a count UNKNOWN (null + the reason), never a
+      // confident 0; (finding 10): showToast is a single slot, so the failure text
+      // rides on the final toast instead of an earlier toast it would overwrite.
+      const publishedCoverage = coverageOf(feed.weeks);
+      let forecastRowsDeleted = null, forecastDeleteError = null, forecastCountUnknown = false;
+      if (publishedCoverage) {
+        const delRes = await fetch(`${SUPABASE_URL}/rest/v1/east_forecast?week_monday=gte.${publishedCoverage.from}&week_monday=lte.${publishedCoverage.to}`, { method: "DELETE", headers: { ...dbAuthHeaders(), Prefer: "return=representation" } });
+        if (!delRes.ok) {
+          forecastDeleteError = (await delRes.text().catch(() => "")) || ("HTTP " + delRes.status);
+          console.warn("east_forecast prune failed", delRes.status, forecastDeleteError);
+        } else {
+          let deleted = null;
+          try { deleted = await delRes.json(); } catch (e) { deleted = null; }
+          forecastRowsDeleted = Array.isArray(deleted) ? deleted.length : null;
+          if (forecastRowsDeleted === null) { forecastCountUnknown = true; forecastDeleteError = "delete succeeded but no representation returned (count unknown)"; console.warn("east_forecast prune: " + forecastDeleteError); }
+        }
+      }
       const codes = { _source: "davenport" };
       (feed.roster || []).forEach(s => { if (s && s.name && s.id) codes[String(s.name).toUpperCase()] = s.id; });
       setEastIdByCode(codes);
       await loadEastTables();
-      logAudit("east.refresh", `Refreshed the East feed: ${rows.length} published week(s) between ${fromMon} and ${toMon}`, { from: fromMon, to: toMon, weeks: rows.length });
-      showToast(rows.length ? `East feed refreshed: ${rows.length} published week(s) cached.` : "East feed refreshed: Davenport has no published weeks in that window - cache unchanged.", rows.length ? "success" : "info");
+      const pruneSummary = !publishedCoverage ? "forecast prune skipped (no published weeks)"
+        : forecastRowsDeleted !== null ? forecastRowsDeleted + " forecast row(s) inside the published coverage deleted"
+        : forecastCountUnknown ? "forecast rows inside the published coverage deleted, count unknown (no representation returned)"
+        : "forecast prune FAILED";
+      logAudit("east.refresh", `Refreshed the East feed: ${rows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}`,
+        { from: fromMon, to: toMon, weeks: rows.length, coverage: publishedCoverage, forecastRowsDeleted, forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null });
+      const pruneWord = !publishedCoverage ? ""
+        : forecastRowsDeleted !== null ? ` ${forecastRowsDeleted} forecast row(s) for now-published weeks deleted.`
+        : forecastCountUnknown ? ` Forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were deleted but the count is unknown (no representation returned) - check the forecast strip.`
+        : ` But the forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were NOT deleted - couldn't delete the forecast rows: ${describeDbError(forecastDeleteError)} (eligibility ignores them; delete them by hand).`;
+      showToast(rows.length ? `East feed refreshed: ${rows.length} published week(s) cached.${pruneWord}` : "East feed refreshed: Davenport has no published weeks in that window - cache unchanged.", rows.length ? (forecastDeleteError ? "error" : "success") : "info");
     } catch (e) {
       // A rejected fetch (network drop, CORS, DNS) on the east_feed upsert, the
       // cache reload or the audit row must not escape as an unhandled rejection
@@ -3788,7 +3845,8 @@ function CallSchedule() {
 
           <Collapsible css={css} ck="setup_east" defaultOpen={false} title="East feed (Davenport, read-only)">
             <EastFeedCard css={css} feedRows={eastFeedRows} forecastRows={eastForecastRows} overrideRows={eastOverrideRows} loadState={eastLoadState} ctx={rulesCtx} ctxInputs={ctxInputs} roster={surgeons} nameOf={nameOf}
-              calMonth={calMonth} calYear={calYear} onRefresh={refreshEastFeed} refreshing={eastRefreshing} onSaveOverride={saveEastOverride} onDeleteOverride={deleteEastOverride} threshold={forecastThreshold} today={todayStr}/>
+              calMonth={calMonth} calYear={calYear} onRefresh={refreshEastFeed} refreshing={eastRefreshing} onSaveOverride={saveEastOverride} onDeleteOverride={deleteEastOverride} threshold={forecastThreshold} today={todayStr}
+              conflicts={eastConflictRows} onEditDay={goToDay}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_generate" defaultOpen={true} title="Generate (preview, then publish)">
@@ -4090,7 +4148,11 @@ function CallSchedule() {
             const u = rulesCtx && rulesCtx.holidayByDay ? rulesCtx.holidayByDay[d] : null;
             if (u) out.push({ k: "H", text: u.name, title: u.name + " (" + (u.tier || "major") + " holiday unit)", bg: "#fbf1d8", fg: "#7a5a20" });
             if (P && P.derived[d]) out.push({ k: "E", text: "E", title: "East week: Silvis " + P.derived[d] + " (derived from the Davenport feed)", bg: "#e8e0f8", fg: "#5a3a90" });
-            const fc = P && P.eastForecast ? P.eastForecast[d] : undefined;
+            // Fix round (9/22, finding 13): an override busy:false clears the day - no F badge
+            // (the day editor says "no East call (override: force clear)"; the O badge mirrors it).
+            const ovClear = !!(P && P.eastOverrides && P.eastOverrides[d] === false);
+            if (ovClear) out.push({ k: "O", text: "O", title: "East override: no East call (force clear)", bg: "#e4f3e8", fg: "#1a6a3a" });
+            const fc = P && P.eastForecast && !ovClear ? P.eastForecast[d] : undefined;
             if (typeof fc === "number" && rulesCtx && fc >= rulesCtx.forecastThreshold) out.push({ k: "F", text: "F", title: "East forecast " + Math.round(fc * 100) + "% (treated as busy)", bg: "#e0eef8", fg: "#1a5a88" });
             return out;
           };
@@ -4894,11 +4956,17 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
       const standing = P && P.eastStanding && P.eastStanding.size ? P.eastStanding.get(day.slice(5)) : null;
       if (standing) out.push({ id, text: name + ": East call (standing rule: " + standing + ", every year) - Silvis primary blocked", tone: "busy" });
       else if (!m.eastId) out.push({ id, text: name + ": East id unresolved - status unknown", tone: "warn" });
-      else if (P && P.eastBusy.has(day)) out.push({ id, text: name + ": East call (published) - Silvis primary blocked", tone: "busy" });
+      else if (P && P.eastBusy.has(day)) out.push({ id, text: name + ": East call (" + (P.eastOverrides && P.eastOverrides[day] === true ? "override" : "published") + ") - Silvis primary blocked", tone: "busy" });
       else {
-        const p = P && P.eastForecast ? P.eastForecast[day] : undefined;
-        if (typeof p === "number") out.push({ id, text: name + ": East forecast " + Math.round(p * 100) + "% (" + (p >= ctx.forecastThreshold ? "treated as busy" : "below the " + Math.round(ctx.forecastThreshold * 100) + "% threshold") + ")", tone: p >= ctx.forecastThreshold ? "busy" : "ok" });
-        else if (ctx && ctx.eastCoverage && day >= ctx.eastCoverage.from && day <= ctx.eastCoverage.to) out.push({ id, text: name + ": no East call (published)", tone: "ok" });
+        // Prompt 12 C (9/22): published > override > forecast - inside the published
+        // coverage the forecast is never consulted, and an override busy:false clears
+        // the day whatever the feed or forecast says.
+        const ovFree = !!(P && P.eastOverrides && P.eastOverrides[day] === false);
+        const covered = !!(ctx && ctx.eastCoverage && day >= ctx.eastCoverage.from && day <= ctx.eastCoverage.to);
+        const p = (!covered && !ovFree && P && P.eastForecast) ? P.eastForecast[day] : undefined;
+        if (ovFree) out.push({ id, text: name + ": no East call (override: force clear)", tone: "ok" });
+        else if (covered) out.push({ id, text: name + ": no East call (published)", tone: "ok" });
+        else if (typeof p === "number") out.push({ id, text: name + ": East forecast " + Math.round(p * 100) + "% (" + (p >= ctx.forecastThreshold ? "treated as busy" : "below the " + Math.round(ctx.forecastThreshold * 100) + "% threshold") + ")", tone: p >= ctx.forecastThreshold ? "busy" : "ok" });
         else out.push({ id, text: name + ": East unknown (no published week or forecast for this day)", tone: "warn" });
       }
     }
@@ -5980,7 +6048,7 @@ function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onS
 }
 
 // --- East feed status, forecast, overrides, derived weeks and busy days ---
-function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ctx, ctxInputs, roster, nameOf, calMonth, calYear, onRefresh, refreshing, onSaveOverride, onDeleteOverride, threshold, today }) {
+function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ctx, ctxInputs, roster, nameOf, calMonth, calYear, onRefresh, refreshing, onSaveOverride, onDeleteOverride, threshold, today, conflicts, onEditDay }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const weeks = (feedRows || []).map(r => ({ weekMonday: r.week_monday, data: r.data || {} }));
   const cov = typeof coverageOf === "function" ? coverageOf(weeks) : null;
@@ -5989,7 +6057,11 @@ function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ct
   const nextPrimary = derived.filter(w => w.silvisRole === "primary" && w.weekMonday >= today).sort((a, b) => a.weekMonday < b.weekMonday ? -1 : 1)[0] || null;
   const meta = (ctxInputs && ctxInputs.eastMeta) || {};
   const busyIds = Object.keys(meta).filter(id => meta[id].busyDays);
-  const forecast = typeof forecastFromFeedRows === "function" ? forecastFromFeedRows(forecastRows || []) : {};
+  // Fix round (9/22, findings 2 + 12): the strip reads the PRUNED map - published rows
+  // win - so it can never name a day eligibility ignores; rows inside the coverage
+  // (stale after a failed prune) are counted and named as ignored.
+  const forecast = (typeof forecastFromFeedRows === "function" && typeof forecastOutsideCoverage === "function") ? forecastOutsideCoverage(forecastFromFeedRows(forecastRows || []), cov) : {};
+  const fcInsideCov = cov ? (forecastRows || []).filter(r => r && r.week_monday >= cov.from && r.week_monday <= cov.to).length : 0;
   const fcGenerated = (forecastRows || []).map(r => r.generated_at || (r.data && r.data.generatedAt)).filter(Boolean).sort().slice(-1)[0] || null;
   const fcRuns = (forecastRows || []).map(r => r.data && r.data.runs).filter(x => typeof x === "number")[0];
   const horizon = suAddDays(today, 90);
@@ -6012,11 +6084,23 @@ function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ct
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Forecast (while Davenport is unpublished)</div>
         {(forecastRows || []).length === 0 ? <p style={{ fontSize: 12, color: "#7a8a98", margin: 0 }}>No forecast rows.</p> : (
           <div style={{ fontSize: 12, color: "#3a4a58", lineHeight: 1.6 }}>
-            generated {suFmtTs(fcGenerated)}, {fcRuns !== undefined ? fcRuns + " runs" : "runs unknown"}, {(forecastRows || []).length} week(s); days at or above {Math.round((threshold || 0.5) * 100)}% in the next 90 days: {fcDays.length === 0 ? "none" : null}
+            generated {suFmtTs(fcGenerated)}, {fcRuns !== undefined ? fcRuns + " runs" : "runs unknown"}, {(forecastRows || []).length} week(s){fcInsideCov > 0 ? <span style={{ color: "#a83232" }}> ({fcInsideCov} inside the published coverage (ignored) - refresh the feed to delete them)</span> : null}; days at or above {Math.round((threshold || 0.5) * 100)}% in the next 90 days: {fcDays.length === 0 ? "none" : null}
             {fcDays.length > 0 && <div data-testid="east-forecast-days" style={{ fontFamily: mono, fontSize: 11 }}>{fcDays.map(d => d + " " + Math.round(forecast[d] * 100) + "%").join(", ")}</div>}
           </div>
         )}
-        <p style={{ fontSize: 11, color: "#7a8a98", margin: "4px 0 0" }}>How to refresh: run <span style={{ fontFamily: mono }}>node scripts/east-forecast.js --sql</span> on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Published weeks replace the forecast automatically once Davenport publishes.</p>
+        <p style={{ fontSize: 11, color: "#7a8a98", margin: "4px 0 0" }}>How to refresh: run <span style={{ fontFamily: mono }}>node scripts/east-forecast.js --sql</span> on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Refreshing the feed caches Davenport's published weeks and deletes forecast rows for weeks that are now published; the forecast only ever fills weeks Davenport has not published.</p>
+      </div>
+      <div style={{ border: "1px solid " + ((conflicts || []).length ? "#e0b4b4" : "#e8ecf0"), borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
+        <div style={{ ...css.subT, margin: "0 0 4px", color: (conflicts || []).length ? "#a83232" : undefined }}>Conflicts with the published schedule ({(conflicts || []).length})</div>
+        <p style={{ fontSize: 11, color: "#7a8a98", margin: "0 0 4px" }}>Days where the East data makes the assigned surgeon ineligible - on East call while Silvis primary, or a derived East week the schedule no longer matches. Locked days are listed too; open the day to trade or reassign.</p>
+        <div data-testid="east-conflicts" style={{ fontSize: 12, fontFamily: mono, lineHeight: 1.7 }}>
+          {(conflicts || []).length === 0 ? "none" : (conflicts || []).map(c => (
+            <div key={c.day + c.role}>
+              <button type="button" onClick={() => onEditDay && onEditDay(c.day)} style={{ ...css.mini(false), fontFamily: mono, padding: "1px 6px", marginRight: 6 }}>{c.day}</button>
+              {" "}{c.role} {nameOf(c.id)}: {(c.reasons || []).map(r => reasonLabel(r, nameOf)).join(", ")}
+            </div>
+          ))}
+        </div>
       </div>
       <div style={{ border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Overrides (days Faraz knows differ from the feed)</div>
@@ -6162,6 +6246,8 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
         <div style={{ ...css.subT, margin: "8px 0 4px" }}>Weekend units: {(dg.weekendUnits || []).length}, fallback (daily) {(dg.weekendUnits || []).filter(w => w.fallback).length}</div>
         <div style={{ ...css.subT, margin: "8px 0 4px", color: (dg.lockViolations || []).length ? "#a83232" : undefined }}>Lock violations ({(dg.lockViolations || []).length})</div>
         {(dg.lockViolations || []).map((v, i) => <div key={i} style={{ fontSize: 12 }}>{fmtMD(v.day)} {v.role} {nameOf(v.id)} ({v.lock}): {(v.reasons || []).map(r => reasonLabel(r, nameOf)).join(", ")}</div>)}
+        <div style={{ ...css.subT, margin: "8px 0 4px", color: (dg.eastConflicts || []).length ? "#a83232" : undefined }}>East conflicts on the final schedule ({(dg.eastConflicts || []).length})</div>
+        {(dg.eastConflicts || []).map((c, i) => <div key={i} data-testid="gen-east-conflict" style={{ fontSize: 12 }}>{fmtMD(c.day)} {c.role} {nameOf(c.id)}: {(c.reasons || []).map(r => reasonLabel(r, nameOf)).join(", ")}</div>)}
         <div style={{ ...css.subT, margin: "8px 0 4px" }}>East forecast days in range ({(dg.eastForecast || []).length}); unknown East days: {(dg.eastUnknownDays || []).length}</div>
         {(dg.eastForecast || []).length > 0 && <div style={{ fontSize: 11, fontFamily: mono, lineHeight: 1.5 }}>{dg.eastForecast.map(f => f.day + " " + Math.round(f.probability * 100) + "%" + (f.busyByThreshold ? " busy" : "") + (f.assigned ? " (" + nameOf(f.id) + " " + f.assigned + ")" : "")).join(", ")}</div>}
         {(dg.warnings || []).length > 0 && <><div style={{ ...css.subT, margin: "8px 0 4px", color: "#8a5a10" }}>Warnings ({dg.warnings.length})</div><ul style={{ margin: 0, paddingLeft: 18, fontSize: 11.5, color: "#7a5a20" }}>{dg.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></>}

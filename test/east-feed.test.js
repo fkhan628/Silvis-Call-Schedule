@@ -205,4 +205,46 @@ eq(ef.eastResolveFakId([{ id: "s1", name: "DJA" }], "FAK"), null);
 eq(ef.efDayOffsets("2026-12-28"), ["2026-12-28", "2026-12-29", "2026-12-30", "2026-12-31", "2027-01-01", "2027-01-02", "2027-01-03"]);
 ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("https://") && ef.EAST_PROJECT.anonKey.length > 100);
 
+// ---- Prompt 12 C (9/22): forecast pruned to the unpublished weeks; overrides grouped per person ----
+{
+  const fc = { "2026-11-04": 0.9, "2027-01-31": 0.6, "2027-02-01": 0.5, "junk": 0.7 };
+  const cov = { from: "2026-11-01", to: "2027-01-31" };
+  eq(ef.forecastOutsideCoverage(fc, cov), { "2027-02-01": 0.5 }, "C: days inside the published coverage (inclusive) are dropped, malformed keys too");
+  eq(ef.forecastOutsideCoverage(fc, null), { "2026-11-04": 0.9, "2027-01-31": 0.6, "2027-02-01": 0.5 }, "C: no coverage -> the whole (validated) forecast");
+  eq(ef.forecastOutsideCoverage(null, cov), {}, "C: no forecast -> empty");
+  eq(fc["2026-11-04"], 0.9, "C: input map not mutated");
+  const rows = [
+    { day: "2026-11-04", person_id: "s1", busy: true },
+    { day: "2026-11-02", person_id: "s1", busy: false },
+    { day: "2026-11-03", person_id: "s5", busy: false },
+    { day: "not-a-date", person_id: "s1", busy: true },
+    { day: "2026-11-05", person_id: "s1", busy: "true" },
+    null,
+  ];
+  eq(ef.overridesByPerson(rows), { s1: { "2026-11-04": true, "2026-11-02": false }, s5: { "2026-11-03": false } }, "C: east_overrides rows -> { person: { day: bool } }, malformed rows dropped");
+  eq(ef.overridesByPerson([]), {});
+  eq(ef.overridesByPerson(null), {});
+}
+
+// ---- Prompt 12 C.5: scripts/east-forecast.js defaults come from the seed (runs 200) ----
+// Requiring the script must NOT run the forecast (main is guarded by require.main).
+{
+  const script = require("../scripts/east-forecast.js");
+  const seed = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "docs", "silvis-seed.json"), "utf8"));
+  eq(seed.groupRules.eastFeed.forecast.runs, 200, "seed: groupRules.eastFeed.forecast.runs is 200");
+  eq(script.defaultForecastRuns(), 200, "C.5: the script's default run count is read from the seed");
+  const a = script.parseArgs(["node", "east-forecast.js"]);
+  eq(a.runs, 200, "C.5: --runs defaults to the seed's 200 (was a hard-coded 100)");
+  ok(a.budgetSec >= 900, "C.5: the default budget fits 200 runs (>= 900 s), got " + a.budgetSec);
+  eq(script.parseArgs(["node", "east-forecast.js", "--runs", "50", "--budget-sec", "30"]).runs, 50, "C.5: --runs still overrides");
+  eq(script.parseArgs(["node", "east-forecast.js", "--runs", "50", "--budget-sec", "30"]).budgetSec, 30);
+}
+
+// ---- Fix round (review 9/22, finding 16): the preview report dumps diagnostics.eastConflicts ----
+{
+  const pg = require("fs").readFileSync(require("path").join(__dirname, "..", "scripts", "preview-generate.js"), "utf8");
+  ok(/for \(const key of \["holidayUnits"[^\]]*"eastConflicts"[^\]]*\]\)/.test(pg), "C fix 16: scripts/preview-generate.js dumps diagnostics.eastConflicts in the main report");
+  ok(/for \(const key of \["fixedViolations"[^\]]*"eastConflicts"[^\]]*\]\)/.test(pg), "C fix 16: ...and in the October backfill section");
+}
+
 console.log("ok " + n + " assertions");

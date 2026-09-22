@@ -94,6 +94,10 @@
 // status met / under / over / partial) plus a warning per fully-in-range week
 // off target. diagnostics.handoffGaps lists every in-range primary of a
 // handoffPartnerRequired surgeon whose next day is the same surgeon or open.
+// diagnostics.eastConflicts (Prompt 12 C.4, 9/22) = rules.eastConflicts over
+// the final schedule: held slots the East data makes ineligible (east-busy,
+// east-forecast-busy, derived-lock, derived-lock-held) - generated slots never
+// appear there, locked / fixed ones may.
 
 var GEN_DAY_MS = 86400000;
 var GEN_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -116,7 +120,8 @@ function genRulesApi() {
       eligibility: eligibility, buildContext: buildContext, weekendUnitPatterns: weekendUnitPatterns,
       holidayUnits: holidayUnits, holidayUnitCandidates: holidayUnitCandidates, isHolidayDay: isHolidayDay,
       talliesFor: talliesFor, runThrough: rdRunThrough, resolveWeight: resolveWeight, monthlyCapFor: monthlyCapFor, defaultWeights: defaultWeights,
-      standingEastDays: standingEastDays
+      standingEastDays: standingEastDays,
+      eastConflicts: eastConflicts
     };
   }
   return genRulesCache;
@@ -1300,6 +1305,11 @@ function genDiagnostics(G, best, meta) {
     eastForecast: eastForecast,
     eastUnknownDays: eastUnknownDays,
     eastStandingDays: eastStandingDays, // V: { [id]: ['YYYY-MM-DD', ...] } - standing East days inside the range
+    // Prompt 12 C.4 (9/22): the East conflict report over the FINAL schedule of the
+    // range (ctx.schedule is best.W here) - empty for generated slots by construction,
+    // a locked / fixed slot may collide (Khan primary locked on an East day, someone
+    // else in Fierce's derived slot). rules.eastConflicts is read-only.
+    eastConflicts: typeof R.eastConflicts === "function" ? R.eastConflicts(ctx, G.days) : [],
     placedCount: Object.keys(S.placed).length,
     warnings: warnings
   };
