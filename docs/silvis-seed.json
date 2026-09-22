@@ -236,13 +236,15 @@
     "availabilityPrecedence": [
       "time_off (+ trailing edge: the day before a vacation blocks PRIMARY)",
       "explicit unavailable / no_backup rows",
-      "explicit available / backup_only rows",
-      "recurring patterns, weekday patterns, windows, day-before rules",
+      "explicit available / backup_only rows (a dated row for a role lifts the next tier for that role only)",
+      "recurring patterns (recurringUnavailable), weekday patterns (weekdays.allowed, outsideDerivedWeeks incl. weekend-block-only), windows / weeks / governed months, day-before-Aledo",
       "mode defaults (weekendsAvailable, pool membership)",
-      "independent gates no row overrides: East busy, caps, maxConsecutiveDays, same-day other role, holiday opt-outs"
+      "independent gates no row overrides: hardNeverWeekdays (named hard on purpose: OR days, Sarkar Fri/Sun - change the rule, or override the edit with its warning), East busy, derived East weeks, caps, maxConsecutiveDays, same-day other role, holiday opt-outs"
     ],
+    "availabilityPrecedenceNote": "availableWeeks and availableWindows are read from surgeonRules directly and are NOT written as available rows: a row is a dated exception that lifts weekday patterns, and one row per window day would open Sarkar's hard-never Friday inside every window.",
     "whitelistMonths": {
-      "rule": "A month is governed by an explicit date list only when it appears in surgeonRules[id].explicitListMonths (written from the seed's explicitAvailable keys). In a governed month the eligible set is exactly the explicit available/backup_only rows minus unavailable rows; in other months recurring patterns + weekendsAvailable minus unavailable rows. Dates in a list that spill into a neighbouring month are additive there and do not put that month into whitelist mode."
+      "rule": "A month is governed by an explicit date list only when it appears in surgeonRules[id].explicitListMonths (written from the seed's explicitAvailable keys, for every surgeon who has one: Burchett Oct+Dec, Acton Oct, Philip Oct). In a governed month the eligible set is exactly the explicit available/backup_only rows minus unavailable rows; in other months recurring patterns + weekendsAvailable minus unavailable rows. Dates in a list that spill into a neighbouring month are additive there and do not put that month into whitelist mode.",
+      "roleScope": "An entry is 'YYYY-MM' (governs primary and backup) or { month: 'YYYY-MM', roles: ['primary'] } (governs only those roles). A role-scoped explicitAvailable list that names one role yields the scoped form; the importer and test/seed-adapter.js derive it the same way."
     },
     "dayBeforeRules": {
       "trailingEdgeRoles": [
@@ -497,10 +499,13 @@
             "2026-10-05",
             "2026-10-07",
             "2026-10-09",
+            "2026-10-10",
+            "2026-10-11",
             "2026-10-17",
             "2026-10-18",
             "2026-10-19",
-            "2026-10-21"
+            "2026-10-21",
+            "2026-10-23"
           ],
           "backup": [
             "2026-10-06",
@@ -511,7 +516,11 @@
       },
       "notes": [
         "Offered to send a full monthly date list like Burchett"
-      ]
+      ],
+      "explicitListMonths": [
+        "2026-10"
+      ],
+      "explicitAvailableNote": "October is a governed month for both roles (groupRules.whitelistMonths: written from the explicitAvailable keys), which is what makes 10/15 open for nobody (rules doc section 8 item 1). 10/10, 10/11 (the ER-panel author 9/16 Fri-Sun block) and 10/23 (Burchett 9/18 delta) added 2026-09-22: they are locked primaries he holds but were missing from the list."
     },
     "s4": {
       "name": "Philip",
@@ -602,9 +611,18 @@
       ],
       "holidayRules": {
         "maxMajorHolidays": 1,
-        "maxMajorHolidaysNote": "Hard, rolling 12 months (moved here from preferences; preferences.maxMajorHolidays kept for readers of the old shape)."
+        "maxMajorHolidaysNote": "Hard, rolling 12 months (moved here from preferences; preferences.maxMajorHolidays kept for readers of the old shape). Window = fewer than 12 calendar months between unit START months, symmetric (a held later unit blocks an earlier date too): Thanksgiving 2026 -> Thanksgiving 2027 and Christmas -> Christmas are 12 months and do not collide; Christmas 2026 -> Thanksgiving 2027 (11) does."
       },
-      "monthlyCapNote": "No cap stated by Philip. Absent monthlyCap means the group default (8 total) applies from November per guide section 5 - flagged for Faraz: his own October was 15 days; raise in Setup if he should carry more."
+      "monthlyCapNote": "No cap stated by Philip. Absent monthlyCap means the group default (8 total) applies from November per guide section 5 - flagged for Faraz: his own October was 15 days; raise in Setup if he should carry more.",
+      "explicitListMonths": [
+        {
+          "month": "2026-10",
+          "roles": [
+            "primary"
+          ]
+        }
+      ],
+      "explicitListMonthsNote": "Role-scoped: his October list names PRIMARY days only ('Backup: not 10/15, 10/7, 10/21, 10/23' = backup otherwise open), so October governs primary and leaves backup to the no_backup rows, the day-before rules and the caps. Matches the hand schedule (8 backup days, none on his list)."
     },
     "s5": {
       "name": "Fierce",
