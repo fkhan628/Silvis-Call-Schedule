@@ -193,10 +193,18 @@ CLI and returned exactly the pre-fix picture: `PROBE_RESULTS A=status=accepted f
 B=status=applied;C=ERR new row for relation  schedule_days  violates check constraint  schedule_days_distinct_roles ;
 D=status=applied locked=true;E=status=applied 03-11p=s2 03-13b=s3;F=status=applied locked=true;G=status=pending;H=ERR new
 row violates row-level security policy for table  shift_trade_requests ;END`. The leftover count afterwards was 0 (and the
-project still had exactly one auth user and one profile), so the batch rolled back as designed. **The migration itself has
-not been applied yet:** the Claude Code session's permission gate refused the live `supabase db query -f
-sql/migrations/2026-09-22-trade-guards.sql`, so applying it (SQL editor or CLI), the probe AFTER and `verify-rls.sh`
-section 5 are Faraz's next step; record the AFTER string and the leftover 0 here when done.
+project still had exactly one auth user and one profile), so the batch rolled back as designed.
+
+**Applied 2026-09-22 (Faraz's go-ahead in chat; Claude Code through the linked CLI):** `sql/migrations/2026-09-22-trade-guards.sql`
+ran without error; `pg_proc` shows `apply_trade` (security definer, `search_path=public`) and `trade_insert_guard`, `pg_trigger`
+shows `trade_insert_guard_trg` + `trade_update_guard_trg` enabled, and `apply_trade` executes only for `authenticated`,
+`postgres`, `service_role`. The probe AFTER returned exactly the expected string: `PROBE_RESULTS A=status=pending from=s2
+decided=null;B=ERR TRADE_INELIGIBLE: Burchett is on vacation on 2030-03-05;C=ERR TRADE_INELIGIBLE: Burchett already holds
+backup on 2030-03-07;D=ERR TRADE_INELIGIBLE: 2030-03-09 primary is locked  ask the scheduler;E=status=applied 03-11p=s2
+03-13b=s3;F=status=applied locked=false;G=ERR TRADE_INELIGIBLE: a trade needs two different surgeons;H=status=pending
+from=s2;END`; leftover count afterwards 0 (still one auth user). `SILVIS_WORKDIR=<linked dir> bash scripts/verify-rls.sh`
+then reported `RESULT: 15 passed, 0 failed`: sections 1, 2 and 4 as before, section 5 PASS for probes A through H plus
+"probe persisted nothing (leftover count 0)"; sections 3 and 6 SKIP until a scheduler / surgeon JWT exists.
 
 **Client consequence.** None required: the app already POSTs `status: 'pending'` with its own id and shows `apply_trade`
 errors verbatim; the new messages read as sentences. Acceptance-time client eligibility stays as a courtesy check - the
