@@ -20,8 +20,13 @@
 // time_off created_by 'seed', schedule_days source 'import' + updated_by 'seed')
 // are reported as 'delete' in the diff and removed by the SQL (importer.js header).
 //
-// Exit codes: 0 ok / 1 error or not fully applied / 2 contact-data refusal /
-// 3 refused to apply over app-edited days. Set through process.exitCode so the
+// Exit codes: 0 ok / 1 error or not fully applied / 2 refusal (contact data, or a
+// rule note the scrub cannot classify / a denylist word left in the blob - see
+// importer.js header "Rule-note scrub") / 3 refused to apply over app-edited days.
+// --dry-run also prints the scrub inventory (path -> action -> category): which
+// seed notes become a category token and which are dropped from the blob
+// (every groupRules and holidays note, plus surgeonRules notes that read as
+// engine/seed documentation). Set through process.exitCode so the
 // event loop drains (process.exit() right after fetch() trips a libuv assertion
 // on Node 24 / Windows and exits 127).
 //
@@ -143,6 +148,15 @@ function printStats(plan) {
   console.log("      time_off " + s.time_off + "; call_schedule_data 'main' keys " + Object.keys(plan.blob).join(", "));
 }
 
+// Dry run only: the rule-note scrub inventory, sorted by path, printed once.
+// Paths, actions and category tokens only - never the seed's wording.
+function printNoteScrub(plan) {
+  const ns = plan.noteScrub || { inventory: [], counts: { category: 0, drop: 0 } };
+  console.log("\nrule notes scrubbed before the blob (importer.js, guide 3.1): " + ns.counts.category + " mapped to a category, " +
+    ns.counts.drop + " dropped (engine/seed documentation, every groupRules and holidays note); the seed keeps its wording");
+  ns.inventory.forEach((e) => console.log("  " + e.path + " -> " + e.action + (e.action === "category" ? " -> " + e.to : "")));
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const seed = JSON.parse(fs.readFileSync(args.seed, "utf8"));
@@ -151,7 +165,7 @@ async function main() {
   try {
     plan = IMP.importPlan(seed, { now: new Date().toISOString() });
   } catch (e) {
-    if (/^CONTACT_DATA_REFUSED/.test(e.message)) { console.error("REFUSED: " + e.message); return 2; }
+    if (/^(CONTACT_DATA_REFUSED|NOTE_UNCLASSIFIED|NOTE_DENYLIST)/.test(e.message)) { console.error("REFUSED: " + e.message); return 2; }
     throw e;
   }
 
@@ -159,6 +173,7 @@ async function main() {
   console.log("Silvis seed import - " + args.mode + " - seed " + path.relative(ROOT, args.seed) + " (generatedOn " + plan.blob.settings.seedGeneratedOn + ")");
   console.log("project " + cfg.url + " (anon read)");
   printStats(plan);
+  if (args.mode !== "apply") printNoteScrub(plan);
   if (plan.infoDeltas.length) {
     console.log("\npendingDeltas (informational - already applied inside existingAssignments):");
     plan.infoDeltas.forEach((l) => console.log("  " + l));

@@ -107,7 +107,25 @@ ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) 
   Faraz assigns `person_id` + role in Setup → Users. No email ever passes through the client except the one the user
   types at login.
 - **Notes are public too**: `note` columns in anon-readable tables and rule notes in the blob stay operational
-  ("unavailable (personal)", "outreach") — never personal reasons. The seed has already been scrubbed to this standard.
+  ("unavailable (personal)", "outreach") — never personal reasons. The importer enforces this for the blob (next bullet);
+  table notes are checked at entry.
+- **Rule notes are scrubbed by the importer (Prompt 12 F)**: the seed keeps its prose, the blob never gets it.
+  `importer.js` (`impScrubRuleNotes`) rewrites every note-like key in `surgeonRules`, `groupRules` and `holidays` — `note`,
+  `notes[]`, any `*Note`, `*Notes` or `*Reason`, at any depth — before `call_schedule_data` is assembled: a note
+  about a surgeon's situation becomes one category token (`outreach`, `family`, `personal`, `OR day`, `preference`,
+  classified by a keyword table in priority order), a note that reads as engine or seed documentation is dropped,
+  every `groupRules` and `holidays` note is dropped (unit notes, `dayMembershipNote`), the blob's `timeOff` entries
+  carry dates only, and a `surgeonRules` note that matches nothing refuses the import (`NOTE_UNCLASSIFIED: <path>`)
+  rather than being kept. A denylist gate then scans every string in the blob (family/families, wife, husband,
+  kid(s), child(ren), daughter, son, parents, in-laws, school, medical, maternity, hosts/hosting, illness, funeral as
+  whole words) and refuses on any hit (`NOTE_DENYLIST: <path> ("<word>")`). `node scripts/import-seed.js --dry-run`
+  prints the inventory (path → action → category) so the scrub is visible before anything is written; refusal
+  messages name paths, never the note text. Nothing in the app parses notes, so the scrub changes no rule. Two
+  known limits: the documentation test runs before classification, so a person note that also uses engine words
+  ("on the list for…", "block party") is dropped rather than refused — it appears as `drop` in the dry-run
+  inventory, never in the blob; and the denylist is a word list, not a classifier — a non-note prose key
+  (`weekdayPattern[].where`, `holidayPreference`, `dailyHandoff`…) is checked for those words only. Setup's
+  "Edit as JSON" editors do not yet run the gate (follow-up).
 
 There is deliberately **no Atwell entry**. A `DayAssignment` may carry `externalCover: "Atwell"` (primary `null`) for
 the imported 9/28–10/4 week; the UI renders the label instead of OPEN and tallies ignore it.

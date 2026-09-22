@@ -19,6 +19,24 @@
 // info lines the CLI prints, refuses the whole plan. Notes written to the
 // tables are operational wording.
 //
+// Rule-note scrub (Prompt 12 F, guide 3.1): the seed's prose notes never reach
+// the blob as written. impScrubRuleNotes() rewrites every note-like key (note,
+// notes[], *Note, *Notes, *Reason, any depth) before the blob is assembled:
+// a surgeonRules note about a person's situation becomes ONE category token
+// ("outreach", "family", "personal", "OR day", "preference"); a note that reads
+// as engine/seed documentation is dropped (the seed keeps it - the app never
+// parses notes); every groupRules and holidays note-like key is dropped; a
+// surgeonRules note that matches nothing REFUSES the import
+// (NOTE_UNCLASSIFIED: <path>). After the scrub a denylist gate over every string
+// in the blob refuses any remaining personal word (NOTE_DENYLIST: <path>
+// ("<word>")). The plan carries the inventory (plan.noteScrub) for the CLI's
+// dry run; messages name paths, never the note text. Two documented limits:
+// (1) the documentation test runs first, so a person note that also contains
+// engine vocabulary ("on the list for...", "block party") is DROPPED, not
+// refused - it shows as 'drop' in the dry-run inventory, and nothing personal
+// reaches the blob either way; (2) the denylist is a word list, not a
+// classifier: a non-note prose key is only checked for those words.
+//
 // Ownership + stale rows: the seed OWNS availability rows with source 'seed',
 // time_off rows with created_by 'seed' and schedule_days rows still
 // source 'import' / updated_by 'seed'. A live row of those kinds that is no
@@ -31,8 +49,9 @@
 //
 // Mapping (seed key -> table / kind / role):
 //   roster[]                              -> blob.roster (6 keys only)
-//   surgeonRules                          -> blob.surgeonRules (+ explicitListMonths derived)
-//   groupRules, holidays                  -> blob.groupRules, blob.holidays
+//   surgeonRules                          -> blob.surgeonRules (+ explicitListMonths derived; notes scrubbed;
+//                                            timeOff as { start, end } only)
+//   groupRules, holidays                  -> blob.groupRules, blob.holidays (note-like keys dropped from both)
 //   _meta.generatedOn / _meta.revisions   -> blob.settings.seedGeneratedOn / seedRevisions
 //   surgeonRules[id].explicitAvailable    -> availability available/any (plain list)
 //                                            or available/primary + available/backup (role-scoped)
@@ -134,13 +153,20 @@ function impFindContactValues(obj, path, out) {
 }
 
 // Throws CONTACT_DATA_REFUSED when roster[] or site carries contact data
-// (a key named like contact data at any depth, or an email/phone-looking value).
+// (a key named like contact data at any depth, or an email/phone-looking value),
+// or when an email/phone-looking value sits anywhere in surgeonRules, groupRules
+// or holidays. The rule blocks are scanned INPUT-side because the note scrub
+// (12 F) runs before the output guard and would otherwise drop such a note
+// silently - a contact value in the public seed must always refuse loudly.
 function impRefuseContactData(seed) {
   var hits = [];
   impFindKeys((seed && seed.roster) || [], IMP_CONTACT_KEY, "roster", hits);
   impFindKeys((seed && seed.site) || {}, IMP_CONTACT_KEY, "site", hits);
   impFindContactValues((seed && seed.roster) || [], "roster", hits);
   impFindContactValues((seed && seed.site) || {}, "site", hits);
+  impFindContactValues((seed && seed.surgeonRules) || {}, "surgeonRules", hits);
+  impFindContactValues((seed && seed.groupRules) || {}, "groupRules", hits);
+  impFindContactValues((seed && seed.holidays) || {}, "holidays", hits);
   if (hits.length) {
     throw new Error("CONTACT_DATA_REFUSED: the seed carries contact data at " + hits.join(", ") +
       " - contact data never enters the repo or an anon-readable table (guide 3.1); remove it and re-run");
@@ -159,6 +185,131 @@ function impRefuseContactOutput(plan) {
   if (hits.length) {
     throw new Error("CONTACT_DATA_REFUSED: the import would write or print contact-looking values at " + hits.join(", ") +
       " - notes and rule text in anon-readable tables are public (guide 3.1); reword them and re-run");
+  }
+}
+
+/* ------------------------------------------------- rule-note scrub (12 F) */
+
+// Note-like keys: exactly note / notes, or any key ending in Note / Notes /
+// Reason (case-sensitive suffix), at any depth, inside arrays too.
+var IMP_NOTE_KEY = /^(note|notes)$|Note$|Notes$|Reason$/;
+// The only note wording that reaches the blob.
+var IMP_NOTE_TOKENS = ["outreach", "family", "personal", "OR day", "preference"];
+// Keyword classification of a note that describes a PERSON's situation:
+// first table row with a matching pattern wins (priority = table order).
+var IMP_NOTE_CATEGORIES = [
+  { category: "OR day", patterns: [/\bOR days?\b/, /\boperating room\b/i] },
+  { category: "outreach", patterns: [/\b(outreach|clinic|Maquoketa|DeWitt|Jackson County|Aledo|Clinton|Dubuque|Davenport|off-?site)\b/i] },
+  { category: "family", patterns: [/\b(family|families|wife|husband|kids?|child|children|daughter|son|parents|in-laws|school|hosts?|hosting|home)\b/i] },
+  { category: "personal", patterns: [/\b(personal|hunting|unavailable|vacation|medical|illness|funeral|maternity|birthday)\b/i] },
+  { category: "preference", patterns: [/\b(prefers?|preferred|preference|ideal|good day|likes?|wants?|willing|tries to avoid|avoid|no longer|no more|option|inconvenient)\b/i] }
+];
+// A note that reads as engine / seed documentation is dropped from the blob.
+// Checked BEFORE the categories: such notes mention people's words in passing
+// ("preferences", "vacation") and would otherwise be mislabelled. Generic:
+// engine names and provenance, any camelCase key name, engine vocabulary.
+var IMP_NOTE_DOC = [
+  /rules\.js|generator|importer|\bSetup\b|\bseed\b|groupRules|surgeonRules|\bdefaults?\b|\b(hard|soft) rule|\bapplies\b|\bencoded\b|\borientation\b|guide section|added 2026-|Faraz 9\/21|\bsupersedes\b|live-verified|read from|written from/i,
+  /\b[a-z]+[A-Z][A-Za-z]+\b/,   // a camelCase key name: maxConsecutiveDays, eastFeed, existingAssignments
+  /\b(primary|backup|locks?|locked|units?|roles?|caps?|consecutive|windows?|derived|derivation|penalty|diagnostics|threshold|feed|import|imported|stated|statement|confirmed|hand schedule|list|model|plan|block|split|whitelist|override|implemented|warn|anon-readable)\b/i
+];
+// Words that may never appear in any blob string after the scrub (word-boundary,
+// case-insensitive; "familiar" does not match, "Family" does). The Prompt 12 F
+// list plus plurals / relatives / hosting (review F hardening). A word list,
+// not a classifier: it is the only check a non-note prose key gets.
+var IMP_NOTE_DENYLIST = /\b(family|families|wife|husband|kid|kids|child|children|daughter|son|parents|in-laws|school|medical|maternity|hosts|hosting|illness|funeral)\b/i;
+
+function impNoteIsDocumentation(text) {
+  for (var i = 0; i < IMP_NOTE_DOC.length; i++) if (IMP_NOTE_DOC[i].test(text)) return true;
+  return false;
+}
+
+// -> category token or null.
+function impNoteCategory(text) {
+  for (var i = 0; i < IMP_NOTE_CATEGORIES.length; i++) {
+    var row = IMP_NOTE_CATEGORIES[i];
+    for (var j = 0; j < row.patterns.length; j++) if (row.patterns[j].test(text)) return row.category;
+  }
+  return null;
+}
+
+// One note-like value. Returns the replacement, or undefined when the key is
+// to be dropped. dropAll = groupRules mode (every note-like key is dropped).
+function impScrubNoteValue(val, path, dropAll, inv, unclassified) {
+  if (dropAll) { inv.push({ path: path, action: "drop", from: typeof val === "string" ? val : null, to: null }); return undefined; }
+  if (typeof val === "string") {
+    if (IMP_NOTE_TOKENS.indexOf(val) >= 0) return val;                                  // already scrubbed (idempotent)
+    if (impNoteIsDocumentation(val)) { inv.push({ path: path, action: "drop", from: val, to: null }); return undefined; }
+    var cat = impNoteCategory(val);
+    if (cat) { inv.push({ path: path, action: "category", from: val, to: cat }); return cat; }
+    unclassified.push(path);
+    return undefined;
+  }
+  if (Array.isArray(val)) {
+    var arr = [];
+    val.forEach(function (x, i) {
+      var q = path + "[" + i + "]";
+      if (typeof x === "string") { var kept = impScrubNoteValue(x, q, dropAll, inv, unclassified); if (kept !== undefined) arr.push(kept); }
+      else arr.push(impScrubWalk(x, q, dropAll, inv, unclassified));
+    });
+    return arr.length ? arr : undefined;                                                // an emptied notes[] loses its key
+  }
+  if (val && typeof val === "object") return impScrubWalk(val, path, dropAll, inv, unclassified);
+  return val;                                                                            // number / bool / null under a note key
+}
+
+// Rebuilds `v` with every note-like key scrubbed; never mutates its input.
+function impScrubWalk(v, path, dropAll, inv, unclassified) {
+  if (Array.isArray(v)) return v.map(function (x, i) { return impScrubWalk(x, path + "[" + i + "]", dropAll, inv, unclassified); });
+  if (!v || typeof v !== "object") return v;
+  var out = {};
+  Object.keys(v).forEach(function (k) {
+    var p = path ? path + "." + k : k;
+    if (!IMP_NOTE_KEY.test(k)) { out[k] = impScrubWalk(v[k], p, dropAll, inv, unclassified); return; }
+    var kept = impScrubNoteValue(v[k], p, dropAll, inv, unclassified);
+    if (kept !== undefined) out[k] = kept;
+  });
+  return out;
+}
+
+// impScrubRuleNotes(surgeonRules, groupRules[, holidays]) -> { surgeonRules, groupRules, holidays, inventory }
+// inventory: [{ path, action: 'category' | 'drop', from, to }] sorted by path.
+// groupRules and holidays are drop-all (every note-like key there is engine /
+// seed documentation - unit notes, dayMembershipNote - and nothing reads them).
+// Throws Error('NOTE_UNCLASSIFIED: <path>[, <path>] - ...') when a surgeonRules
+// note matches no category and is not documentation (fail closed: the seed
+// author adds wording the classifier knows; a note is never silently kept).
+function impScrubRuleNotes(surgeonRules, groupRules, holidays) {
+  var inv = [], unclassified = [];
+  var sr = impScrubWalk(impClone(surgeonRules || {}), "surgeonRules", false, inv, unclassified);
+  var gr = impScrubWalk(impClone(groupRules || {}), "groupRules", true, inv, unclassified);
+  var hol = impScrubWalk(impClone(holidays || {}), "holidays", true, inv, unclassified);
+  if (unclassified.length) {
+    throw new Error("NOTE_UNCLASSIFIED: " + unclassified.join(", ") + " - the note matches no category (" + IMP_NOTE_TOKENS.join(", ") +
+      ") and is not engine documentation; reword it with a keyword the importer classifies (importer.js IMP_NOTE_CATEGORIES) and re-run - it is never written as is (guide 3.1)");
+  }
+  inv.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; });
+  return { surgeonRules: sr, groupRules: gr, holidays: hol, inventory: inv };
+}
+
+// Denylist gate over EVERY string value in the blob (not only note keys), after
+// the scrub. A string that is exactly a category token is exempt. Reports
+// paths and the matched word, never the string.
+function impRefuseNoteDenylist(blob) {
+  var hits = [];
+  (function walk(o, p) {
+    if (typeof o === "string") {
+      if (IMP_NOTE_TOKENS.indexOf(o) >= 0) return;
+      var m = o.match(IMP_NOTE_DENYLIST);
+      if (m) hits.push(p + " (\"" + m[1] + "\")");
+      return;
+    }
+    if (!o || typeof o !== "object") return;
+    if (Array.isArray(o)) { o.forEach(function (v, i) { walk(v, p + "[" + i + "]"); }); return; }
+    Object.keys(o).forEach(function (k) { walk(o[k], p ? p + "." + k : k); });
+  })(blob, "");
+  if (hits.length) {
+    throw new Error("NOTE_DENYLIST: " + hits.join(", ") + " - a personal word would reach the anon-readable blob (guide 3.1); reword the seed and re-run");
   }
 }
 
@@ -397,22 +548,24 @@ function importPlan(seed, options) {
   var now = options.now || new Date().toISOString();
   var meta = seed._meta || {};
 
-  // surgeonRules go into the blob as written (plus derived explicitListMonths),
-  // except vacation notes: the blob is anon-readable, so the seed's personal
-  // wording is replaced the same way the time_off rows are scrubbed.
-  var surgeonRules = impClone(impSeedSurgeonRules(seed));
-  Object.keys(surgeonRules).forEach(function (id) {
-    var r = surgeonRules[id];
+  // surgeonRules go into the blob with derived explicitListMonths, vacations as
+  // dates only (the blob is anon-readable; the seed's vacation wording stays in
+  // the seed and the time_off rows say 'vacation (seed)'), and every note-like
+  // string scrubbed to a category token or dropped (header: rule-note scrub).
+  var rawRules = impClone(impSeedSurgeonRules(seed));
+  Object.keys(rawRules).forEach(function (id) {
+    var r = rawRules[id];
     if (r && Array.isArray(r.timeOff)) {
-      r.timeOff = r.timeOff.map(function (t) { return { start: t.start, end: t.end || t.start, note: "vacation (seed)" }; });
+      r.timeOff = r.timeOff.map(function (t) { return { start: t.start, end: t.end || t.start }; });
     }
   });
+  var scrub = impScrubRuleNotes(rawRules, seed.groupRules || {}, seed.holidays || {});   // throws NOTE_UNCLASSIFIED
 
   var blob = {
     roster: impSeedRoster(seed),
-    surgeonRules: surgeonRules,
-    groupRules: impClone(seed.groupRules || {}),
-    holidays: impClone(seed.holidays || {}),
+    surgeonRules: scrub.surgeonRules,
+    groupRules: scrub.groupRules,
+    holidays: scrub.holidays,
     settings: {
       importedAt: now,
       seedGeneratedOn: meta.generatedOn || null,
@@ -421,6 +574,7 @@ function importPlan(seed, options) {
   };
   var leaks = impFindKeys(blob, IMP_BLOB_KEY);
   if (leaks.length) throw new Error("CONTACT_DATA_REFUSED: the blob would carry contact-looking keys at " + leaks.join(", "));
+  impRefuseNoteDenylist(blob);                                        // throws NOTE_DENYLIST
 
   var infoDeltas = ((seed.pendingDeltas) || []).map(function (d) {
     var who = impRosterName(seed, d.surgeon);
@@ -436,7 +590,14 @@ function importPlan(seed, options) {
     scheduleDayRows: impSeedScheduleRows(seed),
     infoDeltas: infoDeltas,
     refusals: [],
-    generatedAt: now
+    generatedAt: now,
+    noteScrub: {
+      inventory: scrub.inventory,
+      counts: {
+        category: scrub.inventory.filter(function (e) { return e.action === "category"; }).length,
+        drop: scrub.inventory.filter(function (e) { return e.action === "drop"; }).length
+      }
+    }
   };
   impRefuseContactOutput(plan);
   plan.stats = impStats(plan);
@@ -835,6 +996,8 @@ var impExports = {
   impFindEmailValues: impFindEmailValues,
   impFindPhoneValues: impFindPhoneValues,
   impFindContactValues: impFindContactValues,
+  impScrubRuleNotes: impScrubRuleNotes,
+  impRefuseNoteDenylist: impRefuseNoteDenylist,
   impCanon: impCanon
 };
 
