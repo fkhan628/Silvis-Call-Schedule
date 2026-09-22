@@ -403,3 +403,99 @@ December" flipped to exactly `12/22, 12/29`. `test/importer.test.js` (not on the
 four lines that indexed `recurringAvoid[1]` (the removed entry) would crash the suite, so they now pin its absence and the
 `hardNeverWeekdaysNote -> drop`. Setup → Rules already edits `hardNeverWeekdays` and its roles (the same checkboxes Khan's
 rule uses).
+
+## Item Y — Acton's November list is preferences (Faraz, 9/22 evening; appended by Claude Code)
+
+Faraz, verbatim: *"Acton's November list is preferences, not a limit (his 9/17 message gave rules, never dates; the dates
+came via Burchett's relay): remove the November governed-month whitelist for s3. His listed days stay locked; his recurring
+rules govern the rest of November — which makes Thu 11/5 his (primary 11/4–11/6, within his max of 3) with backup from
+anyone eligible. Burchett's November whitelist stays. Update docs/SILVIS-CALL-RULES.md from the OneDrive copy (§3 Acton, §8
+items 11–12) and regenerate the preview."*
+
+Data only — no code change (`importer.js` untouched). Finding first: dropping the `{ month: "2026-11", roles: [...] }` entry
+from `s3.explicitListMonths` is **not enough** — `importer.js impSeedSurgeonRules` completes a surgeon's `explicitListMonths`
+from the KEYS of `explicitAvailable` (`groupRules.whitelistMonths.rule`), so an `s3.explicitAvailable["2026-11"]` block alone
+re-governs November (the 9/22 probe: `2026-11-05 primary -> hard: [whitelist-month]`). There is no data-only way to keep that
+block without governance: `rdGovernedMonths` reads an object entry with an empty `roles` list as both roles, and the completion
+skips only months already listed. So the block is removed; his relayed days live on exactly as Faraz said — as **locks** in
+`existingAssignments` — and the importer will **delete the s3 November availability rows the T import wrote today**. That count
+is **8**, not the 10 the wave brief predicted: the importer collapses consecutive dates into ranges, so 11/14–16 is one row
+(5 primary ranges + 3 backup rows; the live table holds the same 8, its total 56 = the plan's 56 before this item). None of those
+rows lifted anything (his listed days are not 2nd/4th Mon/Wed or Tuesdays), so nothing changes on his locked days.
+
+Seed (`docs/silvis-seed.json`, Edit tool, ASCII, LF, valid JSON): `surgeonRules.s3.explicitListMonths` → `["2026-10"]`;
+`s3.explicitAvailable["2026-11"]` removed; `s3.notes[1]` rewritten (preferences; whitelist off; 11/5 his; item 13 answered —
+dropped by the importer as documentation); `explicitAvailableNote` says why November is absent (dropped too);
+`existingAssignments` 2026-11-05 → `primary: "s3"`, `backup: null`, `locked: true`, `source: "faraz-2026-09-22-acton-1105"`,
+note `"Acton primary per his recurring rules (Faraz 9/22 evening); his relayed 11/5 backup entry superseded"` (operational only —
+no reason, no other surgeon's name; it passes the item-F gate); `pendingDeltas` + 11/5 B s3 → open and 11/5 P open → s3
+(applied); `openQuestions` 13 struck through with the answer; a `_meta.revisions` entry. `s2` (Burchett) untouched.
+
+Proof on the seed context (rules level, `test/rules.test.js` Y block): Acton 11/5 primary → `ok, lockHolder, conflicts: []`
+(no `whitelist-month`, no `max-consecutive` — 11/4, 11/5, 11/6 each read the same, and a probe that opens 11/7 to him reads
+`max-consecutive:3`, so the run of 3 is counted, not ignored); the only soft term on the lock is `long-run:5` (any-role 11/2 P,
+11/3 B, 11/4–6 P — the A soft limit, informational); 11/5 backup: Khan, Philip, Fierce eligible, Burchett `whitelist-month`
+(his list stays), Sarkar `outside-window`, Acton `holds-other-role`. His primary-eligible November days on an empty schedule
+are exactly his recurring rules, restated independently in the test and compared day by day: 11/1, 11/2, 11/4, 11/5, 11/6,
+11/7, 11/8, 11/12, 11/13, 11/14, 11/15, 11/16, 11/30 — not the Tuesdays 11/3, 11/10, 11/17, 11/24 (X; 11/24 also
+`day-before-vacation`), not 11/9, 11/11, 11/23, 11/25 (2nd/4th Mon/Wed), not 11/18 (day before his vacation), not 11/19–22
+and 11/25–29 (vacations; Thanksgiving opted out). On the seed schedule Thu 11/12 is open to him (Fierce's derived backup is the
+other role); **Fri 11/13 is not** — `max-consecutive:3` (11/13 + his locked 11/14–16 = 4), so the brief's "11/13 Khan/Philip"
+guess was wrong: in the regression's context Khan is East-busy that day and 11/13 stays Philip's alone, next to the Tuesdays
+11/10 and 11/24. Governed months: Acton `{ "2026-10": 1 }`, Burchett `{ "2026-10": 1, "2026-11": 3, "2026-12": 1 }` (unchanged).
+
+Tests (test-first; each file run against the unchanged seed before the change). `test/rules.test.js`: banner block first —
+fail-before `FAIL [Prompt 12 Y seed: ...]: Y: Acton governed months - October plain (primary only); November is no longer
+governed (before Y: '2026-11': 3) expected {"2026-10":1} got {"2026-10":1,"2026-11":3}`; then eight T pins flipped in place
+(Acton's governed months; 11/10 primary `whitelist-month` → `hard-never-weekday:Tue`; 11/11 backup → `derived-lock-held:s5`
+with 11/23 as the "backup any day again" day; the adapter's "November object entry kept as written" → October only; 11/23's
+"next to whitelist-month" → nothing else; 11/09 backup → the derived lock; the `manPri` freed-slot pin → Acton may take it; the
+"11/5 primary has no eligible surgeon" pin → Acton, its lock holder, with no conflict) — fail-before of the first flip `FAIL
+[Prompt 12 T: ...]: T then Y FLIP: Acton governed months ... expected {"2026-10":1} got {"2026-10":1,"2026-11":3}`; after:
+`ok 1269 assertions (151 ms)` (was 1221). `test/importer.test.js`: banner block — fail-before `AssertionError
+[ERR_ASSERTION]: Y: s3 explicitListMonths after import = October only (before Y: the { month: '2026-11', roles: [primary,
+backup] } object)`; in-place flips (Acton's primary/backup November lists, the four-source set, 11/5's row shape, the
+availability counts 10 / 3, open primary 7 / open backup 26, the blob list) — fail-before `AssertionError [ERR_ASSERTION]:
+T+Y: Acton primary 11/2, 11/4, 11/5 (Y), 11/6, 11/14, 11/15, 11/16, 11/18`; the block also rebuilds T's live state from the
+seed and pins the expected live diff (`schedule_days` update 1 with the lines `11/5 P OPEN -> Acton`, `11/5 B Acton -> OPEN`;
+`availability` delete = the 8 s3 November rows, derived; blob update 1; `time_off` 0; an app-edited live 11/5 is BLOCKED);
+after: `ok 564 assertions` (was 537). `test/generator-regression.js`: banner block — fail-before `FAIL [range Y (Acton
+November) seed 1 day -]: seed: Acton's explicitListMonths = October only (Y; before: + the November object entry) expected
+["2026-10"] got ["2026-10",{"month":"2026-11","roles":["primary","backup"]}]`; in-place flips (`ACT_GOV` October only —
+fail-before `FAIL [range - seed - day -]: seed: Acton governed Oct primary only (Y; T had Nov both roles) expected
+["2026-10:primary"] got ["2026-10:primary","2026-11:backup+primary"]`; the milestone-preview "exactly one open slot — 11/5
+primary" pin → no open slot, its per-surgeon reason block removed; Philip's T list → `11/10, 11/13, 11/24`; Acton's locked
+backups → 11/3, 11/17). The Y block derives Philip's sole-candidate November days from eligibility over the lock-only seed
+schedule (`soleOpen`) and holds the generator to exactly that set, names 11/13's reasons (`max-consecutive:3` for Acton, East
+for Khan), pins 11/5 as Acton's byte-identical lock with a generated backup for an eligible surgeon and no lock violation, and
+checks every generated Acton November primary against his rules. After: `ok 276484 assertions ... (8986 ms total; budget 40000
+ms via SILVIS_GEN_BUDGET_MS)` on the shared machine (the baseline read 5578 ms — two other waves were running; the file's 10 s
+budget is untouched). Timings line: `R1 Oct bestOf 6: 732 ms / 50 runs; R2 Nov-Dec bestOf 5: 1945 ms; R3 Jan-Mar bestOf 2:
+2619 ms; R4 milestone bestOf 2: 492 ms / 25 runs; R1 backfill bestOf 2: 330 ms; Nov-Dec bestOf 200: 1727 ms`.
+
+Importer dry run (read-only, `node scripts/import-seed.js --dry-run`, the REPORT-FIRST artefact): `live rows before:
+{"call_schedule_data":1,"schedule_days":73,"availability":56,"time_off":7}`; `call_schedule_data 'main':
+roster=unchanged, surgeonRules=update, groupRules=update, holidays=unchanged, settings=update` (groupRules/settings are the
+pending W/X updates on this branch); `schedule_days: insert 0, update 1, delete 0, unchanged 72` — `2026-11: update 1,
+unchanged 24` — `11/5 P OPEN -> Acton`, `11/5 B Acton -> OPEN`; `availability: insert 0, update 0, delete 8, unchanged 48` —
+`delete s3 available/primary 2026-11-02`, `.../backup 2026-11-03`, `.../primary 2026-11-04`, `.../backup 2026-11-05`,
+`.../primary 2026-11-06`, `.../primary 2026-11-14..2026-11-16`, `.../backup 2026-11-17`, `.../primary 2026-11-18` (each
+"seed-owned, no longer in the seed"); `time_off: insert 0, delete 0, unchanged 7`; `Total changes: 12 (incl. 8 delete(s) of
+seed-owned rows)`. The s3 note inventory is unchanged in kind (`notes[1] -> drop`, `explicitAvailableNote -> drop`). Nothing
+was applied; the orchestrator shows Faraz this diff and waits for his go. Preview regeneration is the orchestrator's, after
+every rule item has landed.
+
+Review fixes (9/22 evening, Fix stage): (1) `groupRules.whitelistMonths.rule` / `.roleScope` in the seed (blob-bound prose the
+importer keeps) still named Acton's November as a governed month for both roles; two clauses were reworded - "Acton Oct (his
+November list is preferences since 9/22 evening, Prompt 12 Y)" and "Burchett's November list: the ER-panel author published it, so he is not
+placed on a November day he did not offer in either role; Acton's November object entry left with Prompt 12 Y" - operational
+wording only, no reason. This is one key outside the brief's named s3 keys, taken as part of "remove the November governed-month
+whitelist for s3" so the blob does not state a rule the data reversed; no other p12 wave edits that key (checked against each
+wave's merge base). (2) Test-message hygiene: the duplicate Burchett adapter pin was dropped (its note folded into T's line), two
+kept T assertions no longer say "on his list" (Acton 11/5 backup = backup any day; 11/16 = a 3rd Monday under his recurring
+rules), the X-block comment no longer calls November "governed", and the regression's governed-month message reads "T: October
+primary; Y: November ungoverned". (3) Not done here: rules doc section 8 item 15 still gives Philip's sole-candidate November days
+as 11/10, 11/12, 11/24 (past-tense framing: "In a month where Acton is held to his list"); after Y the derived set is 11/10,
+11/13, 11/24 (11/12 opens to Acton; 11/13 is Philip's alone via Acton's max-consecutive 3 against his locked 11/14-16 and Khan's
+East day). Section 8 is outside this item's doc scope and is taken in from the OneDrive copy - the orchestrator's next doc intake
+appends that clause to item 15; section 3 Acton (the Y bullet) already carries the new set.

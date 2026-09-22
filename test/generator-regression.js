@@ -216,9 +216,10 @@ function burchettMay(d, role) {
   return burchettRecurring(d) || isWeekend(d);
 }
 // Acton: 2nd/4th Mon + Wed blocked for PRIMARY; October governed for primary by his explicit list (backup open since
-// 9/22); November governed for BOTH roles by the list the ER-panel author published (T).
+// 9/22). Prompt 12 Y FLIP (9/22 evening): T governed November for both roles from the relayed list; Faraz ruled that
+// list preferences, so November is his recurring rules again (the relayed days stay as locks).
 const ACT_AVAIL = explicitRoleDates(SR[ACTON].explicitAvailable), ACT_GOV = governedRoles(ACTON);
-eq(govText(ACT_GOV), ["2026-10:primary", "2026-11:backup+primary"], "seed: Acton governed Oct primary only, Nov both roles (T)");
+eq(govText(ACT_GOV), ["2026-10:primary"], "seed: Acton governed Oct primary only (Y; T had Nov both roles)");
 const GOV = {}; IDS.forEach((id) => { GOV[id] = governedRoles(id); });
 // Prompt 12 W (9/22 evening, "own dates beat own patterns"): hardNeverWeekdays restated GENERICALLY for every surgeon
 // from surgeonRules.<id>.hardNeverWeekdays + hardNeverWeekdaysRoles (Khan's Tue/Thu today; Acton's Tuesday arrives
@@ -519,7 +520,7 @@ function checkRun(out, range, seedNo, deep, extraRows) { // extraRows (W): dated
         if (role === P && !isHoliday(d) && weekday(d) === "Tue") X_STATS.actonTuePrimary.push(range.name + " seed " + seedNo + " " + d); // item X: named pin at the end of the file
         ok(!(d >= "2026-11-19" && d <= "2026-11-22") && !(d >= "2026-11-25" && d <= "2026-11-29"), "Acton on his November time off");
         ok(!(HOLIDAY[d] && HOLIDAY[d].name === "Thanksgiving"), "Acton on a Thanksgiving unit day");
-        { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role) && !isHoliday(d)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary, November both roles)"); }
+        { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role) && !isHoliday(d)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary; Y: November ungoverned)"); }
       }
       // item 7 (9/22: backup any day unless explicitly unavailable)
       if (id === BURCHETT) ok(burchettMay(d, role), "Burchett " + role + " on a day his rules exclude (" + weekday(d) + ")");
@@ -1037,15 +1038,13 @@ checkRun(big, RANGES[1], 1, true); // seed 1, bestOf 200; deep = item G tally co
 // open slot at all - the three Thursday backups (11/05, 11/19, 12/03) that only the
 // old day rules left open are now fillable. Deterministic (genPrng, seed 1).
 CUR.range = "R2 Nov-Dec bestOf 200"; CUR.seed = 1; CUR.day = "-";
-// T (9/22): with the ER-panel author's November locks, Thu 11/5 primary is open for nobody - Acton (its locked backup) did not offer
+// T (9/22): with the ER-panel author's November locks, Thu 11/5 primary was open for nobody - Acton (its locked backup) had not offered
 // 11/5 as primary, Burchett did not offer it at all, Philip's week of 11/2 is not on his list, Khan never takes a
-// Thursday, Fierce is in Clinton, Sarkar is outside her window (rules doc section 8 item 13). It is the ONLY open slot
-// of the milestone preview; every reason is restated by name.
-eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), ["2026-11-05 primary"], "milestone preview (seed 1, bestOf 200): exactly one open slot - 11/5 primary (T)");
-{
-  const u = big.diagnostics.uncovered[0], first = (id) => String((u.reasons[id] || [])[0] || "");
-  eq([first(ACTON), first(BURCHETT), first(PHILIP), first(KHAN), first(FIERCE), first(SARKAR)], ["whitelist-month", "whitelist-month", "outside-available-weeks", "hard-never-weekday:Thu", "weekday-pattern:Thu", "outside-window"], "11/5 primary: the first hard reason per surgeon (Acton also holds-other-role)");
-}
+// Thursday, Fierce is in Clinton, Sarkar is outside her window (rules doc section 8 item 13) - the ONLY open slot of the
+// milestone preview. Prompt 12 Y FLIP (9/22 evening): Faraz resolved item 13 - 11/5 is Acton's locked PRIMARY (his
+// recurring rules; 11/4-11/6 = 3 = his max), its backup open to anyone eligible - so the preview has no open slot at all
+// (the per-surgeon reason pin on the open slot went with it; the Y block at the end pins 11/5 by name).
+eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone preview (seed 1, bestOf 200): no open slot (Y; T read exactly ['2026-11-05 primary'])");
 // J (9/22): equal shares in force on the milestone preview - both checks read the targets from the diagnostics.
 // (1) Khan is no longer the default weekend backup: his Nov-Dec backup count is at most 1.5 x his backup target
 //     (review section 4 item 2: the old preview gave him 21 backups against a share near 8-9).
@@ -1073,7 +1072,11 @@ const soleCandidatePrimaries = (out, id, m) => monthDays(m).filter((d) => d >= R
     ok(Math.abs(c - forced.length - M.primaryTarget) <= 3, CODE[id] + " " + m + ": " + c + " primaries against a primary target of " + M.primaryTarget + " (allowed " + M.allowedPrimary + " + locked " + M.lockedHeld.primary + "; sole-candidate days subtracted: " + (forced.join(", ") || "none") + ") - more than 3 off");
   }));
   CUR.day = "-";
-  eq(soleCandidatePrimaries(big, PHILIP, "2026-11"), ["2026-11-10", "2026-11-12", "2026-11-13", "2026-11-24"], "T: Philip is the sole primary candidate on exactly 11/10, 11/12, 11/13, 11/24 once the ER-panel author's November locks are in");
+  // Prompt 12 Y FLIP (9/22 evening): T pinned ["2026-11-10", "2026-11-12", "2026-11-13", "2026-11-24"] by name. With Acton's
+  // November list read as preferences his recurring rules open Thu 11/12 to him (11/12 leaves the set); Fri 11/13 stays
+  // Philip's alone for a different reason - Acton's locked 11/14-16 run makes it a fourth consecutive primary (max 3) and
+  // Khan is East-busy that day. The Y block at the end derives the set from eligibility over the seed and names why.
+  eq(soleCandidatePrimaries(big, PHILIP, "2026-11"), ["2026-11-10", "2026-11-13", "2026-11-24"], "T+Y: Philip is the sole primary candidate on exactly 11/10, 11/13, 11/24 (T had 11/12 too - Acton's rules allow it now)");
   // Prompt 12 X FLIP (9/22 evening): before X this set was [] (T). With Acton's Tuesday now a hard primary rule, the two
   // December Tuesdays outside Sarkar's window (12/14-18) and Fierce's derived week (12/7-13) fall to Philip alone - the
   // Tue/Thu structural gap of rules doc section 8 item 15 (Khan: OR day, Fierce: Clinton, Burchett: off his December list).
@@ -1127,9 +1130,10 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   ok(!DO.warnings.some((w) => /generator bug/.test(w)), "opt-out run: generator reports its own bug");
   eq(DO.hardViolations, [], "opt-out run: hard violations");
   // T (9/22): the ER-panel author's published rows lock Acton as backup on 11/3, 11/5, 11/17 - a lock is a fact the generator never
-  // moves, so those three stay (reported as lock violations naming the opt-out); he is never PLACED as backup.
+  // moves, so those stay (reported as lock violations naming the opt-out); he is never PLACED as backup.
+  // Prompt 12 Y FLIP (9/22 evening): 11/5 became his locked PRIMARY, so two locked backups remain.
   const actonLockedB = Object.keys(INPUT).filter((d) => d >= RANGES[1].start && d <= RANGES[1].end && lockedIn(d, B) && INPUT[d].backup === ACTON);
-  eq(actonLockedB, ["2026-11-03", "2026-11-05", "2026-11-17"], "seed: Acton's locked November backups (the ER-panel author 9/22)");
+  eq(actonLockedB, ["2026-11-03", "2026-11-17"], "seed: Acton's locked November backups (the ER-panel author 9/22; 11/5 is his primary since Y)");
   const actonBackups = Object.keys(outOpt.schedule).filter((d) => outOpt.schedule[d].backup === ACTON && !actonLockedB.includes(d));
   eq(actonBackups, [], "opt-out run: Acton placed as backup on " + actonBackups.join(", "));
   actonLockedB.forEach((d) => { eq([outOpt.schedule[d].backup, outOpt.schedule[d].backupLocked], [ACTON, true], "opt-out run: the locked Acton backup " + d + " stays a lock"); ok(DO.lockViolations.some((l) => l.day === d && l.role === B && l.id === ACTON && l.reasons.some((r) => String(r).indexOf("backup-opt-out") === 0)), "opt-out run: the locked Acton backup " + d + " is reported as a lock violation naming backup-opt-out: " + JSON.stringify(DO.lockViolations.filter((l) => l.day === d))); });
@@ -1389,6 +1393,48 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   ok(!("hardNeverWeekdaysReason" in SR[ACTON]), "seed: no hardNeverWeekdaysReason key for Acton (a *Reason key reaches the blob as a category token)");
   eq((SR[ACTON].recurringAvoid || []).map((r) => r.weekday), ["Sun"], "seed: the Tuesday soft avoid left with its note; the Sunday avoid stays");
   ok(![...SEED_ROWS[ACTON].primary].some((d) => weekday(d) === "Tue"), "seed: none of Acton's dated primary rows is a Tuesday - nothing lifts the block in these runs, so the pin above is not vacuous");
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 12 Y (9/22 evening) ----
+// Faraz: "Acton's November list is preferences, not a limit (his 9/17 message gave rules, never dates; the dates came via
+// Burchett's relay): remove the November governed-month whitelist for s3. His listed days stay locked; his recurring rules
+// govern the rest of November - which makes Thu 11/5 his (primary 11/4-11/6, within his max of 3) with backup from anyone
+// eligible. Burchett's November whitelist stays." Data only. The pins: the seed facts; the milestone preview (seed 1,
+// bestOf 200) has NO open slot any more (T's 11/5 primary was the only one) and 11/5 is Acton's byte-identical lock with a
+// generated backup; Philip's sole-candidate days are DERIVED from eligibility over the lock-only seed schedule and the
+// generator is held to them (it cannot avoid a day nobody else may take) - 11/10 and 11/24 are the Tuesdays, 11/12 (Acton
+// eligible again) and 11/13 are no longer his alone; Acton's generated November primaries obey his recurring rules
+// (checkRun item 6 + X cover it per run; restated here for the milestone preview by name).
+{
+  CUR.range = "Y (Acton November)"; CUR.seed = 1; CUR.day = "-";
+  eq(SR[ACTON].explicitListMonths, ["2026-10"], "seed: Acton's explicitListMonths = October only (Y; before: + the November object entry)");
+  ok(!("2026-11" in (SR[ACTON].explicitAvailable || {})), "seed: no s3.explicitAvailable['2026-11'] key (the importer would re-govern November from the key alone)");
+  eq(govText(ACT_GOV), ["2026-10:primary"], "seed: Acton governed October primary only (Y)");
+  eq(govText(BUR_GOV), ["2026-10:primary", "2026-11:backup+primary", "2026-12:primary"], "seed: Burchett's November whitelist stays (Y changes nothing for him)");
+  eq([INPUT["2026-11-05"].primary, INPUT["2026-11-05"].primaryLocked, INPUT["2026-11-05"].backup, INPUT["2026-11-05"].backupLocked], [ACTON, true, null, false], "seed: 11/5 = Acton primary locked, backup open (source faraz-2026-09-22-acton-1105)");
+  eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone preview (seed 1, bestOf 200): no open slot at all - 11/5 primary is Acton's lock now (T's one open slot)");
+  eq([big.schedule["2026-11-05"].primary, big.schedule["2026-11-05"].primaryLocked], [ACTON, true], "Y: 11/5 primary = Acton, the lock untouched");
+  const b5 = big.schedule["2026-11-05"].backup;
+  ok(b5 && b5 !== ACTON && R.eligibility(ctx, "2026-11-05", B, b5).ok, "Y: 11/5 backup generated for an eligible surgeon other than Acton (got " + (b5 ? CODE[b5] : "open") + ")");
+  ok(!big.diagnostics.lockViolations.some((l) => l.day === "2026-11-05"), "Y: 11/5 carries no lock violation (11/4-11/6 = 3 = his max; no whitelist)");
+  // Philip's sole-candidate November days, derived: open primary slots on the lock-only seed schedule where he is the
+  // only eligible surgeon (standalone or as a block member). The generator must place him on every one of them.
+  const soleOpen = (id, m) => monthDays(m).filter((d) => d >= RANGES[1].start && d <= RANGES[1].end && !lockedIn(d, P) &&
+    (R.eligibility(ctx, d, P, id).ok || R.eligibility(ctx, d, P, id, { asBlockMember: true }).ok) &&
+    IDS.every((o) => o === id || !(R.eligibility(ctx, d, P, o).ok || R.eligibility(ctx, d, P, o, { asBlockMember: true }).ok)));
+  const philipSole = soleOpen(PHILIP, "2026-11");
+  eq(soleCandidatePrimaries(big, PHILIP, "2026-11"), philipSole, "Y: the generator placed Philip on exactly the November days he alone may take (derived from eligibility over the seed, not hard-coded): " + philipSole.join(", "));
+  ok(philipSole.includes("2026-11-10") && philipSole.includes("2026-11-24"), "Y: the Tuesdays 11/10 and 11/24 are still Philip's alone (Acton: X; Khan: OR day; Fierce: Clinton; Burchett: off his list; Sarkar: outside her window)");
+  ok(!philipSole.includes("2026-11-12") && !philipSole.includes("2026-11-05"), "Y: Thu 11/12 is no longer his alone (Acton's rules allow it) and 11/5 is a lock");
+  ok(R.eligibility(ctx, "2026-11-12", P, ACTON).ok, "Y: ...because Acton is primary-eligible on 11/12 on the lock-only seed schedule (Fierce's derived backup is the other role)");
+  // the one non-Tuesday left to him alone is Fri 11/13, and not through any whitelist: Acton's locked 11/14-16 run would make
+  // it a fourth consecutive primary and Khan is East-busy that day (the seed's forecast fixture); named so the pin stays honest.
+  eq(philipSole.filter((d) => weekday(d) !== "Tue"), ["2026-11-13"], "Y: the Tuesdays are the section 8 item 15 structural gap; 11/13 is the one non-Tuesday he alone may take (got " + philipSole.join(", ") + ")");
+  eq(R.eligibility(ctx, "2026-11-13", P, ACTON).hard, ["max-consecutive:3"], "Y: Acton on 11/13 - only his max 3 (11/13 + locked 11/14-16), no whitelist-month");
+  ok(R.eligibility(ctx, "2026-11-13", P, KHAN).hard.some((h) => /^east-(busy|forecast-busy)/.test(h)), "Y: Khan on 11/13 - East: " + JSON.stringify(R.eligibility(ctx, "2026-11-13", P, KHAN).hard));
+  const actonNovGen = Object.keys(big.schedule).filter((d) => d.slice(0, 7) === "2026-11" && big.schedule[d].primary === ACTON && !big.schedule[d].primaryLocked);
+  ok(actonNovGen.every((d) => weekday(d) !== "Tue" && !actonBlockedRecurring(d) && !isHoliday(d)), "Y: every GENERATED Acton November primary obeys his recurring rules (no Tuesday, no 2nd/4th Mon/Wed): " + actonNovGen.join(", "));
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 

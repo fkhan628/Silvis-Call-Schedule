@@ -27,7 +27,8 @@
       "2026-09-22 evening (Claude Code, Prompt 12 item V, from Faraz's 9/22 evening message): standing East rule - surgeonRules.s1.eastStanding [{ name: \"Christmas\", days: [\"12-24\", \"12-25\"] }] (+ note): Khan is on Davenport call every Christmas Eve and Christmas Day (the Davenport app's standing rule of 2026-08-06). rules.js treats a standing day exactly like a published East busy day in EVERY year, independent of the feed and the forecast - the same hard east-busy for the roles his eastFeed blocks (primary; backup stays open), precedence over the forecast and over east-unknown, the same gate (eastFeed.enabled; a malformed day or a disabled East feature is a ctx warning, never a silent block) - so the Christmas unit never has Khan as primary. Generic: any surgeon, an MM-DD list; seed/blob data today (no Setup field yet - the Setup East card shows it read-only); a one-year exception is a manual edit with the visible warning. No schedule_days, time_off or availability rows change.",
       "2026-09-22 evening (Claude Code, Prompt 12 item W, from Faraz's 9/22 evening rule 'own dates beat own patterns'): rules.js - an explicit dated available / backup_only row for a role now lifts hardNeverWeekdays for that date and role like every other weekday-pattern rule (hard-never-weekday:<wd> is pushed only when no row covers the role; the reason code is unchanged where it applies), and outside-window is no longer lifted by a dated row (availableWindows is an obligation, both roles, holidays included). Nothing else changed: vacations, East busy / forecast-busy, derived locks, backupOptOut, caps, consecutive limits and the other role never read a row; a manual lock is not a row. Seed prose only: groupRules.availabilityPrecedence tiers (hardNeverWeekdays into the row-liftable tier, availableWindows into the never-lifted gates; short, reason-free - the importer keeps these strings), availabilityPrecedenceNote, surgeonRules.s1.hardNeverWeekdaysNote, s6.availableWindowsNote (all *Note keys are dropped by the importer). No rule value, schedule_days, time_off or availability row changes.",
       "2026-09-22 evening (Claude Code, Prompt 12 item W, from Faraz's 9/22 evening rule 'own dates beat own patterns'): rules.js - an explicit dated available / backup_only row for a role now lifts hardNeverWeekdays for that date and role like every other weekday-pattern rule (hard-never-weekday:<wd> is pushed only when no row covers the role; the reason code is unchanged where it applies), and outside-window is no longer lifted by a dated row (availableWindows is an obligation, both roles, holidays included). Nothing else changed: vacations, East busy / forecast-busy, derived locks, backupOptOut, caps, consecutive limits and the other role never read a row; a manual lock is not a row. Seed prose only: groupRules.availabilityPrecedence tiers (hardNeverWeekdays into the row-liftable tier, availableWindows into the never-lifted gates; short, reason-free - the importer keeps these strings), availabilityPrecedenceNote, surgeonRules.s1.hardNeverWeekdaysNote, s6.availableWindowsNote (all *Note keys are dropped by the importer). No rule value, schedule_days, time_off or availability row changes.",
-      "2026-09-22 evening (Claude Code, Prompt 12 item X, from Faraz's 9/22 evening decision): Acton never PRIMARY on a Tuesday - surgeonRules.s3.hardNeverWeekdays [\"Tue\"] + hardNeverWeekdaysRoles [\"primary\"] (backup on Tuesdays stays allowed) + hardNeverWeekdaysNote (dropped by the importer); the recurringAvoid Tuesday entry left the seed (the hard rule replaces it); no hardNeverWeekdaysReason key; one s3 notes[] line 'not Tuesdays (primary), 9/22 evening' (dropped by the importer). Data only - the engine is item W's generic hardNeverWeekdays read, lifted for a date only by his own dated available/primary row; his November Tuesday rows (11/3, 11/17) are backups, so nothing changes there. Blob: surgeonRules update plus this sentence in settings.seedRevisions; no schedule_days, time_off or availability row changes."
+      "2026-09-22 evening (Claude Code, Prompt 12 item X, from Faraz's 9/22 evening decision): Acton never PRIMARY on a Tuesday - surgeonRules.s3.hardNeverWeekdays [\"Tue\"] + hardNeverWeekdaysRoles [\"primary\"] (backup on Tuesdays stays allowed) + hardNeverWeekdaysNote (dropped by the importer); the recurringAvoid Tuesday entry left the seed (the hard rule replaces it); no hardNeverWeekdaysReason key; one s3 notes[] line 'not Tuesdays (primary), 9/22 evening' (dropped by the importer). Data only - the engine is item W's generic hardNeverWeekdays read, lifted for a date only by his own dated available/primary row; his November Tuesday rows (11/3, 11/17) are backups, so nothing changes there. Blob: surgeonRules update plus this sentence in settings.seedRevisions; no schedule_days, time_off or availability row changes.",
+      "2026-09-22 evening (Claude Code, Prompt 12 item Y, from Faraz's 9/22 evening decision): Acton's November list is preferences, not a limit (his 9/17 message gave rules, never dates; the dates came via Burchett's relay) - surgeonRules.s3.explicitListMonths = [\"2026-10\"] (the { month: '2026-11', roles: [primary, backup] } object removed) and the s3.explicitAvailable['2026-11'] block removed (a data-only necessity: the importer completes explicitListMonths from the explicitAvailable KEYS - groupRules.whitelistMonths.rule - so the key alone would keep November governed); his relayed days stay LOCKED in existingAssignments. existingAssignments 2026-11-05: primary s3 locked, backup null (source faraz-2026-09-22-acton-1105, note 'Acton primary per his recurring rules (Faraz 9/22 evening); his relayed 11/5 backup entry superseded') - his recurring rules allow the Thursday and 11/4-11/6 is a run of 3, his max; pendingDeltas logs 11/5 B s3 -> open and 11/5 P open -> s3 (applied). Burchett's s2 explicitListMonths / explicitAvailable are UNCHANGED (his November whitelist stays). Open question 13 answered. Data only - no code change. Live consequences (importer): schedule_days update 1 (2026-11-05), availability DELETE of the s3 November rows the T import inserted (5 primary ranges + 3 backup rows = 8 collapsed rows), blob surgeonRules update; time_off unchanged."
     ]
   },
   "site": {
@@ -261,8 +262,8 @@
     ],
     "availabilityPrecedenceNote": "9/22 evening (Faraz, Prompt 12 W) - own dates beat own patterns: a surgeon's explicit dated available / backup_only row, entered by them or by the scheduler for them (Setup availability list now, the Prompt 14 offers painter later), lifts that surgeon's weekday-pattern rules for that date and role, hardNeverWeekdays included (Khan's Tue/Thu primary, Fierce's Clinton days, Burchett's outreach days, Acton's Tuesdays). It never lifts an obligation: vacations and the trailing edge, East feed busy / forecast-busy days, derived-week locks, availableWindows (moved from the row-liftable tier to the never-lifted gates - a row outside a window does not open the day), backupOptOut, caps, consecutive limits, the other role. A manual/import lock is not a row: a lock holder on a pattern day keeps the lock and rules.js lists the rule in conflicts. availableWeeks and availableWindows are read from surgeonRules directly and are NOT written as available rows. rules.js: rdStatic applies hard-never-weekday:<wd> only when no dated row covers the role that day (the same rowAvail flag the other weekday-pattern rules read); outside-window no longer reads rowAvail.",
     "whitelistMonths": {
-      "rule": "A month is governed by an explicit date list only when it appears in surgeonRules[id].explicitListMonths (completed from the seed's explicitAvailable keys, for every surgeon who has one: Burchett Oct+Nov+Dec, Acton Oct+Nov, Philip Oct). In a governed month the eligible set for a governed ROLE is exactly the explicit available/backup_only rows minus unavailable rows; in other months (and for a role the entry does not govern) recurring patterns + weekendsAvailable minus unavailable rows. Dates in a list that spill into a neighbouring month are additive there and do not put that month into whitelist mode.",
-      "roleScope": "9/22 (Prompt 12 I + T): rules.js reads the role scope literally. A plain 'YYYY-MM' entry governs PRIMARY only (backup is open to everyone - Burchett's Oct/Dec, Acton's Oct); an object entry { month: 'YYYY-MM', roles: [...] } governs exactly the roles it names, so { month: '2026-11', roles: ['primary', 'backup'] } restricts BOTH roles (Burchett's and Acton's November lists: the ER-panel author published them, so neither is placed on a November day he did not offer in either role). The importer keeps an explicit entry as written; when it completes a missing month from the explicitAvailable keys it writes the plain (primary-only) form for a plain or two-role list and { month, roles: [role] } for a one-role list - an author who wants backup governed writes the object entry in the seed. Under groupRules.backupPolicy.openToEveryone false a plain entry governs both roles again."
+      "rule": "A month is governed by an explicit date list only when it appears in surgeonRules[id].explicitListMonths (completed from the seed's explicitAvailable keys, for every surgeon who has one: Burchett Oct+Nov+Dec, Acton Oct (his November list is preferences since 9/22 evening, Prompt 12 Y), Philip Oct). In a governed month the eligible set for a governed ROLE is exactly the explicit available/backup_only rows minus unavailable rows; in other months (and for a role the entry does not govern) recurring patterns + weekendsAvailable minus unavailable rows. Dates in a list that spill into a neighbouring month are additive there and do not put that month into whitelist mode.",
+      "roleScope": "9/22 (Prompt 12 I + T): rules.js reads the role scope literally. A plain 'YYYY-MM' entry governs PRIMARY only (backup is open to everyone - Burchett's Oct/Dec, Acton's Oct); an object entry { month: 'YYYY-MM', roles: [...] } governs exactly the roles it names, so { month: '2026-11', roles: ['primary', 'backup'] } restricts BOTH roles (Burchett's November list: the ER-panel author published it, so he is not placed on a November day he did not offer in either role; Acton's November object entry left with Prompt 12 Y). The importer keeps an explicit entry as written; when it completes a missing month from the explicitAvailable keys it writes the plain (primary-only) form for a plain or two-role list and { month, roles: [role] } for a one-role list - an author who wants backup governed writes the object entry in the seed. Under groupRules.backupPolicy.openToEveryone false a plain entry governs both roles again."
     },
     "dayBeforeRules": {
       "trailingEdgeRoles": [
@@ -619,40 +620,17 @@
             "2026-10-08",
             "2026-10-20"
           ]
-        },
-        "2026-11": {
-          "primary": [
-            "2026-11-02",
-            "2026-11-04",
-            "2026-11-06",
-            "2026-11-14",
-            "2026-11-15",
-            "2026-11-16",
-            "2026-11-18"
-          ],
-          "backup": [
-            "2026-11-03",
-            "2026-11-05",
-            "2026-11-17"
-          ]
         }
       },
       "notes": [
         "Offered to send a full monthly date list like Burchett",
-        "9/22 (Prompt 12 T): November per the days he submitted (Burchett's 9/17 relay), as the ER-panel author entered them - primary 11/2, 11/4, 11/6, 11/14, 11/15, 11/16, 11/18; backup 11/3, 11/5, 11/17 - locked in existingAssignments and governed for both roles. 11/18 primary precedes his 11/19 vacation (day-before rule): kept as a published fact, reported as a lock violation. With 11/5 and 11/17 locked as his backups, 11/5 primary has no eligible surgeon (open question 13)",
+        "9/22 evening (Prompt 12 Y, Faraz): his November list is preferences, not a limit - his 9/17 message gave rules, never dates (the dates came through Burchett's 9/17 relay; the ER-panel author entered them 9/22). The relayed days stay LOCKED in existingAssignments (primary 11/2, 11/4, 11/6, 11/14, 11/15, 11/16, 11/18; backup 11/3, 11/17); November is NOT a governed month for him (no explicitListMonths entry, no explicitAvailable block - the importer would complete the month from the key alone), so his recurring rules govern the rest of it. That makes Thu 11/5 his: primary 11/4-11/6 (a run of 3, his max), locked, backup open to anyone eligible (open question 13 answered). 11/18 primary still precedes his 11/19 vacation (day-before rule): kept as a published fact, reported as a lock violation",
         "not Tuesdays (primary), 9/22 evening"
       ],
       "explicitListMonths": [
-        "2026-10",
-        {
-          "month": "2026-11",
-          "roles": [
-            "primary",
-            "backup"
-          ]
-        }
+        "2026-10"
       ],
-      "explicitAvailableNote": "October is a governed month for PRIMARY (plain entry; since 9/22 backup is open to everyone), which is what makes 10/15 open for nobody (rules doc section 8 item 1). 10/10, 10/11 (the ER-panel author 9/16 Fri-Sun block) and 10/23 (Burchett 9/18 delta) added 2026-09-22: they are locked primaries he holds but were missing from the list. November (T, 9/22) is governed for BOTH roles via the explicit object entry in explicitListMonths (the ER-panel author published the list)."
+      "explicitAvailableNote": "October is a governed month for PRIMARY (plain entry; since 9/22 backup is open to everyone), which is what makes 10/15 open for nobody (rules doc section 8 item 1). 10/10, 10/11 (the ER-panel author 9/16 Fri-Sun block) and 10/23 (Burchett 9/18 delta) added 2026-09-22: they are locked primaries he holds but were missing from the list. November is deliberately absent here (Y, 9/22 evening): a '2026-11' key would make the importer complete November back into explicitListMonths (groupRules.whitelistMonths.rule), and his November list is preferences - the relayed days are locks in existingAssignments, not rows."
     },
     "s4": {
       "name": "Philip",
@@ -1415,11 +1393,11 @@
     },
     {
       "date": "2026-11-05",
-      "primary": null,
-      "backup": "s3",
-      "source": "office-er-call-panels-2026-09-22",
+      "primary": "s3",
+      "backup": null,
+      "source": "faraz-2026-09-22-acton-1105",
       "locked": true,
-      "note": "primary open - nobody's rules allow it with Acton as its backup (open question 13)"
+      "note": "Acton primary per his recurring rules (Faraz 9/22 evening); his relayed 11/5 backup entry superseded"
     },
     {
       "date": "2026-11-06",
@@ -1680,6 +1658,24 @@
       "source": "fierce-2026-09-22-backup-week",
       "status": "applied",
       "note": "Fierce's derived-week rule is authoritative (Faraz 9/22) - the ER-panel author's 9/22 Burchett backup entry on 11/16 is superseded, not imported; Mon 11/16 is outside his derived week and is Faraz's explicit decision (9/22: not an inference), an ordinary import lock."
+    },
+    {
+      "date": "2026-11-05",
+      "role": "backup",
+      "surgeon": null,
+      "replaces": "s3",
+      "source": "faraz-2026-09-22-acton-1105",
+      "status": "applied",
+      "note": "Faraz 9/22 evening (Prompt 12 Y): Acton's relayed 11/5 backup entry is superseded - he takes the primary instead (below); 11/5 backup is open to anyone eligible."
+    },
+    {
+      "date": "2026-11-05",
+      "role": "primary",
+      "surgeon": "s3",
+      "replaces": null,
+      "source": "faraz-2026-09-22-acton-1105",
+      "status": "applied",
+      "note": "Faraz 9/22 evening (Prompt 12 Y): Acton's November list is preferences, not a limit; his recurring rules allow Thu 11/5, so he is primary 11/4-11/6 (a run of 3, his max), locked. Answers open question 13."
     }
   ],
   "answeredQuestions": [
@@ -1721,7 +1717,7 @@
     "10. ~~11/9, 11/14, 11/15 backup - the ER-panel author published Burchett; Fierce's derived backup week claims the same days~~ - answered 9/22 (Prompt 12 T): Fierce takes backup 11/9-11/16 (his word); the ER-panel author's Burchett entries on 11/9, 11/14, 11/15, 11/16 are superseded and her document changes on those four days.",
     "11. October's eight open backups + 10/24 primary - fill by generator (fill-open-only over 10/15-11/1: scripts/preview-generate.js --backfill, Prompt 12 T) or by hand before publishing? The backfill section of the preview lists a candidate and the alternatives per slot; Faraz decides.",
     "12. Burchett 10/25 - in his own 9/17 plan but not in the ER-panel author's document; confirm it stands now that Sarkar is off 10/24.",
-    "13. 11/5 (Thu) primary - open for nobody once Acton is locked as its backup (his submitted day): Burchett did not offer 11/5, Philip's week of 11/2 is not on his list, Khan never a Thursday, Fierce is in Clinton, Sarkar is outside her window. Options: Acton primary instead of backup on 11/5 (then 11/5 backup is open to everyone), an outside surgeon, or the group settles Thursdays once (same gap as 10/15).",
+    "13. ~~11/5 (Thu) primary - open for nobody once Acton is locked as its backup~~ - answered 9/22 evening (Prompt 12 Y, Faraz): Acton's 9/17 message gave rules and preferences, never a date list (the November dates came through Burchett's relay), so his November list is preferences, the November whitelist comes off (s3.explicitListMonths = October only; no explicitAvailable['2026-11'] block), his relayed days stay locked, and his recurring rules allow Thu 11/5: primary 11/4-11/6 (a run of 3, his max), locked (source faraz-2026-09-22-acton-1105); 11/5 backup is open to anyone eligible. Burchett's November whitelist stays.",
     "14. 10/16, 10/27, 10/29 backup - open in the import (the ER-panel author's 9/16 document: Philip primary, no backup) but NOT in the open-backup list of her 9/22 document (10/15, 10/21, 10/23, 10/24, 10/25, 10/30, 10/31, 11/1): does her 9/22 document carry a backup on those three days? If so, send it and it is imported as a lock; meanwhile the October backfill proposes candidates for all eleven open backups."
   ]
 }

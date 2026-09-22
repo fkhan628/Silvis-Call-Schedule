@@ -125,14 +125,29 @@ decides the Trauma Director role.
 - October: primary Oct 5, 7, 9, 17, 18, 19, 21, 23; backup Oct 6, 8, 20. Offered to send a full monthly date list like Burchett.
 - ⟶ **November (Burchett's 9/17 relay of "the days Acton submitted"; the ER-panel author entered them into the official
   document on 9/22): primary Mon 11/2, Wed 11/4, Fri 11/6, Sat 11/14, Sun 11/15, Mon 11/16, Wed 11/18; backup Tue 11/3,
-  Thu 11/5, Tue 11/17.** A whitelist for November (governed month, both roles) — and, because the ER-panel author has published
-  them, **locked assignments** (§7). 11/14–16 is three consecutive primaries (his max).
+  Thu 11/5, Tue 11/17.** A whitelist for November (governed month, both roles) ⟶ 9/22 evening: **no longer — preferences,
+  whitelist off (Prompt 12 Y, below)** — and, because the ER-panel author has published them, **locked assignments** (§7). 11/14–16 is
+  three consecutive primaries (his max).
 - ⟶ **Seed keys (Prompt 12 T, 9/22):** `existingAssignments` primary 11/2, 11/4, 11/6, 11/14, 11/15, 11/16, 11/18 and backup
   11/3, 11/5, 11/17 (locked, source `office-er-call-panels-2026-09-22`; one row per day merges the roles — 11/2 = Acton P +
   Burchett B, 11/14 = Acton P + Fierce B); `s3.explicitAvailable["2026-11"]` role-keyed + the object entry
   `{ month: "2026-11", roles: ["primary", "backup"] }` in `explicitListMonths` (both roles governed; his October stays a plain
   entry = primary only). Consequences: **11/18 primary is the day before his 11/19 vacation** — published as submitted, reported
   as a lock violation, never changed; with him locked as **11/5 backup**, **Thu 11/5 primary has no eligible surgeon** (§8 item 13).
+- ⟶ **Seed keys (Prompt 12 Y, 9/22 evening — Faraz: his November list is preferences, not a limit; his 9/17 message gave rules,
+  never dates, the dates came via Burchett's relay):** `s3.explicitListMonths` = `["2026-10"]` (the November object entry removed)
+  and **no** `s3.explicitAvailable["2026-11"]` block — the importer completes a governed month from that key alone
+  (`groupRules.whitelistMonths.rule`, `importer.js impSeedSurgeonRules`), so the data-only way to lift the whitelist is to drop the
+  block; his relayed days live on as **locks** in `existingAssignments`, not as availability rows (importer: `availability` delete 8
+  — the s3 November rows the T import wrote, 5 primary ranges + 3 backup rows). `existingAssignments` **2026-11-05 = Acton primary
+  locked, backup open** (source `faraz-2026-09-22-acton-1105`, row note "Acton primary per his recurring rules (Faraz 9/22 evening);
+  his relayed 11/5 backup entry superseded"); `pendingDeltas` 11/5 B s3 → open and 11/5 P open → s3 (applied). Burchett's `s2`
+  lists are unchanged (his November whitelist stays). Consequences on the seed: **Thu 11/5 = Acton primary 11/4–11/6, a run of 3 =
+  his max**, no conflict on the lock; 11/5 backup open to Khan, Philip, Fierce (Burchett: `whitelist-month`, Sarkar: window);
+  Thu 11/12 primary opens to him (its backup is Fierce's derived lock, the other role); **Fri 11/13 stays Philip's alone** — not a
+  whitelist but Acton's max 3 (11/13 + his locked 11/14–16 = 4) and Khan's East day; the Tuesdays 11/10 and 11/24 stay Philip's alone
+  (item X; §8 item 15); 11/19–22 vacation, 11/18 and 11/24 day-before, 2nd/4th Mon/Wed as before. The milestone preview has no open
+  slot any more. §8 item 13 answered.
 - **No specific monthly cap** (Faraz 9/21); no target stated.
 
 ### Philip (s4) — whitelist of weeks (primary)
@@ -323,6 +338,7 @@ holds Khan's four Thanksgiving rows and the 20 November rows of the ER-panel aut
 - 10/23 primary → Acton (Burchett 9/18).
 - 10/20, 10/22, 10/24 primary → Sarkar; 10/25 primary → Burchett (Burchett's 9/17 October plan). ⟶ 9/22 evening: **10/24 taken back off Sarkar** (two days a week, October included) — open primary.
 - Seed keys touched 9/22 evening (Prompt 12 S): `existingAssignments` 2026-10-24 -> `primary: null`, `source: "faraz-2026-09-22-sarkar-two-days"`, `note` (locked-open like 10/15); `pendingDeltas` gains the 10/24 row (`surgeon: null`, `replaces: "s6"`, `status: "applied"`); `surgeonRules.s6.availableWindows` = the four Mon-Fri ranges + `availableWindowsNote`; `surgeonRules.s2.timeOff` = the four 2027 weekends (`public: true`, note `"unavailable (stated 9/22)"`, `source: "burchett-email-2026-09-22"`) + one `notes` line; `_meta.revisions`, `answeredQuestions`, `openQuestions` 6-7. The importer writes a `public: true` vacation note to `time_off` only when it passes the item-F denylist and names no roster surname: a denylist word refuses the import, a surname falls back to `vacation (seed)` (dry run: `-> private-name`); a private note is always `vacation (seed)`.
+- Seed keys touched 9/22 evening (Prompt 12 Y): `existingAssignments` 2026-11-05 -> `primary: "s3"`, `backup: null`, `locked: true`, `source: "faraz-2026-09-22-acton-1105"`, note "Acton primary per his recurring rules (Faraz 9/22 evening); his relayed 11/5 backup entry superseded" (the row count stays 73); `pendingDeltas` gains 11/5 B s3 -> open and 11/5 P open -> s3 (both `status: "applied"`); `surgeonRules.s3.explicitListMonths` = `["2026-10"]` and the `s3.explicitAvailable["2026-11"]` block removed (his November list is preferences; the days stay as locks); `openQuestions` 13 answered; `_meta.revisions`. Importer dry run against the live tables (9/22 evening): `schedule_days` update 1 (`11/5 P OPEN -> Acton`, `11/5 B Acton -> OPEN`), `availability` delete 8 (the s3 November rows: 11/2, 11/4, 11/6, 11/14..16, 11/18 primary; 11/3, 11/5, 11/17 backup), blob `surgeonRules=update`, `time_off` unchanged.
 
 **The open primary days in the import are 10/15 (Thu) and, since 9/22 evening, Sat 10/24 (see below).** 10/15: Philip cannot (hard), Burchett and Acton did not offer it,
 Khan never takes Thursdays, and Fierce is in Clinton on Thursdays. It needs a human decision. Nothing is scheduled from
@@ -350,7 +366,8 @@ is still open in **October**. Two consequences:
    the locks: 11/5, 11/9, 11/10, 11/12, 11/13, 11/17, 11/19, 11/21, 11/22, 11/24, 11/30 (11/26–29 is Khan's unit).
    ⟶ **9/22 (Prompt 12 T, seed):** 20 of the 25 entries are imported — rows 11/2–11/18 daily, 11/20, 11/23, 11/25
    (`schedule_days` total 73); one row per day merges the roles (11/2 = Acton P + Burchett B; 11/14 = Acton P + Fierce B;
-   11/9 = Fierce B, primary open; 11/25 = Khan P, backup open); a null slot is open for the generator. The five entries
+   11/9 = Fierce B, primary open; 11/25 = Khan P, backup open; ⟶ 9/22 evening, Prompt 12 Y: **11/5 = Acton P locked, backup
+   open**, source `faraz-2026-09-22-acton-1105` — his relayed 11/5 backup entry superseded); a null slot is open for the generator. The five entries
    Faraz's amendments supersede are **not** imported (`pendingDeltas`, applied): Burchett 11/25 primary → **Khan, 2026 only**
    (a locked one-off, source `faraz-2026-09-22-khan-1125`, note "Khan covers 11/25, 2026 only"; not part of the Thanksgiving
    unit, which stays 11/26–11/29) and Burchett backup 11/9, 11/14, 11/15, 11/16 → **Fierce** (below).
