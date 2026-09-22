@@ -14,7 +14,7 @@ developer, one of the six surgeons, and the user you're working with. Live users
 
 ## Identity model — get this right
 
-Roster entries are `{ id, name, code, fullName, email, active, roles }`; ids `s1`–`s6`; `name` is the surgeon's
+Roster entries are `{ id, name, code, fullName, active, roles }`; ids `s1`–`s6`; `name` is the surgeon's
 **last name** (Khan, Burchett, Acton, Philip, Fierce, Sarkar); `code` is a 3-letter chip (FAK, MAB, BDA, AFP, NF, SRK).
 **The schedule stores ids.** There is no Atwell. Roster entries carry **no email field**.
 The Davenport app uses a different id namespace (FAK is `s6` there) — the East feed matches on `code`, never on id.
@@ -43,7 +43,7 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 ## Working locations
 
 1. **Git clone: `<your clone>`** — the ONLY place to edit repo files. Git identity is
-   configured repo-locally. The Davenport reference clone lives beside it at `..\Call-Schedule-App` (read-only for this project).
+   configured repo-locally. The Davenport reference clone lives beside it at `..\davenport-ref` (read-only, fresh clone of `fkhan628/Call-Schedule-App`; `..\Call-Schedule-App` is Faraz's own Davenport working clone — never edit either from here).
 2. **OneDrive folder** `<the OneDrive folder>` — non-repo material (the ER-panel author's Word docs,
    email exports, backups), the private `silvis-contacts.md`, and the source copies of `CLAUDE.md`, `docs/` and `sql/`
    (identical to the repo's — both contact-free). Never edit app files there.
@@ -98,5 +98,7 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 - Current milestone: **a published schedule through 2026-12-31** (generate 2026-11-02 → 2027-01-03 over the locked
   Sep 14 – Nov 1 import); after that, Generate offers 3 / 6 / 9 / 12-month presets. Don't gold-plate exports or edge
   functions until the milestone is live.
-- Pending inputs: who takes 10/15 (group discussion) and Sarkar's home email — see `docs/SILVIS-CALL-RULES.md §8`.
-  Treat those as unknowns, not assumptions to bake in.
+- Pending inputs: who takes 10/15 (group discussion), Sarkar's home email, Khan as backup on ordinary Tue/Thu, Philip's
+  monthly cap — see `docs/SILVIS-CALL-RULES.md §8`. Treat those as unknowns, not assumptions to bake in. Every default
+  taken for an unanswered question is data in `call_schedule_data.data.groupRules` / `surgeonRules` (listed in
+  `docs/ORIENTATION-2026-09-21.md` §3), never a code branch.

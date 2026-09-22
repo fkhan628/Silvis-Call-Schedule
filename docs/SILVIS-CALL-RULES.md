@@ -53,7 +53,9 @@ decides the Trauma Director role.
 - **Main contribution = weekends** (Fri+Sat+Sun as a block). He is in the weekend pool by default.
 - **Mondays and Wednesdays are auto-offered** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday** — those are his OR days (hard). *(Stated 9/21; supersedes the earlier "no Mon/Wed nights" statement.)*
 - East feed: **primary** only on days he is **not on call at East (Davenport)**; **backup is allowed even on East call days**. Source of truth: the Davenport app's `schedule_weeks` rows for the surgeon coded FAK.
-- Max consecutive 3. No monthly target. May cover Thanksgiving Thu–Sun (pending).
+- Max consecutive 3 (a holiday unit counts as one commitment). No monthly target.
+- **Thanksgiving 2026: Khan takes Thu 11/26 – Sun 11/29 as one unit, primary** (Faraz 9/21 evening; locked in the seed).
+- **East forecast while Davenport is unpublished** (Faraz 9/21 evening): the Davenport schedule for the next period is not out until the end of 2026. Until it is, the East feed carries a forecast built by running the Davenport generator many times over the next period with the live Davenport inputs; days where Khan is on East call in ≥ 50 % of runs are treated as East-busy for Silvis primary (backup allowed), lower probabilities are a soft penalty, and such days show a “forecast” badge. When Davenport publishes, the real feed replaces the forecast and a conflict report lists any Silvis day needing a trade. Faraz can also enter his published Silvis days as Davenport constraints when he generates DSG.
 
 ### Burchett (s2) — recurring whitelist + weekends
 - Typically available: **2nd & 4th Monday** (unless in Jackson County), **1st Tuesday**, **2nd & 4th Wednesday**. Otherwise in DeWitt / Jackson County most days.
@@ -86,7 +88,7 @@ decides the Trauma Director role.
 - Takes East call **one week at a time**, alternating between East primary weeks and East backup weeks.
 - **East primary week → Silvis BACKUP every day, Mon–Sun.** **East backup week → Silvis PRIMARY every day, Mon–Sun, 24/7.** These are hard pre-assignments (locks) generated from the East feed, never rebalanced. (His own words: "week I am primary at East I cover backup Silvis; week primary at Silvis cover backup East.")
 - Source of truth: Davenport `schedule_weeks` rows — `isBackup: true` = Fierce is East primary; `isFierceBackup: true` = Fierce is East backup. **Live-verified 9/21** (Davenport is published through the week of 11/9): East primary weeks **9/28** and **11/9**; East backup week **10/12**. (The Davenport config's `MAY_AUG_FIERCE_*` constants are stale — never use them.) The rule reproduces what the group already did by hand: the ER-panel author's doc has him as Silvis backup all of 9/28–10/4, and Burchett has him primary on 10/12.
-- For October the rule is **not** applied retroactively — 10/12 is a single locked day (Faraz 9/21). From November on it is: Silvis **backup 11/9–11/15**; December depends on the next Davenport generation.
+- For October the rule is **not** applied retroactively — 10/12 is a single locked day (Faraz 9/21). From November on it is: Silvis **backup 11/9–11/15**. **Faraz 9/21 (evening): East primary week 11/9; East backup weeks 10/12 and 12/7** — so Silvis **primary 12/7–12/13**, entered as an East override until the Davenport rows exist.
 - **Outside those weeks he is in the pool and can be primary**, under his weekday pattern (via Faraz, 9/21):
 
   | Day | Where he is | Silvis eligibility |
@@ -132,9 +134,11 @@ Default day membership (Faraz's current guess — **editable per year in Setup**
 | Memorial Day | minor | Mon 5/25 (past) | 2027: Mon 5/31 |
 | July 4th | minor | Sat 7/4 (past) | 2027: Sun 7/4 |
 | Labor Day | minor | Mon 9/7 (past) | 2027: Mon 9/6 |
-| Thanksgiving | major | Thu 11/26 | Acton never; Khan may take Thu–Sun (pending); Philip ≤ 1 major |
+| Thanksgiving | major | **Thu 11/26 – Sun 11/29 (one unit; Khan primary — Faraz 9/21)** | Acton never (opted out); Philip ≤ 1 major; backup: anyone not opted out |
 | Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; Burchett available 12/25–28 |
 | New Year's | major | Thu 12/31 + Fri 1/1/2027 | Eve + Day as one unit; Burchett available 12/30–1/3 |
+
+**The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, and Philip's one-major-holiday limit. A holiday unit counts as one commitment for max-consecutive purposes. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed.
 
 Burchett's stated Christmas preference ("2 days on then off") is satisfied by the two-day unit. Holiday fairness is
 tracked separately from shift counts: major and minor counts per surgeon, lifetime, tenure-normalized — the same idea
@@ -179,8 +183,12 @@ days, the vacation approval workflow, split/weighted shift accounting, compensat
 counts and fairness, a running yearly tally. Carried over — office notifications, calendar sync, refresh, data management
 and every safety feature. Holidays are the same DSG set, as primary + backup units.
 
+**Answered by Faraz on 9/21 (evening, in chat with Claude Code):** Thanksgiving 2026 = Khan primary Thu 11/26 – Sun 11/29 as one unit; the day rules do not apply on holidays and anyone may be backup unless opted out; the Davenport schedule is not out until year end, so Silvis includes Khan and avoids his most likely East days via a forecast; Fierce East primary week 11/9, East backup weeks 10/12 and 12/7; port the bones and safety features, adjust whatever will not work for Silvis. The defaults taken for every remaining ambiguity (lock semantics for open slots, whitelist months, precedence, consecutive counting, caps, weights, Fierce cap arithmetic, Sarkar minimum, day-before rules primary-only) are listed in `docs/ORIENTATION-2026-09-21.md` §3 and written into `silvis-seed.json` (`groupRules.*`).
+
 **Still open:**
 
-1. **10/15 (Thu)** — the one open primary day in the locked October import; nobody's rules allow it. The group will discuss.
+1. **10/15 (Thu)** — the one open primary day in the locked October import; nobody's rules allow it. The group will discuss. (Imported unlocked; the generator lists it as uncovered with reasons.)
 2. **Sarkar's home email** — none on record (goes into the private `silvis-contacts.md`, not here).
-3. **Holiday unit days** — confirm the defaults in §5 (e.g. should a Monday holiday unit include the preceding weekend? Thanksgiving Thursday only?).
+3. **Holiday unit days for 2027 and the minor holidays** — should a Monday holiday unit include the preceding weekend? (Christmas and New Year's stay Eve + Day.)
+4. **Khan as backup on ordinary Tue/Thu** — currently blocked for both roles; allowing backup is the cheapest lever if Thursday backups come up short.
+5. **Philip's monthly cap** — none stated; the group default (8 total) applies from November although his own October was 15 days.

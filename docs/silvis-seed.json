@@ -16,6 +16,9 @@
       "CONTACT DATA POLICY (Faraz 9/21, via Claude Code's Prompt 0A redaction): this file and every doc in the repo contain NO emails or phone numbers, so the repo and OneDrive copies are identical. Contact data lives in ONE private file, silvis-contacts.md, in the OneDrive folder only (gitignored) and is used by Faraz to invite users \u2014 the app never imports it. In Supabase, contact data exists only in authenticated-read tables (user_profiles via Auth signup; office_contacts entered in Setup), never in anon-readable ones (call_schedule_data, schedule_days, time_off, availability, east_feed, client_versions). Notes in anon-readable tables stay operational \u2014 no personal reasons.",
       "Contact emails are HOME addresses (gmail/yahoo), not work addresses (Faraz 9/21).",
       "Holiday unit day membership (which days belong to each holiday unit) is Faraz's current guess and editable in Setup."
+    ],
+    "revisions": [
+      "2026-09-22 (Claude Code, from Faraz's 9/21 evening decisions): Thanksgiving 2026 = Khan primary Thu 11/26 - Sun 11/29 as one unit (locked rows added to existingAssignments); day rules do not apply on holiday-unit days and anyone may take a holiday unless opted out; Fierce East weeks stated by Faraz (primary 11/9, backup 10/12 + 12/7); East forecast while Davenport is unpublished; plus the implemented defaults listed under groupRules (countBackupInConsecutive, weights, availabilityPrecedence, holidays, eastFeed). See docs/ORIENTATION-2026-09-21.md section 3."
     ]
   },
   "site": {
@@ -206,7 +209,66 @@
       "half-day / weighted shift accounting",
       "compensation and $ display",
       "Davenport holiday A/B (day + night-before) convention"
-    ]
+    ],
+    "countBackupInConsecutive": false,
+    "countBackupInConsecutiveNote": "Default per guide section 5: maxConsecutiveDays counts primary days only. The locked import only fits this reading (Acton P,P,P,B,P on 10/17-10/21).",
+    "holidays": {
+      "ignoreWeekdayRules": true,
+      "anyoneMayCoverUnlessOptedOut": true,
+      "unitExemptFromMaxConsecutive": true,
+      "note": "Faraz 9/21 (evening): 'The day rules are not for holidays. Anyone can be on backup for holidays unless they explicitly want that holiday off.' On a holiday-unit day the weekday-pattern rules (Khan Tue/Thu + Mon/Wed, Burchett recurring whitelist, Acton 2nd/4th Mon/Wed, Fierce Clinton days + Monday-backup-only, Philip Aledo weekday rules) are not applied, for primary or backup. Still applied: vacations, per-surgeon holidayRules.holidaysOff, maxMajorHolidays, East busy days / forecast, Fierce derived-week locks, Sarkar windows, monthly caps. A holiday unit counts as ONE commitment for maxConsecutiveDays (Khan's 4-day Thanksgiving unit vs his max 3)."
+    },
+    "weights": {
+      "low": 1,
+      "medium": 3,
+      "strong": 10,
+      "preferred": -1,
+      "patternDaily": 5,
+      "patternMismatch": 3,
+      "backToBackWeekend": 3,
+      "backupAfterPrimary": 1,
+      "noTargetWeekday": 1,
+      "eastUnknown": 1,
+      "eastForecastBelowThreshold": 2,
+      "smoothingTolerance": 2,
+      "note": "Soft-penalty weights read by rules.js eligibility() and the generator score; string weights in surgeonRules (low/medium/strong/preferred) map through this table."
+    },
+    "availabilityPrecedence": [
+      "time_off (+ trailing edge: the day before a vacation blocks PRIMARY)",
+      "explicit unavailable / no_backup rows",
+      "explicit available / backup_only rows",
+      "recurring patterns, weekday patterns, windows, day-before rules",
+      "mode defaults (weekendsAvailable, pool membership)",
+      "independent gates no row overrides: East busy, caps, maxConsecutiveDays, same-day other role, holiday opt-outs"
+    ],
+    "whitelistMonths": {
+      "rule": "A month is governed by an explicit date list only when it appears in surgeonRules[id].explicitListMonths (written from the seed's explicitAvailable keys). In a governed month the eligible set is exactly the explicit available/backup_only rows minus unavailable rows; in other months recurring patterns + weekendsAvailable minus unavailable rows. Dates in a list that spill into a neighbouring month are additive there and do not put that month into whitelist mode."
+    },
+    "dayBeforeRules": {
+      "trailingEdgeRoles": [
+        "primary"
+      ],
+      "aledoDayBeforeRoles": [
+        "primary"
+      ],
+      "note": "Both day-before rules (vacation trailing edge; Philip's day-before-Aledo) apply to PRIMARY only. Matches the group's own hand schedule (Philip was backup 10/14 before his 10/15 day and backup 10/22 before Aledo Friday 10/23) and the DB trigger, which checks start_date - 1 for primary only."
+    },
+    "locks": {
+      "nullSlotIsNeverLocked": true,
+      "note": "Importer: primaryLocked = locked && (primary != null || externalCover != null); backupLocked = locked && backup != null. 10/15 and the 16 open October backups stay fillable and show in diagnostics.uncovered with per-surgeon reasons; import/manual locks always beat East-derived locks (with a warning)."
+    },
+    "eastFeed": {
+      "unknownIsBusy": false,
+      "forecast": {
+        "enabled": true,
+        "runs": 200,
+        "busyThreshold": 0.5,
+        "penaltyBelowThreshold": "eastForecastBelowThreshold",
+        "note": "Faraz 9/21 (evening): the Davenport schedule for the next period is not out until the end of 2026. Until it is published, east-feed.js runs the Davenport generator N times over the next period with the live Davenport inputs (config blob, time off, published weeks, read the way the live East feed reads them) and derives per-day probabilities that FAK is on East call. Probability >= busyThreshold is treated as East-busy for Silvis PRIMARY (backup allowed, as on real East days); below it a soft penalty applies; such days carry a 'forecast' badge. When Davenport publishes, the real feed replaces the forecast and a conflict report lists Silvis days needing a trade."
+      },
+      "note": "When the feed (published or forecast) does not cover a day, Khan is treated as clear with a low soft penalty (weights.eastUnknown) and the day is listed in diagnostics; never silently busy, never silently free without a listing."
+    },
+    "regressionScope": "Hard-rule assertions in test/generator-regression.js apply to generator-placed slots only; locks are byte-identical (item 3) and lock collisions are reported as warnings; item 1 accepts externalCover; item 13 accepts 'uncovered with reasons'."
   },
   "surgeonRules": {
     "s1": {
@@ -234,14 +296,35 @@
         "enabled": true,
         "rule": "PRIMARY: eligible only on days with no Davenport (East) call assignment. BACKUP: allowed even on East call days (Faraz 9/21). East assignments are read from the Davenport app's schedule_weeks for the surgeon whose code is FAK.",
         "eastBlocksPrimary": true,
-        "eastBlocksBackup": false
+        "eastBlocksBackup": false,
+        "eastBackupCountsAsBusy": true,
+        "forecast": true,
+        "forecastNote": "Uses groupRules.eastFeed.forecast while Davenport is unpublished (Faraz 9/21 evening)."
       },
       "monthlyTarget": null,
       "monthlyCap": null,
       "notes": [
         "Stated 9/21 (supersedes the earlier 'no Mon/Wed nights' statement): main coverage = weekends; can do Mon/Wed; never Tue/Thu",
-        "May cover Thanksgiving Thu\u2013Sun (pending)"
-      ]
+        "Thanksgiving 2026 CONFIRMED (Faraz 9/21 evening): Khan primary Thu 11/26 through Sun 11/29 as one unit."
+      ],
+      "hardNeverWeekdaysRoles": [
+        "primary",
+        "backup"
+      ],
+      "hardNeverWeekdaysNote": "Applies to both roles on ordinary days; NOT applied on holiday-unit days (groupRules.holidays). Cheapest lever if Thursday backups come up short: set to [\"primary\"].",
+      "holidays2026": {
+        "thanksgiving": {
+          "days": [
+            "2026-11-26",
+            "2026-11-27",
+            "2026-11-28",
+            "2026-11-29"
+          ],
+          "role": "primary",
+          "source": "Faraz 9/21 (evening)",
+          "note": "One 4-day unit; locked rows in existingAssignments; exempt from maxConsecutiveDays as a unit."
+        }
+      }
     },
     "s2": {
       "name": "Burchett",
@@ -289,6 +372,7 @@
           "2026-10-10",
           "2026-10-11",
           "2026-10-14",
+          "2026-10-25",
           "2026-10-26",
           "2026-10-28"
         ],
@@ -335,7 +419,12 @@
       "notes": [
         "In DeWitt and/or Jackson County most days",
         "Total primary+backup per month \u2264 7\u20138; more than 2 consecutive 24h periods 'no longer an option'"
-      ]
+      ],
+      "explicitListMonths": [
+        "2026-10",
+        "2026-12"
+      ],
+      "explicitAvailableNote": "10/25 added 2026-09-22: it is in his own October plan (locked primary) but was missing from the list."
     },
     "s3": {
       "name": "Acton",
@@ -391,7 +480,11 @@
         "neverThanksgiving": true,
         "neverThanksgivingNote": "[removed]",
         "christmasOrNewYearOk": true,
-        "alternatingDaysOk": true
+        "alternatingDaysOk": true,
+        "holidaysOff": [
+          "Thanksgiving"
+        ],
+        "holidaysOffNote": "Generalises neverThanksgiving; consulted on holiday-unit days where the weekday rules are waived."
       },
       "weekendStyle": "split",
       "splitPartner": "s2",
@@ -506,7 +599,12 @@
       "notes": [
         "Could take some call on Aledo weeks but it is inconvenient",
         "Call has been getting busier \u2014 no more full weeks"
-      ]
+      ],
+      "holidayRules": {
+        "maxMajorHolidays": 1,
+        "maxMajorHolidaysNote": "Hard, rolling 12 months (moved here from preferences; preferences.maxMajorHolidays kept for readers of the old shape)."
+      },
+      "monthlyCapNote": "No cap stated by Philip. Absent monthlyCap means the group default (8 total) applies from November per guide section 5 - flagged for Faraz: his own October was 15 days; raise in Setup if he should carry more."
     },
     "s5": {
       "name": "Fierce",
@@ -559,8 +657,9 @@
       },
       "monthlyCap": {
         "total": 14,
-        "countsEastDays": true,
-        "note": "'willing to take up to 14 days of call per month' \u2014 counts Silvis primary + backup plus East week days from the feed"
+        "countsEastDays": "distinct-days",
+        "note": "'willing to take up to 14 days of call per month' \u2014 counts Silvis primary + backup plus East week days from the feed",
+        "countsEastDaysNote": "Count distinct calendar days on which he holds ANY call (Silvis primary/backup or East), attributed to the month each day falls in; when the East feed does not cover a month, count Silvis days only and warn."
       },
       "statedPreferenceNotARule": "Fierce described an ideal of East week \u2192 following week Silvis \u2192 ~10 days with no call. Faraz 9/21: NOT a rule \u2014 no penalty, no Davenport alignment; recorded only in his words.",
       "eastFeed": {
@@ -575,7 +674,20 @@
         ],
         "liveVerifiedOn": "2026-09-21",
         "liveVerifiedThrough": "2026-11-15",
-        "seedNote": "Read from the Davenport project's anon-readable schedule_weeks on 2026-09-21 (published through the week of 11/9). Later weeks appear once Faraz generates the next Davenport period \u2014 the East feed must re-fetch, never rely on this list. Cross-check: the ER-panel author's doc has Fierce as Silvis backup 9/28\u201310/4 (East primary week \u2713); Burchett's 9/18 email has Fierce primary 10/12 (East backup week \u2713)."
+        "seedNote": "Read from the Davenport project's anon-readable schedule_weeks on 2026-09-21 (published through the week of 11/9). Later weeks appear once Faraz generates the next Davenport period \u2014 the East feed must re-fetch, never rely on this list. Cross-check: the ER-panel author's doc has Fierce as Silvis backup 9/28\u201310/4 (East primary week \u2713); Burchett's 9/18 email has Fierce primary 10/12 (East backup week \u2713).",
+        "statedWeeks": {
+          "eastPrimary": [
+            "2026-11-09"
+          ],
+          "eastBackup": [
+            "2026-10-12",
+            "2026-12-07"
+          ],
+          "source": "Faraz 9/21 (evening)",
+          "note": "Stated by Faraz ahead of the Davenport publication; 12/7 is not yet in the published rows and is entered as an East override until it is. 10/12 stays a single locked day (October is not derived)."
+        },
+        "deriveFrom": "2026-11-02",
+        "deriveFromNote": "Derived Silvis weeks apply from November onward; import/manual locks beat derived locks with a warning."
       },
       "weekendStyle": "block",
       "maxConsecutiveDays": 7,
@@ -610,7 +722,9 @@
       "daysPerWindowWeek": {
         "min": 3,
         "max": 4,
-        "note": "Faraz 9/21: 3\u20134 days a week inside her window"
+        "note": "Faraz 9/21: 3\u20134 days a week inside her window",
+        "minIsSoft": true,
+        "countsBackup": true
       },
       "weekendStyle": "saturday-only",
       "hardNeverWeekdays": [
@@ -624,7 +738,9 @@
       "notes": [
         "Windows run Mon\u2013Sat (Dec: Mon\u2013Fri); Saturday inside a window is allowed, Friday and Sunday are not",
         "Burchett's October plan (Tue/Thu/Sat with handoff partners) is the model"
-      ]
+      ],
+      "handoffPartnerRequiredNote": "Implemented as a soft penalty on consecutive Sarkar days plus a diagnostics check that the day after each Sarkar primary has a primary; maxConsecutiveDays 2 already caps runs.",
+      "weekendStyleNote": "saturday-only = she may hold only the Saturday member of a split or daily weekend, never Friday or Sunday, never a block."
     }
   },
   "holidays": {
@@ -672,8 +788,12 @@
           "name": "Thanksgiving",
           "tier": "major",
           "days": [
-            "2026-11-26"
-          ]
+            "2026-11-26",
+            "2026-11-27",
+            "2026-11-28",
+            "2026-11-29"
+          ],
+          "note": "Thu-Sun as one unit; Khan (s1) primary - Faraz 9/21 (evening). Backup still to be assigned by the generator (anyone not opted out)."
         },
         {
           "name": "Christmas",
@@ -1101,6 +1221,38 @@
       "backup": null,
       "source": "office-er-call-panels-2026-09-16",
       "locked": true
+    },
+    {
+      "date": "2026-11-26",
+      "primary": "s1",
+      "backup": null,
+      "source": "faraz-2026-09-21",
+      "locked": true,
+      "note": "Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening)"
+    },
+    {
+      "date": "2026-11-27",
+      "primary": "s1",
+      "backup": null,
+      "source": "faraz-2026-09-21",
+      "locked": true,
+      "note": "Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening)"
+    },
+    {
+      "date": "2026-11-28",
+      "primary": "s1",
+      "backup": null,
+      "source": "faraz-2026-09-21",
+      "locked": true,
+      "note": "Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening)"
+    },
+    {
+      "date": "2026-11-29",
+      "primary": "s1",
+      "backup": null,
+      "source": "faraz-2026-09-21",
+      "locked": true,
+      "note": "Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening)"
     }
   ],
   "pendingDeltas": [
@@ -1166,11 +1318,18 @@
     "Acton: no specific monthly cap; Khan: no cap (Faraz 9/21).",
     "Scope (Faraz 9/21): drop APP info/call/vacation, Fierce separate backup weeks, no-call days, vacation approvals; keep trades; holidays = same DSG set with primary+backup per unit sticking through eve+day; vacations self-entered and logged, blocked over on-call days (trade first); stats = shift counts/fairness, 1 shift per 24h, running yearly tally; generate through end of year, then 3/6/9/12-month presets; carry over office notifications, calendar sync, refresh, data management and all safety features.",
     "Compensation: none in the app (Faraz 9/21).",
-    "Atwell: not in the roster (Faraz 9/21)."
+    "Atwell: not in the roster (Faraz 9/21).",
+    "Thanksgiving 2026: Khan takes Thu 11/26, Fri 11/27, Sat 11/28, Sun 11/29 as one unit (Faraz 9/21 evening).",
+    "Holidays: the day rules are not for holidays - anyone can be backup (or primary) on a holiday-unit day unless they explicitly want that holiday off (Faraz 9/21 evening).",
+    "East feed: the Davenport schedule for the next period is not out until the end of 2026; Silvis includes Khan meanwhile and avoids his most likely East days via a forecast from repeated Davenport generator runs (Faraz 9/21 evening).",
+    "Fierce East weeks: East primary week of 11/9; East backup weeks of 10/12 and 12/7 (Faraz 9/21 evening).",
+    "Porting stance: not a verbatim translation - use the bones and safety features and adjust whatever will not work for Silvis (Faraz 9/21 evening)."
   ],
   "openQuestions": [
-    "1. 10/15 (Thu) \u2014 the one open primary day in the locked October import; nobody's rules allow it. To be discussed by the group.",
+    "1. 10/15 (Thu) \u2014 the one open primary day in the locked October import; nobody's rules allow it. To be discussed by the group. (Imported unlocked; shows as uncovered with reasons.)",
     "2. Sarkar's home email address (none on record) \u2014 goes in the private contacts file, not here.",
-    "3. Holiday unit days: confirm the defaults (Thanksgiving = Thu only; Christmas = 12/24+12/25; New Year's = 12/31+1/1; Memorial/Labor = the Monday; July 4th = the day) \u2014 e.g. should a Monday holiday unit include the preceding weekend?"
+    "3. Holiday unit days for 2027 and the minor holidays: should a Monday holiday unit include the preceding weekend? (Thanksgiving 2026 is settled: Thu\u2013Sun with Khan. Christmas and New Year's stay Eve+Day.)",
+    "4. Khan as BACKUP on ordinary Tuesdays/Thursdays (his OR days): currently blocked for both roles. Allowing backup is the cheapest lever if Thursday backups come up short in Nov\u2013Dec.",
+    "5. Philip's monthly cap: none stated; the group default (8 total) applies from November. His own October was 15 days."
   ]
 }

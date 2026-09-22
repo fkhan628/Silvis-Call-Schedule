@@ -9,6 +9,10 @@
 -- server-side only and never appears in client code.
 -- CONTACT DATA: never in anon-readable tables and never in this file. Emails live
 -- only in user_profiles (via Auth signup) and office_contacts (entered in Setup).
+-- Revision 2026-09-22 (Prompt 2 review, docs/SCHEMA-REVIEW.md): user_profiles auto-created
+-- from auth.users; person_id pinned against self-service; day-before check in the
+-- time_off trigger (primary only); trade status transitions guarded; distinct-roles
+-- check; snapshot source_updated_at; availability idempotency index; client heartbeat.
 -- ============================================================================
 
 create extension if not exists pgcrypto;
@@ -23,6 +27,23 @@ create table if not exists public.user_profiles (
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
+
+-- Profile rows are created by the database when an auth user is created/invited (and the
+-- email is kept in sync), so Setup -> Users can link a person who has never opened the app.
+-- The client never writes an email. Signup lands as viewer with NO person_id; the admin
+-- assigns person_id + role in Setup -> Users.
+create or replace function public.handle_new_auth_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.user_profiles (id, email, role)
+  values (new.id, new.email, 'viewer')
+  on conflict (id) do update set email = excluded.email, updated_at = now();
+  return new;
+end $$;
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert or update of email on auth.users
+  for each row execute function public.handle_new_auth_user();
 
 create or replace function public.silvis_role() returns text
 language sql stable security definer set search_path = public as $$
@@ -61,6 +82,9 @@ create table if not exists public.schedule_days (
   updated_by      text,
   updated_at      timestamptz not null default now()
 );
+alter table public.schedule_days drop constraint if exists schedule_days_distinct_roles;
+alter table public.schedule_days add constraint schedule_days_distinct_roles
+  check (primary_id is null or backup_id is null or primary_id <> backup_id);   -- groupRules.backupDistinctFromPrimary
 create index if not exists schedule_days_primary_idx on public.schedule_days(primary_id, day);
 create index if not exists schedule_days_backup_idx  on public.schedule_days(backup_id, day);
 
@@ -86,11 +110,14 @@ create or replace function public.time_off_no_call_conflict() returns trigger
 language plpgsql as $$
 declare conflicts text;
 begin
+  -- The range itself blocks both roles. The day BEFORE the range blocks PRIMARY only: that
+  -- shift ends 07:00 on the first vacation day (trailing edge, groupRules.dayBeforeRules).
   select string_agg(to_char(day, 'MM/DD') || ' (' || case when primary_id = new.person_id then 'primary' else 'backup' end || ')', ', ' order by day)
     into conflicts
     from public.schedule_days
-   where day between new.start_date and new.end_date
-     and (primary_id = new.person_id or backup_id = new.person_id);
+   where (day between new.start_date and new.end_date
+          and (primary_id = new.person_id or backup_id = new.person_id))
+      or (day = new.start_date - 1 and primary_id = new.person_id);
   if conflicts is not null then
     raise exception 'ON_CALL_CONFLICT: % is on call %; trade those shifts before entering this vacation', new.person_id, conflicts
       using errcode = 'P0001';
@@ -117,6 +144,9 @@ create table if not exists public.availability (
   check (end_date >= start_date)
 );
 create index if not exists availability_person_idx on public.availability(person_id, start_date);
+-- Idempotent imports key rows on person+kind+role+start+end+source (Prompt 5).
+create unique index if not exists availability_stmt_uniq
+  on public.availability(person_id, kind, role, start_date, end_date, coalesce(source, ''));
 
 -- ---------- East (Davenport) feed cache + manual overrides
 create table if not exists public.east_feed (
@@ -150,6 +180,32 @@ create table if not exists public.shift_trade_requests (
   decided_at        timestamptz,
   detail            text
 );
+create index if not exists trade_status_idx on public.shift_trade_requests(status, submitted_at desc);
+create index if not exists trade_day_idx    on public.shift_trade_requests(day);
+
+-- Non-schedulers may only move a PENDING trade's status: the counter-party to accepted/declined,
+-- the proposer to cancelled. Legs (who/day/role/return) are immutable except for the scheduler.
+create or replace function public.trade_update_guard() returns trigger
+language plpgsql as $$
+declare me text := public.silvis_person_id();
+begin
+  if public.silvis_is_sched() then return new; end if;
+  if new.from_surgeon_id <> old.from_surgeon_id or new.to_surgeon_id <> old.to_surgeon_id
+     or new.day <> old.day or new.role <> old.role
+     or new.return_day is distinct from old.return_day or new.return_role is distinct from old.return_role then
+    raise exception 'TRADE_IMMUTABLE: only the scheduler may change the legs of a trade' using errcode = 'P0001';
+  end if;
+  if old.status <> 'pending' then
+    raise exception 'TRADE_NOT_PENDING: this trade is already %', old.status using errcode = 'P0001';
+  end if;
+  if me = old.to_surgeon_id and new.status in ('accepted', 'declined') then return new; end if;
+  if me = old.from_surgeon_id and new.status = 'cancelled' then return new; end if;
+  raise exception 'TRADE_FORBIDDEN: % may not set status % on this trade', coalesce(me, 'anon'), new.status using errcode = 'P0001';
+end $$;
+drop trigger if exists trade_update_guard_trg on public.shift_trade_requests;
+create trigger trade_update_guard_trg
+  before update on public.shift_trade_requests
+  for each row execute function public.trade_update_guard();
 
 -- ---------- notifications, prefs, audit, snapshots, versions, contacts
 create table if not exists public.notifications (
@@ -160,6 +216,7 @@ create table if not exists public.notifications (
   data        jsonb not null default '{}'::jsonb,
   created_at  timestamptz not null default now()
 );
+create index if not exists notifications_created_idx on public.notifications(created_at desc);
 
 create table if not exists public.notification_preferences (
   person_id                 text primary key,
@@ -178,21 +235,36 @@ create table if not exists public.audit_log (
   detail      jsonb not null default '{}'::jsonb,
   created_at  timestamptz not null default now()
 );
+create index if not exists audit_created_idx on public.audit_log(created_at desc);
 
 create table if not exists public.call_schedule_snapshots (
-  id          uuid primary key default gen_random_uuid(),
-  reason      text,
-  data        jsonb not null,              -- { config, schedule_days[], time_off[], availability[] }
-  created_by  text,
-  created_at  timestamptz not null default now()
+  id                 uuid primary key default gen_random_uuid(),
+  reason             text,
+  data               jsonb not null,       -- { config, schedule_days[], time_off[], availability[] }
+  source_updated_at  timestamptz,          -- call_schedule_data.updated_at at capture time (Davenport contract)
+  created_by         text,
+  created_at         timestamptz not null default now()
 );
+alter table public.call_schedule_snapshots add column if not exists source_updated_at timestamptz;
+create index if not exists snapshots_created_idx on public.call_schedule_snapshots(created_at desc);
 
+-- Row 'main' carries min_version/message (the refresh banner). Every other row is a per-client
+-- heartbeat keyed by the auth user id (app_version, user agent, person) so the scheduler can see
+-- who is on which build. Anon may read only 'main'.
 create table if not exists public.client_versions (
-  id           text primary key,           -- 'main'
+  id           text primary key,           -- 'main' or auth.uid()::text
   min_version  text,
   message      text,
+  app_version  text,
+  user_agent   text,
+  person_id    text,
+  seen_at      timestamptz,
   updated_at   timestamptz not null default now()
 );
+alter table public.client_versions add column if not exists app_version text;
+alter table public.client_versions add column if not exists user_agent text;
+alter table public.client_versions add column if not exists person_id text;
+alter table public.client_versions add column if not exists seen_at timestamptz;
 
 create table if not exists public.office_contacts (
   id          uuid primary key default gen_random_uuid(),
@@ -231,6 +303,17 @@ do $$ declare t text; begin
   end loop;
 end $$;
 
+-- client_versions: anon reads ONLY the 'main' row; authenticated users read all and upsert their own heartbeat row
+drop policy if exists client_versions_read_all on public.client_versions;
+create policy client_versions_read_all on public.client_versions for select
+  using (id = 'main' or auth.uid() is not null);
+drop policy if exists client_versions_heartbeat_insert on public.client_versions;
+create policy client_versions_heartbeat_insert on public.client_versions for insert to authenticated
+  with check (id = auth.uid()::text);
+drop policy if exists client_versions_heartbeat_update on public.client_versions;
+create policy client_versions_heartbeat_update on public.client_versions for update to authenticated
+  using (id = auth.uid()::text) with check (id = auth.uid()::text);
+
 -- time_off: anon-readable (generator + shareable page), self-service writes for the surgeon's OWN rows, scheduler for all
 drop policy if exists time_off_read_all on public.time_off;
 create policy time_off_read_all on public.time_off for select using (true);
@@ -257,10 +340,13 @@ drop policy if exists user_profiles_read on public.user_profiles;
 create policy user_profiles_read on public.user_profiles for select to authenticated using (true);
 drop policy if exists user_profiles_self_insert on public.user_profiles;
 create policy user_profiles_self_insert on public.user_profiles for insert to authenticated
-  with check (id = auth.uid() and role = 'viewer');           -- signup lands as viewer; admin promotes
+  with check (id = auth.uid() and role = 'viewer' and person_id is null);   -- signup lands as viewer, unlinked; admin links + promotes
 drop policy if exists user_profiles_self_update on public.user_profiles;
 create policy user_profiles_self_update on public.user_profiles for update to authenticated
-  using (id = auth.uid()) with check (id = auth.uid() and role = (select role from public.user_profiles p where p.id = auth.uid()));
+  using (id = auth.uid())
+  with check (id = auth.uid()
+    and role = (select role from public.user_profiles p where p.id = auth.uid())
+    and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id
 drop policy if exists user_profiles_admin on public.user_profiles;
 create policy user_profiles_admin on public.user_profiles for all to authenticated
   using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');
@@ -323,4 +409,6 @@ insert into public.client_versions (id, min_version, message) values ('main', nu
 -- same POST with a scheduler user's JWT                                                                                  → 201
 -- After Faraz signs up: update public.user_profiles set role='admin', person_id='s1' where email='<the address you signed up with>';
 -- Trigger check: insert a time_off row for a surgeon over a day they are published on → expect an ON_CALL_CONFLICT error;
+--   a range starting the day AFTER a day they are published PRIMARY → ON_CALL_CONFLICT too (trailing edge);
 --   the same range for a surgeon with no shifts in it → 201.
+-- scripts/verify-rls.sh runs all of these (curl for the anon checks; the CLI's linked SQL for the trigger checks).
