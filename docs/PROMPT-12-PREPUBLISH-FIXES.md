@@ -1,7 +1,9 @@
-# Prompt 12 — Pre-publish fixes + the 9/22 rule amendments (v2)
+# Prompt 12 — Pre-publish fixes + the 9/22 rule amendments (v3)
 
 *Paste into Claude Code inside `<your clone>`. Implements `docs/REVIEW-2026-09-22.md` §3
-(items A–H) and Faraz's 9/22 rule changes (items I–O) as recorded in `docs/SILVIS-CALL-RULES.md` (the ⟶ 9/22 marks).
+(items A–H) and Faraz's 9/22 rule changes (items I–O) as recorded in `docs/SILVIS-CALL-RULES.md` (the ⟶ 9/22 marks),
+plus two UI items from his first look at the live app (P: header without "cardiothoracic"; Q: no red OPEN before
+today). v3 adds P and Q — if Prompt 12 v2 already ran, paste only the "Already ran v2?" block at the bottom.*
 Same ground rules as every prompt: report-first for RLS/destructive changes, show every edit, verify by observing, one
 push at the end. Nothing here publishes a schedule. The repo's `docs/silvis-seed.json` is the canonical seed from now
 on; at the end, copy the repo's `docs/` back to the OneDrive folder (repo → OneDrive), not the other way.*
@@ -143,6 +145,39 @@ O. THEME — University of Illinois blue and orange, easy on the eyes (9/22)
       distinguishable from Davenport's on a phone. Run the Playwright smoke harness in both themes and attach the
       screenshots; check every text/background pair with an automated contrast check (fail < 4.5:1 for body text).
 
+P. PANEL HEADER — drop "cardiothoracic" (Faraz 9/22, after seeing the live app)
+   1. The primary column of the week-rows table under the calendar and of the ER Call Panels export is headed
+      "TRAUMA & CARDIOTHORACIC SURGERY TRAUMA" (copied from the ER-panel author's sheet). Faraz wants it to read just "TRAUMA".
+      New header row everywhere: MON/SUN DATES | TRAUMA | TRAUMA BACKUP.
+   2. Change every occurrence together: index-source.html (week-rows <thead>, ~line 4006), helpers.js (week-rows share
+      page ~634, ER panel HTML ~966 and the tab-separated text flavour ~978, plus the doc comment ~933), the tests that
+      pin the header text (test/exports.test.js 152–154, 217, 261; test/ui/smoke.mjs 644, 727, 777–778;
+      test/ui/exports-standalone.mjs 80), and the two docs that quote it (docs/SILVIS-BUILD-GUIDE.md §9 ER export line,
+      docs/CLAUDE-CODE-PROMPTS.md Prompt 9). Nothing else about the layout changes: same three columns, same order,
+      same collapsing, same red open entries, same Copy-for-Word HTML/plain-text flavours. `grep -ri cardiothoracic`
+      over the repo must return nothing except this prompt's own history.
+
+Q. NO "OPEN" ON DAYS BEFORE TODAY (Faraz 9/22)
+   1. Today the month grid, the week-rows table and the exports paint every unassigned day red "OPEN" — including days
+      before today (September before the 9/14 import start, and any past day nobody covered). Those are history, not
+      work to do, and the red is noise. Rule: an unassigned slot is OPEN only from today (Central time, the same
+      America/Chicago clock the app already uses for shifts) forward; before today it renders BLANK.
+   2. Implement it once, in helpers.js, not per call site: give buildWeekRows an opts.today (YYYY-MM-DD); when set, an
+      unassigned day earlier than it produces NO entry at all (so a past week nobody covered is an empty cell, and a
+      past partial run collapses normally for the assigned days). Add a small pure helper, e.g.
+      slotIsOpen(dateStr, holder, today), that the month grid's SlotLine, the "only OPEN" checkbox filter, the
+      calendar-month legend counts, the share page, the printable month and the ER Call Panels export all consult, so
+      "open" means the same thing everywhere. The coverage-at-a-glance strip already looks only at the next 60 days —
+      confirm it is unaffected. The day editor still lets a scheduler assign a past day (it just shows the empty
+      select, no red badge). The office-notifications diff and the generator do not change: they never look before
+      today, and "no row" and "OPEN row" already compare equal.
+   3. Grid rendering for a past blank slot: the role letter and a muted "—" (or nothing), no red, no pill. Week rows:
+      no "M/D OPEN" line. Exports: the cell just has no entry for that day.
+   4. Tests: extend test/exports.test.js and test/week-rows (or wherever buildWeekRows is pinned) with a fixture whose
+      range straddles a fixed "today" — days before it with no row yield no entry, the day itself and later still yield
+      "M/D OPEN"; a smoke check that September's week rows carry no data-kind="open" before today and still carry it
+      for 10/15. Do not change the meaning of open slots in generator diagnostics or the preview report.
+
 Small items (one commit): pass asBlockMember through the trade path and the day editor so Fierce can receive a Fri–Sun
 block; make the day editor fail CLOSED when eligibility throws (show the error, disable Save); do not waive a surgeon's
 EXPLICIT dated availability list on holiday-unit days (Burchett's December list omits 12/24 on purpose) — only the
@@ -154,4 +189,26 @@ docs/PREVIEW-2026-11-02-to-2027-01-03.md; write docs/PREVIEW-DIFF-2026-09-22.md 
 backup changed versus the previous preview, the new per-surgeon tallies (primary, backup, real run lengths, share vs
 allowed), and the open slots (expect zero open backups now). Copy the repo's docs/ to the OneDrive folder (byte copy).
 Stop before pushing.
+```
+
+## Already ran v2? Paste just this
+
+```
+Two more items on the same branch (fix/prepublish-review), one commit each, tests that fail before and pass after,
+npm test + npm run smoke, then stop for my review before pushing:
+
+P. Rename the primary column header of the week-rows table and the ER Call Panels export from
+   "TRAUMA & CARDIOTHORACIC SURGERY TRAUMA" to "TRAUMA" — every occurrence together: index-source.html week-rows <thead>,
+   helpers.js (share page, ER panel HTML and the tab-separated text flavour, doc comment), the tests that pin the header
+   (test/exports.test.js, test/ui/smoke.mjs, test/ui/exports-standalone.mjs) and the two docs that quote it
+   (docs/SILVIS-BUILD-GUIDE.md ER export line, docs/CLAUDE-CODE-PROMPTS.md Prompt 9). Layout otherwise unchanged;
+   `grep -ri cardiothoracic` must come back empty.
+
+Q. An unassigned slot is OPEN only from today (Central) forward; before today it renders blank — no red, no pill, no
+   "M/D OPEN" line, no entry in exports. Implement once in helpers.js (buildWeekRows opts.today → no entry for a past
+   unassigned day; a pure slotIsOpen(dateStr, holder, today) used by the month grid's SlotLine, the "only OPEN" filter,
+   the share page, the printable month and the ER Call Panels export). The coverage strip (next 60 days), the day
+   editor's ability to assign a past day, the office-notifications diff and the generator's open-slot diagnostics do
+   not change. Tests: a fixture straddling a fixed "today" (past unassigned → no entry; today and later → "M/D OPEN"),
+   plus a smoke check that September's week rows have no data-kind="open" before today while 10/15 still does.
 ```
