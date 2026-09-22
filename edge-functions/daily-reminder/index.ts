@@ -33,6 +33,20 @@
 // composes everything and sends nothing; the response shows what would go out
 // (counts + person ids, never addresses).
 //
+// Mode "open-shifts" (Prompt 13 part 5c, 2026-09-22) - body { mode:
+// "open-shifts" }, same x-cron-secret gate, same dryRun contract; any other
+// mode value is a 400 and an absent mode (or "reminder") is the hourly
+// reminder above, unchanged. A third pg_cron job posts it every Monday 12:00
+// UTC (07:00 CDT / 06:00 CST). It reads schedule_days for [today, today+30]
+// Central, computes the open slots with openSlotsMirror (a plain-JS mirror of
+// helpers.js openSlots between the @openSlots-mirror markers, pinned to the
+// same fixture by test/open-shifts.test.js), and when any are open e-mails
+// every linked surgeon whose schedule_updates_email is not false (addresses
+// from user_profiles via the service role, statuses keyed by person_id) and
+// inserts the notifications row { type: 'open_shifts', data: { slots,
+// through, source: 'cron' } } that the board's "last announced" reads. dryRun
+// composes, sends nothing and writes nothing. None open -> 200 { open: 0 }.
+//
 // Secrets (by NAME): CRON_SECRET, RESEND_API_KEY, NOTIFICATION_FROM_EMAIL
 // (required - no hardcoded fallback sender); SUPABASE_URL and
 // SUPABASE_SERVICE_ROLE_KEY are injected by Supabase.
@@ -194,6 +208,288 @@ function buildReminder(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Mode "open-shifts" (Prompt 13 part 5c) - the Monday notice without a session
+// ---------------------------------------------------------------------------
+// @openSlots-mirror-start
+// MIRROR of helpers.js openSlots(schedule, from, to, today, opts),
+// openSlotsLine(slot, nameOfUnit) and openShiftsEmail(slots, opts) - written
+// as plain JavaScript on purpose (no type annotations, nothing from outside
+// this block): test/open-shifts.test.js extracts the text between the two
+// markers, evaluates it with new Function and runs it against
+// test/fixtures/open-slots.json and test/fixtures/open-shifts-email.json,
+// expecting results identical to helpers.js (plus 200 seeded random
+// schedules). Change helpers.js, this block and the fixtures together.
+// schedule_days columns map to the assignment fields the caller builds:
+// primary_id -> primary, backup_id -> backup, external_cover -> externalCover
+// (a lock flag never holds a slot). Dates are UTC-based here (the runtime has
+// no useful local zone); the caller passes Central calendar dates. One
+// deliberate difference: helpers.js falls back to todayCentral() for a
+// malformed `today`; here a malformed today THROWS (fail loud in the cron log)
+// because the caller always has centralNow().ymd.
+function osmPad2(n) { return String(n).padStart(2, "0"); }
+function osmIsIso(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+function osmDate(s) { const p = String(s).split("-").map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])); }
+function osmFmt(d) { return d.getUTCFullYear() + "-" + osmPad2(d.getUTCMonth() + 1) + "-" + osmPad2(d.getUTCDate()); }
+function osmIsDay(s) { return osmIsIso(s) && osmFmt(osmDate(s)) === s; }
+function osmAdd(iso, n) { const d = osmDate(iso); d.setUTCDate(d.getUTCDate() + n); return osmFmt(d); }
+function osmDow(iso) { return osmDate(iso).getUTCDay(); } // 0 Sun ... 6 Sat
+function osmDaysBetween(a, b) { return Math.round((osmDate(b).getTime() - osmDate(a).getTime()) / 86400000); }
+function osmFmtMD(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || "")); return m ? Number(m[2]) + "/" + Number(m[3]) : String(iso || "?"); }
+function osmMonday(iso) { return osmAdd(iso, -((osmDow(iso) + 6) % 7)); }
+function osmHolder(a, role) {
+  if (!a) return null;
+  if (role === "primary") return a.primary || (a.externalCover ? "ext:" + a.externalCover : null);
+  if (role === "backup") return a.backup || null;
+  return null;
+}
+function osmUnit(day, holidayByDay, weekendKinds) {
+  const hol = holidayByDay && typeof holidayByDay === "object" ? holidayByDay[day] : null;
+  if (hol && typeof hol === "object") return { kind: "holiday", name: hol.name || null };
+  const dow = osmDow(day);
+  if (dow !== 5 && dow !== 6 && dow !== 0) return null;
+  const friday = dow === 5 ? day : osmAdd(day, dow === 6 ? -1 : -2);
+  const kinds = weekendKinds && typeof weekendKinds === "object" ? weekendKinds : {};
+  const k = kinds[friday];
+  return { kind: "weekend", pattern: k === "block" || k === "split" || k === "daily" ? k : null, friday: friday };
+}
+function openSlotsMirror(schedule, from, to, today, opts) {
+  if (!osmIsDay(from) || !osmIsDay(to) || from > to) return [];
+  if (!osmIsIso(today)) throw new Error("openSlotsMirror: today must be YYYY-MM-DD (the caller passes the Central date)");
+  const sched = schedule && typeof schedule === "object" ? schedule : {};
+  const o = opts && typeof opts === "object" ? opts : {};
+  const reasons = o.reasons && typeof o.reasons === "object" ? o.reasons : {};
+  const start = from < today ? today : from; // days before today are never open
+  if (start > to) return [];
+  const out = [];
+  const n = osmDaysBetween(start, to);
+  for (let k = 0; k <= n; k++) {
+    const d = osmAdd(start, k);
+    const a = sched[d] || null;
+    let unit;
+    ["primary", "backup"].forEach(function (role) {
+      if (osmHolder(a, role)) return;
+      if (unit === undefined) unit = osmUnit(d, o.holidayByDay, o.weekendKinds);
+      const r = reasons[d + "|" + role];
+      const reason = typeof r === "string" ? r.trim() : "";
+      out.push({ day: d, role: role, unit: unit, reason: reason || null });
+    });
+  }
+  return out;
+}
+const OSM_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function openSlotsLineMirror(slot, nameOfUnit) {
+  const s = slot || {};
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s.day || ""));
+  const when = m ? OSM_DOW[osmDow(s.day)] + " " + m[2] + "/" + m[3] : String(s.day || "?");
+  const u = s.unit && typeof s.unit === "object" ? s.unit : null;
+  let unitText = "";
+  if (typeof nameOfUnit === "function") unitText = u ? String(nameOfUnit(u) || "") : "";
+  else if (u && u.kind === "holiday") unitText = "holiday: " + (u.name || "unit");
+  else if (u && u.kind === "weekend") unitText = "weekend" + (u.pattern ? " " + u.pattern : "");
+  const reason = typeof s.reason === "string" && s.reason.trim() ? " - " + s.reason.trim() : "";
+  return when + " - " + (s.role || "?") + (unitText ? " (" + unitText + ")" : "") + " - open" + reason;
+}
+function openShiftsEmailMirror(slots, opts) {
+  const o = typeof opts === "string" ? { appUrl: opts } : (opts && typeof opts === "object" ? opts : {});
+  const list = (Array.isArray(slots) ? slots : []).filter(function (s) { return s && typeof s === "object" && osmIsDay(s.day) && (s.role === "primary" || s.role === "backup"); });
+  list.sort(function (a, b) { return a.day < b.day ? -1 : a.day > b.day ? 1 : a.role === b.role ? 0 : a.role === "primary" ? -1 : 1; });
+  const n = list.length;
+  const lastDay = n ? list[n - 1].day : null;
+  const through = osmIsDay(o.through) && (!lastDay || o.through >= lastDay) ? o.through : lastDay;
+  const thruText = through ? " through " + osmFmtMD(through) : "";
+  const subject = n + " open shift" + (n === 1 ? "" : "s") + thruText;
+  const appUrl = typeof o.appUrl === "string" && o.appUrl.trim() ? o.appUrl.trim() : "";
+  const detail = "Take this shift: " + (appUrl ? appUrl + "#openshifts" : "open the Open shifts view in the app");
+  const weeks = [];
+  list.forEach(function (s) {
+    const monday = osmMonday(s.day);
+    let w = weeks.length ? weeks[weeks.length - 1] : null;
+    if (!w || w.monday !== monday) { w = { monday: monday, lines: [] }; weeks.push(w); }
+    w.lines.push("  " + openSlotsLineMirror(s, o.nameOfUnit));
+  });
+  const lead = n + " open call shift" + (n === 1 ? "" : "s") + thruText + " (one 24-hour shift each, 07:00 to 07:00). Take one from the Open shifts board - the link is below.";
+  const message = n
+    ? lead + "\n\n" + weeks.map(function (w) { return "Week of Mon " + osmFmtMD(w.monday) + ":\n" + w.lines.join("\n"); }).join("\n\n")
+    : "No open shifts - every published day is covered.";
+  return { subject: subject, message: message, detail: detail, through: through, count: n, slots: list.map(function (s) { return { day: s.day, role: s.role }; }) };
+}
+// The cron's window = helpers.obBoardSlots over the rows read (today ..
+// today+30): the run of rows that STARTS today is the published block seen
+// from today (through = its end; null when today has no row), then the open
+// slots of every ASSIGNED run after it (a pre-assigned holiday unit -
+// claim_open_slot accepts those days). A day with no row is not published and
+// never open - it is neither in the block nor in an assigned run - and a stray
+// row nobody holds beyond the block is no assigned range. Fix round of part 5:
+// the first cut clipped only the END and so announced every row-less day
+// between today and the first row as open in both roles.
+function osmCollapse(days) {
+  const out = [];
+  days.forEach(function (d) {
+    const last = out.length ? out[out.length - 1] : null;
+    if (last && osmAdd(last.end, 1) === d) last.end = d; else out.push({ start: d, end: d });
+  });
+  return out;
+}
+function openShiftsWindowMirror(schedule, today, opts) {
+  if (!osmIsDay(today)) throw new Error("openShiftsWindowMirror: today must be YYYY-MM-DD (the caller passes the Central date)");
+  const sched = schedule && typeof schedule === "object" ? schedule : {};
+  const days = Object.keys(sched).filter(function (d) { return osmIsDay(d) && d >= today; }).sort();
+  const runs = osmCollapse(days);
+  const through = runs.length && runs[0].start === today ? runs[0].end : null;
+  const slots = through ? openSlotsMirror(sched, today, through, today, opts) : [];
+  const held = days.filter(function (d) { return (!through || d > through) && (osmHolder(sched[d], "primary") || osmHolder(sched[d], "backup")); });
+  const ranges = osmCollapse(held);
+  ranges.forEach(function (r) { openSlotsMirror(sched, r.start, r.end, today, opts).forEach(function (s) { slots.push(s); }); });
+  return { slots: slots, through: through, ranges: ranges };
+}
+// @openSlots-mirror-end
+
+// The blob (call_schedule_data.data): roster names for the greeting, the
+// holiday units (holidays.units[year][] = { name, days }) and the last
+// generate's weekend kinds + operational reasons for the unit / reason text.
+async function loadBlobData(): Promise<any> {
+  const rows = await rest("call_schedule_data?select=data&id=eq.main");
+  const raw = rows?.[0]?.data;
+  const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+  return data && typeof data === "object" ? data : {};
+}
+
+// Same frame as send-notification's open_shifts category (title, colour, CTA)
+// so the Monday notice and the on-demand notice look alike in the inbox.
+function buildOpenShiftsEmail(name: string, em: { subject: string; message: string; detail: string }): { subject: string; html: string } {
+  const color = "#C2410C";
+  const link = `${APP_URL}#openshifts`;
+  const html = `
+    <div style="font-family:'Outfit',Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
+      <div style="background:${color};color:#fff;padding:14px 20px;border-radius:10px 10px 0 0;">
+        <h2 style="margin:0;font-size:18px;">Open Shifts</h2>
+        <p style="margin:6px 0 0;font-size:13px;opacity:0.9;">${escHtml(APP_NAME)}</p>
+      </div>
+      <div style="background:#fff;border:1px solid #e0e4ea;border-top:none;padding:20px;border-radius:0 0 10px 10px;">
+        <p style="font-size:14px;color:#2c3e50;line-height:1.6;margin:0;">
+          Hi ${escHtml(name)},<br><br>
+          ${escHtml(em.message).replace(/^ {2}/gm, "&nbsp;&nbsp;").replace(/\r?\n/g, "<br>")}
+        </p>
+        <p style="margin:12px 0 0;padding:10px 14px;background:#f4f6f8;border-left:3px solid ${color};border-radius:6px;font-family:monospace;font-size:13px;color:#2c3e50;line-height:1.6;">
+          Take this shift: <a href="${link}" style="color:#1a6fa8;">${escHtml(link)}</a>
+        </p>
+        <a href="${link}" style="display:inline-block;background:${color};color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;margin-top:16px;">
+          Open shifts
+        </a>
+        <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e4ea;font-size:12px;color:#8a94a0;">
+          ${escHtml(APP_NAME)} - this note goes out every Monday morning while a shift in the next 30 days is open; turn schedule updates off under Settings in the app to stop it.
+        </div>
+      </div>
+    </div>`;
+  return { subject: em.subject, html };
+}
+
+async function runOpenShifts(now: { ymd: string; hour: number; weekday: string }, dryRun: boolean): Promise<Response> {
+  const from = now.ymd;
+  const horizon = addDays(from, 30);
+  console.log(`[daily-reminder] mode=open-shifts central=${from} ${now.weekday} window=${from}..${horizon} dryRun=${dryRun}`);
+
+  const [rows, blob] = await Promise.all([
+    rest(`schedule_days?select=day,primary_id,backup_id,external_cover,primary_locked,backup_locked&day=gte.${from}&day=lte.${horizon}&order=day.asc`),
+    loadBlobData(),
+  ]);
+  // Column -> assignment field, as the fixture states; the lock flags are read
+  // but never hold a slot (a locked, empty day IS open - the scheduler assigns it).
+  const schedule: Record<string, { primary: string | null; backup: string | null; externalCover: string | null }> = {};
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    if (!r?.day) continue;
+    schedule[String(r.day)] = { primary: r.primary_id || null, backup: r.backup_id || null, externalCover: r.external_cover || null };
+  }
+  if (!Object.keys(schedule).length) {
+    console.log(`[daily-reminder] open-shifts: no schedule_days rows in ${from}..${horizon} - nothing published to announce`);
+    return json(200, { mode: "open-shifts", dry_run: dryRun, open: 0, through: null, window_end: horizon, sent: 0 });
+  }
+
+  const holidayByDay: Record<string, { name: string | null; days: string[] }> = {};
+  const unitsByYear = blob?.holidays?.units && typeof blob.holidays.units === "object" ? blob.holidays.units : {};
+  for (const yk of Object.keys(unitsByYear)) {
+    for (const u of (Array.isArray(unitsByYear[yk]) ? unitsByYear[yk] : [])) {
+      if (!u || !Array.isArray(u.days)) continue;
+      for (const d of u.days) holidayByDay[String(d)] = { name: u.name || null, days: u.days.map(String) };
+    }
+  }
+  const lg = blob?.lastGenerate && typeof blob.lastGenerate === "object" ? blob.lastGenerate : {};
+  const weekendKinds = lg.weekendKinds && typeof lg.weekendKinds === "object" ? lg.weekendKinds : {};
+  const reasons: Record<string, string> = {};
+  for (const s of (Array.isArray(lg.openSlots) ? lg.openSlots : [])) {
+    if (s?.day && s?.role && typeof s.reason === "string") reasons[`${s.day}|${s.role}`] = s.reason;
+  }
+
+  // The window the board shows (helpers.obBoardSlots): the block that starts
+  // today, then the open slots of the assigned runs after it; a row-less day is
+  // never announced. published_through = the block's end (null when today has
+  // no row); the notice's own 'through' (subject, feed row) is the later of
+  // that and the last listed slot's day.
+  const win = openShiftsWindowMirror(schedule, from, { holidayByDay, weekendKinds, reasons });
+  const slots = win.slots;
+  const blockThrough: string | null = win.through;
+  console.log(`[daily-reminder] open-shifts: ${slots.length} open slot(s) in ${from}..${horizon} (block through ${blockThrough || "-"}, later assigned runs ${win.ranges.map((r: { start: string; end: string }) => r.start + ".." + r.end).join(",") || "-"})`);
+  if (!slots.length) return json(200, { mode: "open-shifts", dry_run: dryRun, open: 0, through: blockThrough, published_through: blockThrough, window_end: horizon, sent: 0 });
+
+  const em = openShiftsEmailMirror(slots, { appUrl: APP_URL, through: blockThrough });
+  const through: string | null = em.through;
+
+  // Recipients: every linked person (user_profiles.person_id not null) whose
+  // schedule_updates_email is not explicitly false (missing row = on). Both
+  // read with the service role so RLS cannot silently hide a row.
+  const [profiles, prefRows] = await Promise.all([
+    rest("user_profiles?select=person_id,email&person_id=not.is.null"),
+    rest("notification_preferences?select=person_id,schedule_updates_email"),
+  ]);
+  const prefsById: Record<string, any> = {};
+  for (const p of (Array.isArray(prefRows) ? prefRows : [])) if (p?.person_id) prefsById[String(p.person_id)] = p;
+  const emailById: Record<string, string | null> = {};
+  for (const row of (Array.isArray(profiles) ? profiles : [])) {
+    const pid = String(row.person_id);
+    const email = typeof row.email === "string" && row.email.trim() ? row.email.trim() : null;
+    if (!(pid in emailById) || (!emailById[pid] && email)) emailById[pid] = email;
+  }
+  const names: Record<string, string> = {};
+  for (const r of (Array.isArray(blob?.roster) ? blob.roster : [])) if (r?.id) names[String(r.id)] = r.name || String(r.id);
+
+  const results: { person_id: string; status: string }[] = [];
+  let sent = 0, failed = 0, prefOff = 0, noEmail = 0;
+  for (const pid of Object.keys(emailById).sort()) {
+    const pref = prefsById[pid] || null;
+    if (pref && pref.schedule_updates_email === false) { prefOff++; results.push({ person_id: pid, status: "skipped_pref_off" }); continue; }
+    const email = emailById[pid];
+    if (!email) { noEmail++; results.push({ person_id: pid, status: "skipped_no_email" }); continue; }
+    const { subject, html } = buildOpenShiftsEmail(names[pid] || pid, em);
+    if (dryRun) { results.push({ person_id: pid, status: "dry_run_composed" }); continue; }
+    const r = await sendEmail(email, subject, html, `mode=open-shifts person=${pid}`);
+    if (r.ok) { sent++; results.push({ person_id: pid, status: "sent" }); }
+    else { failed++; results.push({ person_id: pid, status: `failed_${r.status}` }); }
+  }
+
+  // The feed row the board's "last announced" reads - written by the service
+  // role, never in a dry run. A failed insert is reported, not hidden.
+  let feedRow = "skipped_dry_run";
+  if (!dryRun) {
+    try {
+      await rest("notifications", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ type: "open_shifts", title: em.subject, message: em.message, data: { slots: em.slots, through, source: "cron" } }),
+      });
+      feedRow = "inserted";
+    } catch (e) {
+      feedRow = `failed: ${(e as Error).message}`;
+      console.error(`[daily-reminder] open-shifts: notifications insert failed: ${(e as Error).message}`);
+    }
+  }
+
+  console.log(`[daily-reminder] open-shifts done: open=${slots.length} sent=${sent} failed=${failed} pref_off=${prefOff} no_email=${noEmail} feed_row=${feedRow.split(":")[0]}`);
+  return json(200, {
+    mode: "open-shifts", dry_run: dryRun, open: slots.length, through, published_through: blockThrough, window_end: horizon,
+    sent, failed, skipped_pref_off: prefOff, skipped_no_email: noEmail, feed_row: feedRow, results,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 serve(async (req) => {
@@ -217,6 +513,15 @@ serve(async (req) => {
       return json(400, { error: "dryRun must be a boolean; nothing was sent" });
     }
     const dryRun: boolean = body?.dryRun === true;
+
+    // Prompt 13 part 5c: mode "open-shifts" (the Monday cron) shares the gate
+    // and the dryRun contract above; everything below this block is the hourly
+    // reminder, unchanged.
+    const mode = body && body.mode !== undefined ? body.mode : "reminder";
+    if (mode !== "reminder" && mode !== "open-shifts") {
+      return json(400, { error: `mode must be "open-shifts" or omitted (got ${JSON.stringify(mode).slice(0, 40)}); nothing was sent` });
+    }
+    if (mode === "open-shifts") return await runOpenShifts(centralNow(), dryRun);
 
     const now = centralNow();
     const tomorrow = addDays(now.ymd, 1);

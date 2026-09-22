@@ -539,6 +539,17 @@ function CallSchedule() {
   useEffect(() => {
     if (!isScheduler && view === "setup") setView("calendar"); // Totals is visible to every signed-in user (counts only)
   }, [isScheduler, view]);
+  // Deep link to the Open shifts board (Prompt 13 part 5): the notice's
+  // 'Take this shift' link is <app>#openshifts. Once a session is adopted,
+  // land on the board and drop the hash from the URL (recovery / invite hashes
+  // are handled by the mount effect below and never reach here).
+  useEffect(() => {
+    if (!authUser || isPublicMode) return;
+    if (window.location.hash === "#openshifts") {
+      setView("openshifts");
+      try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch (e) { console.warn("could not drop #openshifts from the URL", e); }
+    }
+  }, [authUser, isPublicMode]);
 
   // --- Notifications ---
   const [notifications, setNotifications] = useState([]);
@@ -2193,6 +2204,10 @@ function CallSchedule() {
       // once the days are on file: a blocked / failed write keeps the old record.
       setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString()));
       showToast(`Saved ${changes.length} generated slot change(s). Review the publish diff.`, "success");
+      // Prompt 13 part 5a (fix round): the group's open-shifts notice belongs to
+      // Accept & Publish itself, not to the office e-mail - arm it here, once the
+      // days are on file; the publish dialog fires it whichever way it closes.
+      pendingOpenShiftsNoticeRef.current = true;
       publishRef.current();
     } else if (r && r.blocked) {
       showToast("The write was refused by the wipe guard - nothing was saved. Reload and try again.", "error");
@@ -3049,6 +3064,20 @@ function CallSchedule() {
     setShowPublishDialog(true);
   };
   publishRef.current = openPublishDialog; // latest closure for acceptPreview (conventions item 1)
+  // Armed by acceptMerged (Accept & Publish) once the generated days are on
+  // file: the open-shifts notice to the group then goes out exactly once when
+  // the publish dialog closes - Send (after the office POST, folded into the
+  // Published toast), Skip the notice, or the backdrop. A failed office POST
+  // keeps the dialog open, so the notice still follows on Skip or a retry.
+  // The header's "Publish and notify office" does not arm it: only Send
+  // announces there (a publish), a mere look at the diff sends nothing.
+  const pendingOpenShiftsNoticeRef = useRef(false);
+  const closePublishDialog = () => {
+    setShowPublishDialog(false);
+    if (!pendingOpenShiftsNoticeRef.current) return;
+    pendingOpenShiftsNoticeRef.current = false;
+    announceOpenShiftsAfterPublish(false);
+  };
   const triggerPublishNotify = async () => {
     const active = officeContacts.filter(c => c.active).length;
     if (!confirm(`Send the publish notice (${publishChanges.length} change(s)) to ${active} active office contact(s) and post it in the app?`)) return;
@@ -3077,7 +3106,14 @@ function CallSchedule() {
       await addNotification("schedule_published", "Schedule published", publishLabel ? `Call schedule ${publishLabel} was published.` : "The call schedule was published.", {});
       // Broadcast (no targetIds): the period plus the change lines, composed here.
       sendEmailNotif("schedule_published", { message: schedulePublishedMsg(publishLabel || "", lines), subject: "Schedule published" + (publishLabel ? " - " + publishLabel : ""), period: publishLabel || "", change_lines: lines });
-      showToast(`Published. Sent ${body.sent ?? 0} office email(s).`, "success");
+      // Prompt 13 part 5a: after the office notice, tell the group about every
+      // slot the published range still leaves open (feed row + broadcast e-mail
+      // through the same composer the board uses). Nothing is sent when the
+      // range is fully covered; a failure here never undoes the publish. The
+      // outcome rides in the Published toast (a second toast would replace it).
+      pendingOpenShiftsNoticeRef.current = false;
+      const os = await announceOpenShiftsAfterPublish(true);
+      showToast(`Published. Sent ${body.sent ?? 0} office email(s).${os ? " " + os.text : ""}`, os && os.tone === "error" ? "error" : "success");
       setShowPublishDialog(false);
     } catch(e) { console.warn("Publish error:", e); showToast("Publish error: " + (e?.message || e), "error"); }
     finally { setOfficeNotifBusy(false); }
@@ -3439,6 +3475,10 @@ function CallSchedule() {
   const [obWeekend, setObWeekend] = useState(false);
   const [claimSheet, setClaimSheet] = useState(null);  // { day, role, unit, soft: [{reason, weight}], mates: [slots] } while the confirm sheet is open
   const [claimBusy, setClaimBusy] = useState(false);
+  const [obNotice, setObNotice] = useState(null);      // the composed notice { subject, message, detail, slots, count, through } while the Email-the-group preview dialog is open (part 5b)
+  const [obNoticeBusy, setObNoticeBusy] = useState(false);
+  const obCancelRef = useRef(null);                    // the preview dialog's Cancel button - focused when the dialog opens
+  const obEmailBtnRef = useRef(null);                  // the 'Email the group now' button - focus goes back to it when the dialog closes
   const claimCancelRef = useRef(null);                 // the sheet's Cancel button - focused when the sheet opens
   const claimReturnRef = useRef(null);                 // the element that opened the sheet - focus goes back to it on close
   // 'Last announced' must not depend on the feed's 50-row window: the newest
@@ -3594,12 +3634,15 @@ function CallSchedule() {
     showToast(`You took ${label}`, "success");
     // The function wrote schedule_days (version + 1, source 'claim'), the audit row and the feed row; refetch so the board and the calendar are right immediately.
     try { if (refreshDaysRef.current) await refreshDaysRef.current(); } catch (e) { console.warn("schedule refetch after claim_open_slot failed:", e); showToast("Shift taken, but the calendar could not be refreshed - reload to see it.", "error"); }
-    // Part 5d hook: e-mail the scheduler(s) and the claimer (the category is added server-side in part 5).
+    // Part 5d: e-mail the scheduler(s) and the claimer (category shift_claimed,
+    // honours schedule_updates_email server-side). The schedulers are looked up
+    // (roles scheduler / admin), never hardcoded; the in-app feed row came from
+    // claim_open_slot itself and the office learns of it through the weekly digest.
     const ids = await schedulerIdsLoud();
     if (ids) {
       const targets = [...new Set([...ids, mySurgeon])];
       const msg = `${nameOf(mySurgeon)} took the open ${s.role} shift on ${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} (07:00 to 07:00).`;
-      sendEmailNotif("shift_claimed", { message: msg, subject: "Open shift taken - " + label, day: s.day, role: s.role, surgeon_id: mySurgeon }, targets);
+      sendEmailNotif("shift_claimed", { subject: `${nameOf(mySurgeon)} took ${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} ${s.role}`, message: msg, day: s.day, role: s.role, surgeon_id: mySurgeon }, targets);
     }
   };
   useEffect(() => {
@@ -3609,42 +3652,101 @@ function CallSchedule() {
     return () => window.removeEventListener("keydown", onKey);
   }, [claimSheet, claimBusy]);
   useEffect(() => { if (!editorDay) setEditorFocus(null); }, [editorDay]);
-  // Shared composer (part 5 reuses it on Accept & Publish): the notice the
-  // group gets about every open slot in the published range. Operational
-  // wording only (openSlotsLine); no names, no addresses.
-  // Explicit inputs (slots, through) - nothing from the render closure - so
-  // part 5's Accept & Publish hook can pass the list computed from the schedule
-  // it just published rather than the board's pre-publish list.
+  // Shared composer (Prompt 13 part 5): the notice the group gets about every
+  // open slot in the published range - helpers.js openShiftsEmail (subject
+  // 'N open shifts through M/D', the slots grouped by Monday week, the
+  // '#openshifts' deep link as the detail), the same text the Monday cron
+  // mirrors. Operational wording only; no names, no addresses.
+  // Explicit inputs (slots, through) - nothing from the render closure - so the
+  // Accept & Publish hook passes the list computed from the schedule it just
+  // published rather than the board's pre-publish list.
   const composeOpenShiftsNotice = (slots, through) => {
     const list = Array.isArray(slots) ? slots : [];
-    const lines = list.map(s => openSlotsLine(s));
-    const last = list.length ? list[list.length - 1].day : null;
-    const thru = suIsIso(through) ? through : last;
-    const title = `${list.length} open shift${list.length === 1 ? "" : "s"} need${list.length === 1 ? "s" : ""} cover`;
-    const message = `${list.length} open call shift${list.length === 1 ? "" : "s"}${thru ? " through " + fmtMD(thru) : ""} (07:00 to 07:00 each). Take one from the Open shifts board:\n${lines.join("\n")}`;
-    return { title, message, subject: "Silvis call: " + title, slots: list.map(s => ({ day: s.day, role: s.role })), lines, through: thru };
+    const em = openShiftsEmail(list, { appUrl: window.location.origin + window.location.pathname, through: suIsIso(through) ? through : null });
+    return { subject: em.subject, message: em.message, detail: em.detail, slots: em.slots, count: em.count, through: em.through };
   };
-  // Email the group now (scheduler only): one feed row of type 'open_shifts'
-  // (data.slots feeds the board's 'last announced'), a broadcast through
-  // send-notification (category open_shifts, gated per user server-side -
-  // part 5 adds the category), and an audit row 'openshifts.notify'. The
-  // toast states what actually happened: the in-app note is written first
-  // (awaited), then the e-mail outcome from sendEmailNotif is read.
+  // 5a - Accept & Publish: after the office notice, the open slots of the
+  // schedule ON FILE from today to the last contiguous published day (what the
+  // board lists as the published block; the pre-publish state is not used).
+  // Nothing goes out when the range is fully covered (-> null). Returns the
+  // outcome { text, tone } so the caller can fold it into its own toast
+  // (quiet) or leave the toast to sendOpenShiftsNotice. A failure is reported
+  // and never undoes the publish - the board's button covers the retry.
+  const announceOpenShiftsAfterPublish = async (quiet) => {
+    try {
+      const sched = scheduleRef.current || schedule;
+      const through = suLastContiguousDay(sched);
+      if (!through || through < todayStr) return null;
+      const slots = openSlots(sched, todayStr, through, todayStr, { holidayByDay: rulesCtx ? rulesCtx.holidayByDay : null, weekendKinds: boardWeekendKinds, reasons: boardReasons });
+      if (!slots.length) return null;
+      return await sendOpenShiftsNotice("publish", composeOpenShiftsNotice(slots, through), quiet);
+    } catch (e) {
+      console.warn("open-shifts notice after publish failed:", e);
+      const text = "The open-shifts notice to the group could not be sent - use 'Email the group now' on the Open shifts board.";
+      if (!quiet) showToast(text, "error");
+      return { text: text, tone: "error" };
+    }
+  };
+  // The writes behind both paths: one feed row of type 'open_shifts' (title =
+  // the subject; data.slots feeds the board's 'last announced'), a BROADCAST
+  // through send-notification (no targetIds - category open_shifts, gated per
+  // user server-side on schedule_updates_email), and an audit row
+  // 'openshifts.notify'. The outcome text states what actually happened: the
+  // in-app note is written first (awaited), then the e-mail outcome is read.
+  // quiet -> no toast here (the publish path words one toast for everything).
+  const sendOpenShiftsNotice = async (origin, n, quiet) => {
+    const thru = n.through;
+    const count = n.count;
+    await addNotification("open_shifts", n.subject, n.message, { slots: n.slots, through: thru, origin: origin || "board" });
+    const mail = await sendEmailNotif("open_shifts", { subject: n.subject, message: n.message, detail: n.detail, slots: n.slots, through: thru });
+    logAudit("openshifts.notify", `announced ${count} open shift(s) through ${thru || "-"}`, { count: count, through: thru, origin: origin || "board", slots: n.slots, email: mail && mail.ok ? "sent " + mail.sent : mail && mail.notEnabled ? "not enabled" : "failed" });
+    const what = `In-app note posted about ${count} open shift${count === 1 ? "" : "s"}`;
+    let text, tone;
+    if (mail && mail.ok) { text = `${what}; e-mail sent to ${mail.sent} ${mail.sent === 1 ? "person" : "people"}${mail.skippedPrefOff ? ` (${mail.skippedPrefOff} opted out)` : ""}.`; tone = "success"; }
+    else if (mail && mail.notEnabled) { text = `${what}; the e-mail for this notice is not enabled yet.`; tone = "info"; }
+    else { text = `${what}; the e-mail did not go out - see the message above.`; tone = "error"; }
+    if (!quiet) showToast(text, tone);
+    return { count: count, through: thru, mail: mail, text: text, tone: tone };
+  };
+  // 5b - Email the group now (scheduler only): the board opens a confirm dialog
+  // that PREVIEWS the composed e-mail (subject, message, deep link) before
+  // anything is written; Send runs sendOpenShiftsNotice. Any other origin
+  // sends straight away (the publish hook has already been confirmed).
   const notifyOpenShifts = async (origin, slots, through) => {
     if (!isScheduler) return;
     const list = Array.isArray(slots) ? slots : [];
     if (!list.length) { showToast("No open shifts to announce - the published range is fully covered.", "info"); return; }
     const n = composeOpenShiftsNotice(list, through);
-    const thru = n.through;
-    if (origin === "board" && !confirm(`Email the whole group about ${list.length} open shift${list.length === 1 ? "" : "s"}${thru ? " (through " + fmtMD(thru) + ")" : ""}? Everyone also gets an in-app note.`)) return;
-    await addNotification("open_shifts", n.title, n.message, { slots: n.slots, through: thru, origin: origin || "board" });
-    const mail = await sendEmailNotif("open_shifts", { message: n.message, subject: n.subject, slots: n.slots, through: thru });
-    logAudit("openshifts.notify", `announced ${list.length} open shift(s) through ${thru || "-"}`, { count: list.length, through: thru, origin: origin || "board", slots: n.slots, email: mail && mail.ok ? "sent " + mail.sent : mail && mail.notEnabled ? "not enabled" : "failed" });
-    const what = `In-app note posted about ${list.length} open shift${list.length === 1 ? "" : "s"}`;
-    if (mail && mail.ok) showToast(`${what}; e-mail sent to ${mail.sent} ${mail.sent === 1 ? "person" : "people"}${mail.skippedPrefOff ? ` (${mail.skippedPrefOff} opted out)` : ""}.`, "success");
-    else if (mail && mail.notEnabled) showToast(`${what}; the e-mail for this notice is not enabled yet.`, "info");
-    else showToast(`${what}; the e-mail did not go out - see the message above.`, "error");
+    if (origin === "board") { setObNotice(n); return; }
+    await sendOpenShiftsNotice(origin || "board", n);
   };
+  // Close the preview and hand focus back to the button that opened it (the
+  // same pattern as the claim sheet).
+  const closeObNotice = () => {
+    setObNotice(null);
+    const back = obEmailBtnRef.current;
+    if (back && typeof back.focus === "function" && document.contains(back)) { try { back.focus(); } catch (e) { console.warn("email preview: could not return focus", e); } }
+  };
+  const sendBoardNotice = async () => {
+    const n = obNotice;
+    if (!n || obNoticeBusy) return;
+    setObNoticeBusy(true);
+    try { await sendOpenShiftsNotice("board", n); }
+    finally { setObNoticeBusy(false); closeObNotice(); }
+  };
+  useEffect(() => {
+    if (!obNotice) return undefined;
+    const onKey = (e) => { if (e.key === "Escape" && !obNoticeBusy) closeObNotice(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [obNotice, obNoticeBusy]);
+  // Focus Cancel when the preview opens (the opener stays behind the backdrop
+  // otherwise); Tab stays inside through claimSheetKeyDown on the dialog.
+  useEffect(() => {
+    if (!obNotice) return undefined;
+    const t = setTimeout(() => { if (obCancelRef.current) { try { obCancelRef.current.focus(); } catch (e) { console.warn("email preview: could not focus Cancel", e); } } }, 0);
+    return () => clearTimeout(t);
+  }, [obNotice]);
 
   // --- Calendar tools (Prompt 9 exports) ---
   // Group .ics, the shareable read-only page, the printable view and the ER-panel author's
@@ -3851,7 +3953,7 @@ function CallSchedule() {
       {/* Publish dialog - rendered at the top level so Setup > Generate (Accept & Publish)
           and Settings > Office notifications open the same diff from any view. */}
       {showPublishDialog && !isPublicMode && (
-        <div data-testid="publish-dialog" onClick={()=>setShowPublishDialog(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
+        <div data-testid="publish-dialog" onClick={closePublishDialog} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,padding:24,maxWidth:520,width:"100%",maxHeight:"85vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.2)"}}>
             <h3 style={{margin:"0 0 8px",fontSize:16,color:"#1a2a3a"}}>Publish schedule changes</h3>
             <p style={{fontSize:13,color:"#5a6a78",margin:"0 0 12px",lineHeight:1.5}}>
@@ -3869,10 +3971,10 @@ function CallSchedule() {
             )}
             <label style={label}>Period label (subject line)</label>
             <input value={publishLabel} onChange={e=>setPublishLabel(e.target.value)} placeholder="e.g. Nov 2 - Jan 3" style={{...css.inp,width:"100%",marginBottom:16}}/>
-            <p style={{fontSize:11.5,color:"#7a8a98",margin:"0 0 10px",lineHeight:1.5}}>The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that).</p>
+            <p style={{fontSize:11.5,color:"#7a8a98",margin:"0 0 10px",lineHeight:1.5}}>The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept &amp; Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open.</p>
             <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
-              <button data-testid="publish-skip" onClick={()=>setShowPublishDialog(false)} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>Skip the notice</button>
-              <button onClick={triggerPublishNotify} disabled={officeNotifBusy || publishChanges.length === 0} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:(officeNotifBusy || publishChanges.length === 0)?0.6:1}}>{officeNotifBusy?"Sending":"Send"}</button>
+              <button data-testid="publish-skip" onClick={closePublishDialog} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>Skip the notice</button>
+              <button data-testid="publish-send" onClick={triggerPublishNotify} disabled={officeNotifBusy || publishChanges.length === 0} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:(officeNotifBusy || publishChanges.length === 0)?0.6:1}}>{officeNotifBusy?"Sending":"Send"}</button>
             </div>
           </div>
         </div>
@@ -4480,7 +4582,7 @@ function CallSchedule() {
                 <label style={{fontSize:12,color:"#5a6a78",display:"inline-flex",alignItems:"center",gap:5,minHeight:36,cursor:"pointer"}}><input type="checkbox" data-testid="ob-weekend" checked={obWeekend} onChange={e => setObWeekend(e.target.checked)}/> weekends only</label>
                 <span style={{flex:"1 1 auto"}}/>
                 <button type="button" data-testid="ob-copy" onClick={boardCopyList} disabled={!rows.length} title="Plain text, one line per slot - ready for an email or Word" style={{...css.btn(copiedUrl==="ob"),padding:"6px 12px",fontSize:11,opacity:rows.length?1:0.5}}>{copiedUrl==="ob" ? "Copied" : "Copy list"}</button>
-                {isScheduler && <button type="button" data-testid="ob-email" onClick={() => notifyOpenShifts("board", boardSlots, boardEnd)} disabled={!boardSlots.length} title="In-app note for everyone + e-mail to those who accept schedule updates; every open slot in the published range" style={{...css.btn(true),padding:"6px 12px",fontSize:11,opacity:boardSlots.length?1:0.5}}>Email the group now</button>}
+                {isScheduler && <button type="button" data-testid="ob-email" ref={obEmailBtnRef} onClick={() => notifyOpenShifts("board", boardSlots, boardEnd)} disabled={!boardSlots.length} title="In-app note for everyone + e-mail to those who accept schedule updates; every open slot in the published range" style={{...css.btn(true),padding:"6px 12px",fontSize:11,opacity:boardSlots.length?1:0.5}}>Email the group now</button>}
               </div>
               {!rulesCtx && <div data-testid="ob-rules-unavailable" style={{...css.warnBox,marginBottom:10}}>Rules unavailable - the setup has not loaded, so nobody's eligibility can be checked and no shift can be taken until it does.</div>}
               <div className="table-wrap" data-testid="openshifts-wrap" style={css.tableWrap}>
@@ -4545,6 +4647,24 @@ function CallSchedule() {
                     <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
                       <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
                       <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : "Confirm - take this shift"}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {obNotice && (
+                <div data-testid="ob-email-dialog" onClick={() => { if (!obNoticeBusy) closeObNotice(); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
+                  <div role="dialog" aria-modal="true" aria-label="Email the group about open shifts" onClick={e => e.stopPropagation()} onKeyDown={claimSheetKeyDown} style={{background:dk?"#16213e":"#ffffff",color:dkText,borderRadius:12,padding:"16px 18px",maxWidth:560,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
+                    <h3 style={{margin:"0 0 8px",fontSize:16,color:dkText}}>Email the group about {obNotice.count} open shift{obNotice.count === 1 ? "" : "s"}?</h3>
+                    <p style={{fontSize:12.5,color:"#5a6a78",margin:"0 0 10px",lineHeight:1.5}}>Everyone gets an in-app note; the e-mail goes to every linked surgeon who accepts schedule updates in Settings. Each slot listed gets a new "last announced" time on the board.</p>
+                    <div data-testid="ob-email-preview" style={{border:"1px solid " + (dk ? "#2a3a5e" : "#e0e4ea"),borderRadius:8,padding:"10px 12px",fontSize:12,lineHeight:1.5}}>
+                      <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:0.6,color:"#7a8a98",marginBottom:4}}>Preview</div>
+                      <div data-testid="ob-email-subject"><strong>Subject:</strong> {obNotice.subject}</div>
+                      <pre data-testid="ob-email-message" style={{whiteSpace:"pre-wrap",fontFamily:mono,fontSize:11.5,margin:"8px 0",maxHeight:260,overflowY:"auto",color:"inherit"}}>{obNotice.message}</pre>
+                      <div data-testid="ob-email-detail" style={{fontFamily:mono,fontSize:11.5,wordBreak:"break-all"}}>{obNotice.detail}</div>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
+                      <button type="button" ref={obCancelRef} data-testid="ob-email-cancel" onClick={closeObNotice} disabled={obNoticeBusy} style={css.btn(false)}>Cancel</button>
+                      <button type="button" data-testid="ob-email-send" onClick={sendBoardNotice} disabled={obNoticeBusy} style={css.btn(true)}>{obNoticeBusy ? "Sending..." : "Send to the group"}</button>
                     </div>
                   </div>
                 </div>

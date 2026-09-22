@@ -9,7 +9,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET) | never |
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT) | yes - any non-empty send |
-| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron only (`x-cron-secret`) | yes - at a matching reminder hour |
+| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron with body `{"mode":"open-shifts"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. Nothing in this folder has been deployed yet.
@@ -146,15 +146,31 @@ select cron.schedule(
   $$
 );
 
-select jobid, jobname, schedule, active from cron.job;                 -- expect both rows
+-- Weekly open-shifts notice (Prompt 13 part 5c), Monday 12:00 UTC = Monday 07:00 CDT / 06:00 CST.
+-- Reads the secret from Vault (vault.create_secret('<value>', 'silvis_cron_secret') once, in the SQL editor);
+-- the other two live jobs also read the secret from Vault the same way since 9/22 - the '<CRON_SECRET>'
+-- placeholders above show the original shape only. The function answers 200 { open: 0, sent: 0 } when
+-- nothing in [today, today+30] is open, so the job is safe to leave running.
+select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $$
+  select net.http_post(
+    url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder',
+    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+      coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+    body := '{"mode":"open-shifts"}'::jsonb);
+$$);
+
+select jobid, jobname, schedule, active from cron.job;                 -- expect three rows
 select * from cron.job_run_details order by start_time desc limit 10;  -- after the first run
 ```
 
 Notes
-- The secret is stored in `cron.job.command`, readable by anyone who can run
-  SQL as the postgres role (i.e. Faraz in the dashboard). Same posture as
-  Davenport. Supabase Vault (`vault.create_secret` + `vault.decrypted_secrets`)
-  is the upgrade path if that ever matters.
+- With the `<CRON_SECRET>` placeholder form the secret is stored in
+  `cron.job.command`, readable by anyone who can run SQL as the postgres role
+  (i.e. Faraz in the dashboard) - the original Davenport posture. Since 9/22
+  the two live jobs read the secret from Vault instead (`vault.create_secret`
+  once, `vault.decrypted_secrets` in the job command, as the open-shifts job
+  above shows), and the open-shifts job does too once created;
+  `cron.job.command` then holds only the lookup.
 - Rotate: `supabase secrets set CRON_SECRET=<new>` then `cron.alter_job(jobid, command => ...)`
   (or unschedule/schedule) with the new header. Until both agree, the cron
   calls get 401 and nothing is sent (fail closed).
@@ -214,11 +230,25 @@ curl.exe -s -i -X POST "$URL/daily-reminder" -H "Content-Type: application/json"
 # dry run: reads tomorrow's row, composes, sends NOTHING
 curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"dryRun":true}'
 #   -> {"date_tomorrow":"...","current_hour":H,"dry_run":true,"on_call":2,"sent":0,...,"results":[{"person_id":"s?","role":"primary","status":"skipped_wrong_hour"|"dry_run_composed"...}]}
+# mode open-shifts dry run (Prompt 13 part 5c): reads schedule_days for today..today+30, composes the Monday notice, sends NOTHING, writes NO feed row
+curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"open-shifts","dryRun":true}'
+#   -> {"mode":"open-shifts","dry_run":true,"open":N,"through":"YYYY-MM-DD","published_through":"YYYY-MM-DD"|null,"window_end":"YYYY-MM-DD","sent":0,"failed":0,"skipped_pref_off":0,"skipped_no_email":0,"feed_row":"skipped_dry_run","results":[{"person_id":"s?","status":"dry_run_composed"}...]}
+#   -> {"mode":"open-shifts","dry_run":true,"open":0,"through":...,"published_through":...,"window_end":"YYYY-MM-DD","sent":0} when nothing in the window is open
+#   open = the board's list over the rows in the window: the block of rows that starts today (published_through = its end; null when
+#   today has no row), then the open slots of assigned runs after it (e.g. a holiday unit). A day WITHOUT a schedule_days row is never
+#   announced - it is not published and claim_open_slot refuses it. through = the later of published_through and the last listed slot.
+# an unknown mode -> 400, nothing read or sent
+curl.exe -s -i -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"nope"}' | Select-Object -First 1
 ```
 A LIVE call (`-d '{}'`) sends nothing only when no on-call person's reminder hour
 equals the current Central hour. The default hour is 17 (5 pm the evening
 before) for anyone without `reminder_hour_central`, so a live invoke at 17:xx
-Central IS a real send. Use `dryRun` for verification.
+Central IS a real send. Use `dryRun` for verification. A LIVE
+`{"mode":"open-shifts"}` call IS a real send to every opted-in linked surgeon
+whenever `open` is non-zero, and it inserts the `notifications` row the board's
+"last announced" column reads - the Monday cron in section 4 is the intended caller.
+Proof after deploying: one dryRun POST through pg_net from the SQL editor (or the
+curl above) and quote the 200 body.
 
 ## 6. Invocations that CAN send real mail - wait for Faraz
 
@@ -229,7 +259,14 @@ Central IS a real send. Use `dryRun` for verification.
 - `send-notification` with a non-empty `targetIds` or with `targetIds` omitted
   (broadcast to every linked account that has not opted out).
 - `daily-reminder` live (`{}`) at an hour matching an on-call person's reminder hour.
-- Creating either pg_cron job (section 4) - from then on the functions run unattended.
+- `daily-reminder` live `{"mode":"open-shifts"}` while any published slot in the next 30 days
+  is open - every linked surgeon with `schedule_updates_email` on (the Monday cron job).
+- `send-notification` type `open_shifts` (Prompt 13 part 5) - a broadcast to every linked,
+  opted-in surgeon; the app sends it on Accept & Publish when the published range leaves
+  slots open (after the office notice) and on demand from the Open shifts board ("Email the
+  group now", after a preview). Type `shift_claimed` - to the scheduler(s) + the claimer
+  when someone takes an open shift (targetIds, never a broadcast).
+- Creating any of the three pg_cron jobs (section 4) - from then on the functions run unattended.
 
 Planned first live proofs (Prompt 10 acceptance, run by Faraz): one real office
 email (`publish` with a real period label while `office_contacts` holds only

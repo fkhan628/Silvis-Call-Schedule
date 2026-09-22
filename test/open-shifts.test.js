@@ -409,8 +409,11 @@ check("obLastAnnounced(notifications, day, role): newest 'open_shifts' row whose
     assert.ok(/return \{ ok: true, sent/.test(body), "returns { ok: true, sent, ... } on success");
     const k = appSrc.indexOf("const notifyOpenShifts = async (origin, slots, through)");
     assert.ok(k > 0, "notifyOpenShifts(origin, slots, through) takes explicit inputs");
-    const nb = appSrc.slice(k, appSrc.indexOf("\n  };\n", k));
-    assert.ok(/const mail = await sendEmailNotif\("open_shifts"/.test(nb), "notifyOpenShifts awaits sendEmailNotif");
+    // part 5 moved the writes into sendOpenShiftsNotice(origin, n) - the board's preview dialog and the publish hook both end there
+    const ks = appSrc.indexOf("const sendOpenShiftsNotice = async (origin, n, quiet)");
+    assert.ok(ks > 0, "sendOpenShiftsNotice(origin, n, quiet) holds the writes");
+    const nb = appSrc.slice(ks, appSrc.indexOf("\n  };\n", ks));
+    assert.ok(/const mail = await sendEmailNotif\("open_shifts"/.test(nb), "sendOpenShiftsNotice awaits sendEmailNotif");
     assert.ok(!/has been told/.test(nb), "no unconditional success toast");
     assert.ok(/const composeOpenShiftsNotice = \(slots, through\)/.test(appSrc), "composeOpenShiftsNotice(slots, through) takes explicit inputs");
     assert.ok(/notifyOpenShifts\("board", boardSlots, boardEnd\)/.test(appSrc), "the board passes (boardSlots, boardEnd)");
@@ -649,6 +652,381 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(br.length > 0 && br.includes("previewGen.diagnostics.uncovered"), "boardReasons reads previewGen.diagnostics.uncovered");
     assert.ok(br.includes("openSlotReason(u.reasons)"), "the preview's slots are rendered through openSlotReason (never the raw reasons map)");
     assert.ok(br.includes("return { ...fromLast, ...fromPreview };") && /\}, \[previewGen, lastGenerate\]\);\s*$/.test(br), "the preview overlays the persisted reasons and the memo depends on both");
+  });
+}
+
+/* ---- Prompt 13 part 5: NOTIFICATIONS ----
+   helpers.openShiftsEmail(slots, { appUrl, through, nameOfUnit }) is the ONE
+   composer of the group notice (Accept & Publish hook, the board's Email the
+   group now, and - mirrored in plain JS between the markers
+   '// @openSlots-mirror-start' / '// @openSlots-mirror-end' of
+   edge-functions/daily-reminder/index.ts - the Monday cron). The mirror block
+   is extracted here, evaluated as JavaScript and run against the same fixtures
+   as helpers.openSlots / openShiftsEmail. Source pins keep the client, the
+   send-notification categories and the README cron job in step. */
+{
+  const EM = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "open-shifts-email.json"), "utf8"));
+  const slotsWithUnits = () => H.openSlots(FX.schedule, FX.from, FX.to, FX.today, FX.opts);
+  const drSrc = fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"), "utf8").replace(/\r\n/g, "\n");
+  const snSrc = fs.readFileSync(path.join(ROOT, "edge-functions", "send-notification", "index.ts"), "utf8").replace(/\r\n/g, "\n");
+  const readme = fs.readFileSync(path.join(ROOT, "edge-functions", "README.md"), "utf8").replace(/\r\n/g, "\n");
+  const appSrc = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+  const START = "// @openSlots-mirror-start", END = "// @openSlots-mirror-end";
+  const mirrorBlock = () => {
+    const i = drSrc.indexOf(START), j = drSrc.indexOf(END);
+    assert.ok(i >= 0, "daily-reminder/index.ts carries the marker " + START);
+    assert.ok(j > i, "daily-reminder/index.ts carries the marker " + END + " after the start marker");
+    return drSrc.slice(i + START.length, j);
+  };
+  const loadMirror = () => new Function(mirrorBlock() + "\nreturn { openSlots: openSlotsMirror, openShiftsEmail: openShiftsEmailMirror, window: typeof openShiftsWindowMirror === 'function' ? openShiftsWindowMirror : null };")();
+  // A tiny seeded PRNG so the client-vs-mirror comparison below is reproducible.
+  const prng = (seed) => () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+
+  check("helpers.js exports openShiftsEmail (the pure composer of the open-shifts notice)", () => {
+    assert.ok(has("openShiftsEmail"), "missing helpers.js export openShiftsEmail");
+  });
+  check("openShiftsEmail on the fixture: subject 'N open shifts through M/D', message = lead line + slots grouped by Monday week with one indented openSlotsLine each, detail = 'Take this shift: <appUrl>#openshifts'", () => {
+    const out = H.openShiftsEmail(slotsWithUnits(), { appUrl: EM.appUrl, through: EM.through });
+    assert.strictEqual(out.subject, EM.expected.subject);
+    assert.strictEqual(out.message, EM.expected.message);
+    assert.strictEqual(out.detail, EM.expected.detail);
+    assert.strictEqual(out.through, EM.expected.through);
+    assert.strictEqual(out.count, EM.expected.count);
+    assert.deepStrictEqual(out.slots, FX.expected, "slots echo the { day, role } pairs (what the feed row's data.slots stores)");
+    // every fixture line appears once, indented by two spaces, and nothing else reads '- open'
+    const lines = out.message.split("\n").filter(l => / - open/.test(l));
+    assert.deepStrictEqual(lines, FX.expectedLines.map(l => "  " + l));
+    assert.strictEqual((out.message.match(/^Week of Mon \d{1,2}\/\d{1,2}:$/gm) || []).length, 4, "four Monday weeks: 11/2, 11/9, 11/16, 11/23");
+  });
+  check("openShiftsEmail: a single slot reads in the singular; through defaults to the last slot's day; a string second argument is the appUrl; nameOfUnit reaches openSlotsLine", () => {
+    const one = H.openShiftsEmail(EM.oneSlot.slots, { appUrl: EM.appUrl });
+    assert.deepStrictEqual({ subject: one.subject, message: one.message, detail: one.detail, through: one.through, count: one.count }, EM.oneSlot.expected);
+    const viaString = H.openShiftsEmail(EM.oneSlot.slots, EM.appUrl);
+    assert.strictEqual(viaString.detail, EM.oneSlot.expected.detail);
+    assert.strictEqual(viaString.subject, EM.oneSlot.expected.subject);
+    const named = H.openShiftsEmail(EM.oneSlot.slots, { appUrl: EM.appUrl, nameOfUnit: (u) => u.kind === "weekend" ? "wknd" : "" });
+    assert.ok(named.message.indexOf("  Fri 11/06 - primary (wknd) - open") > 0, named.message);
+    // an explicit through wins over the last slot even when it lies beyond it
+    assert.strictEqual(H.openShiftsEmail(EM.oneSlot.slots, { appUrl: EM.appUrl, through: "2026-12-31" }).subject, "1 open shift through 12/31");
+  });
+  check("openShiftsEmail: input order does not matter (sorted by day then primary before backup); junk entries are dropped; no slots -> a 'fully covered' message with count 0; no appUrl -> a detail that still says where to go; never throws", () => {
+    const shuffled = slotsWithUnits().slice().reverse();
+    assert.strictEqual(H.openShiftsEmail(shuffled, { appUrl: EM.appUrl, through: EM.through }).message, EM.expected.message);
+    const junk = H.openShiftsEmail([null, 3, { day: "nope", role: "primary" }, { day: "2026-11-06", role: "nurse" }].concat(EM.oneSlot.slots), EM.appUrl);
+    assert.strictEqual(junk.count, 1);
+    assert.strictEqual(junk.subject, EM.oneSlot.expected.subject);
+    const none = H.openShiftsEmail([], EM.appUrl);
+    assert.strictEqual(none.count, 0);
+    assert.strictEqual(none.subject, "0 open shifts");
+    assert.ok(/fully covered|No open shifts/.test(none.message), none.message);
+    assert.deepStrictEqual(none.slots, []);
+    assert.strictEqual(none.through, null);
+    [undefined, null, "x", {}].forEach(v => { const r = H.openShiftsEmail(v, EM.appUrl); assert.strictEqual(r.count, 0); });
+    const noUrl = H.openShiftsEmail(EM.oneSlot.slots);
+    assert.ok(/^Take this shift: /.test(noUrl.detail) && noUrl.detail.indexOf("Open shifts") > 0, noUrl.detail);
+    assert.ok(noUrl.detail.indexOf("undefined") < 0 && noUrl.detail.indexOf("null") < 0, noUrl.detail);
+    // no address-shaped text can come out of the composer for the fixture (the feed row is anon-readable)
+    assert.ok(!/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(EM.expected.message + EM.expected.subject), "no e-mail address in the composed text");
+  });
+
+  /* -- the TypeScript mirror (plain JS between the markers) -- */
+  check("daily-reminder/index.ts: the block between '// @openSlots-mirror-start' and '// @openSlots-mirror-end' is plain JavaScript (evaluates with new Function, no type annotations) and defines openSlotsMirror + openShiftsEmailMirror", () => {
+    const block = mirrorBlock();
+    assert.ok(!/:\s*(string|number|boolean|any|unknown|void|Record<|Array<|\{\s*\w+:\s*\w+)\b/.test(block.replace(/\/\/[^\n]*/g, "").replace(/"[^"]*"/g, '""').replace(/'[^']*'/g, "''")), "no TypeScript type annotations inside the mirror block");
+    assert.ok(!/\bas\s+(any|string|number|const)\b/.test(block), "no 'as' casts inside the mirror block");
+    const m = loadMirror();
+    assert.strictEqual(typeof m.openSlots, "function");
+    assert.strictEqual(typeof m.openShiftsEmail, "function");
+    assert.ok(block.indexOf("helpers.js") > 0 || block.indexOf("open-slots.json") > 0, "the block names its source of truth (helpers.js / the fixture)");
+  });
+  check("mirror openSlots on the fixture == fixture.expected and == helpers.openSlots (no opts): same { day, role } list in the same order", () => {
+    const m = loadMirror();
+    assert.deepStrictEqual(dayRole(m.openSlots(FX.schedule, FX.from, FX.to, FX.today)), FX.expected);
+    assert.deepStrictEqual(dayRole(m.openSlots(FX.schedule, FX.from, FX.to, FX.today)), dayRole(H.openSlots(FX.schedule, FX.from, FX.to, FX.today)));
+  });
+  check("mirror openSlots with opts == fixture.expectedWithUnits (holiday over weekend, weekend pattern + friday, whitespace reason -> null) and == helpers on unitPrecedence", () => {
+    const m = loadMirror();
+    assert.deepStrictEqual(m.openSlots(FX.schedule, FX.from, FX.to, FX.today, FX.opts), FX.expectedWithUnits);
+    const up = FX.unitPrecedence;
+    assert.deepStrictEqual(m.openSlots(up.schedule, up.from, up.to, up.today, up.opts), up.expected);
+    assert.deepStrictEqual(m.openSlots(up.schedule, up.from, up.to, up.today, up.opts), H.openSlots(up.schedule, up.from, up.to, up.today, up.opts));
+  });
+  check("mirror openSlots: invalid ranges / junk input -> [] like helpers; today clips the range; a day before today is never open; a locked-but-empty day is open; external cover holds primary only", () => {
+    const m = loadMirror();
+    FX.invalidRanges.forEach(r => assert.deepStrictEqual(m.openSlots(FX.schedule, r.from, r.to, FX.today), [], r.why));
+    assert.deepStrictEqual(m.openSlots(null, FX.from, FX.to, FX.today).length, H.openSlots(null, FX.from, FX.to, FX.today).length);
+    assert.deepStrictEqual(m.openSlots(FX.schedule, "2026-11-01", "2026-11-03", "2026-11-04"), []);
+    assert.deepStrictEqual(dayRole(m.openSlots(FX.schedule, "2026-11-17", "2026-11-17", "2026-11-04")), [{ day: "2026-11-17", role: "primary" }, { day: "2026-11-17", role: "backup" }]);
+    assert.deepStrictEqual(dayRole(m.openSlots(FX.schedule, "2026-11-06", "2026-11-06", "2026-11-04")), [{ day: "2026-11-06", role: "backup" }]);
+    assert.deepStrictEqual(m.openSlots({}, "2026-11-10", "2026-11-10", "2026-11-10"), [{ day: "2026-11-10", role: "primary", unit: null, reason: null }, { day: "2026-11-10", role: "backup", unit: null, reason: null }]);
+    // an empty-string holder or a blank externalCover is no holder; a held externalCover is one (mirrors the helpers check)
+    const s = { "2026-11-10": { primary: "", backup: "", externalCover: "  " }, "2026-11-11": { primary: null, backup: "s2", externalCover: "Atwell" } };
+    assert.deepStrictEqual(dayRole(m.openSlots(s, "2026-11-10", "2026-11-11", "2026-11-10")), dayRole(H.openSlots(s, "2026-11-10", "2026-11-11", "2026-11-10")));
+  });
+  check("mirror openSlots == helpers.openSlots on 200 seeded random schedules over Oct 2026 - Jan 2027 (random holders, covers, locks, missing rows, today inside / outside the range, holiday + weekend opts, reasons)", () => {
+    const m = loadMirror();
+    const rnd = prng(20260922);
+    const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+    const ids = ["s1", "s2", "s3", "s4", "s5", "s6", null, null, ""];
+    const holidayByDay = {};
+    ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].forEach(d => { holidayByDay[d] = { name: "Thanksgiving", days: ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"] }; });
+    ["2026-12-24", "2026-12-25"].forEach(d => { holidayByDay[d] = { name: "Christmas", days: ["2026-12-24", "2026-12-25"] }; });
+    const kinds = ["block", "split", "daily", "locked", null];
+    for (let t = 0; t < 200; t++) {
+      const schedule = {};
+      const weekendKinds = {}, reasons = {};
+      for (let k = 0; k < 120; k++) {
+        const d = H.suAddDays("2026-10-01", k);
+        if (rnd() < 0.15) continue; // missing row
+        schedule[d] = { primary: pick(ids), backup: pick(ids), primaryLocked: rnd() < 0.2, backupLocked: rnd() < 0.2, source: "generate", externalCover: rnd() < 0.1 ? pick(["Atwell", "", "  ", "Locum"]) : null, note: null };
+        if (H.parse(d).getDay() === 5 && rnd() < 0.7) weekendKinds[d] = pick(kinds);
+        if (rnd() < 0.2) reasons[H.openSlotKey(d, pick(["primary", "backup"]))] = pick(["no eligible surgeon - vacations", "   ", "generator could not place - report it", ""]);
+      }
+      const from = H.suAddDays("2026-10-01", Math.floor(rnd() * 60));
+      const to = H.suAddDays(from, Math.floor(rnd() * 70));
+      const today = H.suAddDays("2026-09-25", Math.floor(rnd() * 130));
+      const opts = rnd() < 0.5 ? { holidayByDay, weekendKinds, reasons } : undefined;
+      const a = H.openSlots(schedule, from, to, today, opts), b = m.openSlots(schedule, from, to, today, opts);
+      assert.deepStrictEqual(b, a, `seeded schedule #${t} (${from}..${to}, today ${today}, opts ${opts ? "on" : "off"})`);
+    }
+  });
+  check("mirror openShiftsEmail == helpers.openShiftsEmail on the fixture (subject, message, detail, through, count, slots) and on the one-slot / empty / shuffled cases", () => {
+    const m = loadMirror();
+    const slots = slotsWithUnits();
+    const a = H.openShiftsEmail(slots, { appUrl: EM.appUrl, through: EM.through });
+    const b = m.openShiftsEmail(slots, { appUrl: EM.appUrl, through: EM.through });
+    assert.deepStrictEqual(b, a);
+    assert.strictEqual(b.message, EM.expected.message);
+    assert.deepStrictEqual(m.openShiftsEmail(EM.oneSlot.slots, { appUrl: EM.appUrl }), H.openShiftsEmail(EM.oneSlot.slots, { appUrl: EM.appUrl }));
+    assert.deepStrictEqual(m.openShiftsEmail([], EM.appUrl), H.openShiftsEmail([], EM.appUrl));
+    assert.deepStrictEqual(m.openShiftsEmail(slots.slice().reverse(), EM.appUrl), H.openShiftsEmail(slots.slice().reverse(), EM.appUrl));
+    assert.deepStrictEqual(m.openShiftsEmail(null, EM.appUrl), H.openShiftsEmail(null, EM.appUrl));
+  });
+
+  /* -- daily-reminder mode 'open-shifts' (source pins: the contract the orchestrator proves live with a dryRun) -- */
+  check("daily-reminder/index.ts: body.mode 'open-shifts' | undefined/'reminder', any other value -> 400; the mode branches AFTER the x-cron-secret gate and the dryRun boolean check; the default path still starts with 'const now = centralNow();' + 'const tomorrow = addDays(now.ymd, 1);'", () => {
+    const gate = drSrc.indexOf('req.headers.get("x-cron-secret") !== CRON_SECRET');
+    const dry = drSrc.indexOf('typeof body.dryRun !== "boolean"');
+    const mode = drSrc.indexOf('"open-shifts"', dry);
+    assert.ok(gate > 0 && dry > gate && mode > dry, "gate -> dryRun check -> mode dispatch, in that order");
+    assert.ok(/mode must be/.test(drSrc) && /json\(400, \{ error: [^}]*mode/.test(drSrc), "an unknown mode answers 400 with an error naming mode");
+    assert.ok(/const now = centralNow\(\);\n\s+const tomorrow = addDays\(now\.ymd, 1\);/.test(drSrc), "the reminder path is intact");
+  });
+  check("daily-reminder/index.ts mode open-shifts: reads schedule_days for [today, today+30] with the six columns, resolves user_profiles (person_id not null) x notification_preferences.schedule_updates_email, inserts the notifications row { type: 'open_shifts', data: { slots, through, source: 'cron' } } only when not dryRun, answers person ids only", () => {
+    assert.ok(/schedule_days\?select=day,primary_id,backup_id,external_cover,primary_locked,backup_locked&day=gte\.\$\{[^}]+\}&day=lte\.\$\{[^}]+\}/.test(drSrc), "schedule_days window read with the six columns");
+    assert.ok(/addDays\([^,]+,\s*30\)/.test(drSrc), "the window is today + 30");
+    assert.ok(/user_profiles\?select=person_id,email&person_id=not\.is\.null/.test(drSrc), "recipients come from user_profiles via the service role");
+    assert.ok(/schedule_updates_email === false/.test(drSrc), "an explicit false opts out; a missing row is on");
+    assert.ok(/type: "open_shifts"/.test(drSrc) && /source: "cron"/.test(drSrc), "the feed row is typed open_shifts with source cron");
+    const ins = drSrc.indexOf('rest("notifications"');
+    assert.ok(ins > 0, "the feed row is inserted through rest('notifications', ...)");
+    assert.ok(/if \(!dryRun\)[\s\S]{0,200}rest\("notifications"/.test(drSrc) || /dryRun \? [^:]+: [\s\S]{0,120}rest\("notifications"/.test(drSrc), "the insert sits behind a dryRun check");
+    assert.ok(/status: "dry_run_composed"/.test(drSrc), "dryRun composes and reports dry_run_composed per recipient");
+    assert.ok(/skipped_pref_off/.test(drSrc) && /skipped_no_email/.test(drSrc) && /open:/.test(drSrc) && /through/.test(drSrc), "the response carries open / through / sent / failed / skipped_pref_off / skipped_no_email");
+    assert.ok(!/\bemail:\s*[a-z]+\.email\b/.test(drSrc.slice(drSrc.indexOf("results.push"))), "no address is echoed in results");
+  });
+
+  /* -- send-notification categories -- */
+  check("send-notification/index.ts: CATEGORIES.open_shifts { pref: schedule_updates_email, title: 'Open Shifts', color '#C2410C', cta 'Open shifts' } and CATEGORIES.shift_claimed { pref: schedule_updates_email, title: 'Shift Taken', color '#1a8040', cta 'View Schedule' }", () => {
+    assert.ok(/open_shifts:\s*\{\s*pref:\s*"schedule_updates_email",\s*title:\s*"Open Shifts",\s*color:\s*"#C2410C",\s*cta:\s*"Open shifts"\s*\}/.test(snSrc), "open_shifts category");
+    assert.ok(/shift_claimed:\s*\{\s*pref:\s*"schedule_updates_email",\s*title:\s*"Shift Taken",\s*color:\s*"#1a8040",\s*cta:\s*"View Schedule"\s*\}/.test(snSrc), "shift_claimed category");
+    assert.strictEqual((snSrc.match(/^const CATEGORIES/gm) || []).length, 1);
+  });
+
+  /* -- README: the third pg_cron job exactly as Faraz gave it, the dryRun example, the table row, the live-mail list -- */
+  check("edge-functions/README.md: section 4 carries cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', ...) posting {\"mode\":\"open-shifts\"} with the Vault secret 'silvis_cron_secret', plus the dryRun example and the live-mail paths", () => {
+    assert.ok(readme.indexOf("cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $$") > 0, "the job name + schedule line");
+    assert.ok(/vault\.decrypted_secrets where name = 'silvis_cron_secret' limit 1\), 'unset'\)\)/.test(readme), "the Vault lookup exactly as given");
+    assert.ok(readme.indexOf(`body := '{"mode":"open-shifts"}'::jsonb`) > 0, "the body");
+    assert.ok(/12:00 UTC = Monday 07:00 CDT \/ 06:00 CST/.test(readme), "the UTC note");
+    assert.ok(/other two (live )?jobs (also )?read the secret from Vault/.test(readme), "the note that the other two jobs read Vault");
+    assert.ok(readme.indexOf(`'{"mode":"open-shifts","dryRun":true}'`) > 0, "the dryRun example");
+    assert.ok(/\{"mode":"open-shifts","dry_run":true,"open":N/.test(readme), "the dryRun response shape");
+    assert.ok(/open_shifts/.test(readme) && /shift_claimed/.test(readme), "section 6 lists the new live-mail paths");
+    assert.ok(/\| `daily-reminder` \|[^\n]*open-shifts/.test(readme), "the table row names the new mode");
+  });
+
+  /* -- index-source.html: publish hook, board dialog with a Preview, claim subject, deep link -- */
+  check("index-source.html: Accept & Publish hooks the open-shifts notice AFTER the office publish (triggerPublishNotify: office POST ok -> schedule_published feed + mail -> announceOpenShiftsAfterPublish -> 'Published.' toast)", () => {
+    const fn = appSrc.slice(appSrc.indexOf("const triggerPublishNotify = async"), appSrc.indexOf("const triggerDigestTest = async"));
+    const pub = fn.indexOf('sendEmailNotif("schedule_published"');
+    const hook = fn.indexOf("await announceOpenShiftsAfterPublish(true)");
+    const toast = fn.indexOf("showToast(`Published.");
+    assert.ok(pub > 0 && hook > pub && toast > hook, "the hook sits between the schedule_published mail and the Published toast");
+    assert.ok(fn.indexOf("if (!res.ok)") > 0 && fn.indexOf("if (!res.ok)") < hook, "on Send the hook runs only after the office POST succeeded (Skip / the backdrop announce through closePublishDialog when Accept armed it)");
+    const def = appSrc.slice(appSrc.indexOf("const announceOpenShiftsAfterPublish = async"), appSrc.indexOf("const notifyOpenShifts = async"));
+    assert.ok(def.length > 0, "announceOpenShiftsAfterPublish is defined before notifyOpenShifts");
+    assert.ok(/openSlots\((scheduleRef\.current \|\| schedule|sched), todayStr, through, todayStr,/.test(def), "the hook computes openSlots(schedule, todayStr, lastPublishedDay, todayStr, ...) from the schedule just published");
+    assert.ok(/suLastContiguousDay\(/.test(def), "through = the last contiguous published day");
+    assert.ok(/sendOpenShiftsNotice\("publish"/.test(def), "the publish hook posts through the shared sender with origin publish");
+  });
+  check("index-source.html: the notice is composed through helpers.openShiftsEmail (no second composer), the feed row carries data.slots [{day, role}] + through, the e-mail carries subject / message / detail with targetIds omitted", () => {
+    assert.ok(/openShiftsEmail\(/.test(appSrc), "index-source.html calls openShiftsEmail");
+    const comp = appSrc.slice(appSrc.indexOf("const composeOpenShiftsNotice ="), appSrc.indexOf("const announceOpenShiftsAfterPublish = async"));
+    assert.ok(/openShiftsEmail\(list, \{ appUrl: /.test(comp), "composeOpenShiftsNotice delegates to openShiftsEmail");
+    assert.ok(/window\.location\.origin \+ window\.location\.pathname/.test(comp), "the app URL is location.origin + location.pathname");
+    assert.ok(!/Week of Mon/.test(comp), "no week grouping text in the client (it lives in helpers.js)");
+    const send = appSrc.slice(appSrc.indexOf("const sendOpenShiftsNotice = async"), appSrc.indexOf("const notifyOpenShifts = async"));
+    assert.ok(/addNotification\("open_shifts", n\.subject, n\.message, \{ slots: n\.slots, through: /.test(send), "feed row: type open_shifts, title = subject, data.slots + through");
+    assert.ok(/sendEmailNotif\("open_shifts", \{ subject: n\.subject, message: n\.message, detail: n\.detail[^}]*\}\)/.test(send), "broadcast: sendEmailNotif('open_shifts', { subject, message, detail }) with NO targetIds argument");
+    assert.ok(/logAudit\("openshifts\.notify"/.test(send), "audit openshifts.notify");
+  });
+  check("index-source.html: Email the group now opens a confirm dialog with a Preview (subject, message, detail) and a Send button instead of window.confirm; the claim e-mail subject is '<Name> took <Ddd M/D> <role>' to the schedulers + claimer; '#openshifts' deep-links to the board once signed in", () => {
+    assert.ok(appSrc.indexOf('data-testid="ob-email-dialog"') > 0 && appSrc.indexOf('data-testid="ob-email-preview"') > 0 && appSrc.indexOf('data-testid="ob-email-send"') > 0 && appSrc.indexOf('data-testid="ob-email-cancel"') > 0, "dialog, preview, send and cancel test ids");
+    const notify = appSrc.slice(appSrc.indexOf("const notifyOpenShifts = async"), appSrc.indexOf("// --- Calendar tools"));
+    assert.ok(!/confirm\(/.test(notify), "no window.confirm in notifyOpenShifts");
+    assert.ok(/setObNotice\(/.test(notify), "the board path opens the preview dialog");
+    const claim = appSrc.slice(appSrc.indexOf("const runClaim = async"), appSrc.indexOf("const composeOpenShiftsNotice ="));
+    assert.ok(/sendEmailNotif\("shift_claimed", \{ subject: `\$\{nameOf\(mySurgeon\)\} took \$\{DAY_HDR\[parse\(s\.day\)\.getDay\(\)\]\} \$\{fmtMD\(s\.day\)\} \$\{s\.role\}`/.test(claim), "the claim subject");
+    assert.ok(/\[\.\.\.new Set\(\[\.\.\.ids, mySurgeon\]\)\]/.test(claim) && /schedulerIdsLoud\(\)/.test(claim), "targets = uniq(schedulerIds + claimer), schedulers looked up, never hardcoded");
+    assert.ok(!/\["s1"\]/.test(claim), "no hardcoded s1");
+    const hashAt = appSrc.indexOf('window.location.hash === "#openshifts"');
+    assert.ok(hashAt > 0 && /setView\("openshifts"\)/.test(appSrc.slice(hashAt, hashAt + 400)), "the deep link routes to the board");
+  });
+
+  /* -- fix round (review of part 5) -- */
+  check("openShiftsEmail (fix round): an explicit through that PRECEDES the last slot's day is extended to that day - the subject never says 'through 11/1' over a message that lists 11/26 (board: open slots of an assigned range beyond the block)", () => {
+    const out = H.openShiftsEmail(slotsWithUnits(), { appUrl: EM.appUrl, through: "2026-11-01" });
+    assert.strictEqual(out.through, "2026-11-29", "through = the last slot's day when the explicit one lies before it");
+    assert.strictEqual(out.subject, EM.expected.subject);
+    assert.strictEqual(out.message, EM.expected.message);
+    // beyond the last slot it still wins (a fully published block whose tail is covered)
+    assert.strictEqual(H.openShiftsEmail(EM.oneSlot.slots, { appUrl: EM.appUrl, through: "2026-12-31" }).through, "2026-12-31");
+    const m = loadMirror();
+    assert.deepStrictEqual(m.openShiftsEmail(slotsWithUnits(), { appUrl: EM.appUrl, through: "2026-11-01" }), out, "the mirror composer extends through the same way");
+  });
+  // The cron's window: the runs of schedule_days rows in [today, today+30].
+  // Rows exist only on published days, so a day WITHOUT a row is not published
+  // and never open (claim_open_slot refuses it; Generate covers it). The
+  // reviewer's live-shaped case: the import ends 11/1, the Thanksgiving unit
+  // is on file 11/26-11/29, today is 11/2 -> nothing between may be announced.
+  const gapSchedule = () => ({
+    "2026-11-02": { primary: "s1", backup: null, externalCover: null },
+    "2026-11-03": { primary: null, backup: "s2", externalCover: null },
+    "2026-11-04": { primary: "s3", backup: "s4", externalCover: null },
+    "2026-11-05": { primary: null, backup: null, externalCover: null },
+    "2026-11-26": { primary: "s1", backup: "s2", externalCover: null },
+    "2026-11-27": { primary: "s1", backup: null, externalCover: null },
+    "2026-11-28": { primary: "s1", backup: "s2", externalCover: null },
+    "2026-11-29": { primary: "s1", backup: null, externalCover: null },
+    "2026-12-01": { primary: null, backup: null, externalCover: null }, // a stray row nobody holds - not an assigned range
+  });
+  const runsOf = (days) => { const out = []; days.forEach(d => { const l = out.length ? out[out.length - 1] : null; if (l && H.suAddDays(l.end, 1) === d) l.end = d; else out.push({ start: d, end: d }); }); return out; };
+  check("mirror openShiftsWindowMirror(schedule, today, opts) -> { slots, through, ranges }: a gap between today's block and a later assigned run is NEVER announced (the reviewer's blocking case: rows 11/2-11/5 + Thanksgiving 11/26-11/29, today 11/2 -> 4 block slots + 2 holiday backups, through 11/5, no 11/6..11/25, no stray 12/1)", () => {
+    const m = loadMirror();
+    assert.ok(typeof m.window === "function", "the mirror block defines openShiftsWindowMirror (the cron's window = the board's obBoardSlots over the rows read)");
+    const r = m.window(gapSchedule(), "2026-11-02", {});
+    assert.strictEqual(r.through, "2026-11-05", "through = the end of the run that starts today");
+    assert.deepStrictEqual(dayRole(r.slots), [
+      { day: "2026-11-02", role: "backup" }, { day: "2026-11-03", role: "primary" },
+      { day: "2026-11-05", role: "primary" }, { day: "2026-11-05", role: "backup" },
+      { day: "2026-11-27", role: "backup" }, { day: "2026-11-29", role: "backup" },
+    ]);
+    assert.ok(!r.slots.some(s => s.day > "2026-11-05" && s.day < "2026-11-26"), "no day without a row is open");
+    assert.ok(!r.slots.some(s => s.day === "2026-12-01"), "a stray unheld row beyond the block is not an assigned range");
+    assert.deepStrictEqual(r.ranges, [{ start: "2026-11-26", end: "2026-11-29" }]);
+    // == the board on the same rows (helpers.obBoardSlots with lastPublishedDay = the block end)
+    const board = H.obBoardSlots(gapSchedule(), "2026-11-02", "2026-11-05", {});
+    assert.deepStrictEqual(dayRole(r.slots), dayRole(board.slots));
+    assert.deepStrictEqual(r.ranges, board.ranges);
+    // the old end-only clip would have listed 2 phantom slots per gap day
+    const oldClip = m.openSlots(gapSchedule(), "2026-11-02", "2026-11-29", "2026-11-02", {});
+    assert.ok(oldClip.length > r.slots.length + 30, "control: clipping only the end announces the gap (" + oldClip.length + " slots)");
+  });
+  check("mirror openShiftsWindowMirror: today WITHOUT a row -> through null and only the later ASSIGNED runs are announced (a week before the Thanksgiving unit, nothing else published: its open backups, never the 20 days before); no rows at all -> nothing; junk today throws", () => {
+    const m = loadMirror();
+    const sched = {};
+    ["2026-11-26", "2026-11-28"].forEach(d => { sched[d] = { primary: "s1", backup: "s2", externalCover: null }; });
+    ["2026-11-27", "2026-11-29"].forEach(d => { sched[d] = { primary: "s1", backup: null, externalCover: null }; });
+    const r = m.window(sched, "2026-11-19", {});
+    assert.strictEqual(r.through, null);
+    assert.deepStrictEqual(dayRole(r.slots), [{ day: "2026-11-27", role: "backup" }, { day: "2026-11-29", role: "backup" }]);
+    assert.deepStrictEqual(m.window({}, "2026-11-19", {}), { slots: [], through: null, ranges: [] });
+    // days before today are not open even when the block started earlier (the cron reads rows from today only, but be safe)
+    const r2 = m.window(gapSchedule(), "2026-11-04", {});
+    assert.strictEqual(r2.through, "2026-11-05");
+    assert.deepStrictEqual(dayRole(r2.slots), [{ day: "2026-11-05", role: "primary" }, { day: "2026-11-05", role: "backup" }, { day: "2026-11-27", role: "backup" }, { day: "2026-11-29", role: "backup" }]);
+    assert.throws(() => m.window(gapSchedule(), "junk", {}), /today/);
+  });
+  check("mirror openShiftsWindowMirror == helpers.obBoardSlots on 200 seeded random 31-day windows with gaps (random holders, covers, missing rows, stray unheld rows, holiday + weekend opts) whenever today has a row; when it has none the list is the later assigned runs' open slots only", () => {
+    const rnd = prng(20260922);
+    const ids = ["s1", "s2", "s3", "s4", "s5", "s6"];
+    const m = loadMirror();
+    let withBlock = 0, without = 0;
+    for (let i = 0; i < 200; i++) {
+      const today = H.suAddDays("2026-10-01", Math.floor(rnd() * 90));
+      const sched = {};
+      for (let k = 0; k <= 30; k++) {
+        const d = H.suAddDays(today, k);
+        const x = rnd();
+        if (x < 0.3) continue; // no row (a gap)
+        const held = (p) => rnd() < p;
+        sched[d] = { primary: held(0.6) ? ids[Math.floor(rnd() * 6)] : null, backup: held(0.6) ? ids[Math.floor(rnd() * 6)] : null, externalCover: rnd() < 0.1 ? "Locum" : null, primaryLocked: rnd() < 0.2, backupLocked: rnd() < 0.2 };
+      }
+      const opts = { holidayByDay: FX.opts.holidayByDay, weekendKinds: FX.opts.weekendKinds, reasons: FX.opts.reasons };
+      const r = m.window(sched, today, opts);
+      const days = Object.keys(sched).sort();
+      const runs = runsOf(days);
+      const blockEnd = runs.length && runs[0].start === today ? runs[0].end : null;
+      assert.strictEqual(r.through, blockEnd, "through on seed " + i);
+      r.slots.forEach(s => assert.ok(sched[s.day], "seed " + i + ": " + s.day + " has no row but was announced"));
+      if (blockEnd) {
+        withBlock++;
+        const board = H.obBoardSlots(sched, today, blockEnd, opts);
+        assert.deepStrictEqual(r.slots, board.slots, "slots on seed " + i);
+        assert.deepStrictEqual(r.ranges, board.ranges, "ranges on seed " + i);
+      } else {
+        without++;
+        const held = days.filter(d => sched[d].primary || sched[d].backup || sched[d].externalCover);
+        const exp = [];
+        runsOf(held).forEach(run => H.openSlots(sched, run.start, run.end, today, opts).forEach(s => exp.push(s)));
+        assert.deepStrictEqual(r.slots, exp, "later-runs slots on seed " + i);
+      }
+    }
+    assert.ok(withBlock > 50 && without > 20, `both shapes exercised (${withBlock} with a block, ${without} without)`);
+  });
+  check("daily-reminder/index.ts (fix round): runOpenShifts announces openShiftsWindowMirror(schedule, from, ...) - never openSlotsMirror(schedule, from, through, from, ...) over an end-only clip; mode null is NOT the reminder mode (400 like any other non-contract value); the HTML keeps the two-space slot indentation (&nbsp;)", () => {
+    const outside = drSrc.slice(drSrc.indexOf(END));
+    assert.ok(/openShiftsWindowMirror\(schedule, from, /.test(outside), "runOpenShifts calls openShiftsWindowMirror(schedule, from, opts)");
+    assert.ok(!/openSlotsMirror\(schedule, from, through, from/.test(outside), "the end-only clip is gone");
+    assert.ok(!/body\.mode !== null/.test(drSrc) && /body\.mode !== undefined \? body\.mode : "reminder"/.test(drSrc), "mode: undefined -> reminder; null falls through to the 400");
+    const html = drSrc.slice(drSrc.indexOf("function buildOpenShiftsEmail"), drSrc.indexOf("async function runOpenShifts"));
+    assert.ok(/replace\(\/\^ \{2\}\/gm, "&nbsp;&nbsp;"\)/.test(html), "leading two spaces become &nbsp;&nbsp; after escaping");
+    assert.ok(html.indexOf("&nbsp;&nbsp;") < html.indexOf('"<br>"'), "the indent is preserved before the newline -> <br> step");
+  });
+  check("index-source.html (fix round): the group notice is a property of Accept & Publish, not of the office e-mail - acceptMerged arms pendingOpenShiftsNoticeRef after the days are on file; Send announces after the office POST (outcome folded into the Published toast); Skip / backdrop close announce once when armed; a failed office POST keeps the dialog open so the notice still goes out on close", () => {
+    const acc = appSrc.slice(appSrc.indexOf("const acceptMerged = async"), appSrc.indexOf("// --- Seed import"));
+    assert.ok(/pendingOpenShiftsNoticeRef\.current = true;[\s\S]{0,200}publishRef\.current\(\);/.test(acc), "acceptMerged arms the ref right before opening the publish dialog (inside the r.ok branch)");
+    assert.ok(acc.indexOf("pendingOpenShiftsNoticeRef.current = true") > acc.indexOf("if (r && r.ok)"), "armed only when the CAS sync succeeded");
+    const close = appSrc.slice(appSrc.indexOf("const closePublishDialog = "), appSrc.indexOf("const triggerPublishNotify = async"));
+    assert.ok(close.length > 0 && /setShowPublishDialog\(false\)/.test(close) && /pendingOpenShiftsNoticeRef\.current = false/.test(close) && /announceOpenShiftsAfterPublish\(false\)/.test(close), "closePublishDialog consumes the armed ref and announces (with its own toast)");
+    assert.ok(/data-testid="publish-skip" onClick=\{closePublishDialog\}/.test(appSrc), "Skip the notice closes through closePublishDialog");
+    assert.ok(/data-testid="publish-dialog" onClick=\{closePublishDialog\}/.test(appSrc), "the backdrop closes through closePublishDialog");
+    const fn = appSrc.slice(appSrc.indexOf("const triggerPublishNotify = async"), appSrc.indexOf("const triggerDigestTest = async"));
+    assert.ok(/const os = await announceOpenShiftsAfterPublish\(true\);/.test(fn), "Send announces quietly and reads the outcome");
+    assert.ok(/pendingOpenShiftsNoticeRef\.current = false;/.test(fn), "Send consumes the ref so Skip cannot announce twice");
+    assert.ok(/showToast\(`Published\. Sent \$\{body\.sent \?\? 0\} office email\(s\)\.\$\{os \? " " \+ os\.text : ""\}`, os && os\.tone === "error" \? "error" : "success"\)/.test(fn), "the Published toast carries the open-shifts outcome and its tone");
+    assert.ok(fn.indexOf("if (!res.ok)") > 0 && fn.indexOf("if (!res.ok)") < fn.indexOf("const os = await announceOpenShiftsAfterPublish(true);"), "on Send the notice follows the office POST");
+    const def = appSrc.slice(appSrc.indexOf("const announceOpenShiftsAfterPublish = async"), appSrc.indexOf("const sendOpenShiftsNotice = async"));
+    assert.ok(/= async \(quiet\)/.test(def) && /return null;/.test(def) && /return \{ text:/.test(def), "announceOpenShiftsAfterPublish(quiet) returns null when nothing is open, else the outcome { text, tone }");
+    const send = appSrc.slice(appSrc.indexOf("const sendOpenShiftsNotice = async"), appSrc.indexOf("const notifyOpenShifts = async"));
+    assert.ok(/= async \(origin, n, quiet\)/.test(send) && /if \(!quiet\) showToast\(text, tone\);/.test(send) && /return \{ count: count, through: thru, mail: mail, text: text, tone: tone \};/.test(send), "sendOpenShiftsNotice(origin, n, quiet) toasts only when not quiet and returns the outcome");
+    assert.ok(/open-shifts note[^<]*goes out either way/.test(appSrc), "the dialog copy says the group note goes out whether the office notice is sent or skipped");
+  });
+  check("index-source.html (fix round): the Email-the-group preview dialog focuses Cancel when it opens, keeps Tab inside (claimSheetKeyDown) and returns focus to the 'Email the group now' button on close", () => {
+    assert.ok(/const obCancelRef = useRef\(null\)/.test(appSrc) && /const obEmailBtnRef = useRef\(null\)/.test(appSrc), "refs for the dialog's Cancel and the opener");
+    assert.ok(/data-testid="ob-email-cancel" onClick=\{closeObNotice\}/.test(appSrc) && /ref=\{obCancelRef\} data-testid="ob-email-cancel"/.test(appSrc), "Cancel carries the ref and closes through closeObNotice");
+    assert.ok(/data-testid="ob-email" ref=\{obEmailBtnRef\}/.test(appSrc), "the opener carries its ref");
+    const dlg = appSrc.slice(appSrc.indexOf('data-testid="ob-email-dialog"'), appSrc.indexOf('data-testid="ob-email-preview"'));
+    assert.ok(/onKeyDown=\{claimSheetKeyDown\}/.test(dlg), "Tab cycles inside the dialog");
+    assert.ok(/closeObNotice\(\)/.test(dlg), "the backdrop closes through closeObNotice");
+    const close = appSrc.slice(appSrc.indexOf("const closeObNotice = "), appSrc.indexOf("const sendBoardNotice = async"));
+    assert.ok(/setObNotice\(null\)/.test(close) && /obEmailBtnRef\.current/.test(close) && /\.focus\(\)/.test(close), "closeObNotice returns focus to the opener");
+    assert.ok(/if \(!obNotice\) return undefined;[\s\S]{0,300}obCancelRef\.current\.focus\(\)/.test(appSrc), "an effect focuses Cancel when the dialog opens");
+  });
+  check("edge-functions/README.md (fix round): the Vault note says the TWO live jobs read the secret from Vault and the open-shifts job does once created - never 'three live jobs' before it exists", () => {
+    assert.ok(!/three live Silvis jobs/.test(readme), "no 'three live Silvis jobs'");
+    assert.ok(/two live jobs[^\n]*Vault/.test(readme) && /once (it is )?created/.test(readme), "the two live jobs + 'once created' wording");
   });
 }
 

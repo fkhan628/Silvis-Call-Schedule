@@ -27,7 +27,10 @@
 //     account (no user_profiles row with that person_id) is skipped_no_email.
 //   - Categories: schedule_published, manual_edit, trade_proposed,
 //     trade_accepted, trade_declined, trade_applied, vacation_logged,
-//     shift_reminder, test. Davenport names schedule_changed and
+//     shift_reminder, open_shifts, shift_claimed (the last two since Prompt 13
+//     part 5, 2026-09-22: the open-shifts notice broadcast on Accept & Publish
+//     / on demand from the board, and the "took the shift" note to the
+//     scheduler + claimer), test. Davenport names schedule_changed and
 //     trade_submitted are accepted as aliases (logged) so deploy order vs the
 //     client build does not matter.
 //   - The CLIENT composes the words. Payload: { type, data: { subject?,
@@ -159,6 +162,11 @@ const CATEGORIES: Record<string, Category> = {
   trade_applied:      { pref: "trade_updates_email",    title: "Shift Trade Applied",  color: "#1a8040", cta: "View Updated Schedule" },
   vacation_logged:    { pref: "schedule_updates_email", title: "Vacation Logged",    color: "#c09030", cta: "View Calendar" },
   shift_reminder:     { pref: "shift_reminders_email",  title: "Call Reminder",      color: "#1a6fa8", cta: "View Full Schedule" },
+  // Prompt 13 part 5: open shifts. The client composes the list (helpers.js
+  // openShiftsEmail: subject, message grouped by week, detail = the
+  // '#openshifts' deep link); this table only names the frame and the flag.
+  open_shifts:        { pref: "schedule_updates_email", title: "Open Shifts",        color: "#C2410C", cta: "Open shifts" },
+  shift_claimed:      { pref: "schedule_updates_email", title: "Shift Taken",        color: "#1a8040", cta: "View Schedule" },
   test:               { pref: null,                     title: "Test Email",         color: "#1a6fa8", cta: "Open App" },
 };
 

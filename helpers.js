@@ -247,6 +247,52 @@ function openSlotsLine(slot, nameOfUnit) {
   const reason = typeof s.reason === "string" && s.reason.trim() ? " - " + s.reason.trim() : "";
   return when + " - " + (s.role || "?") + (unitText ? " (" + unitText + ")" : "") + " - open" + reason;
 }
+// openShiftsEmail(slots, opts) -> { subject, message, detail, through, count, slots }
+// The ONE composer of the group notice about open shifts (Prompt 13 part 5):
+// Accept & Publish (5a), the board's "Email the group now" (5b) and - mirrored
+// in plain JS between the @openSlots-mirror markers of
+// edge-functions/daily-reminder/index.ts, checked against the same fixtures
+// (test/fixtures/open-slots.json + open-shifts-email.json) by
+// test/open-shifts.test.js - the Monday cron (5c) all send exactly this.
+//   subject  'N open shifts through M/D'  (fmtMD - no leading zeros; also the
+//            feed row's title)
+//   message  one lead line, then the slots grouped by their Monday week:
+//              'Week of Mon 11/2:' followed by one openSlotsLine per slot,
+//              indented two spaces ('  Fri 11/06 - primary (weekend block) - open')
+//   detail   'Take this shift: <appUrl>#openshifts' - the deep link the app
+//            routes to the Open shifts board once signed in
+// opts: a string (the appUrl) or { appUrl, through, nameOfUnit }. through
+// (ISO) defaults to the last slot's day and is never EARLIER than it (the
+// board's list carries the open slots of an assigned range beyond the
+// published block, e.g. a holiday unit - the subject then names that day, not
+// the block's end); nameOfUnit reaches openSlotsLine.
+// Junk entries are dropped, the list is sorted by day then primary before
+// backup whatever the input order, no slots -> count 0 with a 'fully covered'
+// message. Operational wording only - no names, no addresses. Pure.
+function openShiftsEmail(slots, opts) {
+  const o = typeof opts === "string" ? { appUrl: opts } : (opts && typeof opts === "object" ? opts : {});
+  const list = (Array.isArray(slots) ? slots : []).filter(s => s && typeof s === "object" && openSlotIsDay(s.day) && (s.role === "primary" || s.role === "backup"));
+  list.sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : a.role === b.role ? 0 : a.role === "primary" ? -1 : 1);
+  const n = list.length;
+  const lastDay = n ? list[n - 1].day : null;
+  const through = openSlotIsDay(o.through) && (!lastDay || o.through >= lastDay) ? o.through : lastDay;
+  const thruText = through ? " through " + fmtMD(through) : "";
+  const subject = n + " open shift" + (n === 1 ? "" : "s") + thruText;
+  const appUrl = typeof o.appUrl === "string" && o.appUrl.trim() ? o.appUrl.trim() : "";
+  const detail = "Take this shift: " + (appUrl ? appUrl + "#openshifts" : "open the Open shifts view in the app");
+  const weeks = [];
+  list.forEach(s => {
+    const monday = fmt(monOf(parse(s.day)));
+    let w = weeks.length ? weeks[weeks.length - 1] : null;
+    if (!w || w.monday !== monday) { w = { monday: monday, lines: [] }; weeks.push(w); }
+    w.lines.push("  " + openSlotsLine(s, o.nameOfUnit));
+  });
+  const lead = n + " open call shift" + (n === 1 ? "" : "s") + thruText + " (one 24-hour shift each, 07:00 to 07:00). Take one from the Open shifts board - the link is below.";
+  const message = n
+    ? lead + "\n\n" + weeks.map(w => "Week of Mon " + fmtMD(w.monday) + ":\n" + w.lines.join("\n")).join("\n\n")
+    : "No open shifts - every published day is covered.";
+  return { subject: subject, message: message, detail: detail, through: through, count: n, slots: list.map(s => ({ day: s.day, role: s.role })) };
+}
 // obBoardRows(slots, { today, horizonDays, role, weekendOnly }) -> the Open
 // shifts board's visible rows (Prompt 13 part 3): a filtered copy of an
 // openSlots() list, order kept. horizonDays n (> 0) keeps day <= today + n - 1
@@ -1876,7 +1922,7 @@ if (typeof module !== "undefined" && module.exports) {
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
-    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
+    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
     openSlotReason, lastGenerateFromDiagnostics,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,

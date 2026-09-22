@@ -1,0 +1,22 @@
+{
+  "note": "Prompt 13 part 5 - the group e-mail about open shifts. helpers.js openShiftsEmail(slots, { appUrl, through, nameOfUnit }) -> { subject, message, detail, through, count, slots } composed from the open-slots fixture's expectedWithUnits (test/fixtures/open-slots.json). The message is one lead line, then the slots grouped by their Monday week ('Week of Mon M/D:') with one two-space-indented openSlotsLine per slot; the subject is 'N open shifts through M/D' (M/D without leading zeros, fmtMD); the detail is the 'Take this shift' deep link to the Open shifts board (<appUrl>#openshifts). edge-functions/daily-reminder/index.ts mirrors the composer between its @openSlots-mirror markers and test/open-shifts.test.js checks the mirror against THIS file too - change the two together. No names, no contact data.",
+  "appUrl": "https://example.test/app/",
+  "through": "2026-11-29",
+  "expected": {
+    "subject": "14 open shifts through 11/29",
+    "message": "14 open call shifts through 11/29 (one 24-hour shift each, 07:00 to 07:00). Take one from the Open shifts board - the link is below.\n\nWeek of Mon 11/2:\n  Wed 11/04 - primary - open - no eligible surgeon (vacations)\n  Wed 11/04 - backup - open\n  Thu 11/05 - backup - open\n  Fri 11/06 - backup (weekend block) - open\n  Sat 11/07 - primary (weekend block) - open\n  Sat 11/07 - backup (weekend block) - open\n\nWeek of Mon 11/9:\n  Sat 11/14 - backup (weekend split) - open\n\nWeek of Mon 11/16:\n  Tue 11/17 - primary - open\n  Tue 11/17 - backup - open\n  Fri 11/20 - primary (weekend daily) - open - weekend pattern fallback (daily)\n\nWeek of Mon 11/23:\n  Thu 11/26 - backup (holiday: Thanksgiving) - open\n  Sat 11/28 - primary (holiday: Thanksgiving) - open\n  Sat 11/28 - backup (holiday: Thanksgiving) - open\n  Sun 11/29 - backup (holiday: Thanksgiving) - open",
+    "detail": "Take this shift: https://example.test/app/#openshifts",
+    "through": "2026-11-29",
+    "count": 14
+  },
+  "oneSlot": {
+    "slots": [{ "day": "2026-11-06", "role": "primary", "unit": { "kind": "weekend", "pattern": "block", "friday": "2026-11-06" }, "reason": null }],
+    "expected": {
+      "subject": "1 open shift through 11/6",
+      "message": "1 open call shift through 11/6 (one 24-hour shift each, 07:00 to 07:00). Take one from the Open shifts board - the link is below.\n\nWeek of Mon 11/2:\n  Fri 11/06 - primary (weekend block) - open",
+      "detail": "Take this shift: https://example.test/app/#openshifts",
+      "through": "2026-11-06",
+      "count": 1
+    }
+  }
+}

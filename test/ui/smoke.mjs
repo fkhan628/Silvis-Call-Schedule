@@ -1403,11 +1403,43 @@ try {
       const held = await page.evaluate((slot) => { const b = document.querySelector(`tr[data-slot="${slot}"] [data-testid=ob-take]`); return !!b; }, target.slot);
       if (held) fail(`Open shifts: ${target.slot} is still offered after the claim`);
     }
-    // Email the group now (scheduler): confirm -> feed row open_shifts (data.slots = the whole range) + broadcast send-notification + audit openshifts.notify; 'last announced' fills.
+    // Email the group now (scheduler): a confirm dialog PREVIEWS the composed e-mail (Prompt 13 part 5b: subject 'N open shifts through M/D',
+    // the slots grouped by Monday week, the #openshifts deep link) and writes NOTHING until Send -> feed row open_shifts (data.slots = the
+    // whole range, title = the subject) + broadcast send-notification { subject, message, detail } + audit openshifts.notify; 'last announced' fills.
     const beforeMail = writes.length;
     const cur0 = await readBoard();
-    page.once("dialog", d => d.accept());
     await page.click("[data-testid=ob-email]");
+    if (cur0.rows.length) {
+      await page.waitForSelector("[data-testid=ob-email-dialog]", { timeout: 5000 });
+      await page.waitForTimeout(200);
+      const pv = await page.$eval("[data-testid=ob-email-preview]", el => ({
+        subject: (el.querySelector("[data-testid=ob-email-subject]") || { textContent: "" }).textContent.replace(/^Subject:\s*/, "").trim(),
+        message: (el.querySelector("[data-testid=ob-email-message]") || { textContent: "" }).textContent,
+        detail: (el.querySelector("[data-testid=ob-email-detail]") || { textContent: "" }).textContent.trim(),
+        label: el.innerText.split("\n")[0].trim(),
+      }));
+      await page.screenshot({ path: path.join(OUT, "openshifts-email-preview.png"), fullPage: false });
+      const previewWrites = writes.slice(beforeMail).filter(w => /send-notification|\/rest\/v1\/(notifications|audit_log)/.test(w.path));
+      const weekHeads = (pv.message.match(/^Week of Mon \d{1,2}\/\d{1,2}:$/gm) || []).length;
+      const previewLines = pv.message.split("\n").filter(l => /^  \w{3} \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l)).length;
+      if (previewWrites.length) fail("Open shifts: the Email-the-group preview dialog already wrote something before Send: " + previewWrites.map(w => w.method + " " + w.path).join(", "));
+      else if (!/^Preview$/i.test(pv.label)) fail("Open shifts: the confirm dialog has no 'Preview' section heading, got: " + pv.label);
+      else if (!/^\d+ open shifts? through \d{1,2}\/\d{1,2}$/.test(pv.subject)) fail("Open shifts: preview subject is not 'N open shifts through M/D': " + pv.subject);
+      else if (!pv.subject.startsWith(cur0.rows.length + " open shift")) fail(`Open shifts: preview subject counts ${pv.subject} but the board lists ${cur0.rows.length}`);
+      else if (weekHeads < 1 || previewLines !== cur0.rows.length) fail(`Open shifts: preview message should group ${cur0.rows.length} indented slot lines under 'Week of Mon M/D:' headings (got ${weekHeads} heading(s), ${previewLines} line(s)): ` + pv.message.slice(0, 240).replace(/\n/g, " | "));
+      else if (!/^Take this shift: http:\/\/[^\s]+#openshifts$/.test(pv.detail)) fail("Open shifts: preview detail is not the 'Take this shift: <app>#openshifts' deep link: " + pv.detail);
+      else ok(`Open shifts: Email the group now previews the e-mail before sending - subject "${pv.subject}", ${weekHeads} week group(s), ${previewLines} slot line(s), detail "${pv.detail}" - and writes nothing until Send`);
+      // Escape closes it without a write; open again and send
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=ob-email-dialog]", { state: "detached", timeout: 3000 });
+      const escWrites = writes.slice(beforeMail).filter(w => /send-notification|\/rest\/v1\/(notifications|audit_log)/.test(w.path));
+      if (escWrites.length) fail("Open shifts: closing the preview with Escape wrote a notice: " + escWrites.map(w => w.method + " " + w.path).join(", "));
+      else if (writes.length !== beforeMail) console.log("     (unrelated background write(s) while the preview was open: " + writes.slice(beforeMail).map(w => w.method + " " + w.path).join(", ") + ")");
+      await page.click("[data-testid=ob-email]");
+      await page.waitForSelector("[data-testid=ob-email-send]", { timeout: 5000 });
+      await page.click("[data-testid=ob-email-send]");
+      await page.waitForSelector("[data-testid=ob-email-dialog]", { state: "detached", timeout: 8000 });
+    }
     await waitFor(() => writes.slice(beforeMail).some(w => /send-notification/.test(w.path)), 8000);
     // the audit row is written after the e-mail outcome is known (the toast states it) - wait for it rather than for time
     await waitFor(() => writes.slice(beforeMail).some(w => w.path.startsWith("/rest/v1/audit_log") && /openshifts\.notify/.test(w.body || "")), 8000);
@@ -1420,6 +1452,7 @@ try {
     else if (!feed || !feed.data || !Array.isArray(feed.data.slots) || feed.data.slots.length !== cur0.rows.length || !feed.data.slots.every(s => s && s.day && (s.role === "primary" || s.role === "backup"))) fail("Open shifts: Email the group now wrote no open_shifts feed row with data.slots for every open slot: " + JSON.stringify(feed && feed.data));
     else if (String(feed.message).split("\n").filter(l => / - open/.test(l)).length !== cur0.rows.length) fail("Open shifts: the open_shifts feed message does not list one openSlotsLine per slot: " + String(feed.message).slice(0, 200));
     else if (!mail2 || mail2.targetIds !== undefined || !mail2.data || !/ - open/.test(String(mail2.data.message))) fail("Open shifts: Email the group now must POST send-notification type open_shifts as a broadcast (no targetIds; the server gates per category) with the list in data.message: " + JSON.stringify(mail2));
+    else if (!/^\d+ open shifts? through \d{1,2}\/\d{1,2}$/.test(String(mail2.data.subject)) || feed.title !== mail2.data.subject || !/#openshifts$/.test(String(mail2.data.detail)) || !/Week of Mon/.test(String(mail2.data.message)) || mail2.data.message !== feed.message) fail("Open shifts: the e-mail must carry subject 'N open shifts through M/D' (= the feed row's title), the week-grouped message (= the feed message) and the #openshifts detail: " + JSON.stringify(mail2.data).slice(0, 300));
     else if (!audit2 || audit2.detail.count !== cur0.rows.length) fail("Open shifts: no audit 'openshifts.notify' with the count: " + JSON.stringify(audit2));
     else if (cur.rows.some(r => r.announced === "never")) fail(`Open shifts: 'last announced' still reads 'never' on ${cur.rows.filter(r => r.announced === "never").length} row(s) after the notice`);
     else ok(`Open shifts: Email the group now -> feed open_shifts (${feed.data.slots.length} slots) + send-notification open_shifts (broadcast) + audit openshifts.notify; 'last announced' now "${cur.rows[0].announced}"`);
@@ -1595,7 +1628,15 @@ try {
     // finding safe-2: the close button must not read as undo - the changes are already saved
     if (!/already saved for every viewer/.test(text) || !(await page.$("[data-testid=publish-skip]:has-text('Skip the notice')"))) fail("publish dialog: expected the 'already saved' note and a 'Skip the notice' close button (not 'Cancel'): " + text.slice(0, 200).replace(/\n/g, " | "));
     else ok("publish dialog: says the changes are already saved and closes with 'Skip the notice' (no 'Cancel' that could read as undo)");
+    // Prompt 13 part 5a (fix round): the open-shifts note is armed by Accept & Publish only - a dialog opened from the
+    // header to LOOK at the diff and skipped writes nothing to the group (no open_shifts feed row, no send-notification).
+    const beforeSkip = writes.length;
     await page.click("[data-testid=publish-skip]");
+    await page.waitForSelector("[data-testid=publish-dialog]", { state: "detached", timeout: 5000 });
+    await page.waitForTimeout(700);
+    const skipWrites = writes.slice(beforeSkip).filter(w => /send-notification/.test(w.path) || (w.path.startsWith("/rest/v1/notifications") && /"open_shifts"/.test(w.body || "")));
+    if (skipWrites.length) fail("publish dialog (header, Skip): a look at the diff must not announce open shifts, but wrote: " + skipWrites.map(w => w.method + " " + w.path).join(", "));
+    else ok("publish dialog (header, Skip): no open_shifts note - only Accept & Publish arms the group notice");
   }
 
   // ====================== Prompt 6 Slices F + G: Totals, My schedule, Time off, Trades ======================
@@ -2787,8 +2828,51 @@ try {
     const dlgText = await page.$eval("[data-testid=publish-dialog]", el => el.innerText);
     if (!/Publish schedule changes/.test(dlgText) || !/→/.test(dlgText)) fail("publish dialog after Accept lacks the diff lines: " + dlgText.slice(0, 200)); else ok("publish dialog after Accept: diff since last publish with arrow lines (" + (dlgText.match(/→/g) || []).length + ")");
     await page.screenshot({ path: path.join(OUT, "generate-publish-dialog.png"), fullPage: false });
-    await page.click("[data-testid=publish-dialog] [data-testid=publish-skip]");
-    await page.waitForSelector("[data-testid=publish-dialog]", { state: "detached", timeout: 3000 });
+    // Send the office notice (Prompt 13 part 5a): the office-notifications publish POST, the schedule_published feed row +
+    // broadcast, THEN - when the published range leaves slots open - one open_shifts feed row (title 'N open shifts through
+    // M/D', data.slots = every open slot from today to the last published day) and one send-notification open_shifts
+    // broadcast (no targetIds, subject / message / detail). Nothing of the kind when the range is fully covered.
+    {
+      const beforePub = writes.length;
+      page.once("dialog", d => d.accept()); // "Send the publish notice ... ?"
+      await page.click("[data-testid=publish-dialog] [data-testid=publish-send]");
+      await page.waitForSelector("[data-testid=publish-dialog]", { state: "detached", timeout: 20000 });
+      // the ONE toast of the Send path (fix round): 'Published. Sent N office email(s).' + the open-shifts outcome, read before it fades
+      const pubToast = await page.$eval("[data-testid=toast]", el => el.textContent).catch(() => null);
+      await page.waitForTimeout(600);
+      const pubSeq = writesSince(beforePub);
+      const officeIdx = pubSeq.findIndex(w => /office-notifications/.test(w.path) && /"mode":"publish"/.test(w.body || ""));
+      const bodies = pubSeq.map(w => { let b = null; try { b = JSON.parse(w.body || "null"); } catch (e) {} return { w, b }; });
+      const pubFeed = bodies.find(x => x.w.path.startsWith("/rest/v1/notifications") && x.b && x.b.type === "schedule_published");
+      const openFeedIdx = bodies.findIndex(x => x.w.path.startsWith("/rest/v1/notifications") && x.b && x.b.type === "open_shifts");
+      const openMailIdx = bodies.findIndex(x => /send-notification/.test(x.w.path) && x.b && x.b.type === "open_shifts");
+      const openFeed = openFeedIdx >= 0 ? bodies[openFeedIdx].b : null, openMail = openMailIdx >= 0 ? bodies[openMailIdx].b : null;
+      // the expectation, read from the board the app itself renders: every open slot from today to the last published day (data-to)
+      await page.click('button[data-tab="openshifts"]');
+      await page.waitForSelector("[data-testid=openshifts-table]", { timeout: 8000 });
+      await page.click("[data-testid=ob-horizon-all]"); await page.waitForTimeout(200);
+      const bd = await page.$eval("[data-testid=openshifts-table]", el => ({ to: el.getAttribute("data-to"), rows: Array.from(el.querySelectorAll("tbody tr[data-slot]")).map(r => ({ day: r.getAttribute("data-day"), role: r.getAttribute("data-role") })) }));
+      const expectSlots = bd.rows.filter(r => bd.to && r.day <= bd.to).map(r => r.day + "|" + r.role);
+      const gotSlots = openFeed && openFeed.data && Array.isArray(openFeed.data.slots) ? openFeed.data.slots.map(s => s.day + "|" + s.role) : null;
+      if (officeIdx < 0) fail("Publish (Send): no office-notifications POST with mode publish recorded: " + pubSeq.map(w => w.method + " " + w.path).join(", "));
+      else if (!pubFeed) fail("Publish (Send): no schedule_published feed row recorded");
+      else if (!expectSlots.length) {
+        if (openFeed || openMail) fail("Publish (Send): the published range is fully covered yet an open_shifts notice was written: " + JSON.stringify((openFeed || openMail)).slice(0, 200));
+        else ok(`Publish (Send): office-notifications publish POST + schedule_published feed row; the published range (through ${bd.to}) is fully covered, so no open_shifts notice went out`);
+      }
+      else if (!openFeed || !gotSlots) fail(`Publish (Send): the published range leaves ${expectSlots.length} slot(s) open but no open_shifts feed row was written; writes: ` + pubSeq.map(w => w.method + " " + w.path).join(", "));
+      else if (openFeedIdx < officeIdx || openMailIdx < officeIdx) fail(`Publish (Send): the open_shifts notice (#${openFeedIdx} / #${openMailIdx}) must follow the office publish POST (#${officeIdx})`);
+      else if (JSON.stringify(gotSlots) !== JSON.stringify(expectSlots)) fail(`Publish (Send): open_shifts data.slots (${gotSlots.length}) differ from the board's open slots through ${bd.to} (${expectSlots.length}): got ${gotSlots.slice(0, 6).join(", ")} vs ${expectSlots.slice(0, 6).join(", ")}`);
+      else if (openFeed.data.through !== bd.to || !/^\d+ open shifts? through \d{1,2}\/\d{1,2}$/.test(String(openFeed.title))) fail("Publish (Send): open_shifts feed row must carry data.through = the last published day and the title 'N open shifts through M/D': " + JSON.stringify({ title: openFeed.title, through: openFeed.data.through, to: bd.to }));
+      else if (!openMail || openMail.targetIds !== undefined || !openMail.data || openMail.data.subject !== openFeed.title || openMail.data.message !== openFeed.message || !/#openshifts$/.test(String(openMail.data.detail))) fail("Publish (Send): send-notification open_shifts must be a broadcast (no targetIds) with subject = the feed title, message = the feed message and the #openshifts detail: " + JSON.stringify(openMail).slice(0, 300));
+      else if (String(openFeed.message).split("\n").filter(l => / - open/.test(l)).length !== expectSlots.length || !/Week of Mon/.test(String(openFeed.message))) fail("Publish (Send): the open_shifts message must list one week-grouped line per open slot: " + String(openFeed.message).slice(0, 200));
+      else ok(`Publish (Send): office publish POST (#${officeIdx}) -> schedule_published -> open_shifts feed row "${openFeed.title}" (${gotSlots.length} slots, through ${openFeed.data.through}) + send-notification open_shifts broadcast (#${openMailIdx})`);
+      if (!pubSeq.every(w => noAddress(w.body))) fail("Publish (Send): a write body carries an email address");
+      if (!pubToast || !/^Published\. Sent \d+ office email\(s\)\./.test(pubToast)) fail("Publish (Send): expected the 'Published. Sent N office email(s).' toast, got: " + JSON.stringify(pubToast));
+      else if (openFeed && !/In-app note posted about \d+ open shifts?; /.test(pubToast)) fail("Publish (Send): the Published toast must carry the open-shifts outcome (one toast, not two): " + JSON.stringify(pubToast));
+      else if (!openFeed && /open shift/.test(pubToast)) fail("Publish (Send): no open_shifts note went out, yet the toast mentions one: " + JSON.stringify(pubToast));
+      else ok(`Publish (Send): one toast for both outcomes - "${pubToast}"`);
+    }
     if (await page.$("[data-testid=gen-preview]")) fail("Accept & Publish: the preview is still shown after acceptance"); else ok("Accept & Publish: preview cleared");
     await page.click('button[data-tab="calendar"]');
     await page.waitForTimeout(400);
