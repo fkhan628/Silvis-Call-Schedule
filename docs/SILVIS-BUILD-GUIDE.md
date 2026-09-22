@@ -445,4 +445,5 @@ rules-only surgeons, then repairs and smooths as before; whatever stays open goe
 claim is an offer made on the spot. Every dated list in the seed (Burchett's October/December, Acton's October/November,
 Burchett's November, Philip's weeks, Fierce's single days) is migrated into `call_offers` (`source: email-relay`) so
 there is one mechanism, not two; recurring patterns, derived weeks and windows stay rules. the ER-panel author's Word document
-becomes an **export** from the app, never again the place the schedule is assembled. Published assignments remain locks.
+is **retired at go-live** (Faraz 9/22 evening): the app is the source of truth; the ER-panel author keeps a viewer account, the weekly
+office digest and the ER Call Panels export for a paper copy. Published assignments remain locks.
