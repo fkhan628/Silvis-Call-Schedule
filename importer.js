@@ -419,9 +419,12 @@ function impSeedAvailabilityRows(seed, opts) {
 }
 
 // surgeonRules with explicitListMonths completed from the explicitAvailable
-// keys (groupRules.whitelistMonths). A plain date list governs both roles
-// ('YYYY-MM'); a role-scoped list governs only the roles it names
-// ({ month, roles }). Entries the seed already lists are kept as written.
+// keys (groupRules.whitelistMonths). rules.js reads the role scope literally
+// (Prompt 12 T): a plain 'YYYY-MM' entry governs PRIMARY only while
+// backupPolicy.openToEveryone is true (both roles under the closed policy); a
+// role-scoped entry ({ month, roles }) governs exactly the roles it names, so
+// the seed writes { month, roles: ['primary','backup'] } explicitly to govern
+// backup (November 2026). Entries the seed already lists are kept as written.
 // Returns copies - the seed object is never mutated.
 function impSeedSurgeonRules(seed) {
   var sr = (seed && seed.surgeonRules) || {};

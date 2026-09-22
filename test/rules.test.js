@@ -131,9 +131,9 @@ eq(derivedSR.a.explicitListMonths, ["2026-10"], "both roles listed -> plain mont
 eq(derivedSR.b.explicitListMonths, [{ month: "2026-10", roles: ["primary"] }], "one role listed -> role-scoped entry");
 eq(derivedSR.c.explicitListMonths, ["2026-10", "2026-12"], "seed entries kept as written, missing month derived");
 eq(derivedSR.d.explicitListMonths, undefined, "no explicit list -> nothing governed");
-eq(SA.seedToSurgeonRules(seed)[ACTON].explicitListMonths, ["2026-10"]);
+eq(SA.seedToSurgeonRules(seed)[ACTON].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }], "T: the explicit November object entry is kept as written");
 eq(SA.seedToSurgeonRules(seed)[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
-eq(SA.seedToSurgeonRules(seed)[BURCHETT].explicitListMonths, ["2026-10", "2026-12"]);
+eq(SA.seedToSurgeonRules(seed)[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, "2026-12"], "T: Burchett likewise, between his October and December entries");
 eq(SA.seedToTimeOffRows(seed).length, 7, "seven vacation rows (Acton x2, Philip x1, Burchett x4 - the 2027 weekends stated 9/22 evening)");
 const sched = SA.seedToSchedule(seed);
 eq(sched["2026-09-30"].primaryLocked, true, "externalCover day is primary-locked");
@@ -349,23 +349,29 @@ step("Acton time off and trailing edge");
   blocked(R.eligibility(ctx, d, P, ACTON), "time-off:" + d);
   blocked(R.eligibility(ctx, d, B, ACTON), "time-off:" + d);
 });
-blocked(R.eligibility(ctx, "2026-11-18", P, ACTON), "day-before-vacation");
-okElig(R.eligibility(ctx, "2026-11-18", B, ACTON), "day before a vacation blocks PRIMARY only");
+const vacJan = makeCtx({ schedule: {}, timeOffRows: SA.seedToTimeOffRows(seed).concat([{ person_id: ACTON, start_date: "2027-01-20", end_date: "2027-01-21" }]) }); // synthetic January vacation: since T his real edge 11/18 is a locked published day and 11/18 backup is off his November list
+blocked(R.eligibility(vacJan, "2027-01-19", P, ACTON), "day-before-vacation");
+okElig(R.eligibility(vacJan, "2027-01-19", B, ACTON), "day before a vacation blocks PRIMARY only");
+blocked(R.eligibility(clean, "2026-11-18", P, ACTON), "day-before-vacation", "his real edge: 11/18 is on his November primary list, the vacation rule still blocks primary");
 blocked(R.eligibility(ctx, "2026-11-24", P, ACTON), "day-before-vacation", "before the Thanksgiving-week vacation");
 step("Acton recurring blacklist and avoid");
-blocked(R.eligibility(clean, "2026-11-09", P, ACTON), "recurring-unavailable:Mon");
-blocked(R.eligibility(clean, "2026-11-23", P, ACTON), "recurring-unavailable:Mon", "4th Monday");
-okElig(R.eligibility(clean, "2026-11-23", B, ACTON), "9/22: outreach days restrict primary only");
-blocked(R.eligibility(clean, "2026-11-11", P, ACTON), "recurring-unavailable:Wed");
-okElig(R.eligibility(clean, "2026-11-16", P, ACTON), "3rd Monday is fine");
-okElig(R.eligibility(clean, "2026-11-04", P, ACTON), "1st Wednesday is fine");
-const sun8 = R.eligibility(clean, "2026-11-08", P, ACTON);
-okElig(sun8); hasSoft(sun8, "recurring-avoid:Sun");
+// Pinned in January 2027, an ungoverned month: since Prompt 12 T (9/22) November is governed for both of his roles by
+// the ER-panel author's published list, so a November day off that list reads whitelist-month before anything recurring.
+blocked(R.eligibility(clean, "2027-01-11", P, ACTON), "recurring-unavailable:Mon", "2nd Monday");
+blocked(R.eligibility(clean, "2027-01-25", P, ACTON), "recurring-unavailable:Mon", "4th Monday");
+okElig(R.eligibility(clean, "2027-01-25", B, ACTON), "9/22: outreach days restrict primary only");
+blocked(R.eligibility(clean, "2027-01-13", P, ACTON), "recurring-unavailable:Wed", "2nd Wednesday");
+okElig(R.eligibility(clean, "2027-01-18", P, ACTON), "3rd Monday is fine");
+okElig(R.eligibility(clean, "2027-01-06", P, ACTON), "1st Wednesday is fine");
+const sun8 = R.eligibility(clean, "2027-01-10", P, ACTON);
+okElig(sun8); hasSoft(sun8, "recurring-avoid:Sun", "Sunday before the 2nd Monday");
 eq(sun8.soft.find(s => s.reason === "recurring-avoid:Sun").weight, 3, "medium = 3");
-const tue10 = R.eligibility(clean, "2026-11-10", P, ACTON);
+const tue10 = R.eligibility(clean, "2027-01-12", P, ACTON);
 okElig(tue10); hasSoft(tue10, "recurring-avoid:Tue");
-lacksSoft(R.eligibility(clean, "2026-11-15", P, ACTON), "recurring-avoid", "Sunday before the 3rd Monday is not avoided");
-okElig(R.eligibility(clean, "2026-11-02", B, ACTON), "no cap for Acton");
+lacksSoft(R.eligibility(clean, "2027-01-17", P, ACTON), "recurring-avoid", "Sunday before the 3rd Monday is not avoided");
+okElig(R.eligibility(clean, "2027-01-04", B, ACTON), "no cap for Acton");
+blocked(R.eligibility(clean, "2026-11-23", P, ACTON), "recurring-unavailable:Mon", "T: in governed November a 4th Monday off his list carries the recurring reason too");
+has(R.eligibility(clean, "2026-11-23", P, ACTON).hard, "whitelist-month", "T: ...next to whitelist-month");
 step("Acton no cap (explicit null)");
 const ak = {};
 ["2026-11-02", "2026-11-03", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-16"].forEach(d => { ak[d] = { backup: ACTON }; });
@@ -471,7 +477,7 @@ step("Fierce derived-week locks");
 blocked(R.eligibility(clean, "2026-11-11", P, FIERCE), "derived-lock:backup", "Wed of his East-primary week is forced to Silvis backup");
 okElig(R.eligibility(clean, "2026-11-11", B, FIERCE));
 okElig(R.eligibility(clean, "2026-11-10", B, FIERCE), "Tue inside the derived week: the pattern does not apply");
-blocked(R.eligibility(clean, "2026-11-11", B, BURCHETT), "derived-lock-held:s5", "nobody else takes his derived slot");
+blocked(R.eligibility(clean, "2026-11-11", B, PHILIP), "derived-lock-held:s5", "nobody else takes his derived slot (Philip: week of 11/9 is on his list; Burchett's 11/11 backup is off his November list since T)");
 okElig(R.eligibility(clean, "2026-11-11", P, BURCHETT), "the other role is open");
 blocked(R.eligibility(clean, "2026-12-09", B, FIERCE), "derived-lock:primary", "East backup week -> Silvis primary");
 okElig(R.eligibility(clean, "2026-12-09", P, FIERCE));
@@ -517,7 +523,7 @@ ok(legCtx.warnings.some(w => w.indexOf(ACTON) >= 0 && /monthlyCap\.total/.test(w
 const fourP = ["2026-11-02", "2026-11-04", "2026-11-06", "2026-11-10"].map(d => ({ date: d, role: P }));
 okElig(R.eligibility(legCtx, "2026-11-16", P, ACTON, { assume: fourP }), "K: 4 + 1 = 5 within the aliased cap");
 blocked(R.eligibility(legCtx, "2026-11-16", P, ACTON, { assume: fourP.concat([{ date: "2026-11-12", role: P }]) }), "monthly-cap:5", "K: the aliased cap blocks the 6th primary");
-okElig(R.eligibility(legCtx, "2026-11-16", B, ACTON, { assume: fourP.concat([{ date: "2026-11-12", role: P }]) }), "K: and never a backup");
+okElig(R.eligibility(legCtx, "2026-11-17", B, ACTON, { assume: fourP.concat([{ date: "2026-11-12", role: P }]) }), "K: and never a backup (11/17 is on his November backup list)");
 const grLeg = clone(seed.groupRules); grLeg.defaultMonthlyCap = { total: 8 };
 const grCtx = makeCtx({ schedule: {}, groupRules: grLeg });
 eq(R.monthlyCapFor(grCtx, PHILIP).primary, 8, "K: groupRules.defaultMonthlyCap { total: 8 } still yields 8");
@@ -673,7 +679,8 @@ blocked(R.eligibility(clean, "2026-10-16", P, ACTON), "whitelist-month", "an unl
 okElig(R.eligibility(clean, "2026-10-16", B, ACTON), "9/22: the governed month restricts primary only");
 okElig(R.eligibility(clean, "2026-10-23", P, ACTON), "10/23 (Burchett 9/18 delta) is on his list");
 okElig(R.eligibility(clean, "2026-10-10", P, ACTON), "10/10 (the ER-panel author 9/16 Fri-Sun block) is on his list");
-okElig(R.eligibility(clean, "2026-11-02", P, ACTON), "November is not governed for Acton");
+okElig(R.eligibility(clean, "2026-11-02", P, ACTON), "11/2 is on his November primary list (November is governed for both roles since T)");
+okElig(R.eligibility(clean, "2027-01-04", P, ACTON), "January is not governed for Acton (1st Monday, recurring rules only)");
 blocked(R.eligibility(clean, "2026-10-09", P, PHILIP), "whitelist-month", "Philip's October PRIMARY list governs primary");
 okElig(R.eligibility(clean, "2026-10-09", B, PHILIP), "...but not backup: he only excluded four backup days");
 blocked(R.eligibility(clean, "2026-10-21", B, PHILIP), "no-backup-row");
@@ -687,7 +694,10 @@ ok(inactive.activeIds.indexOf(SARKAR) < 0);
 
 /* ------------------------------------------------ weekend patterns */
 step("weekendUnitPatterns");
-const wp = R.weekendUnitPatterns(clean, "2026-11-06");
+// The generic pattern shapes are pinned on the 1/22-24 weekend (January 2027 is ungoverned for everyone): since
+// Prompt 12 T (9/22) November is governed for Burchett and Acton in both roles by the ER-panel author's published lists, so a
+// November weekend off their lists offers neither of them.
+const wp = R.weekendUnitPatterns(clean, "2027-01-22");
 ok(wp.length > 0, "patterns found");
 ok(wp.every((p, i) => i === 0 || wp[i - 1].penalty <= p.penalty), "sorted by penalty");
 const blocks = wp.filter(p => p.kind === "block");
@@ -702,7 +712,7 @@ ok(!splits.some(p => p.members.fri === FIERCE), "Fierce never splits");
 ok(dailies.length > 0 && dailies.every(p => p.fallback === true), "daily is the fallback");
 ok(blocks.concat(splits).every(p => p.fallback === false));
 ok(wp[0].kind !== "daily", "cheapest pattern is not daily");
-ok(wp.every(p => p.members.fri !== SARKAR && p.members.sat !== SARKAR && p.members.sun !== SARKAR), "Sarkar on no day of the 11/06 weekend (outside every window)");
+ok(wp.every(p => p.members.fri !== SARKAR && p.members.sat !== SARKAR && p.members.sun !== SARKAR), "Sarkar on no day of the 1/22 weekend (outside every window)");
 ok(dailies.every(p => p.penalty >= 5), "daily carries weights.patternDaily");
 ok(!dailies.some(p => p.members.fri === p.members.sat && p.members.sat === p.members.sun), "block shapes are not repeated as daily");
 // 9/22 evening (Prompt 12 N): weekendStyle "daily" + weekendBlockPenalty "strong". A window Friday is an
@@ -779,8 +789,8 @@ eq(tOct.total, 13);
 eq(tOct.weekendDays, 6, "9,10,11,17,18,23");
 eq(tOct.maxConsecutive, 3, "9-10-11 and 17-18-19 (backup 20 does not extend the run)");
 const tNov = R.talliesFor(ctx, KHAN, "2026-11");
-eq(tNov, { primary: 4, backup: 0, total: 4, weekendDays: 3, majorHolidays: 1, minorHolidays: 0, maxConsecutive: 1, maxConsecutiveAnyRole: 1 }, "Thanksgiving unit = 4 shifts, 1 major holiday, 1 day for both run measures (Khan opted in)");
-eq(R.talliesFor(makeCtx({ surgeonRules: srNoCollapse }), KHAN, "2026-11").maxConsecutive, 4, "without his opt-in the same unit reads 4 real days");
+eq(tNov, { primary: 5, backup: 0, total: 5, weekendDays: 3, majorHolidays: 1, minorHolidays: 0, maxConsecutive: 2, maxConsecutiveAnyRole: 2 }, "T: 11/25 + the Thanksgiving unit = 5 shifts, 1 major holiday, run 2 for both measures (the unit is one day for Khan)");
+eq(R.talliesFor(makeCtx({ surgeonRules: srNoCollapse }), KHAN, "2026-11").maxConsecutive, 5, "without his opt-in the same shape reads 5 real days (11/25 + 4)");
 eq(R.talliesFor(ctx, SARKAR, "2026-10").primary, 2, "Sarkar October primaries 10/20 + 10/22 (10/24 came off her 9/22 evening)");
 eq(R.talliesFor(clean, SARKAR, "2026-10"), { primary: 0, backup: 0, total: 0, weekendDays: 0, majorHolidays: 0, minorHolidays: 0, maxConsecutive: 0, maxConsecutiveAnyRole: 0 });
 eq(R.talliesFor(ctx, FIERCE, "2026-09").backup, 3, "Fierce backup 9/28-9/30");
@@ -804,7 +814,7 @@ const lift = withRows([
 ]);
 okElig(R.eligibility(lift, "2026-11-09", P, ACTON), "row lifts recurring-unavailable (2nd Monday)");
 hasSoft(R.eligibility(lift, "2026-11-08", P, ACTON), "recurring-avoid:Sun", "soft preferences are not lifted");
-blocked(R.eligibility(lift, "2026-11-09", B, ACTON), "derived-lock-held:s5", "11/09 backup is Fierce's derived lock, not a pattern block");
+blocked(R.eligibility(lift, "2026-11-09", B, PHILIP), "derived-lock-held:s5", "11/09 backup is Fierce's derived lock, not a pattern block (Philip; Acton's 11/9 backup is off his November list since T)");
 okElig(R.eligibility(lift, "2026-12-14", B, ACTON), "9/22: backup on a 2nd Monday (12/14, outside any derived week) needs no row");
 okElig(R.eligibility(lift, "2026-10-27", P, SARKAR), "a primary row lifts outside-window for primary (Tue 10/27 is after her October window)");
 blocked(R.eligibility(lift, "2026-10-27", B, SARKAR), "outside-window", "a primary-only row does not free backup");
@@ -881,9 +891,9 @@ blocked(R.eligibility(ctx, "2026-11-26", B, KHAN), "holds-other-role", "the lock
 step("tests-05: role mask on availability rows");
 okElig(R.eligibility(clean, "2026-11-01", P, PHILIP), "11/1 primary via his October PRIMARY row (spill-over is additive)");
 okElig(R.eligibility(clean, "2026-11-01", B, PHILIP), "9/22: backup is open outside his weeks regardless of the row (row scoping is shown on Sarkar's window in fidelity-02)");
-const maskCtx = withRows([row(ACTON, "unavailable", "2026-11-16", "primary"), row(BURCHETT, "unavailable", "2027-01-23", "backup")]);   // Sat 1/23 (1/9 is his vacation since 9/22 evening)
-blocked(R.eligibility(maskCtx, "2026-11-16", P, ACTON), "unavailable-row");
-okElig(R.eligibility(maskCtx, "2026-11-16", B, ACTON), "a primary-only unavailable row leaves backup open");
+const maskCtx = withRows([row(ACTON, "unavailable", "2026-11-17", "primary"), row(BURCHETT, "unavailable", "2027-01-23", "backup")]);   // Tue 11/17 is on Acton's November backup list (T); Sat 1/23 (1/9 is Burchett's vacation since 9/22 evening)
+blocked(R.eligibility(maskCtx, "2026-11-17", P, ACTON), "unavailable-row");
+okElig(R.eligibility(maskCtx, "2026-11-17", B, ACTON), "a primary-only unavailable row leaves backup open");
 blocked(R.eligibility(maskCtx, "2027-01-23", B, BURCHETT), "unavailable-row");
 okElig(R.eligibility(maskCtx, "2027-01-23", P, BURCHETT), "a backup-only unavailable row leaves primary open");
 
@@ -907,20 +917,20 @@ okElig(R.eligibility(clean, "2026-11-03", B, KHAN), "Khan backup Tue 11/03");
 lacksSoft(R.eligibility(clean, "2026-11-02", B, KHAN), "auto-offer-weekday", "auto-offer is a primary soft");
 hasSoft(R.eligibility(clean, "2026-11-02", P, KHAN), "auto-offer-weekday", "...and still applies to primary");
 // Burchett: recurring whitelist and governed months
-blocked(R.eligibility(clean, "2026-11-05", P, BURCHETT), "not-recurring-available", "an ordinary Thursday is not on his recurring list");
-okElig(R.eligibility(clean, "2026-11-05", B, BURCHETT), "Burchett backup Thu 11/05");
+blocked(R.eligibility(clean, "2027-01-07", P, BURCHETT), "not-recurring-available", "an ordinary Thursday is not on his recurring list (January: ungoverned; November is governed for both roles since T)");
+okElig(R.eligibility(clean, "2027-01-07", B, BURCHETT), "Burchett backup Thu 1/07");
 blocked(R.eligibility(clean, "2026-12-03", P, BURCHETT), "whitelist-month", "12/03 is not on his December list");
 okElig(R.eligibility(clean, "2026-12-03", B, BURCHETT), "Burchett backup 12/03 inside his governed December");
 // Acton: outreach Mondays/Wednesdays (hard) and his soft avoids (medium for primary, low for backup)
 blocked(R.eligibility(clean, "2026-11-09", P, ACTON), "recurring-unavailable:Mon", "2nd Monday");
-blocked(R.eligibility(clean, "2026-11-09", B, ACTON), "derived-lock-held:s5", "11/09 backup belongs to Fierce's derived week in this fixture, so the open-backup check uses the next 2nd Monday");
+blocked(R.eligibility(clean, "2026-11-09", B, ACTON), "whitelist-month", "T: 11/09 backup is off his November list (and inside Fierce's derived week), so the open-backup check uses the next 2nd Monday");
 blocked(R.eligibility(clean, "2026-12-14", P, ACTON), "recurring-unavailable:Mon", "2nd Monday of December");
 okElig(R.eligibility(clean, "2026-12-14", B, ACTON), "Acton backup 12/14 (2nd Monday, outside any derived week)");
-const tueP = R.eligibility(clean, "2026-11-10", P, ACTON), tueB = R.eligibility(clean, "2026-11-10", B, ACTON);
+const tueP = R.eligibility(clean, "2027-01-12", P, ACTON), tueB = R.eligibility(clean, "2027-01-12", B, ACTON); // January: ungoverned
 eq((tueP.soft.find(s => s.reason === "recurring-avoid:Tue") || {}).weight, 3, "Acton Tuesday avoid: medium (3) for primary");
 eq((tueB.soft.find(s => s.reason === "recurring-avoid:Tue") || {}).weight, 1, "Acton Tuesday avoid: low (1) for backup");
-eq((R.eligibility(clean, "2026-11-08", B, ACTON).soft.find(s => s.reason === "recurring-avoid:Sun") || {}).weight, 1, "Sunday before a 2nd Monday: low (1) for backup");
-eq((R.eligibility(clean, "2026-11-08", P, ACTON).soft.find(s => s.reason === "recurring-avoid:Sun") || {}).weight, 3, "...medium (3) for primary");
+eq((R.eligibility(clean, "2027-01-10", B, ACTON).soft.find(s => s.reason === "recurring-avoid:Sun") || {}).weight, 1, "Sunday before a 2nd Monday: low (1) for backup");
+eq((R.eligibility(clean, "2027-01-10", P, ACTON).soft.find(s => s.reason === "recurring-avoid:Sun") || {}).weight, 3, "...medium (3) for primary");
 // Philip: the weeks whitelist, the Aledo week (soft) and day-before-Aledo (hard) are primary rules
 blocked(R.eligibility(clean, "2026-11-04", P, PHILIP), "outside-available-weeks", "Wed 11/04 is outside his weeks");
 okElig(R.eligibility(clean, "2026-11-04", B, PHILIP), "Philip backup 11/04 outside his weeks");
@@ -962,7 +972,8 @@ blocked(R.eligibility(ctx, "2026-11-20", B, ACTON), "time-off:2026-11-20");
 blocked(R.eligibility(ctx, "2026-11-26", B, ACTON), "holiday-opt-out:Thanksgiving");
 blocked(R.eligibility(ctx, "2026-11-26", B, KHAN), "holds-other-role", "locked Thanksgiving primary");
 blocked(R.eligibility(clean, "2026-12-09", B, FIERCE), "derived-lock:primary");
-blocked(R.eligibility(clean, "2026-11-11", B, BURCHETT), "derived-lock-held:s5");
+blocked(R.eligibility(clean, "2026-11-11", B, PHILIP), "derived-lock-held:s5");
+blocked(R.eligibility(clean, "2026-11-11", B, BURCHETT), "whitelist-month", "T: Burchett 11/11 backup is off his November list");
 blocked(R.eligibility(ctx, "2026-09-30", B, BURCHETT), "slot-locked:s5");
 blocked(R.eligibility(clean, "2026-10-18", B, BURCHETT), "unavailable-row");
 blocked(R.eligibility(clean, "2026-10-23", B, PHILIP), "no-backup-row");
@@ -983,8 +994,8 @@ blocked(R.eligibility(opt, "2026-11-26", B, BURCHETT), "backup-opt-out", "holida
 blocked(R.eligibility(opt, "2026-12-09", B, BURCHETT), "backup-opt-out", "a day on his own December list does not lift it");
 okElig(R.eligibility(opt, "2026-12-14", P, BURCHETT), "primary unaffected (listed December Monday outside Fierce's derived week)");
 okElig(R.eligibility(opt, "2026-12-01", P, BURCHETT), "primary unaffected (1st Tuesday, listed)");
-blocked(R.eligibility(opt, "2026-11-04", B, KHAN), "backup-opt-out", "Khan on a Wednesday");
-okElig(R.eligibility(opt, "2026-11-04", P, KHAN), "Khan primary Wednesday unaffected");
+blocked(R.eligibility(opt, "2026-12-02", B, KHAN), "backup-opt-out", "Khan on a Wednesday");
+okElig(R.eligibility(opt, "2026-12-02", P, KHAN), "Khan primary Wednesday unaffected (12/2: 11/4 is Acton's locked primary since T)");
 blocked(R.eligibility(withRows([row(BURCHETT, "available", "2026-11-05", "backup")], { surgeonRules: srOpt }), "2026-11-05", B, BURCHETT), "backup-opt-out", "an explicit available row does not lift it");
 eq(R.holidayUnitCandidates(opt, units[0], B), [PHILIP, FIERCE], "opted out: no longer a Thanksgiving backup candidate");
 const lockedOpt = R.buildContext(SA.seedToContextInput(seed, { schedule: { "2026-11-05": { backup: BURCHETT, backupLocked: true } }, surgeonRules: srOpt, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER }));
@@ -1011,7 +1022,7 @@ eq(seed.groupRules.backupPolicy.openToEveryone, true, "seed: backupPolicy.openTo
 const grClosed = clone(seed.groupRules); grClosed.backupPolicy.openToEveryone = false;
 const closed = makeCtx({ schedule: {}, groupRules: grClosed, surgeonRules: srNoRoles });
 blocked(R.eligibility(closed, "2026-11-05", B, KHAN), "hard-never-weekday:Thu", "closed policy: the hardNeverWeekdaysRoles default is both roles again");
-blocked(R.eligibility(closed, "2026-11-05", B, BURCHETT), "not-recurring-available", "closed policy: recurring whitelist governs backup");
+blocked(R.eligibility(closed, "2027-01-07", B, BURCHETT), "not-recurring-available", "closed policy: recurring whitelist governs backup (January: ungoverned)");
 blocked(R.eligibility(closed, "2026-12-03", B, BURCHETT), "whitelist-month", "closed policy: governed December governs backup");
 blocked(R.eligibility(closed, "2026-12-14", B, ACTON), "recurring-unavailable:Mon", "closed policy: outreach Monday blocks backup");
 eq((R.eligibility(closed, "2026-11-10", B, ACTON).soft.find(s => s.reason === "recurring-avoid:Tue") || {}).weight, 3, "closed policy: recurring-avoid weighs medium for backup too");
@@ -1038,15 +1049,15 @@ eq(R.eligibility(clean, "2026-11-14", P, KHAN).soft, [{ reason: "pattern-mismatc
 eq(R.eligibility(clean, "2026-11-14", P, KHAN, { skipPatternSoft: true }).soft, [], "skipPatternSoft drops the mismatch");
 eq(R.eligibility(wkHeld, "2026-11-07", P, KHAN).soft, [], "Saturday inside the held block: no mismatch, no b2b");
 eq(R.eligibility(wkHeld, "2026-11-14", P, KHAN).soft, [{ reason: "back-to-back-weekend", weight: 3 }, { reason: "pattern-mismatch:block", weight: 3 }], "lone Saturday the weekend after the held block: both");
-eq(R.eligibility(clean, "2026-11-07", P, BURCHETT).soft, [], "split-style surgeon on a lone Saturday: no mismatch");
-eq(R.eligibility(clean, "2026-11-06", P, BURCHETT).soft, [], "split-style on Friday with Saturday free: no mismatch");
-eq(R.eligibility(makeCtx({ schedule: { "2026-11-07": { primary: BURCHETT } } }), "2026-11-06", P, BURCHETT).soft, [{ reason: "pattern-mismatch:split", weight: 3 }], "split-style holding Sat and asking for Fri: mismatch");
+eq(R.eligibility(clean, "2027-01-23", P, BURCHETT).soft, [], "split-style surgeon on a lone Saturday: no mismatch (1/23: January is ungoverned)");
+eq(R.eligibility(clean, "2027-01-22", P, BURCHETT).soft, [], "split-style on Friday with Saturday free: no mismatch");
+eq(R.eligibility(makeCtx({ schedule: { "2027-01-23": { primary: BURCHETT } } }), "2027-01-22", P, BURCHETT).soft, [{ reason: "pattern-mismatch:split", weight: 3 }], "split-style holding Sat and asking for Fri: mismatch");
 const srTarget = clone(seed.surgeonRules); srTarget[ACTON].monthlyTarget = 2;
 const under = R.eligibility(makeCtx({ schedule: {}, surgeonRules: srTarget }), "2026-11-16", P, ACTON);
 eq(under.soft.filter(s => s.reason.indexOf("target") >= 0), [{ reason: "under-target", weight: -1 }]);
-const over1 = R.eligibility(makeCtx({ schedule: { "2026-11-04": { primary: ACTON }, "2026-11-16": { primary: ACTON } }, surgeonRules: srTarget }), "2026-11-13", P, ACTON);
+const over1 = R.eligibility(makeCtx({ schedule: { "2026-11-04": { primary: ACTON }, "2026-11-16": { primary: ACTON } }, surgeonRules: srTarget }), "2026-11-06", P, ACTON); // 11/6: on his November list (governed since T)
 eq(over1.soft.filter(s => s.reason.indexOf("target") >= 0), [{ reason: "over-target:1", weight: 1 }], "low * 1 over");
-const over2 = R.eligibility(makeCtx({ schedule: { "2026-11-04": { primary: ACTON }, "2026-11-16": { primary: ACTON }, "2026-11-12": { primary: ACTON } }, surgeonRules: srTarget }), "2026-11-13", P, ACTON);
+const over2 = R.eligibility(makeCtx({ schedule: { "2026-11-04": { primary: ACTON }, "2026-11-16": { primary: ACTON }, "2026-11-12": { primary: ACTON } }, surgeonRules: srTarget }), "2026-11-06", P, ACTON);
 eq(over2.soft.filter(s => s.reason.indexOf("target") >= 0), [{ reason: "over-target:2", weight: 2 }], "low * 2 over");
 eq(R.eligibility(makeCtx({ schedule: { "2026-11-04": { primary: ACTON } }, surgeonRules: srTarget }), "2026-11-16", P, ACTON).soft.filter(s => s.reason.indexOf("target") >= 0), [], "exactly on target: nothing");
 eq(R.eligibility(clean, "2026-11-16", P, ACTON).soft.filter(s => s.reason.indexOf("target") >= 0), [], "monthlyTarget null: nothing");
@@ -1072,8 +1083,8 @@ eq(penOf("block", KHAN, KHAN, KHAN), -3, "block-style surgeon with primaryContri
 eq(penOf("block", FIERCE, FIERCE, FIERCE), 0, "block-style surgeon without the key in a block");
 eq(penOf("block", BURCHETT, BURCHETT, BURCHETT), null, "Burchett cannot block: max consecutive 2");
 eq(penOf("split", BURCHETT, ACTON, BURCHETT), 0, "the designed split pair");
-eq(penOf("split", ACTON, BURCHETT, ACTON), 3, "the mirror split costs Acton's recurring-avoid on Sunday 11/8 (before the 2nd Monday)");
-eq(R.weekendUnitPatterns(clean, "2026-11-13").find(q => q.kind === "split" && q.members.fri === ACTON && q.members.sat === BURCHETT).penalty, 0, "on a weekend without that Sunday the mirror split is free");
+eq(penOf("split", ACTON, BURCHETT, ACTON), 3, "the mirror split costs Acton's recurring-avoid on Sunday 1/24 (before the 4th Monday)");
+eq(R.weekendUnitPatterns(clean, "2027-01-29").find(q => q.kind === "split" && q.members.fri === ACTON && q.members.sat === BURCHETT).penalty, 0, "on a weekend without that Sunday (1/31) the mirror split is free");
 eq(penOf("split", KHAN, BURCHETT, KHAN), 3, "block-style X in a split: one mismatch");
 eq(penOf("split", KHAN, ACTON, KHAN), 3);
 eq(penOf("split", BURCHETT, KHAN, BURCHETT), 3, "block-style Y on the Saturday: one mismatch");
@@ -1082,13 +1093,13 @@ eq(Math.min.apply(null, dailies.map(p => p.penalty)), 11, "cheapest daily = patt
 eq(penOf("daily", KHAN, BURCHETT, BURCHETT), 11);
 const softSum = r => r.soft.reduce((a, s) => a + s.weight, 0);
 const expectKBA = 5
-  + softSum(R.eligibility(clean, "2026-11-06", P, KHAN, { skipPatternSoft: true })) + 3
-  + softSum(R.eligibility(clean, "2026-11-07", P, BURCHETT, { skipPatternSoft: true })) + 0
-  + softSum(R.eligibility(clean, "2026-11-08", P, ACTON, { skipPatternSoft: true })) + 3;
+  + softSum(R.eligibility(clean, "2027-01-22", P, KHAN, { skipPatternSoft: true })) + 3
+  + softSum(R.eligibility(clean, "2027-01-23", P, BURCHETT, { skipPatternSoft: true })) + 0
+  + softSum(R.eligibility(clean, "2027-01-24", P, ACTON, { skipPatternSoft: true })) + 3;
 eq(penOf("daily", KHAN, BURCHETT, ACTON), expectKBA, "daily penalty = patternDaily + per-member mismatch + soft sums");
-eq(expectKBA, 14, "Acton's Sunday-before-2nd-Monday avoid (3) is inside it");
+eq(expectKBA, 14, "Acton's Sunday-before-4th-Monday avoid (3) is inside it");
 const wpD = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, groupRules: Object.assign(clone(seed.groupRules), { weights: Object.assign({}, seed.groupRules.weights, { patternDaily: 9 }) }) }));
-eq(Math.min.apply(null, R.weekendUnitPatterns(wpD, "2026-11-06").filter(p => p.kind === "daily").map(p => p.penalty)), 15, "patternDaily weight is read from groupRules.weights");
+eq(Math.min.apply(null, R.weekendUnitPatterns(wpD, "2027-01-22").filter(p => p.kind === "daily").map(p => p.penalty)), 15, "patternDaily weight is read from groupRules.weights");
 
 step("contract-002: East feed shapes are validated, never silently dropped");
 const EF = require("../east-feed.js");
@@ -1328,13 +1339,61 @@ step("rules-1: Fierce manually locked PRIMARY on a derived-backup day frees that
 const manPri = makeCtx({ schedule: { "2026-11-10": { primary: FIERCE, primaryLocked: true, backup: null } } });
 const fp1110 = R.eligibility(manPri, "2026-11-10", P, FIERCE);
 ok(fp1110.ok === true && fp1110.lockHolder === true, "manual primary lock: he is the holder, conflicts reported not blocking: " + JSON.stringify(fp1110));
-lacks(R.eligibility(manPri, "2026-11-10", B, ACTON).hard, "derived-lock-held", "Acton may take backup: the derived backup lock is moot once Fierce is locked primary");
-okElig(R.eligibility(manPri, "2026-11-10", B, ACTON), "Acton backup 11/10 (Tue; not a 2nd/4th Mon/Wed)");
+lacks(R.eligibility(manPri, "2026-11-10", B, KHAN).hard, "derived-lock-held", "Khan may take backup: the derived backup lock is moot once Fierce is locked primary");
+okElig(R.eligibility(manPri, "2026-11-10", B, KHAN), "Khan backup 11/10 (Tue; backup any day since 9/22)");
+blocked(R.eligibility(manPri, "2026-11-10", B, ACTON), "whitelist-month", "T: Acton 11/10 backup is off his November list - the governed month, not the derived lock, blocks him");
 lacks(R.eligibility(manPri, "2026-11-10", B, PHILIP).hard, "derived-lock-held", "Philip too (week of 11/9 is on his list)");
 blocked(R.eligibility(manPri, "2026-11-10", B, FIERCE), "holds-other-role", "he cannot also be backup that day");
 okElig(R.eligibility(manPri, "2026-11-11", B, FIERCE), "the other derived days stay his");
 eq(R.eligibility(manPri, "2026-11-11", B, FIERCE).lockHolder, true, "still the derived lock holder on 11/11");
-blocked(R.eligibility(manPri, "2026-11-11", B, BURCHETT), "derived-lock-held:s5", "and still held against everyone else on 11/11 (Burchett: a 2nd Wednesday is on his whitelist, so only the derived lock blocks him)");
+blocked(R.eligibility(manPri, "2026-11-11", B, PHILIP), "derived-lock-held:s5", "and still held against everyone else on 11/11 (Philip: week of 11/9 is on his list, so only the derived lock blocks him)");
+
+/* ------------------------------------------------ Prompt 12 T (9/22): November governed for BOTH roles + the 9/22 locks */
+step("Prompt 12 T: a plain 'YYYY-MM' entry governs PRIMARY only; an object entry governs exactly the roles it names");
+// explicitListMonths -> role mask (1 = primary, 2 = backup). Burchett's and Acton's November entries are the explicit
+// object form { month, roles: [primary, backup] } (the ER-panel author published their lists, so neither is placed on a November day
+// he did not offer, in either role); their October / December entries stay the plain form = primary only (item I).
+eq(Object.assign({}, ctx.per[BURCHETT].governedMonths), { "2026-10": 1, "2026-11": 3, "2026-12": 1 }, "T: Burchett governed months - Oct/Dec plain (primary only), Nov object (both roles)");
+eq(Object.assign({}, ctx.per[ACTON].governedMonths), { "2026-10": 1, "2026-11": 3 }, "T: Acton governed months - Oct plain (primary only), Nov object (both roles)");
+eq(Object.assign({}, ctx.per[PHILIP].governedMonths), { "2026-10": 1 }, "T: Philip October object naming primary only");
+blocked(R.eligibility(clean, "2026-11-10", B, BURCHETT), "whitelist-month", "T: Burchett backup 11/10 - not on his November backup list (before T: eligible, backup any day)");
+blocked(R.eligibility(clean, "2026-11-17", B, BURCHETT), "whitelist-month", "T: Burchett backup 11/17 - not offered (a Tuesday outside the derived week)");
+blocked(R.eligibility(clean, "2026-11-25", B, BURCHETT), "whitelist-month", "T: 11/25 is on his PRIMARY list only - backup blocked");
+blocked(R.eligibility(clean, "2026-11-09", P, BURCHETT), "whitelist-month", "T: 11/9 is on his BACKUP list only - primary blocked");
+blocked(R.eligibility(clean, "2026-11-13", P, BURCHETT), "whitelist-month", "T: Burchett primary 11/13 (Fri; not offered)");
+okElig(R.eligibility(clean, "2026-11-04", B, BURCHETT), "T: Burchett backup 11/4 - on his backup list");
+okElig(R.eligibility(clean, "2026-11-03", P, BURCHETT), "T: Burchett primary 11/3 - on his primary list");
+blocked(R.eligibility(clean, "2026-11-11", B, ACTON), "whitelist-month", "T: Acton backup 11/11 - not on his November backup list (before T: eligible, backup any day)");
+blocked(R.eligibility(clean, "2026-11-10", P, ACTON), "whitelist-month", "T: Acton primary 11/10 - a Tuesday he did not offer (the recurring rules do not apply in a governed month)");
+okElig(R.eligibility(clean, "2026-11-05", B, ACTON), "T: Acton backup 11/5 - on his backup list");
+okElig(R.eligibility(clean, "2026-11-16", P, ACTON), "T: Acton primary 11/16 - on his primary list");
+okElig(R.eligibility(clean, "2026-12-08", B, BURCHETT), "T: December stays the plain form - backup on a non-list day is still eligible");
+blocked(R.eligibility(clean, "2026-12-08", P, BURCHETT), "whitelist-month", "T: December primary governed as before");
+okElig(R.eligibility(clean, "2026-10-13", B, BURCHETT), "T: October stays the plain form - Burchett backup any day (item I, unchanged)");
+okElig(R.eligibility(clean, "2026-10-14", B, ACTON), "T: Acton October backup on a non-list day (item I, unchanged)");
+const tgBur = R.eligibility(clean, "2026-11-27", B, BURCHETT);
+okElig(tgBur, "T: a Thanksgiving-unit day off his November list: the holiday waiver applies to backup as to primary");
+hasSoft(tgBur, "holiday-waiver:whitelist-month");
+blocked(R.eligibility(closed, "2026-11-10", B, BURCHETT), "whitelist-month", "T: the object entry governs backup under the closed policy too");
+blocked(R.eligibility(closed, "2026-12-03", B, BURCHETT), "whitelist-month", "T: closed policy: a plain month governs both roles again (unchanged)");
+step("Prompt 12 T: the 9/22 locks on the seed schedule");
+eq(R.eligibility(ctx, "2026-11-16", B, FIERCE).lockHolder, true, "T: Fierce backup 11/16 is an import lock holder (the Monday after his derived week)");
+eq(R.eligibility(ctx, "2026-11-16", B, FIERCE).conflicts, [], "T: ...with no conflicts (Monday backup is on his pattern)");
+eq(R.eligibility(ctx, "2026-11-12", B, FIERCE).lockHolder, true, "T: 11/12 - derived AND import lock, one holder");
+blocked(R.eligibility(ctx, "2026-11-12", B, BURCHETT), "slot-locked:s5", "T: everyone else sees the import lock on 11/12");
+const k25 = R.eligibility(ctx, "2026-11-25", P, KHAN);
+ok(k25.ok === true && k25.lockHolder === true, "T: Khan 11/25 primary is a lock holder (amendment A): " + JSON.stringify(k25));
+eq(k25.conflicts, [], "T: 11/25 + the Thanksgiving unit = 2 commitments <= his max 3 - no max-consecutive conflict");
+eq([ctx.schedule["2026-11-25"].backup, ctx.schedule["2026-11-25"].backupLocked], [null, false], "T: 11/25 backup is open");
+okElig(R.eligibility(ctx, "2026-11-25", B, PHILIP), "T: Philip may take 11/25 backup (week of 11/23 is on his list; backup any day)");
+blocked(R.eligibility(ctx, "2026-11-25", B, KHAN), "holds-other-role", "T: Khan holds the primary that day");
+blocked(R.eligibility(ctx, "2026-11-25", P, BURCHETT), "slot-locked:s1", "T: the ER-panel author's Burchett 11/25 entry is superseded - the slot is Khan's");
+okElig(R.eligibility(ctx, "2026-11-30", P, KHAN), "T: 11/25 + unit(1) + 11/30 = 3 = his max 3 (Monday auto-offer, East clear here)");
+const a18 = R.eligibility(ctx, "2026-11-18", P, ACTON);
+ok(a18.ok === true && a18.lockHolder === true, "T: Acton 11/18 primary is the ER-panel author's locked entry: " + JSON.stringify(a18));
+has(a18.conflicts, "day-before-vacation", "T: ...kept as a fact, the day before his 11/19 vacation reported as a conflict");
+eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].filter(id => R.eligibility(ctx, "2026-11-05", P, id).ok), [], "T: 11/5 (Thu) primary has no eligible surgeon once Acton is its locked backup (rules doc section 8 item 13)");
+has(R.eligibility(ctx, "2026-11-05", P, ACTON).hard, "whitelist-month", "T: Acton did not offer 11/5 as primary (and holds its locked backup)");
 
 const total = Date.now() - t0;
 if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }

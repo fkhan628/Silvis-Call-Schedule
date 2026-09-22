@@ -21,9 +21,11 @@
 //
 // Coverage and the 10 s budget (Prompt 4: "All runs must finish under 10 s
 // total"): 50 seeds x 4 ranges, then one bestOf 200 Nov-Dec run for the tally
-// table (the UI default), plus five short fixture runs (manual lock, backup
-// opt-out, legacy group key, range edge, derived week overridden - the last one
-// a November-only bestOf 1 run added by the Prompt 12 K fix stage, ~10 ms).
+// table (the UI default), 50 fill-open-only backfill runs over 10/15..11/1 at
+// bestOf 2 (Prompt 12 T), plus seven short fixture runs (manual lock, backup
+// opt-out, legacy group key, range edge, derived week overridden - a
+// November-only bestOf 1 run added by the Prompt 12 K fix stage, ~10 ms - and
+// the two fill-open-only runs, plain + fill-open-only, Prompt 12 T).
 // bestOf per range is 6 / 5 / 2 / 2
 // (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
 // on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
@@ -185,24 +187,36 @@ eq(HANDOFF_IDS, [SARKAR], "seed: Sarkar is the one surgeon with the handoff diag
 const FIERCE_WP = SR[FIERCE].outsideDerivedWeeks.weekdayPattern;
 eq(WD.map((w) => FIERCE_WP[w].backup), [true, true, true, true, true, true, true], "seed: Fierce may be backup on every weekday (9/22)");
 eq(WD.map((w) => FIERCE_WP[w].primary), [false, false, true, false, "weekend-block-only", "weekend-block-only", "weekend-block-only"], "seed: Fierce's primary pattern is unchanged");
-// Burchett: recurring whitelist + explicit lists govern PRIMARY (governed months use
-// the explicit list only); since 9/22 backup is any day not explicitly unavailable.
+// Burchett: recurring whitelist + explicit lists. Governance is restated per ROLE (9/22, Prompt 12 I + T): a plain
+// 'YYYY-MM' entry in explicitListMonths governs PRIMARY only, an object entry exactly the roles it names; in a month
+// governed for a role the eligible days are exactly his explicit list for that role (a plain date list covers both
+// roles, a role-keyed list per role); otherwise backup is any day not explicitly unavailable.
 const burchettRecurring = (d) => (weekday(d) === "Mon" && [2, 4].includes(nthOf(d))) || (weekday(d) === "Tue" && nthOf(d) === 1) || (weekday(d) === "Wed" && [2, 4].includes(nthOf(d)));
 const explicitDates = (obj) => { const s = new Set(); Object.keys(obj || {}).forEach((m) => (Array.isArray(obj[m]) ? obj[m] : []).forEach((d) => s.add(d))); return s; };
-const BUR_AVAIL = explicitDates(SR[BURCHETT].explicitAvailable), BUR_BACKUP_ONLY = explicitDates(SR[BURCHETT].explicitBackupOnly), BUR_UNAVAIL = explicitDates(SR[BURCHETT].explicitUnavailable);
-const BUR_GOVERNED = new Set(SR[BURCHETT].explicitListMonths.map((e) => (typeof e === "string" ? e : e.month)));
+const explicitRoleDates = (obj) => { const s = { primary: new Set(), backup: new Set() }; Object.keys(obj || {}).forEach((m) => { const v = obj[m]; if (Array.isArray(v)) v.forEach((d) => { s.primary.add(d); s.backup.add(d); }); else if (v && typeof v === "object") ROLES.forEach((r) => (v[r] || []).forEach((d) => s[r].add(d))); }); return s; };
+const governedRoles = (id) => { const out = {}; (SR[id].explicitListMonths || []).forEach((e) => { if (typeof e === "string") out[e] = new Set([P]); else (Array.isArray(e.roles) && e.roles.length ? e.roles : ROLES).forEach((r) => (out[e.month] = out[e.month] || new Set()).add(r)); }); return out; };
+const govText = (g) => Object.keys(g).sort().map((m) => m + ":" + [...g[m]].sort().join("+"));
+const BUR_AVAIL = explicitRoleDates(SR[BURCHETT].explicitAvailable), BUR_BACKUP_ONLY = explicitDates(SR[BURCHETT].explicitBackupOnly), BUR_UNAVAIL = explicitDates(SR[BURCHETT].explicitUnavailable);
+const BUR_GOV = governedRoles(BURCHETT);
+eq(govText(BUR_GOV), ["2026-10:primary", "2026-11:backup+primary", "2026-12:primary"], "seed: Burchett governed Oct/Dec primary only (plain entries), Nov both roles (object entry, T)");
+eq([[...BUR_AVAIL.primary].filter((d) => monthOf(d) === "2026-11").length, [...BUR_AVAIL.backup].filter((d) => monthOf(d) === "2026-11").length], [7, 8], "seed: Burchett November lists 7 primary + 8 backup dates (his statement, superseded entries included)");
 function burchettMay(d, role) {
-  if (BUR_UNAVAIL.has(d)) return false;     // explicit rows are never waived
-  if (role === B) return true;              // 9/22: backup any day
-  if (BUR_BACKUP_ONLY.has(d)) return false; // a backup_only row blocks primary
-  if (isHoliday(d)) return true;            // day rules do not apply on holiday-unit days (rules doc section 5)
-  if (BUR_AVAIL.has(d)) return true;
-  if (BUR_GOVERNED.has(monthOf(d))) return false;
+  if (BUR_UNAVAIL.has(d)) return false;                    // explicit rows are never waived
+  if (role === P && BUR_BACKUP_ONLY.has(d)) return false;  // a backup_only row blocks primary
+  if (isHoliday(d)) return true;                           // day rules do not apply on holiday-unit days (rules doc section 5)
+  const gov = BUR_GOV[monthOf(d)];
+  if (gov && gov.has(role)) return BUR_AVAIL[role].has(d); // governed month + role: exactly his list
+  if (role === B) return true;                             // 9/22: backup any day
+  if (BUR_AVAIL[P].has(d)) return true;
   return burchettRecurring(d) || isWeekend(d);
 }
-// Acton: 2nd/4th Mon + Wed blocked for PRIMARY; October governed for primary by his explicit list (backup open since 9/22).
-const ACT_OCT = SR[ACTON].explicitAvailable["2026-10"];
+// Acton: 2nd/4th Mon + Wed blocked for PRIMARY; October governed for primary by his explicit list (backup open since
+// 9/22); November governed for BOTH roles by the list the ER-panel author published (T).
+const ACT_AVAIL = explicitRoleDates(SR[ACTON].explicitAvailable), ACT_GOV = governedRoles(ACTON);
+eq(govText(ACT_GOV), ["2026-10:primary", "2026-11:backup+primary"], "seed: Acton governed Oct primary only, Nov both roles (T)");
+const GOV = {}; IDS.forEach((id) => { GOV[id] = governedRoles(id); });
 const actonBlockedRecurring = (d) => ["Mon", "Wed"].includes(weekday(d)) && [2, 4].includes(nthOf(d));
+const otherRoleOf = (role) => (role === P ? B : P);
 // Philip: Aledo days = 1st/3rd Wednesday + the Friday of the Mon-Sun week containing the 3rd Wednesday.
 function isAledoDay(d) {
   if (weekday(d) === "Wed" && [1, 3].includes(nthOf(d))) return true;
@@ -284,9 +298,10 @@ function reasonOk(r) {
 // blocks backup (eastBlocksBackup false).
 const PRIMARY_ONLY_FOR_BACKUP = ["recurring-unavailable:", "weekday-not-allowed:", "whitelist-month", "not-recurring-available", "outside-available-weeks", "day-before-aledo", "day-before-vacation", "east-busy", "east-forecast-busy:"]
   .concat(WD.every((w) => FIERCE_WP[w].backup === true) ? ["weekday-pattern:", "weekend-block-only"] : []);
-function primaryOnlyReasonForBackup(id, r) {
+function primaryOnlyReasonForBackup(id, r, day) {
   const core = String(r).split("@")[0];
   if (core.indexOf("hard-never-weekday:") === 0) return !hardNeverApplies(id, B);
+  if (core === "whitelist-month") { const g = GOV[id] && GOV[id][monthOf(String(r).split("@")[1] || day)]; return !(g && g.has(B)); } // T: an object entry naming backup governs backup
   return PRIMARY_ONLY_FOR_BACKUP.some((p) => core.indexOf(p) === 0);
 }
 // ...and, across all runs, the generator must actually USE the loosened backup
@@ -340,6 +355,9 @@ function expectedLockViolations(range) {
       if (e[role] === PHILIP && monthOf(d) === "2026-10" && role === B && philipOctB > SR[PHILIP].backupCap.perMonthDays) out.push({ day: d, role, id: PHILIP, lock: "import", prefix: "backup-cap:" });
       if (e[role] === FIERCE && role === P && weekday(d) === "Mon" && !DERIVED_ROLE[d]) out.push({ day: d, role, id: FIERCE, lock: "import", prefix: "weekday-pattern:Mon" });
       if (e[role] === KHAN && role === P && KHAN_BUSY.includes(d)) out.push({ day: d, role, id: KHAN, lock: "import", prefix: "east-busy" });
+      // T: the ER-panel author's Acton 11/18 primary precedes his 11/19 vacation - published as submitted, reported (generic: any holder)
+      if (VAC[e[role]] && VAC[e[role]].has(d)) out.push({ day: d, role, id: e[role], lock: "import", prefix: "time-off:" });
+      else if (role === P && DAY_BEFORE_VAC[e[role]] && DAY_BEFORE_VAC[e[role]].has(d)) out.push({ day: d, role, id: e[role], lock: "import", prefix: "day-before-vacation" });
     });
   });
   return out.sort((a, b) => (a.day + a.role).localeCompare(b.day + b.role));
@@ -418,7 +436,7 @@ function checkRun(out, range, seedNo, deep) {
           u.reasons[id].forEach((r) => {
             ok(!PLACEHOLDER_REASONS.includes(String(r).split("@")[0]), "uncovered " + role + ": " + CODE[id] + " is eligible but the generator left the slot open (" + r + ")");
             ok(reasonOk(r), "uncovered " + role + ": " + CODE[id] + " has a reason outside the rule vocabulary: " + JSON.stringify(r));
-            if (role === B) ok(!primaryOnlyReasonForBackup(id, r), "uncovered backup: " + CODE[id] + " blocked by a PRIMARY-only rule (" + r + ") - backup is open to everyone since 9/22");
+            if (role === B) ok(!primaryOnlyReasonForBackup(id, r, d), "uncovered backup: " + CODE[id] + " blocked by a PRIMARY-only rule (" + r + ") - backup is open to everyone since 9/22");
           });
         });
       }
@@ -435,12 +453,30 @@ function checkRun(out, range, seedNo, deep) {
       eq(e.source, inp.source, "source changed on a locked day");
       eq(e.note, inp.note, "note changed on a locked day");
     });
-    // item 9a: Fierce derived weeks appear whole, correct role, as locks
-    if (DERIVED_ROLE[d] && !lockedIn(d, DERIVED_ROLE[d])) {
-      const role = DERIVED_ROLE[d];
-      eq(e[role], FIERCE, "derived " + role + " not held by Fierce");
-      eq(e[role + "Locked"], true, "derived " + role + " not locked");
-      if (!inp || (!inp.primaryLocked && !inp.backupLocked)) eq(e.source, "east-derived", "derived day source");
+    // item 9a (T): a derived week is WHOLE when every day is either the derived lock or an explicit lock to the
+    // derived surgeon himself (diagnostics.derivedConfirmed). An explicit lock to someone else - or the derived
+    // surgeon locked in the OTHER role - makes the derived lock yield: the day must be in diagnostics.derivedYields
+    // (the explicit row stays) and never a hard violation (hardViolations is [] above).
+    if (DERIVED_ROLE[d]) {
+      const role = DERIVED_ROLE[d], other = otherRoleOf(role);
+      const inpHolder = lockedIn(d, role) ? INPUT[d][role] : null;
+      const heldOther = lockedIn(d, other) && INPUT[d][other] === FIERCE;
+      const y = (D.derivedYields || []).find((x) => x.day === d && x.role === role);
+      const c = (D.derivedConfirmed || []).find((x) => x.day === d && x.role === role);
+      if (inpHolder === FIERCE) {
+        ok(c && c.id === FIERCE && c.derivedId === FIERCE, "derived " + role + " held by Fierce's own explicit lock must be in derivedConfirmed: " + JSON.stringify(D.derivedConfirmed));
+        ok(!y, "a confirmed derived day is not a yield");
+        eq([e[role], e[role + "Locked"]], [FIERCE, true], "confirmed derived day");
+      } else if (inpHolder || heldOther) {
+        ok(y && y.derivedId === FIERCE && (inpHolder ? y.holderId === inpHolder && y.holderRole === role : y.holderId === FIERCE && y.holderRole === other), "yielded derived " + role + " missing from derivedYields (or wrong holder): " + JSON.stringify(D.derivedYields));
+        ok(!c, "a yielded derived day is not a confirmation");
+        if (inpHolder) eq(e[role], inpHolder, "the explicit holder stays on a yielded derived day"); else ok(e[role] !== FIERCE, "Fierce cannot hold both roles on " + d);
+      } else {
+        eq(e[role], FIERCE, "derived " + role + " not held by Fierce");
+        eq(e[role + "Locked"], true, "derived " + role + " not locked");
+        if (!inp || (!inp.primaryLocked && !inp.backupLocked)) eq(e.source, "east-derived", "derived day source");
+        ok(!y && !c, "a pure derived lock is neither a yield nor a confirmation");
+      }
     }
     ROLES.forEach((role) => {
       if (!isPlaced(out, d, role)) return;
@@ -458,7 +494,7 @@ function checkRun(out, range, seedNo, deep) {
         if (role === P && !isHoliday(d)) ok(!actonBlockedRecurring(d), "Acton PRIMARY on a 2nd/4th " + weekday(d));
         ok(!(d >= "2026-11-19" && d <= "2026-11-22") && !(d >= "2026-11-25" && d <= "2026-11-29"), "Acton on his November time off");
         ok(!(HOLIDAY[d] && HOLIDAY[d].name === "Thanksgiving"), "Acton on a Thanksgiving unit day");
-        if (role === P && monthOf(d) === "2026-10" && !isHoliday(d)) ok(ACT_OCT.primary.includes(d), "Acton October PRIMARY is governed by his explicit list");
+        { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role) && !isHoliday(d)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary, November both roles)"); }
       }
       // item 7 (9/22: backup any day unless explicitly unavailable)
       if (id === BURCHETT) ok(burchettMay(d, role), "Burchett " + role + " on a day his rules exclude (" + weekday(d) + ")");
@@ -495,7 +531,7 @@ function checkRun(out, range, seedNo, deep) {
       // 9/22 positive sightings (asserted once at the end: each must happen somewhere in the 150 runs)
       if (role === B && !isHoliday(d)) {
         if (id === KHAN && ["Tue", "Thu"].includes(weekday(d))) SAW["Khan backup on an OR day (Tue/Thu)"]++;
-        if (id === BURCHETT && !isWeekend(d) && !burchettRecurring(d) && !BUR_AVAIL.has(d)) SAW["Burchett backup on a day off his recurring list"]++;
+        if (id === BURCHETT && !isWeekend(d) && !burchettRecurring(d) && !BUR_AVAIL.backup.has(d)) SAW["Burchett backup on a day off his recurring list"]++;
         if (id === ACTON && actonBlockedRecurring(d)) SAW["Acton backup on an outreach 2nd/4th Mon/Wed"]++;
         if (id === PHILIP && d >= PHILIP_WEEKS_FROM && !PHILIP_WEEK_DAYS.has(d)) SAW["Philip backup outside his listed weeks"]++;
         if (id === FIERCE && !DERIVED_ROLE[d] && ["Tue", "Thu"].includes(weekday(d))) SAW["Fierce backup on a Clinton Tue/Thu outside a derived week"]++;
@@ -513,6 +549,17 @@ function checkRun(out, range, seedNo, deep) {
     });
   });
   CUR.day = "-";
+  // T: derivedYields / derivedConfirmed carry in-range days of Fierce's derived weeks only; one warning per yielding
+  // derived week (Monday + role) naming its yielded days in order; no such warning when nothing yields.
+  ok(Array.isArray(D.derivedYields) && Array.isArray(D.derivedConfirmed), "diagnostics.derivedYields / derivedConfirmed missing");
+  D.derivedYields.forEach((y) => ok(days.includes(y.day) && DERIVED_ROLE[y.day] === y.role && y.derivedId === FIERCE && y.holderId && (y.holderRole === P || y.holderRole === B) && typeof y.holderSource === "string", "malformed derivedYields entry " + JSON.stringify(y)));
+  D.derivedConfirmed.forEach((c) => ok(days.includes(c.day) && DERIVED_ROLE[c.day] === c.role && c.id === FIERCE && lockedIn(c.day, c.role) && INPUT[c.day][c.role] === FIERCE, "malformed derivedConfirmed entry " + JSON.stringify(c)));
+  {
+    const byWeek = {};
+    D.derivedYields.forEach((y) => { const k = mondayOf(y.day) + "|" + y.role; (byWeek[k] = byWeek[k] || []).push(y.day); });
+    const expWarn = Object.keys(byWeek).sort().map((k) => "derived week " + k.split("|")[0] + " (" + NAME[FIERCE] + " Silvis " + k.split("|")[1] + ") yields to published entries on " + byWeek[k].sort().join(", "));
+    eq(D.warnings.filter((w) => /^derived week /.test(w)).sort(), expWarn, "one 'derived week ... yields to published entries on ...' warning per yielding derived week");
+  }
   // item 1: the score counts the same open slots the calendar shows
   eq(D.score.uncoveredPrimary, openCount.primary, "score.uncoveredPrimary vs open primary slots");
   eq(D.score.uncoveredBackup, openCount.backup, "score.uncoveredBackup vs open backup slots");
@@ -617,7 +664,11 @@ function checkRun(out, range, seedNo, deep) {
   });
   if (range.name.indexOf("R2") === 0 || range.name.indexOf("R4") === 0) {
     const nov = D.impliedTargets.months["2026-11"], NF = nov.members[FIERCE];
-    eq(NF.lockedHeld, { primary: 0, backup: 7 }, "Fierce holds his 7 derived November days as BACKUP before generation");
+    eq(NF.lockedHeld, { primary: 0, backup: 8 }, "Fierce holds his 7 derived November days (confirmed by his explicit rows) + Mon 11/16 as BACKUP before generation (T)");
+    // T: his explicit backup rows 11/9-11/15 ARE the derived week - nothing yields in November, every day is confirmed
+    eq(D.derivedConfirmed.map((c) => c.day + " " + c.role), ["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15"].map((d) => d + " " + B), "T: derivedConfirmed = 11/9-11/15 backup (Fierce's explicit rows confirm his derived week)");
+    eq(D.derivedYields.filter((y) => monthOf(y.day) === "2026-11"), [], "T: nothing yields in November");
+    ok(!D.warnings.some((w) => /^derived week 2026-11-09 /.test(w)), "T: no yield warning for the week of 11/9");
     // 9/22 (K review, restated per role by J): his held derived East-primary week is 7 locked BACKUPS - it never
     // inflates his primary target - and the cap adds those 7 days to his primary count, so his primary clip is
     // 14 - 1 - 7 = 6; the primary target is min(primaryShare, 6) (nothing primary is locked), never the old 13 clip.
@@ -843,6 +894,10 @@ ok(r2Json.size > 1, "50 seeds produced only " + r2Json.size + " distinct Nov-Dec
   ok(e2.backup !== FIERCE, "Fierce cannot hold both roles");
   eq(e2.backupLocked, false, "the skipped derived backup lock must not reappear as a lock");
   ok(D2.warnings.some((w) => w.indexOf("derived lock skipped: " + DAY + " backup derived " + FIERCE) === 0), "missing the 'derived lock skipped' warning: " + JSON.stringify(D2.warnings));
+  // T: the general yield rule, pinned by name - the manual primary lock makes the derived backup lock yield on 11/10
+  eq(D2.derivedYields, [{ day: DAY, role: B, derivedId: FIERCE, holderId: FIERCE, holderRole: P, holderSource: "manual" }], "T: diagnostics.derivedYields names the yielded day, the holder, his role and the row source");
+  eq(D2.warnings.filter((w) => /^derived week /.test(w)), ["derived week 2026-11-09 (" + NAME[FIERCE] + " Silvis backup) yields to published entries on " + DAY], "T: one warning for the derived week, naming 11/10");
+  eq(D2.derivedConfirmed.map((c) => c.day), ["2026-11-09", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15"], "T: the other six days are confirmed by his explicit backup rows");
   for (let k = 0; k < 7; k++) { const d = addDays("2026-11-09", k); if (d === DAY) continue; eq(out2.schedule[d].backup, FIERCE, "derived backup " + d + " must stay"); eq(out2.schedule[d].backupLocked, true, "derived backup " + d + " must stay locked"); }
   ok(D2.lockViolations.some((l) => l.day === DAY && l.role === P && l.id === FIERCE), "the manual lock's collision with his derived week must be reported in lockViolations");
   ok(!D2.warnings.some((w) => /generator bug/.test(w)), "fixture run: generator reports its own bug");
@@ -869,6 +924,83 @@ eq(presets[1].end, "2027-01-31", "3 months from 2026-11-02");
 const p1 = GEN.genPrng(42), p2 = GEN.genPrng(42);
 eq([p1(), p1(), p1.int(100)], [p2(), p2(), p2.int(100)], "genPrng is deterministic");
 
+/* ---------------------- T: fill-open-only (the October backfill) */
+// generate(ctx, start, end, { fillOpenOnly: true }) fills ONLY the open slots of the input inside the range: every
+// held slot - locked or not, externalCover included - is fixed (byte-identical on the output, lock flags untouched),
+// smoothing / repair never move it, and its rule conflicts are facts (diagnostics.fixedViolations, never
+// hardViolations). Restated from the seed: the open slots of the locked import inside 10/15..11/1 - 10/15 + 10/24
+// primary and eleven backups: the eight of the ER-panel author's 9/22 open list (rules doc section 7: 10/15, 10/21, 10/23, 10/24,
+// 10/25, 10/30, 10/31, 11/1) plus 10/16, 10/27, 10/29, Philip primary days her 9/16 document left without a backup
+// (rules doc section 8 item 14) - and the fixed count; per seed (50 x bestOf 2) the full checkRun contract plus the
+// byte-identical held slots and every open slot filled or listed with reasons.
+const BF = { name: "R1 backfill fill-open-only 2026-10-15..2026-11-01", start: "2026-10-15", end: "2026-11-01" };
+const bfDays = daysList(BF.start, BF.end);
+const heldIn = (d, role) => { const e = INPUT[d]; return !!(e && (e[role] || (role === P && e.externalCover))); };
+const bfOpen = []; bfDays.forEach((d) => ROLES.forEach((role) => { if (!heldIn(d, role)) bfOpen.push(d + " " + role); }));
+CUR.range = BF.name; CUR.seed = "-"; CUR.day = "-";
+const OFFICE_OPEN_BACKUPS = ["2026-10-15", "2026-10-21", "2026-10-23", "2026-10-24", "2026-10-25", "2026-10-30", "2026-10-31", "2026-11-01"]; // the ER-panel author's 9/22 document (rules doc section 7)
+eq(bfOpen, ["2026-10-15 primary", "2026-10-15 backup", "2026-10-16 backup", "2026-10-21 backup", "2026-10-23 backup", "2026-10-24 primary", "2026-10-24 backup", "2026-10-25 backup", "2026-10-27 backup", "2026-10-29 backup", "2026-10-30 backup", "2026-10-31 backup", "2026-11-01 backup"], "seed: the open slots of the locked October import inside the backfill range (10/15 + 10/24 primary, eleven backups)");
+ok(OFFICE_OPEN_BACKUPS.every((d) => bfOpen.includes(d + " " + B)), "seed: the ER-panel author's eight open October backups are all open in the import");
+eq(bfOpen.filter((k) => /backup$/.test(k)).map((k) => k.split(" ")[0]).filter((d) => !OFFICE_OPEN_BACKUPS.includes(d)), ["2026-10-16", "2026-10-27", "2026-10-29"], "seed: the three open backups beyond the ER-panel author's list are 10/16, 10/27, 10/29 (item 14)");
+["2026-10-16", "2026-10-27", "2026-10-29"].forEach((d) => eq([INPUT[d].primary, INPUT[d].primaryLocked], [PHILIP, true], "seed: " + d + " is a locked Philip primary with its backup open"));
+const bfFixed = bfDays.length * 2 - bfOpen.length;
+timing[BF.name] = { ms: 0, runs: 0, candidates: 0 };
+for (let s = 1; s <= SEEDS; s++) {
+  const t = Date.now();
+  const out = GEN.generate(ctx, BF.start, BF.end, { seed: s, bestOf: 2, fillOpenOnly: true });
+  timing[BF.name].ms += Date.now() - t; timing[BF.name].runs++; timing[BF.name].candidates += out.diagnostics.candidatesTried;
+  checkRun(out, BF, s, false);
+  CUR.range = BF.name; CUR.seed = s; CUR.day = "-";
+  eq(out.diagnostics.mode, "fill-open-only", "diagnostics.mode");
+  eq(out.diagnostics.fixedSlots, bfFixed, "diagnostics.fixedSlots = every held input slot inside the range");
+  bfDays.forEach((d) => ROLES.forEach((role) => {
+    if (!heldIn(d, role)) return;
+    CUR.day = d;
+    const e = out.schedule[d], i = INPUT[d];
+    eq([e[role], e[role + "Locked"], e.externalCover, e.source, e.note], [i[role] || null, !!i[role + "Locked"], i.externalCover || null, i.source, i.note], "held " + role + " slot rewritten in fill-open-only mode");
+  }));
+  CUR.day = "-";
+  const filled = bfOpen.filter((k) => { const [d, role] = k.split(" "); return !!out.schedule[d][role]; });
+  const listed = bfOpen.filter((k) => { const [d, role] = k.split(" "); return inUncovered(out, d, role); });
+  eq(filled.length + listed.length, bfOpen.length, "every open slot is filled or listed with reasons (filled " + JSON.stringify(filled) + ", listed " + JSON.stringify(listed) + ")");
+  ok(listed.includes("2026-10-15 primary"), "10/15 primary stays open (nobody's rules allow it): " + JSON.stringify(listed));
+  bfOpen.filter((k) => /backup$/.test(k)).forEach((k) => ok(filled.includes(k), "open backup " + k + " gets no candidate although backup is open to everyone (listed: " + JSON.stringify(listed) + ")"));
+  ok(filled.includes("2026-10-24 primary") || listed.includes("2026-10-24 primary"), "10/24 primary filled or listed");
+}
+// The unlocked-held case (test/fixtures/fill-open-only-2026-10.json): Khan written in as 10/21 backup and Acton as
+// 10/24 primary, neither locked. A plain generate() regenerates both; fillOpenOnly keeps them byte-identical, counts
+// them as fixed, never reports them as hard violations and lists Acton's off-list 10/24 in fixedViolations; the
+// locked-slot report (lockViolations) is unaffected.
+{
+  const FIXO = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "fill-open-only-2026-10.json"), "utf8"));
+  const inputO = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } });
+  Object.keys(FIXO.schedule).forEach((d) => { inputO.schedule[d] = JSON.parse(JSON.stringify(FIXO.schedule[d])); });
+  const ctxO = R.buildContext(inputO);
+  if (ctxO.warnings.length) fail("buildContext warnings (fill-open-only fixture): " + JSON.stringify(ctxO.warnings));
+  CUR.range = "fill-open-only fixture " + BF.start + ".." + BF.end; CUR.seed = 1; CUR.day = "2026-10-24";
+  eq([FIXO.schedule["2026-10-24"].primary, FIXO.schedule["2026-10-24"].primaryLocked, FIXO.schedule["2026-10-21"].backup, FIXO.schedule["2026-10-21"].backupLocked], [ACTON, false, KHAN, false], "fixture: Acton 10/24 primary and Khan 10/21 backup, both unlocked");
+  ok(!ACT_AVAIL.primary.has("2026-10-24") && ACT_GOV["2026-10"].has(P), "fixture: 10/24 is off Acton's governed October primary list (a fixed-slot conflict)");
+  const outN = GEN.generate(ctxO, BF.start, BF.end, { seed: 1, bestOf: 2 });
+  eq(outN.diagnostics.mode, "generate", "default mode");
+  eq(outN.diagnostics.fixedSlots, bfFixed, "default mode: only the locked slots are fixed");
+  ok(outN.schedule["2026-10-24"].primary !== ACTON, "default mode: the unlocked Acton primary on 10/24 is cleared and regenerated (got " + outN.schedule["2026-10-24"].primary + ")");
+  const outO = GEN.generate(ctxO, BF.start, BF.end, { seed: 1, bestOf: 2, fillOpenOnly: true });
+  const DOo = outO.diagnostics, e24 = outO.schedule["2026-10-24"], e21 = outO.schedule["2026-10-21"];
+  eq(DOo.mode, "fill-open-only", "fixture: mode");
+  eq(DOo.fixedSlots, bfFixed + 2, "fixture: the two unlocked held slots count as fixed too");
+  eq([e24.primary, e24.primaryLocked, e24.source, e24.note], [ACTON, false, "manual", FIXO.schedule["2026-10-24"].note], "fixture: 10/24 primary - the unlocked Acton stays as written");
+  eq([e21.backup, e21.backupLocked, e21.primary, e21.primaryLocked, e21.source], [KHAN, false, ACTON, true, "manual"], "fixture: 10/21 - the unlocked Khan backup stays, the locked Acton primary too");
+  ok(e24.backup && e24.backup !== ACTON, "fixture: 10/24 backup is filled by someone else (got " + e24.backup + ")");
+  eq(DOo.hardViolations, [], "fixture: fixed slots are facts, never hard violations");
+  ok(Array.isArray(DOo.fixedViolations) && DOo.fixedViolations.some((v) => v.day === "2026-10-24" && v.role === P && v.id === ACTON && v.reasons.some((r) => r.indexOf("whitelist-month") === 0)), "fixture: Acton's off-list 10/24 is reported in diagnostics.fixedViolations: " + JSON.stringify(DOo.fixedViolations));
+  eq(DOo.lockViolations.map((l) => l.day + " " + l.role + " " + l.id), expectedLockViolations(BF).map((l) => l.day + " " + l.role + " " + l.id), "fixture: lockViolations unaffected by fill-open-only (locked slots only)");
+  ok(!DOo.warnings.some((w) => /generator bug/.test(w)), "fixture: generator reports its own bug");
+  const openO = []; bfDays.forEach((d) => ROLES.forEach((role) => { const e = inputO.schedule[d]; if (!(e && (e[role] || (role === P && e.externalCover)))) openO.push(d + " " + role); }));
+  openO.forEach((k) => { const [d, role] = k.split(" "); ok(!!outO.schedule[d][role] !== inUncovered(outO, d, role), "fixture: open slot " + k + " filled XOR listed"); });
+  eq(openO.length, bfOpen.length - 2, "fixture: two fewer open slots than the seed (10/21 backup, 10/24 primary held)");
+  CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
+}
+
 /* ------------------------------------------------ the Nov-Dec table */
 const tBig = Date.now();
 const big = GEN.generate(ctx, RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: 200 });
@@ -878,12 +1010,30 @@ checkRun(big, RANGES[1], 1, true); // seed 1, bestOf 200; deep = item G tally co
 // open slot at all - the three Thursday backups (11/05, 11/19, 12/03) that only the
 // old day rules left open are now fillable. Deterministic (genPrng, seed 1).
 CUR.range = "R2 Nov-Dec bestOf 200"; CUR.seed = 1; CUR.day = "-";
-eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone preview (seed 1, bestOf 200): no uncovered slot");
+// T (9/22): with the ER-panel author's November locks, Thu 11/5 primary is open for nobody - Acton (its locked backup) did not offer
+// 11/5 as primary, Burchett did not offer it at all, Philip's week of 11/2 is not on his list, Khan never takes a
+// Thursday, Fierce is in Clinton, Sarkar is outside her window (rules doc section 8 item 13). It is the ONLY open slot
+// of the milestone preview; every reason is restated by name.
+eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), ["2026-11-05 primary"], "milestone preview (seed 1, bestOf 200): exactly one open slot - 11/5 primary (T)");
+{
+  const u = big.diagnostics.uncovered[0], first = (id) => String((u.reasons[id] || [])[0] || "");
+  eq([first(ACTON), first(BURCHETT), first(PHILIP), first(KHAN), first(FIERCE), first(SARKAR)], ["whitelist-month", "whitelist-month", "outside-available-weeks", "hard-never-weekday:Thu", "weekday-pattern:Thu", "outside-window"], "11/5 primary: the first hard reason per surgeon (Acton also holds-other-role)");
+}
 // J (9/22): equal shares in force on the milestone preview - both checks read the targets from the diagnostics.
 // (1) Khan is no longer the default weekend backup: his Nov-Dec backup count is at most 1.5 x his backup target
 //     (review section 4 item 2: the old preview gave him 21 backups against a share near 8-9).
 // (2) every pool member's monthly primary count is within 3 of the primary target unless availability limits it
-//     (allowedPrimary + locked primaries below the target).
+//     (allowedPrimary + locked primaries below the target). T (9/22): the symmetric case - a member is FORCED over his
+//     target when he is the ONLY pool member eligible for an open primary on the lock-only base (November after the ER-panel author's
+//     locks: Philip is the sole candidate for Tue 11/10, Thu 11/12, Fri 11/13 and Tue 11/24 - Burchett and Acton are off
+//     their published lists, Khan never a Tue/Thu and East-busy 11/13, Fierce is locked backup 11/9-11/16 and in Clinton,
+//     Sarkar is outside her window). Fairness cannot move a day nobody else may take, so such sole-candidate days are
+//     subtracted before the tolerance is applied; they are computed here from eligibility (standalone or as a block
+//     member) on the lock-only schedule and named in the message, and Philip's November set is pinned by name. Only a
+//     GENERATED primary counts (the output's own lock flag is off): import locks and Fierce's derived-week locks are
+//     already inside lockedHeld.primary and never forced days.
+const soleCandidatePrimaries = (out, id, m) => monthDays(m).filter((d) => d >= RANGES[1].start && d <= RANGES[1].end && out.schedule[d] && out.schedule[d].primary === id && !out.schedule[d].primaryLocked &&
+  IDS.every((o) => o === id || !(R.eligibility(ctx, d, P, o).ok || R.eligibility(ctx, d, P, o, { asBlockMember: true }).ok)));
 {
   const DB = big.diagnostics, kb = DB.tallies[KHAN].range;
   ok(kb.target && typeof kb.target.backup === "number" && kb.target.backup > 0, "Khan must carry a Nov-Dec backup target (got " + JSON.stringify(kb.target) + ")");
@@ -892,9 +1042,12 @@ eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone pr
     const M = DB.impliedTargets.months[m].members[id], c = DB.tallies[id].months[m].primary;
     if (M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget) return; // availability-limited: visible in the shares table, not a defect
     CUR.day = m;
-    ok(Math.abs(c - M.primaryTarget) <= 3, CODE[id] + " " + m + ": " + c + " primaries against a primary target of " + M.primaryTarget + " (allowed " + M.allowedPrimary + " + locked " + M.lockedHeld.primary + ") - more than 3 off");
+    const forced = soleCandidatePrimaries(big, id, m);
+    ok(Math.abs(c - forced.length - M.primaryTarget) <= 3, CODE[id] + " " + m + ": " + c + " primaries against a primary target of " + M.primaryTarget + " (allowed " + M.allowedPrimary + " + locked " + M.lockedHeld.primary + "; sole-candidate days subtracted: " + (forced.join(", ") || "none") + ") - more than 3 off");
   }));
   CUR.day = "-";
+  eq(soleCandidatePrimaries(big, PHILIP, "2026-11"), ["2026-11-10", "2026-11-12", "2026-11-13", "2026-11-24"], "T: Philip is the sole primary candidate on exactly 11/10, 11/12, 11/13, 11/24 once the ER-panel author's November locks are in");
+  eq(soleCandidatePrimaries(big, PHILIP, "2026-12"), [], "T: no sole-candidate day for Philip in December");
 }
 // L (9/22, data-driven): Khan = weekend PRIMARY when East allows. On the milestone preview, among the weekends
 // open to him (khanOpenWeekends: primary-eligible all three days) the full-block PRIMARY weekends are at least
@@ -912,8 +1065,15 @@ eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone pr
   const wkDays = days.filter((d) => isWeekend(d) && !isHoliday(d));
   const kP = wkDays.filter((d) => holder(view, d, P) === KHAN).length, kB = wkDays.filter((d) => holder(view, d, B) === KHAN).length;
   console.log("L (Khan weekends, Nov-Dec bestOf 200 seed 1): weekends open to him " + openWk.length + ", full-block primary " + fullP + ", with a backup day of his " + anyB + "; weekend days outside holiday units: primary " + kP + ", backup " + kB);
-  ok(fullP >= 2 && anyB === 0, "L: of the " + openWk.length + " weekends open to Khan he is full-block primary on " + fullP + " (>= 2 expected) and holds a backup day on " + anyB + " (0 expected: " + openWk.filter((trio) => trio.some((d) => holder(view, d, B) === KHAN)).map((t) => t[0]).join(", ") + ")");
-  ok(kP >= 6 && kB === 0, "L: Khan holds " + kB + " weekend backup days (0 expected) against " + kP + " weekend primary days (>= 6 expected) in Nov-Dec: " + wkDays.filter((d) => holder(view, d, B) === KHAN).join(", "));
+  // T (9/22): the ER-panel author's November locks change the data under these pins - Fri 11/20 is Burchett's, so the 11/20-22 weekend
+  // is no longer open to Khan (two open weekends remain: 12/4 and 12/18), and the 11/6-8 primaries are all locked
+  // (Acton, Burchett, Burchett), so the only way he can serve that weekend is backup. The pins therefore hold L's own
+  // statements rather than the pre-T observed counts: he is never backup on a weekend he could have taken as primary
+  // (anyB 0), his full-block primary weekends are at least his backup weekends (spec '>='), he blocks at least one open
+  // weekend, and over the run his weekend backup days are at most half his weekend primary days (spec 'at most half').
+  ok(fullP >= 1 && fullP >= anyB && anyB === 0, "L: of the " + openWk.length + " weekends open to Khan he is full-block primary on " + fullP + " (>= 1 and >= his backup weekends expected) and holds a backup day on " + anyB + " (0 expected: " + openWk.filter((trio) => trio.some((d) => holder(view, d, B) === KHAN)).map((t) => t[0]).join(", ") + ")");
+  ok(kP >= 3 && kB * 2 <= kP, "L: Khan holds " + kB + " weekend backup days (at most half expected) against " + kP + " weekend primary days (>= 3 expected) in Nov-Dec: " + wkDays.filter((d) => holder(view, d, B) === KHAN).join(", "));
+  ok(wkDays.filter((d) => holder(view, d, B) === KHAN).every((d) => holder(INPUT, d, P) != null || holder(INPUT, d, B) != null || !R.eligibility(ctx, d, P, KHAN, { asBlockMember: true }).ok), "L/T: every weekend backup day of Khan's lies on a day whose primary was locked to someone else (or East-busy for him): " + wkDays.filter((d) => holder(view, d, B) === KHAN).join(", "));
   ok(DB.softPenalties.some((s) => s.id === KHAN && s.reason === "weekend-primary" && s.weight < 0), "L: the preview's soft list carries Khan's weekend-primary bonus (the term is in force)");
   // holiday units are not weekend units (review 9/22): neither L term ever lands on a holiday-unit day
   eq(DB.softPenalties.filter((s) => (s.reason === "weekend-primary" || s.reason === "weekend-backup") && isHoliday(s.day)).map((s) => s.day + " " + s.role + " " + s.reason), [], "L: no weekend-primary / weekend-backup term on a holiday-unit day");
@@ -936,8 +1096,13 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   const DO = outOpt.diagnostics;
   ok(!DO.warnings.some((w) => /generator bug/.test(w)), "opt-out run: generator reports its own bug");
   eq(DO.hardViolations, [], "opt-out run: hard violations");
-  const actonBackups = Object.keys(outOpt.schedule).filter((d) => outOpt.schedule[d].backup === ACTON);
+  // T (9/22): the ER-panel author's published rows lock Acton as backup on 11/3, 11/5, 11/17 - a lock is a fact the generator never
+  // moves, so those three stay (reported as lock violations naming the opt-out); he is never PLACED as backup.
+  const actonLockedB = Object.keys(INPUT).filter((d) => d >= RANGES[1].start && d <= RANGES[1].end && lockedIn(d, B) && INPUT[d].backup === ACTON);
+  eq(actonLockedB, ["2026-11-03", "2026-11-05", "2026-11-17"], "seed: Acton's locked November backups (the ER-panel author 9/22)");
+  const actonBackups = Object.keys(outOpt.schedule).filter((d) => outOpt.schedule[d].backup === ACTON && !actonLockedB.includes(d));
   eq(actonBackups, [], "opt-out run: Acton placed as backup on " + actonBackups.join(", "));
+  actonLockedB.forEach((d) => { eq([outOpt.schedule[d].backup, outOpt.schedule[d].backupLocked], [ACTON, true], "opt-out run: the locked Acton backup " + d + " stays a lock"); ok(DO.lockViolations.some((l) => l.day === d && l.role === B && l.id === ACTON && l.reasons.some((r) => String(r).indexOf("backup-opt-out") === 0)), "opt-out run: the locked Acton backup " + d + " is reported as a lock violation naming backup-opt-out: " + JSON.stringify(DO.lockViolations.filter((l) => l.day === d))); });
   ok(Object.keys(outOpt.schedule).some((d) => outOpt.schedule[d].primary === ACTON), "opt-out run: Acton must still be placed as primary (the opt-out is backup-only)");
   DO.uncovered.filter((u) => u.role === B).forEach((u) => ok((u.reasons[ACTON] || []).some((r) => String(r).indexOf("backup-opt-out") === 0), "opt-out run: open backup " + u.day + " does not name backup-opt-out for BDA: " + JSON.stringify(u.reasons[ACTON])));
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
@@ -965,6 +1130,8 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   const inputEdge = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } });
   CUR.range = "range-edge fixture 2026-11-02..2026-11-08"; CUR.seed = 1; CUR.day = "2026-11-02";
   eq(["2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01"].map((d) => holder(inputEdge.schedule, d, P)), [PHILIP, PHILIP, PHILIP, PHILIP], "seed: Philip holds 10/29 -> 11/01 primary (locked import)");
+  // T (9/22): the seed now holds the ER-panel author's 11/2 row (Acton P + Burchett B); the fixture replaces the whole row with the manual Philip lock
+  eq([holder(inputEdge.schedule, "2026-11-02", P), holder(inputEdge.schedule, "2026-11-02", B)], [ACTON, BURCHETT], "seed: 11/2 is Acton P + Burchett B (the ER-panel author 9/22) - the fixture overrides that row");
   inputEdge.schedule["2026-11-02"] = { primary: PHILIP, backup: null, primaryLocked: true, backupLocked: false, source: "manual", externalCover: null, note: "harness: range-edge fixture" };
   const ctxEdge = R.buildContext(inputEdge);
   if (ctxEdge.warnings.length) fail("buildContext warnings (range-edge fixture): " + JSON.stringify(ctxEdge.warnings));
@@ -990,7 +1157,7 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   CUR.range = "derived-week-overridden fixture 2026-11-02..2026-11-30"; CUR.seed = 1; CUR.day = "2026-11-09";
   const wkOv = daysList("2026-11-09", "2026-11-15");
   eq(wkOv.map((d) => DERIVED_ROLE[d]), [B, B, B, B, B, B, B], "fixture week must be Fierce's derived Silvis-BACKUP (East primary) week");
-  wkOv.forEach((d) => { ok(!inputOv.schedule[d], "seed already holds " + d + " (fixture drift?)"); inputOv.schedule[d] = { primary: null, backup: ACTON, primaryLocked: false, backupLocked: true, source: "manual", externalCover: null, note: "harness: derived week overridden" }; });
+  wkOv.forEach((d) => { ok(inputOv.schedule[d] && inputOv.schedule[d].backup === FIERCE && inputOv.schedule[d].backupLocked === true, "seed: " + d + " is Fierce's explicit backup row (T) - the fixture replaces it with a manual Acton lock"); inputOv.schedule[d] = { primary: null, backup: ACTON, primaryLocked: false, backupLocked: true, source: "manual", externalCover: null, note: "harness: derived week overridden" }; });
   const ctxOv = R.buildContext(inputOv);
   if (ctxOv.warnings.length) fail("buildContext warnings (derived-week-overridden fixture): " + JSON.stringify(ctxOv.warnings));
   const heldOv = daysList("2026-11-01", "2026-11-30").filter((d) => holder(inputOv.schedule, d, P) === FIERCE || holder(inputOv.schedule, d, B) === FIERCE).length;
@@ -999,6 +1166,10 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   CUR.day = "-";
   wkOv.forEach((d) => { eq(outOv.schedule[d].backup, ACTON, "manual backup lock kept on " + d); ok(DOv.warnings.some((w) => w.indexOf("derived lock overridden by import/manual lock: " + d + " backup derived " + FIERCE) === 0), "missing the 'derived lock overridden' warning for " + d + ": " + JSON.stringify(DOv.warnings)); });
   ok(!DOv.warnings.some((w) => /generator bug/.test(w)), "derived-week-overridden run: generator reports its own bug");
+  // T: all seven days yield to the manual Acton locks - listed once each, one warning for the week, nothing confirmed
+  eq(DOv.derivedYields.map((y) => y.day + ":" + y.role + ":" + y.holderId + ":" + y.holderRole + ":" + y.holderSource), wkOv.map((d) => d + ":" + B + ":" + ACTON + ":" + B + ":manual"), "T: derivedYields lists the whole overridden week");
+  eq(DOv.warnings.filter((w) => /^derived week /.test(w)), ["derived week 2026-11-09 (" + NAME[FIERCE] + " Silvis backup) yields to published entries on " + wkOv.join(", ")], "T: one warning naming all seven days");
+  eq(DOv.derivedConfirmed, [], "T: nothing confirmed once the whole week is someone else's");
   const NFOv = novOv.members[FIERCE];
   eq(NFOv.lockedHeld.primary + NFOv.lockedHeld.backup, heldOv, "Fierce holds " + heldOv + " November day(s) before generation (the overridden week is not his)");
   eq([NFOv.eastPrimaryDays, NFOv.clipPrimary], [7, 14 - 1 - 7], "the overridden East primary week still counts: eastPrimaryDays 7, clipPrimary 6 (J: the same clip as when he holds the derived backup)");
@@ -1056,8 +1227,8 @@ console.log("  median candidate range totals: " + Object.keys(median.out.diagnos
 console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this harness");
 
 const total = Date.now() - T_FILE;
-console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + 1 x bestOf 200 + 5 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 7 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

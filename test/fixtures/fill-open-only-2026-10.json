@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "purpose": "Regression case for Prompt 12 T (2026-09-22), generator opts.fillOpenOnly: two slots of the locked October import are written in by hand WITHOUT a lock - Khan as backup on Wed 2026-10-21 and Acton as primary on Sat 2026-10-24 (off his governed October list, and his 10/23 + 10/24 make two straight primaries under his max 3). A plain generate() clears both unlocked slots and regenerates them; generate(..., { fillOpenOnly: true }) treats every held slot as fixed - byte-identical on the output, lock flags untouched, never a hard violation (its conflicts are listed in diagnostics.fixedViolations) - and fills only the open slots (10/15 + 10/24 backup, the other open October backups, 10/15 primary stays open for nobody).",
+    "shape": "schedule fragment merged over the seed's existingAssignments before rules.buildContext (guide section 4.1); each entry replaces the seed's row for that day",
+    "range": { "start": "2026-10-15", "end": "2026-11-01" },
+    "contact_data": "none"
+  },
+  "schedule": {
+    "2026-10-21": {
+      "primary": "s3",
+      "backup": "s1",
+      "primaryLocked": true,
+      "backupLocked": false,
+      "source": "manual",
+      "externalCover": null,
+      "note": "fixture: Acton primary as imported (locked); Khan backup written in by hand, not locked"
+    },
+    "2026-10-24": {
+      "primary": "s3",
+      "backup": null,
+      "primaryLocked": false,
+      "backupLocked": false,
+      "source": "manual",
+      "externalCover": null,
+      "note": "fixture: Acton primary written in by hand, not locked (off his October list; 10/23 + 10/24 = 2 straight)"
+    }
+  }
+}

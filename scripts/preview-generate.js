@@ -11,6 +11,17 @@
  * Usage:
  *   node scripts/preview-generate.js [--start 2026-11-02] [--end 2027-01-03]
  *        [--bestOf 200] [--seed 7] [--out docs/PREVIEW-<start>-to-<end>.md]
+ *        [--backfill 2026-10-15..2026-11-01]
+ *
+ * --backfill A..B (Prompt 12 T, 9/22): after the milestone generate, run a
+ * SECOND generate over A..B with { fillOpenOnly: true } on the same live rows
+ * (independent of the milestone result) and append the section
+ * "## October backfill (fill-open-only, A..B)" - per open slot of the input:
+ * day, weekday, role, the placed candidate (or "open" + per-surgeon reasons)
+ * and the alternatives (every active surgeon eligible for that slot on the
+ * input schedule), plus the backfill's own tally delta. The JSON gains
+ * backfill: { range, schedule, diagnostics, openSlots, talliesDelta }. The
+ * milestone sections are unchanged (the preview-diff tool reads .schedule).
  */
 const fs = require("fs");
 const path = require("path");
@@ -27,6 +38,13 @@ const END = opt("end", "2027-01-03");
 const BEST_OF = Number(opt("bestOf", "200"));
 const SEED = Number(opt("seed", "7"));
 const OUT = opt("out", path.join(REPO, "docs", `PREVIEW-${START}-to-${END}.md`));
+const BACKFILL = opt("backfill", null); // "YYYY-MM-DD..YYYY-MM-DD" (Prompt 12 T)
+const BACKFILL_RANGE = (() => {
+  if (!BACKFILL) return null;
+  const m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(BACKFILL);
+  if (!m || m[1] > m[2]) { console.error("FAIL: --backfill wants YYYY-MM-DD..YYYY-MM-DD (got " + BACKFILL + ")"); process.exit(1); }
+  return { start: m[1], end: m[2] };
+})();
 
 const cfg = fs.readFileSync(path.join(REPO, "config.js"), "utf8");
 const URL = (cfg.match(/SUPABASE_URL\s*=\s*"([^"]+)"/) || [])[1];
@@ -214,8 +232,60 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     L.push(`## diagnostics.${key}`); L.push(""); L.push("```"); L.push(JSON.stringify(dg[key], null, 1).slice(0, 12000)); L.push("```"); L.push("");
   }
 
+  // ---- October backfill (Prompt 12 T, 9/22): a SECOND generate over --backfill A..B with fillOpenOnly on the same
+  // live rows. generate() restores ctx.schedule after every run, so this is independent of the milestone result
+  // above. Every held slot of the input (locked or not, externalCover included) is fixed; only the open slots are
+  // filled. Per open slot: the placed candidate (or "open" + the generator's per-surgeon reasons) and the
+  // alternatives = every active surgeon eligible for that slot on the INPUT schedule (the lock-only base, before any
+  // backfill placement), with the sum of the soft weights eligibility reports. Then the backfill's own tally delta.
+  let backfill;
+  if (BACKFILL_RANGE) {
+    const bStart = BACKFILL_RANGE.start, bEnd = BACKFILL_RANGE.end;
+    const tb0 = Date.now();
+    const bres = G.generate(ctx, bStart, bEnd, { seed: SEED, bestOf: BEST_OF, respectLocks: true, fillOpenOnly: true });
+    const tb1 = Date.now();
+    const bs = bres.schedule || {}, bd = bres.diagnostics || {};
+    const WDN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const weekdayOf = d => WDN[new Date(d + "T00:00:00Z").getUTCDay()];
+    const nextDay = d => { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + 1); return t.toISOString().slice(0, 10); };
+    const bDays = []; for (let d = bStart; d <= bEnd; d = nextDay(d)) bDays.push(d);
+    const heldIn = (d, role) => { const e = schedule[d]; return !!(e && (e[role] || (role === "primary" && e.externalCover))); };
+    const bUnc = bd.uncovered || [];
+    const openRows = [];
+    bDays.forEach(d => ["primary", "backup"].forEach(role => {
+      if (heldIn(d, role)) return;
+      const placed = (bs[d] && bs[d][role]) || null;
+      // Alternatives = standalone eligibility on the INPUT schedule (no asBlockMember: a block-only surgeon may still
+      // be eligible as part of a whole weekend). The surgeon the backfill itself placed in the OTHER role of the same
+      // day is skipped - he cannot hold both roles (review 9/22).
+      const otherRoleHolder = bs[d] && bs[d][role === "primary" ? "backup" : "primary"];
+      const alternatives = (ctx.activeIds || roster.map(r => r.id)).map(id => { if (id === otherRoleHolder) return null; const r = R.eligibility(ctx, d, role, id); return r.ok ? { id, name: nameOf(id), soft: (r.soft || []).reduce((n, x) => n + (Number(x.weight) || 0), 0) } : null; }).filter(Boolean);
+      const u = bUnc.find(x => x.day === d && x.role === role);
+      const reasons = u ? Object.keys(u.reasons || {}).map(id => nameOf(id) + ": " + [].concat(u.reasons[id]).join(", ")).join("; ") : "";
+      openRows.push({ day: d, weekday: weekdayOf(d), role, placed, placedName: placed ? nameOf(placed) : "open", alternatives, reasons });
+    }));
+    const talliesDelta = {};
+    roster.forEach(r => { talliesDelta[r.id] = { primary: 0, backup: 0, days: [] }; });
+    bDays.forEach(d => ["primary", "backup"].forEach(role => { const id = bs[d] && bs[d][role]; if (id && !heldIn(d, role) && talliesDelta[id]) { talliesDelta[id][role]++; talliesDelta[id].days.push(d + " " + role[0].toUpperCase()); } }));
+    backfill = { range: { start: bStart, end: bEnd }, schedule: bs, diagnostics: bd, openSlots: openRows, talliesDelta, generateMs: tb1 - tb0 };
+    const nFilled = openRows.filter(r => r.placed).length;
+    L.push(`## October backfill (fill-open-only, ${bStart}..${bEnd})`); L.push("");
+    L.push(`*A second generate() over the same LIVE rows with fillOpenOnly (independent of the milestone result above): every held slot - locked or not - is fixed and never rewritten; only the open slots are filled. Alternatives are standalone eligibility on the lock-only input (a block-only surgeon may still be eligible as part of a whole weekend; the backfill's own same-day other-role placement is excluded). seed ${SEED}, bestOf ${BEST_OF}, candidates tried ${bd.candidatesTried != null ? bd.candidatesTried : "?"}, generate() ${tb1 - tb0} ms; diagnostics.mode ${bd.mode}; fixed slots ${bd.fixedSlots}; open slots of the input ${openRows.length}: ${nFilled} filled, ${openRows.length - nFilled} still open. Nothing is published by this script.*`); L.push("");
+    L.push("| Day | Weekday | Role | Placed | Alternatives (standalone eligibility on the input schedule; soft weight) | Why open (per surgeon) |"); L.push("|---|---|---|---|---|---|");
+    openRows.forEach(r => L.push(`| ${r.day} | ${r.weekday} | ${r.role} | ${r.placed ? "**" + r.placedName + "**" : "open"} | ${md(r.alternatives.map(a => a.name + (a.soft ? " (" + a.soft + ")" : "")).join(", ") || "-")} | ${md(r.reasons)} |`));
+    L.push("");
+    L.push("### Backfill tally delta (days added by the backfill only)"); L.push("");
+    L.push("| Surgeon | +Primary | +Backup | Days |"); L.push("|---|---|---|---|");
+    roster.forEach(r => { const t = talliesDelta[r.id]; if (!t || (!t.primary && !t.backup)) return; L.push(`| ${r.name} | ${t.primary} | ${t.backup} | ${t.days.join(", ")} |`); });
+    L.push("");
+    for (const key of ["fixedViolations", "lockViolations", "derivedYields", "warnings"]) {
+      if (bd[key] == null || (Array.isArray(bd[key]) && !bd[key].length)) continue;
+      L.push(`### backfill diagnostics.${key}`); L.push(""); L.push("```"); L.push(JSON.stringify(bd[key], null, 1).slice(0, 8000)); L.push("```"); L.push("");
+    }
+  }
+
   fs.writeFileSync(OUT, L.join("\n"), "utf8");
   const jsonOut = OUT.replace(/\.md$/, ".json");
-  fs.writeFileSync(jsonOut, JSON.stringify({ start: START, end: END, seed: SEED, bestOf: BEST_OF, generatedAt: new Date().toISOString(), schedule: sched, diagnostics: dg }, null, 1), "utf8");
-  console.log(`report: ${OUT}\njson:   ${jsonOut}\nopen slots: ${unc.length} | soft penalties: ${soft.length} | generate ${t2 - t1} ms`);
+  fs.writeFileSync(jsonOut, JSON.stringify({ start: START, end: END, seed: SEED, bestOf: BEST_OF, generatedAt: new Date().toISOString(), schedule: sched, diagnostics: dg, backfill }, null, 1), "utf8");
+  console.log(`report: ${OUT}\njson:   ${jsonOut}\nopen slots: ${unc.length} | soft penalties: ${soft.length} | generate ${t2 - t1} ms` + (backfill ? `\nbackfill ${backfill.range.start}..${backfill.range.end}: ${backfill.openSlots.length} open input slots, ${backfill.openSlots.filter(r => r.placed).length} filled, ${backfill.openSlots.filter(r => !r.placed).length} still open | generate ${backfill.generateMs} ms` : ""));
 })().catch(e => { console.error("FAIL:", e && e.stack || e); process.exit(1); });

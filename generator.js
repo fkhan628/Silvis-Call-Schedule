@@ -9,8 +9,16 @@
 //   * Node: const gen = require("./generator.js") (rules.js via require).
 //
 // Contract:
-//   generate(ctx, startDate, endDate, { seed, bestOf, respectLocks, timeBudgetMs })
+//   generate(ctx, startDate, endDate, { seed, bestOf, respectLocks, timeBudgetMs, fillOpenOnly })
 //     -> { schedule, diagnostics }
+//   fillOpenOnly (Prompt 12 T, 9/22; default false): every slot that has a
+//   holder on the input schedule inside the range - locked or not, externalCover
+//   included - is FIXED: kept byte-identical (holder, its own lock flag, source,
+//   note), never rewritten, never moved by repair or smoothing, never a hard
+//   violation (its rule conflicts go to diagnostics.fixedViolations); only the
+//   open slots are filled. diagnostics.mode = "fill-open-only" / "generate",
+//   diagnostics.fixedSlots = the fixed count (the lock count in the default mode).
+//   lockViolations keeps reporting locked slots only.
 //   ctx comes from rules.buildContext(). rules.js reads ctx.schedule live on
 //   every eligibility() call, so each candidate installs its own working copy
 //   as ctx.schedule for the duration of the run and the original is restored
@@ -32,6 +40,14 @@
 //   1 seed locks      import/manual locks, externalCover primaries and Fierce's
 //                     East-derived weeks (source "east-derived"); import/manual
 //                     locks beat derived locks with a warning. Locks never move.
+//                     T: the derived-week yield rule is general - any held row
+//                     (published, import, manual, claimed; a fixed slot under
+//                     fillOpenOnly) beats a derived lock on its day, either as
+//                     another holder of the derived role or as the derived
+//                     surgeon held in the other role. Yielded days are listed in
+//                     diagnostics.derivedYields with ONE warning per derived week
+//                     naming them; days whose holder IS the derived surgeon are
+//                     listed in diagnostics.derivedConfirmed (the week is whole).
 //   2 build units     holiday units (rules.holidayUnits) pre-empt weekend days;
 //                     leftover Fri/Sat/Sun form a reduced weekend unit; every
 //                     other day is a day unit. Tightness per unit/role is
@@ -308,25 +324,53 @@ function genUnset(G, S, day, role) {
 // everything else cleared; derived East weeks applied as locks unless an
 // import/manual lock already holds the slot (warning). Out-of-range entries
 // are shared by reference and never written.
+// Prompt 12 T (9/22), opts.fillOpenOnly: every HELD slot inside the range
+// (locked or not, externalCover included) is fixed. Inside the run a fixed slot
+// carries the lock flag - so eligibility (slot-locked / lockHolder), the unit
+// builders and the derived-yield test below all see it as the fact it is - and
+// genSnapshot puts the input's own flag back on the output (G.outLock).
+// G.fixed[d][role] marks the fixed slots, G.fixedCount counts them
+// (diagnostics.fixedSlots; in the default mode fixed == locked, the count is the
+// lock count). G.lockSrc reads "import" / "fixed" (+ "+derived" when the derived
+// surgeon holds his own derived day) / "derived".
+// The derived-week yield rule (general; rules.js rdDerivedOverridden applies the
+// same test): a held slot beats a derived lock on its day - another holder in
+// the derived role, or the derived surgeon himself held in the other role - and
+// the day is recorded in G.derivedYields with ONE warning per derived week; a
+// held slot whose holder IS the derived surgeon confirms the derived lock
+// (G.derivedConfirmed; the week stays whole).
 function genSeedLocks(G, original) {
-  var base = {}, ctx = G.ctx;
+  var base = {}, ctx = G.ctx, fillOpen = !!G.fillOpenOnly;
   Object.keys(original).forEach(function (k) { base[k] = original[k]; });
-  G.lockSrc = {};
+  G.lockSrc = {}; G.fixed = {}; G.outLock = {}; G.fixedCount = 0;
+  G.derivedYields = []; G.derivedConfirmed = [];
   G.days.forEach(function (d) {
     var e = original[d] || {};
     var lockedP = !!e.externalCover || (G.respectLocks && !!e.primaryLocked && !!e.primary);
     var lockedB = G.respectLocks && !!e.backupLocked && !!e.backup;
+    var fixedP = lockedP || (fillOpen && !!e.primary);
+    var fixedB = lockedB || (fillOpen && !!e.backup);
     base[d] = {
-      primary: lockedP ? (e.primary || null) : null,
-      backup: lockedB ? e.backup : null,
-      primaryLocked: lockedP,
-      backupLocked: lockedB,
-      source: (lockedP || lockedB) ? (e.source || "import") : "generated",
+      primary: fixedP ? (e.primary || null) : null,
+      backup: fixedB ? e.backup : null,
+      primaryLocked: fixedP,
+      backupLocked: fixedB,
+      source: (fixedP || fixedB) ? (e.source || "import") : "generated",
       externalCover: e.externalCover || null,
       note: e.note === undefined ? null : e.note
     };
-    G.lockSrc[d] = { primary: lockedP ? "import" : null, backup: lockedB ? "import" : null };
+    G.lockSrc[d] = { primary: lockedP ? "import" : (fixedP ? "fixed" : null), backup: lockedB ? "import" : (fixedB ? "fixed" : null) };
+    G.fixed[d] = { primary: fixedP, backup: fixedB };
+    // the flag the OUTPUT carries for a fixed slot: a lock stays a lock, an unlocked held slot stays unlocked
+    G.outLock[d] = { primary: lockedP || (fixedP && !!e.primaryLocked), backup: lockedB || (fixedB && !!e.backupLocked) };
+    G.fixedCount += (fixedP ? 1 : 0) + (fixedB ? 1 : 0);
   });
+  var yieldWeeks = {};
+  function yieldOn(d, role, derivedId, holderId, holderRole, holderSource) {
+    G.derivedYields.push({ day: d, role: role, derivedId: derivedId, holderId: holderId, holderRole: holderRole, holderSource: holderSource || null });
+    var k = genMondayOf(d) + "|" + role + "|" + derivedId;
+    (yieldWeeks[k] = yieldWeeks[k] || []).push(d);
+  }
   G.days.forEach(function (d) {
     var ds = ctx.derivedByDay[d];
     if (!ds) return;
@@ -335,12 +379,14 @@ function genSeedLocks(G, original) {
       if (!id) return;
       var e = base[d], other = role === "primary" ? "backup" : "primary";
       if (e[role + "Locked"]) {
-        if (e[role] === id) { G.lockSrc[d][role] = "import+derived"; return; }
+        if (e[role] === id) { G.lockSrc[d][role] = G.lockSrc[d][role] + "+derived"; G.derivedConfirmed.push({ day: d, role: role, id: id, derivedId: id, holderSource: e.source }); return; }
         G.warnings.push("derived lock overridden by import/manual lock: " + d + " " + role + " derived " + id + ", locked to " + (e[role] || ("externalCover " + e.externalCover)));
+        yieldOn(d, role, id, e[role] || ("ext:" + e.externalCover), role, e.source);
         return;
       }
       if (e[other + "Locked"] && e[other] === id) {
         G.warnings.push("derived lock skipped: " + d + " " + role + " derived " + id + " but he is import-locked as " + other + " that day");
+        yieldOn(d, role, id, id, other, e.source);
         return;
       }
       e[role] = id;
@@ -348,6 +394,10 @@ function genSeedLocks(G, original) {
       if (!G.lockSrc[d].primary && !G.lockSrc[d].backup) e.source = "east-derived";
       G.lockSrc[d][role] = "derived";
     });
+  });
+  Object.keys(yieldWeeks).sort().forEach(function (k) {
+    var parts = k.split("|"), r = ctx.rosterById[parts[2]];
+    G.warnings.push("derived week " + parts[0] + " (" + ((r && r.name) || parts[2]) + " Silvis " + parts[1] + ") yields to published entries on " + yieldWeeks[k].join(", "));
   });
   return base;
 }
@@ -1087,17 +1137,22 @@ function genDiagnostics(G, best, meta) {
   uncovered.forEach(function (u) {
     Object.keys(u.reasons).forEach(function (id) { if (u.reasons[id][0] === "eligible-but-not-placed") warnings.push("open slot " + u.day + " " + u.role + " is fillable by " + id + " - generator bug, report it"); });
   });
-  // Locks that break a rule (reported, never changed).
-  var lockViolations = [];
+  // Locks that break a rule (reported, never changed). T: a fixed slot that is
+  // not a lock (fill-open-only) is reported apart, in fixedViolations.
+  var lockViolations = [], fixedViolations = [];
   G.days.forEach(function (d) {
     var e = W[d];
     GEN_ROLES.forEach(function (role) {
       if (!e[role + "Locked"] || !e[role]) return;
       var r = R.eligibility(ctx, d, role, e[role], { asBlockMember: genHoldsFullBlock(W, d, role, e[role]) });
       var conflicts = r.conflicts || (r.ok ? [] : r.hard);
-      if (conflicts.length) lockViolations.push({ day: d, role: role, id: e[role], lock: G.lockSrc[d][role], reasons: conflicts.slice() });
+      if (!conflicts.length) return;
+      var src = G.lockSrc[d][role] || "";
+      if (src.indexOf("fixed") === 0) fixedViolations.push({ day: d, role: role, id: e[role], source: e.source, reasons: conflicts.slice() });
+      else lockViolations.push({ day: d, role: role, id: e[role], lock: src, reasons: conflicts.slice() });
     });
   });
+  if (fixedViolations.length) warnings.push(fixedViolations.length + " held, unlocked slot(s) kept by fill-open-only break a rule - kept as facts, see fixedViolations");
   // Tallies: per month (full calendar month, running-tally semantics) plus in-range totals.
   var tallies = {};
   ids.forEach(function (id) {
@@ -1223,6 +1278,12 @@ function genDiagnostics(G, best, meta) {
     softByReason: softByReason,
     hardViolations: ev.hardViolations.slice(),
     lockViolations: lockViolations,
+    // T (9/22): the run mode, the fixed-slot count, the conflicts of fixed unlocked slots, and the derived-week yield report
+    mode: G.fillOpenOnly ? "fill-open-only" : "generate",
+    fixedSlots: G.fixedCount,
+    fixedViolations: fixedViolations,
+    derivedYields: G.derivedYields.slice(),
+    derivedConfirmed: G.derivedConfirmed.slice(),
     holidayUnits: holidayUnitsOut,
     weekendUnits: weekendUnitsOut,
     impliedTargets: G.targets.implied,
@@ -1243,7 +1304,9 @@ function genSnapshot(G, W) {
   var out = {};
   G.days.forEach(function (d) {
     var e = W[d];
-    out[d] = { primary: e.primary || null, backup: e.backup || null, primaryLocked: !!e.primaryLocked, backupLocked: !!e.backupLocked, source: e.source, externalCover: e.externalCover || null, note: e.note === undefined ? null : e.note };
+    // T: a fixed slot goes out with the input's own lock flag (an unlocked hand-written slot stays unlocked)
+    var f = G.fixed && G.fixed[d], o = G.outLock && G.outLock[d];
+    out[d] = { primary: e.primary || null, backup: e.backup || null, primaryLocked: f && f.primary ? !!o.primary : !!e.primaryLocked, backupLocked: f && f.backup ? !!o.backup : !!e.backupLocked, source: e.source, externalCover: e.externalCover || null, note: e.note === undefined ? null : e.note };
   });
   return out;
 }
@@ -1266,6 +1329,7 @@ function generate(ctx, startDate, endDate, opts) {
   var G = {
     ctx: ctx, R: R, W: W, start: startDate, end: endDate, days: days, months: months,
     respectLocks: opts.respectLocks !== false, jitter: typeof W.jitter === "number" ? W.jitter : 1, warnings: [],
+    fillOpenOnly: opts.fillOpenOnly === true, // T: fill only the open slots, every held slot is fixed
     unitKeyOf: {}, unitKindOf: {},
     // N: window weeks per windows surgeon (her monthly primary target = target x these weeks; J counts per role,
     // so her backups simply have no target to count against)

@@ -36,8 +36,13 @@
 //                 { busy: Set, reasons } } - the last is deriveKhanBusyDays()'s
 //                 own return shape.
 //   surgeonRules[id].explicitListMonths  ['YYYY-MM', ...] or { month, roles }.
-//                 Since 9/22 a governed month restricts PRIMARY only (backup is
-//                 open to everyone), so a backup-only entry has no effect.
+//                 The role scope is read literally (Prompt 12 I + T, 9/22): a
+//                 plain 'YYYY-MM' entry governs PRIMARY only (backup is open to
+//                 everyone; under backupPolicy.openToEveryone false it governs
+//                 both roles again), an object entry governs exactly the roles
+//                 it names - { month, roles: ['primary', 'backup'] } restricts
+//                 both, the form the seed writes for a list the office has
+//                 published (Burchett's and Acton's November, T).
 //   surgeonRules[id].backupOptOut  true -> hard 'backup-opt-out' on every
 //                 backup slot, holiday units included; never waived, no dated
 //                 row lifts it (Faraz 9/22; nobody has opted out).
@@ -288,12 +293,15 @@ function rdAvailRec(map, date) {
   return r;
 }
 
-// explicitListMonths -> { 'YYYY-MM': roleMask }. A string entry governs both
-// roles; { month, roles } governs only the listed roles.
-function rdGovernedMonths(list) {
+// explicitListMonths -> { 'YYYY-MM': roleMask }. A string entry governs the
+// roles of `stringMask` (buildContext passes primary only while backup is open
+// to everyone, both roles under the closed policy); { month, roles } governs
+// exactly the listed roles whatever the policy (an object without roles = both).
+function rdGovernedMonths(list, stringMask) {
   var out = Object.create(null);
+  var sm = typeof stringMask === "number" ? stringMask : RD_MASK.any;
   (list || []).forEach(function (e) {
-    if (typeof e === "string") out[e] = (out[e] || 0) | RD_MASK.any;
+    if (typeof e === "string") out[e] = (out[e] || 0) | sm;
     else if (e && typeof e === "object" && e.month) {
       var roles = Array.isArray(e.roles) && e.roles.length ? e.roles : ["primary", "backup"];
       roles.forEach(function (r) { out[e.month] = (out[e.month] || 0) | (RD_MASK[r] || 0); });
@@ -424,7 +432,7 @@ function buildContext(input) {
       vacation: new Set(),
       dayBeforeVacation: new Set(),
       avail: Object.create(null),
-      governedMonths: rdGovernedMonths(rules.explicitListMonths), // month -> role mask
+      governedMonths: rdGovernedMonths(rules.explicitListMonths, backupOpen ? RD_MASK.primary : RD_MASK.any), // month -> role mask (T: a plain entry = primary only while backup is open)
       weekDays: new Set(),        // days inside rules.availableWeeks (Mon..Sun per listed Monday)
       weeksFromN: null,           // first day the weeks whitelist governs (day number)
       windowDays: new Set(),      // days inside rules.availableWindows
@@ -624,6 +632,13 @@ function rdEastCovered(ctx, P, info) {
 //   (b) he himself is locked into the OTHER role that day (a manual primary lock
 //       on a derived-backup day frees the backup slot for everyone else -
 //       he cannot hold both roles, so the derived backup lock is moot).
+// This is the general yield rule (Prompt 12 T, 9/22): an explicit published,
+// import, manual or claimed row - any locked row - beats a derived-week lock on
+// that day. The generator (genSeedLocks) applies the same test when it seeds the
+// locks, lists every yielded day in diagnostics.derivedYields with one warning per
+// derived week, and lists the days whose locked holder IS the derived surgeon
+// (Fierce's explicit backup rows 11/9-11/15) in diagnostics.derivedConfirmed -
+// those days yield nothing and the week stays whole.
 function rdDerivedOverridden(ctx, date, role, id) {
   var e = ctx.schedule[date];
   if (!e) return false;
@@ -783,12 +798,15 @@ function rdStatic(ctx, date, role, id, asBlock) {
   res.patternDeferred = patternDeferred;
   res.rowAvail = rowAvail;
 
-  // Dated whitelists - PRIMARY only since 9/22 (backup is open to everyone), so a
-  // role-scoped explicit list can only narrow primary. Sarkar's windows are her
-  // only availability and keep governing both roles.
+  // Dated whitelists. A governed month restricts exactly the roles its
+  // explicitListMonths entry names (P.governedMonths carries the mask: a plain
+  // entry = primary only since 9/22, an object entry = the roles it lists - T);
+  // the recurring whitelist and the weeks whitelist restrict PRIMARY only (backup
+  // is open to everyone). Sarkar's windows are her only availability and keep
+  // governing both roles.
   var datedBlock = null;
   var isPrimary = role === "primary" || !ctx.backupOpen; // backupPolicy.openToEveryone false -> both roles again
-  var governed = isPrimary && !!((P.governedMonths[info.month] || 0) & mask);
+  var governed = !!((P.governedMonths[info.month] || 0) & mask);
   if (governed) {
     if (!rowAvail) datedBlock = "whitelist-month";
   } else if (isPrimary && (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length))) {

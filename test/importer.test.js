@@ -30,7 +30,7 @@ const days = plan.scheduleDayRows;
 const byDay = {};
 days.forEach((d) => { byDay[d.day] = d; });
 eq(days.length, seed.existingAssignments.length, "one row per existingAssignment");
-eq(days.length, 53, "49 hand-schedule days + 4 Thanksgiving days");
+eq(days.length, 73, "49 hand-schedule days + 4 Thanksgiving days + 20 November rows (Prompt 12 T)");
 eq(days.filter((d) => d.day >= "2026-11-26" && d.day <= "2026-11-29").length, 4, "Thanksgiving unit rows");
 const ext = days.filter((d) => d.external_cover != null);
 eq(ext.length, 7, "7 externalCover (Atwell) rows");
@@ -66,6 +66,62 @@ ok(plan.infoDeltas.every((l) => /nothing to write/.test(l)), "info deltas say no
 ok(plan.infoDeltas.some((l) => /^10\/12 P Philip -> Fierce/.test(l)), "info delta rendering");
 ok(plan.infoDeltas.some((l) => /^10\/24 P Sarkar -> open \(applied; faraz-2026-09-22-sarkar-two-days\)/.test(l)), "10/24 delta (surgeon null) renders as 'Sarkar -> open': " + plan.infoDeltas.filter((l) => /^10\/24/.test(l)).join(" | "));
 
+/* ------------------------------ November locks (Prompt 12 T, 9/22) */
+// the ER-panel author's 9/22 document entered Burchett's and Acton's November days (rules doc section 7); Faraz's two
+// amendments fold in: 11/25 primary stays Khan (Burchett's entry superseded) and Fierce takes BACKUP 11/9-11/16
+// (Burchett's backup entries on 11/9, 11/14, 11/15, 11/16 superseded). One row per day merging the roles; a null
+// slot stays open for the generator (nullSlotIsNeverLocked). Every expected list is restated here, not read from the seed.
+step("November locks: the ER-panel author's 9/22 entries + Faraz's two amendments");
+const NOV_SRC = "office-er-call-panels-2026-09-22", FIERCE_SRC = "fierce-2026-09-22-backup-week", KHAN_SRC = "faraz-2026-09-22-khan-1125";
+const S2 = BURCHETT, S3 = ACTON, S5 = FIERCE;
+const nov = (d) => d.day >= "2026-11-02" && d.day <= "2026-11-25"; // 11/1 is the last day of the September-October import
+const novDays = days.filter(nov).map((d) => d.day);
+eq(novDays, ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18", "2026-11-20", "2026-11-23", "2026-11-25"], "T: 20 November rows - 11/2-11/18 daily, 11/20, 11/23, 11/25");
+eq(days.length, 73, "T: 53 + 20 November rows");
+eq(days.filter((d) => nov(d) && d.primary_id === S2).map((d) => d.day), ["2026-11-03", "2026-11-07", "2026-11-08", "2026-11-11", "2026-11-20", "2026-11-23"], "T: Burchett primary 11/3, 11/7, 11/8, 11/11, 11/20, 11/23 (11/25 superseded by Khan)");
+eq(days.filter((d) => nov(d) && d.backup_id === S2).map((d) => d.day), ["2026-11-02", "2026-11-04", "2026-11-06", "2026-11-18"], "T: Burchett backup 11/2, 11/4, 11/6, 11/18 (11/9, 11/14, 11/15, 11/16 superseded by Fierce)");
+eq(days.filter((d) => nov(d) && d.primary_id === S3).map((d) => d.day), ["2026-11-02", "2026-11-04", "2026-11-06", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-18"], "T: Acton primary 11/2, 11/4, 11/6, 11/14, 11/15, 11/16, 11/18");
+eq(days.filter((d) => nov(d) && d.backup_id === S3).map((d) => d.day), ["2026-11-03", "2026-11-05", "2026-11-17"], "T: Acton backup 11/3, 11/5, 11/17");
+eq(days.filter((d) => nov(d) && d.backup_id === S5).map((d) => d.day), ["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16"], "T: Fierce backup 11/9-11/16 (amendment B)");
+ok(days.filter((d) => nov(d) && d.backup_id === S5).every((d) => d.backup_locked === true), "T: Fierce's eight backup rows are locked");
+eq([byDay["2026-11-09"].primary_id, byDay["2026-11-09"].primary_locked, byDay["2026-11-09"].backup_id, byDay["2026-11-09"].backup_locked], [null, false, S5, true], "T: 11/9 = Fierce backup locked, primary open (null slot never locked)");
+ok(byDay["2026-11-09"].note.indexOf("seed: " + FIERCE_SRC) === 0, "T: 11/9 provenance is Fierce's 9/22 word: " + byDay["2026-11-09"].note);
+eq([byDay["2026-11-14"].primary_id, byDay["2026-11-14"].backup_id, byDay["2026-11-14"].primary_locked, byDay["2026-11-14"].backup_locked], [S3, S5, true, true], "T: 11/14 = Acton P + Fierce B, both locked");
+eq([byDay["2026-11-02"].primary_id, byDay["2026-11-02"].backup_id, byDay["2026-11-02"].primary_locked, byDay["2026-11-02"].backup_locked], [S3, S2, true, true], "T: 11/2 = Acton P + Burchett B, both locked");
+eq([byDay["2026-11-25"].primary_id, byDay["2026-11-25"].primary_locked, byDay["2026-11-25"].backup_id, byDay["2026-11-25"].backup_locked], [KHAN, true, null, false], "T: 11/25 = Khan primary locked (amendment A; not Burchett), backup open");
+eq(byDay["2026-11-25"].note, "seed: faraz-2026-09-22-khan-1125 - Khan covers 11/25, 2026 only", "T: 11/25 provenance is Faraz's 9/22 decision, a one-off (source + the exact row note)");
+ok(days.filter(nov).every((d) => [NOV_SRC, FIERCE_SRC, KHAN_SRC].some((src) => d.note.indexOf("seed: " + src) === 0)), "T: every November row carries one of the three 9/22 sources");
+["2026-11-05", "2026-11-17"].forEach((d) => eq([byDay[d].primary_id, byDay[d].primary_locked, byDay[d].backup_id], [null, false, S3], "T: " + d + " Acton backup only, primary open"));
+["2026-11-07", "2026-11-08", "2026-11-20", "2026-11-23"].forEach((d) => eq([byDay[d].primary_id, byDay[d].backup_id, byDay[d].backup_locked], [S2, null, false], "T: " + d + " Burchett primary only, backup open"));
+ok(!days.some((d) => d.day === "2026-11-19" || d.day === "2026-11-21" || d.day === "2026-11-22" || d.day === "2026-11-24"), "T: no row for 11/19, 11/21, 11/22, 11/24 (nobody published)");
+eq(plan.infoDeltas.filter((l) => /^11\/25 P Burchett -> Khan \(applied; faraz-2026-09-22-khan-1125\)/.test(l)).length, 1, "T: pendingDeltas records 11/25 Burchett -> Khan: " + plan.infoDeltas.filter((l) => /^11\/25/.test(l)).join(" | "));
+["11/9", "11/14", "11/15", "11/16"].forEach((md) => eq(plan.infoDeltas.filter((l) => l.indexOf(md + " B Burchett -> Fierce (applied; fierce-2026-09-22-backup-week)") === 0).length, 1, "T: pendingDeltas records " + md + " backup Burchett -> Fierce"));
+{
+  // the seed's pendingDeltas rows themselves (source, status and the wording Faraz asked for; the importer renders only the heads)
+  const pd = (d, role) => seed.pendingDeltas.find((x) => x.date === d && x.role === role);
+  eq([pd("2026-11-25", "primary").surgeon, pd("2026-11-25", "primary").replaces, pd("2026-11-25", "primary").source, pd("2026-11-25", "primary").status], [KHAN, BURCHETT, KHAN_SRC, "applied"], "T: 11/25 delta = Khan replaces Burchett, applied, Faraz's 9/22 source");
+  ok(pd("2026-11-25", "primary").note.indexOf("the ER-panel author's document listed Burchett; Faraz 9/22: Khan covers 11/25, 2026 only - a one-off, not a rule") === 0, "T: 11/25 delta note opens with Faraz's wording: " + pd("2026-11-25", "primary").note);
+  ["2026-11-09", "2026-11-14", "2026-11-15", "2026-11-16"].forEach((d) => { const x = pd(d, "backup"); eq([x.surgeon, x.replaces, x.source, x.status], [FIERCE, BURCHETT, FIERCE_SRC, "applied"], "T: " + d + " backup delta = Fierce replaces Burchett"); ok(x.note.indexOf("Fierce's derived-week rule is authoritative (Faraz 9/22)") === 0, "T: " + d + " delta note names the rule: " + x.note); });
+  eq(seed.existingAssignments.find((a) => a.date === "2026-11-25").note, "Khan covers 11/25, 2026 only", "T: the 11/25 row note is exactly Faraz's wording");
+  ok(!JSON.stringify(seed.surgeonRules[KHAN]).match(/11-25|"2026-11"/), "T: no Khan RULE was added for 11/25 (a one-off lives only in existingAssignments)");
+}
+// The Thanksgiving 2026 unit is exactly Thu 11/26 - Sun 11/29: 11/25 is Khan's one-off and belongs to NO unit;
+// Christmas and New Year's keep their eves. Pinned on the seed, on the blob the app reads and on the rules context.
+step("holiday units: Thanksgiving 2026 = 11/26..11/29 exactly, 11/25 in no unit (T)");
+const TG_DAYS = ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"];
+const unit2026 = (name, src) => (src.units["2026"] || []).find((u) => u.name === name);
+eq(unit2026("Thanksgiving", seed.holidays).days, TG_DAYS, "seed: Thanksgiving 2026 unit days");
+eq(unit2026("Christmas", seed.holidays).days, ["2026-12-24", "2026-12-25"], "seed: Christmas keeps its eve");
+eq(unit2026("New Year's", seed.holidays).days, ["2026-12-31", "2027-01-01"], "seed: New Year's keeps its eve");
+ok(!Object.keys(seed.holidays.units).some((y) => seed.holidays.units[y].some((u) => u.days.includes("2026-11-25"))), "seed: 11/25 is in no holiday unit of any year");
+eq(unit2026("Thanksgiving", plan.blob.holidays).days, TG_DAYS, "blob: Thanksgiving 2026 unit days");
+{
+  const hctx = R.buildContext({ roster: plan.blob.roster, surgeonRules: plan.blob.surgeonRules, groupRules: plan.blob.groupRules, holidays: plan.blob.holidays, timeOffRows: plan.timeOffRows, availabilityRows: plan.availabilityRows, schedule: {} });
+  eq(hctx.holidayByDay["2026-11-26"].days, TG_DAYS, "ctx: the unit 11/26 belongs to is exactly 11/26..11/29");
+  eq(hctx.holidayByDay["2026-11-25"], undefined, "ctx: 11/25 belongs to no unit");
+  eq(hctx.holidayUnitsAll.filter((u) => u.days.some((d) => d >= "2026-11-01" && d <= "2026-11-30")).map((u) => u.name + ":" + u.days.join(",")), ["Thanksgiving:" + TG_DAYS.join(",")], "ctx: Thanksgiving is the only November unit");
+}
+
 /* -------------------------------------------------------- availability */
 step("availability rows vs seed statements (counted independently)");
 // Expand plan rows back to per-day statements and compare with the seed.
@@ -96,7 +152,8 @@ function count(id, kind, role) { return [...expected].filter((k) => k.startsWith
 eq(count(BURCHETT, "available", "any"), 7 + 19, "Burchett Oct 7 + Dec 19 dates");
 eq(count(BURCHETT, "backup_only", "any"), 1);
 eq(count(BURCHETT, "unavailable", "any"), 9);
-eq(count(ACTON, "available", "primary"), 10); eq(count(ACTON, "available", "backup"), 3);
+eq(count(ACTON, "available", "primary"), 10 + 7, "Acton Oct 10 + Nov 7 primary dates (T)"); eq(count(ACTON, "available", "backup"), 3 + 3, "Acton Oct 3 + Nov 3 backup dates (T)");
+eq(count(BURCHETT, "available", "primary"), 7, "T: Burchett November primary list is role-scoped (7 dates)"); eq(count(BURCHETT, "available", "backup"), 8, "T: Burchett November backup list is role-scoped (8 dates)");
 eq(count(PHILIP, "available", "primary"), 8); eq(count(PHILIP, "no_backup", "backup"), 4);
 eq(count(KHAN, "available", "any"), 0, "Khan has no dated statements");
 ok(!plan.availabilityRows.some((r) => r.person_id === "s6"), "Sarkar windows are NOT rows");
@@ -112,8 +169,8 @@ const keys = plan.availabilityRows.map((r) => [r.person_id, r.kind, r.role, r.st
 eq(new Set(keys).size, keys.length, "availability keys unique");
 // stats agree
 eq(plan.stats.availability, plan.availabilityRows.length);
-eq(plan.stats.schedule_days, 53); eq(plan.stats.time_off, 7, "stats.time_off: 3 + Burchett's four 2027 weekends (9/22 evening)");
-eq(plan.stats.scheduleDays.externalCover, 7); eq(plan.stats.scheduleDays.openBackup, 20); eq(plan.stats.scheduleDays.openPrimary, 2, "open primaries in the import: 10/15 and, since 9/22 evening, 10/24");
+eq(plan.stats.schedule_days, 73); eq(plan.stats.time_off, 7, "stats.time_off: 3 + Burchett's four 2027 weekends (9/22 evening)");
+eq(plan.stats.scheduleDays.externalCover, 7); eq(plan.stats.scheduleDays.openBackup, 25, "open backups: 16 October + 11/7, 11/8, 11/20, 11/23, 11/25 + 4 Thanksgiving days"); eq(plan.stats.scheduleDays.openPrimary, 8, "open primaries in the import: 10/15, 10/24 (9/22 evening) and, since T, 11/5, 11/9, 11/10, 11/12, 11/13, 11/17");
 
 /* ------------------------------------------------------------ time_off */
 step("time_off rows");
@@ -168,8 +225,8 @@ eq(plan.blob.groupRules, stripNoteKeys(seed.groupRules), "blob groupRules == see
 ok(IMP.impFindKeys(seed.holidays, NOTE_KEY).length >= 1, "the seed's holidays carry note-like keys (" + IMP.impFindKeys(seed.holidays, NOTE_KEY).length + ")");
 eq(plan.blob.holidays, stripNoteKeys(seed.holidays), "blob holidays == seed holidays minus note-like keys (unit notes are engine documentation; nothing reads them)");
 // explicitListMonths derived
-eq(plan.blob.surgeonRules[BURCHETT].explicitListMonths, ["2026-10", "2026-12"]);
-eq(plan.blob.surgeonRules[ACTON].explicitListMonths, ["2026-10"]);
+eq(plan.blob.surgeonRules[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, "2026-12"], "T: the explicit object entry for November survives the import as written");
+eq(plan.blob.surgeonRules[ACTON].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }], "T: Acton likewise");
 eq(plan.blob.surgeonRules[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
 ok(!("explicitListMonths" in plan.blob.surgeonRules[KHAN]), "no list -> no key");
 const derived = IMP.impSeedSurgeonRules({ surgeonRules: {
@@ -239,7 +296,7 @@ ok(checked > 1000, "eligibility identical on " + checked + " (day, role, surgeon
 step("seed adapter delegate keeps its contract");
 eq(SA.seedToAvailabilityRows(seed).length, expected.size, "adapter: one row per dated statement");
 eq(SA.seedToTimeOffRows(seed).length, 7, "adapter: 7 vacation rows (Acton 2, Philip 1, Burchett 4)");
-eq(Object.keys(SA.seedToSchedule(seed)).length, 53);
+eq(Object.keys(SA.seedToSchedule(seed)).length, 73);
 eq(SA.seedToSurgeonRules(seed)[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
 
 /* ------------------------------------------------------------ refusal */
@@ -315,16 +372,16 @@ function applyToModel(model, p) {
   return changed;
 }
 const model = { blob: {}, schedule_days: [], availability: [], time_off: [] };
-eq(applyToModel(model, plan), { sd: 53, av: plan.availabilityRows.length, to: 7 }, "first apply writes everything");
+eq(applyToModel(model, plan), { sd: 73, av: plan.availabilityRows.length, to: 7 }, "first apply writes everything");
 eq(applyToModel(model, plan), { sd: 0, av: 0, to: 0 }, "second apply writes nothing");
 ok(model.schedule_days.every((d) => d.version === 1), "versions untouched by the no-op re-run");
 
 /* ------------------------------------------------------------ planDiff */
 step("planDiff");
 const d0 = IMP.planDiff(plan, { blob: {}, availability: [], time_off: [], schedule_days: [] });
-eq(d0.tables.schedule_days.insert, 53); eq(d0.tables.availability.insert, plan.availabilityRows.length); eq(d0.tables.time_off.insert, 7);
+eq(d0.tables.schedule_days.insert, 73); eq(d0.tables.availability.insert, plan.availabilityRows.length); eq(d0.tables.time_off.insert, 7);
 eq(d0.tables.call_schedule_data.insert, 5); eq(d0.blocked, []); eq(d0.changes, []);
-eq(d0.totalChanges, 5 + 53 + plan.availabilityRows.length + 7);
+eq(d0.totalChanges, 5 + 73 + plan.availabilityRows.length + 7);
 const liveEq = { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) };
 liveEq.blob.settings.importedAt = "2020-01-01T00:00:00Z"; // a different import time is not a change
 liveEq.blob.settings.appAdded = true;                        // keys the app added are ignored
@@ -332,7 +389,7 @@ liveEq.blob.extraTopLevel = { keep: 1 };
 const d1 = IMP.planDiff(plan, liveEq);
 eq(d1.totalChanges, 0, "live == plan -> nothing"); eq(d1.changes, []); eq(d1.blocked, []);
 ok(/No changes/.test(d1.text));
-eq(d1.tables.schedule_days.unchanged, 53); eq(d1.tables.availability.unchanged, plan.availabilityRows.length); eq(d1.tables.time_off.unchanged, 7);
+eq(d1.tables.schedule_days.unchanged, 73); eq(d1.tables.availability.unchanged, plan.availabilityRows.length); eq(d1.tables.time_off.unchanged, 7);
 // the expected live diff for the orchestrator (item S): live = tonight's rows before S -> 1 schedule_days update (10/24), 4 time_off inserts, blob update, availability unchanged
 const livePreS = clone(liveEq);
 Object.assign(livePreS.schedule_days.find((d) => d.day === "2026-10-24"), { primary_id: "s6", primary_locked: true, note: "seed: burchett-email-2026-09-17" });
@@ -342,6 +399,23 @@ const dS = IMP.planDiff(plan, livePreS);
 eq([dS.tables.schedule_days.update, dS.tables.time_off.insert, dS.tables.availability.insert + dS.tables.availability.update + dS.tables.availability.delete, dS.tables.call_schedule_data.update, dS.tables.time_off.delete], [1, 4, 0, 1, 0], "expected live diff: 1 day update, 4 vacation inserts, blob update, availability untouched, no deletes");
 eq(dS.changes, ["10/24 P Sarkar -> OPEN"], "the one day change is 10/24 primary Sarkar -> OPEN");
 eq(dS.tables.time_off.rows, ["insert Burchett 2027-01-09..2027-01-10", "insert Burchett 2027-01-16..2027-01-17", "insert Burchett 2027-02-12..2027-02-14", "insert Burchett 2027-04-09..2027-04-11"]);
+// the expected live diff for the orchestrator (item T): live = the rows as they stand before T (no November rows before
+// 11/26, no November availability for Burchett / Acton, the blob without their November lists) -> 20 schedule_days
+// inserts, the November availability inserts (collapsed ranges of the two role-scoped lists), one blob update, nothing
+// deleted, nothing blocked, no time_off change.
+const livePreT = clone(liveEq);
+livePreT.schedule_days = livePreT.schedule_days.filter((d) => !(d.day >= "2026-11-02" && d.day <= "2026-11-25"));
+livePreT.availability = livePreT.availability.filter((r) => !((r.person_id === BURCHETT || r.person_id === ACTON) && r.start_date >= "2026-11-01" && r.start_date <= "2026-11-30"));
+livePreT.blob.surgeonRules = clone(plan.blob.surgeonRules);
+[BURCHETT, ACTON].forEach((id) => { delete livePreT.blob.surgeonRules[id].explicitAvailable["2026-11"]; livePreT.blob.surgeonRules[id].explicitListMonths = livePreT.blob.surgeonRules[id].explicitListMonths.filter((e) => typeof e === "string"); });
+const novAvail = plan.availabilityRows.filter((r) => (r.person_id === BURCHETT || r.person_id === ACTON) && r.start_date >= "2026-11-01" && r.start_date <= "2026-11-30");
+ok(novAvail.length >= 4 && novAvail.every((r) => r.kind === "available" && (r.role === "primary" || r.role === "backup")), "T: the November availability rows are role-scoped available rows (" + novAvail.length + ")");
+const dT = IMP.planDiff(plan, livePreT);
+eq([dT.tables.schedule_days.insert, dT.tables.schedule_days.update, dT.tables.schedule_days.delete, dT.tables.schedule_days.blocked, dT.tables.availability.insert, dT.tables.availability.update, dT.tables.availability.delete, dT.tables.call_schedule_data.update, dT.tables.time_off.insert, dT.tables.time_off.delete], [20, 0, 0, 0, novAvail.length, 0, 0, 1, 0, 0], "T: expected live diff = 20 day inserts, " + novAvail.length + " availability inserts, 1 blob update, no deletes, no time_off change (got " + JSON.stringify(dT.tables) + ")");
+eq(dT.tables.schedule_days.byMonth["2026-11"], { insert: 20, update: 0, unchanged: 5, blocked: 0, delete: 0 }, "T: November = 20 inserts + the unchanged 11/1 and the 4 Thanksgiving rows");
+eq(dT.changes, [], "T: pure inserts - no update line (an insert is counted, not listed as a change)");
+eq(dT.blocked, [], "T: nothing blocked");
+ok(new RegExp("schedule_days: insert 20, update 0, delete 0, unchanged 53").test(dT.text), "T: the dry-run text reads 'schedule_days: insert 20, update 0, delete 0, unchanged 53': " + dT.text.split("\n").filter((l) => /^schedule_days:/.test(l)).join(" | "));
 // a changed import day -> update line; an app-edited day -> blocked, never counted as a change
 const liveMod = clone(liveEq);
 liveMod.schedule_days.find((d) => d.day === "2026-10-12").primary_id = PHILIP;
