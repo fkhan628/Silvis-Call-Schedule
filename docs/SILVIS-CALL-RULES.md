@@ -148,6 +148,7 @@ decides the Trauma Director role.
   Saturday/Sunday**; a Saturday standalone is fine if it is ever inside a window again; no Fri–Sun block (soft, strong);
   Sunday is never inside a window. Backup on her remaining window days is allowed but not required.
 - Her target is her window-week days, not an equal share. A handoff partner the next morning is a diagnostics check.
+- ⟶ **Seed keys (Prompt 12 N, 9/22 evening):** `daysPerWindowWeek.target` = 2 (soft; a primary placement that keeps her **at or under** the target earns the bonus `window-week-below-target`, every day over it costs `window-week-over-target`; `countsBackup: false` = primary days only; the old `min`/`max` keys are ignored with a warning), `preferAlternateDays: true` (soft `consecutive-primary`), `weekendBlockPenalty: "strong"` (soft, on any multi-day block or split membership), `weekendStyle: "daily"` (a window Friday is a standalone day; `saturday-only` is legacy), `handoffPartnerRequired: true` = diagnostic only (`diagnostics.handoffGaps`); no `hardNeverWeekdays` — `availableWindows` is her only hard rule; her monthly primary target = target × window weeks in the month (`diagnostics.impliedTargets…windowTarget`, `diagnostics.windowWeeks`).
 - ⟶ **9/22 (Prompt 12 A): max 2 consecutive primary days is hard on real days**; any-role soft limit **2**.
 
 ## 4. Weekend unit — how the styles combine
@@ -155,8 +156,8 @@ decides the Trauma Director role.
 The generator treats Fri/Sat/Sun as one unit and chooses a pattern per weekend:
 
 1. **Block** — one surgeon Fri+Sat+Sun (Khan, Philip, Fierce — for Fierce this is the *only* way he takes a Friday).
-2. **Split** — one surgeon Fri+Sun, another Sat (Acton/Burchett pair; also valid for any two surgeons who both accept split). Keeps each under the 2-consecutive limit. Sarkar can only ever be the Saturday half.
-3. **Daily** — three independent days; fallback only — except for Sarkar, for whom a standalone Friday or Saturday is the normal pattern (9/22).
+2. **Split** — one surgeon Fri+Sun, another Sat (Acton/Burchett pair; also valid for any two surgeons who both accept split). Keeps each under the 2-consecutive limit. Sarkar is offered in a split or block only under her `weekendBlockPenalty` (strong soft, 9/22 evening); with Mon–Fri windows she holds no Saturday or Sunday anyway.
+3. **Daily** — three independent days; fallback only — except for Sarkar (`weekendStyle: "daily"`), for whom a window Friday is a standalone day, the normal pattern (9/22 evening); no window carries a Saturday or Sunday now.
 
 Backup for the weekend is filled with the same unit logic after primary. A surgeon's `weekendStyle` is a preference; the hard constraints (availability, caps, max consecutive) always win.
 

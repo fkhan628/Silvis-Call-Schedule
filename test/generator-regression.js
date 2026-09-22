@@ -168,7 +168,16 @@ eq(IDS.filter((id) => SR[id].backupOptOut !== false), [], "seed: every surgeon c
 const OPTED_OUT = new Set(IDS.filter((id) => SR[id].backupOptOut === true));
 const hardNeverApplies = (id, role) => { const r = SR[id].hardNeverWeekdaysRoles; return (Array.isArray(r) && r.length ? r : [P]).includes(role); }; // engine default when the key is absent OR empty: primary only
 eq(SR[KHAN].hardNeverWeekdaysRoles, [P], "seed: Khan's OR days block primary only");
-eq(SR[SARKAR].hardNeverWeekdaysRoles, [P], "seed: Sarkar's Fri/Sun block primary only");
+// Prompt 12 N (9/22 evening): Sarkar's windows are her ONLY hard rule. No hardNeverWeekdays keys; the
+// window-week count is a SOFT target (daysPerWindowWeek.target 2, primary only) checked through
+// diagnostics; alternate days and no Fri-Sun block are soft; handoffPartnerRequired is a diagnostics flag.
+ok(!("hardNeverWeekdays" in SR[SARKAR]) && !("hardNeverWeekdaysRoles" in SR[SARKAR]) && !("hardNeverWeekdaysReason" in SR[SARKAR]) && !("hardNeverWeekdaysRolesNote" in SR[SARKAR]), "seed: Sarkar carries no hardNeverWeekdays keys (9/22 evening: her windows are the only hard rule)");
+eq([SR[SARKAR].daysPerWindowWeek.target, SR[SARKAR].daysPerWindowWeek.countsBackup], [2, false], "seed: Sarkar daysPerWindowWeek = SOFT target 2 primary days per window week");
+ok(!("min" in SR[SARKAR].daysPerWindowWeek) && !("max" in SR[SARKAR].daysPerWindowWeek) && !("minIsSoft" in SR[SARKAR].daysPerWindowWeek), "seed: no hard window-week min/max keys");
+eq([SR[SARKAR].weekendStyle, SR[SARKAR].preferAlternateDays, SR[SARKAR].weekendBlockPenalty, SR[SARKAR].handoffPartnerRequired], ["daily", true, "strong", true], "seed: Sarkar weekendStyle daily, preferAlternateDays, weekendBlockPenalty strong, handoffPartnerRequired (diagnostic)");
+const SARKAR_TARGET = SR[SARKAR].daysPerWindowWeek.target;
+const HANDOFF_IDS = IDS.filter((id) => SR[id].handoffPartnerRequired === true);
+eq(HANDOFF_IDS, [SARKAR], "seed: Sarkar is the one surgeon with the handoff diagnostic");
 const FIERCE_WP = SR[FIERCE].outsideDerivedWeeks.weekdayPattern;
 eq(WD.map((w) => FIERCE_WP[w].backup), [true, true, true, true, true, true, true], "seed: Fierce may be backup on every weekday (9/22)");
 eq(WD.map((w) => FIERCE_WP[w].primary), [false, false, true, false, "weekend-block-only", "weekend-block-only", "weekend-block-only"], "seed: Fierce's primary pattern is unchanged");
@@ -208,9 +217,17 @@ SR[PHILIP].availableWeeks.forEach((mon) => { for (let k = 0; k < 7; k++) PHILIP_
 const PHILIP_WEEKS_FROM = SR[PHILIP].availableWeeks.slice().sort()[0].slice(0, 7) + "-01";
 const PHILIP_OCT_PRIMARY = new Set(SR[PHILIP].explicitAvailable["2026-10"].primary);
 const PHILIP_NO_BACKUP = explicitDates(SR[PHILIP].explicitBackupUnavailable);
-// Sarkar windows.
+// Sarkar windows (both roles, holidays included); since 9/22 evening every window is Mon-Fri, so a
+// Saturday / Sunday is outside every window. Window weeks: Monday -> the window days of that Mon-Sun week.
 const SARKAR_WINDOW = new Set();
 SR[SARKAR].availableWindows.forEach((w) => daysList(w.start, w.end).forEach((d) => SARKAR_WINDOW.add(d)));
+ok([...SARKAR_WINDOW].every((d) => !isWeekend(d) || weekday(d) === "Fri"), "seed: no Sarkar window carries a Saturday or Sunday (9/22 evening)");
+const SARKAR_WEEKS = {};
+[...SARKAR_WINDOW].sort().forEach((d) => { (SARKAR_WEEKS[mondayOf(d)] = SARKAR_WEEKS[mondayOf(d)] || []).push(d); });
+eq(Object.keys(SARKAR_WEEKS).sort(), ["2026-10-19", "2026-11-16", "2026-12-14", "2027-01-11"], "seed: four window weeks");
+// window weeks of month m that the generated range touches: a week counts once, in the month of its first window
+// day; a week entirely outside the range adds nothing to that month's target (her target is range-scoped like the shares)
+const sarkarWeeksInMonth = (m, range) => Object.keys(SARKAR_WEEKS).filter((mon) => monthOf(SARKAR_WEEKS[mon][0]) === m && SARKAR_WEEKS[mon].some((d) => d >= range.start && d <= range.end)).length;
 // Weekend styles.
 const BLOCK_STYLE = IDS.filter((id) => SR[id].weekendStyle === "block");
 eq(BLOCK_STYLE.sort(), [KHAN, PHILIP, FIERCE].sort(), "seed: block-style surgeons are Khan, Philip, Fierce");
@@ -235,8 +252,8 @@ const REASON_PREFIXES = [
   "hard-never-weekday:", "recurring-unavailable:", "weekday-not-allowed:", "weekend-block-only", "weekday-pattern:", "day-before-aledo",
   "whitelist-month", "not-recurring-available", "outside-available-weeks", "outside-window",
   "east-busy", "east-forecast-busy:", "derived-lock:", "derived-lock-held:", "slot-locked:", "external-cover", "holds-other-role",
-  "monthly-cap:", "max-consecutive:", "backup-cap:", "backup-weekend-cap:", "window-week-max:", "max-major-holidays:"
-];
+  "monthly-cap:", "max-consecutive:", "backup-cap:", "backup-weekend-cap:", "max-major-holidays:"
+]; // window-week-max: left the vocabulary 9/22 evening (Prompt 12 N: the window-week count is soft)
 // These two mean the GENERATOR (not a rule) left the slot open - always a failure.
 const PLACEHOLDER_REASONS = ["eligible-but-not-placed", "holiday-unit:eligible-but-unit-not-filled"];
 function reasonOk(r) {
@@ -442,10 +459,11 @@ function checkRun(out, range, seedNo, deep) {
           }
         }
       }
-      // item 10 (9/22: windows govern both roles; Fri/Sun follows her hardNeverWeekdaysRoles list - primary only in the seed)
+      // item 10 (9/22 evening, Prompt 12 N): her windows are the ONLY hard rule - both roles, holidays included; a
+      // Saturday / Sunday follows (no window carries one). NO assertion on her day count (soft; diagnostics below).
       if (id === SARKAR) {
         ok(SARKAR_WINDOW.has(d), "Sarkar " + role + " outside her windows");
-        if (hardNeverApplies(SARKAR, role)) ok(!["Fri", "Sun"].includes(weekday(d)), "Sarkar " + role + " on a " + weekday(d));
+        ok(!["Sat", "Sun"].includes(weekday(d)), "Sarkar " + role + " on a " + weekday(d) + " (outside every Mon-Fri window)");
       }
       // 9/22: an explicit backup opt-out is hard on every backup slot
       if (role === B) ok(!OPTED_OUT.has(id), CODE[id] + " placed as backup although opted out");
@@ -502,14 +520,29 @@ function checkRun(out, range, seedNo, deep) {
     eq(I.capClip[FIERCE], 14 - 1 - I.eastOnlyDays[FIERCE], "Fierce clip = 13 minus East-only days in " + m);
     eq(I.capClip[ACTON], null, "Acton has no clip in " + m);
     Object.keys(I.targets).forEach((id) => {
+      if (I.windowTarget && id in I.windowTarget) return; // a window target is not share-based (checked below)
       const t = I.targets[id], held = I.lockedHeld[id], clip = I.capClip[id];
       ok(t >= held, CODE[id] + " implied target " + t + " below his locked days " + held + " in " + m);
       ok(t <= Math.max(held, clip === null ? Infinity : clip), CODE[id] + " implied target " + t + " above his clip " + clip + " in " + m);
       ok(t <= Math.max(held, I.share) + 0.05, CODE[id] + " implied target " + t + " exceeds max(held, share) in " + m);
     });
-    // Khan: explicit null -> no fairness target (tallies show none) but a neutral scoring term; Sarkar (windows): no term at all
+    // Khan: explicit null -> no fairness target (tallies show none) but a neutral scoring term
     ok(!(KHAN in I.targets) && typeof I.neutralTerm[KHAN] === "number", "Khan must carry a neutral scoring term, not a target, in " + m);
-    ok(!(SARKAR in I.targets) && !(SARKAR in I.neutralTerm) && I.noTerm.includes(SARKAR), "Sarkar must carry no target term in " + m);
+    // Sarkar (Prompt 12 N, 9/22 evening): a numeric monthly PRIMARY target = daysPerWindowWeek.target x the window
+    // weeks in the month (a week counts once), exposed as impliedTargets.windowTarget, no backup target, no neutral term
+    // (N review, fix stage): a month the range touches that holds NO window week gives her no target at all
+    // (noTerm, tallies target null) - never a numeric 0 that the preview would print as "Target 0".
+    const nW = sarkarWeeksInMonth(m, range);
+    const wt = nW ? SARKAR_TARGET * nW : null;
+    ok(I.windowTarget && I.windowTarget[SARKAR] === SARKAR_TARGET * nW, "Sarkar impliedTargets.windowTarget must be " + SARKAR_TARGET * nW + " in " + m + " (got " + JSON.stringify(I.windowTarget) + ")");
+    eq(I.windowWeeks && I.windowWeeks[SARKAR], nW, "Sarkar impliedTargets.windowWeeks = window weeks the range touches in " + m);
+    if (nW) {
+      eq(I.targets[SARKAR], wt, "Sarkar implied target = window target x window weeks in " + m);
+      ok(!(SARKAR in I.neutralTerm) && !I.noTerm.includes(SARKAR), "Sarkar carries a real target in " + m + ", not a neutral / no term");
+    } else {
+      ok(!(SARKAR in I.targets) && !(SARKAR in I.neutralTerm) && I.noTerm.includes(SARKAR), "Sarkar carries NO target and no term in " + m + " (no window week in the range): targets " + JSON.stringify(I.targets[SARKAR]) + " noTerm " + JSON.stringify(I.noTerm));
+    }
+    eq(D.tallies[SARKAR].months[m].target, wt, "Sarkar tallies target = her window target (null without a window week) in " + m);
     eq(D.tallies[KHAN].months[m].target, null, "Khan tallies target must stay null in " + m);
     // K (fix stage): diagnostics.tallies carry the East primary-week days a countsEastDays cap adds
     // (eastP) so the Generate preview can flag P + eastP > cap the way the engine counts; 0 for everyone else.
@@ -574,14 +607,41 @@ function checkRun(out, range, seedNo, deep) {
     // (distinct days; his Silvis backups - including the derived East-primary week - never count)
     const fierceDays = mdays.filter((d) => holder(view, d, P) === FIERCE || FIERCE_EAST_PRIMARY_DAYS.has(d)).length;
     if (placedIn(FIERCE, P)) ok(fierceDays <= 14, "Fierce " + fierceDays + " primary + East primary-week days in " + m);
-    // item 10: Sarkar <= 4 days per window week (Mon-Sun)
-    const mondays = new Set(mdays.map(mondayOf));
-    mondays.forEach((mon) => {
-      const wk = [0, 1, 2, 3, 4, 5, 6].map((k) => addDays(mon, k));
-      const n = wk.filter((d) => holdsAny(view, d, SARKAR)).length;
-      if (wk.some((d) => out.schedule[d] && (isPlaced(out, d, P) && out.schedule[d][P] === SARKAR || isPlaced(out, d, B) && out.schedule[d][B] === SARKAR))) ok(n <= 4, "Sarkar " + n + " days in week of " + mon);
-    });
   });
+  // item 10 (Prompt 12 N, 9/22 evening): the window-week count is SOFT - no assertion on it; instead
+  // diagnostics.windowWeeks lists every window week overlapping the range (target 2, status consistent with the
+  // schedule: partial when some window days are outside the range, else met / under / over by her PRIMARY days in
+  // the Mon-Sun week), and a warning appears for exactly the fully-in-range weeks with n != target.
+  CUR.day = "-";
+  ok(Array.isArray(D.windowWeeks), "diagnostics.windowWeeks missing");
+  const expWW = Object.keys(SARKAR_WEEKS).sort().map((mon) => {
+    const wdays = SARKAR_WEEKS[mon], inRangeDays = wdays.filter((d) => days.includes(d));
+    if (!inRangeDays.length) return null;
+    const wk = [0, 1, 2, 3, 4, 5, 6].map((k) => addDays(mon, k));
+    const primaries = wk.filter((d) => holder(view, d, P) === SARKAR).length, backups = wk.filter((d) => holder(view, d, B) === SARKAR).length;
+    const partial = inRangeDays.length < wdays.length;
+    return { monday: mon, surgeonId: SARKAR, windowDays: wdays, inRangeWindowDays: inRangeDays, primaries, backups, target: SARKAR_TARGET, status: partial ? "partial" : primaries === SARKAR_TARGET ? "met" : primaries < SARKAR_TARGET ? "under" : "over" };
+  }).filter(Boolean);
+  const gotWW = (D.windowWeeks || []).slice().sort((a, b) => (a.monday + a.surgeonId).localeCompare(b.monday + b.surgeonId)).map((w) => ({ monday: w.monday, surgeonId: w.surgeonId, windowDays: w.windowDays, inRangeWindowDays: w.inRangeWindowDays, primaries: w.primaries, backups: w.backups, target: w.target, status: w.status }));
+  eq(gotWW, expWW, "diagnostics.windowWeeks (every window week overlapping the range, restated from the seed and the schedule)");
+  const expWWWarn = expWW.filter((w) => w.status !== "partial" && w.primaries !== SARKAR_TARGET).map((w) => "window week " + w.monday + ": " + NAME[SARKAR] + " has " + w.primaries + " primary day(s) (target " + SARKAR_TARGET + ")");
+  eq(D.warnings.filter((w) => /^window week /.test(w)).sort(), expWWWarn.sort(), "window-week warnings = exactly the fully-in-range weeks with n != " + SARKAR_TARGET);
+  // handoff diagnostic (handoffPartnerRequired): every in-range primary of hers whose next day is hers again or open,
+  // read from the merged view (a next day beyond the range that is not published is unknown and not listed)
+  ok(Array.isArray(D.handoffGaps), "diagnostics.handoffGaps missing");
+  const expHG = [];
+  HANDOFF_IDS.forEach((id) => days.forEach((d) => {
+    if (holder(view, d, P) !== id) return;
+    const next = addDays(d, 1), e = view[next];
+    if (!e) return;
+    if (e.primary === id) expHG.push({ day: d, next, surgeonId: id, problem: "same-surgeon" });
+    else if (!e.primary && !e.externalCover) expHG.push({ day: d, next, surgeonId: id, problem: "open" });
+  }));
+  const gotHG = (D.handoffGaps || []).slice().sort((a, b) => (a.day + a.surgeonId).localeCompare(b.day + b.surgeonId)).map((g) => ({ day: g.day, next: g.next, surgeonId: g.surgeonId, problem: g.problem }));
+  eq(gotHG, expHG.sort((a, b) => (a.day + a.surgeonId).localeCompare(b.day + b.surgeonId)), "diagnostics.handoffGaps only where the schedule shows the gap");
+  expHG.forEach((g) => ok(D.warnings.some((w) => w.indexOf("handoff " + g.day + ": ") === 0), "missing the handoff warning for " + g.day));
+  eq(D.warnings.filter((w) => /^handoff /.test(w)).length, expHG.length, "one handoff warning per gap");
+  ok(!D.hardViolations.some((v) => v.reasons.some((r) => /window-week/.test(r))), "no hard violation ever cites the window-week count");
   // consecutive PRIMARY runs (primary-only per countBackupInConsecutive:false) for ALL SIX at the seed's
   // maxConsecutiveDays, across the WHOLE range plus the 7 days before it (no month cut - Prompt 12 A / review G);
   // holiday-unit days collapse to one only for an opted-in surgeon; a run counts when it contains a placed day
@@ -600,7 +660,7 @@ function checkRun(out, range, seedNo, deep) {
     flush();
     N++;
   }
-  IDS.forEach(checkRuns);  // items 7 (Burchett 2), 10 (Sarkar 2) and, since Prompt 12 A, Khan 3 / Acton 3 / Philip 4 / Fierce 7
+  IDS.forEach(checkRuns);  // items 7 (Burchett 2), 10 (Sarkar 2 - the group-wide hard limit, not a window rule) and, since Prompt 12 A, Khan 3 / Acton 3 / Philip 4 / Fierce 7
   // item G: the preview's run columns must equal the harness's own computation
   if (deep) {
     IDS.forEach((id) => {

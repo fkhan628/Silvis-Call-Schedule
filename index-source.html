@@ -4852,7 +4852,6 @@ function reasonLabel(code, nameOf) {
     case "max-consecutive": return "more than " + arg + " consecutive days";
     case "backup-cap": return "backup cap of " + arg + " per month reached";
     case "backup-weekend-cap": return "backup weekend cap of " + arg + " reached";
-    case "window-week-max": return "over " + arg + " days in the window week";
     case "max-major-holidays": return "already holds " + arg + " major holiday(s) in 12 months";
     default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " (" + arg + ")" : "") : s;
   }
@@ -4871,8 +4870,9 @@ function softTag(soft) {
     case "over-preferred-cap": return "over preferred cap " + arg;
     case "over-target": return "over target +" + arg;
     case "under-target": return "under target";
-    case "window-week-below-min": return "under window min " + arg;
-    case "handoff-partner": return "handoff";
+    case "window-week-below-target": return "under window target " + arg;
+    case "window-week-over-target": return "over window target " + arg;
+    case "consecutive-primary": return "consecutive primary";
     case "back-to-back-weekend": return "back-to-back weekend";
     case "backup-after-primary": return "backup after primary";
     case "pattern-mismatch": return "style: " + arg;
@@ -5593,7 +5593,9 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
         <div style={box}>
           <div style={css.subT}>Availability and shape - {s.name || sel}</div>
           <SuField label="Availability mode"><select value={get("availabilityMode", "")} onChange={e => set("availabilityMode", e.target.value || undefined)} style={{ ...inp, width: 260 }}>{SU_MODES.map(m => <option key={m} value={m}>{m || "(open - every day unless blocked)"}</option>)}</select></SuField>
-          <SuField label="Weekend style"><select value={get("weekendStyle", "")} onChange={e => set("weekendStyle", e.target.value || undefined)} style={{ ...inp, width: 130 }}><option value="">(none)</option><option value="block">block (Fri+Sat+Sun)</option><option value="split">split (Fri+Sun / Sat)</option><option value="saturday-only">saturday-only</option></select></SuField>
+          <SuField label="Weekend style"><select data-testid="rules-weekend-style" value={get("weekendStyle", "")} onChange={e => set("weekendStyle", e.target.value || undefined)} style={{ ...inp, width: 190 }}><option value="">(none)</option><option value="block">block (Fri+Sat+Sun)</option><option value="split">split (Fri+Sun / Sat)</option><option value="daily">daily (standalone days)</option><option value="saturday-only">saturday-only (legacy)</option></select></SuField>
+          <SuField label="Fri-Sun block penalty" hint="soft; added to every multi-day block or split membership of this surgeon"><select data-testid="rules-weekend-block-penalty" value={get("weekendBlockPenalty", "") === null ? "" : String(get("weekendBlockPenalty", ""))} onChange={e => set("weekendBlockPenalty", e.target.value === "" ? undefined : (/^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value))} style={{ ...inp, width: 130 }}><option value="">none</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("weekendBlockPenalty", ""); return v === null || v === undefined || v === "" || v === "medium" || v === "strong" ? null : <option value={String(v)}>custom: {String(v)}</option>; })()}</select></SuField>
+          <SuCheck label="prefer alternate days (soft)" title="Prompt 12 N (9/22 evening): a medium penalty on a primary whose day before or after is this surgeon's own primary." checked={draft.preferAlternateDays === true} onChange={v => set("preferAlternateDays", v ? true : undefined)} testid="rules-prefer-alternate-days" />
           <SuField label="Split partner"><select value={get("splitPartner", "")} onChange={e => set("splitPartner", e.target.value || undefined)} style={{ ...inp, width: 130 }}><option value="">(none)</option>{(roster || []).filter(x => x.id !== sel).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></SuField>
           <SuField label="Max consecutive days" hint="blank = group default; hard, primary days only"><input type="number" min="1" max="14" value={get("maxConsecutiveDays", "") === null ? "" : get("maxConsecutiveDays", "")} onChange={e => set("maxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
           <SuField label="Max consecutive any role (soft)" hint="blank = none; primary or backup, a penalty that grows per day beyond it"><input data-testid="rules-max-consec-any" type="number" min="1" max="14" value={get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", "")} onChange={e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
@@ -5656,13 +5658,13 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           ))}
           <button onClick={() => set("availableWindows", (get("availableWindows", []) || []).concat([{ start: today, end: suAddDays(today, 5) }]))} style={css.mini(false)}>Add window</button>
           <div style={{ marginTop: 8 }}>
-            <SuCheck label="days per window week" checked={!!draft.daysPerWindowWeek} onChange={v => set("daysPerWindowWeek", v ? { min: 3, max: 4, countsBackup: true } : undefined)} />
+            <SuCheck label="days per window week" title="Prompt 12 N (9/22 evening): a SOFT target of primary days per Mon-Sun window week; a week off target is a diagnostics warning, never a violation. Older min / max keys are ignored by the engine (one warning) - the first edit here drops them." checked={!!draft.daysPerWindowWeek} onChange={v => set("daysPerWindowWeek", v ? { target: 2, countsBackup: false } : undefined)} testid="rules-window-week" />
             {draft.daysPerWindowWeek && <>
-              <SuField label="Min (soft)"><input type="number" min="0" max="7" value={get("daysPerWindowWeek.min", "")} onChange={e => set("daysPerWindowWeek.min", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 60 }} /></SuField>
-              <SuField label="Max (hard)"><input type="number" min="1" max="7" value={get("daysPerWindowWeek.max", "")} onChange={e => set("daysPerWindowWeek.max", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 60 }} /></SuField>
-              <SuCheck label="backup days count" checked={get("daysPerWindowWeek.countsBackup", true) !== false} onChange={v => set("daysPerWindowWeek.countsBackup", v)} />
+              <SuField label="Target primary days per window week (soft)" hint="blank = none"><input data-testid="rules-window-week-target" type="number" min="0" max="7" value={get("daysPerWindowWeek.target", "") === null ? "" : get("daysPerWindowWeek.target", "")} onChange={e => { ["min", "max", "minIsSoft"].forEach(k => { if (get("daysPerWindowWeek." + k, undefined) !== undefined) set("daysPerWindowWeek." + k, undefined); }); set("daysPerWindowWeek.target", e.target.value === "" ? undefined : Number(e.target.value)); }} style={{ ...inp, width: 60 }} /></SuField>
+              <SuCheck label="backup days count" checked={get("daysPerWindowWeek.countsBackup", false) === true} onChange={v => set("daysPerWindowWeek.countsBackup", v)} />
+              {(get("daysPerWindowWeek.min", undefined) !== undefined || get("daysPerWindowWeek.max", undefined) !== undefined) && <span style={{ fontSize: 10, color: "#c04040" }}>legacy min / max keys present - ignored by the engine; edit the target to drop them</span>}
             </>}
-            <SuCheck label="handoff partner required (soft on consecutive primaries)" checked={!!draft.handoffPartnerRequired} onChange={v => set("handoffPartnerRequired", v || undefined)} />
+            <SuCheck label="handoff partner required (diagnostics: warns when the day after a primary is the same surgeon or open)" checked={!!draft.handoffPartnerRequired} onChange={v => set("handoffPartnerRequired", v || undefined)} />
           </div>
         </div>
 

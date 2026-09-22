@@ -46,6 +46,27 @@
 //   groupRules.backupPolicy.openToEveryone  the 9/22 switch (absent = true);
 //                 false restores the pre-9/22 both-roles reading of the rules
 //                 listed below (explicit per-surgeon data is honoured either way).
+//   surgeonRules[id].daysPerWindowWeek  { target, countsBackup } (Prompt 12 N,
+//                 9/22 evening): a SOFT target of `target` PRIMARY days per
+//                 Mon-Sun window week (countsBackup true counts either role);
+//                 a placement at or under the target (0 or 1 other primaries
+//                 held for target 2) -> 'window-week-below-target:<t>' at
+//                 -weights.medium, over -> 'window-week-over-target:<t>' at
+//                 weights.medium per day over. There is no hard window-week
+//                 min/max: the pre-N keys min / max / minIsSoft are ignored
+//                 with one ctx warning.
+//   surgeonRules[id].preferAlternateDays  true -> soft 'consecutive-primary'
+//                 (weights.medium) on a primary whose day before or after is
+//                 his/her own primary (replaces the old handoff-partner soft).
+//   surgeonRules[id].weekendBlockPenalty  a weight ('strong' | number): added
+//                 by weekendUnitPatterns to every multi-day block and every
+//                 split membership of that surgeon (a weekend day stays
+//                 available as a standalone day in a daily pattern).
+//   surgeonRules[id].weekendStyle 'daily'  a standalone weekend day is the
+//                 normal pattern (memberPen 0); 'saturday-only' (older blobs)
+//                 still means Saturday member of a split / daily only.
+//   surgeonRules[id].handoffPartnerRequired  a DIAGNOSTICS flag the generator
+//                 reads (diagnostics.handoffGaps); no eligibility effect.
 //
 // Backup is open to everyone (Faraz 9/22, rules doc section 1 "Roles per day"):
 // outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed
@@ -421,8 +442,30 @@ function buildContext(input) {
       // role" - one click too many in Setup must not open Khan's OR days for primary).
       hardNeverRoles: new Set(Array.isArray(rules.hardNeverWeekdaysRoles) && rules.hardNeverWeekdaysRoles.length ? rules.hardNeverWeekdaysRoles : (backupOpen ? ["primary"] : ["primary", "backup"])),
       backupOptOut: rules.backupOptOut === true,
-      weekendStyle: rules.weekendStyle || null
+      weekendStyle: rules.weekendStyle || null,
+      // Prompt 12 N (9/22 evening): the window-week SOFT target (null = none), what
+      // it counts, the alternate-days soft, the weekend-block soft weight (0 = none)
+      // and the handoff diagnostics flag (read by the generator, not here).
+      windowTarget: null,
+      windowCountsBackup: false,
+      preferAlternate: rules.preferAlternateDays === true,
+      blockPenalty: rules.weekendBlockPenalty !== undefined && rules.weekendBlockPenalty !== null ? resolveWeight(ctx, rules.weekendBlockPenalty) : 0,
+      handoffPartnerRequired: rules.handoffPartnerRequired === true
     };
+    // (N review) weekendBlockPenalty: a weight name ("strong", "medium", ...) or a number is
+    // applied as given; anything else falls back to weights.medium inside resolveWeight - say
+    // so once, so a typo in the blob is never a silent downgrade from strong (10) to medium (3).
+    var wbp = rules.weekendBlockPenalty;
+    if (wbp !== undefined && wbp !== null && !(typeof wbp === "number" && !isNaN(wbp)) && !(typeof wbp === "string" && (Object.prototype.hasOwnProperty.call(ctx.weights, wbp) || !isNaN(parseFloat(wbp))))) {
+      ctx.warnings.push("surgeonRules." + id + ".weekendBlockPenalty = " + JSON.stringify(wbp) + " is not a weight name or a number (Prompt 12 N): read as weights.medium = " + P.blockPenalty + " - use \"strong\", \"medium\" or a number in Setup -> Rules");
+    }
+    var dpw = rules.daysPerWindowWeek;
+    if (dpw && typeof dpw === "object") {
+      if (typeof dpw.target === "number") P.windowTarget = dpw.target;
+      P.windowCountsBackup = dpw.countsBackup === true;
+      var legacyKeys = ["min", "max", "minIsSoft"].filter(function (k) { return Object.prototype.hasOwnProperty.call(dpw, k); });
+      if (legacyKeys.length) ctx.warnings.push("surgeonRules." + id + ".daysPerWindowWeek." + legacyKeys.join("/") + " are legacy keys (Prompt 12 N, 9/22 evening): ignored - the window-week count is a SOFT target now (daysPerWindowWeek.target, primary days" + (P.windowTarget === null ? "; no target is set" : "") + ") and there is no hard window-week min/max; rewrite it in Setup -> Rules");
+    }
     if (hr.neverThanksgiving) P.holidaysOff.add("Thanksgiving");
     if (typeof hr.maxMajorHolidays === "number") P.maxMajor = hr.maxMajorHolidays;
     else if (rules.preferences && typeof rules.preferences.maxMajorHolidays === "number") P.maxMajor = rules.preferences.maxMajorHolidays;
@@ -628,12 +671,16 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // not-recurring-available, outside-available-weeks, outside-window,
 // external-cover, slot-locked:, derived-lock:, derived-lock-held:,
 // holds-other-role, monthly-cap:, max-consecutive:, backup-cap:,
-// backup-weekend-cap:, window-week-max:, max-major-holidays:.
+// backup-weekend-cap:, max-major-holidays:.
 // max-consecutive:<limit> is the HARD primary-only run limit on real days (a
 // holiday unit is one day only for a surgeon who opted in). Its SOFT sibling
 // long-run:<runLength> (Prompt 12 A, 9/22) marks an any-role run (primary or
 // backup) longer than surgeonRules.<id>.maxConsecutiveAnyRole, weighted
 // weights.longRunPerDay * (runLength - limit).
+// Window-week vocabulary (Prompt 12 N, 9/22 evening) is SOFT only:
+// window-week-below-target:<t> (-medium), window-week-over-target:<t>
+// (medium x days over) and consecutive-primary (medium, preferAlternateDays).
+// The pre-N hard reason window-week-max: no longer exists.
 function rdStatic(ctx, date, role, id, asBlock) {
   var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "");
   var memo = ctx._memo[key];
@@ -905,23 +952,29 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     }
   }
 
-  // Days per window week (Sarkar): max hard, min as a soft bonus while under it.
-  var dp = rules.daysPerWindowWeek;
-  if (dp) {
+  // Days per window week (Prompt 12 N, 9/22 evening): a SOFT target of PRIMARY days
+  // in the Mon-Sun week (schedule + assume-slots + this slot); countsBackup true
+  // counts either role and then applies to a backup placement too. A placement
+  // that keeps her at or under the target (0 or 1 other primaries held when the
+  // target is 2) is a bonus (-medium) - every day up to the target is wanted, not
+  // just the first; a placement over it is a penalty (medium per day over). There
+  // is NO hard window-week maximum or minimum (none of her rules are hard and
+  // fast yet - Faraz 9/22 evening; the window itself is the hard rule, above).
+  if (P.windowTarget !== null && (role === "primary" || P.windowCountsBackup)) {
     var wcnt = 0;
     for (var w = 0; w < 7; w++) {
       var wd = rdAddDays(info.monday, w);
-      if (dp.countsBackup === false ? holdsRole(wd, "primary") : holdsAny(wd)) wcnt++;
+      if (P.windowCountsBackup ? holdsAny(wd) : holdsRole(wd, "primary")) wcnt++;
     }
-    if (typeof dp.max === "number" && wcnt > dp.max) hard.push("window-week-max:" + dp.max);
-    // 9/22: the minimum is a PRIMARY target - backup inside a window is allowed but
-    // never rewarded (item N owns countsBackup and the rest of her 9/22 changes).
-    if (role === "primary" && typeof dp.min === "number" && wcnt < dp.min) soft.push({ reason: "window-week-below-min:" + dp.min, weight: W.preferred });
+    if (wcnt <= P.windowTarget) soft.push({ reason: "window-week-below-target:" + P.windowTarget, weight: -W.medium });
+    else soft.push({ reason: "window-week-over-target:" + P.windowTarget, weight: W.medium * (wcnt - P.windowTarget) });
   }
 
-  // Handoff partner required (Sarkar): consecutive primary days hand off to herself.
-  if (rules.handoffPartnerRequired && role === "primary" && (holdsRole(prevDay, "primary") || holdsRole(nextDay, "primary"))) {
-    soft.push({ reason: "handoff-partner", weight: W.medium });
+  // Prefer alternate days (Prompt 12 N, 9/22 evening): a primary whose day before or
+  // after is the surgeon's own primary (schedule or assume-slots). Replaces the
+  // pre-N handoff-partner soft; handoffPartnerRequired is a diagnostics flag now.
+  if (P.preferAlternate && role === "primary" && (holdsRole(prevDay, "primary") || holdsRole(nextDay, "primary"))) {
+    soft.push({ reason: "consecutive-primary", weight: W.medium });
   }
 
   // Max major holidays: at most N major units within any 12 calendar-month span,
@@ -989,6 +1042,11 @@ function rdSoftSum(r) { var s = 0; for (var k = 0; k < r.soft.length; k++) s += 
 // the days a holiday unit did not pre-empt; a reduced unit offers block(remaining)
 // and daily only. Block members are evaluated with asBlockMember only for a full
 // three-day block. Style mismatches add weights.patternMismatch once per surgeon.
+// Prompt 12 N (9/22 evening): a surgeon with surgeonRules.<id>.weekendBlockPenalty
+// is still offered in a multi-day block (present.length > 1) and in a split, but
+// each such membership adds that weight; weekendStyle "daily" means a standalone
+// weekend day is the normal pattern (memberPen 0). "saturday-only" (older blobs)
+// keeps its meaning: Saturday member of a split / daily only, never a block.
 function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
   role = role || "primary";
   if (rdWeekday(fridayStr) !== "Fri") throw new Error("weekendUnitPatterns: " + fridayStr + " is not a Friday");
@@ -1024,6 +1082,7 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
       map[present[k]] = id;
     }
     if (present.length > 1 ? style !== "block" : style === "block") pen += W.patternMismatch;
+    if (present.length > 1) pen += ctx.per[id].blockPenalty; // N: a multi-day block for a weekendBlockPenalty surgeon (0 for everyone else)
     out.push({ kind: "block", members: members(map), penalty: pen, fallback: false, surgeons: [id] });
   });
 
@@ -1036,11 +1095,11 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
       if (!rf.ok) return;
       var rs = eligibility(ctx, sun, role, x, { assume: [{ date: fri, role: role }], skipPatternSoft: true });
       if (!rs.ok) return;
-      var penX = rdSoftSum(rf) + rdSoftSum(rs) + (sx === "split" ? 0 : W.patternMismatch);
+      var penX = rdSoftSum(rf) + rdSoftSum(rs) + (sx === "split" ? 0 : W.patternMismatch) + ctx.per[x].blockPenalty; // N: split membership carries the surgeon's weekendBlockPenalty
       ids.forEach(function (y) {
         if (y === x || !solo[y][sat].ok) return;
         var sy = styleOf(y);
-        var pen = penX + rdSoftSum(solo[y][sat]) + ((sy === "split" || sy === "saturday-only") ? 0 : W.patternMismatch);
+        var pen = penX + rdSoftSum(solo[y][sat]) + ((sy === "split" || sy === "saturday-only") ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty;
         var map = {}; map[fri] = x; map[sun] = x; map[sat] = y;
         out.push({ kind: "split", members: members(map), penalty: pen, fallback: false, surgeons: [x, y] });
       });
@@ -1053,7 +1112,7 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
     var s = styleOf(id);
     if (s === "block") return W.patternMismatch;
     if (s === "split" || s === "saturday-only") return d === sat ? 0 : W.patternMismatch;
-    return 0;
+    return 0; // "daily" (N) and no style: a standalone day is the normal pattern
   }
   (function rec(idx, map, chosen) {
     if (idx === present.length) {

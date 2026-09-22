@@ -150,6 +150,20 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   }
   L.push("");
 
+  // window weeks (Prompt 12 N): one row per window week overlapping the range; the count is a SOFT target
+  if (Array.isArray(dg.windowWeeks) && dg.windowWeeks.length) {
+    L.push("## Window weeks (soft target; a week off target is a warning, not a violation)"); L.push("");
+    L.push("| Surgeon | Week of | Window days | In range | Primary | Backup | Target | Status |"); L.push("|---|---|---|---|---|---|---|---|");
+    for (const w of dg.windowWeeks) L.push(`| ${nameOf(w.surgeonId)} | ${w.monday} | ${w.windowDays.join(", ")} | ${w.inRangeWindowDays.length}/${w.windowDays.length} | ${w.primaries} | ${w.backups} | ${w.target == null ? "-" : w.target} | ${w.status} |`);
+    L.push("");
+  }
+  if (Array.isArray(dg.handoffGaps) && dg.handoffGaps.length) {
+    L.push(`## Handoff gaps (${dg.handoffGaps.length})`); L.push("");
+    L.push("| Day | Surgeon | Next day | Problem |"); L.push("|---|---|---|---|");
+    for (const g of dg.handoffGaps) L.push(`| ${g.day} | ${nameOf(g.surgeonId)} | ${g.next} | ${g.problem} |`);
+    L.push("");
+  }
+
   // uncovered
   const unc = dg.uncovered || [];
   L.push(`## Open slots (${unc.length})`); L.push("");
