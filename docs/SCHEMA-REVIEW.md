@@ -5,7 +5,7 @@ time). Findings marked **applied** were written into `sql/schema.sql` in the sam
 Supabase CLI's linked Management-API path (`supabase db query --linked -f sql/schema.sql`), so no live data was at risk.
 Verification: `scripts/verify-rls.sh`.*
 
-**Live differs from `sql/schema.sql` since 2026-09-23 (audit RLS-2):** `claim_open_slot` and `call_offers_guard` are live as the bodies in `sql/migrations/2026-09-23-claim-offer.sql` (branch `feat/offers`, not yet merged) and `call_periods` / `call_offers` / `offer_status` / the `OF001`-`OF003` guards exist live but appear nowhere on `main`; do not re-run `schema.sql` wholesale until that mirror lands (its header carries the same note and `test/schema.test.js` fails closed once the migration file exists unmirrored).
+**Live and `sql/schema.sql` agree again since the 9/23 `feat/offers` merge (audit RLS-2 closed):** `claim_open_slot` and `call_offers_guard` are mirrored from `sql/migrations/2026-09-23-claim-offer.sql` (applied 2026-09-23 07:05Z) and `call_periods` / `call_offers` / `offer_status()` / the `OF001`-`OF003` guards / `offer_modes` from the 9/22 and 9/23 migrations; `test/schema.test.js` compares every migrated body against the newest migration touching it, so the file is re-runnable wholesale again. The only bodies in the repo that are NOT live yet are `set_offer_mode()` / `save_offers()` (`sql/migrations/2026-09-23-offer-mode-rpc.sql`, the orchestrator's next step - subsection below).
 
 ## (a) Tables, one line each
 
@@ -27,7 +27,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
 | `call_offers` | Offers: one row per person and day (`role_pref` primary / backup / either, operational `note`, `entered_by`, `source` app / email-relay / import); triggers refuse a past day (`OF001`), a day inside the person's vacation (`OF002`) and non-scheduler writes inside a frozen period (`OF003`). Authenticated. Added 2026-09-22 (Prompt 14 part 1; block below). |
-| `call_periods` | Periods: generation windows with `offers_close_at` / `publish_by` / `status` / `rules_only_ids` / `offer_modes` (`{person_id: 'exhaustive' \| 'preferred'}`, absent = preferred; column from `sql/migrations/2026-09-23-offer-modes.sql`, applied live by the orchestrator - see the offer_modes subsection below). Authenticated read, scheduler write. |
+| `call_periods` | Periods: generation windows with `offers_close_at` / `publish_by` / `status` / `rules_only_ids` / `offer_modes` (`{person_id: 'exhaustive' \| 'preferred'}`, absent = preferred; column from `sql/migrations/2026-09-23-offer-modes.sql`, applied live 2026-09-23 07:05Z - see the offer_modes subsection below). Authenticated read, scheduler write. |
 | `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. |
 
 Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`.
@@ -428,7 +428,7 @@ printed `anon GET call_offers -> HTTP 200  Content-Range: */0  body: []`, the sa
 call_offers -> HTTP 401` with body code `42501` (`new row violates row-level security policy for table "call_offers"`) -
 `RESULT: 5 passed, 0 failed` for the anon sections; 8c/8d/8e SKIP until run with a JWT and the linked workdir.
 
-### offer_modes (2026-09-23; `sql/migrations/2026-09-23-offer-modes.sql`) - applied by the orchestrator tonight
+### offer_modes (2026-09-23; `sql/migrations/2026-09-23-offer-modes.sql`) - applied 2026-09-23 07:05Z
 
 Faraz 9/22 evening (prompt v2 part 2a): when submitting, a surgeon chooses **exhaustive** ("only these days") or
 **preferred** ("my preferred days; use my rules to fill gaps", the default). Stored on the period:
@@ -439,13 +439,30 @@ policy changes; the shape check is deliberately the only SQL-side constraint (th
 `rules.js`; a check constraint cannot iterate jsonb values without a helper). The same four lines sit in `sql/schema.sql`
 (the create-table also declares the column inline for a fresh apply); `test/schema.test.js` pins both copies.
 
-Confirmed NOT applied as of 2026-09-23 (anon `GET call_periods?select=offer_modes` -> `400` `42703` "column
-call_periods.offer_modes does not exist"). Apply and prove (workdir = a directory linked with
-`supabase link --project-ref bzhsroegtagqhutbnsrp`; absolute paths):
+Confirmed NOT applied at the 9/23 morning probe (anon `GET call_periods?select=offer_modes` -> `400` `42703` "column
+call_periods.offer_modes does not exist"); **applied 2026-09-23 07:05Z** by the orchestrator through the linked CLI
+(the 9/23 audit's column probe reads the column). The probe / verify-rls lines below are what proves it (workdir = a
+directory linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`; absolute paths):
 
     supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-offer-modes.sql
     supabase db query --linked --workdir <dir> -f <abs>/sql/probes/offers-probe.sql      # K-set / K-type / K-default as above; A-J unchanged
     SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh                                     # section 8 grades A-K + leftover count 0
+
+observed: <to be filled by the orchestrator>
+
+### claim-as-offer (2026-09-23; `sql/migrations/2026-09-23-claim-offer.sql`) - applied 2026-09-23 07:05Z
+
+Prompt 14 part 2c: `claim_open_slot()` re-created with the `call_offers` upsert (none for a claimer listed in the
+period's `rules_only_ids`; the `schedule.claim` audit detail carries `offer` true / false) and `call_offers_guard()`
+skipping `OFFER_FROZEN` while the transaction-local `silvis.claim_in_progress` is on. Applied by the orchestrator through
+the linked CLI at 2026-09-23 07:05Z; since the 9/23 `feat/offers` merge `sql/schema.sql` mirrors both bodies from this
+file (`test/schema.test.js`: the 9/22 claim migration stays frozen by sha256, the newest-migration guard compares the
+live bodies). Base check for the record: the migration header quotes the pre-rebase base sha256
+`d86735999738fabe93da4990e4e3bff72e646d66521525a9db73fd179c1cb453` of `claim_open_slot`; the landed
+`sql/migrations/2026-09-22-claim-open-slot.sql` body hashes to `88ae39e5b2d14ec956a012532aeda897636f8efb49d472456d1b1ec0d987dd1b`,
+and a line diff of the two function texts shows only the offer additions (the declaration, the guarded upsert block, the
+audit detail) - the base was not otherwise changed by the open-shifts rebase. Proof of the live state: the claim probe
+(`sql/probes/claim-open-slot-probe.sql`, cases A..L) plus `sql/probes/offers-probe.sql`; `verify-rls.sh` sections 7 and 8.
 
 observed: <to be filled by the orchestrator>
 

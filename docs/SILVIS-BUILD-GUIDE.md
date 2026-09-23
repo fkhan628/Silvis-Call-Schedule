@@ -842,9 +842,9 @@ passed; the scheduler may still enter a late offer). RLS is **authenticated-only
 carry person ids and free text): every signed-in user reads, a surgeon writes only their own rows, scheduler/admin
 any row and the periods. `call_periods.offer_modes` jsonb (`sql/migrations/2026-09-23-offer-modes.sql`; Faraz 9/22
 evening) holds `{person_id: 'exhaustive' | 'preferred'}`, an absent key meaning `preferred`; the SQL side checks only
-that it is an object — **that column is in the repo but not yet applied live as of 9/23** (anon probe: `42703`, column
-missing; the orchestrator applies it and writes the observed line into `docs/SCHEMA-REVIEW.md`; it must precede the
-seed apply of part 5, which writes `offer_modes`). Proof: `sql/probes/offers-probe.sql` (rolls itself back) and
+that it is an object — **applied live 2026-09-23 07:05Z** (the 9/23 audit's column probe reads it; the observed
+line goes into `docs/SCHEMA-REVIEW.md` once the orchestrator pastes the probe output; it precedes the seed apply of
+part 5, which writes `offer_modes`). Proof: `sql/probes/offers-probe.sql` (rolls itself back) and
 `scripts/verify-rls.sh` section 8; the observed runs are in `docs/SCHEMA-REVIEW.md`.
 
 **Part 3a — the painter (built 9/23 on `feat/offers`, sub-part U3a; the rest of part 3 is below).** `OfferPainterSheet`
@@ -1145,25 +1145,38 @@ never an anon-readable table for recipients), the CAS + dry-run guards, the READ
 paragraph. For the first period (close 2026-10-02) the reminder days are 2026-09-18 (past) and 2026-09-29, and the
 close summary goes out on 2026-10-02 — the cron must be live by 9/29 for Fierce (`not_started`) to be reminded.
 
-**Where Prompt 14 stands at the end of the 9/23 wave (parts 1, 2, 4, 5 on `feat/offers`; part 6 = this text).** In the
-repo: the schema artefacts (`sql/migrations/2026-09-22-offers-periods.sql`, `2026-09-23-offer-modes.sql`,
-`2026-09-23-claim-offer.sql`, `sql/probes/offers-probe.sql`, `sql/schema.sql`), the engine (`rules.js`, `generator.js`,
+**Where Prompt 14 stands after the 9/23 rebase onto `main`'s audit landing (parts 1, 2, 4, 5, 6 and the UI wave 3a /
+3b / 3c are on `main` together — this text is part 6 brought up to date).** In the repo: the schema artefacts
+(`sql/migrations/2026-09-22-offers-periods.sql`, `2026-09-23-offer-modes.sql`, `2026-09-23-claim-offer.sql`,
+`2026-09-23-offer-mode-rpc.sql`, `sql/probes/offers-probe.sql`, `sql/probes/offer-rpcs-probe.sql`, `sql/schema.sql`
+mirroring every applied body), the engine (`rules.js`, `generator.js` — offers first on top of the water-filled share,
 `helpers.js`), the importer plan and CLI (`importer.js`, `scripts/import-seed.js`), the two edge-function sources, the
-seed's `offerPeriods[]` / `offerSources` and every test named above. **Live:** only the 9/22 schema (`call_offers`,
-`call_periods`, `offer_status()`, OF001–OF003, authenticated-only RLS). **Not yet live, in the order they must land:**
-(1) the `offer_modes` column; (2) the seed apply — `node scripts/import-seed.js --apply` — one `call_periods` row and
-79 `call_offers` rows, **before 2026-10-02** (OF003 refuses seed-entered offers inside the period from the close on);
-(3) `send-notification` and `daily-reminder` redeployed from the merged head that also carries the Prompt 13 open-shifts
-mode, then the `silvis-offers-daily` cron (README §3 deploy record + §4) — **by 9/29** for the 3-day reminder;
-(4) `sql/migrations/2026-09-23-claim-offer.sql` (its base, `claim_open_slot`, is on `main` since the 9/23 open-shifts merge); (5) part 3, the UI wave (above),
-which must land with — or before — the first in-app Generate or trade over the period (the dated caveat under part 5:
-until then the in-app `eligibility()` consumers read Burchett and Philip by their recurring rules only, and the in-app
-Setup import must not be run). The **offers-aware preview regeneration** the prompt's part 5 asks for has **not** been
-run: `scripts/preview-generate.js` reads neither `--offers-json` nor `call_offers` yet — a UI-wave (or preview-script)
-item; until then the Prompt 14 P2 regression on `test/fixtures/offers-2026-11.json` is the proof that Burchett's and
-Acton's November days come out as the ER-panel author published. Open decisions for Faraz: the offer modes of the first period
-(rules doc §8 item 20 — Burchett / Philip exhaustive, Acton / Fierce preferred, Khan / Sarkar rules-only, set 9/23 as
-defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 (his default, renameable, data).
+painter, the Periods section, the day editor's offer column and My schedule's offers (`index-source.html`), the seed's
+`offerPeriods[]` / `offerSources` and every test named above. **Live:** the 9/22 schema (`call_offers`, `call_periods`,
+`offer_status()`, OF001–OF003, authenticated-only RLS), the `offer_modes` column and the claim-as-offer bodies of
+`claim_open_slot` / `call_offers_guard` (both 2026-09-23 07:05Z); both tables are still empty. **Not yet live, in the
+order they must land (the orchestrator's live steps after the merge — the F03 remainder):** (1) the two RPCs —
+`sql/migrations/2026-09-23-offer-mode-rpc.sql` (`set_offer_mode`, `save_offers`) and their probe — the painter's Save
+answers `404 PGRST202` until then; (2) the seed apply — `node scripts/import-seed.js --apply --workdir <linked dir>` —
+one `call_periods` row, 79 `call_offers` rows (Burchett 34, Acton 10, Philip 35), the 20 retired `available` rows and
+the blob's `surgeonRules` / `groupRules` / `settings`, **before 2026-10-02** (OF003 refuses seed-entered offers inside
+the period from the close on); (3) `send-notification` (the offers categories over the v4 role / party gate) and
+`daily-reminder` (mode `offers` beside open-shifts) redeployed from this head, then the `silvis-offers-daily` cron
+(README §3 deploy record + §4) — **by 9/29** for the 3-day reminder. **The in-app Setup import still plans WITHOUT the period** (`importPlan(seed, { now })`, no `offerPeriods`; only the
+CLI passes it): until (2) its dry run reads the pending apply as changes (`Total changes: 3 (+30 blocked)` - the blob's
+`surgeonRules` / `groupRules` / `settings`; the smoke harness pins the pre-apply 0 deliberately and fails until then),
+and AFTER (2) it would read the retired rows as changes again (`surgeonRules`, `settings`, Burchett's 20 `available`
+rows) - **do not Apply it after the seed apply**: it would re-insert his November / December whitelist and rows and
+undo part 5; the CLI is the period-aware path until the in-app import passes `offerPeriods`, and the smoke's two Import
+pins need the blob half restated from the plan (or the in-app import made period-aware) to read 0 again. Until (2) the
+in-app `eligibility()` consumers read Burchett and Philip by their recurring rules (no period row exists yet). The
+**offers-aware preview regeneration** the prompt's part 5 asks for has **not** been run: `scripts/import-seed.js
+--offers-json <path>` writes the generate input, but `scripts/preview-generate.js` does not read it yet — a
+preview-script item; until then the Prompt 14 P2 regression on `test/fixtures/offers-2026-11.json` is the proof that
+Burchett's and Acton's November days come out as the ER-panel author published. Open decisions for Faraz: the offer modes of the
+first period (rules doc §8 item 20 — Burchett / Philip exhaustive, Acton / Fierce preferred, Khan / Sarkar
+rules-only, set 9/23 as defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 (his default,
+renameable, data).
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 
