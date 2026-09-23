@@ -5086,10 +5086,6 @@ function DayEditor(props) {
     const list = roster.map(s => {
       const external = s.type === "external";
       let r;
-      // Prompt 12 M: an outside surgeon is asked on the manual path (slot facts only, never external-surgeon)
-      try { r = ctx ? eligibility(ctx, day, role, s.id, external ? { manual: true } : undefined) : { ok: true, hard: [], soft: [] }; }
-      catch (e) { console.warn("eligibility threw for", s.id, role, day, e); r = { ok: true, hard: [], soft: [], error: true }; }
-      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, external, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: !!r.error, eastStanding: r.eastStanding || null }; // eastStanding: Prompt 12 V - the standing East entry's name behind an east-busy
       // Prompt 12 M: an outside surgeon is asked on the manual path (slot facts only, never external-surgeon);
       // a pool surgeon completing a Fri-Sun block is asked as a block member (small items 9/22)
       const eopts = external ? { manual: true } : (holdsOtherBlockDays(role, s.id) ? { asBlockMember: true } : undefined);
@@ -5101,7 +5097,7 @@ function DayEditor(props) {
         const msg = String(e && e.message || e).slice(0, 120);
         r = { ok: false, hard: ["rules-error:" + msg], soft: [], error: msg };
       }
-      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, external, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: r.error || null };
+      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, external, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: r.error || null, eastStanding: r.eastStanding || null }; // eastStanding: Prompt 12 V - the standing East entry's name behind an east-busy
     });
     // pool: eligible first, then ineligible (roster order kept inside each group); inactive only if currently held;
     // outside surgeons (M) come last as their own group - the select shows them under "Outside surgeons"
