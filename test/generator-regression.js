@@ -1503,9 +1503,25 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
+// ---- NB (9/23): the running tallies count every FIXED slot ----
+// Faraz: "November backups - Fierce 16, Khan 3: do the locked derived-week days count?" Synthetic check in
+// test/nov-backups.test.js (a module; also runs standalone): a pool of five, A holding N locked days of a role -
+// spread through the month and preceding the range - A's lockedHeld = N, target = max(N, share) exactly, peers
+// at the share, the month tally = N + generated, A strictly below every peer in generated days and within
+// room + surplus. Runs here so the CI chain covers it (build.yml lists no separate step for it).
+{
+  CUR.range = "NB (synthetic tally)"; CUR.seed = "-"; CUR.day = "-";
+  const t0 = Date.now();
+  const NB = require("./nov-backups.test.js");
+  const nbLines = NB.run({ R, GEN, ok }, { seeds: 5, bestOf: 2 });
+  eq(nbLines.length, 40, "NB: synthetic runs (2 roles x 2 placements x 2 N x 5 seeds)");
+  console.log("  NB synthetic tally check: " + nbLines.length + " runs in " + (Date.now() - t0) + " ms; " + nbLines.filter((s) => /N=10 seed 1:/.test(s)).map((s) => s.replace(/^nov-backups /, "")).join(" || "));
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 11 fixture runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 11 fixture runs + 40 NB synthetic tally runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");
