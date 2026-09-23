@@ -610,3 +610,111 @@ to read the `east_feed` vacations + `east_vacation_reviews` is a possible later 
 - `verify-rls.sh` section 9: **9a** anon `GET /rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5` → `HTTP 200` + `[]`
   (the post-migration expectation: the silent RLS empty read, no 404). The 9b and RESULT lines of the after-run were not handed to this
   record — paste them here on the next `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` run (expected 9b `401`/`403`, RESULT all-PASS).
+
+## 2026-09-24 - pre-launch RLS (Prompt 16 A1)
+
+**Status: PREPARED — not applied.** Report-first (guide §4.3): `sql/migrations/2026-09-24-prelaunch-rls.sql` changes row-level
+security on the live project. This section is the report; the orchestrator applies the file only after Faraz's go, then fills the
+*observed* line at the end. Source of the before-state: the live `pg_policies` dump of 2026-09-23 ~17:10 (read-only); source of the
+finding: the 2026-09-23 pre-launch review, item A (security, blocking) and the periods report's "freeze by status" decision.
+
+**Before / after, per policy.** Every text below is byte-identical in the migration and in `sql/schema.sql` (`test/schema.test.js`
+pins the identity, the guard bodies, the grants and the probe / verify-rls cases).
+
+| policy / object | before (live 9/23) | after (this migration) | closes |
+|---|---|---|---|
+| `user_profiles_read` (SELECT, authenticated) | `using (true)` | `using (id = auth.uid() or public.silvis_is_sched() or role in ('admin','scheduler'))` | every signed-in account (a self-made one included) reading every profile row, `email` included; a surgeon's session still reads its own row and the scheduler / admin rows it addresses notifications to |
+| `user_profiles_self_update` (UPDATE, authenticated) | with-check pins `role` and `person_id` | the same, plus `and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())` | a linked surgeon re-pointing his own `email` (what `send-notification` addresses and sends as) to an address he does not control, through the direct PostgREST PATCH; `display_name` stays self-editable. **Residual, stated:** the GoTrue email-change route still re-syncs `user_profiles.email` through `handle_new_auth_user` - see "What could break" |
+| `contacts_read` (SELECT, authenticated) | `using (true)` | `using (public.silvis_is_sched())` | any signed-in account reading `office_contacts` |
+| `notif_insert` (INSERT, authenticated) | `with check (true)` | `with check (public.silvis_is_sched() or public.silvis_person_id() is not null)` | an unlinked account writing into everyone's in-app feed |
+| `audit_insert` (INSERT, authenticated) | `with check (true)` | `with check (public.silvis_is_sched() or (public.silvis_person_id() is not null and actor_id = public.silvis_person_id()))` | an unlinked account writing audit rows; a linked surgeon writing them under another `actor_id` (the client's `logAudit` sends `actor_id = userProfile.person_id`) |
+| `notif_delete_sched` (DELETE, authenticated) | no delete policy on `notifications` (nobody could delete) | `using (public.silvis_is_sched())` | nothing - a new capability (spam removal by the scheduler / admin); the app has no delete UI yet (Part B) |
+| `call_offers_guard` (trigger function, BEFORE INSERT OR UPDATE) | OF001 / OF002 / OF003 by close date (claim flag skips OF003) | + `OF004 OFFER_IMMUTABLE` on UPDATE when `new.day <> old.day or new.person_id <> old.person_id` and the caller is not a scheduler; OF003 also when `p.status <> 'upcoming'` | a surgeon moving an offer to another day (or person) through UPDATE instead of clear + offer; any surgeon write inside a published / closed / generated period whose close date still lies ahead |
+| `call_offers_delete_guard` (trigger function, BEFORE DELETE) | OF003 by close date | OF003 also when `p.status <> 'upcoming'` | a surgeon deleting an offer inside a published period whose close date still lies ahead |
+| `offer_status` `(uuid, text)` - function grants | EXECUTE to PUBLIC, anon, authenticated, postgres, service_role | revoked from public and anon; authenticated + service_role keep it | anon calling a status derivation (nothing anon calls it: the client uses `helpers.offerRollcall`, no edge function names it) |
+| `user_profiles_admin`, `user_profiles_self_insert`, `notif_read`, `audit_read`, `contacts_write`, `call_offers_*`, `call_periods_*`, `set_offer_mode()` (OM005 already tests `p.status <> 'upcoming' or p.offers_close_at <= today_c`), `save_offers()`, `offer_status()` body | unchanged | unchanged | - |
+
+**What could break, and the client lines checked (build 2026.09.23n, `index-source.html`).** `fetchProfile` :656 reads the own row
+(`user_profiles?id=eq.<uid>`) - still readable by everyone. `schedulerIdsLoud` :1077 reads `role=in.(scheduler,admin)` rows - those
+rows stay readable to every signed-in user, so a surgeon's session still addresses the scheduler. `loadClientVersions` :874 and
+`loadAllProfilesLoud` :2077 read the whole table, but run only from :904 (`view === "settings" && isScheduler`) and :2115
+(`view === "setup" && isAdmin`); `saveUserProfile` :2088 refuses a non-admin before any PATCH. The `office_contacts` read :3272 sits
+in an effect that returns at :3269 unless `isScheduler`. `logAudit` :828 sends `actor_id = userProfile?.person_id || authUser?.id`:
+a linked person's rows pass the new `audit_insert`; an unlinked viewer's would be refused - fire-and-forget with a console warning,
+and no viewer action reaches a write today. `addNotification` :2786 is reached only from linked-person / scheduler actions. The
+`shift_trade_requests` / `time_off` / `east_vacation_reviews` paths are untouched. `verify-rls.sh` 6b / 8c read the own profile row
+(:157, :300). Edge functions read `user_profiles` / `office_contacts` with the service role. Residual, accepted: the scheduler / admin
+rows (including their `email`) remain readable to every signed-in account - that is what the surgeon's notification path needs; with
+public sign-ups switched off (dashboard, the same review item) "every signed-in account" is the seven invited people. The client
+side of the review item - removing the dead "Sign up" link - is a separate front-end item, not part of this migration. A scheduler-
+role account that is not admin still cannot correct another account's `email` (unchanged; Faraz's account is admin).
+
+*Non-app writers of `call_offers`.* `silvis_is_sched()` reads `auth.uid()`, which is null for a postgres or service-role session,
+so the CLI importer (`scripts/import-seed.js`, `supabase db query --linked`, runs as postgres) and the service role are
+non-schedulers to both guards. Today the importer is refused (OF003, whole import rolls back) once `offers_close_at` has passed;
+after this migration also once the period leaves `upcoming` - i.e. a seed change that adds or edits an offer inside the published
+Nov 2026 - Jan 2027 period is refused from the apply on, not from 10/2. Fail-loud, nothing silent; a re-run of identical data
+proposes no rows and fires nothing; late offers go through the app as the scheduler. The importer's own comments
+(`scripts/import-seed.js` :95-98, `importer.js` :128 / :1380) still say "after offers_close_at" - a one-line Part B update,
+outside A1's file list. `claim_open_slot` is covered by the claim flag; `daily-reminder` never writes `call_offers`.
+
+*The email pin's residual - a decision for Faraz, not baked in.* The new with-check closes the direct PostgREST PATCH only.
+GoTrue's self-service email change - `PUT /auth/v1/user {"email": ...}` with the anon key and the own access token, the endpoint
+`config.js` already uses for passwords (the client has no email-change UI, so this is a curl-level path) - still rewrites
+`auth.users.email` once the new mailbox confirms (and, with secure email change on, the old one too), and `handle_new_auth_user`
+(`sql/schema.sql`, `security definer`, `after insert or update of email on auth.users`, `on conflict (id) do update set email =
+excluded.email`, unchanged by this migration) copies it into `user_profiles.email` - the column `send-notification` reads for
+recipients and sender identity. So "re-point to an address he does not control" is closed; "re-point to a mailbox he can confirm" is
+not. Two hardenings, either one a separate prepared item (this file is pinned to exactly two `create or replace function`s):
+(1) dashboard - check whether this project's Auth settings let self-service email updates be disabled; (2) a follow-up migration
+changing `handle_new_auth_user`'s on-conflict to keep the existing address when the row is linked (`set email = case when
+user_profiles.person_id is null then excluded.email else user_profiles.email end`; the admin corrects via Setup -> Users), with its
+own probe and pin update. Faraz picks; until then the residual stands as accepted.
+
+**The probe - `sql/probes/prelaunch-rls-probe.sql` (persists nothing).** Same mechanism as the earlier probes: one batch, no
+`BEGIN`/`COMMIT`, temp table granted to `authenticated` and `anon`, last statement raises `PROBE_RESULTS ...;END`. Fixtures in
+2030-07 (two periods 'probe prelaunch open' 7/1-7/15 upcoming and 'probe prelaunch published' 7/16-7/31 with `offers_close_at`
+2030-06-20 **in the future** and status published; s3's offers 7/5, 7/6, 7/20, note `probe-prelaunch`; an inactive
+`office_contacts` row `probe-prelaunch`; a `notifications` row titled `probe-prelaunch`; three throwaway auth users
+`probe-prelaunch-<uuid>@example.test`: a stranger = unlinked viewer, a surgeon linked to s3, an admin linked to s1). Its header
+states, per case, the string read AFTER the migration and BEFORE it - so the same file, run before and after, shows the holes
+closing. Expected AFTER (up to the flattened message texts): `A1=own=1 sees_surgeon=1 sees_stranger=1;A2=contacts=1;A3=ok
+deleted=3;A4=ok;A5=updated=1;A6=updated=1;A7=ok rows=1;L1=own=1 leak=0 sched_ok=t;L10=ERR OF004 OFFER_IMMUTABLE ...;L11=updated=1;
+L12=ERR OF003 OFFER_FROZEN: offers for probe prelaunch published closed on 2030-06-20 - ask the scheduler;L13=ERR OF003 ...;L14=ok
+rows=1;L15=ERR OM005 MODE_FROZEN ...;L2=contacts=0;L3=ok;L4=ok;L5=ERR 42501 ... "audit_log";L6=ERR 42501 ... "user_profiles";
+L7=updated=1;L8=deleted=0;L9=ERR OF004 OFFER_IMMUTABLE ...;N1=ERR 42501 permission denied for function offer_status;S1=own=1 leak=0
+sched_ok=t;S2=contacts=0;S3=ERR 42501 ... "notifications";S4=ERR 42501 ... "audit_log";END`. Expected BEFORE: `S1` / `L1` read
+`leak=N` with N >= 1, `S2` / `L2` `contacts=1`, `S3` / `S4` / `L5` `inserted (NO refusal)`, `L6` `updated=1`, `L9` `updated=1`, `L10`
+`ERR 42501 ... "call_offers"`, `L12` `ok rows=1`, `L13` `deleted=1`, `A3` `ok deleted=0`, `N1` `status=not_started`; every other
+case reads the same before and after. `scripts/verify-rls.sh` **section 10** grades every case, checks the anon `rpc/offer_status`
+refusal (10a), the three client gates from the source (10b) and counts leftovers over `office_contacts` name, `notifications`
+title, `audit_log` action, `call_offers` note, `call_periods` label and `auth.users` email (must be 0).
+
+**Orchestrator commands, in order (probe before -> migration -> probe after -> verify-rls -> record);** absolute paths, the
+workdir linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`:
+
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/prelaunch-rls-probe.sql        # BEFORE: the holes, as the header states
+    supabase db query --linked --workdir <dir> -o json "select ((select count(*) from public.office_contacts where name = 'probe-prelaunch') + (select count(*) from public.notifications where title = 'probe-prelaunch') + (select count(*) from public.audit_log where action = 'probe.prelaunch') + (select count(*) from public.call_offers where note = 'probe-prelaunch') + (select count(*) from public.call_periods where label like 'probe prelaunch%') + (select count(*) from auth.users where email like 'probe-prelaunch-%@example.test'))::int as leftover"   # 0
+    supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-prelaunch-rls.sql   # after Faraz's go - ONE session
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/prelaunch-rls-probe.sql        # AFTER: the picture above
+    SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh                                                  # section 10: 10a 401/403, 10b three PASS, 10c all cases PASS, leftover 0; sections 1-9 unchanged
+    supabase db query --linked --workdir <dir> -o json "select tablename, policyname, cmd, roles, qual, with_check from pg_policies where tablename in ('user_profiles','office_contacts','notifications','audit_log') order by 1, 2"   # the after-state, for this record
+    supabase db query --linked --workdir <dir> -o json "select grantee, privilege_type from information_schema.routine_privileges where routine_schema = 'public' and routine_name = 'offer_status' order by 1"   # authenticated, postgres, service_role - no PUBLIC, no anon
+
+If the AFTER probe reads anything but the picture above, or the leftover count is not 0, stop and report before anything else is
+applied. Rolling back = re-running the 9/22 / 9/23 texts from `git show 9809015:sql/schema.sql` (the five pre-existing policies
+`user_profiles_read`, `user_profiles_self_update`, `contacts_read`, `notif_insert`, `audit_insert` and the two guard bodies) plus
+`drop policy if exists notif_delete_sched on public.notifications;` (new here, no predecessor) plus
+`grant execute on function public.offer_status(uuid, text) to anon and to public` (the before-state had both) - kept out of this
+file on purpose.
+
+**Record step (after the AFTER probe, verify-rls and the two after-state queries), one commit:** paste the AFTER probe sentinel, the
+leftover 0, the verify-rls section 10 lines and both after-state query outputs at *observed:* below; change this section's status
+from PREPARED to APPLIED <timestamp>; fill "applied: _to be filled by the orchestrator_" in guide §4.3; update table (b) above for
+`user_profiles` / `notifications` / `audit_log` / `office_contacts`; and - so the header does not go stale the way revision i did -
+change `sql/schema.sql`'s `Revision 2026-09-24 j (... report-first, NOT yet applied)` line to `applied <timestamp>` together with its
+verbatim pin in `test/schema.test.js` (the `Revision 2026-09-24 j` regex), and in the same edit the `Revision 2026-09-23 i (... NOT
+yet applied)` line + its pin, since that migration was applied 2026-09-23 ~18:45 UTC (recorded above). Then re-run
+`node test/schema.test.js` (the `observed: ` pin only requires the prefix; the PREPARED pin must be updated to APPLIED).
+
+observed: <to be filled by the orchestrator>

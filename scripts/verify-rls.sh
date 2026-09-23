@@ -451,6 +451,94 @@ else
   echo "   SKIP 9d (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment; no such user exists until invites go out)"
 fi
 
+echo "== 10. pre-launch RLS (Prompt 16 A1): profiles / contacts / feed / audit / email pin / offer immutability / freeze by status / offer_status grant =="
+# sql/migrations/2026-09-24-prelaunch-rls.sql (report-first; applied only after Faraz's go). Client reads checked for
+# a) user_profiles_read and b) contacts_read - the reads the new policies must not turn into a silent 200 + [] (file:line
+# as of build 2026.09.23n; test/schema.test.js pins the same gates against the source):
+#   index-source.html:656   fetchProfile           user_profiles?id=eq.<own uid>                 own row - readable by everyone
+#   index-source.html:1077  schedulerIdsLoud       user_profiles?...&role=in.(scheduler,admin)   those rows stay readable to every signed-in user
+#   index-source.html:874   loadClientVersions     user_profiles?select=*                        called only at :904 (view settings && isScheduler)
+#   index-source.html:2077  loadAllProfilesLoud    user_profiles?select=*                        called only at :2115 (view setup && isAdmin); saveUserProfile :2088 refuses a non-admin
+#   index-source.html:3272  office_contacts?select=*                                             the effect returns at :3269 unless isScheduler
+#   index-source.html:828   logAudit               audit_log.actor_id = userProfile.person_id     what audit_insert now requires of a non-scheduler
+#   index-source.html:2786  addNotification        notifications insert                          reached only from linked-person / scheduler actions
+#   scripts/verify-rls.sh:157 and :300             user_profiles?id=eq.<own uid>&select=person_id own row
+#   edge-functions/*        read user_profiles / office_contacts with the service role (RLS bypassed) - unaffected
+# 10a. anon may not execute offer_status(uuid, text). 401/403 = the grant is revoked (after). A 200 = anon still runs it
+#      (before: it answers "not_started" - anon sees no offers). Nothing is written either way.
+line=$(curl -s -o /tmp/vr10a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/offer_status" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_period":"00000000-0000-0000-0000-000000000000","p_person":"s3"}')
+echo "   10a anon rpc offer_status: $line  body: $(head -c 160 /tmp/vr10a.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc offer_status refused ($line - execute revoked from anon)";;
+  "HTTP 200") bad "anon can still execute offer_status ($line, body $(head -c 60 /tmp/vr10a.json)) - apply sql/migrations/2026-09-24-prelaunch-rls.sql";;
+  *) bad "anon rpc offer_status: $line (expected 401/403)";;
+esac
+# 10b. the client gates for a) / b), read from the source (a regression here would make the new policies 200 + [] a live read)
+n10=$(grep -n 'rest/v1/office_contacts?select=\*' index-source.html | head -1 | cut -d: -f1)
+if [ -n "$n10" ] && sed -n "$((n10-4)),${n10}p" index-source.html | grep -q 'if (!loaded || !isScheduler) return;'; then ok "client: the office_contacts read (index-source.html:$n10) is behind the isScheduler gate"; else bad "client: the office_contacts read is not behind 'if (!loaded || !isScheduler) return;' (line ${n10:-?})"; fi
+if grep -q 'if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }' index-source.html && grep -q 'if (view === "setup" && isAdmin) loadAllProfilesLoud();' index-source.html; then ok "client: both whole-table user_profiles reads are role-gated (loadClientVersions: isScheduler; loadAllProfilesLoud: isAdmin)"; else bad "client: a whole-table user_profiles read lost its role gate"; fi
+if grep -q 'user_profiles?select=person_id,role&role=in.(scheduler,admin)&person_id=not.is.null' index-source.html; then ok "client: schedulerIdsLoud reads scheduler/admin rows only (kept readable for every signed-in user)"; else bad "client: schedulerIdsLoud no longer filters to role=in.(scheduler,admin)"; fi
+# 10c. sql/probes/prelaunch-rls-probe.sql: three throwaway users (stranger / surgeon s3 / admin s1), fixtures in 2030-07 keyed
+#      'probe-prelaunch', acts as each of them and as anon, ends with RAISE 'PROBE_RESULTS ...;END' so everything rolls back.
+#      Expectations are the AFTER-migration picture; the probe header lists the BEFORE string of every case (the holes).
+if linked; then
+  PROBE10="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/prelaunch-rls-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE10" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "prelaunch probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results10=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results10" | tr ';' '\n' | sed 's/^/   /'
+    case_val10()   { echo "$results10" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq10()  { v=$(case_val10 "$1"); [ "$v" = "$2" ] && ok "prelaunch probe $1: $3" || bad "prelaunch probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err10() { v=$(case_val10 "$1"); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "prelaunch probe $1: $4"; else bad "prelaunch probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    expect_eq10  S1  "own=1 leak=0 sched_ok=t"                       "a stranger (unlinked viewer) reads own row + scheduler/admin rows, no other row"
+    expect_eq10  S2  "contacts=0"                                     "a stranger reads no office contact"
+    expect_err10 S3  42501 'row-level security policy for table "notifications"' "a stranger cannot insert into the feed"
+    expect_err10 S4  42501 'row-level security policy for table "audit_log"'     "a stranger cannot insert into the audit log"
+    expect_eq10  L1  "own=1 leak=0 sched_ok=t"                       "a linked surgeon reads own row + scheduler/admin rows, no other row"
+    expect_eq10  L2  "contacts=0"                                     "a linked surgeon reads no office contact"
+    expect_eq10  L3  "ok"                                             "a linked surgeon inserts a notification"
+    expect_eq10  L4  "ok"                                             "a linked surgeon writes an audit row as himself (actor_id = his roster id)"
+    expect_err10 L5  42501 'row-level security policy for table "audit_log"'     "a linked surgeon cannot write an audit row as someone else"
+    expect_err10 L6  42501 'row-level security policy for table "user_profiles"' "a surgeon cannot change his own email (pinned)"
+    expect_eq10  L7  "updated=1"                                      "a surgeon still changes his own display_name"
+    expect_eq10  L8  "deleted=0"                                      "a surgeon's delete of a notification touches nothing (no policy: silent)"
+    expect_err10 L9  OF004 "OFFER_IMMUTABLE"                          "a surgeon's UPDATE may not move an offer to another day"
+    expect_err10 L10 OF004 "OFFER_IMMUTABLE"                          "a surgeon's UPDATE may not re-point an offer to another person"
+    expect_eq10  L11 "updated=1"                                      "a surgeon's UPDATE of role_pref alone is fine"
+    expect_err10 L12 OF003 "closed on 2030-06-20"                     "insert inside a PUBLISHED period whose close date lies ahead is refused (freeze by status)"
+    expect_err10 L13 OF003 "closed on 2030-06-20"                     "delete inside a PUBLISHED period whose close date lies ahead is refused (freeze by status)"
+    expect_eq10  L14 "ok rows=1"                                      "insert inside an upcoming period is fine"
+    expect_err10 L15 OM005 "MODE_FROZEN"                              "set_offer_mode on a published period was already refused (control)"
+    expect_eq10  A1  "own=1 sees_surgeon=1 sees_stranger=1"          "the admin reads every profile"
+    expect_eq10  A2  "contacts=1"                                     "the admin reads office contacts"
+    expect_eq10  A3  "ok deleted=3"                                   "the admin inserts a notification and deletes the probe's three (notif_delete_sched)"
+    expect_eq10  A4  "ok"                                             "the admin writes an audit row for another actor"
+    expect_eq10  A5  "updated=1"                                      "the admin corrects a surgeon's email (user_profiles_admin, unchanged)"
+    expect_eq10  A6  "updated=1"                                      "the admin moves a surgeon's offer to another day"
+    expect_eq10  A7  "ok rows=1"                                      "the admin enters a late offer inside the published period (email relay)"
+    expect_err10 N1  42501 "permission denied for function offer_status" "anon cannot execute offer_status()"
+  fi
+  LEFTOVER10_SQL="select ((select count(*) from public.office_contacts where name = 'probe-prelaunch') + (select count(*) from public.notifications where title = 'probe-prelaunch') + (select count(*) from public.audit_log where action = 'probe.prelaunch') + (select count(*) from public.call_offers where note = 'probe-prelaunch') + (select count(*) from public.call_periods where label like 'probe prelaunch%') + (select count(*) from auth.users where email like 'probe-prelaunch-%@example.test'))::int as leftover"
+  r=$(q "$LEFTOVER10_SQL")
+  if [ "$(verdict "$r")" != "accepted" ]; then
+    bad "prelaunch probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "prelaunch probe persisted nothing (leftover count 0: office_contacts / notifications / audit_log / call_offers / call_periods / auth.users)"
+  else
+    bad "prelaunch probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.call_offers where note = 'probe-prelaunch';"
+    echo "      delete from public.call_periods where label like 'probe prelaunch%';"
+    echo "      delete from public.audit_log where action = 'probe.prelaunch';"
+    echo "      delete from public.notifications where title = 'probe-prelaunch';"
+    echo "      delete from public.office_contacts where name = 'probe-prelaunch';"
+    echo "      delete from auth.users where email like 'probe-prelaunch-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 10c (supabase CLI not linked at $WORKDIR)"
+fi
+
 echo
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

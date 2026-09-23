@@ -494,7 +494,8 @@ ok(!/simple-protocol/.test(evProbe), "eastvac probe header must not claim a simp
 
 step("verify-rls.sh section 9 checks the anon 200 + [] read, the anon write, grades the probe, counts leftovers, reads as a surgeon");
 ok(/^echo "== 9\. east_vacation_reviews/m.test(vr), "verify-rls.sh has no section 9 (east_vacation_reviews)");
-const s9 = vr.slice(vr.indexOf('echo "== 9.'));
+// bounded at section 10 (Prompt 16 A1): the 9d read-only pin below must judge 9d, not the next section's anon rpc POST
+const s9 = vr.slice(vr.indexOf('echo "== 9.'), vr.indexOf('echo "== 10.') > 0 ? vr.indexOf('echo "== 10.') : vr.length);
 ok(s9.length > 0 && s9.length < vr.length, "verify-rls.sh section 9 could not be sliced out");
 ok(/rest\/v1\/east_vacation_reviews\?select=person_id,start,end,decision/.test(s9), "verify-rls.sh 9a must GET rest/v1/east_vacation_reviews");
 ok(/\[ "\$body9a" = "\[\]" \]/.test(s9), "verify-rls.sh 9a must require an EMPTY array body on 200 (a row in the anon body is a FAIL)");
@@ -684,15 +685,23 @@ eq(require("crypto").createHash("sha256").update(offersBody).digest("hex"), OFFE
   "offers migration body sha256 must equal the applied file's (strip nothing; annotate only in the trailer line);");
 checkOffersDDL("offers migration", offersMig);
 ok(offersMig.indexOf("offer_modes") < 0, "offers migration is the 9/22 body: offer_modes belongs to 2026-09-23-offer-modes.sql");
-// call_offers_delete_guard is still the 9/22 body; call_offers_guard was re-created on 9/23 07:05Z by the claim-offer
-// migration (OFFER_FROZEN skipped while silvis.claim_in_progress is on) - schema.sql mirrors the newest of each.
+// Both guards were re-created by the pre-launch migration (Prompt 16 A1, sql/migrations/2026-09-24-prelaunch-rls.sql:
+// freeze by status + OF004) - schema.sql mirrors the NEWEST of each, i.e. that file. The 9/22 offers migration keeps
+// the applied delete-guard base; the 9/23 claim-offer migration keeps the applied call_offers_guard base
+// (OFFER_FROZEN skipped while silvis.claim_in_progress is on) - both frozen, neither mirrored any more.
+const PRELAUNCH_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-prelaunch-rls.sql");
 (function guardsMirrored() {
-  const a = functionText(schema, "call_offers_delete_guard"), b = functionText(offersMig, "call_offers_delete_guard");
-  ok(a && b && a === b, "call_offers_delete_guard(): migration text differs from schema.sql (keep them identical; the migration is what ran live)");
+  const prelaunch = read(PRELAUNCH_MIGRATION);
+  const a = functionText(schema, "call_offers_delete_guard"), b = functionText(prelaunch, "call_offers_delete_guard");
+  ok(a && b && a === b, "call_offers_delete_guard(): schema.sql differs from sql/migrations/2026-09-24-prelaunch-rls.sql (the newest migration touching it)");
+  const base0 = functionText(offersMig, "call_offers_delete_guard");
+  ok(base0 && /OF003/.test(base0) && !/p\.status/.test(base0), "offers migration: the 9/22 call_offers_delete_guard is the applied base (OF003 by close date only)");
   const claimOffer = read(CLAIM_OFFER_MIGRATION);
-  const g = functionText(schema, "call_offers_guard"), h = functionText(claimOffer, "call_offers_guard");
-  ok(g && h && g === h, "call_offers_guard(): schema.sql differs from sql/migrations/2026-09-23-claim-offer.sql (the newest migration touching it)");
+  const g = functionText(schema, "call_offers_guard"), h = functionText(prelaunch, "call_offers_guard");
+  ok(g && h && g === h, "call_offers_guard(): schema.sql differs from sql/migrations/2026-09-24-prelaunch-rls.sql (the newest migration touching it)");
   ok(/current_setting\('silvis\.claim_in_progress', true\)/.test(g), "schema.sql: call_offers_guard must skip OFFER_FROZEN only while silvis.claim_in_progress is on");
+  const claimBase = functionText(claimOffer, "call_offers_guard");
+  ok(claimBase && /current_setting\('silvis\.claim_in_progress', true\)/.test(claimBase) && !/OF004|p\.status/.test(claimBase), "claim-offer migration: its call_offers_guard is the applied 9/23 base (claim flag, no OF004, no status freeze)");
   const base = functionText(offersMig, "call_offers_guard");
   ok(base && /OF001/.test(base) && /OF002/.test(base) && /OF003/.test(base), "offers migration: the 9/22 call_offers_guard raises OF001 / OF002 / OF003");
 })();
@@ -907,5 +916,173 @@ ok(!/simple-protocol/.test(rpcProbe), "offer-rpcs probe header must not claim a 
 step("P14 P3a: docs/SCHEMA-REVIEW.md carries the rpc section with an 'observed:' placeholder for the orchestrator");
 ok(/### set_offer_mode\(\) \+ save_offers\(\) \(2026-09-23; `sql\/migrations\/2026-09-23-offer-mode-rpc\.sql`\)/.test(review), "SCHEMA-REVIEW.md lacks the set_offer_mode() + save_offers() section");
 ok(/offer-mode-rpc[\s\S]*observed: /.test(review.slice(review.indexOf("### set_offer_mode()"))), "SCHEMA-REVIEW.md's rpc section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
+
+// ---- Prompt 16 A1 (2026-09-24) - pre-launch RLS: close the door before anyone is invited ----
+// sql/migrations/2026-09-24-prelaunch-rls.sql (report-first; the orchestrator applies after Faraz's go) re-creates six
+// policies (user_profiles_read own row + scheduler/admin rows; user_profiles_self_update pins email; contacts_read
+// scheduler/admin; notif_insert + audit_insert linked persons or schedulers, the audit row's actor_id = the caller;
+// notif_delete_sched), re-creates the two call_offers guards (freeze by STATUS as well as by date; OF004 OFFER_IMMUTABLE:
+// a non-scheduler UPDATE may not move an offer's day or person) and revokes offer_status() from public / anon.
+// schema.sql mirrors every text byte for byte; sql/probes/prelaunch-rls-probe.sql rolls itself back (fixtures in 2030-07,
+// leftovers keyed on 'probe-prelaunch'); scripts/verify-rls.sh section 10 grades it; the client reads of a) / b) are
+// pinned here so the policy change can never turn one of them into a silent 200 + [].
+const PRELAUNCH_PROBE = path.join(ROOT, "sql", "probes", "prelaunch-rls-probe.sql");
+const PRELAUNCH_POLICIES = {
+  user_profiles_read: "create policy user_profiles_read on public.user_profiles for select to authenticated\n  using (id = auth.uid() or public.silvis_is_sched() or role in ('admin','scheduler'));",
+  user_profiles_self_update: "create policy user_profiles_self_update on public.user_profiles for update to authenticated\n  using (id = auth.uid())\n  with check (id = auth.uid()\n    and role = (select role from public.user_profiles p where p.id = auth.uid())\n    and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())\n    and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid()));",
+  contacts_read: "create policy contacts_read on public.office_contacts for select to authenticated using (public.silvis_is_sched());",
+  notif_insert: "create policy notif_insert on public.notifications for insert to authenticated\n  with check (public.silvis_is_sched() or public.silvis_person_id() is not null);",
+  notif_delete_sched: "create policy notif_delete_sched on public.notifications for delete to authenticated using (public.silvis_is_sched());",
+  audit_insert: "create policy audit_insert on public.audit_log for insert to authenticated\n  with check (public.silvis_is_sched() or (public.silvis_person_id() is not null and actor_id = public.silvis_person_id()));",
+};
+const PRELAUNCH_TABLE_OF = { user_profiles_read: "user_profiles", user_profiles_self_update: "user_profiles", contacts_read: "office_contacts", notif_insert: "notifications", notif_delete_sched: "notifications", audit_insert: "audit_log" };
+const FREEZE_WHERE = "(p.offers_close_at <= today_c or p.status <> 'upcoming')";
+const OF004_LINE = "if tg_op = 'UPDATE' and not public.silvis_is_sched() and (new.day <> old.day or new.person_id <> old.person_id) then";
+const OF004_RAISE = "raise exception 'OFFER_IMMUTABLE: an offer keeps its day and person (% %) - clear it and offer the other day instead', old.person_id, old.day using errcode = 'OF004';";
+const OFFER_STATUS_GRANTS = "revoke execute on function public.offer_status(uuid, text) from public;\nrevoke execute on function public.offer_status(uuid, text) from anon;\ngrant execute on function public.offer_status(uuid, text) to authenticated;\ngrant execute on function public.offer_status(uuid, text) to service_role;";
+const PRELAUNCH_CASES = ["S1", "S2", "S3", "S4", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10", "L11", "L12", "L13", "L14", "L15", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "N1"];
+function checkPrelaunchPolicies(n, s) {
+  Object.keys(PRELAUNCH_POLICIES).forEach((p) => {
+    ok(s.indexOf("drop policy if exists " + p + " on public." + PRELAUNCH_TABLE_OF[p] + ";") >= 0, n + ": `drop policy if exists " + p + " on public." + PRELAUNCH_TABLE_OF[p] + ";` missing (idempotency)");
+    ok(s.indexOf(PRELAUNCH_POLICIES[p]) >= 0, n + ": policy " + p + " must read exactly:\n" + PRELAUNCH_POLICIES[p]);
+    eq((s.match(new RegExp("create policy " + p + " on public\\.", "g")) || []).length, 1, n + ": policy " + p + " must be created exactly once;");
+  });
+  ok(!/create policy [a-z_]+ on public\.(user_profiles|office_contacts|notifications|audit_log) for [a-z]+ using \(true\)/.test(s), n + ": no role-less (anon) policy on user_profiles / office_contacts / notifications / audit_log");
+  ok(!/create policy (user_profiles_read|contacts_read|notif_insert|audit_insert)[^;]*\((true)\)/.test(s), n + ": user_profiles_read / contacts_read / notif_insert / audit_insert must no longer be using/with check (true)");
+}
+function checkPrelaunchGuards(n, s) {
+  const g = functionText(s, "call_offers_guard");
+  ok(g, n + ": no `create or replace function public.call_offers_guard()` ... `end $$;` block");
+  const d = functionText(s, "call_offers_delete_guard");
+  ok(d, n + ": no `create or replace function public.call_offers_delete_guard()` ... `end $$;` block");
+  if (!g || !d) return;
+  eq((g.match(/OF004/g) || []).length, 1, n + ": call_offers_guard must raise OF004 exactly once;");
+  ok(g.indexOf(OF004_LINE) > 0, n + ": call_offers_guard lacks the OF004 condition `" + OF004_LINE + "` (UPDATE only, non-scheduler only, day OR person moved)");
+  ok(g.indexOf(OF004_RAISE) > 0, n + ": call_offers_guard must raise exactly `" + OF004_RAISE + "`");
+  ok(g.indexOf("OF002") < g.indexOf(OF004_LINE) && g.indexOf(OF004_LINE) < g.indexOf("silvis.claim_in_progress"), n + ": OF004 must sit after OF002 and before the freeze check");
+  ok(g.indexOf(FREEZE_WHERE) > 0, n + ": call_offers_guard's freeze must test `" + FREEZE_WHERE + "` (by status as well as by close date)");
+  ok(d.indexOf(FREEZE_WHERE) > 0, n + ": call_offers_delete_guard's freeze must test `" + FREEZE_WHERE + "`");
+  ok(!/p\.offers_close_at <= today_c\s*\n/.test(g + d), n + ": no guard may still freeze by close date alone");
+  ok(!/OF004/.test(d), n + ": the delete guard has no OF004 (a delete moves nothing)");
+  ok(/if not public\.silvis_is_sched\(\) then/.test(d), n + ": the delete guard keeps the scheduler exemption as its first test");
+  ok(/if not public\.silvis_is_sched\(\) and coalesce\(current_setting\('silvis\.claim_in_progress', true\), ''\) <> 'on' then/.test(g), n + ": call_offers_guard keeps the scheduler exemption + the claim-in-progress skip on the freeze");
+  ok(/new\.updated_at := now\(\);\s+return new;/.test(g), n + ": call_offers_guard still stamps updated_at and returns new");
+  ok(/return old;/.test(d), n + ": the delete guard still returns old");
+}
+step("P16 A1: the pre-launch migration file - six policies, two guards, the offer_status grants, nothing else");
+const prelaunchMig = read(PRELAUNCH_MIGRATION);
+ok(!/\r/.test(prelaunchMig), "prelaunch migration has CRLF line endings");
+checkPrelaunchPolicies("prelaunch migration", prelaunchMig);
+checkPrelaunchGuards("prelaunch migration", prelaunchMig);
+eq((prelaunchMig.match(/^create policy /gm) || []).length, 6, "the prelaunch migration must create exactly the six policies;");
+eq((prelaunchMig.match(/^drop policy if exists /gm) || []).length, 6, "the prelaunch migration must drop-if-exists exactly the six policies;");
+eq((prelaunchMig.match(/create or replace function/g) || []).length, 2, "the prelaunch migration must re-create call_offers_guard and call_offers_delete_guard and nothing else;");
+ok(!/create table|drop table|alter table|drop function|drop policy if exists user_profiles_admin|create policy user_profiles_admin/.test(prelaunchMig), "the prelaunch migration must not create / drop / alter a table, drop a function or touch user_profiles_admin");
+ok(!/set_offer_mode\(|save_offers\(|claim_open_slot\(|apply_trade\(/.test(prelaunchMig.replace(/--[^\n]*/g, "")), "the prelaunch migration must not redefine set_offer_mode / save_offers / claim_open_slot / apply_trade (set_offer_mode already freezes by status: OM005)");
+ok(prelaunchMig.indexOf(OFFER_STATUS_GRANTS) >= 0, "the prelaunch migration must carry exactly:\n" + OFFER_STATUS_GRANTS);
+ok(!/create or replace function public\.offer_status/.test(prelaunchMig), "the prelaunch migration must not redefine offer_status() (grants only)");
+ok(/drop trigger if exists call_offers_guard_trg on public\.call_offers;/.test(prelaunchMig) && /drop trigger if exists call_offers_delete_guard_trg on public\.call_offers;/.test(prelaunchMig), "the prelaunch migration re-creates both triggers (drop if exists first)");
+["call_offers_guard_trg", "call_offers_delete_guard_trg"].forEach((t) => ok(triggerText(prelaunchMig, t) === triggerText(schema, t), "trigger " + t + ": prelaunch migration text differs from schema.sql"));
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-prelaunch-rls\.sql/.test(prelaunchMig), "the prelaunch migration header must carry the CLI apply line for the orchestrator");
+ok(/REPORT-FIRST|report-first/.test(prelaunchMig), "the prelaunch migration header must say it is report-first (RLS on the live database)");
+
+step("P16 A1: schema.sql mirrors the six policies, both guards and the grants byte for byte; user_profiles_admin stays admin-only");
+checkPrelaunchPolicies("schema.sql", schema);
+checkPrelaunchGuards("schema.sql", schema);
+Object.keys(PRELAUNCH_POLICIES).forEach((p) => ok(policyText(schema, p) === policyText(prelaunchMig, p), "policy " + p + ": schema.sql differs from the prelaunch migration"));
+["call_offers_guard", "call_offers_delete_guard"].forEach((name) => ok(functionText(schema, name) === functionText(prelaunchMig, name), name + "(): schema.sql differs from the prelaunch migration"));
+ok(schema.indexOf(OFFER_STATUS_GRANTS) >= 0, "schema.sql must carry the offer_status grants right after its definition");
+ok(schema.indexOf(OFFER_STATUS_GRANTS) > schema.indexOf("create or replace function public.offer_status(") && schema.indexOf(OFFER_STATUS_GRANTS) < schema.indexOf("create or replace function public.call_offers_guard("), "the offer_status grants sit between offer_status() and call_offers_guard()");
+ok(schema.indexOf("create policy user_profiles_admin on public.user_profiles for all to authenticated\n  using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');") > 0, "schema.sql: user_profiles_admin must stay admin-only (Setup -> Users is isAdmin-gated in the client; a scheduler-role account corrects nothing there)");
+ok(schema.indexOf("create policy user_profiles_self_insert on public.user_profiles for insert to authenticated\n  with check (id = auth.uid() and role = 'viewer' and person_id is null);") > 0, "schema.sql: user_profiles_self_insert unchanged (viewer, unlinked)");
+ok(/-- Revision 2026-09-24 j \(Prompt 16 A1, sql\/migrations\/2026-09-24-prelaunch-rls\.sql, report-first, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-24 j (the pre-launch RLS migration, not yet applied)");
+ok(!/create policy notif_delete/.test(offersMig) && !/notif_delete_sched/.test(claimMigration), "notif_delete_sched belongs to the prelaunch migration only");
+
+step("P16 A1: the probe is self-rolling-back, acts as a stranger / a linked surgeon / an admin / anon, covers S1..N1 with BEFORE strings in its header");
+const plProbe = read(PRELAUNCH_PROBE);
+ok(!/\r/.test(plProbe), "prelaunch probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(plProbe), "prelaunch probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(plProbe), "prelaunch probe must collect into a temp table probe_results");
+ok(/grant insert, select on probe_results to authenticated;/.test(plProbe) && /grant insert, select on probe_results to anon;/.test(plProbe), "prelaunch probe must grant the temp table to authenticated AND anon (N1 runs as anon)");
+const plLastDo = plProbe.lastIndexOf("do $$");
+ok(plLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(plProbe.slice(plLastDo)), "prelaunch probe's last DO block must raise 'PROBE_RESULTS %;END' so the batch rolls back");
+PRELAUNCH_CASES.forEach((k) => ok(plProbe.indexOf("values ('" + k + "'") >= 0, "prelaunch probe lacks case " + k));
+ok(plProbe.indexOf("'2030-07-") > 0, "prelaunch probe fixtures must live in 2030-07");
+// every date literal outside 2030-07 must be one of the periods' close / publish-by dates (values, not rows): no fixture row
+// may land in another probe's month (trade 2030-03, claim 2030-04, offers 2030-05/06, eastvac 2030-05, verify-rls 8d 2030-08/09)
+eq([...new Set(plProbe.match(/'2030-\d\d-\d\d'/g) || [])].filter((d) => !/^'2030-07-/.test(d)).sort(), ["'2030-05-20'", "'2030-06-03'", "'2030-06-20'"],
+  "prelaunch probe: date literals outside 2030-07 must be exactly the two offers_close_at values and the open period's publish_by;");
+ok(plProbe.indexOf("'2030-07-21'") < 0, "prelaunch probe must not use 2030-07-21 (verify-rls.sh 8c's own-row fixture day)");
+ok(/'probe-prelaunch-' \|\| [a-z]+ \|\| '@example\.test'/.test(plProbe), "prelaunch probe's throwaway auth users must be probe-prelaunch-<uuid>@example.test (the leftover count keys on it)");
+ok(/'probe prelaunch open', '2030-07-01', '2030-07-15', '2030-05-20'/.test(plProbe) && /'probe prelaunch published', '2030-07-16', '2030-07-31', '2030-06-20'/.test(plProbe), "prelaunch probe periods: 'probe prelaunch open' (7/1-7/15, close 2030-05-20, upcoming) and 'probe prelaunch published' (7/16-7/31, close 2030-06-20 in the future, status published)");
+ok(/set status = 'published' where label = 'probe prelaunch published'/.test(plProbe), "the published fixture period must be flipped to status published AFTER its fixture offer is inserted (the freeze-by-status hole is what L12 / L13 measure)");
+ok(/values \('probe-prelaunch', 'probe-prelaunch@example\.test', 'probe', false\)/.test(plProbe), "the office_contacts fixture must be name 'probe-prelaunch', an @example.test address, active = false (never mailed even if left behind)");
+ok(/title = 'probe-prelaunch'/.test(plProbe) && /'probe\.prelaunch'/.test(plProbe) && (plProbe.match(/'either', 'probe-prelaunch', /g) || []).length >= 6, "probe rows must carry title 'probe-prelaunch' (notifications), action 'probe.prelaunch' (audit_log) and note 'probe-prelaunch' on every call_offers insert (3 fixtures + L12 + L14 + A7) - the leftover keys");
+ok(/set person_id = 's3', role = 'surgeon'/.test(plProbe) && /set person_id = 's1', role = 'admin'/.test(plProbe), "prelaunch probe must link its throwaway surgeon to s3 and its admin to s1 (admin, not scheduler: user_profiles_admin is the correction path)");
+ok(/role = 'viewer' and person_id is null/.test(plProbe), "prelaunch probe must assert the stranger stays an unlinked viewer (handle_new_auth_user's default)");
+ok(/set local role anon/.test(plProbe), "prelaunch probe N1 must act as anon");
+ok(/'ERR ' \|\| sqlstate \|\| ' ' \|\| replace\(sqlerrm, ';', ','\)/.test(plProbe), "prelaunch probe must record the SQLSTATE with each error (42501 / OF003 / OF004 / OM005 are graded)");
+ok(/get diagnostics n = row_count;/.test(plProbe), "prelaunch probe must observe UPDATE / DELETE row counts (RLS filters silently: L8 deleted=0)");
+const plHeader = plProbe.slice(0, plProbe.indexOf("create temp table probe_results"));
+ok(/BEFORE/.test(plHeader) && /inserted \(NO refusal\)/.test(plHeader) && /status=not_started/.test(plHeader), "prelaunch probe header must state the BEFORE strings (the holes: inserted (NO refusal), updated=1, deleted=1, status=not_started)");
+["own=1 leak=0 sched_ok=t", "contacts=0", "ok deleted=3", "permission denied for function offer_status", "OFFER_IMMUTABLE", "closed on 2030-06-20"].forEach((s) => ok(plHeader.indexOf(s) > 0, "prelaunch probe header must state the AFTER string `" + s + "`"));
+ok(!/simple-protocol/.test(plProbe), "prelaunch probe header must not claim a simple-protocol connection");
+
+step("P16 A1: verify-rls.sh section 10 - anon rpc offer_status refused, the client gates, the probe graded case by case, leftovers counted");
+ok(/^echo "== 10\. /m.test(vr), "verify-rls.sh has no section 10");
+const s10 = vr.slice(vr.indexOf('echo "== 10. '));
+ok(s10.length > 0 && s10.length < vr.length, "verify-rls.sh section 10 could not be sliced out");
+ok(/-X POST "\$URL\/rest\/v1\/rpc\/offer_status"/.test(s10), "section 10 must POST rest/v1/rpc/offer_status as anon");
+ok(/"HTTP 401"\|"HTTP 403"\) ok "anon rpc offer_status refused/.test(s10), "section 10a must accept 401/403 for the anon rpc call and name a 200 as the open grant");
+ok(/prelaunch-rls-probe\.sql/.test(s10), "section 10 must run sql/probes/prelaunch-rls-probe.sql through the linked CLI");
+PRELAUNCH_CASES.forEach((k) => ok(new RegExp("expect_(eq|err)10\\s+" + k + "\\s").test(s10), "section 10 does not grade probe case " + k));
+["own=1 leak=0 sched_ok=t", "contacts=0", "contacts=1", "ok deleted=3", "deleted=0", "updated=1", "ok rows=1", "OF004", "OF003", "OM005", "42501", "permission denied for function offer_status", "own=1 sees_surgeon=1 sees_stranger=1"].forEach((c) => ok(s10.indexOf(c) > 0, "section 10 must expect " + c));
+ok(/name = 'probe-prelaunch'/.test(s10) && /title = 'probe-prelaunch'/.test(s10) && /action = 'probe\.prelaunch'/.test(s10) && /note = 'probe-prelaunch'/.test(s10) && /label like 'probe prelaunch%'/.test(s10) && /email like 'probe-prelaunch-%@example\.test'/.test(s10),
+  "section 10 must count leftovers over office_contacts / notifications / audit_log / call_offers / call_periods / auth.users and fail on non-zero");
+ok(/LEFT ROWS BEHIND/.test(s10), "section 10 must report leftovers as a failure with the cleanup statements");
+ok((s10.match(/index-source\.html:\d+/g) || []).length >= 6, "section 10 must list the client reads it checked for a) / b) as index-source.html:<line>");
+ok(/office_contacts\?select/.test(s10) && /isScheduler/.test(s10) && /isAdmin/.test(s10), "section 10 must check the office_contacts / Users reads are behind their role gates");
+const s10write = s10.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+ok(!/-X (PATCH|DELETE|PUT)/.test(s10write) && (s10write.match(/-X POST/g) || []).length === 1, "section 10 must write nothing over REST (one anon POST to the rpc, which cannot persist anything)");
+
+step("P16 A1: the client reads of a) / b) are role-gated where the new policies would otherwise 200 + [] them");
+const client = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
+const contactsAt = client.indexOf("rest/v1/office_contacts?select=*");
+ok(contactsAt > 0, "index-source.html must read office_contacts once (Setup -> Office contacts)");
+ok(client.slice(contactsAt - 400, contactsAt).indexOf("if (!loaded || !isScheduler) return;") > 0, "the office_contacts load effect must return before the fetch unless isScheduler (contacts_read is scheduler/admin only after A1)");
+eq((client.match(/rest\/v1\/office_contacts\?select/g) || []).length, 1, "exactly one office_contacts read in the client;");
+const fullProfileReads = client.match(/rest\/v1\/user_profiles\?select=\*[^`]*`/g) || [];
+eq(fullProfileReads.length, 2, "exactly two whole-table user_profiles reads (loadClientVersions, loadAllProfilesLoud);");
+ok(/if \(view === "settings" && isScheduler\) \{ loadAudit\(\); loadSnapshots\(\); loadClientVersions\(\); \}/.test(client), "loadClientVersions (user_profiles?select=*) runs only for a scheduler on the Settings view");
+ok(/if \(view === "setup" && isAdmin\) loadAllProfilesLoud\(\);/.test(client), "loadAllProfilesLoud (user_profiles?select=*) runs only for the admin on Setup");
+ok(/rest\/v1\/user_profiles\?select=person_id,role&role=in\.\(scheduler,admin\)&person_id=not\.is\.null/.test(client), "schedulerIdsLoud reads scheduler/admin rows only - the rows user_profiles_read keeps readable for every signed-in user");
+ok(/rest\/v1\/user_profiles\?id=eq\.\$\{encodeURIComponent\(userId\)\}&select=\*/.test(client), "fetchProfile reads the own row only");
+ok(/actor_id: userProfile\?\.person_id \|\| authUser\?\.id \|\| null,/.test(client), "logAudit writes actor_id = the caller's person_id (audit_insert requires it for a non-scheduler)");
+
+step("P16 A1: docs - SCHEMA-REVIEW.md PREPARED block with the before / after table + 'observed:' placeholder; guide 4.3 table, one row per change");
+const plReview = review.slice(review.indexOf("## 2026-09-24 - pre-launch RLS (Prompt 16 A1)"));
+ok(plReview.length > 0 && plReview.length < review.length, "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - pre-launch RLS (Prompt 16 A1)' section");
+ok(/PREPARED/.test(plReview.slice(0, 200)), "the A1 section must be marked PREPARED (not applied)");
+ok(/observed: <to be filled by the orchestrator>/.test(plReview), "the A1 section must carry 'observed: <to be filled by the orchestrator>'");
+Object.keys(PRELAUNCH_POLICIES).forEach((p) => ok(new RegExp("^\\| `" + p + "`", "m").test(plReview), "the A1 before / after table lacks a row for " + p));
+["call_offers_guard", "call_offers_delete_guard", "offer_status"].forEach((p) => ok(new RegExp("^\\| `" + p + "`", "m").test(plReview), "the A1 before / after table lacks a row for " + p));
+ok(/probe before -> migration -> probe after -> verify-rls -> record|probe BEFORE/.test(plReview) && /sql\/migrations\/2026-09-24-prelaunch-rls\.sql/.test(plReview) && /sql\/probes\/prelaunch-rls-probe\.sql/.test(plReview), "the A1 section must give the orchestrator's commands in order (probe before, migration, probe after, verify-rls, record)");
+const guide = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"), "utf8");
+const g43 = guide.slice(guide.indexOf("### 4.3 RLS posture"), guide.indexOf("### 4.4 Data-loss safeguards"));
+ok(g43.length > 0, "guide section 4.3 could not be sliced out");
+Object.keys(PRELAUNCH_POLICIES).concat(["call_offers_guard", "offer_status"]).forEach((p) => ok(new RegExp("^\\| `" + p + "`", "m").test(g43), "guide 4.3's pre-launch table lacks a row for " + p));
+ok(/Prompt 16 A1/.test(g43) && /prelaunch-rls/.test(g43), "guide 4.3 must name Prompt 16 A1 and the migration file");
+
+step("P16 A1 review fixes: the email pin's GoTrue residual, the importer as a non-scheduler, the rollback recipe, the record step, no review phrasing, N1 anon claims");
+const plMigHeader = prelaunchMig.slice(0, prelaunchMig.indexOf("drop policy if exists"));
+ok(/handle_new_auth_user/.test(plMigHeader) && /PUT \/auth\/v1\/user/.test(plMigHeader), "the migration header d) must state the residual: the email pin closes the REST PATCH only - GoTrue's self-service email change (PUT /auth/v1/user) still re-syncs user_profiles.email through handle_new_auth_user (security definer)");
+ok(/handle_new_auth_user/.test(plReview) && /PUT \/auth\/v1\/user/.test(plReview), "SCHEMA-REVIEW's A1 section must state the GoTrue / handle_new_auth_user residual of the email pin and offer the hardening as a decision");
+ok(/handle_new_auth_user/.test(g43), "guide 4.3's user_profiles_self_update row must name the handle_new_auth_user residual");
+ok(/import-seed\.js/.test(plReview) && /import-seed/.test(g43), "SCHEMA-REVIEW 'What could break' and guide 4.3 must name the CLI importer (postgres, no JWT = a non-scheduler to the guards): an offers import into a non-upcoming period is refused with OF003");
+ok(/drop policy if exists notif_delete_sched on public\.notifications;/.test(plReview), "the rollback recipe must drop notif_delete_sched (a new policy with no predecessor in 9809015)");
+ok(/to anon and to public|to public and to anon/.test(plReview), "the rollback recipe must restore the offer_status EXECUTE grant to public as well as to anon (the before-state)");
+ok(/Revision 2026-09-24 j/.test(plReview) && /test\/schema\.test\.js/.test(plReview) && /Revision 2026-09-23 i/.test(plReview), "the record step must name the schema.sql header revision j (and the stale revision i) 'NOT yet applied' wording + its test pin as part of the apply record");
+ok(!/directory of the six|home addresses|self-made account =/.test(prelaunchMig + plReview + g43), "no review phrasing in the repo: state the policy fact (every signed-in account could read every profile row, email included)");
+ok(!/set_config\('request\.jwt\.claims', '', true\)/.test(plProbe) && /set_config\('request\.jwt\.claims', '\{"role":"anon"\}', true\)/.test(plProbe), "prelaunch probe N1 must set request.jwt.claims to '{\"role\":\"anon\"}' (auth.uid() can parse it), not ''");
 
 console.log("schema.test.js: " + N + " assertions passed");

@@ -33,6 +33,11 @@
 -- Revision 2026-09-23 i (Prompt 14 part 3a, sql/migrations/2026-09-23-offer-mode-rpc.sql, NOT yet applied): set_offer_mode()
 -- (security definer; one person's key on one period) + save_offers() (security invoker; the painter's one-transaction Save -
 -- rows and, when given, the period mode through set_offer_mode, one commit or nothing; a note-less repaint keeps the note).
+-- Revision 2026-09-24 j (Prompt 16 A1, sql/migrations/2026-09-24-prelaunch-rls.sql, report-first, NOT yet applied): pre-launch RLS -
+-- user_profiles_read = own row + scheduler/admin rows (or a scheduler/admin caller); contacts_read scheduler/admin only;
+-- notif_insert + audit_insert = scheduler/admin or a linked person (the audit row's actor_id = the caller's roster id);
+-- notif_delete_sched; user_profiles_self_update pins email; OF004 OFFER_IMMUTABLE (a non-scheduler UPDATE may not move an
+-- offer's day / person); both call_offers guards freeze by status as well as by date; offer_status() revoked from anon.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -672,13 +677,22 @@ language sql stable security invoker as $$
                   where p.id = p_period and r = p_person) then 'rules_only'
     else 'not_started' end;
 $$;
+-- Prompt 16 A1: not callable by anon (nothing anon needs it: the client derives the status in helpers.offerRollcall, the
+-- share page and the ICS feed read schedule_days). Authenticated + service_role keep execute.
+revoke execute on function public.offer_status(uuid, text) from public;
+revoke execute on function public.offer_status(uuid, text) from anon;
+grant execute on function public.offer_status(uuid, text) to authenticated;
+grant execute on function public.offer_status(uuid, text) to service_role;
 
 -- ---------- triggers on call_offers (fail closed; the app checks the same things before the button)
 --   OFFER_PAST        the day is before today in America/Chicago
 --   OFFER_ON_VACATION the day lies inside one of the person's time_off ranges (mirror of time_off_no_call_conflict)
---   OFFER_FROZEN      a non-scheduler writes a day inside a period whose offers_close_at has passed
---                     (the scheduler may still enter a late offer; every row carries entered_by/source, and the
---                     app writes an audit row 'offers.save' with the count)
+--   OFFER_IMMUTABLE   a non-scheduler UPDATE moves the offer's day or person (Prompt 16 A1: an offer is cleared and
+--                     re-offered, never moved; save_offers' upsert and claim_open_slot's upsert touch neither column)
+--   OFFER_FROZEN      a non-scheduler writes a day inside a period whose offers_close_at has passed OR whose status is
+--                     no longer 'upcoming' (Prompt 16 A1: freeze by status too - a published period is frozen whatever
+--                     its close date; the scheduler may still enter a late offer; every row carries entered_by/source,
+--                     and the app writes an audit row 'offers.save' with the count)
 create or replace function public.call_offers_guard() returns trigger
 language plpgsql as $$
 declare
@@ -691,10 +705,13 @@ begin
   if exists (select 1 from public.time_off t where t.person_id = new.person_id and new.day between t.start_date and t.end_date) then
     raise exception 'OFFER_ON_VACATION: % is inside a vacation of %', new.day, new.person_id using errcode = 'OF002';
   end if;
+  if tg_op = 'UPDATE' and not public.silvis_is_sched() and (new.day <> old.day or new.person_id <> old.person_id) then
+    raise exception 'OFFER_IMMUTABLE: an offer keeps its day and person (% %) - clear it and offer the other day instead', old.person_id, old.day using errcode = 'OF004';
+  end if;
   if not public.silvis_is_sched() and coalesce(current_setting('silvis.claim_in_progress', true), '') <> 'on' then
     select p.label, p.offers_close_at into frozen
       from public.call_periods p
-     where new.day between p.start_day and p.end_day and p.offers_close_at <= today_c
+     where new.day between p.start_day and p.end_day and (p.offers_close_at <= today_c or p.status <> 'upcoming')
      limit 1;
     if found then
       raise exception 'OFFER_FROZEN: offers for % closed on % - ask the scheduler', frozen.label, frozen.offers_close_at using errcode = 'OF003';
@@ -708,7 +725,7 @@ create trigger call_offers_guard_trg
   before insert or update on public.call_offers
   for each row execute function public.call_offers_guard();
 
--- Deleting an offer inside a frozen period is refused for non-schedulers the same way.
+-- Deleting an offer inside a frozen period (by close date or by status) is refused for non-schedulers the same way.
 create or replace function public.call_offers_delete_guard() returns trigger
 language plpgsql as $$
 declare
@@ -718,7 +735,7 @@ begin
   if not public.silvis_is_sched() then
     select p.label, p.offers_close_at into frozen
       from public.call_periods p
-     where old.day between p.start_day and p.end_day and p.offers_close_at <= today_c
+     where old.day between p.start_day and p.end_day and (p.offers_close_at <= today_c or p.status <> 'upcoming')
      limit 1;
     if found then
       raise exception 'OFFER_FROZEN: offers for % closed on % - ask the scheduler', frozen.label, frozen.offers_close_at using errcode = 'OF003';
@@ -1030,9 +1047,13 @@ drop policy if exists east_vacation_reviews_self_delete on public.east_vacation_
 create policy east_vacation_reviews_self_delete on public.east_vacation_reviews for delete to authenticated
   using (person_id = public.silvis_person_id() or public.silvis_is_sched());
 
--- user_profiles: authenticated read; self-update of display fields; role/person changes admin-only
+-- user_profiles (Prompt 16 A1): a signed-in user reads their OWN row plus the scheduler / admin rows (the rows a surgeon's
+-- session addresses notifications to - schedulerIdsLoud); a scheduler / admin reads every row. Self-update of display_name
+-- only: role, person_id AND email are pinned against self-service (the Resend sender must never be re-pointed by its
+-- owner); corrections are the admin's (user_profiles_admin; Setup -> Users is isAdmin-gated in the client).
 drop policy if exists user_profiles_read on public.user_profiles;
-create policy user_profiles_read on public.user_profiles for select to authenticated using (true);
+create policy user_profiles_read on public.user_profiles for select to authenticated
+  using (id = auth.uid() or public.silvis_is_sched() or role in ('admin','scheduler'));
 drop policy if exists user_profiles_self_insert on public.user_profiles;
 create policy user_profiles_self_insert on public.user_profiles for insert to authenticated
   with check (id = auth.uid() and role = 'viewer' and person_id is null);   -- signup lands as viewer, unlinked; admin links + promotes
@@ -1041,7 +1062,8 @@ create policy user_profiles_self_update on public.user_profiles for update to au
   using (id = auth.uid())
   with check (id = auth.uid()
     and role = (select role from public.user_profiles p where p.id = auth.uid())
-    and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id
+    and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())
+    and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id or email
 drop policy if exists user_profiles_admin on public.user_profiles;
 create policy user_profiles_admin on public.user_profiles for all to authenticated
   using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');
@@ -1080,11 +1102,15 @@ drop policy if exists call_periods_write on public.call_periods;
 create policy call_periods_write on public.call_periods for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
 
--- notifications: authenticated read + insert
+-- notifications: authenticated read; insert by a scheduler / admin or a caller linked to a roster entry (Prompt 16 A1:
+-- an unlinked account writes nothing into the group's feed); delete by scheduler / admin only (spam removal; no UI yet).
 drop policy if exists notif_read on public.notifications;
 create policy notif_read on public.notifications for select to authenticated using (true);
 drop policy if exists notif_insert on public.notifications;
-create policy notif_insert on public.notifications for insert to authenticated with check (true);
+create policy notif_insert on public.notifications for insert to authenticated
+  with check (public.silvis_is_sched() or public.silvis_person_id() is not null);
+drop policy if exists notif_delete_sched on public.notifications;
+create policy notif_delete_sched on public.notifications for delete to authenticated using (public.silvis_is_sched());
 
 -- notification_preferences: own row
 drop policy if exists prefs_own on public.notification_preferences;
@@ -1092,9 +1118,11 @@ create policy prefs_own on public.notification_preferences for all to authentica
   using (person_id = public.silvis_person_id() or public.silvis_is_sched())
   with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
 
--- audit_log: insert by authenticated, read by scheduler/admin
+-- audit_log: insert by a scheduler / admin, or by a linked person writing as themself (actor_id = their roster id - what
+-- the client's logAudit sends; Prompt 16 A1); read by scheduler/admin
 drop policy if exists audit_insert on public.audit_log;
-create policy audit_insert on public.audit_log for insert to authenticated with check (true);
+create policy audit_insert on public.audit_log for insert to authenticated
+  with check (public.silvis_is_sched() or (public.silvis_person_id() is not null and actor_id = public.silvis_person_id()));
 drop policy if exists audit_read on public.audit_log;
 create policy audit_read on public.audit_log for select to authenticated using (public.silvis_is_sched());
 
@@ -1103,9 +1131,10 @@ drop policy if exists snap_sched on public.call_schedule_snapshots;
 create policy snap_sched on public.call_schedule_snapshots for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
 
--- office_contacts: authenticated read, scheduler write
+-- office_contacts: scheduler / admin read AND write (Prompt 16 A1: the client loads the table only for isScheduler; the
+-- office digest reads it with the service role)
 drop policy if exists contacts_read on public.office_contacts;
-create policy contacts_read on public.office_contacts for select to authenticated using (true);
+create policy contacts_read on public.office_contacts for select to authenticated using (public.silvis_is_sched());
 drop policy if exists contacts_write on public.office_contacts;
 create policy contacts_write on public.office_contacts for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
