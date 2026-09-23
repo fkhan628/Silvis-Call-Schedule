@@ -561,4 +561,172 @@ const PHONE = /(^|[^0-9])\(?[0-9]{3}\)?[-. ][0-9]{3}[-. ][0-9]{4}([^0-9]|$)/;
   });
 })(path.join(ROOT, "sql"));
 
+// ---- Prompt 14 P1 (9/23) ----
+// Offers + periods (docs/PROMPT-14-OFFER-PERIODS.md part 1). The 9/22 body was applied live by hand
+// (docs/SCHEMA-REVIEW.md "Offers and periods"); the repo copy is pinned by sha256 so the file that ran
+// is the file that is kept. offer_modes (Faraz 9/22 evening) is a separate, later migration.
+const OFFERS_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-22-offers-periods.sql");
+const OFFER_MODES_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-offer-modes.sql");
+const OFFERS_PROBE = path.join(ROOT, "sql", "probes", "offers-probe.sql");
+// sha256 of the applied file, observed 2026-09-22 (sha256sum of the scratchpad copy that ran through the linked CLI).
+const OFFERS_APPLIED_SHA256 = "d2deac095ad18e2f245286eb6011ea49b0a3d89964ba5334e682978889c16458";
+// The repo copy may carry ONE trailer line after the applied body; the body (everything before it) is what is hashed.
+const OFFERS_TRAILER = "\n-- applied 2026-09-22 15:15 by hand";
+const OFFER_POLICIES = ["call_offers_read", "call_offers_insert", "call_offers_update", "call_offers_delete", "call_periods_read", "call_periods_write"];
+const OFFER_MODES_LINES = [
+  "alter table public.call_periods add column if not exists offer_modes jsonb not null default '{}'::jsonb;",
+  "alter table public.call_periods drop constraint if exists call_periods_offer_modes_object;",
+  "alter table public.call_periods add constraint call_periods_offer_modes_object check (jsonb_typeof(offer_modes) = 'object');",
+  "comment on column public.call_periods.offer_modes is '{person_id: ''exhaustive'' | ''preferred''}; absent = ''preferred'' (the default, Faraz 9/22 evening); offer_status() is unchanged';",
+];
+// A `language sql` function ends with `\n$$;` (no `end`), unlike the plpgsql bodies functionText() reads.
+function sqlFunctionText(sql, name) {
+  const m = sql.match(new RegExp("create or replace function public\\." + name + "\\([^)]*\\)[\\s\\S]*?\\n\\$\\$;", ""));
+  return m ? m[0] : null;
+}
+function policyText(sql, name) {
+  const m = sql.match(new RegExp("create policy " + name + " on public\\.[a-z_]+[\\s\\S]*?;", ""));
+  return m ? m[0] : null;
+}
+function triggerText(sql, name) {
+  const m = sql.match(new RegExp("create trigger " + name + "\\s[\\s\\S]*?;", ""));
+  return m ? m[0] : null;
+}
+function checkOffersDDL(n, s) {
+  ok(/create table if not exists public\.call_periods \(/.test(s), n + ": `create table if not exists public.call_periods (` missing");
+  ok(/create table if not exists public\.call_offers \(/.test(s), n + ": `create table if not exists public.call_offers (` missing");
+  ok(/status\s+text not null default 'upcoming' check \(status in \('upcoming','closed','generated','published'\)\)/.test(s), n + ": call_periods.status check list");
+  ok(/check \(jsonb_typeof\(rules_only_ids\) = 'array'\)/.test(s), n + ": call_periods.rules_only_ids must be checked as a jsonb array");
+  ok(/check \(offers_close_at <= start_day\)/.test(s), n + ": call_periods must check offers_close_at <= start_day");
+  ok(/role_pref\s+text not null check \(role_pref in \('primary','backup','either'\)\)/.test(s), n + ": call_offers.role_pref check list");
+  ok(/source\s+text not null default 'app' check \(source in \('app','email-relay','import'\)\)/.test(s), n + ": call_offers.source check list");
+  ok(/unique \(person_id, day\)/.test(s), n + ": call_offers needs unique (person_id, day)");
+  // the three refusals, each with its stable token AND its errcode (the client matches on both)
+  ok(/raise exception 'OFFER_PAST: % is before today \(%\) in Central time', new\.day, today_c using errcode = 'OF001';/.test(s), n + ": OFFER_PAST / OF001");
+  ok(/raise exception 'OFFER_ON_VACATION: % is inside a vacation of %', new\.day, new\.person_id using errcode = 'OF002';/.test(s), n + ": OFFER_ON_VACATION / OF002");
+  eq((s.match(/raise exception 'OFFER_FROZEN: offers for % closed on % - ask the scheduler', frozen\.label, frozen\.offers_close_at using errcode = 'OF003';/g) || []).length, 2,
+    n + ": OFFER_FROZEN / OF003 must be raised by BOTH the insert/update guard and the delete guard;");
+  ok(/today_c date := \(now\(\) at time zone 'America\/Chicago'\)::date;/.test(s), n + ": 'today' must be the Central date");
+  ok(/if not public\.silvis_is_sched\(\) then/.test(s), n + ": the freeze must exempt the scheduler (silvis_is_sched())");
+  // triggers (drop-if-exists first: idempotency)
+  ok(/drop trigger if exists call_offers_guard_trg on public\.call_offers;/.test(s), n + ": drop trigger if exists call_offers_guard_trg");
+  ok(/create trigger call_offers_guard_trg\s+before insert or update on public\.call_offers\s+for each row execute function public\.call_offers_guard\(\);/.test(s), n + ": call_offers_guard_trg before insert or update");
+  ok(/drop trigger if exists call_offers_delete_guard_trg on public\.call_offers;/.test(s), n + ": drop trigger if exists call_offers_delete_guard_trg");
+  ok(/create trigger call_offers_delete_guard_trg\s+before delete on public\.call_offers\s+for each row execute function public\.call_offers_delete_guard\(\);/.test(s), n + ": call_offers_delete_guard_trg before delete");
+  // derived status
+  const os = sqlFunctionText(s, "offer_status");
+  ok(os, n + ": no `create or replace function public.offer_status(p_period uuid, p_person text)` ... `$$;` block");
+  ok(/language sql stable security invoker/.test(os), n + ": offer_status must be language sql stable security invoker (it runs under the caller's RLS)");
+  ["'submitted'", "'rules_only'", "'not_started'"].forEach((v) => ok(os.indexOf(v) >= 0, n + ": offer_status must return " + v));
+  ok(/o\.day between p\.start_day and p\.end_day/.test(os), n + ": 'submitted' = an offer INSIDE the period's days");
+  ok(/jsonb_array_elements_text\(p\.rules_only_ids\)/.test(os), n + ": 'rules_only' reads call_periods.rules_only_ids");
+  // RLS: on, authenticated-only reads (NOT anon), own rows or scheduler for writes, scheduler for periods
+  ok(/alter table public\.call_offers\s+enable row level security;/.test(s), n + ": RLS must be enabled on call_offers");
+  ok(/alter table public\.call_periods\s+enable row level security;/.test(s), n + ": RLS must be enabled on call_periods");
+  OFFER_POLICIES.forEach((p) => {
+    ok(new RegExp("drop policy if exists " + p + " on public\\.").test(s), n + ": drop policy if exists " + p);
+    ok(policyText(s, p), n + ": create policy " + p);
+  });
+  ok(/create policy call_offers_read on public\.call_offers for select to authenticated using \(true\);/.test(s), n + ": call_offers_read = every signed-in user, never anon");
+  ok(/create policy call_periods_read on public\.call_periods for select to authenticated using \(true\);/.test(s), n + ": call_periods_read = every signed-in user, never anon");
+  ok(/create policy call_offers_insert on public\.call_offers for insert to authenticated\s+with check \(person_id = public\.silvis_person_id\(\) or public\.silvis_is_sched\(\)\);/.test(s), n + ": call_offers_insert = own row or scheduler");
+  ok(/create policy call_offers_update on public\.call_offers for update to authenticated\s+using \(person_id = public\.silvis_person_id\(\) or public\.silvis_is_sched\(\)\)\s+with check \(person_id = public\.silvis_person_id\(\) or public\.silvis_is_sched\(\)\);/.test(s), n + ": call_offers_update = own row or scheduler, using AND with check");
+  ok(/create policy call_offers_delete on public\.call_offers for delete to authenticated\s+using \(person_id = public\.silvis_person_id\(\) or public\.silvis_is_sched\(\)\);/.test(s), n + ": call_offers_delete = own row or scheduler");
+  ok(/create policy call_periods_write on public\.call_periods for all to authenticated\s+using \(public\.silvis_is_sched\(\)\) with check \(public\.silvis_is_sched\(\)\);/.test(s), n + ": call_periods_write = scheduler/admin only");
+}
+function checkOfferModes(n, s) {
+  OFFER_MODES_LINES.forEach((line) => ok(s.indexOf(line) >= 0, n + ": missing exact line `" + line + "`"));
+}
+
+step("P14 P1: schema.sql declares call_offers + call_periods, OF001/OF002/OF003, triggers, offer_status, RLS");
+checkOffersDDL("schema.sql", schema);
+// The anon read_all loop must never list the two tables (offers carry person ids + free-text notes).
+const anonLoop = schema.match(/foreach t in array array\[[^\]]*\]/);
+ok(anonLoop && !/call_offers|call_periods/.test(anonLoop[0]), "schema.sql: call_offers / call_periods must NOT be in the anon read_all loop");
+ok(!/create policy [a-z_]+ on public\.call_(offers|periods) for select using \(true\)/.test(schema), "schema.sql: no anon (role-less) select policy on call_offers / call_periods");
+
+step("P14 P1: schema.sql carries offer_modes (column, object check, comment)");
+checkOfferModes("schema.sql", schema);
+ok(/offer_modes\s+jsonb not null default '\{\}'::jsonb/.test(schema), "schema.sql: create table call_periods should declare offer_modes inline too (fresh apply) - the alter is the no-op for the live table");
+
+step("P14 P1: migration 2026-09-22-offers-periods.sql = the applied file (sha256 of the body) + the same objects as schema.sql");
+const offersBuf = fs.existsSync(OFFERS_MIGRATION) ? fs.readFileSync(OFFERS_MIGRATION) : null;
+ok(offersBuf, "missing file " + path.relative(ROOT, OFFERS_MIGRATION));
+const offersMig = offersBuf.toString("utf8");
+ok(!/\r/.test(offersMig), "offers migration has CRLF line endings");
+const trailerAt = offersBuf.indexOf(OFFERS_TRAILER);
+const offersBody = trailerAt >= 0 ? offersBuf.slice(0, trailerAt + 1) : offersBuf;   // keep the body's final newline
+ok(trailerAt < 0 || offersBuf.slice(trailerAt + 1).toString("utf8").split("\n").filter((l) => l.length).length === 1,
+  "offers migration: at most ONE trailer line after the applied body");
+eq(require("crypto").createHash("sha256").update(offersBody).digest("hex"), OFFERS_APPLIED_SHA256,
+  "offers migration body sha256 must equal the applied file's (strip nothing; annotate only in the trailer line);");
+checkOffersDDL("offers migration", offersMig);
+ok(offersMig.indexOf("offer_modes") < 0, "offers migration is the 9/22 body: offer_modes belongs to 2026-09-23-offer-modes.sql");
+["call_offers_guard", "call_offers_delete_guard"].forEach((name) => {
+  const a = functionText(schema, name), b = functionText(offersMig, name);
+  ok(a && b && a === b, name + "(): migration text differs from schema.sql (keep them identical; the migration is what ran live)");
+});
+ok(sqlFunctionText(schema, "offer_status") === sqlFunctionText(offersMig, "offer_status"), "offer_status(): migration text differs from schema.sql");
+OFFER_POLICIES.forEach((p) => ok(policyText(schema, p) === policyText(offersMig, p), "policy " + p + ": migration text differs from schema.sql"));
+["call_offers_guard_trg", "call_offers_delete_guard_trg"].forEach((t) => ok(triggerText(schema, t) === triggerText(offersMig, t), "trigger " + t + ": migration text differs from schema.sql"));
+
+step("P14 P1: migration 2026-09-23-offer-modes.sql (NOT yet applied live; the orchestrator runs it)");
+const modesMig = read(OFFER_MODES_MIGRATION);
+ok(!/\r/.test(modesMig), "offer_modes migration has CRLF line endings");
+checkOfferModes("offer_modes migration", modesMig);
+ok(!/create or replace function/.test(modesMig), "offer_modes migration must not redefine any function (offer_status() is unchanged)");
+ok(!/create table/.test(modesMig), "offer_modes migration must not create tables (additive column only)");
+
+step("P14 P1: offers probe is self-rolling-back, granted to authenticated AND anon, covers A-J + offer_modes K");
+const oprobe = read(OFFERS_PROBE);
+ok(!/\r/.test(oprobe), "offers probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(oprobe), "offers probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(oprobe), "offers probe must collect into a temp table probe_results");
+ok(/grant insert, select on probe_results to authenticated;/.test(oprobe), "offers probe must grant the temp table to authenticated");
+ok(/grant insert, select on probe_results to anon;/.test(oprobe), "offers probe must grant the temp table to anon (case I runs as anon)");
+const oLastDo = oprobe.lastIndexOf("do $$");
+ok(oLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(oprobe.slice(oLastDo)), "offers probe's last DO block must raise 'PROBE_RESULTS %;END' so the batch rolls back");
+["'A'", "'B'", "'C'", "'D'", "'E'", "'F'", "'G'", "'H'", "'I-read'", "'I-insert'", "'J'", "'K-set'", "'K-type'", "'K-default'"].forEach((k) => ok(oprobe.indexOf("values (" + k) >= 0, "offers probe lacks case " + k));
+ok(/'probe frozen', '2030-05-01', '2030-05-31', '2026-09-01'/.test(oprobe), "offers probe fixture: the frozen period is 2030-05 with offers_close_at 2026-09-01");
+ok(/'probe modes'/.test(oprobe), "offers probe K must use a second period labelled 'probe modes'");
+ok(/jsonb_typeof|offer_modes/.test(oprobe.slice(oprobe.indexOf("'K-type'") - 600, oprobe.indexOf("'K-type'"))), "offers probe K-type must insert a non-object offer_modes and expect the check to refuse it");
+ok(/probe-offers-' \|\| [a-z]+ \|\| '@example\.test'/.test(oprobe), "offers probe users must be probe-offers-<uuid>@example.test (the leftover count keys on it)");
+ok(!/simple-protocol/.test(oprobe), "offers probe header must not claim a simple-protocol connection");
+
+step("P14 P1: verify-rls.sh section 8 (anon count=exact 0 on both tables, anon insert refused, JWT own-row insert + cleanup, probe + leftovers)");
+ok(/^echo "== 8\. /m.test(vr), "verify-rls.sh has no section 8");
+const s8 = vr.slice(vr.indexOf('echo "== 8. '));
+ok(/for t in call_offers call_periods; do/.test(s8) && /rest\/v1\/\$t\?select=id&limit=1/.test(s8), "section 8 must GET both call_offers and call_periods as anon (the `for t in call_offers call_periods` loop)");
+eq((s8.match(/Prefer: count=exact/g) || []).length >= 2, true, "section 8 must ask for count=exact on both anon reads (an RLS-blocked read is 200 + [], so the count is what is asserted)");
+ok(/\*\/0/.test(s8), "section 8 must assert Content-Range */0 (zero rows visible to anon)");
+ok(/-X POST "\$URL\/rest\/v1\/call_offers"/.test(s8), "section 8 must POST call_offers as anon and expect 401/403");
+ok(/SILVIS_JWT/.test(s8) && /-X DELETE "\$URL\/rest\/v1\/call_offers\?id=eq\./.test(s8), "section 8 must insert an own row with SILVIS_JWT and DELETE it by id afterwards");
+ok(/offers-probe\.sql/.test(s8) && /probe-offers-%@example\.test/.test(s8) && /label in \('probe frozen', 'probe modes'\)/.test(s8), "section 8 must run sql/probes/offers-probe.sql through the linked CLI and count leftovers (offers 2030-05/06, both probe periods, probe-offers users)");
+// 9/23 Fix stage: the alternation was (eq|err); expect_ok8 was added for K-set (substring grading, reviewer finding 2).
+["A", "B", "C", "D", "E", "F", "G", "H", "I-read", "I-insert", "J", "K-set", "K-type", "K-default"].forEach((k) => ok(new RegExp("expect_(eq|err|ok)8\\s+" + k.replace("-", "\\-") + "\\s").test(s8), "section 8 must grade probe case " + k + " (expect_eq8 / expect_err8 / expect_ok8)"));
+
+step("P14 P1: docs/SCHEMA-REVIEW.md quotes the 9/22 observed probe and leaves the offer_modes observation to the orchestrator");
+const review = read(path.join(ROOT, "docs", "SCHEMA-REVIEW.md"));
+ok(/## Offers and periods \(Prompt 14 part 1\) - applied 2026-09-22/.test(review), "SCHEMA-REVIEW.md lacks the 'Offers and periods (Prompt 14 part 1) - applied 2026-09-22' block");
+ok(/PROBE_RESULTS A=ERR OF001 OFFER_PAST: 2020-01-01 is before today \(2026-09-22\) in Central time;B=ERR OF002/.test(review), "SCHEMA-REVIEW.md must quote the observed PROBE_RESULTS string verbatim");
+ok(/offer_modes[\s\S]*observed: /.test(review), "SCHEMA-REVIEW.md must carry an 'observed:' line for the offer_modes migration (placeholder until the orchestrator fills it)");
+
+// ---- Prompt 14 P1 Fix stage (9/23) - reviewer minors ----
+step("P14 P1 fix: 8c's fixture day lies outside the probe's leftover window (2030-05-01..2030-06-30)");
+const m8c = s8.match(/\\"day\\":\\"(\d{4}-\d{2}-\d{2})\\"[^\n]*verify-rls\.sh 8c probe/);
+ok(!!m8c, "section 8c must insert the own row with note 'verify-rls.sh 8c probe'");
+ok(m8c && !/^2030-0[56]-/.test(m8c[1]), "8c's day (" + (m8c && m8c[1]) + ") must not fall inside the 8e leftover window 2030-05-01..2030-06-30, or a failed 8c DELETE reads as 'the probe did not roll back'");
+step("P14 P1 fix: K-set is graded on quote-free substrings (a CLI that escapes quotes must not fail a working column)");
+ok(/expect_ok8\s+K-set\s+["']modes=\{["']\s+["']s2=exhaustive s3=absent["']/.test(s8), "K-set must be graded with expect_ok8 on 'modes={' and 's2=exhaustive s3=absent'");
+ok(!/expect_eq8\s+K-set\s/.test(s8), "K-set must not be graded on the exact jsonb text (expect_eq8)");
+ok(/expect_ok8\(\)\s*\{[^\n]*\^ok /.test(s8), "expect_ok8 must require the value to start with 'ok '");
+step("P14 P1 fix: SCHEMA-REVIEW.md tables (a) and (b) carry call_offers and call_periods");
+const secA = review.slice(review.indexOf("## (a) "), review.indexOf("## (b) "));
+const secB = review.slice(review.indexOf("## (b) "), review.indexOf("## (c) "));
+ok(/^\| `call_offers` \|/m.test(secA), "table (a) lacks a call_offers row");
+ok(/^\| `call_periods` \|/m.test(secA), "table (a) lacks a call_periods row");
+ok(/^\| `call_offers` \| authenticated \|/m.test(secB), "table (b) lacks a call_offers row (read: authenticated)");
+ok(/^\| `call_periods` \| authenticated \|/m.test(secB), "table (b) lacks a call_periods row (read: authenticated)");
+ok(!/anon/i.test(secA.split("\n").filter((l) => /`call_(offers|periods)`/.test(l)).join("\n")), "the (a) rows for call_offers / call_periods must not say anon (they are authenticated-only)");
+
 console.log("schema.test.js: " + N + " assertions passed");

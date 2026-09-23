@@ -22,9 +22,12 @@
 -- the away/home decision per mirrored Davenport vacation range (authenticated-read; own rows or scheduler write).
 -- Revision 2026-09-23 e (audit RLS-6, sql/migrations/2026-09-23-trade-past-guard.sql): TRADE_PAST - a non-scheduler may
 -- not apply, or accept, a trade whose day or return day is before today in America/Chicago (strict <, like CL003).
+-- Revision 2026-09-23 f (Prompt 14 part 1, sql/migrations/2026-09-22-offers-periods.sql, applied by hand 9/22 15:15):
+-- call_offers + call_periods, offer_status(), guards OF001/OF002/OF003, authenticated-only RLS (never anon).
+-- Revision 2026-09-23 g (sql/migrations/2026-09-23-offer-modes.sql): call_periods.offer_modes jsonb
+-- {person_id: 'exhaustive' | 'preferred'}; absent = 'preferred' (Faraz 9/22 evening).
 -- LIVE DIFFERS FROM THIS FILE since 2026-09-23 (audit RLS-2): claim_open_slot and call_offers_guard are live as the bodies in
--- sql/migrations/2026-09-23-claim-offer.sql (branch feat/offers, not yet merged), and call_periods / call_offers /
--- offer_status / the OF001-OF003 offer guards exist live but appear nowhere in this file. Do NOT re-run this file
+-- sql/migrations/2026-09-23-claim-offer.sql (branch feat/offers, not yet merged). Do NOT re-run this file
 -- wholesale until that mirror lands: CREATE OR REPLACE would silently revert claim_open_slot's claim-as-offer write.
 -- test/schema.test.js fails closed the moment that migration file exists here without its bodies mirrored below.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
@@ -579,6 +582,132 @@ end $$;
 revoke all on function public.claim_open_slot(date, text) from public, anon;
 grant execute on function public.claim_open_slot(date, text) to authenticated;
 
+-- ---------- offers + periods (2026-09-22, Prompt 14 part 1; sql/migrations/2026-09-22-offers-periods.sql, applied 15:15)
+-- Silvis is an offers problem: surgeons paint the dates they will cover for any time ahead; a period is the
+-- generation window (default 3 months) whose offers freeze six weeks before it starts; the rules engine reads both
+-- (docs/SILVIS-BUILD-GUIDE.md section 17). Same conventions as the rest of this file: idempotent DDL, RLS on,
+-- silvis_person_id() / silvis_is_sched(), triggers that fail closed with a stable message token + errcode.
+-- NOT anon-readable on purpose: offers carry person ids and free-text notes; anon reads stay limited to the
+-- published schedule. Snapshot / wipe-guard decision (part 1): call_schedule_snapshots.data gains call_offers[] +
+-- call_periods[] when the client capture is extended (a later wave) so a restore brings the offers back;
+-- payloadLooksWiped and the table-side wipe guards do not consider them.
+
+-- call_periods: the generation windows (a period = 3 months by default)
+create table if not exists public.call_periods (
+  id               uuid primary key default gen_random_uuid(),
+  label            text not null,                              -- "Nov 2026 - Jan 2027"
+  start_day        date not null,
+  end_day          date not null,
+  offers_close_at  date not null,                              -- default start_day - 6 weeks (set by the app from groupRules.offerPeriods)
+  publish_by       date not null,                              -- default start_day - 4 weeks
+  status           text not null default 'upcoming' check (status in ('upcoming','closed','generated','published')),
+  rules_only_ids   jsonb not null default '[]'::jsonb,         -- ["s1","s6"]: surgeons who chose "go by my rules" for this period
+  offer_modes      jsonb not null default '{}'::jsonb,         -- {person_id: 'exhaustive' | 'preferred'}; absent = 'preferred' (2026-09-23, below)
+  created_by       text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  check (end_day >= start_day),
+  check (offers_close_at <= start_day),
+  check (jsonb_typeof(rules_only_ids) = 'array')
+);
+create unique index if not exists call_periods_start_idx on public.call_periods(start_day);
+-- 2026-09-23 (sql/migrations/2026-09-23-offer-modes.sql; Faraz 9/22 evening): the hardness each surgeon chose for the
+-- period - 'exhaustive' = eligible only on the offered days in the offered role; 'preferred' = offered days first, own
+-- rules fill the gaps (the default; an absent key means 'preferred'). Values are the two words above; the SQL side checks
+-- the shape only (an object), the client and rules.js read the value. Derived status (offer_status) ignores the mode.
+alter table public.call_periods add column if not exists offer_modes jsonb not null default '{}'::jsonb;
+alter table public.call_periods drop constraint if exists call_periods_offer_modes_object;
+alter table public.call_periods add constraint call_periods_offer_modes_object check (jsonb_typeof(offer_modes) = 'object');
+comment on column public.call_periods.offer_modes is '{person_id: ''exhaustive'' | ''preferred''}; absent = ''preferred'' (the default, Faraz 9/22 evening); offer_status() is unchanged';
+
+-- call_offers: one row per person and day ("I will cover this day")
+create table if not exists public.call_offers (
+  id          uuid primary key default gen_random_uuid(),
+  person_id   text not null,                                    -- roster id (s1..s6)
+  day         date not null,
+  role_pref   text not null check (role_pref in ('primary','backup','either')),
+  note        text,                                             -- operational only (scrubbed on import; checked at entry)
+  entered_by  text not null,                                    -- the roster id, or 'scheduler' when relaying an email
+  source      text not null default 'app' check (source in ('app','email-relay','import')),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  unique (person_id, day)
+);
+create index if not exists call_offers_day_idx on public.call_offers(day);
+create index if not exists call_offers_person_idx on public.call_offers(person_id, day);
+
+-- Per-period, per-surgeon status is DERIVED (never stored twice):
+--   'submitted'   if the person has >= 1 call_offers row with day between start_day and end_day
+--   'rules_only'  else if the person is listed in call_periods.rules_only_ids
+--   'not_started' otherwise
+create or replace function public.offer_status(p_period uuid, p_person text) returns text
+language sql stable security invoker as $$
+  select case
+    when exists (select 1 from public.call_offers o, public.call_periods p
+                  where p.id = p_period and o.person_id = p_person and o.day between p.start_day and p.end_day) then 'submitted'
+    when exists (select 1 from public.call_periods p, jsonb_array_elements_text(p.rules_only_ids) r
+                  where p.id = p_period and r = p_person) then 'rules_only'
+    else 'not_started' end;
+$$;
+
+-- ---------- triggers on call_offers (fail closed; the app checks the same things before the button)
+--   OFFER_PAST        the day is before today in America/Chicago
+--   OFFER_ON_VACATION the day lies inside one of the person's time_off ranges (mirror of time_off_no_call_conflict)
+--   OFFER_FROZEN      a non-scheduler writes a day inside a period whose offers_close_at has passed
+--                     (the scheduler may still enter a late offer; every row carries entered_by/source, and the
+--                     app writes an audit row 'offers.save' with the count)
+create or replace function public.call_offers_guard() returns trigger
+language plpgsql as $$
+declare
+  today_c date := (now() at time zone 'America/Chicago')::date;
+  frozen  record;
+begin
+  if new.day < today_c then
+    raise exception 'OFFER_PAST: % is before today (%) in Central time', new.day, today_c using errcode = 'OF001';
+  end if;
+  if exists (select 1 from public.time_off t where t.person_id = new.person_id and new.day between t.start_date and t.end_date) then
+    raise exception 'OFFER_ON_VACATION: % is inside a vacation of %', new.day, new.person_id using errcode = 'OF002';
+  end if;
+  if not public.silvis_is_sched() then
+    select p.label, p.offers_close_at into frozen
+      from public.call_periods p
+     where new.day between p.start_day and p.end_day and p.offers_close_at <= today_c
+     limit 1;
+    if found then
+      raise exception 'OFFER_FROZEN: offers for % closed on % - ask the scheduler', frozen.label, frozen.offers_close_at using errcode = 'OF003';
+    end if;
+  end if;
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists call_offers_guard_trg on public.call_offers;
+create trigger call_offers_guard_trg
+  before insert or update on public.call_offers
+  for each row execute function public.call_offers_guard();
+
+-- Deleting an offer inside a frozen period is refused for non-schedulers the same way.
+create or replace function public.call_offers_delete_guard() returns trigger
+language plpgsql as $$
+declare
+  today_c date := (now() at time zone 'America/Chicago')::date;
+  frozen  record;
+begin
+  if not public.silvis_is_sched() then
+    select p.label, p.offers_close_at into frozen
+      from public.call_periods p
+     where old.day between p.start_day and p.end_day and p.offers_close_at <= today_c
+     limit 1;
+    if found then
+      raise exception 'OFFER_FROZEN: offers for % closed on % - ask the scheduler', frozen.label, frozen.offers_close_at using errcode = 'OF003';
+    end if;
+  end if;
+  return old;
+end $$;
+drop trigger if exists call_offers_delete_guard_trg on public.call_offers;
+create trigger call_offers_delete_guard_trg
+  before delete on public.call_offers
+  for each row execute function public.call_offers_delete_guard();
+
 -- ---------- notifications, prefs, audit, snapshots, versions, contacts
 create table if not exists public.notifications (
   id          uuid primary key default gen_random_uuid(),
@@ -677,6 +806,8 @@ alter table public.call_schedule_snapshots enable row level security;
 alter table public.client_versions         enable row level security;
 alter table public.office_contacts         enable row level security;
 alter table public.office_notification_state enable row level security;
+alter table public.call_offers             enable row level security;
+alter table public.call_periods            enable row level security;
 
 -- Anon-readable tables (shareable page + calendar-sync need these without a JWT)
 do $$ declare t text; begin
@@ -760,6 +891,30 @@ create policy trade_read on public.shift_trade_requests for select to authentica
 drop policy if exists trade_update on public.shift_trade_requests;
 create policy trade_update on public.shift_trade_requests for update to authenticated
   using (public.silvis_is_sched() or from_surgeon_id = public.silvis_person_id() or to_surgeon_id = public.silvis_person_id());
+
+-- call_offers (2026-09-22, Prompt 14 part 1): every signed-in user reads (the group has always seen each other's offers
+-- on the email chain; it is also how a surgeon sees who else offered a day); a surgeon writes only rows whose person_id
+-- is their own roster id; scheduler/admin any row (relaying an email: entered_by 'scheduler', source 'email-relay').
+-- Never anon: not in the read_all loop above.
+drop policy if exists call_offers_read on public.call_offers;
+create policy call_offers_read on public.call_offers for select to authenticated using (true);
+drop policy if exists call_offers_insert on public.call_offers;
+create policy call_offers_insert on public.call_offers for insert to authenticated
+  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+drop policy if exists call_offers_update on public.call_offers;
+create policy call_offers_update on public.call_offers for update to authenticated
+  using (person_id = public.silvis_person_id() or public.silvis_is_sched())
+  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+drop policy if exists call_offers_delete on public.call_offers;
+create policy call_offers_delete on public.call_offers for delete to authenticated
+  using (person_id = public.silvis_person_id() or public.silvis_is_sched());
+
+-- call_periods: every signed-in user reads; scheduler/admin write.
+drop policy if exists call_periods_read on public.call_periods;
+create policy call_periods_read on public.call_periods for select to authenticated using (true);
+drop policy if exists call_periods_write on public.call_periods;
+create policy call_periods_write on public.call_periods for all to authenticated
+  using (public.silvis_is_sched()) with check (public.silvis_is_sched());
 
 -- notifications: authenticated read + insert
 drop policy if exists notif_read on public.notifications;

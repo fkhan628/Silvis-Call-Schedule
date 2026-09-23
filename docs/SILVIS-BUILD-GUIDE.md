@@ -823,7 +823,20 @@ weeks before the next one starts; `offers_close_at`, editable per period), the s
 (`publish_by`), and reminders go out 14 and 3 days before the freeze to anyone with nothing entered for that period who
 has not chosen **"go by my rules"**. Status per surgeon per period is derived, never typed: submitted / rules-only /
 not started. A daily cron mode (`daily-reminder` mode `offers`, job `silvis-offers-daily`, Vault secret like the
-others) sends the reminders and the close summary; it never generates or publishes.
+others) sends the reminders and the close summary; it never generates or publishes. **Data (part 1, applied live
+2026-09-22 15:15; `sql/migrations/2026-09-22-offers-periods.sql`, mirrored in `sql/schema.sql`):** `call_offers`
+(`person_id`, `day`, `role_pref` primary / backup / either, operational `note`, `entered_by` = the roster id or
+`scheduler`, `source` app / email-relay / import; unique per person and day) and `call_periods` (`label`, `start_day`,
+`end_day`, `offers_close_at`, `publish_by`, `status` upcoming / closed / generated / published, `rules_only_ids` jsonb
+array). The per-period status is `offer_status(period, person)`, never a column. Three fail-closed triggers on
+`call_offers`: `OFFER_PAST` (`OF001`, before today in Central time), `OFFER_ON_VACATION` (`OF002`, inside the person's
+`time_off`), `OFFER_FROZEN` (`OF003`, a non-scheduler writing or deleting inside a period whose `offers_close_at` has
+passed; the scheduler may still enter a late offer). RLS is **authenticated-only** for both tables (never anon: offers
+carry person ids and free text): every signed-in user reads, a surgeon writes only their own rows, scheduler/admin
+any row and the periods. `call_periods.offer_modes` jsonb (`sql/migrations/2026-09-23-offer-modes.sql`; Faraz 9/22
+evening) holds `{person_id: 'exhaustive' | 'preferred'}`, an absent key meaning `preferred`; the SQL side checks only
+that it is an object. Proof: `sql/probes/offers-probe.sql` (rolls itself back) and `scripts/verify-rls.sh` section 8;
+the observed runs are in `docs/SCHEMA-REVIEW.md`.
 
 **Entry is phone-first, modelled on Davenport's Paint Month sheet:** a full-screen vertical day list (one tall row per
 day, month navigation forward without limit), brushes Primary / Backup / Either / Clear, tap to paint, tap-start /

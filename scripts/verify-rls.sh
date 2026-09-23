@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 7a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) via the linked Supabase CLI
-#   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write check (3)
-#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6) and REST claim checks (7c-7e; a SURGEON-role user's access token)
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 7a, 8, 9a-9b) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) via the linked Supabase CLI
+#   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
+#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
@@ -268,6 +268,118 @@ if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
   fi
 else
   echo "   SKIP 7c-7e (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment; no such user exists until invites go out)"
+fi
+
+echo "== 8. offers + periods (Prompt 14 part 1): anon sees nothing, anon cannot insert, JWT own row, rolled-back probe =="
+# call_offers / call_periods are authenticated-read only (never anon: offers carry person ids + free-text notes).
+# RLS-SILENT-READ CAVEAT: an RLS-blocked anon read is NOT an error - PostgREST answers 200 + [] - so a 200 alone proves
+# nothing. The assertion is the exact row count anon can see, asked for with `Prefer: count=exact` and read from the
+# Content-Range header: it must be */0. A 401/403 would also mean "anon cannot read" and is accepted.
+for t in call_offers call_periods; do
+  hdr=$(curl -s -D - -o /tmp/vr8_$t.json "$URL/rest/v1/$t?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
+  code=$(echo "$hdr" | grep -oE '^HTTP/[0-9.]+ [0-9]+' | head -1 | awk '{print $2}')
+  range=$(echo "$hdr" | grep -i '^content-range:' | tr -d '\r' | awk '{print $2}')
+  echo "   anon GET $t -> HTTP $code  Content-Range: ${range:-<none>}  body: $(head -c 120 /tmp/vr8_$t.json)"
+  case "$code" in
+    200) if [ "$range" = "*/0" ]; then ok "anon sees 0 rows of $t (200 + [] with count=exact -> Content-Range */0)"; else bad "anon read of $t: 200 with Content-Range '$range' (expected */0 - RLS must hide every row from anon)"; fi;;
+    401|403) ok "anon read of $t refused (HTTP $code)";;
+    *) bad "anon read of $t: HTTP ${code:-<none>}";;
+  esac
+done
+line=$(curl -s -o /tmp/vr8b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_offers" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"person_id":"s9test","day":"2030-06-20","role_pref":"either","entered_by":"s9test","source":"app"}')
+echo "   anon POST call_offers -> $line  body: $(head -c 160 /tmp/vr8b.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon insert into call_offers refused ($line)";;
+  *) if grep -q '42501' /tmp/vr8b.json; then ok "anon insert into call_offers refused (42501)"; else bad "anon insert into call_offers: $line (expected 401/403 or 42501)"; fi;;
+esac
+if [ -n "${SILVIS_JWT:-}" ]; then
+  # 8c. own-row insert as the JWT's roster id (a scheduler passes either way), then DELETE by id and confirm it is gone.
+  #     The fixture day 2030-07-21 sits OUTSIDE the probe's leftover window (8e counts call_offers 2030-05-01..2030-06-30),
+  #     so a failed 8c DELETE is reported here, never misread as "the probe did not roll back".
+  sub8=$(curl -s "$URL/auth/v1/user" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" | grep -oE '"id":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
+  pid8=$(curl -s "$URL/rest/v1/user_profiles?id=eq.$sub8&select=person_id" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" | grep -oE '"person_id":"[^"]+"' | head -1 | cut -d'"' -f4)
+  if [ -z "$sub8" ] || [ -z "$pid8" ]; then
+    bad "8c: could not resolve the caller's roster id from SILVIS_JWT (sub='$sub8' person_id='$pid8')"
+  else
+    line=$(curl -s -o /tmp/vr8c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_offers" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d "{\"person_id\":\"$pid8\",\"day\":\"2030-07-21\",\"role_pref\":\"either\",\"entered_by\":\"$pid8\",\"source\":\"app\",\"note\":\"verify-rls.sh 8c probe\"}")
+    echo "   JWT POST call_offers (own row $pid8, 2030-07-21) -> $line  body: $(head -c 160 /tmp/vr8c.json)"
+    case "$line" in "HTTP 201") ok "JWT own-row insert into call_offers returns 201";; *) bad "JWT own-row insert into call_offers: $line";; esac
+    oid=$(grep -oE '"id":"[0-9a-f-]{36}"' /tmp/vr8c.json | head -1 | cut -d'"' -f4)
+    if [ -n "$oid" ]; then
+      del=$(curl -s -o /dev/null -w 'HTTP %{http_code}' -X DELETE "$URL/rest/v1/call_offers?id=eq.$oid" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT")
+      left=$(curl -s "$URL/rest/v1/call_offers?id=eq.$oid&select=id" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT")
+      echo "   cleanup DELETE by id: $del  still there: $left"
+      [ "$left" = "[]" ] && ok "8c row deleted (read back as [])" || bad "8c row NOT deleted: $left  (delete it: delete from public.call_offers where id = '$oid')"
+    else
+      echo "   (no id in the response; nothing to clean up)"
+    fi
+    # 8d. offer_modes over REST (needs sql/migrations/2026-09-23-offer-modes.sql applied): a period with a mode map is
+    #     stored and read back; a non-object is refused by the check constraint (23514); the row is deleted by id.
+    line=$(curl -s -o /tmp/vr8d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_periods" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d "{\"label\":\"verify-rls 8d\",\"start_day\":\"2030-08-01\",\"end_day\":\"2030-08-31\",\"offers_close_at\":\"2030-06-20\",\"publish_by\":\"2030-07-04\",\"status\":\"upcoming\",\"created_by\":\"verify-rls\",\"offer_modes\":{\"$pid8\":\"preferred\"}}")
+    echo "   JWT POST call_periods with offer_modes -> $line  body: $(head -c 200 /tmp/vr8d.json)"
+    if [ "$line" = "HTTP 201" ] && grep -q "\"offer_modes\":{\"$pid8\":\"preferred\"}" /tmp/vr8d.json; then ok "offer_modes stored and read back over REST"; elif grep -q '42703' /tmp/vr8d.json; then bad "offer_modes column missing live: apply sql/migrations/2026-09-23-offer-modes.sql first"; else bad "offer_modes insert: $line $(head -c 120 /tmp/vr8d.json)"; fi
+    pid8d=$(grep -oE '"id":"[0-9a-f-]{36}"' /tmp/vr8d.json | head -1 | cut -d'"' -f4)
+    line=$(curl -s -o /tmp/vr8e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_periods" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -d '{"label":"verify-rls 8d bad","start_day":"2030-09-01","end_day":"2030-09-30","offers_close_at":"2030-07-20","publish_by":"2030-08-04","status":"upcoming","created_by":"verify-rls","offer_modes":["s1"]}')
+    echo "   JWT POST call_periods with offer_modes = array -> $line  body: $(head -c 160 /tmp/vr8e.json)"
+    if [ "$line" != "HTTP 201" ] && grep -q '23514' /tmp/vr8e.json; then ok "a non-object offer_modes is refused (23514 call_periods_offer_modes_object)"; else bad "non-object offer_modes: $line $(head -c 120 /tmp/vr8e.json)"; fi
+    for lbl in "verify-rls%208d" "verify-rls%208d%20bad"; do
+      del=$(curl -s -o /dev/null -w 'HTTP %{http_code}' -X DELETE "$URL/rest/v1/call_periods?label=eq.$lbl" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT")
+      echo "   cleanup DELETE call_periods label=$lbl: $del"
+    done
+    left=$(curl -s "$URL/rest/v1/call_periods?label=like.verify-rls*&select=id" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT")
+    [ "$left" = "[]" ] && ok "8d periods deleted (read back as [])" || bad "8d periods NOT deleted: $left  (id from the 201: ${pid8d:-<none>})"
+  fi
+else
+  echo "   SKIP 8c/8d (set SILVIS_JWT=<scheduler access token> in the environment to run the authenticated checks)"
+fi
+# 8e. sql/probes/offers-probe.sql: fixtures in 2030-05 / 2030-06 + throwaway auth users, acts as a surgeon / the
+#     scheduler / anon, ends with RAISE 'PROBE_RESULTS ...;END' so the whole batch rolls back. Expectations are the
+#     picture AFTER sql/migrations/2026-09-23-offer-modes.sql (the probe header lists BEFORE for the K cases).
+if linked; then
+  PROBE8="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/offers-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE8" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "offers probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results8=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results8" | tr ';' '\n' | sed 's/^/   /'
+    case_val8()     { echo "$results8" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq8()    { v=$(case_val8 "$1"); [ "$v" = "$2" ] && ok "offers probe $1: $3" || bad "offers probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err8()   { v=$(case_val8 "$1"); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -q -- "$3"; then ok "offers probe $1: $4"; else bad "offers probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    # expect_ok8: the value starts with 'ok ' and carries both substrings - used where the exact text would embed jsonb
+    # quotes (K-set) that a CLI might escape in its error text; a false negative there would fail a working column.
+    expect_ok8()    { v=$(case_val8 "$1"); if echo "$v" | grep -q '^ok ' && echo "$v" | grep -qF -- "$2" && echo "$v" | grep -qF -- "$3"; then ok "offers probe $1: $4"; else bad "offers probe $1: $4 (got '$v', expected ok ... $2 ... $3)"; fi; }
+    expect_err8  A        OF001 "OFFER_PAST: 2020-01-01 is before today"                    "a past day is refused (OF001)"
+    expect_err8  B        OF002 "OFFER_ON_VACATION: 2030-06-11 is inside a vacation of s3"  "a day inside the person's vacation is refused (OF002)"
+    expect_eq8   C        "ok rows=1"                                                       "a surgeon inserts their own future offer"
+    expect_err8  D        42501 "row-level security"                                        "a surgeon cannot write another surgeon's offer (RLS)"
+    expect_eq8   E        "ok updated=1"                                                    "a surgeon updates their own row"
+    expect_err8  F        OF003 "OFFER_FROZEN: offers for probe frozen closed on 2026-09-01" "a surgeon's insert inside a frozen period is refused (OF003)"
+    expect_eq8   G        "ok rows=1 status=submitted"                                      "the scheduler may enter a late offer (email-relay); offer_status reads submitted"
+    expect_err8  H        OF003 "OFFER_FROZEN: offers for probe frozen closed on 2026-09-01" "a surgeon's delete inside a frozen period is refused (OF003)"
+    expect_eq8   I-read   "rows=0"                                                          "anon reads 0 rows (RLS-silent, no error)"
+    expect_err8  I-insert 42501 "row-level security"                                        "anon cannot insert"
+    expect_eq8   J        "s2=not_started s6=rules_only s3=submitted"                       "derived statuses not_started / rules_only / submitted"
+    expect_ok8   K-set    'modes={' 's2=exhaustive s3=absent'                               "offer_modes is stored and read back (absent key = preferred, read by the client)"
+    expect_err8  K-type   23514 "call_periods_offer_modes_object"                           "a non-object offer_modes is refused by the check constraint"
+    expect_eq8   K-default "modes={}"                                                       "a period inserted without offer_modes reads {}"
+  fi
+  # Did it roll back? Count every kind of fixture the probe creates.
+  LEFTOVER8_SQL="select ((select count(*) from public.call_offers where day between '2030-05-01' and '2030-06-30') + (select count(*) from public.call_periods where label in ('probe frozen', 'probe modes')) + (select count(*) from public.time_off where note = 'probe offers') + (select count(*) from auth.users where email like 'probe-offers-%@example.test'))::int as leftover"
+  r=$(q "$LEFTOVER8_SQL")
+  if [ "$(verdict "$r")" != "accepted" ]; then
+    bad "offers probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "offers probe persisted nothing (leftover count 0: call_offers 2030-05/06 / probe periods / time_off / auth.users)"
+  else
+    bad "offers probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.call_offers where day between '2030-05-01' and '2030-06-30';"
+    echo "      delete from public.call_periods where label in ('probe frozen', 'probe modes');"
+    echo "      delete from public.time_off where note = 'probe offers';"
+    echo "      delete from auth.users where email like 'probe-offers-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 8e (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo "== 9. east_vacation_reviews (Prompt 15 part 2: the away/home decision per mirrored East vacation range) =="

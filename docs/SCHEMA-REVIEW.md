@@ -26,6 +26,8 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
+| `call_offers` | Offers: one row per person and day (`role_pref` primary / backup / either, operational `note`, `entered_by`, `source` app / email-relay / import); triggers refuse a past day (`OF001`), a day inside the person's vacation (`OF002`) and non-scheduler writes inside a frozen period (`OF003`). Authenticated. Added 2026-09-22 (Prompt 14 part 1; block below). |
+| `call_periods` | Periods: generation windows with `offers_close_at` / `publish_by` / `status` / `rules_only_ids` / `offer_modes` (`{person_id: 'exhaustive' \| 'preferred'}`, absent = preferred; column from `sql/migrations/2026-09-23-offer-modes.sql`, applied live by the orchestrator - see the offer_modes subsection below). Authenticated read, scheduler write. |
 | `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. |
 
 Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`.
@@ -45,6 +47,8 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `audit_log` | scheduler/admin | insert: any authenticated user |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
+| `call_offers` | authenticated | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin; never anon (deliberately absent from the anon `read_all` loop) |
+| `call_periods` | authenticated | scheduler/admin (all verbs); never anon |
 | `east_vacation_reviews` (applied 2026-09-23) | authenticated (**no anon policy** — an anon read is a silent `200 + []`) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 
 ## (c) Findings
@@ -360,6 +364,91 @@ against the section-7 slice only (section 5's `expect_eq A ...` lines had satisf
 cleanup and the `source` comment; 291 assertions.
 
 **⟶ 9/23 (P13R, the rebase onto the Prompt 12 head) — review note 5 closed.** The generator treats a row whose source is `claim` or `trade` as fixed in both modes exactly like a lock (`generator.GEN_PERSON_FIXED_SOURCES`; every held role of that day, counted in `diagnostics.fixedSlots`, conflicts in `fixedViolations`), so a later Generate never discards a claim; `manual` stays governed by the day editor's lock toggle. No schema change: `claim_open_slot` still writes `source = 'claim'` and no lock flag. Pinned in `test/generator-regression.js` (fixture `claim-fixed-2026-10.json`) and `test/open-shifts.test.js`.
+## Offers and periods (Prompt 14 part 1) - applied 2026-09-22
+
+*Report-first on 9/22 (draft reviewed by Faraz in chat: "approved as drafted, apply it"), applied 2026-09-22 15:15 through
+the linked CLI from the scratchpad copy; the repo carries that file byte-for-byte as
+`sql/migrations/2026-09-22-offers-periods.sql` (body sha256 `d2deac095ad18e2f245286eb6011ea49b0a3d89964ba5334e682978889c16458`;
+the file's last line is a trailer comment saying so, and `test/schema.test.js` hashes the body without it) and the same
+DDL merged into `sql/schema.sql` (tables, `offer_status()`, the two guard functions, triggers, RLS - function, policy and
+trigger texts pinned identical). Design: `docs/PROMPT-14-OFFER-PERIODS.md` part 1 and `docs/SILVIS-BUILD-GUIDE.md` section 17.*
+
+**What it adds.** `call_periods` (`label`, `start_day`, `end_day`, `offers_close_at` <= `start_day`, `publish_by`,
+`status` upcoming / closed / generated / published, `rules_only_ids` jsonb array, unique `start_day`) and `call_offers`
+(`person_id`, `day`, `role_pref` primary / backup / either, operational `note`, `entered_by` = roster id or `scheduler`,
+`source` app / email-relay / import, unique `(person_id, day)`). `offer_status(period, person)` derives submitted /
+rules_only / not_started (`language sql stable security invoker`, so it reads under the caller's RLS). Triggers on
+`call_offers`, fail closed with a stable token and errcode: `OFFER_PAST` `OF001` (before today in America/Chicago),
+`OFFER_ON_VACATION` `OF002` (inside the person's `time_off`; the mirror of `time_off_no_call_conflict`), `OFFER_FROZEN`
+`OF003` (a non-scheduler inserting, updating or deleting a day inside a period whose `offers_close_at` has passed; the
+scheduler may still enter or remove a late offer). RLS: both tables **authenticated-read only - never anon** (offers carry
+person ids and free text; they are deliberately absent from the anon `read_all` loop); `call_offers` insert / update /
+delete for `person_id = silvis_person_id()` or scheduler/admin; `call_periods` write scheduler/admin. Snapshot / wipe-guard
+decision: `call_schedule_snapshots.data` gains `call_offers[]` + `call_periods[]` when the client capture is extended (a
+later wave); `payloadLooksWiped` and the table-side wipe guards do not consider them.
+
+**Observed 2026-09-22 (verbatim, the scratchpad note written right after the apply):**
+
+```
+Observed 2026-09-22 ~15:15 (Claude Code, linked CLI) right after applying p14/2026-09-22-offers-periods.sql live (Faraz: "approved as drafted, apply it").
+
+Objects: call_offers + call_periods with RLS on; policies call_offers_read/insert/update/delete (authenticated), call_periods_read (authenticated), call_periods_write (ALL, authenticated, scheduler via silvis_is_sched()); triggers call_offers_guard_trg (before insert or update) + call_offers_delete_guard_trg (before delete); functions offer_status, call_offers_guard, call_offers_delete_guard (all security invoker).
+
+Rolled-back probe (p14/offers-probe.sql; throwaway surgeon linked to s3 + scheduler linked to s1; a 'probe frozen' period 2030-05 with offers_close_at 2026-09-01):
+PROBE_RESULTS A=ERR OF001 OFFER_PAST: 2020-01-01 is before today (2026-09-22) in Central time;B=ERR OF002 OFFER_ON_VACATION: 2026-11-20 is inside a vacation of s3;C=ok rows=1;D=ERR 42501 new row violates row-level security policy for table "call_offers";E=ok updated=1;F=ERR OF003 OFFER_FROZEN: offers for probe frozen closed on 2026-09-01 - ask the scheduler;G=ok rows=1 status=submitted;H=ERR OF003 OFFER_FROZEN: offers for probe frozen closed on 2026-09-01 - ask the scheduler;I-insert=ERR 42501 new row violates row-level security policy for table "call_offers";I-read=rows=0;J=s2=not_started s6=rules_only s3=submitted;END
+
+Cases: A past day refused (OF001) | B day inside the person's vacation refused (OF002) | C surgeon inserts own future offer ok | D surgeon inserting another surgeon's offer refused by RLS | E surgeon updates own row ok | F surgeon insert inside a frozen period refused (OF003) | G scheduler may enter a late offer (source email-relay) and offer_status reads submitted | H surgeon delete inside a frozen period refused (OF003) | I anon reads 0 rows and cannot insert | J derived statuses not_started / rules_only / submitted.
+Leftover count after the probe: 0 (call_offers, call_periods, probe auth users); auth users still 1.
+
+For the Prompt 14 part 1 lane: copy the SQL verbatim into sql/schema.sql and sql/migrations/2026-09-22-offers-periods.sql, turn this probe into sql/probes/offers-probe.sql + verify-rls.sh section 8 (grant the temp table to anon AND authenticated), pin in test/schema.test.js, and quote this observed string in docs/SCHEMA-REVIEW.md. Do NOT re-apply live.
+```
+
+**The repo probe - `sql/probes/offers-probe.sql` (persists nothing).** Same shape as the trade probe: one batch, no
+`BEGIN`/`COMMIT`, temp table granted to `authenticated` AND `anon` (cases C-I run as those roles), last statement raises
+`PROBE_RESULTS ...;END`. Two deliberate differences from the 9/22 scratch probe quoted above: case **B** brings its own
+fixture vacation (`s3`, 2030-06-11, note `probe offers`) instead of Acton's live 11/19-22 row, so the probe never depends
+on live `time_off`; and cases **K-set / K-type / K-default** prove `offer_modes` (below). Expected after both migrations:
+`A=ERR OF001 OFFER_PAST: 2020-01-01 is before today (<today>) in Central time;B=ERR OF002 OFFER_ON_VACATION: 2030-06-11 is
+inside a vacation of s3;C=ok rows=1;D=ERR 42501 ...;E=ok updated=1;F=ERR OF003 ... closed on 2026-09-01 - ask the
+scheduler;G=ok rows=1 status=submitted;H=ERR OF003 ...;I-insert=ERR 42501 ...;I-read=rows=0;J=s2=not_started s6=rules_only
+s3=submitted;K-default=modes={};K-set=ok modes={"s2": "exhaustive"} s2=exhaustive s3=absent;K-type=ERR 23514 new row for
+relation "call_periods" violates check constraint "call_periods_offer_modes_object";END`. Before the 9/23 migration the
+three K cases read `ERR 42703 column "offer_modes" ... does not exist` and A-J are unchanged.
+
+`scripts/verify-rls.sh` **section 8** grades it and adds the REST view: anon `GET call_offers` / `call_periods` with
+`Prefer: count=exact` must be `200` + `[]` with `Content-Range: */0` (the RLS-silent-read caveat: a 200 alone proves
+nothing, the count is what is asserted; 401/403 also accepted); anon `POST call_offers` 401/403 or `42501`; with
+`SILVIS_JWT`: an own-row insert 201, deleted by id and read back as `[]` (8c), a period with `offer_modes` stored and read
+back and a non-object refused with `23514` (8d, cleaned up by label); with the linked CLI: the probe (8e) plus a leftover
+count over `call_offers` 2030-05/06, the two probe periods, `time_off` note `probe offers` and `auth.users`
+`probe-offers-%@example.test`, which must be 0.
+
+**Observed 2026-09-23 (Claude Code, anon path of verify-rls.sh against the live project, no workdir / no JWT):** section 8
+printed `anon GET call_offers -> HTTP 200  Content-Range: */0  body: []`, the same for `call_periods`, and `anon POST
+call_offers -> HTTP 401` with body code `42501` (`new row violates row-level security policy for table "call_offers"`) -
+`RESULT: 5 passed, 0 failed` for the anon sections; 8c/8d/8e SKIP until run with a JWT and the linked workdir.
+
+### offer_modes (2026-09-23; `sql/migrations/2026-09-23-offer-modes.sql`) - applied by the orchestrator tonight
+
+Faraz 9/22 evening (prompt v2 part 2a): when submitting, a surgeon chooses **exhaustive** ("only these days") or
+**preferred** ("my preferred days; use my rules to fill gaps", the default). Stored on the period:
+`call_periods.offer_modes jsonb not null default '{}'` with check `call_periods_offer_modes_object`
+(`jsonb_typeof(offer_modes) = 'object'`) and the column comment `{person_id: 'exhaustive' | 'preferred'}; absent =
+'preferred' (the default, Faraz 9/22 evening); offer_status() is unchanged`. Additive only: no function, trigger or
+policy changes; the shape check is deliberately the only SQL-side constraint (the two words are read by the client and
+`rules.js`; a check constraint cannot iterate jsonb values without a helper). The same four lines sit in `sql/schema.sql`
+(the create-table also declares the column inline for a fresh apply); `test/schema.test.js` pins both copies.
+
+Confirmed NOT applied as of 2026-09-23 (anon `GET call_periods?select=offer_modes` -> `400` `42703` "column
+call_periods.offer_modes does not exist"). Apply and prove (workdir = a directory linked with
+`supabase link --project-ref bzhsroegtagqhutbnsrp`; absolute paths):
+
+    supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-offer-modes.sql
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/offers-probe.sql      # K-set / K-type / K-default as above; A-J unchanged
+    SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh                                     # section 8 grades A-K + leftover count 0
+
+observed: <to be filled by the orchestrator>
+
 
 ## 2026-09-23 - east_vacation_reviews (Prompt 15 part 2)
 
