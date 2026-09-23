@@ -181,7 +181,16 @@ const db = {
       method: "PATCH", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
       body: JSON.stringify(data),
     });
-    return { error: res.ok ? null : await res.text() };
+    // The matched rows come back too (RLS-7): an RLS-filtered PATCH is HTTP 200
+    // with ZERO rows - nothing changed - and a caller must be able to tell that
+    // from a real update. A 2xx with a non-JSON body counts as zero rows.
+    const text = await res.text().catch(() => "");
+    let rows = [];
+    if (res.ok) {
+      try { rows = JSON.parse(text); }
+      catch (e) { console.warn(`db.update(${table}): 2xx with a non-JSON body (treated as no row updated)`, text.slice(0, 120)); rows = []; }
+    } else console.warn(`db.update(${table}) failed: HTTP ${res.status}`, text.slice(0, 200));
+    return { data: Array.isArray(rows) ? rows : [], error: res.ok ? null : (text || `HTTP ${res.status}`) };
   },
   async upsert(table, row) {
     return supabase.from(table).upsert(row);
@@ -382,7 +391,7 @@ const snapshots = {
   // upserted by id via applyTables (merge-duplicates; never deletes). A
   // restore is itself destructive, so the CURRENT state is snapshotted first
   // and the restore aborts if that capture fails.
-  async restore(snapshotId, applySchedule, applyTables) {
+  async restore(snapshotId, applySchedule, applyTables, onBlobWritten) {
     if (!snapshotId) return { ok: false, error: "No snapshot id" };
     if (typeof applySchedule !== "function") {
       return { ok: false, error: "restore() requires the app's schedule applier (the CAS sync path) - refusing to bypass it" };
@@ -400,7 +409,7 @@ const snapshots = {
       const snap = rows?.[0];
       const raw = snap && (typeof snap.data === "string" ? JSON.parse(snap.data) : snap.data);
       if (!raw) return { ok: false, error: "Snapshot not found or has no data" };
-      const r = await this.applyPayload(raw, applySchedule, applyTables, "before_restore");
+      const r = await this.applyPayload(raw, applySchedule, applyTables, "before_restore", onBlobWritten);
       if (!r.ok) return r;
       return { ...r, reason: snap.reason, created_at: snap.created_at };
     } catch (e) {
@@ -410,8 +419,14 @@ const snapshots = {
   },
   // The shared apply step behind restore() and the JSON import. Order:
   // validate -> refuse an empty payload -> snapshot the current state (abort
-  // if that fails) -> blob upsert -> CAS schedule apply -> table upserts.
-  async applyPayload(raw, applySchedule, applyTables, preReason) {
+  // if that fails) -> blob upsert -> onBlobWritten(config, ts) -> CAS schedule
+  // apply -> table upserts. onBlobWritten (optional) lets the app adopt the
+  // restored setup the moment it is in the DB, BEFORE the schedule leg arms
+  // the autosave - otherwise the autosave wrote the pre-restore setup back
+  // over it. A leg that fails after the blob landed returns ok:false with
+  // blobRestored / scheduleRestored AND the blob it wrote, so the caller
+  // reports a PARTIAL restore instead of a failure that "changed nothing".
+  async applyPayload(raw, applySchedule, applyTables, preReason, onBlobWritten) {
     let payload;
     try { payload = this.normalizePayload(raw); }
     catch (e) { return { ok: false, error: "Backup shape invalid: " + (e && e.message || e) }; }
@@ -425,22 +440,32 @@ const snapshots = {
     const ts = new Date().toISOString();
     const up = await db.upsert("call_schedule_data", { id: "main", data: payload.config, updated_at: ts });
     if (up && up.error) return { ok: false, error: "Config write failed: " + up.error };
-    const applied = await applySchedule(schedule);
-    if (applied && applied.ok === false) {
-      return { ok: false, error: applied.error || "Schedule apply failed", blobRestored: true };
+    if (typeof onBlobWritten === "function") {
+      try { onBlobWritten(payload.config, ts); }
+      catch (e) { console.warn("applyPayload: onBlobWritten threw (the blob is written; the legs continue):", e); }
     }
-    const tables = await applyTables({ time_off: payload.time_off, availability: payload.availability });
+    const counts = {
+      schedule_days: payload.schedule_days.length,
+      time_off: payload.time_off.length,
+      availability: payload.availability.length,
+    };
+    // A leg that THROWS (a network exception in a bare fetch) is the same PARTIAL outcome as one that returns
+    // ok:false - the blob is already written, so the caller must hear that, never "nothing was changed".
+    let applied;
+    try { applied = await applySchedule(schedule); }
+    catch (e) { applied = { ok: false, error: String(e && e.message || e) }; }
+    if (applied && applied.ok === false) {
+      return { ok: false, error: applied.error || "Schedule apply failed", blobRestored: true, blob: payload.config, schedule, ts, counts };
+    }
+    let tables;
+    try { tables = await applyTables({ time_off: payload.time_off, availability: payload.availability }); }
+    catch (e) { tables = { ok: false, error: String(e && e.message || e) }; }
     if (tables && tables.ok === false) {
-      return { ok: false, error: tables.error || "Table restore failed", blobRestored: true, scheduleRestored: true };
+      return { ok: false, error: tables.error || "Table restore failed", blobRestored: true, scheduleRestored: true, blob: payload.config, schedule, ts, counts: { ...counts, ...(tables.counts || {}) } };
     }
     return {
       ok: true, blob: payload.config, schedule, ts,
-      counts: {
-        schedule_days: payload.schedule_days.length,
-        time_off: payload.time_off.length,
-        availability: payload.availability.length,
-        ...(tables && tables.counts ? tables.counts : {}),
-      },
+      counts: { ...counts, ...(tables && tables.counts ? tables.counts : {}) },
     };
   },
 };

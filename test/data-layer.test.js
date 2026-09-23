@@ -424,6 +424,137 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   })();
 
+  // ---- audit 9/23 (app-safety lane) ----
+  await (async () => {
+    // D12 (app-safety-1): the restored blob is handed to onBlobWritten the moment it is written - after the ONE
+    // call_schedule_data POST and BEFORE the schedule leg - and a failed schedule leg is reported as PARTIAL
+    // (blobRestored, no scheduleRestored) with blob / ts / counts on the result so the caller can adopt and report.
+    const order = []; calls.length = 0;
+    setFetch((url, opts) => {
+      if (opts && opts.method === "POST" && url.includes("call_schedule_snapshots")) { order.push("snapshot"); return resp(201, ""); }
+      if (opts && opts.method === "POST" && url.includes("call_schedule_data")) { order.push("blob"); return resp(201, ""); }
+      if (url.includes("call_schedule_data")) return resp(200, [{ data: { roster: [] }, updated_at: "t0" }]);
+      if (url.includes("schedule_days")) return resp(200, [{ day: "2026-01-01", primary_id: "s1" }]);
+      return resp(200, []);
+    });
+    const payload = { config: { roster: C.INIT_SURGEONS, groupRules: { x: 2 } }, schedule_days: [{ day: "2026-10-12", primary_id: "s4" }], time_off: [{ id: "a", person_id: "s2", start_date: "2026-04-01", end_date: "2026-04-01" }], availability: [] };
+    let written = null, tablesCalled = 0;
+    const r = await C.snapshots.applyPayload(payload,
+      async () => { order.push("cas"); return { ok: false, error: "wipe blocked" }; },
+      async () => { tablesCalled++; order.push("tables"); return { ok: true, counts: {} }; },
+      "before_restore",
+      (config, ts) => { order.push("onBlobWritten"); written = { config, ts }; });
+    check("applyPayload: schedule leg fails -> ok:false + blobRestored only; onBlobWritten ran after the ONE blob POST and before the CAS applier; blob/ts/counts on the result", () => {
+      assert.strictEqual(r.ok, false); assert.strictEqual(r.blobRestored, true); assert.ok(!r.scheduleRestored, "scheduleRestored must not be set");
+      assert.match(r.error, /wipe blocked/);
+      assert.deepStrictEqual(order, ["snapshot", "blob", "onBlobWritten", "cas"]);
+      assert.strictEqual(tablesCalled, 0, "the table leg never runs after a failed schedule leg");
+      assert.strictEqual(calls.filter(c => c.method === "POST" && c.url.includes("call_schedule_data")).length, 1);
+      assert.ok(written && typeof written.ts === "string", "onBlobWritten(config, ts)");
+      assert.deepEqual(written.config, payload.config); // deepEqual: vm-realm object
+      assert.deepEqual(r.blob, payload.config, "the partial result carries the blob it wrote");
+      assert.strictEqual(r.ts, written.ts, "and the ts it wrote it with");
+      assert.strictEqual(r.counts && r.counts.schedule_days, 1);
+    });
+  })();
+  await (async () => {
+    // D13 (app-safety-1): a failed TABLE leg is PARTIAL with both flags; a throwing onBlobWritten never aborts the legs.
+    const order = []; calls.length = 0;
+    setFetch((url, opts) => {
+      if (opts && opts.method === "POST" && url.includes("call_schedule_snapshots")) { order.push("snapshot"); return resp(201, ""); }
+      if (opts && opts.method === "POST" && url.includes("call_schedule_data")) { order.push("blob"); return resp(201, ""); }
+      if (url.includes("call_schedule_data")) return resp(200, [{ data: { roster: [] }, updated_at: "t0" }]);
+      if (url.includes("schedule_days")) return resp(200, [{ day: "2026-01-01", primary_id: "s1" }]);
+      return resp(200, []);
+    });
+    const payload = { config: { roster: C.INIT_SURGEONS, holidays: [] }, schedule_days: [{ day: "2026-10-12", primary_id: "s4" }], time_off: [{ id: "a", person_id: "s2", start_date: "2026-04-01", end_date: "2026-04-01" }], availability: [] };
+    const r = await C.snapshots.applyPayload(payload,
+      async () => { order.push("cas"); return { ok: true }; },
+      async () => { order.push("tables"); return { ok: false, error: "time_off restore failed: 403", counts: { time_off_upserted: 0 } }; },
+      "before_import",
+      () => { order.push("onBlobWritten"); throw new Error("adopt threw"); });
+    check("applyPayload: table leg fails -> ok:false + blobRestored + scheduleRestored, blob/ts on the result; a throwing onBlobWritten does not abort the legs", () => {
+      assert.strictEqual(r.ok, false); assert.strictEqual(r.blobRestored, true); assert.strictEqual(r.scheduleRestored, true);
+      assert.match(r.error, /time_off restore failed/);
+      assert.deepStrictEqual(order, ["snapshot", "blob", "onBlobWritten", "cas", "tables"]);
+      assert.strictEqual(calls.filter(c => c.method === "POST" && c.url.includes("call_schedule_data")).length, 1);
+      assert.deepEqual(r.blob, payload.config); assert.strictEqual(typeof r.ts, "string");
+    });
+  })();
+  await (async () => {
+    // D13b (review of app-safety-1): a leg that THROWS (a network exception in the app's bare fetch) is the same
+    // PARTIAL outcome as a leg that returns ok:false - never "nothing was changed" after the blob POST landed.
+    const order = []; calls.length = 0;
+    setFetch((url, opts) => {
+      if (opts && opts.method === "POST" && url.includes("call_schedule_snapshots")) { order.push("snapshot"); return resp(201, ""); }
+      if (opts && opts.method === "POST" && url.includes("call_schedule_data")) { order.push("blob"); return resp(201, ""); }
+      if (url.includes("call_schedule_data")) return resp(200, [{ data: { roster: [] }, updated_at: "t0" }]);
+      if (url.includes("schedule_days")) return resp(200, [{ day: "2026-01-01", primary_id: "s1" }]);
+      return resp(200, []);
+    });
+    const payload = { config: { roster: C.INIT_SURGEONS, holidays: [] }, schedule_days: [{ day: "2026-10-12", primary_id: "s4" }], time_off: [{ id: "a", person_id: "s2", start_date: "2026-04-01", end_date: "2026-04-01" }], availability: [] };
+    let tablesCalled = 0, thrown = null, r1 = null;
+    try {
+      r1 = await C.snapshots.applyPayload(payload,
+        async () => { order.push("cas"); throw new TypeError("Failed to fetch"); },
+        async () => { tablesCalled++; order.push("tables"); return { ok: true, counts: {} }; },
+        "before_restore", () => { order.push("onBlobWritten"); });
+    } catch (e) { thrown = e; }
+    check("applyPayload: a THROWING schedule leg is the same PARTIAL result as ok:false (blobRestored, the error text, blob/ts, ONE blob POST, no table leg) - never a rejection", () => {
+      assert.strictEqual(thrown, null, "applyPayload must not reject: " + String(thrown));
+      assert.strictEqual(r1.ok, false); assert.strictEqual(r1.blobRestored, true); assert.ok(!r1.scheduleRestored);
+      assert.match(String(r1.error), /Failed to fetch/);
+      assert.deepStrictEqual(order, ["snapshot", "blob", "onBlobWritten", "cas"]);
+      assert.strictEqual(tablesCalled, 0);
+      assert.strictEqual(calls.filter(c => c.method === "POST" && c.url.includes("call_schedule_data")).length, 1);
+      assert.deepEqual(r1.blob, payload.config); assert.strictEqual(typeof r1.ts, "string");
+    });
+    order.length = 0; thrown = null;
+    let r2 = null;
+    try {
+      r2 = await C.snapshots.applyPayload(payload,
+        async () => { order.push("cas"); return { ok: true }; },
+        async () => { order.push("tables"); throw new TypeError("Failed to fetch"); },
+        "before_import", () => { order.push("onBlobWritten"); });
+    } catch (e) { thrown = e; }
+    check("applyPayload: a THROWING table leg is PARTIAL with blobRestored + scheduleRestored and the error text - never a rejection", () => {
+      assert.strictEqual(thrown, null, "applyPayload must not reject: " + String(thrown));
+      assert.strictEqual(r2.ok, false); assert.strictEqual(r2.blobRestored, true); assert.strictEqual(r2.scheduleRestored, true);
+      assert.match(String(r2.error), /Failed to fetch/);
+      assert.deepStrictEqual(order, ["snapshot", "blob", "onBlobWritten", "cas", "tables"]);
+      assert.deepEqual(r2.blob, payload.config); assert.strictEqual(typeof r2.ts, "string");
+    });
+  })();
+  await (async () => {
+    // D14 (RLS-7): db.update returns the matched rows so a caller can tell an RLS-filtered PATCH (HTTP 200 + [])
+    // from a real update; a 2xx non-JSON body is ZERO rows, never success.
+    const db = vm.runInContext("db", sandbox);
+    calls.length = 0;
+    setFetch(() => resp(200, [{ id: "c1", active: false }]));
+    const hit = await db.update("office_contacts", "c1", { active: false });
+    setFetch(() => resp(200, []));
+    const none = await db.update("office_contacts", "c1", { active: false });
+    setFetch(() => resp(200, "<html>proxy</html>"));
+    const junk = await db.update("office_contacts", "c1", { active: false });
+    setFetch(() => resp(403, "permission denied for table office_contacts"));
+    const denied = await db.update("office_contacts", "c1", { active: false });
+    setFetch(() => resp(401, ""));
+    const bare = await db.update("office_contacts", "c1", { active: false });
+    check("db.update: { data: rows, error } - 200+[row] is one row, 200+[] and a non-JSON 2xx are ZERO rows (not success), a non-2xx carries the body as error", () => {
+      assert.strictEqual(hit.error, null); assert.strictEqual(hit.data.length, 1); assert.strictEqual(hit.data[0].id, "c1");
+      assert.strictEqual(none.error, null); assert.strictEqual(Array.isArray(none.data) && none.data.length, 0);
+      assert.strictEqual(junk.error, null); assert.strictEqual(Array.isArray(junk.data) && junk.data.length, 0);
+      assert.strictEqual(Array.isArray(denied.data) && denied.data.length, 0); assert.match(String(denied.error), /permission denied/);
+      const patch = calls[calls.length - 1]; assert.strictEqual(patch.method, "PATCH"); assert.ok(patch.url.includes("office_contacts?id=eq.c1"));
+    });
+    // review of RLS-7: a non-2xx with an EMPTY body is still an error (truthy), never the zero-row branch's wording.
+    check("db.update: a non-2xx with an empty body reports error 'HTTP <status>' (truthy), not '' - the caller's `if (error)` branch must fire", () => {
+      assert.strictEqual(Array.isArray(bare.data) && bare.data.length, 0);
+      assert.ok(bare.error, "error must be truthy for a 401 with no body");
+      assert.match(String(bare.error), /HTTP 401/);
+    });
+  })();
+
   /* ---------------- E. source pins ---------------- */
   console.log("\n[E] source pins (index-source.html)");
   // LF-normalize: a Windows checkout without .gitattributes handed us CRLF once and the two-line pins below missed.
@@ -439,15 +570,88 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   check("intentionalScheduleWipeRef granted at exactly 2 sites (clearSchedule, applyScheduleViaCAS)", () => {
     assert.strictEqual(count("intentionalScheduleWipeRef.current = true"), 2);
   });
-  check("intentionalScheduleWipeRef consumed at exactly 2 sites (unconditional sync consume + applier finally)", () => {
+  check("intentionalScheduleWipeRef consumed at exactly 2 sites (enqueue-time consume in syncScheduleDays + applier finally)", () => {
     assert.strictEqual(count("intentionalScheduleWipeRef.current = false"), 2);
   });
-  check("the wipe gate precedes the unconditional consume inside syncScheduleDaysNow", () => {
-    const fn = src.indexOf("const syncScheduleDaysNow = async");
-    const gate = src.indexOf("chk.wipe && !intentionalScheduleWipeRef.current", fn);
-    const consume = src.indexOf("intentionalScheduleWipeRef.current = false;", fn);
-    const firstWrite = src.indexOf("await postDayRow(", fn);
-    assert.ok(fn > 0 && gate > fn && consume > gate && firstWrite > consume, `fn=${fn} gate=${gate} consume=${consume} firstWrite=${firstWrite}`);
+  // app-safety-2: the grant is consumed synchronously at ENQUEUE (arming and enqueuing are synchronous at both grant
+  // sites) and handed to that run; syncScheduleDaysNow gates on the handed-in grant and never touches the ref.
+  check("the wipe grant is consumed at enqueue inside syncScheduleDays and handed to that run; syncScheduleDaysNow gates on the grant, not the ref", () => {
+    const enq = src.indexOf("const syncScheduleDays = (nextSchedule) => {");
+    const fn = src.indexOf("const syncScheduleDaysNow = async (nextSchedule, wipeGranted) => {", enq);
+    const read = src.indexOf("const grant = intentionalScheduleWipeRef.current;", enq);
+    const consume = src.indexOf("intentionalScheduleWipeRef.current = false;", enq);
+    const handoff = src.indexOf("syncScheduleDaysNow(nextSchedule, grant)", enq);
+    assert.ok(enq > 0 && fn > enq && read > enq && consume > read && handoff > consume && handoff < fn, `enq=${enq} read=${read} consume=${consume} handoff=${handoff} fn=${fn}`);
+    const end = src.indexOf("const scheduleDaySyncRetry = () => {", fn);
+    const body = src.slice(fn, end);
+    assert.ok(body.includes("if (chk.wipe && !wipeGranted) {"), "the gate reads the handed-in grant");
+    assert.strictEqual(body.includes("intentionalScheduleWipeRef"), false, "syncScheduleDaysNow no longer reads or clears the ref");
+    const firstWrite = body.indexOf("await postDayRow(");
+    assert.ok(body.indexOf("if (chk.wipe && !wipeGranted) {") < firstWrite, "the gate precedes the first write");
+  });
+  // app-safety-2 (behaviour): the two sync functions are lifted out of the component verbatim and run against stub
+  // refs. A queued autosave run (A) enqueued BEFORE a clear / restore armed the one-shot must not spend that grant;
+  // the run enqueued right after arming (B) is the intended wipe and must go through.
+  await (async () => {
+    const start = src.indexOf("  const syncScheduleDays = (nextSchedule) => {");
+    const end = src.indexOf("  const scheduleDaySyncRetry = () => {", start);
+    const body = src.slice(start, end);
+    const ref = (v) => ({ current: v });
+    const sameAssignment = (day, a, b) => JSON.stringify(H.assignmentToDayRow(day, a || H.emptyDayAssignment())) === JSON.stringify(H.assignmentToDayRow(day, b || H.emptyDayAssignment()));
+    const mk = () => {
+      const state = { toasts: [], patched: [] };
+      const intentionalScheduleWipeRef = ref(false);
+      const lastSyncRef = ref({ "2026-11-02": { primary: "s1" }, "2026-11-03": { primary: "s2" }, "2026-11-04": { primary: "s3" }, "2026-11-05": { primary: "s4" } });
+      const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console"];
+      const fns = new Function(...params, body + "\nreturn { syncScheduleDays, syncScheduleDaysNow };")(
+        intentionalScheduleWipeRef, ref(0), ref(Promise.resolve()), lastSyncRef, ref({ "2026-11-02": 1, "2026-11-03": 1, "2026-11-04": 1, "2026-11-05": 1 }), ref(lastSyncRef.current),
+        H.scheduleWipeCheck, sameAssignment, H.assignmentToDayRow, H.emptyDayAssignment,
+        async () => ({ version: 1 }), async (row, ver) => { state.patched.push(row.day); return { version: ver + 1 }; }, async () => null,
+        () => {}, () => {}, (m) => state.toasts.push(m), () => {}, async () => ({ sched: {}, vers: {} }), () => {}, null, null, () => "write failed", () => 0, { warn: () => {} });
+      return { ...fns, state, intentionalScheduleWipeRef, lastSyncRef };
+    };
+    const wipe = { "2026-11-02": {}, "2026-11-03": {}, "2026-11-04": {}, "2026-11-05": {} };
+    const t = mk();
+    const pA = t.syncScheduleDays({ ...t.lastSyncRef.current, "2026-11-02": { primary: "s5" } }); // an ordinary autosave diff, queued first
+    t.intentionalScheduleWipeRef.current = true;                                                  // clearSchedule / applyScheduleViaCAS arm ...
+    const pB = t.syncScheduleDays(wipe);                                                            // ... and enqueue synchronously
+    const spentAtEnqueue = t.intentionalScheduleWipeRef.current === false;
+    const [rA, rB] = await Promise.all([pA, pB]);
+    check("app-safety-2: a clear/restore enqueued behind a queued autosave run keeps its own wipe grant (the earlier run cannot spend it; the grant is spent at enqueue)", () => {
+      assert.strictEqual(rA.ok, true, "run A: " + JSON.stringify(rA));
+      assert.strictEqual(rB.ok, true, "run B (the intentional wipe) must not be BLOCKED: " + JSON.stringify(rB));
+      assert.strictEqual(spentAtEnqueue, true, "the one-shot is consumed synchronously when its run is enqueued");
+      assert.deepStrictEqual(t.state.patched, ["2026-11-02", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"]);
+      assert.strictEqual(t.state.toasts.some(m => /wipe/i.test(m)), false, "no wipe-blocked toast");
+    });
+    const u = mk();
+    const rU = await u.syncScheduleDays(wipe);
+    check("app-safety-2: a wipe-shaped run with no grant is still BLOCKED and writes nothing (the gate is unchanged)", () => {
+      assert.strictEqual(rU.ok, false); assert.strictEqual(rU.blocked, true);
+      assert.deepStrictEqual(u.state.patched, []);
+      assert.ok(u.state.toasts.some(m => /Blocked an unexpected schedule wipe/.test(m)));
+    });
+  })();
+  // review of app-safety-2: the grant never survives to an event handler - each grant site enqueues its run in the
+  // same synchronous stretch (no await between arming and syncScheduleDays), and syncScheduleDays spends the ref at
+  // enqueue; so the keepalive flush reader can only ever see it false, and its comment says so.
+  check("the wipe grant never reaches the keepalive flush: no await between either grant site and its syncScheduleDays enqueue; the flush reader is commented as always-false (spent at enqueue)", () => {
+    let from = 0, sites = 0;
+    for (;;) {
+      const g = src.indexOf("intentionalScheduleWipeRef.current = true", from);
+      if (g < 0) break;
+      sites++;
+      const enq = src.indexOf("syncScheduleDays(", g);
+      const between = src.slice(g, enq + "syncScheduleDays(".length); // includes the call so the lookahead can exempt `await syncScheduleDays(`
+      assert.ok(enq > g && enq - g < 400, `grant site ${sites}: syncScheduleDays enqueue within reach`);
+      assert.strictEqual(/\bawait\b(?!\s+syncScheduleDays\()/.test(between), false, `grant site ${sites}: no await between arming and the enqueue`);
+      from = g + 1;
+    }
+    assert.strictEqual(sites, 2);
+    const reader = src.indexOf("if (chk.wipe && !intentionalScheduleWipeRef.current) {");
+    assert.ok(reader > 0, "the keepalive flush reader exists once");
+    assert.strictEqual(count("if (chk.wipe && !intentionalScheduleWipeRef.current) {"), 1);
+    assert.ok(src.slice(reader - 600, reader).includes("spent at enqueue"), "the reader's comment says the ref is always false here (spent at enqueue)");
   });
   check("allowWipeSaveRef granted at exactly 1 site (factory reset) and cleared at 2 (autosave consume + reset failure restore)", () => {
     assert.strictEqual(count("allowWipeSaveRef.current = true"), 1);
@@ -597,7 +801,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual([...new Set(nonAscii)], [], "non-ASCII characters in the babel block: " + [...new Set(nonAscii)].map(c => "U+" + c.charCodeAt(0).toString(16)).join(" "));
   });
   // ---- fix round 1 pins ----
-  check("blobLoadedRef: set true at exactly 4 sites (mount read, background refresh, factory reset, restore/import) and never false", () => {
+  check("blobLoadedRef: set true at exactly 4 sites (mount read, background refresh, factory reset, adoptRestoredBlob) and never false", () => {
     assert.strictEqual(count("blobLoadedRef.current = true"), 4);
     assert.strictEqual(count("blobLoadedRef.current = false"), 0, "it is a per-session 'have read the blob' fact, never cleared");
     const mount = src.indexOf("// --- Supabase: Load on mount + real-time sync ---");
@@ -609,6 +813,90 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const refreshMark = src.indexOf("blobLoadedRef.current = true;", refresh);
     const refreshEarlyReturn = src.indexOf("if (!row?.data) return;", refresh);
     assert.ok(refresh > 0 && refreshMark > refresh && refreshMark < refreshEarlyReturn, "refreshBlobRow marks the blob loaded BEFORE its empty-row early return");
+  });
+  // ---- audit 9/23 (app-safety lane) ----
+  // app-safety-1: the restored blob is adopted ONCE, by adoptRestoredBlob, the moment applyPayload has written it
+  // (the onBlobWritten applier) - never after the later legs; both callers pass it and both branch on
+  // r.blobRestored so a restore / import that lost a later leg is reported as PARTIAL, not as "failed".
+  check("restore/import: adoptRestoredBlob is the single adoption site, both callers pass it to applyPayload/restore, both branch on r.blobRestored, afterPayloadApplied no longer adopts", () => {
+    assert.strictEqual(count("const adoptRestoredBlob = (config, ts) => {"), 1);
+    const helper = src.indexOf("const adoptRestoredBlob = (config, ts) => {");
+    const hb = src.slice(helper, src.indexOf("};", helper));
+    ["adoptBlob(config", "blobTsRef.current = ts", "blobLoadedRef.current = true", "everHadRealDataRef.current = true"].forEach(n => assert.ok(hb.includes(n), "adoptRestoredBlob must do: " + n));
+    assert.strictEqual(count("snapshots.restore(snap.id, applyScheduleViaCAS, applyTablesUpsert, adoptRestoredBlob)"), 1);
+    assert.strictEqual(count('snapshots.applyPayload(obj, applyScheduleViaCAS, applyTablesUpsert, "before_import", adoptRestoredBlob)'), 1);
+    const rs = src.indexOf("const restoreSnapshot = async (snap) => {");
+    const ib = src.indexOf("const importBackupFile = async (file) => {", rs);
+    const ex = src.indexOf("const exportBackup = () => {", ib);
+    assert.ok(rs > 0 && ib > rs && ex > ib);
+    assert.ok(src.slice(rs, ib).includes("r.blobRestored"), "restoreSnapshot branches on r.blobRestored");
+    assert.ok(src.slice(ib, ex).includes("r.blobRestored"), "importBackupFile branches on r.blobRestored");
+    assert.ok(src.slice(rs, ib).includes('outcome: "partial"') && src.slice(ib, ex).includes('outcome: "partial"'), "a partial apply still writes its audit row");
+    const after = src.indexOf("const afterPayloadApplied = (r, what) => {");
+    assert.ok(after > 0 && !src.slice(after, src.indexOf("};", after)).includes("adoptBlob("), "afterPayloadApplied no longer adopts - onBlobWritten did, before the schedule leg");
+  });
+  check("config.js: applyPayload calls onBlobWritten right after the blob upsert and before the schedule applier; restore() passes it through", () => {
+    const cfg = fs.readFileSync(path.join(ROOT, "config.js"), "utf8").replace(/\r\n/g, "\n");
+    const fn = cfg.indexOf("async applyPayload(raw, applySchedule, applyTables, preReason, onBlobWritten) {");
+    const up = cfg.indexOf('db.upsert("call_schedule_data"', fn);
+    const cb = cfg.indexOf("onBlobWritten(payload.config, ts)", fn);
+    const leg = cfg.indexOf("await applySchedule(schedule)", fn);
+    assert.ok(fn > 0 && up > fn && cb > up && leg > cb, `fn=${fn} upsert=${up} callback=${cb} scheduleLeg=${leg}`);
+    assert.ok(cfg.includes("async restore(snapshotId, applySchedule, applyTables, onBlobWritten) {"));
+    assert.ok(cfg.includes('this.applyPayload(raw, applySchedule, applyTables, "before_restore", onBlobWritten)'));
+  });
+  // app-safety-3: every automatic snapshot reason the app, config.js and the CLI importer write has a label in the
+  // restore list (the raw strings 'generate_publish' / 'before_seed_import' used to show).
+  check("snapshotReasonLabel names every snapshot reason written by index-source.html, config.js and importer.js", () => {
+    const m = src.indexOf("const snapshotReasonLabel = (r) => ({");
+    const mEnd = src.indexOf('}[r] || r || "manual")', m);
+    assert.ok(m > 0 && mEnd > m, "the label map keeps its raw-reason fallback");
+    const labeled = new Set([...src.slice(m, mEnd).matchAll(/^\s*([a-z_]+):/gm)].map(x => x[1]));
+    const used = new Set();
+    const census = (text) => {
+      [...text.matchAll(/snapshots\.capture(?:IfStale)?\("([a-z_]+)"/g)].forEach(x => used.add(x[1]));
+      [...text.matchAll(/applyPayload\([^)]*?"([a-z_]+)"/g)].forEach(x => used.add(x[1]));
+    };
+    census(src); census(fs.readFileSync(path.join(ROOT, "config.js"), "utf8"));
+    [...fs.readFileSync(path.join(ROOT, "importer.js"), "utf8").matchAll(/select '([a-z_]+)',/g)].forEach(x => used.add(x[1]));
+    ["generate_publish", "seed_import", "before_seed_import", "before_restore", "before_import", "clear_schedule", "reset_all_data", "periodic_session"].forEach(r => assert.ok(used.has(r), "the census should find " + r + " - a regex drifted"));
+    assert.deepStrictEqual([...used].filter(r => !labeled.has(r)), [], "snapshot reasons with no label");
+  });
+  // app-safety-4: every localStorage key carries the documented silvis- prefix; the two underscore spellings
+  // inherited from Davenport are read through once (so the rename deploy still nukes its cache and no panel state
+  // is lost) and removed on the next write - never written again.
+  check("localStorage keys: silvis- prefix everywhere; the legacy silvis_app_version / silvis_collapse_ keys are read through once and retired, never written", () => {
+    assert.strictEqual(rxCount(/localStorage\.setItem\("silvis_/g), 0, "no write to a legacy underscore key");
+    assert.ok(src.includes('localStorage.getItem("silvis-app-version") || localStorage.getItem("silvis_app_version")'), "the version read falls back to the legacy key ONCE (a null read would skip the rename deploy's cache nuke)");
+    assert.strictEqual(count('localStorage.removeItem("silvis_app_version")'), 2, "both branches retire the legacy key after writing the new one");
+    assert.strictEqual(count('"silvis_app_version"'), 3, "one fallback read + two removes");
+    assert.strictEqual(count('"silvis_collapse_" + ck'), 2, "one fallback read + one remove");
+    assert.ok(src.includes('localStorage.getItem("silvis-collapse-" + ck)') && src.includes('localStorage.setItem("silvis-collapse-" + ck'));
+    assert.strictEqual(count('"silvis_collapse_setup_east"'), 0, "openEastVacPanel writes through the helper, not a legacy literal");
+    assert.strictEqual(count('writeCollapseFlag("setup_east", true)'), 1);
+  });
+  // RLS-7: the two PATCH handlers that used to trust a 2xx alone now behave like patchTradeStatus - a 200 with zero
+  // rows (an RLS-filtered write) adopts nothing locally and logs no audit row.
+  check("RLS-7: toEdit and updateOfficeContact treat a 2xx with zero rows as 'not changed' (no local adopt, no audit row, no fabricated row)", () => {
+    const te = src.indexOf("const toEdit = async (personId, rowId, newStart, newEnd) => {");
+    const tb = src.slice(te, src.indexOf("// SCHEDULE STORAGE:", te));
+    const guard = tb.indexOf("rows.length !== 1"), adopt = tb.indexOf("adoptTimeOffRows("), audit = tb.indexOf('logAudit("timeoff.edit"');
+    assert.ok(te > 0 && guard > 0 && adopt > guard && audit > adopt, `guard=${guard} adopt=${adopt} audit=${audit}`);
+    assert.strictEqual(tb.includes("{ ...old, start_date: newStart"), false, "no fabricated 'updated' row when the PATCH matched nothing");
+    assert.ok(tb.includes("loadTimeOff(true)"), "the list is reloaded so the stale row disappears");
+    const uo = src.indexOf("const updateOfficeContact = async (id, patch) => {");
+    const ub = src.slice(uo, src.indexOf("const deleteOfficeContact = async (id) => {", uo));
+    const zero = ub.indexOf("data.length === 0"), rollback = ub.indexOf("setOfficeContacts(before)", zero), uaudit = ub.indexOf('logAudit("office_contact.update"');
+    assert.ok(uo > 0 && zero > 0 && rollback > zero && uaudit > rollback, `zero=${zero} rollback=${rollback} audit=${uaudit}`);
+  });
+  // F07: the office digest is the Monday 06:00 Central cron (README + live job); the app must not call it Saturday.
+  // Scoped to digest copy (review): the shift model is Fri/Sat/Sun units, so a legitimate 'Saturday' in weekend or
+  // holiday copy must not trip a pin about the digest cron.
+  check("F07: no app copy calls the office digest a Saturday digest (the cron is Monday 06:00 Central)", () => {
+    assert.strictEqual(rxCount(/Saturday[^.\n]{0,60}digest|digest[^.\n]{0,60}Saturday/gi), 0);
+    assert.strictEqual(count("Monday morning change digest"), 1);
+    assert.strictEqual(count("Test the weekly digest now"), 1);
+    assert.strictEqual(count("Manually fire the weekly digest now?"), 1);
   });
   check("autosave leg 2 and the keepalive blob leg are gated on blobLoadedRef (after the canWriteBlob gate, before the upsert)", () => {
     const eff = src.indexOf("// --- Supabase: Auto-save on changes ---");
