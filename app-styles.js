@@ -115,9 +115,48 @@ const css = {
   badge: (i, entry) => { const c = rosterColors(entry, i); return { display:"inline-flex", alignItems:"center", background:c.tg, color:c.tx, border:pillBorder(c), borderRadius:5, padding:"2px 9px", fontSize:12, fontWeight:600, whiteSpace:"nowrap", letterSpacing:0.3 }; },
 };
 
+// East-vacation marker (Prompt 15 part 3, 9/23): the person's Davenport vacation
+// ranges under his review decision. A small DIAMOND (a rotated square), so it
+// never passes for the round Silvis vacation dot beside it; keyed by the review
+// STATE, never by a name: unreviewed = dashed amber outline (decide it - it is a
+// Silvis vacation until then), away = solid outline in the person's own colour
+// (a Silvis vacation), home = filled green (available at Silvis; no East call).
+// The outlines clear 3:1 on the cell surface in both themes (data-layer pin);
+// index-source.html passes textColorOf(id) for the person's colour.
+const EASTVAC_COLORS = {
+  light: { unreviewed: "#B45309", home: "#15803D", homeFill: "#86EFAC" },
+  dark:  { unreviewed: "#FBBF24", home: "#4ADE80", homeFill: "#166534" },
+};
+function eastVacMarkStyle(state, dark, personColor) {
+  const C = EASTVAC_COLORS[dark ? "dark" : "light"];
+  const base = { display: "inline-block", width: 7, height: 7, borderRadius: 1, transform: "rotate(45deg)", flexShrink: 0, borderWidth: 1.5, boxSizing: "border-box" };
+  if (state === "home") return Object.assign(base, { borderStyle: "solid", borderColor: C.home, background: C.homeFill });
+  if (state === "away") return Object.assign(base, { borderStyle: "solid", borderColor: personColor || (dark ? THEME.dark.text : THEME.light.text), background: "transparent" });
+  return Object.assign(base, { borderStyle: "dashed", borderColor: C.unreviewed, background: "transparent" });
+}
+// The three-way review control (unreviewed / away / home) as tappable segments;
+// the active segment is filled in the state's tone with white text (every tone
+// clears 4.5:1 under white), the others stay quiet. The fill is written as a
+// flat linear-gradient on purpose: the dark sheet in index-source.html paints
+// every plain button's text #C9D6E8 and a gradient button's text white, so the
+// active segment keeps white-on-tone in both themes without a data-pill
+// exception. 32px tall at least (phone tap target).
+const EASTVAC_SEG_TONES = {
+  light: { unreviewed: "#B45309", away: "#13294B", home: "#15803D" },
+  dark:  { unreviewed: "#92400E", away: "#2E5090", home: "#166534" },
+};
+function eastVacSegStyle(active, state, dark) {
+  const T = THEME[dark ? "dark" : "light"];
+  const tone = EASTVAC_SEG_TONES[dark ? "dark" : "light"][state] || EASTVAC_SEG_TONES.light.unreviewed;
+  return {
+    background: active ? "linear-gradient(135deg," + tone + "," + tone + ")" : "transparent", color: active ? "#FFFFFF" : T.muted, border: "1px solid " + (active ? tone : T.inputBorder),
+    borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: font, minHeight: 32, lineHeight: "22px", whiteSpace: "nowrap",
+  };
+}
+
 // Node (tests: test/data-layer.test.js pins, test/ui/contrast.mjs).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css };
+  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle };
 }
 
 /* ═══════════════════════════════════════════════════

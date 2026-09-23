@@ -1091,6 +1091,159 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes("(IMP.IMP_RETIRED_SETTINGS_KEYS || []).forEach(k => { delete merged.settings[k]; });"), "retired keys deleted from merged.settings before the CAS PATCH");
   });
 
+  /* ---------------- P15 part 3: East vacations in the UI (source pins) ---------------- */
+  console.log("\n[P15] East vacations UI (index-source.html / app-styles.js pins)");
+  check("P15: the rules ctx receives the East vacation inputs - eastVacationRanges keyed by the ROSTER id from eastVacations(eastFeedRows, code) (never a Davenport id) and eastVacationReviews = the loaded rows; the ctxInputs memo depends on the review rows", () => {
+    const cs = src.indexOf("const ctxInputs = useMemo(() => {");
+    const cb = src.slice(cs, src.indexOf("const rulesCtxState = useMemo", cs));
+    assert.ok(cs > 0 && cb.length > 0, "ctxInputs memo not found");
+    assert.ok(cb.includes("eastVacations(eastFeedRows, s.code)"), "the ranges must come from east-feed.js eastVacations(rows, code) for the surgeon's CODE");
+    assert.ok(cb.includes("eastVacationRanges[s.id] ="), "the map must be keyed by the roster id (s.id)");
+    assert.ok(cb.includes("eastVacationRanges, eastVacationReviews: eastVacationReviewRows"), "both inputs must reach buildContext");
+    assert.ok(cb.includes("eastOverrideRows, eastIdByCode, eastVacationReviewRows]"), "the memo must rebuild when the review rows change");
+  });
+  check("P15: east_vacation_reviews is an authenticated-only table - read through readAuthOnlyTable (null on a stale token, never an anon 200 + [] adopted), a 404 (migration not applied) is named, the load runs at start and in the 60-s poll", () => {
+    assert.ok(src.includes('readAuthOnlyTable("east_vacation_reviews"'), "the reviews must be read with readAuthOnlyTable");
+    assert.strictEqual(src.includes('db.query("east_vacation_reviews"'), false, "never a plain db.query (anon fallback) on the reviews table");
+    assert.ok(src.includes('setEastVacReviewState(missing ? "missing" : "failed")'), "a 404 must be recorded as 'missing' (the table is prepared, not applied)");
+    assert.ok(src.includes("await loadEastVacationReviews();"), "initial load");
+    assert.ok(src.includes("loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),"), "the 60-s poll refreshes the reviews too");
+  });
+  check("P15: the review write path - dbAuthHeaders() on every mutation, an upsert on (person_id,start,end) with merge-duplicates + representation checked non-empty, a reset is a DELETE by the exact triple, one audit eastvac.review, own rows or the scheduler", () => {
+    const ws = src.indexOf("const saveEastVacationReview = async");
+    assert.ok(ws > 0, "saveEastVacationReview missing");
+    const wb = src.slice(ws, src.indexOf("\n  };", ws));
+    assert.ok(wb.includes("/rest/v1/east_vacation_reviews?on_conflict=person_id,start,end"), "the upsert must name the unique triple (the primary key is id)");
+    assert.ok(wb.includes('Prefer: "resolution=merge-duplicates,return=representation"'), "merge-duplicates + representation");
+    assert.ok(wb.includes('method: "DELETE", headers: { ...dbAuthHeaders(), Prefer: "return=representation" }'), "a reset deletes the row and counts the representation");
+    assert.ok(wb.includes("person_id=eq.${encodeURIComponent(personId)}&start=eq.${range.start}&end=eq.${range.end}"), "the delete is scoped to the exact (person, start, end)");
+    assert.ok((wb.match(/dbAuthHeaders\(\)/g) || []).length >= 2, "every mutation uses dbAuthHeaders()");
+    assert.strictEqual(wb.includes("dbReadHeaders()"), false, "no read headers on a write");
+    assert.ok(wb.includes('logAudit("eastvac.review"'), "one audit action eastvac.review");
+    assert.ok(wb.includes("!isScheduler && personId !== mySurgeon"), "a surgeon reviews his own ranges only; the scheduler anyone's");
+    assert.ok(wb.includes("!Array.isArray(rows) || rows.length === 0"), "an empty representation is a failed save (RLS no-op), never success");
+  });
+  check("P15: the 'home' -> 'either' offers hook exists as a NO-OP with the Prompt 14 TODO (the painter is on another branch); no call_offers write from this branch", () => {
+    assert.ok(src.includes("const offerEitherForHomeRange = (personId, range) => {"), "hook missing");
+    assert.ok(src.includes("TODO(Prompt 14 UI wave)"), "the TODO marker must name the wave that wires it");
+    assert.ok(src.includes('if (decision === "home") offerEitherForHomeRange(personId, range);'), "a home decision must call the hook");
+    assert.strictEqual(src.includes("/rest/v1/call_offers"), false, "no call_offers write on this branch");
+  });
+  check("P15: the refresh resets changed / removed ranges through derivedEastVacations(...).stale (person-scoped), skips rows the read could not see, and names the resets in the toast + audit", () => {
+    const rs = src.indexOf("const refreshEastFeed = async () => {");
+    const rb = src.slice(rs, src.indexOf("const saveEastOverride = async", rs));
+    assert.ok(rb.includes("derivedEastVacations(newRanges, eastVacationReviewRows, s.id).stale"), "the stale list must be person-scoped (roster id)");
+    assert.ok(rb.includes("st.review.end >= fromMon"), "rows for ranges the time_off read could not see (end < from) are kept");
+    assert.ok(rb.includes('"unreviewed", { quiet: true, reason: st.reason }'), "a reset goes through the normal write path with the reason");
+    assert.ok(rb.includes("reviewResets"), "the audit row carries the resets");
+    assert.ok(rb.includes("East vacation review(s) reset:"), "the toast names the resets");
+  });
+  check("P15: where it shows - calendar marker with the state (data-eastvac-state), the day-editor East line, the coverage strip item opening the panel, My schedule and the Time off view lists, the East feed card section", () => {
+    assert.ok(src.includes('data-eastvac-state={m.state}'), "calendar day cells: marker per person with the state");
+    assert.ok(src.includes("eastVacMarkStyle(m.state, dk, textColorOf(m.id))"), "the marker style comes from app-styles.js (never a name-keyed colour)");
+    assert.ok(src.includes('data-eastvac={l.eastVac || undefined}'), "the day editor's East line carries the state");
+    assert.ok(src.includes('data-testid="cov-eastvac-unreviewed"'), "coverage strip item");
+    assert.ok(src.includes("unreviewed East vacations: "), "the strip wording");
+    assert.ok(src.includes('data-testid="mine-eastvac"'), "My schedule list");
+    assert.ok(src.includes('data-testid="eastvac-timeoff"'), "Time off view list");
+    assert.ok(src.includes('data-testid="eastvac-card"'), "East feed card section");
+    assert.ok(src.includes('data-testid="eastvac-conflicts"'), "the conflicts list (the time_off trigger mirrored, report only)");
+    assert.ok(src.includes("eastVacationConflicts(rulesCtx)"), "the conflicts come from rules.eastVacationConflicts over the live ctx");
+    const ev = src.indexOf("function EastVacationList(");
+    assert.ok(ev > 0, "one shared EastVacationList component");
+    const evb = src.slice(ev, src.indexOf("\nfunction ", ev + 10));
+    assert.ok(evb.includes('data-testid={"eastvac-set-" + st}'), "segmented control buttons carry eastvac-set-<state>");
+    assert.ok(evb.includes('["unreviewed", "away", "home"]'), "three states, in that order");
+  });
+  check("P15: the office digest and the ER export are untouched (assignments, not availability)", () => {
+    const h = readRoot("helpers.js");
+    const er = h.slice(h.indexOf("function erPanelRows("), h.indexOf("function buildErCallPanelsDocument(") + 1200);
+    assert.ok(er.length > 0 && !/eastVac|east_vacation|eastClear/.test(er), "the ER Call Panels builders mention East vacations");
+    const digest = readRoot(path.join("edge-functions", "office-notifications", "index.ts"));
+    assert.strictEqual(/east_vacation|eastVac/.test(digest), false, "the office digest reads East vacations");
+    const daily = readRoot(path.join("edge-functions", "daily-reminder", "index.ts"));
+    assert.strictEqual(/east_vacation|eastVac/.test(daily), false, "the daily reminder reads East vacations");
+  });
+  check("P15: app-styles.js eastVacMarkStyle - a diamond distinct from the round dot; unreviewed dashed, away outlined in the person's colour, home filled; the outline clears 3:1 on the cell surface in both themes; eastVacSegStyle for the three-way control", () => {
+    assert.ok(styles && typeof styles.eastVacMarkStyle === "function", "eastVacMarkStyle not exported");
+    assert.ok(typeof styles.eastVacSegStyle === "function", "eastVacSegStyle not exported");
+    assert.ok(styles.EASTVAC_COLORS && styles.EASTVAC_COLORS.light && styles.EASTVAC_COLORS.dark, "EASTVAC_COLORS tokens per theme");
+    for (const dark of [false, true]) {
+      const T = styles.THEME[dark ? "dark" : "light"];
+      const u = styles.eastVacMarkStyle("unreviewed", dark, "#1F3A6B"), a = styles.eastVacMarkStyle("away", dark, "#1F3A6B"), hm = styles.eastVacMarkStyle("home", dark, "#1F3A6B");
+      assert.strictEqual(u.borderStyle, "dashed", "unreviewed = dashed");
+      assert.strictEqual(a.borderStyle, "solid", "away = solid");
+      assert.strictEqual(a.borderColor, "#1F3A6B", "away outline = the person's colour");
+      assert.strictEqual(a.background, "transparent", "away is hollow");
+      assert.notStrictEqual(hm.background, "transparent", "home is filled");
+      assert.ok(/rotate\(45deg\)/.test(u.transform), "a diamond (rotated square), not a round dot");
+      assert.strictEqual(u.borderRadius, a.borderRadius, "same shape across states");
+      const C = styles.EASTVAC_COLORS[dark ? "dark" : "light"];
+      assert.ok(ratio(C.unreviewed, T.surface) >= 3, `${dark ? "dark" : "light"} unreviewed outline ${C.unreviewed} on the cell ${T.surface} = ${ratio(C.unreviewed, T.surface).toFixed(2)}:1`);
+      assert.ok(ratio(C.home, T.surface) >= 3, `${dark ? "dark" : "light"} home outline ${C.home} on the cell ${T.surface} = ${ratio(C.home, T.surface).toFixed(2)}:1`);
+      assert.ok(ratio(C.unreviewed, T.weekend) >= 3, `${dark ? "dark" : "light"} unreviewed outline on a weekend cell`);
+      const segOn = styles.eastVacSegStyle(true, "home", dark), segOff = styles.eastVacSegStyle(false, "home", dark);
+      assert.notStrictEqual(segOn.background, segOff.background, "the active segment is distinct");
+      assert.ok(Number(segOn.minHeight) >= 32, "tap target height");
+      // the active fill is a flat gradient (the dark sheet paints a gradient button's text white) and every tone reads white text at 4.5:1
+      assert.ok(/^linear-gradient\(/.test(segOn.background), "active segment background is a flat linear-gradient (dark-sheet contract)");
+      for (const st of ["unreviewed", "away", "home"]) { const tone = styles.EASTVAC_SEG_TONES[dark ? "dark" : "light"][st]; assert.ok(ratio("#FFFFFF", tone) >= 4.5, `${dark ? "dark" : "light"} ${st} segment tone ${tone} under white text = ${ratio("#FFFFFF", tone).toFixed(2)}:1`); }
+    }
+  });
+  /* E3 review fixes (9/23) */
+  check("P15 fix: ONE predicate decides who has East vacations - eastVacationPerson(s, ef) (East feature reads busy days, a roster code, not an outside surgeon) in the ctx input, in eastVacPeople and in the refresh's vacationCodes", () => {
+    assert.ok(src.includes("function eastVacationPerson(s, ef)"), "the shared predicate eastVacationPerson(s, ef) must exist");
+    const cs = src.indexOf("const ctxInputs = useMemo(() => {");
+    const cb = src.slice(cs, src.indexOf("const rulesCtxState = useMemo", cs));
+    assert.ok(cb.includes("eastVacationPerson(s, ef)"), "the ctx input eastVacationRanges must use the shared predicate");
+    const ps = src.indexOf("const eastVacPeople = useMemo(() => {");
+    const pb = src.slice(ps, src.indexOf("const eastVacById = useMemo", ps));
+    assert.ok(ps > 0 && pb.includes("eastVacationPerson(s, ef)"), "eastVacPeople must use the shared predicate");
+    const rs = src.indexOf("const refreshEastFeed = async () => {");
+    const rb = src.slice(rs, src.indexOf("const saveEastOverride = async", rs));
+    assert.ok(rb.includes("eastVacationPerson(s, ef)"), "the refresh's vacationCodes must use the shared predicate");
+    assert.ok((src.match(/eastVacationPerson\(s, ef\)/g) || []).length >= 4, "the predicate is defined once and used in the three places");
+  });
+  check("P15 fix: the refresh's stale list is computed against the RELOADED cache picture (eastVacations(cacheRows, code) - the same merged list the panel, the ctx and the markers read), never the raw fetched list; loadEastTables hands the east_feed rows back; no cache -> no reset", () => {
+    const ls = src.indexOf("const loadEastTables = async (quiet) => {");
+    const lb = src.slice(ls, src.indexOf("\n  };", ls));
+    assert.ok(lb.includes("feedRows"), "loadEastTables must return the east_feed rows it loaded (feedRows)");
+    const rs = src.indexOf("const refreshEastFeed = async () => {");
+    const rb = src.slice(rs, src.indexOf("const saveEastOverride = async", rs));
+    assert.ok(rb.includes("const newRanges = eastVacations(cacheRows, code);"), "the stale list must be computed from the reloaded cache (eastVacations(cacheRows, code))");
+    assert.strictEqual(rb.includes("feed.vacations[code] || []"), false, "never against the raw fetched list (a kept-unseen range joined in the cache would reset the review on every refresh)");
+    assert.ok(rb.includes("feed.vacations && cacheRows &&"), "a failed cache reload resets nothing");
+  });
+  check("P15 fix: a quiet reset reports through the ONE refresh toast - saveEastVacationReview's failure toasts are conditioned on !quiet; the start-up 404 (migration not applied) is a console.warn + the panel banner, never a toast to every signed-in user", () => {
+    const ws = src.indexOf("const saveEastVacationReview = async");
+    const wb = src.slice(ws, src.indexOf("\n  };", ws));
+    assert.ok(wb.includes("if (!quiet) showToast(\"Couldn't save the East vacation review: \""), "the HTTP failure toast is silenced under quiet");
+    assert.ok(wb.includes("if (!quiet) showToast(\"No review row came back"), "the no-representation toast is silenced under quiet");
+    assert.ok(wb.includes("if (!quiet) showToast(\"Couldn't save the East vacation review - check your connection"), "the network failure toast is silenced under quiet");
+    assert.ok(wb.includes("if (!quiet) showToast(\"The East vacation reviews table is not on the database yet"), "the 'missing' refusal toast is silenced under quiet");
+    const ls = src.indexOf("const loadEastVacationReviews = async (quiet) => {");
+    const lb = src.slice(ls, src.indexOf("\n  };", ls));
+    assert.ok(lb.includes("if (!quiet && !missing) showToast("), "a 404 at start is not toasted (the panel banner names it; a save attempt refuses with a toast)");
+  });
+  check("P15 fix: public mode draws no East-vacation marker, legend, title or strip item (the reviews are never loaded there, so every state would read 'unreviewed'); the strip item renders for the scheduler and for the person with the East code only (never a dead end for another surgeon or the viewer)", () => {
+    const ps = src.indexOf("const eastVacPeople = useMemo(() => {");
+    const pb = src.slice(ps, src.indexOf("const eastVacById = useMemo", ps));
+    assert.ok(pb.includes("if (isPublicMode) return out;"), "eastVacPeople is empty in public mode");
+    assert.ok(pb.includes("eastVacationReviewRows, todayStr, isPublicMode]"), "the memo depends on isPublicMode");
+    assert.ok(src.includes("{!isPublicMode && (isScheduler ? eastVacPeople.length > 0 : !!eastVacById[mySurgeon]) && ("), "the strip item's render condition");
+  });
+  check("P15 fix: the calendar marker is per DAY from the rules ctx when it is available - unreviewed / away from P.eastVacationDays, home from P.eastClear, a home day the feed says busy carries feedBusy (the feed wins), a Silvis time_off day inside a range carries no East marker - and falls back to the range state without a ctx", () => {
+    const ms = src.indexOf("const eastVacByDay = useMemo(() => {");
+    const mb = src.slice(ms, src.indexOf("\n  }, [", ms) + 60);
+    assert.ok(ms > 0, "eastVacByDay memo missing");
+    assert.ok(mb.includes("P.eastVacationDays[d]"), "unreviewed / away days come from P.eastVacationDays");
+    assert.ok(mb.includes("P.eastClear.has(d)"), "home days come from P.eastClear");
+    assert.ok(mb.includes("feedBusy: true"), "a home day the feed says busy is flagged");
+    assert.ok(mb.includes("P.vacation.has(d)"), "a Silvis time_off day inside the range: no East marker (the Silvis dot stands, as the day editor shows no East line)");
+    assert.ok(mb.includes("[eastVacPeople, gridDays, rulesCtx]"), "the memo depends on the rules ctx");
+    assert.ok(src.includes('data-eastvac-feedbusy={m.feedBusy ? "1" : undefined}'), "the cell marker carries the feed-busy flag");
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

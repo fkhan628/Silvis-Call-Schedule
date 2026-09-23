@@ -181,6 +181,35 @@
 //     empty in index-source.html, app-styles.js, manifest.json, config.js
 //     and helpers.js (the share page / printable CSS); the .ics pill buttons,
 //     the active-tab label and the dark Fairness bar fill are measured too
+//   - Prompt 15 part 3 (East vacations, 9/23): the harness overlays THREE FAK
+//     ranges (2027-04/05, Tue-Fri each) on the newest cached east_feed row
+//     (every live data.vacations list stripped first, so the picture does not
+//     depend on what Faraz has refreshed), serves east_vacation_reviews from an
+//     in-harness store seeded with one 'away' and one 'home' row (the third
+//     range = unreviewed) and answers the mocked Davenport time_off with the
+//     same three rows (the Refresh above resets nothing - asserted: no
+//     east_vacation_reviews DELETE). Then: the Setup ->
+//     East feed panel lists the three ranges with the unreviewed / away / home
+//     control (pressed = state, >= 32px); unreviewed -> away is ONE POST
+//     ...east_vacation_reviews?on_conflict=person_id,start,end (merge-duplicates
+//     + representation, decided_by s1) + audit eastvac.review and NO time_off
+//     write; back to unreviewed is ONE DELETE by the exact triple (representation
+//     counted) + audit reset; away -> home saves the review only (no call_offers
+//     write: the Prompt 14 hook is a no-op tonight); the conflicts list renders;
+//     the panel is screenshotted with one range in each state in both themes at
+//     desktop and 390 px (eastvac-panel*.png; dark: navy body, active segment
+//     white on its tone); the calendar shows a dashed / hollow / filled diamond
+//     on the three days and NO Silvis dot; the day editor's East line carries the
+//     state and Khan's primary reason reads 'on vacation (East vacation,
+//     unreviewed ...)', while on the home Tuesday he is eligible (Tue lifted); the
+//     coverage strip reads 'unreviewed East vacations: 1 (Khan)' and opens Setup
+//     -> East feed (the card's collapse flag set to '0' first, so the click is
+//     what opens it); My schedule and the Time off view list the same three
+//     decisions (mine-eastvac.png). Fix round: a Refresh whose mocked Davenport
+//     answer moved one range and dropped another DELETEs the two old review rows
+//     by their exact triples (+ audit eastvac.review reset, reason changed /
+//     removed), names both in the refresh toast and keeps the unchanged range's
+//     row; the panel then lists the moved range unreviewed.
 // Exit code 1 on any failure.
 //
 // Determinism (finding removal-03): React / ReactDOM / the Supabase SDK are
@@ -272,6 +301,18 @@ let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_b
 const EAST_HOST = "xqongyahdnkozqunpwmu.supabase.co";
 const EAST_WEEK = { week_monday: "2026-10-05", data: { dayCall: "s6", nights: { mon: "s1", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" }, off: [], isBackup: false, dayCallOverrides: {} } };
 const EAST_BLOB = { surgeons: [{ id: "s6", name: "FAK" }, { id: "s1", name: "AAA" }] };
+// Prompt 15 part 3: three FAK vacation ranges (Tue-Fri, far from every other pin: the clean time-off range is
+// 2027-03-02..03, the Generate presets end in 2026) - unreviewed / away / home in that order - overlaid on the
+// newest cached east_feed row, answered by the mocked Davenport time_off (person s6 = FAK), and reviewed through
+// the in-harness east_vacation_reviews store below (seeded: away for [1], home for [2]; [0] has no row).
+const EASTVAC_RANGES = [{ start: "2027-04-06", end: "2027-04-09" }, { start: "2027-04-20", end: "2027-04-23" }, { start: "2027-05-04", end: "2027-05-07" }];
+const eastVacReviewStore = [
+  { id: "fixture-eastvac-1", person_id: "s1", start: EASTVAC_RANGES[1].start, end: EASTVAC_RANGES[1].end, decision: "away", decided_at: "2026-09-23T04:00:00Z", decided_by: "s1" },
+  { id: "fixture-eastvac-2", person_id: "s1", start: EASTVAC_RANGES[2].start, end: EASTVAC_RANGES[2].end, decision: "home", decided_at: "2026-09-23T04:00:00Z", decided_by: "s1" },
+];
+// What Davenport currently says (the mocked time_off AND the east_feed overlay the reload reads): the fix round's
+// refresh-reset step swaps this list for one with a moved and a missing range, then restores it.
+let eastVacFeed = EASTVAC_RANGES;
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 const FAKE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
 // The same session, expired an hour ago (datalayer-001: an authenticated-only read must be SKIPPED, not degraded to anon).
@@ -478,6 +519,9 @@ await context.route((url) => url.hostname === EAST_HOST, async (route) => {
   if (route.request().method() !== "GET") return route.fulfill({ status: 405, contentType: "application/json", body: "[]" });
   if (url.pathname.startsWith("/rest/v1/schedule_weeks")) return json([EAST_WEEK]);
   if (url.pathname.startsWith("/rest/v1/call_schedule_data")) return json([{ id: "main", data: EAST_BLOB }]);
+  // Prompt 15: the Davenport time_off read (kind vacation, FAK = s6 there) answers the same three ranges the
+  // harness overlays on the cache, so a Refresh keeps every review (nothing changed, nothing removed).
+  if (url.pathname.startsWith("/rest/v1/time_off")) return json(eastVacFeed.map((r, i) => ({ id: "dav-timeoff-" + (i + 1), person_id: "s6", kind: "vacation", start_date: r.start, end_date: r.end })));
   return json([]);
 });
 const page = await context.newPage();
@@ -606,6 +650,33 @@ const routeSupabase = async (route) => {
     claimedDays[b.p_day] = { ...cur, [col]: "s1", source: "claim", updated_by: "s1", updated_at: new Date().toISOString() };
     return json(200, { ok: true, day: b.p_day, role: b.p_role, person_id: "s1", version: 2 });
   }
+  // Prompt 15 part 3: east_vacation_reviews is authenticated-read only (an anon passthrough would answer
+  // 200 + [] and every range would read as unreviewed), so the harness serves the store: GET = the rows,
+  // POST ?on_conflict=person_id,start,end = upsert (the representation is the merged row, like PostgREST),
+  // DELETE ?person_id=eq.&start=eq.&end=eq. = the removed rows as the representation. Writes are recorded.
+  if (url.pathname.startsWith("/rest/v1/east_vacation_reviews")) {
+    if (method === "GET") return json(200, eastVacReviewStore.slice().sort((a, b) => a.start < b.start ? -1 : 1));
+    const body = req.postData() || "";
+    writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+    const q = (k) => (url.searchParams.get(k) || "").replace(/^eq\./, "");
+    if (method === "POST") {
+      let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+      const rows = (Array.isArray(b) ? b : [b]).map(r => {
+        const i = eastVacReviewStore.findIndex(x => x.person_id === r.person_id && x.start === r.start && x.end === r.end);
+        if (i >= 0 && /merge-duplicates/.test(req.headers()["prefer"] || "")) { Object.assign(eastVacReviewStore[i], r); return eastVacReviewStore[i]; }
+        if (i >= 0) return null; // a duplicate without merge-duplicates would be a 409 in PostgREST
+        const row = { id: crypto.randomUUID(), decided_at: new Date().toISOString(), ...r }; eastVacReviewStore.push(row); return row;
+      });
+      if (rows.some(r => r === null)) return json(409, { code: "23505", message: "duplicate key value violates unique constraint east_vacation_reviews_person_id_start_end_key" });
+      return json(201, rows);
+    }
+    if (method === "DELETE") {
+      const gone = eastVacReviewStore.filter(x => (!q("person_id") || x.person_id === q("person_id")) && (!q("start") || x.start === q("start")) && (!q("end") || x.end === q("end")));
+      gone.forEach(g => eastVacReviewStore.splice(eastVacReviewStore.indexOf(g), 1));
+      return json(200, gone);
+    }
+    return json(200, []);
+  }
   if (method === "POST" || method === "PATCH" || method === "DELETE" || method === "PUT") {
     const body = req.postData() || "";
     // Harness switch (Slice E): make the snapshot insert FAIL so the
@@ -686,6 +757,22 @@ const routeSupabase = async (route) => {
   }
   const fx = fixtureAnswer(url);
   if (fx) return json(200, fx);
+  // Prompt 15 part 3: the East feed cache stays live, but its vacation lists are the harness's: every row's
+  // data.vacations is stripped and the newest cached week hosts the three FAK fixture ranges (the ride-on host
+  // rule of east-feed.js planVacationCache puts a range beyond the published weeks on the latest cached week).
+  if (method === "GET" && url.pathname === "/rest/v1/east_feed") {
+    const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+    let rows = await res.json().catch(() => []);
+    if (!Array.isArray(rows)) rows = [];
+    const published = rows.filter(r => r && r.data && r.data.isForecast !== true).map(r => r.week_monday).sort();
+    const host = published[published.length - 1] || null;
+    return json(200, rows.map(r => {
+      if (!r || !r.data || typeof r.data !== "object") return r;
+      const data = { ...r.data }; delete data.vacations;
+      if (r.week_monday === host) data.vacations = eastVacFeed.map(x => ({ code: "FAK", start: x.start, end: x.end }));
+      return { ...r, data };
+    }));
+  }
   // Anon READ passthrough: the fake JWT would be rejected by the real project,
   // so swap it for the anon key (what dbReadHeaders does for an expired token).
   const headers = { ...req.headers() };
@@ -2887,6 +2974,12 @@ try {
         else if (!/1 forecast row\(s\) inside the published coverage deleted/.test((refreshAudit2 && refreshAudit2.detail && refreshAudit2.detail.summary) || "")) fail("East refresh (C.2): the audit summary does not name the deleted count: " + JSON.stringify(refreshAudit2 && refreshAudit2.detail && refreshAudit2.detail.summary));
         else if (!/1 forecast row\(s\)/.test(txt2)) fail("East refresh (C.2): the success toast does not say how many forecast rows were deleted: " + txt2.slice(0, 200));
         else ok("East refresh (C.2): DELETE /rest/v1/east_forecast?week_monday=gte.2026-10-05&week_monday=lte.2026-10-11 (return=representation) after the upsert; audit detail forecastRowsDeleted 1 (counted from the representation); audit summary + toast name the count");
+        // Prompt 15 (fix round): the mocked Davenport time_off answered the same three ranges the cache overlay carries and
+        // both review rows (away / home) match them exactly -> the refresh resets NOTHING: no east_vacation_reviews DELETE,
+        // no eastvac.review audit, no 'reset' word in the toast (the moved / removed case is driven further down).
+        const evDel = writesSince(before2, "/rest/v1/east_vacation_reviews").filter(w => w.method === "DELETE");
+        if (evDel.length || auditSince(before2, "eastvac.review") || /East vacation review\(s\) reset/.test(txt2)) fail("East refresh (P15): an unchanged Davenport range must keep its review - saw " + evDel.length + " east_vacation_reviews DELETE(s), audit " + JSON.stringify(auditSince(before2, "eastvac.review")) + ", toast reset word " + /East vacation review\(s\) reset/.test(txt2));
+        else ok("East refresh (P15): both review rows match unchanged ranges - no east_vacation_reviews DELETE, no eastvac.review audit, no reset word in the toast");
         // Prompt 12 C.4: the conflict report over the published schedule lives in the card.
         const conflicts = await page.$eval("[data-testid=east-conflicts]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => null);
         if (conflicts === null) fail("East card (C.4): no [data-testid=east-conflicts] conflict report");
@@ -2894,6 +2987,202 @@ try {
         else ok("East card (C.4): conflicts with the published schedule: " + (conflicts === "none" ? "none" : conflicts.slice(0, 120)));
       }
     }
+
+    // ---- Prompt 15 part 3 (9/23): East vacations - the panel, the write path, the markers, the strip, My schedule, Time off ----
+    // Fixture: see EASTVAC_RANGES / eastVacReviewStore and the east_feed overlay in routeSupabase. The Refresh above
+    // answered the same three ranges from the mocked Davenport time_off, so every review is still in place here.
+    try {
+      const EV = EASTVAC_RANGES;
+      const want = [["unreviewed", EV[0]], ["away", EV[1]], ["home", EV[2]]];
+      await page.click('button[data-tab="setup"]');
+      await openCard("setup_east");
+      await page.waitForSelector("[data-testid=eastvac-list]", { timeout: 8000 });
+      const readRanges = (listSel) => page.$$eval(`${listSel} [data-testid^=eastvac-range-]`, els => els.map(e => ({ start: e.getAttribute("data-start"), end: e.getAttribute("data-end"), state: e.getAttribute("data-state"), buttons: Array.from(e.querySelectorAll("[data-testid^=eastvac-set-]")).map(b => ({ st: b.getAttribute("data-testid").slice("eastvac-set-".length), pressed: b.getAttribute("aria-pressed"), h: b.getBoundingClientRect().height })) })));
+      const listOk = (rows) => rows.length === 3 && want.every(([st, r]) => (rows.find(x => x.start === r.start && x.end === r.end) || {}).state === st);
+      const rs = await readRanges("[data-testid=eastvac-list]");
+      const revState = await page.$eval("[data-testid=eastvac-review-state]", el => el.getAttribute("data-state"));
+      if (!listOk(rs)) fail("East vacations panel: expected the three fixture ranges as unreviewed / away / home, got " + JSON.stringify(rs.map(x => x.start + ".." + x.end + " " + x.state)));
+      else if (revState !== "ok") fail("East vacations panel: review state is '" + revState + "', expected ok (the harness serves the reviews table)");
+      else if (rs.some(x => x.buttons.length !== 3 || x.buttons.some(b => b.h < 32))) fail("East vacations panel: every range needs the three-way control (unreviewed / away / home), each >= 32px tall: " + JSON.stringify(rs.map(x => x.buttons)));
+      else if (rs.some(x => x.buttons.filter(b => b.pressed === "true").length !== 1 || x.buttons.find(b => b.pressed === "true").st !== x.state)) fail("East vacations panel: the pressed segment must be the range's state: " + JSON.stringify(rs));
+      else ok(`East vacations panel: 3 ranges - ${rs.map(x => x.start + ".." + x.end + " " + x.state).join(", ")} - each with the unreviewed / away / home control (pressed = state, >= 32px), reviews loaded`);
+      // unreviewed -> away: ONE upsert on the exact triple + audit, no time_off write
+      const row0 = `[data-testid=eastvac-list] [data-testid=eastvac-range-s1-${EV[0].start}]`;
+      const before = writes.length;
+      await page.click(`${row0} [data-testid=eastvac-set-away]`);
+      await waitFor(async () => (await page.getAttribute(row0, "data-state")) === "away", 8000);
+      await page.waitForTimeout(400);
+      const up = writesSince(before, "/rest/v1/east_vacation_reviews").filter(w => w.method === "POST");
+      const upBody = up[0] ? bodyOf(up[0]) : null;
+      const upAudit = auditSince(before, "eastvac.review");
+      const stAfter = await page.getAttribute(row0, "data-state");
+      if (up.length !== 1 || up[0].path !== "/rest/v1/east_vacation_reviews?on_conflict=person_id,start,end" || !/resolution=merge-duplicates/.test(up[0].prefer) || !/return=representation/.test(up[0].prefer)) fail("East vacations away: expected one POST /rest/v1/east_vacation_reviews?on_conflict=person_id,start,end (merge-duplicates + representation): " + JSON.stringify(up.map(w => w.method + " " + w.path + " [" + w.prefer + "]")));
+      else if (!upBody || upBody.person_id !== "s1" || upBody.start !== EV[0].start || upBody.end !== EV[0].end || upBody.decision !== "away" || !upBody.decided_at || upBody.decided_by !== "s1") fail("East vacations away: upsert body wrong: " + JSON.stringify(upBody));
+      else if (!upAudit || !upAudit.detail || upAudit.detail.decision !== "away" || upAudit.detail.start !== EV[0].start || upAudit.detail.end !== EV[0].end || upAudit.detail.person_id !== "s1") fail("East vacations away: audit eastvac.review { person_id s1, start, end, decision away } missing: " + JSON.stringify(upAudit));
+      else if (stAfter !== "away") fail("East vacations away: the row did not re-render as away (" + stAfter + ")");
+      else if (writesSince(before).some(w => /\/rest\/v1\/time_off/.test(w.path))) fail("East vacations away: a time_off write went out - a derived vacation must never write time_off rows");
+      else if (!writesSince(before).every(w => noAddress(w.body))) fail("East vacations away: a write body carries an email address");
+      else ok(`East vacations: ${EV[0].start}..${EV[0].end} unreviewed -> away = POST ...east_vacation_reviews?on_conflict=person_id,start,end { s1, decision away, decided_by s1 } (merge-duplicates + representation) + audit eastvac.review; row reads away; no time_off write`);
+      // back to unreviewed: ONE delete by the exact triple, representation counted, audit reset
+      const before2 = writes.length;
+      await page.click(`${row0} [data-testid=eastvac-set-unreviewed]`);
+      await waitFor(async () => (await page.getAttribute(row0, "data-state")) === "unreviewed", 8000);
+      await page.waitForTimeout(400);
+      const del = writesSince(before2, "/rest/v1/east_vacation_reviews").filter(w => w.method === "DELETE");
+      const delAudit = auditSince(before2, "eastvac.review");
+      if (del.length !== 1 || del[0].path !== `/rest/v1/east_vacation_reviews?person_id=eq.s1&start=eq.${EV[0].start}&end=eq.${EV[0].end}` || !/return=representation/.test(del[0].prefer)) fail("East vacations reset: expected one DELETE by the exact (person_id, start, end) with return=representation: " + JSON.stringify(del.map(w => w.method + " " + w.path + " [" + w.prefer + "]")));
+      else if (!delAudit || !delAudit.detail || delAudit.detail.decision !== "reset" || delAudit.detail.removed !== 1) fail("East vacations reset: audit eastvac.review { decision reset, removed 1 } missing: " + JSON.stringify(delAudit));
+      else if ((await page.getAttribute(row0, "data-state")) !== "unreviewed") fail("East vacations reset: the row did not return to unreviewed");
+      else ok(`East vacations: back to unreviewed = DELETE ...?person_id=eq.s1&start=eq.${EV[0].start}&end=eq.${EV[0].end} (representation counted: removed 1) + audit eastvac.review reset`);
+      // away -> home saves the review only: the Prompt 14 'paint as either offers' hook is a no-op (no call_offers write); then back to away
+      const row1 = `[data-testid=eastvac-list] [data-testid=eastvac-range-s1-${EV[1].start}]`;
+      const before3 = writes.length;
+      await page.click(`${row1} [data-testid=eastvac-set-home]`);
+      await waitFor(async () => (await page.getAttribute(row1, "data-state")) === "home", 8000);
+      await page.waitForTimeout(300);
+      const homeWrites = writesSince(before3).filter(w => !/\/rest\/v1\/audit_log/.test(w.path));
+      if (homeWrites.length !== 1 || !/\/rest\/v1\/east_vacation_reviews/.test(homeWrites[0].path) || writesSince(before3).some(w => /call_offers/.test(w.path))) fail("East vacations home: expected exactly one east_vacation_reviews write and NO call_offers write (the Prompt 14 hook is a no-op tonight): " + JSON.stringify(homeWrites.map(w => w.method + " " + w.path)));
+      else ok("East vacations: away -> home saves the review only - no call_offers write (Prompt 14's painter hook is a documented no-op)");
+      await page.click(`${row1} [data-testid=eastvac-set-away]`);
+      await waitFor(async () => (await page.getAttribute(row1, "data-state")) === "away", 8000);
+      await page.waitForTimeout(300);
+      const evc = await page.$eval("[data-testid=eastvac-conflicts]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => null);
+      if (evc === null) fail("East vacations panel: no [data-testid=eastvac-conflicts] list (the time_off trigger mirrored for derived ranges)");
+      else if (!(evc === "none" || /\d{4}-\d{2}-\d{2} (primary|backup) /.test(evc))) fail("East vacations panel: the conflicts list is neither 'none' nor day/role rows: " + evc.slice(0, 160));
+      else ok("East vacations panel: published days inside unreviewed/away ranges: " + (evc === "none" ? "none" : evc.slice(0, 120)));
+      // screenshots: the panel with one range in each state - light + dark, desktop + 390 px
+      const panel = page.locator("[data-testid=eastvac-card]");
+      const shotPanel = async (name) => { await panel.scrollIntoViewIfNeeded(); await page.waitForTimeout(150); await panel.screenshot({ path: path.join(OUT, name) }); ok("screenshot test/ui/out/" + name); };
+      await shotPanel("eastvac-panel.png");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(300);
+      const m390 = await page.evaluate(() => { const card = document.querySelector("[data-testid=eastvac-card]"); const btns = Array.from(card.querySelectorAll("[data-testid^=eastvac-set-]")); return { pageW: document.documentElement.scrollWidth, minBtn: Math.min(...btns.map(b => b.getBoundingClientRect().height)), offscreen: btns.filter(b => b.getBoundingClientRect().right > 390 || b.getBoundingClientRect().left < 0).length }; });
+      if (m390.pageW > 392 || m390.offscreen || m390.minBtn < 32) fail("East vacations panel 390px: the page scrolls sideways or a control is off screen / short: " + JSON.stringify(m390)); else ok(`East vacations panel 390px: no horizontal page scroll (${m390.pageW}), every control on screen and >= 32px (${m390.minBtn})`);
+      await shotPanel("eastvac-panel-390.png");
+      await page.setViewportSize({ width: 1180, height: 900 });
+      const setTheme = async (dark) => { await page.click('button[data-tab="settings"]'); await page.click(`button:has-text('${dark ? "Dark" : "Light"}')`); await page.click('button[data-tab="setup"]'); await openCard("setup_east"); await page.waitForSelector("[data-testid=eastvac-list]", { timeout: 8000 }); await page.waitForTimeout(300); };
+      await setTheme(true);
+      const darkSeg = await page.evaluate(() => {
+        const on = document.querySelector("[data-testid=eastvac-card] [data-testid^=eastvac-set-][aria-pressed=true]"); const cs = on ? getComputedStyle(on) : null;
+        // the three row markers: each outline must be visible on its row (fix round: the 'away' diamond was drawn in the light text colour and vanished on the dark card)
+        const lum = (rgb) => { const m = /rgba?\((\d+), (\d+), (\d+)/.exec(rgb || ""); if (!m) return null; const c = [m[1], m[2], m[3]].map(v => { v = Number(v) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+        const marks = Array.from(document.querySelectorAll("[data-testid=eastvac-card] [data-testid=eastvac-row-mark]")).map(m => { const row = m.closest("[data-testid^=eastvac-range-]"); const a = lum(getComputedStyle(m).borderTopColor), b = lum(getComputedStyle(row).backgroundColor); return { state: row.getAttribute("data-state"), ratio: a === null || b === null ? null : Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100 }; });
+        return { color: cs ? cs.color : null, bg: cs ? (cs.backgroundImage !== "none" ? cs.backgroundImage : cs.backgroundColor) : null, body: getComputedStyle(document.body).backgroundColor, marks };
+      });
+      const dimMarks = darkSeg.marks.filter(m => m.ratio === null || m.ratio < 3);
+      if (!/rgb\(11, 26, 51\)/.test(darkSeg.body) || darkSeg.color !== "rgb(255, 255, 255)" || !darkSeg.bg || /rgba\(0, 0, 0, 0\)/.test(darkSeg.bg)) fail("East vacations panel dark: body " + darkSeg.body + ", active segment text " + darkSeg.color + " on " + darkSeg.bg + " (expected the navy page and white text on the segment's tone)");
+      else if (darkSeg.marks.length !== 3 || dimMarks.length) fail("East vacations panel dark: a row marker's outline is below 3:1 on its row: " + JSON.stringify(darkSeg.marks));
+      else ok("East vacations panel dark: navy body, active segment white on its tone (" + String(darkSeg.bg).slice(0, 60) + "), row markers " + darkSeg.marks.map(m => m.state + " " + m.ratio + ":1").join(", "));
+      await shotPanel("eastvac-panel-dark.png");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(300);
+      await shotPanel("eastvac-panel-390-dark.png");
+      await page.setViewportSize({ width: 1180, height: 900 });
+      await setTheme(false);
+      // calendar markers on the three first days (one per state): a diamond - dashed / hollow / filled - and no Silvis dot
+      const markerOn = async (d) => { const [y, m] = d.split("-"); await showMonth(Number(y), Number(m) - 1); return page.$eval(`[data-day="${d}"]`, el => { const mk = el.querySelector("[data-eastvac]"); const cs = mk ? getComputedStyle(mk) : null; return { state: mk ? mk.getAttribute("data-eastvac-state") : null, who: mk ? mk.getAttribute("data-eastvac") : null, border: cs ? cs.borderTopStyle : null, bg: cs ? cs.backgroundColor : null, transform: cs ? cs.transform : null, dot: !!el.querySelector("[data-vac=s1]") }; }); };
+      const mk = {};
+      for (const [st, r] of want) mk[st] = await markerOn(r.start);
+      if (want.some(([st]) => !mk[st] || mk[st].state !== st || mk[st].who !== "s1")) fail("calendar East-vacation markers: expected unreviewed / away / home on the three fixture days for s1, got " + JSON.stringify(mk));
+      else if (mk.unreviewed.border !== "dashed" || mk.away.border !== "solid" || mk.away.bg !== "rgba(0, 0, 0, 0)" || mk.home.bg === "rgba(0, 0, 0, 0)" || !/matrix/.test(mk.home.transform)) fail("calendar East-vacation markers: unreviewed = dashed, away = hollow, home = filled, all rotated diamonds: " + JSON.stringify(mk));
+      else if (Object.values(mk).some(x => x.dot)) fail("calendar East-vacation markers: a Silvis vacation dot for s1 sits on a fixture day (a derived vacation must not write time_off)");
+      else ok(`calendar: East-vacation markers ${want.map(([st, r]) => r.start + " " + st).join(", ")} - dashed / hollow / filled diamonds, no Silvis dot`);
+      await showMonth(2027, 3);
+      await page.screenshot({ path: path.join(OUT, "calendar-eastvac-2027-04.png"), fullPage: false });
+      ok("screenshot test/ui/out/calendar-eastvac-2027-04.png");
+      // the day editor: the East line with the state; Khan's primary reason glossed; on the home Tuesday he is eligible (Tue lifted)
+      await page.click(`[data-day="${EV[0].start}"]`);
+      await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      await page.waitForTimeout(300);
+      const evLine = await page.$eval("[data-testid=day-editor] [data-testid=east-status][data-eastvac]", el => ({ st: el.getAttribute("data-eastvac"), text: el.textContent.replace(/\s+/g, " ").trim() })).catch(() => null);
+      const pReasons = await page.$eval("[data-testid=editor-primary-reasons]", el => el.textContent.replace(/\s+/g, " ")).catch(() => "");
+      const khanOpt = await page.$eval('[data-testid=editor-primary] option[value="s1"]', el => ({ eligible: el.getAttribute("data-eligible"), label: el.textContent })).catch(() => null);
+      if (!evLine || evLine.st !== "unreviewed" || !/Khan: East \(Davenport\) vacation, unreviewed - treated as a Silvis vacation/.test(evLine.text)) fail("day editor " + EV[0].start + ": no East-vacation line with state unreviewed: " + JSON.stringify(evLine));
+      else if (!khanOpt || khanOpt.eligible !== "false" || !/time-off:/.test(khanOpt.label)) fail("day editor " + EV[0].start + ": Khan should be ineligible for primary with a time-off reason: " + JSON.stringify(khanOpt));
+      else if (!/Khan - on vacation \(East vacation, unreviewed/.test(pReasons)) fail("day editor " + EV[0].start + ": Khan's primary reason should read 'on vacation (East vacation, unreviewed ...)': " + pReasons.slice(0, 200));
+      else ok(`day editor ${EV[0].start}: East line '${evLine.text.slice(0, 96)}'; Khan ineligible (${khanOpt.label.trim()}) with the East-vacation gloss`);
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
+      await showMonth(2027, 4);
+      await page.click(`[data-day="${EV[2].start}"]`);
+      await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      await page.waitForTimeout(300);
+      const homeLine = await page.$eval("[data-testid=day-editor] [data-testid=east-status][data-eastvac]", el => ({ st: el.getAttribute("data-eastvac"), text: el.textContent.replace(/\s+/g, " ").trim() })).catch(() => null);
+      const khanHome = await page.$eval('[data-testid=editor-primary] option[value="s1"]', el => ({ eligible: el.getAttribute("data-eligible"), label: el.textContent })).catch(() => null);
+      const dowHome = new Date(EV[2].start + "T12:00:00Z").getUTCDay();
+      if (!homeLine || homeLine.st !== "home" || !/Khan: East \(Davenport\) vacation, home - available at Silvis/.test(homeLine.text)) fail("day editor " + EV[2].start + ": no East-vacation line with state home: " + JSON.stringify(homeLine));
+      else if (!khanHome || khanHome.eligible !== "true") fail("day editor " + EV[2].start + " (a " + ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dowHome] + "): Khan should be ELIGIBLE for primary on a home day (the Tue/Thu rule lifted): " + JSON.stringify(khanHome));
+      else ok(`day editor ${EV[2].start} (${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dowHome]}): East line '${homeLine.text.slice(0, 80)}'; Khan eligible for primary (${khanHome.label.trim()})`);
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
+      // the coverage strip: 'unreviewed East vacations: 1 (Khan)' - the one range without a row - opens Setup > East feed
+      const stripCount = await page.getAttribute("[data-testid=cov-eastvac-unreviewed]", "data-count").catch(() => null);
+      const stripText = await page.$eval("[data-testid=cov-eastvac-unreviewed]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
+      if (stripCount !== "1" || !/unreviewed East vacations: 1 \(Khan\)/.test(stripText)) fail(`coverage strip: 'unreviewed East vacations' should read 1 (Khan) - the one fixture range without a review row: count '${stripCount}', text '${stripText}'`);
+      else {
+        // fix round: openCard above left the card open (its flag persisted as '1'), so the click has to be what opens
+        // it - collapse the flag first (Collapsible reads it when the Setup view mounts) and assert it flips to '1'.
+        await page.evaluate(() => { try { localStorage.setItem("silvis_collapse_setup_east", "0"); } catch (e) {} });
+        const flagBefore = await page.evaluate(() => { try { return localStorage.getItem("silvis_collapse_setup_east"); } catch (e) { return null; } });
+        await page.click("[data-testid=cov-eastvac-unreviewed]");
+        await page.waitForTimeout(500);
+        const opened = await page.getAttribute("[data-testid=card-setup_east]", "data-open").catch(() => null);
+        const listThere = await page.$("[data-testid=eastvac-list]");
+        if (flagBefore !== "0" || opened !== "1" || !listThere) fail("coverage strip: the count did not open Setup > East feed with the panel (collapse flag before the click '" + flagBefore + "', card-setup_east data-open=" + opened + ")"); else ok("coverage strip: 'unreviewed East vacations: 1 (Khan)' opens Setup > East feed with the panel open (the card's collapse flag was '0' before the click)");
+      }
+      // My schedule and the Time off view list the same three decisions
+      await page.click('button[data-tab="myschedule"]');
+      await page.waitForSelector("[data-testid=mine-eastvac]", { timeout: 8000 });
+      const mineRs = await readRanges("[data-testid=mine-eastvac-list]");
+      if (!listOk(mineRs)) fail("My schedule: the East vacation list should show the 3 ranges with their decisions: " + JSON.stringify(mineRs.map(x => x.start + " " + x.state))); else ok("My schedule: own East (Davenport) vacations listed with decisions - " + mineRs.map(x => x.start + " " + x.state).join(", "));
+      await page.screenshot({ path: path.join(OUT, "mine-eastvac.png"), fullPage: true });
+      ok("screenshot test/ui/out/mine-eastvac.png");
+      await page.click('button[data-tab="timeoff"]');
+      await page.waitForSelector("[data-testid=eastvac-timeoff]", { timeout: 8000 });
+      const toRs = await readRanges("[data-testid=eastvac-timeoff-list]");
+      if (!listOk(toRs)) fail("Time off view: the East vacation list should show the 3 ranges with their decisions: " + JSON.stringify(toRs.map(x => x.start + " " + x.state))); else ok("Time off view: East (Davenport) vacations listed with the same three decisions");
+      const toText = await page.$eval("[data-testid=eastvac-timeoff]", el => el.innerText);
+      if (!noAddress(toText)) fail("Time off view: the East vacation card renders an email address");
+      // ---- Refresh resets (fix round, E3 review finding 1): a Davenport range that MOVED or DISAPPEARED deletes the
+      //      person's review row through the same write path (DELETE by the exact old triple, audit eastvac.review reset with
+      //      the reason changed / removed) and the ONE refresh toast names both; an unchanged range keeps its row. Fixture:
+      //      EV[0] gets an away row first (the row that must survive), then the mocked Davenport time_off and the east_feed
+      //      overlay the reload reads answer EV[0] unchanged, EV[1] ending one day later (changed) and EV[2] gone (removed).
+      {
+        await page.click('button[data-tab="setup"]');
+        await openCard("setup_east");
+        await page.waitForSelector("[data-testid=eastvac-list]", { timeout: 8000 });
+        await page.click(`${row0} [data-testid=eastvac-set-away]`);
+        await waitFor(async () => (await page.getAttribute(row0, "data-state")) === "away", 8000);
+        await page.waitForTimeout(300);
+        const md = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
+        const moved = { start: EV[1].start, end: "2027-04-24" };
+        eastVacFeed = [EV[0], moved];
+        const beforeR = writes.length;
+        await page.click("[data-testid=east-refresh]");
+        await waitFor(() => !!auditSince(beforeR, "east.refresh"), 20000);
+        await page.waitForTimeout(600);
+        const dels = writesSince(beforeR, "/rest/v1/east_vacation_reviews").filter(w => w.method === "DELETE").map(w => w.path);
+        const resetAudits = writesSince(beforeR, "/rest/v1/audit_log").map(bodyOf).filter(b => b && b.action === "eastvac.review");
+        const refreshAudit = auditSince(beforeR, "east.refresh");
+        const toastR = await bodyText();
+        const wantDel = [`/rest/v1/east_vacation_reviews?person_id=eq.s1&start=eq.${EV[1].start}&end=eq.${EV[1].end}`, `/rest/v1/east_vacation_reviews?person_id=eq.s1&start=eq.${EV[2].start}&end=eq.${EV[2].end}`];
+        const wantToast = `East vacation review(s) reset: ${md(EV[1].start)}-${md(EV[1].end)} (was away; dates changed), ${md(EV[2].start)}-${md(EV[2].end)} (was home; removed from Davenport).`;
+        const keptRow = eastVacReviewStore.find(r => r.person_id === "s1" && r.start === EV[0].start && r.end === EV[0].end);
+        const afterRs = await readRanges("[data-testid=eastvac-list]");
+        const st = (s, e) => (afterRs.find(x => x.start === s && (!e || x.end === e)) || {}).state;
+        if (dels.length !== 2 || wantDel.some(p => dels.indexOf(p) < 0)) fail("East refresh reset: expected exactly two east_vacation_reviews DELETEs by the exact old triples (" + wantDel.join(" and ") + "), saw " + JSON.stringify(dels));
+        else if (!keptRow || keptRow.decision !== "away") fail("East refresh reset: the UNCHANGED range " + EV[0].start + ".." + EV[0].end + " must keep its away row - store has " + JSON.stringify(keptRow || null));
+        else if (resetAudits.length !== 2 || !resetAudits.some(a => a.detail && a.detail.decision === "reset" && a.detail.reason === "changed" && a.detail.start === EV[1].start && a.detail.end === EV[1].end && a.detail.removed === 1) || !resetAudits.some(a => a.detail && a.detail.decision === "reset" && a.detail.reason === "removed" && a.detail.start === EV[2].start && a.detail.end === EV[2].end && a.detail.removed === 1)) fail("East refresh reset: expected two audit eastvac.review rows { decision reset, reason changed / removed, removed 1 }: " + JSON.stringify(resetAudits.map(a => a.detail)));
+        else if (toastR.indexOf(wantToast) < 0) fail("East refresh reset: the refresh toast must name both resets - wanted '" + wantToast + "' in: " + (toastR.match(/East feed refreshed[^\n]*/) || [toastR.slice(0, 300)])[0]);
+        else if (!refreshAudit || !refreshAudit.detail || !Array.isArray(refreshAudit.detail.reviewResets) || refreshAudit.detail.reviewResets.length !== 2 || (refreshAudit.detail.reviewResetFailures || []).length) fail("East refresh reset: audit east.refresh detail.reviewResets should list the 2 resets (no failures): " + JSON.stringify(refreshAudit && refreshAudit.detail && { reviewResets: refreshAudit.detail.reviewResets, reviewResetFailures: refreshAudit.detail.reviewResetFailures }));
+        else if (afterRs.length !== 2 || st(EV[0].start, EV[0].end) !== "away" || st(moved.start, moved.end) !== "unreviewed") fail("East refresh reset: the panel should now list " + EV[0].start + " away and the moved range " + moved.start + ".." + moved.end + " unreviewed: " + JSON.stringify(afterRs.map(x => x.start + ".." + x.end + " " + x.state)));
+        else ok(`East refresh reset: ${EV[1].start}..${EV[1].end} moved + ${EV[2].start}..${EV[2].end} removed from Davenport -> 2 DELETEs by the exact old triples + 2 audit eastvac.review resets (changed / removed, removed 1 each); toast '${wantToast}'; the unchanged ${EV[0].start} range kept its away row; panel lists 2 ranges (away, moved unreviewed)`);
+        eastVacFeed = EASTVAC_RANGES; // restore for whatever follows (the app's cache picture follows on its next reload)
+      }
+      await page.click('button[data-tab="setup"]');
+      await page.waitForTimeout(300);
+    } catch (e) { fail("East vacations (Prompt 15 part 3) harness exception: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-eastvac.png"), fullPage: true }); } catch (e2) {} eastVacFeed = EASTVAC_RANGES; await page.setViewportSize({ width: 1180, height: 900 }).catch(() => {}); }
 
     // ---- Generate: the default range STARTS at the first open slot on or after today (Central) - Faraz 9/22
     //      late, Prompt 12 AB (decided 9/22 late; the wave-7 open question "the default start may change to the

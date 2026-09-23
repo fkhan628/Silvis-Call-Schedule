@@ -293,6 +293,16 @@ function CallSchedule() {
   const [eastForecastRows, setEastForecastRows] = useState([]);   // east_forecast: isForecast rows
   const [eastOverrideRows, setEastOverrideRows] = useState([]);   // east_overrides: per day/person busy true/false
   const [eastLoadState, setEastLoadState] = useState({ feed: "pending", forecast: "pending", overrides: "pending" });
+  // Prompt 15 part 3 (9/23): east_vacation_reviews rows ({ person_id, start, end,
+  // decision 'away' | 'home', decided_at, decided_by }) - the person's decision per
+  // exact Davenport vacation range (the ranges themselves live in the east_feed
+  // payload; eastVacations(rows, code)). Authenticated-read only: loaded through
+  // readAuthOnlyTable, so a stale session keeps the last list instead of adopting
+  // an RLS-empty answer. eastVacReviewState: pending | ok | skipped (no fresh
+  // token) | missing (HTTP 404 - the table is prepared, not applied yet) | failed.
+  const [eastVacationReviewRows, setEastVacationReviewRows] = useState([]);
+  const [eastVacReviewState, setEastVacReviewState] = useState("pending");
+  const [eastVacBusy, setEastVacBusy] = useState(null);           // "personId|start|end" while a review write is in flight
   // Davenport ids for our roster CODES (FAK is s6 there). Resolved from data,
   // never a literal id: the forecast rows record the id they were built for;
   // failing that the Davenport roster is read once, read-only, via east-feed.js.
@@ -909,17 +919,21 @@ function CallSchedule() {
   };
   // The three East tables, each in its own try: one failure cannot blank the
   // others, and a failed table keeps its previous rows (marked "failed").
+  // Returns { ok, feedRows }: feedRows = the east_feed rows just loaded (null when
+  // that read failed), so a caller that must act on the RELOADED cache in the same
+  // tick (refreshEastFeed's review resets) never reads a stale state closure.
   const loadEastTables = async (quiet) => {
     const one = async (table, order, set, key) => {
       try {
         const rows = await db.query(table, { order });
-        set(Array.isArray(rows) ? rows : []);
+        const list = Array.isArray(rows) ? rows : [];
+        set(list);
         setEastLoadState(s => ({ ...s, [key]: "ok" }));
-        return true;
+        return list;
       } catch (e) {
         console.warn(`${table} load failed`, e);
         setEastLoadState(s => ({ ...s, [key]: "failed" }));
-        return false;
+        return null;
       }
     };
     const r = await Promise.all([
@@ -927,8 +941,33 @@ function CallSchedule() {
       one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"),
       one("east_overrides", "day.asc", setEastOverrideRows, "overrides"),
     ]);
-    if (!quiet && r.some(x => !x)) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
-    return r.every(Boolean);
+    if (!quiet && r.some(x => x === null)) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
+    return { ok: r.every(x => x !== null), feedRows: r[0] };
+  };
+  // Prompt 15 part 3: the East vacation reviews (authenticated-only table). No
+  // fresh token -> not read (readAuthOnlyTable returns null; the current list is
+  // kept); an HTTP 404 means the migration is not applied yet - recorded as
+  // "missing" so the panel says so instead of showing a silent "unreviewed".
+  // Either way every range without a row reads as unreviewed (= away) - the
+  // conservative default rules.js applies.
+  const loadEastVacationReviews = async (quiet) => {
+    if (isPublicMode) return true;
+    try {
+      const rows = await readAuthOnlyTable("east_vacation_reviews", { order: "start.asc" });
+      if (rows === null) { setEastVacReviewState(s => s === "ok" ? s : "skipped"); return false; }
+      setEastVacationReviewRows(rows);
+      setEastVacReviewState("ok");
+      return true;
+    } catch (e) {
+      const missing = /HTTP 404\b/.test(String(e && e.message || e));
+      console.warn("east_vacation_reviews load failed" + (missing ? " - the table is not on the database yet (migration 2026-09-23 not applied)" : ""), e);
+      setEastVacReviewState(missing ? "missing" : "failed");
+      // Review fix (E3, 9/23): a 404 (deploy before the migration) is NOT toasted to every
+      // signed-in user at every start - the panel banner names it and a save attempt
+      // refuses with a toast; only a real read failure toasts here.
+      if (!quiet && !missing) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
+      return false;
+    }
   };
 
   // Days in [start, end] where the person is published (primary or backup),
@@ -1332,6 +1371,7 @@ function CallSchedule() {
       await loadTimeOff();
       await loadAvailability();
       await loadEastTables();
+      await loadEastVacationReviews();
       setLoaded(true);
       loadedAtRef.current = Date.now();
     })();
@@ -1397,7 +1437,7 @@ function CallSchedule() {
     const refreshAll = async () => {
       await Promise.allSettled([
         refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(),
-        loadTimeOff(true), loadAvailability(true), loadEastTables(true),
+        loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),
       ]);
     };
     refreshDaysRef.current = refreshDays;       // trade apply -> refetch the rows the function wrote
@@ -1735,11 +1775,23 @@ function CallSchedule() {
     const forecastAll = forecastFromFeedRows(eastForecastRows);
     const eastOverrides = overridesByPerson(eastOverrideRows);
     const eastBusyDays = {}, eastForecast = {}, eastDerived = [], eastMeta = {};
+    const eastVacationRanges = {}; // Prompt 15: { rosterId: [{ start, end }] } - the person's Davenport vacations from the cache, by CODE
     const forecastIds = []; // surgeons whose eastFeed.forecast is on - filled after the prune below
     let unresolved = false;
     surgeons.forEach(s => {
       const ef = (surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed) || null;
       if (!ef || !ef.enabled) return;
+      // Prompt 15 parts 2-3 (9/23): the person's East vacation ranges, read from the
+      // east_feed payload by roster CODE (eastVacations merges the per-week copies) and
+      // keyed by the ROSTER id - rules.js derives the vacation / eastClear days from them
+      // under the review rows (eastVacationReviews). ONE predicate (eastVacationPerson:
+      // the East feature reads busy days, a roster code, not an outside surgeon) decides
+      // this input, eastVacPeople and the refresh's vacationCodes, so the rules never
+      // derive a vacation the UI has no control for; an empty list is left out.
+      if (eastVacationPerson(s, ef) && typeof eastVacations === "function") {
+        const ranges = eastVacations(eastFeedRows, s.code);
+        if (ranges.length) eastVacationRanges[s.id] = ranges;
+      }
       const meta = { code: s.code, busyDays: false, derivedWeeks: false, forecast: false, eastId: null };
       if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {
         meta.busyDays = true;
@@ -1771,8 +1823,9 @@ function CallSchedule() {
       roster: surgeons, surgeonRules: surgeonRules || {}, groupRules: groupRules || {}, holidays: holidays || {},
       timeOffRows, availabilityRows, schedule,
       eastBusyDays, eastForecast, eastOverrides, eastDerived, eastFeedCoverage: coverage, eastMeta,
+      eastVacationRanges, eastVacationReviews: eastVacationReviewRows,
     };
-  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode]);
+  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode, eastVacationReviewRows]);
   const rulesCtxState = useMemo(() => safeBuildContext(ctxInputs), [ctxInputs]);
   const rulesCtx = rulesCtxState.ctx;
   // Prompt 12 C.4 (9/22): the East conflict report over the WHOLE schedule map
@@ -2034,7 +2087,7 @@ function CallSchedule() {
       // read eastVacations(eastFeedRows, code).
       const vacationCodes = surgeons.filter(s => {
         const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
-        return ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code;
+        return eastVacationPerson(s, ef);
       }).map(s => String(s.code).toUpperCase());
       let feed;
       try { feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes }); }
@@ -2086,7 +2139,40 @@ function CallSchedule() {
       const codes = { _source: "davenport" };
       (feed.roster || []).forEach(s => { if (s && s.name && s.id) codes[String(s.name).toUpperCase()] = s.id; });
       setEastIdByCode(codes);
-      await loadEastTables();
+      const reloaded = await loadEastTables();
+      const cacheRows = reloaded && Array.isArray(reloaded.feedRows) ? reloaded.feedRows : null;
+      // Prompt 15 parts 2-3 (9/23): a refreshed feed that CHANGED or REMOVED a range
+      // resets its review - the exact-match rule means the old row no longer matches
+      // anything, so helpers.derivedEastVacations lists it as stale (changed = it
+      // still overlaps a current range, removed = gone from Davenport), PER PERSON
+      // (roster id resolved from the code; another surgeon's rows are never touched).
+      // Each stale row is deleted through the normal write path (audit eastvac.review,
+      // decision reset, the reason) and named in the toast. Rows for ranges the
+      // time_off read could not see (end < from) are kept, exactly as the cache keeps
+      // those ranges; a failed time_off read resets nothing (the cache was kept).
+      // Review fix (E3, 9/23): the current ranges are read from the RELOADED cache
+      // (eastVacations(cacheRows, code) - the merged picture the panel, the ctx and the
+      // markers show), never from the raw fetched list: a kept-unseen cached range
+      // adjacent to a fetched one is joined in the cache, the review is saved on the
+      // joined range, and the raw list would have reset it on every refresh. A failed
+      // cache reload resets nothing.
+      const reviewResets = [], reviewResetFailures = [];
+      if (feed.vacations && cacheRows && typeof derivedEastVacations === "function" && typeof eastVacations === "function") {
+        for (const s of surgeons) {
+          const code = String(s.code || "").toUpperCase();
+          if (!code || vacationCodes.indexOf(code) < 0 || !Object.prototype.hasOwnProperty.call(feed.vacations, code)) continue;
+          const newRanges = eastVacations(cacheRows, code);
+          const stale = derivedEastVacations(newRanges, eastVacationReviewRows, s.id).stale.filter(st => st.review && suIsIso(st.review.end) && st.review.end >= fromMon);
+          for (const st of stale) {
+            const r = await saveEastVacationReview(s.id, { start: st.review.start, end: st.review.end }, "unreviewed", { quiet: true, reason: st.reason });
+            (r.ok ? reviewResets : reviewResetFailures).push({ person_id: s.id, start: st.review.start, end: st.review.end, reason: st.reason, decision: st.review.decision, error: r.ok ? undefined : r.error });
+          }
+        }
+      }
+      const resetText = (x) => `${fmtMD(x.start)}-${fmtMD(x.end)} (was ${x.decision}; ${x.reason === "changed" ? "dates changed" : "removed from Davenport"})`;
+      const resetWord = reviewResets.length || reviewResetFailures.length
+        ? ` East vacation review(s) reset: ${reviewResets.map(resetText).join(", ") || "none"}${reviewResetFailures.length ? "; could NOT reset " + reviewResetFailures.map(resetText).join(", ") + " - delete the row by hand" : ""}.`
+        : "";
       const pruneSummary = !publishedCoverage ? "forecast prune skipped (no published weeks)"
         : forecastRowsDeleted !== null ? forecastRowsDeleted + " forecast row(s) inside the published coverage deleted"
         : forecastCountUnknown ? "forecast rows inside the published coverage deleted, count unknown (no representation returned)"
@@ -2098,9 +2184,10 @@ function CallSchedule() {
         : feed.vacationsError ? "East time_off read FAILED - cached East vacations kept"
         : feed.vacations ? `${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo}${unresolvedWord}${rewrittenWord}`
         : `no East vacations read${unresolvedWord}`;
-      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}`,
+      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}`,
         { from: fromMon, to: toMon, weeks: weekRows.length, coverage: publishedCoverage, forecastRowsDeleted, forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null,
-          vacations: { codes: vacationCodes, ranges: vacationCount, to: feed.vacationsTo || null, rewrittenWeeks: rewrittenRows.length, unresolved: feed.vacationCodesUnresolved || [], error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null } });
+          vacations: { codes: vacationCodes, ranges: vacationCount, to: feed.vacationsTo || null, rewrittenWeeks: rewrittenRows.length, unresolved: feed.vacationCodesUnresolved || [], error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null },
+          reviewResets, reviewResetFailures });
       const pruneWord = !publishedCoverage ? ""
         : forecastRowsDeleted !== null ? ` ${forecastRowsDeleted} forecast row(s) for now-published weeks deleted.`
         : forecastCountUnknown ? ` Forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were deleted but the count is unknown (no representation returned) - check the forecast strip.`
@@ -2109,7 +2196,7 @@ function CallSchedule() {
         : feed.vacationsError ? ` East time off could NOT be read - the cached East vacations are kept (a failed read never means 'no vacations'): ${String(feed.vacationsError).slice(0, 120)}`
         : feed.vacations ? (plan.carriers ? ` ${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo} cached${unresolvedWord}${rewrittenWord}.` : ` ${vacationCount} East vacation range(s) read but NOT cached - no published week row to hold them.`)
         : ` No East vacations read${unresolvedWord}.`;
-      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}` : `East feed refreshed: Davenport has no published weeks in that window - the cached weeks are unchanged.${vacationWord}`, feed.vacationsError ? "error" : weekRows.length ? (forecastDeleteError ? "error" : "success") : "info");
+      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}` : `East feed refreshed: Davenport has no published weeks in that window - the cached weeks are unchanged.${vacationWord}${resetWord}`, feed.vacationsError || reviewResetFailures.length ? "error" : weekRows.length ? (forecastDeleteError ? "error" : "success") : "info");
     } catch (e) {
       // A rejected fetch (network drop, CORS, DNS) on the east_feed upsert, the
       // cache reload or the audit row must not escape as an unhandled rejection
@@ -2139,6 +2226,82 @@ function CallSchedule() {
       logAudit("east.override", `East override removed ${String(day).slice(0, 10)} ${nameOf(personId)}`, { day, person_id: personId, removed: true });
       showToast("Override removed.", "success");
     } catch (e) { console.warn("east_overrides delete error", e); showToast("Couldn't remove the override - check your connection.", "error"); }
+  };
+  // Prompt 15 part 2, the 'home' -> 'either' offers step: with Prompt 14 present a
+  // home decision offers to paint the range's days as `either` offers in one tap
+  // (a confirm sheet listing the dates; call_offers rows inserted the normal way).
+  // Prompt 14's painter is on another branch tonight, so this is a NO-OP that
+  // names the days in the console and returns pending; the review itself is
+  // saved either way. Never writes anything.
+  // TODO(Prompt 14 UI wave): open the offers painter's confirm sheet for
+  // range.start..range.end (brush 'either') and insert call_offers through its
+  // batch write + audit; keep the review save independent of the offer.
+  const offerEitherForHomeRange = (personId, range) => {
+    console.info("eastvac: " + nameOf(personId) + " marked " + range.start + ".." + range.end + " home - the 'paint these days as either offers' step arrives with Prompt 14's painter (no-op tonight; nothing written)");
+    return { ok: true, offered: 0, pending: "prompt-14" };
+  };
+  // Prompt 15 parts 2-3 (9/23): the ONE write path for East vacation reviews.
+  // decision 'away' | 'home' upserts the person's row for the EXACT range
+  // (unique person_id,start,end - the primary key is id, so on_conflict names the
+  // triple; merge-duplicates + return=representation, an empty representation is
+  // a refused save, never success); 'unreviewed' deletes the row (a reset - a
+  // change of mind or the refresh's changed / removed reset, opts.reason). RLS:
+  // own rows or the scheduler (mirrored client-side). One audit eastvac.review
+  // per change with the range and the decision ('reset' for a delete). After a
+  // successful write the rows are re-read (the picture, the ctx and every list
+  // rebuild from them) and a 'home' decision calls the offers hook.
+  const saveEastVacationReview = async (personId, range, decision, opts) => {
+    const quiet = !!(opts && opts.quiet);
+    if (isPublicMode) return { ok: false, error: "public" };
+    if (!isScheduler && personId !== mySurgeon) { showToast("You can only review your own East vacations.", "error"); return { ok: false, error: "not-own" }; }
+    if (!range || !suIsIso(range.start) || !suIsIso(range.end) || range.end < range.start) { showToast("That East vacation range is not valid.", "error"); return { ok: false, error: "range" }; }
+    if (decision !== "away" && decision !== "home" && decision !== "unreviewed") { showToast("Pick away, home or unreviewed.", "error"); return { ok: false, error: "decision" }; }
+    if (eastVacReviewState === "missing") { if (!quiet) showToast("The East vacation reviews table is not on the database yet - the decision cannot be saved until the migration is applied.", "error"); return { ok: false, error: "missing" }; }
+    const key = personId + "|" + range.start + "|" + range.end;
+    setEastVacBusy(key);
+    try {
+      const by = userProfile?.person_id || authUser?.id || null;
+      let res;
+      if (decision === "unreviewed") {
+        res = await fetch(`${SUPABASE_URL}/rest/v1/east_vacation_reviews?person_id=eq.${encodeURIComponent(personId)}&start=eq.${range.start}&end=eq.${range.end}`,
+          { method: "DELETE", headers: { ...dbAuthHeaders(), Prefer: "return=representation" } });
+      } else {
+        res = await fetch(`${SUPABASE_URL}/rest/v1/east_vacation_reviews?on_conflict=person_id,start,end`, {
+          method: "POST", headers: { ...dbAuthHeaders(), Prefer: "resolution=merge-duplicates,return=representation" },
+          body: JSON.stringify({ person_id: personId, start: range.start, end: range.end, decision, decided_at: new Date().toISOString(), decided_by: by }),
+        });
+      }
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        console.warn("east_vacation_reviews " + (decision === "unreviewed" ? "delete" : "upsert") + " failed", res.status, t);
+        // quiet (the refresh's resets): the caller names the failure in its ONE toast
+        if (!quiet) showToast("Couldn't save the East vacation review: " + describeDbError(t), "error");
+        return { ok: false, error: describeDbError(t) };
+      }
+      let rows = null;
+      try { rows = await res.json(); } catch (e) { rows = null; }
+      if (decision !== "unreviewed" && (!Array.isArray(rows) || rows.length === 0)) {
+        console.warn("east_vacation_reviews upsert: 2xx but no row came back", rows);
+        if (!quiet) showToast("No review row came back - your session may lack permission for " + nameOf(personId) + "'s rows. Reload and retry.", "error");
+        await loadEastVacationReviews(true);
+        return { ok: false, error: "no-representation" };
+      }
+      const removed = decision === "unreviewed" ? (Array.isArray(rows) ? rows.length : null) : undefined;
+      await loadEastVacationReviews(true);
+      const reason = (opts && opts.reason) || null;
+      const label = decision === "unreviewed" ? "reset" : decision;
+      logAudit("eastvac.review", `East vacation ${range.start}..${range.end} ${nameOf(personId)}: ${label}${reason ? " (" + reason + ")" : ""}`,
+        { person_id: personId, start: range.start, end: range.end, decision: label, reason, ...(removed !== undefined ? { removed } : {}) });
+      if (!quiet) showToast(decision === "home" ? `${fmtMD(range.start)}-${fmtMD(range.end)}: home - ${nameOf(personId)} is available at Silvis those days (no East call; preferred as primary).`
+        : decision === "away" ? `${fmtMD(range.start)}-${fmtMD(range.end)}: away - treated as a Silvis vacation.`
+        : `${fmtMD(range.start)}-${fmtMD(range.end)}: back to unreviewed (treated as away until decided).`, "success");
+      if (decision === "home") offerEitherForHomeRange(personId, range);
+      return { ok: true, removed };
+    } catch (e) {
+      console.warn("east_vacation_reviews write error", e);
+      if (!quiet) showToast("Couldn't save the East vacation review - check your connection and try again.", "error");
+      return { ok: false, error: errText(e) };
+    } finally { setEastVacBusy(null); }
   };
   // Open the day editor on any day from Setup (holiday "Edit day", vacation conflicts).
   const goToDay = (day) => {
@@ -3508,6 +3671,80 @@ function CallSchedule() {
     const cov = coverageOf(eastFeedRows.map(r => ({ weekMonday: r.week_monday, data: r.data || {} })));
     return cov && cov.to ? cov.to : null;
   }, [eastFeedRows]);
+  // Prompt 15 part 3 (9/23): the East vacation picture per person with an East
+  // code - the cached Davenport ranges (eastVacations by CODE) under the review
+  // rows (helpers.js derivedEastVacations, PERSON-scoped by roster id: another
+  // surgeon's row never decides a range). One list feeds the East feed panel,
+  // the Time off view, My schedule, the calendar markers and the strip count.
+  const eastVacPeople = useMemo(() => {
+    const out = [];
+    // Review fix (E3, 9/23): public mode never loads the reviews (no anon policy), so
+    // every range would read 'unreviewed' there - the public calendar draws no East
+    // vacation marker, legend, title or strip item at all.
+    if (isPublicMode) return out;
+    if (typeof eastVacations !== "function" || typeof derivedEastVacations !== "function") return out;
+    surgeons.forEach(s => {
+      const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
+      // the same people whose Davenport vacations the refresh reads and the ctx input carries (eastVacationPerson:
+      // the East feature reads busy days) - a derived-weeks-only feature (Fierce) has no East vacations and no row here
+      if (!eastVacationPerson(s, ef)) return;
+      const d = derivedEastVacations(eastVacations(eastFeedRows, s.code), eastVacationReviewRows, s.id);
+      out.push({ id: s.id, code: s.code, ranges: d.ranges, stale: d.stale, unreviewedUpcoming: d.ranges.filter(r => r.state === "unreviewed" && r.end >= todayStr).length });
+    });
+    return out;
+  }, [surgeons, surgeonRules, eastFeedRows, eastVacationReviewRows, todayStr, isPublicMode]);
+  const eastVacById = useMemo(() => { const m = {}; eastVacPeople.forEach(p => { m[p.id] = p; }); return m; }, [eastVacPeople]);
+  const eastVacUnreviewed = eastVacPeople.reduce((n, p) => n + p.unreviewedUpcoming, 0);
+  // Calendar markers: date -> [{ id, state, feedBusy? }] over the visible grid. Per DAY
+  // from the rules ctx when it is available (review fix E3, 9/23 - the same picture the
+  // day editor shows): unreviewed / away from P.eastVacationDays, home from P.eastClear;
+  // a home day the East feed says busy keeps the home marker with feedBusy (the feed
+  // wins - no east-clear, ctx warning); a Silvis time_off day inside a range carries
+  // no East marker (the Silvis dot stands; the day editor shows no East line there).
+  // Without a ctx (rules error) the range state is drawn as is.
+  const eastVacByDay = useMemo(() => {
+    const map = {};
+    if (!gridDays.length) return map;
+    const lo = gridDays[0], hi = gridDays[gridDays.length - 1];
+    eastVacPeople.forEach(p => {
+      const P = rulesCtx && rulesCtx.per && rulesCtx.per[p.id] && rulesCtx.per[p.id].eastVacationDays && rulesCtx.per[p.id].eastClear ? rulesCtx.per[p.id] : null;
+      p.ranges.forEach(r => {
+        if (r.end < lo || r.start > hi) return;
+        const stop = r.end > hi ? hi : r.end;
+        for (let dd = parse(r.start < lo ? lo : r.start); fmt(dd) <= stop; dd = addD(dd, 1)) {
+          const d = fmt(dd);
+          let m = { id: p.id, state: r.state };
+          if (P) {
+            if (P.eastVacationDays[d]) m = { id: p.id, state: P.eastVacationDays[d] };
+            else if (P.eastClear.has(d)) m = { id: p.id, state: "home" };
+            else if (P.vacation && P.vacation.has(d)) continue;               // his Silvis time_off day: the dot stands, no East gloss
+            else if (r.state === "home") m = { id: p.id, state: "home", feedBusy: true }; // home, but the feed says busy that day
+          }
+          (map[d] = map[d] || []).push(m);
+        }
+      });
+    });
+    return map;
+  }, [eastVacPeople, gridDays, rulesCtx]);
+  // The time_off trigger mirrored for the DERIVED ranges (rules.eastVacationConflicts):
+  // published days the person holds inside an unreviewed / away range (and a
+  // published primary the day before one) - a report, never a block on a lock.
+  const eastVacConflictRows = useMemo(() => {
+    if (!rulesCtx || typeof eastVacationConflicts !== "function") return [];
+    try { return eastVacationConflicts(rulesCtx); }
+    catch (e) { console.warn("East vacation conflict report failed", e); return []; }
+  }, [rulesCtx]);
+  // The strip's count opens where the decision is made: the scheduler's Setup ->
+  // East feed panel (forced open), a surgeon's own Time off view.
+  const openEastVacPanel = () => {
+    if (isPublicMode) return;
+    if (isScheduler) {
+      // Collapsible reads its open flag at mount; the strip lives on the calendar, so the
+      // Setup view (and the card) mounts fresh with the flag set.
+      try { localStorage.setItem("silvis_collapse_setup_east", "1"); } catch (e) { console.warn("Couldn't persist the East panel state:", e); }
+      setView("setup");
+    } else setView("timeoff");
+  };
   const snapshotAgeText = (iso) => {
     if (!iso) return "none on file";
     const t = new Date(iso).getTime();
@@ -4372,9 +4609,10 @@ function CallSchedule() {
           </Collapsible>
 
           <Collapsible css={css} ck="setup_east" defaultOpen={false} title="East feed (Davenport, read-only)">
-            <EastFeedCard css={css} feedRows={eastFeedRows} forecastRows={eastForecastRows} overrideRows={eastOverrideRows} loadState={eastLoadState} ctx={rulesCtx} ctxInputs={ctxInputs} roster={surgeons} nameOf={nameOf}
+            <EastFeedCard css={css} dk={dk} feedRows={eastFeedRows} forecastRows={eastForecastRows} overrideRows={eastOverrideRows} loadState={eastLoadState} ctx={rulesCtx} ctxInputs={ctxInputs} roster={surgeons} nameOf={nameOf}
               calMonth={calMonth} calYear={calYear} onRefresh={refreshEastFeed} refreshing={eastRefreshing} onSaveOverride={saveEastOverride} onDeleteOverride={deleteEastOverride} threshold={forecastThreshold} today={todayStr}
-              conflicts={eastConflictRows} onEditDay={goToDay}/>
+              conflicts={eastConflictRows} onEditDay={goToDay}
+              eastVac={eastVacPeople} eastVacReviewState={eastVacReviewState} onReviewEastVac={saveEastVacationReview} eastVacBusyKey={eastVacBusy} canReviewEastVac={(pid) => isScheduler || pid === mySurgeon} eastVacConflicts={eastVacConflictRows}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_generate" defaultOpen={true} title="Generate (preview, then publish)">
@@ -4463,6 +4701,15 @@ function CallSchedule() {
                   {covItem("cov-open-backup", "open backup", glance.openBackup, "#c04040")}
                   {covItem("cov-forecast-primary", "forecast-busy as primary", glance.forecastPrimary.map(x => x.day), "#8a5a10")}
                   <span data-testid="cov-east-end" data-value={eastCoverageEnd || ""} title="Last day covered by a published Davenport week in the East feed cache">East feed through <strong style={{fontFamily:mono}}>{eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown"}</strong></span>
+                  {/* Prompt 15 part 3: East vacations still to decide (upcoming ranges of the person with the East code) - opens the panel where the decision is made.
+                      Shown to the scheduler and to the person with the East code only: another surgeon's or the viewer's Time off view has no East card (a dead end). */}
+                  {!isPublicMode && (isScheduler ? eastVacPeople.length > 0 : !!eastVacById[mySurgeon]) && (
+                    <button type="button" data-testid="cov-eastvac-unreviewed" data-count={eastVacUnreviewed} onClick={openEastVacPanel}
+                      title={(eastVacUnreviewed ? "Undecided Davenport vacation range(s) - treated as away (a Silvis vacation) until reviewed. " : "Every upcoming East vacation is reviewed. ") + (isScheduler ? "Opens Setup > East feed." : "Opens Time off.")}
+                      style={{...css.mini(false),color: eastVacUnreviewed ? "#8a5a10" : "#1a8040",borderColor: eastVacUnreviewed ? "#8a5a10" : "#a0d8b0",fontFamily:font,cursor:"pointer"}}>
+                      unreviewed East vacations: <span style={{fontFamily:mono,fontWeight:800}}>{eastVacUnreviewed}</span>{eastVacPeople.length === 1 ? " (" + nameOf(eastVacPeople[0].id) + ")" : ""}
+                    </button>
+                  )}
                   <span data-testid="cov-last-published" data-value={(lastPublished && lastPublished.at) || ""}>last published <strong>{lastPublished && lastPublished.at ? fmtAuditTime(lastPublished.at) : "never"}</strong></span>
                   {isScheduler && !isPublicMode && <span data-testid="cov-last-snapshot" data-value={lastSnapshotAt || ""}>last snapshot <strong>{snapshotAgeText(lastSnapshotAt)}</strong></span>}
                 </div>
@@ -4544,6 +4791,7 @@ function CallSchedule() {
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
                 const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
                 if (hol) titleBits.push(hol.name + " (holiday unit)"); if (derivedWho) titleBits.push("East-derived: " + derivedWho); if (a && a.note) titleBits.push("note: " + a.note);
+                if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
                 // The header reserves 15px per 13px badge shown (E / F / confirm), at least the 30px two badges need, so a badge never covers the holiday label.
                 const nBadges = (derived ? 1 : 0) + (fc && fc.p >= 0.2 ? 1 : 0) + (awaitingConfirmation(a) ? 1 : 0);
                 return (
@@ -4562,9 +4810,11 @@ function CallSchedule() {
                     </div>
                     <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)}/>
                     <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>
-                    {(vacByDay[d] || []).length > 0 && (
-                      <div className="cal-dots" title={"On vacation: " + vacByDay[d].map(nameOf).join(", ")}>
-                        {vacByDay[d].map(pid => <span key={pid} data-vac={pid} style={{width:6,height:6,borderRadius:3,background:textColorOf(pid),display:"inline-block"}}/>)}
+                    {((vacByDay[d] || []).length > 0 || (eastVacByDay[d] || []).length > 0) && (
+                      <div className="cal-dots" title={[(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ")}>
+                        {(vacByDay[d] || []).map(pid => <span key={pid} data-vac={pid} style={{width:6,height:6,borderRadius:3,background:textColorOf(pid),display:"inline-block"}}/>)}
+                        {/* Prompt 15 part 3: the East-vacation marker - a diamond, distinct from the round dot, in the review state (app-styles.js eastVacMarkStyle) */}
+                        {(eastVacByDay[d] || []).map(m => <span key={"ev" + m.id} data-eastvac={m.id} data-eastvac-state={m.state} data-eastvac-feedbusy={m.feedBusy ? "1" : undefined} title={nameOf(m.id) + ": East (Davenport) vacation - " + (m.state === "home" ? (m.feedBusy ? "home, but the East feed says busy that day - the feed wins (no east-clear; check the Davenport schedule or the override)" : "home: available at Silvis (no East call)") : m.state === "away" ? "away: a Silvis vacation" : "unreviewed: treated as a Silvis vacation until decided")} style={eastVacMarkStyle(m.state, dk, textColorOf(m.id))}/>)}
                       </div>
                     )}
                     {a && a.note && <span className="cal-note" title={a.note} style={{position:"absolute",bottom:2,right:4,fontSize:8,color:"#9aa4ae",fontWeight:700,letterSpacing:0.5}}>NOTE</span>}
@@ -4588,6 +4838,7 @@ function CallSchedule() {
               <span>Fri-Sun tinted = weekend unit</span>
               <span>gold = holiday unit</span>
               <span>dots = vacations</span>
+              {eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"><span style={eastVacMarkStyle("unreviewed", dk)}/> unreviewed <span style={eastVacMarkStyle("away", dk, dkSubtext)}/> away <span style={eastVacMarkStyle("home", dk)}/> home = East vacation</span>}
               <span>orange outline = today</span>
               {isScheduler && !isPublicMode && <span>Click a day to edit (eligibility-checked); saves per day with compare-and-swap.</span>}
             </div>
@@ -4806,6 +5057,10 @@ function CallSchedule() {
             if (ovClear) out.push({ k: "O", text: "O", title: "East override: no East call (force clear)", bg: "#e4f3e8", fg: "#1a6a3a" });
             const fc = P && P.eastForecast && !ovClear ? P.eastForecast[d] : undefined;
             if (typeof fc === "number" && rulesCtx && fc >= rulesCtx.forecastThreshold) out.push({ k: "F", text: "F", title: "East forecast " + Math.round(fc * 100) + "% (treated as busy)", bg: "#e0eef8", fg: "#1a5a88" });
+            // Prompt 15 part 3: a held day inside the person's own East vacation (a locked unit such as Thanksgiving) or on a 'home' day
+            const ev = P && P.eastVacationDays ? P.eastVacationDays[d] : null;
+            if (ev) out.push({ k: "V", text: "EV", title: "East (Davenport) vacation, " + ev + " - treated as a Silvis vacation; this held day conflicts (decide home or trade)", bg: "#fbf1d8", fg: "#8a5a10" });
+            else if (P && P.eastClear && P.eastClear.has(d)) out.push({ k: "V", text: "EV", title: "East (Davenport) vacation, home - available at Silvis (no East call)", bg: "#e4f3e8", fg: "#1a6a3a" });
             return out;
           };
           const countdown = (d) => { const n = suDaysBetween(todayStr, d); return n === 0 ? "today" : n === 1 ? "tomorrow" : "in " + n + " days"; };
@@ -4837,7 +5092,7 @@ function CallSchedule() {
               </div>
               <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
                 <div style={css.subT}>Upcoming - next 90 days ({upcoming.length})</div>
-                <span style={muted}>H holiday unit - E East-derived week - F East forecast busy</span>
+                <span style={muted}>H holiday unit - E East-derived week - F East forecast busy - EV East (Davenport) vacation</span>
               </div>
               {upcoming.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No call in the next 90 days.</p> : (
                 <div data-testid="mine-upcoming" style={{maxHeight:420,overflowY:"auto"}}>
@@ -4861,6 +5116,16 @@ function CallSchedule() {
               </div>
               {renderVacationList([pid], true)}
             </div>
+            {/* Prompt 15 part 3: the person's own East (Davenport) vacation ranges with his decisions */}
+            {eastVacById[pid] && (
+              <div style={css.card} data-testid="mine-eastvac">
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                  <div style={{...css.cardT,margin:0}}>My East (Davenport) vacations ({eastVacById[pid].unreviewedUpcoming} unreviewed)</div>
+                </div>
+                <p style={sectionNote}>Mirrored from the Davenport app by the East feed refresh. Away = also off at Silvis; home = available at Silvis (no East call, no OR block - your best Silvis days). Unreviewed counts as away.</p>
+                <EastVacationList css={css} dk={dk} people={[eastVacById[pid]]} reviewState={eastVacReviewState} onReview={saveEastVacationReview} busyKey={eastVacBusy} canReview={(id) => isScheduler || id === mySurgeon} nameOf={nameOf} today={todayStr} testid="mine-eastvac-list" compact/>
+              </div>
+            )}
           </>;
         })()}
 
@@ -4879,6 +5144,14 @@ function CallSchedule() {
               </>
             )}
           </div>
+          {/* Prompt 15 part 3: the East (Davenport) vacations of the person with the East code - his own view (the scheduler sees every East person) */}
+          {(isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon)).length > 0 && (
+            <div style={css.card} data-testid="eastvac-timeoff">
+              <div style={css.cardT}>{isScheduler ? "East (Davenport) vacations" : "My East (Davenport) vacations"}</div>
+              <p style={sectionNote}>Mirrored from the Davenport app by the East feed refresh - nothing is entered here and no Silvis vacation row is written. Decide each range: <strong>away</strong> = also off at Silvis (treated exactly like a vacation above); <strong>home</strong> = available at Silvis (no East call, no OR block - the Tue/Thu rule is lifted and you are preferred as primary). Unreviewed counts as away until you decide.</p>
+              <EastVacationList css={css} dk={dk} people={isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon)} reviewState={eastVacReviewState} onReview={saveEastVacationReview} busyKey={eastVacBusy} canReview={(id) => isScheduler || id === mySurgeon} nameOf={nameOf} today={todayStr} testid="eastvac-timeoff-list"/>
+            </div>
+          )}
 
           {(() => {
             const fromId = isScheduler ? (tradeFrom || mySurgeon || "") : (mySurgeon || "");
@@ -5533,6 +5806,7 @@ const REASON_WORDS = {
   "weekend-primary": "weekend primary block (contribution bonus)", "weekend-backup": "weekend backup (contribution penalty)",
   "window-week-below-target": "at or under the window-week target", "window-week-over-target": "over the window-week target",
   "consecutive-primary": "consecutive primary days (prefers alternate days)", "long-run": "long any-role run",
+  "east-clear": "home East vacation day (no East call, no OR block - preferred as primary)", // Prompt 15 part 2, primary-only bonus
 };
 // Read an AUTHENTICATED-ONLY table (shift_trade_requests, notifications: RLS
 // 'to authenticated'). db.query reads with dbReadHeaders(), which falls back
@@ -5604,6 +5878,16 @@ function softTag(soft) {
 // East status lines for one day, per surgeon with an East feature (data-driven
 // from ctxInputs.eastMeta): published busy / forecast p / clear / unknown for
 // busy-days surgeons, derived Silvis role for derived-week surgeons.
+// Prompt 15 (review fix E3, 9/23): the ONE predicate for "this surgeon has East
+// vacations" - his East feature reads busy days (the refresh reads the Davenport
+// time_off for exactly these codes), he has a roster code and is not an outside
+// surgeon. Used by the ctx input (eastVacationRanges), eastVacPeople (panel, lists,
+// markers, strip) and the refresh's vacationCodes, so the rules never derive a
+// vacation the UI has no control for. A derived-weeks-only feature (Fierce) has none.
+function eastVacationPerson(s, ef) {
+  return !!(s && ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code && s.type !== "external");
+}
+
 function eastStatusLines(ctx, ctxInputs, day, nameOf) {
   const out = [];
   const meta = (ctxInputs && ctxInputs.eastMeta) || {};
@@ -5633,6 +5917,20 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
       if (dRole) out.push({ id, text: name + ": East week -> Silvis " + dRole + " (derived)", tone: "busy" });
       else if (P.eastDays.has(day)) out.push({ id, text: name + ": on East call this week (not derived - before the derive-from date)", tone: "warn" });
       else out.push({ id, text: name + ": no East week", tone: "ok" });
+    }
+    // Prompt 15 part 3: the person's Davenport vacation under his review decision, as
+    // rules.js derived it - unreviewed / away = a Silvis vacation (P.eastVacationDays),
+    // home = an eastClear day (P.eastClear), the day before a derived range for the
+    // trailing edge (P.eastDayBefore). A Silvis time_off day inside a range carries no
+    // East line (the Silvis vacation stands and is listed under Vacations).
+    if (P && P.eastVacationDays && P.eastVacationDays[day]) {
+      const st = P.eastVacationDays[day];
+      out.push({ id, eastVac: st, text: name + ": East (Davenport) vacation, " + st + " - treated as a Silvis vacation" + (st === "unreviewed" ? " until decided (Setup > East feed / Time off)" : ""), tone: "busy" });
+    } else if (P && P.eastClear && P.eastClear.has(day)) {
+      out.push({ id, eastVac: "home", text: name + ": East (Davenport) vacation, home - available at Silvis: no East call, Tue/Thu rule lifted, preferred as primary", tone: "home" });
+    } else if (P && P.eastDayBefore && P.eastDayBefore[day]) {
+      const st = P.eastDayBefore[day];
+      out.push({ id, eastVac: st, text: name + ": East (Davenport) vacation (" + st + ") starts tomorrow - primary blocked (07:00 handoff)", tone: "warn" });
     }
   });
   return out;
@@ -5726,7 +6024,7 @@ function DayEditor(props) {
         const msg = String(e && e.message || e).slice(0, 120);
         r = { ok: false, hard: ["rules-error:" + msg], soft: [], error: msg };
       }
-      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, external, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: r.error || null, eastStanding: r.eastStanding || null }; // eastStanding: Prompt 12 V - the standing East entry's name behind an east-busy
+      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, external, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: r.error || null, eastStanding: r.eastStanding || null, eastVacation: r.eastVacation || null, eastClear: !!r.eastClear }; // eastStanding: Prompt 12 V - the standing East entry's name behind an east-busy; eastVacation / eastClear: Prompt 15 - the derived East vacation state behind a time-off reason / a 'home' day
     });
     // pool: eligible first, then ineligible (roster order kept inside each group); inactive only if currently held;
     // outside surgeons (M) come last as their own group - the select shows them under "Outside surgeons"
@@ -5856,7 +6154,7 @@ function DayEditor(props) {
         )}
         {canEdit && ineligible.length > 0 && (
           <div data-testid={"editor-" + role + "-reasons"} style={{fontSize:11,color:sub,marginTop:6,lineHeight:1.5}}>
-            <span style={{fontWeight:700}}>Not eligible:</span> {ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "")).join("; ")}
+            <span style={{fontWeight:700}}>Not eligible:</span> {ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(o.hard[0]) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join("; ")}
           </div>
         )}
       </div>
@@ -5874,7 +6172,7 @@ function DayEditor(props) {
         </div>
         <div style={{fontSize:12,color:sub,lineHeight:1.6,marginBottom:10}}>
           <div>{hol ? <><span style={{fontWeight:700,color:"#8a6a10"}}>{hol.name}</span> holiday unit ({hol.tier}): {hol.days.map(fmtMD).join(", ")} - one primary and one backup stick through the unit.</> : "Not in a holiday unit."}</div>
-          {east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map(l => <div key={l.id + l.text} data-testid="east-status" style={{color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : sub}}>East - {l.text}</div>)}
+          {east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map(l => <div key={l.id + l.text} data-testid="east-status" data-eastvac={l.eastVac || undefined} style={{color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : l.tone === "home" ? "#1a8040" : sub}}>{l.eastVac ? <span style={{...eastVacMarkStyle(l.eastVac, dk, sub),marginRight:6,verticalAlign:"middle"}}/> : null}East - {l.text}</div>)}
           <div>Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div>
           {ctxError && <div style={{color:"#a83232",fontWeight:700}}>Eligibility unavailable: {ctxError}</div>}
           {!rulesImported && <div>Rules not imported yet - eligibility reflects locks, vacations and availability rows only.</div>}
@@ -6832,7 +7130,90 @@ function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onS
 }
 
 // --- East feed status, forecast, overrides, derived weeks and busy days ---
-function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ctx, ctxInputs, roster, nameOf, calMonth, calYear, onRefresh, refreshing, onSaveOverride, onDeleteOverride, threshold, today, conflicts, onEditDay }) {
+// Prompt 15 part 3 (9/23): the East vacation list - every Davenport vacation range
+// of a person with an East code, with its review state as a tappable three-way
+// control (unreviewed / away / home). ONE component behind the Setup -> East feed
+// panel, the person's own Time off view and My schedule, so the three never
+// disagree. people = the app's eastVacPeople entries ({ id, code, ranges: [{ start,
+// end, state, review }] }); onReview(personId, { start, end }, decision) is the
+// one write path (saveEastVacationReview); canReview(personId) mirrors the RLS
+// (own rows or the scheduler) - otherwise the state is read-only text.
+// reviewState names why a decision may be missing (skipped / missing / failed):
+// a range without a row is UNREVIEWED and treated as away either way. Past
+// ranges are hidden behind a toggle. Nothing here writes time_off rows.
+function EastVacationList({ css, dk, people, reviewState, onReview, busyKey, canReview, nameOf, today, testid, conflicts, onEditDay, compact }) {
+  const [showPast, setShowPast] = React.useState(false);
+  const stateText = reviewState === "ok" ? null
+    : reviewState === "missing" ? "The east_vacation_reviews table is not on the database yet (migration 2026-09-23) - every range reads as unreviewed (treated as away) and decisions cannot be saved."
+    : reviewState === "skipped" ? "Reviews not loaded - the session token is missing or expired; every range reads as unreviewed until the session refreshes."
+    : reviewState === "failed" ? "Couldn't load the reviews - every range reads as unreviewed until they load."
+    : "Loading the reviews.";
+  const STATES = ["unreviewed", "away", "home"];
+  const stateWord = (st) => st === "home" ? "home - available at Silvis" : st === "away" ? "away - a Silvis vacation" : "unreviewed - treated as away";
+  const rowBg = dk ? "#13294B" : "#f8f9fb", rowBorder = dk ? "#24406B" : "#e8ecf0";
+  const list = people || [];
+  const past = list.reduce((n, p) => n + p.ranges.filter(r => r.end < today).length, 0);
+  return (
+    <div data-testid={testid || "eastvac-list"}>
+      {stateText && <div data-testid="eastvac-review-state" data-state={reviewState} style={{ ...css.warnBox, marginBottom: 8 }}>{stateText}</div>}
+      {!stateText && <span data-testid="eastvac-review-state" data-state={reviewState} style={{ display: "none" }}/>}
+      {list.length === 0 && <p style={{ fontSize: 12, color: "#5B6B82", margin: 0 }}>No surgeon has an East code with a Davenport vacation on file (refresh the East feed).</p>}
+      {list.map(p => {
+        const rows = p.ranges.filter(r => showPast || r.end >= today);
+        const undecided = p.ranges.filter(r => r.state === "unreviewed" && r.end >= today).length;
+        return (
+          <div key={p.id} data-testid={"eastvac-person-" + p.id} style={{ marginBottom: 8 }}>
+            {!compact && <div style={{ fontSize: 12, color: "#1F2A3A", marginBottom: 4 }}><strong>{nameOf(p.id)}</strong> ({p.code}) - {p.ranges.length} Davenport vacation range(s) on file, <span data-testid={"eastvac-undecided-" + p.id} style={{ color: undecided ? "#8a5a10" : "#1a8040", fontWeight: 700 }}>{undecided} unreviewed</span></div>}
+            {rows.length === 0 && <p style={{ fontSize: 12, color: "#5B6B82", margin: 0, fontStyle: "italic" }}>No {showPast ? "" : "upcoming "}East vacation ranges.</p>}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {rows.map(r => {
+                const key = p.id + "|" + r.start + "|" + r.end;
+                const busy = busyKey === key;
+                const editable = typeof canReview === "function" ? canReview(p.id) : false;
+                const days = suDaysBetween(r.start, r.end) + 1;
+                return (
+                  <div key={r.start + r.end} data-testid={"eastvac-range-" + p.id + "-" + r.start} data-start={r.start} data-end={r.end} data-state={r.state}
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: rowBg, borderRadius: 6, border: "1px solid " + rowBorder, flexWrap: "wrap", opacity: r.end < today ? 0.7 : 1 }}>
+                    <span data-testid="eastvac-row-mark" style={{ ...eastVacMarkStyle(r.state, dk, dk ? "#E6ECF5" : "#1F2A3A"), flexShrink: 0 }}/>
+                    <span style={{ fontFamily: mono, fontSize: 12, color: "#1F2A3A", minWidth: 118 }}>{fmtMD(r.start)}-{fmtMD(r.end)}</span>
+                    <span style={{ fontSize: 11, color: "#5B6B82", minWidth: 52 }}>{days} day{days === 1 ? "" : "s"}{r.end < today ? " - past" : ""}</span>
+                    {editable ? (
+                      <span role="group" aria-label={"East vacation " + r.start + " to " + r.end} style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                        {STATES.map(st => (
+                          <button key={st} type="button" data-testid={"eastvac-set-" + st} aria-pressed={r.state === st} disabled={busy || r.state === st}
+                            title={stateWord(st)} onClick={() => { if (r.state !== st) onReview(p.id, { start: r.start, end: r.end }, st); }}
+                            style={{ ...eastVacSegStyle(r.state === st, st, dk), opacity: busy ? 0.6 : 1, cursor: r.state === st ? "default" : "pointer" }}>{busy && r.state !== st ? "..." : st.charAt(0).toUpperCase() + st.slice(1)}</button>
+                        ))}
+                      </span>
+                    ) : <span data-testid="eastvac-state-text" style={{ fontSize: 11, fontWeight: 700, color: r.state === "home" ? "#1a8040" : r.state === "away" ? "#1F2A3A" : "#8a5a10" }}>{stateWord(r.state)}</span>}
+                    {r.review && r.review.decided_at && <span style={{ fontSize: 10, color: "#9aa4ae", fontFamily: mono }}>decided {suFmtTs(r.review.decided_at)}{r.review.decided_by ? " by " + nameOf(r.review.decided_by) : ""}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+      {past > 0 && <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#5B6B82", marginTop: 6, cursor: "pointer" }}><input type="checkbox" checked={showPast} onChange={e => setShowPast(e.target.checked)}/> Show {past} past range(s)</label>}
+      {Array.isArray(conflicts) && (
+        <div style={{ marginTop: 8, border: "1px solid " + (conflicts.length ? "#e0b4b4" : rowBorder), borderRadius: 8, padding: "8px 10px" }}>
+          <div style={{ ...css.subT, margin: "0 0 4px", color: conflicts.length ? "#a83232" : undefined }}>Published days inside unreviewed / away ranges ({conflicts.length})</div>
+          <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 4px" }}>The vacation trigger's refusal, mirrored for these derived ranges: a published day the person holds inside one (or a published primary the day before it). A report only - the lock stays; decide <em>home</em> or trade the shift.</p>
+          <div data-testid="eastvac-conflicts" style={{ fontSize: 12, fontFamily: mono, lineHeight: 1.7 }}>
+            {conflicts.length === 0 ? "none" : conflicts.map(c => (
+              <div key={c.day + c.role}>
+                <button type="button" onClick={() => onEditDay && onEditDay(c.day)} style={{ ...css.mini(false), fontFamily: mono, padding: "1px 6px", marginRight: 6 }}>{c.day}</button>
+                {" "}{c.role} {nameOf(c.surgeonId)}: East vacation ({c.state}){c.trailingEdge ? " starts the next morning" : ""}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState, ctx, ctxInputs, roster, nameOf, calMonth, calYear, onRefresh, refreshing, onSaveOverride, onDeleteOverride, threshold, today, conflicts, onEditDay, eastVac, eastVacReviewState, onReviewEastVac, eastVacBusyKey, canReviewEastVac, eastVacConflicts }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const weeks = (feedRows || []).map(r => ({ weekMonday: r.week_monday, data: r.data || {} }));
   const cov = typeof coverageOf === "function" ? coverageOf(weeks) : null;
@@ -6885,6 +7266,12 @@ function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ct
             </div>
           ))}
         </div>
+      </div>
+      {/* Prompt 15 parts 2-3 (9/23): the person's Davenport vacations, reviewed here - nothing is mirrored blindly */}
+      <div data-testid="eastvac-card" style={{ border: "1px solid " + (((eastVac || []).some(p => p.unreviewedUpcoming > 0)) ? "#e8d090" : "#e8ecf0"), borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
+        <div style={{ ...css.subT, margin: "0 0 4px" }}>East vacations (Davenport time off, reviewed here)</div>
+        <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 6px" }}>Refreshing the feed also reads the person's Davenport vacations (kind vacation only, matched by roster code). Each range is <strong>unreviewed</strong> until he decides: <strong>away</strong> = also off at Silvis (a derived vacation - both roles blocked, primary the day before, no time_off row written); <strong>home</strong> = available at Silvis (no East call, no OR block: the Tue/Thu rule is lifted and he is preferred as primary). Unreviewed counts as away. A range Davenport changes or removes resets to unreviewed on the next refresh and the toast says so. The person can decide from his own Time off view too. The one-tap "paint these days as offers" step arrives with Prompt 14's painter.</p>
+        <EastVacationList css={css} dk={dk} people={eastVac || []} reviewState={eastVacReviewState} onReview={onReviewEastVac} busyKey={eastVacBusyKey} canReview={canReviewEastVac} nameOf={nameOf} today={today} testid="eastvac-list" conflicts={eastVacConflicts || []} onEditDay={onEditDay}/>
       </div>
       <div style={{ border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Overrides (days Faraz knows differ from the feed)</div>
