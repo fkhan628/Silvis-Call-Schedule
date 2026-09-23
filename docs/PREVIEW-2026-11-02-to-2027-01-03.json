@@ -3,164 +3,164 @@
  "end": "2027-01-03",
  "seed": 7,
  "bestOf": 200,
- "generatedAt": "2026-09-22T07:34:05.408Z",
+ "generatedAt": "2026-09-23T05:28:27.631Z",
  "schedule": {
   "2026-11-02": {
    "primary": "s3",
-   "backup": "s1",
-   "primaryLocked": false,
-   "backupLocked": false,
-   "source": "generated",
+   "backup": "s2",
+   "primaryLocked": true,
+   "backupLocked": true,
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-03": {
    "primary": "s2",
    "backup": "s3",
-   "primaryLocked": false,
-   "backupLocked": false,
-   "source": "generated",
+   "primaryLocked": true,
+   "backupLocked": true,
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-04": {
-   "primary": "s5",
-   "backup": "s1",
-   "primaryLocked": false,
-   "backupLocked": false,
-   "source": "generated",
+   "primary": "s3",
+   "backup": "s2",
+   "primaryLocked": true,
+   "backupLocked": true,
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-05": {
    "primary": "s3",
-   "backup": null,
-   "primaryLocked": false,
+   "backup": "s1",
+   "primaryLocked": true,
    "backupLocked": false,
-   "source": "generated",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: faraz-2026-09-22-acton-1105 - Acton primary per his recurring rules (Faraz 9/22 evening); his relayed 11/5 backup entry superseded"
   },
   "2026-11-06": {
-   "primary": "s2",
-   "backup": "s1",
-   "primaryLocked": false,
-   "backupLocked": false,
-   "source": "generated",
+   "primary": "s3",
+   "backup": "s2",
+   "primaryLocked": true,
+   "backupLocked": true,
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-07": {
-   "primary": "s3",
+   "primary": "s2",
    "backup": "s1",
-   "primaryLocked": false,
+   "primaryLocked": true,
    "backupLocked": false,
-   "source": "generated",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-08": {
    "primary": "s2",
    "backup": "s1",
-   "primaryLocked": false,
+   "primaryLocked": true,
    "backupLocked": false,
-   "source": "generated",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-09": {
    "primary": "s4",
    "backup": "s5",
    "primaryLocked": false,
    "backupLocked": true,
-   "source": "east-derived",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: fierce-2026-09-22-backup-week - Fierce 9/22: East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); the ER-panel author's Burchett backup entry superseded"
   },
   "2026-11-10": {
    "primary": "s4",
    "backup": "s5",
    "primaryLocked": false,
    "backupLocked": true,
-   "source": "east-derived",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: fierce-2026-09-22-backup-week - Fierce 9/22: East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision)"
   },
   "2026-11-11": {
    "primary": "s2",
    "backup": "s5",
-   "primaryLocked": false,
+   "primaryLocked": true,
    "backupLocked": true,
-   "source": "east-derived",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22 - backup: Fierce 9/22 - East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); source fierce-2026-09-22-backup-week"
   },
   "2026-11-12": {
    "primary": "s3",
    "backup": "s5",
    "primaryLocked": false,
    "backupLocked": true,
-   "source": "east-derived",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: fierce-2026-09-22-backup-week - Fierce 9/22: East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision)"
   },
   "2026-11-13": {
    "primary": "s4",
    "backup": "s5",
    "primaryLocked": false,
    "backupLocked": true,
-   "source": "east-derived",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: fierce-2026-09-22-backup-week - Fierce 9/22: East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision)"
   },
   "2026-11-14": {
-   "primary": "s4",
+   "primary": "s3",
    "backup": "s5",
-   "primaryLocked": false,
+   "primaryLocked": true,
    "backupLocked": true,
-   "source": "east-derived",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22 - backup: Fierce 9/22 - East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); source fierce-2026-09-22-backup-week; the ER-panel author's Burchett backup entry superseded"
   },
   "2026-11-15": {
-   "primary": "s4",
+   "primary": "s3",
    "backup": "s5",
-   "primaryLocked": false,
+   "primaryLocked": true,
    "backupLocked": true,
-   "source": "east-derived",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22 - backup: Fierce 9/22 - East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); source fierce-2026-09-22-backup-week; the ER-panel author's Burchett backup entry superseded"
   },
   "2026-11-16": {
    "primary": "s3",
-   "backup": "s6",
-   "primaryLocked": false,
-   "backupLocked": false,
-   "source": "generated",
+   "backup": "s5",
+   "primaryLocked": true,
+   "backupLocked": true,
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22 - backup: Fierce 9/22 - East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); source fierce-2026-09-22-backup-week; the ER-panel author's Burchett backup entry superseded"
   },
   "2026-11-17": {
    "primary": "s6",
    "backup": "s3",
    "primaryLocked": false,
-   "backupLocked": false,
-   "source": "generated",
+   "backupLocked": true,
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-18": {
-   "primary": "s5",
-   "backup": "s3",
-   "primaryLocked": false,
-   "backupLocked": false,
-   "source": "generated",
+   "primary": "s3",
+   "backup": "s2",
+   "primaryLocked": true,
+   "backupLocked": true,
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22 - Acton primary the day before his 11/19 vacation - published as submitted, reported as a lock violation"
   },
   "2026-11-19": {
    "primary": "s6",
-   "backup": null,
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -169,16 +169,16 @@
   },
   "2026-11-20": {
    "primary": "s2",
-   "backup": "s1",
-   "primaryLocked": false,
+   "backup": "s5",
+   "primaryLocked": true,
    "backupLocked": false,
-   "source": "generated",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-21": {
-   "primary": "s6",
-   "backup": "s1",
+   "primary": "s1",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -186,8 +186,8 @@
    "note": null
   },
   "2026-11-22": {
-   "primary": "s2",
-   "backup": "s1",
+   "primary": "s1",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -196,16 +196,16 @@
   },
   "2026-11-23": {
    "primary": "s2",
-   "backup": "s4",
-   "primaryLocked": false,
+   "backup": "s3",
+   "primaryLocked": true,
    "backupLocked": false,
-   "source": "generated",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: office-er-call-panels-2026-09-22"
   },
   "2026-11-24": {
    "primary": "s4",
-   "backup": "s3",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -213,53 +213,53 @@
    "note": null
   },
   "2026-11-25": {
-   "primary": "s5",
-   "backup": "s1",
-   "primaryLocked": false,
+   "primary": "s1",
+   "backup": "s5",
+   "primaryLocked": true,
    "backupLocked": false,
-   "source": "generated",
+   "source": "import",
    "externalCover": null,
-   "note": null
+   "note": "seed: faraz-2026-09-22-khan-1125 - Khan covers 11/25, 2026 only"
   },
   "2026-11-26": {
    "primary": "s1",
-   "backup": "s5",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "import",
    "externalCover": null,
-   "note": "seed: faraz-2026-09-21 - Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening)"
+   "note": "seed: faraz-2026-09-21 - Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening; confirmed 9/22)"
   },
   "2026-11-27": {
    "primary": "s1",
-   "backup": "s5",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "import",
    "externalCover": null,
-   "note": "seed: faraz-2026-09-21 - Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening)"
+   "note": "seed: faraz-2026-09-21 - Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening; confirmed 9/22)"
   },
   "2026-11-28": {
    "primary": "s1",
-   "backup": "s5",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "import",
    "externalCover": null,
-   "note": "seed: faraz-2026-09-21 - Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening)"
+   "note": "seed: faraz-2026-09-21 - Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening; confirmed 9/22)"
   },
   "2026-11-29": {
    "primary": "s1",
-   "backup": "s5",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "import",
    "externalCover": null,
-   "note": "seed: faraz-2026-09-21 - Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening)"
+   "note": "seed: faraz-2026-09-21 - Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening; confirmed 9/22)"
   },
   "2026-11-30": {
    "primary": "s3",
-   "backup": "s1",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -268,7 +268,7 @@
   },
   "2026-12-01": {
    "primary": "s2",
-   "backup": "s3",
+   "backup": "s1",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -286,7 +286,7 @@
   },
   "2026-12-03": {
    "primary": "s3",
-   "backup": null,
+   "backup": "s1",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -295,7 +295,7 @@
   },
   "2026-12-04": {
    "primary": "s3",
-   "backup": "s1",
+   "backup": "s2",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -304,7 +304,7 @@
   },
   "2026-12-05": {
    "primary": "s2",
-   "backup": "s1",
+   "backup": "s3",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -313,7 +313,7 @@
   },
   "2026-12-06": {
    "primary": "s3",
-   "backup": "s1",
+   "backup": "s2",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -322,7 +322,7 @@
   },
   "2026-12-07": {
    "primary": "s5",
-   "backup": "s1",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "east-derived",
@@ -340,7 +340,7 @@
   },
   "2026-12-09": {
    "primary": "s5",
-   "backup": "s2",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "east-derived",
@@ -349,7 +349,7 @@
   },
   "2026-12-10": {
    "primary": "s5",
-   "backup": "s3",
+   "backup": "s2",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "east-derived",
@@ -358,7 +358,7 @@
   },
   "2026-12-11": {
    "primary": "s5",
-   "backup": "s1",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "east-derived",
@@ -367,7 +367,7 @@
   },
   "2026-12-12": {
    "primary": "s5",
-   "backup": "s1",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "east-derived",
@@ -376,7 +376,7 @@
   },
   "2026-12-13": {
    "primary": "s5",
-   "backup": "s1",
+   "backup": "s4",
    "primaryLocked": true,
    "backupLocked": false,
    "source": "east-derived",
@@ -385,7 +385,7 @@
   },
   "2026-12-14": {
    "primary": "s2",
-   "backup": "s6",
+   "backup": "s3",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -402,8 +402,8 @@
    "note": null
   },
   "2026-12-16": {
-   "primary": "s3",
-   "backup": "s5",
+   "primary": "s5",
+   "backup": "s3",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -412,7 +412,7 @@
   },
   "2026-12-17": {
    "primary": "s6",
-   "backup": "s3",
+   "backup": "s4",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -421,7 +421,7 @@
   },
   "2026-12-18": {
    "primary": "s1",
-   "backup": "s3",
+   "backup": "s2",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -439,7 +439,7 @@
   },
   "2026-12-20": {
    "primary": "s1",
-   "backup": "s3",
+   "backup": "s2",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -457,7 +457,7 @@
   },
   "2026-12-22": {
    "primary": "s4",
-   "backup": "s3",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -465,8 +465,8 @@
    "note": null
   },
   "2026-12-23": {
-   "primary": "s5",
-   "backup": "s1",
+   "primary": "s2",
+   "backup": "s3",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -475,7 +475,7 @@
   },
   "2026-12-24": {
    "primary": "s3",
-   "backup": "s4",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -484,7 +484,7 @@
   },
   "2026-12-25": {
    "primary": "s3",
-   "backup": "s4",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -493,7 +493,7 @@
   },
   "2026-12-26": {
    "primary": "s4",
-   "backup": "s1",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -502,7 +502,7 @@
   },
   "2026-12-27": {
    "primary": "s4",
-   "backup": "s1",
+   "backup": "s5",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -510,8 +510,8 @@
    "note": null
   },
   "2026-12-28": {
-   "primary": "s4",
-   "backup": "s5",
+   "primary": "s2",
+   "backup": "s1",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -520,7 +520,7 @@
   },
   "2026-12-29": {
    "primary": "s4",
-   "backup": "s3",
+   "backup": "s1",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -528,8 +528,8 @@
    "note": null
   },
   "2026-12-30": {
-   "primary": "s2",
-   "backup": "s5",
+   "primary": "s4",
+   "backup": "s3",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -538,7 +538,7 @@
   },
   "2026-12-31": {
    "primary": "s2",
-   "backup": "s3",
+   "backup": "s1",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -547,7 +547,7 @@
   },
   "2027-01-01": {
    "primary": "s2",
-   "backup": "s3",
+   "backup": "s1",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -556,7 +556,7 @@
   },
   "2027-01-02": {
    "primary": "s1",
-   "backup": "s2",
+   "backup": "s4",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -565,7 +565,7 @@
   },
   "2027-01-03": {
    "primary": "s1",
-   "backup": "s2",
+   "backup": "s4",
    "primaryLocked": false,
    "backupLocked": false,
    "source": "generated",
@@ -578,206 +578,206 @@
   "bestOf": 200,
   "candidatesTried": 200,
   "candidateScores": [
-   30165880,
-   30150560,
-   30160571,
-   30165690,
-   30168470,
-   30134841,
-   30166670,
-   30153470,
-   30150790,
-   30138550,
-   30165771,
-   30137790,
-   30163890,
-   30158400,
-   30138030,
-   30182760,
-   30165290,
-   30163971,
-   30152890,
-   30165840,
-   30165670,
-   30163971,
-   30162890,
-   30165770,
-   30156400,
-   30164791,
-   30177570,
-   30176550,
-   30155191,
-   30175670,
-   30174571,
-   30176060,
-   30163890,
-   30155560,
-   30168590,
-   30145470,
-   30126760,
-   30165701,
-   30170771,
-   30147521,
-   30139571,
-   30143720,
-   30155471,
-   30153401,
-   30187670,
-   30179471,
-   30193570,
-   30151720,
-   30166570,
-   70160950,
-   30152560,
-   30158771,
-   30162890,
-   30151571,
-   30180470,
-   30153601,
-   30151760,
-   30168931,
-   30167370,
-   30152601,
-   30151890,
-   30126571,
-   30139890,
-   30167581,
-   30181810,
-   30164290,
-   30135581,
-   30167570,
-   30131760,
-   30160670,
-   30155500,
-   30151571,
-   30153140,
-   30162671,
-   30138550,
-   30142720,
-   30169470,
-   30156301,
-   30157411,
-   30142631,
-   30159771,
-   30149690,
-   30162890,
-   30176640,
-   30138970,
-   30187670,
-   30179660,
-   30163671,
-   30138721,
-   30163740,
-   30164701,
-   30172641,
-   30148890,
-   30139701,
-   30150891,
-   30163671,
-   30124660,
-   30162890,
-   30155790,
-   30158690,
-   30151790,
-   30158060,
-   30168691,
-   30140601,
-   30163960,
-   30154841,
-   30165671,
-   30177651,
-   30151651,
-   30165670,
-   30143520,
-   30131760,
-   30129570,
-   30149601,
-   30161670,
-   30163671,
-   30141670,
-   30147421,
-   30164701,
-   30125660,
-   30148671,
-   30173771,
-   30152801,
-   30153690,
-   30139601,
-   30165740,
-   30184460,
-   30146740,
-   30175661,
-   30161941,
-   30154701,
-   30141130,
-   30142720,
-   30141930,
-   30136561,
-   30167860,
-   30170660,
-   30125660,
-   30132850,
-   30187960,
-   30201840,
-   30138571,
-   30151690,
-   30168880,
-   30155861,
-   30174090,
-   30135850,
-   30142520,
-   30161400,
-   30168880,
-   30142520,
-   30143431,
-   30165470,
-   30162501,
-   30161890,
-   30153401,
-   30169570,
-   30151790,
-   30166770,
-   30153401,
-   30163671,
-   30140701,
-   30187771,
-   30153460,
-   30152691,
-   30166770,
-   30154790,
-   30184740,
-   30144651,
-   30140601,
-   30153590,
-   30148790,
-   30140841,
-   30188740,
-   30154760,
-   30163940,
-   30177670,
-   30175771,
-   30141670,
-   30146651,
-   30152890,
-   30126860,
-   30165371,
-   30137581,
-   30172671,
-   30162671,
-   30152890,
-   30132951,
-   30186260,
-   30152990,
-   30175771,
-   30176740,
-   30155311,
-   30219020,
-   30143431,
-   30157501,
-   30163771,
-   30177570,
-   30146521,
-   30164470
+   93861,
+   98641,
+   85450,
+   95101,
+   92571,
+   101650,
+   90851,
+   90811,
+   95960,
+   92571,
+   79700,
+   84301,
+   91481,
+   82690,
+   88721,
+   79441,
+   87811,
+   89831,
+   99630,
+   104811,
+   77321,
+   88811,
+   91571,
+   85450,
+   88811,
+   99831,
+   82660,
+   82290,
+   94700,
+   82930,
+   107441,
+   104571,
+   82690,
+   97471,
+   88811,
+   81971,
+   85690,
+   89411,
+   105851,
+   98701,
+   112250,
+   97690,
+   90811,
+   93571,
+   94490,
+   104851,
+   99831,
+   98720,
+   86621,
+   80700,
+   98690,
+   81841,
+   86710,
+   90811,
+   79381,
+   117811,
+   102811,
+   93571,
+   86661,
+   90571,
+   84711,
+   94861,
+   85710,
+   94591,
+   89811,
+   81731,
+   89811,
+   113591,
+   87411,
+   99411,
+   82841,
+   92571,
+   83601,
+   85950,
+   87411,
+   81861,
+   90470,
+   100591,
+   85471,
+   87890,
+   101730,
+   100411,
+   96651,
+   100591,
+   99411,
+   100591,
+   109690,
+   86310,
+   83690,
+   87811,
+   104451,
+   92571,
+   98450,
+   94461,
+   105591,
+   104700,
+   100831,
+   86721,
+   87811,
+   97720,
+   96480,
+   81930,
+   78441,
+   95311,
+   84651,
+   109290,
+   92571,
+   87811,
+   82601,
+   95320,
+   88811,
+   90751,
+   86390,
+   82400,
+   85690,
+   84660,
+   90811,
+   88481,
+   86330,
+   94461,
+   80841,
+   105091,
+   96310,
+   103811,
+   99730,
+   88710,
+   91571,
+   103811,
+   92571,
+   85690,
+   96301,
+   87450,
+   91571,
+   102811,
+   80781,
+   82460,
+   85950,
+   101591,
+   82601,
+   99941,
+   84290,
+   90811,
+   101751,
+   83431,
+   82731,
+   91831,
+   81841,
+   92571,
+   96711,
+   85721,
+   82491,
+   88851,
+   92961,
+   100701,
+   90811,
+   97311,
+   112720,
+   94861,
+   95690,
+   94591,
+   116811,
+   90811,
+   85690,
+   79381,
+   83861,
+   86690,
+   98480,
+   79441,
+   89811,
+   96471,
+   84690,
+   87811,
+   82841,
+   90390,
+   91441,
+   103411,
+   101811,
+   93831,
+   93401,
+   84601,
+   89461,
+   109301,
+   93571,
+   93841,
+   93721,
+   104611,
+   83690,
+   113741,
+   90811,
+   103711,
+   89751,
+   114461,
+   79841,
+   92571,
+   88411,
+   104411,
+   88971,
+   105851,
+   90811,
+   78441
   ],
   "truncated": false,
   "range": {
@@ -792,19 +792,21 @@
   },
   "score": {
    "uncoveredPrimary": 0,
-   "uncoveredBackup": 3,
+   "uncoveredBackup": 0,
    "hardViolations": 0,
-   "softSum": 122,
-   "targetDeviation": 25,
-   "weekendSpread": 16,
-   "holidaySpread": 0,
-   "total": 30124660,
+   "softSum": 70,
+   "primaryDeviation": 19.8,
+   "backupDeviation": 13.2,
+   "weekendSpread": 6,
+   "holidaySpread": 1,
+   "total": 77321,
    "weights": {
     "uncoveredPrimary": 1000000000,
     "uncoveredBackup": 10000000,
     "hardViolations": 1000000,
     "softSum": 1000,
-    "targetDeviation": 100,
+    "primaryDeviation": 300,
+    "backupDeviation": 100,
     "weekendSpread": 10,
     "holidaySpread": 1
    }
@@ -815,48 +817,69 @@
     "name": "Khan",
     "months": {
      "2026-11": {
-      "primary": 4,
-      "backup": 10,
-      "total": 14,
-      "weekendDays": 9,
+      "primary": 7,
+      "backup": 3,
+      "total": 10,
+      "weekendDays": 7,
       "majorHolidays": 1,
       "minorHolidays": 0,
-      "maxConsecutive": 1,
+      "maxConsecutive": 2,
+      "maxConsecutiveAnyRole": 2,
       "cap": null,
-      "target": null
+      "eastP": 0,
+      "target": {
+       "primary": 5,
+       "backup": 3
+      }
      },
      "2026-12": {
       "primary": 3,
-      "backup": 11,
-      "total": 14,
-      "weekendDays": 11,
-      "majorHolidays": 0,
+      "backup": 6,
+      "total": 9,
+      "weekendDays": 3,
+      "majorHolidays": 1,
       "minorHolidays": 0,
       "maxConsecutive": 3,
+      "maxConsecutiveAnyRole": 3,
       "cap": null,
-      "target": null
+      "eastP": 0,
+      "target": {
+       "primary": 4.4,
+       "backup": 6.2
+      }
      },
      "2027-01": {
       "primary": 2,
-      "backup": 0,
-      "total": 2,
-      "weekendDays": 2,
-      "majorHolidays": 0,
+      "backup": 1,
+      "total": 3,
+      "weekendDays": 3,
+      "majorHolidays": 1,
       "minorHolidays": 0,
       "maxConsecutive": 2,
+      "maxConsecutiveAnyRole": 3,
       "cap": null,
-      "target": null
+      "eastP": 0,
+      "target": {
+       "primary": 0.6,
+       "backup": 0.6
+      }
      }
     },
     "range": {
-     "primary": 9,
-     "backup": 21,
-     "total": 30,
-     "weekendDays": 22,
-     "majorHolidays": 1,
+     "primary": 12,
+     "backup": 10,
+     "total": 22,
+     "weekendDays": 13,
+     "majorHolidays": 2,
      "minorHolidays": 0,
      "maxConsecutive": 3,
-     "cap": null
+     "maxConsecutiveAnyRole": 3,
+     "cap": null,
+     "eastP": 0,
+     "target": {
+      "primary": 10,
+      "backup": 9.8
+     }
     }
    },
    "s2": {
@@ -864,48 +887,69 @@
     "name": "Burchett",
     "months": {
      "2026-11": {
-      "primary": 7,
-      "backup": 0,
-      "total": 7,
+      "primary": 6,
+      "backup": 4,
+      "total": 10,
       "weekendDays": 4,
       "majorHolidays": 0,
       "minorHolidays": 0,
       "maxConsecutive": 2,
+      "maxConsecutiveAnyRole": 3,
       "cap": 8,
-      "target": 7
+      "eastP": 0,
+      "target": {
+       "primary": 6,
+       "backup": 4
+      }
      },
      "2026-12": {
-      "primary": 5,
-      "backup": 2,
-      "total": 7,
-      "weekendDays": 2,
+      "primary": 6,
+      "backup": 6,
+      "total": 12,
+      "weekendDays": 6,
       "majorHolidays": 1,
       "minorHolidays": 0,
       "maxConsecutive": 2,
+      "maxConsecutiveAnyRole": 3,
       "cap": 8,
-      "target": 7
+      "eastP": 0,
+      "target": {
+       "primary": 4.4,
+       "backup": 6.2
+      }
      },
      "2027-01": {
       "primary": 1,
-      "backup": 2,
-      "total": 3,
-      "weekendDays": 3,
+      "backup": 0,
+      "total": 1,
+      "weekendDays": 1,
       "majorHolidays": 1,
       "minorHolidays": 0,
-      "maxConsecutive": 1,
+      "maxConsecutive": 2,
+      "maxConsecutiveAnyRole": 2,
       "cap": 8,
-      "target": 1
+      "eastP": 0,
+      "target": {
+       "primary": 0.6,
+       "backup": 0.6
+      }
      }
     },
     "range": {
      "primary": 13,
-     "backup": 4,
-     "total": 17,
-     "weekendDays": 9,
+     "backup": 10,
+     "total": 23,
+     "weekendDays": 11,
      "majorHolidays": 1,
      "minorHolidays": 0,
      "maxConsecutive": 2,
-     "cap": 8
+     "maxConsecutiveAnyRole": 3,
+     "cap": 8,
+     "eastP": 0,
+     "target": {
+      "primary": 11,
+      "backup": 10.8
+     }
     }
    },
    "s3": {
@@ -913,48 +957,69 @@
     "name": "Acton",
     "months": {
      "2026-11": {
-      "primary": 6,
-      "backup": 4,
-      "total": 10,
-      "weekendDays": 1,
+      "primary": 10,
+      "backup": 3,
+      "total": 13,
+      "weekendDays": 3,
       "majorHolidays": 0,
       "minorHolidays": 0,
-      "maxConsecutive": 1,
+      "maxConsecutive": 3,
+      "maxConsecutiveAnyRole": 5,
       "cap": null,
-      "target": 7.8
+      "eastP": 0,
+      "target": {
+       "primary": 8,
+       "backup": 3
+      }
      },
      "2026-12": {
-      "primary": 7,
-      "backup": 9,
-      "total": 16,
-      "weekendDays": 5,
-      "majorHolidays": 2,
+      "primary": 6,
+      "backup": 6,
+      "total": 12,
+      "weekendDays": 4,
+      "majorHolidays": 1,
       "minorHolidays": 0,
       "maxConsecutive": 2,
+      "maxConsecutiveAnyRole": 4,
       "cap": null,
-      "target": 9.2
+      "eastP": 0,
+      "target": {
+       "primary": 4.4,
+       "backup": 6.2
+      }
      },
      "2027-01": {
       "primary": 0,
-      "backup": 1,
-      "total": 1,
-      "weekendDays": 1,
-      "majorHolidays": 1,
+      "backup": 0,
+      "total": 0,
+      "weekendDays": 0,
+      "majorHolidays": 0,
       "minorHolidays": 0,
       "maxConsecutive": 0,
+      "maxConsecutiveAnyRole": 0,
       "cap": null,
-      "target": 1
+      "eastP": 0,
+      "target": {
+       "primary": 0.6,
+       "backup": 0.6
+      }
      }
     },
     "range": {
-     "primary": 13,
-     "backup": 14,
-     "total": 27,
+     "primary": 16,
+     "backup": 9,
+     "total": 25,
      "weekendDays": 7,
-     "majorHolidays": 2,
+     "majorHolidays": 1,
      "minorHolidays": 0,
-     "maxConsecutive": 2,
-     "cap": null
+     "maxConsecutive": 3,
+     "maxConsecutiveAnyRole": 5,
+     "cap": null,
+     "eastP": 0,
+     "target": {
+      "primary": 13,
+      "backup": 9.8
+     }
     }
    },
    "s4": {
@@ -962,48 +1027,69 @@
     "name": "Philip",
     "months": {
      "2026-11": {
-      "primary": 7,
-      "backup": 1,
-      "total": 8,
-      "weekendDays": 4,
-      "majorHolidays": 0,
-      "minorHolidays": 0,
-      "maxConsecutive": 3,
-      "cap": 8,
-      "target": 7
-     },
-     "2026-12": {
       "primary": 5,
-      "backup": 3,
-      "total": 8,
-      "weekendDays": 3,
+      "backup": 4,
+      "total": 9,
+      "weekendDays": 5,
       "majorHolidays": 1,
       "minorHolidays": 0,
       "maxConsecutive": 4,
+      "maxConsecutiveAnyRole": 7,
       "cap": 8,
-      "target": 7
+      "eastP": 0,
+      "target": {
+       "primary": 1.6,
+       "backup": 3
+      }
+     },
+     "2026-12": {
+      "primary": 5,
+      "backup": 7,
+      "total": 12,
+      "weekendDays": 5,
+      "majorHolidays": 0,
+      "minorHolidays": 0,
+      "maxConsecutive": 2,
+      "maxConsecutiveAnyRole": 3,
+      "cap": 8,
+      "eastP": 0,
+      "target": {
+       "primary": 4.4,
+       "backup": 6.2
+      }
      },
      "2027-01": {
       "primary": 0,
-      "backup": 0,
-      "total": 0,
-      "weekendDays": 0,
+      "backup": 2,
+      "total": 2,
+      "weekendDays": 2,
       "majorHolidays": 0,
       "minorHolidays": 0,
       "maxConsecutive": 0,
+      "maxConsecutiveAnyRole": 2,
       "cap": 8,
-      "target": 1
+      "eastP": 0,
+      "target": {
+       "primary": 0.6,
+       "backup": 0.6
+      }
      }
     },
     "range": {
-     "primary": 11,
-     "backup": 4,
-     "total": 15,
-     "weekendDays": 6,
+     "primary": 9,
+     "backup": 13,
+     "total": 22,
+     "weekendDays": 11,
      "majorHolidays": 1,
      "minorHolidays": 0,
-     "maxConsecutive": 4,
-     "cap": 8
+     "maxConsecutive": 2,
+     "maxConsecutiveAnyRole": 4,
+     "cap": 8,
+     "eastP": 0,
+     "target": {
+      "primary": 6.6,
+      "backup": 9.8
+     }
     }
    },
    "s5": {
@@ -1011,26 +1097,36 @@
     "name": "Fierce",
     "months": {
      "2026-11": {
-      "primary": 3,
-      "backup": 11,
-      "total": 14,
+      "primary": 0,
+      "backup": 15,
+      "total": 15,
       "weekendDays": 6,
-      "majorHolidays": 1,
+      "majorHolidays": 0,
       "minorHolidays": 0,
-      "maxConsecutive": 1,
+      "maxConsecutive": 0,
+      "maxConsecutiveAnyRole": 8,
       "cap": 14,
-      "target": 7.8
+      "eastP": 7,
+      "target": {
+       "primary": 1.6,
+       "backup": 8
+      }
      },
      "2026-12": {
       "primary": 9,
-      "backup": 4,
-      "total": 13,
-      "weekendDays": 3,
-      "majorHolidays": 0,
+      "backup": 6,
+      "total": 15,
+      "weekendDays": 6,
+      "majorHolidays": 1,
       "minorHolidays": 0,
       "maxConsecutive": 7,
+      "maxConsecutiveAnyRole": 7,
       "cap": 14,
-      "target": 9.2
+      "eastP": 0,
+      "target": {
+       "primary": 7,
+       "backup": 6.2
+      }
      },
      "2027-01": {
       "primary": 0,
@@ -1040,19 +1136,30 @@
       "majorHolidays": 0,
       "minorHolidays": 0,
       "maxConsecutive": 0,
+      "maxConsecutiveAnyRole": 0,
       "cap": 14,
-      "target": 1
+      "eastP": 0,
+      "target": {
+       "primary": 0.6,
+       "backup": 0.6
+      }
      }
     },
     "range": {
-     "primary": 12,
-     "backup": 15,
-     "total": 27,
-     "weekendDays": 9,
+     "primary": 9,
+     "backup": 21,
+     "total": 30,
+     "weekendDays": 12,
      "majorHolidays": 1,
      "minorHolidays": 0,
      "maxConsecutive": 7,
-     "cap": 14
+     "maxConsecutiveAnyRole": 8,
+     "cap": 14,
+     "eastP": 7,
+     "target": {
+      "primary": 9.2,
+      "backup": 14.8
+     }
     }
    },
    "s6": {
@@ -1060,26 +1167,36 @@
     "name": "Sarkar",
     "months": {
      "2026-11": {
-      "primary": 3,
-      "backup": 1,
-      "total": 4,
-      "weekendDays": 1,
-      "majorHolidays": 0,
-      "minorHolidays": 0,
-      "maxConsecutive": 1,
-      "cap": 8,
-      "target": null
-     },
-     "2026-12": {
       "primary": 2,
-      "backup": 1,
-      "total": 3,
+      "backup": 0,
+      "total": 2,
       "weekendDays": 0,
       "majorHolidays": 0,
       "minorHolidays": 0,
       "maxConsecutive": 1,
+      "maxConsecutiveAnyRole": 1,
       "cap": 8,
-      "target": null
+      "eastP": 0,
+      "target": {
+       "primary": 2,
+       "backup": null
+      }
+     },
+     "2026-12": {
+      "primary": 2,
+      "backup": 0,
+      "total": 2,
+      "weekendDays": 0,
+      "majorHolidays": 0,
+      "minorHolidays": 0,
+      "maxConsecutive": 1,
+      "maxConsecutiveAnyRole": 1,
+      "cap": 8,
+      "eastP": 0,
+      "target": {
+       "primary": 2,
+       "backup": null
+      }
      },
      "2027-01": {
       "primary": 0,
@@ -1089,235 +1206,146 @@
       "majorHolidays": 0,
       "minorHolidays": 0,
       "maxConsecutive": 0,
+      "maxConsecutiveAnyRole": 0,
       "cap": 8,
-      "target": null
+      "eastP": 0,
+      "target": {
+       "primary": null,
+       "backup": null
+      }
      }
     },
     "range": {
-     "primary": 5,
-     "backup": 2,
-     "total": 7,
-     "weekendDays": 1,
+     "primary": 4,
+     "backup": 0,
+     "total": 4,
+     "weekendDays": 0,
      "majorHolidays": 0,
      "minorHolidays": 0,
      "maxConsecutive": 1,
-     "cap": 8
+     "maxConsecutiveAnyRole": 1,
+     "cap": 8,
+     "eastP": 0,
+     "target": {
+      "primary": 4,
+      "backup": null
+     }
     }
    }
   },
-  "uncovered": [
+  "uncovered": [],
+  "softPenalties": [
    {
-    "day": "2026-11-05",
+    "day": "2026-11-07",
     "role": "backup",
-    "weekday": "Thu",
-    "holidayUnit": null,
-    "reasons": {
-     "s1": [
-      "hard-never-weekday:Thu"
-     ],
-     "s2": [
-      "not-recurring-available"
-     ],
-     "s3": [
-      "holds-other-role"
-     ],
-     "s4": [
-      "outside-available-weeks"
-     ],
-     "s5": [
-      "weekday-pattern:Thu"
-     ],
-     "s6": [
-      "outside-window"
-     ]
-    }
+    "id": "s1",
+    "reason": "pattern-mismatch:block",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-07",
+    "role": "backup",
+    "id": "s1",
+    "reason": "weekend-backup",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-08",
+    "role": "backup",
+    "id": "s1",
+    "reason": "pattern-mismatch:block",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-08",
+    "role": "backup",
+    "id": "s1",
+    "reason": "weekend-backup",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-13",
+    "role": "primary",
+    "id": "s4",
+    "reason": "pattern-mismatch:block",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-17",
+    "role": "primary",
+    "id": "s6",
+    "reason": "window-week-below-target:2",
+    "weight": -3
    },
    {
     "day": "2026-11-19",
-    "role": "backup",
-    "weekday": "Thu",
-    "holidayUnit": null,
-    "reasons": {
-     "s1": [
-      "hard-never-weekday:Thu"
-     ],
-     "s2": [
-      "not-recurring-available"
-     ],
-     "s3": [
-      "time-off:2026-11-19"
-     ],
-     "s4": [
-      "outside-available-weeks"
-     ],
-     "s5": [
-      "weekday-pattern:Thu"
-     ],
-     "s6": [
-      "holds-other-role"
-     ]
-    }
-   },
-   {
-    "day": "2026-12-03",
-    "role": "backup",
-    "weekday": "Thu",
-    "holidayUnit": null,
-    "reasons": {
-     "s1": [
-      "hard-never-weekday:Thu"
-     ],
-     "s2": [
-      "whitelist-month"
-     ],
-     "s3": [
-      "holds-other-role"
-     ],
-     "s4": [
-      "outside-available-weeks"
-     ],
-     "s5": [
-      "weekday-pattern:Thu"
-     ],
-     "s6": [
-      "outside-window"
-     ]
-    }
-   }
-  ],
-  "softPenalties": [
-   {
-    "day": "2026-11-02",
-    "role": "backup",
-    "id": "s1",
-    "reason": "auto-offer-weekday",
-    "weight": 1
-   },
-   {
-    "day": "2026-11-03",
-    "role": "backup",
-    "id": "s3",
-    "reason": "recurring-avoid:Tue",
-    "weight": 3
-   },
-   {
-    "day": "2026-11-03",
-    "role": "backup",
-    "id": "s3",
-    "reason": "backup-after-primary",
-    "weight": 1
-   },
-   {
-    "day": "2026-11-04",
     "role": "primary",
-    "id": "s5",
-    "reason": "preferred",
-    "weight": -1
-   },
-   {
-    "day": "2026-11-04",
-    "role": "backup",
-    "id": "s1",
-    "reason": "auto-offer-weekday",
-    "weight": 1
-   },
-   {
-    "day": "2026-11-17",
-    "role": "backup",
-    "id": "s3",
-    "reason": "recurring-avoid:Tue",
-    "weight": 3
-   },
-   {
-    "day": "2026-11-17",
-    "role": "backup",
-    "id": "s3",
-    "reason": "backup-after-primary",
-    "weight": 1
-   },
-   {
-    "day": "2026-11-18",
-    "role": "primary",
-    "id": "s5",
-    "reason": "preferred",
-    "weight": -1
+    "id": "s6",
+    "reason": "window-week-below-target:2",
+    "weight": -3
    },
    {
     "day": "2026-11-20",
     "role": "backup",
+    "id": "s5",
+    "reason": "back-to-back-weekend",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-21",
+    "role": "primary",
     "id": "s1",
     "reason": "back-to-back-weekend",
     "weight": 3
    },
    {
     "day": "2026-11-21",
+    "role": "primary",
+    "id": "s1",
+    "reason": "pattern-mismatch:block",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-21",
     "role": "backup",
+    "id": "s5",
+    "reason": "back-to-back-weekend",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-22",
+    "role": "primary",
+    "id": "s1",
+    "reason": "east-forecast:0.09",
+    "weight": 2
+   },
+   {
+    "day": "2026-11-22",
+    "role": "primary",
     "id": "s1",
     "reason": "back-to-back-weekend",
     "weight": 3
    },
    {
     "day": "2026-11-22",
-    "role": "backup",
+    "role": "primary",
     "id": "s1",
+    "reason": "pattern-mismatch:block",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-22",
+    "role": "backup",
+    "id": "s5",
     "reason": "back-to-back-weekend",
     "weight": 3
    },
    {
-    "day": "2026-11-24",
-    "role": "backup",
-    "id": "s3",
-    "reason": "recurring-avoid:Tue",
-    "weight": 3
-   },
-   {
     "day": "2026-11-25",
-    "role": "primary",
+    "role": "backup",
     "id": "s5",
     "reason": "preferred",
     "weight": -1
-   },
-   {
-    "day": "2026-11-25",
-    "role": "backup",
-    "id": "s1",
-    "reason": "auto-offer-weekday",
-    "weight": 1
-   },
-   {
-    "day": "2026-11-26",
-    "role": "backup",
-    "id": "s5",
-    "reason": "backup-after-primary",
-    "weight": 1
-   },
-   {
-    "day": "2026-11-30",
-    "role": "backup",
-    "id": "s1",
-    "reason": "auto-offer-weekday",
-    "weight": 1
-   },
-   {
-    "day": "2026-11-30",
-    "role": "backup",
-    "id": "s1",
-    "reason": "backup-after-primary",
-    "weight": 1
-   },
-   {
-    "day": "2026-12-01",
-    "role": "backup",
-    "id": "s3",
-    "reason": "recurring-avoid:Tue",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-01",
-    "role": "backup",
-    "id": "s3",
-    "reason": "backup-after-primary",
-    "weight": 1
    },
    {
     "day": "2026-12-02",
@@ -1325,83 +1353,41 @@
     "id": "s5",
     "reason": "preferred",
     "weight": -1
-   },
-   {
-    "day": "2026-12-02",
-    "role": "backup",
-    "id": "s1",
-    "reason": "auto-offer-weekday",
-    "weight": 1
-   },
-   {
-    "day": "2026-12-04",
-    "role": "backup",
-    "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
    },
    {
     "day": "2026-12-05",
     "role": "backup",
-    "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
+    "id": "s3",
+    "reason": "backup-after-primary",
+    "weight": 1
    },
    {
     "day": "2026-12-06",
     "role": "backup",
-    "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-07",
-    "role": "backup",
-    "id": "s1",
-    "reason": "auto-offer-weekday",
+    "id": "s2",
+    "reason": "backup-after-primary",
     "weight": 1
    },
    {
-    "day": "2026-12-11",
-    "role": "backup",
-    "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-12",
-    "role": "backup",
-    "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-13",
-    "role": "backup",
-    "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
     "day": "2026-12-15",
-    "role": "backup",
-    "id": "s3",
-    "reason": "recurring-avoid:Tue",
-    "weight": 3
+    "role": "primary",
+    "id": "s6",
+    "reason": "window-week-below-target:2",
+    "weight": -3
    },
    {
     "day": "2026-12-16",
-    "role": "backup",
+    "role": "primary",
     "id": "s5",
     "reason": "preferred",
     "weight": -1
    },
    {
     "day": "2026-12-17",
-    "role": "backup",
-    "id": "s3",
-    "reason": "backup-after-primary",
-    "weight": 1
+    "role": "primary",
+    "id": "s6",
+    "reason": "window-week-below-target:2",
+    "weight": -3
    },
    {
     "day": "2026-12-18",
@@ -1414,22 +1400,15 @@
     "day": "2026-12-18",
     "role": "primary",
     "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-18",
-    "role": "backup",
-    "id": "s3",
-    "reason": "back-to-back-weekend",
-    "weight": 3
+    "reason": "weekend-primary",
+    "weight": -3
    },
    {
     "day": "2026-12-19",
     "role": "primary",
     "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
+    "reason": "weekend-primary",
+    "weight": -3
    },
    {
     "day": "2026-12-20",
@@ -1442,56 +1421,14 @@
     "day": "2026-12-20",
     "role": "primary",
     "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
+    "reason": "weekend-primary",
+    "weight": -3
    },
    {
-    "day": "2026-12-20",
-    "role": "backup",
-    "id": "s3",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-22",
-    "role": "backup",
-    "id": "s3",
-    "reason": "recurring-avoid:Tue",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-22",
-    "role": "backup",
-    "id": "s3",
-    "reason": "backup-after-primary",
-    "weight": 1
-   },
-   {
-    "day": "2026-12-23",
+    "day": "2026-12-26",
     "role": "primary",
-    "id": "s5",
-    "reason": "preferred",
-    "weight": -1
-   },
-   {
-    "day": "2026-12-23",
-    "role": "backup",
-    "id": "s1",
-    "reason": "auto-offer-weekday",
-    "weight": 1
-   },
-   {
-    "day": "2026-12-25",
-    "role": "primary",
-    "id": "s3",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-25",
-    "role": "backup",
     "id": "s4",
-    "reason": "pattern-mismatch:block",
+    "reason": "back-to-back-weekend",
     "weight": 3
    },
    {
@@ -1502,17 +1439,10 @@
     "weight": 3
    },
    {
-    "day": "2026-12-26",
-    "role": "backup",
-    "id": "s1",
+    "day": "2026-12-27",
+    "role": "primary",
+    "id": "s4",
     "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-26",
-    "role": "backup",
-    "id": "s1",
-    "reason": "pattern-mismatch:block",
     "weight": 3
    },
    {
@@ -1521,47 +1451,12 @@
     "id": "s4",
     "reason": "pattern-mismatch:block",
     "weight": 3
-   },
-   {
-    "day": "2026-12-27",
-    "role": "backup",
-    "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-27",
-    "role": "backup",
-    "id": "s1",
-    "reason": "pattern-mismatch:block",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-29",
-    "role": "backup",
-    "id": "s3",
-    "reason": "recurring-avoid:Tue",
-    "weight": 3
-   },
-   {
-    "day": "2026-12-30",
-    "role": "backup",
-    "id": "s5",
-    "reason": "preferred",
-    "weight": -1
    },
    {
     "day": "2027-01-01",
     "role": "backup",
-    "id": "s3",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2027-01-02",
-    "role": "primary",
     "id": "s1",
-    "reason": "back-to-back-weekend",
+    "reason": "pattern-mismatch:block",
     "weight": 3
    },
    {
@@ -1574,15 +1469,15 @@
    {
     "day": "2027-01-02",
     "role": "backup",
-    "id": "s2",
-    "reason": "backup-after-primary",
-    "weight": 1
+    "id": "s4",
+    "reason": "back-to-back-weekend",
+    "weight": 3
    },
    {
     "day": "2027-01-02",
     "role": "backup",
-    "id": "s2",
-    "reason": "pattern-mismatch:split",
+    "id": "s4",
+    "reason": "pattern-mismatch:block",
     "weight": 3
    },
    {
@@ -1596,37 +1491,125 @@
     "day": "2027-01-03",
     "role": "primary",
     "id": "s1",
-    "reason": "back-to-back-weekend",
-    "weight": 3
-   },
-   {
-    "day": "2027-01-03",
-    "role": "primary",
-    "id": "s1",
     "reason": "pattern-mismatch:block",
     "weight": 3
    },
    {
     "day": "2027-01-03",
     "role": "backup",
-    "id": "s2",
-    "reason": "pattern-mismatch:split",
+    "id": "s4",
+    "reason": "back-to-back-weekend",
     "weight": 3
+   },
+   {
+    "day": "2027-01-03",
+    "role": "backup",
+    "id": "s4",
+    "reason": "pattern-mismatch:block",
+    "weight": 3
+   },
+   {
+    "day": "2026-11-20",
+    "role": "primary",
+    "id": null,
+    "reason": "pattern-daily",
+    "weight": 5
+   },
+   {
+    "day": "2026-11-13",
+    "role": "primary",
+    "id": null,
+    "reason": "pattern-daily",
+    "weight": 5
+   },
+   {
+    "day": "2026-11-06",
+    "role": "backup",
+    "id": null,
+    "reason": "pattern-daily",
+    "weight": 5
    }
   ],
   "softByReason": {
-   "auto-offer-weekday": 7,
-   "recurring-avoid:Tue": 21,
-   "backup-after-primary": 8,
-   "preferred": -7,
-   "back-to-back-weekend": 60,
+   "pattern-mismatch:block": 36,
+   "weekend-backup": 6,
+   "window-week-below-target:2": -12,
+   "back-to-back-weekend": 27,
+   "east-forecast:0.09": 2,
+   "preferred": -3,
+   "backup-after-primary": 2,
    "east-forecast:0.19": 4,
-   "pattern-mismatch:block": 21,
-   "pattern-mismatch:split": 6,
-   "east-forecast:0.03": 2
+   "weekend-primary": -9,
+   "east-forecast:0.03": 2,
+   "pattern-daily": 15
   },
   "hardViolations": [],
-  "lockViolations": [],
+  "lockViolations": [
+   {
+    "day": "2026-11-18",
+    "role": "primary",
+    "id": "s3",
+    "lock": "import",
+    "reasons": [
+     "day-before-vacation"
+    ]
+   }
+  ],
+  "mode": "generate",
+  "fixedSlots": 33,
+  "fixedViolations": [],
+  "derivedYields": [],
+  "derivedConfirmed": [
+   {
+    "day": "2026-11-09",
+    "role": "backup",
+    "id": "s5",
+    "derivedId": "s5",
+    "holderSource": "import"
+   },
+   {
+    "day": "2026-11-10",
+    "role": "backup",
+    "id": "s5",
+    "derivedId": "s5",
+    "holderSource": "import"
+   },
+   {
+    "day": "2026-11-11",
+    "role": "backup",
+    "id": "s5",
+    "derivedId": "s5",
+    "holderSource": "import"
+   },
+   {
+    "day": "2026-11-12",
+    "role": "backup",
+    "id": "s5",
+    "derivedId": "s5",
+    "holderSource": "import"
+   },
+   {
+    "day": "2026-11-13",
+    "role": "backup",
+    "id": "s5",
+    "derivedId": "s5",
+    "holderSource": "import"
+   },
+   {
+    "day": "2026-11-14",
+    "role": "backup",
+    "id": "s5",
+    "derivedId": "s5",
+    "holderSource": "import"
+   },
+   {
+    "day": "2026-11-15",
+    "role": "backup",
+    "id": "s5",
+    "derivedId": "s5",
+    "holderSource": "import"
+   }
+  ],
   "holidayUnits": [
    {
     "name": "Thanksgiving",
@@ -1651,11 +1634,12 @@
      "2026-11-29"
     ],
     "primary": "s1",
-    "backup": "s5",
+    "backup": "s4",
     "primaryLocked": true,
     "backupLocked": false,
     "candidates": {
      "backup": [
+      "s4",
       "s5"
      ]
     },
@@ -1678,12 +1662,11 @@
      "2026-12-25"
     ],
     "primary": "s3",
-    "backup": "s4",
+    "backup": "s5",
     "primaryLocked": false,
     "backupLocked": false,
     "candidates": {
      "primary": [
-      "s2",
       "s3",
       "s4",
       "s5"
@@ -1691,7 +1674,6 @@
      "backup": [
       "s1",
       "s2",
-      "s4",
       "s5"
      ]
     },
@@ -1714,7 +1696,7 @@
      "2027-01-01"
     ],
     "primary": "s2",
-    "backup": "s3",
+    "backup": "s1",
     "primaryLocked": false,
     "backupLocked": false,
     "candidates": {
@@ -1744,37 +1726,39 @@
     ],
     "preempted": [],
     "reduced": false,
-    "kind": "split",
+    "kind": "locked",
     "members": {
-     "fri": "s2",
-     "sat": "s3",
+     "fri": "s3",
+     "sat": "s2",
      "sun": "s2"
     },
-    "fallback": false,
+    "fallback": true,
     "roles": {
      "primary": {
-      "kind": "split",
+      "kind": "locked",
       "members": {
-       "fri": "s2",
-       "sat": "s3",
+       "fri": "s3",
+       "sat": "s2",
        "sun": "s2"
       },
       "penalty": 0,
       "fallback": false,
       "styleMismatch": [],
-      "partial": false,
+      "locked": true,
       "openDays": []
      },
      "backup": {
-      "kind": "block",
+      "kind": "daily",
       "members": {
-       "fri": "s1",
+       "fri": "s2",
        "sat": "s1",
        "sun": "s1"
       },
-      "penalty": 0,
-      "fallback": false,
-      "styleMismatch": [],
+      "penalty": 17,
+      "fallback": true,
+      "styleMismatch": [
+       "s1"
+      ],
       "partial": false,
       "openDays": []
      }
@@ -1789,24 +1773,26 @@
     ],
     "preempted": [],
     "reduced": false,
-    "kind": "block",
+    "kind": "daily",
     "members": {
      "fri": "s4",
-     "sat": "s4",
-     "sun": "s4"
+     "sat": "s3",
+     "sun": "s3"
     },
-    "fallback": false,
+    "fallback": true,
     "roles": {
      "primary": {
-      "kind": "block",
+      "kind": "daily",
       "members": {
        "fri": "s4",
-       "sat": "s4",
-       "sun": "s4"
+       "sat": "s3",
+       "sun": "s3"
       },
-      "penalty": 0,
-      "fallback": false,
-      "styleMismatch": [],
+      "penalty": 23,
+      "fallback": true,
+      "styleMismatch": [
+       "s4"
+      ],
       "partial": false,
       "openDays": []
      },
@@ -1834,33 +1820,35 @@
     ],
     "preempted": [],
     "reduced": false,
-    "kind": "split",
+    "kind": "daily",
     "members": {
      "fri": "s2",
-     "sat": "s6",
-     "sun": "s2"
+     "sat": "s1",
+     "sun": "s1"
     },
-    "fallback": false,
+    "fallback": true,
     "roles": {
      "primary": {
-      "kind": "split",
+      "kind": "daily",
       "members": {
        "fri": "s2",
-       "sat": "s6",
-       "sun": "s2"
+       "sat": "s1",
+       "sun": "s1"
       },
-      "penalty": 0,
-      "fallback": false,
-      "styleMismatch": [],
+      "penalty": 22,
+      "fallback": true,
+      "styleMismatch": [
+       "s1"
+      ],
       "partial": false,
       "openDays": []
      },
      "backup": {
       "kind": "block",
       "members": {
-       "fri": "s1",
-       "sat": "s1",
-       "sun": "s1"
+       "fri": "s5",
+       "sat": "s5",
+       "sun": "s5"
       },
       "penalty": 9,
       "fallback": false,
@@ -1901,13 +1889,13 @@
       "openDays": []
      },
      "backup": {
-      "kind": "block",
+      "kind": "split",
       "members": {
-       "fri": "s1",
-       "sat": "s1",
-       "sun": "s1"
+       "fri": "s2",
+       "sat": "s3",
+       "sun": "s2"
       },
-      "penalty": 9,
+      "penalty": 2,
       "fallback": false,
       "styleMismatch": [],
       "partial": false,
@@ -1948,11 +1936,11 @@
      "backup": {
       "kind": "block",
       "members": {
-       "fri": "s1",
-       "sat": "s1",
-       "sun": "s1"
+       "fri": "s4",
+       "sat": "s4",
+       "sun": "s4"
       },
-      "penalty": 9,
+      "penalty": 0,
       "fallback": false,
       "styleMismatch": [],
       "partial": false,
@@ -1984,20 +1972,20 @@
        "sat": "s1",
        "sun": "s1"
       },
-      "penalty": 4,
+      "penalty": 1,
       "fallback": false,
       "styleMismatch": [],
       "partial": false,
       "openDays": []
      },
      "backup": {
-      "kind": "split",
+      "kind": "block",
       "members": {
-       "fri": "s3",
+       "fri": "s2",
        "sat": "s2",
-       "sun": "s3"
+       "sun": "s2"
       },
-      "penalty": 6,
+      "penalty": 3,
       "fallback": false,
       "styleMismatch": [],
       "partial": false,
@@ -2040,10 +2028,10 @@
       "kind": "block",
       "members": {
        "fri": null,
-       "sat": "s1",
-       "sun": "s1"
+       "sat": "s5",
+       "sun": "s5"
       },
-      "penalty": 6,
+      "penalty": 0,
       "fallback": false,
       "styleMismatch": [],
       "partial": false,
@@ -2086,10 +2074,10 @@
       "kind": "block",
       "members": {
        "fri": null,
-       "sat": "s2",
-       "sun": "s2"
+       "sat": "s4",
+       "sun": "s4"
       },
-      "penalty": 4,
+      "penalty": 6,
       "fallback": false,
       "styleMismatch": [],
       "partial": false,
@@ -2099,184 +2087,483 @@
    }
   ],
   "impliedTargets": {
-   "rule": "target = max(lockedHeld, min(share, clip)); share = open in-range slots / pool members without a numeric target; clip = min(capPreferred, capTotal - 1) - East-only days; explicit null = no fairness target but the same number as a neutral scoring term; windows = no term",
+   "rule": "equal shares per role (J): pool = active, poolMember !== false, no availableWindows, not external; primaryShare = (open in-range primary slots - the windows surgeons' reserved primaries) / pool size; backupShare = open in-range backup slots / pool size; pool member primaryTarget = max(lockedHeld.primary, min(primaryShare, clipPrimary)) with clipPrimary = min(capPreferred, capPrimary - 1) - East primary-week days not held as Silvis primary (K; null when uncapped), backupTarget = max(lockedHeld.backup, min(backupShare, backupCap.perMonthDays)); a numeric monthlyTarget sets the primary target, { primary, backup } sets each, explicit null = equal share; windows + daysPerWindowWeek.target = target x window weeks of the month the range touches, primary only, no backup target, no target in a month without a window week (N); everyone else: no targets; allowedPrimary / allowedBackup = open in-range slots where eligibility passes on the lock-only schedule (a weekend day of a full unit as a block member, a holiday day as a unit candidate); lockedHeld and the targets are whole-calendar-month figures even where the range only touches the month (rangeDays); placeableAtTarget = sum of max(0, target - lockedHeld) per role - below the open slots where a locked floor or a clip pins a member, since the flat share is not redistributed",
+   "pool": [
+    "s1",
+    "s2",
+    "s3",
+    "s4",
+    "s5"
+   ],
    "months": {
     "2026-11": {
-     "openSlots": 47,
-     "divisor": 6,
-     "share": 7.8,
-     "targets": {
-      "s2": 7,
-      "s3": 7.8,
-      "s4": 7,
-      "s5": 7.8
+     "primaryOpen": 10,
+     "backupOpen": 15,
+     "poolSize": 5,
+     "reservedForWindows": 2,
+     "primaryShare": 1.6,
+     "backupShare": 3,
+     "rangeDays": 29,
+     "placeableAtTarget": {
+      "primary": 4.2,
+      "backup": 7
      },
-     "neutralTerm": {
-      "s1": 7.8
+     "windowTarget": {
+      "s6": 2
      },
-     "noTerm": [
-      "s6"
-     ],
-     "lockedHeld": {
-      "s1": 4,
-      "s2": 0,
-      "s3": 0,
-      "s4": 1,
-      "s5": 7
+     "windowWeeks": {
+      "s6": 1
      },
-     "eastOnlyDays": {
-      "s1": 0,
-      "s2": 0,
-      "s3": 0,
-      "s4": 0,
-      "s5": 0
-     },
-     "capClip": {
-      "s1": null,
-      "s2": 7,
-      "s3": null,
-      "s4": 7,
-      "s5": 13
+     "members": {
+      "s1": {
+       "primaryTarget": 5,
+       "backupTarget": 3,
+       "lockedHeld": {
+        "primary": 5,
+        "backup": 0
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 5,
+       "allowedBackup": 10
+      },
+      "s2": {
+       "primaryTarget": 6,
+       "backupTarget": 4,
+       "lockedHeld": {
+        "primary": 6,
+        "backup": 4
+       },
+       "clipPrimary": 7,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 0,
+       "allowedBackup": 0
+      },
+      "s3": {
+       "primaryTarget": 8,
+       "backupTarget": 3,
+       "lockedHeld": {
+        "primary": 8,
+        "backup": 2
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 2,
+       "allowedBackup": 5
+      },
+      "s4": {
+       "primaryTarget": 1.6,
+       "backupTarget": 3,
+       "lockedHeld": {
+        "primary": 1,
+        "backup": 0
+       },
+       "clipPrimary": 7,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 5,
+       "allowedBackup": 15
+      },
+      "s5": {
+       "primaryTarget": 1.6,
+       "backupTarget": 8,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 8
+       },
+       "clipPrimary": 6,
+       "eastPrimaryDays": 7,
+       "allowedPrimary": 2,
+       "allowedBackup": 15
+      },
+      "s6": {
+       "primaryTarget": 2,
+       "backupTarget": null,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 2,
+       "allowedBackup": 2
+      }
      }
     },
     "2026-12": {
-     "openSlots": 55,
-     "divisor": 6,
-     "share": 9.2,
-     "targets": {
-      "s2": 7,
-      "s3": 9.2,
-      "s4": 7,
-      "s5": 9.2
+     "primaryOpen": 24,
+     "backupOpen": 31,
+     "poolSize": 5,
+     "reservedForWindows": 2,
+     "primaryShare": 4.4,
+     "backupShare": 6.2,
+     "rangeDays": 31,
+     "placeableAtTarget": {
+      "primary": 19.6,
+      "backup": 31
      },
-     "neutralTerm": {
-      "s1": 9.2
+     "windowTarget": {
+      "s6": 2
      },
-     "noTerm": [
-      "s6"
-     ],
-     "lockedHeld": {
-      "s1": 0,
-      "s2": 0,
-      "s3": 0,
-      "s4": 0,
-      "s5": 7
+     "windowWeeks": {
+      "s6": 1
      },
-     "eastOnlyDays": {
-      "s1": 0,
-      "s2": 0,
-      "s3": 0,
-      "s4": 0,
-      "s5": 0
-     },
-     "capClip": {
-      "s1": null,
-      "s2": 7,
-      "s3": null,
-      "s4": 7,
-      "s5": 13
+     "members": {
+      "s1": {
+       "primaryTarget": 4.4,
+       "backupTarget": 6.2,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 12,
+       "allowedBackup": 31
+      },
+      "s2": {
+       "primaryTarget": 4.4,
+       "backupTarget": 6.2,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": 7,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 12,
+       "allowedBackup": 31
+      },
+      "s3": {
+       "primaryTarget": 4.4,
+       "backupTarget": 6.2,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 17,
+       "allowedBackup": 31
+      },
+      "s4": {
+       "primaryTarget": 4.4,
+       "backupTarget": 6.2,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": 7,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 11,
+       "allowedBackup": 31
+      },
+      "s5": {
+       "primaryTarget": 7,
+       "backupTarget": 6.2,
+       "lockedHeld": {
+        "primary": 7,
+        "backup": 0
+       },
+       "clipPrimary": 13,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 12,
+       "allowedBackup": 24
+      },
+      "s6": {
+       "primaryTarget": 2,
+       "backupTarget": null,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 5,
+       "allowedBackup": 5
+      }
      }
     },
     "2027-01": {
-     "openSlots": 6,
-     "divisor": 6,
-     "share": 1,
-     "targets": {
-      "s2": 1,
-      "s3": 1,
-      "s4": 1,
-      "s5": 1
+     "primaryOpen": 3,
+     "backupOpen": 3,
+     "poolSize": 5,
+     "reservedForWindows": 0,
+     "primaryShare": 0.6,
+     "backupShare": 0.6,
+     "rangeDays": 3,
+     "placeableAtTarget": {
+      "primary": 3,
+      "backup": 3
      },
-     "neutralTerm": {
-      "s1": 1
+     "windowTarget": {
+      "s6": 0
      },
-     "noTerm": [
-      "s6"
-     ],
-     "lockedHeld": {
-      "s1": 0,
-      "s2": 0,
-      "s3": 0,
-      "s4": 0,
-      "s5": 0
+     "windowWeeks": {
+      "s6": 0
      },
-     "eastOnlyDays": {
-      "s1": 0,
-      "s2": 0,
-      "s3": 0,
-      "s4": 0,
-      "s5": 0
-     },
-     "capClip": {
-      "s1": null,
-      "s2": 7,
-      "s3": null,
-      "s4": 7,
-      "s5": 13
+     "members": {
+      "s1": {
+       "primaryTarget": 0.6,
+       "backupTarget": 0.6,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 3,
+       "allowedBackup": 3
+      },
+      "s2": {
+       "primaryTarget": 0.6,
+       "backupTarget": 0.6,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": 7,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 3,
+       "allowedBackup": 3
+      },
+      "s3": {
+       "primaryTarget": 0.6,
+       "backupTarget": 0.6,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 3,
+       "allowedBackup": 3
+      },
+      "s4": {
+       "primaryTarget": 0.6,
+       "backupTarget": 0.6,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": 7,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 3,
+       "allowedBackup": 3
+      },
+      "s5": {
+       "primaryTarget": 0.6,
+       "backupTarget": 0.6,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": 13,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 1,
+       "allowedBackup": 3
+      },
+      "s6": {
+       "primaryTarget": null,
+       "backupTarget": null,
+       "lockedHeld": {
+        "primary": 0,
+        "backup": 0
+       },
+       "clipPrimary": null,
+       "eastPrimaryDays": 0,
+       "allowedPrimary": 0,
+       "allowedBackup": 0
+      }
      }
     }
    }
   },
   "targets": {
    "2026-11": {
-    "s2": 7,
-    "s3": 7.8,
-    "s4": 7,
-    "s5": 7.8
+    "s1": {
+     "primary": 5,
+     "backup": 3
+    },
+    "s2": {
+     "primary": 6,
+     "backup": 4
+    },
+    "s3": {
+     "primary": 8,
+     "backup": 3
+    },
+    "s4": {
+     "primary": 1.6,
+     "backup": 3
+    },
+    "s5": {
+     "primary": 1.6,
+     "backup": 8
+    },
+    "s6": {
+     "primary": 2,
+     "backup": null
+    }
    },
    "2026-12": {
-    "s2": 7,
-    "s3": 9.2,
-    "s4": 7,
-    "s5": 9.2
+    "s1": {
+     "primary": 4.4,
+     "backup": 6.2
+    },
+    "s2": {
+     "primary": 4.4,
+     "backup": 6.2
+    },
+    "s3": {
+     "primary": 4.4,
+     "backup": 6.2
+    },
+    "s4": {
+     "primary": 4.4,
+     "backup": 6.2
+    },
+    "s5": {
+     "primary": 7,
+     "backup": 6.2
+    },
+    "s6": {
+     "primary": 2,
+     "backup": null
+    }
    },
    "2027-01": {
-    "s2": 1,
-    "s3": 1,
-    "s4": 1,
-    "s5": 1
+    "s1": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s2": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s3": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s4": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s5": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s6": {
+     "primary": null,
+     "backup": null
+    }
    }
   },
   "scoreTargets": {
    "2026-11": {
-    "s1": 7.8,
-    "s2": 7,
-    "s3": 7.8,
-    "s4": 7,
-    "s5": 7.8
+    "s1": {
+     "primary": 5,
+     "backup": 3
+    },
+    "s2": {
+     "primary": 6,
+     "backup": 4
+    },
+    "s3": {
+     "primary": 8,
+     "backup": 3
+    },
+    "s4": {
+     "primary": 1.6,
+     "backup": 3
+    },
+    "s5": {
+     "primary": 1.6,
+     "backup": 8
+    },
+    "s6": {
+     "primary": 2,
+     "backup": null
+    }
    },
    "2026-12": {
-    "s1": 9.2,
-    "s2": 7,
-    "s3": 9.2,
-    "s4": 7,
-    "s5": 9.2
+    "s1": {
+     "primary": 4.4,
+     "backup": 6.2
+    },
+    "s2": {
+     "primary": 4.4,
+     "backup": 6.2
+    },
+    "s3": {
+     "primary": 4.4,
+     "backup": 6.2
+    },
+    "s4": {
+     "primary": 4.4,
+     "backup": 6.2
+    },
+    "s5": {
+     "primary": 7,
+     "backup": 6.2
+    },
+    "s6": {
+     "primary": 2,
+     "backup": null
+    }
    },
    "2027-01": {
-    "s1": 1,
-    "s2": 1,
-    "s3": 1,
-    "s4": 1,
-    "s5": 1
+    "s1": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s2": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s3": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s4": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s5": {
+     "primary": 0.6,
+     "backup": 0.6
+    },
+    "s6": {
+     "primary": null,
+     "backup": null
+    }
    }
   },
   "forcedSlots": {
-   "s3": {
+   "s4": {
     "2026-11": [
      {
-      "day": "2026-11-05",
+      "day": "2026-11-10",
       "roles": [
-       "primary",
-       "backup"
+       "primary"
+      ]
+     },
+     {
+      "day": "2026-11-24",
+      "roles": [
+       "primary"
       ]
      }
     ],
     "2026-12": [
      {
-      "day": "2026-12-03",
+      "day": "2026-12-22",
       "roles": [
-       "primary",
-       "backup"
+       "primary"
+      ]
+     },
+     {
+      "day": "2026-12-29",
+      "roles": [
+       "primary"
       ]
      }
     ]
@@ -2284,18 +2571,41 @@
    "s6": {
     "2026-11": [
      {
+      "day": "2026-11-17",
+      "roles": [
+       "primary"
+      ]
+     },
+     {
       "day": "2026-11-19",
       "roles": [
-       "primary",
-       "backup"
+       "primary"
+      ]
+     }
+    ],
+    "2026-12": [
+     {
+      "day": "2026-12-15",
+      "roles": [
+       "primary"
       ]
      }
     ]
    },
-   "s4": {
-    "2026-11": [
+   "s2": {
+    "2026-12": [
      {
-      "day": "2026-11-24",
+      "day": "2026-12-01",
+      "roles": [
+       "primary"
+      ]
+     }
+    ]
+   },
+   "s3": {
+    "2026-12": [
+     {
+      "day": "2026-12-03",
       "roles": [
        "primary"
       ]
@@ -2303,6 +2613,53 @@
     ]
    }
   },
+  "windowWeeks": [
+   {
+    "monday": "2026-11-16",
+    "surgeonId": "s6",
+    "windowDays": [
+     "2026-11-16",
+     "2026-11-17",
+     "2026-11-18",
+     "2026-11-19",
+     "2026-11-20"
+    ],
+    "inRangeWindowDays": [
+     "2026-11-16",
+     "2026-11-17",
+     "2026-11-18",
+     "2026-11-19",
+     "2026-11-20"
+    ],
+    "primaries": 2,
+    "backups": 0,
+    "target": 2,
+    "status": "met"
+   },
+   {
+    "monday": "2026-12-14",
+    "surgeonId": "s6",
+    "windowDays": [
+     "2026-12-14",
+     "2026-12-15",
+     "2026-12-16",
+     "2026-12-17",
+     "2026-12-18"
+    ],
+    "inRangeWindowDays": [
+     "2026-12-14",
+     "2026-12-15",
+     "2026-12-16",
+     "2026-12-17",
+     "2026-12-18"
+    ],
+    "primaries": 2,
+    "backups": 0,
+    "target": 2,
+    "status": "met"
+   }
+  ],
+  "handoffGaps": [],
   "eastFeedSnapshot": {
    "coverage": {
     "from": "2026-09-28",
@@ -2361,7 +2718,7 @@
     "weekday": "Mon",
     "probability": 0.27,
     "busyByThreshold": false,
-    "assigned": "backup"
+    "assigned": null
    },
    {
     "id": "s1",
@@ -2369,7 +2726,7 @@
     "weekday": "Tue",
     "probability": 0.41,
     "busyByThreshold": false,
-    "assigned": null
+    "assigned": "backup"
    },
    {
     "id": "s1",
@@ -2385,7 +2742,7 @@
     "weekday": "Thu",
     "probability": 0.28,
     "busyByThreshold": false,
-    "assigned": null
+    "assigned": "backup"
    },
    {
     "id": "s1",
@@ -2393,7 +2750,7 @@
     "weekday": "Mon",
     "probability": 0.41,
     "busyByThreshold": false,
-    "assigned": "backup"
+    "assigned": null
    },
    {
     "id": "s1",
@@ -2441,7 +2798,7 @@
     "weekday": "Wed",
     "probability": 1,
     "busyByThreshold": true,
-    "assigned": "backup"
+    "assigned": null
    },
    {
     "id": "s1",
@@ -2465,7 +2822,7 @@
     "weekday": "Sat",
     "probability": 1,
     "busyByThreshold": true,
-    "assigned": "backup"
+    "assigned": null
    },
    {
     "id": "s1",
@@ -2473,7 +2830,7 @@
     "weekday": "Sun",
     "probability": 0.72,
     "busyByThreshold": true,
-    "assigned": "backup"
+    "assigned": null
    },
    {
     "id": "s1",
@@ -2481,7 +2838,7 @@
     "weekday": "Tue",
     "probability": 0.6,
     "busyByThreshold": true,
-    "assigned": null
+    "assigned": "backup"
    },
    {
     "id": "s1",
@@ -2493,11 +2850,2104 @@
    }
   ],
   "eastUnknownDays": [],
-  "placedCount": 105,
+  "eastStandingDays": {
+   "s1": [
+    "2026-12-24",
+    "2026-12-25"
+   ]
+  },
+  "eastConflicts": [],
+  "placedCount": 86,
   "warnings": [
-   "s5 cap counts East days but the East feed does not cover all of 2026-11: Silvis days only were counted for that month",
-   "s5 cap counts East days but the East feed does not cover all of 2026-12: Silvis days only were counted for that month",
-   "s5 cap counts East days but the East feed does not cover all of 2027-01: Silvis days only were counted for that month"
+   "s5 cap counts East days but the East feed does not cover all of 2026-11: only his Silvis primaries and the derived East primary-week days were counted for that month",
+   "s5 cap counts East days but the East feed does not cover all of 2026-12: only his Silvis primaries and the derived East primary-week days were counted for that month",
+   "s5 cap counts East days but the East feed does not cover all of 2027-01: only his Silvis primaries and the derived East primary-week days were counted for that month",
+   "1 locked slot(s) break a rule - kept as facts, see lockViolations"
   ]
+ },
+ "backfill": {
+  "range": {
+   "start": "2026-10-07",
+   "end": "2026-11-01"
+  },
+  "schedule": {
+   "2026-10-07": {
+    "primary": "s3",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-08": {
+    "primary": "s4",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-09": {
+    "primary": "s3",
+    "backup": "s1",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-10": {
+    "primary": "s3",
+    "backup": "s1",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-11": {
+    "primary": "s3",
+    "backup": "s1",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-12": {
+    "primary": "s5",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: burchett-email-2026-09-18"
+   },
+   "2026-10-13": {
+    "primary": "s4",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-14": {
+    "primary": "s2",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-15": {
+    "primary": null,
+    "backup": "s1",
+    "primaryLocked": false,
+    "backupLocked": false,
+    "source": "generated",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-16": {
+    "primary": "s4",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-17": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-18": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-19": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-20": {
+    "primary": "s6",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: burchett-email-2026-09-17"
+   },
+   "2026-10-21": {
+    "primary": "s3",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-22": {
+    "primary": "s6",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: burchett-email-2026-09-17"
+   },
+   "2026-10-23": {
+    "primary": "s3",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: burchett-email-2026-09-18"
+   },
+   "2026-10-24": {
+    "primary": "s1",
+    "backup": "s5",
+    "primaryLocked": false,
+    "backupLocked": false,
+    "source": "generated",
+    "externalCover": null,
+    "note": "seed: faraz-2026-09-22-sarkar-two-days - open — Sarkar at two days per week from 9/22"
+   },
+   "2026-10-25": {
+    "primary": "s2",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: burchett-email-2026-09-17"
+   },
+   "2026-10-26": {
+    "primary": "s2",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-27": {
+    "primary": "s4",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-28": {
+    "primary": "s2",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-29": {
+    "primary": "s4",
+    "backup": "s1",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-30": {
+    "primary": "s4",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-10-31": {
+    "primary": "s4",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   },
+   "2026-11-01": {
+    "primary": "s4",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null,
+    "note": "seed: office-er-call-panels-2026-09-16"
+   }
+  },
+  "diagnostics": {
+   "seed": 7,
+   "bestOf": 200,
+   "candidatesTried": 200,
+   "candidateScores": [
+    1000044360,
+    1000046380,
+    1000043360,
+    1000048380,
+    1000043360,
+    1000048380,
+    1000042360,
+    1000047380,
+    1000048380,
+    1000047380,
+    1000048380,
+    1000043360,
+    1000044360,
+    1000044360,
+    1000043360,
+    1000044360,
+    1000042360,
+    1000047380,
+    1000044360,
+    1000048380,
+    1000047380,
+    1000044360,
+    1000044360,
+    1000042360,
+    1000042360,
+    1000043360,
+    1000044360,
+    1000043360,
+    1000046380,
+    1000044360,
+    1000044360,
+    1000048380,
+    1000048380,
+    1000047380,
+    1000044360,
+    1000047380,
+    1000046380,
+    1000047380,
+    1000047380,
+    1000047380,
+    1000044360,
+    1000044360,
+    1000044360,
+    1000044360,
+    1000046380,
+    1000043360,
+    1000044360,
+    1000042360,
+    1000042360,
+    1000048380,
+    1000047380,
+    1000047380,
+    1000044360,
+    1000044360,
+    1000043360,
+    1000044360,
+    1000047380,
+    1000044360,
+    1000047380,
+    1000044360,
+    1000044360,
+    1000046380,
+    1000047380,
+    1000047380,
+    1000046380,
+    1000044360,
+    1000043360,
+    1000048380,
+    1000047380,
+    1000044360,
+    1000044360,
+    1000042360,
+    1000043360,
+    1000043360,
+    1000048380,
+    1000044360,
+    1000043360,
+    1000046380,
+    1000044360,
+    1000048380,
+    1000048380,
+    1000047380,
+    1000048380,
+    1000048380,
+    1000044360,
+    1000046380,
+    1000048380,
+    1000047380,
+    1000042360,
+    1000048380,
+    1000046380,
+    1000046380,
+    1000044360,
+    1000042360,
+    1000044360,
+    1000042360,
+    1000047380,
+    1000043360,
+    1000044360,
+    1000046380,
+    1000044360,
+    1000048380,
+    1000044360,
+    1000044360,
+    1000042360,
+    1000047380,
+    1000044360,
+    1000043360,
+    1000046380,
+    1000047380,
+    1000047380,
+    1000046380,
+    1000048380,
+    1000047380,
+    1000043360,
+    1000043360,
+    1000048380,
+    1000047380,
+    1000044360,
+    1000047380,
+    1000047380,
+    1000048380,
+    1000048380,
+    1000044360,
+    1000048380,
+    1000048380,
+    1000044360,
+    1000044360,
+    1000048380,
+    1000046380,
+    1000043360,
+    1000044360,
+    1000047380,
+    1000047380,
+    1000043360,
+    1000048380,
+    1000047380,
+    1000044360,
+    1000044360,
+    1000042360,
+    1000044360,
+    1000048380,
+    1000047380,
+    1000043360,
+    1000043360,
+    1000044360,
+    1000043360,
+    1000043360,
+    1000043360,
+    1000044360,
+    1000044360,
+    1000043360,
+    1000046380,
+    1000044360,
+    1000047380,
+    1000047380,
+    1000048380,
+    1000044360,
+    1000047380,
+    1000048380,
+    1000044360,
+    1000044360,
+    1000044360,
+    1000048380,
+    1000044360,
+    1000047380,
+    1000047380,
+    1000047380,
+    1000048380,
+    1000044360,
+    1000047380,
+    1000042360,
+    1000044360,
+    1000042360,
+    1000047380,
+    1000044360,
+    1000044360,
+    1000043360,
+    1000042360,
+    1000046380,
+    1000047380,
+    1000047380,
+    1000044360,
+    1000044360,
+    1000047380,
+    1000043360,
+    1000044360,
+    1000043360,
+    1000047380,
+    1000042360,
+    1000048380,
+    1000047380,
+    1000046380,
+    1000046380,
+    1000044360,
+    1000043360,
+    1000047380,
+    1000043360,
+    1000043360,
+    1000046380
+   ],
+   "truncated": false,
+   "range": {
+    "start": "2026-10-07",
+    "end": "2026-11-01",
+    "days": 26,
+    "months": [
+     "2026-10",
+     "2026-11"
+    ]
+   },
+   "score": {
+    "uncoveredPrimary": 1,
+    "uncoveredBackup": 0,
+    "hardViolations": 0,
+    "softSum": 41,
+    "primaryDeviation": 0.6,
+    "backupDeviation": 11.4,
+    "weekendSpread": 4,
+    "holidaySpread": 0,
+    "total": 1000042360,
+    "weights": {
+     "uncoveredPrimary": 1000000000,
+     "uncoveredBackup": 10000000,
+     "hardViolations": 1000000,
+     "softSum": 1000,
+     "primaryDeviation": 300,
+     "backupDeviation": 100,
+     "weekendSpread": 10,
+     "holidaySpread": 1
+    }
+   },
+   "tallies": {
+    "s1": {
+     "code": "FAK",
+     "name": "Khan",
+     "months": {
+      "2026-10": {
+       "primary": 1,
+       "backup": 5,
+       "total": 6,
+       "weekendDays": 4,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 1,
+       "maxConsecutiveAnyRole": 3,
+       "cap": null,
+       "eastP": 0,
+       "target": {
+        "primary": 0.4,
+        "backup": 3
+       }
+      },
+      "2026-11": {
+       "primary": 5,
+       "backup": 0,
+       "total": 5,
+       "weekendDays": 3,
+       "majorHolidays": 1,
+       "minorHolidays": 0,
+       "maxConsecutive": 2,
+       "maxConsecutiveAnyRole": 2,
+       "cap": null,
+       "eastP": 0,
+       "target": {
+        "primary": 5,
+        "backup": 0.2
+       }
+      }
+     },
+     "range": {
+      "primary": 1,
+      "backup": 5,
+      "total": 6,
+      "weekendDays": 4,
+      "majorHolidays": 0,
+      "minorHolidays": 0,
+      "maxConsecutive": 1,
+      "maxConsecutiveAnyRole": 3,
+      "cap": null,
+      "eastP": 0,
+      "target": {
+       "primary": 5.4,
+       "backup": 3.2
+      }
+     }
+    },
+    "s2": {
+     "code": "MAB",
+     "name": "Burchett",
+     "months": {
+      "2026-10": {
+       "primary": 5,
+       "backup": 3,
+       "total": 8,
+       "weekendDays": 2,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 2,
+       "maxConsecutiveAnyRole": 3,
+       "cap": 8,
+       "eastP": 0,
+       "target": {
+        "primary": 5,
+        "backup": 3
+       }
+      },
+      "2026-11": {
+       "primary": 6,
+       "backup": 4,
+       "total": 10,
+       "weekendDays": 4,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 2,
+       "maxConsecutiveAnyRole": 3,
+       "cap": 8,
+       "eastP": 0,
+       "target": {
+        "primary": 6,
+        "backup": 4
+       }
+      }
+     },
+     "range": {
+      "primary": 4,
+      "backup": 3,
+      "total": 7,
+      "weekendDays": 2,
+      "majorHolidays": 0,
+      "minorHolidays": 0,
+      "maxConsecutive": 2,
+      "maxConsecutiveAnyRole": 3,
+      "cap": 8,
+      "eastP": 0,
+      "target": {
+       "primary": 11,
+       "backup": 7
+      }
+     }
+    },
+    "s3": {
+     "code": "BDA",
+     "name": "Acton",
+     "months": {
+      "2026-10": {
+       "primary": 10,
+       "backup": 4,
+       "total": 14,
+       "weekendDays": 6,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 3,
+       "maxConsecutiveAnyRole": 7,
+       "cap": null,
+       "eastP": 0,
+       "target": {
+        "primary": 10,
+        "backup": 3
+       }
+      },
+      "2026-11": {
+       "primary": 8,
+       "backup": 2,
+       "total": 10,
+       "weekendDays": 3,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 3,
+       "maxConsecutiveAnyRole": 5,
+       "cap": null,
+       "eastP": 0,
+       "target": {
+        "primary": 8,
+        "backup": 2
+       }
+      }
+     },
+     "range": {
+      "primary": 9,
+      "backup": 3,
+      "total": 12,
+      "weekendDays": 6,
+      "majorHolidays": 0,
+      "minorHolidays": 0,
+      "maxConsecutive": 3,
+      "maxConsecutiveAnyRole": 7,
+      "cap": null,
+      "eastP": 0,
+      "target": {
+       "primary": 18,
+       "backup": 5
+      }
+     }
+    },
+    "s4": {
+     "code": "AFP",
+     "name": "Philip",
+     "months": {
+      "2026-10": {
+       "primary": 7,
+       "backup": 8,
+       "total": 15,
+       "weekendDays": 5,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 4,
+       "maxConsecutiveAnyRole": 7,
+       "cap": 8,
+       "eastP": 0,
+       "target": {
+        "primary": 7,
+        "backup": 8
+       }
+      },
+      "2026-11": {
+       "primary": 1,
+       "backup": 0,
+       "total": 1,
+       "weekendDays": 1,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 4,
+       "maxConsecutiveAnyRole": 7,
+       "cap": 8,
+       "eastP": 0,
+       "target": {
+        "primary": 1,
+        "backup": 0.2
+       }
+      }
+     },
+     "range": {
+      "primary": 8,
+      "backup": 7,
+      "total": 15,
+      "weekendDays": 6,
+      "majorHolidays": 0,
+      "minorHolidays": 0,
+      "maxConsecutive": 4,
+      "maxConsecutiveAnyRole": 7,
+      "cap": 8,
+      "eastP": 0,
+      "target": {
+       "primary": 8,
+       "backup": 8.2
+      }
+     }
+    },
+    "s5": {
+     "code": "NF",
+     "name": "Fierce",
+     "months": {
+      "2026-10": {
+       "primary": 1,
+       "backup": 11,
+       "total": 12,
+       "weekendDays": 8,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 1,
+       "maxConsecutiveAnyRole": 7,
+       "cap": 14,
+       "eastP": 0,
+       "target": {
+        "primary": 1,
+        "backup": 4
+       }
+      },
+      "2026-11": {
+       "primary": 0,
+       "backup": 9,
+       "total": 9,
+       "weekendDays": 4,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 0,
+       "maxConsecutiveAnyRole": 8,
+       "cap": 14,
+       "eastP": 7,
+       "target": {
+        "primary": 0,
+        "backup": 8
+       }
+      }
+     },
+     "range": {
+      "primary": 1,
+      "backup": 8,
+      "total": 9,
+      "weekendDays": 6,
+      "majorHolidays": 0,
+      "minorHolidays": 0,
+      "maxConsecutive": 1,
+      "maxConsecutiveAnyRole": 3,
+      "cap": 14,
+      "eastP": 0,
+      "target": {
+       "primary": 1,
+       "backup": 12
+      }
+     }
+    },
+    "s6": {
+     "code": "SRK",
+     "name": "Sarkar",
+     "months": {
+      "2026-10": {
+       "primary": 2,
+       "backup": 0,
+       "total": 2,
+       "weekendDays": 0,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 1,
+       "maxConsecutiveAnyRole": 1,
+       "cap": 8,
+       "eastP": 0,
+       "target": {
+        "primary": 2,
+        "backup": null
+       }
+      },
+      "2026-11": {
+       "primary": 0,
+       "backup": 0,
+       "total": 0,
+       "weekendDays": 0,
+       "majorHolidays": 0,
+       "minorHolidays": 0,
+       "maxConsecutive": 0,
+       "maxConsecutiveAnyRole": 0,
+       "cap": 8,
+       "eastP": 0,
+       "target": {
+        "primary": null,
+        "backup": null
+       }
+      }
+     },
+     "range": {
+      "primary": 2,
+      "backup": 0,
+      "total": 2,
+      "weekendDays": 0,
+      "majorHolidays": 0,
+      "minorHolidays": 0,
+      "maxConsecutive": 1,
+      "maxConsecutiveAnyRole": 1,
+      "cap": 8,
+      "eastP": 0,
+      "target": {
+       "primary": 2,
+       "backup": null
+      }
+     }
+    }
+   },
+   "uncovered": [
+    {
+     "day": "2026-10-15",
+     "role": "primary",
+     "weekday": "Thu",
+     "holidayUnit": null,
+     "reasons": {
+      "s1": [
+       "hard-never-weekday:Thu"
+      ],
+      "s2": [
+       "whitelist-month"
+      ],
+      "s3": [
+       "whitelist-month"
+      ],
+      "s4": [
+       "time-off:2026-10-15",
+       "whitelist-month"
+      ],
+      "s5": [
+       "weekday-pattern:Thu"
+      ],
+      "s6": [
+       "outside-window"
+      ]
+     }
+    }
+   ],
+   "softPenalties": [
+    {
+     "day": "2026-10-07",
+     "role": "backup",
+     "id": "s5",
+     "reason": "preferred",
+     "weight": -1
+    },
+    {
+     "day": "2026-10-09",
+     "role": "backup",
+     "id": "s1",
+     "reason": "weekend-backup",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-10",
+     "role": "backup",
+     "id": "s1",
+     "reason": "weekend-backup",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-11",
+     "role": "backup",
+     "id": "s1",
+     "reason": "weekend-backup",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-16",
+     "role": "backup",
+     "id": "s2",
+     "reason": "back-to-back-weekend",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-21",
+     "role": "backup",
+     "id": "s5",
+     "reason": "preferred",
+     "weight": -1
+    },
+    {
+     "day": "2026-10-23",
+     "role": "backup",
+     "id": "s5",
+     "reason": "back-to-back-weekend",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-24",
+     "role": "primary",
+     "id": "s1",
+     "reason": "pattern-mismatch:block",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-24",
+     "role": "backup",
+     "id": "s5",
+     "reason": "back-to-back-weekend",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-25",
+     "role": "backup",
+     "id": "s5",
+     "reason": "back-to-back-weekend",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-30",
+     "role": "backup",
+     "id": "s5",
+     "reason": "back-to-back-weekend",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-31",
+     "role": "backup",
+     "id": "s5",
+     "reason": "back-to-back-weekend",
+     "weight": 3
+    },
+    {
+     "day": "2026-11-01",
+     "role": "backup",
+     "id": "s5",
+     "reason": "back-to-back-weekend",
+     "weight": 3
+    },
+    {
+     "day": "2026-10-23",
+     "role": "primary",
+     "id": null,
+     "reason": "pattern-daily",
+     "weight": 5
+    },
+    {
+     "day": "2026-10-16",
+     "role": "backup",
+     "id": null,
+     "reason": "pattern-daily",
+     "weight": 5
+    }
+   ],
+   "softByReason": {
+    "preferred": -2,
+    "weekend-backup": 9,
+    "back-to-back-weekend": 21,
+    "pattern-mismatch:block": 3,
+    "pattern-daily": 10
+   },
+   "hardViolations": [],
+   "lockViolations": [
+    {
+     "day": "2026-10-12",
+     "role": "primary",
+     "id": "s5",
+     "lock": "import",
+     "reasons": [
+      "weekday-pattern:Mon"
+     ]
+    },
+    {
+     "day": "2026-10-14",
+     "role": "backup",
+     "id": "s4",
+     "lock": "import",
+     "reasons": [
+      "backup-cap:7"
+     ]
+    },
+    {
+     "day": "2026-10-17",
+     "role": "backup",
+     "id": "s4",
+     "lock": "import",
+     "reasons": [
+      "backup-cap:7"
+     ]
+    },
+    {
+     "day": "2026-10-18",
+     "role": "backup",
+     "id": "s4",
+     "lock": "import",
+     "reasons": [
+      "backup-cap:7"
+     ]
+    },
+    {
+     "day": "2026-10-19",
+     "role": "backup",
+     "id": "s4",
+     "lock": "import",
+     "reasons": [
+      "backup-cap:7"
+     ]
+    },
+    {
+     "day": "2026-10-22",
+     "role": "backup",
+     "id": "s4",
+     "lock": "import",
+     "reasons": [
+      "backup-cap:7"
+     ]
+    },
+    {
+     "day": "2026-10-26",
+     "role": "backup",
+     "id": "s4",
+     "lock": "import",
+     "reasons": [
+      "backup-cap:7"
+     ]
+    },
+    {
+     "day": "2026-10-28",
+     "role": "backup",
+     "id": "s4",
+     "lock": "import",
+     "reasons": [
+      "backup-cap:7"
+     ]
+    }
+   ],
+   "mode": "fill-open-only",
+   "fixedSlots": 34,
+   "fixedViolations": [],
+   "derivedYields": [],
+   "derivedConfirmed": [],
+   "holidayUnits": [],
+   "weekendUnits": [
+    {
+     "friday": "2026-10-09",
+     "present": [
+      "2026-10-09",
+      "2026-10-10",
+      "2026-10-11"
+     ],
+     "preempted": [],
+     "reduced": false,
+     "kind": "locked",
+     "members": {
+      "fri": "s3",
+      "sat": "s3",
+      "sun": "s3"
+     },
+     "fallback": false,
+     "roles": {
+      "primary": {
+       "kind": "locked",
+       "members": {
+        "fri": "s3",
+        "sat": "s3",
+        "sun": "s3"
+       },
+       "penalty": 0,
+       "fallback": false,
+       "styleMismatch": [],
+       "locked": true,
+       "openDays": []
+      },
+      "backup": {
+       "kind": "block",
+       "members": {
+        "fri": "s1",
+        "sat": "s1",
+        "sun": "s1"
+       },
+       "penalty": 3,
+       "fallback": false,
+       "styleMismatch": [],
+       "partial": false,
+       "openDays": []
+      }
+     }
+    },
+    {
+     "friday": "2026-10-16",
+     "present": [
+      "2026-10-16",
+      "2026-10-17",
+      "2026-10-18"
+     ],
+     "preempted": [],
+     "reduced": false,
+     "kind": "locked",
+     "members": {
+      "fri": "s4",
+      "sat": "s3",
+      "sun": "s3"
+     },
+     "fallback": true,
+     "roles": {
+      "primary": {
+       "kind": "locked",
+       "members": {
+        "fri": "s4",
+        "sat": "s3",
+        "sun": "s3"
+       },
+       "penalty": 0,
+       "fallback": true,
+       "styleMismatch": [
+        "s4"
+       ],
+       "locked": true,
+       "openDays": []
+      },
+      "backup": {
+       "kind": "daily",
+       "members": {
+        "fri": "s2",
+        "sat": "s4",
+        "sun": "s4"
+       },
+       "penalty": 17,
+       "fallback": true,
+       "styleMismatch": [
+        "s4"
+       ],
+       "partial": false,
+       "openDays": []
+      }
+     }
+    },
+    {
+     "friday": "2026-10-23",
+     "present": [
+      "2026-10-23",
+      "2026-10-24",
+      "2026-10-25"
+     ],
+     "preempted": [],
+     "reduced": false,
+     "kind": "daily",
+     "members": {
+      "fri": "s3",
+      "sat": "s1",
+      "sun": "s2"
+     },
+     "fallback": true,
+     "roles": {
+      "primary": {
+       "kind": "daily",
+       "members": {
+        "fri": "s3",
+        "sat": "s1",
+        "sun": "s2"
+       },
+       "penalty": 17,
+       "fallback": true,
+       "styleMismatch": [
+        "s1"
+       ],
+       "partial": false,
+       "openDays": []
+      },
+      "backup": {
+       "kind": "block",
+       "members": {
+        "fri": "s5",
+        "sat": "s5",
+        "sun": "s5"
+       },
+       "penalty": 9,
+       "fallback": false,
+       "styleMismatch": [],
+       "partial": false,
+       "openDays": []
+      }
+     }
+    },
+    {
+     "friday": "2026-10-30",
+     "present": [
+      "2026-10-30",
+      "2026-10-31",
+      "2026-11-01"
+     ],
+     "preempted": [],
+     "reduced": false,
+     "kind": "locked",
+     "members": {
+      "fri": "s4",
+      "sat": "s4",
+      "sun": "s4"
+     },
+     "fallback": false,
+     "roles": {
+      "primary": {
+       "kind": "locked",
+       "members": {
+        "fri": "s4",
+        "sat": "s4",
+        "sun": "s4"
+       },
+       "penalty": 0,
+       "fallback": false,
+       "styleMismatch": [],
+       "locked": true,
+       "openDays": []
+      },
+      "backup": {
+       "kind": "block",
+       "members": {
+        "fri": "s5",
+        "sat": "s5",
+        "sun": "s5"
+       },
+       "penalty": 0,
+       "fallback": false,
+       "styleMismatch": [],
+       "partial": false,
+       "openDays": []
+      }
+     }
+    }
+   ],
+   "impliedTargets": {
+    "rule": "equal shares per role (J): pool = active, poolMember !== false, no availableWindows, not external; primaryShare = (open in-range primary slots - the windows surgeons' reserved primaries) / pool size; backupShare = open in-range backup slots / pool size; pool member primaryTarget = max(lockedHeld.primary, min(primaryShare, clipPrimary)) with clipPrimary = min(capPreferred, capPrimary - 1) - East primary-week days not held as Silvis primary (K; null when uncapped), backupTarget = max(lockedHeld.backup, min(backupShare, backupCap.perMonthDays)); a numeric monthlyTarget sets the primary target, { primary, backup } sets each, explicit null = equal share; windows + daysPerWindowWeek.target = target x window weeks of the month the range touches, primary only, no backup target, no target in a month without a window week (N); everyone else: no targets; allowedPrimary / allowedBackup = open in-range slots where eligibility passes on the lock-only schedule (a weekend day of a full unit as a block member, a holiday day as a unit candidate); lockedHeld and the targets are whole-calendar-month figures even where the range only touches the month (rangeDays); placeableAtTarget = sum of max(0, target - lockedHeld) per role - below the open slots where a locked floor or a clip pins a member, since the flat share is not redistributed",
+    "pool": [
+     "s1",
+     "s2",
+     "s3",
+     "s4",
+     "s5"
+    ],
+    "months": {
+     "2026-10": {
+      "primaryOpen": 2,
+      "backupOpen": 15,
+      "poolSize": 5,
+      "reservedForWindows": 0,
+      "primaryShare": 0.4,
+      "backupShare": 3,
+      "rangeDays": 25,
+      "placeableAtTarget": {
+       "primary": 0.4,
+       "backup": 5
+      },
+      "windowTarget": {
+       "s6": 2
+      },
+      "windowWeeks": {
+       "s6": 1
+      },
+      "members": {
+       "s1": {
+        "primaryTarget": 0.4,
+        "backupTarget": 3,
+        "lockedHeld": {
+         "primary": 0,
+         "backup": 0
+        },
+        "clipPrimary": null,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 1,
+        "allowedBackup": 15
+       },
+       "s2": {
+        "primaryTarget": 5,
+        "backupTarget": 3,
+        "lockedHeld": {
+         "primary": 5,
+         "backup": 1
+        },
+        "clipPrimary": 7,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 10
+       },
+       "s3": {
+        "primaryTarget": 10,
+        "backupTarget": 3,
+        "lockedHeld": {
+         "primary": 10,
+         "backup": 3
+        },
+        "clipPrimary": null,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 9
+       },
+       "s4": {
+        "primaryTarget": 7,
+        "backupTarget": 8,
+        "lockedHeld": {
+         "primary": 7,
+         "backup": 8
+        },
+        "clipPrimary": 7,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 0
+       },
+       "s5": {
+        "primaryTarget": 1,
+        "backupTarget": 4,
+        "lockedHeld": {
+         "primary": 1,
+         "backup": 4
+        },
+        "clipPrimary": 13,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 1,
+        "allowedBackup": 15
+       },
+       "s6": {
+        "primaryTarget": 2,
+        "backupTarget": null,
+        "lockedHeld": {
+         "primary": 2,
+         "backup": 0
+        },
+        "clipPrimary": null,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 2
+       }
+      }
+     },
+     "2026-11": {
+      "primaryOpen": 0,
+      "backupOpen": 1,
+      "poolSize": 5,
+      "reservedForWindows": 0,
+      "primaryShare": 0,
+      "backupShare": 0.2,
+      "rangeDays": 1,
+      "placeableAtTarget": {
+       "primary": 0,
+       "backup": 0.4
+      },
+      "windowTarget": {
+       "s6": 0
+      },
+      "windowWeeks": {
+       "s6": 0
+      },
+      "members": {
+       "s1": {
+        "primaryTarget": 5,
+        "backupTarget": 0.2,
+        "lockedHeld": {
+         "primary": 5,
+         "backup": 0
+        },
+        "clipPrimary": null,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 1
+       },
+       "s2": {
+        "primaryTarget": 6,
+        "backupTarget": 4,
+        "lockedHeld": {
+         "primary": 6,
+         "backup": 4
+        },
+        "clipPrimary": 7,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 0
+       },
+       "s3": {
+        "primaryTarget": 8,
+        "backupTarget": 2,
+        "lockedHeld": {
+         "primary": 8,
+         "backup": 2
+        },
+        "clipPrimary": null,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 1
+       },
+       "s4": {
+        "primaryTarget": 1,
+        "backupTarget": 0.2,
+        "lockedHeld": {
+         "primary": 1,
+         "backup": 0
+        },
+        "clipPrimary": 7,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 0
+       },
+       "s5": {
+        "primaryTarget": 0,
+        "backupTarget": 8,
+        "lockedHeld": {
+         "primary": 0,
+         "backup": 8
+        },
+        "clipPrimary": 6,
+        "eastPrimaryDays": 7,
+        "allowedPrimary": 0,
+        "allowedBackup": 1
+       },
+       "s6": {
+        "primaryTarget": null,
+        "backupTarget": null,
+        "lockedHeld": {
+         "primary": 0,
+         "backup": 0
+        },
+        "clipPrimary": null,
+        "eastPrimaryDays": 0,
+        "allowedPrimary": 0,
+        "allowedBackup": 0
+       }
+      }
+     }
+    }
+   },
+   "targets": {
+    "2026-10": {
+     "s1": {
+      "primary": 0.4,
+      "backup": 3
+     },
+     "s2": {
+      "primary": 5,
+      "backup": 3
+     },
+     "s3": {
+      "primary": 10,
+      "backup": 3
+     },
+     "s4": {
+      "primary": 7,
+      "backup": 8
+     },
+     "s5": {
+      "primary": 1,
+      "backup": 4
+     },
+     "s6": {
+      "primary": 2,
+      "backup": null
+     }
+    },
+    "2026-11": {
+     "s1": {
+      "primary": 5,
+      "backup": 0.2
+     },
+     "s2": {
+      "primary": 6,
+      "backup": 4
+     },
+     "s3": {
+      "primary": 8,
+      "backup": 2
+     },
+     "s4": {
+      "primary": 1,
+      "backup": 0.2
+     },
+     "s5": {
+      "primary": 0,
+      "backup": 8
+     },
+     "s6": {
+      "primary": null,
+      "backup": null
+     }
+    }
+   },
+   "scoreTargets": {
+    "2026-10": {
+     "s1": {
+      "primary": 0.4,
+      "backup": 3
+     },
+     "s2": {
+      "primary": 5,
+      "backup": 3
+     },
+     "s3": {
+      "primary": 10,
+      "backup": 3
+     },
+     "s4": {
+      "primary": 7,
+      "backup": 8
+     },
+     "s5": {
+      "primary": 1,
+      "backup": 4
+     },
+     "s6": {
+      "primary": 2,
+      "backup": null
+     }
+    },
+    "2026-11": {
+     "s1": {
+      "primary": 5,
+      "backup": 0.2
+     },
+     "s2": {
+      "primary": 6,
+      "backup": 4
+     },
+     "s3": {
+      "primary": 8,
+      "backup": 2
+     },
+     "s4": {
+      "primary": 1,
+      "backup": 0.2
+     },
+     "s5": {
+      "primary": 0,
+      "backup": 8
+     },
+     "s6": {
+      "primary": null,
+      "backup": null
+     }
+    }
+   },
+   "forcedSlots": {},
+   "windowWeeks": [
+    {
+     "monday": "2026-10-19",
+     "surgeonId": "s6",
+     "windowDays": [
+      "2026-10-19",
+      "2026-10-20",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23"
+     ],
+     "inRangeWindowDays": [
+      "2026-10-19",
+      "2026-10-20",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23"
+     ],
+     "primaries": 2,
+     "backups": 0,
+     "target": 2,
+     "status": "met"
+    }
+   ],
+   "handoffGaps": [],
+   "eastFeedSnapshot": {
+    "coverage": {
+     "from": "2026-09-28",
+     "to": "2026-11-15"
+    },
+    "busyDaysInRange": {
+     "s1": 7,
+     "s5": 0
+    },
+    "forecastDaysInRange": {
+     "s1": 0,
+     "s5": 0
+    },
+    "derivedDaysInRange": {
+     "s1": 0,
+     "s5": 0
+    },
+    "forecastThreshold": 0.5
+   },
+   "eastForecast": [],
+   "eastUnknownDays": [],
+   "eastStandingDays": {
+    "s1": []
+   },
+   "eastConflicts": [],
+   "placedCount": 17,
+   "warnings": [
+    "s5 cap counts East days but the East feed does not cover all of 2026-11: only his Silvis primaries and the derived East primary-week days were counted for that month",
+    "8 locked slot(s) break a rule - kept as facts, see lockViolations"
+   ]
+  },
+  "openSlots": [
+   {
+    "day": "2026-10-07",
+    "weekday": "Wed",
+    "role": "backup",
+    "placed": "s5",
+    "placedName": "Fierce",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 0
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 1
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": -1
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-09",
+    "weekday": "Fri",
+    "role": "backup",
+    "placed": "s1",
+    "placedName": "Khan",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 0
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 6
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-10",
+    "weekday": "Sat",
+    "role": "backup",
+    "placed": "s1",
+    "placedName": "Khan",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 0
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 6
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-11",
+    "weekday": "Sun",
+    "role": "backup",
+    "placed": "s1",
+    "placedName": "Khan",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 0
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 6
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-13",
+    "weekday": "Tue",
+    "role": "backup",
+    "placed": "s2",
+    "placedName": "Burchett",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 0
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 0
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 0
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 1
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-15",
+    "weekday": "Thu",
+    "role": "primary",
+    "placed": null,
+    "placedName": "open",
+    "alternatives": [],
+    "reasons": "Khan: hard-never-weekday:Thu; Burchett: whitelist-month; Acton: whitelist-month; Philip: time-off:2026-10-15, whitelist-month; Fierce: weekday-pattern:Thu; Sarkar: outside-window"
+   },
+   {
+    "day": "2026-10-15",
+    "weekday": "Thu",
+    "role": "backup",
+    "placed": "s1",
+    "placedName": "Khan",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 0
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 1
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 0
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 0
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-16",
+    "weekday": "Fri",
+    "role": "backup",
+    "placed": "s2",
+    "placedName": "Burchett",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 3
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 9
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 3
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-21",
+    "weekday": "Wed",
+    "role": "backup",
+    "placed": "s5",
+    "placedName": "Fierce",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 0
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 0
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": -1
+     },
+     {
+      "id": "s6",
+      "name": "Sarkar",
+      "soft": 4
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-23",
+    "weekday": "Fri",
+    "role": "backup",
+    "placed": "s5",
+    "placedName": "Fierce",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 3
+     },
+     {
+      "id": "s6",
+      "name": "Sarkar",
+      "soft": 1
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-24",
+    "weekday": "Sat",
+    "role": "primary",
+    "placed": "s1",
+    "placedName": "Khan",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 3
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-24",
+    "weekday": "Sat",
+    "role": "backup",
+    "placed": "s5",
+    "placedName": "Fierce",
+    "alternatives": [
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 4
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 3
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-25",
+    "weekday": "Sun",
+    "role": "backup",
+    "placed": "s5",
+    "placedName": "Fierce",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 4
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 3
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-27",
+    "weekday": "Tue",
+    "role": "backup",
+    "placed": "s3",
+    "placedName": "Acton",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 0
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 4
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 0
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 0
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-29",
+    "weekday": "Thu",
+    "role": "backup",
+    "placed": "s1",
+    "placedName": "Khan",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 0
+     },
+     {
+      "id": "s2",
+      "name": "Burchett",
+      "soft": 1
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 0
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 0
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-30",
+    "weekday": "Fri",
+    "role": "backup",
+    "placed": "s5",
+    "placedName": "Fierce",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 3
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 3
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-10-31",
+    "weekday": "Sat",
+    "role": "backup",
+    "placed": "s5",
+    "placedName": "Fierce",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 3
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 3
+     }
+    ],
+    "reasons": ""
+   },
+   {
+    "day": "2026-11-01",
+    "weekday": "Sun",
+    "role": "backup",
+    "placed": "s5",
+    "placedName": "Fierce",
+    "alternatives": [
+     {
+      "id": "s1",
+      "name": "Khan",
+      "soft": 6
+     },
+     {
+      "id": "s3",
+      "name": "Acton",
+      "soft": 9
+     },
+     {
+      "id": "s5",
+      "name": "Fierce",
+      "soft": 3
+     }
+    ],
+    "reasons": ""
+   }
+  ],
+  "talliesDelta": {
+   "s1": {
+    "primary": 1,
+    "backup": 5,
+    "days": [
+     "2026-10-09 B",
+     "2026-10-10 B",
+     "2026-10-11 B",
+     "2026-10-15 B",
+     "2026-10-24 P",
+     "2026-10-29 B"
+    ]
+   },
+   "s2": {
+    "primary": 0,
+    "backup": 2,
+    "days": [
+     "2026-10-13 B",
+     "2026-10-16 B"
+    ]
+   },
+   "s3": {
+    "primary": 0,
+    "backup": 1,
+    "days": [
+     "2026-10-27 B"
+    ]
+   },
+   "s4": {
+    "primary": 0,
+    "backup": 0,
+    "days": []
+   },
+   "s5": {
+    "primary": 0,
+    "backup": 8,
+    "days": [
+     "2026-10-07 B",
+     "2026-10-21 B",
+     "2026-10-23 B",
+     "2026-10-24 B",
+     "2026-10-25 B",
+     "2026-10-30 B",
+     "2026-10-31 B",
+     "2026-11-01 B"
+    ]
+   },
+   "s6": {
+    "primary": 0,
+    "backup": 0,
+    "days": []
+   }
+  },
+  "generateMs": 616
  }
 }
