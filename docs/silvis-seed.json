@@ -34,7 +34,8 @@
       "2026-09-22 late evening (Claude Code, Prompt 12 item AA, from Faraz's 9/22 late-evening instruction: one standard for the blob - no reasons, only the rule; reasons live in docs/SILVIS-CALL-RULES.md): surgeonRules.s1.hardNeverWeekdaysReason removed from the seed (its wording folded into s1.hardNeverWeekdaysNote, a Note key the importer drops); importer.js impScrubRuleNotes now DROPS every note-like key of surgeonRules (note, notes[], *Note, *Notes, *Reason, any depth) exactly as it already did for groupRules and holidays - no classification, no category token of any kind reaches the blob (the former tokens are gone from the code); the denylist gate over every string of the assembled blob stays, runs after the scrub and exempts nothing; time_off public notes (item S) are unchanged. Review (same night): two non-note prose keys moved to Note keys so they leave the blob too - surgeonRules.s5.statedPreferenceNotARule renamed statedPreferenceNotARuleNote (nothing in the app reads it) and the second sentence of groupRules.holidayPolicy moved to groupRules.holidayPolicyNote (holidayPolicy keeps the unit rule and its pointer to holidays.rules); the weekdayPattern where column (s5, shown in Setup -> Rules) is unchanged pending Faraz's ruling. Blob: surgeonRules update (every remaining note key and token leaves, s5 loses the renamed key), groupRules update (holidayPolicy shortened) plus this sentence in settings.seedRevisions; no schedule_days, time_off or availability row changes.",
       "2026-09-22 late evening (Claude Code, Prompt 12 item AC, from Faraz's 9/22 late-evening instruction '2027 units: Thanksgiving Thu-Sun (same shape as 2026); July 4, 2027 falls on a Sunday and is observed Monday 7/5, so the unit is Sat 7/3 - Mon 7/5 under the Monday-absorbs-the-weekend rule. Data only, editable in Setup.'): holidays.units 2027 Thanksgiving -> 11/25-11/28 (4 days) and July 4th -> 7/3-7/5; Memorial Day, Labor Day, Christmas and New Year's 2027 unchanged; 2026 units unchanged. holidays.rules.mondayMinor states the observed-day reading of July 4th (Sunday -> Monday -> Sat-Mon; Saturday -> Friday) and Thanksgiving Thu-Sun; dayMembershipNote closes the two 2027 questions and names the Saturday-July-4 unit shape as the one still open; openQuestions 3 answered. Builder (helpers.defaultHolidayUnits): Thanksgiving = fourth Thursday through the Sunday after in every year; July 4th = the observed day, then Sat-Mon when the flag is on and the observed day is a Monday; Memorial Day and Labor Day unchanged. Blob: holidays update (rules.mondayMinor, units 2027) plus this sentence in settings.seedRevisions; no schedule_days, time_off or availability row changes.",
       "2026-09-23 overnight (Claude Code, Prompt 12 review fixes group RF3 - docs and seed staleness; no rule, lock or schedule change): roster s6 fullName '' (placeholder text gone; enter her first name in Setup -> Roster); groupRules.timeOff.conflictRule no longer promises a scheduler override (the DB trigger refuses every caller - edit the schedule first); groupRules.backupPolicy.note, generationHorizons.note and locks.note reworded to the landed items K and AB and to the 9/23 publish (10/24 open primary named); surgeonRules.s5.eastFeed.statedWeeks.note says the 12/7 week is derived from this key, not from an east_overrides row (that table is empty); openQuestions 5 (8 PRIMARY, K) and 11 (sixteen open October backups, filled by the 9/23 publish except 10/15 primary). The anon blob changes only in roster s6 fullName and groupRules.timeOff.conflictRule; every other edit is an importer-dropped note or openQuestions text.",
-      "2026-09-23 (Claude Code, from Faraz's 9/23 instruction): Burchett's December list governs BOTH roles - his 9/17 email offered 'the dates I can take primary call (or backup)' - so surgeonRules.s2.explicitListMonths '2026-12' becomes { month: '2026-12', roles: [primary, backup] }, the November form. Data only (rules.js has read the object form since T; the importer keeps an entry as written); tests flipped to the new reading: rules.test.js (12/3 and 12/8 backup now whitelist-month; 12/4, 12/10, 12/18 blocked, 12/6, 12/19, 12/20 ok), importer.test.js and generator-regression.js expectations. The published schedule is NOT regenerated: the entry invalidates three published backups (12/4, 12/10, 12/18 - all generated, unlocked), which Faraz reassigns in the day editor (eligible replacements in docs/SILVIS-CALL-RULES.md, Burchett section). Expected live consequence (importer dry run): blob update only - surgeonRules (s2.explicitListMonths), groupRules (the whitelistMonths.roleScope wording, which reaches the blob) and the settings stamps (importedAt, seedRevisionCount, seedCoreHash); no row changes - the December availability rows are already available/any; schedule_days and time_off unchanged."
+      "2026-09-23 (Claude Code, from Faraz's 9/23 instruction): Burchett's December list governs BOTH roles - his 9/17 email offered 'the dates I can take primary call (or backup)' - so surgeonRules.s2.explicitListMonths '2026-12' becomes { month: '2026-12', roles: [primary, backup] }, the November form. Data only (rules.js has read the object form since T; the importer keeps an entry as written); tests flipped to the new reading: rules.test.js (12/3 and 12/8 backup now whitelist-month; 12/4, 12/10, 12/18 blocked, 12/6, 12/19, 12/20 ok), importer.test.js and generator-regression.js expectations. The published schedule is NOT regenerated: the entry invalidates three published backups (12/4, 12/10, 12/18 - all generated, unlocked), which Faraz reassigns in the day editor (eligible replacements in docs/SILVIS-CALL-RULES.md, Burchett section). Expected live consequence (importer dry run): blob update only - surgeonRules (s2.explicitListMonths), groupRules (the whitelistMonths.roleScope wording, which reaches the blob) and the settings stamps (importedAt, seedRevisionCount, seedCoreHash); no row changes - the December availability rows are already available/any; schedule_days and time_off unchanged.",
+      "2026-09-23 morning (Claude Code, Prompt 12 item DT, from Faraz's 9/23 decision): Burchett's December list governs BOTH roles - his 9/17 email gives the dates as the ones he can take primary call or backup - so the plain '2026-12' entry in surgeonRules.s2.explicitListMonths becomes { month: '2026-12', roles: ['primary', 'backup'] }; the dates are unchanged and the December availability rows were already role any, so the import is a blob change only (surgeonRules; plus the example text in groupRules.whitelistMonths.roleScope). The three published December backups off his list (12/4, 12/10, 12/18 - generated 9/23 under the primary-only reading) are reassigned by hand in the day editor (docs/REPORT-BURCHETT-DECEMBER-2026-09-23.md); nothing is regenerated. Same revision, rules doc section 8 item 16 decided TRIM (Faraz 9/23): the seed carries rules only, never reasons - surgeonRules.s3.timeOff[*].note, s4.timeOff[0].note and s3.holidayRules.neverThanksgivingNote are 'off (stated 9/17)', s4.notes[1] is 'no more full weeks (stated 9/17)'; all importer-dropped notes (AA), no rule or date changed."
     ]
   },
   "site": {
@@ -375,7 +376,7 @@
       "name": "Burchett",
       "poolMember": true,
       "backupOptOut": false,
-      "backupNote": "9/22: backup any day (off-site is fine for standby); the recurring whitelist and the October list govern primary only. 9/23 (Faraz): his December list governs BOTH roles - his 9/17 email offered the dates for primary call or backup - so December is an object entry in explicitListMonths like November.",
+      "backupNote": "9/22: backup any day (off-site is fine for standby); the recurring whitelist and the October list govern primary only. 9/23 (Faraz): the December list governs BOTH roles - his 9/17 email gives the dates as the ones he can take primary call or backup - so an unlisted December day is closed to him for backup too (explicitListMonths object entry).",
       "availabilityMode": "whitelist-recurring",
       "recurringAvailable": [
         {
@@ -589,17 +590,17 @@
         {
           "start": "2026-11-19",
           "end": "2026-11-22",
-          "note": "[removed]"
+          "note": "off (stated 9/17)"
         },
         {
           "start": "2026-11-25",
           "end": "2026-11-29",
-          "note": "Thanksgiving week"
+          "note": "off (stated 9/17)"
         }
       ],
       "holidayRules": {
         "neverThanksgiving": true,
-        "neverThanksgivingNote": "[removed]",
+        "neverThanksgivingNote": "off (stated 9/17)",
         "christmasOrNewYearOk": true,
         "alternatingDaysOk": true,
         "holidaysOff": [
@@ -729,12 +730,12 @@
         {
           "start": "2026-10-15",
           "end": "2026-10-15",
-          "note": "Unavailable (personal)"
+          "note": "off (stated 9/17)"
         }
       ],
       "notes": [
         "Could take some call on Aledo weeks but it is inconvenient",
-        "Call has been getting busier \u2014 no more full weeks"
+        "no more full weeks (stated 9/17)"
       ],
       "holidayRules": {
         "maxMajorHolidays": 1,

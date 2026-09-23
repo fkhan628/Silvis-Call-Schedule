@@ -129,7 +129,8 @@ decides the Trauma Director role.
   12/1, 12/2 and 12/3 backups, so 12/4 would make a 4-day any-role standby run 12/1–12/4 — exactly his `maxConsecutiveAnyRole`
   of 4, no penalty but at the limit; Fierce is the cheaper pick, soft 6 vs Khan's 9); **12/10 → Khan or Acton**
   (Philip at cap, Fierce holds the derived primary, Sarkar outside her window); **12/18 → Acton, Fierce or Sarkar** (Khan
-  holds primary, Philip at cap). Faraz reassigns them in the day editor; the rest of December is untouched.
+  holds primary, Philip at cap). Faraz reassigns them in the day editor; the rest of December is untouched. Full eligibility table for the three slots, every roster id:
+  `docs/REPORT-BURCHETT-DECEMBER-2026-09-23.md`.
 - ⟶ **November (Burchett 9/17 "November Silvis Trauma Call days"; the ER-panel author entered them on 9/22): primary Tue 11/3,
   Sat 11/7, Sun 11/8, Wed 11/11, Fri 11/20, Mon 11/23, Wed 11/25; backup Mon 11/2, Wed 11/4, Fri 11/6, Mon 11/9,
   Sat 11/14, Sun 11/15, Mon 11/16, Wed 11/18.** ⟶ 9/22 evening: backup 11/9, 11/14, 11/15 and 11/16 go to Fierce instead (his derived week, Faraz's call), and **Khan takes Wed 11/25 primary from Burchett this year** — a one-off for 2026, locked, not a rule and not part of the Thanksgiving unit (which stays Thu 11/26 – Sun 11/29); his other entries stand. These match his recurring pattern exactly (1st Tue, 2nd/4th Mon and Wed,
@@ -142,7 +143,7 @@ decides the Trauma Director role.
   (`pendingDeltas`, status applied). Seed keys: `existingAssignments` primary 11/3, 11/7, 11/8, 11/11, 11/20, 11/23 and backup
   11/2, 11/4, 11/6, 11/18 (source `office-er-call-panels-2026-09-22`, locked); `s2.explicitListMonths` gains the object
   entry `{ month: "2026-11", roles: ["primary", "backup"] }`. `rules.js` reads the role scope literally: a plain `'YYYY-MM'`
-  entry governs **primary only** (the 9/22 backup rule — his October; his December was one too until 9/23, below), an object entry governs **exactly the roles
+  entry governs **primary only** (the 9/22 backup rule — his October; his December was one too until 9/23 — see the 9/23 bullet above), an object entry governs **exactly the roles
   it names**, so **November restricts BOTH roles**: he is not generated onto a November day he did not offer, in either role
   (`groupRules.whitelistMonths.roleScope`).
 - ⟶ **9/22 evening (Burchett email): weekends in early 2027 he CANNOT work, either role:** **Sat 1/9–Sun 1/10, Sat 1/16–Sun 1/17,
@@ -154,11 +155,9 @@ decides the Trauma Director role.
 ### Acton (s3) — recurring blacklist (primary)
 - **Unavailable for primary on the 2nd & 4th Monday and Wednesday** (outreach in Maquoketa). These align with Burchett's available days — the two are designed to complement each other. ⟶ **9/22: backup on those days is allowed.**
 - Avoid (soft, medium): the **Sunday immediately before a 2nd/4th Monday** (morning carryover before Maquoketa; "may not be as much of an issue" with a true handoff).
-- ⟶ **9/22 evening (Faraz): no Tuesdays for Acton — HARD for primary** ("[removed]"). He asked for
-  it "if possible"; Faraz made it firm. Backup on Tuesdays stays allowed (standby; the 9/22 backup rule). Note in
-  any anon-readable table reads "not Tuesdays" — the reason stays here and in his own words only.
+- ⟶ **No Tuesdays for Acton — hard for primary** (Faraz 9/22 evening, at Acton's request); backup on Tuesdays allowed.
 - ⟶ **Seed keys (Prompt 12 X, 9/22 evening):** `surgeonRules.s3.hardNeverWeekdays: ["Tue"]`, `hardNeverWeekdaysRoles: ["primary"]` (the generic W read — `rules.js rdStatic`, reason `hard-never-weekday:Tue`, lifted for a date only by his own dated `available`/primary row; a lock is not a row, so his published Tue 9/22 keeps its holder with the rule in `conflicts`), `hardNeverWeekdaysNote` (dropped by the importer); no `hardNeverWeekdaysReason` key on purpose (⟶ 9/22 late, Prompt 12 AA: a `*Reason` key is dropped like every note-like key now — no category token reaches the blob for anyone); the old `recurringAvoid` Tuesday entry left the seed with its note. Data only — no code change; editable in Setup → Rules (hard never weekdays + roles).
-- Time off: **Nov 19–22** ([removed]), **Nov 25–29** (Thanksgiving week). **Never on Thanksgiving.** Christmas or New Year's is fine; agrees with Burchett's alternating-days strategy.
+- Time off: **Nov 19–22** and **Nov 25–29**; never on Thanksgiving. Christmas or New Year's is fine (alternating days, like Burchett).
 - Weekend style: **split** with Burchett; has also taken full Fri–Sun (10/9–10/11), so max consecutive 3.
 - ⟶ **9/22 (Prompt 12 A): max consecutive 3 primary days is hard on real days** (no holiday-unit opt-in); any-role soft limit **4**.
 - October: primary Oct 5, 7, 9, 17, 18, 19, 21, 23; backup Oct 6, 8, 20. Offered to send a full monthly date list like Burchett.
@@ -198,11 +197,11 @@ decides the Trauma Director role.
 - In **Aledo the 1st and 3rd Wednesday** of each month **and the Friday of that 3rd week**; tries to avoid Silvis *primary* those whole weeks (strong soft). ⟶ **9/22: backup on any day, Aledo weeks included.**
 - **Hard (primary):** not primary the **day before an Aledo day** (Tue before a 1st/3rd Wed; Thu before the 3rd-week Fri) — he leaves before 7 AM, i.e. before the shift ends, and would dump late non-emergent work on the next person. ⟶ **9/22 (Faraz, Prompt 12 H): under the open-backup rule this stays PRIMARY-only — a standby backup the day before an Aledo day is acceptable** (seed `groupRules.dayBeforeRules.aledoDayBeforeRoles = ["primary"]`; the hand schedule itself had him backup 10/22 before Aledo Friday 10/23).
 - Weeks he could be primary or backup (week-of Monday): 11/9, 11/23, 12/7, 12/21, 12/28, 1/11, 1/25, 2/8, 2/22, 3/8, 3/22, 3/29, 4/12, 4/26, 5/10, 5/24, (6/7 tentative vacation), 6/21, 6/28. He does **not** want all of them.
-- **No more than one major holiday** (Thanksgiving / Christmas / New Year). **Prefers not a full week at a time** ("call has been getting busier").
+- **No more than one major holiday** (Thanksgiving / Christmas / New Year). **Prefers not a full week at a time.**
 - Backup cap (stated for October, treat as monthly): **≤ 7 days and ≤ 1 weekend** of backup — an explicit backup cap, so it survives the 9/22 "backup doesn't count" rule. The group default primary cap (8) applies to his primary days.
 - Weekend style: **block**; in practice Thu–Sun (10/29–11/1), so max consecutive 4.
 - ⟶ **9/22 (Prompt 12 A): max consecutive 4 primary days is hard on real days**; any-role soft limit **4** with the long-run penalty — this is how "prefers not a full week" is implemented (review item E: 12/22 P, 12/24–25 B, 12/26–29 P is now penalised).
-- October: **cannot 10/15** (personal — hard). Primary 10/8, 10/13, 10/16, 10/27, 10/29–11/1. Backup: not 10/15, 10/7, 10/21, 10/23.
+- October: **cannot 10/15** (hard). Primary 10/8, 10/13, 10/16, 10/27, 10/29–11/1. Backup: not 10/15, 10/7, 10/21, 10/23.
 
 ### Fierce (s5) — derived East weeks + a weekday pattern the rest of the time
 - Takes East call **one week at a time**, alternating between East primary weeks and East backup weeks.
@@ -510,6 +509,11 @@ Christmas unit (12/24 is off his December list; 12/25, 12/31 and 1/1 are on it) 
 he is not a Thanksgiving backup candidate either; Philip's listed weeks are an explicit dated list too (Memorial Day 2027
 sits outside them: not primary); only the recurring weekday patterns are waived on holidays (§5).
 
+**Answered by Faraz on 9/23 (morning):** Burchett's December list governs **both roles** — his 9/17 email gives the dates as the
+ones he can take primary call or backup — so the seed's December entry becomes an object entry naming both roles (§3, Burchett);
+the three published December backups off his list (12/4, 12/10, 12/18) are reassigned by hand in the day editor, nothing is
+regenerated (`docs/REPORT-BURCHETT-DECEMBER-2026-09-23.md`). Item 16 below: TRIM.
+
 **Still open:**
 
 1. **10/15 (Thu)** — one of the two open primary days in the locked October import (the other is Sat 10/24, item 6); nobody's rules allow it. The group will discuss. (Imported unlocked; the generator lists it as uncovered with reasons.)
@@ -542,10 +546,10 @@ sits outside them: not primary); only the recurring weekday patterns are waived 
     unless the surgeon says "only these days"** — under Prompt 14 each surgeon picks that when submitting (default:
     preferred, rules fill gaps, and they are told which days). Ask Acton about November now. The reminder email should
     say plainly that Tuesdays and Thursdays are the days the group most needs.
-16. **Personal reasons quoted in this public document — Faraz's call (raised by the 9/23 overnight review).** The blob
-    carries no reasons (Prompt 12 AA), but this file sits in a public GitHub repo — as readable as the anon table — and still
-    names Acton's reasons and Faraz's own words in §3 (Acton: the vacation and Thanksgiving lines); the seed carries the same
-    kind of wording in `surgeonRules.s3.timeOff[*].note` and `surgeonRules.s4.timeOff[0].note` (importer-dropped — none is
-    `public: true`, so `time_off` gets "vacation (seed)" — but repo-visible). Keep them (the group knows; they explain the
-    rules) or trim to the rule alone ("Nov 19–22 and Nov 25–29 off; never Thanksgiving"); if trimmed, the OneDrive source
-    copy and the seed notes go the same way. Nothing changed pending the decision.
+16. ~~**Personal reasons quoted in this public document — Faraz's call (raised by the 9/23 overnight review).**~~ **DECIDED 9/23: TRIM.**
+    The public repo carries rules only, never reasons; the reasons live in Faraz's private notes file in the OneDrive folder
+    (gitignored, never copied into `docs/` or the seed). Done 9/23: §3 Acton (the Tuesday and time-off lines) and Philip (10/15,
+    the full-week line) carry the bare rule / dates; the seed's `surgeonRules.s3.timeOff[*].note`, `s4.timeOff[0].note` and
+    `s3.holidayRules.neverThanksgivingNote` read "off (stated 9/17)" and `s4.notes[1]` "no more full weeks (stated 9/17)"
+    (importer-dropped notes — `time_off` still gets "vacation (seed)"); the review and Prompt 12 records no longer quote the old
+    note text. The OneDrive `docs/` copy follows the repo (repo → OneDrive).

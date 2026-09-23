@@ -796,6 +796,146 @@ there is one mechanism, not two; recurring patterns, derived weeks and windows s
 is **retired at go-live** (Faraz 9/22 evening): the app is the source of truth; the ER-panel author keeps a viewer account, the weekly
 office digest and the ER Call Panels export for a paper copy. Published assignments remain locks.
 
+## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
+
+Faraz: *"there are days where I am on vacation at East, where we are not going anywhere, and I can cover call at
+Silvis."* So the East feed mirrors his Davenport vacations into Silvis and **nothing is mirrored blindly**: each range
+is **unreviewed** until he decides **away** (also off at Silvis) or **home** (available at Silvis — and his best Silvis
+days, because a Davenport vacation day has no East call and no OR block). A generic `eastFeed` feature for any roster
+surgeon with an East code (matched by roster **code** through the Davenport roster blob, never by a Davenport id);
+only Khan (FAK) has one today. Rules-doc text: `SILVIS-CALL-RULES.md` §3 Khan (the 9/22 evening entry).
+
+### 18.1 The pipeline (three parts, one branch `feat/east-vacations`)
+
+| part | what | where |
+|---|---|---|
+| 1 (E1) | *Refresh from Davenport* also reads the Davenport `time_off` table ([removed]; path **1a**, no paste box, no Davenport change) for the codes of every surgeon whose East feature reads busy days, `kind = vacation` only, and caches the ranges per published week in the `east_feed` payload `data.vacations: [{ code, start, end }]`; a range beyond the published weeks rides on the latest cached week; a failed `time_off` read keeps the cache and says so. Details in §7 (the *East vacations* bullet). | `east-feed.js` (`fetchEastWeeks(from, to, { vacationCodes })`, `planVacationCache`, `eastVacations(rows, code)`), `refreshEastFeed` in `index-source.html` |
+| 2 (E2) | The review table **`east_vacation_reviews`** (`person_id text`, `"start" date`, `"end" date`, `decision check in ('away','home')`, `decided_at`, `decided_by`, `unique (person_id, "start", "end")`; RLS read all authenticated — **no anon policy** — write own rows or scheduler/admin) as a **prepared** migration + self-rolling-back probe + `verify-rls.sh` section 9 (`docs/SCHEMA-REVIEW.md`, section *2026-09-23 - east_vacation_reviews*). `rules.js` derives the consequences: `buildContext` inputs `eastVacationRanges { rosterId: [{ start, end }] }` + `eastVacationReviews` (rows); **unreviewed and away = a derived vacation** (every day joins `P.vacation` — the same hard codes `time-off:<date>` for both roles and `day-before-vacation` for primary, so the generator, the day editor, the claim gate and the open-shifts eligibility all see it; `res.eastVacation = 'away' \| 'unreviewed'` for the gloss); **home = `eastClear`** (a dated availability for both roles: the weekday-pattern family incl. `hardNeverWeekdays` is lifted, no `east-unknown`, a primary-only soft bonus `{ east-clear, -weights.eastClear }`, default 2, Setup-editable; `res.eastClear = true`); the published feed wins over home with a `ctx.warnings` line; `eastVacationConflicts(ctx, schedule?)` mirrors the `time_off` trigger for the derived ranges (report only). `helpers.js` `reviewStateFor(range, reviews, personId)` / `derivedEastVacations(ranges, reviews, personId)` — **person-scoped**: another surgeon's row never decides a range and is never listed stale. | `sql/migrations/2026-09-23-east-vacation-reviews.sql`, `sql/schema.sql` rev. d, `sql/probes/east-vacation-reviews-probe.sql`, `scripts/verify-rls.sh` §9, `rules.js`, `helpers.js`, `generator.js` (`diagnostics.eastVacations`) |
+| 3 (E3) | The UI: the review controls, the markers, the strip count, the lists, the write path, the refresh resets — this section. | `index-source.html`, `app-styles.js`, `test/ui/smoke.mjs`, `test/data-layer.test.js` |
+
+**No `time_off` row is ever written for an East vacation.** A change of mind is one row in `east_vacation_reviews` (or
+its deletion) and leaves no orphans; the Silvis vacation form and its trigger are untouched. **Client-side only
+(known, documented):** `rpc/claim_open_slot` (`CL009`), `apply_trade`'s vacation check and the `time_off` trigger read
+`time_off` rows only, so a direct REST claim or a stale PWA that passes no East inputs is not stopped by the database;
+the client gate (`eligibility`) enforces the derived vacation. Extending `CL009` to read the feed + the reviews is a
+possible later migration.
+
+### 18.2 The review step in the app (E3)
+
+- **Loading.** `east_vacation_reviews` is authenticated-read only, so the app reads it with `readAuthOnlyTable`
+  (`loadEastVacationReviews`, at start and in the 60-s poll): no fresh token → not read, the last list is kept
+  (state `skipped`); an HTTP 404 → state `missing` (the migration is not applied yet — the panel banner says so and a
+  save attempt refuses with a toast; the start-up load itself does **not** toast a 404 to every signed-in user — review
+  fix); any other failure → `failed` with a toast. In every non-`ok` state a range without a row still reads
+  **unreviewed = away** (the conservative default the rules apply), and the panel names why the decisions are missing.
+- **One picture, one component.** `eastVacPeople` = per surgeon for whom **`eastVacationPerson(s, ef)`** holds — the one
+  predicate (the East feature reads busy days, i.e. `eastBlocksPrimary || eastBlocksBackup`, a roster code, not an
+  outside surgeon) that also decides the ctx input `eastVacationRanges` and the refresh's `vacationCodes`, so the rules
+  never derive a vacation the UI has no control for (a derived-weeks-only feature such as Fierce's has none):
+  `derivedEastVacations(eastVacations(eastFeedRows, code), reviewRows, rosterId)`
+  → `ranges` with `state` / `review` and the person's `stale` rows. Empty in public mode (the reviews are never loaded
+  there, so every state would read unreviewed — the public calendar draws no East-vacation marker, legend or strip item).
+  `EastVacationList` renders it in **three places** —
+  Setup → East feed (card *East vacations (Davenport time off, reviewed here)*, `data-testid="eastvac-card"`), the
+  person's own **Time off** view (`eastvac-timeoff`; the scheduler sees every East person) and **My schedule**
+  (`mine-eastvac`) — each range as a row (`eastvac-range-<id>-<start>`, `data-state`) with a tappable three-way
+  control `Unreviewed | Away | Home` (`eastvac-set-<state>`, `aria-pressed` = the state, ≥ 32 px, the active segment
+  white on its tone in both themes — `app-styles.js` `eastVacSegStyle`), the decision's time and author, a *show past*
+  toggle, and (in the Setup card) the conflicts list `eastvac-conflicts` = `rules.eastVacationConflicts(rulesCtx)`:
+  published days the person holds inside an unreviewed / away range (and a published primary the day before one),
+  each opening the day editor — a report, never a block on a lock. Read-only text instead of the control when the
+  viewer may not decide (the RLS mirrored: own rows or the scheduler).
+- **The write path — `saveEastVacationReview(personId, { start, end }, decision, opts)`**, the only writer. `away` /
+  `home` → `POST /rest/v1/east_vacation_reviews?on_conflict=person_id,start,end` with `Prefer:
+  resolution=merge-duplicates,return=representation` and `{ person_id, start, end, decision, decided_at, decided_by }`
+  (the primary key is `id`, so the upsert must name the unique triple); an empty representation is a **refused save**
+  (RLS no-op), never success. `unreviewed` (a change of mind, or the refresh's reset) → `DELETE ...?person_id=eq.
+  &start=eq.&end=eq.` with `return=representation`, the count recorded. Every mutation uses `dbAuthHeaders()`. After a
+  successful write the rows are re-read (the picture, the rules ctx and every list rebuild), **one audit row
+  `eastvac.review`** `{ person_id, start, end, decision: 'away' | 'home' | 'reset', reason, removed? }` is logged,
+  and a `home` decision calls `offerEitherForHomeRange(personId, range)`.
+- **The `home` → `either` offers step (Prompt 14).** With the offers painter present a home decision offers to paint
+  the range's days as `either` offers in one tap (a confirm sheet listing the dates; `call_offers` rows inserted the
+  normal way). Prompt 14's painter is on another branch tonight, so the hook is a **documented no-op**
+  (`console.info`, returns `{ pending: "prompt-14" }`, `TODO(Prompt 14 UI wave)`); the review itself is saved either
+  way, and nothing on this branch writes `call_offers` (data-layer pin + smoke).
+- **Refresh resets.** After *Refresh from Davenport* caches the new lists and **re-reads the cache** (`loadEastTables`
+  hands the `east_feed` rows back), for each East person whose code was read:
+  `derivedEastVacations(eastVacations(cacheRows, CODE), reviewRows, rosterId).stale` — computed against the **reloaded
+  cache picture** (the same merged list the panel, the ctx and the markers show), never the raw fetched list: a
+  kept-unseen cached range adjacent to a fetched one is joined in the cache, the review is saved on the joined range,
+  and the raw list would have reset it on every refresh (review fix). A row that matches no current range
+  exactly is **`changed`** (it still overlaps a current range: the dates moved) or **`removed`** (gone from Davenport);
+  rows whose `end` lies before the read's lower bound (`from` = today − 28 days) are kept, exactly as the cache keeps
+  those ranges; a failed `time_off` read or a failed cache reload resets nothing. Each stale row is deleted through
+  `saveEastVacationReview(..., "unreviewed", { quiet: true, reason })` — `quiet` silences that function's own toasts, so
+  the resets are audited like any reset and the **one final refresh toast** names them
+  ("East vacation review(s) reset: 3/2-3/6 (was home; dates changed), 4/10-4/12 (was away; removed from
+  Davenport).") or the failure ("could NOT reset ... - delete the row by hand", tone error); the `east.refresh` audit row
+  carries `reviewResets` / `reviewResetFailures`. A range already reviewed and unchanged keeps its decision.
+
+### 18.3 Where it shows
+
+- **Calendar day cells:** an East-vacation **marker** beside the vacation dots — a small diamond, distinct from the
+  round Silvis dot, in the review state (`app-styles.js` `eastVacMarkStyle(state, dark, personColor)`: unreviewed =
+  dashed amber outline, away = solid outline in the person's colour, home = filled green; `data-eastvac="<id>"`,
+  `data-eastvac-state`); the legend explains the three; the cell title names "East vacation: Khan (unreviewed)". The
+  marker is **per day from the rules ctx** when it is available (the same picture the day editor shows): unreviewed /
+  away from `P.eastVacationDays`, home from `P.eastClear`; a home day the East feed says busy keeps the home diamond
+  with `data-eastvac-feedbusy="1"` and a title saying the feed wins; a Silvis `time_off` day inside a range carries no
+  East marker (the Silvis dot stands, as the day editor shows no East line there); without a ctx the range state is
+  drawn as is. Nothing is drawn in public mode.
+- **Day editor:** `eastStatusLines` adds the person's line — *East (Davenport) vacation, unreviewed - treated as a
+  Silvis vacation until decided*, *... home - available at Silvis: no East call, Tue/Thu rule lifted, preferred as
+  primary*, or *... starts tomorrow - primary blocked (07:00 handoff)* — with the marker and `data-eastvac=<state>`;
+  the *Not eligible* list glosses a `time-off:` / `day-before-vacation` reason with "(East vacation, unreviewed - decide
+  it in Setup > East feed or Time off)"; `east-clear` reads "home East vacation day (no East call, no OR block -
+  preferred as primary)" among the soft tags.
+- **Coverage strip:** `unreviewed East vacations: N (Khan)` (`cov-eastvac-unreviewed`, `data-count`) = the person's
+  upcoming ranges without a row (any horizon, not the 60-day window); it opens the place where the decision is made —
+  the scheduler's Setup → East feed (the card forced open) or the person's own Time off view. Rendered for the
+  **scheduler and the person with the East code only** (another surgeon's or the viewer's Time off view has no East
+  card, so the item would be a dead end); hidden in public mode and when nobody has an East code.
+- **My schedule:** the card *My East (Davenport) vacations (N unreviewed)* with the list, and an **EV** badge on a held
+  day inside the person's own East vacation (the locked Thanksgiving unit case: [range] unreviewed lists his four
+  held days until he marks the range home) or on a home day.
+- **Time off view:** the same list for the person with the East code (the scheduler: every East person) beside his
+  Silvis vacations — nothing is entered there and no Silvis row is written.
+- **Untouched on purpose:** the office digest, the daily reminder and the ER Call Panels export show assignments, not
+  availability (data-layer pin).
+
+### 18.4 Proof
+
+- `test/rules.test.js` (part 2): unreviewed / away range → ineligible both roles + the trailing edge; home → eligible,
+  Tue/Thu lifted, the primary bonus; the feed wins over home with a warning; the helpers are person-scoped and equal to
+  the ctx's decision. `test/east-feed.test.js` (part 1): the payload key, the ride-on host, the whole-cache rewrite.
+  `test/schema.test.js`: the migration = `schema.sql`, columns, constraints, the four policies, no anon policy.
+- `test/data-layer.test.js` `[P15]` (part 3): the ctx inputs keyed by roster id from `eastVacations(rows, code)`; the
+  reviews read through `readAuthOnlyTable` (never `db.query`), 404 → `missing`, start + poll; the write path (upsert on
+  the triple, merge-duplicates + representation checked, the exact-triple delete, `dbAuthHeaders()` only, one audit
+  action, own-or-scheduler); the no-op hook with its TODO and no `call_offers` write; the refresh reset through the
+  person-scoped `stale` list with the `end >= from` guard and the toast wording; every place it shows; the digest / ER
+  export / daily reminder untouched; the marker styles (dashed / hollow / filled diamond, 3:1 outlines in both themes)
+  and the segment tones (flat gradient, white text ≥ 4.5:1). Fix-round pins: the one predicate `eastVacationPerson` in
+  all three places; the stale list from the reloaded cache (`eastVacations(cacheRows, code)`, never the raw list); the
+  quiet toasts and the un-toasted start-up 404; the public-mode guard and the strip's render condition; the per-day
+  marker from the ctx (`P.eastVacationDays` / `P.eastClear` / `feedBusy` / the Silvis time_off skip).
+- `test/ui/smoke.mjs` (part 3): the harness overlays three FAK ranges on the newest cached `east_feed` row (every live
+  `data.vacations` list stripped first), serves `east_vacation_reviews` from an in-harness store (one away, one home;
+  the third unreviewed) and answers the mocked Davenport `time_off` with the same rows, then reads the panel, drives the
+  three controls (the POST / DELETE shapes, the audit rows, no `time_off` and no `call_offers` write), the conflicts
+  list, the markers on three days (dashed / hollow / filled, no Silvis dot), the day editor lines and glosses (Khan
+  ineligible on the unreviewed Tuesday, **eligible** on the home Tuesday), the strip count and its click (the card's
+  collapse flag set to `0` first, so the click is what opens it), My schedule and the Time off list, and — fix round —
+  the **refresh-reset path**: the first Refresh (unchanged ranges) issues no `east_vacation_reviews` DELETE; a second
+  Refresh whose mocked Davenport answer moved one range and dropped another issues exactly two DELETEs by the old
+  triples, two `eastvac.review` reset audits (reason `changed` / `removed`, `removed: 1`), names both in the toast and
+  keeps the unchanged range's row; screenshots `eastvac-panel.png`, `eastvac-panel-390.png`, `eastvac-panel-dark.png`,
+  `eastvac-panel-390-dark.png`, `calendar-eastvac-2027-04.png`, `mine-eastvac.png`.
+- **Live (orchestrator, tonight, under Faraz's mandate):** apply the migration, run the probe, record the observed
+  strings in `docs/SCHEMA-REVIEW.md`; then Faraz's first action after the deploy is *Refresh from Davenport* (the 16
+  FAK ranges arrive) and the decision on **[range]** (home, per the prompt) and **[range]**.
+
 ## 19. Publishing from the command line (Prompt 12 PUB, 2026-09-23 overnight)
 
 Publishing normally happens in the app (Setup → Generate → Accept & Publish) under the scheduler's signed-in session.

@@ -648,14 +648,14 @@ function noteValues(o, p, out) {
   return out;
 }
 // (1) the two live offenders (review finding F): the seed keeps its wording, the blob gets the category
-eq(seed.surgeonRules[ACTON].holidayRules.neverThanksgivingNote, "[removed]", "seed still says '[removed]' (the seed is not rewritten)");
-// Prompt 12 X FLIP (9/22 evening): the second offender - Acton's Tuesday avoid with its '[removed]' note - left the seed
+eq(seed.surgeonRules[ACTON].holidayRules.neverThanksgivingNote, "off (stated 9/17)", "seed note is the bare form since 9/23 (rules doc section 8 item 16: TRIM - no reason in the seed either; the importer does not rewrite the seed)");
+// Prompt 12 X FLIP (9/22 evening): the second offender - Acton's Tuesday avoid with its note - left the seed
 // entirely (his Tuesday is now the hard primary rule s3.hardNeverWeekdays, with no reason key); the pins below read its absence.
 ok(!seed.surgeonRules[ACTON].recurringAvoid.some((r) => r.weekday === "Tue") && !("hardNeverWeekdaysReason" in seed.surgeonRules[ACTON]), "X: no Tuesday avoid entry and no hardNeverWeekdaysReason key in the seed (the rule carries no reason)");
-ok(!("neverThanksgivingNote" in plan.blob.surgeonRules[ACTON].holidayRules), "AA FLIP: neverThanksgivingNote is dropped from the blob (F: '[removed]' -> the token 'family')");
+ok(!("neverThanksgivingNote" in plan.blob.surgeonRules[ACTON].holidayRules), "AA FLIP: neverThanksgivingNote is dropped from the blob (F)");
 eq(plan.blob.surgeonRules[ACTON].recurringAvoid.map((r) => "note" in r), [false], "AA FLIP: only the Sunday avoid remains in the blob (X) and it carries no note (F: the token 'outreach')");
-ok(JSON.stringify(plan.blob).indexOf("[removed]") < 0 && JSON.stringify(plan.blob).indexOf("[removed]") < 0, "neither phrase anywhere in the blob");
-ok(sql.indexOf("[removed]") < 0 && sql.indexOf("[removed]") < 0, "neither phrase in the generated SQL");
+ok(!/\b(hosts|family)\b/i.test(JSON.stringify(plan.blob)), "neither denylist token (hosts, family) anywhere in the blob");
+ok(!/\b(hosts|family)\b/i.test(sql), "neither denylist token (hosts, family) in the generated SQL");
 // (2) AA FLIP: no note-like string is left in the blob's surgeonRules at all (F: >= 8 survived as category tokens)
 const blobNotes = noteValues(plan.blob.surgeonRules, "surgeonRules", []);
 eq(blobNotes, [], "AA FLIP: no note-like string survives under surgeonRules (F: some person-situation notes survived as categories)");
@@ -757,7 +757,7 @@ const direct = IMP.impScrubRuleNotes(rawSr, clone(seed.groupRules));
 ok(!("neverThanksgivingNote" in direct.surgeonRules[ACTON].holidayRules), "AA FLIP: the direct call drops neverThanksgivingNote (F: 'family')");
 eq(IMP.impFindKeys(direct.groupRules, NOTE_KEY), []);
 eq(IMP.impFindKeys(direct.surgeonRules, NOTE_KEY), [], "AA FLIP: the direct call leaves no note-like key (F: only category tokens)");
-ok(rawSr[ACTON].holidayRules.neverThanksgivingNote === "[removed]", "impScrubRuleNotes does not mutate its input");
+ok(rawSr[ACTON].holidayRules.neverThanksgivingNote === "off (stated 9/17)", "impScrubRuleNotes does not mutate its input");
 // empty / absent inputs
 eq(IMP.impScrubRuleNotes({}, {}), { surgeonRules: {}, groupRules: {}, holidays: {}, inventory: [] });
 eq(IMP.impScrubRuleNotes({}, {}, { units: { 2026: [{ name: "x", days: ["2026-12-25"], note: "doc" }] } }).holidays, { units: { 2026: [{ name: "x", days: ["2026-12-25"] }] } }, "holidays: every note-like key dropped");
