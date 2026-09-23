@@ -258,8 +258,39 @@ The `manual_edit` notice (above) is Faraz's call afterwards - the app's day edit
 
 ## AFTER (observed)
 
-*To be filled by the orchestrator after `--apply`: the `--- verification ---` block of the day-edit run (snapshot id,
-audit rows, days_by_tool, re-read result), the four rows as re-read, and the importer's post-apply verify line.*
+Applied by the orchestrator on 2026-09-23 at 08:38 Central (rows stamped 2026-09-23 13:38:51 UTC) from this tool at commit
+725e36c, as ONE batch of NINE edits: the four October backups of this report plus five more Faraz asked for the same morning
+(backup 11/19 -> Philip, 11/24 -> Khan - the two moves of docs/REPORT-NOV-BACKUPS-2026-09-23.md - and 12/4 -> Fierce, 12/10 -> Khan,
+12/18 -> Acton - the three the December rule change invalidated). Dry run first (exit 0, nine rows, every edit `ok` on both availability
+sources, soft terms only), then `--apply --workdir <linked dir>`, exit 0. Verification block of the run (verbatim):
+
+```
+days_by_tool 9; snapshot_id bed7558b-bba6-4e73-94e4-12de822a2d69; snapshots_after 12
+snapshot id bed7558b-bba6-4e73-94e4-12de822a2d69; snapshots after 12; audit rows 16; rows stamped at 2026-09-23 13:38:51.195155+00: 9/9
+re-read: every planned row on file, versions incremented, tag present; outside the plan: untouched, total 112; fresh plan: 0 row(s)
+VERIFIED: 9 row(s) edited. No notification was queued and no mail was sent - see the preview above.
+```
+
+The nine rows as re-read with the anon key right after (day, primary, backup, source, version, updated_by):
+
+| day | primary | backup | source | version | updated_by |
+|---|---|---|---|---|---|
+| 2026-10-09 | s3 Acton locked | **s2 Burchett locked** | manual | 3 | Faraz (day-edit CLI, 2026-09-23) |
+| 2026-10-15 | OPEN unlocked | **s2 Burchett locked** | manual | 3 | Faraz (day-edit CLI, 2026-09-23) |
+| 2026-10-20 | s6 Sarkar locked | **s2 Burchett locked** | manual | 2 | Faraz (day-edit CLI, 2026-09-23) |
+| 2026-10-22 | s6 Sarkar locked | **s2 Burchett locked** | manual | 2 | Faraz (day-edit CLI, 2026-09-23) |
+| 2026-11-19 | s6 Sarkar unlocked | **s4 Philip locked** | manual | 2 | Faraz (day-edit CLI, 2026-09-23) |
+| 2026-11-24 | s4 Philip unlocked | **s1 Khan locked** | manual | 2 | Faraz (day-edit CLI, 2026-09-23) |
+| 2026-12-04 | s3 Acton unlocked | **s5 Fierce locked** | manual | 2 | Faraz (day-edit CLI, 2026-09-23) |
+| 2026-12-10 | s5 Fierce locked | **s1 Khan locked** | manual | 2 | Faraz (day-edit CLI, 2026-09-23) |
+| 2026-12-18 | s1 Khan unlocked | **s3 Acton locked** | manual | 2 | Faraz (day-edit CLI, 2026-09-23) |
+
+Primaries untouched; 10/15 primary still OPEN; `schedule_days` still 112 rows; `notifications` unchanged.
+
+Importer apply of this seed (AFTER the edits, from main at a45ec81, 2026-09-23 13:55 UTC): `availability: insert 4` (s2 backup_only/any
+2026-10-09, 10-15, 10-20, 10-22), blob surgeonRules + settings update, schedule_days 0 / 0 / 0 (the four October days read as unchanged,
+29 previously published days kept), snapshot 13, and the post-apply verify line: `VERIFIED: the applied part is fully applied - a fresh plan
+reads 'Total changes: 0 (+30 blocked)'`. Live availability count 48 -> 52.
 
 ## Deviations from the item's file list (each unavoidable, none weakens a gate)
 
