@@ -10,6 +10,14 @@
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
 # RAISING an exception whose message carries the per-case results, and this script grades them.
 # Section 7 (Prompt 13 part 2) does the same with sql/probes/claim-open-slot-probe.sql (claim_open_slot).
+#
+# --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
+# any other argument is refused the same way - every option of this script is an environment variable, never a flag.
+case "${1:-}" in
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  "") ;;
+  *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
+esac
 set -u
 cd "$(dirname "$0")/.." || exit 1
 URL=$(grep -oE 'SUPABASE_URL\s*=\s*"[^"]+"' config.js | head -1 | sed 's/.*"\(.*\)"/\1/')

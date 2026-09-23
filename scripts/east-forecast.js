@@ -90,6 +90,8 @@ function defaultForecastRuns(seedPath) {
   }
   return FALLBACK_RUNS;
 }
+const USAGE = "usage: node scripts/east-forecast.js [--start YYYY-MM-DD] [--weeks N] [--runs N] [--threshold 0.2] [--budget-sec 900] [--sql] [--ref <davenport clone>]\n" +
+  "  read-only GETs with the Davenport public anon key; --sql PRINTS east_forecast upserts and executes nothing; every flag is described in the header of this file";
 function parseArgs(argv) {
   const a = { start: null, weeks: null, runs: defaultForecastRuns(), runsFrom: "seed", threshold: 0.2, budgetSec: 900, sql: false, ref: process.env.DAVENPORT_REF || path.join(ROOT, "..", "davenport-ref") };
   for (let i = 2; i < argv.length; i++) {
@@ -101,7 +103,7 @@ function parseArgs(argv) {
     else if (k === "--budget-sec") { a.budgetSec = parseFloat(v); i++; }
     else if (k === "--sql") { a.sql = true; }
     else if (k === "--ref") { a.ref = v; i++; }
-    else if (k === "--help" || k === "-h") { console.log(fs.readFileSync(__filename, "utf8").split("\n").slice(1, 40).join("\n")); process.exit(0); }
+    else if (k === "--help" || k === "-h") { console.log(USAGE); process.exit(0); } // rebase follow-up 9/23: one usage line, not the 39-line header
     else { console.error("unknown argument: " + k); process.exit(2); }
   }
   if (a.start && !/^\d{4}-\d{2}-\d{2}$/.test(a.start)) { console.error("--start must be YYYY-MM-DD"); process.exit(2); }

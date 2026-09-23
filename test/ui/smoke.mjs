@@ -294,6 +294,7 @@ let failSnapshotInsert = false; // Slice E harness switch (see the Supabase rout
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
 let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH open for N ms so a CAS sync run is provably in flight
 let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_by } stamped onto every call_schedule_data GET row
+let blobWriteTs = null;         // rebase follow-up 9/23 (review, major): updated_at of the app's LAST call_schedule_data write, served on every later blob GET (what the real column reads) so the 60 s poll's refreshBlobRow short-circuits instead of re-adopting the harness-untouched blob over a Setup edit
 // Davenport (East) project mock - fetchEastWeeks reads schedule_weeks + the
 // roster blob from this host with its public key; the harness answers both so
 // a Refresh never leaves the machine and the upsert payload is deterministic.
@@ -706,6 +707,15 @@ const routeSupabase = async (route) => {
       try { const b = JSON.parse(body); snapStore.push({ id: crypto.randomUUID(), reason: b.reason || null, source_updated_at: b.source_updated_at || null, created_at: new Date().toISOString(), data: b.data }); }
       catch (e) { failedRequests.push("snapshot POST body did not parse: " + (e && e.message || e)); }
     }
+    // rebase follow-up 9/23 (review, major): the app stamps its own updated_at into every blob upsert / merge and
+    // remembers it (blobTsRef); the real column then reads that stamp, so refreshBlobRow's equality check
+    // short-circuits on the next 60 s poll. Keep the stamp so the mocked row does too - without it the first tick
+    // after a Setup edit (Acton's harness target, the Primary contribution) re-adopted the fixture / live blob and
+    // the Totals / Fairness reads that followed were a coin toss (1 run in 3). The DATA column stays the fixture's
+    // / the live one's on purpose: the Import pins and the seed-ownership rule read that picture.
+    if ((method === "POST" || method === "PATCH") && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
+      try { const b = JSON.parse(body || "{}"); const r = Array.isArray(b) ? b[0] : b; if (r && typeof r.updated_at === "string") blobWriteTs = r.updated_at; } catch (e) {}
+    }
     writes.push({ method, path: url.pathname + url.search, body: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? "(snapshot body omitted)" : body, prefer: req.headers()["prefer"] || "", snapshotReason: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? (() => { try { return JSON.parse(body).reason; } catch (e) { return null; } })() : undefined });
     return json(method === "POST" ? 201 : 200, representation(method, url, body));
   }
@@ -730,13 +740,16 @@ const routeSupabase = async (route) => {
   // Harness switch (fix round 2, safe-4): stamp a foreign updated_at / updated_by
   // onto the blob row so the import's dry run and its pre-apply re-read see a
   // setup that "changed since the dry run".
-  if (blobReadOverride && method === "GET" && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
+  // ... and (rebase follow-up 9/23) the app's own last write stamp rides on every blob GET after a write; the
+  // deliberate foreign stamp above still wins when it is armed.
+  if ((blobReadOverride || blobWriteTs) && method === "GET" && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
     let rows = fixtureAnswer(url);
     if (!rows) {
       const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
       rows = await res.json().catch(() => []);
     }
-    return json(200, (Array.isArray(rows) ? rows : []).map(r => ({ ...r, ...blobReadOverride })));
+    const stampRow = (r) => (r && typeof r === "object") ? { ...r, ...(blobWriteTs ? { updated_at: blobWriteTs } : {}), ...(blobReadOverride || {}) } : r;
+    return json(200, Array.isArray(rows) ? rows.map(stampRow) : stampRow(rows));
   }
   // Prompt 13 part 3: a claimed day reads back with the claimer, version + 1 (what the function's UPDATE leaves).
   // ... and the harness-opened slot (LIVE mode, P13R-2) reads back blank with its live source and version.

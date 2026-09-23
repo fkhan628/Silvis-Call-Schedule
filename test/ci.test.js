@@ -204,6 +204,17 @@ scriptFiles.forEach(f => {
   ok(/unknown argument/i.test((u.stderr || "") + (u.stdout || "")), "scripts/" + f + " did not name the unknown argument: " + String(u.stderr || "").trim().slice(0, 200));
 });
 ok(docsSnapshot() === docsBefore, "a --help / unknown-flag run of a script created or modified a file under docs/");
+// rebase follow-up 9/23 (review, minor): the one SHELL script under scripts/ honours the same contract without being
+// run here (it probes the live project): its --help / unknown-argument arm sits BEFORE `set -u`, the config.js read
+// and the first curl, so `bash scripts/verify-rls.sh --help` prints usage and exits 0 with no request made.
+const shFiles = fs.readdirSync(scriptsDir).filter(f => /\.sh$/.test(f)).sort();
+ok(JSON.stringify(shFiles) === JSON.stringify(["verify-rls.sh"]), "expected scripts/verify-rls.sh to be the only shell script under scripts/ (a new one needs the same --help arm and a pin here), found: " + shFiles.join(", "));
+const vrCode = read("scripts/verify-rls.sh").split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+const vrHelp = vrCode.search(/-h\|--help\)\s*echo "usage: bash scripts\/verify-rls\.sh/);
+const vrFirstRun = Math.min(...["set -u", "curl ", "grep -oE"].map(s => vrCode.indexOf(s)).filter(i => i >= 0));
+ok(vrHelp >= 0, "scripts/verify-rls.sh has no `-h|--help) echo \"usage: bash scripts/verify-rls.sh ...\"` arm");
+ok(vrHelp >= 0 && vrHelp < vrFirstRun, "the --help arm of scripts/verify-rls.sh must come before set -u / the config.js read / the first curl (arm at " + vrHelp + ", first run at " + vrFirstRun + ")");
+ok(/\*\)\s*echo "unknown argument: \$1[^\n]*" >&2; exit 2;;/.test(vrCode), "scripts/verify-rls.sh must refuse an unknown argument with 'unknown argument: <arg>' on stderr and exit 2");
 // the default --out of preview-generate.js is outside docs/ (a casual re-run can never clobber the committed record)
 const pgSrc = read("scripts/preview-generate.js");
 ok(/os\.tmpdir\(\)/.test(pgSrc) && !/path\.join\(REPO, "docs", `PREVIEW-/.test(pgSrc), "scripts/preview-generate.js must default --out to os.tmpdir(), never docs/PREVIEW-<range>.md");
