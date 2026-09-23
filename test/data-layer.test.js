@@ -1746,6 +1746,203 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(C.payloadLooksWiped({ schedule: {}, vacations: {}, availability: [], call_offers: [{ person_id: "s2", day: "2026-11-03", role_pref: "primary" }] }), true);
   });
 
+  /* ---------------- F. Prompt 14 part 3a (U3a): the offer painter's pure pieces + source pins ---------------- */
+  console.log("\n[F] Prompt 14 U3a: offer painter helpers + source pins");
+  check("U3a: offersDraftDiff splits a draft against the saved rows into insert / update / delete, drops no-ops, day order", () => {
+    const saved = [
+      { id: "a", person_id: "s1", day: "2026-11-03", role_pref: "primary" },
+      { id: "b", person_id: "s1", day: "2026-11-05T00:00:00", role_pref: "either" }, // a timestamp-shaped day reads by its date
+      { id: "c", person_id: "s1", day: "2026-11-09", role_pref: "backup" },
+    ];
+    const draft = {
+      "2026-11-09": null,        // clear a saved offer -> delete
+      "2026-11-03": "primary",   // same as saved -> no-op
+      "2026-11-05": "backup",    // saved either -> update
+      "2026-11-02": "either",    // new -> insert
+      "2026-11-01": "",          // clear a day never saved -> no-op
+      "2026-11-10": "clear",     // an unknown brush -> bad, writes nothing
+      "11/12/2026": "primary",   // not ISO -> bad
+    };
+    const d = H.offersDraftDiff(saved, draft);
+    assert.deepStrictEqual(d.insert, [{ day: "2026-11-02", role_pref: "either" }]);
+    assert.deepStrictEqual(d.update, [{ day: "2026-11-05", role_pref: "backup", was: "either" }]);
+    assert.deepStrictEqual(d.delete, ["2026-11-09"]);
+    assert.deepStrictEqual(d.bad, ["11/12/2026", "2026-11-10"]);
+    assert.strictEqual(d.count, 3);
+  });
+  check("U3a: offersDraftDiff accepts a { day: role } saved map, an empty draft is a zero diff, junk never throws", () => {
+    assert.deepStrictEqual(H.offersDraftDiff({ "2026-12-01": "primary" }, { "2026-12-01": "either" }), { insert: [], update: [{ day: "2026-12-01", role_pref: "either", was: "primary" }], delete: [], bad: [], count: 1 });
+    assert.deepStrictEqual(H.offersDraftDiff([], {}), { insert: [], update: [], delete: [], bad: [], count: 0 });
+    assert.deepStrictEqual(H.offersDraftDiff(null, null).count, 0);
+    assert.deepStrictEqual(H.offersDraftDiff("x", 7).count, 0);
+  });
+  check("U3a: offerDayWhy - obligations grey (first family word), the weekday-pattern family confirms, the rest is neither", () => {
+    const w = H.offerDayWhy(["slot-locked:s2", "east-busy", "hard-never-weekday:Tue", "monthly-cap:8"]);
+    assert.strictEqual(w.block, "East busy");
+    assert.strictEqual(w.confirm, "never a call day by your rules");
+    assert.deepStrictEqual(w.codes, { block: ["east-busy"], confirm: ["hard-never-weekday:Tue"] });
+    assert.deepStrictEqual(H.offerDayWhy(["holiday-opt-out:Thanksgiving"]).block, "you opted out of Thanksgiving");
+    assert.strictEqual(H.offerDayWhy(["time-off:2026-11-19"]).block, "on your vacation");
+    assert.strictEqual(H.offerDayWhy(["day-before-vacation"]).block, "the day before your vacation");
+    assert.strictEqual(H.offerDayWhy(["derived-lock:backup"]).block, "your East/Silvis week");
+    assert.strictEqual(H.offerDayWhy(["outside-window"]).block, "outside your window");
+    assert.strictEqual(H.offerDayWhy(["east-forecast-busy:0.75"]).block, "East forecast busy");
+    // the person's own dated rows BLOCK (rules.js never lifts them for an offer - the 9/23 review's finding), with words that name the fix
+    ["unavailable-row", "no-backup-row", "backup-only-row"].forEach(c => { const r = H.offerDayWhy([c]); assert.ok(r.block && /ask the scheduler to change that row first/.test(r.block) && !r.confirm, c + " must block (not confirm): " + JSON.stringify(r)); });
+    const none = H.offerDayWhy(["holds-other-role", "not-offered", "max-consecutive:3", "backup-cap:7"]);
+    assert.deepStrictEqual(none, { block: null, confirm: null, codes: { block: [], confirm: [] } });
+    assert.deepStrictEqual(H.offerDayWhy(null), { block: null, confirm: null, codes: { block: [], confirm: [] } });
+    // every hard code rules.js can raise is classified on purpose: block, confirm, or (listed here) weighed by the generator
+    const R = require(path.join(ROOT, "rules.js"));
+    const neither = ["unknown-surgeon", "bad-role:", "external-cover", "external-surgeon", "slot-locked:", "holds-other-role", "monthly-cap:", "max-consecutive:", "backup-cap:", "backup-weekend-cap:", "max-major-holidays:", "not-offered"];
+    R.HARD_REASONS.forEach(code => {
+      const w2 = H.offerDayWhy([code + (code.endsWith(":") ? "x" : "")]);
+      if (neither.indexOf(code) >= 0) assert.strictEqual(w2.block || w2.confirm, null, code + " must be neither block nor confirm");
+      else assert.ok(w2.block || w2.confirm, code + " is not classified by offerDayWhy (add it to the block or confirm table)");
+    });
+  });
+  check("U3a: the painter's confirm / block split holds in a REAL ctx - every confirm code the seed raises is lifted by a saved offer, the three dated-row codes never are", () => {
+    // Built from docs/silvis-seed.json through rules.buildContext (no word table consulted): for every (surgeon, day, role)
+    // of the first period whose no-offer hard list carries a confirm-family code, an offer of that role on that day must
+    // remove the code; a dated unavailable / no_backup / backup_only row must survive the same offer. This is what makes
+    // "the saved offer lifts that pattern" true when the painter says it, and "ask the scheduler to change that row"
+    // right when it greys.
+    const R = require(path.join(ROOT, "rules.js"));
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const per = seed.offerPeriods[0];
+    const base = { roster: seed.roster, surgeonRules: seed.surgeonRules, groupRules: seed.groupRules, holidays: seed.holidays, schedule: {}, availabilityRows: [], periods: [per], today: "2026-09-23" };
+    const core = (c) => String(c).split(":")[0];
+    const ctx0 = R.buildContext({ ...base, offers: [] });
+    const lifted = {}, kept = [];
+    for (let d = per.start; d <= per.end; d = H.suAddDays(d, 1)) {
+      ["s1", "s2", "s3", "s4", "s5", "s6"].forEach(id => ["primary", "backup"].forEach(role => {
+        const codes = R.eligibility(ctx0, d, role, id, { claim: true }).hard.map(core).filter(c => H.OFFER_CONFIRM_WORDS[c]);
+        if (!codes.length) return;
+        const after = R.eligibility(R.buildContext({ ...base, offers: [{ person_id: id, day: d, role_pref: role }] }), d, role, id, { claim: true }).hard.map(core);
+        codes.forEach(c => { if (after.indexOf(c) >= 0) kept.push(id + " " + d + " " + role + " " + c); else lifted[c] = (lifted[c] || 0) + 1; });
+      }));
+    }
+    assert.deepStrictEqual(kept, [], "confirm codes a saved offer did NOT lift (move them to OFFER_BLOCK_WORDS)");
+    assert.ok(Object.keys(lifted).length >= 5, "the seed should exercise at least five confirm codes, saw " + JSON.stringify(lifted));
+    ["hard-never-weekday", "weekday-pattern", "recurring-unavailable", "weekend-block-only", "whitelist-month", "outside-available-weeks", "day-before-aledo"].forEach(c => assert.ok(lifted[c], c + " was not exercised / lifted: " + JSON.stringify(lifted)));
+    // the dated rows: an offer of the same role on the same day never lifts them -> they must be BLOCK codes
+    const day = "2026-12-09", pid = "s3"; // a Wed inside the period for Acton (his recurring-unavailable Wed is lifted, the row is not)
+    [["unavailable", "either", ["primary", "backup"], "unavailable-row"], ["no_backup", "either", ["backup"], "no-backup-row"], ["backup_only", "primary", ["primary"], "backup-only-row"]].forEach(([kind, pref, roles, code]) => {
+      const ctx1 = R.buildContext({ ...base, availabilityRows: [{ person_id: pid, kind, role: "any", start_date: day }], offers: [{ person_id: pid, day, role_pref: pref }] });
+      roles.forEach(role => {
+        const e = R.eligibility(ctx1, day, role, pid, { claim: true });
+        assert.ok(e.hard.map(core).indexOf(code) >= 0, kind + " row + offer " + pref + ": " + role + " should still be hard " + code + ", got " + JSON.stringify(e.hard));
+        const why = H.offerDayWhy(e.hard);
+        assert.ok(why.block && !why.confirm, code + " must grey the row (block), never confirm: " + JSON.stringify(why));
+      });
+    });
+  });
+  check("U3a: offerNextPeriod prefers the earliest period still OPEN for offers, falls back to the running frozen one; offerPeriodOpen reads status + offers_close_at like OF003 / OM005", () => {
+    const P = [{ id: "b", start_day: "2027-02-01", end_day: "2027-04-30", offers_close_at: "2027-01-05", status: "upcoming" }, { id: "a", start_day: "2026-11-02", end_day: "2027-01-03", offers_close_at: "2026-10-02", status: "upcoming" }, { id: "z", start_day: "2026-08-01", end_day: "2026-09-20", offers_close_at: "2026-07-01", status: "published" }];
+    assert.strictEqual(H.offerNextPeriod(P, "2026-09-23").id, "a", "a is open until 10/2");
+    assert.strictEqual(H.offerNextPeriod(P, "2026-10-02").id, "b", "on the freeze day a is frozen (close <= today) -> the next open period b, not a (the 9/23 review's finding)");
+    assert.strictEqual(H.offerNextPeriod(P, "2026-12-15").id, "b", "between the freeze and a's end the painter speaks to b");
+    assert.strictEqual(H.offerNextPeriod(P, "2027-01-04").id, "b");
+    assert.strictEqual(H.offerNextPeriod(P, "2027-05-01"), null);
+    assert.strictEqual(H.offerNextPeriod(P, "bad"), null);
+    assert.strictEqual(H.offerNextPeriod(null, "2026-09-23"), null);
+    // no open period at all -> the running frozen one (read-only in the sheet), never null while a period is still running
+    const onlyA = [P[1], P[2]];
+    assert.strictEqual(H.offerNextPeriod(onlyA, "2026-12-15").id, "a");
+    assert.strictEqual(H.offerPeriodOpen(onlyA[0], "2026-12-15"), false);
+    assert.strictEqual(H.offerPeriodOpen(onlyA[0], "2026-10-01"), true);
+    assert.strictEqual(H.offerPeriodOpen(onlyA[0], "2026-10-02"), false, "frozen ON offers_close_at (OF003: close <= today)");
+    assert.strictEqual(H.offerPeriodOpen({ start_day: "2027-02-01", end_day: "2027-04-30", offers_close_at: "2027-01-05", status: "closed" }, "2026-12-15"), false, "a status other than upcoming is closed whatever the date");
+    assert.strictEqual(H.offerPeriodOpen({ start_day: "2027-02-01", end_day: "2027-04-30" }, "2026-12-15"), true, "no status / no close = open (the seed's shape before the importer fills them)");
+    assert.strictEqual(H.offerPeriodOpen(null, "2026-12-15"), false);
+    assert.strictEqual(H.offerPeriodOpen({}, "bad"), false);
+    assert.strictEqual(H.offerNextPeriod([{ id: "s", start: "2026-11-02", end: "2027-01-03", offersCloseAt: "2026-10-02" }], "2026-09-23").id, "s"); // seed aliases
+    assert.strictEqual(H.offerPeriodOpen({ start: "2026-11-02", end: "2027-01-03", offersCloseAt: "2026-10-02" }, "2026-10-02"), false, "offersCloseAt alias read");
+  });
+  check("U3a: offerRulesWords speaks every seed surgeon's rules from the data (no name branch), defaults when nothing is on file", () => {
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const words = (id) => H.offerRulesWords(seed.surgeonRules[id], seed.groupRules);
+    const k = words("s1"); assert.ok(k.some(s => /^Weekdays: Mon, Wed \(offered automatically when East is clear\)\.$/.test(s)), JSON.stringify(k)); assert.ok(k.some(s => s === "Never primary on Tue, Thu."), JSON.stringify(k)); // hardNeverWeekdaysRoles ["primary"] in the seed (9/22: backup open Tue/Thu) assert.ok(k.some(s => /East \(Davenport\) call days block primary; the forecast stands in/.test(s)));
+    const b = words("s2"); assert.ok(b.some(s => s === "Available on the 2/4 Mon, the 1 Tue, the 2/4 Wed."), JSON.stringify(b)); assert.ok(b.some(s => s === "Cap: 8 primary days a month (7 preferred)."));
+    const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon, the 2/4 Wed.")); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "No monthly cap of your own."));
+    const p = words("s4"); assert.ok(p.some(s => /^Listed weeks \(Mondays\): 11\/9, 11\/23, 12\/7, 12\/21, 12\/28, 1\/11 and 13 more\.$/.test(s)), JSON.stringify(p)); assert.ok(p.some(s => /^Aledo days: the 1\/3 Wed, Fri of week 3; never on call the day before\.$/.test(s))); assert.ok(p.some(s => s === "Backup cap: 7 days and 1 weekend a month."));
+    const f = words("s5"); assert.ok(f.some(s => s === "Outside your East weeks: primary on Wed, Fri/Sat/Sun as one block; backup any day."), JSON.stringify(f)); assert.ok(f.some(s => /East weeks derive your Silvis week/.test(s))); assert.ok(f.some(s => s === "Cap: 14 primary days a month, East primary-week days included."));
+    const s6 = words("s6"); assert.ok(s6.some(s => s === "Windows: 10/19-10/23, 11/16-11/20, 12/14-12/18, 1/11-1/15 (about 2 primary days per window week)."), JSON.stringify(s6)); assert.ok(s6.some(s => s === "Weekends: one day at a time."));
+    assert.deepStrictEqual(H.offerRulesWords(null, seed.groupRules), ["No rules of yours are on file - the scheduler places you by the group defaults."]);
+    assert.deepStrictEqual(H.offerRulesWords({}, {}), ["No recurring rules of yours are on file - the scheduler places you by the group defaults."]);
+    assert.deepStrictEqual(H.offerRulesWords({ name: "X" }, { defaultMonthlyCap: { primary: 8 } }), ["Cap: the group default of 8 primary days a month."]);
+    const all = ["s1", "s2", "s3", "s4", "s5", "s6"].flatMap(words).join(" ");
+    assert.strictEqual(/@|\b\d{3}[-.]\d{3}[-.]\d{4}\b/.test(all), false, "rules words must never carry an address or phone");
+  });
+  {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
+    const styles = require(path.join(ROOT, "app-styles.js"));
+    check("U3a pins: OfferPainterSheet is a MODULE-SCOPE component mounted outside the view conditionals, the app never defines it inside CallSchedule", () => {
+      const def = src.indexOf("\nfunction OfferPainterSheet(");
+      const app = src.indexOf("\nfunction CallSchedule() {");
+      const appEnd = src.indexOf("\nfunction MonthPainterSheet(");
+      assert.ok(def > 0, "no module-scope OfferPainterSheet");
+      assert.ok(app > 0 && appEnd > app && (def < app || def > appEnd), "OfferPainterSheet is defined inside CallSchedule (it would remount and lose the draft)");
+      assert.ok(src.includes("{offerSheet && !isPublicMode && (\n        <OfferPainterSheet"), "the sheet is not mounted beside the vacation painter (outside the view conditionals)");
+      assert.strictEqual((src.match(/<OfferPainterSheet\b/g) || []).length, 1, "exactly one mount");
+    });
+    check("U3a pins: one Save = ONE rpc/save_offers request (rows + period + mode together) through dbAuthHeaders + ONE audit row offers.save; a mode-only save = ONE rpc/set_offer_mode; nothing to write = no request and no audit; no direct call_offers / call_periods write", () => {
+      assert.ok(src.includes("`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: \"POST\", headers: { ...dbAuthHeaders()"), "save_offers must be one POST with dbAuthHeaders");
+      assert.strictEqual((src.match(/rest\/v1\/rpc\/save_offers/g) || []).length, 1, "save_offers is called from exactly one place");
+      assert.ok(src.includes("body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null })"), "the rows request must carry the period + mode when the same Save changed the toggle (one commit or nothing - the 9/23 review's finding 3)");
+      assert.ok(src.includes("`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, { method: \"POST\", headers: { ...dbAuthHeaders()"), "set_offer_mode must be one POST with dbAuthHeaders");
+      assert.ok(/if \(diff\.count > 0\) \{[\s\S]*?\} else \{\s*const r2 = await fetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/rpc\/set_offer_mode`/.test(src), "set_offer_mode is the MODE-ONLY path (the else of diff.count > 0), never a second request after the rows");
+      assert.ok(src.includes("if (diff.count === 0 && !withMode) return { ok: true, nothing: true };"), "nothing to write must return before any request or audit row (finding 10)");
+      assert.ok(src.includes("if (diff.count === 0 && !mode) { setBusy(false); setDraft({}); setModeDraft(null); setPendingStart(null); setSavedNote(\"Already saved - nothing to write\");"), "the sheet's Save must drop an equalised draft without calling onCommit");
+      assert.strictEqual(src.includes("modeError"), false, "no partial 'rows saved, mode not' state may remain (the combined Save is atomic)");
+      assert.strictEqual((src.match(/logAudit\("offers\.save"/g) || []).length, 1, "exactly one offers.save audit site");
+      assert.strictEqual(/rest\/v1\/call_offers[^\n]*method: "(POST|PATCH|DELETE)"/.test(src), false, "a direct call_offers write bypasses the atomic RPC");
+      assert.strictEqual(/rest\/v1\/call_periods[^\n]*method: "(POST|PATCH|DELETE)"/.test(src), false, "a direct call_periods write (a surgeon cannot; the scheduler path is Periods, not the painter)");
+      assert.ok(src.includes("const diff = offersDraftDiff(savedByDay, draft);"), "the sheet's Save must diff through helpers.offersDraftDiff");
+      assert.ok(src.includes("if (!res.ok) {\n          const t = await res.text().catch(() => \"\");\n          console.warn(\"Paint offers: save_offers failed\", res.status, t.slice(0, 300));\n          return { ok: false, error: describeDbError(t) };"), "a failed save_offers must warn and return ok:false with the verbatim reason (the sheet keeps the draft)");
+      assert.ok(src.includes("OFFERS?_[A-Z_]+|MODE_[A-Z_]+"), "describeDbError must show the OF001-OF003 / OS / OM tokens verbatim");
+    });
+    check("U3a pins: offers / periods are authenticated-only reads (readAuthOnlyTable), the sheet greys through eligibility(..., { claim: true }) + offerDayWhy, confirms the weekday-pattern family", () => {
+      assert.ok(src.includes('readAuthOnlyTable("call_offers"'), "call_offers must be read through readAuthOnlyTable (an anon read answers 200 + [] and would wipe the list)");
+      assert.ok(src.includes('readAuthOnlyTable("call_periods"'), "call_periods must be read through readAuthOnlyTable");
+      assert.ok(src.includes('eligibility(ctx, ds, role, person.id, { claim: true })'), "the sheet must consult eligibility with { claim: true } (exhaustive not-offered never greys)");
+      assert.ok(src.includes("const why = offerDayWhy("), "the sheet must classify the hard reasons through helpers.offerDayWhy");
+      assert.ok(src.includes("normally not one of your"), "the weekday-pattern confirmation wording is missing");
+      assert.ok(src.includes("frozen") && src.includes("ask the scheduler"), "the frozen reason must say to ask the scheduler");
+      assert.ok(src.includes("if (per && !isScheduler && !offerPeriodOpen(per, today))"), "a row's frozen reading must be helpers.offerPeriodOpen (one reading with OF003 / OM005 and the period box)");
+      // finding 1: the period box speaks to the OPEN period; a frozen fallback is read-only for a non-scheduler
+      assert.ok(src.includes("const periodOpen = !!period && (isScheduler || offerPeriodOpen(period, today));"), "periodOpen must be derived from offerPeriodOpen (the scheduler is never frozen)");
+      assert.ok(src.includes("const mode = !periodOpen ? null : modeDirty ? modeDraft :"), "a frozen period never takes a mode from Save");
+      assert.ok(src.includes("if (!period || !periodOpen || busy) return;"), "'Go by my rules' must refuse a frozen period");
+      assert.ok(src.includes('data-testid="ofp-period-closed"') && src.includes("closed{periodClose ? \" \" + fmtMD(periodClose) : \"\"} - ask the scheduler for a late change."), "a frozen period must render read-only with the closed date and 'ask the scheduler'");
+      assert.ok(src.includes("{period && periodOpen && <button data-testid=\"ofp-period-toggle\""), "the Change button (and so the toggle) must exist only on an open period");
+      // findings 4 / 9: Clear never queues a past / frozen day, but may take back a saved offer under a later obligation
+      assert.ok(src.includes("const clearable = (r) => !!r && !r.past && !r.frozen && !!savedByDay[r.ds];"), "clearable(): a saved offer on an obligation-greyed row, never past / frozen");
+      assert.ok(src.includes("if (r.grey && !clearable(r)) { skipped.push(dayText(ds) + \": \" + r.grey); return; }"), "the Clear branch must skip and NAME greyed rows it cannot clear (a range must not fail the whole batch on OF003)");
+      assert.ok(src.includes("if (!r || (r.grey && !(armed === \"clear\" && clearable(r)))) return;"), "tapDay must let Clear through on a clearable greyed row");
+      assert.ok(src.includes("const tappable = !grey || (armed === \"clear\" && clearable(r));") && src.includes("disabled={!tappable}"), "the row button must be enabled for Clear on a clearable greyed row");
+      // findings 5 / 7: the period box is one line by default
+      assert.ok(src.includes("const periodExpanded = periodOpen && (periodOpenBox || modeDirty);"), "the period box expands only on Change or while the mode is dirty");
+      assert.ok(src.includes('data-testid="ofp-period-line"') && src.includes('data-testid="ofp-list"'), "the one-line period summary and the day list need their test ids (the smoke measures the list's height)");
+    });
+    check("U3a pins: entry points - My schedule button, the nav action, the #offers deep link; the toggle + 'Go by my rules' + paste box live in the sheet", () => {
+      assert.ok(src.includes('data-testid="paint-offers"'), "My schedule lacks the Paint my offers button");
+      assert.ok(src.includes('data-testid="nav-paint-offers"'), "the nav bar lacks the Paint offers action");
+      assert.ok(src.includes('window.location.hash === "#offers"'), "no #offers deep link");
+      assert.ok(src.includes('{["primary", "backup", "either", "clear"].map(k => (\n            <button key={k} data-testid={"ofp-brush-" + k}'), "the four brushes (ofp-brush-<key>) are missing");
+      ["ofp-range", "ofp-mode-exhaustive", "ofp-mode-preferred", "ofp-rules-only", "ofp-paste-text", "ofp-paste-add", "ofp-save", "ofp-discard", "ofp-close", "ofp-counts", "ofp-error", "ofp-saved", "ofp-day", "ofp-why", "ofp-cancel-start", "ofp-period-toggle", "ofp-period-line", "ofp-period-closed", "ofp-list", "ofp-footer"].forEach(t => assert.ok(src.includes('data-testid="' + t + '"'), "missing data-testid " + t));
+      assert.ok(src.includes("suParseDateList(pasteText, pasteYear)"), "the paste box must reuse the availability paste parser");
+      assert.ok(src.includes("data-testid=\"ofp-prev\" disabled={atCurrentMonth}"), "< must be disabled on the current month (navigation is from the current month forward)");
+      assert.ok(src.includes("setTimeout(() => setSavedNote(\"\"), 3000)"), "the saved note must clear after 3 s");
+    });
+    check("U3a pins: app-styles carries the brush tokens the sheet reads (never literals in the JSX)", () => {
+      assert.ok(styles.OFFER_BRUSH && styles.OFFER_BRUSH.primary && styles.OFFER_BRUSH.backup && styles.OFFER_BRUSH.either && styles.OFFER_BRUSH.clear, "OFFER_BRUSH tokens missing");
+      ["primary", "backup", "either", "clear"].forEach(k => { const b = styles.OFFER_BRUSH[k]; assert.ok(/^linear-gradient\(/.test(b.gradient), k + " armed brush must be a gradient (the dark sheet exempts gradient buttons)"); assert.ok(/^#[0-9A-Fa-f]{6}$/.test(b.text) && /^#[0-9A-Fa-f]{6}$/.test(b.tint) && /^#[0-9A-Fa-f]{6}$/.test(b.border), k + " tokens must be hex"); });
+      assert.strictEqual(typeof styles.css.brush, "function", "css.brush(on, key) missing");
+      assert.ok(src.includes("css.brush(armed === k, k)"), "the sheet's brushes must read css.brush");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

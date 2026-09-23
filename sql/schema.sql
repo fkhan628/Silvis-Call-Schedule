@@ -30,6 +30,9 @@
 -- an offer made on the spot - claim_open_slot() upserts the claimer's call_offers row (none for a rules_only claimer; the
 -- audit detail carries offer true/false) and call_offers_guard() skips OFFER_FROZEN while silvis.claim_in_progress is on.
 -- The 2026-09-22 claim-open-slot migration stays frozen as applied; test/schema.test.js mirrors both bodies from this file.
+-- Revision 2026-09-23 i (Prompt 14 part 3a, sql/migrations/2026-09-23-offer-mode-rpc.sql, NOT yet applied): set_offer_mode()
+-- (security definer; one person's key on one period) + save_offers() (security invoker; the painter's one-transaction Save -
+-- rows and, when given, the period mode through set_offer_mode, one commit or nothing; a note-less repaint keeps the note).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -727,6 +730,147 @@ drop trigger if exists call_offers_delete_guard_trg on public.call_offers;
 create trigger call_offers_delete_guard_trg
   before delete on public.call_offers
   for each row execute function public.call_offers_delete_guard();
+
+-- ============================================================================
+-- set_offer_mode(p_period, p_mode, p_person) + save_offers(p_person, p_rows, p_clear, p_period, p_mode) - the offer painter
+-- (2026-09-23, Prompt 14 part 3a; sql/migrations/2026-09-23-offer-mode-rpc.sql - NOT yet applied live as of 9/23,
+-- the orchestrator runs it; probe sql/probes/offer-rpcs-probe.sql rolls itself back)
+--
+-- set_offer_mode: SECURITY DEFINER because a surgeon cannot write call_periods (RLS: scheduler / admin only), yet the
+--   painter lets them choose exhaustive / preferred / rules_only for the next period. It writes THAT ONE PERSON'S key
+--   and nothing else; a non-scheduler may only speak for silvis_person_id() and only before offers_close_at (OM005,
+--   like OF003); rules_only is refused while the person has offers inside the period (OM006).
+-- save_offers: SECURITY INVOKER - the painter's one Save as ONE transaction (upserts + deletes and, when p_mode is
+--   given, the period mode through set_offer_mode - together or nothing; a row sent without a note keeps its note),
+--   as the caller: the call_offers RLS policies and OF001 / OF002 / OF003 apply per row, nothing is bypassed;
+--   entered_by / source come from who is calling (own id / 'app', or 'scheduler' / 'email-relay' when the
+--   scheduler paints for someone). The client writes the audit row offers.save after ok. Both texts are the
+--   migration's, byte for byte (test/schema.test.js pins the identity).
+-- Tokens: OM001 MODE_NOT_LINKED, OM002 MODE_NOT_YOURS, OM003 MODE_BAD_MODE, OM004 MODE_NO_PERIOD, OM005 MODE_FROZEN,
+--   OM006 MODE_HAS_OFFERS; OS001 OFFERS_NOT_LINKED, OS002 OFFERS_NOT_YOURS, OS003 OFFERS_BAD_ROW.
+-- ============================================================================
+create or replace function public.set_offer_mode(p_period uuid, p_mode text, p_person text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  me       text := public.silvis_person_id();
+  sched    boolean := public.silvis_is_sched();
+  who      text;
+  today_c  date := (now() at time zone 'America/Chicago')::date;
+  p        public.call_periods%rowtype;
+  n_offers integer;
+begin
+  if auth.uid() is null or (me is null and not sched) then
+    raise exception 'MODE_NOT_LINKED: sign in with an account that is linked to a roster entry' using errcode = 'OM001';
+  end if;
+  who := coalesce(nullif(btrim(p_person), ''), me);
+  if who is null then
+    raise exception 'MODE_NOT_LINKED: name the person (your account is not linked to a roster entry)' using errcode = 'OM001';
+  end if;
+  if who <> coalesce(me, '') and not sched then
+    raise exception 'MODE_NOT_YOURS: only the scheduler can set another surgeon''s mode' using errcode = 'OM002';
+  end if;
+  if p_mode is null or p_mode not in ('exhaustive', 'preferred', 'rules_only') then
+    raise exception 'MODE_BAD_MODE: mode must be exhaustive, preferred or rules_only (got %)', coalesce(p_mode, 'null') using errcode = 'OM003';
+  end if;
+
+  select * into p from public.call_periods where id = p_period for update;
+  if not found then
+    raise exception 'MODE_NO_PERIOD: no period % on file', coalesce(p_period::text, 'null') using errcode = 'OM004';
+  end if;
+  if not sched and (p.status <> 'upcoming' or p.offers_close_at <= today_c) then
+    raise exception 'MODE_FROZEN: offers for % closed on % - ask the scheduler', p.label, p.offers_close_at using errcode = 'OM005';
+  end if;
+
+  if p_mode = 'rules_only' then
+    select count(*) into n_offers from public.call_offers o where o.person_id = who and o.day between p.start_day and p.end_day;
+    if n_offers > 0 then
+      raise exception 'MODE_HAS_OFFERS: % has % offered day(s) inside % - clear them first to go by the rules', who, n_offers, p.label using errcode = 'OM006';
+    end if;
+    update public.call_periods
+       set rules_only_ids = (select coalesce(jsonb_agg(distinct x), '[]'::jsonb)
+                               from (select jsonb_array_elements_text(rules_only_ids) as x union all select who) s),
+           offer_modes    = offer_modes - who,
+           updated_at     = now()
+     where id = p_period;
+  else
+    update public.call_periods
+       set rules_only_ids = (select coalesce(jsonb_agg(x), '[]'::jsonb)
+                               from jsonb_array_elements_text(rules_only_ids) as x where x <> who),
+           offer_modes    = offer_modes || jsonb_build_object(who, p_mode),
+           updated_at     = now()
+     where id = p_period;
+  end if;
+
+  select * into p from public.call_periods where id = p_period;
+  return jsonb_build_object('ok', true, 'period_id', p.id, 'label', p.label, 'person_id', who, 'mode', p_mode,
+                            'rules_only_ids', p.rules_only_ids, 'offer_modes', p.offer_modes, 'by', coalesce(me, 'scheduler'));
+end $$;
+revoke all on function public.set_offer_mode(uuid, text, text) from public;
+revoke all on function public.set_offer_mode(uuid, text, text) from anon;
+grant execute on function public.set_offer_mode(uuid, text, text) to authenticated;
+comment on function public.set_offer_mode(uuid, text, text) is 'Prompt 14 part 3a: one person''s offer mode on one period (exhaustive / preferred -> offer_modes[person], off rules_only_ids; rules_only -> on rules_only_ids, key dropped; refused with offers inside the period). Security definer because surgeons cannot write call_periods; a non-scheduler may only set their own, and only before offers_close_at.';
+
+create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[], p_period uuid default null, p_mode text default null) returns jsonb
+language plpgsql security invoker set search_path = public as $$
+declare
+  me        text := public.silvis_person_id();
+  sched     boolean := public.silvis_is_sched();
+  who       text := nullif(btrim(p_person), '');
+  v_by      text;
+  v_src     text;
+  n_up      integer := 0;
+  n_del     integer := 0;
+  bad       text;
+begin
+  if auth.uid() is null or (me is null and not sched) then
+    raise exception 'OFFERS_NOT_LINKED: sign in with an account that is linked to a roster entry to save offers' using errcode = 'OS001';
+  end if;
+  who := coalesce(who, me);
+  if who is null then
+    raise exception 'OFFERS_NOT_LINKED: name the person (your account is not linked to a roster entry)' using errcode = 'OS001';
+  end if;
+  if who <> coalesce(me, '') and not sched then
+    raise exception 'OFFERS_NOT_YOURS: only the scheduler can save another surgeon''s offers' using errcode = 'OS002';
+  end if;
+  if p_rows is not null and jsonb_typeof(p_rows) <> 'array' then
+    raise exception 'OFFERS_BAD_ROW: rows must be a JSON array' using errcode = 'OS003';
+  end if;
+  -- Fail closed BEFORE any write: one malformed row means the whole batch is refused.
+  select string_agg(coalesce(r->>'day', 'null') || ' ' || coalesce(r->>'role_pref', 'null'), ', ') into bad
+    from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) r
+   where r->>'day' !~ '^\d{4}-\d{2}-\d{2}$' or r->>'role_pref' is null or r->>'role_pref' not in ('primary', 'backup', 'either');
+  if bad is not null then
+    raise exception 'OFFERS_BAD_ROW: % (day must be YYYY-MM-DD, role_pref primary / backup / either) - nothing was saved', bad using errcode = 'OS003';
+  end if;
+
+  -- Who entered it is a fact of the call, never a client field.
+  if me is not null and who = me then v_by := me; v_src := 'app'; else v_by := 'scheduler'; v_src := 'email-relay'; end if;
+
+  -- The deletes first, then the upserts (order is immaterial inside one transaction; the delete guard OF003 and the
+  -- RLS delete policy apply per row). A day in both lists ends up upserted.
+  if p_clear is not null and array_length(p_clear, 1) > 0 then
+    delete from public.call_offers where person_id = who and day = any(p_clear);
+    get diagnostics n_del = row_count;
+  end if;
+  insert into public.call_offers (person_id, day, role_pref, note, entered_by, source)
+  select who, (r->>'day')::date, r->>'role_pref', nullif(btrim(r->>'note'), ''), v_by, v_src
+    from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) r
+  on conflict (person_id, day) do update
+    set role_pref = excluded.role_pref, note = coalesce(excluded.note, call_offers.note), entered_by = excluded.entered_by, source = excluded.source, updated_at = now();
+  get diagnostics n_up = row_count;
+
+  -- The mode, when the same Save changed it: inside this transaction, so a refused mode (OM001-OM006, checked by
+  -- set_offer_mode itself) rolls the rows above back too - days + mode are one commit or nothing.
+  if p_mode is not null then
+    perform public.set_offer_mode(p_period, p_mode, who);
+  end if;
+
+  return jsonb_build_object('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by, 'source', v_src, 'mode', p_mode);
+end $$;
+revoke all on function public.save_offers(text, jsonb, date[], uuid, text) from public;
+revoke all on function public.save_offers(text, jsonb, date[], uuid, text) from anon;
+grant execute on function public.save_offers(text, jsonb, date[], uuid, text) to authenticated;
+comment on function public.save_offers(text, jsonb, date[], uuid, text) is 'Prompt 14 part 3a: the offer painter''s one Save - upserts + deletes (+ the period mode through set_offer_mode when p_mode is given) in ONE transaction as the caller (security invoker: RLS + OF001/OF002/OF003 apply per row; nothing bypassed). entered_by / source come from the caller identity; a row sent without a note keeps its note. The client writes the audit row offers.save after ok.';
 
 -- ---------- notifications, prefs, audit, snapshots, versions, contacts
 create table if not exists public.notifications (

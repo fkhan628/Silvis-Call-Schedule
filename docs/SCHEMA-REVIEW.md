@@ -449,6 +449,46 @@ call_periods.offer_modes does not exist"). Apply and prove (workdir = a director
 
 observed: <to be filled by the orchestrator>
 
+### set_offer_mode() + save_offers() (2026-09-23; `sql/migrations/2026-09-23-offer-mode-rpc.sql`) - to be applied by the orchestrator
+
+Prompt 14 part 3a (the offer painter, U3a). Two functions, additive (create or replace + grants; no table, trigger or
+policy is touched), mirrored byte for byte into `sql/schema.sql` and pinned by `test/schema.test.js`:
+
+- `set_offer_mode(p_period uuid, p_mode text, p_person text default null) -> jsonb`, **security definer** because a
+  surgeon cannot write `call_periods` (RLS: scheduler / admin only) yet chooses, for the next period, `exhaustive` /
+  `preferred` / `rules_only` from the painter. It writes that ONE person's key only (`offer_modes[person]` and on/off
+  `rules_only_ids`); a non-scheduler may only speak for `silvis_person_id()` (OM002) and only before `offers_close_at`
+  while the period is `upcoming` (OM005, like OF003); `rules_only` is refused while the person has offers inside the
+  period (OM006). Tokens OM001-OM006 with custom SQLSTATEs; the app shows them verbatim.
+- `save_offers(p_person text, p_rows jsonb, p_clear date[], p_period uuid default null, p_mode text default null) ->
+  jsonb`, **security invoker**: the painter's one Save as ONE transaction (every upsert and delete succeeds together or
+  nothing is written) as the caller, so the `call_offers` policies and OF001 / OF002 / OF003 apply per row - nothing
+  bypassed. When `p_mode` is given the function runs `set_offer_mode(p_period, p_mode, who)` inside the same
+  transaction after the rows, so a refused mode rolls the rows back too (days + mode are one commit or nothing; the
+  9/23 review's finding). A repaint that sends no note keeps the row's note (`coalesce(excluded.note,
+  call_offers.note)` - the importer's `seed: <tag>` survives a role change). `entered_by` / `source` come from the
+  caller identity (own id / `app`; `scheduler` / `email-relay` when the scheduler paints for someone), never from the
+  client. A malformed row refuses the whole batch before any write (OS003). The client writes the one audit row
+  `offers.save` after ok. Both are `revoke ... from public, anon; grant execute ... to authenticated`. The migration's
+  one `drop function if exists public.save_offers(text, jsonb, date[])` removes the never-applied three-argument draft
+  so no second overload can exist (a no-op on the live database).
+
+Not applied as of 2026-09-23 (the painter's Save answers `404` `PGRST202` "Could not find the function
+public.save_offers" until it is). Apply and prove (workdir = a directory linked with
+`supabase link --project-ref bzhsroegtagqhutbnsrp`; absolute paths):
+
+    supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-offer-mode-rpc.sql
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/offer-rpcs-probe.sql   # expects the A..K-anon + L / M lines in the probe header; everything rolls back
+
+Expected PROBE_RESULTS (from the probe header): A ok upserted=2 (by=s3 src=app) rows=2 role=either note=seed: probe;
+B ERR OS003 OFFERS_BAD_ROW; C ERR OS002 OFFERS_NOT_YOURS; D ERR OF002 OFFER_ON_VACATION with rows=2 (the good row rolled
+back too); E ok upserted=1 deleted=1 rows=1 role=backup note=seed: probe (the note survived the note-less repaint);
+F ok mode=exhaustive; G ERR OM006 MODE_HAS_OFFERS; H ok mode=rules_only status=rules_only; L ERR OM003 MODE_BAD_MODE
+rows=0 (the row of the combined call rolled back with the refused mode); M ok upserted=1 mode=exhaustive
+status=submitted rows=1 (days + mode in one call); I ERR OM005 MODE_FROZEN; J-mode ok / J-save ok by=scheduler
+src=email-relay; K-mode ERR OM003 MODE_BAD_MODE; K-anon ERR 42501.
+
+observed: <to be filled by the orchestrator>
 
 ## 2026-09-23 - east_vacation_reviews (Prompt 15 part 2)
 

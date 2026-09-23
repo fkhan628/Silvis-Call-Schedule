@@ -268,6 +268,12 @@ function CallSchedule() {
   const [vacations, setVacations] = useState({});
   const [timeOffRows, setTimeOffRows] = useState([]); // raw rows (export / restore)
   const [availabilityRows, setAvailabilityRows] = useState([]); // dated availability statements
+  // Offers (Prompt 14 part 3a): call_offers / call_periods rows, authenticated-only tables read through
+  // readAuthOnlyTable (a missing / expired token skips the read; an anon read answers 200 + [] and would wipe
+  // the lists). The painter (OfferPainterSheet, module scope) reads them; offerSheet = { personId } while it is open.
+  const [offerRows, setOfferRows] = useState([]);
+  const [periodRows, setPeriodRows] = useState([]);
+  const [offerSheet, setOfferSheet] = useState(null);
 
   // Calendar view defaults to the current month - the CENTRAL month (helpers.js
   // todayCentral), the same notion of today as the OPEN logic and the today ring
@@ -599,6 +605,16 @@ function CallSchedule() {
 
   // --- My identity (roster id from the profile) ---
   const mySurgeon = userProfile?.person_id || "";
+  // Deep link to the offer painter (Prompt 14 part 3a): <app>#offers opens "Paint my offers" for the signed-in
+  // surgeon once the profile's roster link is known (the reminder e-mails can point here), then drops the hash.
+  // Declared AFTER mySurgeon on purpose: the dependency array reads it at render time (a const above would be TDZ).
+  useEffect(() => {
+    if (!authUser || isPublicMode || !mySurgeon) return;
+    if (window.location.hash === "#offers") {
+      setOfferSheet({ personId: mySurgeon });
+      try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch (e) { console.warn("could not drop #offers from the URL", e); }
+    }
+  }, [authUser, isPublicMode, mySurgeon]);
 
   // Trade initiator defaults to the signed-in surgeon.
   useEffect(() => {
@@ -924,6 +940,30 @@ function CallSchedule() {
       return false;
     }
   };
+  // Prompt 14 part 3a: offers and periods. readAuthOnlyTable returns null (not []) without a fresh session token,
+  // so a stale session never adopts an RLS-empty answer over the current lists; a failed read keeps the rows.
+  const loadOffers = async (quiet) => {
+    try {
+      const rows = await readAuthOnlyTable("call_offers", { order: "day.asc" });
+      if (rows) setOfferRows(rows);
+      return !!rows;
+    } catch (e) {
+      console.warn("call_offers load failed", e);
+      if (!quiet) showToast("Couldn't load the offers - the painter may show an older picture.", "error");
+      return false;
+    }
+  };
+  const loadPeriods = async (quiet) => {
+    try {
+      const rows = await readAuthOnlyTable("call_periods", { order: "start_day.asc" });
+      if (rows) setPeriodRows(rows);
+      return !!rows;
+    } catch (e) {
+      console.warn("call_periods load failed", e);
+      if (!quiet) showToast("Couldn't load the offer periods - the painter may show an older picture.", "error");
+      return false;
+    }
+  };
   // The three East tables, each in its own try: one failure cannot blank the
   // others, and a failed table keeps its previous rows (marked "failed").
   // Returns { ok, feedRows }: feedRows = the east_feed rows just loaded (null when
@@ -1002,11 +1042,11 @@ function CallSchedule() {
     // TRADE_IMMUTABLE / TRADE_NOT_ACCEPTED / TRADE_NOT_FOUND from the trade
     // guard and apply_trade) is shown VERBATIM (PostgREST wraps it as
     // { message, code, details, hint }).
-    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+/; // CLAIM_* = claim_open_slot's nine refusals (Prompt 13 part 2), shown verbatim
+    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+/; // CLAIM_* = claim_open_slot's nine refusals (Prompt 13 part 2); OFFER_* = the call_offers guards OF001-OF003, OFFERS_* / MODE_* = save_offers / set_offer_mode (Prompt 14 part 3a) - all shown verbatim
     if (OWN.test(s)) {
       let verbatim = "";
       try { const o = typeof err === "string" ? JSON.parse(err) : err; verbatim = String((o && (o.message || o.details)) || ""); } catch (e) { console.warn("describeDbError: error body is not JSON - extracting the raised message by regex", e); verbatim = ""; }
-      if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
+      if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
       return verbatim;
     }
     if (/23514|check constraint|distinct/i.test(s)) return "The database refused the change (a check constraint failed - e.g. the same person in both roles on one day): " + s.slice(0, 160);
@@ -1372,6 +1412,9 @@ function CallSchedule() {
           const notifs = await readAuthOnlyTable("notifications", { order: "created_at.desc", limit: 50 });
           if (notifs) setNotifications(notifs);
         } catch(e) { console.warn("Notifications load failed:", e); }
+        // Prompt 14 part 3a: offers + periods (authenticated-only, same contract as the two above)
+        await loadOffers(true);
+        await loadPeriods(true);
         try {
           const mainRows = await db.query("client_versions", { eq: { id: "main" }, select: "id,min_version,message" });
           const main = Array.isArray(mainRows) ? mainRows[0] : null;
@@ -1453,6 +1496,7 @@ function CallSchedule() {
       await Promise.allSettled([
         refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(),
         loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),
+        loadOffers(true), loadPeriods(true),
       ]);
     };
     refreshDaysRef.current = refreshDays;       // trade apply -> refetch the rows the function wrote
@@ -1503,6 +1547,8 @@ function CallSchedule() {
           .on("postgres_changes", { event: "*", schema: "public", table: "schedule_days" }, onDayChange)
           .on("postgres_changes", { event: "*", schema: "public", table: "time_off" }, () => { loadTimeOff(true); })
           .on("postgres_changes", { event: "*", schema: "public", table: "availability" }, () => { loadAvailability(true); })
+          .on("postgres_changes", { event: "*", schema: "public", table: "call_offers" }, () => { loadOffers(true); })
+          .on("postgres_changes", { event: "*", schema: "public", table: "call_periods" }, () => { loadPeriods(true); })
           .on("postgres_changes", { event: "*", schema: "public", table: "shift_trade_requests" }, refreshTradeReqs)
           .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, refreshNotifs)
           .on("postgres_changes", { event: "*", schema: "public", table: "client_versions" }, refreshMinVersion)
@@ -3431,6 +3477,46 @@ function CallSchedule() {
     }
   };
 
+  // --- Offer painter (Prompt 14 part 3a) - full-screen sheet, OfferPainterSheet at module scope ---
+  // The sheet holds the draft; commitOffersPaint is its ONLY write path. One Save = ONE request: rpc/save_offers
+  // carries the diff's upserts + deletes AND, when the toggle changed in the same Save, the period + mode - one
+  // transaction as the caller (RLS and OF001-OF003 apply per row, nothing bypassed; the function runs
+  // set_offer_mode inside that transaction, so a refused mode rolls the rows back too). A failure writes nothing
+  // and the sheet keeps the draft. A mode-only save (the toggle alone, "Go by my rules") is ONE rpc/set_offer_mode
+  // (security definer: a surgeon cannot write call_periods). Then ONE audit row 'offers.save' with the count and
+  // the mode. Nothing to write (a draft equalised by a reload) = no request and no audit row. entered_by / source
+  // are decided by the function from who is calling (own id / 'app', or 'scheduler' / 'email-relay' when the
+  // scheduler paints for someone), never by the client.
+  const commitOffersPaint = async ({ personId, diff, mode, period }) => {
+    const withMode = !!(mode && period && period.id);
+    const summary = { person_id: personId, inserted: diff.insert.length, updated: diff.update.length, deleted: diff.delete.length, count: diff.count, period_id: period ? period.id : null, period: period ? period.label : null, mode: withMode ? mode : null };
+    try {
+      if (diff.count === 0 && !withMode) return { ok: true, nothing: true }; // nothing to write: no request, no audit row
+      if (diff.count > 0) {
+        const rows = diff.insert.concat(diff.update).map(r => ({ day: r.day, role_pref: r.role_pref }));
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: "POST", headers: { ...dbAuthHeaders() }, body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null }) });
+        if (!res.ok) {
+          const t = await res.text().catch(() => "");
+          console.warn("Paint offers: save_offers failed", res.status, t.slice(0, 300));
+          return { ok: false, error: describeDbError(t) };
+        }
+      } else {
+        const r2 = await fetch(`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, { method: "POST", headers: { ...dbAuthHeaders() }, body: JSON.stringify({ p_period: period.id, p_mode: mode, p_person: personId }) });
+        if (!r2.ok) {
+          const t2 = await r2.text().catch(() => "");
+          console.warn("Paint offers: set_offer_mode failed", r2.status, t2.slice(0, 300));
+          return { ok: false, error: describeDbError(t2) };
+        }
+      }
+      logAudit("offers.save", `${nameOf(personId)}: ${diff.count} offer change(s)${withMode ? ", mode " + mode : ""}${period ? " (" + period.label + ")" : ""}`, summary);
+      loadOffers(true); loadPeriods(true); // canonicalize (realtime would also catch it)
+      return { ok: true };
+    } catch (e) {
+      console.warn("Paint offers: commit threw", e);
+      return { ok: false, error: String(e?.message || e) };
+    }
+  };
+
   // --- Snapshot restore (Settings -> Restore from Snapshot) + JSON import ---
   const [snapshotList, setSnapshotList] = useState(null);   // null = not loaded yet
   const [snapshotsLoading, setSnapshotsLoading] = useState(false);
@@ -4329,9 +4415,25 @@ function CallSchedule() {
           onClose={() => setPaintSheet(false)}
         />
       )}
+      {/* Offer painter (Prompt 14 part 3a) - same placement: outside the view conditionals, one mount. */}
+      {offerSheet && !isPublicMode && (
+        <OfferPainterSheet
+          css={css} dk={dk}
+          person={sMap[offerSheet.personId] || null}
+          asScheduler={isScheduler && offerSheet.personId !== mySurgeon}
+          isScheduler={isScheduler}
+          offers={offerRows} periods={periodRows}
+          schedule={schedule}
+          ctx={rulesCtx} ctxError={rulesCtxState.error}
+          surgeonRules={surgeonRules} groupRules={groupRules}
+          today={todayStr} nameOf={nameOf}
+          onCommit={commitOffersPaint}
+          onClose={() => setOfferSheet(null)}
+        />
+      )}
       {/* Non-blocking toast */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...(paintSheet ? { top: 12 } : { bottom: 24 }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: 12 } : { bottom: 24 }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           {toast.msg}
         </div>
       )}
@@ -4366,14 +4468,14 @@ function CallSchedule() {
         </div>
       )}
       {/* Minimum-version gate (client_versions row 'main') - persistent, reload is user-initiated */}
-      {forceUpdate && !paintSheet && (
+      {forceUpdate && !paintSheet && !offerSheet && (
         <div role="alert" style={{position:"fixed",left:0,right:0,bottom:updateAvailable?44:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",fontSize:12.5,fontWeight:600,fontFamily:font}}>
           <span>This app version ({APP_VERSION}) is below the required minimum ({forceUpdate.min_version}). {forceUpdate.message}</span>
           <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Reload now</button>
         </div>
       )}
       {/* Update-available banner (version.json) */}
-      {updateAvailable && !paintSheet && (
+      {updateAvailable && !paintSheet && !offerSheet && (
         <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,bottom:0,zIndex:9998,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
           <span>New version available ({updateAvailable})</span>
           <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Tap to reload</button>
@@ -4575,6 +4677,9 @@ function CallSchedule() {
           </button>
           {scheduleHistory.length > 0 && isScheduler && (
             <button onClick={undoLastChange} style={{...css.tab(false),fontSize:12,padding:"4px 10px",color:T.accent}} title={`Undo (${scheduleHistory.length} steps)`}>Undo</button>
+          )}
+          {mySurgeon && (
+            <button data-testid="nav-paint-offers" onClick={()=>setOfferSheet({ personId: mySurgeon })} style={{...css.tab(false, T.accent),fontSize:12,padding:"5px 10px"}} title="Paint the dates you'll cover (primary / backup / either), any time ahead">Paint offers</button>
           )}
         </div>}
       </div>
@@ -5133,6 +5238,7 @@ function CallSchedule() {
                   </select>
                 ) : <Badge id={pid}/>}
                 <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                  <button data-testid="paint-offers" onClick={()=>setOfferSheet({ personId: pid })} title={pid === mySurgeon ? "Paint the dates you'll cover (primary / backup / either), any time ahead" : "Enter " + nameOf(pid) + "'s offered dates as the scheduler (relayed; entered_by scheduler)"} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>{pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)}</button>
                   <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} title="One 07:00-to-07:00 event per shift (America/Chicago), importable into Google, Apple or Outlook calendars" style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Download my calendar</button>
                   <button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")} title={"Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>{copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"}</button>
                 </span>
@@ -5164,6 +5270,23 @@ function CallSchedule() {
                   ))}
                 </div>
               )}
+            </div>
+            <div style={css.card} data-testid="mine-offers">
+              {(() => {
+                // Prompt 14 part 3a: the person's own future offers, as saved (the painter is where they change).
+                const mine = offerRows.filter(o => o.person_id === pid && String(o.day).slice(0, 10) >= todayStr).sort((a, b) => a.day < b.day ? -1 : 1);
+                const nextPer = offerNextPeriod(periodRows, todayStr);
+                const st = nextPer ? offerStatus(nextPer, offerRows, pid) : null;
+                const word = (r) => r === "either" ? "P or B" : r === "primary" ? "P" : "B";
+                return <>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
+                    <div style={{...css.cardT,margin:0}}>My offers ({mine.length} upcoming day{mine.length === 1 ? "" : "s"})</div>
+                    {nextPer && <span style={muted} data-testid="mine-offer-status">{nextPer.label}: {st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : "nothing entered yet"}{nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : ""}</span>}
+                  </div>
+                  {mine.length === 0 ? <p style={{...muted,fontStyle:"italic",margin:0}}>No future dates offered - use Paint my offers above.</p>
+                    : <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{mine.slice(0, 40).map(o => <span key={o.id || o.day} data-testid="mine-offer" data-day={String(o.day).slice(0, 10)} style={{fontFamily:mono,fontSize:11,padding:"1px 6px",borderRadius:4,border:`1px solid ${dkCardBorder}`,color:dkText}}>{fmtMD(String(o.day).slice(0, 10))} {word(o.role_pref)}</span>)}{mine.length > 40 && <span style={muted}>and {mine.length - 40} more</span>}</div>}
+                </>;
+              })()}
             </div>
             <div style={css.card}>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
@@ -5819,6 +5942,429 @@ function writeCollapseFlag(ck, open) {
   localStorage.setItem("silvis-collapse-" + ck, open ? "1" : "0");
   localStorage.removeItem("silvis_collapse_" + ck);
 }
+
+// --- Offer painter (Prompt 14 part 3a) - "Paint my offers", a full-screen phone-first sheet ---
+// Modelled on the Davenport Paint Month sheet (the vacation painter above is the same shape): a VERTICAL DAY
+// LIST, one full-width row per day (min 52 px), month navigation forward without limit, brushes at the top.
+// Defined at MODULE SCOPE deliberately: inside CallSchedule its identity would change every parent render and
+// React would remount it, silently dropping the draft.
+//
+// Contract:
+//  - Painting NEVER writes per tap. The draft ({ day: brush | null }) lives here; Save hands the parent ONE diff
+//    (helpers.offersDraftDiff against the person's saved rows) plus the mode when the toggle changed, and the
+//    parent makes ONE request (rpc/save_offers carrying rows + period + mode, all-or-nothing; a mode-only save is
+//    one rpc/set_offer_mode) + ONE audit row. A failed commit wrote nothing: the error box names every pending
+//    entry, the draft stays, the unsaved indicator stays up, no success signal. A draft that turned into nothing
+//    to write (equalised by a reload) is dropped without a request or an audit row.
+//  - Tap a day = paint the armed brush; tap again with the same brush = clear it. Range mode: tap a start day,
+//    then an end day (same day twice = that one day); the hint line says which step you are on and offers
+//    "x cancel start". Discard and Close confirm on a dirty draft; the saved note clears after 3 s.
+//  - A day the person CANNOT offer is greyed and untappable with its reason: past, frozen (the period's
+//    offers_close_at has passed - ask the scheduler), and every OBLIGATION rules.eligibility reports for BOTH roles
+//    (helpers.offerDayWhy: vacation / day-before-vacation, East busy / forecast busy, derived East-Silvis week,
+//    outside the window, holiday or backup opt-out, inactive, and the person's own dated unavailable / no-backup /
+//    backup-only rows, which an offer never lifts). Blocked in one role only = paintable in the other (the row says
+//    "backup only - East busy"). eligibility is consulted with { claim: true }, so an exhaustive surgeon's own
+//    not-offered never greys a day he is about to offer. The Clear brush is the one exception: a SAVED offer on an
+//    obligation-greyed row (a vacation entered over it later) can still be cleared - the row stays tappable for
+//    Clear; past and frozen rows never (the database would refuse the delete with OF003 anyway).
+//  - A day the person's WEEKDAY PATTERN excludes (Tue/Thu OR days, Clinton days, outreach days, Tuesdays) is NOT
+//    greyed: painting it asks once ("<weekday> is normally not one of your ... call days (<why>) - offer it
+//    anyway?") because the saved offer lifts that pattern for the date (item W). Obligations are never liftable
+//    here. Everything else eligibility reports (caps, runs, a lock, the other role) is the generator's business
+//    when it places the offer, so it neither greys nor asks.
+//  - The period box, the toggle (exhaustive / preferred) and "Go by my rules" speak to helpers.offerNextPeriod:
+//    the earliest period still OPEN for offers, else the running frozen one, which a non-scheduler sees read-only
+//    ("offers for <label> closed <date> - ask the scheduler", no toggle). The box is one summary line by default
+//    ("Change" expands the mode buttons) so the day list keeps the phone's height. They go through the same
+//    onCommit (mode-only save allowed).
+function OfferPainterSheet({ css, dk, person, asScheduler, isScheduler, offers, periods, schedule, ctx, ctxError, surgeonRules, groupRules, today, nameOf, onCommit, onClose }) {
+  const T = THEME[dk ? "dark" : "light"];
+  const pid = person ? person.id : "";
+  const t0 = parse(today);
+  const [ym, setYm] = React.useState({ y: t0.getFullYear(), m: t0.getMonth() });
+  const [armed, setArmed] = React.useState("either");
+  const [rangeMode, setRangeMode] = React.useState(false);
+  const [pendingStart, setPendingStart] = React.useState(null);
+  const [draft, setDraft] = React.useState({});           // day -> 'primary' | 'backup' | 'either' | null (null = clear a saved offer)
+  const [modeDraft, setModeDraft] = React.useState(null);  // 'exhaustive' | 'preferred' while it differs from the saved mode
+  const [busy, setBusy] = React.useState(false);
+  const [commitError, setCommitError] = React.useState(null); // { msg, items }
+  const [savedNote, setSavedNote] = React.useState("");
+  const [hint, setHint] = React.useState("");
+  const [pasteOpen, setPasteOpen] = React.useState(false);
+  const [pasteText, setPasteText] = React.useState("");
+  const [pasteYear, setPasteYear] = React.useState(String(t0.getFullYear()));
+  const [rulesOpen, setRulesOpen] = React.useState(false);
+  const [periodOpenBox, setPeriodOpenBox] = React.useState(false); // the period box expanded ("Change"); a dirty mode keeps it open
+  const savedTimerRef = React.useRef(null);
+  React.useEffect(() => () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); }, []);
+
+  // Saved picture: the person's rows by day, and how many OTHERS offered each day.
+  const savedByDay = React.useMemo(() => { const m = {}; (offers || []).forEach(o => { if (o && o.person_id === pid) m[String(o.day).slice(0, 10)] = o.role_pref; }); return m; }, [offers, pid]);
+  const othersByDay = React.useMemo(() => { const m = {}; (offers || []).forEach(o => { if (o && o.person_id !== pid) { const d = String(o.day).slice(0, 10); m[d] = (m[d] || 0) + 1; } }); return m; }, [offers, pid]);
+  const effective = (ds) => (ds in draft ? draft[ds] : (savedByDay[ds] || null));
+  const dirtyDays = Object.keys(draft);
+
+  // The next period (toggle / go by my rules) and the person's derived status + mode on it. periodOpen = a
+  // surgeon may still write to it (offers_close_at ahead, status upcoming); the scheduler is never frozen (OM005).
+  const period = React.useMemo(() => offerNextPeriod(periods, today), [periods, today]);
+  const periodOpen = !!period && (isScheduler || offerPeriodOpen(period, today));
+  const periodStatus = period ? offerStatus(period, offers, pid) : null;
+  const savedMode = period ? ((period.offer_modes && typeof period.offer_modes === "object" ? period.offer_modes[pid] : null) || "preferred") : "preferred";
+  const shownMode = modeDraft || savedMode;
+  const modeDirty = !!modeDraft && modeDraft !== savedMode;
+  const periodLabel = period ? String(period.label || (period.start_day + " - " + period.end_day)) : "";
+  const periodClose = period && period.offers_close_at ? String(period.offers_close_at).slice(0, 10) : null;
+  const inPeriod = (ds) => !!period && ds >= String(period.start_day).slice(0, 10) && ds <= String(period.end_day).slice(0, 10);
+  const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
+  const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
+  const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
+  const cap = ctx && typeof monthlyCapFor === "function" && pid ? monthlyCapFor(ctx, pid).primary : null;
+
+  // Per-day picture for the shown month: greys (with why), one-role blocks, pattern confirms, the published
+  // holders and the others' count. Recomputed when the month, the ctx (schedule / rules / feed) or the rows move.
+  const days = React.useMemo(() => {
+    const out = []; const n = new Date(ym.y, ym.m + 1, 0).getDate();
+    for (let d = 1; d <= n; d++) {
+      const dt = new Date(ym.y, ym.m, d); const ds = fmt(dt); const dow = dt.getDay();
+      const row = { ds, d, dow, weekend: dow === 0 || dow === 6, past: ds < today, frozen: null, block: {}, confirm: {}, grey: null };
+      const per = periodFor(ds, periods || []);
+      if (per && !isScheduler && !offerPeriodOpen(per, today)) { // the same reading as OF003 / OM005 (helpers.offerPeriodOpen)
+        const close = per.offers_close_at ? String(per.offers_close_at).slice(0, 10) : null;
+        row.frozen = "frozen - offers for " + (per.label || "this period") + " closed" + (close ? " " + fmtMD(close) : "") + " - ask the scheduler";
+      }
+      if (ctx && pid) {
+        ["primary", "backup"].forEach(role => {
+          let elig = null;
+          try { elig = eligibility(ctx, ds, role, person.id, { claim: true }); } catch (e) { console.warn("Paint offers: eligibility threw for " + ds + " " + role, e); }
+          const why = offerDayWhy(elig ? elig.hard : []);
+          row.block[role] = why.block; row.confirm[role] = why.confirm;
+        });
+      }
+      if (row.past) row.grey = "past";
+      else if (row.frozen) row.grey = row.frozen;
+      else if (row.block.primary && row.block.backup) row.grey = row.block.primary === row.block.backup ? row.block.primary : row.block.primary + " / " + row.block.backup;
+      const a = schedule ? schedule[ds] : null;
+      row.holders = { primary: a ? dayHolder(a, "primary") : null, backup: a ? dayHolder(a, "backup") : null };
+      row.others = othersByDay[ds] || 0;
+      out.push(row);
+    }
+    return out;
+  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay]);
+  const rowByDay = React.useMemo(() => { const m = {}; days.forEach(r => { m[r.ds] = r; }); return m; }, [days]);
+
+  // Running counts: the shown month by brush (draft applied) and the next period against the person's cap.
+  const monthCounts = React.useMemo(() => {
+    const c = { primary: 0, backup: 0, either: 0 };
+    days.forEach(r => { const e = effective(r.ds); if (e && c[e] !== undefined) c[e] += 1; });
+    return c;
+  }, [days, draft, savedByDay]);
+  const periodCount = React.useMemo(() => {
+    if (!period) return 0;
+    const set = new Set();
+    Object.keys(savedByDay).forEach(d => { if (inPeriod(d) && !(d in draft)) set.add(d); });
+    Object.keys(draft).forEach(d => { if (inPeriod(d) && draft[d]) set.add(d); });
+    return set.size;
+  }, [period, savedByDay, draft]);
+  const periodMonths = period ? Math.max(1, Math.round(suDaysBetween(String(period.start_day).slice(0, 10), String(period.end_day).slice(0, 10)) / 30.4)) : 0;
+
+  const brushWord = (b) => (OFFER_BRUSH[b] || OFFER_BRUSH.clear).label.toLowerCase();
+  const roleWord = (b) => b === "either" ? "primary or backup" : b;
+  const rolesOf = (b) => b === "either" ? ["primary", "backup"] : [b];
+  const dayText = (ds) => DAY_HDR[parse(ds).getDay()] + " " + fmtMD(ds);
+  const setDraftDay = (n, ds, want) => {
+    const saved = savedByDay[ds] || null;
+    if (want === saved || (!want && !saved)) delete n[ds]; else n[ds] = want; // a no-op against the saved row drops out
+  };
+  // Clear may reach a greyed row that still carries a SAVED offer (a vacation entered over it later) - never a
+  // past or frozen one (the delete guard refuses those for a non-scheduler; a range must not fail on them).
+  const clearable = (r) => !!r && !r.past && !r.frozen && !!savedByDay[r.ds];
+  // The one place every paint goes through (a tap, a range, the paste box): greys are skipped and named,
+  // one-role blocks are skipped and named, pattern days ask ONCE for the whole batch, then the draft moves.
+  const paintDays = (list, brush, opts) => {
+    setCommitError(null);
+    const single = !!(opts && opts.single);
+    const skipped = [], asks = [], go = [];
+    list.forEach(ds => {
+      const r = rowByDay[ds];
+      if (brush === "clear") {
+        if (!effective(ds)) return; // nothing to clear
+        if (!r) { skipped.push(dayText(ds) + ": outside the shown month"); return; }
+        if (r.grey && !clearable(r)) { skipped.push(dayText(ds) + ": " + r.grey); return; }
+        go.push(ds); return;
+      }
+      if (!r) { skipped.push(dayText(ds) + ": outside the shown month"); return; }
+      if (r.grey) { skipped.push(dayText(ds) + ": " + r.grey); return; }
+      const need = rolesOf(brush);
+      const blocked = need.filter(role => r.block[role]);
+      if (blocked.length) { skipped.push(dayText(ds) + ": " + blocked.map(role => role + " - " + r.block[role]).join(", ")); return; }
+      const cur = effective(ds);
+      if (single && cur === brush) { go.push(ds); return; } // tap again with the same brush = clear
+      const asking = need.map(role => r.confirm[role]).filter(Boolean);
+      if (asking.length && cur !== brush) asks.push({ ds, why: asking[0], dow: DAY_HDR[r.dow] });
+      go.push(ds);
+    });
+    let ok = go.slice();
+    if (asks.length) {
+      const first = asks[0];
+      const long = { Sun: "Sunday", Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday" }[first.dow] || first.dow;
+      const msg = asks.length === 1
+        ? `${long} ${fmtMD(first.ds)} is normally not one of your ${roleWord(brush)} call days (${first.why}) - offer it anyway?\n\nThe saved offer lifts that pattern for this date.`
+        : `${asks.length} of these days are normally not one of your ${roleWord(brush)} call days (${asks.slice(0, 6).map(a => a.dow + " " + fmtMD(a.ds)).join(", ")}${asks.length > 6 ? ", ..." : ""} - ${first.why}) - offer them anyway?\n\nThe saved offers lift that pattern for those dates.`;
+      if (!confirm(msg)) { const drop = new Set(asks.map(a => a.ds)); ok = ok.filter(ds => !drop.has(ds)); skipped.push(asks.length + " pattern day(s) left out"); }
+    }
+    if (ok.length) setDraft(p => { const n = { ...p }; ok.forEach(ds => { const cur = effective(ds); setDraftDay(n, ds, brush === "clear" ? null : (single && cur === brush ? null : brush)); }); return n; });
+    setHint(skipped.length ? "Skipped " + skipped.length + " day(s): " + skipped.slice(0, 4).join("; ") + (skipped.length > 4 ? "; ..." : "") : "");
+  };
+  const tapDay = (ds) => {
+    const r = rowByDay[ds];
+    if (!r || (r.grey && !(armed === "clear" && clearable(r)))) return;
+    if (!rangeMode) { paintDays([ds], armed, { single: true }); return; }
+    if (!pendingStart) { setPendingStart(ds); setHint(""); return; }
+    const [s, e] = pendingStart <= ds ? [pendingStart, ds] : [ds, pendingStart];
+    const list = []; for (let d = s; d <= e; d = suAddDays(d, 1)) list.push(d);
+    setPendingStart(null);
+    paintDays(list, armed, { single: false });
+  };
+  const pasteParsed = React.useMemo(() => suParseDateList(pasteText, pasteYear), [pasteText, pasteYear]);
+  const addPaste = () => {
+    if (!pasteParsed.dates.length) return;
+    const brush = armed === "clear" ? "either" : armed;
+    // the paste box may name days outside the shown month: evaluate each against its own month's picture
+    const byMonth = {};
+    pasteParsed.dates.forEach(d => { const k = d.slice(0, 7); (byMonth[k] = byMonth[k] || []).push(d); });
+    const months = Object.keys(byMonth).sort();
+    if (months.length === 1 && months[0] === fmt(new Date(ym.y, ym.m, 1)).slice(0, 7)) { paintDays(byMonth[months[0]], brush, { single: false }); setPasteText(""); return; }
+    // other months: paint the shown month's part now and move the view to the first other month for the rest
+    const here = fmt(new Date(ym.y, ym.m, 1)).slice(0, 7);
+    if (byMonth[here]) paintDays(byMonth[here], brush, { single: false });
+    const rest = pasteParsed.dates.filter(d => d.slice(0, 7) !== here);
+    if (rest.length) { const f = parse(rest[0]); setYm({ y: f.getFullYear(), m: f.getMonth() }); setPasteText(rest.join(", ")); setHint("Showing " + MO[f.getMonth()] + " " + f.getFullYear() + " - press Add again for the " + rest.length + " pasted day(s) in it."); }
+    else setPasteText("");
+  };
+
+  const describeDraft = () => dirtyDays.slice().sort().map(ds => dayText(ds) + ": " + (draft[ds] ? brushWord(draft[ds]) : "clear")).concat(modeDirty ? ["mode for " + periodLabel + ": " + modeDraft] : []);
+  const doSave = async () => {
+    if (!dirtyCount || busy) return;
+    setBusy(true); setCommitError(null); setSavedNote("");
+    const items = describeDraft();
+    const diff = offersDraftDiff(savedByDay, draft);
+    if (diff.bad.length) { setBusy(false); setCommitError({ msg: "a drafted day is malformed (" + diff.bad.join(", ") + ") - discard it", items }); return; }
+    // A rules-only surgeon who paints days inside the period comes off the rules-only list by that save (the
+    // period's list would otherwise contradict the derived 'submitted' status). Only an OPEN period takes a mode.
+    const addsInPeriod = diff.insert.concat(diff.update).some(r => inPeriod(r.day));
+    const mode = !periodOpen ? null : modeDirty ? modeDraft : (periodStatus === "rules_only" && addsInPeriod ? shownMode : null);
+    // Nothing left to write (the draft was equalised by a reload from another device): drop it, no request, no audit.
+    if (diff.count === 0 && !mode) { setBusy(false); setDraft({}); setModeDraft(null); setPendingStart(null); setSavedNote("Already saved - nothing to write"); if (savedTimerRef.current) clearTimeout(savedTimerRef.current); savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000); return; }
+    let r;
+    try { r = await onCommit({ personId: pid, diff, mode, period: period || null, items }); }
+    catch (e) { console.warn("Paint offers: commit threw", e); r = { ok: false, error: String(e?.message || e) }; }
+    finally { setBusy(false); }
+    if (r && r.ok) {
+      setDraft({}); setModeDraft(null); setPendingStart(null); setPeriodOpenBox(false);
+      setSavedNote(`Saved ${diff.count} change${diff.count === 1 ? "" : "s"}${mode ? " - " + (mode === "rules_only" ? "going by your rules" : "mode: " + (mode === "exhaustive" ? "only these days" : "preferred days")) : ""}`);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000);
+    } else {
+      setCommitError({ msg: (r && r.error) || "unknown error", items });
+    }
+  };
+  const doRulesOnly = async () => {
+    if (!period || !periodOpen || busy) return;
+    if (dirtyDays.some(ds => draft[ds] && inPeriod(ds))) { setHint("You have drafted days inside " + periodLabel + " - discard them first to go by your rules."); return; }
+    if (!confirm(`Go by your rules for ${periodLabel}?\n\nThe generator places you from your rules alone and you hear nothing more about this period:\n- ${rulesWords.join("\n- ")}\n\nYou can still paint days later (that takes you off the rules-only list).`)) return;
+    setBusy(true); setCommitError(null); setSavedNote("");
+    let r;
+    try { r = await onCommit({ personId: pid, diff: { insert: [], update: [], delete: [], bad: [], count: 0 }, mode: "rules_only", period, items: ["mode for " + periodLabel + ": rules_only"] }); }
+    catch (e) { console.warn("Paint offers: rules-only commit threw", e); r = { ok: false, error: String(e?.message || e) }; }
+    finally { setBusy(false); }
+    if (r && r.ok) { setModeDraft(null); setPeriodOpenBox(false); setSavedNote("Saved - going by your rules for " + periodLabel); if (savedTimerRef.current) clearTimeout(savedTimerRef.current); savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000); }
+    else setCommitError({ msg: (r && r.error) || "unknown error", items: ["mode for " + periodLabel + ": rules_only"] });
+  };
+  const doDiscard = () => {
+    if (!dirtyCount) return;
+    if (!confirm(`Discard ${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"}?`)) return;
+    setDraft({}); setModeDraft(null); setPendingStart(null); setCommitError(null); setSavedNote(""); setHint(""); setPeriodOpenBox(false);
+  };
+  const doClose = () => {
+    if (busy) return; // never close mid-save - the commit would land invisibly
+    if (dirtyCount && !confirm(`Discard ${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"} and close?`)) return;
+    onClose();
+  };
+
+  const bg = T.bg, panelBg = T.surface, border = T.border, text = T.text, muted = T.muted;
+  const openRed = T.open;
+  const pillFor = (b) => { const c = OFFER_BRUSH[b] || OFFER_BRUSH.clear; return { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 6, fontSize: 12.5, fontWeight: 800, background: c.tint, color: c.text, border: `1px solid ${c.border}` }; };
+  const holderText = (v, ds) => v ? holderLabel(v, nameOf) : (ds >= today ? "OPEN" : "-");
+  const monthLabel = MO[ym.m] + " " + ym.y;
+  const atCurrentMonth = ym.y === t0.getFullYear() && ym.m === t0.getMonth(); // navigation is from the current month forward: < stops here
+  const periodExpanded = periodOpen && (periodOpenBox || modeDirty); // one line by default; "Change" or a dirty mode opens the box
+  const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : "yourself as " + brushWord(armed)}; tap again with the same brush to clear it.`
+    : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
+
+  if (!person) {
+    return (
+      <div data-testid="ofp-sheet" style={{ position: "fixed", inset: 0, zIndex: 9300, background: bg, display: "flex", flexDirection: "column", fontFamily: font, padding: 20, color: text }}>
+        <p>Your account is not linked to a roster entry yet - the scheduler will link it. Nothing can be offered until then.</p>
+        <button data-testid="ofp-close" onClick={onClose} style={{ ...css.btn(false), minHeight: 44, alignSelf: "flex-start" }}>Close</button>
+      </div>
+    );
+  }
+  return (
+    <div data-testid="ofp-sheet" data-person={pid} data-month={fmt(new Date(ym.y, ym.m, 1)).slice(0, 7)} style={{ position: "fixed", inset: 0, zIndex: 9300, background: bg, display: "flex", flexDirection: "column", fontFamily: font }}>
+      {/* Header - safe-area padded for the installed PWA */}
+      <div style={{ background: panelBg, borderBottom: `1px solid ${border}`, padding: "8px 12px 8px", paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: text }}>{asScheduler ? "Paint offers for " + person.name : "Paint my offers"}{asScheduler && <span style={{ fontSize: 10.5, fontWeight: 600, color: muted, marginLeft: 6 }}>as the scheduler (relayed)</span>}</div>
+          <button data-testid="ofp-close" onClick={doClose} aria-label="Close" style={{ background: "none", border: "none", color: muted, fontSize: 22, cursor: "pointer", padding: "6px 10px", minWidth: 44, minHeight: 44 }}>x</button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+          <button data-testid="ofp-prev" disabled={atCurrentMonth} onClick={() => { if (atCurrentMonth) return; setPendingStart(null); setYm(p => { const m = p.m - 1; return m < 0 ? { y: p.y - 1, m: 11 } : { y: p.y, m }; }); }} aria-label="Previous month" style={{ ...css.btn(false), minWidth: 48, minHeight: 44, fontSize: 15, opacity: atCurrentMonth ? 0.45 : 1, cursor: atCurrentMonth ? "default" : "pointer" }}>&lsaquo;</button>
+          <span data-testid="ofp-month" style={{ fontSize: 14, fontWeight: 700, color: text, minWidth: 150, textAlign: "center" }}>{monthLabel}</span>
+          <button data-testid="ofp-next" onClick={() => { setPendingStart(null); setYm(p => { const m = p.m + 1; return m > 11 ? { y: p.y + 1, m: 0 } : { y: p.y, m }; }); }} aria-label="Next month" style={{ ...css.btn(false), minWidth: 48, minHeight: 44, fontSize: 15 }}>&rsaquo;</button>
+        </div>
+        <div data-testid="ofp-counts" data-month-primary={monthCounts.primary} data-month-backup={monthCounts.backup} data-month-either={monthCounts.either} data-period-count={periodCount} style={{ fontSize: 11, color: muted, textAlign: "center", marginTop: 2, lineHeight: 1.5 }}>
+          {monthLabel}: <b style={{ color: text }}>{monthCounts.primary}</b> primary, <b style={{ color: text }}>{monthCounts.backup}</b> backup, <b style={{ color: text }}>{monthCounts.either}</b> either offered
+          {period && <> - {periodLabel}: <b style={{ color: text }}>{periodCount}</b> day{periodCount === 1 ? "" : "s"}{cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : ""}</>}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
+          {["primary", "backup", "either", "clear"].map(k => (
+            <button key={k} data-testid={"ofp-brush-" + k} data-armed={armed === k ? "1" : "0"} onClick={() => { setArmed(k); setPendingStart(null); setHint(""); }} style={css.brush(armed === k, k)}>{OFFER_BRUSH[k].label}</button>
+          ))}
+          <button data-testid="ofp-range" data-on={rangeMode ? "1" : "0"} onClick={() => { setRangeMode(v => !v); setPendingStart(null); setHint(""); }} title="Paint a run of days: tap the start day, then the end day" style={{ ...css.btn(false), minHeight: 44, padding: "8px 12px", fontSize: 12, marginLeft: "auto", ...(rangeMode ? { background: `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})`, color: "#fff", borderColor: T.navy } : {}) }}>{rangeMode ? "Range: on" : "Range"}</button>
+        </div>
+        <div data-testid="ofp-hint" style={{ fontSize: 11, color: hint ? "#a05010" : muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", lineHeight: 1.4 }}>
+          {hint ? <span>{hint}</span>
+            : rangeMode && pendingStart ? <>
+                <span>Start {dayText(pendingStart)} - tap the end day (same day = just that day).</span>
+                <button data-testid="ofp-cancel-start" onClick={() => setPendingStart(null)} style={{ minHeight: 30, padding: "3px 10px", borderRadius: 7, fontSize: 11, fontWeight: 700, fontFamily: font, cursor: "pointer", background: "transparent", color: "#c04040", border: "1px solid #c05050" }}>x cancel start</button>
+              </>
+            : <span>{rangeHint}</span>}
+        </div>
+        {!ctx && <div role="alert" data-testid="ofp-rules-unavailable" style={{ ...css.warnBox, marginTop: 6, fontSize: 11 }}>Rules unavailable{ctxError ? " (" + String(ctxError).slice(0, 120) + ")" : ""} - only past and frozen days are greyed; the database still refuses a vacation day.</div>}
+      </div>
+
+      {/* Day list */}
+      <div data-testid="ofp-list" style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 10px 12px" }}>
+        {days.map(r => {
+          const ds = r.ds;
+          const eff = effective(ds);
+          const drafted = ds in draft;
+          const isPending = pendingStart === ds;
+          const grey = !!r.grey;
+          const tappable = !grey || (armed === "clear" && clearable(r)); // a saved offer under a new obligation can still be cleared
+          const partial = !grey && (r.block.primary || r.block.backup) ? (r.block.primary ? "backup only - " + r.block.primary : "primary only - " + r.block.backup) : null;
+          const rowBg = grey ? (dk ? "#0F1B33" : "#F1F3F6") : isPending ? (dk ? "#1a3a5e" : "#dcecf8") : drafted ? (dk ? "#1c3050" : "#eaf3fb") : r.weekend ? T.weekend : panelBg;
+          const holderP = holderText(r.holders.primary, ds), holderB = holderText(r.holders.backup, ds);
+          return (
+            <button key={ds} data-testid="ofp-day" data-day={ds} data-state={grey && !drafted ? "blocked" : drafted ? "draft" : eff ? "saved" : "free"} data-offer={eff || ""} data-why={r.grey || partial || ""} data-clearable={grey && clearable(r) ? "1" : "0"} disabled={!tappable} onClick={() => tapDay(ds)}
+              style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", minHeight: 52, padding: "7px 10px", marginBottom: 4, borderRadius: 9, cursor: tappable ? "pointer" : "not-allowed", fontFamily: font, background: rowBg, opacity: grey ? 0.6 : 1, border: `1px solid ${isPending ? T.accent : drafted ? T.accent : border}` }}>
+              <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
+                <div style={{ fontSize: 17, fontWeight: 800, color: text, fontFamily: mono }}>{r.d}</div>
+                <div style={{ fontSize: 9.5, fontWeight: 700, color: r.weekend ? "#a05010" : muted, textTransform: "uppercase" }}>{DAY_HDR[r.dow]}</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  {eff ? <span style={pillFor(eff)}>{OFFER_BRUSH[eff].label}</span> : <span style={{ fontSize: 11.5, color: drafted ? "#a05010" : muted, fontWeight: drafted ? 700 : 400 }}>{drafted ? "will clear" : grey ? "" : "not offered"}</span>}
+                  {drafted && <span style={{ fontSize: 9.5, fontWeight: 800, color: "#a05010" }}>unsaved</span>}
+                  {isPending && <span style={{ fontSize: 11, fontWeight: 700, color: T.accentText }}>range starts here</span>}
+                  {grey && <span data-testid="ofp-why" style={{ fontSize: 11, fontWeight: 700, color: muted }}>{r.grey}{clearable(r) ? " - saved offer: Clear can take it back" : ""}</span>}
+                  {!grey && partial && <span data-testid="ofp-why" style={{ fontSize: 10.5, fontWeight: 700, color: "#a05010" }}>{partial}</span>}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10.5, color: muted, marginTop: 2 }}>
+                  <span>P <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span></span>
+                  <span>B <span style={{ color: holderB === "OPEN" ? openRed : text, fontWeight: holderB === "OPEN" ? 800 : 600 }}>{holderB}</span></span>
+                  {r.others > 0 && <span data-testid="ofp-others">{r.others} other{r.others === 1 ? "" : "s"} offered</span>}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Sticky footer: one summary row (period line + Change, Paste dates, My rules), the expanded period box only
+          while changing the mode, the unsaved indicator, Discard / Save - kept short so the day list owns the phone */}
+      <div data-testid="ofp-footer" style={{ background: panelBg, borderTop: `1px solid ${border}`, padding: "8px 12px", paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 8px)", flexShrink: 0, maxHeight: "55vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+          {period && (
+            <span data-testid="ofp-period-line" style={{ flex: "1 1 170px", minWidth: 0, fontSize: 11.5, fontWeight: 700, color: text, lineHeight: 1.35 }}>
+              {periodLabel} - {periodOpen ? (periodClose ? "freezes " + fmtMD(periodClose) : "open") : "closed" + (periodClose ? " " + fmtMD(periodClose) : "")} - {periodStatus === "submitted" ? "days offered" : periodStatus === "rules_only" ? "by your rules" : "nothing yet"}{periodOpen ? " - " + (shownMode === "exhaustive" ? "only these days" : "preferred days") : ""}
+              {modeDirty && <span style={{ color: "#a05010", marginLeft: 6 }}>mode unsaved</span>}
+            </span>
+          )}
+          {period && periodOpen && <button data-testid="ofp-period-toggle" data-on={periodExpanded ? "1" : "0"} onClick={() => setPeriodOpenBox(v => !v)} style={{ ...css.mini(periodExpanded), minHeight: 36 }}>{periodExpanded ? "Done" : "Change"}</button>}
+          <button data-testid="ofp-paste-toggle" onClick={() => setPasteOpen(v => !v)} style={{ ...css.mini(pasteOpen), minHeight: 36 }}>{pasteOpen ? "Hide paste" : "Paste dates"}</button>
+          {period && <button data-testid="ofp-rules-toggle" onClick={() => setRulesOpen(v => !v)} style={{ ...css.mini(rulesOpen), minHeight: 36 }}>{rulesOpen ? "Hide rules" : "My rules"}</button>}
+        </div>
+        {pasteOpen && (
+          <div data-testid="ofp-paste" style={{ marginBottom: 8 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: muted }}>Dates like 11/3, 11/5-11/8 or 2026-12-01 (M/D uses the year on the right); they become drafts with the armed brush{armed === "clear" ? " (either, since Clear is armed)" : ""}.</span>
+              <select data-testid="ofp-paste-year" value={pasteYear} onChange={e => setPasteYear(e.target.value)} style={{ ...css.inp, minHeight: 36 }}>{[t0.getFullYear(), t0.getFullYear() + 1, t0.getFullYear() + 2].map(y => <option key={y} value={String(y)}>{y}</option>)}</select>
+            </div>
+            <textarea data-testid="ofp-paste-text" value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="11/3, 11/5, 11/16-11/20" style={{ ...css.inp, width: "100%", minHeight: 48, fontFamily: mono, boxSizing: "border-box" }} />
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
+              <span data-testid="ofp-paste-preview" style={{ fontSize: 11, color: pasteParsed.bad.length ? "#a05010" : muted }}>{pasteParsed.dates.length} date(s){pasteParsed.bad.length ? " - not understood: " + pasteParsed.bad.slice(0, 5).join(", ") : ""}</span>
+              <button data-testid="ofp-paste-add" onClick={addPaste} disabled={!pasteParsed.dates.length} style={{ ...css.btn(true), minHeight: 36, opacity: pasteParsed.dates.length ? 1 : 0.5 }}>Add {pasteParsed.dates.length} day(s) to the draft</button>
+            </div>
+          </div>
+        )}
+        {period && rulesOpen && (
+          <div data-testid="ofp-rules-words" style={{ fontSize: 11.5, color: text, lineHeight: 1.5, marginBottom: 8, padding: "6px 10px", borderRadius: 8, background: T.raised, border: `1px solid ${border}` }}>
+            <b>Your rules, as the generator reads them:</b>
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{rulesWords.map((w, i) => <li key={i}>{w}</li>)}</ul>
+          </div>
+        )}
+        {period && (
+          <div data-testid="ofp-period" data-period-id={period.id || ""} data-status={periodStatus || ""} data-mode={shownMode} data-open={periodOpen ? "1" : "0"} data-expanded={periodExpanded ? "1" : "0"} style={periodExpanded || !periodOpen ? { marginBottom: 8, padding: "8px 10px", borderRadius: 8, border: `1px solid ${modeDirty ? T.accent : border}`, background: T.raised } : { display: "none" }}>
+            {!periodOpen && (
+              <div data-testid="ofp-period-closed" style={{ fontSize: 11.5, color: muted, lineHeight: 1.45 }}>
+                Offers for {periodLabel} closed{periodClose ? " " + fmtMD(periodClose) : ""} - ask the scheduler for a late change. {periodStatus === "submitted" ? "You offered days for it" : periodStatus === "rules_only" ? "You go by your rules for it" : "You entered nothing for it"}{period.offer_modes && period.offer_modes[pid] ? ", mode " + (savedMode === "exhaustive" ? "only these days" : "preferred days") : ""}.
+              </div>
+            )}
+            {periodOpen && periodExpanded && (
+              <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button data-testid="ofp-mode-exhaustive" data-on={shownMode === "exhaustive" ? "1" : "0"} onClick={() => setModeDraft("exhaustive" === savedMode ? null : "exhaustive")} style={{ ...css.mini(shownMode === "exhaustive"), minHeight: 40, padding: "6px 12px", fontSize: 12 }}>Only these days</button>
+                  <button data-testid="ofp-mode-preferred" data-on={shownMode === "preferred" ? "1" : "0"} onClick={() => setModeDraft("preferred" === savedMode ? null : "preferred")} style={{ ...css.mini(shownMode === "preferred"), minHeight: 40, padding: "6px 12px", fontSize: 12 }}>These are my preferred days - use my rules to fill gaps</button>
+                </div>
+                <div style={{ fontSize: 11, color: muted, marginTop: 4, lineHeight: 1.45 }}>
+                  {shownMode === "exhaustive"
+                    ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)."
+                    : "Your days are placed first; when a slot would otherwise stay open your ordinary rules may place you on another day, and your publish e-mail names every such day - trade if needed. (The default.)"}
+                  {periodStatus === "rules_only" ? " Choosing a mode or painting a day inside this period takes you off the rules-only list." : ""}
+                </div>
+                {periodStatus !== "submitted" && (
+                  <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    {periodStatus === "rules_only"
+                      ? <span style={{ fontSize: 11, color: muted }}>You go by your rules for {periodLabel} - paint days above to offer specific dates instead.</span>
+                      : <button data-testid="ofp-rules-only" onClick={doRulesOnly} disabled={busy} style={{ ...css.btn(false), minHeight: 40, fontSize: 12 }}>Go by my rules for {periodLabel}</button>}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+        {commitError && (
+          <div role="alert" data-testid="ofp-error" style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 8, background: dk ? "#3a1a1a" : "#fdeaea", border: "1px solid #c05050", maxHeight: 130, overflowY: "auto" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#c04040" }}>{`Nothing was saved - ${commitError.items.length} entr${commitError.items.length === 1 ? "y is" : "ies are"} still unsaved:`}</div>
+            {commitError.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: dk ? "#e0b0b0" : "#8a3030", fontFamily: mono }}>- {it}</div>)}
+            <div style={{ fontSize: 10.5, color: muted, marginTop: 3 }}>({commitError.msg}) - your taps are kept; fix the issue and Save again.</div>
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div data-testid="ofp-status" style={{ flex: 1, fontSize: 12.5, fontWeight: 800, color: dirtyCount ? "#a05010" : muted }}>
+            {dirtyCount ? `${dirtyCount} unsaved` : savedNote ? <span data-testid="ofp-saved" style={{ color: "#1a8040" }}>{savedNote}</span> : "No unsaved changes"}
+          </div>
+          <button data-testid="ofp-discard" onClick={doDiscard} disabled={!dirtyCount || busy} style={{ ...css.btn(false), minHeight: 44, opacity: dirtyCount && !busy ? 1 : 0.45 }}>Discard</button>
+          <button data-testid="ofp-save" onClick={doSave} disabled={!dirtyCount || busy} style={{ ...css.btn(true), minHeight: 44, minWidth: 110, opacity: dirtyCount && !busy ? 1 : 0.55 }}>{busy ? "Saving" : `Save${dirtyCount ? ` (${dirtyCount})` : ""}`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Reusable collapsible section. Persists open/closed per-device via localStorage
 // (keyed by `ck`). Defined at module scope so it never remounts on parent re-render.
 function Collapsible({ title, ck, defaultOpen = false, summary = null, children, css, right = null, style = null }) {

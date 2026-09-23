@@ -847,28 +847,98 @@ missing; the orchestrator applies it and writes the observed line into `docs/SCH
 seed apply of part 5, which writes `offer_modes`). Proof: `sql/probes/offers-probe.sql` (rolls itself back) and
 `scripts/verify-rls.sh` section 8; the observed runs are in `docs/SCHEMA-REVIEW.md`.
 
-**Part 3 — the UI — is the next wave (not on `feat/offers` as of 9/23; `index-source.html` carries none of it yet: no
-`call_offers` / `call_periods` read, no `offers.save`).** Entry will be phone-first, modelled on Davenport's Paint Month
-sheet: a full-screen vertical day list (one tall row per day, month navigation forward without limit), brushes Primary
-/ Backup / Either / Clear, tap to paint, tap-start / tap-end for a range, greyed rows that say why a day cannot be
-offered (past, your vacation, East busy, your derived week, outside your window, frozen), a weekday-pattern day
-paintable behind one confirmation, what is already published that day and how many others offered it, a running count
-against the person's cap, drafts kept locally and **one Save = one batch write + one audit entry**, a failed save that
-writes nothing, a paste-a-date-list box for typists, a "Go by my rules for <period>" button and the mode toggle ("Only
-these days" / "These are my preferred days — use my rules to fill gaps", the default) that writes `offer_modes`. The UI
-wave owns three **audit actions**, named here so the SQL comments, the cron and the docs agree: `offers.save` (the
-painter's one Save — one batch write, one audit row with the count; already named in the `call_offers` comment of
-`sql/schema.sql`), `period.create` (Setup → Generate → Periods, from the presets in `groupRules.offerPeriods`) and
-`period.close` ("Close now" — the same action the cron writes with `actor_id` `cron`; the two closers meet on the
-part-4 compare-and-swap, so only one summary goes out). It also owns the wiring the engine is waiting for: pass
-`call_offers` / `call_periods` into `ctxInputs` → `buildContext` (`offers`, `periods`); switch the in-app Setup import
-to `importPlan(seed, { offerPeriods: true })` and refuse Apply when the seed carries periods the plan did not convert;
-give the trade path the claim reading (below); the day editor's "offered primary / either / backup — rules — not
-offered" line per candidate; My Schedule's own future offers; the Periods section (create from the presets, timeline
-editable, per-surgeon status, "Remind" on `offers_reminder`, "Enter for someone" as `entered_by 'scheduler'` /
-`source 'email-relay'`, Generate over the period, Accept & Publish); and the publish e-mail line from
-`diagnostics.offers.outsideOffers`. Smoke for that wave: paint five days with two brushes and a range at 390 px, flip
-the toggle, save once — one request, one audit row, the rows in `call_offers`, the mode on the period.
+**Part 3a — the painter (built 9/23 on `feat/offers`, sub-part U3a; the rest of part 3 is below).** `OfferPainterSheet`
+in `index-source.html` is a MODULE-SCOPE component (the Davenport reason: inside the app function it would remount on
+every parent render and lose the draft), mounted once beside the vacation painter, outside the view conditionals. Entry
+points: **My schedule → "Paint my offers"** (the scheduler's person picker turns it into "Paint offers for <name>" — the
+relay path: the sheet says "as the scheduler (relayed)" and the function stamps `entered_by 'scheduler'` / `source
+'email-relay'`), the nav-bar action **"Paint offers"** for any signed-in surgeon with a roster link, and the deep link
+`<app>#offers` (dropped from the URL once opened, like `#openshifts`). The app reads `call_offers` / `call_periods`
+through `readAuthOnlyTable` (authenticated-only tables: no fresh token = the read is skipped, never an RLS-empty `[]`
+adopted), on load, on the 60-s poll and on realtime changes to either table; My schedule also shows the person's own
+future offers and their status on the next period. The sheet: a vertical day list (one row per day, min 52 px,
+safe-area padding), month ‹ › from the current Central month forward without limit (‹ is disabled on the current month); brushes Primary / Backup / Either /
+Clear (`css.brush` + `OFFER_BRUSH` tokens in `app-styles.js`: the armed chip is a gradient with white text, which the
+dark stylesheet exempts); tap = paint the armed brush, tap again with the same brush = clear; a **Range** toggle turns
+taps into start / end (same day twice = one day; the hint line names the step and offers "x cancel start"); a
+paste-a-date-list box reusing `suParseDateList` (rows become drafts with the armed brush, never writes). Each row shows
+the drafted / saved offer as a pill, what is published that day (holders, or OPEN in red at/after today), "N others
+offered", and — greyed and disabled — WHY it cannot be offered: `past`, `frozen - offers for <label> closed <date> - ask
+the scheduler` (a non-scheduler inside a period whose `offers_close_at` has passed or whose status is no longer
+`upcoming` — one reading, `helpers.offerPeriodOpen`, shared with the period box; the scheduler is never frozen, like
+OF003), and every **obligation** `rules.eligibility(ctx, day, role, id, { claim: true })` reports for BOTH roles,
+classified by `helpers.offerDayWhy` (`OFFER_BLOCK_WORDS`: time-off, day-before-vacation, east-busy, east-forecast-busy,
+derived-lock / derived-lock-held, outside-window, holiday-opt-out, backup-opt-out, inactive, **and the person's own
+dated rows** unavailable-row / no-backup-row / backup-only-row — `rules.js` keeps those hard whatever an offer says, an
+offer only adds a dated *available* bit and never clears a dated statement, so the painter greys them with "ask the
+scheduler to change that row first" rather than promising a lift it cannot deliver; 9/23 review). Blocked in one role
+only = paintable in the other ("backup only - East busy"). The **weekday-pattern family** (`OFFER_CONFIRM_WORDS`:
+hard-never-weekday, weekday-not-allowed, recurring-unavailable, not-recurring-available, weekday-pattern,
+weekend-block-only, day-before-aledo, whitelist-month, outside-available-weeks) never greys: painting such a day asks
+once per batch ("Tuesday 11/3 is normally not one of your primary call days (never a call day by your rules) - offer it
+anyway?") because the saved offer is a dated row that lifts the pattern (item W); obligations are never liftable here.
+Every other hard reason (caps, runs, a lock, the other role, `not-offered` — hence `{ claim: true }`) is the generator's
+business and neither greys nor asks. `test/data-layer.test.js` section F checks every code in `rules.HARD_REASONS` is
+classified on purpose **and proves the split from a real seed ctx**: every confirm code the first period raises (seven)
+vanishes once the offer is saved, the three dated-row codes survive it. The **Clear** brush is the one brush that may
+reach a greyed row: a SAVED offer under a later obligation (a vacation entered over it) stays tappable for Clear and a
+range with Clear armed takes such rows back, while past and frozen rows are skipped and named (the delete guard would
+refuse them with OF003 and fail the whole batch). Header counts: primary / backup / either offered in the shown month
+(draft applied) and the days offered in the next period against `monthlyCapFor(ctx, id).primary`. **Save = ONE
+request** — `POST rpc/save_offers(p_person, p_rows, p_clear, p_period, p_mode)` with the diff
+`helpers.offersDraftDiff(saved, draft)` computes (insert + update as upserts, delete as clears, no-ops dropped,
+malformed days refused client-side) **and, when the same Save changed the toggle, the period id + mode** — a `security
+invoker` function (`sql/migrations/2026-09-23-offer-mode-rpc.sql`, **not yet applied live as of 9/23** - until then Save
+answers `404 PGRST202` and the sheet keeps the draft; probe `sql/probes/offer-rpcs-probe.sql`, cases A..K-anon + L / M)
+that upserts and deletes in one transaction as the caller, so RLS and OF001–OF003 apply per row, then runs
+`set_offer_mode` **inside that transaction** when `p_mode` is given, so a refused mode rolls the rows back too — days +
+mode are one commit or nothing (the 9/23 review's finding; two requests could not promise that). A repaint that sends
+no note keeps the row's note (`coalesce(excluded.note, call_offers.note)`: the importer's `seed: <tag>` and the relay's
+e-mail date survive a role change). `entered_by` / `source` come from the caller identity, never from the client. A
+mode-only save (the toggle alone, "Go by my rules") is one `POST rpc/set_offer_mode(p_period, p_mode, p_person)` — a
+`security definer` function because a surgeon cannot write `call_periods`: it writes that one person's key only
+(`exhaustive` / `preferred` → `offer_modes[person]` and off `rules_only_ids`; `rules_only` → on `rules_only_ids`, key
+dropped, refused with OM006 while the person has offers inside the period), refuses a non-scheduler after the close
+(OM005) or naming someone else (OM002). Then **ONE audit row `offers.save`** (`detail.count`, `inserted` / `updated` /
+`deleted`, `period_id`, `period`, `mode`). A draft that turned into nothing to write (equalised by a reload from another
+device) is dropped with "Already saved - nothing to write" — no request, no audit row. A failed batch shows "Nothing
+was saved" naming every pending entry with the database's token verbatim (`describeDbError` now shows `OFFER_*`,
+`OFFERS_*`, `MODE_*`), keeps the draft and the unsaved count; Discard and Close confirm on a dirty draft; the saved
+note clears after 3 s. The period box speaks to `helpers.offerNextPeriod`: **the earliest period still OPEN for offers**
+(status `upcoming`, `offers_close_at` after today), falling back to the running frozen one only when nothing is open —
+so from the freeze (10/2) the sheet targets the next period as soon as part 3b creates it, and until then a
+non-scheduler sees the frozen one **read-only** ("Offers for <label> closed 10/2 - ask the scheduler for a late
+change", no toggle, no "Go by my rules"; the scheduler keeps both, as OM005 lets him). On the phone the box is **one
+summary line** by default (`<label> - freezes 10/2 - nothing yet - preferred days`, beside "Paste dates" and "My
+rules"), so the day list keeps at least 45 % of a 390 x 844 viewport (the smoke measures it); **Change** expands the
+toggle **"Only these days"** / **"These are my preferred days - use my rules to fill gaps"** (default) with one
+explaining line and **"Go by my rules for <label>"** (shown until the person has offers inside the period; its confirm
+speaks that person's rules in words from `surgeonRules` — `helpers.offerRulesWords`, data-driven, no name branch); a
+dirty mode keeps the box open, a Save or Discard folds it. A rules-only surgeon who paints a day inside the period
+comes off the list by that save (the derived status would contradict it otherwise). Smoke (`test/ui/smoke.mjs`, both
+themes, 390 px + 1180): paint five days with three brushes including a range, the Tue/Thu confirmation counted once
+per batch, "1 other offered", the header counts, the list height, Change + the toggle, a forced OF002 failure (one
+attempt, nothing else written, every entry named, draft kept), the real Save = exactly one `save_offers` carrying
+`p_mode` + one `offers.save` audit and **no** `set_offer_mode`, rows read back saved, the box folded, the note
+clearing, tap-again = "will clear", Close confirming, the scheduler's relay for Fierce with Change → "Go by my rules"
+(one mode call, one audit), dark at both widths; screenshots `offers-greyed-390.png`, `offers-armed-390.png`,
+`offers-range-390.png`, `offers-saved-390.png`, `offers-desktop.png`, `offers-desktop-dark.png`, `offers-390-dark.png`.
+
+**Still ahead in part 3 (not on `feat/offers` as of 9/23 U3a):** the three **audit actions** named here so the SQL
+comments, the cron and the docs agree: `offers.save` (built, above), `period.create` (Setup → Generate → Periods, from
+the presets in `groupRules.offerPeriods`) and `period.close` ("Close now" — the same action the cron writes with
+`actor_id` `cron`; the two closers meet on the part-4 compare-and-swap, so only one summary goes out). And the wiring
+the engine is waiting for: pass `offerRows` / `periodRows` into `ctxInputs` → `buildContext` (`offers`, `periods`) —
+deliberately NOT done by the painter sub-part, because the moment offers reach the ctx an exhaustive surgeon's
+`not-offered` becomes live in the day editor, the generator and the trade path, and the trade path must take the claim
+reading first (below); switch the in-app Setup import to `importPlan(seed, { offerPeriods: true })` and refuse Apply
+when the seed carries periods the plan did not convert; the day editor's "offered primary / either / backup — rules —
+not offered" line per candidate; the Periods section (create from the presets, timeline editable, per-surgeon status,
+"Remind" on `offers_reminder`, "Enter for someone" — today My schedule's person picker already opens the painter as the
+scheduler, Generate over the period, Accept & Publish); and the publish e-mail line from
+`diagnostics.offers.outsideOffers`. (The two RPCs are already mirrored byte for byte into `sql/schema.sql`, pinned by
+`test/schema.test.js` and described in `docs/SCHEMA-REVIEW.md` with an `observed:` placeholder the orchestrator fills
+after the apply.)
 
 **Eligibility is offers-first, at the hardness each surgeon chooses (built in Prompt 14 P2, 9/23):** `rules.buildContext`
 takes two more inputs, `offers` (`call_offers` rows) and `periods` (`call_periods` rows with `rules_only_ids` and

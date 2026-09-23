@@ -2148,6 +2148,170 @@ function offerCronPlan(period, today, rules) {
   return base;
 }
 
+/* ═══ Offer painter (Prompt 14 part 3a, 9/23) ═══
+ * Pure pieces of the OfferPainterSheet (index-source.html, module scope): the draft-to-write diff, the words for a
+ * day that cannot be offered, the words for a surgeon's rules and the "next period" pick. Nothing here reads the
+ * clock, the DOM or the network; test/data-layer.test.js section F runs them. */
+const OFFER_ROLES = { primary: true, backup: true, either: true };
+// offersDraftDiff(saved, draft) -> { insert: [{ day, role_pref }], update: [{ day, role_pref, was }], delete: [day],
+// bad: [day], count }. saved = the person's call_offers rows (an array; a { day: role_pref } map is accepted too),
+// draft = { day: role_pref | null } (null / '' = clear). A draft entry equal to the saved state drops out, a clear of
+// a day never saved drops out, a day that is not 'YYYY-MM-DD' or a brush outside primary / backup / either lands in
+// `bad` and writes nothing (fail closed). Every list is in day order; count = insert + update + delete.
+function offersDraftDiff(saved, draft) {
+  const savedMap = {};
+  if (Array.isArray(saved)) saved.forEach(r => { const d = r && r.day !== undefined && r.day !== null ? String(r.day).slice(0, 10) : ""; if (suIsIso(d) && OFFER_ROLES[r.role_pref]) savedMap[d] = r.role_pref; });
+  else if (saved && typeof saved === "object") Object.keys(saved).forEach(d => { if (suIsIso(d) && OFFER_ROLES[saved[d]]) savedMap[d] = saved[d]; });
+  const out = { insert: [], update: [], delete: [], bad: [], count: 0 };
+  Object.keys(draft && typeof draft === "object" ? draft : {}).sort().forEach(day => {
+    const want = draft[day], have = savedMap[day];
+    if (!suIsIso(day)) { out.bad.push(day); return; }
+    if (want === null || want === undefined || want === "") { if (have) out.delete.push(day); return; }
+    if (!OFFER_ROLES[want]) { out.bad.push(day); return; }
+    if (!have) out.insert.push({ day, role_pref: want });
+    else if (have !== want) out.update.push({ day, role_pref: want, was: have });
+  });
+  out.count = out.insert.length + out.update.length + out.delete.length;
+  return out;
+}
+// The two families the painter tells apart (rules doc section 1 "own dates beat own patterns"; guide section 17):
+//   OBLIGATIONS grey the day for that role and are never liftable from the painter. The person's own DATED rows
+//   (unavailable / no backup / backup only, entered under Setup -> Availability) sit here too: rules.js keeps them
+//   hard whatever an offer says (an offer only adds a dated 'available' bit, it never clears a dated statement), so
+//   an offer painted over one would be unplaceable - the row must be changed first;
+//   the WEEKDAY-PATTERN family is paintable behind one confirmation, because the saved offer is a dated row that
+//   lifts the pattern for that date and role (item W). test/data-layer.test.js section F proves BOTH claims from a
+//   real ctx: every confirm code the seed can raise vanishes once the offer is saved, the three row codes stay.
+// Everything else eligibility reports (caps, runs, the other role, a lock, not-offered) is neither: the generator
+// weighs it when it places the offer. The core code is the part before ':'. The same test checks every code in
+// rules.HARD_REASONS is classified on purpose.
+const OFFER_BLOCK_WORDS = {
+  "time-off": "on your vacation",
+  "day-before-vacation": "the day before your vacation",
+  "east-busy": "East busy",
+  "east-forecast-busy": "East forecast busy",
+  "derived-lock": "your East/Silvis week",
+  "derived-lock-held": "your East/Silvis week",
+  "outside-window": "outside your window",
+  "holiday-opt-out": "you opted out of this holiday",
+  "backup-opt-out": "you opted out of backup",
+  "inactive": "not active on the roster",
+  "unavailable-row": "a day you stated as unavailable - ask the scheduler to change that row first",
+  "no-backup-row": "a day you stated as no backup - ask the scheduler to change that row first",
+  "backup-only-row": "a day you stated as backup only - ask the scheduler to change that row first",
+};
+const OFFER_CONFIRM_WORDS = {
+  "hard-never-weekday": "never a call day by your rules",
+  "weekday-not-allowed": "not one of your allowed weekdays",
+  "recurring-unavailable": "your recurring unavailable day",
+  "not-recurring-available": "not one of your recurring available days",
+  "weekday-pattern": "your weekday pattern",
+  "weekend-block-only": "a standalone weekend day (you take Fri-Sun as a block)",
+  "day-before-aledo": "the day before an Aledo day",
+  "whitelist-month": "outside the days you listed for that month",
+  "outside-available-weeks": "outside your listed weeks",
+};
+// offerDayWhy(hard) -> { block: words | null, confirm: words | null, codes: { block: [...], confirm: [...] } } for one
+// role's hard reasons (rules.eligibility(...).hard). block wins the row when set; confirm is the one-line reason the
+// confirmation names; the first code of each family gives the words (holiday-opt-out carries the unit's name).
+function offerDayWhy(hard) {
+  const list = Array.isArray(hard) ? hard : [];
+  const out = { block: null, confirm: null, codes: { block: [], confirm: [] } };
+  list.forEach(code => {
+    const s = String(code || ""); const i = s.indexOf(":"); const core = i < 0 ? s : s.slice(0, i); const arg = i < 0 ? "" : s.slice(i + 1);
+    if (OFFER_BLOCK_WORDS[core]) { out.codes.block.push(s); if (!out.block) out.block = core === "holiday-opt-out" && arg ? "you opted out of " + arg : OFFER_BLOCK_WORDS[core]; }
+    else if (OFFER_CONFIRM_WORDS[core]) { out.codes.confirm.push(s); if (!out.confirm) out.confirm = OFFER_CONFIRM_WORDS[core]; }
+  });
+  return out;
+}
+// offerPeriodOpen(period, today) -> true while a SURGEON may still enter offers / choose a mode for the period: its
+// status is 'upcoming' (absent = upcoming) and offers_close_at (alias offersCloseAt) is after today - the same
+// reading as OF003 / OM005 (frozen once offers_close_at <= today). The scheduler is never frozen (the caller's
+// business). false for junk.
+function offerPeriodOpen(period, today) {
+  if (!period || typeof period !== "object" || !suIsIso(today)) return false;
+  const status = period.status === undefined || period.status === null || period.status === "" ? "upcoming" : String(period.status);
+  if (status !== "upcoming") return false;
+  const raw = period.offers_close_at !== undefined ? period.offers_close_at : period.offersCloseAt;
+  const close = raw === undefined || raw === null ? "" : String(raw).slice(0, 10);
+  return !suIsIso(close) || close > today;
+}
+// offerNextPeriod(periods, today) -> the call_periods row the painter's toggle, "go by my rules", period box and
+// period count speak to: the earliest period (by start_day) that is still OPEN for offers (offerPeriodOpen) and not
+// over; when none is open, the earliest period still running or ahead (frozen - the caller renders it read-only
+// through offerPeriodOpen), so a surgeon looking in between the freeze and the next period's creation still sees
+// where they stand. null when there is none or today is not ISO. 'start' / 'end' are read as aliases (the seed's
+// shape), like the other period helpers above.
+function offerNextPeriod(periods, today) {
+  if (!suIsIso(today) || !Array.isArray(periods)) return null;
+  let open = null, openStart = null, any = null, anyStart = null;
+  periods.forEach(p => {
+    if (!p || typeof p !== "object") return;
+    const s = String(p.start_day !== undefined ? p.start_day : (p.start !== undefined ? p.start : "")).slice(0, 10);
+    const e = String(p.end_day !== undefined ? p.end_day : (p.end !== undefined ? p.end : "")).slice(0, 10);
+    if (!suIsIso(s) || !suIsIso(e) || e < today) return;
+    if (any === null || s < anyStart) { any = p; anyStart = s; }
+    if (offerPeriodOpen(p, today) && (open === null || s < openStart)) { open = p; openStart = s; }
+  });
+  return open || any;
+}
+// offerRulesWords(rules, groupRules) -> plain sentences describing one surgeon's rules, built from the DATA in
+// call_schedule_data.data.surgeonRules (no surgeon-specific branch; a key that is absent says nothing). Shown by
+// the painter next to "Go by my rules" so the person knows what that means for them. Never carries a note field.
+function offerRulesWords(rules, groupRules) {
+  const R = rules && typeof rules === "object" ? rules : null;
+  const G = groupRules && typeof groupRules === "object" ? groupRules : {};
+  const out = [];
+  if (!R) return ["No rules of yours are on file - the scheduler places you by the group defaults."];
+  const nthWords = (p) => {
+    if (!p || !p.weekday) return "";
+    if (p.nth !== undefined && p.nth !== null) return "the " + (Array.isArray(p.nth) ? p.nth : [p.nth]).join("/") + " " + p.weekday;
+    if (p.nthWeekOfMonth !== undefined && p.nthWeekOfMonth !== null) return p.weekday + " of week " + p.nthWeekOfMonth;
+    if (p.beforeNthMonday !== undefined && p.beforeNthMonday !== null) return p.weekday + " before the " + (Array.isArray(p.beforeNthMonday) ? p.beforeNthMonday : [p.beforeNthMonday]).join("/") + " Monday";
+    return "every " + p.weekday;
+  };
+  const listOf = (v) => (Array.isArray(v) ? v : []).map(nthWords).filter(Boolean).join(", ");
+  const md = (d) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? Number(m[1]) + "/" + Number(m[2]) : String(d || ""); };
+  if (R.weekdays && Array.isArray(R.weekdays.allowed) && R.weekdays.allowed.length) out.push("Weekdays: " + R.weekdays.allowed.join(", ") + (R.weekdays.autoOffer ? " (offered automatically when East is clear)" : "") + ".");
+  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + ".");
+  if (Array.isArray(R.recurringAvailable) && R.recurringAvailable.length) out.push("Available on " + listOf(R.recurringAvailable) + ".");
+  if (Array.isArray(R.recurringUnavailable) && R.recurringUnavailable.length) out.push("Unavailable on " + listOf(R.recurringUnavailable) + ".");
+  if (Array.isArray(R.recurringAvoid) && R.recurringAvoid.length) out.push("Prefer not: " + listOf(R.recurringAvoid) + ".");
+  if (Array.isArray(R.availableWindows) && R.availableWindows.length) {
+    const t = R.daysPerWindowWeek && typeof R.daysPerWindowWeek.target === "number" ? R.daysPerWindowWeek.target : null;
+    out.push("Windows: " + R.availableWindows.map(w => md(w && w.start) + "-" + md(w && w.end)).join(", ") + (t !== null ? " (about " + t + " primary day" + (t === 1 ? "" : "s") + " per window week)" : "") + ".");
+  }
+  if (Array.isArray(R.availableWeeks) && R.availableWeeks.length) out.push("Listed weeks (Mondays): " + R.availableWeeks.slice(0, 6).map(md).join(", ") + (R.availableWeeks.length > 6 ? " and " + (R.availableWeeks.length - 6) + " more" : "") + ".");
+  const wp = R.outsideDerivedWeeks && R.outsideDerivedWeeks.weekdayPattern;
+  if (wp && typeof wp === "object") {
+    const prim = Object.keys(wp).filter(d => wp[d] && wp[d].primary === true);
+    const block = Object.keys(wp).filter(d => wp[d] && wp[d].primary === "weekend-block-only");
+    const noBackup = Object.keys(wp).filter(d => wp[d] && wp[d].backup === false);
+    out.push("Outside your East weeks: primary on " + (prim.length ? prim.join(", ") : "no weekday") + (block.length ? ", " + block.join("/") + " as one block" : "") + "; backup " + (noBackup.length ? "except " + noBackup.join(", ") : "any day") + ".");
+  }
+  const ef = R.eastFeed;
+  if (ef && ef.enabled) {
+    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) out.push("Your East (Davenport) call days block " + [ef.eastBlocksPrimary ? "primary" : null, ef.eastBlocksBackup ? "backup" : null].filter(Boolean).join(" and ") + (ef.forecast ? "; the forecast stands in while Davenport is unpublished" : "") + ".");
+    if (ef.deriveFrom || ef.statedWeeks) out.push("Your East weeks derive your Silvis week: East primary week = Silvis backup all week, East backup week = Silvis primary all week.");
+  }
+  if (R.aledo && Array.isArray(R.aledo.weekdays) && R.aledo.weekdays.length) out.push("Aledo days: " + listOf(R.aledo.weekdays) + (R.aledo.hardAvoidDayBefore ? "; never on call the day before" : "") + ".");
+  if (R.weekendStyle) out.push("Weekends: " + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
+  const cap = R.monthlyCap;
+  if (typeof cap === "number") out.push("Cap: " + cap + " primary days a month.");
+  else if (cap && typeof cap === "object" && typeof cap.primary === "number") out.push("Cap: " + cap.primary + " primary days a month" + (typeof cap.preferred === "number" ? " (" + cap.preferred + " preferred)" : "") + (cap.countsEastDays ? ", East primary-week days included" : "") + ".");
+  else if (cap === null) out.push("No monthly cap of your own.");
+  else if (cap === undefined && G.defaultMonthlyCap && typeof G.defaultMonthlyCap.primary === "number") out.push("Cap: the group default of " + G.defaultMonthlyCap.primary + " primary days a month.");
+  if (R.backupCap && typeof R.backupCap === "object") out.push("Backup cap: " + [typeof R.backupCap.perMonthDays === "number" ? R.backupCap.perMonthDays + " days" : null, typeof R.backupCap.weekendsPerMonth === "number" ? R.backupCap.weekendsPerMonth + " weekend" + (R.backupCap.weekendsPerMonth === 1 ? "" : "s") : null].filter(Boolean).join(" and ") + " a month.");
+  if (typeof R.maxConsecutiveDays === "number") out.push("At most " + R.maxConsecutiveDays + " consecutive primary days" + (typeof R.maxConsecutiveAnyRole === "number" ? " (" + R.maxConsecutiveAnyRole + " in any role)" : "") + ".");
+  const hr = R.holidayRules;
+  if (hr && Array.isArray(hr.holidaysOff) && hr.holidaysOff.length) out.push("Never on " + hr.holidaysOff.join(", ") + ".");
+  if (hr && typeof hr.maxMajorHolidays === "number") out.push("At most " + hr.maxMajorHolidays + " major holiday" + (hr.maxMajorHolidays === 1 ? "" : "s") + " in 12 months.");
+  if (R.backupOptOut) out.push("No backup shifts.");
+  if (R.preferAlternateDays) out.push("Prefer alternating days.");
+  if (!out.length) out.push("No recurring rules of yours are on file - the scheduler places you by the group defaults.");
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     reviewStateFor, derivedEastVacations,
@@ -2172,5 +2336,6 @@ if (typeof module !== "undefined" && module.exports) {
     defaultHolidayUnits, huNthWeekday, HU_ORDER, HU_STANDARD_TIER,
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
+    offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
   };
 }

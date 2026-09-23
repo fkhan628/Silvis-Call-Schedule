@@ -166,6 +166,34 @@
 //     BEFORE Copy list, the sheet as a viewport shot), the dark 390 probe
 //     fails on a white swipe-hint cover, and the 'ok screenshots' line is
 //     earned - every file must exist, be from this run and stay under 300 KB.
+//   - Prompt 14 part 3a (the offer painter, U3a): call_offers / call_periods
+//     are authenticated-only, so the harness serves them (the seed's first
+//     period with a fake uuid, s1 on its rulesOnly list; an offer store with one
+//     s2 row) and answers rpc/save_offers + rpc/set_offer_mode like the SQL
+//     functions (tokens included; failSaveOffers forces one OF002 refusal). At
+//     390 px light: My schedule -> Paint my offers opens on the current month,
+//     past rows greyed 'past' + disabled, every row >= 52 px, no horizontal
+//     scroll; the first month ahead with six paintable rows: Primary armed =
+//     gradient + white text, tap / tap again (clears) / tap, a second Primary,
+//     Backup, Range + Either over two endpoints (hint names the start with 'x
+//     cancel start'; every free row between is painted), the Tue/Thu primary
+//     confirmation counted once per batch, '1 other offered' on the s2 day,
+//     header counts = the draft, period box = seed picture (rules_only,
+//     preferred) folded to ONE line so the day list keeps >= 45 % of 844 px,
+//     Change -> toggle 'Only these days'; a FORCED failure records one
+//     save_offers attempt and nothing else, names every entry verbatim, keeps
+//     the draft; the real Save = exactly ONE save_offers (rows in day order, no
+//     clears, p_period + p_mode exhaustive in the SAME call - no set_offer_mode)
+//     + ONE audit offers.save and nothing else; rows read back saved, note
+//     clears after 3 s, tap-again on a
+//     saved day = 'will clear', Close confirms (dismissed = stays), Discard
+//     restores; then as the scheduler for Fierce: 'Paint offers for Fierce' /
+//     'as the scheduler (relayed)', 'Go by my rules' = ONE set_offer_mode
+//     rules_only + ONE audit with his rules in the confirm text; then the nav
+//     action at 1180 (light) and dark at 1180 + 390 (sheet navy, armed brush
+//     still a gradient). Screenshots offers-greyed-390.png, offers-armed-390.png,
+//     offers-range-390.png, offers-saved-390.png, offers-desktop.png,
+//     offers-desktop-dark.png, offers-390-dark.png.
 //   - Prompt 12 item TH (theme, items O + R): the sign-in screen is opened
 //     WITHOUT a session on a second page (the auth token removed by an init
 //     script) and screenshotted in both themes (signin-light.png,
@@ -291,6 +319,7 @@ const FAKE_EMAIL = "scheduler@example.com";
 // must never put an address on screen or in a screenshot.
 const FAKE_PROFILE = { id: FAKE_UID, person_id: "s1", role: "admin", display_name: "Khan", email: null, created_at: "2026-09-22T00:00:00Z" };
 let failSnapshotInsert = false; // Slice E harness switch (see the Supabase route)
+let forcedOffer400 = false;     // Prompt 14 part 3a: the browser's own "400" line for the save_offers refusal the harness forced (OF002) - consumed once
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
 let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH open for N ms so a CAS sync run is provably in flight
 let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_by } stamped onto every call_schedule_data GET row
@@ -379,11 +408,20 @@ const routeCdn = async (route) => {
 const cdnMatcher = (url) => CDN_HOSTS.includes(url.hostname) || FONT_HOSTS.includes(url.hostname);
 
 // ---- Realtime websocket mock ----
-// The SDK joins "realtime:silvis-schedule-sync" with 7 postgres_changes
-// bindings (order = the .on() order in index-source.html). The join reply
+// The SDK joins "realtime:silvis-schedule-sync" with 9 postgres_changes
+// bindings (order = the .on() order in index-source.html; call_offers /
+// call_periods joined the list in Prompt 14 part 3a, BEFORE shift_trade_requests -
+// a list out of step delivers a frame to the wrong handler and datalayer-001 goes dark). The join reply
 // must echo them back with ids; a later postgres_changes frame carrying one
 // of those ids reaches the app's handler (onDayChange for schedule_days).
-const RT_TABLES = ["call_schedule_data", "schedule_days", "time_off", "availability", "shift_trade_requests", "notifications", "client_versions"];
+const RT_TABLES = ["call_schedule_data", "schedule_days", "time_off", "availability", "call_offers", "call_periods", "shift_trade_requests", "notifications", "client_versions"];
+// Self-check: the list must equal the app's .on() order, or every injected frame lands on the wrong handler.
+{
+  const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
+  const marker = '.on("postgres_changes", { event: "*", schema: "public", table: "';
+  const appOrder = src.split(marker).slice(1).map(part => part.slice(0, part.indexOf('"')));
+  if (appOrder.join(",") !== RT_TABLES.join(",")) { console.error("FAIL: RT_TABLES is out of step with index-source.html's postgres_changes order - app: " + appOrder.join(",") + " | harness: " + RT_TABLES.join(",")); process.exit(1); }
+}
 const rt = { ws: null, topic: null, joined: false, frames: [], arrayFormat: false, joinRef: null };
 const rtDecode = (raw) => {
   const m = JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8"));
@@ -538,6 +576,7 @@ const watchPage = (pg, tag) => {
   pg.on("console", (msg) => {
     if (msg.type() === "error") {
       if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
+      else if (forcedOffer400 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); forcedOffer400 = false; } // the forced OF002 answer of rpc/save_offers (offer painter)
       else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
       else consoleErrors.push(msg.text());
     }
@@ -595,6 +634,64 @@ const dayStore = {};
 // JSON comes back. A second claim of the same slot is refused with the
 // function's own CLAIM_HELD token so the verbatim-message path can be seen.
 const claimedDays = {}; // day -> { primary_id? , backup_id?, source, updated_by, updated_at } overlaid on every schedule_days GET
+// Prompt 14 part 3a (the offer painter): call_offers / call_periods are authenticated-only tables, so the anon
+// passthrough would answer [] - the harness serves them: ONE period (the seed's first offerPeriods entry with a
+// fake uuid; s1 is on its rulesOnly list, exactly as the seed says) and an offer store seeded with one OTHER
+// surgeon's row (so "1 other offered" can be seen). rpc/save_offers and rpc/set_offer_mode are answered like the
+// SQL functions would (validation tokens included); every call is recorded in writes. failSaveOffers makes the
+// next save_offers answer a 400 with the OF002 vacation token (the "nothing was saved" path).
+const offerPeriod = (() => {
+  const p = (JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).offerPeriods || [])[0];
+  return p ? { id: "00000000-0000-4000-8000-00000000a0f1", label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: p.status || "upcoming", rules_only_ids: (p.rulesOnly || []).slice(), offer_modes: { ...(p.offerModes || {}) }, created_by: "harness", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" } : null;
+})();
+const OTHER_OFFER_DAY = "2026-10-14";
+const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER_DAY, role_pref: "either", note: null, entered_by: "s2", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" }];
+let failSaveOffers = false;
+// applyOfferMode(who, periodId, mode) mirrors set_offer_mode: { code, message } on a refusal, { ok } after the write.
+// save_offers calls it for p_mode inside its "transaction" (the store is mutated only after every check passed, so a
+// refused mode leaves the rows untouched - the SQL's rollback, in miniature).
+const applyOfferMode = (who, periodId, mode) => {
+  if (!["exhaustive", "preferred", "rules_only"].includes(mode)) return { code: "OM003", message: `MODE_BAD_MODE: mode must be exhaustive, preferred or rules_only (got ${mode || "null"})` };
+  if (!offerPeriod || periodId !== offerPeriod.id) return { code: "OM004", message: `MODE_NO_PERIOD: no period ${periodId || "null"} on file` };
+  if (mode === "rules_only") {
+    const n = offerStore.filter(o => o.person_id === who && o.day >= offerPeriod.start_day && o.day <= offerPeriod.end_day).length;
+    if (n) return { code: "OM006", message: `MODE_HAS_OFFERS: ${who} has ${n} offered day(s) inside ${offerPeriod.label} - clear them first to go by the rules` };
+    if (!offerPeriod.rules_only_ids.includes(who)) offerPeriod.rules_only_ids.push(who);
+    delete offerPeriod.offer_modes[who];
+  } else {
+    offerPeriod.rules_only_ids = offerPeriod.rules_only_ids.filter(x => x !== who);
+    offerPeriod.offer_modes[who] = mode;
+  }
+  offerPeriod.updated_at = new Date().toISOString();
+  return { ok: true };
+};
+const offerRpc = (b, json) => {
+  const err = (code, message) => json(400, { message, code, details: null, hint: null });
+  const who = String(b.p_person || "s1");
+  if (failSaveOffers) { failSaveOffers = false; forcedOffer400 = true; return err("OF002", `OFFER_ON_VACATION: ${((b.p_rows || [])[0] || {}).day || "?"} is inside a vacation of ${who}`); }
+  const rows = Array.isArray(b.p_rows) ? b.p_rows : [];
+  const bad = rows.filter(r => !/^\d{4}-\d{2}-\d{2}$/.test(String(r && r.day)) || !["primary", "backup", "either"].includes(r && r.role_pref));
+  if (bad.length) return err("OS003", `OFFERS_BAD_ROW: ${bad.map(r => (r.day || "null") + " " + (r.role_pref || "null")).join(", ")} (day must be YYYY-MM-DD, role_pref primary / backup / either) - nothing was saved`);
+  // the mode's checks run before the store moves (a refused mode = nothing written, like the SQL rollback)
+  const modeCheck = b.p_mode !== null && b.p_mode !== undefined ? applyOfferMode(who, b.p_period, b.p_mode) : { ok: true };
+  if (modeCheck.code) return err(modeCheck.code, modeCheck.message);
+  const clear = new Set(Array.isArray(b.p_clear) ? b.p_clear : []);
+  let deleted = 0;
+  for (let i = offerStore.length - 1; i >= 0; i--) if (offerStore[i].person_id === who && clear.has(offerStore[i].day)) { offerStore.splice(i, 1); deleted++; }
+  const by = who === "s1" ? "s1" : "scheduler", src = who === "s1" ? "app" : "email-relay";
+  rows.forEach(r => {
+    const cur = offerStore.find(o => o.person_id === who && o.day === r.day);
+    if (cur) Object.assign(cur, { role_pref: r.role_pref, note: r.note || cur.note || null, entered_by: by, source: src, updated_at: new Date().toISOString() }); // coalesce(excluded.note, call_offers.note)
+    else offerStore.push({ id: crypto.randomUUID(), person_id: who, day: r.day, role_pref: r.role_pref, note: r.note || null, entered_by: by, source: src, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+  });
+  return json(200, { ok: true, person_id: who, upserted: rows.length, deleted, entered_by: by, source: src, mode: b.p_mode === undefined ? null : b.p_mode });
+};
+const offerModeRpc = (b, json) => {
+  const who = String(b.p_person || "s1");
+  const r = applyOfferMode(who, b.p_period, b.p_mode);
+  if (r.code) return json(400, { message: r.message, code: r.code, details: null, hint: null });
+  return json(200, { ok: true, period_id: offerPeriod.id, label: offerPeriod.label, person_id: who, mode: b.p_mode, rules_only_ids: offerPeriod.rules_only_ids, offer_modes: offerPeriod.offer_modes, by: "s1" });
+};
 const routeSupabase = async (route) => {
   const req = route.request();
   const url = new URL(req.url());
@@ -676,6 +773,15 @@ const routeSupabase = async (route) => {
       return json(200, gone);
     }
     return json(200, []);
+  }
+  // Prompt 14 part 3a: offers + periods (authenticated-only; served from the harness store) and the two RPCs.
+  if (method === "GET" && url.pathname.startsWith("/rest/v1/call_periods")) return json(200, offerPeriod ? [offerPeriod] : []);
+  if (method === "GET" && url.pathname.startsWith("/rest/v1/call_offers")) return json(200, offerStore.slice().sort((a, b) => a.day < b.day ? -1 : 1));
+  if (url.pathname === "/rest/v1/rpc/save_offers" || url.pathname === "/rest/v1/rpc/set_offer_mode") {
+    const body = req.postData() || "";
+    writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+    let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+    return url.pathname.endsWith("save_offers") ? offerRpc(b, json) : offerModeRpc(b, json);
   }
   if (method === "POST" || method === "PATCH" || method === "DELETE" || method === "PUT") {
     const body = req.postData() || "";
@@ -2282,6 +2388,271 @@ try {
     await page.screenshot({ path: path.join(OUT, "mine.png"), fullPage: true });
     ok("screenshot test/ui/out/mine.png");
   } catch (e) { fail("My schedule harness exception: " + errLine(e)); }
+
+  // ---- Prompt 14 part 3a: the offer painter (My schedule -> Paint my offers; nav action; both themes) ----
+  // 390 px, light: the current month greys every past row ('past', disabled, >= 52 px; screenshot with a reason);
+  // the first month ahead with six paintable rows: arm Primary (gradient, white text; screenshot), tap a day, tap
+  // again (clears), tap again; a second Primary day; Backup on a third; Range with Either over two more (the hint
+  // names the start and offers 'x cancel start'; screenshot) - every free row between the endpoints is painted,
+  // blocked / one-role rows are skipped; the Tue/Thu PRIMARY confirmation ("normally not one of your ... call
+  // days") is asked once per batch and counted; "1 other offered" on the harness's s2 row; the header counts equal
+  // the draft; the period box reads the seed's picture for s1 (rules_only, preferred); flip the toggle to "Only
+  // these days"; a FORCED save failure (OF002 from the harness) writes nothing else, names every pending entry
+  // verbatim and keeps the draft + the unsaved count; Save for real = exactly ONE rpc/save_offers (the diff's rows,
+  // no clears, p_period + p_mode exhaustive in the SAME call - never a second set_offer_mode request) + ONE audit
+  // offers.save (count, mode) and nothing else; the rows read back as saved, the period box flips to submitted /
+  // exhaustive and folds back to one line (the day list keeps >= 45 % of 844 px), the note clears after 3 s; tap-again
+  // on a saved day drafts 'will clear'; Close on a dirty draft confirms (dismissed = stays), Discard restores.
+  // Then the scheduler's relay: My schedule -> Fierce -> "Paint offers for Fierce" (header says so) -> "Go by my
+  // rules" = ONE mode call (rules_only, p_person s5) + ONE audit, no save_offers, the confirm text carries his rules
+  // in words. Dark: the sheet at 1180 and 390 (background navy, armed brush still a gradient with white text).
+  try {
+    let ofpDismissNext = false;
+    const dialogs = [];
+    const onOfpDialog = (d) => { dialogs.push(d.message()); if (ofpDismissNext) { ofpDismissNext = false; d.dismiss(); } else d.accept(); };
+    page.on("dialog", onOfpDialog);
+    const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const dowOf = (d) => new Date(d + "T12:00:00Z").getUTCDay();
+    const mdOfDay = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
+    const tap = async (day) => { await page.click(`[data-testid=ofp-day][data-day="${day}"]`); await page.waitForTimeout(120); };
+    const stateOf = async (day) => page.$eval(`[data-testid=ofp-day][data-day="${day}"]`, el => ({ state: el.getAttribute("data-state"), offer: el.getAttribute("data-offer") }));
+    const readRows = () => page.$$eval("[data-testid=ofp-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), state: e.getAttribute("data-state"), why: e.getAttribute("data-why"), disabled: e.disabled, h: e.getBoundingClientRect().height })));
+    try {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.click('button[data-tab="myschedule"]');
+      await page.waitForSelector("[data-testid=paint-offers]", { timeout: 8000 });
+      if (await page.$("[data-testid=mine-person]")) await page.selectOption("[data-testid=mine-person]", "s1");
+      await page.waitForTimeout(200);
+      const offersCard = await page.$eval("[data-testid=mine-offers]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+      if (!/My offers \(0 upcoming days\)/i.test(offersCard) || !offersCard.includes(offerPeriod.label) || !/going by my rules/.test(offersCard)) fail("Offer painter: the My offers card does not read '0 upcoming days' + the seed period + 'going by my rules' for s1: " + offersCard.slice(0, 200));
+      else ok("Offer painter: My schedule shows 'My offers (0 upcoming days)' and '" + offerPeriod.label + ": going by my rules' for s1 (the seed's rulesOnly)");
+      await page.click("[data-testid=paint-offers]");
+      await page.waitForSelector("[data-testid=ofp-sheet]", { timeout: 5000 });
+      await page.waitForTimeout(300);
+      { const tst = await page.$("[data-testid=toast]"); if (tst) await tst.click().catch(() => {}); } // an earlier step's toast sits over the sheet header (the review shots)
+      const t = new Date(todayIso + "T12:00:00Z");
+      const month0 = await page.$eval("[data-testid=ofp-month]", el => el.textContent.trim());
+      if (month0 !== MONTH_NAMES[t.getUTCMonth()] + " " + t.getUTCFullYear()) fail(`Offer painter: opens on '${month0}', expected the current Central month '${MONTH_NAMES[t.getUTCMonth()]} ${t.getUTCFullYear()}'`); else ok(`Offer painter: opens on the current month (${month0})`);
+      const prevDisabled = await page.$eval("[data-testid=ofp-prev]", el => el.disabled);
+      if (!prevDisabled) fail("Offer painter: < must be disabled on the current month (navigation is from the current month forward)"); else ok("Offer painter: < is disabled on the current month (forward-only navigation)");
+      const rows0 = await readRows();
+      const pastRows = rows0.filter(r => r.day < todayIso);
+      const wrongPast = pastRows.filter(r => r.state !== "blocked" || r.why !== "past" || !r.disabled);
+      if (!pastRows.length) console.log("     (offer painter: today is the 1st - no past row to grey this month)");
+      else if (wrongPast.length) fail("Offer painter: past rows not greyed as 'past' + disabled: " + JSON.stringify(wrongPast.slice(0, 3)));
+      else ok(`Offer painter: all ${pastRows.length} past row(s) of ${month0} are greyed 'past' and disabled`);
+      const shortRows = rows0.filter(r => r.h < 52);
+      if (shortRows.length) fail(`Offer painter: ${shortRows.length} row(s) under 52 px, e.g. ${JSON.stringify(shortRows[0])}`); else ok(`Offer painter: every day row is >= 52 px tall (${rows0.length} rows)`);
+      // the painting surface owns the phone: with the period box collapsed to one line the day list keeps >= 45 % of 844 px
+      const listGeom = await page.evaluate(() => { const l = document.querySelector("[data-testid=ofp-list]"); const f = document.querySelector("[data-testid=ofp-footer]"); const p = document.querySelector("[data-testid=ofp-period]"); return { list: l ? l.clientHeight : 0, footer: f ? f.getBoundingClientRect().height : 0, vh: window.innerHeight, expanded: p ? p.getAttribute("data-expanded") : null, line: (document.querySelector("[data-testid=ofp-period-line]") || {}).innerText || "" }; });
+      if (listGeom.list < 0.45 * listGeom.vh || listGeom.expanded !== "0") fail(`Offer painter 390x844: the day list is only ${listGeom.list}px of ${listGeom.vh} (footer ${Math.round(listGeom.footer)}px, period box expanded=${listGeom.expanded}) - it must keep >= 45% with the period box collapsed`);
+      else ok(`Offer painter 390x844: the day list keeps ${listGeom.list}px of ${listGeom.vh} (${Math.round(100 * listGeom.list / listGeom.vh)}%; footer ${Math.round(listGeom.footer)}px, period box one line: '${listGeom.line.replace(/\s+/g, " ").slice(0, 70)}')`);
+      const sheetW = await page.evaluate(() => { const s = document.querySelector("[data-testid=ofp-sheet]"); return { sw: s.scrollWidth, cw: s.clientWidth, bg: getComputedStyle(s).backgroundColor }; });
+      if (sheetW.sw > sheetW.cw + 1) fail(`Offer painter 390px: the sheet scrolls horizontally (${sheetW.sw} > ${sheetW.cw})`); else ok(`Offer painter 390px: no horizontal scroll (${sheetW.sw} in ${sheetW.cw}), background ${sheetW.bg}`);
+      const greyRow = rows0.find(r => r.state === "blocked" && r.why !== "past") || pastRows[0] || null;
+      if (greyRow) await page.locator(`[data-testid=ofp-day][data-day="${greyRow.day}"]`).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(OUT, "offers-greyed-390.png"), fullPage: false });
+      ok("screenshot test/ui/out/offers-greyed-390.png" + (greyRow ? ` (greyed row ${greyRow.day}: '${greyRow.why}')` : ""));
+      // the first month ahead with six paintable rows
+      let freeDays = [], allRows = [], monthLabel = month0;
+      for (let k = 0; k < 4; k++) {
+        await page.click("[data-testid=ofp-next]"); await page.waitForTimeout(200);
+        monthLabel = await page.$eval("[data-testid=ofp-month]", el => el.textContent.trim());
+        allRows = await readRows();
+        freeDays = allRows.filter(r => r.state === "free" && !r.why);
+        if (freeDays.length >= 6) break;
+      }
+      if (freeDays.length < 6) throw new Error(`no month within four ahead has six paintable rows for s1 (last ${monthLabel}: ${freeDays.length})`);
+      ok(`Offer painter: ${monthLabel} has ${freeDays.length} paintable rows for s1 (${allRows.filter(r => r.state === "blocked").length} greyed, ${allRows.filter(r => r.state === "free" && r.why).length} one-role)`);
+      const oneRole = allRows.find(r => r.state === "free" && r.why);
+      if (oneRole) ok(`Offer painter: a one-role row says why (${oneRole.day}: '${oneRole.why}')`);
+      if (allRows.some(r => r.day === OTHER_OFFER_DAY)) {
+        const others = await page.$eval(`[data-testid=ofp-day][data-day="${OTHER_OFFER_DAY}"] [data-testid=ofp-others]`, el => el.textContent.trim()).catch(() => null);
+        if (others !== "1 other offered") fail(`Offer painter: ${OTHER_OFFER_DAY} should read '1 other offered' (the harness's s2 row), got ${JSON.stringify(others)}`); else ok(`Offer painter: ${OTHER_OFFER_DAY} reads '1 other offered' (s2's row)`);
+      }
+      // arm Primary: gradient + white text (the dark sheet exempts gradient buttons)
+      await page.click("[data-testid=ofp-brush-primary]");
+      const armedProbe = await page.$eval("[data-testid=ofp-brush-primary]", el => ({ armed: el.getAttribute("data-armed"), bg: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).color, h: el.getBoundingClientRect().height }));
+      const idleProbe = await page.$eval("[data-testid=ofp-brush-either]", el => ({ armed: el.getAttribute("data-armed"), bg: getComputedStyle(el).backgroundImage }));
+      if (armedProbe.armed !== "1" || !/linear-gradient/.test(armedProbe.bg) || armedProbe.color !== "rgb(255, 255, 255)" || armedProbe.h < 44 || idleProbe.armed !== "0" || /linear-gradient/.test(idleProbe.bg)) fail("Offer painter: armed brush is not the gradient with white text (>= 44 px) while the idle one stays flat: " + JSON.stringify({ armedProbe, idleProbe }));
+      else ok(`Offer painter: Primary armed = gradient, white text, ${armedProbe.h}px; Either idle = flat`);
+      await page.screenshot({ path: path.join(OUT, "offers-armed-390.png"), fullPage: false });
+      ok("screenshot test/ui/out/offers-armed-390.png");
+      const [d1, d2, d3, d4, d5] = freeDays.map(r => r.day);
+      // tap, tap again (clears), tap again (paints)
+      await tap(d1); const s1a = await stateOf(d1); await tap(d1); const s1b = await stateOf(d1); await tap(d1); const s1c = await stateOf(d1);
+      if (!(s1a.state === "draft" && s1a.offer === "primary" && s1b.state === "free" && s1b.offer === "" && s1c.state === "draft" && s1c.offer === "primary")) fail(`Offer painter: tap / tap again / tap on ${d1} read ${JSON.stringify([s1a, s1b, s1c])}, expected draft primary -> free -> draft primary`);
+      else ok(`Offer painter: ${d1} tap = draft primary, tap again with the same brush = cleared, tap = draft again`);
+      await tap(d2);
+      await page.click("[data-testid=ofp-brush-backup]"); await tap(d3);
+      // range with Either over d4..d5
+      await page.click("[data-testid=ofp-brush-either]"); await page.click("[data-testid=ofp-range]");
+      if ((await page.$eval("[data-testid=ofp-range]", el => el.getAttribute("data-on"))) !== "1") fail("Offer painter: the Range toggle did not arm");
+      await tap(d4);
+      const hintMid = await page.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " "));
+      if (!new RegExp("Start .*" + mdOfDay(d4).replace("/", "\\/") + " - tap the end day").test(hintMid) || !(await page.$("[data-testid=ofp-cancel-start]"))) fail("Offer painter: the range hint does not name the start and offer 'x cancel start': " + hintMid);
+      else ok(`Offer painter: range hint '${hintMid.slice(0, 70)}' with 'x cancel start'`);
+      await tap(d5);
+      const expectRange = allRows.filter(r => r.day >= d4 && r.day <= d5 && r.state === "free" && !r.why).map(r => r.day);
+      const expected = { [d1]: "primary", [d2]: "primary", [d3]: "backup" }; expectRange.forEach(d => { expected[d] = "either"; });
+      const drafts = await page.$$eval("[data-testid=ofp-day][data-state=draft]", els => els.map(e => [e.getAttribute("data-day"), e.getAttribute("data-offer")]));
+      const draftMap = Object.fromEntries(drafts);
+      if (JSON.stringify(draftMap) !== JSON.stringify(Object.fromEntries(Object.entries(expected).sort()))) fail("Offer painter: the draft after two singles, one backup and the Either range is " + JSON.stringify(draftMap) + ", expected " + JSON.stringify(expected));
+      else ok(`Offer painter: draft = ${d1} P, ${d2} P, ${d3} B, range ${d4}..${d5} = ${expectRange.length} Either day(s) (${Object.keys(expected).length} days, 3 brushes)`);
+      await page.click("[data-testid=ofp-range]");
+      // the weekday-pattern confirmation (s1: never PRIMARY on Tue/Thu; backup is open) - once per batch
+      const isTuThu = (d) => dowOf(d) === 2 || dowOf(d) === 4;
+      const expectedAsks = (isTuThu(d1) ? 2 : 0) + (isTuThu(d2) ? 1 : 0) + (expectRange.some(isTuThu) ? 1 : 0);
+      const asks = dialogs.filter(m => /normally not one of your (primary|primary or backup) call days/.test(m));
+      if (asks.length !== expectedAsks) fail(`Offer painter: ${asks.length} weekday-pattern confirmation(s) asked, expected ${expectedAsks} (Tue/Thu among ${d1} x2, ${d2}, range ${expectRange.join(",")}): ` + JSON.stringify(asks.slice(0, 3)));
+      else ok(`Offer painter: the Tue/Thu primary confirmation was asked ${asks.length} time(s) (once per batch), e.g. ${asks[0] ? JSON.stringify(asks[0].split("\n")[0]) : "none needed"}`);
+      if (asks.length && !/never a call day by your rules/.test(asks[0])) fail("Offer painter: the confirmation does not name the reason ('never a call day by your rules'): " + asks[0]);
+      await page.screenshot({ path: path.join(OUT, "offers-range-390.png"), fullPage: false });
+      ok("screenshot test/ui/out/offers-range-390.png");
+      const nDays = Object.keys(expected).length;
+      const counts = await page.$eval("[data-testid=ofp-counts]", el => ({ p: +el.getAttribute("data-month-primary"), b: +el.getAttribute("data-month-backup"), e: +el.getAttribute("data-month-either"), per: +el.getAttribute("data-period-count") }));
+      const inPer = Object.keys(expected).filter(d => d >= offerPeriod.start_day && d <= offerPeriod.end_day).length;
+      if (counts.p !== 2 || counts.b !== 1 || counts.e !== expectRange.length || counts.per !== inPer) fail("Offer painter: header counts " + JSON.stringify(counts) + ` differ from the draft (2 P, 1 B, ${expectRange.length} either; ${inPer} in the period)`);
+      else ok(`Offer painter: header counts 2 primary / 1 backup / ${counts.e} either for ${monthLabel}, ${counts.per} in ${offerPeriod.label}`);
+      // the period box: the seed's picture for s1 (open period, collapsed to one line), "Change" expands it, then the toggle
+      const per0 = await page.$eval("[data-testid=ofp-period]", el => ({ id: el.getAttribute("data-period-id"), status: el.getAttribute("data-status"), mode: el.getAttribute("data-mode"), open: el.getAttribute("data-open"), expanded: el.getAttribute("data-expanded") }));
+      const modeBtnBefore = await page.$("[data-testid=ofp-mode-exhaustive]");
+      if (per0.id !== offerPeriod.id || per0.status !== "rules_only" || per0.mode !== "preferred" || per0.open !== "1" || per0.expanded !== "0" || modeBtnBefore) fail("Offer painter: the period box should read the seed's picture for s1 (rules_only, preferred), open, collapsed with no mode buttons rendered: " + JSON.stringify({ ...per0, modeButtons: !!modeBtnBefore })); else ok(`Offer painter: period box = ${offerPeriod.label}, s1 rules_only, mode preferred (default), open, one line (mode buttons hidden until Change)`);
+      await page.click("[data-testid=ofp-period-toggle]");
+      await page.waitForSelector("[data-testid=ofp-mode-exhaustive]", { timeout: 3000 });
+      await page.click("[data-testid=ofp-mode-exhaustive]");
+      await page.waitForTimeout(100);
+      const modeOn = await page.$eval("[data-testid=ofp-mode-exhaustive]", el => el.getAttribute("data-on"));
+      const statusText = await page.$eval("[data-testid=ofp-status]", el => el.innerText.trim());
+      if (modeOn !== "1" || statusText !== `${nDays + 1} unsaved`) fail(`Offer painter: after the toggle the status reads '${statusText}' (mode on=${modeOn}), expected '${nDays + 1} unsaved'`); else ok(`Offer painter: Change -> toggle 'Only these days' armed -> '${statusText}' (${nDays} days + the mode)`);
+      // forced failure: the batch is refused, nothing else is written, every pending entry is named, the draft stays
+      failSaveOffers = true;
+      const beforeFail = writes.length;
+      await page.click("[data-testid=ofp-save]");
+      await page.waitForSelector("[data-testid=ofp-error]", { timeout: 5000 });
+      await page.waitForTimeout(500);
+      const failWrites = writesSince(beforeFail);
+      const errText = await page.$eval("[data-testid=ofp-error]", el => el.innerText.replace(/\s+/g, " "));
+      const draftsAfterFail = await page.$$eval("[data-testid=ofp-day][data-state=draft]", els => els.length);
+      const statusAfterFail = await page.$eval("[data-testid=ofp-status]", el => el.innerText.trim());
+      const missingNames = Object.keys(expected).filter(d => !errText.includes(mdOfDay(d)));
+      if (failWrites.length !== 1 || !/rpc\/save_offers$/.test(failWrites[0].path)) fail("Offer painter: the forced failure should record exactly one save_offers attempt and nothing else: " + JSON.stringify(failWrites.map(w => w.method + " " + w.path)));
+      else if (!/Nothing was saved - \d+ entries are still unsaved/.test(errText) || missingNames.length || !/OFFER_ON_VACATION/.test(errText)) fail("Offer painter: the error box must say nothing was saved, name every pending entry and quote the token: " + errText.slice(0, 300) + (missingNames.length ? " (missing " + missingNames.join(", ") + ")" : ""));
+      else if (draftsAfterFail !== nDays || statusAfterFail !== `${nDays + 1} unsaved`) fail(`Offer painter: the draft did not survive the failed save (${draftsAfterFail} drafts, '${statusAfterFail}')`);
+      else ok(`Offer painter: forced OF002 failure -> one save_offers attempt, NO mode call, NO audit, 'Nothing was saved' names all ${nDays} days + the mode verbatim, draft kept ('${statusAfterFail}')`);
+      // the real save: ONE request (rows + period + mode in the same save_offers call) + ONE audit row - no set_offer_mode
+      const before = writes.length;
+      await page.click("[data-testid=ofp-save]");
+      await waitFor(() => writesSince(before, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
+      await page.waitForTimeout(600);
+      const saves = writesSince(before, "/rest/v1/rpc/save_offers");
+      const modes = writesSince(before, "/rest/v1/rpc/set_offer_mode");
+      const audits = writesSince(before, "/rest/v1/audit_log").map(bodyOf).filter(b => b && b.action === "offers.save");
+      const otherWrites = writesSince(before).filter(w => !/rpc\/(save_offers|set_offer_mode)$|\/rest\/v1\/audit_log/.test(w.path));
+      const saveBody = saves[0] ? bodyOf(saves[0]) : null;
+      const wantRows = Object.keys(expected).sort().map(d => ({ day: d, role_pref: expected[d] }));
+      if (saves.length !== 1 || !saveBody || saveBody.p_person !== "s1" || JSON.stringify(saveBody.p_rows) !== JSON.stringify(wantRows) || JSON.stringify(saveBody.p_clear) !== "[]" || saveBody.p_period !== offerPeriod.id || saveBody.p_mode !== "exhaustive") fail("Offer painter: expected exactly ONE rpc/save_offers { p_person s1, p_rows = the draft in day order, p_clear [], p_period, p_mode exhaustive }: " + JSON.stringify(saves.map(w => w.body)).slice(0, 600));
+      else if (modes.length !== 0) fail("Offer painter: a Save that changes days AND the mode must be ONE request - no separate rpc/set_offer_mode (the 9/23 review's finding 3): " + JSON.stringify(modes.map(w => w.body)));
+      else if (audits.length !== 1 || audits[0].detail.count !== nDays || audits[0].detail.mode !== "exhaustive" || audits[0].detail.inserted !== nDays || audits[0].detail.period_id !== offerPeriod.id) fail("Offer painter: expected exactly ONE audit offers.save with count / mode / period: " + JSON.stringify(audits));
+      else if (otherWrites.length) fail("Offer painter: unexpected writes beside the batch and the audit: " + JSON.stringify(otherWrites.map(w => w.method + " " + w.path)));
+      else ok(`Offer painter: Save = ONE POST rpc/save_offers (${nDays} rows, no clears, p_mode exhaustive on ${offerPeriod.label}) + ONE audit offers.save ("${audits[0].detail.summary}") - no set_offer_mode, nothing else`);
+      if (!writesSince(before).every(w => noAddress(w.body))) fail("Offer painter: a write body carries an email address");
+      await page.waitForFunction((n) => document.querySelectorAll("[data-testid=ofp-day][data-state=saved]").length === n, nDays, { timeout: 5000 }).catch(() => {});
+      const savedRows = await page.$$eval("[data-testid=ofp-day][data-state=saved]", els => els.map(e => [e.getAttribute("data-day"), e.getAttribute("data-offer")]));
+      const savedNote = await page.$eval("[data-testid=ofp-saved]", el => el.textContent.trim()).catch(() => null);
+      const per1 = await page.$eval("[data-testid=ofp-period]", el => ({ status: el.getAttribute("data-status"), mode: el.getAttribute("data-mode"), expanded: el.getAttribute("data-expanded") }));
+      if (JSON.stringify(Object.fromEntries(savedRows)) !== JSON.stringify(Object.fromEntries(Object.entries(expected).sort()))) fail("Offer painter: after the save the rows should read back as saved from the store: " + JSON.stringify(savedRows));
+      else if (!savedNote || !new RegExp(`^Saved ${nDays} changes - mode: only these days$`).test(savedNote)) fail(`Offer painter: saved note reads ${JSON.stringify(savedNote)}, expected 'Saved ${nDays} changes - mode: only these days'`);
+      // the mode took s1 off the rules-only list; he is 'submitted' only when a painted day lies inside the period; the box folds back to one line
+      else if (per1.status !== (inPer ? "submitted" : "not_started") || per1.mode !== "exhaustive" || per1.expanded !== "0") fail(`Offer painter: after the save the period box should read ${inPer ? "submitted" : "not_started"} (${inPer} painted day(s) inside the period) / exhaustive and fold back to one line: ` + JSON.stringify(per1));
+      else ok(`Offer painter: ${savedRows.length} rows read back as saved, note '${savedNote}', period box ${per1.status} (off the rules-only list) / exhaustive, folded back to one line`);
+      await page.screenshot({ path: path.join(OUT, "offers-saved-390.png"), fullPage: false });
+      ok("screenshot test/ui/out/offers-saved-390.png");
+      await page.waitForTimeout(3300);
+      if (await page.$("[data-testid=ofp-saved]")) fail("Offer painter: the saved note did not clear after 3 s"); else ok("Offer painter: the saved note cleared after 3 s");
+      // tap-again on a saved day drafts a clear; Close on a dirty draft confirms (dismissed = the sheet stays); Discard restores
+      await page.click("[data-testid=ofp-brush-primary]"); await tap(d1);
+      const clearState = await stateOf(d1);
+      ofpDismissNext = true; const dlgN = dialogs.length;
+      await page.click("[data-testid=ofp-close]"); await page.waitForTimeout(200);
+      const stillOpen = !!(await page.$("[data-testid=ofp-sheet]"));
+      const closeAsk = dialogs[dlgN] || "";
+      await page.click("[data-testid=ofp-discard]"); await page.waitForTimeout(200);
+      const afterDiscard = await stateOf(d1);
+      if (clearState.state !== "draft" || clearState.offer !== "") fail(`Offer painter: tapping the saved ${d1} with Primary should draft a clear, got ${JSON.stringify(clearState)}`);
+      else if (!stillOpen || !/Discard 1 unsaved change and close\?/.test(closeAsk)) fail(`Offer painter: Close on a dirty draft must confirm and stay when dismissed (open=${stillOpen}, dialog '${closeAsk}')`);
+      else if (afterDiscard.state !== "saved" || afterDiscard.offer !== "primary") fail("Offer painter: Discard did not restore the saved row: " + JSON.stringify(afterDiscard));
+      else ok(`Offer painter: tap-again on saved ${d1} = 'will clear' draft; Close asked '${closeAsk}' and stayed when dismissed; Discard (confirmed) restored the saved row`);
+      await page.click("[data-testid=ofp-close]");
+      await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
+      // the scheduler relays for Fierce: "Go by my rules" = one mode call + one audit
+      await page.selectOption("[data-testid=mine-person]", "s5");
+      await page.waitForTimeout(200);
+      const btnLabel = await page.$eval("[data-testid=paint-offers]", el => el.textContent.trim());
+      await page.click("[data-testid=paint-offers]");
+      await page.waitForSelector("[data-testid=ofp-sheet][data-person=s5]", { timeout: 5000 });
+      const hdr = await page.$eval("[data-testid=ofp-sheet]", el => el.innerText.replace(/\s+/g, " ").slice(0, 160));
+      const perF = await page.$eval("[data-testid=ofp-period]", el => el.getAttribute("data-status"));
+      if (btnLabel !== "Paint offers for Fierce" || !/Paint offers for Fierce\s*as the scheduler \(relayed\)/.test(hdr) || perF !== "not_started") fail(`Offer painter (scheduler for s5): button '${btnLabel}', header '${hdr.slice(0, 80)}', status ${perF} - expected 'Paint offers for Fierce' / 'as the scheduler (relayed)' / not_started`);
+      else ok(`Offer painter (scheduler for s5): '${btnLabel}' opens the sheet 'as the scheduler (relayed)', Fierce not_started`);
+      const b2 = writes.length;
+      await page.click("[data-testid=ofp-period-toggle]"); // Change expands the box; "Go by my rules" lives inside it
+      await page.waitForSelector("[data-testid=ofp-rules-only]", { timeout: 3000 });
+      await page.click("[data-testid=ofp-rules-only]");
+      await waitFor(() => writesSince(b2, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
+      await page.waitForTimeout(500);
+      const modes2 = writesSince(b2, "/rest/v1/rpc/set_offer_mode").map(bodyOf);
+      const saves2 = writesSince(b2, "/rest/v1/rpc/save_offers");
+      const audits2 = writesSince(b2, "/rest/v1/audit_log").map(bodyOf).filter(b => b && b.action === "offers.save");
+      const rulesAsk = dialogs.find(m => /^Go by your rules for /.test(m)) || "";
+      const perF2 = await page.$eval("[data-testid=ofp-period]", el => el.getAttribute("data-status"));
+      const noteF = await page.$eval("[data-testid=ofp-saved]", el => el.textContent.trim()).catch(() => null);
+      if (modes2.length !== 1 || modes2[0].p_mode !== "rules_only" || modes2[0].p_person !== "s5" || modes2[0].p_period !== offerPeriod.id || saves2.length) fail("Offer painter (scheduler for s5): 'Go by my rules' should be exactly ONE set_offer_mode { rules_only, s5 } and no save_offers: " + JSON.stringify({ modes2, saves: saves2.length }));
+      else if (audits2.length !== 1 || audits2[0].detail.mode !== "rules_only" || audits2[0].detail.count !== 0 || audits2[0].detail.person_id !== "s5") fail("Offer painter (scheduler for s5): expected one audit offers.save { mode rules_only, count 0, s5 }: " + JSON.stringify(audits2));
+      else if (!/Outside your East weeks: primary on Wed/.test(rulesAsk) || perF2 !== "rules_only" || !/going by your rules/.test(noteF || "")) fail(`Offer painter (scheduler for s5): the confirm must speak his rules in words, the box must flip to rules_only, the note must say so (status ${perF2}, note ${JSON.stringify(noteF)}, dialog ${JSON.stringify(rulesAsk.slice(0, 160))})`);
+      else ok(`Offer painter (scheduler for s5): 'Go by my rules' = ONE set_offer_mode rules_only + ONE audit; the confirm carried his rules in words; box now rules_only, note '${noteF}'`);
+      await page.click("[data-testid=ofp-close]");
+      await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
+      await page.selectOption("[data-testid=mine-person]", "s1");
+      // desktop light (nav action), then dark at 1180 and 390
+      await page.setViewportSize({ width: 1180, height: 900 });
+      await page.click("[data-testid=nav-paint-offers]");
+      await page.waitForSelector("[data-testid=ofp-sheet][data-person=s1]", { timeout: 5000 });
+      await page.waitForTimeout(200);
+      await page.screenshot({ path: path.join(OUT, "offers-desktop.png"), fullPage: false });
+      ok("screenshot test/ui/out/offers-desktop.png (opened from the nav action)");
+      await page.click("[data-testid=ofp-close]");
+      await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
+      await page.click('button[data-tab="settings"]');
+      await page.click("button:has-text('Dark')");
+      await page.click('button[data-tab="myschedule"]');
+      await page.waitForSelector("[data-testid=paint-offers]", { timeout: 5000 });
+      await page.click("[data-testid=paint-offers]");
+      await page.waitForSelector("[data-testid=ofp-sheet][data-person=s1]", { timeout: 5000 });
+      await page.click("[data-testid=ofp-brush-primary]");
+      await page.waitForTimeout(200);
+      const darkProbe = await page.evaluate(() => { const s = document.querySelector("[data-testid=ofp-sheet]"); const b = document.querySelector("[data-testid=ofp-brush-primary]"); const row = document.querySelector("[data-testid=ofp-day][data-state=saved]") || document.querySelector("[data-testid=ofp-day]"); return { bg: getComputedStyle(s).backgroundColor, brushBg: getComputedStyle(b).backgroundImage, brushColor: getComputedStyle(b).color, rowBg: row ? getComputedStyle(row).backgroundColor : null }; });
+      if (darkProbe.bg !== "rgb(11, 26, 51)" || !/linear-gradient/.test(darkProbe.brushBg) || darkProbe.brushColor !== "rgb(255, 255, 255)" || darkProbe.rowBg === "rgb(255, 255, 255)") fail("Offer painter (dark): sheet background / armed brush / row colours off: " + JSON.stringify(darkProbe));
+      else ok(`Offer painter (dark): sheet ${darkProbe.bg}, armed brush gradient with white text, row ${darkProbe.rowBg}`);
+      await page.screenshot({ path: path.join(OUT, "offers-desktop-dark.png"), fullPage: false });
+      ok("screenshot test/ui/out/offers-desktop-dark.png");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(200);
+      const dark390 = await page.evaluate(() => { const s = document.querySelector("[data-testid=ofp-sheet]"); return { sw: s.scrollWidth, cw: s.clientWidth }; });
+      if (dark390.sw > dark390.cw + 1) fail(`Offer painter (dark 390px): horizontal scroll (${dark390.sw} > ${dark390.cw})`); else ok(`Offer painter (dark 390px): no horizontal scroll (${dark390.sw} in ${dark390.cw})`);
+      await page.screenshot({ path: path.join(OUT, "offers-390-dark.png"), fullPage: false });
+      ok("screenshot test/ui/out/offers-390-dark.png");
+      await page.click("[data-testid=ofp-close]");
+      await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
+      await page.setViewportSize({ width: 1180, height: 900 });
+      await page.click('button[data-tab="settings"]');
+      await page.click("button:has-text('Light')");
+    } finally {
+      page.off("dialog", onOfpDialog);
+      failSaveOffers = false;
+      await page.setViewportSize({ width: 1180, height: 900 });
+    }
+  } catch (e) { fail("Offer painter: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-offers.png"), fullPage: false }); } catch (e2) {} }
 
   // ---- Time off: refused over a published day (client-side, no write); clean range writes once ----
   try {
@@ -4314,7 +4685,7 @@ if (pageErrors.length) fail("pageerrors: " + pageErrors.join(" | ")); else ok("n
 const unexpected = consoleErrors.filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 const expected = consoleErrors.filter(t => EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 if (expected.length) console.log(`     (${expected.length} expected console error(s) ignored: ${[...new Set(expected)].slice(0, 3).join(" | ")})`);
-if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from the snapshot insert the harness forced to 500 - expected)`);
+if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400 - expected)`);
 if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ")); else ok("no unexpected console errors");
 
 console.log(`\ncdn cache: ${cdnHits} hit(s), ${cdnMisses} miss(es) (${path.relative(ROOT, CDN_CACHE)})`);

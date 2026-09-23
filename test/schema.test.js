@@ -759,4 +759,153 @@ ok(/^\| `call_offers` \| authenticated \|/m.test(secB), "table (b) lacks a call_
 ok(/^\| `call_periods` \| authenticated \|/m.test(secB), "table (b) lacks a call_periods row (read: authenticated)");
 ok(!/anon/i.test(secA.split("\n").filter((l) => /`call_(offers|periods)`/.test(l)).join("\n")), "the (a) rows for call_offers / call_periods must not say anon (they are authenticated-only)");
 
+// ---- Prompt 14 P3a (9/23, U3a) - the offer painter's two RPCs ----
+// sql/migrations/2026-09-23-offer-mode-rpc.sql (NOT yet applied live as of 9/23; the orchestrator runs it) defines
+// set_offer_mode() (security definer: ONE person's key on ONE period - a surgeon cannot write call_periods) and
+// save_offers() (security invoker: the painter's one Save as ONE transaction, RLS + OF001-OF003 per row). schema.sql
+// mirrors both byte for byte; sql/probes/offer-rpcs-probe.sql rolls itself back (cases A..K-anon).
+const RPC_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-offer-mode-rpc.sql");
+const RPC_PROBE = path.join(ROOT, "sql", "probes", "offer-rpcs-probe.sql");
+const MODE_CODES = [["OM001", "MODE_NOT_LINKED"], ["OM002", "MODE_NOT_YOURS"], ["OM003", "MODE_BAD_MODE"], ["OM004", "MODE_NO_PERIOD"], ["OM005", "MODE_FROZEN"], ["OM006", "MODE_HAS_OFFERS"]];
+const SAVE_CODES = [["OS001", "OFFERS_NOT_LINKED"], ["OS002", "OFFERS_NOT_YOURS"], ["OS003", "OFFERS_BAD_ROW"]];
+// one raise carries the token (message prefix; '' = an escaped quote inside it) and the errcode
+const raiseRe = (token, code) => new RegExp("raise exception '" + token + ": (?:[^']|'')*'[^;]*using errcode = '" + code + "';");
+function checkOfferRpcs(n, s) {
+  const mode = functionText(s, "set_offer_mode");
+  ok(mode, n + ": no `create or replace function public.set_offer_mode(p_period uuid, p_mode text, p_person text default null)` ... `end $$;` block");
+  if (mode) {
+    ok(/^create or replace function public\.set_offer_mode\(p_period uuid, p_mode text, p_person text default null\) returns jsonb\nlanguage plpgsql security definer set search_path = public as \$\$/.test(mode),
+      n + ": set_offer_mode must be `returns jsonb`, `language plpgsql security definer set search_path = public` (a surgeon cannot write call_periods)");
+    const firstUpdate = mode.indexOf("update public.call_periods");
+    ok(firstUpdate > 0, n + ": set_offer_mode has no `update public.call_periods`");
+    let last = -1;
+    MODE_CODES.forEach(([code, token]) => {
+      const m = mode.match(raiseRe(token, code));
+      ok(m, n + ": set_offer_mode lacks `raise exception '" + token + ": ...' using errcode = '" + code + "'`");
+      const at = m ? mode.indexOf(m[0]) : -1;
+      ok(at > last, n + ": " + token + " (" + code + ") is out of order (expected " + MODE_CODES.map((c) => c[0]).join(" -> ") + ")");
+      ok(at < firstUpdate, n + ": " + token + " must be checked BEFORE the first call_periods update");
+      last = at;
+    });
+    eq((mode.match(/using errcode = 'OM0/g) || []).length, 7, n + ": seven OM0xx raises expected (OM001 twice: anon / unlinked, and no person named);");
+    ok(/auth\.uid\(\) is null or \(me is null and not sched\)/.test(mode), n + ": OM001 must fire for anon (auth.uid() null) and for an unlinked non-scheduler");
+    ok(/who := coalesce\(nullif\(btrim\(p_person\), ''\), me\);/.test(mode), n + ": the person defaults to the caller's own roster id (p_person is the scheduler's relay path)");
+    ok(/if who <> coalesce\(me, ''\) and not sched then/.test(mode), n + ": OM002 - a non-scheduler may only speak for silvis_person_id()");
+    ok(/today_c\s+date := \(now\(\) at time zone 'America\/Chicago'\)::date;/.test(mode), n + ": 'today' must be the Central date");
+    ok(/select \* into p from public\.call_periods where id = p_period for update;/.test(mode), n + ": the period row must be locked (`for update`)");
+    ok(/if not sched and \(p\.status <> 'upcoming' or p\.offers_close_at <= today_c\) then/.test(mode), n + ": OM005 - the freeze exempts the scheduler, like OF003");
+    ok(/o\.day between p\.start_day and p\.end_day;/.test(mode) && /if n_offers > 0 then/.test(mode), n + ": OM006 must count the person's offers INSIDE the period before rules_only");
+    ok(/offer_modes\s+= offer_modes - who,/.test(mode), n + ": rules_only must drop the person's offer_modes key");
+    ok(/from \(select jsonb_array_elements_text\(rules_only_ids\) as x union all select who\) s\)/.test(mode) && /jsonb_agg\(distinct x\)/.test(mode), n + ": rules_only must add the person to rules_only_ids exactly once (distinct)");
+    ok(/offer_modes\s+= offer_modes \|\| jsonb_build_object\(who, p_mode\),/.test(mode), n + ": exhaustive / preferred must write offer_modes[person] = mode and nothing else in the map");
+    ok(/from jsonb_array_elements_text\(rules_only_ids\) as x where x <> who\),/.test(mode), n + ": exhaustive / preferred must take the person OFF rules_only_ids");
+    eq((mode.match(/updated_at\s+= now\(\)/g) || []).length, 2, n + ": both branches must stamp updated_at;");
+    ok(!/\b(label|start_day|end_day|offers_close_at|publish_by|status)\s+= /.test(mode), n + ": set_offer_mode must never write a period column other than rules_only_ids / offer_modes / updated_at");
+    ok(!/(insert into|update|delete from) public\.call_offers/.test(mode), n + ": set_offer_mode must not write call_offers (it only counts them)");
+    ok(/return jsonb_build_object\('ok', true, 'period_id', p\.id, 'label', p\.label, 'person_id', who, 'mode', p_mode,\s+'rules_only_ids', p\.rules_only_ids, 'offer_modes', p\.offer_modes, 'by', coalesce\(me, 'scheduler'\)\);/.test(mode),
+      n + ": return shape must be {ok, period_id, label, person_id, mode, rules_only_ids, offer_modes, by}");
+    ok(!/audit_log|notifications/.test(mode), n + ": set_offer_mode writes no audit / feed row (the client's offers.save is the one audit row)");
+  }
+  ok(/revoke all on function public\.set_offer_mode\(uuid, text, text\) from public;\nrevoke all on function public\.set_offer_mode\(uuid, text, text\) from anon;\ngrant execute on function public\.set_offer_mode\(uuid, text, text\) to authenticated;/.test(s),
+    n + ": set_offer_mode grants: revoke from public and anon, grant execute to authenticated");
+
+  const save = functionText(s, "save_offers");
+  ok(save, n + ": no `create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[])` ... `end $$;` block");
+  if (save) {
+    ok(/^create or replace function public\.save_offers\(p_person text, p_rows jsonb, p_clear date\[\], p_period uuid default null, p_mode text default null\) returns jsonb\nlanguage plpgsql security invoker set search_path = public as \$\$/.test(save),
+      n + ": save_offers must be `returns jsonb`, `language plpgsql security invoker set search_path = public` with the optional p_period / p_mode (the combined days + mode Save; RLS + OF001-OF003 apply per row)");
+    ok(!/security definer/.test(save), n + ": save_offers must NOT be security definer (nothing bypassed)");
+    const firstWrite = save.indexOf("delete from public.call_offers");
+    const insertAt = save.indexOf("insert into public.call_offers");
+    ok(firstWrite > 0 && insertAt > firstWrite, n + ": save_offers must delete (p_clear) then upsert (p_rows) inside the one transaction");
+    let last = -1;
+    SAVE_CODES.forEach(([code, token]) => {
+      const m = save.match(raiseRe(token, code));
+      ok(m, n + ": save_offers lacks `raise exception '" + token + ": ...' using errcode = '" + code + "'`");
+      const at = m ? save.indexOf(m[0]) : -1;
+      ok(at > last, n + ": " + token + " (" + code + ") is out of order (expected " + SAVE_CODES.map((c) => c[0]).join(" -> ") + ")");
+      ok(at < firstWrite, n + ": " + token + " must be checked BEFORE the first call_offers write (fail closed: a bad batch writes nothing)");
+      last = at;
+    });
+    eq((save.match(/using errcode = 'OS0/g) || []).length, 5, n + ": five OS0xx raises expected (OS001 x2, OS002, OS003 x2: not an array / a bad row);");
+    ok(save.indexOf("where r->>'day' !~ '^\\d{4}-\\d{2}-\\d{2}$' or r->>'role_pref' is null or r->>'role_pref' not in ('primary', 'backup', 'either');") > 0 && save.indexOf("where r->>'day' !~") < firstWrite,
+      n + ": every row's day (YYYY-MM-DD) and role_pref (primary / backup / either) must be validated BEFORE any write");
+    ok(/if me is not null and who = me then v_by := me; v_src := 'app'; else v_by := 'scheduler'; v_src := 'email-relay'; end if;/.test(save),
+      n + ": entered_by / source must be derived from the caller (own id / 'app', else 'scheduler' / 'email-relay')");
+    ok(/select who, \(r->>'day'\)::date, r->>'role_pref', nullif\(btrim\(r->>'note'\), ''\), v_by, v_src/.test(save), n + ": the insert must take entered_by / source from v_by / v_src, never from the row");
+    ok(!/r->>'entered_by'|r->>'source'|r->>'person_id'/.test(save), n + ": save_offers must never read entered_by / source / person_id from the client rows");
+    ok(/delete from public\.call_offers where person_id = who and day = any\(p_clear\);/.test(save), n + ": the clears must be scoped to the person and the named days");
+    ok(/on conflict \(person_id, day\) do update\s+set role_pref = excluded\.role_pref, note = coalesce\(excluded\.note, call_offers\.note\), entered_by = excluded\.entered_by, source = excluded\.source, updated_at = now\(\);/.test(save),
+      n + ": the upsert must key on (person_id, day), refresh role_pref / entered_by / source / updated_at and KEEP the row's note when the client sends none (coalesce(excluded.note, call_offers.note) - the importer's 'seed: <tag>' survives a repaint)");
+    ok(!/schedule_days|time_off|call_periods|audit_log|notifications/.test(save), n + ": save_offers touches call_offers only (the mode goes through set_offer_mode; the audit row is the client's)");
+    const modeAt = save.indexOf("perform public.set_offer_mode(p_period, p_mode, who);");
+    ok(modeAt > insertAt && /if p_mode is not null then\s+perform public\.set_offer_mode\(p_period, p_mode, who\);\s+end if;/.test(save),
+      n + ": when p_mode is given the mode must be set THROUGH set_offer_mode inside the same transaction, after the rows (a refused mode rolls the rows back - days + mode are one commit or nothing)");
+    ok(/return jsonb_build_object\('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by, 'source', v_src, 'mode', p_mode\);/.test(save),
+      n + ": return shape must be {ok, person_id, upserted, deleted, entered_by, source, mode}");
+  }
+  ok(/revoke all on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) from public;\nrevoke all on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) from anon;\ngrant execute on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) to authenticated;/.test(s),
+    n + ": save_offers grants (five-argument signature): revoke from public and anon, grant execute to authenticated");
+  ok(!/save_offers\(text, jsonb, date\[\]\)\s+(from|to)\b/.test(s), n + ": no grant / revoke may still name the three-argument save_offers (it does not exist)");
+}
+step("P14 P3a: schema.sql carries set_offer_mode() + save_offers() (placement after the call_offers guards, header revision line)");
+checkOfferRpcs("schema.sql", schema);
+(function placement() {
+  const guardTrg = schema.indexOf("for each row execute function public.call_offers_delete_guard();");
+  const modeAt = schema.indexOf("create or replace function public.set_offer_mode(");
+  const saveAt = schema.indexOf("create or replace function public.save_offers(");
+  const notifAt = schema.indexOf("create table if not exists public.notifications (");
+  ok(modeAt > guardTrg && saveAt > modeAt, "set_offer_mode then save_offers must follow the call_offers delete-guard trigger (the offers section)");
+  ok(saveAt < notifAt, "the two RPCs must be defined BEFORE the notifications table");
+  ok(/-- Revision 2026-09-23 i \(Prompt 14 part 3a, sql\/migrations\/2026-09-23-offer-mode-rpc\.sql, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-23 i (the two RPCs, not yet applied)");
+})();
+
+step("P14 P3a: migration 2026-09-23-offer-mode-rpc.sql defines the two functions and nothing else, byte-identical to schema.sql");
+const rpcMig = read(RPC_MIGRATION);
+ok(!/\r/.test(rpcMig), "offer-mode-rpc migration has CRLF line endings");
+checkOfferRpcs("rpc migration", rpcMig);
+eq((rpcMig.match(/create or replace function/g) || []).length, 2, "the rpc migration must define set_offer_mode and save_offers and nothing else;");
+ok(!/drop table|create table|alter table|create policy|drop policy|create trigger/.test(rpcMig), "the rpc migration must be additive (no table / policy / trigger changes)");
+// the ONE drop allowed: save_offers' earlier three-argument draft (never applied live) - so no second overload can
+// ever leave PostgREST unable to resolve rpc/save_offers
+eq((rpcMig.match(/drop function/g) || []).length, 1, "the rpc migration may drop exactly one function (the never-applied three-argument save_offers);");
+ok(/^drop function if exists public\.save_offers\(text, jsonb, date\[\]\);\ncreate or replace function public\.save_offers\(/m.test(rpcMig), "the drop must be `drop function if exists public.save_offers(text, jsonb, date[]);` right before the create");
+ok(!/drop function/.test(schema.slice(schema.indexOf("create or replace function public.set_offer_mode("), schema.indexOf("create table if not exists public.notifications ("))), "schema.sql's offers-RPC section carries no drop (a from-scratch schema has nothing to drop)");
+["set_offer_mode", "save_offers"].forEach((name) => {
+  const a = functionText(schema, name), b = functionText(rpcMig, name);
+  ok(a && b && a === b, name + "(): migration text differs from schema.sql (keep them identical; the migration is what runs live)");
+});
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-23-offer-mode-rpc\.sql/.test(rpcMig), "the rpc migration header must carry the CLI apply line for the orchestrator");
+
+step("P14 P3a: offer-rpcs probe is self-rolling-back, acts as a surgeon (s3) / the scheduler (s1) / anon, covers A..K-anon + L / M");
+const rpcProbe = read(RPC_PROBE);
+ok(!/\r/.test(rpcProbe), "offer-rpcs probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(rpcProbe), "offer-rpcs probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(rpcProbe), "offer-rpcs probe must collect into a temp table probe_results");
+ok(/grant insert, select on probe_results to authenticated;/.test(rpcProbe) && /grant insert, select on probe_results to anon;/.test(rpcProbe), "offer-rpcs probe must grant the temp table to authenticated AND anon (K-anon)");
+const rLastDo = rpcProbe.lastIndexOf("do $$");
+ok(rLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(rpcProbe.slice(rLastDo)), "offer-rpcs probe's last DO block must raise 'PROBE_RESULTS %;END' so the batch rolls back");
+["'A'", "'B'", "'C'", "'D'", "'E'", "'F'", "'G'", "'H'", "'L'", "'M'", "'I'", "'J-mode'", "'J-save'", "'K-mode'", "'K-anon'"].forEach((k) => ok(rpcProbe.indexOf("values (" + k) >= 0, "offer-rpcs probe lacks case " + k));
+// the review's two additions: the note survives a note-less repaint (A seeds 'seed: probe' on 6/3, E repaints 6/3 without a
+// note and s3_rows() prints note=), and the combined days + mode call (L: a bad mode rolls the row back; M: ok in one call)
+ok(/"day":"2030-06-03","role_pref":"either","note":"seed: probe"/.test(rpcProbe), "case A must seed the 6/3 row with note 'seed: probe' (E proves the note survives the repaint)");
+ok(/\|\| ' note=' \|\| coalesce\(min\(note\) filter \(where day = '2030-06-03'\), ''\)/.test(rpcProbe), "s3_rows() must print the 6/3 row's note (note=...) so E / L / M are graded on it");
+ok(/public\.save_offers\('s3', '\[\{"day":"2030-06-20","role_pref":"either"\}\]'::jsonb, null, o, 'x'\)/.test(rpcProbe), "case L must save a row + mode 'x' in ONE call (expect OM003 and the row rolled back)");
+ok(/public\.save_offers\('s3', '\[\{"day":"2030-06-20","role_pref":"either"\}\]'::jsonb, null, o, 'exhaustive'\)/.test(rpcProbe), "case M must save a row + mode exhaustive in ONE call");
+ok(/note=seed: probe/.test(rpcProbe) && /rows=0 note=/.test(rpcProbe), "the probe header must state the note / rollback expectations (E note=seed: probe; L rows=0)");
+ok(/'probe rpc open',\s+'2030-06-01', '2030-06-30', '2030-04-20'/.test(rpcProbe) && /'probe rpc frozen', '2030-05-01', '2030-05-31', '2026-09-01'/.test(rpcProbe), "offer-rpcs probe fixtures: 'probe rpc open' (2030-06, close 2030-04-20) and 'probe rpc frozen' (2030-05, close 2026-09-01)");
+ok(!/'probe frozen'|'probe modes'/.test(rpcProbe), "offer-rpcs probe must not reuse the offers probe's period labels");
+ok(rpcProbe.indexOf("'2030-03-") < 0, "offer-rpcs probe must not touch the trade probe's 2030-03 fixtures");
+ok(/'probe-offers-' \|\| [a-z]+ \|\| '@example\.test'/.test(rpcProbe), "offer-rpcs probe users must be probe-offers-<uuid>@example.test (section 8's leftover count keys on it)");
+ok(/'probe offers'/.test(rpcProbe), "offer-rpcs probe's time_off row must carry note 'probe offers' (section 8's leftover count keys on it)");
+ok(/set person_id = 's3', role = 'surgeon'/.test(rpcProbe) && /set person_id = 's1', role = 'scheduler'/.test(rpcProbe), "offer-rpcs probe must link its throwaway surgeon to s3 and its scheduler to s1");
+ok(/set local role anon/.test(rpcProbe), "offer-rpcs probe K-anon must act as anon");
+ok(/'ERR ' \|\| sqlstate \|\| ' '/.test(rpcProbe), "offer-rpcs probe must record the SQLSTATE with each error (the OM / OS / OF codes are graded)");
+ok(/public\.set_offer_mode\(f, 'preferred', 's3'\)/.test(rpcProbe), "case J must set s3's mode on the FROZEN period as the scheduler (the relay path)");
+ok(!/simple-protocol/.test(rpcProbe), "offer-rpcs probe header must not claim a simple-protocol connection");
+
+step("P14 P3a: docs/SCHEMA-REVIEW.md carries the rpc section with an 'observed:' placeholder for the orchestrator");
+ok(/### set_offer_mode\(\) \+ save_offers\(\) \(2026-09-23; `sql\/migrations\/2026-09-23-offer-mode-rpc\.sql`\)/.test(review), "SCHEMA-REVIEW.md lacks the set_offer_mode() + save_offers() section");
+ok(/offer-mode-rpc[\s\S]*observed: /.test(review.slice(review.indexOf("### set_offer_mode()"))), "SCHEMA-REVIEW.md's rpc section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
+
 console.log("schema.test.js: " + N + " assertions passed");

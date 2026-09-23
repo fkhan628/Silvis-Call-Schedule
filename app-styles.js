@@ -113,6 +113,19 @@ const css = {
   tableWrap: { overflowX:"auto", border:`1px solid ${LIGHT.border}`, borderRadius:6 },
   // badge(idx, entry): a roster pill - colours by roster id / type (rosterColors), never by name.
   badge: (i, entry) => { const c = rosterColors(entry, i); return { display:"inline-flex", alignItems:"center", background:c.tg, color:c.tx, border:pillBorder(c), borderRadius:5, padding:"2px 9px", fontSize:12, fontWeight:600, whiteSpace:"nowrap", letterSpacing:0.3 }; },
+  // brush(on, key): an offer-painter brush chip (Prompt 14 part 3a). Armed = its GRADIENT with white text (the dark
+  // sheet recolours flat buttons but exempts linear-gradient ones); idle = transparent with the brush's own text colour.
+  brush: (on, key) => { const b = OFFER_BRUSH[key] || OFFER_BRUSH.clear; return { minHeight:44, padding:"8px 14px", borderRadius:9, fontSize:13, fontWeight:800, fontFamily:font, cursor:"pointer", background:on ? b.gradient : "transparent", color:on ? "#FFFFFF" : b.text, border:`2px solid ${on ? b.border : b.border}` }; },
+};
+
+// Offer painter brushes (Prompt 14 part 3a): primary = the navy, backup = an amber (the My-schedule backup gradient's
+// family), either = a teal, clear = grey. tint / text carry the drafted pill in both themes (a pill keeps its own
+// background); gradient is the armed chip. Primary / backup stay distinguishable by word as well (P / B / P+B).
+const OFFER_BRUSH = {
+  primary: { gradient: "linear-gradient(135deg,#13294B,#1F3A6B)", border: "#13294B", text: "#13294B", tint: "#E8EEF8", label: "Primary", short: "P" },
+  backup:  { gradient: "linear-gradient(135deg,#8A6A20,#B08A30)", border: "#8A6A20", text: "#7A5A20", tint: "#FBF1D8", label: "Backup", short: "B" },
+  either:  { gradient: "linear-gradient(135deg,#0F766E,#149C90)", border: "#0F766E", text: "#0F766E", tint: "#E3F4F1", label: "Either", short: "P+B" },
+  clear:   { gradient: "linear-gradient(135deg,#5B6B82,#7A8A98)", border: "#7A8A98", text: "#5B6B82", tint: "#EEF2F7", label: "Clear", short: "-" },
 };
 
 // East-vacation marker (Prompt 15 part 3, 9/23): the person's Davenport vacation
@@ -156,7 +169,7 @@ function eastVacSegStyle(active, state, dark) {
 
 // Node (tests: test/data-layer.test.js pins, test/ui/contrast.mjs).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle };
+  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle, OFFER_BRUSH };
 }
 
 /* ═══════════════════════════════════════════════════

@@ -63,12 +63,35 @@ say whether the list is **"only these days"** (you are never placed on a day you
 — use my rules to fill gaps"** (the default: your days first, your rules cover what is still open, and your publish
 e-mail names every day you did not list — trade if needed). Vacations, East days, derived weeks, windows and caps still
 apply on an offered day. A day is refused if it is past, on your vacation, or inside a period that has already frozen —
-ask Faraz: the database lets the scheduler enter a late offer (OF003 is skipped for the scheduler role), and he will be
-able to do that from the Periods section once the UI wave ships; until then the only late path is a scheduler-JWT REST
-write, because the seed CLI runs as postgres and is refused by OF003 from 2026-10-02. *Until the UI wave ships, Faraz
-relays e-mailed dates as the scheduler (the first period's lists went in that way from the seed); the 14- and 3-day
-reminder e-mails start once the offers cron is live (target 9/29, `edge-functions/README.md` §3 deploy record); and the publish e-mail's
-off-list line arrives with the UI wave.*
+ask Faraz: the database lets the scheduler enter a late offer (OF003 is skipped for the scheduler role), and once the
+UI wave is live he does that from My schedule (pick the surgeon, "Paint offers for <name>" — the entry is stamped as
+relayed by the scheduler); until then the only late path is a scheduler-JWT REST write, because the seed CLI runs as
+postgres and is refused by OF003 from 2026-10-02. *Until the UI wave is live, Faraz relays e-mailed dates as the
+scheduler (the first period's lists went in that way from the seed); the 14- and 3-day reminder e-mails start once the
+offers cron is live (target 9/29, `edge-functions/README.md` §3 deploy record); and the publish e-mail's off-list line
+arrives with the rest of the UI wave.*
+
+**How to paint (the UI wave, branch `feat/offers` — show them on their phone).** Open **Mine** and tap **Paint my
+offers** (or the **Paint offers** button in the top bar; a reminder e-mail's link `#offers` opens it too). You get one
+row per day for the month; ‹ › move ahead as far as you like. Tap a brush at the top — **Primary**, **Backup**, **Either**
+(happy with either role) or **Clear** — then tap the days; tap a day again with the same brush to take it back. For a
+run of days switch **Range** on, tap the first day, then the last (the line under the brushes tells you which tap you
+are on and has an "x cancel start"). Prefer typing? **Paste dates** takes "11/3, 11/5, 11/16-11/20". Greyed rows
+cannot be offered and say why: past, your vacation (and the day before it for primary), an East call day or a derived
+East week, outside your window, a day you had Faraz mark as unavailable / no backup / backup only (ask him to change
+that row first), or frozen because that period already closed (ask Faraz). A day your usual pattern excludes — a Tue/Thu
+OR day, a Clinton or outreach day — is NOT greyed: the app asks once ("... is normally not one of your primary call days
+- offer it anyway?") and your offer counts for that date. If a vacation you entered later covers a day you had
+offered, that row greys but **Clear** can still take the offer back. Each row also shows who is already published that
+day (OPEN in red if nobody) and how many colleagues offered it. Nothing is written while you tap: the footer counts
+your unsaved changes; **Save** writes them all at once — your days and, if you changed it, your mode, in one request;
+if it fails nothing at all was saved, the list of what is still pending stays on screen, and you just Save again —
+**Discard** drops them. Above Save, one line names the next period, its freeze date, where you stand and your mode;
+**Change** opens the choice: **Only these days** or **These are my preferred days - use my rules to fill gaps** (the
+default), or **Go by my rules for <period>** if you would rather not paint at all — it lists your rules in plain words
+before you confirm. Once a period has frozen that line only reads "closed <date> - ask the scheduler" until the next
+period exists. The header keeps a running count of what you offered this month and in the next period against your
+monthly cap.
 
 **Open shifts (tell every surgeon).** The **Open shifts** tab lists every unfilled primary or backup slot from today to
 the end of the published schedule, with the weekend or holiday unit it belongs to, why it is open, and who is eligible
