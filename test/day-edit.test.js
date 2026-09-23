@@ -204,10 +204,10 @@ const sql = DE.dayEditSql(plan, { by: BY, now: "2026-09-23T13:00:00.000Z" });
   ok(/'day_edit'/.test(sql), "snapshot reason 'day_edit' (the app's day editor takes no snapshot - this is the publish tool's capture with its own reason)");
   ok(/raise exception 'DAY_EDIT_ABORT: snapshot not captured/.test(sql), "a snapshot failure raises and aborts the block");
   ok(sql.indexOf("'" + BY + "'") > 0, "the --by tag is a literal");
-  // the snapshot data shape is the importer's / publish tool's (same four keys, same aggregation)
+  // the snapshot data shape is the importer's / publish tool's (the same six keys since Prompt 14 P5 - config, schedule_days, time_off, availability, call_offers, call_periods - same aggregation)
   const IMP = require(path.join(REPO, "importer.js"));
   const impSql = IMP.importSql(IMP.importPlan(seed, { now: "2026-09-23T06:00:00.000Z" }));
-  const shapeLines = (s) => s.split("\n").map(l => l.trim()).filter(l => /^'(config|schedule_days|time_off|availability)',\s+\(select /.test(l));
+  const shapeLines = (s) => s.split("\n").map(l => l.trim()).filter(l => /^'(config|schedule_days|time_off|availability|call_offers|call_periods)',\s+\(select /.test(l));
   eq(shapeLines(sql), shapeLines(impSql), "snapshot data = the importer's jsonb_build_object shape");
   // CAS guard: day + version + the expected current holder of the edited role
   plan.days.forEach(d => {

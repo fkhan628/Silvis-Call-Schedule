@@ -3691,7 +3691,11 @@ try {
       await page.click(`${row1} [data-testid=eastvac-set-home]`);
       await waitFor(async () => (await page.getAttribute(row1, "data-state")) === "home", 8000);
       await page.waitForTimeout(300);
-      const homeWrites = writesSince(before3).filter(w => !/\/rest\/v1\/audit_log/.test(w.path));
+      // the app's 800 ms blob autosave (an unchanged re-save of call_schedule_data) may land inside this window - it is
+      // the same "unrelated background write" the preview step tolerates and says nothing about this hook
+      const homeWrites = writesSince(before3).filter(w => !/\/rest\/v1\/(audit_log|call_schedule_data)\b/.test(w.path));
+      const homeBlobWrites = writesSince(before3).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
+      if (homeBlobWrites.length) console.log("     (unrelated background write(s) during the home step: " + homeBlobWrites.map(w => w.method + " " + w.path).join(", ") + ")");
       if (homeWrites.length !== 1 || !/\/rest\/v1\/east_vacation_reviews/.test(homeWrites[0].path) || writesSince(before3).some(w => /call_offers/.test(w.path))) fail("East vacations home: expected exactly one east_vacation_reviews write and NO call_offers write (the Prompt 14 hook is a no-op tonight): " + JSON.stringify(homeWrites.map(w => w.method + " " + w.path)));
       else ok("East vacations: away -> home saves the review only - no call_offers write (Prompt 14's painter hook is a documented no-op)");
       await page.click(`${row1} [data-testid=eastvac-set-away]`);
