@@ -24,6 +24,21 @@ with the Vault secret the same day: `{"mode":"open-shifts","dryRun":true}` ->
 default-mode dryRun still answers as before (200, tomorrow's two on-call people
 `skipped_wrong_hour`). The Monday cron job (section 4) is not created yet.
 
+function.
+
+**Deploy record.** All four functions were deployed 2026-09-22 from the CLI with
+`--no-verify-jwt` (verify_jwt OFF on each: `calendar-sync` answered a live
+unauthenticated GET, the other three answered 401 without their gate - see
+`docs/STATUS-2026-09-22.md`). The function-side secrets `CRON_SECRET`,
+`RESEND_API_KEY` and `NOTIFICATION_FROM_EMAIL` were set in the dashboard the
+same day (2026-09-22 12:56 UTC, by Faraz; names only are recorded anywhere).
+The two pg_cron jobs in section 4 exist and read the secret from Supabase
+Vault (`silvis_cron_secret`) at run time; both functions answered pg_net
+`dryRun` posts with 200 (`docs/REVIEW-2026-09-22.md` section 6). Deployed
+version numbers are not recorded in this repo: read them from
+`supabase functions list` before any redeploy, and keep the download-and-
+byte-compare convention in section 3 so the repo stays the source of truth.
+
 ## 0. Prerequisites
 
 1. Supabase CLI installed and logged in (`supabase --version`, `supabase projects list`).
@@ -46,7 +61,7 @@ default-mode dryRun still answers as before (200, tomorrow's two on-call people
 4. A Resend account with a VERIFIED sending domain; the sender goes in
    `NOTIFICATION_FROM_EMAIL` (below). There is no hardcoded fallback sender in
    any Silvis function - a missing value is a 500, never a send from a stray address.
-5. Apply the SQL in section 2 (baseline table) before running the office digest.
+5. The office digest's baseline table (section 2) is in `sql/schema.sql`, applied 2026-09-22.
 
 ## 1. Secrets (set by NAME; values never go in this repo, in a URL, or in chat)
 
@@ -65,7 +80,8 @@ supabase secrets list --project-ref bzhsroegtagqhutbnsrp     # names only are pr
 
 `supabase secrets set` re-versions EVERY deployed function (Davenport lesson:
 the version number jumps without a code change). Set secrets BEFORE the first
-deploy so the functions come up configured.
+deploy so the functions come up configured. (Done 2026-09-22 - see the deploy
+record at the top; a rotation re-versions all four again.)
 
 ## 2. Database: baseline table for the office digest (one-time SQL)
 
@@ -116,11 +132,18 @@ After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 
-## 4. pg_cron schedules (pg_net; header carries the secret; placeholders only)
+## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
-Run in the SQL editor once, AFTER the secret is set and the functions are
-deployed (order matters: secret -> function -> cron, so nothing ever runs
-ungated). Replace `<CRON_SECRET>` with the same value you set in section 1.
+Both jobs were created 2026-09-22, AFTER the secret was set and the functions
+deployed (order matters: secret -> function -> cron, so nothing ever ran
+ungated). Kept here as the record and for re-creation; `cron.schedule` with an
+existing job name replaces that job. The secret is NEVER pasted into
+`cron.job.command`: each job reads it from Supabase Vault
+(`vault.decrypted_secrets`, row `silvis_cron_secret`) when it fires, and a
+missing Vault row degrades to the literal `unset`, which the function rejects
+with 401 (fail closed). The Vault value was generated inside the database
+(`gen_random_bytes(32)`, 64 hex chars) and the same value was then set as the
+function-side `CRON_SECRET`; nobody typed it and it appears in no document.
 pg_cron on Supabase evaluates schedules in UTC.
 
 ```sql
@@ -134,7 +157,8 @@ select cron.schedule(
   $$
   select net.http_post(
     url     := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder',
-    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', '<CRON_SECRET>'),
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret',
+                 coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
     body    := '{}'::jsonb
   );
   $$
@@ -150,7 +174,8 @@ select cron.schedule(
   $$
   select net.http_post(
     url     := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/office-notifications',
-    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', '<CRON_SECRET>'),
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret',
+                 coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
     body    := '{"mode":"digest"}'::jsonb
   );
   $$
@@ -183,8 +208,19 @@ Notes
   `cron.job.command` then holds only the lookup.
 - Rotate: `supabase secrets set CRON_SECRET=<new>` then `cron.alter_job(jobid, command => ...)`
   (or unschedule/schedule) with the new header. Until both agree, the cron
+
+- Nothing secret is stored in `cron.job.command`: the command names the Vault
+  row, and `vault.decrypted_secrets` is readable only as the postgres role
+  (Faraz in the SQL editor), never through the REST API or the anon key. This
+  supersedes the Davenport posture (secret pasted into the command).
+- Rotate: change the Vault row's value (`vault.update_secret` on the
+  `silvis_cron_secret` row) and set the same new value with
+  `supabase secrets set CRON_SECRET=<new>`. The jobs read the new value on
+  their next tick without an `alter_job`; until both sides agree the cron
   calls get 401 and nothing is sent (fail closed).
-- Do NOT create these jobs until Faraz has approved live mail (section 6).
+- Both jobs run unattended since 2026-09-22. A live send results only from the
+  inputs listed in section 6 (a linked account whose reminder hour matches;
+  rows in `office_contacts` plus a non-empty digest diff).
 
 ## 5. Verification - safe steps (no mail can result)
 
@@ -277,6 +313,10 @@ curl above) and quote the 200 body.
   group now", after a preview). Type `shift_claimed` - to the scheduler(s) + the claimer
   when someone takes an open shift (targetIds, never a broadcast).
 - Creating any of the three pg_cron jobs (section 4) - from then on the functions run unattended.
+
+- Both pg_cron jobs (section 4) exist since 2026-09-22 and run unattended; what
+  they can send is bounded by the data above (a linked account email with a
+  matching reminder hour; `office_contacts` rows with a non-empty digest diff).
 
 Planned first live proofs (Prompt 10 acceptance, run by Faraz): one real office
 email (`publish` with a real period label while `office_contacts` holds only

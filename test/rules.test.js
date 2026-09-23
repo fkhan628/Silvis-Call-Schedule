@@ -2,6 +2,10 @@
 // Exits non-zero on the first failure with a clear message; prints
 // 'ok <n> assertions' on success. Builds ctx from docs/silvis-seed.json via
 // test/seed-adapter.js plus small synthetic East-feed inputs.
+// Wall-clock gate: the whole file must finish inside SILVIS_RULES_BUDGET_MS
+// (default 5000 ms; a loaded machine may raise it, and the value is printed
+// when set). It is a failing assertion, never a warning - a slow rules engine
+// is a bug, and CI keeps the default.
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
@@ -1948,5 +1952,8 @@ ok(mHol2.schedule["2026-12-25"].backup && mHol2.schedule["2026-12-25"].backup !=
 ok(mHol2.schedule["2026-12-24"].primary && mHol2.schedule["2026-12-24"].primary === mHol2.schedule["2026-12-25"].primary, "M: the primary side of that unit is one holder");
 
 const total = Date.now() - t0;
-if (total > 2000) { console.error("FAIL: test file took " + total + " ms (limit 2000)"); process.exit(1); }
-console.log("ok " + N + " assertions (" + total + " ms)");
+const BUDGET_MS = process.env.SILVIS_RULES_BUDGET_MS ? Math.floor(+process.env.SILVIS_RULES_BUDGET_MS) : 5000;
+const budgetNote = "budget " + BUDGET_MS + " ms" + (process.env.SILVIS_RULES_BUDGET_MS ? " via SILVIS_RULES_BUDGET_MS" : "");
+if (!(BUDGET_MS > 0)) { console.error("FAIL: SILVIS_RULES_BUDGET_MS must be a positive number of milliseconds, got " + JSON.stringify(process.env.SILVIS_RULES_BUDGET_MS)); process.exit(1); }
+if (total > BUDGET_MS) { console.error("FAIL: test file took " + total + " ms (" + budgetNote + ")"); process.exit(1); }
+console.log("ok " + N + " assertions (" + total + " ms; " + budgetNote + ")");

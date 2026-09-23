@@ -43,6 +43,24 @@ on:
       - "test/schema.test.js"
       - "importer.js"
       - "test/generator-regression.js"
+      - "test/ci.test.js"
+      # Inputs the suites consume (a seed-, fixture- or adapter-only push must
+      # re-run the tests that read them) and the PWA shell (a manifest/icon-only
+      # push must bump APP_VERSION so cache-busted clients refetch them).
+      # test/ci.test.js pins this list against package.json's test chain.
+      # Deliberately NOT watched (review 2026-09-23): scripts/**, sql/**,
+      # edge-functions/** and the docs/*.json / docs/*.md inputs some suites
+      # read. A push touching only one of them skips its guard suite, but
+      # adding them would make every SQL-, script- or doc-only push a Pages
+      # redeploy with an APP_VERSION bump (an update banner on every client
+      # for a no-op). Run `npm test` locally before such a push instead.
+      - "docs/silvis-seed.json"
+      - "test/fixtures/**"
+      - "test/seed-adapter.js"
+      - "manifest.json"
+      - "icon-512.png"
+      - "icon-192.png"
+      - "apple-touch-icon.png"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
 permissions:
@@ -80,9 +98,6 @@ jobs:
       - name: East feed unit tests
         run: node test/east-feed.test.js
 
-      - name: Generator regression test
-        run: node test/generator-regression.js
-
       # Data-layer contract: helpers round trips, snapshot fail-closed paths,
       # and the SOURCE PINS on index-source.html (guard-ref site counts, CAS
       # literals, blob-strip, blobLoadedRef gate, realtime merge). Without this
@@ -104,8 +119,15 @@ jobs:
       - name: Week-rows builder tests
         run: node test/week-rows.test.js
 
+      # Offline: the suite's live ER-panel section reads the Supabase project;
+      # a runner has no business doing that, and a transient fetch failure must
+      # never turn a live deploy red. The switch prints a note and skips only
+      # that section (run the suite locally without the variable to refresh
+      # test/ui/out/er-panel-*.html).
       - name: Export builders tests (ICS, share page, printable, ER panel)
         run: node test/exports.test.js
+        env:
+          EXPORTS_OFFLINE: "1"
 
       - name: Totals helpers tests
         run: node test/totals.test.js
@@ -125,6 +147,20 @@ jobs:
       # second definition out of index-source.html.
       - name: Open-shifts tests + source pins
         run: node test/open-shifts.test.js
+      # CI + gate hygiene: package.json's test chain, the steps above and the
+      # paths filter stay aligned, the exports step stays offline, the three
+      # wall-clock gates (rules 5000 ms via SILVIS_RULES_BUDGET_MS; regression
+      # 10000 ms and holidays 4000 ms via SILVIS_GEN_BUDGET_MS) stay overridable
+      # failing assertions, and neither variable is set here. Pure - no network.
+      - name: CI + gate hygiene tests
+        run: node test/ci.test.js
+
+      # Last, as in `npm test`: the fast unit suites fail first. Its default
+      # 10 s wall-clock budget IS the CI gate (runners read ~3.6 s);
+      # SILVIS_GEN_BUDGET_MS is for a loaded developer machine and is never
+      # set here.
+      - name: Generator regression test
+        run: node test/generator-regression.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js

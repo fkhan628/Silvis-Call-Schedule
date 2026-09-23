@@ -43,7 +43,8 @@
 //     address (from the verified session) - never to office contacts.
 //
 // Baseline row: office_notification_state (id = 'digest_snapshot'). The table
-// is NOT in sql/schema.sql yet - see edge-functions/README.md for the SQL. It
+// is defined in sql/schema.sql (applied to the live project 2026-09-22; the
+// SQL is repeated in edge-functions/README.md section 2 for reference). It
 // has no RLS policies (service role only); the client never reads it. Writes
 // are UPSERTs, so a missing row can never turn into a silent 0-row PATCH.
 // Baseline shape: { v: 2, days: { "YYYY-MM-DD": { p, b, x } }, vacations:
