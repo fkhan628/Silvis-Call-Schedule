@@ -4030,18 +4030,21 @@ function CallSchedule() {
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
                 const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
                 if (hol) titleBits.push(hol.name + " (holiday unit)"); if (derivedWho) titleBits.push("East-derived: " + derivedWho); if (a && a.note) titleBits.push("note: " + a.note);
+                // The header reserves 15px per 13px badge shown (E / F / confirm), at least the 30px two badges need, so a badge never covers the holiday label.
+                const nBadges = (derived ? 1 : 0) + (fc && fc.p >= 0.2 ? 1 : 0) + (awaitingConfirmation(a) ? 1 : 0);
                 return (
                   <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
                     onClick={()=>setEditorDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditorDay(d); } }}
                     title={titleBits.join(" | ")}
                     style={{background:bg, border: isToday ? "2px solid #1a6fa8" : "1px solid " + dkCardBorder, ...bracket, opacity: dim ? 0.28 : inMonth ? 1 : 0.5, color:dkText, boxShadow: isToday ? "0 0 0 2px rgba(26,111,168,0.18)" : "none"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:4,minWidth:0,paddingRight:30}}>
+                    <div style={{display:"flex",alignItems:"center",gap:4,minWidth:0,paddingRight:Math.max(30, 4 + 15 * nBadges)}}>
                       <span style={{fontFamily:mono,fontSize:11,fontWeight:isToday?800:600,color:isToday?"#1a6fa8":inMonth?dkText:"#9aa4ae"}}>{dt.getDate()}</span>
                       {hol && <span className="cal-hol" title={hol.name + " - holiday unit (" + hol.tier + ")"} style={{fontSize:9,fontWeight:700,color:"#8a6a10",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{hol.name}</span>}
                     </div>
                     <div className="cal-badges">
                       {derived && <span data-badge="E" title={"East-derived week: " + derivedWho} style={badge(true, "#1a6fa8")}>E</span>}
                       {fc && fc.p >= 0.2 && <span data-badge={fc.p >= forecastThreshold ? "F" : "f"} title={"East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)"} style={badge(fc.p >= forecastThreshold, "#8a5a10")}>F</span>}
+                      {awaitingConfirmation(a) && <span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={badge(true, "#c2410c")}>?</span>}
                     </div>
                     <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)}/>
                     <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>
@@ -4994,6 +4997,17 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
   return out;
 }
 
+// Prompt 12 B: a LOCKED day whose schedule_days note starts with this marker (importer.js writes it for an
+// existingAssignments row flagged awaitingConfirmation - the four Thanksgiving rows) is a lock the scheduler still
+// has to re-confirm. The month grid and the day editor show a small "confirm" badge on it; nothing else changes
+// (the lock stays a lock until it is edited). Same literal as importer.js IMP_AWAITING_MARKER, pinned by
+// test/data-layer.test.js; the marker leaves the note on the next seed import once the flag is removed. A manual edit
+// that needed an override puts the app's own '[override: ...] ' tag in front of the note (saveDayEdit) - the predicate
+// strips that tag first, so the badge survives an overridden backup pick on a flagged day (review B-1).
+const AWAITING_CONFIRMATION_MARKER = "awaiting confirmation - ";
+const awaitingConfirmation = (a) => !!(a && (a.primaryLocked || a.backupLocked) && typeof a.note === "string" && a.note.replace(/^\[override:[^\]]*\]\s*/, "").indexOf(AWAITING_CONFIRMATION_MARKER) === 0);
+const confirmBadgeStyle = { display:"inline-flex", alignItems:"center", height:13, padding:"0 4px", borderRadius:3, fontSize:8, fontWeight:800, lineHeight:1, letterSpacing:0.5, textTransform:"uppercase", background:"#c2410c", color:"#ffffff", whiteSpace:"nowrap" };
+
 // Small padlock glyph (inline SVG so no emoji / non-ASCII is needed).
 function Padlock({ title, size, className }) {
   const s = size || 9;
@@ -5133,6 +5147,7 @@ function DayEditor(props) {
           <span style={{...label,marginBottom:0,minWidth:60}}>{role === "primary" ? "Primary" : "Backup"}</span>
           {holderView(role)}
           {locked && <Padlock title={role + " locked"} size={11}/>}
+          {locked && awaitingConfirmation(opened) && <span data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={confirmBadgeStyle}>confirm</span>}
           {cur && cur.external && <span data-testid={"editor-" + role + "-external-tag"} style={{fontSize:10,color:sub,fontWeight:700}}>outside surgeon - written in by hand</span>}
           {cur && cur.lockHolder && cur.conflicts.length > 0 && <span title={cur.conflicts.join(", ")} style={{fontSize:10,color:"#8a5a10",fontWeight:700}}>locked holder breaks: {cur.conflicts.map(c => reasonLabel(c, nameOf)).join("; ")}</span>}
           {ov && <span data-testid={"override-tag-" + role} style={{fontSize:10,color:"#a83232",fontWeight:700}}>override: {ov.reasons.join(", ")}</span>}

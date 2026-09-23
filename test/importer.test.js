@@ -66,6 +66,55 @@ ok(plan.infoDeltas.every((l) => /nothing to write/.test(l)), "info deltas say no
 ok(plan.infoDeltas.some((l) => /^10\/12 P Philip -> Fierce/.test(l)), "info delta rendering");
 ok(plan.infoDeltas.some((l) => /^10\/24 P Sarkar -> open \(applied; faraz-2026-09-22-sarkar-two-days\)/.test(l)), "10/24 delta (surgeon null) renders as 'Sarkar -> open': " + plan.infoDeltas.filter((l) => /^10\/24/.test(l)).join(" | "));
 
+/* ------------------------------ Thanksgiving provenance (Prompt 12 B) */
+// The four 11/26-11/29 rows were recorded by Claude Code on 2026-09-22 as a 9/21 evening decision while the daytime
+// record said pending. Until Faraz re-confirms they carry awaitingConfirmation: true and the importer prefixes their
+// schedule_days note with the exact marker the app reads for its "confirm" badge. Every literal is restated here.
+step("B: awaitingConfirmation rows -> 'awaiting confirmation - ' note marker");
+const AWAIT_MARKER = "awaiting confirmation - ";
+const B_ROWS = ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"];
+const B_NOTE = "Thanksgiving unit - Khan primary Thu-Sun; recorded by Claude Code on 2026-09-22 as an evening decision; the daytime record said pending; Faraz to re-confirm before publish";
+eq(IMP.IMP_AWAITING_MARKER, AWAIT_MARKER, "B: the importer exports the marker literal (shared with the app's badge)");
+eq(seed.existingAssignments.filter((a) => a.awaitingConfirmation === true).map((a) => a.date), B_ROWS, "B: exactly the four Thanksgiving rows carry awaitingConfirmation: true");
+ok(seed.existingAssignments.filter((a) => B_ROWS.includes(a.date)).every((a) => a.primary === KHAN && a.locked === true && a.source === "faraz-2026-09-21" && a.note === B_NOTE), "B: the four rows keep Khan primary, locked, source faraz-2026-09-21, and the provenance note (no 'CONFIRMED')");
+B_ROWS.forEach((d) => eq(byDay[d].note, AWAIT_MARKER + "seed: faraz-2026-09-21 - " + B_NOTE, "B: " + d + " schedule_days note = marker + 'seed: <source>' + the row note"));
+eq(days.filter((d) => (d.note || "").indexOf(AWAIT_MARKER) === 0).map((d) => d.day), B_ROWS, "B: no other row carries the marker (11/25 included)");
+ok(!days.some((d) => /CONFIRMED/.test(d.note || "")), "B: no schedule_days note says CONFIRMED");
+eq(byDay["2026-11-25"].note, "seed: faraz-2026-09-22-khan-1125 - Khan covers 11/25, 2026 only", "B: 11/25 (Faraz's separate 9/22 decision) is not flagged");
+B_ROWS.forEach((d) => ok(IMP.impSeedSchedule(seed)[d].note.indexOf(AWAIT_MARKER) === 0, "B: the in-memory schedule (fixture / context) carries the marker on " + d));
+eq(plan.stats.scheduleDays.awaitingConfirmation, 4, "B: plan.stats counts the awaiting rows");
+eq(plan.noteScrub.inventory.filter((e) => e.action === "awaiting-confirmation").map((e) => [e.path, e.to, "from" in e]), B_ROWS.map((d) => ["existingAssignments[" + d + "].note", "schedule_days", false]), "B: the dry-run inventory lists the four rows (path only, never the note text)");
+eq(plan.noteScrub.counts.awaitingConfirmation, 4, "B: inventory counts.awaitingConfirmation");
+ok(IMP.importSql(plan).indexOf("'" + AWAIT_MARKER + "seed: faraz-2026-09-21 - " + B_NOTE + "'") >= 0, "B: the SQL writes the marked note as a plain literal");
+ok(/^-- seed generatedOn .*; 73 schedule_days \(4 awaiting confirmation\), /m.test(IMP.importSql(plan)), "B: the SQL header counts the awaiting rows");
+ok(!/CONFIRMED/.test(JSON.stringify(seed.surgeonRules[KHAN])), "B: Khan's seed rules no longer say CONFIRMED");
+ok(/re-confirm before publish/.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.note) && /daytime record said pending/.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.note), "B: s1.holidays2026.thanksgiving.note carries the provenance sentence");
+ok(seed.surgeonRules[KHAN].notes.some((t) => /recorded by Claude Code on 2026-09-22 as an evening decision; the daytime record said pending; Faraz to re-confirm before publish/.test(t)), "B: s1.notes carries the provenance sentence");
+eq(seed.surgeonRules[KHAN].holidays2026.thanksgiving.days, B_ROWS, "B: the s1 holiday block still lists the four days");
+eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.days, B_ROWS, "B: ... and so does the blob (unit unchanged)");
+// review B-3: the holidays.units 2026 Thanksgiving note (seed record only - the importer drops holidays notes) says the
+// same as the four rows it sits beside: no bare 'Faraz 9/21 (evening)' attribution without the provenance caveat.
+{
+  const tgUnit = (seed.holidays.units["2026"] || seed.holidays.units[2026]).find((u) => u.name === "Thanksgiving");
+  eq(tgUnit.days, B_ROWS, "B: holidays.units 2026 Thanksgiving still spans the four days");
+  ok(/recorded by Claude Code on 2026-09-22 as an evening decision; the daytime record said pending; Faraz to re-confirm before publish/.test(tgUnit.note), "B: holidays.units 2026 Thanksgiving note carries the provenance sentence");
+  ok(!/Faraz 9\/21 \(evening\)/.test(tgUnit.note), "B: ... and no longer attributes the unit to 'Faraz 9/21 (evening)' outright");
+  ok(!("holidays" in plan.blob && JSON.stringify(plan.blob.holidays).indexOf("recorded by Claude Code") >= 0), "B: the unit note stays out of the blob (holidays notes are dropped)");
+}
+// flag semantics on fixtures: absent / false -> no marker; true without a note -> marker + provenance only; idempotent
+{
+  const fx = clone(seed);
+  const r26 = fx.existingAssignments.find((a) => a.date === "2026-11-26"), r27 = fx.existingAssignments.find((a) => a.date === "2026-11-27"), r28 = fx.existingAssignments.find((a) => a.date === "2026-11-28");
+  r26.awaitingConfirmation = false; delete r27.awaitingConfirmation; delete r28.note;
+  const p2 = IMP.importPlan(fx, { now: NOW }), by2 = {}; p2.scheduleDayRows.forEach((d) => { by2[d.day] = d; });
+  eq(by2["2026-11-26"].note, "seed: faraz-2026-09-21 - " + B_NOTE, "B: awaitingConfirmation: false -> no marker (the note itself is kept)");
+  eq(by2["2026-11-27"].note, "seed: faraz-2026-09-21 - " + B_NOTE, "B: key absent -> no marker");
+  eq(by2["2026-11-28"].note, AWAIT_MARKER + "seed: faraz-2026-09-21", "B: flag without a note -> marker + provenance only");
+  eq(p2.stats.scheduleDays.awaitingConfirmation, 2, "B: fixture count = 11/28 + 11/29");
+  eq(p2.noteScrub.inventory.filter((e) => e.action === "awaiting-confirmation").map((e) => e.path), ["existingAssignments[2026-11-28].note", "existingAssignments[2026-11-29].note"], "B: fixture inventory");
+  eq(IMP.importPlan(seed, { now: NOW }).scheduleDayRows, plan.scheduleDayRows, "B: idempotent - a second plan writes the same notes");
+}
+
 /* ------------------------------ November locks (Prompt 12 T, 9/22) */
 // the ER-panel author's 9/22 document entered Burchett's and Acton's November days (rules doc section 7); Faraz's two
 // amendments fold in: 11/25 primary stays Khan (Burchett's entry superseded) and Fierce takes BACKUP 11/9-11/16
@@ -643,10 +692,11 @@ ok(inv.filter((e) => e.path.indexOf("groupRules.") === 0).every((e) => e.action 
 ok(inv.filter((e) => e.path.indexOf("holidays.") === 0).every((e) => e.action === "drop"), "every holidays entry is a drop");
 eq(inv.filter((e) => e.path.indexOf("holidays.") === 0).length, IMP.impFindKeys(seed.holidays, NOTE_KEY).length, "one drop per holidays note-like key");
 eq(inv.filter((e) => e.path.indexOf("groupRules.") === 0).length, IMP.impFindKeys(seed.groupRules, NOTE_KEY).length, "one drop per groupRules note-like key");
-ok(inv.every((e) => (e.action === "category" && CATS.indexOf(e.to) >= 0) || (e.action === "drop" && e.to === null) || (e.action === "public" && e.to === "time_off") || (e.action === "private-name" && e.to === null)), "inventory actions are category/drop, plus 'public' / 'private-name' for time_off notes (item S)");
+ok(inv.every((e) => (e.action === "category" && CATS.indexOf(e.to) >= 0) || (e.action === "drop" && e.to === null) || (e.action === "public" && e.to === "time_off") || (e.action === "private-name" && e.to === null) || (e.action === "awaiting-confirmation" && e.to === "schedule_days")), "inventory actions are category/drop, plus 'public' / 'private-name' for time_off notes (item S) and 'awaiting-confirmation' for flagged existingAssignments (item B)");
+ok(inv.some((e) => e.action === "awaiting-confirmation"), "B: the real seed's inventory lists the awaiting rows");
 ok(!inv.some((e) => e.action === "private-name"), "the real seed has no public note naming a surgeon");
 eq(inv.map((e) => e.path), inv.map((e) => e.path).slice().sort(), "inventory sorted by path");
-eq(plan.noteScrub.counts, { category: inv.filter((e) => e.action === "category").length, drop: inv.filter((e) => e.action === "drop").length, timeOffPublic: inv.filter((e) => e.action === "public").length }, "counts agree with the inventory");
+eq(plan.noteScrub.counts, { category: inv.filter((e) => e.action === "category").length, drop: inv.filter((e) => e.action === "drop").length, timeOffPublic: inv.filter((e) => e.action === "public").length, awaitingConfirmation: inv.filter((e) => e.action === "awaiting-confirmation").length }, "counts agree with the inventory");
 // (6) refusals: unclassifiable surgeon note -> NOTE_UNCLASSIFIED; denylist word in a non-note string -> NOTE_DENYLIST
 function refusesWith(prefix, mutate, label) {
   const fx = clone(seed);

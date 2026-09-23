@@ -657,6 +657,27 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(both, [], `helpers.js and ${f} both declare: ${both.join(", ")}`);
     }
   });
+  // Prompt 12 B: the importer prefixes a flagged existingAssignments row's schedule_days note with one exact marker;
+  // the app shows a "confirm" badge on a locked day whose note starts with it (DayEditor role row beside the padlock,
+  // month grid cell). The literal lives in both files and must stay byte-identical.
+  check("B: 'confirm' badge - marker literal shared with importer.js, badge testid in the DayEditor role row and the month grid, hover title", () => {
+    const imp = fs.readFileSync(path.join(ROOT, "importer.js"), "utf8").replace(/\r\n/g, "\n");
+    assert.ok(imp.includes('var IMP_AWAITING_MARKER = "awaiting confirmation - ";'), "importer.js marker literal");
+    assert.ok(src.includes('const AWAITING_CONFIRMATION_MARKER = "awaiting confirmation - ";'), "index-source.html marker literal");
+    assert.ok(src.includes("const awaitingConfirmation = (a) =>"), "one predicate: a locked day whose note starts with the marker");
+    assert.strictEqual(count('data-testid="confirm-badge"'), 2, "DayEditor role row + month grid cell");
+    assert.strictEqual(count('data-badge="confirm"'), 1, "the grid badge is readable through [data-badge] like E / F");
+    assert.strictEqual(count("awaiting the scheduler's confirmation"), 2, "the hover title on both badges");
+    // review B-1: saveDayEdit rebuilds an overridden day's note as '[override: ...] <note>', which moves the marker off
+    // index 0 - the predicate strips the app's own override tag (same regex literal as saveDayEdit) before it looks.
+    assert.ok(src.includes('const awaitingConfirmation = (a) => !!(a && (a.primaryLocked || a.backupLocked) && typeof a.note === "string" && a.note.replace(/^\\[override:[^\\]]*\\]\\s*/, "").indexOf(AWAITING_CONFIRMATION_MARKER) === 0);'), "the predicate tolerates the '[override: ...] ' prefix saveDayEdit puts in front of the note");
+    assert.ok(count("/^\\[override:[^\\]]*\\]\\s*/") >= 2, "saveDayEdit and the predicate share one override-tag regex literal");
+    // review B-2: in the month grid the badge is a 13px '?' square like E / F (the header reserves 15px per badge shown),
+    // so it never covers the holiday label; the word 'confirm' stays in the day editor where there is room.
+    assert.ok(src.includes('<span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler\'s confirmation" style={badge(true, "#c2410c")}>?</span>'), "grid badge = 13px square via badge(), glyph '?'");
+    assert.ok(src.includes("paddingRight:Math.max(30, 4 + 15 * nBadges)"), "the cell header widens its reserved gutter per badge shown");
+    assert.ok(src.includes("style={confirmBadgeStyle}>confirm</span>"), "the day editor keeps the word 'confirm'");
+  });
 
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
   console.log("\n[M] outside surgeons pins");

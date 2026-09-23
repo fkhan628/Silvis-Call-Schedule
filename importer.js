@@ -517,13 +517,27 @@ function impSeedTimeOffRows(seed, opts) {
   return rows;
 }
 
+// Prompt 12 B: an existingAssignments row with awaitingConfirmation: true is a
+// lock the scheduler still has to re-confirm (the Thanksgiving rows recorded
+// from an evening chat). Its schedule_days note is prefixed with this exact
+// marker; the app shows a "confirm" badge on a locked day whose note starts
+// with it (index-source.html AWAITING_CONFIRMATION_MARKER is the same literal,
+// pinned by test/data-layer.test.js). The rows count in plan.stats and are
+// listed in the dry-run inventory as 'awaiting-confirmation' (path only).
+var IMP_AWAITING_MARKER = "awaiting confirmation - ";
+function impAwaitingConfirmation(a) { return !!a && a.awaitingConfirmation === true; }
+
 // Provenance note for an imported day: the seed's source string plus its
-// operational note when present.
+// operational note when present; the awaiting-confirmation marker in front
+// when the row is flagged (a flag without source or note still writes the
+// marker so the badge shows).
 function impDayNote(a) {
   var parts = [];
   if (a.source) parts.push("seed: " + a.source);
   if (a.note) parts.push(String(a.note));
-  return parts.length ? parts.join(" - ") : null;
+  var body = parts.length ? parts.join(" - ") : null;
+  if (!impAwaitingConfirmation(a)) return body;
+  return IMP_AWAITING_MARKER + (body || "").replace(/^\s+/, "");
 }
 
 // existingAssignments -> in-memory schedule (guide 4.1) with lock flags per
@@ -607,7 +621,8 @@ function impStats(plan) {
       backupLocked: days.filter(function (d) { return d.backup_locked; }).length,
       openPrimary: days.filter(function (d) { return d.primary_id == null && d.external_cover == null; }).length,
       openBackup: days.filter(function (d) { return d.backup_id == null; }).length,
-      externalCover: days.filter(function (d) { return d.external_cover != null; }).length
+      externalCover: days.filter(function (d) { return d.external_cover != null; }).length,
+      awaitingConfirmation: days.filter(function (d) { return typeof d.note === "string" && d.note.indexOf(IMP_AWAITING_MARKER) === 0; }).length   // Prompt 12 B
     },
     infoDeltas: plan.infoDeltas.length
   };
@@ -663,7 +678,13 @@ function importPlan(seed, options) {
   // scrub itself never sees timeOff notes.
   var publicInv = [];
   var timeOffRows = impSeedTimeOffRows(seed, { inventory: publicInv });     // throws NOTE_DENYLIST
-  var inventory = scrub.inventory.concat(publicInv);
+  // Prompt 12 B: flagged existingAssignments rows join the dry-run inventory too
+  // ('existingAssignments[<date>].note -> awaiting-confirmation'; path only, the
+  // CLI prints the inventory as is), counted under counts.awaitingConfirmation.
+  var awaitingInv = ((seed.existingAssignments) || []).filter(impAwaitingConfirmation).map(function (a) {
+    return { path: "existingAssignments[" + a.date + "].note", action: "awaiting-confirmation", to: "schedule_days" };
+  });
+  var inventory = scrub.inventory.concat(publicInv, awaitingInv);
   inventory.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; });
 
   var plan = {
@@ -679,7 +700,8 @@ function importPlan(seed, options) {
       counts: {
         category: scrub.inventory.filter(function (e) { return e.action === "category"; }).length,
         drop: scrub.inventory.filter(function (e) { return e.action === "drop"; }).length,
-        timeOffPublic: publicInv.filter(function (e) { return e.action === "public"; }).length   // surname fallbacks are inventoried, not counted as public
+        timeOffPublic: publicInv.filter(function (e) { return e.action === "public"; }).length,   // surname fallbacks are inventoried, not counted as public
+        awaitingConfirmation: awaitingInv.length
       }
     }
   };
@@ -911,12 +933,20 @@ function impSqlStaleTimeOff(rows) {
 // table: stale seed-owned rows deleted, then insert/update. Idempotent: every
 // insert carries ON CONFLICT or WHERE NOT EXISTS, every update is guarded by
 // IS DISTINCT FROM, every delete is set-based against the plan's keys.
+// Prompt 12 B: ' (N awaiting confirmation)' after the schedule_days count in the
+// SQL header when any planned row carries the marker; empty otherwise so
+// unflagged seeds keep their header byte for byte.
+function impAwaitingHeader(plan) {
+  var n = (plan.scheduleDayRows || []).filter(function (d) { return typeof d.note === "string" && d.note.indexOf(IMP_AWAITING_MARKER) === 0; }).length;
+  return n ? " (" + n + " awaiting confirmation)" : "";
+}
+
 function importSql(plan) {
   if (!plan || !plan.blob) throw new Error("importer: importSql needs a plan from importPlan()");
   var head = [
     "-- Silvis seed import - generated " + (plan.generatedAt || new Date().toISOString()) + " by importer.js",
     "-- seed generatedOn " + ((plan.blob.settings && plan.blob.settings.seedGeneratedOn) || "?") +
-      "; " + plan.scheduleDayRows.length + " schedule_days, " + plan.availabilityRows.length + " availability, " + plan.timeOffRows.length + " time_off rows",
+      "; " + plan.scheduleDayRows.length + " schedule_days" + impAwaitingHeader(plan) + ", " + plan.availabilityRows.length + " availability, " + plan.timeOffRows.length + " time_off rows",
     "-- Idempotent: safe to run again; a re-run of identical data changes nothing.",
     "begin;",
     ""
@@ -1108,6 +1138,7 @@ var impExports = {
   importPlan: importPlan,
   importSql: importSql,
   planDiff: planDiff,
+  IMP_AWAITING_MARKER: IMP_AWAITING_MARKER,     // Prompt 12 B: the schedule_days note prefix the app's "confirm" badge reads
   // seed -> shape helpers (test/seed-adapter.js delegates here)
   impSeedRoster: impSeedRoster,
   impMergeRoster: impMergeRoster,
