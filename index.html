@@ -111,7 +111,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.22n";
+    var APP_VERSION = "2026.09.23a";
     (function() {
       var stored = localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
@@ -186,22 +186,24 @@ function CallSchedule() {
   const [holidays, setHolidays] = useState(undefined);
   const [settings, setSettings] = useState({});
   const [lastPublished, setLastPublished] = useState(null);
+  const [lastGenerate, setLastGenerate] = useState(undefined);
   const [schedule, setSchedule] = useState({});
   const [vacations, setVacations] = useState({});
   const [timeOffRows, setTimeOffRows] = useState([]);
   const [availabilityRows, setAvailabilityRows] = useState([]);
-  const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
-  const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+  const [calMonth, setCalMonth] = useState(() => parse(todayCentral()).getMonth());
+  const [calYear, setCalYear] = useState(() => parse(todayCentral()).getFullYear());
   const [toolMonths, setToolMonths] = useState(1);
   const [erRange, setErRange] = useState(null);
   const erPreviewRef = useRef(null);
-  const [calYearText, setCalYearText] = useState(() => String(new Date().getFullYear()));
+  const [calYearText, setCalYearText] = useState(() => String(parse(todayCentral()).getFullYear()));
   useEffect(() => {
     setCalYearText(String(calYear));
   }, [calYear]);
   const [calSurgeonFilters, setCalSurgeonFilters] = useState([]);
   const [calOnlyOpen, setCalOnlyOpen] = useState(false);
   const [editorDay, setEditorDay] = useState(null);
+  const [editorFocus, setEditorFocus] = useState(null);
   const [eastFeedRows, setEastFeedRows] = useState([]);
   const [eastForecastRows, setEastForecastRows] = useState([]);
   const [eastOverrideRows, setEastOverrideRows] = useState([]);
@@ -408,6 +410,17 @@ function CallSchedule() {
   useEffect(() => {
     if (!isScheduler && view === "setup") setView("calendar");
   }, [isScheduler, view]);
+  useEffect(() => {
+    if (!authUser || isPublicMode) return;
+    if (window.location.hash === "#openshifts") {
+      setView("openshifts");
+      try {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      } catch (e) {
+        console.warn("could not drop #openshifts from the URL", e);
+      }
+    }
+  }, [authUser, isPublicMode]);
   const [notifications, setNotifications] = useState([]);
   const [showNotifs, setShowNotifs] = useState(false);
   const [notifLastSeen, setNotifLastSeen] = useState(() => {
@@ -456,6 +469,7 @@ function CallSchedule() {
     const base = isScheduler || !mySurgeon ? notifications : notifications.filter(n => {
       var _n$data, _n$data2, _n$data3;
       if (n.type === "schedule_published" || n.type === "schedule_changed" || n.type === "manual_edit") return true;
+      if (n.type === "open_shifts") return true;
       if (((_n$data = n.data) === null || _n$data === void 0 ? void 0 : _n$data.surgeon_id) === mySurgeon) return true;
       if (((_n$data2 = n.data) === null || _n$data2 === void 0 ? void 0 : _n$data2.from_surgeon_id) === mySurgeon || ((_n$data3 = n.data) === null || _n$data3 === void 0 ? void 0 : _n$data3.to_surgeon_id) === mySurgeon) return true;
       return false;
@@ -665,6 +679,8 @@ function CallSchedule() {
     return m;
   }, [surgeons]);
   const activeSurgeons = useMemo(() => surgeons.filter(s => s.active !== false), [surgeons]);
+  const rosterPool = useMemo(() => surgeons.filter(s => s.type !== "external"), [surgeons]);
+  const poolSurgeons = useMemo(() => rosterPool.filter(s => s.active !== false), [rosterPool]);
   const logAudit = (action, summary, details) => {
     (async () => {
       try {
@@ -866,7 +882,7 @@ function CallSchedule() {
   const vacationConflicts = (personId, start, end) => vacationConflictItems(personId, start, end).map(c => `${fmtMD(c.day)} (${c.role})`);
   const describeDbError = err => {
     const s = typeof err === "string" ? err : JSON.stringify(err || {});
-    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+/;
+    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+/;
     if (OWN.test(s)) {
       let verbatim = "";
       try {
@@ -877,7 +893,7 @@ function CallSchedule() {
         verbatim = "";
       }
       if (!OWN.test(verbatim)) {
-        const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+)[^"}\\]*/.exec(s);
+        const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+)[^"}\\]*/.exec(s);
         verbatim = m ? m[0] : s.slice(0, 240);
       }
       return verbatim;
@@ -1341,6 +1357,7 @@ function CallSchedule() {
     if (d.holidays !== undefined) setHolidays(d.holidays);
     if (d.settings && typeof d.settings === "object") setSettings(d.settings);
     if (d.lastPublished !== undefined) setLastPublished(d.lastPublished);
+    if (d.lastGenerate !== undefined) setLastGenerate(d.lastGenerate);
   };
   useEffect(() => {
     (async () => {
@@ -1609,6 +1626,7 @@ function CallSchedule() {
     holidays,
     settings,
     lastPublished,
+    lastGenerate,
     schedule,
     vacations,
     availability: availabilityRows
@@ -1675,7 +1693,7 @@ function CallSchedule() {
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, schedule, vacations, availabilityRows]);
+  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows]);
   const flushRef = useRef(() => {});
   flushRef.current = source => {
     if (isPublicMode) return;
@@ -1869,11 +1887,14 @@ function CallSchedule() {
       weekMonday: r.week_monday,
       data: r.data || {}
     }));
-    const forecast = forecastFromFeedRows(eastForecastRows);
+    const publishedCoverage = coverageOf(weeks);
+    const forecastAll = forecastFromFeedRows(eastForecastRows);
+    const eastOverrides = overridesByPerson(eastOverrideRows);
     const eastBusyDays = {},
       eastForecast = {},
       eastDerived = [],
       eastMeta = {};
+    const forecastIds = [];
     let unresolved = false;
     surgeons.forEach(s => {
       const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed || null;
@@ -1893,10 +1914,7 @@ function CallSchedule() {
           eastBackupCountsAsBusy: ef.eastBackupCountsAsBusy !== false
         }).busy;else if (weeks.length) unresolved = true;
         eastBusyDays[s.id] = applyOverrides(busy, eastOverrideRows, s.id);
-        if (ef.forecast && Object.keys(forecast).length) {
-          eastForecast[s.id] = forecast;
-          meta.forecast = true;
-        }
+        if (ef.forecast) forecastIds.push(s.id);
       }
       if (ef.deriveFrom || ef.statedWeeks) {
         meta.derivedWeeks = true;
@@ -1913,7 +1931,12 @@ function CallSchedule() {
       }
       eastMeta[s.id] = meta;
     });
-    const coverage = unresolved ? null : coverageOf(weeks);
+    const coverage = unresolved ? null : publishedCoverage;
+    const forecast = forecastOutsideCoverage(forecastAll, coverage);
+    if (Object.keys(forecast).length) forecastIds.forEach(id => {
+      eastForecast[id] = forecast;
+      eastMeta[id].forecast = true;
+    });
     return {
       roster: surgeons,
       surgeonRules: surgeonRules || {},
@@ -1924,6 +1947,7 @@ function CallSchedule() {
       schedule,
       eastBusyDays,
       eastForecast,
+      eastOverrides,
       eastDerived,
       eastFeedCoverage: coverage,
       eastMeta
@@ -1931,6 +1955,15 @@ function CallSchedule() {
   }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode]);
   const rulesCtxState = useMemo(() => safeBuildContext(ctxInputs), [ctxInputs]);
   const rulesCtx = rulesCtxState.ctx;
+  const eastConflictRows = useMemo(() => {
+    if (!rulesCtx || typeof eastConflicts !== "function") return [];
+    try {
+      return eastConflicts(rulesCtx, Object.keys(schedule || {}).sort());
+    } catch (e) {
+      console.warn("East conflict report failed", e);
+      return [];
+    }
+  }, [rulesCtx, schedule]);
   useEffect(() => {
     if (rulesCtxState.error) showToast("Couldn't build the rules context - eligibility checks are unavailable (" + rulesCtxState.error.slice(0, 90) + ").", "error");else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) console.warn("rules context warnings:", rulesCtx.warnings);
   }, [rulesCtxState]);
@@ -1954,7 +1987,9 @@ function CallSchedule() {
       note = note ? tag + " " + note : tag;
     }
     after.note = note || null;
-    after.source = "manual";
+    const isExternalId = id => !!(id && sMap[id] && sMap[id].type === "external");
+    const keepPersonSource = (before.source === "claim" || before.source === "trade") && ["primary", "backup"].some(r => !!before[r] && before[r] === after[r]);
+    after.source = isExternalId(after.primary) || isExternalId(after.backup) ? "manual-external" : keepPersonSource ? before.source : "manual";
     if (sameAssignment(day, before, after)) return true;
     pushUndo(schedule);
     setSchedule(p => _objectSpread(_objectSpread({}, p), {}, {
@@ -2335,6 +2370,35 @@ function CallSchedule() {
           return;
         }
       }
+      const publishedCoverage = coverageOf(feed.weeks);
+      let forecastRowsDeleted = null,
+        forecastDeleteError = null,
+        forecastCountUnknown = false;
+      if (publishedCoverage) {
+        const delRes = await fetch(`${SUPABASE_URL}/rest/v1/east_forecast?week_monday=gte.${publishedCoverage.from}&week_monday=lte.${publishedCoverage.to}`, {
+          method: "DELETE",
+          headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+            Prefer: "return=representation"
+          })
+        });
+        if (!delRes.ok) {
+          forecastDeleteError = (await delRes.text().catch(() => "")) || "HTTP " + delRes.status;
+          console.warn("east_forecast prune failed", delRes.status, forecastDeleteError);
+        } else {
+          let deleted = null;
+          try {
+            deleted = await delRes.json();
+          } catch (e) {
+            deleted = null;
+          }
+          forecastRowsDeleted = Array.isArray(deleted) ? deleted.length : null;
+          if (forecastRowsDeleted === null) {
+            forecastCountUnknown = true;
+            forecastDeleteError = "delete succeeded but no representation returned (count unknown)";
+            console.warn("east_forecast prune: " + forecastDeleteError);
+          }
+        }
+      }
       const codes = {
         _source: "davenport"
       };
@@ -2343,12 +2407,17 @@ function CallSchedule() {
       });
       setEastIdByCode(codes);
       await loadEastTables();
-      logAudit("east.refresh", `Refreshed the East feed: ${rows.length} published week(s) between ${fromMon} and ${toMon}`, {
+      const pruneSummary = !publishedCoverage ? "forecast prune skipped (no published weeks)" : forecastRowsDeleted !== null ? forecastRowsDeleted + " forecast row(s) inside the published coverage deleted" : forecastCountUnknown ? "forecast rows inside the published coverage deleted, count unknown (no representation returned)" : "forecast prune FAILED";
+      logAudit("east.refresh", `Refreshed the East feed: ${rows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}`, {
         from: fromMon,
         to: toMon,
-        weeks: rows.length
+        weeks: rows.length,
+        coverage: publishedCoverage,
+        forecastRowsDeleted,
+        forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null
       });
-      showToast(rows.length ? `East feed refreshed: ${rows.length} published week(s) cached.` : "East feed refreshed: Davenport has no published weeks in that window - cache unchanged.", rows.length ? "success" : "info");
+      const pruneWord = !publishedCoverage ? "" : forecastRowsDeleted !== null ? ` ${forecastRowsDeleted} forecast row(s) for now-published weeks deleted.` : forecastCountUnknown ? ` Forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were deleted but the count is unknown (no representation returned) - check the forecast strip.` : ` But the forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were NOT deleted - couldn't delete the forecast rows: ${describeDbError(forecastDeleteError)} (eligibility ignores them; delete them by hand).`;
+      showToast(rows.length ? `East feed refreshed: ${rows.length} published week(s) cached.${pruneWord}` : "East feed refreshed: Davenport has no published weeks in that window - cache unchanged.", rows.length ? forecastDeleteError ? "error" : "success" : "info");
     } catch (e) {
       console.warn("East feed refresh failed", e);
       showToast("East feed refresh FAILED - the cached weeks are unchanged. " + errText(e).slice(0, 120), "error");
@@ -2426,16 +2495,20 @@ function CallSchedule() {
     setView("calendar");
     setEditorDay(day);
   };
+  const genToday = todayCentral();
   const lastPublishedDay = useMemo(() => suLastContiguousDay(schedule), [schedule]);
-  const laterAssignedRanges = useMemo(() => suLaterAssignedRanges(schedule, lastPublishedDay), [schedule, lastPublishedDay]);
+  const genFirstOpenDay = useMemo(() => suFirstOpenSlotDay(schedule, genToday), [schedule, genToday]);
+  const genFallback = lastPublishedDay ? suAddDays(lastPublishedDay, 1) : genToday;
+  const genStart = genFirstOpenDay || (genFallback > genToday ? genFallback : genToday);
+  const laterAssignedRanges = useMemo(() => suLaterAssignedRanges(schedule, suAddDays(genStart, -1)), [schedule, genStart]);
   const genPresets = useMemo(() => {
     try {
-      return rangePresets(lastPublishedDay);
+      return rangePresets(suAddDays(genStart, -1));
     } catch (e) {
       console.warn("rangePresets failed", e);
       return [];
     }
-  }, [lastPublishedDay]);
+  }, [genStart]);
   const runGenerate = async o => {
     if (!isScheduler) return;
     const start = o.start,
@@ -2578,7 +2651,9 @@ function CallSchedule() {
     if (r && r.ok) {
       setSaveStatus("Generated days saved");
       setTimeout(() => setSaveStatus(""), 2000);
+      setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString(), lastGenerate));
       showToast(`Saved ${changes.length} generated slot change(s). Review the publish diff.`, "success");
+      pendingOpenShiftsNoticeRef.current = true;
       publishRef.current();
     } else if (r && r.blocked) {
       showToast("The write was refused by the wipe guard - nothing was saved. Reload and try again.", "error");
@@ -2757,6 +2832,7 @@ function CallSchedule() {
         const liveBlob = st.live && st.live.blob && typeof st.live.blob === "object" ? st.live.blob : {};
         const core = _objectSpread({}, plan.blob);
         delete core.settings;
+        if (Array.isArray(core.roster) && IMP && typeof IMP.impMergeRoster === "function") core.roster = IMP.impMergeRoster(core.roster, liveBlob.roster);
         const merged = _objectSpread(_objectSpread(_objectSpread({}, liveBlob), core), {}, {
           settings: _objectSpread(_objectSpread({}, liveBlob.settings && typeof liveBlob.settings === "object" ? liveBlob.settings : {}), plan.blob.settings || {})
         });
@@ -2943,6 +3019,7 @@ function CallSchedule() {
     setHolidays(undefined);
     setSettings({});
     setLastPublished(null);
+    setLastGenerate(undefined);
     setSaveStatus("Reset complete");
     setTimeout(() => setSaveStatus(""), 2000);
   };
@@ -2970,7 +3047,12 @@ function CallSchedule() {
     }
   }, []);
   const sendEmailNotif = useCallback(async (type, data, targetIds = null) => {
-    if (Array.isArray(targetIds) && targetIds.length === 0) return;
+    if (Array.isArray(targetIds) && targetIds.length === 0) return {
+      ok: false,
+      skipped: true,
+      sent: 0,
+      failed: 0
+    };
     try {
       const body = {
         type,
@@ -2983,13 +3065,46 @@ function CallSchedule() {
         body: JSON.stringify(body)
       });
       const result = await res.json().catch(() => null);
+      const errText = result && typeof result.error === "string" ? result.error : "";
+      if (res.status === 400 && /^unknown notification type/.test(errText)) {
+        console.warn("Email notification: category not enabled on the deployed function yet -", type, errText);
+        showToast("E-mail for this event is not enabled yet - the in-app note was posted.", "info");
+        return {
+          ok: false,
+          notEnabled: true,
+          status: res.status,
+          error: errText,
+          sent: 0,
+          failed: 0
+        };
+      }
       if (!res.ok || result && result.failed > 0) {
         console.warn("Email notification issue:", type, res.status, JSON.stringify(result));
         showToast(res.status === 404 ? "Email function is not deployed yet (Prompt 10) - no email sent." : "Some notification emails didn't send.", "error");
+        return {
+          ok: false,
+          status: res.status,
+          error: errText || `HTTP ${res.status}`,
+          sent: result && Number(result.sent) || 0,
+          failed: result && Number(result.failed) || 0
+        };
       }
+      return {
+        ok: true,
+        sent: result && Number(result.sent) || 0,
+        failed: 0,
+        skippedPrefOff: result && Number(result.skipped_pref_off) || 0
+      };
     } catch (e) {
       console.warn("Email notification error:", e);
       showToast("Couldn't send email notifications - check your connection.", "error");
+      return {
+        ok: false,
+        status: 0,
+        error: String(e && e.message || e),
+        sent: 0,
+        failed: 0
+      };
     }
   }, []);
   const tradeEligibility = (day, role, candidateId, opts) => {
@@ -3020,15 +3135,25 @@ function CallSchedule() {
       };
     }
   };
+  const tradeIsFullWeekendBlock = days => {
+    if (!days || days.length !== 3 || !days.every(suIsIso)) return false;
+    const d0 = parse(days[0]);
+    if (d0.getDay() !== 5 || days[1] !== fmt(addD(d0, 1)) || days[2] !== fmt(addD(d0, 2))) return false;
+    return !(rulesCtx && rulesCtx.holidayByDay && days.some(d => rulesCtx.holidayByDay[d]));
+  };
   const tradeEligibilityOver = (days, role, candidateId) => {
     const soft = [];
+    const PR = rulesCtx && rulesCtx.per ? rulesCtx.per[candidateId] : null;
+    const asBlock = !!(PR && PR.weekendStyle === "block" && tradeIsFullWeekendBlock(days));
     for (let i = 0; i < days.length; i++) {
-      const r = tradeEligibility(days[i], role, candidateId, {
+      const r = tradeEligibility(days[i], role, candidateId, _objectSpread({
         assume: days.filter(x => x !== days[i]).map(x => ({
           date: x,
           role
         }))
-      });
+      }, asBlock ? {
+        asBlockMember: true
+      } : {}));
       if (!r.ok) return _objectSpread(_objectSpread({}, r), {}, {
         day: days[i]
       });
@@ -3890,6 +4015,13 @@ function CallSchedule() {
     setShowPublishDialog(true);
   };
   publishRef.current = openPublishDialog;
+  const pendingOpenShiftsNoticeRef = useRef(false);
+  const closePublishDialog = () => {
+    setShowPublishDialog(false);
+    if (!pendingOpenShiftsNoticeRef.current) return;
+    pendingOpenShiftsNoticeRef.current = false;
+    announceOpenShiftsAfterPublish(false);
+  };
   const triggerPublishNotify = async () => {
     const active = officeContacts.filter(c => c.active).length;
     if (!confirm(`Send the publish notice (${publishChanges.length} change(s)) to ${active} active office contact(s) and post it in the app?`)) return;
@@ -3937,7 +4069,9 @@ function CallSchedule() {
         period: publishLabel || "",
         change_lines: lines
       });
-      showToast(`Published. Sent ${(_body$sent2 = body.sent) !== null && _body$sent2 !== void 0 ? _body$sent2 : 0} office email(s).`, "success");
+      pendingOpenShiftsNoticeRef.current = false;
+      const os = await announceOpenShiftsAfterPublish(true);
+      showToast(`Published. Sent ${(_body$sent2 = body.sent) !== null && _body$sent2 !== void 0 ? _body$sent2 : 0} office email(s).${os ? " " + os.text : ""}`, os && os.tone === "error" ? "error" : "success");
       setShowPublishDialog(false);
     } catch (e) {
       console.warn("Publish error:", e);
@@ -4246,7 +4380,7 @@ function CallSchedule() {
     border: "1px solid #2a3a5e",
     color: "#e0e0f0"
   } : {};
-  const todayStr = fmt(new Date());
+  const todayStr = todayCentral();
   const todayAssign = schedule[todayStr] || null;
   const buildTonightMsg = () => {
     const a = todayAssign;
@@ -4392,7 +4526,7 @@ function CallSchedule() {
     } else setCalMonth(m => m + 1);
   };
   const goToday = () => {
-    const n = new Date();
+    const n = parse(todayCentral());
     setCalMonth(n.getMonth());
     setCalYear(n.getFullYear());
   };
@@ -4447,7 +4581,455 @@ function CallSchedule() {
     if (h < 48) return h + " h ago";
     return Math.floor(h / 24) + " days ago";
   };
-  const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr), [schedule, surgeons, monthStartStr, monthEndStr]);
+  const weekRows = useMemo(() => buildWeekRows(schedule, surgeons, monthStartStr, monthEndStr, {
+    today: todayStr
+  }), [schedule, surgeons, monthStartStr, monthEndStr, todayStr]);
+  const openKeys = useMemo(() => {
+    if (!gridDays.length) return new Set();
+    let base = schedule;
+    if (previewGen && previewGen.schedule) {
+      base = {};
+      gridDays.forEach(d => {
+        base[d] = previewGen.schedule[d] || schedule[d] || null;
+      });
+    }
+    return new Set(openSlots(base, gridDays[0], gridDays[gridDays.length - 1], todayStr).map(s => openSlotKey(s.day, s.role)));
+  }, [schedule, previewGen, gridDays, todayStr]);
+  const [obHorizon, setObHorizon] = useState(30);
+  const [obRole, setObRole] = useState("all");
+  const [obWeekend, setObWeekend] = useState(false);
+  const [claimSheet, setClaimSheet] = useState(null);
+  const [claimBusy, setClaimBusy] = useState(false);
+  const [obNotice, setObNotice] = useState(null);
+  const [obNoticeBusy, setObNoticeBusy] = useState(false);
+  const obCancelRef = useRef(null);
+  const obEmailBtnRef = useRef(null);
+  const claimCancelRef = useRef(null);
+  const claimReturnRef = useRef(null);
+  const [boardNotices, setBoardNotices] = useState([]);
+  useEffect(() => {
+    if (view !== "openshifts" || isPublicMode) return undefined;
+    let alive = true;
+    (async () => {
+      try {
+        const rows = await readAuthOnlyTable("notifications", {
+          eq: {
+            type: "open_shifts"
+          },
+          order: "created_at.desc",
+          limit: 20
+        });
+        if (alive && rows) setBoardNotices(rows);
+      } catch (e) {
+        console.warn("open_shifts notices load failed (last announced falls back to the feed):", e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [view, isPublicMode]);
+  const boardAnnounced = useMemo(() => boardNotices.length ? boardNotices.concat(notifications) : notifications, [boardNotices, notifications]);
+  const boardReasons = useMemo(() => {
+    const toMap = list => {
+      const m = {};
+      (Array.isArray(list) ? list : []).forEach(s => {
+        if (s && suIsIso(s.day) && (s.role === "primary" || s.role === "backup") && typeof s.reason === "string") m[openSlotKey(s.day, s.role)] = s.reason;
+      });
+      return m;
+    };
+    const src = lastGenerate && typeof lastGenerate === "object" ? lastGenerate.openSlots : null;
+    const fromLast = Array.isArray(src) ? toMap(src) : src && typeof src === "object" ? src : {};
+    const unc = previewGen && previewGen.diagnostics && Array.isArray(previewGen.diagnostics.uncovered) ? previewGen.diagnostics.uncovered : [];
+    const fromPreview = toMap(unc.map(u => u && typeof u === "object" ? {
+      day: u.day,
+      role: u.role,
+      reason: openSlotReason(u.reasons)
+    } : null));
+    return _objectSpread(_objectSpread({}, fromLast), fromPreview);
+  }, [previewGen, lastGenerate]);
+  const boardWeekendKinds = useMemo(() => {
+    const fromPreview = previewGen && previewGen.diagnostics ? previewGen.diagnostics.weekendUnits : null;
+    const fromLast = lastGenerate && typeof lastGenerate === "object" ? lastGenerate.weekendKinds || lastGenerate.weekendUnits || lastGenerate.diagnostics && lastGenerate.diagnostics.weekendUnits : null;
+    return _objectSpread(_objectSpread({}, openSlotWeekendKinds(fromLast)), openSlotWeekendKinds(fromPreview));
+  }, [previewGen, lastGenerate]);
+  const board = useMemo(() => obBoardSlots(schedule, todayStr, lastPublishedDay, {
+    holidayByDay: rulesCtx ? rulesCtx.holidayByDay : null,
+    weekendKinds: boardWeekendKinds,
+    reasons: boardReasons
+  }), [schedule, todayStr, lastPublishedDay, rulesCtx, boardWeekendKinds, boardReasons]);
+  const boardSlots = board.slots;
+  const boardEnd = board.end;
+  const boardRanges = board.ranges;
+  const boardEndText = boardEnd ? fmtMD(boardEnd) : "-";
+  const boardTail = useMemo(() => {
+    const through = suAddDays(todayStr, 59);
+    const from = boardEnd && boardEnd >= todayStr ? suAddDays(boardEnd, 1) : todayStr;
+    const listed = new Set(boardSlots.map(s => openSlotKey(s.day, s.role)));
+    const counts = from <= through ? openSlotCounts(openSlots(schedule, from, through, todayStr).filter(s => !listed.has(openSlotKey(s.day, s.role)))) : {
+      primary: 0,
+      backup: 0,
+      total: 0
+    };
+    return {
+      from,
+      through,
+      primary: counts.primary,
+      backup: counts.backup
+    };
+  }, [schedule, todayStr, boardEnd, boardSlots]);
+  const boardBlockMember = (day, role, id) => {
+    const dow = parse(day).getDay();
+    if (dow !== 5 && dow !== 6 && dow !== 0) return false;
+    const fri = suAddDays(day, dow === 5 ? 0 : dow === 6 ? -1 : -2);
+    return [0, 1, 2].map(k => suAddDays(fri, k)).every(d => d === day || !!(schedule[d] && schedule[d][role] === id));
+  };
+  const boardElig = useMemo(() => {
+    const out = {};
+    if (view !== "openshifts" || !rulesCtx) return out;
+    boardSlots.forEach(s => {
+      out[openSlotKey(s.day, s.role)] = activeSurgeons.filter(sg => sg.type !== "external").map(sg => {
+        let r;
+        try {
+          r = eligibility(rulesCtx, s.day, s.role, sg.id, boardBlockMember(s.day, s.role, sg.id) ? {
+            asBlockMember: true
+          } : undefined);
+        } catch (e) {
+          console.warn("board eligibility threw for", sg.id, s.role, s.day, e);
+          r = {
+            ok: false,
+            hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)],
+            soft: []
+          };
+        }
+        return {
+          id: sg.id,
+          ok: !!r.ok,
+          hard: r.hard && r.hard.length ? r.hard : r.ok ? [] : ["unknown-surgeon"],
+          soft: r.soft || []
+        };
+      });
+    });
+    return out;
+  }, [view, boardSlots, rulesCtx, activeSurgeons, schedule]);
+  const boardRows = useMemo(() => obBoardRows(boardSlots, {
+    today: todayStr,
+    horizonDays: obHorizon === "all" ? null : obHorizon,
+    role: obRole,
+    weekendOnly: obWeekend
+  }), [boardSlots, todayStr, obHorizon, obRole, obWeekend]);
+  const boardUnitText = u => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : "weekend" + (u.pattern ? " " + u.pattern : "");
+  const boardCopyList = async () => {
+    const text = boardRows.map(s => openSlotsLine(s)).join("\n");
+    if (!text) {
+      showToast("Nothing to copy - no open shift matches the filters.", "info");
+      return;
+    }
+    try {
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopiedUrl("ob");
+      setTimeout(() => setCopiedUrl(""), 2500);
+      showToast(`Copied ${boardRows.length} line(s) - paste into an email or Word.`, "info");
+    } catch (e) {
+      console.warn("Copy list: clipboard unavailable:", e);
+      showToast("Copy list: the clipboard is blocked here - select the table and copy it instead.", "error");
+    }
+  };
+  const claimOpenSlotRpc = async (day, role) => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/claim_open_slot`, {
+        method: "POST",
+        headers: dbAuthHeaders(),
+        body: JSON.stringify({
+          p_day: day,
+          p_role: role
+        })
+      });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return {
+        ok: false,
+        error: describeDbError(text) || `HTTP ${res.status}`
+      };
+      let body = null;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch (e) {
+        console.warn("claim_open_slot: 2xx with a non-JSON body", text.slice(0, 160), e);
+        body = null;
+      }
+      return {
+        ok: true,
+        result: body
+      };
+    } catch (e) {
+      console.warn("claim_open_slot call failed:", e);
+      return {
+        ok: false,
+        error: "network error - nothing was changed; check your connection and try again"
+      };
+    }
+  };
+  const openClaimSheet = (slot, opener) => {
+    if (!mySurgeon) return;
+    const me = (boardElig[openSlotKey(slot.day, slot.role)] || []).find(o => o.id === mySurgeon);
+    claimReturnRef.current = opener || null;
+    setClaimSheet({
+      day: slot.day,
+      role: slot.role,
+      unit: slot.unit,
+      soft: me ? me.soft : [],
+      mates: obUnitMates(boardSlots, slot)
+    });
+  };
+  const closeClaimSheet = () => {
+    setClaimSheet(null);
+    const back = claimReturnRef.current;
+    claimReturnRef.current = null;
+    if (back && typeof back.focus === "function" && document.contains(back)) {
+      try {
+        back.focus();
+      } catch (e) {
+        console.warn("claim sheet: could not return focus", e);
+      }
+    }
+  };
+  useEffect(() => {
+    if (!claimSheet) return undefined;
+    const t = setTimeout(() => {
+      if (claimCancelRef.current) {
+        try {
+          claimCancelRef.current.focus();
+        } catch (e) {
+          console.warn("claim sheet: could not focus Cancel", e);
+        }
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [claimSheet]);
+  const claimSheetKeyDown = e => {
+    if (e.key !== "Tab") return;
+    const root = e.currentTarget;
+    const focusable = Array.from(root.querySelectorAll("button:not([disabled])"));
+    if (!focusable.length) return;
+    const first = focusable[0],
+      last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  const runClaim = async () => {
+    const s = claimSheet;
+    if (!s || claimBusy || !mySurgeon) return;
+    const gate = (boardElig[openSlotKey(s.day, s.role)] || []).find(o => o.id === mySurgeon);
+    if (!gate || !gate.ok) {
+      showToast("Not eligible any more: " + (gate ? reasonLabel(gate.hard[0], nameOf) : reasonLabel("unknown-surgeon")), "error");
+      closeClaimSheet();
+      return;
+    }
+    setClaimBusy(true);
+    const label = `${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} ${s.role}`;
+    const a = await claimOpenSlotRpc(s.day, s.role);
+    if (!a.ok) {
+      console.warn("claim_open_slot refused:", a.error);
+      showToast(`Couldn't take ${label}: ${a.error}`, "error");
+      logAudit("schedule.claim", `claim refused: ${label}`, {
+        day: s.day,
+        role: s.role,
+        person: mySurgeon,
+        outcome: "failed",
+        error: String(a.error).slice(0, 300)
+      });
+      setClaimBusy(false);
+      closeClaimSheet();
+      try {
+        if (refreshDaysRef.current) await refreshDaysRef.current();
+      } catch (e) {
+        console.warn("schedule refetch after a refused claim failed:", e);
+      }
+      return;
+    }
+    setClaimBusy(false);
+    closeClaimSheet();
+    showToast(`You took ${label}`, "success");
+    try {
+      if (refreshDaysRef.current) await refreshDaysRef.current();
+    } catch (e) {
+      console.warn("schedule refetch after claim_open_slot failed:", e);
+      showToast("Shift taken, but the calendar could not be refreshed - reload to see it.", "error");
+    }
+    const ids = await schedulerIdsLoud();
+    if (ids) {
+      const targets = [...new Set([...ids, mySurgeon])];
+      const msg = `${nameOf(mySurgeon)} took the open ${s.role} shift on ${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} (07:00 to 07:00).`;
+      sendEmailNotif("shift_claimed", {
+        subject: `${nameOf(mySurgeon)} took ${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} ${s.role}`,
+        message: msg,
+        day: s.day,
+        role: s.role,
+        surgeon_id: mySurgeon
+      }, targets);
+    }
+  };
+  useEffect(() => {
+    if (!claimSheet) return undefined;
+    const onKey = e => {
+      if (e.key === "Escape" && !claimBusy) closeClaimSheet();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [claimSheet, claimBusy]);
+  useEffect(() => {
+    if (!editorDay) setEditorFocus(null);
+  }, [editorDay]);
+  const composeOpenShiftsNotice = (slots, through) => {
+    const list = Array.isArray(slots) ? slots : [];
+    const em = openShiftsEmail(list, {
+      appUrl: window.location.origin + window.location.pathname,
+      through: suIsIso(through) ? through : null
+    });
+    return {
+      subject: em.subject,
+      message: em.message,
+      detail: em.detail,
+      slots: em.slots,
+      count: em.count,
+      through: em.through
+    };
+  };
+  const announceOpenShiftsAfterPublish = async quiet => {
+    try {
+      const sched = scheduleRef.current || schedule;
+      const through = suLastContiguousDay(sched);
+      if (!through || through < todayStr) return null;
+      const slots = openSlots(sched, todayStr, through, todayStr, {
+        holidayByDay: rulesCtx ? rulesCtx.holidayByDay : null,
+        weekendKinds: boardWeekendKinds,
+        reasons: boardReasons
+      });
+      if (!slots.length) return null;
+      return await sendOpenShiftsNotice("publish", composeOpenShiftsNotice(slots, through), quiet);
+    } catch (e) {
+      console.warn("open-shifts notice after publish failed:", e);
+      const text = "The open-shifts notice to the group could not be sent - use 'Email the group now' on the Open shifts board.";
+      if (!quiet) showToast(text, "error");
+      return {
+        text: text,
+        tone: "error"
+      };
+    }
+  };
+  const sendOpenShiftsNotice = async (origin, n, quiet) => {
+    const thru = n.through;
+    const count = n.count;
+    await addNotification("open_shifts", n.subject, n.message, {
+      slots: n.slots,
+      through: thru,
+      origin: origin || "board"
+    });
+    const mail = await sendEmailNotif("open_shifts", {
+      subject: n.subject,
+      message: n.message,
+      detail: n.detail,
+      slots: n.slots,
+      through: thru
+    });
+    logAudit("openshifts.notify", `announced ${count} open shift(s) through ${thru || "-"}`, {
+      count: count,
+      through: thru,
+      origin: origin || "board",
+      slots: n.slots,
+      email: mail && mail.ok ? "sent " + mail.sent : mail && mail.notEnabled ? "not enabled" : "failed"
+    });
+    const what = `In-app note posted about ${count} open shift${count === 1 ? "" : "s"}`;
+    let text, tone;
+    if (mail && mail.ok) {
+      text = `${what}; e-mail sent to ${mail.sent} ${mail.sent === 1 ? "person" : "people"}${mail.skippedPrefOff ? ` (${mail.skippedPrefOff} opted out)` : ""}.`;
+      tone = "success";
+    } else if (mail && mail.notEnabled) {
+      text = `${what}; the e-mail for this notice is not enabled yet.`;
+      tone = "info";
+    } else {
+      text = `${what}; the e-mail did not go out - see the message above.`;
+      tone = "error";
+    }
+    if (!quiet) showToast(text, tone);
+    return {
+      count: count,
+      through: thru,
+      mail: mail,
+      text: text,
+      tone: tone
+    };
+  };
+  const notifyOpenShifts = async (origin, slots, through) => {
+    if (!isScheduler) return;
+    const list = Array.isArray(slots) ? slots : [];
+    if (!list.length) {
+      showToast("No open shifts to announce - the published range is fully covered.", "info");
+      return;
+    }
+    const n = composeOpenShiftsNotice(list, through);
+    if (origin === "board") {
+      setObNotice(n);
+      return;
+    }
+    await sendOpenShiftsNotice(origin || "board", n);
+  };
+  const closeObNotice = () => {
+    setObNotice(null);
+    const back = obEmailBtnRef.current;
+    if (back && typeof back.focus === "function" && document.contains(back)) {
+      try {
+        back.focus();
+      } catch (e) {
+        console.warn("email preview: could not return focus", e);
+      }
+    }
+  };
+  const sendBoardNotice = async () => {
+    const n = obNotice;
+    if (!n || obNoticeBusy) return;
+    setObNoticeBusy(true);
+    try {
+      await sendOpenShiftsNotice("board", n);
+    } finally {
+      setObNoticeBusy(false);
+      closeObNotice();
+    }
+  };
+  useEffect(() => {
+    if (!obNotice) return undefined;
+    const onKey = e => {
+      if (e.key === "Escape" && !obNoticeBusy) closeObNotice();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [obNotice, obNoticeBusy]);
+  useEffect(() => {
+    if (!obNotice) return undefined;
+    const t = setTimeout(() => {
+      if (obCancelRef.current) {
+        try {
+          obCancelRef.current.focus();
+        } catch (e) {
+          console.warn("email preview: could not focus Cancel", e);
+        }
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [obNotice]);
   const errText = e => e && e.message ? e.message : String(e);
   const toolMonthList = () => {
     const out = [];
@@ -4476,7 +5058,8 @@ function CallSchedule() {
     holidays,
     vacations,
     generatedAt: new Date(),
-    appUrl: location.origin + location.pathname
+    appUrl: location.origin + location.pathname,
+    today: todayStr
   });
   const downloadSharePage = () => {
     try {
@@ -4508,7 +5091,8 @@ function CallSchedule() {
         schedule,
         roster: surgeons,
         holidays,
-        vacations
+        vacations,
+        today: todayStr
       });
       const w = window.open("", "_blank");
       if (!w) {
@@ -4531,11 +5115,15 @@ function CallSchedule() {
     to: erTo,
     widened: false
   };
-  const erPanelHtml = useMemo(() => erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo) : "", [schedule, surgeons, erFrom, erTo, erRangeOk]);
+  const erPanelHtml = useMemo(() => erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo, {
+    today: todayStr
+  }) : "", [schedule, surgeons, erFrom, erTo, erRangeOk, todayStr]);
   const copyErForWord = async () => {
     if (!erRangeOk) return;
     const html = erPanelHtml;
-    const text = buildErCallPanelsText(schedule, surgeons, erFrom, erTo);
+    const text = buildErCallPanelsText(schedule, surgeons, erFrom, erTo, {
+      today: todayStr
+    });
     try {
       if (!(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem && window.isSecureContext)) throw new Error("rich clipboard unavailable");
       await navigator.clipboard.write([new ClipboardItem({
@@ -4567,7 +5155,9 @@ function CallSchedule() {
   const downloadErHtml = () => {
     if (!erRangeOk) return;
     try {
-      downloadTextFile(buildErCallPanelsDocument(schedule, surgeons, erFrom, erTo), `silvis-er-call-panels-${erSpan.from}-${erSpan.to}.html`, "text/html");
+      downloadTextFile(buildErCallPanelsDocument(schedule, surgeons, erFrom, erTo, {
+        today: todayStr
+      }), `silvis-er-call-panels-${erSpan.from}-${erSpan.to}.html`, "text/html");
     } catch (e) {
       console.error("ER panel download failed:", e);
       showToast("Download failed: " + errText(e), "error");
@@ -4919,7 +5509,7 @@ function CallSchedule() {
   }), paintSheet && React.createElement(MonthPainterSheet, {
     css: css,
     dk: dk,
-    surgeons: isScheduler ? activeSurgeons : activeSurgeons.filter(s => s.id === mySurgeon),
+    surgeons: isScheduler ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon),
     vacations: vacations,
     onCommit: commitTimeOffPaint,
     onClose: () => setPaintSheet(false)
@@ -4952,7 +5542,7 @@ function CallSchedule() {
     })
   }, toast.msg), showPublishDialog && !isPublicMode && React.createElement("div", {
     "data-testid": "publish-dialog",
-    onClick: () => setShowPublishDialog(false),
+    onClick: closePublishDialog,
     style: {
       position: "fixed",
       inset: 0,
@@ -5036,7 +5626,7 @@ function CallSchedule() {
       margin: "0 0 10px",
       lineHeight: 1.5
     }
-  }, "The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that)."), React.createElement("div", {
+  }, "The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept & Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open."), React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "flex-end",
@@ -5044,12 +5634,13 @@ function CallSchedule() {
     }
   }, React.createElement("button", {
     "data-testid": "publish-skip",
-    onClick: () => setShowPublishDialog(false),
+    onClick: closePublishDialog,
     style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
       padding: "7px 14px",
       fontSize: 12
     })
   }, "Skip the notice"), React.createElement("button", {
+    "data-testid": "publish-send",
     onClick: triggerPublishNotify,
     disabled: officeNotifBusy || publishChanges.length === 0,
     style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
@@ -5170,6 +5761,10 @@ function CallSchedule() {
         td[data-flag="over"], span[data-flag="over"] { color: #f06060 !important; }
         td[data-flag="under"], span[data-flag="under"] { color: #5aafe8 !important; }
         td[data-flag="ok"], span[data-flag="ok"] { color: #40c060 !important; }
+        /* Prompt 13 fix round: the .table-wrap swipe-hint covers are painted in the light card white (#ffffff)
+           in the <head> rule; under dark mode they repaint in the dark card colour so the first column stays
+           readable at 390 px (positions / sizes / attachment come from the light rule - only the images change) */
+        .table-wrap { background-image: linear-gradient(90deg, #16213e 30%, rgba(22,33,62,0)), linear-gradient(90deg, rgba(22,33,62,0), #16213e 70%), radial-gradient(farthest-side at 0 50%, rgba(0,0,0,0.55), rgba(0,0,0,0)), radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,0.55), rgba(0,0,0,0)) !important; }
       `), authLoading ? React.createElement("div", {
     style: {
       display: "flex",
@@ -5602,7 +6197,7 @@ function CallSchedule() {
   }, "Connecting"))))), !isPublicMode && React.createElement("div", {
     style: css.nav
   }, (() => {
-    const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["myschedule", "Mine"], ["timeoff", "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
+    const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["openshifts", "Open shifts"], ["myschedule", "Mine"], ["timeoff", "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
     let tabs = allTabs;
     if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
     if (!mySurgeon) tabs = tabs.filter(([k]) => k !== "myschedule");
@@ -5631,7 +6226,26 @@ function CallSchedule() {
         justifyContent: "center",
         padding: "0 4px"
       }
-    }, pendingTrades)));
+    }, pendingTrades), k === "openshifts" && boardSlots.length > 0 && React.createElement("span", {
+      "data-testid": "openshifts-badge",
+      title: boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : ""),
+      style: {
+        position: "absolute",
+        top: -4,
+        right: -4,
+        background: "#e04040",
+        color: "#fff",
+        borderRadius: 10,
+        fontSize: 9,
+        fontWeight: 700,
+        minWidth: 16,
+        height: 16,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "0 4px"
+      }
+    }, boardSlots.length)));
   })(), React.createElement("button", {
     onClick: () => {
       setShowNotifs(p => !p);
@@ -5750,7 +6364,9 @@ function CallSchedule() {
       trade_cancelled: "timeoff",
       trade_applied: "timeoff",
       vacation_logged: "timeoff",
-      shift_reminder: "myschedule"
+      shift_reminder: "myschedule",
+      open_shifts: "openshifts",
+      shift_claimed: "calendar"
     };
     const targetTab = tabMap[n.type] || null;
     return React.createElement("div", {
@@ -5866,7 +6482,7 @@ function CallSchedule() {
     }, "Refresh")
   }, React.createElement(UsersCard, {
     css: css,
-    roster: surgeons,
+    roster: rosterPool,
     profiles: allProfiles,
     error: profilesErr,
     loading: profilesLoading,
@@ -5905,7 +6521,7 @@ function CallSchedule() {
   }, React.createElement(AvailabilityCard, {
     css: css,
     rows: availabilityRows,
-    roster: activeSurgeons,
+    roster: poolSurgeons,
     nameOf: nameOf,
     onAdd: addAvailabilityRows,
     onDelete: deleteAvailabilityRow,
@@ -5928,7 +6544,7 @@ function CallSchedule() {
     }, "Paint month")
   }, React.createElement("p", {
     style: sectionNote
-  }, "Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is."), renderVacationForm(activeSurgeons), React.createElement("label", {
+  }, "Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is."), renderVacationForm(poolSurgeons), React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -5950,6 +6566,7 @@ function CallSchedule() {
   }, React.createElement(HolidaysCard, {
     css: css,
     holidays: holidays,
+    groupRules: groupRules,
     schedule: schedule,
     roster: surgeons,
     nameOf: nameOf,
@@ -5979,7 +6596,9 @@ function CallSchedule() {
     onSaveOverride: saveEastOverride,
     onDeleteOverride: deleteEastOverride,
     threshold: forecastThreshold,
-    today: todayStr
+    today: todayStr,
+    conflicts: eastConflictRows,
+    onEditDay: goToDay
   })), React.createElement(Collapsible, {
     css: css,
     ck: "setup_generate",
@@ -6000,6 +6619,8 @@ function CallSchedule() {
     roster: surgeons,
     rulesImported: rulesImported,
     lastPublishedDay: lastPublishedDay,
+    genStart: genStart,
+    genFirstOpenDay: genFirstOpenDay,
     laterRanges: laterAssignedRanges,
     holidayNames: holidayNameByDay(holidays)
   })), React.createElement(Collapsible, {
@@ -6202,6 +6823,7 @@ function CallSchedule() {
   }, "Clear range")))), view === "calendar" && (() => {
     const SlotLine = ({
       role,
+      day,
       holder,
       locked
     }) => {
@@ -6213,7 +6835,10 @@ function CallSchedule() {
         style: {
           background: dk ? "#243250" : "#e4e8ee"
         }
-      });else if (!holder) body = React.createElement("span", {
+      });else if (!holder && !slotIsOpen(day, holder, todayStr)) body = React.createElement("span", {
+        className: "cal-pill cal-blank",
+        "aria-hidden": "true"
+      }, "\xA0");else if (!holder) body = React.createElement("span", {
         className: "cal-pill cal-open",
         style: {
           color: "#c04040",
@@ -6563,7 +7188,7 @@ function CallSchedule() {
         fontStyle: "italic",
         marginBottom: 8
       })
-    }, "No schedule days in the database yet - every day shows OPEN."), !rulesImported && loaded && React.createElement("p", {
+    }, "No schedule days in the database yet - every day from today shows OPEN."), !rulesImported && loaded && React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         marginBottom: 8
       })
@@ -6600,10 +7225,10 @@ function CallSchedule() {
       const fc = forecastByDay[d];
       const pH = dayHolder(a, "primary");
       const bH = a ? a.backup : null;
-      const openP = !pH,
-        openB = !bH;
+      const openP = slotIsOpen(d, pH, todayStr),
+        openB = slotIsOpen(d, bH, todayStr);
       const inFilter = calSurgeonFilters.length === 0 || a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup));
-      const dim = !inFilter || calOnlyOpen && !(openP || openB);
+      const dim = !inFilter || calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup")));
       const isToday = d === todayStr;
       const bg = hol ? dk ? "#3a3418" : "#fdf6dc" : isWk ? dk ? "#141c30" : "#f3f6f9" : dk ? "#16213e" : "#ffffff";
       const bracket = isWk ? {
@@ -6612,10 +7237,11 @@ function CallSchedule() {
         borderTopRightRadius: dow === 0 ? 8 : 6
       } : {};
       const derivedWho = derived ? Object.keys(derived).map(r => nameOf(derived[r]) + " Silvis " + r).join(", ") : "";
-      const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + holderLabel(pH, nameOf), "B " + holderLabel(bH, nameOf)];
+      const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
       if (hol) titleBits.push(hol.name + " (holiday unit)");
       if (derivedWho) titleBits.push("East-derived: " + derivedWho);
       if (a && a.note) titleBits.push("note: " + a.note);
+      const nBadges = (derived ? 1 : 0) + (fc && fc.p >= 0.2 ? 1 : 0) + (awaitingConfirmation(a) ? 1 : 0);
       return React.createElement("div", {
         key: d,
         className: "cal-cell" + (isPreview ? " cal-preview" : ""),
@@ -6649,7 +7275,7 @@ function CallSchedule() {
           alignItems: "center",
           gap: 4,
           minWidth: 0,
-          paddingRight: 30
+          paddingRight: Math.max(30, 4 + 15 * nBadges)
         }
       }, React.createElement("span", {
         style: {
@@ -6680,12 +7306,19 @@ function CallSchedule() {
         "data-badge": fc.p >= forecastThreshold ? "F" : "f",
         title: "East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)",
         style: badge(fc.p >= forecastThreshold, "#8a5a10")
-      }, "F")), React.createElement(SlotLine, {
+      }, "F"), awaitingConfirmation(a) && React.createElement("span", {
+        "data-badge": "confirm",
+        "data-testid": "confirm-badge",
+        title: "awaiting the scheduler's confirmation",
+        style: badge(true, "#c2410c")
+      }, "?")), React.createElement(SlotLine, {
         role: "P",
+        day: d,
         holder: pH,
         locked: !!(a && a.primaryLocked)
       }), React.createElement(SlotLine, {
         role: "B",
+        day: d,
         holder: bH,
         locked: !!(a && a.backupLocked)
       }), (vacByDay[d] || []).length > 0 && React.createElement("div", {
@@ -6760,7 +7393,7 @@ function CallSchedule() {
         color: "#c04040",
         fontWeight: 800
       }
-    }, "OPEN"), " = nobody assigned"), React.createElement("span", null, React.createElement("span", {
+    }, "OPEN"), " = nobody assigned (today onward)"), React.createElement("span", null, React.createElement("span", {
       style: {
         fontStyle: "italic"
       }
@@ -6812,7 +7445,7 @@ function CallSchedule() {
       style: thS
     }, "MON/SUN DATES"), React.createElement("th", {
       style: thS
-    }, "TRAUMA & CARDIOTHORACIC SURGERY TRAUMA"), React.createElement("th", {
+    }, "TRAUMA"), React.createElement("th", {
       style: thS
     }, "TRAUMA BACKUP"))), React.createElement("tbody", null, !loaded && React.createElement("tr", null, React.createElement("td", {
       colSpan: 3,
@@ -7071,30 +7704,530 @@ function CallSchedule() {
       dangerouslySetInnerHTML: {
         __html: erPanelHtml
       }
-    })))), editorDay && React.createElement(DayEditor, {
-      key: editorDay,
-      day: editorDay,
-      entry: schedule[editorDay] || null,
-      roster: surgeons,
-      ctxInputs: ctxInputs,
-      ctxError: rulesCtxState.error,
-      canEdit: isScheduler && !isPublicMode,
-      rulesImported: rulesImported,
-      isPublicMode: isPublicMode,
-      nameOf: nameOf,
-      codeOf: codeOf,
-      colorOf: colorOf,
-      mySurgeon: mySurgeon,
-      vacationNames: vacNamesOn(editorDay),
-      onSave: (next, meta) => {
-        if (saveDayEdit(editorDay, next, meta)) setEditorDay(null);
+    })))));
+  })(), (view === "calendar" || view === "openshifts") && editorDay && React.createElement(DayEditor, {
+    key: editorDay,
+    day: editorDay,
+    entry: schedule[editorDay] || null,
+    roster: surgeons,
+    ctxInputs: ctxInputs,
+    ctxError: rulesCtxState.error,
+    canEdit: isScheduler && !isPublicMode,
+    rulesImported: rulesImported,
+    isPublicMode: isPublicMode,
+    nameOf: nameOf,
+    codeOf: codeOf,
+    colorOf: colorOf,
+    mySurgeon: mySurgeon,
+    vacationNames: vacNamesOn(editorDay),
+    focusExternal: editorFocus === "external",
+    onSave: (next, meta) => {
+      if (saveDayEdit(editorDay, next, meta)) setEditorDay(null);
+    },
+    onCancel: () => setEditorDay(null),
+    onNav: editorNav,
+    onTrade: proposeTradeForDay,
+    css: css,
+    dk: dk
+  }), view === "openshifts" && !isPublicMode && (() => {
+    const rows = boardRows;
+    const canAct = !!mySurgeon || isScheduler;
+    const horizonBtn = (v, text) => React.createElement("button", {
+      key: String(v),
+      type: "button",
+      "data-testid": "ob-horizon-" + v,
+      onClick: () => setObHorizon(v),
+      style: _objectSpread(_objectSpread({}, css.mini(obHorizon === v)), {}, {
+        padding: "6px 10px"
+      })
+    }, text);
+    const chip = o => {
+      const c = colorOf(o.id);
+      return React.createElement("span", {
+        key: o.id,
+        "data-eligible-id": o.id,
+        title: o.soft.length ? "allowed - " + o.soft.map(x => reasonLabel(x.reason, nameOf)).join("; ") : "no rule warnings",
+        style: {
+          background: c.tg,
+          color: c.tx,
+          border: "1px solid " + c.bd,
+          borderRadius: 5,
+          padding: "1px 7px",
+          fontSize: 11,
+          fontWeight: 700,
+          whiteSpace: "nowrap",
+          marginRight: 4,
+          marginBottom: 2,
+          display: "inline-block"
+        }
+      }, nameOf(o.id));
+    };
+    const takeTitle = me => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(me.hard[0], nameOf) : reasonLabel("unknown-surgeon");
+    const sheetDate = d => {
+      try {
+        return parse(d).toLocaleDateString(undefined, {
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+          year: "numeric"
+        });
+      } catch (e) {
+        return d;
+      }
+    };
+    return React.createElement("div", {
+      style: css.card,
+      "data-testid": "openshifts-card"
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: 8
+      }
+    }, React.createElement("div", {
+      style: css.cardT
+    }, "Open shifts"), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: "#7a8a98"
+      }
+    }, !loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`)), React.createElement("p", {
+      style: sectionNote
+    }, "Every slot the published schedule leaves open, from today to the last published day (and on any day already assigned beyond it, such as a holiday unit) - each is one 24-hour shift, 07:00 to 07:00.", mySurgeon ? " Take any shift the rules allow you: it is written to the schedule at once (no approval) and the scheduler is told." : "", isScheduler ? " As the scheduler you can assign anyone from the day editor or write in outside cover." : "", " The generator's reason for leaving a slot open appears after the next Generate."), React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        alignItems: "center",
+        marginBottom: 10
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 10,
+        color: "#7a8a98",
+        fontWeight: 700,
+        textTransform: "uppercase",
+        letterSpacing: 0.5
+      }
+    }, "Show"), horizonBtn(30, "Next 30 days"), horizonBtn(60, "Next 60 days"), horizonBtn("all", "All"), React.createElement("select", {
+      "data-testid": "ob-role",
+      value: obRole,
+      onChange: e => setObRole(e.target.value),
+      style: _objectSpread(_objectSpread(_objectSpread({}, css.inp), dkInp), {}, {
+        padding: "4px 8px",
+        fontSize: 12
+      })
+    }, React.createElement("option", {
+      value: "all"
+    }, "Both roles"), React.createElement("option", {
+      value: "primary"
+    }, "Primary only"), React.createElement("option", {
+      value: "backup"
+    }, "Backup only")), React.createElement("label", {
+      style: {
+        fontSize: 12,
+        color: "#5a6a78",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        minHeight: 36,
+        cursor: "pointer"
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      "data-testid": "ob-weekend",
+      checked: obWeekend,
+      onChange: e => setObWeekend(e.target.checked)
+    }), " weekends only"), React.createElement("span", {
+      style: {
+        flex: "1 1 auto"
+      }
+    }), React.createElement("button", {
+      type: "button",
+      "data-testid": "ob-copy",
+      onClick: boardCopyList,
+      disabled: !rows.length,
+      title: "Plain text, one line per slot - ready for an email or Word",
+      style: _objectSpread(_objectSpread({}, css.btn(copiedUrl === "ob")), {}, {
+        padding: "6px 12px",
+        fontSize: 11,
+        opacity: rows.length ? 1 : 0.5
+      })
+    }, copiedUrl === "ob" ? "Copied" : "Copy list"), isScheduler && React.createElement("button", {
+      type: "button",
+      "data-testid": "ob-email",
+      ref: obEmailBtnRef,
+      onClick: () => notifyOpenShifts("board", boardSlots, boardEnd),
+      disabled: !boardSlots.length,
+      title: "In-app note for everyone + e-mail to those who accept schedule updates; every open slot in the published range",
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "6px 12px",
+        fontSize: 11,
+        opacity: boardSlots.length ? 1 : 0.5
+      })
+    }, "Email the group now")), !rulesCtx && React.createElement("div", {
+      "data-testid": "ob-rules-unavailable",
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        marginBottom: 10
+      })
+    }, "Rules unavailable - the setup has not loaded, so nobody's eligibility can be checked and no shift can be taken until it does."), React.createElement("div", {
+      className: "table-wrap",
+      "data-testid": "openshifts-wrap",
+      style: css.tableWrap
+    }, React.createElement("table", {
+      className: "setup-table",
+      "data-testid": "openshifts-table",
+      "data-from": todayStr,
+      "data-to": boardEnd || "",
+      "data-total": boardSlots.length,
+      "data-ranges": boardRanges.map(r => r.start + ".." + r.end).join(",")
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Role"), React.createElement("th", null, "Unit"), React.createElement("th", null, "Why"), React.createElement("th", null, "Eligible now"), React.createElement("th", null, "Last announced"), canAct && React.createElement("th", null, "Action"))), React.createElement("tbody", null, rows.length === 0 && React.createElement("tr", null, React.createElement("td", {
+      colSpan: canAct ? 7 : 6,
+      style: {
+        color: "#1a8040",
+        fontWeight: 600,
+        padding: "12px 8px"
+      }
+    }, !loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered.")), rows.map(s => {
+      const key = openSlotKey(s.day, s.role);
+      const elig = boardElig[key] || null;
+      const eligible = elig ? elig.filter(o => o.ok) : [];
+      const me = elig ? elig.find(o => o.id === mySurgeon) || null : null;
+      const announced = obLastAnnounced(boardAnnounced, s.day, s.role);
+      const locked = !!(schedule[s.day] && schedule[s.day][s.role + "Locked"]);
+      return React.createElement("tr", {
+        key: key,
+        "data-slot": key,
+        "data-day": s.day,
+        "data-role": s.role
+      }, React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap",
+          fontWeight: 700
+        }
+      }, DAY_HDR[parse(s.day).getDay()], " ", fmtMD(s.day), s.day === todayStr ? React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: "#7a8a98",
+          marginLeft: 4,
+          fontWeight: 400
+        }
+      }, "today") : null), React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap"
+        }
+      }, React.createElement("span", {
+        style: {
+          color: "#c04040",
+          fontWeight: 800,
+          fontSize: 10,
+          letterSpacing: 0.5
+        }
+      }, "OPEN"), " ", s.role === "primary" ? "Primary (TRAUMA)" : "Backup"), React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap",
+          fontSize: 12
+        }
+      }, boardUnitText(s.unit)), React.createElement("td", {
+        style: {
+          fontSize: 12,
+          minWidth: 110
+        }
+      }, s.reason || "-"), React.createElement("td", {
+        style: {
+          fontSize: 12,
+          minWidth: 150
+        }
+      }, !rulesCtx ? "-" : eligible.length ? eligible.map(chip) : React.createElement("span", {
+        style: {
+          color: "#c04040",
+          fontStyle: "italic"
+        }
+      }, "nobody under the current rules")), React.createElement("td", {
+        "data-testid": "ob-announced",
+        style: {
+          whiteSpace: "nowrap",
+          fontSize: 12
+        }
+      }, announced ? fmtAuditTime(announced) : "never"), canAct && React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap"
+        }
+      }, React.createElement("div", {
+        style: {
+          display: "flex",
+          gap: 4,
+          alignItems: "center"
+        }
+      }, mySurgeon ? me && me.ok && !locked ? React.createElement("button", {
+        type: "button",
+        "data-testid": "ob-take",
+        onClick: e => openClaimSheet(s, e.currentTarget),
+        style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+          padding: "6px 10px",
+          fontSize: 11
+        })
+      }, "Take this shift") : React.createElement("button", {
+        type: "button",
+        "data-testid": "ob-take",
+        disabled: true,
+        title: locked ? "slot locked - ask the scheduler to assign it" : takeTitle(me),
+        style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+          padding: "6px 10px",
+          fontSize: 11,
+          opacity: 0.55,
+          cursor: "not-allowed"
+        })
+      }, "Take this shift") : null, isScheduler && React.createElement("button", {
+        type: "button",
+        "data-testid": "ob-assign",
+        onClick: () => {
+          setEditorFocus(null);
+          setEditorDay(s.day);
+        },
+        title: "Open the day editor on this day",
+        style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+          padding: "6px 9px"
+        })
+      }, "Assign..."), isScheduler && s.role === "primary" && React.createElement("button", {
+        type: "button",
+        "data-testid": "ob-external",
+        onClick: () => {
+          setEditorFocus("external");
+          setEditorDay(s.day);
+        },
+        title: "Write in someone outside the roster as primary cover (saved from the day editor)",
+        style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+          padding: "6px 9px"
+        })
+      }, "Outside cover"))));
+    })))), React.createElement("div", {
+      "data-testid": "openshifts-tail",
+      "data-primary": boardTail.primary,
+      "data-backup": boardTail.backup,
+      "data-through": boardTail.through,
+      style: {
+        fontSize: 11,
+        color: "#7a8a98",
+        marginTop: 8,
+        lineHeight: 1.5
+      }
+    }, boardTail.primary + boardTail.backup > 0 ? React.createElement(React.Fragment, null, "Not listed: ", boardTail.primary, " primary / ", boardTail.backup, " backup day(s) between ", fmtMD(boardTail.from), " and ", fmtMD(boardTail.through), " have no schedule row yet", boardEnd ? ` (after the last published day, ${boardEndText})` : "", ". The coverage strip counts them as open; Generate covers them.") : React.createElement(React.Fragment, null, "The published schedule runs through ", boardEndText, " - this board and the coverage strip's next-60-days counts agree.")), React.createElement("div", {
+      "data-testid": "openshifts-lastgen",
+      "data-mode": lastGenerate && typeof lastGenerate === "object" && lastGenerate.mode ? lastGenerate.mode : "",
+      "data-fixed": lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : "",
+      style: {
+        fontSize: 11,
+        color: "#7a8a98",
+        marginTop: 4,
+        lineHeight: 1.5
+      }
+    }, lastGenerate && typeof lastGenerate === "object" && lastGenerate.at ? React.createElement(React.Fragment, null, "Why column: from the last Accept & Publish on ", new Date(lastGenerate.at).toLocaleString(), lastGenerate.range && lastGenerate.range.start ? " over " + fmtMD(lastGenerate.range.start) + " - " + fmtMD(lastGenerate.range.end || lastGenerate.range.start) : "", " (", lastGenerate.mode === "fill-open-only" ? "fill open slots only" : "generate", Number.isInteger(lastGenerate.fixedSlots) ? ", " + lastGenerate.fixedSlots + " slot(s) fixed: locks, outside surgeons, claims and trades" : "", ")", lastGenerate.carriedFrom ? "; earlier reasons kept for days outside that range" : "", ".") : React.createElement(React.Fragment, null, "Why column: no generate recorded yet - it fills after the next Accept & Publish.")), claimSheet && React.createElement("div", {
+      "data-testid": "claim-sheet",
+      onClick: () => {
+        if (!claimBusy) closeClaimSheet();
       },
-      onCancel: () => setEditorDay(null),
-      onNav: editorNav,
-      onTrade: proposeTradeForDay,
-      css: css,
-      dk: dk
-    }));
+      style: {
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9500,
+        padding: 14
+      }
+    }, React.createElement("div", {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": "Take this shift",
+      onClick: e => e.stopPropagation(),
+      onKeyDown: claimSheetKeyDown,
+      style: {
+        background: dk ? "#16213e" : "#ffffff",
+        color: dkText,
+        borderRadius: 12,
+        padding: "16px 18px",
+        maxWidth: 460,
+        width: "100%",
+        maxHeight: "92vh",
+        overflowY: "auto",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
+        fontFamily: font
+      }
+    }, React.createElement("h3", {
+      style: {
+        margin: "0 0 8px",
+        fontSize: 16,
+        color: dkText
+      }
+    }, "Take this shift?"), React.createElement("div", {
+      style: {
+        fontSize: 13,
+        lineHeight: 1.7
+      }
+    }, React.createElement("div", null, React.createElement("strong", null, DAY_HDR[parse(claimSheet.day).getDay()], " ", fmtMD(claimSheet.day)), " - ", sheetDate(claimSheet.day)), React.createElement("div", null, "Role: ", React.createElement("strong", null, claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"), " - one 24-hour shift, 07:00 to 07:00."), React.createElement("div", null, "Unit: ", boardUnitText(claimSheet.unit))), claimSheet.mates.length > 0 && React.createElement("div", {
+      "data-testid": "claim-unit-mates",
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        marginTop: 10
+      })
+    }, React.createElement("strong", null, "This takes one day only."), " The group keeps one primary and one backup through a ", claimSheet.unit.kind === "holiday" ? "holiday unit" : "weekend block", "; the other open ", claimSheet.role, " day", claimSheet.mates.length === 1 ? "" : "s", " of this unit stay", claimSheet.mates.length === 1 ? "s" : "", " open: ", claimSheet.mates.map(m => DAY_HDR[parse(m.day).getDay()] + " " + fmtMD(m.day)).join(", "), ". Take ", claimSheet.mates.length === 1 ? "it" : "them", " too from the board, or tell the scheduler."), claimSheet.soft.length ? React.createElement("div", {
+      "data-testid": "claim-soft",
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        marginTop: 10
+      })
+    }, React.createElement("strong", null, "Allowed, shown so you know:"), React.createElement("ul", {
+      style: {
+        margin: "4px 0 0",
+        paddingLeft: 18
+      }
+    }, claimSheet.soft.map((x, i) => React.createElement("li", {
+      key: i
+    }, reasonLabel(x.reason, nameOf), " ", React.createElement("span", {
+      style: {
+        fontFamily: mono,
+        fontSize: 11
+      }
+    }, "(weight ", x.weight, ")"))))) : React.createElement("div", {
+      style: _objectSpread(_objectSpread({}, css.okBox), {}, {
+        marginTop: 10
+      })
+    }, "No rule warnings for you on this day."), React.createElement("p", {
+      style: {
+        fontSize: 12,
+        color: "#5a6a78",
+        margin: "10px 0 0",
+        lineHeight: 1.5
+      }
+    }, "Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade."), React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "flex-end",
+        gap: 8,
+        marginTop: 14,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("button", {
+      type: "button",
+      ref: claimCancelRef,
+      "data-testid": "claim-cancel",
+      onClick: closeClaimSheet,
+      disabled: claimBusy,
+      style: css.btn(false)
+    }, "Cancel"), React.createElement("button", {
+      type: "button",
+      "data-testid": "claim-confirm",
+      onClick: runClaim,
+      disabled: claimBusy,
+      style: css.btn(true)
+    }, claimBusy ? "Taking..." : "Confirm - take this shift")))), obNotice && React.createElement("div", {
+      "data-testid": "ob-email-dialog",
+      onClick: () => {
+        if (!obNoticeBusy) closeObNotice();
+      },
+      style: {
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9500,
+        padding: 14
+      }
+    }, React.createElement("div", {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": "Email the group about open shifts",
+      onClick: e => e.stopPropagation(),
+      onKeyDown: claimSheetKeyDown,
+      style: {
+        background: dk ? "#16213e" : "#ffffff",
+        color: dkText,
+        borderRadius: 12,
+        padding: "16px 18px",
+        maxWidth: 560,
+        width: "100%",
+        maxHeight: "92vh",
+        overflowY: "auto",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
+        fontFamily: font
+      }
+    }, React.createElement("h3", {
+      style: {
+        margin: "0 0 8px",
+        fontSize: 16,
+        color: dkText
+      }
+    }, "Email the group about ", obNotice.count, " open shift", obNotice.count === 1 ? "" : "s", "?"), React.createElement("p", {
+      style: {
+        fontSize: 12.5,
+        color: "#5a6a78",
+        margin: "0 0 10px",
+        lineHeight: 1.5
+      }
+    }, "Everyone gets an in-app note; the e-mail goes to every linked surgeon who accepts schedule updates in Settings. Each slot listed gets a new \"last announced\" time on the board."), React.createElement("div", {
+      "data-testid": "ob-email-preview",
+      style: {
+        border: "1px solid " + (dk ? "#2a3a5e" : "#e0e4ea"),
+        borderRadius: 8,
+        padding: "10px 12px",
+        fontSize: 12,
+        lineHeight: 1.5
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        textTransform: "uppercase",
+        letterSpacing: 0.6,
+        color: "#7a8a98",
+        marginBottom: 4
+      }
+    }, "Preview"), React.createElement("div", {
+      "data-testid": "ob-email-subject"
+    }, React.createElement("strong", null, "Subject:"), " ", obNotice.subject), React.createElement("pre", {
+      "data-testid": "ob-email-message",
+      style: {
+        whiteSpace: "pre-wrap",
+        fontFamily: mono,
+        fontSize: 11.5,
+        margin: "8px 0",
+        maxHeight: 260,
+        overflowY: "auto",
+        color: "inherit"
+      }
+    }, obNotice.message), React.createElement("div", {
+      "data-testid": "ob-email-detail",
+      style: {
+        fontFamily: mono,
+        fontSize: 11.5,
+        wordBreak: "break-all"
+      }
+    }, obNotice.detail)), React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "flex-end",
+        gap: 8,
+        marginTop: 14,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("button", {
+      type: "button",
+      ref: obCancelRef,
+      "data-testid": "ob-email-cancel",
+      onClick: closeObNotice,
+      disabled: obNoticeBusy,
+      style: css.btn(false)
+    }, "Cancel"), React.createElement("button", {
+      type: "button",
+      "data-testid": "ob-email-send",
+      onClick: sendBoardNotice,
+      disabled: obNoticeBusy,
+      style: css.btn(true)
+    }, obNoticeBusy ? "Sending..." : "Send to the group")))));
   })(), view === "myschedule" && !isPublicMode && (() => {
     const pid = isScheduler && minePerson && sMap[minePerson] ? minePerson : mySurgeon;
     if (!pid) return React.createElement("div", {
@@ -7124,7 +8257,15 @@ function CallSchedule() {
         bg: "#e8e0f8",
         fg: "#5a3a90"
       });
-      const fc = P && P.eastForecast ? P.eastForecast[d] : undefined;
+      const ovClear = !!(P && P.eastOverrides && P.eastOverrides[d] === false);
+      if (ovClear) out.push({
+        k: "O",
+        text: "O",
+        title: "East override: no East call (force clear)",
+        bg: "#e4f3e8",
+        fg: "#1a6a3a"
+      });
+      const fc = P && P.eastForecast && !ovClear ? P.eastForecast[d] : undefined;
       if (typeof fc === "number" && rulesCtx && fc >= rulesCtx.forecastThreshold) out.push({
         k: "F",
         text: "F",
@@ -7331,7 +8472,7 @@ function CallSchedule() {
     style: sectionNote
   }, "Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record", isScheduler ? " (as the scheduler you can enter or remove anyone's)" : "", ". Notes are operational and visible to the whole group."), !mySurgeon && !isScheduler ? React.createElement("p", {
     style: muted
-  }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement(React.Fragment, null, renderVacationForm(isScheduler ? activeSurgeons : activeSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
+  }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement(React.Fragment, null, renderVacationForm(isScheduler ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -7355,7 +8496,7 @@ function CallSchedule() {
     const whole = !!unit && tradeWholeUnit;
     const offerDays = whole ? unit.days : [tradeDay];
     const eligOf = cand => whole ? tradeEligibilityOver(offerDays, tradeRole, cand) : tradeEligibility(tradeDay, tradeRole, cand);
-    const cands = activeSurgeons.filter(s => s.id !== fromId).map(s => ({
+    const cands = poolSurgeons.filter(s => s.id !== fromId).map(s => ({
       s,
       e: dayOk ? eligOf(s.id) : null
     }));
@@ -7515,7 +8656,7 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, inp), {}, {
         width: 120
       })
-    }, activeSurgeons.map(s => React.createElement("option", {
+    }, poolSurgeons.map(s => React.createElement("option", {
       key: s.id,
       value: s.id
     }, s.name))) : React.createElement("div", {
@@ -9313,7 +10454,17 @@ const REASON_WORDS = {
   "not-recurring-available": "not a recurring available day",
   "holds-other-role": "already holds the other role that day",
   "unknown-surgeon": "not on the roster",
-  "bad-role": "unknown role"
+  "bad-role": "unknown role",
+  "backup-opt-out": "does not take backup",
+  "external-surgeon": "outside surgeon (written in by hand)",
+  "derived-lock-held": "East week slot belongs to someone else",
+  "rules-error": "eligibility check failed",
+  "weekend-primary": "weekend primary block (contribution bonus)",
+  "weekend-backup": "weekend backup (contribution penalty)",
+  "window-week-below-target": "at or under the window-week target",
+  "window-week-over-target": "over the window-week target",
+  "consecutive-primary": "consecutive primary days (prefers alternate days)",
+  "long-run": "long any-role run"
 };
 async function readAuthOnlyTable(table, opts) {
   let token = null;
@@ -9339,6 +10490,8 @@ function reasonLabel(code, nameOf) {
   switch (key) {
     case "rules-unavailable":
       return "the rules have not loaded yet - try again in a moment" + (arg ? " (" + arg + ")" : "");
+    case "rules-error":
+      return "eligibility check failed: " + arg;
     case "unit-split":
       return "part of the " + arg + " - trade the whole unit";
     case "slot-locked":
@@ -9369,8 +10522,6 @@ function reasonLabel(code, nameOf) {
       return "backup cap of " + arg + " per month reached";
     case "backup-weekend-cap":
       return "backup weekend cap of " + arg + " reached";
-    case "window-week-max":
-      return "over " + arg + " days in the window week";
     case "max-major-holidays":
       return "already holds " + arg + " major holiday(s) in 12 months";
     default:
@@ -9402,10 +10553,12 @@ function softTag(soft) {
       return "over target +" + arg;
     case "under-target":
       return "under target";
-    case "window-week-below-min":
-      return "under window min " + arg;
-    case "handoff-partner":
-      return "handoff";
+    case "window-week-below-target":
+      return "under window target " + arg;
+    case "window-week-over-target":
+      return "over window target " + arg;
+    case "consecutive-primary":
+      return "consecutive primary";
     case "back-to-back-weekend":
       return "back-to-back weekend";
     case "backup-after-primary":
@@ -9417,7 +10570,7 @@ function softTag(soft) {
     case "holiday-waiver":
       return "holiday waiver";
     default:
-      return s;
+      return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
 }
 function eastStatusLines(ctx, ctxInputs, day, nameOf) {
@@ -9428,24 +10581,35 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
     const P = ctx && ctx.per ? ctx.per[id] : null;
     const name = nameOf(id);
     if (m.busyDays) {
-      if (!m.eastId) out.push({
+      const standing = P && P.eastStanding && P.eastStanding.size ? P.eastStanding.get(day.slice(5)) : null;
+      if (standing) out.push({
+        id,
+        text: name + ": East call (standing rule: " + standing + ", every year) - Silvis primary blocked",
+        tone: "busy"
+      });else if (!m.eastId) out.push({
         id,
         text: name + ": East id unresolved - status unknown",
         tone: "warn"
       });else if (P && P.eastBusy.has(day)) out.push({
         id,
-        text: name + ": East call (published) - Silvis primary blocked",
+        text: name + ": East call (" + (P.eastOverrides && P.eastOverrides[day] === true ? "override" : "published") + ") - Silvis primary blocked",
         tone: "busy"
       });else {
-        const p = P && P.eastForecast ? P.eastForecast[day] : undefined;
-        if (typeof p === "number") out.push({
+        const ovFree = !!(P && P.eastOverrides && P.eastOverrides[day] === false);
+        const covered = !!(ctx && ctx.eastCoverage && day >= ctx.eastCoverage.from && day <= ctx.eastCoverage.to);
+        const p = !covered && !ovFree && P && P.eastForecast ? P.eastForecast[day] : undefined;
+        if (ovFree) out.push({
           id,
-          text: name + ": East forecast " + Math.round(p * 100) + "% (" + (p >= ctx.forecastThreshold ? "treated as busy" : "below the " + Math.round(ctx.forecastThreshold * 100) + "% threshold") + ")",
-          tone: p >= ctx.forecastThreshold ? "busy" : "ok"
-        });else if (ctx && ctx.eastCoverage && day >= ctx.eastCoverage.from && day <= ctx.eastCoverage.to) out.push({
+          text: name + ": no East call (override: force clear)",
+          tone: "ok"
+        });else if (covered) out.push({
           id,
           text: name + ": no East call (published)",
           tone: "ok"
+        });else if (typeof p === "number") out.push({
+          id,
+          text: name + ": East forecast " + Math.round(p * 100) + "% (" + (p >= ctx.forecastThreshold ? "treated as busy" : "below the " + Math.round(ctx.forecastThreshold * 100) + "% threshold") + ")",
+          tone: p >= ctx.forecastThreshold ? "busy" : "ok"
         });else out.push({
           id,
           text: name + ": East unknown (no published week or forecast for this day)",
@@ -9472,6 +10636,23 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
   });
   return out;
 }
+const AWAITING_CONFIRMATION_MARKER = "awaiting confirmation - ";
+const awaitingConfirmation = a => !!(a && (a.primaryLocked || a.backupLocked) && typeof a.note === "string" && a.note.replace(/^\[override:[^\]]*\]\s*/, "").indexOf(AWAITING_CONFIRMATION_MARKER) === 0);
+const confirmBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: 13,
+  padding: "0 4px",
+  borderRadius: 3,
+  fontSize: 8,
+  fontWeight: 800,
+  lineHeight: 1,
+  letterSpacing: 0.5,
+  textTransform: "uppercase",
+  background: "#c2410c",
+  color: "#ffffff",
+  whiteSpace: "nowrap"
+};
 function Padlock({
   title,
   size,
@@ -9523,13 +10704,28 @@ function DayEditor(props) {
     onNav,
     onTrade,
     css,
-    dk
+    dk,
+    focusExternal
   } = props;
+  const externalRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!focusExternal || !externalRef.current) return;
+    try {
+      externalRef.current.focus();
+      externalRef.current.scrollIntoView({
+        block: "center"
+      });
+    } catch (e) {
+      console.warn("focusExternal: could not focus the external-cover input", e);
+    }
+  }, [focusExternal, day]);
   const opened = React.useMemo(() => _objectSpread(_objectSpread({}, emptyDayAssignment()), entry || {}), [day]);
   const [draft, setDraft] = React.useState(opened);
   const [overrides, setOverrides] = React.useState([]);
   const [pending, setPending] = React.useState(null);
   const [hint, setHint] = React.useState("");
+  const [info, setInfo] = React.useState("");
+  const extInfo = name => name + " is an outside surgeon - written in by hand and locked; the generator never moves it.";
   const norm = a => JSON.stringify(assignmentToDayRow(day, a));
   const dirty = norm(draft) !== norm(opened);
   const draftState = React.useMemo(() => safeBuildContext(_objectSpread(_objectSpread({}, ctxInputs), {}, {
@@ -9542,22 +10738,39 @@ function DayEditor(props) {
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
   const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
+  const editorBlockDays = React.useMemo(() => {
+    const dow = parse(day).getDay();
+    const idx = dow === 5 ? 0 : dow === 6 ? 1 : dow === 0 ? 2 : -1;
+    if (idx < 0) return null;
+    const fri = addD(parse(day), -idx);
+    const days = [0, 1, 2].map(i => fmt(addD(fri, i)));
+    if (ctx && ctx.holidayByDay && days.some(d => ctx.holidayByDay[d])) return null;
+    return days;
+  }, [day, ctx]);
+  const holdsOtherBlockDays = (role, id) => !!editorBlockDays && editorBlockDays.every(d => d === day || !!(ctxInputs.schedule && ctxInputs.schedule[d] && ctxInputs.schedule[d][role] === id));
   const evalRole = role => {
     const list = roster.map(s => {
+      const external = s.type === "external";
       let r;
+      const eopts = external ? {
+        manual: true
+      } : holdsOtherBlockDays(role, s.id) ? {
+        asBlockMember: true
+      } : undefined;
       try {
-        r = ctx ? eligibility(ctx, day, role, s.id) : {
+        r = ctx ? eligibility(ctx, day, role, s.id, eopts) : {
           ok: true,
           hard: [],
           soft: []
         };
       } catch (e) {
         console.warn("eligibility threw for", s.id, role, day, e);
+        const msg = String(e && e.message || e).slice(0, 120);
         r = {
-          ok: true,
-          hard: [],
+          ok: false,
+          hard: ["rules-error:" + msg],
           soft: [],
-          error: true
+          error: msg
         };
       }
       return {
@@ -9565,22 +10778,29 @@ function DayEditor(props) {
         name: s.name,
         code: s.code,
         active: s.active !== false,
+        external,
         ok: !!r.ok,
         hard: r.hard || [],
         soft: r.soft || [],
         lockHolder: !!r.lockHolder,
         conflicts: r.conflicts || [],
-        error: !!r.error
+        error: r.error || null,
+        eastStanding: r.eastStanding || null
       };
     });
-    return list.filter(o => o.active && o.ok).concat(list.filter(o => o.active && !o.ok)).concat(list.filter(o => !o.active && o.id === draft[role]));
+    const pool = list.filter(o => !o.external),
+      ext = list.filter(o => o.external);
+    return pool.filter(o => o.active && o.ok).concat(pool.filter(o => o.active && !o.ok)).concat(pool.filter(o => !o.active && o.id === draft[role])).concat(ext.filter(o => o.active || o.id === draft[role]));
   };
   const opts = React.useMemo(() => ({
     primary: evalRole("primary"),
     backup: evalRole("backup")
   }), [ctx, day, draft, roster]);
+  const evalErrors = [].concat(opts.primary, opts.backup).filter(o => o.error);
+  const evalBroken = evalErrors.length > 0;
   const pick = (role, value) => {
     setHint("");
+    setInfo("");
     if (!value) {
       setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
         [role]: null
@@ -9589,6 +10809,10 @@ function DayEditor(props) {
       return;
     }
     const opt = opts[role].find(o => o.id === value);
+    if (opt && opt.error) {
+      setHint("Eligibility check failed for " + opt.name + " (" + opt.error + ") - nobody can be assigned until the rules evaluate again.");
+      return;
+    }
     if (opt && !opt.ok) {
       setPending({
         id: value,
@@ -9597,23 +10821,32 @@ function DayEditor(props) {
       });
       return;
     }
-    setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+    const external = !!(opt && opt.external);
+    setDraft(d => _objectSpread(_objectSpread(_objectSpread({}, d), {}, {
       [role]: value
-    }, role === "primary" ? {
+    }, external ? {
+      [role + "Locked"]: true
+    } : {}), role === "primary" ? {
       externalCover: null
     } : {}));
     setOverrides(o => o.filter(x => x.role !== role));
+    if (external) setInfo(extInfo(opt.name));
   };
   const confirmOverride = () => {
     if (!pending) return;
     const p = pending;
-    setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+    const opt = opts[p.role].find(o => o.id === p.id);
+    const external = !!(opt && opt.external);
+    setDraft(d => _objectSpread(_objectSpread(_objectSpread({}, d), {}, {
       [p.role]: p.id
-    }, p.role === "primary" ? {
+    }, external ? {
+      [p.role + "Locked"]: true
+    } : {}), p.role === "primary" ? {
       externalCover: null
     } : {}));
     setOverrides(o => o.filter(x => x.role !== p.role).concat([p]));
     setPending(null);
+    if (external) setInfo(extInfo(opt.name));
   };
   const clearRole = role => {
     if (draft[role + "Locked"]) {
@@ -9626,6 +10859,10 @@ function DayEditor(props) {
     [role + "Locked"]: !d[role + "Locked"]
   }));
   const save = () => {
+    if (evalBroken) {
+      setHint("Eligibility check failed - saving is disabled until the rules evaluate again.");
+      return;
+    }
     if (!dirty) {
       onCancel();
       return;
@@ -9746,7 +10983,18 @@ function DayEditor(props) {
     }, role === "primary" ? "Primary" : "Backup"), holderView(role), locked && React.createElement(Padlock, {
       title: role + " locked",
       size: 11
-    }), cur && cur.lockHolder && cur.conflicts.length > 0 && React.createElement("span", {
+    }), locked && awaitingConfirmation(opened) && React.createElement("span", {
+      "data-testid": "confirm-badge",
+      title: "awaiting the scheduler's confirmation",
+      style: confirmBadgeStyle
+    }, "confirm"), cur && cur.external && React.createElement("span", {
+      "data-testid": "editor-" + role + "-external-tag",
+      style: {
+        fontSize: 10,
+        color: sub,
+        fontWeight: 700
+      }
+    }, "outside surgeon - written in by hand"), cur && cur.lockHolder && cur.conflicts.length > 0 && React.createElement("span", {
       title: cur.conflicts.join(", "),
       style: {
         fontSize: 10,
@@ -9781,14 +11029,24 @@ function DayEditor(props) {
     }, React.createElement("option", {
       value: "",
       "data-eligible": "true"
-    }, role === "primary" && draft.externalCover ? draft.externalCover + " (external cover)" : "OPEN"), list.map(o => React.createElement("option", {
+    }, role === "primary" && draft.externalCover ? draft.externalCover + " (external cover)" : "OPEN"), list.filter(o => !o.external).map(o => React.createElement("option", {
       key: o.id,
       value: o.id,
       "data-eligible": o.ok ? "true" : "false",
       style: o.ok ? {} : {
         color: "#a0a8b0"
       }
-    }, optionLabel(o)))), React.createElement("label", {
+    }, optionLabel(o))), list.some(o => o.external) && React.createElement("optgroup", {
+      label: "Outside surgeons",
+      "data-testid": "editor-" + role + "-externals"
+    }, list.filter(o => o.external).map(o => React.createElement("option", {
+      key: o.id,
+      value: o.id,
+      "data-eligible": o.ok ? "true" : "false",
+      style: o.ok ? {} : {
+        color: "#a0a8b0"
+      }
+    }, optionLabel(o))))), React.createElement("label", {
       style: {
         display: "flex",
         alignItems: "center",
@@ -9831,7 +11089,7 @@ function DayEditor(props) {
       style: {
         fontWeight: 700
       }
-    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf)).join("; ")));
+    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "")).join("; ")));
   };
   return React.createElement("div", {
     "data-testid": "day-editor",
@@ -10026,6 +11284,7 @@ function DayEditor(props) {
     style: label
   }, "External cover (primary)"), React.createElement("input", {
     "data-testid": "editor-external",
+    ref: externalRef,
     value: draft.externalCover || "",
     disabled: !!draft.primary,
     onChange: e => setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
@@ -10043,7 +11302,25 @@ function DayEditor(props) {
       color: sub,
       marginBottom: 10
     }
-  }, draft.note ? React.createElement(React.Fragment, null, "Note: ", draft.note) : "No note."), hint && React.createElement("div", {
+  }, draft.note ? React.createElement(React.Fragment, null, "Note: ", draft.note) : "No note."), info && React.createElement("div", {
+    role: "status",
+    "data-testid": "editor-info",
+    style: {
+      fontSize: 12,
+      color: sub,
+      fontWeight: 600,
+      marginBottom: 8
+    }
+  }, info), evalBroken && React.createElement("div", {
+    role: "alert",
+    "data-testid": "editor-eval-error",
+    style: {
+      fontSize: 12,
+      color: "#a83232",
+      fontWeight: 700,
+      marginBottom: 8
+    }
+  }, "Eligibility check failed for ", Array.from(new Set(evalErrors.map(o => o.name))).join(", "), ": ", evalErrors[0].error, " - saving is disabled until the rules evaluate again (reload the page; if it persists, tell the scheduler)."), hint && React.createElement("div", {
     role: "status",
     "data-testid": "editor-hint",
     style: {
@@ -10100,11 +11377,12 @@ function DayEditor(props) {
     type: "button",
     "data-testid": "editor-save",
     onClick: save,
-    disabled: !dirty,
+    disabled: !dirty || evalBroken,
+    title: evalBroken ? "Eligibility check failed - saving is disabled" : undefined,
     style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
       padding: "7px 16px",
       fontSize: 12,
-      opacity: dirty ? 1 : 0.5
+      opacity: dirty && !evalBroken ? 1 : 0.5
     })
   }, "Save"))));
 }
@@ -10114,6 +11392,7 @@ const SU_MODES = ["", "weekends-plus-weekdays", "whitelist-recurring", "blacklis
 const SU_AVAIL_KINDS = ["available", "unavailable", "avoid", "prefer", "backup_only", "no_backup"];
 const SU_CONTACT_KEY = /e-?_?mail|phone|contact|mobile|cell/i;
 const SU_CONTACT_VALUE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(?:\+?1[-. ]?)?\(?\b\d{3}\)?[-. ]\s?\d{3}[-. ]\d{4}\b/;
+const SU_NOTE_DENYLIST = /\b(family|families|wife|husband|kid|kids|child|children|daughter|son|parents|in-laws|school|medical|maternity|hosts|hosting|illness|funeral)\b/i;
 function suClone(v) {
   return v === undefined ? undefined : JSON.parse(JSON.stringify(v));
 }
@@ -10200,9 +11479,9 @@ function TotalsCard({
   const opts = {
     holidayByDay: ctx ? ctx.holidayByDay : {},
     weekendDays: ctx ? ctx.weekendDays : undefined,
-    unitExempt: ctx ? ctx.holidayFlags.unitExemptFromMaxConsecutive !== false : true,
     countBackup: ctx ? !!ctx.countBackupInConsecutive : false
   };
+  const collapseFor = id => !!(surgeonRules && surgeonRules[id] && surgeonRules[id].holidayUnitCountsAsOneDay === true);
   const hasPreview = !!(preview && preview.schedule && Object.keys(preview.schedule).length);
   const sources = [{
     key: "published",
@@ -10218,32 +11497,54 @@ function TotalsCard({
   const nMonths = range.months.length;
   const targetFor = id => {
     const r = surgeonRules && surgeonRules[id];
-    if (r && typeof r.monthlyTarget === "number") return {
-      value: r.monthlyTarget * nMonths,
-      kind: "explicit"
+    const mt = r ? r.monthlyTarget : undefined;
+    const explicit = {
+      primary: typeof mt === "number" ? mt : mt && typeof mt === "object" && typeof mt.primary === "number" ? mt.primary : null,
+      backup: mt && typeof mt === "object" && typeof mt.backup === "number" ? mt.backup : null
     };
-    if (dg && dg.tallies && dg.tallies[id] && dg.tallies[id].months) {
-      let sum = 0,
-        all = nMonths > 0;
-      range.months.forEach(m => {
-        const t = dg.tallies[id].months[m];
-        if (t && typeof t.target === "number") sum += t.target;else all = false;
-      });
-      if (all) return {
-        value: sum,
-        kind: "implied"
-      };
-    }
-    return {
-      value: null,
-      kind: "none"
+    const out = {
+      primary: {
+        value: null,
+        kind: "none"
+      },
+      backup: {
+        value: null,
+        kind: "none"
+      }
     };
+    ["primary", "backup"].forEach(role => {
+      if (explicit[role] !== null) {
+        out[role] = {
+          value: explicit[role] * nMonths,
+          kind: "explicit"
+        };
+        return;
+      }
+      if (dg && dg.tallies && dg.tallies[id] && dg.tallies[id].months) {
+        let sum = 0,
+          all = nMonths > 0;
+        range.months.forEach(m => {
+          const t = dg.tallies[id].months[m];
+          const v = t && t.target && typeof t.target === "object" ? t.target[role] : role === "primary" && t && typeof t.target === "number" ? t.target : null;
+          if (typeof v === "number") sum += v;else all = false;
+        });
+        if (all) out[role] = {
+          value: Math.round(sum * 10) / 10,
+          kind: "implied"
+        };
+      }
+    });
+    return out;
   };
-  const capFor = id => ctx && typeof monthlyCapFor === "function" ? monthlyCapFor(ctx, id).total : null;
+  const capFor = id => ctx && typeof monthlyCapFor === "function" ? monthlyCapFor(ctx, id).primary : null;
   const perOf = id => ctx && ctx.per ? ctx.per[id] : null;
   const eastFor = id => {
     const P = perOf(id);
     return P ? ttDaysIn(P.eastDays, range.from, range.to) : 0;
+  };
+  const eastPrimaryFor = id => {
+    const P = perOf(id);
+    return P && P.eastPrimaryDays ? ttDaysIn(P.eastPrimaryDays, range.from, range.to) : 0;
   };
   const countsEast = id => {
     const P = perOf(id);
@@ -10253,15 +11554,27 @@ function TotalsCard({
     const P = perOf(id);
     return P ? P.maxConsec : null;
   };
-  const list = (roster || []).filter(s => s && s.id);
+  const maxConsecAnyRule = id => {
+    const P = perOf(id);
+    return P && typeof P.maxConsecAnyRole === "number" ? P.maxConsecAnyRole : null;
+  };
+  const list = (roster || []).filter(s => s && s.id && s.type !== "external");
+  const outside = sources.map(src => ({
+    src,
+    rows: ttOutsideSurgeons(roster || [], src.sched, range.from, range.to, opts)
+  }));
+  const hasOutside = outside.some(o => o.rows.length > 0);
   const showEast = list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
   const rows = [];
   list.forEach(s => sources.forEach(src => {
-    const t = ttTotalsFor(src.sched, s.id, range.from, range.to, opts);
+    const t = ttTotalsFor(src.sched, s.id, range.from, range.to, _objectSpread(_objectSpread({}, opts), {}, {
+      unitCollapse: collapseFor(s.id)
+    }));
     const tg = targetFor(s.id),
       cap = capFor(s.id),
-      east = eastFor(s.id);
-    const capUse = countsEast(s.id) ? t.total + east : t.total;
+      east = eastFor(s.id),
+      eastP = countsEast(s.id) ? eastPrimaryFor(s.id) : 0;
+    const capUse = t.primary + eastP;
     rows.push({
       id: s.id,
       name: s.name,
@@ -10269,23 +11582,30 @@ function TotalsCard({
       src: src.key,
       srcLabel: src.label,
       t,
-      target: tg.value,
-      targetKind: tg.kind,
+      target: tg.primary.value,
+      targetKind: tg.primary.kind,
+      targetB: tg.backup.value,
+      targetBKind: tg.backup.kind,
       cap,
       capUse,
       east,
+      eastP,
       maxRule: maxConsecRule(s.id),
-      deviation: ttDeviation(t.total, tg.value)
+      maxRuleAny: maxConsecAnyRule(s.id),
+      deviation: ttDeviation(t.primary, tg.primary.value),
+      deviationB: ttDeviation(t.backup, tg.backup.value)
     });
   }));
   const capText = r => r.cap === null ? "-" : nMonths > 1 ? r.cap + "/mo" : String(r.cap);
   const targetText = r => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
-  const anyImplied = rows.some(r => r.targetKind === "implied");
+  const targetBText = r => r.targetB === null ? "-" : String(r.targetB) + (r.targetBKind === "implied" ? "*" : "");
+  const anyImplied = rows.some(r => r.targetKind === "implied" || r.targetBKind === "implied");
   const periodText = range.label + (mode === "fairness" ? "" : "");
   const exportCsv = () => {
     try {
-      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap per month", "Target", "Deviation"];
-      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation]);
+      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
+      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool"]);
+      outside.forEach(o => o.rows.forEach(x => data.push([range.label, range.from, range.to, o.src.label, x.name, x.code, x.primary, x.backup, x.total, "", "", "", "", "", "", "", "", "", "", "", "", "outside"])));
       const csv = ttCsvText(headers, data);
       const name = "silvis-totals-" + rangeMode + "-" + range.from + "-" + range.to + ".csv";
       const real = downloadTextFile(csv, name, "text/csv");
@@ -10321,10 +11641,14 @@ function TotalsCard({
     fontFamily: font
   });
   const border = dk ? "#2a3a5e" : "#e8ecf0";
-  const devColor = r => r.target === null ? "#8a94a0" : r.t.total > r.target ? "#c04040" : r.t.total < r.target ? "#1a6fa8" : "#1a8040";
-  const devFlag = r => r.target === null ? undefined : r.t.total > r.target ? "over" : r.t.total < r.target ? "under" : "ok";
+  const devColor = r => r.target === null ? "#8a94a0" : r.t.primary > r.target ? "#c04040" : r.t.primary < r.target ? "#1a6fa8" : "#1a8040";
+  const devFlag = r => r.target === null ? undefined : r.t.primary > r.target ? "over" : r.t.primary < r.target ? "under" : "ok";
+  const devColorB = r => r.targetB === null ? "#8a94a0" : r.t.backup > r.targetB ? "#c04040" : r.t.backup < r.targetB ? "#1a6fa8" : "#1a8040";
+  const devFlagB = r => r.targetB === null ? undefined : r.t.backup > r.targetB ? "over" : r.t.backup < r.targetB ? "under" : "ok";
+  const targetSum = r => r.target === null && r.targetB === null ? null : Math.round(((r.target || 0) + (r.targetB || 0)) * 10) / 10;
   const overCap = r => r.cap !== null && r.capUse > r.cap * nMonths;
   const overConsec = r => r.maxRule !== null && r.t.maxConsecutive > r.maxRule;
+  const overConsecAny = r => r.maxRuleAny !== null && r.t.maxConsecutiveAnyRole > r.maxRuleAny;
   const years = [];
   for (let y = now.getFullYear() - 1; y <= now.getFullYear() + 2; y++) years.push(y);
   const modeBtn = (k, text) => React.createElement("button", {
@@ -10405,7 +11729,7 @@ function TotalsCard({
       color: dk ? "#c0c0d8" : "#3a4a58",
       marginBottom: 8
     }
-  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ". One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges", opts.unitExempt ? " (a holiday unit counts as one commitment)" : "", ".", !loaded ? " Loading schedule..." : ""), !ctx && React.createElement("div", {
+  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ". One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.", !loaded ? " Loading schedule..." : ""), !ctx && React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
       marginBottom: 8
     })
@@ -10436,17 +11760,31 @@ function TotalsCard({
     title: "Holiday units held (once per unit): major / minor"
   }, "Holidays maj/min"), React.createElement("th", {
     style: th,
-    title: "Longest run of consecutive primary days touching the period (rule limit in brackets)"
-  }, "Max consec. P"), showEast && React.createElement("th", {
+    "data-testid": "totals-th-maxconsec",
+    title: "Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)"
+  }, "Max consec. P"), React.createElement("th", {
     style: th,
-    title: "Days on East (Davenport) call in the period - counted toward the cap for a surgeon whose cap counts them"
+    "data-testid": "totals-th-maxconsecany",
+    title: "Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)"
+  }, "Max consec. any"), showEast && React.createElement("th", {
+    style: th,
+    title: "Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)"
   }, "East days"), React.createElement("th", {
-    style: th
-  }, "Cap", nMonths > 1 ? " /mo" : ""), React.createElement("th", {
-    style: th
+    style: th,
+    title: "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it"
+  }, "Cap (P)", nMonths > 1 ? " /mo" : ""), React.createElement("th", {
+    style: th,
+    title: "Primary-day target for the period: an explicit monthlyTarget in Setup, else the implied equal share of the open primary slots from the last Generate preview (*)"
   }, "Target"), React.createElement("th", {
-    style: th
-  }, "Deviation"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
+    style: th,
+    title: "Primary days minus the primary target"
+  }, "Deviation"), React.createElement("th", {
+    style: th,
+    title: "Backup-day target for the period: an explicit { backup } target in Setup, else the implied equal share of the open backup slots from the last Generate preview (*)"
+  }, "Target B"), React.createElement("th", {
+    style: th,
+    title: "Backup days minus the backup target"
+  }, "Deviation B"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
     key: r.id + r.src,
     "data-testid": "totals-row-" + r.id,
     "data-source": r.src,
@@ -10457,6 +11795,7 @@ function TotalsCard({
     "data-major": r.t.majorHolidays,
     "data-minor": r.t.minorHolidays,
     "data-maxconsec": r.t.maxConsecutive,
+    "data-maxconsecany": r.t.maxConsecutiveAnyRole,
     "data-east": r.east,
     style: {
       borderTop: "1px solid " + border,
@@ -10491,7 +11830,13 @@ function TotalsCard({
     style: _objectSpread(_objectSpread({}, td), {}, {
       color: overConsec(r) ? "#c04040" : td.color
     })
-  }, r.t.maxConsecutive, r.maxRule !== null ? " (" + r.maxRule + ")" : ""), showEast && React.createElement("td", {
+  }, r.t.maxConsecutive, r.maxRule !== null ? " (" + r.maxRule + ")" : ""), React.createElement("td", {
+    "data-col": "maxconsecany",
+    "data-flag": overConsecAny(r) ? "over" : undefined,
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      color: overConsecAny(r) ? "#c04040" : td.color
+    })
+  }, r.t.maxConsecutiveAnyRole, r.maxRuleAny !== null ? " (" + r.maxRuleAny + ")" : ""), showEast && React.createElement("td", {
     style: td
   }, r.east || (countsEast(r.id) ? 0 : "-")), React.createElement("td", {
     "data-col": "cap",
@@ -10499,7 +11844,7 @@ function TotalsCard({
     style: _objectSpread(_objectSpread({}, td), {}, {
       color: overCap(r) ? "#c04040" : td.color
     }),
-    title: countsEast(r.id) ? "This cap counts Silvis + East days: " + r.capUse : undefined
+    title: r.cap === null ? undefined : countsEast(r.id) ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts"
   }, capText(r)), React.createElement("td", {
     "data-col": "target",
     style: td
@@ -10510,7 +11855,17 @@ function TotalsCard({
       color: devColor(r),
       fontWeight: 600
     })
-  }, r.deviation)))))) : React.createElement("div", {
+  }, r.deviation), React.createElement("td", {
+    "data-col": "targetb",
+    style: td
+  }, targetBText(r)), React.createElement("td", {
+    "data-col": "deviationb",
+    "data-flag": devFlagB(r),
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      color: devColorB(r),
+      fontWeight: 600
+    })
+  }, r.deviationB)))))) : React.createElement("div", {
     "data-testid": "fairness-view"
   }, React.createElement("p", {
     style: {
@@ -10519,8 +11874,8 @@ function TotalsCard({
       margin: "0 0 10px",
       lineHeight: 1.5
     }
-  }, "Total days in ", range.label, " against each surgeon's target (green mark) and cap (red mark). Fairness at Silvis is per-surgeon targets and caps, not equal shares - a surgeon without a target shows '-'."), (() => {
-    const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, r.target === null ? 0 : r.target)));
+  }, "Total days in ", range.label, " against each surgeon's targets (green mark = primary target + backup target) and primary cap (red mark). Fairness at Silvis (9/22) is an equal share of primary days and, separately, of backup days for every pool member, within each person's availability - the deviation reads primary days against the primary target, then backup days against the backup target; a surgeon without a target shows '-'."), (() => {
+    const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, targetSum(r) === null ? 0 : targetSum(r))));
     const pct = v => Math.min(100, Math.round(v / scale * 100));
     return rows.map(r => React.createElement("div", {
       key: r.id + r.src,
@@ -10528,6 +11883,7 @@ function TotalsCard({
       "data-source": r.src,
       "data-total": r.t.total,
       "data-deviation": r.deviation,
+      "data-deviation-b": r.deviationB,
       style: {
         display: "flex",
         alignItems: "center",
@@ -10569,22 +11925,22 @@ function TotalsCard({
         background: overCap(r) ? "#c04040" : "linear-gradient(90deg,#1a6fa8,#2488c8)",
         borderRadius: 4
       }
-    }), countsEast(r.id) && r.east > 0 && React.createElement("div", {
-      title: "+ " + r.east + " East day(s) counted toward the cap",
+    }), countsEast(r.id) && r.eastP > 0 && React.createElement("div", {
+      title: "+ " + r.eastP + " East primary-week day(s) counted toward the cap (P)",
       style: {
         position: "absolute",
         left: pct(r.t.total) + "%",
         top: 0,
         bottom: 0,
-        width: pct(r.capUse) - pct(r.t.total) + "%",
+        width: Math.max(0, pct(r.t.total + r.eastP) - pct(r.t.total)) + "%",
         background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)"
       }
-    }), r.target !== null && React.createElement("div", {
+    }), targetSum(r) !== null && React.createElement("div", {
       "data-testid": "fairness-target-mark",
-      title: "target " + r.target,
+      title: "target P " + (r.target === null ? "-" : r.target) + " + B " + (r.targetB === null ? "-" : r.targetB) + " = " + targetSum(r),
       style: {
         position: "absolute",
-        left: pct(r.target) + "%",
+        left: pct(targetSum(r)) + "%",
         top: 0,
         bottom: 0,
         width: 2,
@@ -10607,20 +11963,98 @@ function TotalsCard({
         color: dk ? "#e0e0f0" : "#2c3e50",
         minWidth: 250
       }
-    }, r.t.total, " total (", r.t.primary, " P + ", r.t.backup, " B)", showEast && countsEast(r.id) ? " + " + r.east + " East" : "", " - target ", r.target === null ? "-" : r.target, r.targetKind === "implied" ? "*" : "", " - cap ", r.cap === null ? "-" : r.cap * nMonths, " - ", React.createElement("span", {
+    }, r.t.total, " total (", r.t.primary, " P + ", r.t.backup, " B)", showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : "", " - target ", r.target === null ? "-" : r.target, r.targetKind === "implied" ? "*" : "", " - target B ", r.targetB === null ? "-" : r.targetB, r.targetBKind === "implied" ? "*" : "", " - cap (P) ", r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths, " - ", React.createElement("span", {
       "data-flag": devFlag(r),
       style: {
         color: devColor(r),
         fontWeight: 700
       }
-    }, r.deviation === "-" ? "no target" : "deviation " + r.deviation))));
-  })()), anyImplied && React.createElement("div", {
+    }, r.deviation === "-" && r.deviationB === "-" ? "no target" : r.deviation === "-" ? "no primary target" : "deviation " + r.deviation + " P"), r.targetB !== null && React.createElement("span", {
+      "data-flag": devFlagB(r),
+      style: {
+        color: devColorB(r),
+        fontWeight: 700
+      }
+    }, " / ", r.deviationB, " B"))));
+  })()), hasOutside && React.createElement("div", {
+    "data-testid": "totals-external",
+    style: {
+      marginTop: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: dk ? "#c0c0d8" : "#3a4a58",
+      marginBottom: 2
+    }
+  }, "Outside surgeons"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#7a8a98",
+      marginBottom: 6
+    }
+  }, "Written in by hand (internal locums): their days come off the pool's open slots and count toward nobody's share or cap."), React.createElement("div", {
+    className: "table-wrap",
+    style: css.tableWrap
+  }, React.createElement("table", {
+    "data-testid": "totals-external-table",
+    style: {
+      borderCollapse: "collapse",
+      minWidth: 360
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: thL
+  }, "Surgeon"), sources.length > 1 && React.createElement("th", {
+    style: thL
+  }, "Source"), React.createElement("th", {
+    style: th
+  }, "Primary"), React.createElement("th", {
+    style: th
+  }, "Backup"), React.createElement("th", {
+    style: th
+  }, "Total"))), React.createElement("tbody", null, outside.map(o => o.rows.map(r => React.createElement("tr", {
+    key: r.id + o.src.key,
+    "data-testid": "totals-ext-row-" + r.id,
+    "data-source": o.src.key,
+    "data-primary": r.primary,
+    "data-backup": r.backup,
+    "data-total": r.total,
+    style: {
+      borderTop: "1px solid " + border,
+      opacity: o.src.key === "preview" ? 0.85 : 1,
+      fontStyle: o.src.key === "preview" ? "italic" : "normal"
+    }
+  }, React.createElement("td", {
+    style: tdL
+  }, React.createElement(Badge, {
+    id: r.id
+  }), !r.active && React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "#9aa4ae",
+      marginLeft: 6
+    }
+  }, "inactive")), sources.length > 1 && React.createElement("td", {
+    style: _objectSpread(_objectSpread({}, tdL), {}, {
+      fontSize: 11,
+      color: o.src.key === "preview" ? "#7a4fbf" : "#7a8a98"
+    })
+  }, o.src.label), React.createElement("td", {
+    style: td
+  }, r.primary), React.createElement("td", {
+    style: td
+  }, r.backup), React.createElement("td", {
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      fontWeight: 700
+    })
+  }, r.total)))))))), anyImplied && React.createElement("div", {
     style: {
       fontSize: 11,
       color: "#7a8a98",
       marginTop: 8
     }
-  }, "* implied target from the last Generate preview's diagnostics (no explicit monthlyTarget in Setup)."), showEast && React.createElement("div", {
+  }, "* implied equal share (of the period's open primary slots and, separately, its open backup slots) from the last Generate preview's diagnostics - no explicit monthlyTarget in Setup."), showEast && React.createElement("div", {
     style: {
       fontSize: 11,
       color: "#7a8a98",
@@ -10727,6 +12161,22 @@ function RosterEditor({
       roles: ["surgeon"]
     }]);
   };
+  const addExternal = () => {
+    const used = new Set(rows.map(r => r.id));
+    let n = 1;
+    while (used.has("x" + n)) n++;
+    setDirty(true);
+    setRows(r => [...r, {
+      id: "x" + n,
+      name: "",
+      code: "",
+      fullName: "",
+      active: true,
+      roles: ["surgeon"],
+      type: "external",
+      note: ""
+    }]);
+  };
   const remove = i => {
     const r = rows[i];
     if (referenced(r.id)) {
@@ -10740,8 +12190,9 @@ function RosterEditor({
     const ids = new Set(),
       codes = new Set();
     for (const r of rows) {
-      if (!/^s\d+$/.test(String(r.id || ""))) {
-        showToast(`Roster id "${r.id}" must look like s1, s2, ...`, "error");
+      const isExt = r.type === "external";
+      if (!(isExt ? /^x\d+$/ : /^s\d+$/).test(String(r.id || ""))) {
+        showToast(isExt ? `Outside-surgeon id "${r.id}" must look like x1, x2, ...` : `Roster id "${r.id}" must look like s1, s2, ...`, "error");
         return;
       }
       if (!String(r.name || "").trim() || !String(r.code || "").trim()) {
@@ -10760,14 +12211,28 @@ function RosterEditor({
       ids.add(r.id);
       codes.add(c);
     }
-    const clean = rows.map(r => ({
-      id: r.id,
-      name: String(r.name).trim(),
-      code: String(r.code).trim().toUpperCase(),
-      fullName: String(r.fullName || "").trim(),
-      active: r.active !== false,
-      roles: Array.isArray(r.roles) ? r.roles : String(r.roles || "surgeon").split(/[,\s]+/).filter(Boolean)
-    }));
+    const clean = rows.map(r => {
+      const base = {
+        id: r.id,
+        name: String(r.name).trim(),
+        code: String(r.code).trim().toUpperCase(),
+        fullName: String(r.fullName || "").trim(),
+        active: r.active !== false,
+        roles: Array.isArray(r.roles) ? r.roles : String(r.roles || "surgeon").split(/[,\s]+/).filter(Boolean)
+      };
+      if (r.type !== "external") return base;
+      const note = String(r.note || "").trim();
+      return _objectSpread(_objectSpread({}, base), {}, {
+        type: "external"
+      }, note ? {
+        note
+      } : {});
+    });
+    const badNote = clean.find(r => r.note && SU_NOTE_DENYLIST.test(r.note));
+    if (badNote) {
+      showToast(`Refused: the note for ${badNote.name || badNote.id} carries a personal word - keep roster notes operational (the setup is readable with the public key).`, "error");
+      return;
+    }
     const leaks = suContactPaths(clean);
     if (leaks.length) {
       showToast("Refused: the roster would carry contact-looking data at " + leaks.join(", ") + " - names and codes only.", "error");
@@ -10785,19 +12250,27 @@ function RosterEditor({
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "Names and codes only - the schedule stores ids, the calendar shows last names, narrow cells show the code. Contact details never live here (accounts are linked under Users; addresses stay in Supabase Auth)."), React.createElement("div", {
+  }, "Names and codes only - the schedule stores ids, the calendar shows last names, narrow cells show the code. Contact details never live here (accounts are linked under Users; addresses stay in Supabase Auth). Outside surgeons (internal locums, 9/22) get their own button: written in by hand in the day editor, never generated, tallied under their own heading; their note is operational only (no personal wording - the setup is readable with the public key)."), React.createElement("div", {
     className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
     className: "setup-table"
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Id"), React.createElement("th", null, "Last name"), React.createElement("th", null, "Code"), React.createElement("th", null, "Full name"), React.createElement("th", null, "Active"), React.createElement("th", null, "Roles"), React.createElement("th", null))), React.createElement("tbody", null, rows.map((r, i) => React.createElement("tr", {
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Id"), React.createElement("th", null, "Type"), React.createElement("th", null, "Last name"), React.createElement("th", null, "Code"), React.createElement("th", null, "Full name"), React.createElement("th", null, "Active"), React.createElement("th", null, "Roles"), React.createElement("th", null, "Note"), React.createElement("th", null))), React.createElement("tbody", null, rows.map((r, i) => React.createElement("tr", {
     key: r.id + ":" + i
   }, React.createElement("td", {
     style: {
       fontFamily: mono
     }
-  }, r.id), React.createElement("td", null, React.createElement("input", {
+  }, r.id), React.createElement("td", {
+    "data-testid": "roster-type-" + r.id,
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      color: r.type === "external" ? "#8a5a10" : "#7a8a98"
+    }
+  }, r.type === "external" ? "outside" : "pool"), React.createElement("td", null, React.createElement("input", {
     type: "text",
+    "data-testid": "roster-name-" + r.id,
     value: r.name || "",
     onChange: e => edit(i, "name", e.target.value),
     style: _objectSpread(_objectSpread({}, inp), {}, {
@@ -10805,6 +12278,7 @@ function RosterEditor({
     })
   })), React.createElement("td", null, React.createElement("input", {
     type: "text",
+    "data-testid": "roster-code-" + r.id,
     value: r.code || "",
     maxLength: 4,
     onChange: e => edit(i, "code", e.target.value.toUpperCase()),
@@ -10830,7 +12304,23 @@ function RosterEditor({
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 120
     })
-  })), React.createElement("td", null, React.createElement("button", {
+  })), React.createElement("td", null, r.type === "external" ? React.createElement("input", {
+    type: "text",
+    "data-testid": "roster-note-" + r.id,
+    value: r.note || "",
+    maxLength: 120,
+    onChange: e => edit(i, "note", e.target.value),
+    placeholder: "operational note (shown here only)",
+    title: "Operational only - the setup is readable with the public key; never a personal reason",
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: 200
+    })
+  }) : React.createElement("span", {
+    style: {
+      color: "#b0b8c0",
+      fontSize: 11
+    }
+  }, "-")), React.createElement("td", null, React.createElement("button", {
     onClick: () => remove(i),
     style: css.danger,
     title: "Remove (refused while the id is referenced)"
@@ -10846,6 +12336,11 @@ function RosterEditor({
     onClick: add,
     style: css.mini(false)
   }, "Add surgeon"), React.createElement("button", {
+    "data-testid": "roster-add-external",
+    onClick: addExternal,
+    style: css.mini(false),
+    title: "An outside surgeon (internal locum): written in by hand in the day editor, never generated, tallied under its own heading"
+  }, "Add outside surgeon"), React.createElement("button", {
     "data-testid": "roster-save",
     onClick: save,
     disabled: !dirty,
@@ -11223,10 +12718,14 @@ function RulesEditor({
       return n;
     });
   };
-  const toggleList = (path, item, on) => {
-    const cur = get(path, []);
+  const toggleList = (path, item, on, dflt) => {
+    const cur = get(path, dflt || []);
     const list = Array.isArray(cur) ? cur.filter(x => x !== item) : [];
     if (on) list.push(item);
+    if (dflt && !list.length) {
+      set(path, undefined);
+      return;
+    }
     set(path, list);
   };
   const save = () => {
@@ -11258,8 +12757,13 @@ function RulesEditor({
   };
   const capMode = Object.prototype.hasOwnProperty.call(draft, "monthlyCap") ? draft.monthlyCap === null ? "none" : "number" : "default";
   const capObj = draft.monthlyCap && typeof draft.monthlyCap === "object" ? draft.monthlyCap : typeof draft.monthlyCap === "number" ? {
-    total: draft.monthlyCap
+    primary: draft.monthlyCap
   } : {};
+  const capPrimaryVal = typeof capObj.primary === "number" ? capObj.primary : typeof capObj.total === "number" ? capObj.total : undefined;
+  const setCapPrimary = v => {
+    if (Object.prototype.hasOwnProperty.call(capObj, "total")) set("monthlyCap.total", undefined);
+    set("monthlyCap.primary", v);
+  };
   const wp = get("outsideDerivedWeeks.weekdayPattern", null);
   const holNames = holidayNames && holidayNames.length ? holidayNames : SU_HOLIDAY_NAMES;
   const s = (roster || []).find(x => x.id === sel) || {};
@@ -11303,7 +12807,7 @@ function RulesEditor({
       alignItems: "center",
       marginBottom: 10
     }
-  }, (roster || []).map(x => React.createElement("button", {
+  }, (roster || []).filter(x => x.type !== "external").map(x => React.createElement("button", {
     key: x.id,
     "data-testid": "rules-pick-" + x.id,
     onClick: () => pick(x.id),
@@ -11331,10 +12835,11 @@ function RulesEditor({
   }, m || "(open - every day unless blocked)")))), React.createElement(SuField, {
     label: "Weekend style"
   }, React.createElement("select", {
+    "data-testid": "rules-weekend-style",
     value: get("weekendStyle", ""),
     onChange: e => set("weekendStyle", e.target.value || undefined),
     style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 130
+      width: 190
     })
   }, React.createElement("option", {
     value: ""
@@ -11343,8 +12848,51 @@ function RulesEditor({
   }, "block (Fri+Sat+Sun)"), React.createElement("option", {
     value: "split"
   }, "split (Fri+Sun / Sat)"), React.createElement("option", {
+    value: "daily"
+  }, "daily (standalone days)"), React.createElement("option", {
     value: "saturday-only"
-  }, "saturday-only"))), React.createElement(SuField, {
+  }, "saturday-only (legacy)"))), React.createElement(SuField, {
+    label: "Primary contribution",
+    hint: "soft; weekends = a bonus for a full Fri-Sun primary block and a penalty for a weekend backup (weights.weekendContribution)"
+  }, React.createElement("select", {
+    "data-testid": "rules-primary-contribution",
+    value: get("primaryContribution", ""),
+    onChange: e => set("primaryContribution", e.target.value || undefined),
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: 190
+    })
+  }, React.createElement("option", {
+    value: ""
+  }, "(none)"), React.createElement("option", {
+    value: "weekends"
+  }, "weekends (Prompt 12 L)"))), React.createElement(SuField, {
+    label: "Fri-Sun block penalty",
+    hint: "soft; added to every multi-day block or split membership of this surgeon"
+  }, React.createElement("select", {
+    "data-testid": "rules-weekend-block-penalty",
+    value: get("weekendBlockPenalty", "") === null ? "" : String(get("weekendBlockPenalty", "")),
+    onChange: e => set("weekendBlockPenalty", e.target.value === "" ? undefined : /^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value),
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: 130
+    })
+  }, React.createElement("option", {
+    value: ""
+  }, "none"), React.createElement("option", {
+    value: "medium"
+  }, "medium"), React.createElement("option", {
+    value: "strong"
+  }, "strong"), (() => {
+    const v = get("weekendBlockPenalty", "");
+    return v === null || v === undefined || v === "" || v === "medium" || v === "strong" ? null : React.createElement("option", {
+      value: String(v)
+    }, "custom: ", String(v));
+  })())), React.createElement(SuCheck, {
+    label: "prefer alternate days (soft)",
+    title: "Prompt 12 N (9/22 evening): a medium penalty on a primary whose day before or after is this surgeon's own primary.",
+    checked: draft.preferAlternateDays === true,
+    onChange: v => set("preferAlternateDays", v ? true : undefined),
+    testid: "rules-prefer-alternate-days"
+  }), React.createElement(SuField, {
     label: "Split partner"
   }, React.createElement("select", {
     value: get("splitPartner", ""),
@@ -11359,7 +12907,7 @@ function RulesEditor({
     value: x.id
   }, x.name)))), React.createElement(SuField, {
     label: "Max consecutive days",
-    hint: "blank = group default"
+    hint: "blank = group default; hard, primary days only"
   }, React.createElement("input", {
     type: "number",
     min: "1",
@@ -11370,8 +12918,27 @@ function RulesEditor({
       width: 70
     })
   })), React.createElement(SuField, {
+    label: "Max consecutive any role (soft)",
+    hint: "blank = none; primary or backup, a penalty that grows per day beyond it"
+  }, React.createElement("input", {
+    "data-testid": "rules-max-consec-any",
+    type: "number",
+    min: "1",
+    max: "14",
+    value: get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", ""),
+    onChange: e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value)),
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: 70
+    })
+  })), React.createElement(SuCheck, {
+    label: "a holiday unit counts as one day for the consecutive limits",
+    title: "Prompt 12 A (9/22): a per-surgeon opt-in (Khan: his 4-day Thanksgiving unit vs his max 3). Unchecked = real days.",
+    checked: draft.holidayUnitCountsAsOneDay === true,
+    onChange: v => set("holidayUnitCountsAsOneDay", v ? true : undefined),
+    testid: "rules-holiday-unit-one-day"
+  }), React.createElement(SuField, {
     label: "Monthly target",
-    hint: "blank = no target"
+    hint: "blank = equal share; a number = primary target"
   }, React.createElement("input", {
     "data-testid": "rules-monthly-target",
     type: "number",
@@ -11390,7 +12957,7 @@ function RulesEditor({
     onChange: e => {
       const v = e.target.value;
       if (v === "default") set("monthlyCap", undefined);else if (v === "none") set("monthlyCap", null);else set("monthlyCap", {
-        total: capObj.total || 8
+        primary: capPrimaryVal || 8
       });
     },
     style: _objectSpread(_objectSpread({}, inp), {}, {
@@ -11403,13 +12970,15 @@ function RulesEditor({
   }, "no cap (explicit null)"), React.createElement("option", {
     value: "number"
   }, "a number"))), capMode === "number" && React.createElement(React.Fragment, null, React.createElement(SuField, {
-    label: "Total"
+    label: "Primary days per month",
+    hint: "hard; backup days never count"
   }, React.createElement("input", {
     type: "number",
     min: "1",
     max: "31",
-    value: capObj.total === undefined || capObj.total === null ? "" : capObj.total,
-    onChange: e => set("monthlyCap.total", e.target.value === "" ? undefined : Number(e.target.value)),
+    "data-testid": "rules-cap-primary",
+    value: capPrimaryVal === undefined || capPrimaryVal === null ? "" : capPrimaryVal,
+    onChange: e => setCapPrimary(e.target.value === "" ? undefined : Number(e.target.value)),
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 70
     })
@@ -11425,9 +12994,9 @@ function RulesEditor({
       width: 70
     })
   })), React.createElement(SuCheck, {
-    label: "count East week days toward the cap",
-    checked: !!capObj.countsEastDays,
-    onChange: v => set("monthlyCap.countsEastDays", v ? "distinct-days" : undefined)
+    label: "count East primary-week days toward the cap",
+    checked: capObj.countsEastDays === true || capObj.countsEastDays === "distinct-days",
+    onChange: v => set("monthlyCap.countsEastDays", v ? true : undefined)
   }))), React.createElement("div", {
     style: {
       marginTop: 4
@@ -11455,9 +13024,20 @@ function RulesEditor({
   }, "applies to"), ["primary", "backup"].map(r => React.createElement(SuCheck, {
     key: r,
     label: r,
-    checked: (get("hardNeverWeekdaysRoles", ["primary", "backup"]) || []).indexOf(r) >= 0,
-    onChange: v => toggleList("hardNeverWeekdaysRoles", r, v)
-  }))), React.createElement("div", null, React.createElement(SuCheck, {
+    checked: (get("hardNeverWeekdaysRoles", ["primary"]) || []).indexOf(r) >= 0,
+    onChange: v => toggleList("hardNeverWeekdaysRoles", r, v, ["primary"])
+  })), React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "#7a8a98"
+    }
+  }, "(default: primary only - backup is open to everyone since 9/22; at least one role stays ticked)")), React.createElement("div", null, React.createElement(SuCheck, {
+    label: "Does not take backup",
+    title: "9/22: backup is open to everyone unless the surgeon explicitly opts out. Checked = a hard block on every backup slot, holiday units included; primary is unaffected.",
+    checked: draft.backupOptOut === true,
+    onChange: v => set("backupOptOut", v ? true : undefined),
+    testid: "rules-backup-opt-out"
+  })), React.createElement("div", null, React.createElement(SuCheck, {
     label: "weekday allow-list (Mon-Thu; weekends stay pool days)",
     checked: !!draft.weekdays,
     onChange: v => set("weekdays", v ? {
@@ -11581,40 +13161,42 @@ function RulesEditor({
     }
   }, React.createElement(SuCheck, {
     label: "days per window week",
+    title: "Prompt 12 N (9/22 evening): a SOFT target of primary days per Mon-Sun window week; a week off target is a diagnostics warning, never a violation. Older min / max keys are ignored by the engine (one warning) - the first edit here drops them.",
     checked: !!draft.daysPerWindowWeek,
     onChange: v => set("daysPerWindowWeek", v ? {
-      min: 3,
-      max: 4,
-      countsBackup: true
-    } : undefined)
+      target: 2,
+      countsBackup: false
+    } : undefined),
+    testid: "rules-window-week"
   }), draft.daysPerWindowWeek && React.createElement(React.Fragment, null, React.createElement(SuField, {
-    label: "Min (soft)"
+    label: "Target primary days per window week (soft)",
+    hint: "blank = none"
   }, React.createElement("input", {
+    "data-testid": "rules-window-week-target",
     type: "number",
     min: "0",
     max: "7",
-    value: get("daysPerWindowWeek.min", ""),
-    onChange: e => set("daysPerWindowWeek.min", e.target.value === "" ? undefined : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 60
-    })
-  })), React.createElement(SuField, {
-    label: "Max (hard)"
-  }, React.createElement("input", {
-    type: "number",
-    min: "1",
-    max: "7",
-    value: get("daysPerWindowWeek.max", ""),
-    onChange: e => set("daysPerWindowWeek.max", e.target.value === "" ? undefined : Number(e.target.value)),
+    value: get("daysPerWindowWeek.target", "") === null ? "" : get("daysPerWindowWeek.target", ""),
+    onChange: e => {
+      ["min", "max", "minIsSoft"].forEach(k => {
+        if (get("daysPerWindowWeek." + k, undefined) !== undefined) set("daysPerWindowWeek." + k, undefined);
+      });
+      set("daysPerWindowWeek.target", e.target.value === "" ? undefined : Number(e.target.value));
+    },
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 60
     })
   })), React.createElement(SuCheck, {
     label: "backup days count",
-    checked: get("daysPerWindowWeek.countsBackup", true) !== false,
+    checked: get("daysPerWindowWeek.countsBackup", false) === true,
     onChange: v => set("daysPerWindowWeek.countsBackup", v)
-  })), React.createElement(SuCheck, {
-    label: "handoff partner required (soft on consecutive primaries)",
+  }), (get("daysPerWindowWeek.min", undefined) !== undefined || get("daysPerWindowWeek.max", undefined) !== undefined) && React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "#c04040"
+    }
+  }, "legacy min / max keys present - ignored by the engine; edit the target to drop them")), React.createElement(SuCheck, {
+    label: "handoff partner required (diagnostics: warns when the day after a primary is the same surgeon or open)",
     checked: !!draft.handoffPartnerRequired,
     onChange: v => set("handoffPartnerRequired", v || undefined)
   }))), React.createElement("div", {
@@ -11886,14 +13468,23 @@ function RulesEditor({
   }, React.createElement("div", {
     style: css.subT
   }, "Group rules"), React.createElement(SuField, {
-    label: "Default monthly cap (total)",
-    hint: "blank = none"
+    label: "Default monthly cap (primary days)",
+    hint: "blank = none; backup days never count"
   }, React.createElement("input", {
     type: "number",
     min: "1",
     max: "31",
-    value: gget("defaultMonthlyCap.total", "") === null ? "" : gget("defaultMonthlyCap.total", ""),
-    onChange: e => gset("defaultMonthlyCap.total", e.target.value === "" ? undefined : Number(e.target.value)),
+    "data-testid": "group-default-cap-primary",
+    value: (() => {
+      const p = gget("defaultMonthlyCap.primary", null);
+      if (typeof p === "number") return p;
+      const t = gget("defaultMonthlyCap.total", null);
+      return typeof t === "number" ? t : "";
+    })(),
+    onChange: e => {
+      if (gget("defaultMonthlyCap.total", null) !== null) gset("defaultMonthlyCap.total", undefined);
+      gset("defaultMonthlyCap.primary", e.target.value === "" ? undefined : Number(e.target.value));
+    },
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 70
     })
@@ -11936,10 +13527,6 @@ function RulesEditor({
     label: "anyone may cover a holiday unless opted out",
     checked: gget("holidays.anyoneMayCoverUnlessOptedOut", true) !== false,
     onChange: v => gset("holidays.anyoneMayCoverUnlessOptedOut", v)
-  }), React.createElement(SuCheck, {
-    label: "a holiday unit counts as one commitment for max consecutive",
-    checked: gget("holidays.unitExemptFromMaxConsecutive", true) !== false,
-    onChange: v => gset("holidays.unitExemptFromMaxConsecutive", v)
   })), React.createElement("div", {
     style: css.subT
   }, "Weights"), React.createElement("div", {
@@ -12415,6 +14002,7 @@ function AvailabilityCard({
 function HolidaysCard({
   css,
   holidays,
+  groupRules,
   schedule,
   roster,
   nameOf,
@@ -12484,10 +14072,18 @@ function HolidaysCard({
       showToast(y + " already exists.", "info");
       return;
     }
+    const tiers = draft.rules && draft.rules.tiers || holidays && holidays.rules && holidays.rules.tiers || undefined;
+    const prefill = defaultHolidayUnits(y, _objectSpread(_objectSpread({}, groupRules && groupRules.holidays || {}), {}, {
+      tiers
+    })).map(u => ({
+      name: u.name,
+      tier: u.tier,
+      days: u.days
+    }));
     setDirty(true);
     setDraft(d => {
       const n = suClone(d);
-      n.units[y] = [];
+      n.units[y] = prefill;
       return n;
     });
     setNewYear("");
@@ -12717,7 +14313,14 @@ function HolidaysCard({
       fontSize: 11,
       color: "#7a8a98"
     }
-  }, dirty ? "Unsaved changes" : "Saved in the shared setup (autosave).")));
+  }, dirty ? "Unsaved changes" : "Saved in the shared setup (autosave).")), React.createElement("p", {
+    "data-testid": "holidays-prefill-hint",
+    style: {
+      fontSize: 11,
+      color: "#7a8a98",
+      margin: "6px 0 0"
+    }
+  }, groupRules && groupRules.holidays && groupRules.holidays.mondayMinorAbsorbsWeekend === true ? "New years are pre-filled from the group rule (minor Monday holidays absorb the weekend before); edit any unit's days." : "New years are pre-filled with single-day holidays (the Monday-minor group rule is off in the shared setup); edit any unit's days."));
 }
 function EastFeedCard({
   css,
@@ -12736,7 +14339,9 @@ function EastFeedCard({
   onSaveOverride,
   onDeleteOverride,
   threshold,
-  today
+  today,
+  conflicts,
+  onEditDay
 }) {
   const inp = _objectSpread(_objectSpread({}, css.inp), {}, {
     padding: "3px 6px",
@@ -12752,7 +14357,8 @@ function EastFeedCard({
   const nextPrimary = derived.filter(w => w.silvisRole === "primary" && w.weekMonday >= today).sort((a, b) => a.weekMonday < b.weekMonday ? -1 : 1)[0] || null;
   const meta = ctxInputs && ctxInputs.eastMeta || {};
   const busyIds = Object.keys(meta).filter(id => meta[id].busyDays);
-  const forecast = typeof forecastFromFeedRows === "function" ? forecastFromFeedRows(forecastRows || []) : {};
+  const forecast = typeof forecastFromFeedRows === "function" && typeof forecastOutsideCoverage === "function" ? forecastOutsideCoverage(forecastFromFeedRows(forecastRows || []), cov) : {};
+  const fcInsideCov = cov ? (forecastRows || []).filter(r => r && r.week_monday >= cov.from && r.week_monday <= cov.to).length : 0;
   const fcGenerated = (forecastRows || []).map(r => r.generated_at || r.data && r.data.generatedAt).filter(Boolean).sort().slice(-1)[0] || null;
   const fcRuns = (forecastRows || []).map(r => r.data && r.data.runs).filter(x => typeof x === "number")[0];
   const horizon = suAddDays(today, 90);
@@ -12837,7 +14443,11 @@ function EastFeedCard({
       color: "#3a4a58",
       lineHeight: 1.6
     }
-  }, "generated ", suFmtTs(fcGenerated), ", ", fcRuns !== undefined ? fcRuns + " runs" : "runs unknown", ", ", (forecastRows || []).length, " week(s); days at or above ", Math.round((threshold || 0.5) * 100), "% in the next 90 days: ", fcDays.length === 0 ? "none" : null, fcDays.length > 0 && React.createElement("div", {
+  }, "generated ", suFmtTs(fcGenerated), ", ", fcRuns !== undefined ? fcRuns + " runs" : "runs unknown", ", ", (forecastRows || []).length, " week(s)", fcInsideCov > 0 ? React.createElement("span", {
+    style: {
+      color: "#a83232"
+    }
+  }, " (", fcInsideCov, " inside the published coverage (ignored) - refresh the feed to delete them)") : null, "; days at or above ", Math.round((threshold || 0.5) * 100), "% in the next 90 days: ", fcDays.length === 0 ? "none" : null, fcDays.length > 0 && React.createElement("div", {
     "data-testid": "east-forecast-days",
     style: {
       fontFamily: mono,
@@ -12853,7 +14463,42 @@ function EastFeedCard({
     style: {
       fontFamily: mono
     }
-  }, "node scripts/east-forecast.js --sql"), " on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Published weeks replace the forecast automatically once Davenport publishes.")), React.createElement("div", {
+  }, "node scripts/east-forecast.js --sql"), " on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Refreshing the feed caches Davenport's published weeks and deletes forecast rows for weeks that are now published; the forecast only ever fills weeks Davenport has not published.")), React.createElement("div", {
+    style: {
+      border: "1px solid " + ((conflicts || []).length ? "#e0b4b4" : "#e8ecf0"),
+      borderRadius: 8,
+      padding: "8px 10px",
+      marginBottom: 10
+    }
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: "0 0 4px",
+      color: (conflicts || []).length ? "#a83232" : undefined
+    })
+  }, "Conflicts with the published schedule (", (conflicts || []).length, ")"), React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "#7a8a98",
+      margin: "0 0 4px"
+    }
+  }, "Days where the East data makes the assigned surgeon ineligible - on East call while Silvis primary, or a derived East week the schedule no longer matches. Locked days are listed too; open the day to trade or reassign."), React.createElement("div", {
+    "data-testid": "east-conflicts",
+    style: {
+      fontSize: 12,
+      fontFamily: mono,
+      lineHeight: 1.7
+    }
+  }, (conflicts || []).length === 0 ? "none" : (conflicts || []).map(c => React.createElement("div", {
+    key: c.day + c.role
+  }, React.createElement("button", {
+    type: "button",
+    onClick: () => onEditDay && onEditDay(c.day),
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      fontFamily: mono,
+      padding: "1px 6px",
+      marginRight: 6
+    })
+  }, c.day), " ", c.role, " ", nameOf(c.id), ": ", (c.reasons || []).map(r => reasonLabel(r, nameOf)).join(", "))))), React.createElement("div", {
     style: {
       border: "1px solid #e8ecf0",
       borderRadius: 8,
@@ -13011,6 +14656,22 @@ function EastFeedCard({
         color: "#7a8a98"
       }
     }, "none"));
+  }), busyIds.map(id => {
+    const P = ctx && ctx.per ? ctx.per[id] : null;
+    const st = P && P.eastStandingList ? P.eastStandingList : [];
+    return st.length ? React.createElement("div", {
+      key: "standing-" + id,
+      "data-testid": "east-standing-" + id,
+      style: {
+        fontSize: 12,
+        marginTop: 6,
+        color: "#2c3e50"
+      }
+    }, React.createElement("strong", null, nameOf(id)), " - Standing: ", React.createElement("span", {
+      style: {
+        fontFamily: mono
+      }
+    }, st.map(e => e.name + " " + e.days.join(", ")).join("; ")), " (every year; Silvis primary blocked, backup per the East-day rule; seed/blob data, no Setup field yet)") : null;
   }))));
 }
 function GenDiagnostics({
@@ -13028,6 +14689,9 @@ function GenDiagnostics({
     (bySurgeon[p.id] = bySurgeon[p.id] || []).push(p);
   });
   const num = v => v === null || v === undefined ? "-" : Math.round(v * 10) / 10;
+  const tgtOf = (t, role) => t && typeof t === "object" ? typeof t[role] === "number" ? t[role] : null : role === "primary" && typeof t === "number" ? t : null;
+  const IT = dg.impliedTargets;
+  const hasShares = !!(IT && IT.months && Object.keys(IT.months).some(m => IT.months[m] && IT.months[m].members));
   const scoreKeys = dg.score ? Object.keys(dg.score) : [];
   const box = {
     border: "1px solid #e8ecf0",
@@ -13090,7 +14754,17 @@ function GenDiagnostics({
   }, React.createElement("table", {
     className: "setup-table",
     "data-testid": "gen-tallies"
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Month"), React.createElement("th", null, "P"), React.createElement("th", null, "B"), React.createElement("th", null, "Total"), React.createElement("th", null, "Wknd days"), React.createElement("th", null, "Major"), React.createElement("th", null, "Minor"), React.createElement("th", null, "Max consec"), React.createElement("th", null, "Cap"), React.createElement("th", null, "Target"))), React.createElement("tbody", null, ids.map(id => {
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Month"), React.createElement("th", null, "P"), React.createElement("th", null, "B"), React.createElement("th", null, "Total"), React.createElement("th", null, "Wknd days"), React.createElement("th", null, "Major"), React.createElement("th", null, "Minor"), React.createElement("th", {
+    title: "Longest run of consecutive primary days touching the month / range (real days; the hard limit's measure)"
+  }, "Max consec. P"), React.createElement("th", {
+    title: "Longest run of consecutive days in either role (real days; the soft limit's measure)"
+  }, "Max consec. any"), React.createElement("th", {
+    title: "Monthly cap on PRIMARY days (backup days never count); a row is flagged when P - plus, for a cap that counts East days, his East primary-week days - is over it"
+  }, "Cap (P)"), React.createElement("th", {
+    title: "Primary-day target for the month: an explicit monthlyTarget, else the implied equal share of the month's open primary slots (the window surgeon: her window target)"
+  }, "Target P"), React.createElement("th", {
+    title: "Backup-day target for the month: the implied equal share of the month's open backup slots (a windows surgeon has none)"
+  }, "Target B"))), React.createElement("tbody", null, ids.map(id => {
     const t = dg.tallies[id];
     const rows = months.map(m => {
       const x = t.months[m] || {};
@@ -13098,13 +14772,15 @@ function GenDiagnostics({
         key: id + m,
         "data-tally": id,
         style: {
-          color: x.cap !== null && x.cap !== undefined && x.total > x.cap ? "#a83232" : undefined
+          color: x.cap !== null && x.cap !== undefined && x.primary + (x.eastP || 0) > x.cap ? "#a83232" : undefined
         }
       }, React.createElement("td", null, nameOf(id)), React.createElement("td", {
         style: {
           fontFamily: mono
         }
-      }, m), React.createElement("td", null, x.primary), React.createElement("td", null, x.backup), React.createElement("td", null, React.createElement("strong", null, x.total)), React.createElement("td", null, x.weekendDays), React.createElement("td", null, x.majorHolidays), React.createElement("td", null, x.minorHolidays), React.createElement("td", null, x.maxConsecutive), React.createElement("td", null, num(x.cap)), React.createElement("td", null, num(x.target)));
+      }, m), React.createElement("td", null, x.primary), React.createElement("td", null, x.backup), React.createElement("td", null, React.createElement("strong", null, x.total)), React.createElement("td", null, x.weekendDays), React.createElement("td", null, x.majorHolidays), React.createElement("td", null, x.minorHolidays), React.createElement("td", null, x.maxConsecutive), React.createElement("td", null, x.maxConsecutiveAnyRole), React.createElement("td", {
+        title: x.eastP ? x.primary + " P + " + x.eastP + " East primary-week day(s) = " + (x.primary + x.eastP) + " counted against the cap" : undefined
+      }, num(x.cap), x.eastP ? " (" + (x.primary + x.eastP) + " counted)" : ""), React.createElement("td", null, num(tgtOf(x.target, "primary"))), React.createElement("td", null, num(tgtOf(x.target, "backup"))));
     });
     const r = t.range || {};
     rows.push(React.createElement("tr", {
@@ -13114,9 +14790,66 @@ function GenDiagnostics({
         background: "#f4f6f8",
         fontWeight: 700
       }
-    }, React.createElement("td", null, nameOf(id)), React.createElement("td", null, "range"), React.createElement("td", null, r.primary), React.createElement("td", null, r.backup), React.createElement("td", null, r.total), React.createElement("td", null, r.weekendDays), React.createElement("td", null, r.majorHolidays), React.createElement("td", null, r.minorHolidays), React.createElement("td", null, r.maxConsecutive), React.createElement("td", null, num(r.cap)), React.createElement("td", null)));
+    }, React.createElement("td", null, nameOf(id)), React.createElement("td", null, "range"), React.createElement("td", null, r.primary), React.createElement("td", null, r.backup), React.createElement("td", null, r.total), React.createElement("td", null, r.weekendDays), React.createElement("td", null, r.majorHolidays), React.createElement("td", null, r.minorHolidays), React.createElement("td", null, r.maxConsecutive), React.createElement("td", null, r.maxConsecutiveAnyRole), React.createElement("td", {
+      title: r.eastP ? r.primary + " P + " + r.eastP + " East primary-week day(s) in the range" : undefined
+    }, num(r.cap), r.eastP ? " (+" + r.eastP + " East P)" : ""), React.createElement("td", null, num(tgtOf(r.target, "primary"))), React.createElement("td", null, num(tgtOf(r.target, "backup")))));
     return rows;
-  }))))), React.createElement("div", {
+  }))))), hasShares && React.createElement("div", {
+    style: box,
+    "data-testid": "gen-shares"
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: "0 0 4px"
+    })
+  }, "Implied shares (equal-share fairness: target vs what the rules allow)"), React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "#7a8a98",
+      margin: "0 0 6px",
+      lineHeight: 1.5
+    }
+  }, "Pool: ", (IT.pool || []).map(nameOf).join(", "), ". Every pool member is targeted at an equal share of the month's open primary slots (after the window surgeon's reserved primaries) and, separately, of its open backup slots, held to locked days, caps and availability. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and locked days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus locked days, summed); where a locked floor or a cap pins a member it reads below the open count and the surplus days are placed by the soft terms alone."), months.map(m => {
+    const I = IT.months[m];
+    if (!I || !I.members) return null;
+    return React.createElement("div", {
+      key: m,
+      style: {
+        marginBottom: 6
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontFamily: mono
+      },
+      "data-testid": "gen-shares-head-" + m
+    }, m, ": primary ", I.primaryOpen, " open - ", I.reservedForWindows, " reserved = share ", I.primaryShare, " each of ", I.poolSize, "; backup ", I.backupOpen, " open = share ", I.backupShare, I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : "", typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""), React.createElement("div", {
+      className: "table-wrap",
+      style: css.tableWrap
+    }, React.createElement("table", {
+      className: "setup-table",
+      "data-testid": "gen-shares-" + m
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Target P"), React.createElement("th", null, "Allowed P"), React.createElement("th", null, "Locked P"), React.createElement("th", {
+      title: "min(preferred cap, cap - 1) minus East primary-week days (a cap that counts them); '-' when uncapped"
+    }, "Clip P"), React.createElement("th", null, "Target B"), React.createElement("th", null, "Allowed B"), React.createElement("th", null, "Locked B"))), React.createElement("tbody", null, ids.filter(id => I.members[id]).map(id => {
+      const M = I.members[id];
+      const shortP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget;
+      const shortB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget;
+      return React.createElement("tr", {
+        key: id,
+        "data-share": id + ":" + m
+      }, React.createElement("td", null, nameOf(id)), React.createElement("td", null, num(M.primaryTarget)), React.createElement("td", {
+        style: {
+          color: shortP ? "#a83232" : undefined
+        },
+        title: shortP ? "the rules allow fewer open primary slots than the target" : undefined
+      }, M.allowedPrimary, shortP ? " (short)" : ""), React.createElement("td", null, M.lockedHeld.primary), React.createElement("td", null, num(M.clipPrimary)), React.createElement("td", null, num(M.backupTarget)), React.createElement("td", {
+        style: {
+          color: shortB ? "#a83232" : undefined
+        },
+        title: shortB ? "the rules allow fewer open backup slots than the target" : undefined
+      }, M.allowedBackup, shortB ? " (short)" : ""), React.createElement("td", null, M.lockedHeld.backup));
+    })))));
+  })), React.createElement("div", {
     style: box
   }, React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
@@ -13244,6 +14977,17 @@ function GenDiagnostics({
     }
   }, fmtMD(v.day), " ", v.role, " ", nameOf(v.id), " (", v.lock, "): ", (v.reasons || []).map(r => reasonLabel(r, nameOf)).join(", "))), React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: "8px 0 4px",
+      color: (dg.eastConflicts || []).length ? "#a83232" : undefined
+    })
+  }, "East conflicts on the final schedule (", (dg.eastConflicts || []).length, ")"), (dg.eastConflicts || []).map((c, i) => React.createElement("div", {
+    key: i,
+    "data-testid": "gen-east-conflict",
+    style: {
+      fontSize: 12
+    }
+  }, fmtMD(c.day), " ", c.role, " ", nameOf(c.id), ": ", (c.reasons || []).map(r => reasonLabel(r, nameOf)).join(", "))), React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
       margin: "8px 0 4px"
     })
   }, "East forecast days in range (", (dg.eastForecast || []).length, "); unknown East days: ", (dg.eastUnknownDays || []).length), (dg.eastForecast || []).length > 0 && React.createElement("div", {
@@ -13283,6 +15027,8 @@ function GeneratePanel({
   roster,
   rulesImported,
   lastPublishedDay,
+  genStart,
+  genFirstOpenDay,
   laterRanges,
   holidayNames
 }) {
@@ -13305,8 +15051,9 @@ function GeneratePanel({
       lineHeight: 1.5
     }
   }, "Best-of-N over the rules (locks, vacations, availability, East feed, holiday units). The result is a PREVIEW drawn on the calendar with a dashed outline; nothing is written until Accept & Publish, which snapshots first, writes the days through the compare-and-swap sync and then opens the publish dialog. ", React.createElement("span", {
-    "data-testid": "gen-last-published"
-  }, lastPublishedDay ? "Last published day on file: " + lastPublishedDay + " (end of the contiguous block of saved days; the presets start the day after)." : "No schedule days on file yet.", laterText ? " Later locked days on file: " + laterText + " - kept as locks while 'respect locks' is on." : "")), !rulesImported && React.createElement("div", {
+    "data-testid": "gen-last-published",
+    "data-gen-start": genStart || ""
+  }, !lastPublishedDay ? "No schedule days on file yet." : genFirstOpenDay ? "Range starts at the first open slot on or after today: " + genStart + " (locks are never touched; the run fills every open slot from there and generates the rest). Last saved day (end of the contiguous block): " + lastPublishedDay + "." : "No open slot on or after today - the range starts the day after the last saved day (end of the contiguous block: " + lastPublishedDay + "), or today when that day has passed: " + genStart + ".", laterText ? " Days with a held slot from the start on: " + laterText + " - locked slots stay as they are while 'respect locks' is on; the open slots on those days are filled." : "")), !rulesImported && React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
       marginBottom: 8
     })
