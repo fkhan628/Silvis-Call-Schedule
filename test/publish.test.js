@@ -227,10 +227,11 @@ const sql = PUB.publishSql(plan, FX.preview, { previewFile: "test/fixtures/publi
   ok(/'generate_publish'/.test(sql), "snapshot reason is the app's 'generate_publish'");
   ok(sql.indexOf("'" + TAG + "'") > 0, "the tool tag is a literal");
   ok(/created_by\)[\s\S]*'generate_publish'/.test(sql), "created_by column present in the snapshot insert");
-  // the snapshot data shape is the importer's (same four keys, same aggregation)
+  // the snapshot data shape is the importer's (same six keys since Prompt 14 P5 - config, schedule_days, time_off,
+  // availability, call_offers, call_periods - same aggregation)
   const IMP = require(path.join(REPO, "importer.js"));
   const impSql = IMP.importSql(IMP.importPlan(seed, { now: "2026-09-23T06:00:00.000Z" }));
-  const shapeLines = (s) => s.split("\n").map(l => l.trim()).filter(l => /^'(config|schedule_days|time_off|availability)',\s+\(select /.test(l));
+  const shapeLines = (s) => s.split("\n").map(l => l.trim()).filter(l => /^'(config|schedule_days|time_off|availability|call_offers|call_periods)',\s+\(select /.test(l));
   eq(shapeLines(sql), shapeLines(impSql), "snapshot data = the importer's jsonb_build_object shape");
   // CAS per update: WHERE day = X AND version = seen; each guarded by GET DIAGNOSTICS + RAISE
   plan.rows.filter(r => r.action === "update").forEach(r => {

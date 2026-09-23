@@ -500,7 +500,11 @@ function publishSql(plan, preview, opts) {
   L.push("           'config',        (select data from public.call_schedule_data where id = 'main'),");
   L.push("           'schedule_days', (select coalesce(jsonb_agg(to_jsonb(s) order by s.day), '[]'::jsonb) from public.schedule_days s),");
   L.push("           'time_off',      (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.time_off t),");
-  L.push("           'availability',  (select coalesce(jsonb_agg(to_jsonb(a)), '[]'::jsonb) from public.availability a)),");
+  L.push("           'availability',  (select coalesce(jsonb_agg(to_jsonb(a)), '[]'::jsonb) from public.availability a),");
+  // Prompt 14 P5: the snapshot also carries the offers and periods (as snapshots.capture and importer.js do since 9/23),
+  // so a restore after a publish brings them back; the tool never writes either table.
+  L.push("           'call_offers',   (select coalesce(jsonb_agg(to_jsonb(o) order by o.person_id, o.day), '[]'::jsonb) from public.call_offers o),");
+  L.push("           'call_periods',  (select coalesce(jsonb_agg(to_jsonb(p) order by p.start_day), '[]'::jsonb) from public.call_periods p)),");
   L.push("         (select updated_at from public.call_schedule_data where id = 'main'),");
   L.push("         " + S(TAG));
   L.push("  returning id into v_snap;");
