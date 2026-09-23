@@ -111,7 +111,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23h";
+    var APP_VERSION = "2026.09.23i";
     (function() {
       var stored = localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
@@ -12266,13 +12266,13 @@ function TotalsCard({
     title: "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it"
   }, "Cap (P)", nMonths > 1 ? " /mo" : ""), React.createElement("th", {
     style: th,
-    title: "Primary-day target for the period: an explicit monthlyTarget in Setup, else the implied equal share of the open primary slots from the last Generate preview (*)"
+    title: "Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder) (*)"
   }, "Target"), React.createElement("th", {
     style: th,
     title: "Primary days minus the primary target"
   }, "Deviation"), React.createElement("th", {
     style: th,
-    title: "Backup-day target for the period: an explicit { backup } target in Setup, else the implied equal share of the open backup slots from the last Generate preview (*)"
+    title: "Backup-day target for the period: an explicit { backup } target in Setup, else min(level, backup cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool backup slots, open + already held (a locked day counts against its holder) (*)"
   }, "Target B"), React.createElement("th", {
     style: th,
     title: "Backup days minus the backup target"
@@ -12366,7 +12366,7 @@ function TotalsCard({
       margin: "0 0 10px",
       lineHeight: 1.5
     }
-  }, "Total days in ", range.label, " against each surgeon's targets (green mark = primary target + backup target) and primary cap (red mark). Fairness at Silvis (9/22) is an equal share of primary days and, separately, of backup days for every pool member, within each person's availability - the deviation reads primary days against the primary target, then backup days against the backup target; a surgeon without a target shows '-'."), (() => {
+  }, "Total days in ", range.label, " against each surgeon's targets (green mark = primary target + backup target) and primary cap (red mark). Fairness at Silvis (9/22, water-filled 9/23) is a water-filled share of the month's primary days and, separately, of its backup days for every pool member - ALL the pool's slots, open and already held, poured over the members up to each one's cap, so a locked or derived day counts against its holder's share - and the deviation reads primary days against the primary target, then backup days against the backup target, convexly (a day further over target costs more); a surgeon without a target shows '-'."), (() => {
     const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, targetSum(r) === null ? 0 : targetSum(r))));
     const pct = v => Math.min(100, Math.round(v / scale * 100));
     return rows.map(r => React.createElement("div", {
@@ -12548,7 +12548,7 @@ function TotalsCard({
       color: "#5B6B82",
       marginTop: 8
     }
-  }, "* implied equal share (of the period's open primary slots and, separately, its open backup slots) from the last Generate preview's diagnostics - no explicit monthlyTarget in Setup."), showEast && React.createElement("div", {
+  }, "* implied water-filled share (the level over ALL the month's pool primary slots and, separately, its pool backup slots, open + held, clipped at each member's cap) from the last Generate preview's diagnostics - no explicit monthlyTarget in Setup."), showEast && React.createElement("div", {
     style: {
       fontSize: 11,
       color: "#5B6B82",
@@ -15508,9 +15508,9 @@ function GenDiagnostics({
   }, "Max consec. any"), React.createElement("th", {
     title: "Monthly cap on PRIMARY days (backup days never count); a row is flagged when P - plus, for a cap that counts East days, his East primary-week days - is over it"
   }, "Cap (P)"), React.createElement("th", {
-    title: "Primary-day target for the month: an explicit monthlyTarget, else the implied equal share of the month's open primary slots (the window surgeon: her window target)"
+    title: "Primary-day target for the month: an explicit monthlyTarget, else min(level, cap) where the level is the water-filled share of ALL the month's pool primary slots, open + already held (a locked day counts against its holder; the window surgeon: her window target)"
   }, "Target P"), React.createElement("th", {
-    title: "Backup-day target for the month: the implied equal share of the month's open backup slots (a windows surgeon has none)"
+    title: "Backup-day target for the month: min(level, backup cap) where the level is the water-filled share of ALL the month's pool backup slots, open + already held (a windows surgeon has none)"
   }, "Target B"))), React.createElement("tbody", null, ids.map(id => {
     const t = dg.tallies[id];
     const rows = months.map(m => {
@@ -15548,14 +15548,14 @@ function GenDiagnostics({
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
       margin: "0 0 4px"
     })
-  }, "Implied shares (equal-share fairness: target vs what the rules allow)"), React.createElement("p", {
+  }, "Implied shares (water-filled share per role: target vs what the rules allow)"), React.createElement("p", {
     style: {
       fontSize: 11,
       color: "#5B6B82",
       margin: "0 0 6px",
       lineHeight: 1.5
     }
-  }, "Pool: ", (IT.pool || []).map(nameOf).join(", "), ". Every pool member is targeted at an equal share of the month's open primary slots (after the window surgeon's reserved primaries) and, separately, of its open backup slots, held to locked days, caps and availability. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and locked days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus locked days, summed); where a locked floor or a cap pins a member it reads below the open count and the surplus days are placed by the soft terms alone."), months.map(m => {
+  }, "Pool: ", (IT.pool || []).map(nameOf).join(", "), ". Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's clip (Clip P; the backup cap for backup): a member below the level takes his clip and the rest is shared by the others, target = min(level, clip). A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone."), months.map(m => {
     const I = IT.months[m];
     if (!I || !I.members) return null;
     return React.createElement("div", {
@@ -15569,15 +15569,19 @@ function GenDiagnostics({
         fontFamily: mono
       },
       "data-testid": "gen-shares-head-" + m
-    }, m, ": primary ", I.primaryOpen, " open - ", I.reservedForWindows, " reserved = share ", I.primaryShare, " each of ", I.poolSize, "; backup ", I.backupOpen, " open = share ", I.backupShare, I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : "", typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""), React.createElement("div", {
+    }, m, ": ", I.poolSlots ? "primary " + I.poolSlots.primary + " pool slots (" + I.primaryOpen + " open - " + I.reservedForWindows + " reserved + " + (I.heldByPool ? I.heldByPool.primary : "-") + " held) = level " + (I.primaryShare === null || I.primaryShare === undefined ? "at caps" : I.primaryShare) + " each of " + I.poolSize + "; backup " + I.poolSlots.backup + " pool slots (" + I.backupOpen + " open + " + (I.heldByPool ? I.heldByPool.backup : "-") + " held) = level " + (I.backupShare === null || I.backupShare === undefined ? "at caps" : I.backupShare) : "pre-9/23 preview (flat share): primary " + I.primaryOpen + " open - " + I.reservedForWindows + " reserved, share " + num(I.primaryShare) + " each of " + I.poolSize + "; backup " + I.backupOpen + " open, share " + num(I.backupShare), I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : "", typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""), React.createElement("div", {
       className: "table-wrap",
       style: css.tableWrap
     }, React.createElement("table", {
       className: "setup-table",
       "data-testid": "gen-shares-" + m
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Target P"), React.createElement("th", null, "Allowed P"), React.createElement("th", null, "Locked P"), React.createElement("th", {
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Target P"), React.createElement("th", null, "Allowed P"), React.createElement("th", {
+      title: "Primary days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share"
+    }, "Held P"), React.createElement("th", {
       title: "min(preferred cap, cap - 1) minus East primary-week days (a cap that counts them); '-' when uncapped"
-    }, "Clip P"), React.createElement("th", null, "Target B"), React.createElement("th", null, "Allowed B"), React.createElement("th", null, "Locked B"))), React.createElement("tbody", null, ids.filter(id => I.members[id]).map(id => {
+    }, "Clip P"), React.createElement("th", null, "Target B"), React.createElement("th", null, "Allowed B"), React.createElement("th", {
+      title: "Backup days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share"
+    }, "Held B"))), React.createElement("tbody", null, ids.filter(id => I.members[id]).map(id => {
       const M = I.members[id];
       const shortP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget;
       const shortB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget;
