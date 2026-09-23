@@ -2023,17 +2023,41 @@ function CallSchedule() {
     try {
       const fromMon = fmt(monOf(addD(new Date(), -28)));
       const toMon = fmt(addD(parse(fromMon), 7 * 30));
+      // Prompt 15 part 1a (9/23): the same refresh reads the Davenport VACATIONS
+      // (time_off, kind vacation only) of every roster surgeon whose East feature
+      // reads busy days - the codes go in, fetchEastWeeks resolves each through
+      // the Davenport roster blob by CODE, never by id. They land per week in the
+      // east_feed payload (data.vacations: [{ code, start, end }],
+      // attachVacationsToWeeks) so a refresh replaces them cleanly; a failed
+      // time_off read keeps each week's cached list (keepCachedVacations) and the
+      // toast names it - never "no vacations". Nothing visual yet: parts 2-3
+      // read eastVacations(eastFeedRows, code).
+      const vacationCodes = surgeons.filter(s => {
+        const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
+        return ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code;
+      }).map(s => String(s.code).toUpperCase());
       let feed;
-      try { feed = await fetchEastWeeks(fromMon, toMon); }
+      try { feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes }); }
       catch (e) {
         console.warn("East feed fetch failed - cache kept", e);
         showToast("East feed fetch FAILED - the cached weeks are kept and East status is unchanged (a failed fetch never means 'no East call'). " + errText(e).slice(0, 120), "error");
         return;
       }
-      const rows = toEastFeedRows(feed.weeks).map(r => ({ ...r, fetched_at: feed.fetchedAt }));
+      if (feed.vacationsError) console.warn("East time_off read failed - the cached East vacations are kept", feed.vacationsError);
+      // Review fix (E1 finding 1, 9/23): the split and the ride-on host rule run
+      // over the WHOLE cache (planVacationCache), not the 28-day window, and every
+      // cached row outside the window whose list changed is upserted too (its own
+      // payload, its own fetched_at) - so a ride-on range Davenport cancelled or
+      // shortened is cleared from its old host, even when 0 weeks were fetched.
+      const plan = feed.vacations ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };
+      const vacationCount = feed.vacations ? Object.keys(feed.vacations).reduce((acc, c) => acc + feed.vacations[c].length, 0) : null;
+      const unresolvedWord = (feed.vacationCodesUnresolved || []).length ? ` (${feed.vacationCodesUnresolved.join(", ")} not in the Davenport roster)` : "";
+      const weekRows = toEastFeedRows(plan.weeks).map(r => ({ ...r, fetched_at: feed.fetchedAt }));
+      const rewrittenRows = plan.rewritten.map(w => ({ week_monday: w.weekMonday, data: w.data, fetched_at: w.fetchedAt || feed.fetchedAt }));
+      const rows = weekRows.concat(rewrittenRows);
       if (rows.length) {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/east_feed`, { method: "POST", headers: { ...dbAuthHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) });
-        if (!res.ok) { const t = await res.text().catch(() => ""); console.warn("east_feed upsert failed", res.status, t); showToast("Fetched " + rows.length + " week(s) but couldn't cache them: " + describeDbError(t), "error"); return; }
+        if (!res.ok) { const t = await res.text().catch(() => ""); console.warn("east_feed upsert failed", res.status, t); showToast("Fetched " + weekRows.length + " week(s) but couldn't cache them: " + describeDbError(t), "error"); return; }
       }
       // Prompt 12 C.2 (9/22): published rows win - delete the east_forecast rows
       // whose week_monday now lies inside the published coverage of the weeks just
@@ -2067,13 +2091,25 @@ function CallSchedule() {
         : forecastRowsDeleted !== null ? forecastRowsDeleted + " forecast row(s) inside the published coverage deleted"
         : forecastCountUnknown ? "forecast rows inside the published coverage deleted, count unknown (no representation returned)"
         : "forecast prune FAILED";
-      logAudit("east.refresh", `Refreshed the East feed: ${rows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}`,
-        { from: fromMon, to: toMon, weeks: rows.length, coverage: publishedCoverage, forecastRowsDeleted, forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null });
+      // Prompt 15 part 1a: the vacations leg of the refresh, named in the audit row
+      // and the ONE final toast (a failed time_off read is tone error, cache kept).
+      const rewrittenWord = rewrittenRows.length ? `; ${rewrittenRows.length} older cached week(s) rewritten (East vacation ranges re-hosted or cleared)` : "";
+      const vacationSummary = !vacationCodes.length ? "no East vacation codes"
+        : feed.vacationsError ? "East time_off read FAILED - cached East vacations kept"
+        : feed.vacations ? `${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo}${unresolvedWord}${rewrittenWord}`
+        : `no East vacations read${unresolvedWord}`;
+      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}`,
+        { from: fromMon, to: toMon, weeks: weekRows.length, coverage: publishedCoverage, forecastRowsDeleted, forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null,
+          vacations: { codes: vacationCodes, ranges: vacationCount, to: feed.vacationsTo || null, rewrittenWeeks: rewrittenRows.length, unresolved: feed.vacationCodesUnresolved || [], error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null } });
       const pruneWord = !publishedCoverage ? ""
         : forecastRowsDeleted !== null ? ` ${forecastRowsDeleted} forecast row(s) for now-published weeks deleted.`
         : forecastCountUnknown ? ` Forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were deleted but the count is unknown (no representation returned) - check the forecast strip.`
         : ` But the forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were NOT deleted - couldn't delete the forecast rows: ${describeDbError(forecastDeleteError)} (eligibility ignores them; delete them by hand).`;
-      showToast(rows.length ? `East feed refreshed: ${rows.length} published week(s) cached.${pruneWord}` : "East feed refreshed: Davenport has no published weeks in that window - cache unchanged.", rows.length ? (forecastDeleteError ? "error" : "success") : "info");
+      const vacationWord = !vacationCodes.length ? ""
+        : feed.vacationsError ? ` East time off could NOT be read - the cached East vacations are kept (a failed read never means 'no vacations'): ${String(feed.vacationsError).slice(0, 120)}`
+        : feed.vacations ? (plan.carriers ? ` ${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo} cached${unresolvedWord}${rewrittenWord}.` : ` ${vacationCount} East vacation range(s) read but NOT cached - no published week row to hold them.`)
+        : ` No East vacations read${unresolvedWord}.`;
+      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}` : `East feed refreshed: Davenport has no published weeks in that window - the cached weeks are unchanged.${vacationWord}`, feed.vacationsError ? "error" : weekRows.length ? (forecastDeleteError ? "error" : "success") : "info");
     } catch (e) {
       // A rejected fetch (network drop, CORS, DNS) on the east_feed upsert, the
       // cache reload or the audit row must not escape as an unhandled rejection

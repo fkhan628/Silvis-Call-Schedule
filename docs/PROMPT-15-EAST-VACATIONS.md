@@ -61,3 +61,44 @@ passing tests, report-first for anything that touches RLS on EITHER project, sto
    Davenport clone's README if a Copy button was added there. npm test, npm run smoke, screenshots of the panel with
    one range in each state. Stop before pushing.
 ```
+
+## Part 1 — path taken and the observed probe (2026-09-23, branch `feat/east-vacations`)
+
+**Path 1a.** The Davenport project's `time_off` table is read through the East feed's existing read path, so east-feed.js reads it
+directly; there is no paste box and no change to the Davenport app. The probe note, copied verbatim from
+`scratchpad/p15/davenport-timeoff-probe.txt`:
+
+```
+Prompt 15 part 1 probe - observed 2026-09-22 ~22:58 local by Claude Code (read-only, Davenport PUBLIC anon key from east-feed.js):
+  GET https://xqongyahdnkozqunpwmu.supabase.co/rest/v1/time_off?select=id,person_id,kind,start_date,end_date&limit=5  -> [removed]
+      [removed]
+  GET .../time_off?select=count (Prefer: count=exact)  -> 206, [removed]
+  GET .../schedule_weeks?select=week_monday&order=week_monday.desc&limit=1 -> 200 (control: the read the East feed already does; latest week 2026-11-09)
+Conclusion: [removed] -> Prompt 15 path 1a (fetch FAK's vacation rows by roster CODE via the
+Davenport blob, kind = vacation only, into east_feed payload key vacations: [{start, end}]). Path 1b (paste box + Copy button) not needed.
+Side observation for Faraz (Davenport side, not changed from here): [removed]
+holding that app's public anon key.
+```
+
+Second read-only look while building (2026-09-23, same key, `eastGetJson`): the Davenport roster resolves code FAK to
+`s6`; [removed]. His ranges lie
+mostly **beyond** Davenport's last published week (2026-11-09): [range] (his Silvis Thanksgiving unit — the
+"home" case the prompt describes), [range], then 2027. That is why a range touching no cached week rides on the
+latest cached week before it (see guide §7) instead of being dropped.
+
+What part 1 built (E1): `fetchEastWeeks(from, to, { vacationCodes })` → `vacations: { CODE: [{ start, end }] }` (kind
+`vacation` only, ids resolved by roster code through the Davenport blob, merged and sorted) or `vacations: null` +
+`vacationsError` when the `time_off` read fails while the weeks still come back; `attachVacationsToWeeks` puts each
+range into every cached week it touches as `data.vacations: [{ code, start, end }]`; `keepCachedVacations` carries a
+week's cached list into a refresh whose `time_off` read failed; `eastVacations(rows, code)` merges across the cache.
+The app's *Refresh from Davenport* passes the codes of the surgeons whose East feature reads busy days, writes the rows
+as before, and names the vacations leg in the toast and the `east.refresh` audit row. Nothing visual yet (parts 2–3).
+
+**Review fixes (E1, same day).** (1) The per-week split and the ride-on host rule now run over the *whole* cache
+(`planVacationCache`), and every cached row outside the 28-day refresh window whose list changed is upserted too
+(own payload, own `fetched_at`) — the reviewer showed that with Davenport published only through 2026-11-09, Khan's
+the three ranges all ride on the 11/09 row, which leaves the window on 2026-12-14; after that a
+cancelled or shortened range would have survived in the cache (and a refresh that fetched 0 weeks never touched the
+host). Ranges the read cannot see (`end < from`) are kept as cached. (2) The `time_off` read has its own horizon,
+`opts.vacationsTo` (default: the weeks window's Sunday + 365 days), instead of ending with the published weeks.
+Tests: `test/east-feed.test.js` (the T1/T2 scenario, the 0-weeks case, no-churn, the `start_date=lte.` bound).

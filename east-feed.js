@@ -5,6 +5,10 @@
 // Silvis generator:
 //   - Khan's East-busy days   (deriveKhanBusyDays)  -> blocks Silvis PRIMARY only
 //   - Fierce's derived weeks  (deriveFierceWeeks)   -> Silvis primary/backup locks
+//   - East vacations (Prompt 15 part 1a): the Davenport time_off rows, kind
+//     'vacation' only, of any roster surgeon with an East code (fetchEastWeeks
+//     opts.vacationCodes -> attachVacationsToWeeks -> east_feed data.vacations:
+//     [{ code, start, end }]; read back with eastVacations(rows, code))
 //
 // Loaded in the browser as a classic script (config -> helpers -> rules ->
 // east-feed -> generator), so every top-level name here is prefixed east/ef and
@@ -81,11 +85,35 @@ function eastResolveFakId(roster, code) {
   return hit ? hit.id : null;
 }
 
-// fetchEastWeeks(fromMonday, toMonday)
-//   -> { weeks:[{ weekMonday, data }], roster:[{id,name}], fakId, fetchedAt }
-// Throws on any transport/HTTP failure (never resolves to "no East call").
-async function fetchEastWeeks(fromMonday, toMonday) {
+// fetchEastWeeks(fromMonday, toMonday, opts)
+//   opts.vacationCodes: roster CODES (e.g. ["FAK"]) whose Davenport time_off
+//     VACATIONS are read in the same refresh (Prompt 15 part 1a). Default [] =
+//     no time_off read (scripts that only want the roster are unchanged).
+//   opts.vacationsTo: YYYY-MM-DD, the inclusive END of the time_off read
+//     (start_date <= it). Default: the weeks window's Sunday + 365 days. The
+//     time_off read does not depend on what Davenport has published, and
+//     vacations reach much further than the published weeks (Generate offers
+//     12-month presets after the milestone), so it gets its own horizon
+//     (review E1 finding 2, 9/23); a value before the window's Sunday, or a
+//     malformed one, falls back to the default.
+//   -> { weeks:[{ weekMonday, data }], roster:[{id,name}], fakId, fetchedAt,
+//        vacations: { CODE: [{ start, end }] } | null,   // merged, sorted
+//        vacationsError: string | null, vacationsTo,
+//        vacationIdsByCode: { CODE: davenportId }, vacationCodesUnresolved: [CODE] }
+// Throws on any transport/HTTP failure of the weeks or the roster (never
+// resolves to "no East call"). The time_off read is a SEPARATE step: each code
+// is resolved to its Davenport id through the roster blob (by code, never a
+// hard-coded id), kind = 'vacation' only (no-call days are a Davenport
+// concept), rows overlapping [fromMonday, vacationsTo]. Its failure leaves
+// vacations null + vacationsError set - unknown, never "no vacations" - while
+// the weeks still come back; the caller keeps each week's cached list
+// (keepCachedVacations) and names the failure. A 200 with [] is a real "no
+// vacations in the window" (an RLS-blocked read on the Davenport side would
+// look the same - see guide section 7).
+const EAST_VACATIONS_HORIZON_DAYS = 365;
+async function fetchEastWeeks(fromMonday, toMonday, opts) {
   if (!efIsDateStr(fromMonday) || !efIsDateStr(toMonday)) throw new Error("east-feed: fetchEastWeeks needs YYYY-MM-DD Mondays");
+  const o = Object.assign({ vacationCodes: [], vacationsTo: null }, opts || {});
   const q = "schedule_weeks?select=week_monday,data&week_monday=gte." + fromMonday + "&week_monday=lte." + toMonday + "&order=week_monday.asc";
   const rows = await eastGetJson(q);
   const blobRows = await eastGetJson("call_schedule_data?id=eq.main&select=data");
@@ -99,7 +127,20 @@ async function fetchEastWeeks(fromMonday, toMonday) {
     .filter(r => r && efIsDateStr(r.week_monday))
     .map(r => ({ weekMonday: r.week_monday, data: (typeof r.data === "string" ? JSON.parse(r.data) : r.data) || {} }))
     .sort((a, b) => a.weekMonday < b.weekMonday ? -1 : a.weekMonday > b.weekMonday ? 1 : 0);
-  return { weeks, roster, fakId, fetchedAt: new Date().toISOString() };
+  // East vacations: resolve every requested code by CODE through the roster.
+  const codes = (Array.isArray(o.vacationCodes) ? o.vacationCodes : []).map(c => String(c || "").toUpperCase()).filter(Boolean);
+  const vacationIdsByCode = {}, vacationCodesUnresolved = [];
+  codes.forEach(c => { const id = eastResolveFakId(roster, c); if (id) vacationIdsByCode[c] = id; else vacationCodesUnresolved.push(c); });
+  const ids = Object.keys(vacationIdsByCode).map(c => vacationIdsByCode[c]);
+  let vacations = null, vacationsError = null;
+  const windowEnd = efFmt(efAddD(efParse(toMonday), 6));
+  const vacationsTo = (efIsDateStr(o.vacationsTo) && o.vacationsTo >= windowEnd) ? o.vacationsTo : efFmt(efAddD(efParse(windowEnd), EAST_VACATIONS_HORIZON_DAYS));
+  if (ids.length) {
+    const tq = "time_off?select=person_id,kind,start_date,end_date&kind=eq.vacation&person_id=in.(" + ids.join(",") + ")&end_date=gte." + fromMonday + "&start_date=lte." + vacationsTo + "&order=start_date.asc";
+    try { vacations = vacationsFromTimeOff(await eastGetJson(tq), vacationIdsByCode); }
+    catch (e) { vacationsError = (e && e.message) ? e.message : String(e); }
+  }
+  return { weeks, roster, fakId, fetchedAt: new Date().toISOString(), vacations, vacationsError, vacationsTo, vacationIdsByCode, vacationCodesUnresolved };
 }
 
 // deriveKhanBusyDays(weeks, fakId, opts)
@@ -324,12 +365,190 @@ function toEastFeedRows(weeks) {
     .map(w => ({ week_monday: w.weekMonday, data: w.data || {} }));
 }
 
+// ---- East vacations (Prompt 15 part 1a, 9/23) ----
+// Davenport keeps vacations in its own time_off table (id, person_id, kind,
+// start_date, end_date; inclusive dates; kind 'vacation' | 'nocall'). Verified
+// [removed]. The Silvis cache is per week, so a
+// person's ranges are written into the payload of every cached week they
+// touch (whole, not clipped) as data.vacations: [{ code, start, end }] and a
+// refresh replaces them cleanly. Ranges that touch NO cached week - Davenport
+// publishes a few months ahead, vacations reach further - ride on the latest
+// cached week before them (or the first week when none precedes), so nothing
+// inside the fetched window is lost; the next refresh, once those weeks are
+// published, moves them to their own rows. eastVacations(rows, code) merges the
+// per-week copies back into one sorted list for the app and rules.js. The
+// ranges are dates only, never a note or reason (east_feed is anon-readable).
+
+function efValidRange(r) { return !!(r && efIsDateStr(r.start) && efIsDateStr(r.end) && r.start <= r.end); }
+
+// eastMergeRanges(ranges) -> [{ start, end }] sorted, overlapping AND adjacent
+// (end + 1 day == next start) ranges merged, malformed / inverted ones dropped.
+// Never mutates the input.
+function eastMergeRanges(ranges) {
+  const rs = (ranges || []).filter(efValidRange).map(r => ({ start: r.start, end: r.end }))
+    .sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : a.end < b.end ? -1 : a.end > b.end ? 1 : 0);
+  const out = [];
+  rs.forEach(r => {
+    const last = out[out.length - 1];
+    if (last && r.start <= efFmt(efAddD(efParse(last.end), 1))) { if (r.end > last.end) last.end = r.end; }
+    else out.push({ start: r.start, end: r.end });
+  });
+  return out;
+}
+
+// vacationsFromTimeOff(rows, idByCode) -> { CODE: [{ start, end }] }
+//   rows: Davenport time_off rows; idByCode: { CODE: davenportId } (resolved
+//   through the Davenport roster blob by fetchEastWeeks). Keeps kind
+//   'vacation' rows of the resolved ids only, merged per code. Every requested
+//   code gets a list (empty = known-empty; a missing code is "not asked").
+function vacationsFromTimeOff(rows, idByCode) {
+  const out = {}, codeOfId = {};
+  Object.keys(idByCode || {}).forEach(c => {
+    const code = String(c).toUpperCase();
+    if (!idByCode[c]) return;
+    codeOfId[idByCode[c]] = code;
+    out[code] = [];
+  });
+  (rows || []).forEach(r => {
+    if (!r || r.kind !== "vacation") return;
+    const code = codeOfId[r.person_id];
+    if (!code) return;
+    out[code].push({ start: String(r.start_date || "").slice(0, 10), end: String(r.end_date || "").slice(0, 10) });
+  });
+  Object.keys(out).forEach(c => { out[c] = eastMergeRanges(out[c]); });
+  return out;
+}
+
+// attachVacationsToWeeks(weeks, vacationsByCode) -> new weeks array
+//   Writes data.vacations: [{ code, start, end }] (sorted by code, start) into
+//   every published week: the ranges touching its Mon..Sun, plus - for a range
+//   touching no cached week - the latest cached week before it (or the first).
+//   vacationsByCode null (the time_off read failed) -> rows returned as they
+//   are, no key written (the caller then runs keepCachedVacations). Forecast
+//   rows never carry vacations. Never mutates the input.
+function attachVacationsToWeeks(weeks, vacationsByCode) {
+  const ws = weeks || [];
+  if (!vacationsByCode || typeof vacationsByCode !== "object") return ws.slice();
+  const carriers = ws.filter(w => w && efIsDateStr(w.weekMonday) && !efIsForecastRow(w)).map(w => w.weekMonday).sort();
+  const per = {};
+  carriers.forEach(m => { per[m] = []; });
+  if (carriers.length) {
+    Object.keys(vacationsByCode).forEach(c => {
+      const code = String(c).toUpperCase();
+      eastMergeRanges(vacationsByCode[c]).forEach(r => {
+        const touched = carriers.filter(m => r.start <= efFmt(efAddD(efParse(m), 6)) && r.end >= m);
+        if (touched.length) { touched.forEach(m => per[m].push({ code, start: r.start, end: r.end })); return; }
+        let host = null;
+        carriers.forEach(m => { if (m <= r.start) host = m; });
+        per[host || carriers[0]].push({ code, start: r.start, end: r.end });
+      });
+    });
+  }
+  const order = (a, b) => a.code < b.code ? -1 : a.code > b.code ? 1 : a.start < b.start ? -1 : a.start > b.start ? 1 : 0;
+  return ws.map(w => {
+    if (!w || !efIsDateStr(w.weekMonday) || efIsForecastRow(w)) return w;
+    const list = (per[w.weekMonday] || []).slice().sort(order).map(e => ({ code: e.code, start: e.start, end: e.end }));
+    return Object.assign({}, w, { data: Object.assign({}, w.data || {}, { vacations: list }) });
+  });
+}
+
+// keepCachedVacations(weeks, prevRows) -> new weeks array
+//   The failure path: a freshly fetched week whose payload has NO vacations key
+//   (the time_off read failed, or nobody was asked) inherits the list its
+//   cached east_feed row (prevRows: [{ week_monday | weekMonday, data }])
+//   already carries, so the upsert never wipes known vacations. A fetched list,
+//   even an empty one, is never overwritten. Never mutates the input.
+function keepCachedVacations(weeks, prevRows) {
+  const prev = {};
+  (prevRows || []).forEach(r => {
+    const m = r && (r.week_monday || r.weekMonday);
+    if (efIsDateStr(m) && r.data && Array.isArray(r.data.vacations)) prev[m] = r.data.vacations;
+  });
+  return (weeks || []).map(w => {
+    if (!w || !efIsDateStr(w.weekMonday) || (w.data && w.data.vacations !== undefined) || !prev[w.weekMonday]) return w;
+    return Object.assign({}, w, { data: Object.assign({}, w.data || {}, { vacations: prev[w.weekMonday].map(v => Object.assign({}, v)) }) });
+  });
+}
+
+// planVacationCache(cachedRows, fetchedWeeks, vacationsByCode, opts)
+//   -> { weeks, rewritten, carriers }
+//   The refresh's write plan (review E1 finding 1, 9/23). The per-week split
+//   and the ride-on host rule of attachVacationsToWeeks run over the WHOLE
+//   cache - the cached published east_feed rows (cachedRows: [{ week_monday |
+//   weekMonday, data, fetched_at? }]) plus the freshly fetched weeks, the
+//   fetched payload winning per Monday - not over the refresh window alone.
+//   Otherwise a range riding on the newest cached week (Davenport publishes a
+//   few months ahead; vacations reach further) would go stale as soon as that
+//   host left the 28-day window: cancelled or shortened in Davenport, still in
+//   the cache, still a Silvis vacation (part 2's conservative default).
+//   weeks:     every fetched week with its vacations attached (upserted with
+//              the new fetched_at, as before).
+//   rewritten: every cached published row OUTSIDE the fetched set whose list
+//              changed - a ride-on range re-hosted on a now-published week, or
+//              cancelled - with its own week payload, the new list and its
+//              cached fetchedAt (its week data was not re-fetched). Ranges the
+//              read could not see (end < opts.from, the time_off window's
+//              start) are kept as they were, so old rows neither churn nor lose
+//              past ranges; a row without the key whose list is empty is not
+//              rewritten (absent == known-empty). Forecast rows are never
+//              carriers and never rewritten.
+//   carriers:  how many published rows could host a range (0 = nothing to
+//              cache the vacations on).
+//   vacationsByCode null (the time_off read failed) -> the fetched weeks as
+//   they are, nothing rewritten (the caller runs keepCachedVacations). Never
+//   mutates its inputs. The 0-weeks-fetched refresh still rewrites the host.
+function planVacationCache(cachedRows, fetchedWeeks, vacationsByCode, opts) {
+  const o = opts || {};
+  const fresh = (fetchedWeeks || []).slice();
+  if (!vacationsByCode || typeof vacationsByCode !== "object") return { weeks: fresh, rewritten: [], carriers: 0 };
+  const freshBy = {};
+  fresh.forEach(w => { if (w && efIsDateStr(w.weekMonday)) freshBy[w.weekMonday] = true; });
+  const cached = [];
+  (cachedRows || []).forEach(r => {
+    const m = r && (r.week_monday || r.weekMonday);
+    if (!efIsDateStr(m) || efIsForecastRow(r) || freshBy[m]) return;
+    cached.push({ weekMonday: m, data: r.data || {}, fetchedAt: r.fetched_at || r.fetchedAt || null });
+  });
+  const attached = attachVacationsToWeeks(fresh.concat(cached), vacationsByCode);
+  const carriers = attached.filter(w => w && efIsDateStr(w.weekMonday) && !efIsForecastRow(w)).length;
+  const order = (a, b) => a.code < b.code ? -1 : a.code > b.code ? 1 : a.start < b.start ? -1 : a.start > b.start ? 1 : 0;
+  const norm = list => (Array.isArray(list) ? list : []).filter(v => v && efIsDateStr(v.start) && efIsDateStr(v.end))
+    .map(v => ({ code: String(v.code || "").toUpperCase(), start: v.start, end: v.end })).sort(order);
+  const weeks = attached.slice(0, fresh.length);
+  const rewritten = [];
+  attached.slice(fresh.length).forEach((w, i) => {
+    const prev = norm(cached[i].data.vacations);
+    const unseen = efIsDateStr(o.from) ? prev.filter(v => v.end < o.from) : [];
+    const next = norm(unseen.concat(w.data.vacations || []));
+    if (JSON.stringify(next) === JSON.stringify(prev)) return;
+    rewritten.push({ weekMonday: w.weekMonday, data: Object.assign({}, w.data, { vacations: next }), fetchedAt: cached[i].fetchedAt });
+  });
+  return { weeks, rewritten, carriers };
+}
+
+// eastVacations(rows, code) -> [{ start, end }] merged and sorted across every
+//   cached week (east_feed rows or fetched weeks) for one roster code
+//   (case-insensitive). Rows without the key (never refreshed since Prompt 15)
+//   and forecast rows contribute nothing. This is the one read path for the
+//   app and rules.js (ctx.eastVacations, Prompt 15 part 2).
+function eastVacations(rows, code) {
+  const want = String(code || "").toUpperCase();
+  if (!want) return [];
+  const all = [];
+  (rows || []).forEach(r => {
+    if (!r || !r.data || efIsForecastRow(r) || !Array.isArray(r.data.vacations)) return;
+    r.data.vacations.forEach(v => { if (v && String(v.code || "").toUpperCase() === want) all.push({ start: v.start, end: v.end }); });
+  });
+  return eastMergeRanges(all);
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     EAST_PROJECT, eastGetJson, eastResolveFakId, fetchEastWeeks,
     deriveKhanBusyDays, deriveFierceWeeks, coverageOf, applyOverrides,
     forecastToBusy, toEastFeedRows, efIsForecastRow, forecastFromFeedRows,
     forecastOutsideCoverage, overridesByPerson,
-    efFmt, efParse, efAddD, efDayOffsets,
+    eastMergeRanges, vacationsFromTimeOff, attachVacationsToWeeks, keepCachedVacations, planVacationCache, eastVacations,
+    EAST_VACATIONS_HORIZON_DAYS, efFmt, efParse, efAddD, efDayOffsets,
   };
 }

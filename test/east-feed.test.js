@@ -247,4 +247,198 @@ ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("ht
   ok(/for \(const key of \["fixedViolations"[^\]]*"eastConflicts"[^\]]*\]\)/.test(pg), "C fix 16: ...and in the October backfill section");
 }
 
-console.log("ok " + n + " assertions");
+// ---- Prompt 15 part 1a (9/23): East vacations - Davenport time_off rows -> per-week payload key + helper ----
+// Davenport-shaped fixture: roster with CODES (name = code, ids are Davenport
+// ids), time_off rows for several people (incl. an APP and a no-call row),
+// adjacent and overlapping FAK ranges, a range before the first cached week, one
+// in a gap week and one after the last cached week. Only FAK's vacations may
+// come through, merged and sorted; the per-week split; the failure path keeps
+// the cached vacations; the helper merges across weeks.
+{
+  const idByCode = { FAK: "s6" };
+  const timeOff = [
+    { id: 1, person_id: "s6", kind: "vacation", start_date: "2026-11-05", end_date: "2026-11-08" }, // adjacent to the next (merge)
+    { id: 2, person_id: "s6", kind: "vacation", start_date: "2026-11-02", end_date: "2026-11-04" },
+    { id: 3, person_id: "s1", kind: "vacation", start_date: "2026-11-03", end_date: "2026-11-05" }, // another surgeon - dropped
+    { id: 4, person_id: "a2", kind: "vacation", start_date: "2026-11-02", end_date: "2026-11-02" }, // an APP - dropped
+    { id: 5, person_id: "s6", kind: "nocall", start_date: "2026-11-10", end_date: "2026-11-10" },   // no-call day: a Davenport concept - dropped
+    { id: 6, person_id: "s6", kind: "vacation", start_date: "2026-11-15", end_date: "2026-11-17" }, // overlaps the next (merge)
+    { id: 7, person_id: "s6", kind: "vacation", start_date: "2026-11-13", end_date: "2026-11-16" },
+    { id: 8, person_id: "s6", kind: "vacation", start_date: "2026-12-09", end_date: "2026-12-10" }, // gap week (12/07 not cached)
+    { id: 9, person_id: "s6", kind: "vacation", start_date: "2026-10-01", end_date: "2026-10-02" }, // before the first cached week
+    { id: 10, person_id: "s6", kind: "vacation", start_date: "2027-01-08", end_date: "2027-01-10" }, // after the last cached week
+    { id: 11, person_id: "s6", kind: "vacation", start_date: "2026-11-03", end_date: "2026-11-03" }, // inside 11/02..11/08 (absorbed)
+    { id: 12, person_id: "s6", kind: "vacation", start_date: "nope", end_date: "2026-11-30" },        // malformed - dropped
+    { id: 13, person_id: "s6", kind: "vacation", start_date: "2026-11-30", end_date: "2026-11-29" },  // end before start - dropped
+    null,
+  ];
+  const merged = [
+    { start: "2026-10-01", end: "2026-10-02" },
+    { start: "2026-11-02", end: "2026-11-08" },
+    { start: "2026-11-13", end: "2026-11-17" },
+    { start: "2026-12-09", end: "2026-12-10" },
+    { start: "2027-01-08", end: "2027-01-10" },
+  ];
+  // merge
+  eq(ef.eastMergeRanges([{ start: "2026-11-05", end: "2026-11-08" }, { start: "2026-11-02", end: "2026-11-04" }, { start: "2026-11-15", end: "2026-11-17" }, { start: "2026-11-13", end: "2026-11-16" }, { start: "2026-11-03", end: "2026-11-03" }, { start: "bad", end: "2026-11-30" }, { start: "2026-11-30", end: "2026-11-29" }, null]),
+    [{ start: "2026-11-02", end: "2026-11-08" }, { start: "2026-11-13", end: "2026-11-17" }], "P15: adjacent + overlapping + contained ranges merge, sorted; malformed and inverted ranges dropped");
+  eq(ef.eastMergeRanges([{ start: "2026-12-31", end: "2026-12-31" }, { start: "2027-01-01", end: "2027-01-02" }]), [{ start: "2026-12-31", end: "2027-01-02" }], "P15: adjacency across the year boundary");
+  eq(ef.eastMergeRanges([{ start: "2026-11-02", end: "2026-11-03" }, { start: "2026-11-05", end: "2026-11-06" }]), [{ start: "2026-11-02", end: "2026-11-03" }, { start: "2026-11-05", end: "2026-11-06" }], "P15: a one-day gap is NOT adjacent");
+  eq(ef.eastMergeRanges(null), []);
+  // Davenport rows -> { CODE: merged ranges } (kind vacation only, resolved ids only)
+  eq(ef.vacationsFromTimeOff(timeOff, idByCode), { FAK: merged }, "P15: only the FAK code's vacation rows, merged and sorted; other people, APPs, no-call and malformed rows dropped");
+  eq(ef.vacationsFromTimeOff(timeOff, { FAK: "s6", DJA: "s1" }).DJA, [{ start: "2026-11-03", end: "2026-11-05" }], "P15: generic - a second code resolves independently");
+  eq(ef.vacationsFromTimeOff(timeOff, {}), {}, "P15: no codes -> nothing");
+  eq(ef.vacationsFromTimeOff(null, idByCode), { FAK: [] }, "P15: no rows -> an empty list per code (known-empty, not missing)");
+  // per-week split over an UNSORTED cache with a gap week (12/07 missing)
+  const wk = [
+    { weekMonday: "2026-11-09", data: { dayCall: "s2", nights: {} } },
+    { weekMonday: "2026-10-12", data: { dayCall: "s1", nights: {} } },
+    { weekMonday: "2026-11-02", data: { dayCall: "s6", nights: {} } },
+    { weekMonday: "2026-11-16", data: { dayCall: "s3", nights: {} } },
+    { weekMonday: "2026-11-30", data: { dayCall: "s4", nights: {} } },
+    { weekMonday: "2026-12-14", data: { dayCall: "s5", nights: {} } },
+    { weekMonday: "2026-12-07", data: { isForecast: true, fakBusyProbabilityByDay: {} } }, // forecast row in a mixed cache: never a carrier
+  ];
+  const before = JSON.stringify(wk);
+  const out = ef.attachVacationsToWeeks(wk, { FAK: merged });
+  eq(JSON.stringify(wk), before, "P15: input weeks are not mutated");
+  const byMon = {}; out.forEach(w => { byMon[w.weekMonday] = w; });
+  eq(out.map(w => w.weekMonday), wk.map(w => w.weekMonday), "P15: same rows, same order");
+  eq(byMon["2026-10-12"].data.vacations, [{ code: "FAK", start: "2026-10-01", end: "2026-10-02" }], "P15: a range before the first cached week rides on the first week");
+  eq(byMon["2026-11-02"].data.vacations, [{ code: "FAK", start: "2026-11-02", end: "2026-11-08" }], "P15: the range touching Mon..Sun of that week, whole (not clipped)");
+  eq(byMon["2026-11-09"].data.vacations, [{ code: "FAK", start: "2026-11-13", end: "2026-11-17" }], "P15: a range spanning two weeks is in both (1/2)");
+  eq(byMon["2026-11-16"].data.vacations, [{ code: "FAK", start: "2026-11-13", end: "2026-11-17" }], "P15: a range spanning two weeks is in both (2/2)");
+  eq(byMon["2026-11-30"].data.vacations, [{ code: "FAK", start: "2026-12-09", end: "2026-12-10" }], "P15: a range in a GAP week rides on the latest cached week before it");
+  eq(byMon["2026-12-14"].data.vacations, [{ code: "FAK", start: "2027-01-08", end: "2027-01-10" }], "P15: a range after the last cached week rides on the last week");
+  eq(byMon["2026-12-07"].data.vacations, undefined, "P15: a forecast row never carries vacations");
+  eq(byMon["2026-11-02"].data.dayCall, "s6", "P15: the rest of the payload is preserved");
+  eq(ef.attachVacationsToWeeks([{ weekMonday: "2026-11-02", data: {} }], { FAK: [] })[0].data.vacations, [], "P15: a fetched-but-empty list writes an empty key (known-empty)");
+  eq(ef.attachVacationsToWeeks([{ weekMonday: "2026-11-02", data: {} }], null)[0].data.vacations, undefined, "P15: vacations null (fetch failed) -> the key is left alone");
+  // the helper merges across cached weeks (the spanning range appears twice)
+  const cacheRows = ef.toEastFeedRows(out);
+  eq(ef.eastVacations(cacheRows, "FAK"), merged, "P15: eastVacations merges the per-week copies back into one sorted list");
+  eq(ef.eastVacations(cacheRows, "fak"), merged, "P15: code match is case-insensitive");
+  eq(ef.eastVacations(cacheRows, "DJA"), [], "P15: another code -> empty");
+  eq(ef.eastVacations(out, "FAK"), merged, "P15: accepts weekMonday rows too");
+  eq(ef.eastVacations([{ week_monday: "2026-11-02", data: { vacations: [{ code: "FAK", start: "2026-11-02", end: "2026-11-04" }] } }, { week_monday: "2026-11-09", data: { vacations: [{ code: "FAK", start: "2026-11-05", end: "2026-11-06" }] } }], "FAK"),
+    [{ start: "2026-11-02", end: "2026-11-06" }], "P15: adjacent ranges cached on different weeks merge");
+  eq(ef.eastVacations(null, "FAK"), []);
+  eq(ef.eastVacations([{ week_monday: "2026-11-02", data: { dayCall: "s6" } }], "FAK"), [], "P15: rows without the key (never refreshed) contribute nothing");
+  // failure path: the app keeps the cached vacations per week when the time_off read failed
+  const prev = ef.toEastFeedRows(out);
+  const fresh = [{ weekMonday: "2026-11-02", data: { dayCall: "s6", nights: {} } }, { weekMonday: "2026-11-09", data: { dayCall: "s2", nights: {} } }, { weekMonday: "2027-01-04", data: { dayCall: "s1" } }];
+  const kept = ef.keepCachedVacations(fresh, prev);
+  eq(kept[0].data.vacations, [{ code: "FAK", start: "2026-11-02", end: "2026-11-08" }], "P15: a week whose new payload has no vacations key inherits the cached list");
+  eq(kept[1].data.vacations, [{ code: "FAK", start: "2026-11-13", end: "2026-11-17" }]);
+  eq(kept[2].data.vacations, undefined, "P15: no cached row -> still unknown");
+  eq(fresh[0].data.vacations, undefined, "P15: keepCachedVacations does not mutate its input");
+  eq(ef.keepCachedVacations([{ weekMonday: "2026-11-02", data: { vacations: [] } }], prev)[0].data.vacations, [], "P15: a fetched (empty) list is NOT overwritten by the cache");
+}
+// planVacationCache (review E1 finding 1, 9/23): the per-week split and the
+// ride-on host rule run over the WHOLE cache (cached published rows + the
+// fetched weeks; the fetched payload wins per Monday), and every cached row
+// OUTSIDE the fetched set whose list changed is returned for the upsert, so a
+// ride-on range that Davenport cancelled or shortened is cleared from its old
+// host once that host has left the 28-day refresh window. Reviewer's scenario:
+// T1 (Nov 2026) Davenport published through 11/09 -> Khan's 11/24-27, 12/8-10
+// and 2027-02-03..28 ride on the 11/09 row; T2 (a refresh on 2026-12-21, window
+// from 11/16) Davenport published 11/16..12/21, Khan cancelled 2027-02 and
+// shortened 12/8-10 to 12/8-9.
+{
+  const t1weeks = ["2026-10-26", "2026-11-02", "2026-11-09"].map(m => ({ weekMonday: m, data: { dayCall: "s1" } }));
+  const t1vac = { FAK: [{ start: "2026-11-24", end: "2026-11-27" }, { start: "2026-12-08", end: "2026-12-10" }, { start: "2027-02-03", end: "2027-02-20" }] };
+  const cacheT1 = ef.toEastFeedRows(ef.attachVacationsToWeeks(t1weeks, t1vac)).map(r => ({ ...r, fetched_at: "2026-11-10T12:00:00.000Z" }));
+  eq(cacheT1[2].data.vacations.map(v => v.start), ["2026-11-24", "2026-12-08", "2027-02-03"], "P15 fix 1: T1 - all three future ranges ride on the newest cached week 11/09");
+  // a forecast row and a past range on an old row live in the cache too
+  cacheT1.push({ week_monday: "2026-12-07", data: { isForecast: true, fakBusyProbabilityByDay: {} }, fetched_at: "2026-11-10T12:00:00.000Z" });
+  cacheT1[0].data.vacations = [{ code: "FAK", start: "2026-10-28", end: "2026-10-30" }]; // ended before the T2 window: the read cannot see it
+  const t2weeks = ["2026-11-16", "2026-11-23", "2026-11-30", "2026-12-07", "2026-12-14", "2026-12-21"].map(m => ({ weekMonday: m, data: { dayCall: "s2" } }));
+  const t2vac = { FAK: [{ start: "2026-11-24", end: "2026-11-27" }, { start: "2026-12-08", end: "2026-12-09" }] };
+  const before = JSON.stringify({ cacheT1, t2weeks });
+  const plan = ef.planVacationCache(cacheT1, t2weeks, t2vac, { from: "2026-11-16" });
+  eq(JSON.stringify({ cacheT1, t2weeks }), before, "P15 fix 1: planVacationCache does not mutate the cache or the fetched weeks");
+  eq(plan.weeks.map(w => w.weekMonday), t2weeks.map(w => w.weekMonday), "P15 fix 1: every fetched week comes back, in order");
+  eq(plan.weeks[1].data.vacations, [{ code: "FAK", start: "2026-11-24", end: "2026-11-27" }], "P15 fix 1: 11/24-27 lands on the now-published 11/23 week");
+  eq(plan.weeks[3].data.vacations, [{ code: "FAK", start: "2026-12-08", end: "2026-12-09" }], "P15 fix 1: the shortened range lands on the 12/07 week");
+  eq(plan.weeks[0].data.dayCall, "s2", "P15 fix 1: the fetched payload is kept");
+  eq(plan.rewritten.map(w => w.weekMonday), ["2026-11-09"], "P15 fix 1: exactly the old host row (outside the window, list changed) is rewritten - not the unchanged 10/26 and 11/02 rows, never the forecast row");
+  eq(plan.rewritten[0].data.vacations, [], "P15 fix 1: the old host's list is cleared (cancelled 2027-02, re-hosted 11/24-27 and 12/8-9)");
+  eq(plan.rewritten[0].data.dayCall, "s1", "P15 fix 1: the old host keeps its own week payload");
+  eq(plan.rewritten[0].fetchedAt, "2026-11-10T12:00:00.000Z", "P15 fix 1: the old host keeps its fetched_at (its week data was not re-fetched)");
+  eq(plan.carriers, 9, "P15 fix 1: carriers = 3 cached published rows + 6 fetched weeks (the forecast row is not one)");
+  // the resulting cache (merge-duplicates upsert on week_monday) tells the Davenport truth
+  const byMon = {}; cacheT1.forEach(r => { byMon[r.week_monday] = r; });
+  ef.toEastFeedRows(plan.weeks).concat(ef.toEastFeedRows(plan.rewritten)).forEach(r => { byMon[r.week_monday] = r; });
+  const cacheT2 = Object.keys(byMon).sort().map(m => byMon[m]);
+  eq(ef.eastVacations(cacheT2, "FAK"), [{ start: "2026-10-28", end: "2026-10-30" }, { start: "2026-11-24", end: "2026-11-27" }, { start: "2026-12-08", end: "2026-12-09" }], "P15 fix 1: after the upsert the cache holds Davenport's truth - the cancelled 2027-02 range and the 12/13 day are gone; the past 10/28-30 range (before the read window) is kept");
+  // T2' variant: Davenport published NOTHING new (0 weeks in the window) - the rewrite still happens
+  const plan0 = ef.planVacationCache(cacheT1, [], t2vac, { from: "2026-11-16" });
+  eq(plan0.weeks, [], "P15 fix 1: 0 weeks fetched -> no week rows");
+  eq(plan0.rewritten.map(w => w.weekMonday), ["2026-11-09"], "P15 fix 1: 0 weeks fetched -> the host row is still rewritten");
+  eq(plan0.rewritten[0].data.vacations, [{ code: "FAK", start: "2026-11-24", end: "2026-11-27" }, { code: "FAK", start: "2026-12-08", end: "2026-12-09" }], "P15 fix 1: ...with the current ranges riding on it (2027-02 dropped, 12/10 dropped)");
+  eq(plan0.carriers, 3);
+  // no churn: rows without the key whose computed list is empty are not rewritten
+  const bare = [{ week_monday: "2026-11-02", data: { dayCall: "s1" } }, { week_monday: "2026-11-09", data: { dayCall: "s1" } }];
+  eq(ef.planVacationCache(bare, [{ weekMonday: "2026-11-16", data: {} }], { FAK: [] }, { from: "2026-11-16" }).rewritten, [], "P15 fix 1: a known-empty read rewrites no old row (absent key == empty list)");
+  eq(ef.planVacationCache(bare, [], { FAK: [{ start: "2027-01-04", end: "2027-01-05" }] }, { from: "2026-11-16" }).rewritten.map(w => w.weekMonday + ":" + w.data.vacations.length), ["2026-11-09:1"], "P15 fix 1: a new ride-on range on a bare cache lands on the newest cached row");
+  // a cached row that is ALSO fetched: the fetched payload wins and it is never in rewritten
+  const both = ef.planVacationCache(cacheT1, [{ weekMonday: "2026-11-09", data: { dayCall: "s9" } }], { FAK: [] }, { from: "2026-11-02" });
+  eq(both.weeks.map(w => w.weekMonday + ":" + w.data.dayCall), ["2026-11-09:s9"]);
+  eq(both.rewritten, [], "P15 fix 1: the re-fetched host is written as a fetched week, not as a rewrite");
+  // the failure path is not this helper's: vacations null -> fetched weeks as they are, nothing rewritten
+  const nul = ef.planVacationCache(cacheT1, t2weeks, null, { from: "2026-11-16" });
+  eq(nul.weeks.map(w => w.data.vacations), t2weeks.map(() => undefined), "P15 fix 1: vacations null -> no key written (keepCachedVacations is the caller's next step)");
+  eq(nul.rewritten, []);
+  eq(ef.planVacationCache(null, null, { FAK: [] }), { weeks: [], rewritten: [], carriers: 0 }, "P15 fix 1: empty everything");
+}
+// fetchEastWeeks with a stubbed fetch: the time_off read is scoped to the
+// resolved ids, kind vacation, the window; its failure is NOT the weeks' failure.
+{
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  const rows = { schedule_weeks: [{ week_monday: "2026-11-02", data: { dayCall: "s6" } }, { week_monday: "2026-11-09", data: { dayCall: "s2" } }],
+    call_schedule_data: [{ data: { surgeons: [{ id: "s1", name: "DJA" }, { id: "s6", name: "FAK" }] } }],
+    time_off: [{ person_id: "s6", kind: "vacation", start_date: "2026-11-18", end_date: "2026-11-22" }, { person_id: "s6", kind: "vacation", start_date: "2026-11-23", end_date: "2026-11-24" }, { person_id: "s1", kind: "vacation", start_date: "2026-11-18", end_date: "2026-11-22" }, { person_id: "s6", kind: "nocall", start_date: "2026-11-10", end_date: "2026-11-10" }] };
+  let failTimeOff = false;
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    const table = url.split("/rest/v1/")[1].split("?")[0];
+    if (table === "time_off" && failTimeOff) return { ok: false, status: 500, text: async () => "boom", json: async () => null };
+    return { ok: true, status: 200, text: async () => "", json: async () => rows[table] };
+  };
+  (async () => {
+    try {
+      const a = await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { vacationCodes: ["FAK", "NF"] });
+      eq(a.weeks.map(w => w.weekMonday), ["2026-11-02", "2026-11-09"]);
+      eq(a.vacations, { FAK: [{ start: "2026-11-18", end: "2026-11-24" }] }, "P15: fetch -> FAK's vacation rows merged (adjacent 11/22|11/23), s1's and the no-call row dropped");
+      eq(a.vacationsError, null);
+      eq(a.vacationIdsByCode, { FAK: "s6" }, "P15: ids resolved through the Davenport blob by CODE");
+      eq(a.vacationCodesUnresolved, ["NF"], "P15: a code the Davenport roster lacks is reported, not an error");
+      const q = calls.filter(u => u.indexOf("/rest/v1/time_off") >= 0);
+      eq(q.length, 1, "P15: exactly one time_off GET");
+      ok(/kind=eq\.vacation/.test(q[0]) && /person_id=in\.\(s6\)/.test(q[0]) && /end_date=gte\.2026-11-02/.test(q[0]) && /start_date=lte\.2027-11-15/.test(q[0]), "P15 fix 2: scoped to kind vacation, the resolved ids, from the window's Monday to a year past the window's Sunday (vacations reach further than Davenport publishes; Generate will offer 12-month presets): " + q[0]);
+      calls.length = 0;
+      const a2 = await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { vacationCodes: ["FAK"], vacationsTo: "2027-06-30" });
+      ok(/start_date=lte\.2027-06-30/.test(calls.filter(u => u.indexOf("/rest/v1/time_off") >= 0)[0]), "P15 fix 2: opts.vacationsTo sets the time_off horizon on its own (the weeks window is unchanged)");
+      eq(a2.vacationsTo, "2027-06-30", "P15 fix 2: the horizon used is reported");
+      calls.length = 0;
+      const a3 = await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { vacationCodes: ["FAK"], vacationsTo: "2026-11-01" });
+      ok(/start_date=lte\.2027-11-15/.test(calls.filter(u => u.indexOf("/rest/v1/time_off") >= 0)[0]) && a3.vacationsTo === "2027-11-15", "P15 fix 2: a vacationsTo before the window's end (or malformed) falls back to the default");
+      ok(/week_monday=lte\.2026-11-09/.test(calls.find(u => u.indexOf("/rest/v1/schedule_weeks") >= 0)), "P15 fix 2: the schedule_weeks read keeps the weeks window");
+      calls.length = 0;
+      const b = await ef.fetchEastWeeks("2026-11-02", "2026-11-09");
+      eq(calls.filter(u => u.indexOf("/rest/v1/time_off") >= 0).length, 0, "P15: no vacationCodes -> no time_off read (scripts that only want the roster are unchanged)");
+      eq(b.vacations, null);
+      failTimeOff = true;
+      const c = await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { vacationCodes: ["FAK"] });
+      eq(c.weeks.length, 2, "P15: a failed time_off read still returns the weeks");
+      eq(c.vacations, null, "P15: ...with vacations null (unknown, never 'no vacations')");
+      ok(typeof c.vacationsError === "string" && /time_off/.test(c.vacationsError) && /500/.test(c.vacationsError), "P15: the error names the read: " + c.vacationsError);
+      eq(ef.attachVacationsToWeeks(c.weeks, c.vacations)[0].data.vacations, undefined, "P15: nothing is written for the failed read - keepCachedVacations then restores the cache");
+      console.log("ok " + n + " assertions");
+    } catch (e) { console.error(e); process.exit(1); }
+    finally { globalThis.fetch = realFetch; }
+  })();
+}
+
