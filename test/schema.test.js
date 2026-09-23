@@ -769,7 +769,7 @@ ok(/^\| `call_periods` \| authenticated \|/m.test(secB), "table (b) lacks a call
 ok(!/anon/i.test(secA.split("\n").filter((l) => /`call_(offers|periods)`/.test(l)).join("\n")), "the (a) rows for call_offers / call_periods must not say anon (they are authenticated-only)");
 
 // ---- Prompt 14 P3a (9/23, U3a) - the offer painter's two RPCs ----
-// sql/migrations/2026-09-23-offer-mode-rpc.sql (NOT yet applied live as of 9/23; the orchestrator runs it) defines
+// sql/migrations/2026-09-23-offer-mode-rpc.sql (applied live 2026-09-23 ~12:45 Central) defines
 // set_offer_mode() (security definer: ONE person's key on ONE period - a surgeon cannot write call_periods) and
 // save_offers() (security invoker: the painter's one Save as ONE transaction, RLS + OF001-OF003 per row). schema.sql
 // mirrors both byte for byte; sql/probes/offer-rpcs-probe.sql rolls itself back (cases A..K-anon).
@@ -866,7 +866,7 @@ checkOfferRpcs("schema.sql", schema);
   const notifAt = schema.indexOf("create table if not exists public.notifications (");
   ok(modeAt > guardTrg && saveAt > modeAt, "set_offer_mode then save_offers must follow the call_offers delete-guard trigger (the offers section)");
   ok(saveAt < notifAt, "the two RPCs must be defined BEFORE the notifications table");
-  ok(/-- Revision 2026-09-23 i \(Prompt 14 part 3a, sql\/migrations\/2026-09-23-offer-mode-rpc\.sql, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-23 i (the two RPCs, not yet applied)");
+ok(/-- Revision 2026-09-23 i \(Prompt 14 part 3a, sql\/migrations\/2026-09-23-offer-mode-rpc\.sql, applied 2026-09-23[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-23 i (the two RPCs, applied 2026-09-23)");
 })();
 
 step("P14 P3a: migration 2026-09-23-offer-mode-rpc.sql defines the two functions and nothing else, byte-identical to schema.sql");
@@ -995,7 +995,7 @@ ok(schema.indexOf(OFFER_STATUS_GRANTS) >= 0, "schema.sql must carry the offer_st
 ok(schema.indexOf(OFFER_STATUS_GRANTS) > schema.indexOf("create or replace function public.offer_status(") && schema.indexOf(OFFER_STATUS_GRANTS) < schema.indexOf("create or replace function public.call_offers_guard("), "the offer_status grants sit between offer_status() and call_offers_guard()");
 ok(schema.indexOf("create policy user_profiles_admin on public.user_profiles for all to authenticated\n  using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');") > 0, "schema.sql: user_profiles_admin must stay admin-only (Setup -> Users is isAdmin-gated in the client; a scheduler-role account corrects nothing there)");
 ok(schema.indexOf("create policy user_profiles_self_insert on public.user_profiles for insert to authenticated\n  with check (id = auth.uid() and role = 'viewer' and person_id is null);") > 0, "schema.sql: user_profiles_self_insert unchanged (viewer, unlinked)");
-ok(/-- Revision 2026-09-24 j \(Prompt 16 A1, sql\/migrations\/2026-09-24-prelaunch-rls\.sql, report-first, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-24 j (the pre-launch RLS migration, not yet applied)");
+ok(/-- Revision 2026-09-24 j \(Prompt 16 A1, sql\/migrations\/2026-09-24-prelaunch-rls\.sql, applied 2026-09-23[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 j (the pre-launch RLS migration, applied 2026-09-23)");
 ok(!/create policy notif_delete/.test(offersMig) && !/notif_delete_sched/.test(claimMigration), "notif_delete_sched belongs to the prelaunch migration only");
 
 step("P16 A1: the probe is self-rolling-back, acts as a stranger / a linked surgeon / an admin / anon, covers S1..N1 with BEFORE strings in its header");
@@ -1063,7 +1063,7 @@ step("P16 A1: docs - SCHEMA-REVIEW.md PREPARED block with the before / after tab
 const plReview = review.slice(review.indexOf("## 2026-09-24 - pre-launch RLS (Prompt 16 A1)"));
 ok(plReview.length > 0 && plReview.length < review.length, "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - pre-launch RLS (Prompt 16 A1)' section");
 ok(/PREPARED/.test(plReview.slice(0, 200)), "the A1 section must be marked PREPARED (not applied)");
-ok(/observed: <to be filled by the orchestrator>/.test(plReview), "the A1 section must carry 'observed: <to be filled by the orchestrator>'");
+ok(/observed: applied 2026-09-23[^\r\n]{0,600}PROBE_RESULTS A1=own=1/.test(plReview), "the A1 section must carry the observed line (applied + the AFTER probe string)");
 Object.keys(PRELAUNCH_POLICIES).forEach((p) => ok(new RegExp("^\\| `" + p + "`", "m").test(plReview), "the A1 before / after table lacks a row for " + p));
 ["call_offers_guard", "call_offers_delete_guard", "offer_status"].forEach((p) => ok(new RegExp("^\\| `" + p + "`", "m").test(plReview), "the A1 before / after table lacks a row for " + p));
 ok(/probe before -> migration -> probe after -> verify-rls -> record|probe BEFORE/.test(plReview) && /sql\/migrations\/2026-09-24-prelaunch-rls\.sql/.test(plReview) && /sql\/probes\/prelaunch-rls-probe\.sql/.test(plReview), "the A1 section must give the orchestrator's commands in order (probe before, migration, probe after, verify-rls, record)");

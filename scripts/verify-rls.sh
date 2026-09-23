@@ -491,7 +491,8 @@ if linked; then
     echo "$results10" | tr ';' '\n' | sed 's/^/   /'
     case_val10()   { echo "$results10" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
     expect_eq10()  { v=$(case_val10 "$1"); [ "$v" = "$2" ] && ok "prelaunch probe $1: $3" || bad "prelaunch probe $1: $3 (got '$v', expected '$2')"; }
-    expect_err10() { v=$(case_val10 "$1"); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "prelaunch probe $1: $4"; else bad "prelaunch probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    # expect_err10: the CLI escapes the quotes around identifiers in its error text ("table \"x\""), so the value is unescaped first
+    expect_err10() { v=$(case_val10 "$1" | sed 's/\\//g'); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "prelaunch probe $1: $4"; else bad "prelaunch probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
     expect_eq10  S1  "own=1 leak=0 sched_ok=t"                       "a stranger (unlinked viewer) reads own row + scheduler/admin rows, no other row"
     expect_eq10  S2  "contacts=0"                                     "a stranger reads no office contact"
     expect_err10 S3  42501 'row-level security policy for table "notifications"' "a stranger cannot insert into the feed"

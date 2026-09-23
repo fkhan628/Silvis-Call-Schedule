@@ -30,10 +30,10 @@
 -- an offer made on the spot - claim_open_slot() upserts the claimer's call_offers row (none for a rules_only claimer; the
 -- audit detail carries offer true/false) and call_offers_guard() skips OFFER_FROZEN while silvis.claim_in_progress is on.
 -- The 2026-09-22 claim-open-slot migration stays frozen as applied; test/schema.test.js mirrors both bodies from this file.
--- Revision 2026-09-23 i (Prompt 14 part 3a, sql/migrations/2026-09-23-offer-mode-rpc.sql, NOT yet applied): set_offer_mode()
+-- Revision 2026-09-23 i (Prompt 14 part 3a, sql/migrations/2026-09-23-offer-mode-rpc.sql, applied 2026-09-23 ~12:45 Central): set_offer_mode()
 -- (security definer; one person's key on one period) + save_offers() (security invoker; the painter's one-transaction Save -
 -- rows and, when given, the period mode through set_offer_mode, one commit or nothing; a note-less repaint keeps the note).
--- Revision 2026-09-24 j (Prompt 16 A1, sql/migrations/2026-09-24-prelaunch-rls.sql, report-first, NOT yet applied): pre-launch RLS -
+-- Revision 2026-09-24 j (Prompt 16 A1, sql/migrations/2026-09-24-prelaunch-rls.sql, applied 2026-09-23 ~18:35 Central after the probe): pre-launch RLS -
 -- user_profiles_read = own row + scheduler/admin rows (or a scheduler/admin caller); contacts_read scheduler/admin only;
 -- notif_insert + audit_insert = scheduler/admin or a linked person (the audit row's actor_id = the caller's roster id);
 -- notif_delete_sched; user_profiles_self_update pins email; OF004 OFFER_IMMUTABLE (a non-scheduler UPDATE may not move an
@@ -750,7 +750,7 @@ create trigger call_offers_delete_guard_trg
 
 -- ============================================================================
 -- set_offer_mode(p_period, p_mode, p_person) + save_offers(p_person, p_rows, p_clear, p_period, p_mode) - the offer painter
--- (2026-09-23, Prompt 14 part 3a; sql/migrations/2026-09-23-offer-mode-rpc.sql - NOT yet applied live as of 9/23,
+-- (2026-09-23, Prompt 14 part 3a; sql/migrations/2026-09-23-offer-mode-rpc.sql - applied live 2026-09-23 ~12:45 Central,
 -- the orchestrator runs it; probe sql/probes/offer-rpcs-probe.sql rolls itself back)
 --
 -- set_offer_mode: SECURITY DEFINER because a surgeon cannot write call_periods (RLS: scheduler / admin only), yet the
