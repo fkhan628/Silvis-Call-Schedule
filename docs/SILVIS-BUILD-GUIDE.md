@@ -192,8 +192,12 @@ LOAD is permissive and AUTOSAVE is unconditional — keep the same guards.
 **Backup / snapshot scope (Faraz 9/22; Prompt 14 P5, 9/23):** `call_schedule_snapshots.data` = `{ config, schedule_days,
 time_off, availability, call_offers, call_periods }` — the client capture (`config.js snapshots.capture`, read with the
 writer's identity; both offer tables are authenticated-read) and the importer's pre-import snapshot write the same six
-keys, so a restore brings the offers and their periods back; `normalizePayload` accepts a backup without the two keys
-(pre-P5) and hands them to the app's table applier, which upserts them once part 3 wires it. The wipe guards
+keys, so a restore CAN bring the offers and their periods back; `normalizePayload` accepts a backup without the two keys
+(pre-P5) and hands them to the app's table applier — which, as of the 9/23 rebase, still writes `time_off` /
+`availability` only: `applyPayload` reports the two tables as `*_in_backup` + `notApplied`, and the app's restore and
+JSON import say **PARTIAL** in the alert, the toast and the audit row (`notAppliedSuffix`) instead of claiming them.
+Wiring the upsert is an open item (`call_offers_guard` refuses past-day rows on insert and update — OF001 — so it needs
+a today-forward filter and `on_conflict=person_id,day`); until then the SQL path restores them. The wipe guards
 (`payloadLooksWipedDaily`, the table-side guards) deliberately do not consider offers: a schedule with no assigned day
 is still a wipe whatever was offered.
 
@@ -1103,15 +1107,20 @@ exhaustive is `either`, so Philip's weeks now limit his **backup** to the listed
 whitelist governed primary only; Burchett's December list already governs both roles since 9/23 - the object entry -
 so nothing changes for him) — `rolePref: "primary"` on the tag or `preferred` mode restores the old reading, data only; **his answer is time-coupled**: it lands as a seed re-import,
 which after 2026-10-02 is refused by OF003 (above), so it must be settled before the close or entered in-app by the
-scheduler. **Dated caveat (9/23, until part 3 lands):** after the apply the live blob has no November / December
-whitelist for Burchett and none of his 20 `available` rows, while `index-source.html` passes neither `call_offers`
-nor `call_periods` into `buildContext` and imports with the legacy plan — so between the apply and part 3 every
-in-app consumer of `eligibility()` (Generate over Dec – Jan, trade acceptance, the day editor's warning) reads
-Burchett and Philip by their recurring rules only, and an in-app Setup import would re-add the 20 rows and the two
-governed months. The published / locked rows are untouched by the apply either way. Land part 3 in the same go-live,
-or hold in-app Generate / trades over Dec – Jan and the Setup import until it lands; the part 3 lane switches the
-in-app import to `importPlan(seed, { offerPeriods: true })` and refuses Apply when the seed carries periods the plan
-did not convert. `--offers-json <path>` writes the planned `{ periods, offers }`
+scheduler. **Where the in-app side stands after the 9/23 rebase (part 3 landed):** `index-source.html` passes `offers` /
+`periods` into `buildContext` (the U3c pin in `test/data-layer.test.js`), so every in-app consumer of `eligibility()`
+(Generate, trade acceptance, the day editor's warning) reads the period as soon as its row exists — after the apply the
+live blob has no November / December whitelist for Burchett and none of his 20 `available` rows, and the offers carry
+those days instead. The in-app Setup import, however, still builds the **legacy** plan (`importPlan(seed, { now })`,
+no `offerPeriods`): it writes no `call_periods` / `call_offers`, and after the apply it would re-add the whitelist and
+the 20 rows. The panel therefore **refuses Apply** for a seed that carries periods the plan did not convert
+(`plan.offerPeriods = { enabled: false, seedPeriods: n }` → the `seed-period-block` note naming the count and the CLI
+command, the button disabled, a second guard in `applySeedImport`; the dry run stays informational and its diff text
+carries the importer's own 'offer periods: the seed carries n period(s) that this plan did NOT convert' line; the
+smoke pins it with the seed plus one date, then runs the Apply mechanics on the same seed without `offerPeriods`, a
+byte-identical legacy plan). The CLI is the period-aware path; switching the in-app import to
+`importPlan(seed, { offerPeriods: true })` with period / offer writers is still open. The published / locked rows are
+untouched by the apply either way. `--offers-json <path>` writes the planned `{ periods, offers }`
 for an offers-aware generate run; `importer.impSeedContextInput(seed, { offerPeriods: true })` builds the same world
 for tests. Proof: `test/importer.test.js` Prompt 14 P5 block (the period row, the 79 offers with exact days and roles,
 the Central today filter, the vacation skip, the retired rows and months, October untouched, the SQL shape, the
@@ -1166,9 +1175,11 @@ the period from the close on); (3) `send-notification` (the offers categories ov
 CLI passes it): until (2) its dry run reads the pending apply as changes (`Total changes: 3 (+30 blocked)` - the blob's
 `surgeonRules` / `groupRules` / `settings`; the smoke harness pins the pre-apply 0 deliberately and fails until then),
 and AFTER (2) it would read the retired rows as changes again (`surgeonRules`, `settings`, Burchett's 20 `available`
-rows) - **do not Apply it after the seed apply**: it would re-insert his November / December whitelist and rows and
-undo part 5; the CLI is the period-aware path until the in-app import passes `offerPeriods`, and the smoke's two Import
-pins need the blob half restated from the plan (or the in-app import made period-aware) to read 0 again. Until (2) the
+rows) - which is why the app **refuses Apply** for a seed that carries periods (above): applying would re-insert his
+November / December whitelist and rows and undo part 5; the CLI is the period-aware path until the in-app import passes
+`offerPeriods`, and the smoke's two Import dry-run pins still need the blob half restated from the plan (or the in-app
+import made period-aware) to read 0 again. A snapshot restore in the app writes `time_off` / `availability` back but
+not the offers or periods it captured - it says PARTIAL (§3 backup scope). Until (2) the
 in-app `eligibility()` consumers read Burchett and Philip by their recurring rules (no period row exists yet). The
 **offers-aware preview regeneration** the prompt's part 5 asks for has **not** been run: `scripts/import-seed.js
 --offers-json <path>` writes the generate input, but `scripts/preview-generate.js` does not read it yet — a

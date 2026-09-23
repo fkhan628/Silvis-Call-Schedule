@@ -700,7 +700,7 @@ ok(sqlFunctionText(schema, "offer_status") === sqlFunctionText(offersMig, "offer
 OFFER_POLICIES.forEach((p) => ok(policyText(schema, p) === policyText(offersMig, p), "policy " + p + ": migration text differs from schema.sql"));
 ["call_offers_guard_trg", "call_offers_delete_guard_trg"].forEach((t) => ok(triggerText(schema, t) === triggerText(offersMig, t), "trigger " + t + ": migration text differs from schema.sql"));
 
-step("P14 P1: migration 2026-09-23-offer-modes.sql (NOT yet applied live; the orchestrator runs it)");
+step("P14 P1: migration 2026-09-23-offer-modes.sql (applied live 2026-09-23 07:05Z)");
 const modesMig = read(OFFER_MODES_MIGRATION);
 ok(!/\r/.test(modesMig), "offer_modes migration has CRLF line endings");
 checkOfferModes("offer_modes migration", modesMig);

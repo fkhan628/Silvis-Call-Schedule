@@ -1708,7 +1708,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.throws(() => C.snapshots.normalizePayload({ call_periods: [{ label: "x" }] }), /call_periods\[0\] is missing start_day\/end_day/);
   });
   await (async () => {
-    // applyPayload hands the two arrays to the app's table applier (which upserts them once part 3 wires it; today it ignores unknown keys)
+    // applyPayload hands the two arrays to the app's table applier (which still writes time_off / availability only - it ignores the two keys and applyPayload says so via notApplied)
     calls.length = 0;
     setFetch((url, opts) => {
       if (opts && opts.method === "POST") return resp(201, "");
@@ -1723,7 +1723,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       async () => ({ ok: true }), async (t) => { given = t; return { ok: true, counts: {} }; }, "before_restore");
     // Prompt 14 P5 FLIP (9/23 review): the counts never claim a restore the applier did not do - the payload lengths are
     // reported as *_in_backup, the applied counts come from the applier alone (call_offers_upserted / call_periods_upserted,
-    // once part 3 wires the upsert), and notApplied names the offer tables an older applier ignored
+    // if an applier ever writes them), and notApplied names the offer tables the applier ignored
     check("P5: applyPayload passes call_offers / call_periods to the table applier and reports them as in-backup, not as applied", () => {
       assert.strictEqual(r.ok, true, JSON.stringify(r));
       assert.deepStrictEqual(Object.keys(given).sort(), ["availability", "call_offers", "call_periods", "time_off"]);
@@ -1744,6 +1744,30 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   })();
   check("P5: the wipe guard does not consider offers (a payload with offers and nothing else still looks wiped)", () => {
     assert.strictEqual(C.payloadLooksWiped({ schedule: {}, vacations: {}, availability: [], call_offers: [{ person_id: "s2", day: "2026-11-03", role_pref: "primary" }] }), true);
+  });
+  // 9/23 rebase review (major): the app's applier still writes time_off / availability only, so the restore and the JSON
+  // import must SAY so - notApplied reaches the audit row (message suffix + detail.notApplied + outcome partial), the
+  // alert and the toast; and the in-app seed import refuses Apply for a seed whose offer periods the legacy plan did
+  // not convert (the block note, the disabled button, a second guard in applySeedImport).
+  check("P5 (rebase review): restore / import surface notApplied as PARTIAL in the audit row, the alert and the toast", () => {
+    assert.ok(src.includes("const applyTablesUpsert = async ({ time_off, availability }) => {"), "the applier still destructures the two legacy tables (the pin above expects notApplied for the offer tables)");
+    assert.ok(src.includes('const notAppliedSuffix = (r) => notAppliedList(r).length ? ` - PARTIAL: ${notAppliedList(r).join(" / ")} in the backup were not written (the app does not restore them yet)` : "";'), "notAppliedSuffix");
+    assert.ok(src.includes('const notAppliedDetail = (r) => notAppliedList(r).length ? { notApplied: notAppliedList(r), outcome: "partial" } : {};'), "notAppliedDetail");
+    assert.strictEqual(count('${notAppliedSuffix(r)}`, {'), 2, "both success audit rows (snapshot.restore, data.import) carry the suffix");
+    assert.strictEqual(count("...notAppliedDetail(r) });"), 2, "both success audit rows carry notApplied + outcome partial in the detail");
+    const after = src.indexOf("const afterPayloadApplied = (r, what) => {");
+    const body = src.slice(after, src.indexOf("  const restoreSnapshot = async (snap) => {", after));
+    assert.ok(/NOT restored \(captured in the backup only/.test(body) && /\(PARTIAL\)/.test(body), "the alert names the tables not restored and says PARTIAL");
+    assert.ok(body.includes('na.length ? "error" : "success"'), "the toast is an error when something in the backup was not written");
+  });
+  check("P5 (rebase review): the in-app seed import refuses Apply for a seed carrying offer periods the legacy plan did not convert", () => {
+    assert.ok(src.includes("plan = IMP.importPlan(seed, { now: new Date().toISOString() });"), "the in-app plan is still the legacy plan (no offerPeriods) - the refusal below is what makes that safe");
+    assert.ok(src.includes("const periodGap = plan.offerPeriods && plan.offerPeriods.enabled !== true ? (plan.offerPeriods.seedPeriods || 0) : 0;"), "periodGap from plan.offerPeriods");
+    assert.ok(src.includes("setSeedState(s => ({ ...s, loading: false, plan, diff, live, periodGap }));"), "periodGap reaches the seed state");
+    assert.ok(src.includes('if ((st.periodGap || 0) > 0) { showToast(`Apply refused: the seed carries ${st.periodGap} offer period(s) this in-app import does not convert - apply it with the CLI (scripts/import-seed.js --apply). Nothing was written.`, "error"); return; }'), "applySeedImport's own guard, before the blob check");
+    assert.ok(src.includes("const canApply = !!(d && !state.applying && (d.totalChanges > 0) && !periodBlocked);"), "canApply requires no period gap");
+    assert.ok(src.includes('<div data-testid="seed-period-block" style={{ ...css.warnBox, marginBottom: 8 }}>'), "the block note");
+    assert.ok(src.includes("node scripts/import-seed.js --apply --workdir &lt;linked dir&gt;"), "the note names the CLI command");
   });
 
   /* ---------------- F. Prompt 14 part 3a (U3a): the offer painter's pure pieces + source pins ---------------- */

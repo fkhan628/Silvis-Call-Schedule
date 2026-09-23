@@ -3692,7 +3692,11 @@ try {
       await waitFor(async () => (await page.getAttribute(row1, "data-state")) === "home", 8000);
       await page.waitForTimeout(300);
       // the app's 800 ms blob autosave (an unchanged re-save of call_schedule_data) may land inside this window - it is
-      // the same "unrelated background write" the preview step tolerates and says nothing about this hook
+      // the same "unrelated background write" the preview step tolerates and says nothing about this hook. Why it shows
+      // up here since the Prompt 14 rebase (9/23 review): a timing shift, not an offers write path - refreshAll now also
+      // awaits loadOffers / loadPeriods, which moves the re-save into this 300 ms window; the autosave effect's deps
+      // (index-source.html: loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate,
+      // schedule, vacations, availabilityRows) carry no offerRows / periodRows, so no offers state can trigger it
       const homeWrites = writesSince(before3).filter(w => !/\/rest\/v1\/(audit_log|call_schedule_data)\b/.test(w.path));
       const homeBlobWrites = writesSince(before3).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
       if (homeBlobWrites.length) console.log("     (unrelated background write(s) during the home step: " + homeBlobWrites.map(w => w.method + " " + w.path).join(", ") + ")");
@@ -4727,6 +4731,37 @@ try {
         // RF2 review fix: a seed change under a core key moves settings too (the seedCoreHash stamp follows the seed-owned content), so the extra date reads surgeonRules=update + settings=update + 1 availability insert = 3 changes
         if (total3.trim() !== "Total changes: 3" + blockedSuffix || !/settings=update/.test(diff3) || !new RegExp("insert s2 available/any " + extra).test(diff3) || !/surgeonRules=update/.test(diff3)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: 3${blockedSuffix}' (blob surgeonRules + 1 availability insert${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules/.test(l)).join(" | ")}`);
         else ok(`Import apply dry run: extra Burchett date ${extra} -> 3 changes (surgeonRules=update, settings=update - the seedCoreHash stamp, insert s2 available/any ${extra})${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
+        // Prompt 14 (9/23 rebase review): the in-app plan is the LEGACY one (no offerPeriods), so a seed that carries
+        // periods is dry-run only in the app - the block note shows, Apply is disabled although the diff has 3 changes,
+        // the importer's own 'did NOT convert' line is in the diff text, nothing is written. The Apply mechanics below
+        // then run on the same seed WITHOUT offerPeriods (importer: a byte-identical legacy plan - blob, availability,
+        // time_off and schedule days - checked at node level: importPlan(seed) vs importPlan(seed minus offerPeriods)).
+        {
+          const seedPeriodCount = Array.isArray(seed3.offerPeriods) ? seed3.offerPeriods.length : 0;
+          const blockNote = await page.$("[data-testid=seed-period-block]");
+          const blockText = blockNote ? await blockNote.innerText() : "";
+          const applyDisabled3 = await page.$eval("[data-testid=seed-apply]", el => el.disabled);
+          const periodWrites = writesSince(before3).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off|call_offers|call_periods)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
+          if (!seedPeriodCount) fail("Import period refusal premise: docs/silvis-seed.json carries no offerPeriods[] - the refusal cannot be exercised");
+          else if (!blockNote || !new RegExp("carries " + seedPeriodCount + " offer period\\(s\\)").test(blockText) || !/scripts\/import-seed\.js --apply/.test(blockText)) fail("Import period refusal: the seed-period-block note is missing or does not name the period count and the CLI command: " + blockText.slice(0, 240));
+          else if (!applyDisabled3) fail("Import period refusal: Apply must be disabled for a seed that carries offer periods the in-app plan did not convert (3 changes in the diff, still refused)");
+          else if (!new RegExp("offer periods: the seed carries " + seedPeriodCount + " period\\(s\\) that this plan did NOT convert").test(diff3)) fail("Import period refusal: the importer's 'did NOT convert' line is missing from the diff text");
+          else if (periodWrites.length) fail("Import period refusal wrote something: " + JSON.stringify(periodWrites.map(w => w.method + " " + w.path)));
+          else ok(`Import: a seed carrying ${seedPeriodCount} offer period(s) is dry-run only in the app - seed-period-block note (period count + the CLI command), Apply disabled at 3 changes, the importer's 'did NOT convert' line in the diff, no writes`);
+          await page.locator("[data-testid=card-setup_import]").screenshot({ path: path.join(OUT, "import-period-refusal.png") });
+          ok("screenshot test/ui/out/import-period-refusal.png");
+          delete seed3.offerPeriods;
+          const dryResp = page.waitForResponse(r => r.url().includes("/rest/v1/availability?select=*"), { timeout: 60000 }).catch(() => null);
+          await page.setInputFiles("[data-testid=seed-file]", { name: "seed-plus-one-date-no-periods.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(seed3)) });
+          await dryResp;
+          await page.waitForSelector("[data-testid=seed-dryrun]", { timeout: 60000 });
+          await page.waitForTimeout(600);
+          const total3b = await page.$eval("[data-testid=seed-total]", el => el.innerText.replace(/\s+/g, " "));
+          if (total3b.trim() !== total3.trim()) fail(`Import apply dry run (no periods): the legacy plan of the same seed without offerPeriods must read the same total - got '${total3b.trim()}' vs '${total3.trim()}'`);
+          else if (await page.$("[data-testid=seed-period-block]")) fail("Import apply dry run (no periods): the period block note must not show for a period-free seed");
+          else if (await page.$eval("[data-testid=seed-apply]", el => el.disabled)) fail("Import apply dry run (no periods): Apply must be enabled (3 changes, no periods)");
+          else ok(`Import apply dry run (no periods): the same seed without offerPeriods -> ${total3b.trim()}, no block note, Apply enabled`);
+        }
         // Prompt 12 SM2: the result panel's counts are restated from the harness's own data, never from
         // the app's summary (the pre-SM2 pin hard-coded Prompt 6's 37-row plan and four Thanksgiving days):
         //   availability / time_off - the plan for seed3 (the seed + the extra date), keyed the way the app

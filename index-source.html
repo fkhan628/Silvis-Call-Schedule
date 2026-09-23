@@ -370,7 +370,7 @@ function CallSchedule() {
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [availBusy, setAvailBusy] = useState(false);
   const [eastRefreshing, setEastRefreshing] = useState(false);
-  const [seedState, setSeedState] = useState({ fileName: "", plan: null, diff: null, live: null, error: "", applying: false, result: null, loading: false });
+  const [seedState, setSeedState] = useState({ fileName: "", plan: null, diff: null, live: null, error: "", applying: false, result: null, loading: false, periodGap: 0 });
   const [vacConflict, setVacConflict] = useState(null);     // { personId, items: [{ day, role }] } from the last refused vacation
 
   const [loaded, setLoaded] = useState(false);
@@ -2561,7 +2561,7 @@ function CallSchedule() {
     if (!file || !isScheduler) return;
     const IMP = window.SilvisImporter;
     if (!IMP || typeof IMP.importPlan !== "function") { showToast("importer.js did not load - reload the app.", "error"); return; }
-    setSeedState({ fileName: file.name, plan: null, diff: null, live: null, error: "", applying: false, result: null, loading: true });
+    setSeedState({ fileName: file.name, plan: null, diff: null, live: null, error: "", applying: false, result: null, loading: true, periodGap: 0 });
     let seed;
     try { seed = JSON.parse(await file.text()); }
     catch (e) { setSeedState(s => ({ ...s, loading: false, error: "That file is not valid JSON: " + errText(e) })); showToast("Seed file is not valid JSON.", "error"); return; }
@@ -2574,11 +2574,17 @@ function CallSchedule() {
       showToast(/CONTACT_DATA_REFUSED/.test(msg) ? "Seed REFUSED: it carries contact data. Nothing was read into the app." : "Seed refused: " + msg.slice(0, 160), "error");
       return;
     }
+    // Prompt 14 (9/23 rebase review): this is the LEGACY plan (no offerPeriods option) - it converts none of the seed's
+    // offer periods into call_periods / call_offers and would re-add the whitelist months and 'available' rows the
+    // period-aware CLI apply retired for the surgeons who submitted offers. A seed that carries periods is therefore
+    // dry-run only in the app (Apply refused below and in applySeedImport); scripts/import-seed.js --apply is the
+    // period-aware path. plan.offerPeriods = { enabled: false, seedPeriods } (importer.js importPlan).
+    const periodGap = plan.offerPeriods && plan.offerPeriods.enabled !== true ? (plan.offerPeriods.seedPeriods || 0) : 0;
     try {
       const live = await fetchLiveForImport();
       const diff = IMP.planDiff(plan, live);
-      setSeedState(s => ({ ...s, loading: false, plan, diff, live }));
-      showToast(diff.totalChanges === 0 ? "Dry run: the live tables already match the seed." : `Dry run: ${diff.totalChanges} change(s) - review, then Apply.`, "info");
+      setSeedState(s => ({ ...s, loading: false, plan, diff, live, periodGap }));
+      showToast(diff.totalChanges === 0 ? "Dry run: the live tables already match the seed." : periodGap > 0 ? `Dry run: ${diff.totalChanges} change(s) - Apply is refused in the app: the seed carries ${periodGap} offer period(s) this import does not convert. Apply it with the CLI (scripts/import-seed.js --apply).` : `Dry run: ${diff.totalChanges} change(s) - review, then Apply.`, periodGap > 0 && diff.totalChanges > 0 ? "error" : "info");
     } catch (e) {
       console.warn("seed dry run failed", e);
       setSeedState(s => ({ ...s, loading: false, error: "Dry run failed (live rows could not be read): " + errText(e) }));
@@ -2588,6 +2594,7 @@ function CallSchedule() {
   const applySeedImport = async () => {
     const st = seedState;
     if (!isScheduler || !st.plan || !st.diff || st.applying) return;
+    if ((st.periodGap || 0) > 0) { showToast(`Apply refused: the seed carries ${st.periodGap} offer period(s) this in-app import does not convert - apply it with the CLI (scripts/import-seed.js --apply). Nothing was written.`, "error"); return; }
     if (!blobLoadedRef.current) { showToast("The shared setup has not loaded this session - reload before importing (a blob merge over unread data is refused).", "error"); return; }
     const IMP = window.SilvisImporter;
     if (!confirm(`Apply the seed import?\n\n${st.diff.totalChanges} change(s) in the dry run. A snapshot is saved first; if that fails nothing is written. App-edited days are never overwritten.`)) return;
@@ -3677,6 +3684,12 @@ function CallSchedule() {
   };
   // The table leg: upsert time_off / availability rows BY ID (merge-duplicates).
   // Never deletes - rows that exist today and are absent from the backup stay.
+  // Prompt 14 P5 (9/23 rebase review): a backup also carries call_offers / call_periods (snapshots.capture reads
+  // them), but this applier does NOT write them yet - it destructures time_off / availability only. config.js
+  // applyPayload reports them as *_in_backup + notApplied, and the restore / import below says PARTIAL in the
+  // alert, the toast and the audit row (notAppliedSuffix) instead of claiming them. Wiring the upsert is an open
+  // item: call_offers_guard refuses past-day rows on insert AND update (OF001), so a plain merge-duplicates of a
+  // whole backup would fail - it needs a today-forward (Central) filter and on_conflict=person_id,day first.
   const applyTablesUpsert = async ({ time_off, availability }) => {
     const counts = {};
     for (const [table, rows] of [["time_off", time_off], ["availability", availability]]) {
@@ -3713,16 +3726,23 @@ function CallSchedule() {
   const partialApplyMessage = (r, what) => r.scheduleRestored
     ? `Setup and schedule restored; the vacation/availability rows did not (${r.error || "unknown error"}) - run the ${what} again to finish.`
     : `Setup restored; the schedule did not (${r.error || "unknown error"}) - reload, then run the ${what} again.`;
+  // Prompt 14 P5: applyPayload's notApplied names the backup tables the app's applier did not write (call_offers /
+  // call_periods today) - the audit row, the alert and the toast say PARTIAL, never "restored".
+  const notAppliedList = (r) => Array.isArray(r && r.notApplied) ? r.notApplied : [];
+  const notAppliedSuffix = (r) => notAppliedList(r).length ? ` - PARTIAL: ${notAppliedList(r).join(" / ")} in the backup were not written (the app does not restore them yet)` : "";
+  const notAppliedDetail = (r) => notAppliedList(r).length ? { notApplied: notAppliedList(r), outcome: "partial" } : {};
   const afterPayloadApplied = (r, what) => {
     loadSnapshots();
     const c = r.counts || {};
-    alert(`${what} complete.\n\nRESTORED: ${c.schedule_days ?? 0} schedule day(s), ${c.time_off ?? 0} vacation row(s), ${c.availability ?? 0} availability row(s), plus roster/rules/settings.\n\nExisting vacation/availability rows not in the backup were left in place (restore never deletes).`);
-    showToast(`${what} complete - other devices will pick it up on their next sync.`, "success");
+    const na = notAppliedList(r);
+    const naLine = na.length ? `\n\nNOT restored (captured in the backup only - the app does not write these tables yet): ${na.map(k => `${c[k + "_in_backup"] ?? "?"} ${k} row(s)`).join(", ")}. Re-enter them in Setup -> Generate -> Periods and the painter, or restore them with the SQL path.` : "";
+    alert(`${what} complete${na.length ? " (PARTIAL)" : ""}.\n\nRESTORED: ${c.schedule_days ?? 0} schedule day(s), ${c.time_off ?? 0} vacation row(s), ${c.availability ?? 0} availability row(s), plus roster/rules/settings.\n\nExisting vacation/availability rows not in the backup were left in place (restore never deletes).${naLine}`);
+    showToast(na.length ? `${what} complete - PARTIAL: ${na.join(" / ")} in the backup were not written (the app does not restore them yet).` : `${what} complete - other devices will pick it up on their next sync.`, na.length ? "error" : "success");
   };
   const restoreSnapshot = async (snap) => {
     if (!isScheduler) return;
     const when = new Date(snap.created_at).toLocaleString(undefined, { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" });
-    if (!confirm(`Restore the "${snapshotReasonLabel(snap.reason)}" snapshot from ${when}?\n\nThis replaces the CURRENT schedule and setup for everyone with that saved copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so this restore can itself be undone.`)) return;
+    if (!confirm(`Restore the "${snapshotReasonLabel(snap.reason)}" snapshot from ${when}?\n\nThis replaces the CURRENT schedule and setup for everyone with that saved copy and re-adds its vacation/availability rows (offer and period rows in the backup are NOT written back by the app yet - the result says so). A fresh snapshot of the current state is saved first, so this restore can itself be undone.`)) return;
     setRestoreBusyId(snap.id);
     setSaveStatus("Restoring snapshot");
     const r = await snapshots.restore(snap.id, applyScheduleViaCAS, applyTablesUpsert, adoptRestoredBlob);
@@ -3738,7 +3758,7 @@ function CallSchedule() {
       showToast(partialApplyMessage(r, "restore"), "error");
       return;
     }
-    logAudit("snapshot.restore", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}`, { snapshot_id: snap.id, reason: snap.reason, created_at: snap.created_at, counts: r.counts });
+    logAudit("snapshot.restore", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}${notAppliedSuffix(r)}`, { snapshot_id: snap.id, reason: snap.reason, created_at: snap.created_at, counts: r.counts, ...notAppliedDetail(r) });
     setSaveStatus("Snapshot restored");
     setTimeout(() => setSaveStatus(""), 3000);
     afterPayloadApplied(r, "Restore");
@@ -3766,7 +3786,7 @@ function CallSchedule() {
       showToast(partialApplyMessage(r, "import"), "error");
       return;
     }
-    logAudit("data.import", `Imported JSON backup (${file.name})`, { counts: r.counts, file: file.name });
+    logAudit("data.import", `Imported JSON backup (${file.name})${notAppliedSuffix(r)}`, { counts: r.counts, file: file.name, ...notAppliedDetail(r) });
     setSaveStatus("Backup imported");
     setTimeout(() => setSaveStatus(""), 3000);
     afterPayloadApplied(r, "Import");
@@ -8513,7 +8533,8 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
   const fileRef = React.useRef(null);
   const d = state.diff;
   const t = d && d.tables;
-  const canApply = !!(d && !state.applying && (d.totalChanges > 0));
+  const periodBlocked = (state.periodGap || 0) > 0; // Prompt 14: the legacy plan did not convert the seed's offer periods - dry run only
+  const canApply = !!(d && !state.applying && (d.totalChanges > 0) && !periodBlocked);
   return (
     <div data-testid="seed-card">
       <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Reads docs/silvis-seed.json (repo or OneDrive copy) through importer.importPlan - a file that carries contact data is refused before anything is read into the app. The dry run diffs the plan against freshly read live rows. Apply snapshots first, merges the blob, inserts only missing availability / vacation rows and writes schedule days only where a day is missing or still source "import" (an app-edited day is never overwritten) through the compare-and-swap sync.</p>
@@ -8542,9 +8563,14 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
             </div>
           )}
           {state.plan && state.plan.infoDeltas && state.plan.infoDeltas.length > 0 && <details style={{ fontSize: 11, marginBottom: 8 }}><summary>{state.plan.infoDeltas.length} email update(s) already applied inside the seed (informational)</summary><ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{state.plan.infoDeltas.map((l, i) => <li key={i}>{l}</li>)}</ul></details>}
+          {periodBlocked && (
+            <div data-testid="seed-period-block" style={{ ...css.warnBox, marginBottom: 8 }}>
+              <strong>Apply is refused in the app for this seed:</strong> it carries {state.periodGap} offer period(s) and this in-app import plans without them (the legacy plan) - it would write no call_periods / call_offers rows and would re-add the whitelist months and available rows the period retires for the surgeons who submitted offers. Apply it from the repo with the CLI: <span style={{ fontFamily: mono }}>node scripts/import-seed.js --apply --workdir &lt;linked dir&gt;</span> (dry run first). The dry run above is informational only.
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button data-testid="seed-apply" onClick={onApply} disabled={!canApply} style={{ ...css.btn(true), padding: "6px 14px", opacity: canApply ? 1 : 0.5 }}>{state.applying ? "Applying" : d.totalChanges === 0 ? "Nothing to apply" : "Apply (snapshot first)"}</button>
-            <span style={{ fontSize: 11, color: "#5B6B82" }}>{d.totalChanges === 0 ? "The live tables already match the plan." : "A snapshot is captured first; if that fails nothing is written."}</span>
+            <button data-testid="seed-apply" onClick={onApply} disabled={!canApply} style={{ ...css.btn(true), padding: "6px 14px", opacity: canApply ? 1 : 0.5 }}>{state.applying ? "Applying" : periodBlocked ? "Apply refused (offer periods - use the CLI)" : d.totalChanges === 0 ? "Nothing to apply" : "Apply (snapshot first)"}</button>
+            <span style={{ fontSize: 11, color: "#5B6B82" }}>{periodBlocked ? "Dry run only - see the note above." : d.totalChanges === 0 ? "The live tables already match the plan." : "A snapshot is captured first; if that fails nothing is written."}</span>
           </div>
         </div>
       )}

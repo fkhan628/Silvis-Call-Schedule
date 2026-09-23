@@ -288,7 +288,8 @@ const snapshots = {
         dayRows = await this._readAll("schedule_days?select=*&order=day.asc", "schedule_days");
         toRows  = await this._readAll("time_off?select=*&order=start_date.asc,person_id.asc", "time_off");
         avRows  = await this._readAll("availability?select=*&order=start_date.asc,person_id.asc", "availability");
-        // Prompt 14 P5 (Faraz 9/22): the offers and their periods are in scope too, so a restore brings them back.
+        // Prompt 14 P5 (Faraz 9/22): the offers and their periods are in scope too - captured here so a restore CAN bring
+        // them back; the app's table applier does not write them yet (applyPayload reports notApplied; the app says PARTIAL).
         // Both tables are authenticated-read (never anon) - the writer's identity above reads them; a failed read
         // fails the capture like any other. The wipe guards (payloadLooksWipedDaily) do not consider them.
         offerRows  = await this._readAll("call_offers?select=*&order=day.asc,person_id.asc", "call_offers");

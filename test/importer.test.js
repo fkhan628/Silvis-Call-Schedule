@@ -1482,7 +1482,7 @@ eq(p5.stats.call_offers, 79); eq(p5.stats.call_periods, 1);
   eq(R.buildContext(SA.seedToContextInput(seed)).periods, [], "P5: the legacy adapter still builds a period-free ctx (rules.test.js / the regression are unchanged)");
 }
 // (8) legacy callers: no option -> no offers, the pre-period plan; the plan says the seed carries a period it did not plan
-ok(!("offerRows" in plan) && !("periodRows" in plan) && plan.offerPeriods && plan.offerPeriods.enabled === false && plan.offerPeriods.seedPeriods === 1, "P5: importPlan(seed, { now }) plans no offers and says the seed carries 1 period it did not plan (the in-app import until part 3)");
+ok(!("offerRows" in plan) && !("periodRows" in plan) && plan.offerPeriods && plan.offerPeriods.enabled === false && plan.offerPeriods.seedPeriods === 1, "P5: importPlan(seed, { now }) plans no offers and says the seed carries 1 period it did not plan (the in-app import's legacy plan - the app refuses Apply for such a seed)");
 eq(SA.seedToSurgeonRules(seed)[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, { month: "2026-12", roles: ["primary", "backup"] }], "P5: the legacy adapter still derives Burchett's three months, December in the object form since 9/23 (rules.test.js pins them)");
 // (9) SQL: snapshot scope, the period upsert, the guarded offers insert, the ownership-guarded delete (future days only), the order
 const sql5 = IMP.importSql(p5);
