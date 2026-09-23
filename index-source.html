@@ -3517,6 +3517,99 @@ function CallSchedule() {
     }
   };
 
+  // --- Periods (Prompt 14 part 3b, U3b) - the scheduler's side of the offers. PeriodsSection (module scope) renders;
+  // these are its ONLY write paths. Each write is ONE request through dbAuthHeaders() with Prefer: return=representation,
+  // checked for the row it should return (an RLS no-op is 200 + [] - that is a failure here, never a success), then
+  // ONE audit row. A failed request writes nothing and the form keeps its draft. call_periods is scheduler-only in
+  // RLS (call_periods_write: silvis_is_sched()); the UI is behind the Setup tab's isScheduler gate as well. ---
+  const [prdBusy, setPrdBusy] = useState(false);
+  const [prdRemind, setPrdRemind] = useState({}); // "<period id>:<person id>" -> { ok, note } for this session's Remind clicks
+  // The New-period draft lives HERE (like genOpts), not in PeriodsSection: the Generate card renders its children
+  // only while open and the Setup view unmounts on a tab change - a half-filled form must survive both (review 9/23).
+  const [prdDraft, setPrdDraft] = useState(null);
+  const createPeriod = async (row) => {
+    if (!isScheduler) return { ok: false, error: "scheduler only" };
+    setPrdBusy(true);
+    try {
+      const body = { label: row.label, start_day: row.start_day, end_day: row.end_day, offers_close_at: row.offers_close_at, publish_by: row.publish_by, status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: userProfile?.person_id || "scheduler" };
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/call_periods`, { method: "POST", headers: { ...dbAuthHeaders(), Prefer: "return=representation" }, body: JSON.stringify(body) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) { console.warn("Periods: create failed", res.status, text.slice(0, 300)); return { ok: false, error: describeDbError(text) }; }
+      let rows = []; try { rows = JSON.parse(text || "[]"); } catch (e) { rows = []; }
+      if (!Array.isArray(rows) || rows.length !== 1 || !rows[0].id) { console.warn("Periods: create answered without the new row (RLS no-op?)", text.slice(0, 200)); return { ok: false, error: "the database answered without the new row - nothing was created (does your account write periods?)" }; }
+      const created = rows[0];
+      logAudit("period.create", `Period ${created.label} (${created.start_day} - ${created.end_day}): offers close ${created.offers_close_at}, publish by ${created.publish_by}`, { period_id: created.id, label: created.label, start_day: created.start_day, end_day: created.end_day, offers_close_at: created.offers_close_at, publish_by: created.publish_by, length_months: row.length_months || null });
+      setPeriodRows(prev => (prev.some(p => p.id === created.id) ? prev : prev.concat([created])).slice().sort((a, b) => String(a.start_day) < String(b.start_day) ? -1 : 1));
+      loadPeriods(true); // canonicalize (realtime would also catch it)
+      showToast(`Period ${created.label} created - offers close ${fmtMD(String(created.offers_close_at).slice(0, 10))}, publish by ${fmtMD(String(created.publish_by).slice(0, 10))}. Nothing is generated or sent by this.`, "success");
+      return { ok: true, period: created };
+    } catch (e) { console.warn("Periods: create threw", e); return { ok: false, error: String(e?.message || e) }; }
+    finally { setPrdBusy(false); }
+  };
+  // Close now = the freeze, early. Compare-and-swap on status ('upcoming' -> 'closed', the same flip the morning run
+  // makes) so two closers never both write: zero rows back = someone else closed it first (or the account cannot
+  // write periods) - reported, nothing audited by this side.
+  const closePeriodNow = async (p) => {
+    if (!isScheduler || !p || !p.id) return { ok: false };
+    const roll = offerRollcall(p, offerRows, offerPoolIds(surgeons));
+    const words = roll.map(r => `${nameOf(r.id)}: ${r.status === "submitted" ? r.offered + " day" + (r.offered === 1 ? "" : "s") : r.status === "rules_only" ? "rules" : "nothing"}`).join(", ");
+    if (!confirm(`Close offers for ${p.label} now?\n\nSurgeons can no longer paint days or change their mode for it (you still can, as the scheduler). Standing now - ${words}.\n\nThe status becomes 'closed'. Nothing is generated, published or e-mailed by this.`)) { showToast("Nothing was changed - the period stays open.", "info"); return { ok: false, cancelled: true }; }
+    setPrdBusy(true);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/call_periods?id=eq.${encodeURIComponent(p.id)}&status=eq.upcoming`, { method: "PATCH", headers: { ...dbAuthHeaders(), Prefer: "return=representation" }, body: JSON.stringify({ status: "closed", updated_at: new Date().toISOString() }) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) { console.warn("Periods: close failed", res.status, text.slice(0, 300)); showToast("Close failed - nothing was changed: " + describeDbError(text), "error"); return { ok: false, error: describeDbError(text) }; }
+      let rows = []; try { rows = JSON.parse(text || "[]"); } catch (e) { rows = []; }
+      if (!Array.isArray(rows) || rows.length !== 1) { console.warn("Periods: close matched no upcoming row", p.id, text.slice(0, 200)); showToast(`${p.label} was not closed by this click: it is no longer 'upcoming' (the morning run or another scheduler closed it), or your account cannot write periods. Reloading the list.`, "info"); loadPeriods(true); return { ok: false, raced: true }; }
+      logAudit("period.close", `Offers for ${p.label} closed now by the scheduler (${words})`, { period_id: p.id, label: p.label, offers_close_at: p.offers_close_at, by: "scheduler", rollcall: roll });
+      setPeriodRows(prev => prev.map(x => x.id === p.id ? { ...x, ...rows[0] } : x));
+      loadPeriods(true);
+      showToast(`Offers for ${p.label} are closed. Generate the period when you are ready (today Generate places by the standing rules; offers-first placement lands with the engine wiring).`, "success");
+      return { ok: true };
+    } catch (e) { console.warn("Periods: close threw", e); showToast("Close failed - nothing was changed: " + String(e?.message || e), "error"); return { ok: false, error: String(e?.message || e) }; }
+    finally { setPrdBusy(false); }
+  };
+  // Remind = the morning run's note, sent now to ONE not-started surgeon through send-notification (category
+  // offers_reminder, targetIds [that person]; the function honours schedule_updates_email and needs the session's
+  // JWT). The words are composed here, like every other category - the function never invents schedule facts.
+  const remindOffers = async (p, personId) => {
+    if (!isScheduler || !p || !p.id || !personId) return { ok: false };
+    const key = p.id + ":" + personId;
+    const pref = notifPrefs && notifPrefs[personId];
+    if (pref && pref.schedule_updates_email === false) {
+      showToast(`${nameOf(personId)} has schedule-update e-mails turned off - no reminder can be sent; ask in person.`, "info");
+      setPrdRemind(s => ({ ...s, [key]: { ok: false, note: "e-mail off - not sent" } }));
+      return { ok: false, prefOff: true };
+    }
+    const start = String(p.start_day || "").slice(0, 10), end = String(p.end_day || "").slice(0, 10), close = String(p.offers_close_at || "").slice(0, 10);
+    const n = suIsIso(close) ? suDaysBetween(todayStr, close) : null;
+    const when = n === null ? "" : n === 0 ? " (today)" : n === 1 ? " (tomorrow)" : n > 1 ? ` (in ${n} days)` : "";
+    // Dates spelled exactly as the morning run spells them (daily-reminder fmtDay: "Friday, Oct 2"), so a surgeon
+    // who gets both notes reads one spelling.
+    const closeLabel = prdDayWords(close);
+    const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;
+    const message = `Your dates for ${p.label} (${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'.\n\nNothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page (the morning run sends the same note ${((groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose) || OP_PERIOD_DEFAULTS.remindDaysBeforeClose).join(" and ")} days before the freeze).`;
+    const detail = "Paint my offers: " + window.location.origin + window.location.pathname + "#offers";
+    setPrdRemind(s => ({ ...s, [key]: { ok: false, note: "sending" } }));
+    const r = await sendEmailNotif("offers_reminder", { subject, message, detail }, [personId]);
+    const stamp = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    if (r && r.ok && r.sent > 0) { setPrdRemind(s => ({ ...s, [key]: { ok: true, note: `reminded ${stamp}` } })); showToast(`Reminder e-mailed to ${nameOf(personId)}.`, "success"); }
+    else if (r && r.ok) { setPrdRemind(s => ({ ...s, [key]: { ok: false, note: r.skippedPrefOff ? "e-mail off - not sent" : "no linked e-mail - not sent" } })); showToast(`No reminder went out: ${nameOf(personId)} ${r.skippedPrefOff ? "has schedule-update e-mails turned off" : "has no linked account e-mail"}.`, "info"); }
+    else setPrdRemind(s => ({ ...s, [key]: { ok: false, note: r && r.notEnabled ? "e-mail category not deployed yet" : "not sent - " + String((r && r.error) || "failed").slice(0, 60) } })); // sendEmailNotif already toasted
+    return r;
+  };
+  // Enter for someone = the painter as that surgeon, targeted at THIS period (the function stamps entered_by
+  // 'scheduler' / source 'email-relay' from the caller identity; the client decides nothing about that).
+  const enterOffersFor = (p, personId) => { if (!isScheduler || !personId) return; setOfferSheet({ personId, periodId: p && p.id ? p.id : null }); };
+  // Generate this period = the existing preview flow (runGenerate: ctx, best-of-N, diagnostics, Accept & Publish
+  // below) with the range set to the period. Nothing else changes: same options, same confirmations, same writes.
+  const generatePeriod = (p) => {
+    if (!isScheduler || !p) return;
+    const start = String(p.start_day || "").slice(0, 10), end = String(p.end_day || "").slice(0, 10);
+    setGenOpts(o => ({ ...o, start, end }));
+    runGenerate({ ...genOpts, start, end });
+  };
+
   // --- Snapshot restore (Settings -> Restore from Snapshot) + JSON import ---
   const [snapshotList, setSnapshotList] = useState(null);   // null = not loaded yet
   const [snapshotsLoading, setSnapshotsLoading] = useState(false);
@@ -4427,6 +4520,7 @@ function CallSchedule() {
           ctx={rulesCtx} ctxError={rulesCtxState.error}
           surgeonRules={surgeonRules} groupRules={groupRules}
           today={todayStr} nameOf={nameOf}
+          preferPeriodId={offerSheet.periodId || null}
           onCommit={commitOffersPaint}
           onClose={() => setOfferSheet(null)}
         />
@@ -4777,6 +4871,9 @@ function CallSchedule() {
           </Collapsible>
 
           <Collapsible css={css} ck="setup_generate" defaultOpen={true} title="Generate (preview, then publish)">
+            {/* Prompt 14 part 3b: Periods - create from the presets, per-surgeon status, Remind, Close now, Enter for someone, Generate over the period. */}
+            <PeriodsSection css={css} periods={periodRows} offers={offerRows} roster={surgeons} groupRules={groupRules} today={todayStr} nameOf={nameOf} notifPrefs={notifPrefs} busy={prdBusy || genBusy} remindState={prdRemind} selfId={mySurgeon} draft={prdDraft} setDraft={setPrdDraft}
+              onCreate={createPeriod} onCloseNow={closePeriodNow} onRemind={remindOffers} onEnterFor={enterOffersFor} onGenerate={generatePeriod}/>
             <GeneratePanel css={css} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} genStart={genStart} genFirstOpenDay={genFirstOpenDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
           </Collapsible>
 
@@ -5978,11 +6075,15 @@ function writeCollapseFlag(ck, open) {
 //    ("offers for <label> closed <date> - ask the scheduler", no toggle). The box is one summary line by default
 //    ("Change" expands the mode buttons) so the day list keeps the phone's height. They go through the same
 //    onCommit (mode-only save allowed).
-function OfferPainterSheet({ css, dk, person, asScheduler, isScheduler, offers, periods, schedule, ctx, ctxError, surgeonRules, groupRules, today, nameOf, onCommit, onClose }) {
+function OfferPainterSheet({ css, dk, person, asScheduler, isScheduler, offers, periods, schedule, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose }) {
   const T = THEME[dk ? "dark" : "light"];
   const pid = person ? person.id : "";
   const t0 = parse(today);
-  const [ym, setYm] = React.useState({ y: t0.getFullYear(), m: t0.getMonth() });
+  // Prompt 14 part 3b: opened from Setup -> Periods ("Enter for someone") the sheet speaks to THAT period and opens on
+  // its first month (never behind today); otherwise the current month and helpers.offerNextPeriod as before.
+  const preferred = React.useMemo(() => (preferPeriodId && Array.isArray(periods) ? periods.find(p => p && p.id === preferPeriodId) : null) || null, [periods, preferPeriodId]);
+  const m0 = (() => { const s = preferred ? String(preferred.start_day || "").slice(0, 10) : ""; return suIsIso(s) && s > today ? parse(s) : t0; })();
+  const [ym, setYm] = React.useState({ y: m0.getFullYear(), m: m0.getMonth() });
   const [armed, setArmed] = React.useState("either");
   const [rangeMode, setRangeMode] = React.useState(false);
   const [pendingStart, setPendingStart] = React.useState(null);
@@ -6008,7 +6109,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, isScheduler, offers, 
 
   // The next period (toggle / go by my rules) and the person's derived status + mode on it. periodOpen = a
   // surgeon may still write to it (offers_close_at ahead, status upcoming); the scheduler is never frozen (OM005).
-  const period = React.useMemo(() => offerNextPeriod(periods, today), [periods, today]);
+  const period = React.useMemo(() => preferred || offerNextPeriod(periods, today), [preferred, periods, today]);
   const periodOpen = !!period && (isScheduler || offerPeriodOpen(period, today));
   const periodStatus = period ? offerStatus(period, offers, pid) : null;
   const savedMode = period ? ((period.offer_modes && typeof period.offer_modes === "object" ? period.offer_modes[pid] : null) || "preferred") : "preferred";
@@ -8052,6 +8153,185 @@ function suHeldUnlockedSlotChanges(current, next) {
     if (!a || c.from === null || c.from === undefined) return false;
     return c.role === "primary" ? !a.primaryLocked : !a.backupLocked;
   });
+}
+
+// --- Periods (Prompt 14 part 3b, U3b): Setup -> Generate -> "Periods". MODULE scope like every Setup component. ---
+// Reads: periods (call_periods rows), offers (call_offers rows), roster, groupRules.offerPeriods, today (Central).
+// Every write belongs to the parent: onCreate (ONE POST call_periods + ONE audit period.create), onCloseNow (ONE
+// compare-and-swap PATCH status upcoming -> closed + ONE audit period.close), onRemind (ONE send-notification
+// offers_reminder to that person - the client composes the words, the server honours schedule_updates_email),
+// onEnterFor (opens the offer painter as that surgeon - the SQL stamps entered_by 'scheduler' / source 'email-relay'
+// from the caller identity), onGenerate (the existing Generate flow with the period's range). Per-surgeon status is
+// DERIVED from the rows through helpers.offerRollcall (the SQL offer_status() reading) - never stored twice.
+const PRD_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const PRD_DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function prdLabelFor(start, end) {
+  if (!suIsIso(start) || !suIsIso(end)) return "";
+  const a = PRD_MON[+start.slice(5, 7) - 1] + " " + start.slice(0, 4), b = PRD_MON[+end.slice(5, 7) - 1] + " " + end.slice(0, 4);
+  return a === b ? a : a + " - " + b;
+}
+// "2026-10-02" -> "Friday, Oct 2" - the morning run's spelling (edge-functions/daily-reminder fmtDay), so the Remind
+// e-mail sent from here and the cron's read the same.
+function prdDayWords(iso) {
+  if (!suIsIso(iso)) return String(iso || "");
+  const dt = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)));
+  return PRD_DOW[dt.getUTCDay()] + ", " + PRD_MON[dt.getUTCMonth()] + " " + dt.getUTCDate();
+}
+// The muted token literal (LIGHT.muted); the dark <style> remaps rgb(91, 107, 130) to #9FB0C8 - never use an
+// unmapped grey such as #3a4a58 on the section's own surface (review 9/23: ~1.6:1 on the dark card).
+const PRD_MUTED = "#5B6B82";
+function PeriodsSection({ css, periods, offers, roster, groupRules, today, nameOf, notifPrefs, busy, remindState, selfId, draft, setDraft, onCreate, onCloseNow, onRemind, onEnterFor, onGenerate }) {
+  const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
+  const rules = (groupRules && groupRules.offerPeriods) || {};
+  const presets = Array.isArray(rules.presets) && rules.presets.length ? rules.presets : OP_PERIOD_DEFAULTS.presets;
+  const ids = React.useMemo(() => offerPoolIds(roster || []), [roster]);
+  const day = (v) => (v === undefined || v === null ? "" : String(v).slice(0, 10));
+  const all = React.useMemo(() => (periods || []).filter(p => p && suIsIso(day(p.start_day)) && suIsIso(day(p.end_day))).slice().sort((a, b) => day(a.start_day) < day(b.start_day) ? -1 : 1), [periods]);
+  const shown = all.filter(p => day(p.end_day) >= today);
+  const hidden = all.length - shown.length;
+  const lastEnd = all.length ? day(all[all.length - 1].end_day) : null;
+  const defaultStart = lastEnd && suAddDays(lastEnd, 1) > today ? suAddDays(lastEnd, 1) : today;
+  // draft = { start_day, length_months, end_day, offers_close_at, publish_by, label, touched: { <field>: true } } while
+  // the form is open - parent state (CallSchedule.prdDraft), so collapsing the card or changing tabs keeps it.
+  const [formError, setFormError] = React.useState("");
+  // The presets fill every date from groupRules.offerPeriods (helpers.offerTimeline); each stays editable per period.
+  const fromTimeline = (start, months) => {
+    const t = offerTimeline({ start_day: start, length_months: months }, rules);
+    if (!t) return { start_day: start, length_months: months, end_day: "", offers_close_at: "", publish_by: "", label: "", touched: {} };
+    return { start_day: t.start_day, length_months: t.length_months, end_day: t.end_day, offers_close_at: t.offers_close_at, publish_by: t.publish_by, label: prdLabelFor(t.start_day, t.end_day), touched: {} };
+  };
+  const openForm = () => { setFormError(""); setDraft(fromTimeline(defaultStart, Number(rules.lengthMonths) || OP_PERIOD_DEFAULTS.lengthMonths)); };
+  // A preset click is an explicit "fill from the rules" and resets every field; a Start change re-derives ONLY the
+  // fields the scheduler has not edited by hand (a hand-set close date or label survives a nudged start).
+  const setField = (k, v) => setDraft(d => {
+    if (!d) return d;
+    const touched = d.touched || {};
+    if (k === "start_day") {
+      if (!suIsIso(v)) return { ...d, start_day: v };
+      const t = fromTimeline(v, d.length_months);
+      const n = { ...t, touched };
+      ["end_day", "offers_close_at", "publish_by", "label"].forEach(f => { if (touched[f]) n[f] = d[f]; });
+      if (!touched.label && suIsIso(n.end_day)) n.label = prdLabelFor(v, n.end_day);
+      return n;
+    }
+    const n = { ...d, [k]: v, touched: { ...touched, [k]: true } };
+    if (k === "end_day" && !touched.label && suIsIso(v) && suIsIso(n.start_day)) n.label = prdLabelFor(n.start_day, v);
+    return n;
+  });
+  const overlap = (d) => all.find(p => !(day(p.end_day) < d.start_day || day(p.start_day) > d.end_day)) || null;
+  const validate = (d) => {
+    if (!d) return "nothing to create";
+    if (!suIsIso(d.start_day) || !suIsIso(d.end_day) || !suIsIso(d.offers_close_at) || !suIsIso(d.publish_by)) return "Every date must be a full YYYY-MM-DD.";
+    if (d.end_day < d.start_day) return "The end must be on or after the start.";
+    if (d.offers_close_at > d.start_day) return "Offers must close on or before the start day (the database refuses a later close).";
+    if (!String(d.label || "").trim()) return "Give the period a label.";
+    if (all.some(p => day(p.start_day) === d.start_day)) return "A period already starts on " + d.start_day + ".";
+    const o = overlap(d);
+    if (o) return "This range overlaps " + (o.label || day(o.start_day) + " - " + day(o.end_day)) + " - periods must not overlap.";
+    return "";
+  };
+  const submit = async () => {
+    const err = validate(draft);
+    if (err) { setFormError(err); return; }
+    setFormError("");
+    const { touched, ...fields } = draft;
+    const r = await onCreate({ ...fields, label: String(draft.label).trim() });
+    if (r && r.ok) setDraft(null); else if (r && r.error) setFormError("Not created: " + r.error);
+  };
+  const modeWord = (p, r) => {
+    const m = p.offer_modes && typeof p.offer_modes === "object" ? p.offer_modes[r.id] : null;
+    if (r.status === "rules_only") return "-";
+    return m === "exhaustive" ? "only these days" : m === "preferred" ? "preferred days" : "preferred days (default)";
+  };
+  const statusWord = (r) => r.status === "submitted" ? `submitted ${r.offered} day${r.offered === 1 ? "" : "s"}` : r.status === "rules_only" ? "rules only" : "not started";
+  const statusColor = (s) => s === "submitted" ? "#1a6030" : s === "rules_only" ? PRD_MUTED : "#a83232";
+  const roleBreakdown = (p, id) => { const c = { primary: 0, backup: 0, either: 0 }; (offers || []).forEach(o => { if (o && o.person_id === id && day(o.day) >= day(p.start_day) && day(o.day) <= day(p.end_day) && c[o.role_pref] !== undefined) c[o.role_pref]++; }); return `${c.primary} primary / ${c.backup} backup / ${c.either} either`; };
+  const daysTo = (d) => suIsIso(d) ? suDaysBetween(today, d) : null;
+  const inWords = (n) => n === null ? "" : n === 0 ? " (today)" : n === 1 ? " (tomorrow)" : n > 1 ? ` (in ${n} days)` : ` (${-n} day${n === -1 ? "" : "s"} ago)`;
+  const draftWarn = draft && suIsIso(draft.offers_close_at) && draft.offers_close_at <= today ? "The close date has passed or is today: surgeons will be frozen out of this period as soon as it exists and the morning run will mark it closed. Move the date later to collect offers." : draft && suIsIso(draft.publish_by) && suIsIso(draft.start_day) && draft.publish_by > draft.start_day ? "Publish-by lies after the start - the schedule would be due after the period begins." : "";
+  return (
+    <div data-testid="periods-section" style={{ marginBottom: 14, paddingBottom: 12, borderBottom: "1px dashed #c8d8e8" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+        <div style={{ ...css.subT, margin: 0 }}>Periods</div>
+        <span style={{ fontSize: 11, color: "#5B6B82" }}>{all.length === 0 ? "No period on file yet." : `${shown.length} current / upcoming${hidden ? `, ${hidden} earlier hidden` : ""}`}</span>
+        <span style={{ flex: 1 }} />
+        {!draft && <button type="button" data-testid="prd-new" onClick={openForm} disabled={busy} style={{ ...css.btn(true), padding: "5px 12px", fontSize: 11 }}>New period</button>}
+      </div>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). Today "Generate this period" places by the standing rules over the period's range; offers-first placement (offered days first, gaps by the rules) lands with the engine wiring - see the build guide, section 17. Status below is derived from the offers on file - submitted (days inside the period), rules only (chose "go by my rules"), not started.</p>
+      {draft && (
+        <div data-testid="prd-form" style={{ border: "1px solid #c8d8e8", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#f8fbff" }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 10, color: "#5B6B82", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Length</span>
+            {presets.map(n => <button key={n} type="button" data-testid={"prd-preset-" + n} onClick={() => setDraft(d => fromTimeline(d && suIsIso(d.start_day) ? d.start_day : defaultStart, Number(n)))} style={css.mini(draft.length_months === Number(n))}>{n} months</button>)}
+            <span style={{ fontSize: 11, color: "#5B6B82" }}>from groupRules.offerPeriods (close {Number(rules.closeWeeksBeforeStart) || OP_PERIOD_DEFAULTS.closeWeeksBeforeStart} weeks and publish {Number(rules.publishWeeksBeforeStart) || OP_PERIOD_DEFAULTS.publishWeeksBeforeStart} weeks before the start); every date below stays editable</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <SuField label="Label"><input data-testid="prd-label" type="text" value={draft.label} onChange={e => setField("label", e.target.value)} style={{ ...inp, width: 170 }} /></SuField>
+            <SuField label="Start"><input data-testid="prd-start" type="date" value={draft.start_day} onChange={e => setField("start_day", e.target.value)} style={inp} /></SuField>
+            <SuField label="End"><input data-testid="prd-end" type="date" value={draft.end_day} onChange={e => setField("end_day", e.target.value)} style={inp} /></SuField>
+            <SuField label="Offers close" hint="the freeze - surgeons can no longer paint or change their mode after this day"><input data-testid="prd-close" type="date" value={draft.offers_close_at} onChange={e => setField("offers_close_at", e.target.value)} style={inp} /></SuField>
+            <SuField label="Publish by"><input data-testid="prd-publish" type="date" value={draft.publish_by} onChange={e => setField("publish_by", e.target.value)} style={inp} /></SuField>
+            <button type="button" data-testid="prd-create" onClick={submit} disabled={busy} style={{ ...css.btn(true), padding: "6px 14px", marginBottom: 8, opacity: busy ? 0.6 : 1 }}>{busy ? "Creating" : "Create period"}</button>
+            <button type="button" data-testid="prd-cancel" onClick={() => { setDraft(null); setFormError(""); }} disabled={busy} style={{ ...css.mini(false), marginBottom: 8 }}>Cancel</button>
+          </div>
+          {draftWarn && <div data-testid="prd-form-warn" style={{ ...css.warnBox, marginTop: 4 }}>{draftWarn}</div>}
+          {formError && <div data-testid="prd-form-error" style={{ ...css.errBox, marginTop: 4 }}>{formError}</div>}
+        </div>
+      )}
+      {shown.length === 0 && !draft && <div style={{ fontSize: 12, color: "#5B6B82", fontStyle: "italic", marginBottom: 8 }}>Create the next period from a preset above; the seed's first period arrives with the offers import.</div>}
+      {shown.map(p => {
+        const roll = offerRollcall(p, offers || [], ids);
+        const status = p.status || "upcoming";
+        const open = offerPeriodOpen(p, today);
+        const close = day(p.offers_close_at), pub = day(p.publish_by);
+        const nSub = roll.filter(r => r.status === "submitted").length, nRules = roll.filter(r => r.status === "rules_only").length, nNot = roll.length - nSub - nRules;
+        return (
+          <div key={p.id || day(p.start_day)} data-testid="prd-period" data-period-id={p.id || ""} data-status={status} data-start={day(p.start_day)} data-end={day(p.end_day)} style={{ border: "1px solid #DCE3EC", borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+              <strong data-testid="prd-label-text" style={{ fontSize: 13 }}>{p.label || prdLabelFor(day(p.start_day), day(p.end_day))}</strong>
+              <span style={{ fontFamily: mono, fontSize: 11, color: PRD_MUTED }}>{day(p.start_day)} - {day(p.end_day)}</span>
+              <span data-testid="prd-status" style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", padding: "2px 8px", borderRadius: 10, color: status === "upcoming" ? (open ? "#1a6030" : "#7a5a20") : status === "closed" ? "#a83232" : "#3a4a58", background: status === "upcoming" ? (open ? "#e8f8e8" : "#fbf1d8") : status === "closed" ? "#fdeaea" : "#eef2f7", border: "1px solid #DCE3EC" }}>{status === "upcoming" && !open ? "upcoming - frozen" : status}</span>
+              <span style={{ flex: 1 }} />
+              {status === "upcoming" && <button type="button" data-testid="prd-close-now" onClick={() => onCloseNow(p)} disabled={busy} title="Freeze the offers for this period now: surgeons can no longer paint or change their mode for it (you still can); status becomes 'closed'; nothing is generated or published" style={{ ...css.danger, padding: "5px 10px" }}>Close now</button>}
+              <button type="button" data-testid="prd-generate" onClick={() => onGenerate(p)} disabled={busy} title={"Run Generate over " + day(p.start_day) + " - " + day(p.end_day) + " (the existing preview flow, by the standing rules - offers are not placed first yet; Accept & Publish is below)"} style={{ ...css.btn(true), padding: "5px 12px", fontSize: 11 }}>Generate this period</button>
+            </div>
+            <div style={{ fontSize: 12, color: PRD_MUTED, marginBottom: 6 }}>
+              Offers close <strong>{close || "-"}</strong>{inWords(daysTo(close))} - publish by <strong>{pub || "-"}</strong>{inWords(daysTo(pub))} - {nSub} submitted, {nRules} rules only, <span style={{ color: nNot ? "#a83232" : "#1a6030", fontWeight: 600 }}>{nNot} not started</span>.
+            </div>
+            <div className="table-wrap" style={css.tableWrap}>
+              <table className="setup-table" data-testid="prd-table">
+                <thead><tr><th>Surgeon</th><th>Status</th><th>Mode</th><th>Action</th></tr></thead>
+                <tbody>
+                  {roll.map(r => {
+                    const key = (p.id || day(p.start_day)) + ":" + r.id;
+                    const rs = remindState && remindState[key];
+                    const pref = notifPrefs && notifPrefs[r.id];
+                    const mailOff = !!(pref && pref.schedule_updates_email === false);
+                    return (
+                      <tr key={r.id} data-testid="prd-row" data-person={r.id} data-status={r.status} data-offered={r.offered}>
+                        <td style={{ whiteSpace: "nowrap", fontWeight: 700 }}>{nameOf(r.id)}</td>
+                        <td style={{ whiteSpace: "nowrap", color: statusColor(r.status), fontWeight: 600 }} title={r.status === "submitted" ? roleBreakdown(p, r.id) : ""}>{statusWord(r)}</td>
+                        <td style={{ whiteSpace: "nowrap", fontSize: 12 }}>{modeWord(p, r)}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
+                            {r.status === "not_started" && status === "upcoming" && open && (
+                              <button type="button" data-testid="prd-remind" onClick={() => onRemind(p, r.id)} disabled={busy || mailOff || (rs && rs.note === "sending")} title={mailOff ? nameOf(r.id) + " has schedule-update e-mails turned off - no reminder can be sent" : "E-mail " + nameOf(r.id) + " that the dates for " + (p.label || "this period") + " freeze on " + prdDayWords(close) + " (the same note the morning run sends)"} style={{ ...css.mini(false), padding: "5px 9px", opacity: mailOff ? 0.5 : 1 }}>{rs && rs.note === "sending" ? "Sending" : "Remind"}</button>
+                            )}
+                            <button type="button" data-testid="prd-enter-for" onClick={() => onEnterFor(p, r.id)} disabled={busy} title={r.id === selfId ? "Paint the dates you'll cover for " + (p.label || "this period") + " (your own offers: entered_by you, source app)" : "Open the offer painter as " + nameOf(r.id) + " (a relayed e-mail: entered_by scheduler, source email-relay)"} style={{ ...css.mini(false), padding: "5px 9px" }}>{r.id === selfId ? "Paint my offers" : "Enter for " + nameOf(r.id)}</button>
+                            {rs && rs.note && rs.note !== "sending" && <span data-testid="prd-remind-note" style={{ fontSize: 11, color: rs.ok ? "#1a8040" : "#c2410c" }}>{rs.note}</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onReroll, onAccept, onDiscard, nameOf, roster, rulesImported, lastPublishedDay, genStart, genFirstOpenDay, laterRanges, holidayNames }) {

@@ -644,6 +644,7 @@ const offerPeriod = (() => {
   const p = (JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).offerPeriods || [])[0];
   return p ? { id: "00000000-0000-4000-8000-00000000a0f1", label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: p.status || "upcoming", rules_only_ids: (p.rulesOnly || []).slice(), offer_modes: { ...(p.offerModes || {}) }, created_by: "harness", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" } : null;
 })();
+const periodStore = offerPeriod ? [offerPeriod] : []; // Prompt 14 part 3b (U3b): GET call_periods serves this list; the Periods section's POST / PATCH move it (route below)
 const OTHER_OFFER_DAY = "2026-10-14";
 const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER_DAY, role_pref: "either", note: null, entered_by: "s2", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" }];
 let failSaveOffers = false;
@@ -775,8 +776,44 @@ const routeSupabase = async (route) => {
     return json(200, []);
   }
   // Prompt 14 part 3a: offers + periods (authenticated-only; served from the harness store) and the two RPCs.
-  if (method === "GET" && url.pathname.startsWith("/rest/v1/call_periods")) return json(200, offerPeriod ? [offerPeriod] : []);
+  // Part 3b (U3b): call_periods is a store the Periods section moves - POST answers the new row (201 + [row] under
+  // Prefer: return=representation, the unique start_day and the two checks refused like PostgREST), PATCH
+  // ?id=eq.<id>&status=eq.upcoming merges only when the row still matches (the compare-and-swap: [] otherwise).
+  if (url.pathname.startsWith("/rest/v1/call_periods")) {
+    if (method === "GET") return json(200, periodStore.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1));
+    const body = req.postData() || "";
+    const prefer = req.headers()["prefer"] || "";
+    writes.push({ method, path: url.pathname + url.search, body, prefer });
+    let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+    if (method === "POST") {
+      if (periodStore.some(p => p.start_day === b.start_day)) return json(409, { message: "duplicate key value violates unique constraint \"call_periods_start_idx\"", code: "23505", details: null, hint: null });
+      if (!(typeof b.end_day === "string" && b.end_day >= b.start_day) || !(typeof b.offers_close_at === "string" && b.offers_close_at <= b.start_day)) return json(400, { message: "new row for relation \"call_periods\" violates check constraint", code: "23514", details: null, hint: null });
+      const row = { id: crypto.randomUUID(), status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...b };
+      periodStore.push(row);
+      return json(201, /return=representation/.test(prefer) ? [row] : []);
+    }
+    if (method === "PATCH") {
+      const id = (url.searchParams.get("id") || "").replace(/^eq\./, "");
+      const st = (url.searchParams.get("status") || "").replace(/^eq\./, "");
+      const row = periodStore.find(p => p.id === id && (!st || p.status === st));
+      if (!row) return json(200, []);
+      Object.assign(row, b);
+      return json(200, /return=representation/.test(prefer) ? [row] : []);
+    }
+    return json(200, []);
+  }
   if (method === "GET" && url.pathname.startsWith("/rest/v1/call_offers")) return json(200, offerStore.slice().sort((a, b) => a.day < b.day ? -1 : 1));
+  // Part 3b: the Periods "Remind" e-mail is answered like the deployed function would (sent = the targets), so the
+  // happy path ("reminded <time>") is what the section shows; every other category keeps the generic 201 + [] below.
+  if (method === "POST" && url.pathname === "/functions/v1/send-notification") {
+    const body = req.postData() || "";
+    let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+    if (b && b.type === "offers_reminder") {
+      writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+      const ids = Array.isArray(b.targetIds) ? b.targetIds.map(String) : [];
+      return json(200, { sent: ids.length, failed: 0, skipped_no_email: 0, skipped_pref_off: 0, results: ids.map(id => ({ person_id: id, status: "sent" })) });
+    }
+  }
   if (url.pathname === "/rest/v1/rpc/save_offers" || url.pathname === "/rest/v1/rpc/set_offer_mode") {
     const body = req.postData() || "";
     writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
@@ -3700,6 +3737,242 @@ try {
       else if (seedPh !== "random - the toast shows the seed") fail("RF2 GeneratePanel: Seed placeholder is " + JSON.stringify(seedPh));
       else ok("RF2 GeneratePanel: 'Fill open slots only (keep every held day)' checkbox present and OFF by default; Seed placeholder 'random - the toast shows the seed'");
     }
+
+    // ---- Prompt 14 part 3b (U3b): Periods inside the Generate card ----
+    // The status table of the seed period equals an INDEPENDENT restatement of SQL offer_status() over the harness's
+    // own stores (call_offers + call_periods as they stand after the painter section: submitted = a row inside the
+    // period, else rules_only if listed, else not_started) with Remind on the not_started rows only while the
+    // period is still open (close > today, status upcoming); Remind on one of them = exactly ONE POST
+    // functions/v1/send-notification { type offers_reminder, targetIds [id], data.subject / message naming the
+    // label and the close date } and nothing else; New period -> a start inside the seed period is refused with
+    // zero writes; the 3-month preset fills end / close / publish / label = the harness's own date maths (last day
+    // of the 3rd calendar month, Fri/Sat -> the following Sunday; start - 42 / - 28 days); Create = ONE POST
+    // call_periods (return=representation) + ONE audit period.create and nothing else, the new box renders all six
+    // not_started; Close now dismissed = zero writes, confirmed = ONE compare-and-swap PATCH
+    // ?id=eq.<id>&status=eq.upcoming { status closed } + ONE audit period.close, the box reads closed with no Remind
+    // / Close now; "Enter for <name>" opens the painter as that surgeon, relayed, targeted at THAT period and opened
+    // on its first month; "Generate this period" runs the existing flow with the period's range (N=3, no writes,
+    // then Discard). Screenshots at 1180 and 390 in both themes: periods-desktop.png, periods-390.png,
+    // periods-desktop-dark.png, periods-390-dark.png.
+    try {
+      let prdDismissNext = false;
+      const prdDialogs = [];
+      const onPrdDialog = (d) => { prdDialogs.push(d.message()); if (prdDismissNext) { prdDismissNext = false; d.dismiss(); } else d.accept(); };
+      page.on("dialog", onPrdDialog);
+      try {
+        const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const IDS = ["s1", "s2", "s3", "s4", "s5", "s6"];
+        const dow = (d) => new Date(d + "T12:00:00Z").getUTCDay();
+        const sundayOnOrAfter = (d) => isoAddDays(d, (7 - dow(d)) % 7);
+        // The Remind e-mail spells its dates like the morning run (daily-reminder fmtDay: "Friday, Oct 2") - restated here.
+        const DOW_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const dayWords = (d) => `${DOW_FULL[dow(d)]}, ${MON[+d.slice(5, 7) - 1]} ${+d.slice(8, 10)}`;
+        const SELF = FAKE_PROFILE.person_id; // the harness signs in as the scheduler s1: his own row reads "Paint my offers"
+        const per = periodStore[0];
+        if (!per) throw new Error("the seed carries no offerPeriods[0] - nothing to read the table against");
+        const inPer = (o, p) => o.day >= p.start_day && o.day <= p.end_day;
+        const expStatus = (id, p) => offerStore.some(o => o.person_id === id && inPer(o, p)) ? "submitted" : (p.rules_only_ids || []).includes(id) ? "rules_only" : "not_started";
+        const expOffered = (id, p) => new Set(offerStore.filter(o => o.person_id === id && inPer(o, p)).map(o => o.day)).size;
+        const isOpen = (p) => (p.status || "upcoming") === "upcoming" && p.offers_close_at > todayCentral;
+        const boxSel = (id) => `[data-testid=prd-period][data-period-id="${id}"]`;
+        const readBox = (id) => page.$eval(boxSel(id), el => ({ status: el.getAttribute("data-status"), label: el.querySelector("[data-testid=prd-label-text]").textContent.trim(), pill: el.querySelector("[data-testid=prd-status]").textContent.trim(), closeNow: !!el.querySelector("[data-testid=prd-close-now]"), remind: Array.from(el.querySelectorAll("[data-testid=prd-remind]")).map(b => b.closest("tr").getAttribute("data-person")), rows: Array.from(el.querySelectorAll("[data-testid=prd-row]")).map(r => ({ id: r.getAttribute("data-person"), status: r.getAttribute("data-status"), offered: Number(r.getAttribute("data-offered")), text: r.innerText.replace(/\s+/g, " ").trim(), enter: (r.querySelector("[data-testid=prd-enter-for]") || {}).textContent || "" })) }));
+        await page.waitForSelector("[data-testid=periods-section]", { timeout: 5000 });
+        await page.waitForSelector(boxSel(per.id), { timeout: 5000 });
+        // (a) the seed period's table against the stores
+        const box0 = await readBox(per.id);
+        const wrong0 = IDS.map(id => { const r = box0.rows.find(x => x.id === id); const es = expStatus(id, per), eo = expOffered(id, per); return !r ? `${id}: missing` : (r.status !== es || r.offered !== eo) ? `${id}: ${r.status}/${r.offered}, expected ${es}/${eo}` : null; }).filter(Boolean);
+        const expRemind = isOpen(per) ? IDS.filter(id => expStatus(id, per) === "not_started") : [];
+        const wordsOk = box0.rows.every(r => (r.status === "submitted" && new RegExp(`submitted ${r.offered} days?`).test(r.text)) || (r.status === "rules_only" && /rules only/.test(r.text) && / - /.test(r.text)) || (r.status === "not_started" && /not started/.test(r.text)));
+        // the scheduler's own row offers "Paint my offers" (his own offers: entered_by him, source app); every other row "Enter for <name>" (relayed)
+        const enterOk = box0.rows.every(r => r.id === SELF ? r.enter.trim() === "Paint my offers" : /^Enter for \S+/.test(r.enter.trim()));
+        if (box0.rows.length !== 6 || wrong0.length) fail(`Periods: the ${per.label} table differs from the stores: ${wrong0.join("; ") || box0.rows.length + " rows"}`);
+        else if (box0.label !== per.label || box0.status !== (per.status || "upcoming") || !wordsOk) fail(`Periods: box header / words off for ${per.label}: ${JSON.stringify({ label: box0.label, status: box0.status, pill: box0.pill, rows: box0.rows.map(r => r.text) })}`);
+        else if (!enterOk) fail(`Periods: the scheduler's own row (${SELF}) must read 'Paint my offers' and every other row 'Enter for <name>': ${JSON.stringify(box0.rows.map(r => r.id + ": " + r.enter.trim()))}`);
+        else if (JSON.stringify(box0.remind) !== JSON.stringify(expRemind)) fail(`Periods: Remind must appear on the not_started rows only while the period is open (expected ${JSON.stringify(expRemind)}, got ${JSON.stringify(box0.remind)})`);
+        else ok(`Periods: ${per.label} (${box0.pill}) = ${IDS.map(id => id + " " + expStatus(id, per) + (expStatus(id, per) === "submitted" ? " " + expOffered(id, per) + "d" : "")).join(", ")}; Remind on ${expRemind.length ? expRemind.join(", ") : "nobody (frozen)"} only; ${SELF}'s row 'Paint my offers', the others 'Enter for <name>'`);
+        // (b) Remind on a not_started surgeon = ONE send-notification offers_reminder and nothing else
+        if (expRemind.length) {
+          const who = expRemind[0];
+          const b0 = writes.length;
+          await page.click(`${boxSel(per.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind]`);
+          await waitFor(() => writesSince(b0).some(w => /send-notification/.test(w.path)), 8000);
+          await page.waitForTimeout(400);
+          const mails = writesSince(b0).filter(w => /send-notification/.test(w.path)).map(bodyOf);
+          const others = writesSince(b0).filter(w => !/send-notification/.test(w.path));
+          const m = mails[0];
+          const note = await page.$eval(`${boxSel(per.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind-note]`, el => el.textContent.trim()).catch(() => null);
+          if (mails.length !== 1 || !m || m.type !== "offers_reminder" || JSON.stringify(m.targetIds) !== JSON.stringify([who])) fail(`Periods Remind: expected exactly ONE send-notification { type offers_reminder, targetIds [${who}] }: ${JSON.stringify(mails).slice(0, 400)}`);
+          else if (!m.data || String(m.data.subject) !== `Your call dates for ${per.label} freeze on ${dayWords(per.offers_close_at)}` || !String(m.data.message).includes(`(${dayWords(per.start_day)} to ${dayWords(per.end_day)}) freeze on ${dayWords(per.offers_close_at)}`) || !/paint them in the app or choose 'go by my rules'/.test(String(m.data.message)) || !/#offers$/.test(String(m.data.detail))) fail(`Periods Remind: the composed words must be the morning run's - subject 'Your call dates for ${per.label} freeze on ${dayWords(per.offers_close_at)}', message '(<start> to <end>) freeze on <close>' in the same "Friday, Oct 2" spelling + the painter hint, the #offers deep link as detail: ` + JSON.stringify(m.data).slice(0, 400));
+          else if (others.length) fail("Periods Remind: nothing but the e-mail call may be written: " + JSON.stringify(others.map(w => w.method + " " + w.path)));
+          else if (!noAddress(m)) fail("Periods Remind: the payload carries an e-mail address");
+          else if (!note || !/^reminded /.test(note)) fail(`Periods Remind: the row should read 'reminded <time>' after the 200, got ${JSON.stringify(note)}`);
+          else ok(`Periods Remind (${who}): ONE send-notification offers_reminder -> targetIds [${who}], subject "${m.data.subject}", nothing else written; row reads '${note}'`);
+        } else console.log(`     (today ${todayCentral} is past ${per.label}'s close ${per.offers_close_at} - the Remind call is exercised on the new period below)`);
+        // (c) New period: a start inside the seed period is refused with zero writes; the 3-month preset fills the dates
+        const expDefaultStart = isoAddDays(per.end_day, 1) > todayCentral ? isoAddDays(periodStore.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1).pop().end_day, 1) : todayCentral;
+        await page.click("[data-testid=prd-new]");
+        await page.waitForSelector("[data-testid=prd-form]", { timeout: 3000 });
+        const startDefault = await page.$eval("[data-testid=prd-start]", el => el.value);
+        const bRef = writes.length;
+        await page.fill("[data-testid=prd-start]", per.start_day);
+        await page.click("[data-testid=prd-create]");
+        await page.waitForTimeout(300);
+        const refusal = await page.$eval("[data-testid=prd-form-error]", el => el.textContent.trim()).catch(() => null);
+        if (startDefault !== expDefaultStart) fail(`Periods form: the default start should be the day after the last period (${expDefaultStart}), got ${startDefault}`);
+        else if (!refusal || !/already starts on|overlaps/.test(refusal) || writesSince(bRef).length) fail(`Periods form: a start inside ${per.label} must be refused client-side with zero writes (error ${JSON.stringify(refusal)}, writes ${writesSince(bRef).length})`);
+        else ok(`Periods form: default start ${startDefault}; a start on ${per.start_day} refused ("${refusal.slice(0, 70)}") with zero writes`);
+        await page.fill("[data-testid=prd-start]", expDefaultStart);
+        await page.click("[data-testid=prd-preset-3]");
+        await page.waitForTimeout(150);
+        const f = await page.evaluate(() => ({ label: document.querySelector("[data-testid=prd-label]").value, start: document.querySelector("[data-testid=prd-start]").value, end: document.querySelector("[data-testid=prd-end]").value, close: document.querySelector("[data-testid=prd-close]").value, publish: document.querySelector("[data-testid=prd-publish]").value }));
+        const sy = +expDefaultStart.slice(0, 4), sm = +expDefaultStart.slice(5, 7);
+        const idx3 = sm + 2, ey = sy + Math.floor((idx3 - 1) / 12), em = ((idx3 - 1) % 12) + 1;
+        let expEnd = utcDay(Date.UTC(ey, em, 0));
+        if (dow(expEnd) === 5 || dow(expEnd) === 6) expEnd = sundayOnOrAfter(expEnd);
+        const expClose = isoAddDays(expDefaultStart, -42), expPublish = isoAddDays(expDefaultStart, -28);
+        const expLabel = `${MON[sm - 1]} ${sy} - ${MON[+expEnd.slice(5, 7) - 1]} ${expEnd.slice(0, 4)}`;
+        if (f.start !== expDefaultStart || f.end !== expEnd || f.close !== expClose || f.publish !== expPublish || f.label !== expLabel) fail(`Periods form (3-month preset from ${expDefaultStart}): expected end ${expEnd}, close ${expClose}, publish ${expPublish}, label '${expLabel}'; got ${JSON.stringify(f)}`);
+        else ok(`Periods form: 3-month preset from ${expDefaultStart} -> end ${f.end}, offers close ${f.close} (start - 6 weeks), publish by ${f.publish} (start - 4 weeks), label '${f.label}'`);
+        // (c2) a hand-set close date survives a nudged Start (only untouched fields re-derive); the draft survives the
+        // card being collapsed and reopened (it is CallSchedule state, not the section's); a preset click resets all
+        const readForm = () => page.evaluate(() => ({ label: document.querySelector("[data-testid=prd-label]").value, start: document.querySelector("[data-testid=prd-start]").value, end: document.querySelector("[data-testid=prd-end]").value, close: document.querySelector("[data-testid=prd-close]").value, publish: document.querySelector("[data-testid=prd-publish]").value }));
+        const handClose = isoAddDays(expClose, -7), nudged = isoAddDays(expDefaultStart, 1);
+        await page.fill("[data-testid=prd-close]", handClose);
+        await page.fill("[data-testid=prd-start]", nudged);
+        await page.waitForTimeout(150);
+        const f2 = await readForm();
+        const bCol = writes.length;
+        await page.click("[data-testid=card-toggle-setup_generate]");
+        await page.waitForTimeout(200);
+        const formGone = (await page.$("[data-testid=prd-form]")) === null;
+        await page.click("[data-testid=card-toggle-setup_generate]");
+        await page.waitForSelector("[data-testid=prd-form]", { timeout: 3000 }).catch(() => null);
+        const f3 = await readForm().catch(() => null);
+        await page.click("[data-testid=prd-preset-3]");
+        await page.waitForTimeout(150);
+        const f4 = await readForm();
+        if (f2.close !== handClose || f2.start !== nudged || f2.publish !== isoAddDays(nudged, -28) || f2.label !== expLabel) fail(`Periods form: after a hand-set close ${handClose} and Start nudged to ${nudged}, the close must survive and only publish (start - 4 weeks) re-derive; got ${JSON.stringify(f2)}`);
+        else if (!formGone || !f3 || f3.close !== handClose || f3.start !== nudged || writesSince(bCol).length) fail(`Periods form: collapsing the Generate card must keep the draft (form hidden while closed, back with close ${handClose} / start ${nudged} when reopened, zero writes); got hidden=${formGone}, ${JSON.stringify(f3)}, writes ${writesSince(bCol).length}`);
+        else if (f4.close !== isoAddDays(nudged, -42) || f4.start !== nudged || f4.publish !== isoAddDays(nudged, -28)) fail(`Periods form: a preset click must refill every date from the rules (close ${isoAddDays(nudged, -42)}), got ${JSON.stringify(f4)}`);
+        else ok(`Periods form: hand-set close ${handClose} survived Start -> ${nudged} (publish re-derived ${f2.publish}); the draft survived the card collapsing / reopening; the 3-month preset refilled every date`);
+        await page.fill("[data-testid=prd-start]", expDefaultStart);
+        await page.click("[data-testid=prd-preset-3]");
+        await page.waitForTimeout(150);
+        const f5 = await readForm();
+        if (f5.start !== expDefaultStart || f5.close !== expClose || f5.publish !== expPublish || f5.end !== expEnd || f5.label !== expLabel) fail(`Periods form: could not return the draft to the preset state before Create: ${JSON.stringify(f5)}`);
+        // (d) Create = ONE POST call_periods (return=representation) + ONE audit period.create; the new box renders
+        const bC = writes.length;
+        await page.click("[data-testid=prd-create]");
+        await waitFor(() => writesSince(bC, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "period.create"), 8000);
+        await page.waitForTimeout(400);
+        const posts = writesSince(bC, "/rest/v1/call_periods");
+        const cAud = writesSince(bC, "/rest/v1/audit_log").map(bodyOf).filter(b => b && b.action === "period.create");
+        const cOther = writesSince(bC).filter(w => !/\/rest\/v1\/(call_periods|audit_log)/.test(w.path));
+        const created = periodStore.find(p => p.start_day === expDefaultStart);
+        const pb = posts[0] ? bodyOf(posts[0]) : null;
+        if (posts.length !== 1 || posts[0].method !== "POST" || !/return=representation/.test(posts[0].prefer) || !pb || pb.label !== expLabel || pb.start_day !== expDefaultStart || pb.end_day !== expEnd || pb.offers_close_at !== expClose || pb.publish_by !== expPublish || pb.status !== "upcoming" || JSON.stringify(pb.rules_only_ids) !== "[]" || JSON.stringify(pb.offer_modes) !== "{}") fail("Periods create: expected exactly ONE POST /rest/v1/call_periods (return=representation) with the form's dates, status upcoming, empty rules_only_ids / offer_modes: " + JSON.stringify(posts.map(w => w.method + " " + w.path + " " + w.body)).slice(0, 500));
+        else if (!created || cAud.length !== 1 || cAud[0].detail.period_id !== created.id || cAud[0].detail.label !== expLabel || cAud[0].detail.length_months !== 3) fail("Periods create: expected ONE audit period.create carrying the new row's id / label / 3 months: " + JSON.stringify(cAud));
+        else if (cOther.length) fail("Periods create: nothing but the POST and the audit may be written: " + JSON.stringify(cOther.map(w => w.method + " " + w.path)));
+        else if (!writesSince(bC).every(w => noAddress(w.body))) fail("Periods create: a write body carries an e-mail address");
+        else {
+          await page.waitForSelector(boxSel(created.id), { timeout: 5000 });
+          const box1 = await readBox(created.id);
+          const expRemind1 = isOpen(created) ? IDS.slice() : [];
+          if (box1.rows.length !== 6 || box1.rows.some(r => r.status !== "not_started" || r.offered !== 0) || box1.label !== expLabel || box1.status !== "upcoming" || JSON.stringify(box1.remind) !== JSON.stringify(expRemind1) || !box1.closeNow || (await page.$("[data-testid=prd-form]"))) fail(`Periods create: the new box should read '${expLabel}' upcoming, six not_started rows, Remind on all six, Close now, form folded: ` + JSON.stringify({ label: box1.label, status: box1.status, remind: box1.remind, closeNow: box1.closeNow, rows: box1.rows.map(r => r.text) }));
+          else ok(`Periods create: ONE POST call_periods + ONE audit period.create ("${cAud[0].detail.summary}"); '${expLabel}' renders upcoming with six not_started rows and Remind on each`);
+          if (!expRemind.length) { // the seed period was frozen: exercise Remind here instead
+            const who = "s3"; const b0 = writes.length;
+            await page.click(`${boxSel(created.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind]`);
+            await waitFor(() => writesSince(b0).some(w => /send-notification/.test(w.path)), 8000);
+            const mails = writesSince(b0).filter(w => /send-notification/.test(w.path)).map(bodyOf);
+            if (mails.length !== 1 || mails[0].type !== "offers_reminder" || JSON.stringify(mails[0].targetIds) !== JSON.stringify([who]) || !String(mails[0].data && mails[0].data.message).includes(`freeze on ${dayWords(expClose)}`)) fail("Periods Remind (new period): expected ONE offers_reminder to " + who + " naming the freeze '" + dayWords(expClose) + "': " + JSON.stringify(mails).slice(0, 300));
+            else ok(`Periods Remind (new period, ${who}): ONE send-notification offers_reminder naming the freeze ${dayWords(expClose)}`);
+          }
+          // (e) Close now: dismissed = zero writes; confirmed = ONE CAS PATCH + ONE audit period.close
+          const bD = writes.length;
+          prdDismissNext = true;
+          await page.click(`${boxSel(created.id)} [data-testid=prd-close-now]`);
+          await page.waitForTimeout(400);
+          const dismissed = prdDialogs[prdDialogs.length - 1] || "";
+          if (writesSince(bD).length || !/^Close offers for /.test(dismissed) || (await page.$eval(boxSel(created.id), el => el.getAttribute("data-status"))) !== "upcoming") fail(`Periods Close now (dismissed): zero writes expected and the status kept (writes ${writesSince(bD).length}, dialog '${dismissed.slice(0, 60)}')`);
+          else ok(`Periods Close now: the confirm ("${dismissed.split("\n")[0]}") dismissed -> zero writes, still upcoming`);
+          const bE = writes.length;
+          await page.click(`${boxSel(created.id)} [data-testid=prd-close-now]`);
+          await waitFor(() => writesSince(bE, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "period.close"), 8000);
+          await page.waitForTimeout(400);
+          const patches = writesSince(bE, "/rest/v1/call_periods");
+          const eAud = writesSince(bE, "/rest/v1/audit_log").map(bodyOf).filter(b => b && b.action === "period.close");
+          const eOther = writesSince(bE).filter(w => !/\/rest\/v1\/(call_periods|audit_log)/.test(w.path));
+          const box2 = await readBox(created.id);
+          if (patches.length !== 1 || patches[0].method !== "PATCH" || patches[0].path !== `/rest/v1/call_periods?id=eq.${created.id}&status=eq.upcoming` || (bodyOf(patches[0]) || {}).status !== "closed" || !/return=representation/.test(patches[0].prefer)) fail("Periods Close now: expected exactly ONE PATCH /rest/v1/call_periods?id=eq.<id>&status=eq.upcoming { status closed } (return=representation): " + JSON.stringify(patches.map(w => w.method + " " + w.path + " " + w.body)));
+          else if (eAud.length !== 1 || eAud[0].detail.period_id !== created.id || eAud[0].detail.by !== "scheduler" || !Array.isArray(eAud[0].detail.rollcall) || eAud[0].detail.rollcall.length !== 6) fail("Periods Close now: expected ONE audit period.close with period_id, by scheduler and the six-row roll call: " + JSON.stringify(eAud));
+          else if (eOther.length) fail("Periods Close now: nothing but the PATCH and the audit may be written: " + JSON.stringify(eOther.map(w => w.method + " " + w.path)));
+          else if (box2.status !== "closed" || created.status !== "closed" || box2.closeNow || box2.remind.length) fail(`Periods Close now: the box should read closed with no Close now / Remind (box ${box2.status}, store ${created.status}, closeNow ${box2.closeNow}, remind ${box2.remind.length})`);
+          else ok(`Periods Close now: ONE CAS PATCH (status=eq.upcoming -> closed) + ONE audit period.close ("${eAud[0].detail.summary.slice(0, 80)}"); the box reads closed, Remind / Close now gone`);
+        }
+        // (f) Enter for someone = the painter as that surgeon, relayed, targeted at the seed period
+        const whoE = "s3";
+        await page.click(`${boxSel(per.id)} [data-testid=prd-row][data-person=${whoE}] [data-testid=prd-enter-for]`);
+        await page.waitForSelector(`[data-testid=ofp-sheet][data-person=${whoE}]`, { timeout: 5000 });
+        const sheet = await page.$eval("[data-testid=ofp-sheet]", el => ({ month: el.getAttribute("data-month"), text: el.innerText.replace(/\s+/g, " ").slice(0, 200) }));
+        const perBox = await page.$eval("[data-testid=ofp-period]", el => ({ id: el.getAttribute("data-id") || el.getAttribute("data-period-id") || el.getAttribute("data-period"), status: el.getAttribute("data-status") })).catch(() => null);
+        const expMonth = per.start_day > todayCentral ? per.start_day.slice(0, 7) : todayCentral.slice(0, 7);
+        if (!/as the scheduler \(relayed\)/.test(sheet.text) || !perBox || perBox.id !== per.id || sheet.month !== expMonth) fail(`Periods Enter for ${whoE}: expected the painter 'as the scheduler (relayed)', period box = ${per.id}, opened on ${expMonth}: ${JSON.stringify({ sheet, perBox })}`);
+        else ok(`Periods Enter for ${whoE}: painter opened as the scheduler (relayed), targeted at ${per.label} (${perBox.status}), month ${sheet.month}`);
+        await page.click("[data-testid=ofp-close]");
+        await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
+        // (g) Generate this period = the existing flow with the period's range (N=3, seed 7; no writes; then Discard)
+        await page.fill("[data-testid=gen-n]", "3");
+        await page.fill("[data-testid=gen-seed]", "7");
+        const bG = writes.length;
+        await page.click(`${boxSel(per.id)} [data-testid=prd-generate]`);
+        await page.waitForSelector("[data-testid=gen-diagnostics]", { timeout: 90000 });
+        await page.waitForTimeout(500);
+        const gs = await page.$eval("[data-testid=gen-start]", el => el.value), ge = await page.$eval("[data-testid=gen-end]", el => el.value);
+        const gMeta = await page.$eval("[data-testid=gen-preview-meta]", el => el.textContent);
+        const gBad = writesSince(bG).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off|call_periods|audit_log)/.test(w.path));
+        if (gs !== per.start_day || ge !== per.end_day || !gMeta.includes(`${mdOf(per.start_day)} - ${mdOf(per.end_day)}`) || !/best of 3/.test(gMeta)) fail(`Periods Generate: expected the range ${per.start_day}..${per.end_day} in the fields and the preview meta: ${JSON.stringify({ gs, ge, gMeta: gMeta.slice(0, 120) })}`);
+        else if (gBad.length) fail("Periods Generate wrote something: " + JSON.stringify(gBad.map(w => w.method + " " + w.path)));
+        else ok(`Periods Generate: the existing flow ran over ${per.start_day}..${per.end_day} ("${gMeta.slice(0, 70)}"), nothing written`);
+        await page.click("[data-testid=gen-discard]");
+        await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
+        // (h) screenshots at 1180 and 390 in both themes; no horizontal page scroll at 390
+        const secLoc = page.locator("[data-testid=periods-section]");
+        await secLoc.screenshot({ path: path.join(OUT, "periods-desktop.png") });
+        ok("screenshot test/ui/out/periods-desktop.png");
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.waitForTimeout(300);
+        const geom390 = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, wraps: Array.from(document.querySelectorAll("[data-testid=periods-section] .table-wrap")).map(w => ({ sw: w.scrollWidth, cw: w.clientWidth })), btn: Math.min(...Array.from(document.querySelectorAll("[data-testid=periods-section] button")).map(b => b.getBoundingClientRect().height)) }));
+        if (geom390.sw > geom390.cw + 1) fail(`Periods 390px: the page scrolls horizontally (${geom390.sw} > ${geom390.cw}) - the table must scroll inside its card`);
+        else ok(`Periods 390px: no horizontal page scroll (${geom390.sw} in ${geom390.cw}); ${geom390.wraps.length} table(s) scroll inside their wrap; smallest button ${Math.round(geom390.btn)}px`);
+        await secLoc.screenshot({ path: path.join(OUT, "periods-390.png") });
+        ok("screenshot test/ui/out/periods-390.png");
+        await page.setViewportSize({ width: 1180, height: 900 });
+        await page.click('button[data-tab="settings"]');
+        await page.click("button:has-text('Dark')");
+        await page.click('button[data-tab="setup"]');
+        await openCard("setup_generate");
+        await page.waitForSelector("[data-testid=periods-section]", { timeout: 5000 });
+        await page.waitForTimeout(200);
+        await page.locator("[data-testid=periods-section]").screenshot({ path: path.join(OUT, "periods-desktop-dark.png") });
+        ok("screenshot test/ui/out/periods-desktop-dark.png");
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.waitForTimeout(300);
+        const dark390 = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
+        if (dark390.sw > dark390.cw + 1) fail(`Periods (dark 390px): horizontal page scroll (${dark390.sw} > ${dark390.cw})`); else ok(`Periods (dark 390px): no horizontal page scroll (${dark390.sw} in ${dark390.cw})`);
+        await page.locator("[data-testid=periods-section]").screenshot({ path: path.join(OUT, "periods-390-dark.png") });
+        ok("screenshot test/ui/out/periods-390-dark.png");
+        await page.setViewportSize({ width: 1180, height: 900 });
+        await page.click('button[data-tab="settings"]');
+        await page.click("button:has-text('Light')");
+        await page.click('button[data-tab="setup"]');
+        await openCard("setup_generate");
+        await page.waitForSelector("[data-testid=gen-run]", { timeout: 5000 });
+      } finally {
+        page.off("dialog", onPrdDialog);
+        await page.setViewportSize({ width: 1180, height: 900 });
+      }
+    } catch (e) { fail("Periods: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-periods.png"), fullPage: false }); } catch (e2) {} }
 
     // ---- Generate: preview from the app's derived default start (item AB: the first open slot on/after
     //      today, else the day after the last saved block, clamped to today) through the END OF THAT MONTH,

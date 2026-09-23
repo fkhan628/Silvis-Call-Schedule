@@ -1897,7 +1897,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(src.includes("modeError"), false, "no partial 'rows saved, mode not' state may remain (the combined Save is atomic)");
       assert.strictEqual((src.match(/logAudit\("offers\.save"/g) || []).length, 1, "exactly one offers.save audit site");
       assert.strictEqual(/rest\/v1\/call_offers[^\n]*method: "(POST|PATCH|DELETE)"/.test(src), false, "a direct call_offers write bypasses the atomic RPC");
-      assert.strictEqual(/rest\/v1\/call_periods[^\n]*method: "(POST|PATCH|DELETE)"/.test(src), false, "a direct call_periods write (a surgeon cannot; the scheduler path is Periods, not the painter)");
+      // U3b: the scheduler's Periods section (createPeriod / closePeriodNow) writes call_periods directly - the painter's commit never does.
+      const paintFn = src.slice(src.indexOf("const commitOffersPaint = async"), src.indexOf("// --- Periods (Prompt 14 part 3b, U3b)"));
+      assert.ok(paintFn.length > 500 && paintFn.includes("rpc/save_offers"), "commitOffersPaint body not found before the Periods block");
+      assert.strictEqual(/rest\/v1\/call_periods/.test(paintFn), false, "a direct call_periods write in the painter's commit (a surgeon cannot; the scheduler path is Periods, not the painter)");
       assert.ok(src.includes("const diff = offersDraftDiff(savedByDay, draft);"), "the sheet's Save must diff through helpers.offersDraftDiff");
       assert.ok(src.includes("if (!res.ok) {\n          const t = await res.text().catch(() => \"\");\n          console.warn(\"Paint offers: save_offers failed\", res.status, t.slice(0, 300));\n          return { ok: false, error: describeDbError(t) };"), "a failed save_offers must warn and return ok:false with the verbatim reason (the sheet keeps the draft)");
       assert.ok(src.includes("OFFERS?_[A-Z_]+|MODE_[A-Z_]+"), "describeDbError must show the OF001-OF003 / OS / OM tokens verbatim");
@@ -1940,6 +1943,87 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       ["primary", "backup", "either", "clear"].forEach(k => { const b = styles.OFFER_BRUSH[k]; assert.ok(/^linear-gradient\(/.test(b.gradient), k + " armed brush must be a gradient (the dark sheet exempts gradient buttons)"); assert.ok(/^#[0-9A-Fa-f]{6}$/.test(b.text) && /^#[0-9A-Fa-f]{6}$/.test(b.tint) && /^#[0-9A-Fa-f]{6}$/.test(b.border), k + " tokens must be hex"); });
       assert.strictEqual(typeof styles.css.brush, "function", "css.brush(on, key) missing");
       assert.ok(src.includes("css.brush(armed === k, k)"), "the sheet's brushes must read css.brush");
+    });
+
+    /* ---------------- G. Prompt 14 part 3b (U3b): the Periods section - the helpers it leans on + source pins ---------------- */
+    console.log("\n[G] Prompt 14 U3b: Periods section - timeline / roll call + source pins");
+    check("U3b: offerTimeline fills a period from a start + preset like the form does (end = last day of the Nth month, Fri/Sat -> the following Sunday; close = start - 6 weeks; publish = start - 4 weeks); offerRollcall = the table's rows", () => {
+      const R = { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [14, 3] };
+      const t3 = H.offerTimeline({ start_day: "2027-01-04", length_months: 3 }, R);
+      assert.deepStrictEqual({ s: t3.start_day, e: t3.end_day, c: t3.offers_close_at, p: t3.publish_by, m: t3.length_months }, { s: "2027-01-04", e: "2027-03-31", c: "2026-11-23", p: "2026-12-07", m: 3 });
+      const t6 = H.offerTimeline({ start_day: "2027-01-04", length_months: 6 }, R);
+      assert.deepStrictEqual({ e: t6.end_day, c: t6.offers_close_at, p: t6.publish_by }, { e: "2027-06-30", c: "2026-11-23", p: "2026-12-07" });
+      assert.strictEqual(H.offerTimeline({ start_day: "2026-08-03", length_months: 3 }, R).end_day, "2026-11-01", "2026-10-31 is a Saturday -> the following Sunday");
+      assert.deepStrictEqual(H.offerTimeline({ start_day: "2027-01-04" }, {}).presets, [3, 6], "absent rules -> the defaults' presets");
+      const per = { id: "p", start_day: "2026-11-02", end_day: "2027-01-03", rules_only_ids: ["s6"], offer_modes: { s2: "exhaustive" } };
+      const offers = [{ person_id: "s2", day: "2026-11-03", role_pref: "primary" }, { person_id: "s2", day: "2026-11-03", role_pref: "backup" }, { person_id: "s2", day: "2026-12-01", role_pref: "either" }, { person_id: "s3", day: "2026-10-14", role_pref: "either" }];
+      assert.deepStrictEqual(H.offerRollcall(per, offers, ["s1", "s2", "s3", "s6"]), [{ id: "s1", status: "not_started", offered: 0 }, { id: "s2", status: "submitted", offered: 2 }, { id: "s3", status: "not_started", offered: 0 }, { id: "s6", status: "rules_only", offered: 0 }]);
+      assert.deepStrictEqual(H.offerPoolIds([{ id: "s1", active: true }, { id: "x1", active: true, type: "external" }, { id: "s2", active: false }, { id: "s3" }]), ["s1", "s3"], "the table lists active, non-external roster entries");
+    });
+    check("U3b pins: PeriodsSection is a MODULE-SCOPE component mounted once inside the Generate card above GeneratePanel, behind the Setup view's isScheduler gate; status is derived through offerRollcall over offerPoolIds; the presets fill the dates through offerTimeline", () => {
+      const def = src.indexOf("\nfunction PeriodsSection(");
+      const app = src.indexOf("\nfunction CallSchedule() {");
+      const appEnd = src.indexOf("\nfunction MonthPainterSheet(");
+      assert.ok(def > 0 && app > 0 && appEnd > app && (def < app || def > appEnd), "PeriodsSection must be defined at module scope (a component inside CallSchedule remounts and loses the form)");
+      assert.strictEqual((src.match(/<PeriodsSection\b/g) || []).length, 1, "exactly one mount");
+      const mount = src.indexOf("<PeriodsSection ");
+      const card = src.lastIndexOf('<Collapsible css={css} ck="setup_generate"', mount);
+      const gen = src.indexOf("<GeneratePanel", mount);
+      assert.ok(card > 0 && gen > mount && !src.slice(card, mount).includes("</Collapsible>"), "the section must sit inside the setup_generate card above GeneratePanel");
+      const gate = src.lastIndexOf('{view==="setup" && !isPublicMode && isScheduler && <>', mount);
+      assert.ok(gate > 0 && gate < card, "the Setup view's isScheduler gate must precede the mount");
+      ["periods-section", "prd-new", "prd-form", "prd-label", "prd-start", "prd-end", "prd-close", "prd-publish", "prd-create", "prd-cancel", "prd-form-warn", "prd-form-error", "prd-period", "prd-label-text", "prd-status", "prd-close-now", "prd-generate", "prd-table", "prd-row", "prd-remind", "prd-enter-for", "prd-remind-note"].forEach(t => assert.ok(src.includes('data-testid="' + t + '"'), "missing data-testid " + t));
+      assert.ok(src.includes('data-testid={"prd-preset-" + n}') && src.includes("const presets = Array.isArray(rules.presets) && rules.presets.length ? rules.presets : OP_PERIOD_DEFAULTS.presets;"), "the presets come from groupRules.offerPeriods.presets (prd-preset-<n>), defaults otherwise");
+      assert.ok(src.includes("const roll = offerRollcall(p, offers || [], ids);") && src.includes("const ids = React.useMemo(() => offerPoolIds(roster || []), [roster]);"), "status must be derived through helpers.offerRollcall over offerPoolIds - never stored");
+      assert.ok(src.includes("const t = offerTimeline({ start_day: start, length_months: months }, rules);"), "the presets must fill the dates through helpers.offerTimeline");
+      assert.ok(src.includes('if (d.offers_close_at > d.start_day) return "Offers must close on or before the start day') && src.includes('if (o) return "This range overlaps "'), "the form refuses a close after the start (the DB check) and an overlapping period before any request");
+    });
+    check("U3b pins: createPeriod = ONE POST call_periods through dbAuthHeaders + return=representation with the returned row checked, then ONE audit period.create; closePeriodNow = confirm, ONE compare-and-swap PATCH (status=eq.upcoming) with its row checked, then ONE audit period.close; no DELETE; exactly two call_periods write sites", () => {
+      assert.strictEqual((src.match(/`\$\{SUPABASE_URL\}\/rest\/v1\/call_periods`, \{ method: "POST", headers: \{ \.\.\.dbAuthHeaders\(\), Prefer: "return=representation" \}/g) || []).length, 1, "exactly one call_periods POST site (createPeriod)");
+      assert.ok(src.includes('if (!Array.isArray(rows) || rows.length !== 1 || !rows[0].id) { console.warn("Periods: create answered without the new row (RLS no-op?)"'), "a 2xx without the new row must be a failure (an RLS no-op is 200 + [])");
+      assert.strictEqual((src.match(/logAudit\("period\.create"/g) || []).length, 1, "exactly one period.create audit site");
+      assert.strictEqual((src.match(/rest\/v1\/call_periods\?id=eq\.\$\{encodeURIComponent\(p\.id\)\}&status=eq\.upcoming`, \{ method: "PATCH", headers: \{ \.\.\.dbAuthHeaders\(\), Prefer: "return=representation" \}/g) || []).length, 1, "exactly one call_periods PATCH site, a compare-and-swap on status upcoming (closePeriodNow)");
+      assert.ok(src.includes('if (!Array.isArray(rows) || rows.length !== 1) { console.warn("Periods: close matched no upcoming row"'), "zero rows back from the CAS PATCH must be reported, never audited as a close");
+      assert.strictEqual((src.match(/logAudit\("period\.close"/g) || []).length, 1, "exactly one period.close audit site");
+      assert.strictEqual(/rest\/v1\/call_periods[^\n]*method: "DELETE"/.test(src), false, "no call_periods DELETE");
+      assert.strictEqual((src.match(/rest\/v1\/call_periods[^\n]*method: "(POST|PATCH)"/g) || []).length, 2, "call_periods is written from exactly two sites (create + close)");
+      const create = src.indexOf("const createPeriod = async"), close = src.indexOf("const closePeriodNow = async"), remind = src.indexOf("const remindOffers = async");
+      assert.ok(create > 0 && close > create && remind > close, "createPeriod, closePeriodNow, remindOffers in that order");
+      const cBody = src.slice(create, close), eBody = src.slice(close, remind);
+      assert.ok(cBody.indexOf("rest/v1/call_periods") < cBody.indexOf('logAudit("period.create"'), "the create audit comes after the POST and its row check");
+      assert.ok(eBody.indexOf("if (!confirm(`Close offers for ") < eBody.indexOf("rest/v1/call_periods") && eBody.indexOf("rest/v1/call_periods") < eBody.indexOf('logAudit("period.close"'), "Close now: confirm, then the PATCH, then the audit");
+      assert.ok(cBody.includes('return { ok: false, error: describeDbError(text) }') && eBody.includes('return { ok: false, error: describeDbError(text) }'), "a failed request returns the verbatim reason and writes nothing more");
+    });
+    check("U3b pins: Remind = ONE sendEmailNotif('offers_reminder', words composed here, targetIds [that person]) on not_started rows of an open period, honouring schedule_updates_email, writing nothing else; Enter for someone opens the painter targeted at the period (entered_by / source left to the SQL); Generate this period = runGenerate with the period's range", () => {
+      assert.strictEqual((src.match(/sendEmailNotif\("offers_reminder"/g) || []).length, 1, "exactly one offers_reminder send site");
+      assert.ok(src.includes('const r = await sendEmailNotif("offers_reminder", { subject, message, detail }, [personId]);'), "the reminder is targeted at the one person (never a broadcast)");
+      assert.ok(src.includes("const closeLabel = prdDayWords(close);") && src.includes("const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;") && src.includes("(${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'."), "the client composes the same words as the morning run (daily-reminder buildOffersReminder), dates in the cron's spelling");
+      assert.ok(src.includes("if (pref && pref.schedule_updates_email === false) {"), "a person with schedule-update e-mails off is not mailed (the server gates too)");
+      assert.ok(src.includes('{r.status === "not_started" && status === "upcoming" && open && ('), "Remind renders on not_started rows of an open upcoming period only");
+      const remindBody = src.slice(src.indexOf("const remindOffers = async"), src.indexOf("const enterOffersFor"));
+      assert.strictEqual(/logAudit\(|rest\/v1\//.test(remindBody), false, "Remind writes nothing but the e-mail call");
+      assert.ok(src.includes("const enterOffersFor = (p, personId) => { if (!isScheduler || !personId) return; setOfferSheet({ personId, periodId: p && p.id ? p.id : null }); };"), "Enter for someone must open the painter as that surgeon with the period id");
+      assert.ok(src.includes("preferPeriodId={offerSheet.periodId || null}") && src.includes("const period = React.useMemo(() => preferred || offerNextPeriod(periods, today), [preferred, periods, today]);"), "the painter must speak to the targeted period");
+      const prdBlock = src.slice(src.indexOf("const createPeriod = async"), src.indexOf("// --- Snapshot restore"));
+      assert.strictEqual(/entered_by\s*:|source\s*:\s*"/.test(prdBlock), false, "the client never sends entered_by / source - the SQL stamps them from the caller identity");
+      assert.ok(src.includes("setGenOpts(o => ({ ...o, start, end }));\n    runGenerate({ ...genOpts, start, end });"), "Generate this period = the existing runGenerate with the period's range (same options, confirmations and writes)");
+    });
+    check("U3b review pins (9/23): Remind dates spelled like the cron's fmtDay; the section paints its own text in the remapped muted token (no #3a4a58 outside the pill); the scheduler's own row reads 'Paint my offers'; a Start change keeps hand-edited fields; the New-period draft is CallSchedule state; the copy says Generate places by the rules today", () => {
+      // prdDayWords mirrors edge-functions/daily-reminder fmtDay: full weekday, short month, day-of-month
+      const cron = fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"), "utf8");
+      const dow = 'const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];';
+      const mon = 'const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];';
+      assert.ok(cron.includes(dow) && cron.includes(mon) && cron.includes("return `${WEEKDAYS[dt.getUTCDay()]}, ${MONTHS[m - 1]} ${d}`;"), "the cron's fmtDay changed - re-mirror prdDayWords");
+      assert.ok(src.includes(dow.replace("WEEKDAYS", "PRD_DOW")) && src.includes(mon.replace("MONTHS", "PRD_MON")) && src.includes('return PRD_DOW[dt.getUTCDay()] + ", " + PRD_MON[dt.getUTCMonth()] + " " + dt.getUTCDate();'), "prdDayWords must spell dates exactly like the cron's fmtDay");
+      const sec = src.slice(src.indexOf("\nfunction PeriodsSection("), src.indexOf("\nfunction GeneratePanel("));
+      assert.ok(sec.length > 2000, "PeriodsSection body not found");
+      assert.strictEqual((sec.match(/#3a4a58/g) || []).length, 1, "only the status pill (its own light background) may use #3a4a58 - the dark sheet does not remap it");
+      assert.ok(src.includes('const PRD_MUTED = "#5B6B82";') && sec.includes("color: PRD_MUTED }}>{day(p.start_day)} - {day(p.end_day)}") && sec.includes("fontSize: 12, color: PRD_MUTED, marginBottom: 6"), "the range and the timeline line take the muted token the dark sheet remaps");
+      assert.ok(sec.includes('{r.id === selfId ? "Paint my offers" : "Enter for " + nameOf(r.id)}') && src.includes("selfId={mySurgeon} draft={prdDraft} setDraft={setPrdDraft}"), "the scheduler's own row reads 'Paint my offers' (his own offers: entered_by him, source app), every other row 'Enter for <name>'");
+      assert.ok(sec.includes('["end_day", "offers_close_at", "publish_by", "label"].forEach(f => { if (touched[f]) n[f] = d[f]; });') && sec.includes("touched: { ...touched, [k]: true }"), "a Start change re-derives only the fields the scheduler has not edited");
+      assert.ok(src.includes("const [prdDraft, setPrdDraft] = useState(null);") && !sec.includes("React.useState(null)"), "the New-period draft lives in CallSchedule (the collapsed card / a tab change unmounts the section)");
+      assert.ok(sec.includes('Today "Generate this period" places by the standing rules over the period\'s range; offers-first placement (offered days first, gaps by the rules) lands with the engine wiring') && src.includes("today Generate places by the standing rules; offers-first placement lands with the engine wiring") && sec.includes("by the standing rules - offers are not placed first yet"), "the copy must not promise offers-first placement while offerRows / periodRows are not in ctxInputs");
+      assert.strictEqual(/ctxInputs[\s\S]{0,400}offers: offerRows/.test(src), false, "when offerRows enter ctxInputs, rewrite the Periods copy (intro, Close-now toast, Generate title) and drop this pin");
     });
   }
 

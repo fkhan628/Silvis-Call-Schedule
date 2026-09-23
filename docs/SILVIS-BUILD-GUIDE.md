@@ -924,21 +924,69 @@ clearing, tap-again = "will clear", Close confirming, the scheduler's relay for 
 (one mode call, one audit), dark at both widths; screenshots `offers-greyed-390.png`, `offers-armed-390.png`,
 `offers-range-390.png`, `offers-saved-390.png`, `offers-desktop.png`, `offers-desktop-dark.png`, `offers-390-dark.png`.
 
-**Still ahead in part 3 (not on `feat/offers` as of 9/23 U3a):** the three **audit actions** named here so the SQL
-comments, the cron and the docs agree: `offers.save` (built, above), `period.create` (Setup → Generate → Periods, from
-the presets in `groupRules.offerPeriods`) and `period.close` ("Close now" — the same action the cron writes with
-`actor_id` `cron`; the two closers meet on the part-4 compare-and-swap, so only one summary goes out). And the wiring
-the engine is waiting for: pass `offerRows` / `periodRows` into `ctxInputs` → `buildContext` (`offers`, `periods`) —
-deliberately NOT done by the painter sub-part, because the moment offers reach the ctx an exhaustive surgeon's
-`not-offered` becomes live in the day editor, the generator and the trade path, and the trade path must take the claim
-reading first (below); switch the in-app Setup import to `importPlan(seed, { offerPeriods: true })` and refuse Apply
-when the seed carries periods the plan did not convert; the day editor's "offered primary / either / backup — rules —
-not offered" line per candidate; the Periods section (create from the presets, timeline editable, per-surgeon status,
-"Remind" on `offers_reminder`, "Enter for someone" — today My schedule's person picker already opens the painter as the
-scheduler, Generate over the period, Accept & Publish); and the publish e-mail line from
-`diagnostics.offers.outsideOffers`. (The two RPCs are already mirrored byte for byte into `sql/schema.sql`, pinned by
-`test/schema.test.js` and described in `docs/SCHEMA-REVIEW.md` with an `observed:` placeholder the orchestrator fills
-after the apply.)
+**The scheduler's side — Periods (part 3b, U3b, 9/23):** Setup → Generate grows a **Periods** section above the
+Generate panel (`PeriodsSection`, module scope, behind the Setup view's scheduler gate; RLS on `call_periods` is
+scheduler-only as well). **New period** opens a form pre-filled from the presets in `groupRules.offerPeriods`
+(`presets` 3 / 6 as buttons; `helpers.offerTimeline` fills end = the last day of the Nth calendar month, extended to
+the following Sunday from a Friday or Saturday, offers close = start − `closeWeeksBeforeStart` weeks, publish by =
+start − `publishWeeksBeforeStart` weeks, label "Jan 2027 - Mar 2027"); the start defaults to the day after the last
+period on file; every date stays editable per period (a preset click refills every date from the rules; a changed
+Start re-derives only the fields the scheduler has not edited by hand, so a hand-set close date or label survives a
+nudged start), and the form refuses — before any request — a close after the start (the DB check), a duplicate
+start (the unique index) and an overlap with an existing period, and warns when the close has already passed. The
+draft is `CallSchedule` state (`prdDraft`, like `genOpts`), so collapsing the Generate card or changing tabs keeps a
+half-filled form. **Create** = ONE `POST call_periods` with `Prefer: return=representation` through
+`dbAuthHeaders()`, status `upcoming`, empty `rules_only_ids` / `offer_modes`; a 2xx that returns no row (an RLS no-op)
+is a failure, and only after the row comes back does the client write ONE audit row **`period.create`**. Each period
+renders as a box: label, range, a status pill (upcoming / upcoming − frozen once `offers_close_at` ≤ today / closed /
+generated / published), "offers close … publish by …" with the days to go, and a **per-surgeon table** derived on
+the spot through `helpers.offerRollcall` over `helpers.offerPoolIds` (active, non-outside roster entries): *submitted
+N days* (title = primary / backup / either breakdown), *rules only*, *not started*, and the mode (*only these days* /
+*preferred days* / *preferred days (default)*; "-" for rules-only). Per row: **Remind** — on `not_started` rows of a
+still-open upcoming period only; ONE `send-notification` call, category `offers_reminder`, `targetIds` [that person],
+the words composed by the client exactly like the morning run's (`buildOffersReminder`: "Your dates for <label> (<start>
+to <end>) freeze on <date> (in N days) - paint them in the app or choose 'go by my rules'…", `detail` = the `#offers`
+deep link; the dates spelled as the cron spells them — `prdDayWords` mirrors `fmtDay`, "Friday, Oct 2" — so a surgeon
+who gets both notes reads one spelling); the server honours `schedule_updates_email` and the client already greys the button when the loaded
+preference says off; the row then reads "reminded <time>" / "e-mail off - not sent" / "no linked e-mail - not sent";
+nothing else is written. **Enter for <name>** opens the offer painter as that surgeon, targeted at that period (the
+sheet's new `preferPeriodId`: its period box, toggle and counts speak to it and it opens on the period's first month);
+`entered_by 'scheduler'` / `source 'email-relay'` are stamped by `save_offers` from the caller identity — the client
+sends neither. The scheduler's own row reads **Paint my offers** instead (his own offers: `entered_by` him, `source
+'app'`, exactly as My Schedule's button). **Close now** = the freeze, early: a confirm that names the standing (who has how many days, who goes by
+the rules, who has nothing), then ONE compare-and-swap `PATCH call_periods?id=eq.<id>&status=eq.upcoming` to `closed`
+with `return=representation` — zero rows back means the morning run or another scheduler got there first (or the
+account cannot write periods) and is reported, never audited; one row back → ONE audit row **`period.close`** (`by
+scheduler`, the roll call in the detail). The two closers therefore meet on the same flip and only one of them logs
+it. **Generate this period** = the existing preview flow (`runGenerate`) with the range set to the period — same
+options, confirmations, snapshot and CAS writes, Accept & Publish below it unchanged. Until `offerRows` /
+`periodRows` enter `ctxInputs` (below) this places **by the standing rules**, not offers-first, and the section says
+so where the scheduler reads it (the intro paragraph, the Close-now toast, the button's title); a data-layer pin
+trips when the wiring lands so the copy is rewritten with it. The section paints its own text in the muted token the
+dark sheet remaps (`PRD_MUTED` = `#5B6B82` → `#9FB0C8`); only the status pill, which keeps its own light background,
+uses an unmapped grey. Smoke (`test/ui/smoke.mjs`, Setup section, both themes, 1180 + 390): the seed period's table
+equals the harness's own restatement of `offer_status()` over its stores, Remind on the not-started rows only while
+open, the scheduler's own row 'Paint my offers' and the others 'Enter for <name>'; Remind on one = exactly one
+`send-notification offers_reminder` with the cron's subject and date spelling and nothing else; a start inside the
+seed period refused with zero writes; the 3-month preset's four dates and label equal the harness's date maths; a
+hand-set close survives a nudged Start while publish re-derives, the draft survives the card collapsing and
+reopening, a preset click refills every date; Create = one POST + one `period.create`; Close
+now dismissed = zero writes, confirmed = one CAS PATCH + one `period.close`, the box closed with no Remind / Close
+now; Enter for Acton opens the relayed painter targeted at the seed period on its first month; Generate this period
+runs the existing flow over the period with no writes; screenshots `periods-desktop.png`, `periods-390.png`,
+`periods-desktop-dark.png`, `periods-390-dark.png`.
+
+**Still ahead in part 3 (not on `feat/offers` as of 9/23 U3b):** the wiring the engine is waiting for: pass
+`offerRows` / `periodRows` into `ctxInputs` → `buildContext` (`offers`, `periods`) — deliberately NOT done by the
+painter or the Periods sub-part, because the moment offers reach the ctx an exhaustive surgeon's `not-offered` becomes
+live in the day editor, the generator and the trade path, and the trade path must take the claim reading first
+(below); until then "Generate this period" places by the rules, not offers-first. Then: switch the in-app Setup import
+to `importPlan(seed, { offerPeriods: true })` and refuse Apply when the seed carries periods the plan did not convert;
+the day editor's "offered primary / either / backup — rules — not offered" line per candidate; the publish e-mail line
+from `diagnostics.offers.outsideOffers`; and the period's `generated` / `published` status flips (nothing sets them
+yet — proposed: Accept & Publish marks the periods its range covers `published`). (The two RPCs are already mirrored
+byte for byte into `sql/schema.sql`, pinned by `test/schema.test.js` and described in `docs/SCHEMA-REVIEW.md` with an
+`observed:` placeholder the orchestrator fills after the apply.)
 
 **Eligibility is offers-first, at the hardness each surgeon chooses (built in Prompt 14 P2, 9/23):** `rules.buildContext`
 takes two more inputs, `offers` (`call_offers` rows) and `periods` (`call_periods` rows with `rules_only_ids` and
