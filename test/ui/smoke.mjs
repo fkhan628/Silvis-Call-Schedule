@@ -824,7 +824,7 @@ try {
     else if (/10\/7 OPEN/.test(row1005)) fail("week row 10/5 shows '10/7 OPEN' although the live row holds a backup (" + liveEarlyByDay["2026-10-07"].backup_id + "): " + row1005); else ok(`week row 10/5: 10/7 backup held live by ${liveEarlyByDay["2026-10-07"].backup_id} - no OPEN entry`);
   }
   const openRed = await page.$eval('[data-testid=week-rows] [data-kind="open"]', el => getComputedStyle(el).color).catch(() => "");
-  if (openRed) { if (!/rgb\(192, 64, 64\)/.test(openRed)) fail("week rows: OPEN entry is not red (#c04040): " + openRed); else ok("week rows: OPEN entries are red"); }
+  if (openRed) { if (!/rgb\(185, 28, 28\)/.test(openRed)) fail("week rows: OPEN entry is not red (#B91C1C, theme O.1): " + openRed); else ok("week rows: OPEN entries are red (#B91C1C)"); }
   else if (liveOpenBetween("2026-09-28", "2026-11-01")) fail("week rows: no OPEN entry found in the October 2026 week rows although the live rows have an open slot on " + liveOpenBetween("2026-09-28", "2026-11-01"));
   else console.log("     (week rows: no open slot in the live rows for the October 2026 weeks - the 'OPEN entries are red' pin has nothing to check)");
   // TH: OPEN is the theme's red token #B91C1C (light) - item O.1 keeps OPEN red so it never competes with the orange accent.
@@ -1628,7 +1628,7 @@ try {
     // Fix round: the swipe-hint covers must be repainted in the dark card colour - a white (#ffffff) cover paints a pale band over the date column.
     const m2 = await mobileProbe();
     if (m2.pageW > 392) fail(`Open shifts 390px (dark): the page scrolls horizontally (scrollWidth ${m2.pageW})`);
-    else if (!/rgb\(26, 26, 46\)/.test(m2.bodyBg)) fail("Open shifts 390px (dark): the body background is not the dark navy: " + m2.bodyBg);
+    else if (!/rgb\(11, 26, 51\)/.test(m2.bodyBg)) fail("Open shifts 390px (dark): the body background is not the dark navy (#0B1A33, theme O.2): " + m2.bodyBg);
     else if (!/table-wrap/.test(m2.cls) || !/swipe sideways/.test(m2.hint)) fail("Open shifts 390px (dark): the table wrapper lacks the table-wrap swipe hint: " + JSON.stringify(m2));
     else if (m2.minBtn && m2.minBtn < 36) fail(`Open shifts 390px (dark): a button is shorter than 36px (${m2.minBtn})`);
     else if (/rgb\(255, 255, 255\)/.test(m2.wrapBg) || !/rgb\(22, 33, 62\)/.test(m2.wrapBg)) fail("Open shifts 390px (dark): the table-wrap swipe-hint cover is still white under dark mode (computed background-image): " + m2.wrapBg.slice(0, 200));
