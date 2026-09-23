@@ -1740,9 +1740,12 @@ function CallSchedule() {
       return ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code;
     }).map(s => String(s.code).toUpperCase());
     if (!needCodes.length) return;
-    // 1) the forecast rows carry the Davenport id they were built for (code FAK by construction)
-    const fc = eastForecastRows.find(r => r && r.data && r.data.fakId);
-    if (fc && needCodes.length === 1 && needCodes[0] === "FAK") { setEastIdByCode({ FAK: fc.data.fakId, _source: "forecast" }); return; }
+    // 1) a forecast row carries the Davenport id AND the roster code it was built for (scripts/east-forecast.js
+    //    data.code beside data.fakId; audit RG-8, 9/23). Rows built before 9/23 carry no code and fall through to
+    //    the roster read below, which handles every code.
+    const fc = eastForecastRows.find(r => r && r.data && r.data.fakId && r.data.code);
+    const fcCode = fc ? String(fc.data.code).toUpperCase() : null;
+    if (fc && needCodes.length === 1 && needCodes[0] === fcCode) { const m = { _source: "forecast" }; m[fcCode] = fc.data.fakId; setEastIdByCode(m); return; }
     if (!eastFeedRows.length || (eastIdByCode && eastIdByCode._source === "failed")) return;
     // 2) the Davenport roster, read-only, through east-feed.js (GET only)
     let cancelled = false;
@@ -6808,7 +6811,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
             <SuCheck label="weekday allow-list (Mon-Thu; weekends stay pool days)" checked={!!draft.weekdays} onChange={v => set("weekdays", v ? { allowed: [], autoOffer: true } : undefined)} />
             {draft.weekdays && <>
               {["Mon", "Tue", "Wed", "Thu"].map(w => <SuCheck key={w} label={w} checked={(get("weekdays.allowed", []) || []).indexOf(w) >= 0} onChange={v => toggleList("weekdays.allowed", w, v)} />)}
-              <SuCheck label="auto-offer those days (soft)" checked={get("weekdays.autoOffer", true) !== false} onChange={v => set("weekdays.autoOffer", v)} />
+              <SuCheck label="offer those days (soft +1, weights.noTargetWeekday)" title="Eligible with a soft +1 (auto-offer-weekday): on otherwise equal terms another surgeon takes the day. Set groupRules.weights.noTargetWeekday to 0 for equal footing." checked={get("weekdays.autoOffer", true) !== false} onChange={v => set("weekdays.autoOffer", v)} />
             </>}
           </div>
           <div>
@@ -6933,7 +6936,6 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <SuCheck label="backup days count toward consecutive runs" checked={!!gget("countBackupInConsecutive", false)} onChange={v => gset("countBackupInConsecutive", v)} />
           <SuCheck label="backup must differ from primary" checked={gget("backupDistinctFromPrimary", true) !== false} onChange={v => gset("backupDistinctFromPrimary", v)} />
           <SuCheck label="holiday units waive weekday rules" checked={gget("holidays.ignoreWeekdayRules", true) !== false} onChange={v => gset("holidays.ignoreWeekdayRules", v)} />
-          <SuCheck label="anyone may cover a holiday unless opted out" checked={gget("holidays.anyoneMayCoverUnlessOptedOut", true) !== false} onChange={v => gset("holidays.anyoneMayCoverUnlessOptedOut", v)} />
         </div>
         <div style={css.subT}>Weights</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>

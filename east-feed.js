@@ -77,15 +77,23 @@ async function eastGetJson(pathAndQuery) {
   return json;
 }
 
-// Resolve FAK's Davenport id from the Davenport roster (data.surgeons =
-// [{id,name}] where name IS the 3-letter code). Never hard-code s6.
+// Resolve a roster CODE to its Davenport id from the Davenport roster
+// (data.surgeons = [{id,name}] where name IS the 3-letter code). Never
+// hard-code an id, and no default code (audit RG-8, 9/23): a missing or empty
+// code resolves to null. The name keeps its historical "Fak" for the callers.
 function eastResolveFakId(roster, code) {
-  const want = String(code || "FAK").toUpperCase();
+  const want = String(code || "").toUpperCase();
+  if (!want) return null;
   const hit = (roster || []).find(s => s && typeof s.name === "string" && s.name.toUpperCase() === want);
   return hit ? hit.id : null;
 }
 
 // fetchEastWeeks(fromMonday, toMonday, opts)
+//   opts.codes: roster CODES to resolve to Davenport ids (audit RG-8, 9/23) -
+//     idsByCode / codesUnresolved in the result; no code is required and none
+//     is assumed (a roster without a given code is reported, never thrown - the
+//     app treats an unresolved id as "East days unknown"). vacationCodes are
+//     resolved the same way and appear in both maps.
 //   opts.vacationCodes: roster CODES (e.g. ["FAK"]) whose Davenport time_off
 //     VACATIONS are read in the same refresh (Prompt 15 part 1a). Default [] =
 //     no time_off read (scripts that only want the roster are unchanged).
@@ -96,7 +104,9 @@ function eastResolveFakId(roster, code) {
 //     12-month presets after the milestone), so it gets its own horizon
 //     (review E1 finding 2, 9/23); a value before the window's Sunday, or a
 //     malformed one, falls back to the default.
-//   -> { weeks:[{ weekMonday, data }], roster:[{id,name}], fakId, fetchedAt,
+//   -> { weeks:[{ weekMonday, data }], roster:[{id,name}], fetchedAt,
+//        idsByCode: { CODE: davenportId }, codesUnresolved: [CODE],   // codes + vacationCodes
+//        fakId,                          // deprecated alias: the FIRST requested code's id, or null
 //        vacations: { CODE: [{ start, end }] } | null,   // merged, sorted
 //        vacationsError: string | null, vacationsTo,
 //        vacationIdsByCode: { CODE: davenportId }, vacationCodesUnresolved: [CODE] }
@@ -113,7 +123,7 @@ function eastResolveFakId(roster, code) {
 const EAST_VACATIONS_HORIZON_DAYS = 365;
 async function fetchEastWeeks(fromMonday, toMonday, opts) {
   if (!efIsDateStr(fromMonday) || !efIsDateStr(toMonday)) throw new Error("east-feed: fetchEastWeeks needs YYYY-MM-DD Mondays");
-  const o = Object.assign({ vacationCodes: [], vacationsTo: null }, opts || {});
+  const o = Object.assign({ codes: [], vacationCodes: [], vacationsTo: null }, opts || {});
   const q = "schedule_weeks?select=week_monday,data&week_monday=gte." + fromMonday + "&week_monday=lte." + toMonday + "&order=week_monday.asc";
   const rows = await eastGetJson(q);
   const blobRows = await eastGetJson("call_schedule_data?id=eq.main&select=data");
@@ -121,16 +131,25 @@ async function fetchEastWeeks(fromMonday, toMonday, opts) {
   let blob = blobRows[0].data;
   if (typeof blob === "string") { try { blob = JSON.parse(blob); } catch (e) { throw new Error("east-feed: Davenport blob is not JSON"); } }
   const roster = Array.isArray(blob.surgeons) ? blob.surgeons.map(s => ({ id: s.id, name: s.name })) : [];
-  const fakId = eastResolveFakId(roster, "FAK");
-  if (!fakId) throw new Error("east-feed: no Davenport roster entry with code FAK");
+  // Resolve every requested code by CODE through the roster (audit RG-8, 9/23: no code is required; a
+  // missing one lands in codesUnresolved - reported, never thrown).
+  const upper = (list) => (Array.isArray(list) ? list : []).map(c => String(c || "").toUpperCase()).filter(Boolean);
+  const wantCodes = upper(o.codes), codes = upper(o.vacationCodes);
+  const idsByCode = {}, codesUnresolved = [];
+  wantCodes.concat(codes).forEach(c => {
+    if (idsByCode[c] || codesUnresolved.indexOf(c) >= 0) return;
+    const id = eastResolveFakId(roster, c);
+    if (id) idsByCode[c] = id; else codesUnresolved.push(c);
+  });
+  const firstCode = wantCodes[0] || codes[0] || null;
+  const fakId = firstCode ? (idsByCode[firstCode] || null) : null;   // deprecated alias (see the contract above)
   const weeks = rows
     .filter(r => r && efIsDateStr(r.week_monday))
     .map(r => ({ weekMonday: r.week_monday, data: (typeof r.data === "string" ? JSON.parse(r.data) : r.data) || {} }))
     .sort((a, b) => a.weekMonday < b.weekMonday ? -1 : a.weekMonday > b.weekMonday ? 1 : 0);
-  // East vacations: resolve every requested code by CODE through the roster.
-  const codes = (Array.isArray(o.vacationCodes) ? o.vacationCodes : []).map(c => String(c || "").toUpperCase()).filter(Boolean);
+  // East vacations: the vacation codes' share of the resolution above.
   const vacationIdsByCode = {}, vacationCodesUnresolved = [];
-  codes.forEach(c => { const id = eastResolveFakId(roster, c); if (id) vacationIdsByCode[c] = id; else vacationCodesUnresolved.push(c); });
+  codes.forEach(c => { if (idsByCode[c]) vacationIdsByCode[c] = idsByCode[c]; else if (vacationCodesUnresolved.indexOf(c) < 0) vacationCodesUnresolved.push(c); });
   const ids = Object.keys(vacationIdsByCode).map(c => vacationIdsByCode[c]);
   let vacations = null, vacationsError = null;
   const windowEnd = efFmt(efAddD(efParse(toMonday), 6));
@@ -140,7 +159,7 @@ async function fetchEastWeeks(fromMonday, toMonday, opts) {
     try { vacations = vacationsFromTimeOff(await eastGetJson(tq), vacationIdsByCode); }
     catch (e) { vacationsError = (e && e.message) ? e.message : String(e); }
   }
-  return { weeks, roster, fakId, fetchedAt: new Date().toISOString(), vacations, vacationsError, vacationsTo, vacationIdsByCode, vacationCodesUnresolved };
+  return { weeks, roster, fakId, idsByCode, codesUnresolved, fetchedAt: new Date().toISOString(), vacations, vacationsError, vacationsTo, vacationIdsByCode, vacationCodesUnresolved };
 }
 
 // deriveKhanBusyDays(weeks, fakId, opts)

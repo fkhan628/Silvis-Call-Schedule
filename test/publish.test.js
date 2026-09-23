@@ -24,6 +24,7 @@
 "use strict";
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const REPO = path.join(__dirname, "..");
@@ -413,6 +414,39 @@ step("H: the real preview file - shape, no overlap, preview checks");
   ok(p.ok, "plan over an empty live set: " + JSON.stringify(p.aborts));
   ok(/inserts? /.test(PUB.renderPlan(p, nameOf)) || /insert/.test(PUB.renderPlan(p, nameOf)), "renderPlan text");
   ok(/# Publish/.test(PUB.renderReport({ plan: p, preview: real, roster: FX.roster, mode: "dry-run", previewFile: "x.json", preflight: null, previewChecks: pc })), "renderReport markdown");
+}
+
+/* ------------------------------------------------------------------ T4 */
+step("T4 (audit 9/23): the report never lands on a tracked publish record by default");
+{
+  const rel = (p) => path.relative(REPO, p).replace(/\\/g, "/");
+  const record = path.join(REPO, "docs", "PUBLISH-2026-09-23.md");
+  ok(fs.existsSync(record), "the 9/23 publish record is tracked (the file a refused --apply used to overwrite)");
+  const dry = PUB.parseArgs([]);
+  ok(!rel(dry.report).startsWith("docs/") && dry.reportExplicit === false, "dry-run: the report defaults outside docs/: " + dry.report);
+  const ap = PUB.parseArgs(["--apply", "--workdir", "C:/x/supabase"]);
+  ok(/^docs\/PUBLISH-\d{4}-\d{2}-\d{2}-\d{4}(-\d+)?\.md$/.test(rel(ap.report)), "apply: the report defaults to a dated docs/PUBLISH-<date>-<hhmm>.md: " + rel(ap.report));
+  ok(rel(ap.report) !== "docs/PUBLISH-2026-09-23.md" && !fs.existsSync(ap.report), "...a NEW file, never the 9/23 record");
+  eq(ap.reportExplicit, false); ok(!rel(ap.scratchReport).startsWith("docs/"), "...and its scratch destination is outside docs/");
+  eq(rel(PUB.defaultApplyReport(new Date("2026-09-23T14:32:05Z"))), "docs/PUBLISH-2026-09-23-1432.md", "the default name is UTC date + hhmm");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "silvis-t4-"));
+  fs.writeFileSync(path.join(tmp, "PUBLISH-2026-09-23-1432.md"), "taken", "utf8");
+  eq(path.basename(PUB.defaultApplyReport(new Date("2026-09-23T14:32:05Z"), tmp)), "PUBLISH-2026-09-23-1432-2.md", "an existing file of that name is never reused");
+  // where each outcome writes: only a SENT batch reaches docs/ by default; an explicit --report always wins
+  const argsDefault = { report: ap.report, scratchReport: ap.scratchReport, reportExplicit: false };
+  eq(PUB.reportDestination(argsDefault, "sent"), ap.report, "sent -> the dated docs/ report");
+  ["dry-run", "refused", "nothing"].forEach((o) => eq(PUB.reportDestination(argsDefault, o), ap.scratchReport, o + " -> the scratch path, docs/ untouched"));
+  const argsExplicit = { report: "C:/mine/r.md", scratchReport: ap.scratchReport, reportExplicit: true };
+  ["sent", "dry-run", "refused", "nothing"].forEach((o) => eq(PUB.reportDestination(argsExplicit, o), "C:/mine/r.md", o + " with --report -> the named file"));
+  // the source: every writeReport call names its outcome, the refused/nothing paths never say "sent", and the
+  // --workdir check now precedes the gates check
+  const src = fs.readFileSync(path.join(REPO, "scripts", "publish-preview.js"), "utf8");
+  const calls = src.match(/writeReport\((null|apply), "(dry-run|refused|nothing|sent)"\)/g) || [];
+  eq(calls.length, (src.match(/writeReport\(/g) || []).length, "every writeReport call passes an outcome: " + JSON.stringify(calls));
+  ok(calls.length >= 5, "the five call sites (dry-run, refused, nothing, re-read failure, verified) are all present");
+  ok(/REFUSING TO APPLY[^\n]*writeReport\(null, "refused"\)/.test(src) && /nothing to apply[^\n]*writeReport\(null, "nothing"\)/.test(src), "the refused and nothing-to-apply paths carry their outcome");
+  ok(src.indexOf("--apply needs --workdir") < src.indexOf("REFUSING TO APPLY"), "the --workdir check precedes the gates check");
+  ok(!/DEFAULT_REPORT/.test(src), "no DEFAULT_REPORT constant pointing at a historical record remains");
 }
 
 console.log("ok " + n + " assertions (" + (Date.now() - t0) + " ms)");

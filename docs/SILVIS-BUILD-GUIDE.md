@@ -85,7 +85,7 @@ ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) 
 
 | id | name | code | pool |
 |---|---|---|---|
-| s1 | Khan | FAK | weekend primary when East allows (`primaryContribution: "weekends"`, 9/22); Mon/Wed auto-offered when East is clear; never Tue/Thu as primary (backup any day since 9/22); East blocks primary only |
+| s1 | Khan | FAK | weekend primary when East allows (`primaryContribution: "weekends"`, 9/22); Mon/Wed auto-offered when East is clear (= eligible with a soft +1, `auto-offer-weekday` / `weights.noTargetWeekday` — audit RG-3, 9/23); never Tue/Thu as primary (backup any day since 9/22); East blocks primary only |
 | s2 | Burchett | MAB | yes |
 | s3 | Acton | BDA | yes |
 | s4 | Philip | AFP | yes |
@@ -340,6 +340,7 @@ with `apikey`/`Authorization: Bearer {DAV_ANON}`. Never write to it.
 Week row `data` shape (Davenport `generator.js` line ~825):
 `{ dayCall, nights: { mon, tue, wed, thu, wknd }, off, isBackup, isFierceBackup, holidayCoverage: { date: { surgeonId, … } } | null }`
 where ids are Davenport ids (FAK = `s6`). Resolve FAK by matching the Davenport roster code, not by hard-coding `s6`.
+9/23 (audit RG-8): `fetchEastWeeks` requires no code at all — it resolves the codes the caller passes (`opts.codes` / `vacationCodes`) into `idsByCode` and reports a missing one in `codesUnresolved` (never a throw; `fakId` stays as a deprecated alias for the first requested code), `scripts/east-forecast.js` takes its code from the seed roster entry whose `eastFeed.forecast` is on and writes `data.code` beside `data.fakId`, and the app and the scripts take a forecast row's id only for that code (older rows without `code` fall through to the roster read).
 
 Derivations (pure functions, unit-tested):
 - **Khan busy days:** `dayCall === FAK` → Mon…Sat busy (service week; Sat 07:00→Sun 07:00 is his); `nights.mon/tue/wed/thu === FAK` → that day busy; `nights.wknd === FAK` → Fri and Sun busy (Sat 07:00–Sun 07:00 is not his, but a lone Silvis Saturday breaks his block style — allow only as fallback); `holidayCoverage[d].surgeonId === FAK` → `d` busy. Busy days block Silvis **primary only** — Khan may be Silvis **backup** on an East call day (Faraz 9/21). East backup weeks (`isBackup` true) count as busy for primary too — but only the shifts he actually holds in such a week (his dayCall / override / night / weekend / holiday days), never all seven days; pinned by `test/east-feed.test.js` ("never busy wholesale").
@@ -398,6 +399,7 @@ deployed source before overwriting, byte-diff after). OneSignal push is not requ
 - Repo secrets: none needed (Pages + `GITHUB_TOKEN`). The Supabase anon key is public by design; the service-role key is never committed.
 - Pages URL once live: `https://fkhan628.github.io/Silvis-Call-Schedule/`.
 - One push to `main` is a live deploy — branch + PR for anything touching destructive paths, sync/state, RLS, or many call sites.
+- Two pushes to `main` within one run's window (~30 s; audit T3, 9/23): the commit-back step fetches `origin/main` first — a docs/sql/scripts-only move is rebuilt on top of (its push queued no run), a watched move is left to its own queued run (a notice, nothing pushed), and a push that is still rejected fails the run with an `::error::` — re-run "Build & deploy" from the Actions tab (workflow_dispatch); the live site stays on the previous build until then. CI runs Node 24 (audit T2): the Babel 8 packages need `^22.18.0 || >=24.11.0`, and `package.json` `engines` carries the same floor.
 
 ## 12. Testing
 
@@ -1071,6 +1073,8 @@ node scripts/publish-preview.js                                  # dry run (defa
 node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL through `supabase db query --linked -f`, then verifies
    [--preview docs/PREVIEW-<start>-to-<end>.json] [--out <sql>] [--report <md>] [--force-app-edited]
 ```
+
+*9/23 (audit T1 / T4): the committed `docs/PREVIEW-2026-11-02-to-2027-01-03.{md,json}` and `docs/PUBLISH-2026-09-23.md` are the record of the 9/23 publish and are never regenerated or overwritten in place — `preview-generate.js` writes to the OS temp dir unless `--out` names a file (a new range gets a new file name), and `publish-preview.js` writes a dry run's, a refused apply's or a nothing-to-apply run's report to the scratch path and a real apply's report to a new dated `docs/PUBLISH-<YYYY-MM-DD>-<hhmm>.md` (UTC) unless `--report` names one; every script under `scripts/` answers `--help` and refuses an unknown flag without running anything (`test/ci.test.js` section 6).*
 
 - **Input**: the preview's `.schedule` (milestone `.start..end`) and `.backfill.schedule` (`.backfill.range`, the
   fill-open-only pass). A day in both must be identical (else abort). Live rows come from the seven anon-readable

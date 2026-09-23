@@ -202,6 +202,8 @@ eq(ef.coverageOf([{ weekMonday: "2026-12-28", data: {} }]), { from: "2026-12-28"
 }
 eq(ef.eastResolveFakId([{ id: "s1", name: "DJA" }, { id: "s6", name: "FAK" }], "FAK"), "s6");
 eq(ef.eastResolveFakId([{ id: "s1", name: "DJA" }], "FAK"), null);
+eq(ef.eastResolveFakId([{ id: "s6", name: "FAK" }]), null, "RG-8: no default code - a missing code resolves to null, never to FAK");
+eq(ef.eastResolveFakId([{ id: "s5", name: "NF" }], "nf"), "s5", "RG-8: any code, case-insensitive");
 eq(ef.efDayOffsets("2026-12-28"), ["2026-12-28", "2026-12-29", "2026-12-30", "2026-12-31", "2027-01-01", "2027-01-02", "2027-01-03"]);
 ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("https://") && ef.EAST_PROJECT.anonKey.length > 100);
 
@@ -238,6 +240,25 @@ ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("ht
   ok(a.budgetSec >= 900, "C.5: the default budget fits 200 runs (>= 900 s), got " + a.budgetSec);
   eq(script.parseArgs(["node", "east-forecast.js", "--runs", "50", "--budget-sec", "30"]).runs, 50, "C.5: --runs still overrides");
   eq(script.parseArgs(["node", "east-forecast.js", "--runs", "50", "--budget-sec", "30"]).budgetSec, 30);
+  // audit RG-8 (9/23): the forecast code comes from the seed roster (the one active entry with
+  // eastFeed.enabled + forecast), never a literal; zero or two such entries refuse, naming the codes.
+  ok(typeof script.forecastCodeFromSeed === "function", "RG-8: scripts/east-forecast.js exports forecastCodeFromSeed");
+  eq(script.forecastCodeFromSeed(seed), "FAK", "RG-8: the shipped seed's forecast code is FAK (s1 is the only eastFeed.forecast entry)");
+  const twoFlags = JSON.parse(JSON.stringify(seed)); twoFlags.surgeonRules.s5.eastFeed.forecast = true;
+  let fcErr = null; try { script.forecastCodeFromSeed(twoFlags); } catch (e) { fcErr = e; }
+  ok(fcErr && /found 2/.test(fcErr.message) && /FAK/.test(fcErr.message) && /NF/.test(fcErr.message), "RG-8: two forecast flags throw 'found 2' naming both codes, got: " + (fcErr && fcErr.message));
+  const noFlag = JSON.parse(JSON.stringify(seed)); delete noFlag.surgeonRules.s1.eastFeed.forecast;
+  fcErr = null; try { script.forecastCodeFromSeed(noFlag); } catch (e) { fcErr = e; }
+  ok(fcErr && /found 0/.test(fcErr.message), "RG-8: no forecast flag throws 'found 0', got: " + (fcErr && fcErr.message));
+  const inactive = JSON.parse(JSON.stringify(seed)); inactive.roster.find(s => s.id === "s1").active = false;
+  fcErr = null; try { script.forecastCodeFromSeed(inactive); } catch (e) { fcErr = e; }
+  ok(fcErr && /found 0/.test(fcErr.message), "RG-8: an inactive roster entry does not count, got: " + (fcErr && fcErr.message));
+  // the JSON output and every printed SQL row carry `code` beside `fakId` (source pins on the two data objects),
+  // and the script resolves no literal code.
+  const efScriptSrc = require("fs").readFileSync(require("path").join(__dirname, "..", "scripts", "east-forecast.js"), "utf8");
+  ok(/code:\s*inp\.code,[^\n]*\n\s*fakId:\s*inp\.fakId/.test(efScriptSrc), "RG-8: docs/east-forecast-latest.json carries code beside fakId");
+  ok(/isForecast:\s*true,[^\n]*code:\s*inp\.code,\s*fakId:\s*inp\.fakId/.test(efScriptSrc), "RG-8: each printed east_forecast SQL row carries data.code beside data.fakId");
+  ok(!/eastResolveFakId\([^)]*"FAK"\)/.test(efScriptSrc) && /eastResolveFakId\(surgeons,\s*code\)/.test(efScriptSrc), "RG-8: the Davenport id is resolved by the seed's code, never by a literal FAK");
 }
 
 // ---- Fix round (review 9/22, finding 16): the preview report dumps diagnostics.eastConflicts ----
@@ -436,6 +457,22 @@ ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("ht
       eq(c.vacations, null, "P15: ...with vacations null (unknown, never 'no vacations')");
       ok(typeof c.vacationsError === "string" && /time_off/.test(c.vacationsError) && /500/.test(c.vacationsError), "P15: the error names the read: " + c.vacationsError);
       eq(ef.attachVacationsToWeeks(c.weeks, c.vacations)[0].data.vacations, undefined, "P15: nothing is written for the failed read - keepCachedVacations then restores the cache");
+      // audit RG-8 (9/23): resolution is generic per requested code; no code is required
+      failTimeOff = false;
+      const d0 = await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { codes: ["NF", "FAK"] });
+      eq(d0.idsByCode, { FAK: "s6" }, "RG-8: opts.codes resolve by CODE into idsByCode");
+      eq(d0.codesUnresolved, ["NF"], "RG-8: a requested-but-missing code lands in codesUnresolved");
+      eq(d0.fakId, null, "RG-8: fakId is the FIRST requested code's id (NF has none) - a deprecated alias, not a FAK lookup");
+      eq((await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { codes: ["FAK"] })).fakId, "s6", "RG-8: ...and FAK's id when FAK is the first requested code");
+      const d1 = await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { vacationCodes: ["FAK"] });
+      eq([d1.idsByCode, d1.codesUnresolved, d1.vacationIdsByCode], [{ FAK: "s6" }, [], { FAK: "s6" }], "RG-8: vacationCodes appear in both maps");
+      rows.call_schedule_data = [{ data: { surgeons: [{ id: "s1", name: "DJA" }] } }];
+      const d2 = await ef.fetchEastWeeks("2026-11-02", "2026-11-09");
+      eq([d2.weeks.length, d2.fakId, d2.idsByCode, d2.codesUnresolved], [2, null, {}, []], "RG-8: a Davenport roster without FAK does not throw when no code needs it");
+      calls.length = 0;
+      const d3 = await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { vacationCodes: ["FAK"] });
+      eq([d3.weeks.length, d3.codesUnresolved, d3.vacationCodesUnresolved, d3.vacations], [2, ["FAK"], ["FAK"], null], "RG-8: a requested code the roster lacks is reported in both lists; the weeks still come back, vacations stay unknown");
+      eq(calls.filter(u => u.indexOf("/rest/v1/time_off") >= 0).length, 0, "RG-8: ...and no time_off read is made for an unresolved code");
       console.log("ok " + n + " assertions");
     } catch (e) { console.error(e); process.exit(1); }
     finally { globalThis.fetch = realFetch; }

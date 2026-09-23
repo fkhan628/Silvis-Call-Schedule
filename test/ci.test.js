@@ -180,4 +180,61 @@ ok(efLine.length > 0, "docs/SCHEMA-REVIEW.md has no east_forecast table row");
 ok(!/not yet applied/.test(efLine), "docs/SCHEMA-REVIEW.md still says east_forecast is not yet applied to the live DB");
 flush("docs statements");
 
+// ---- 6. scripts/: --help is help, an unknown flag is refused, docs/ untouched ----
+// (audit T1, 9/23: `preview-generate.js --help` used to run a live-data generate
+// and overwrite the committed docs/PREVIEW-*.{md,json} publish record in place.)
+const scriptsDir = path.join(ROOT, "scripts");
+const scriptFiles = fs.readdirSync(scriptsDir).filter(f => /\.js$/.test(f)).sort();
+ok(scriptFiles.length >= 7, "expected the seven Node scripts under scripts/, found " + scriptFiles.length + ": " + scriptFiles.join(", "));
+const docsDir = path.join(ROOT, "docs");
+// recursive (review 9/23): a file written inside a docs/ subfolder must trip the guard too
+const walkFiles = (dir, rel) => fs.readdirSync(dir).sort().flatMap(f => { const p = path.join(dir, f), st = fs.statSync(p); return st.isDirectory() ? walkFiles(p, rel + f + "/") : [[rel + f, st.size + ":" + st.mtimeMs]]; });
+const docsSnapshot = () => JSON.stringify(walkFiles(docsDir, ""));
+ok(fs.readdirSync(docsDir).some(f => fs.statSync(path.join(docsDir, f)).isDirectory()) && walkFiles(docsDir, "").some(([r]) => r.indexOf("/") > 0), "the docs/ snapshot walks into subfolders (docs/screenshots/ exists and must appear as nested paths)");
+const docsBefore = docsSnapshot();
+const spawnScript = (f, arg) => cp.spawnSync(process.execPath, [path.join(scriptsDir, f), arg], { cwd: ROOT, encoding: "utf8", timeout: 60000, env: Object.assign({}, process.env, { SILVIS_SUPABASE_WORKDIR: "" }) });
+scriptFiles.forEach(f => {
+  ["--help", "-h"].forEach(flag => {
+    const r = spawnScript(f, flag);
+    ok(r.status === 0, "scripts/" + f + " " + flag + " exited " + r.status + " (expected 0; stderr: " + String(r.stderr || "").trim().slice(0, 200) + ")");
+    ok(/usage/i.test(r.stdout || ""), "scripts/" + f + " " + flag + " printed no usage text");
+  });
+  const u = spawnScript(f, "--no-such-flag-ci-test");
+  ok(u.status !== null && u.status !== 0, "scripts/" + f + " --no-such-flag-ci-test exited " + u.status + " (expected a non-zero refusal, never a run)");
+  ok(/unknown argument/i.test((u.stderr || "") + (u.stdout || "")), "scripts/" + f + " did not name the unknown argument: " + String(u.stderr || "").trim().slice(0, 200));
+});
+ok(docsSnapshot() === docsBefore, "a --help / unknown-flag run of a script created or modified a file under docs/");
+// the default --out of preview-generate.js is outside docs/ (a casual re-run can never clobber the committed record)
+const pgSrc = read("scripts/preview-generate.js");
+ok(/os\.tmpdir\(\)/.test(pgSrc) && !/path\.join\(REPO, "docs", `PREVIEW-/.test(pgSrc), "scripts/preview-generate.js must default --out to os.tmpdir(), never docs/PREVIEW-<range>.md");
+flush("scripts --help contract");
+
+// ---- 7. the deploy job: Node floor and the commit-back step (audit T2 / T3, 9/23) ----
+const nodeVer = (yml.match(/node-version:\s*"(\d+)"/) || [])[1];
+ok(nodeVer && Number(nodeVer) >= 22, "build.yml node-version must be 22 or newer (the Babel 8 engines floor is ^22.18.0 || >=24.11.0); found " + nodeVer);
+ok(/"engines"\s*:\s*\{\s*"node"\s*:\s*">=22\.18"/.test(read("package.json")), "package.json must declare engines.node >=22.18 (the same floor for a developer machine)");
+const commitStep = stepBlocks.find(b => /name:\s*Commit built files/.test(b)) || "";
+ok(commitStep.length > 0, "no 'Commit built files' step in build.yml");
+ok(/git fetch(?: --quiet)? origin main/.test(commitStep) && commitStep.indexOf("git fetch") < commitStep.indexOf("git push"), "the commit step must fetch origin/main before it pushes");
+ok(/scripts\/ci-watched-paths\.js/.test(commitStep) && /git reset --hard(?: --quiet)? origin\/main/.test(commitStep), "the commit step must ask scripts/ci-watched-paths.js whether main's move is watched and rebuild on top of origin/main when it is not");
+ok(!/git pull --rebase/.test(yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n")), "build.yml must never `git pull --rebase` a compiled index.html over a changed source (a comment may say why not)");
+ok(/::error::/.test(commitStep) && /workflow_dispatch/.test(commitStep), "a rejected push must fail with an ::error:: naming the workflow_dispatch recovery");
+// review 9/23 (major): the matcher's exit code is captured and switched on - 0 rebuild, 1 step aside, anything
+// else (usage / parse error, node missing) FAILS the step. `set -e` ignores a command inside an `if`, and an
+// `if ... || node scripts/ci-watched-paths.js` would read a matcher crash as "watched": a green run, nothing pushed.
+ok(!/if \[[^\n]*\|\|\s*node scripts\/ci-watched-paths\.js/.test(commitStep), "the commit step must not call scripts/ci-watched-paths.js inside an `if ... ||` condition (every non-zero exit would read as 'watched')");
+ok(/node scripts\/ci-watched-paths\.js [^\n]*\|\|\s*rc=\$\?/.test(commitStep) && /case\s+"?\$rc"?\s+in/.test(commitStep), "the commit step must capture the matcher's exit code (`|| rc=$?`) and `case \"$rc\" in` on it");
+const rcCases = (commitStep.match(/^\s*(0|1|\*)\)\s*$/gm) || []).map(s => s.trim());
+ok(JSON.stringify(rcCases) === JSON.stringify(["0)", "1)", "*)"]), "the case needs exactly the three arms 0) rebuild / 1) step aside / *) fail, found " + JSON.stringify(rcCases));
+const starArm = commitStep.split(/^\s*\*\)\s*$/m)[1] || "";
+ok(/::error::[^\n]*ci-watched-paths\.js[^\n]*exit \$rc/.test(starArm) && /^\s*exit 1\s*$/m.test(starArm.split("esac")[0]), "the *) arm must print ::error:: naming ci-watched-paths.js and the exit code, then exit 1 (never the ::notice:: + exit 0 of the step-aside arm)");
+// the matcher reads the SAME paths filter this file parses
+const WP = require(path.join(ROOT, "scripts", "ci-watched-paths.js"));
+ok(JSON.stringify(WP.watchedGlobs(yml)) === JSON.stringify(filter), "scripts/ci-watched-paths.js reads the same paths filter as this test");
+ok(WP.watchedOf(["docs/PUBLISH-x.md", "sql/schema.sql", "scripts/day-edit.js", "edge-functions/x/index.ts", "README.md"], filter).length === 0, "docs / sql / scripts / edge-function paths are unwatched (a follow-up push there queues no run)");
+const watchedSample = ["index-source.html", "rules.js", "test/fixtures/x/y.json", "docs/silvis-seed.json", "package.json"];
+ok(JSON.stringify(WP.watchedOf(watchedSample, filter)) === JSON.stringify(watchedSample), "watched paths match and ** crosses directories: " + JSON.stringify(WP.watchedOf(watchedSample, filter)));
+ok(WP.watchedOf(["test/fixturesX.json", "rules.jsx", "xindex-source.html"], filter).length === 0, "globs are anchored and '.' is literal");
+flush("deploy job pins");
+
 console.log("ok " + N + " assertions (" + chain.length + " suites in the chain, " + filter.length + " paths in the filter, " + testSteps.length + " test steps)");

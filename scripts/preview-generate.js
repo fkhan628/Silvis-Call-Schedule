@@ -10,8 +10,16 @@
  *
  * Usage:
  *   node scripts/preview-generate.js [--start 2026-11-02] [--end 2027-01-03]
- *        [--bestOf 200] [--seed 7] [--out docs/PREVIEW-<start>-to-<end>.md]
+ *        [--bestOf 200] [--seed 7] [--out <report.md>]
  *        [--backfill 2026-10-15..2026-11-01]
+ *   -h / --help prints the usage and exits 0; an unknown argument or a flag
+ *   without its value is refused (exit 1) - neither runs a generate.
+ *
+ * --out defaults to <os tmpdir>/silvis-preview-<start>-to-<end>.md (the JSON
+ * dump lands beside it). Writing under docs/ is an explicit choice (audit T1,
+ * 9/23): the committed docs/PREVIEW-*.{md,json} are the record of a publish
+ * (scripts/publish-preview.js reads the JSON as its default preview), never
+ * regenerated in place - a new range gets a new file name.
  *
  * --backfill A..B (Prompt 12 T, 9/22): after the milestone generate, run a
  * SECOND generate over A..B with { fillOpenOnly: true } on the same live rows
@@ -24,6 +32,7 @@
  * milestone sections are unchanged (the preview-diff tool reads .schedule).
  */
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const REPO = path.resolve(__dirname, "..");
 const H = require(path.join(REPO, "helpers.js"));
@@ -31,20 +40,46 @@ const R = require(path.join(REPO, "rules.js"));
 const EF = require(path.join(REPO, "east-feed.js"));
 const G = require(path.join(REPO, "generator.js"));
 
-const args = process.argv.slice(2);
-const opt = (name, dflt) => { const i = args.indexOf("--" + name); return i >= 0 ? args[i + 1] : dflt; };
-const START = opt("start", "2026-11-02");
-const END = opt("end", "2027-01-03");
-const BEST_OF = Number(opt("bestOf", "200"));
-const SEED = Number(opt("seed", "7"));
-const OUT = opt("out", path.join(REPO, "docs", `PREVIEW-${START}-to-${END}.md`));
-const BACKFILL = opt("backfill", null); // "YYYY-MM-DD..YYYY-MM-DD" (Prompt 12 T)
-const BACKFILL_RANGE = (() => {
-  if (!BACKFILL) return null;
-  const m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(BACKFILL);
-  if (!m || m[1] > m[2]) { console.error("FAIL: --backfill wants YYYY-MM-DD..YYYY-MM-DD (got " + BACKFILL + ")"); process.exit(1); }
-  return { start: m[1], end: m[2] };
-})();
+function usage() {
+  console.log("usage: node scripts/preview-generate.js [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--bestOf N] [--seed N] [--out <report.md>] [--backfill YYYY-MM-DD..YYYY-MM-DD]\n" +
+    "  Reads the LIVE anon-readable rows and runs generator.generate() - nothing is written to the database.\n" +
+    "  --out defaults to <os tmpdir>/silvis-preview-<start>-to-<end>.md (+ .json beside it); writing under docs/ is an explicit choice:\n" +
+    "  the committed docs/PREVIEW-*.{md,json} are the record of a publish and are never regenerated in place (a new range = a new file name).");
+}
+// The same contract as scripts/import-seed.js / east-forecast.js (audit T1, 9/23): -h/--help is help (exit 0), an
+// unknown token or a flag missing its value is refused (exit 1) - a typo can never start a live-data generate.
+function parseArgs(argv) {
+  const a = { start: "2026-11-02", end: "2027-01-03", bestOf: 200, seed: 7, out: null, backfill: null };
+  const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+  const value = (i, flag) => { const v = argv[i]; if (v === undefined || /^--/.test(v)) { console.error("FAIL: " + flag + " needs a value"); usage(); process.exit(1); } return v; };
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "--start") a.start = value(++i, t);
+    else if (t === "--end") a.end = value(++i, t);
+    else if (t === "--bestOf") a.bestOf = Number(value(++i, t));
+    else if (t === "--seed") a.seed = Number(value(++i, t));
+    else if (t === "--out") a.out = path.resolve(value(++i, t));
+    else if (t === "--backfill") a.backfill = value(++i, t); // "YYYY-MM-DD..YYYY-MM-DD" (Prompt 12 T)
+    else if (t === "-h" || t === "--help") { usage(); process.exit(0); }
+    else { console.error("unknown argument: " + t); usage(); process.exit(1); }
+  }
+  if (!isDate(a.start) || !isDate(a.end) || a.start > a.end) { console.error("FAIL: --start / --end want YYYY-MM-DD with start <= end (got " + a.start + " / " + a.end + ")"); process.exit(1); }
+  if (!(a.bestOf > 0) || !Number.isFinite(a.seed)) { console.error("FAIL: --bestOf wants a positive number and --seed a number"); process.exit(1); }
+  if (a.backfill !== null) {
+    const m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(a.backfill);
+    if (!m || m[1] > m[2]) { console.error("FAIL: --backfill wants YYYY-MM-DD..YYYY-MM-DD (got " + a.backfill + ")"); process.exit(1); }
+    a.backfill = { start: m[1], end: m[2] };
+  }
+  if (!a.out) a.out = path.join(os.tmpdir(), `silvis-preview-${a.start}-to-${a.end}.md`);
+  return a;
+}
+const ARGS = parseArgs(process.argv.slice(2));
+const START = ARGS.start;
+const END = ARGS.end;
+const BEST_OF = ARGS.bestOf;
+const SEED = ARGS.seed;
+const OUT = ARGS.out;
+const BACKFILL_RANGE = ARGS.backfill;
 
 const cfg = fs.readFileSync(path.join(REPO, "config.js"), "utf8");
 const URL = (cfg.match(/SUPABASE_URL\s*=\s*"([^"]+)"/) || [])[1];
@@ -104,13 +139,17 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   const forecastAll = typeof EF.forecastFromFeedRows === "function" ? EF.forecastFromFeedRows(forecastRows.map(r => ({ weekMonday: r.week_monday, data: r.data }))) : {};
   const forecast = typeof EF.forecastOutsideCoverage === "function" ? EF.forecastOutsideCoverage(forecastAll, eastFeedCoverage) : forecastAll;
   const eastOverrides = typeof EF.overridesByPerson === "function" ? EF.overridesByPerson(overrideRows) : {};
-  const fakIdEast = (forecastRows[0] && forecastRows[0].data && forecastRows[0].data.fakId) || null;
+  // RG-8 (9/23): a forecast row's id is taken only for the roster code it was built for (data.code beside
+  // data.fakId; rows built before 9/23 carry no code and fall through to the roster resolve, which handles every code)
+  const fc0 = (forecastRows[0] && forecastRows[0].data) || {};
+  const forecastCode = fc0.code ? String(fc0.code).toUpperCase() : null;
+  const fakIdEast = fc0.fakId || null;
   const eastBusyDays = {}, eastForecast = {}, eastDerived = [];
   for (const s of roster) {
     const ef = (surgeonRules[s.id] || {}).eastFeed || {};
     if (!ef.enabled) continue;
     if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {
-      let eastId = s.code === "FAK" ? fakIdEast : null;
+      let eastId = forecastCode && String(s.code || "").toUpperCase() === forecastCode ? fakIdEast : null;
       if (!eastId) { // resolve by code from the Davenport roster (read-only)
         try { const feed = await EF.fetchEastWeeks("2026-09-28", "2026-09-28"); eastId = EF.eastResolveFakId ? EF.eastResolveFakId(feed.roster, s.code) : (feed.roster.find(r => r.name === s.code) || {}).id; } catch (e) { console.warn("East roster resolve failed:", e.message); }
       }

@@ -254,12 +254,11 @@ const CDN_CACHE = path.join(OUT, "cdn-cache");
 // Playwright lives outside the repo (it is not a devDependency: CI's npm
 // install must stay small and the deploy job never runs a browser). Search
 // order: explicit env, the repo's own node_modules (npm i -D --no-save
-// playwright), the documented tooling dir, then the session scratchpad.
+// playwright), then the documented tooling dir.
 const PW_CANDIDATES = [
   process.env.PLAYWRIGHT_DIR,
   path.join(ROOT, "node_modules"),
   "<playwright-dir>",
-  "<your home folder>/AppData/Local/Temp/claude/<session-folder>/<session-id>/scratchpad/tooling/node_modules",
 ].filter(Boolean);
 const PW_DIR = PW_CANDIDATES.find(d => fs.existsSync(path.join(d, "playwright", "package.json")));
 if (!PW_DIR) {
@@ -2751,12 +2750,20 @@ try {
     const beforePc = writes.length;
     await page.selectOption("[data-testid=rules-primary-contribution]", pcNew);
     await page.click("[data-testid=rules-save]");
-    const pcBlob = (await waitFor(() => writesSince(beforePc, "/rest/v1/call_schedule_data").some(w => w.method === "POST"), 6000, 100)) ? writesSince(beforePc, "/rest/v1/call_schedule_data").filter(w => w.method === "POST").pop() : null;
-    const pcSaved = pcBlob ? (() => { try { return JSON.parse(pcBlob.body).data.surgeonRules.s1.primaryContribution; } catch (e) { return "(unparsed)"; } })() : "(no blob write)";
+    // The blob autosaves 800 ms after the LAST state change, so the first POST after the click can still be an
+    // earlier change's autosave (opening the card, picking the surgeon) carrying the old value - a race this step
+    // lost once the East-id resolution went async (audit 9/23). Wait for the write that carries the new value;
+    // the failure names the last write seen.
+    const pcWant = pcNew || undefined;
+    const pcPosts = () => writesSince(beforePc, "/rest/v1/call_schedule_data").filter(w => w.method === "POST");
+    const pcOf = (w) => { try { return JSON.parse(w.body).data.surgeonRules.s1.primaryContribution; } catch (e) { return "(unparsed)"; } };
+    const pcHit = await waitFor(() => pcPosts().some(w => pcOf(w) === pcWant), 6000, 100);
+    const pcBlob = pcPosts().pop() || null;
+    const pcSaved = pcBlob ? pcOf(pcBlob) : "(no blob write)";
     if (pcOpts.join(",") !== ",weekends") fail("Rules: Primary contribution options should be (none) / weekends, got: " + pcOpts.join(","));
     else if (!pcBlob) fail("Rules: no call_schedule_data write after saving the Primary contribution change");
-    else if ((pcNew || undefined) !== pcSaved) fail(`Rules: the saved blob carries surgeonRules.s1.primaryContribution = ${JSON.stringify(pcSaved)}, expected ${JSON.stringify(pcNew || undefined)}`);
-    else ok(`Rules: Primary contribution select (live value '${pcWas}') -> '${pcNew || "(none)"}' -> blob write carries surgeonRules.s1.primaryContribution ${JSON.stringify(pcSaved)}`);
+    else if (!pcHit) fail(`Rules: no call_schedule_data write carried surgeonRules.s1.primaryContribution ${JSON.stringify(pcWant)} within 6 s of the save (${pcPosts().length} write(s); the last carries ${JSON.stringify(pcSaved)})`);
+    else ok(`Rules: Primary contribution select (live value '${pcWas}') -> '${pcNew || "(none)"}' -> blob write carries surgeonRules.s1.primaryContribution ${JSON.stringify(pcWant)} (${pcPosts().length} blob write(s) since the click)`);
     // put it back so the rest of the run sees the live rules
     await page.selectOption("[data-testid=rules-primary-contribution]", pcWas);
     if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) { await page.click("[data-testid=rules-save]"); await page.waitForTimeout(1200); }

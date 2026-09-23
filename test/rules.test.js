@@ -662,6 +662,37 @@ eq(ctxLegacy.warnings.filter(w => /unitExemptFromMaxConsecutive/.test(w)).length
 blocked(R.eligibility(ctxLegacy, "2026-11-30", P, KHAN), "max-consecutive:3", "the legacy group key does not collapse the unit for a surgeon who did not opt in");
 eq(makeCtx({ schedule: k1sched }).warnings.filter(w => /unitExemptFromMaxConsecutive/.test(w)).length, 0, "no warning when the key is absent");
 
+step("audit RG-1 / RG-2 (9/23): the two dead group keys warn once each and change nothing");
+const deadKeys = clone(seed.groupRules);
+deadKeys.holidays.anyoneMayCoverUnlessOptedOut = false;
+deadKeys.eastFeed = Object.assign({}, deadKeys.eastFeed, { unknownIsBusy: true });
+const ctxDead = makeCtx({ schedule: {}, groupRules: deadKeys });
+eq(ctxDead.warnings.filter(w => /anyoneMayCoverUnlessOptedOut/.test(w)).length, 1, "RG-1: exactly one warning names the holiday key: " + JSON.stringify(ctxDead.warnings));
+eq(ctxDead.warnings.filter(w => /unknownIsBusy/.test(w)).length, 1, "RG-2: exactly one warning names the East key: " + JSON.stringify(ctxDead.warnings));
+ok(/holidaysOff/.test(ctxDead.warnings.find(w => /anyoneMayCoverUnlessOptedOut/.test(w))) && /east-unknown/.test(ctxDead.warnings.find(w => /unknownIsBusy/.test(w))), "each warning names the behaviour that IS in force");
+ok(!Object.prototype.hasOwnProperty.call(seed.groupRules.holidays, "anyoneMayCoverUnlessOptedOut") && !Object.prototype.hasOwnProperty.call(seed.groupRules.eastFeed || {}, "unknownIsBusy"), "the shipped seed carries neither key");
+eq(clean.warnings.filter(w => /anyoneMayCoverUnlessOptedOut|unknownIsBusy/.test(w)), [], "...and raises neither warning");
+// holiday-unit days (Thanksgiving, Christmas Eve/Day, New Year) and an East day outside the coverage (2027-02-03,
+// EAST_COVER ends 1/31) evaluate identically with both keys set to their non-default values
+["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29", "2026-12-24", "2026-12-25", "2026-12-31", "2027-01-01", "2027-02-03"].forEach(d => [P, B].forEach(role => [KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].forEach(id => {
+  eq(R.eligibility(ctxDead, d, role, id), R.eligibility(clean, d, role, id), "RG-1/2: " + id + " " + role + " " + d + " is identical with the dead keys flipped");
+})));
+hasSoft(R.eligibility(ctxDead, "2027-02-03", P, KHAN), "east-unknown", "RG-2: unknownIsBusy true still reads as clear + soft east-unknown");
+
+step("audit RG-7 (9/23): a weeks whitelist that ends before the range end warns - generic, primary only");
+const rg7Far = makeCtx({ schedule: {}, rangeStart: "2026-11-02", rangeEnd: "2027-09-30" });
+const rg7W = rg7Far.warnings.filter(w => /availableWeeks/.test(w));
+eq(rg7W.length, 1, "one warning for the one seed surgeon with a weeks list (Philip): " + JSON.stringify(rg7Far.warnings));
+ok(/surgeonRules\.s4\.availableWeeks/.test(rg7W[0]) && /2027-06-28/.test(rg7W[0]) && /2027-07-04/.test(rg7W[0]) && /outside-available-weeks/.test(rg7W[0]), "names the surgeon, the last listed Monday, the last covered day and the reason: " + rg7W[0]);
+blocked(R.eligibility(rg7Far, "2027-07-05", P, PHILIP), "outside-available-weeks", "the warning describes a real block on the first day past the list");
+okElig(R.eligibility(rg7Far, "2027-07-05", B, PHILIP), "...primary only: backup stays open");
+eq(makeCtx({ schedule: {}, rangeStart: "2026-11-02", rangeEnd: "2027-07-04" }).warnings.filter(w => /availableWeeks/.test(w)), [], "a range ending on the last listed Sunday warns nothing");
+eq(makeCtx({ schedule: {}, rangeStart: "2026-11-02", rangeEnd: "2027-01-03" }).warnings.filter(w => /availableWeeks/.test(w)), [], "the milestone range warns nothing");
+eq(clean.warnings.filter(w => /availableWeeks/.test(w)), [], "no range -> no warning");
+const srWeeks2 = clone(SA.seedToSurgeonRules(seed)); srWeeks2[ACTON] = Object.assign({}, srWeeks2[ACTON], { availableWeeks: ["2026-11-02"] });
+const rg7Two = makeCtx({ schedule: {}, surgeonRules: srWeeks2, rangeStart: "2026-11-02", rangeEnd: "2027-09-30" });
+eq(rg7Two.warnings.filter(w => /availableWeeks/.test(w)).map(w => (w.match(/surgeonRules\.(s\d)\./) || [])[1]).sort(), [ACTON, PHILIP], "generic: every surgeon with a weeks list is checked, nobody else");
+
 step("Thanksgiving 2026 decisions");
 const tg = R.eligibility(ctx, "2026-11-26", P, KHAN);
 okElig(tg, "Khan primary on Thanksgiving Thursday: the Thu block is waived");

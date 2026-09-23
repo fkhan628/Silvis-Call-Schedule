@@ -11,6 +11,9 @@
     "smoke": "node build.js && node test/ui/smoke.mjs",
     "test:ui": "node build.js && node test/ui/smoke.mjs"
   },
+  "engines": {
+    "node": ">=22.18"
+  },
   "devDependencies": {
     "@babel/core": "8.0.1",
     "@babel/preset-env": "8.0.2",

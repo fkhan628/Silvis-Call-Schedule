@@ -42,8 +42,15 @@
 //     reasonCountsByDay:{date:{reason:n}},
 //     fierceWeekProbability:{weekMonday:{eastPrimary:p, eastBackup:p}}, notes:[] }
 //
-// Module use (tests): require() exports { parseArgs, defaultForecastRuns } and
-// runs nothing - main is guarded by require.main === module.
+// Module use (tests): require() exports { parseArgs, defaultForecastRuns,
+// forecastCodeFromSeed } and runs nothing - main is guarded by
+// require.main === module.
+//
+// Whose East call is forecast: the roster CODE comes from docs/silvis-seed.json -
+// the one active roster entry whose surgeonRules.<id>.eastFeed.forecast is on
+// (FAK today; audit RG-8, 9/23 - no literal code). The JSON and the SQL rows
+// carry that code beside the Davenport id (data.code, data.fakId) so the app
+// and the scripts can check whom a row was built for.
 //
 // How generate()'s arguments are built: exactly like the Davenport app's
 // doGenerate (davenport-ref/index-source.html ~3751-3846) and buildTimeOffMaps
@@ -64,6 +71,14 @@ const ef = require(path.join(ROOT, "east-feed.js"));
 // otherwise). A missing / malformed seed value falls back to 100 with a note
 // on stderr so the default is never silently something else.
 const FALLBACK_RUNS = 100;
+// The roster code whose East call is forecast: exactly one active roster entry with eastFeed.forecast on.
+function forecastCodeFromSeed(seed) {
+  const roster = (seed && Array.isArray(seed.roster)) ? seed.roster : [];
+  const sr = (seed && seed.surgeonRules) || {};
+  const hits = roster.filter(s => s && s.active !== false && s.code && sr[s.id] && sr[s.id].eastFeed && sr[s.id].eastFeed.enabled && sr[s.id].eastFeed.forecast);
+  if (hits.length !== 1) throw new Error("east-forecast: expected exactly one active roster entry with surgeonRules.<id>.eastFeed.forecast on, found " + hits.length + (hits.length ? " (" + hits.map(s => s.code).join(", ") + ")" : ""));
+  return String(hits[0].code).toUpperCase();
+}
 function defaultForecastRuns(seedPath) {
   try {
     const seed = JSON.parse(fs.readFileSync(seedPath || path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
@@ -184,8 +199,9 @@ function buildDavenportInputs(dav, live, args, notes) {
 
   // surgeons: the app's `surgeons` state = blob.surgeons (falls back to INIT_SURGEONS)
   const surgeons = Array.isArray(blob.surgeons) && blob.surgeons.length ? blob.surgeons : dav.INIT_SURGEONS;
-  const fakId = ef.eastResolveFakId(surgeons, "FAK");
-  if (!fakId) throw new Error("no Davenport roster entry with code FAK");
+  const code = forecastCodeFromSeed(JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8")));
+  const fakId = ef.eastResolveFakId(surgeons, code);
+  if (!fakId) throw new Error("no Davenport roster entry with code " + code);
 
   // period
   const publishedMondays = Object.keys(schedule).sort();
@@ -235,7 +251,7 @@ function buildDavenportInputs(dav, live, args, notes) {
   const seedDebug = { first: startStr, prevKey: fmt(addD(mondays[0], -7)), prevFound: !!schedule[fmt(addD(mondays[0], -7))], seedDayCall: prevWeekSeed.dayCall, recentDcCount: Object.keys(prevWeekSeed.recentDc).length, scheduleWeeks: publishedMondays.length };
 
   const args12 = [surgeons, mondays, availability, backupMondaySet, priorCounts, prefs, fierceBackupSet, holidayAssignments, pendingLocks, prevWeekSeed, vac, year1Counts];
-  return { args12, surgeons, fakId, mondays, startStr, endStr, numWeeks, publishedThrough, seedDebug, vac, nc, backupMondaySet, fierceBackupSet, holidayAssignments, pendingLocks };
+  return { args12, surgeons, code, fakId, mondays, startStr, endStr, numWeeks, publishedThrough, seedDebug, vac, nc, backupMondaySet, fierceBackupSet, holidayAssignments, pendingLocks };
 }
 
 // ---------------------------------------------------------------- helpers
@@ -260,7 +276,7 @@ async function main() {
   const { fmt, parse, addD } = dav;
 
   console.log("  published weeks: " + Object.keys(live.schedule).length + ", through " + inp.publishedThrough + " (blob updated " + live.blobUpdatedAt + ")");
-  console.log("  roster: " + inp.surgeons.map(s => s.id + "=" + s.name).join(" ") + "  -> FAK id " + inp.fakId);
+  console.log("  roster: " + inp.surgeons.map(s => s.id + "=" + s.name).join(" ") + "  -> " + inp.code + " id " + inp.fakId);
   console.log("  period: " + inp.startStr + " .. " + inp.endStr + " (" + inp.numWeeks + " weeks)" + (args.start ? " [--start]" : " [last published + 7d]") + (args.weeks ? " [--weeks]" : " [blob.numWeeks=" + (live.blob.numWeeks || "n/a") + "]"));
   console.log("  seed: " + JSON.stringify(inp.seedDebug));
   console.log("  time_off rows: " + live.timeOff.length + " (" + Object.keys(inp.vac).length + " people with vacation, " + Object.keys(inp.nc).length + " with no-call)");
@@ -353,7 +369,8 @@ async function main() {
     period: { start: inp.startStr, end: inp.endStr, numWeeks: inp.numWeeks },
     requestedRuns: args.runs,   // what was asked for (seed groupRules.eastFeed.forecast.runs unless --runs)
     runs,                       // what actually ran (budget-reduced when the note says so)
-    fakId: inp.fakId,
+    code: inp.code,             // the roster code whose East call this is (from the seed's eastFeed.forecast flag)
+    fakId: inp.fakId,           // its Davenport id, resolved by code
     busyProbabilityByDay,
     reasonCountsByDay: reasonCounts,
     fierceWeekProbability,
@@ -403,7 +420,7 @@ async function main() {
       const ms = fmt(m);
       const days = ef.efDayOffsets(ms);
       const wk = {}; days.forEach(d => wk[d] = busyProbabilityByDay[d]);
-      const data = { isForecast: true, runs, generatedAt: out.generatedAt, fakBusyProbabilityByDay: wk, fierceWeekProbability: fierceWeekProbability[ms] };
+      const data = { isForecast: true, runs, generatedAt: out.generatedAt, code: inp.code, fakId: inp.fakId, fakBusyProbabilityByDay: wk, fierceWeekProbability: fierceWeekProbability[ms] };
       rowsSql.push("insert into public.east_forecast (week_monday, data, generated_at) values (" + sqlStr(ms) + ", " + sqlStr(JSON.stringify(data)) + "::jsonb, " + sqlStr(out.generatedAt) + "::timestamptz) on conflict (week_monday) do update set data = excluded.data, generated_at = excluded.generated_at;");
     });
     // round-trip check: the printed rows must read back through east-feed.js as
@@ -422,4 +439,4 @@ async function main() {
 if (require.main === module) {
   main().catch(e => { console.error("east-forecast FAILED: " + (e && e.stack || e)); process.exit(1); });
 }
-module.exports = { parseArgs, defaultForecastRuns, FALLBACK_RUNS };
+module.exports = { parseArgs, defaultForecastRuns, forecastCodeFromSeed, FALLBACK_RUNS };

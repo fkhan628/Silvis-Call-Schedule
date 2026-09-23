@@ -27,7 +27,11 @@
 //   planned change present, versions incremented, the snapshot and the audit
 //   row present (from the batch's own final select), a fresh plan reads zero
 //   rows; prints per-surgeon per-month tallies of the final rows and writes
-//   docs/PUBLISH-2026-09-23.md. Exit non-zero on any mismatch.
+//   the report to a NEW dated docs/PUBLISH-<YYYY-MM-DD>-<hhmm>.md (UTC; --report
+//   names another file). Exit non-zero on any mismatch. A refused --apply, a
+//   nothing-to-apply run and a dry run write their report to the scratch path
+//   (audit T4, 9/23): the committed docs/PUBLISH-*.md are the records of real
+//   publishes and are never overwritten by default.
 //
 // PLAN (pure; test/publish.test.js drives it with synthetic live rows)
 //   desired end state per day = the preview's assignment (backfill days from
@@ -122,7 +126,24 @@ const AUDIT_ACTION = "schedule.generate_accept";     // index-source.html: logAu
 const AUTH_NOTE = "published from the command line on Faraz's authorisation of 2026-09-22 evening";
 const ROLES = ["primary", "backup"];
 const DEFAULT_PREVIEW = path.join(ROOT, "docs", "PREVIEW-2026-11-02-to-2027-01-03.json");
-const DEFAULT_REPORT = path.join(ROOT, "docs", "PUBLISH-2026-09-23.md");
+
+// The default --apply report (audit T4, 9/23): a NEW dated file under docs/, never an existing one. The former default
+// was the tracked record of the real 9/23 publish (docs/PUBLISH-2026-09-23.md), which a refused re-run overwrote.
+function defaultApplyReport(now, dir) {
+  const d = now || new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const base = "PUBLISH-" + d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate()) + "-" + p(d.getUTCHours()) + p(d.getUTCMinutes());
+  const docs = dir || path.join(ROOT, "docs");
+  let f = path.join(docs, base + ".md");
+  for (let k = 2; fs.existsSync(f); k++) f = path.join(docs, base + "-" + k + ".md");
+  return f;
+}
+// Where a run's report goes: only a run that SENT the batch ("sent") writes under docs/ by default; a dry run, a
+// refused --apply and a nothing-to-apply run go to the scratch path. An explicit --report always wins.
+function reportDestination(args, outcome) {
+  if (args.reportExplicit) return args.report;
+  return outcome === "sent" ? args.report : args.scratchReport;
+}
 
 /* ------------------------------------------------------------- dates */
 
@@ -688,13 +709,15 @@ async function buildLiveContext(live, schedule, range) {
   const forecastAll = typeof EF.forecastFromFeedRows === "function" ? EF.forecastFromFeedRows(live.forecastRows.map((r) => ({ weekMonday: r.week_monday, data: r.data }))) : {};
   const forecast = typeof EF.forecastOutsideCoverage === "function" ? EF.forecastOutsideCoverage(forecastAll, eastFeedCoverage) : forecastAll;
   const eastOverrides = typeof EF.overridesByPerson === "function" ? EF.overridesByPerson(live.overrideRows) : {};
-  const fakIdEast = (live.forecastRows[0] && live.forecastRows[0].data && live.forecastRows[0].data.fakId) || null;
+  const fc0 = (live.forecastRows[0] && live.forecastRows[0].data) || {};
+  const forecastCode = fc0.code ? String(fc0.code).toUpperCase() : null;   // rows built before 9/23 carry no code -> roster resolve below
+  const fakIdEast = fc0.fakId || null;
   const eastBusyDays = {}, eastForecast = {}, eastDerived = [];
   for (const s of roster) {
     const ef = (surgeonRules[s.id] || {}).eastFeed || {};
     if (!ef.enabled) continue;
     if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {
-      let eastId = s.code === "FAK" ? fakIdEast : null;
+      let eastId = forecastCode && String(s.code || "").toUpperCase() === forecastCode ? fakIdEast : null;
       if (!eastId) {   // resolve by code from the Davenport roster (read-only), exactly as preview-generate.js does
         try { const feed = await EF.fetchEastWeeks("2026-09-28", "2026-09-28"); eastId = EF.eastResolveFakId ? EF.eastResolveFakId(feed.roster, s.code) : (feed.roster.find((r) => r.name === s.code) || {}).id; }
         catch (e) { notes.push("East roster resolve failed for " + s.code + ": " + e.message); }
@@ -732,12 +755,16 @@ function parseArgs(argv) {
   }
   const scratchDir = a.workdir ? path.dirname(path.resolve(a.workdir)) : os.tmpdir();
   if (!a.out) a.out = path.join(scratchDir, a.workdir ? "publish-preview.sql" : "silvis-publish-preview.sql");
-  if (!a.report) a.report = a.mode === "apply" ? DEFAULT_REPORT : path.join(scratchDir, "silvis-publish-preview-report.md");
+  a.scratchReport = path.join(scratchDir, "silvis-publish-preview-report.md");
+  a.reportExplicit = !!a.report;
+  if (!a.report) a.report = a.mode === "apply" ? defaultApplyReport() : a.scratchReport;
   return a;
 }
 
 function usage() {
-  console.log("usage: node scripts/publish-preview.js [--preview docs/PREVIEW-....json] [--dry-run | --apply --workdir <linked dir>] [--out <sql path>] [--report <md path>] [--force-app-edited]");
+  console.log("usage: node scripts/publish-preview.js [--preview docs/PREVIEW-....json] [--dry-run | --apply --workdir <linked dir>] [--out <sql path>] [--report <md path>] [--force-app-edited]\n" +
+    "  --report defaults to a NEW dated docs/PUBLISH-<YYYY-MM-DD>-<hhmm>.md (UTC) for an --apply that sends the batch; a dry run,\n" +
+    "  a refused --apply and a nothing-to-apply run write to the scratch path. Never point --report at an existing publish record.");
 }
 
 function q(s) { return '"' + String(s).replace(/"/g, '\\"') + '"'; }
@@ -818,22 +845,25 @@ async function main() {
   } else console.log("\nno SQL: " + (plan.ok ? "nothing to write - the live rows already match the preview" : "the plan aborted"));
 
   const gatesOk = plan.ok && pc.ok && !!pf && pf.ok;
-  const writeReport = (apply) => {
-    fs.mkdirSync(path.dirname(args.report), { recursive: true });
-    fs.writeFileSync(args.report, renderReport({ plan, preview, roster, mode: args.mode, previewFile, preflight: pf, previewChecks: pc, apply }), "utf8");
-    console.log("report written: " + args.report);
+  // outcome: "dry-run" | "refused" | "nothing" | "sent" - see reportDestination (audit T4: a refused --apply used to
+  // overwrite the tracked docs/PUBLISH-2026-09-23.md, the record of the real publish)
+  const writeReport = (apply, outcome) => {
+    const dest = reportDestination(args, outcome);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, renderReport({ plan, preview, roster, mode: args.mode, previewFile, preflight: pf, previewChecks: pc, apply }), "utf8");
+    console.log("report written: " + dest);
   };
 
   if (args.mode !== "apply") {
-    writeReport(null);
+    writeReport(null, "dry-run");
     if (!gatesOk) { console.error("\ndry-run: the plan or the preflight FAILED - --apply would refuse (exit 2)."); return 2; }
     console.log("\ndry-run: " + plan.rows.length + " row(s) would be written (" + plan.changes.length + " slot change(s)); " + plan.refused.length + " refused slot(s) left alone; preflight PASS. Nothing was written.");
     return 0;
   }
 
-  if (!gatesOk) { console.error("\nREFUSING TO APPLY: the plan or the preflight failed (see above)."); writeReport(null); return 2; }
   if (!args.workdir) { console.error("--apply needs --workdir <linked supabase dir> (or SILVIS_SUPABASE_WORKDIR)"); return 1; }
-  if (!sql) { console.log("nothing to apply - the live rows already match the preview."); writeReport(null); return 0; }
+  if (!gatesOk) { console.error("\nREFUSING TO APPLY: the plan or the preflight failed (see above)."); writeReport(null, "refused"); return 2; }
+  if (!sql) { console.log("nothing to apply - the live rows already match the preview."); writeReport(null, "nothing"); return 0; }
 
   const rows = runSupabase(path.resolve(args.workdir), args.out);
   const result = (rows && rows[0]) || null;
@@ -860,7 +890,7 @@ async function main() {
     apply.verify = { ok: false, problems: problems.slice() };
     apply.ok = false;
     console.error("\nPOST-APPLY RE-READ FAILED (the batch was sent): " + (e && e.stack || e));
-    writeReport(apply);
+    writeReport(apply, "sent");
     console.error("\nNOT VERIFIED:"); problems.forEach((p) => console.error("  " + p));
     return 1;
   }
@@ -880,7 +910,7 @@ async function main() {
   console.log("\nper-surgeon per-month tallies of the final rows:");
   console.log(renderTallies(tallies(finalMap, roster, plan.ranges), roster));
   plan.final = finalMap;
-  writeReport(apply);
+  writeReport(apply, "sent");
   if (problems.length) { console.error("\nNOT VERIFIED:"); problems.forEach((p) => console.error("  " + p)); return 1; }
   console.log("\nVERIFIED: the preview is published; " + plan.rows.length + " row(s), " + plan.changes.length + " slot change(s); " + plan.refused.length + " refused slot(s) left alone. No notice was sent - open the app's publish dialog for that.");
   return 0;
@@ -891,7 +921,8 @@ module.exports = {
   buildDesired, planPublish, applyToLive, verifyApplied, verifyUntouched, tallies,
   previewChecks, preflight, holdsFullBlock,
   publishSql, auditDetail, renderPlan, renderPreflight, renderReport, renderTallies,
-  fetchLive, buildLiveContext, parseCliRows
+  fetchLive, buildLiveContext, parseCliRows,
+  parseArgs, defaultApplyReport, reportDestination, DEFAULT_PREVIEW
 };
 
 if (require.main === module) {

@@ -84,10 +84,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Node 24 (current LTS): the Babel 8 packages declare engines
+      # ^22.18.0 || >=24.11.0, and on Node 20 npm printed EBADENGINE for every
+      # one of them while the build only succeeded because engines are a warning
+      # (audit T2, 9/23). package.json "engines" carries the same floor for a
+      # developer machine. The Node 24 transpile is byte-identical to the Node 20
+      # output of the same source.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Install build deps
         run: npm install --no-audit --no-fund
@@ -199,14 +205,55 @@ jobs:
       - name: Build index.html
         run: node build.js
 
+      # Commit back. main may have moved while this run was queued or running
+      # (audit T3, 9/23): the concurrency group serialises runs but does not
+      # rebase them, so a push from the checked-out sha would be non-fast-forward.
+      #   - the move touched only UNWATCHED paths (docs / sql / scripts): no run
+      #     was queued for it, so this run carries it - reset onto origin/main and
+      #     rebuild (the build inputs are unchanged, so the suites above still
+      #     cover the result);
+      #   - the move touched a WATCHED path: its own queued run owns the deploy,
+      #     so this run steps aside (exit 0, nothing pushed) instead of forcing a
+      #     push that the queued run would then reject.
+      # Never `git pull --rebase` here: rebasing a compiled index.html over a
+      # changed index-source.html would deploy a stale build under a new version.
       - name: Commit built files
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch --quiet origin main
+          if [ "$(git rev-parse origin/main)" != "${{ github.sha }}" ]; then
+            changed="$(git diff --name-only "${{ github.sha }}" origin/main)"
+            echo "main moved since ${{ github.sha }} ($(git rev-parse --short origin/main)):"
+            echo "$changed" | sed 's/^/  /'
+            # Matcher exit: 0 = none watched, 1 = some watched, anything else = the matcher
+            # itself failed. Captured explicitly (review 9/23): `set -e` ignores a command
+            # inside an `if` condition, and a matcher crash must never read as "watched" -
+            # that arm is a green run with nothing pushed and no queued run to follow.
+            rc=0
+            if [ -n "$changed" ]; then node scripts/ci-watched-paths.js $changed || rc=$?; fi
+            case "$rc" in
+              0)
+                echo "only unwatched paths changed - rebuilding on top of origin/main"
+                git reset --hard --quiet origin/main
+                node bump-version.js
+                node build.js
+                ;;
+              1)
+                echo "::notice::main moved with a watched change; the queued run for $(git rev-parse --short origin/main) owns this deploy - nothing pushed from this run (re-run 'Build & deploy' from the Actions tab if no run follows)."
+                exit 0
+                ;;
+              *)
+                echo "::error::scripts/ci-watched-paths.js failed (exit $rc) - cannot tell whether main's move is watched, so nothing is pushed from this run. Recovery: fix the matcher, then re-run 'Build & deploy' from the Actions tab (workflow_dispatch) or push any watched file; the live site stays on the previous build until then."
+                exit 1
+                ;;
+            esac
+          fi
           git add index-source.html index.html version.json
           if git diff --cached --quiet; then
             echo "Nothing to commit (source unchanged)."
           else
             git commit -m "Build: compile index.html + bump version [skip ci]"
-            git push
+            git push || { echo "::error::push to main rejected (main moved again during the build). Recovery: re-run 'Build & deploy' from the Actions tab (workflow_dispatch) or push any watched file; the live site stays on the previous build until then."; exit 1; }
           fi

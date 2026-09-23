@@ -8,21 +8,37 @@
 //   diagnostics carry it (diagnostics.impliedTargets, item J).
 //
 //   node scripts/preview-diff.js <before.json> <after.json> [--out docs/PREVIEW-DIFF-<date>.md] [--roster docs/silvis-seed.json]
+//   -h / --help prints the usage (exit 0); an unknown flag or a flag without its value is refused (exit 2).
 //
 // Pure file I/O: nothing here touches the network or the database.
 "use strict";
 const fs = require("fs");
 const path = require("path");
 
-const argv = process.argv.slice(2);
-function opt(name, dflt) { const i = argv.indexOf("--" + name); return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt; }
-const files = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && argv[i - 1].startsWith("--")));
-if (files.length < 2) { console.error("usage: node scripts/preview-diff.js <before.json> <after.json> [--out file.md] [--roster docs/silvis-seed.json]"); process.exit(2); }
 const REPO = path.join(__dirname, "..");
+const USAGE = "usage: node scripts/preview-diff.js <before.json> <after.json> [--out file.md] [--roster docs/silvis-seed.json]";
+function parseArgs(argv) {
+  const a = { files: [], out: null, roster: path.join(REPO, "docs", "silvis-seed.json") };
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "-h" || t === "--help") { console.log(USAGE); process.exit(0); }
+    else if (t === "--out" || t === "--roster") {
+      const v = argv[++i];
+      if (v === undefined || /^--/.test(v)) { console.error(t + " needs a value\n" + USAGE); process.exit(2); }
+      if (t === "--out") a.out = v; else a.roster = v;
+    }
+    else if (/^--/.test(t)) { console.error("unknown argument: " + t + "\n" + USAGE); process.exit(2); }
+    else a.files.push(t);
+  }
+  if (a.files.length !== 2) { console.error(USAGE); process.exit(2); }
+  return a;
+}
+const ARGS = parseArgs(process.argv.slice(2));
+const files = ARGS.files;
 const before = JSON.parse(fs.readFileSync(files[0], "utf8"));
 const after = JSON.parse(fs.readFileSync(files[1], "utf8"));
-const rosterFile = opt("roster", path.join(REPO, "docs", "silvis-seed.json"));
-const OUT = opt("out", null);
+const rosterFile = ARGS.roster;
+const OUT = ARGS.out;
 
 const roster = (JSON.parse(fs.readFileSync(rosterFile, "utf8")).roster || []).map(r => ({ id: r.id, name: r.name, code: r.code, type: r.type || "pool" }));
 const nameOf = (id) => { if (!id) return "OPEN"; const r = roster.find(x => x.id === id); return r ? r.name : id; };

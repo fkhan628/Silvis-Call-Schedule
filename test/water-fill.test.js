@@ -46,7 +46,12 @@ function run(h) {
   ok(FXW.input.surgeonRules[BURCHETT].explicitListMonths.includes("2026-12"), "WF fixture: Burchett's December entry is the plain form the 05:28Z generate saw");
   ok(!JSON.stringify(FXW.input).match(/"note"|@/), "WF fixture carries no notes and no contact data");
   const ctxW = R.buildContext(Object.assign({}, FXW.input, { rangeStart: MS.start, rangeEnd: MS.end }));
-  eq(ctxW.warnings, [], "buildContext warnings (WF fixture)");
+  // The pre-publish blob still carried the two group keys the engine never read (dropped from the seed by audit
+  // RG-1 / RG-2, 9/23; rules.js warns once per key while a blob carries them). The fixture stays the exact
+  // snapshot, so exactly those two notices are expected here - and nothing else.
+  const isDeadKeyW = (w) => /groupRules.holidays.anyoneMayCoverUnlessOptedOut|groupRules.eastFeed.unknownIsBusy/.test(w);
+  eq(ctxW.warnings.filter(isDeadKeyW).length, 2, "buildContext warnings (WF fixture): the two dead-key notices the pre-publish blob earns (RG-1 anyoneMayCoverUnlessOptedOut, RG-2 unknownIsBusy)");
+  eq(ctxW.warnings.filter((w) => !isDeadKeyW(w)), [], "buildContext warnings (WF fixture)");
   const tw0 = Date.now();
   const outM = GEN.generate(ctxW, MS.start, MS.end, { seed: FXW._meta.seed, bestOf: FXW._meta.bestOf, respectLocks: true });
   const outB = GEN.generate(ctxW, BFW.start, BFW.end, { seed: FXW._meta.seed, bestOf: FXW._meta.bestOf, respectLocks: true, fillOpenOnly: true });

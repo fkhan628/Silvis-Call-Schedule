@@ -477,6 +477,17 @@ function buildContext(input) {
     ctx.warnings.push("groupRules.holidays.unitExemptFromMaxConsecutive is ignored (Prompt 12 A, 9/22): a holiday unit counts as one day for the consecutive limits only for a surgeon whose surgeonRules.<id>.holidayUnitCountsAsOneDay is true - remove the group key from the blob");
   }
   if (defaultCapLegacy) ctx.warnings.push("groupRules.defaultMonthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as defaultMonthlyCap.primary = " + defaultCap + " (a cap on PRIMARY days per month) - rename it in Setup");
+  // audit RG-1 (9/23): "anyone not opted out may cover a holiday" is fixed behaviour - the opt-out is
+  // surgeonRules.<id>.holidayRules.holidaysOff (hard holiday-opt-out:<name>), the waiver family is
+  // holidays.ignoreWeekdayRules; eligibility() never read the former group key. Warn so the blob can drop it.
+  if (ctx.holidayFlags && Object.prototype.hasOwnProperty.call(ctx.holidayFlags, "anyoneMayCoverUnlessOptedOut")) {
+    ctx.warnings.push("groupRules.holidays.anyoneMayCoverUnlessOptedOut is ignored (audit RG-1, 9/23; never read since e7eec23, 9/22): anyone not opted out (surgeonRules.<id>.holidayRules.holidaysOff) may cover a holiday is fixed behaviour - remove the key from the blob");
+  }
+  // audit RG-2 (9/23): a day no East data (published or forecast) covers is always clear with the soft
+  // east-unknown penalty (weights.eastUnknown) and listed in diagnostics - no key flips that.
+  if (groupRules.eastFeed && Object.prototype.hasOwnProperty.call(groupRules.eastFeed, "unknownIsBusy")) {
+    ctx.warnings.push("groupRules.eastFeed.unknownIsBusy is not read by the engine (audit RG-2, 9/23): an uncovered East day is always clear with the soft east-unknown penalty (weights.eastUnknown) - remove the key from the blob");
+  }
 
   if (input.eastFeedCoverage && input.eastFeedCoverage.from && input.eastFeedCoverage.to) {
     ctx.eastCoverage = { from: input.eastFeedCoverage.from, to: input.eastFeedCoverage.to,
@@ -651,6 +662,13 @@ function buildContext(input) {
       mondays.forEach(function (mon) { for (var k = 0; k < 7; k++) P.weekDays.add(rdAddDays(mon, k)); });
       var from = rules.availableWeeksFrom || (mondays[0].slice(0, 7) + "-01");
       P.weeksFromN = rdInfo(from).n;
+      // audit RG-7 (9/23): the list is a whitelist - past its last listed week the surgeon is primary-ineligible
+      // everywhere ("outside-available-weeks") until he supplies more weeks. Say so when the range runs past it
+      // (generic: every surgeon with a weeks list; the warning rides into diagnostics.warnings and the Generate panel).
+      var lastListedSunday = rdAddDays(mondays[mondays.length - 1], 6);
+      if (ctx.rangeEnd && ctx.rangeEnd > lastListedSunday) {
+        ctx.warnings.push("surgeonRules." + id + ".availableWeeks ends with the week of " + mondays[mondays.length - 1] + " - no primary for " + (r.name || id) + " after " + lastListedSunday + " in this range (outside-available-weeks) until more weeks are entered in Setup -> Rules -> availableWeeks; backup stays open");
+      }
     }
     if (P.hasWindows) {
       rules.availableWindows.forEach(function (w) { rdEachDayInRange(w.start, w.end, function (d) { P.windowDays.add(d); }); });
@@ -1028,7 +1046,6 @@ function rdStatic(ctx, date, role, id, asBlock) {
   var waive = !!(hol && HF.ignoreWeekdayRules !== false);
   var optedOut = !!(hol && P.holidaysOff.has(hol.name));
   if (optedOut) hard.push("holiday-opt-out:" + hol.name);
-  var anyoneMay = !!(hol && HF.anyoneMayCoverUnlessOptedOut !== false && !optedOut);
 
   // Time off (vacations only). Trailing edge: the day before blocks PRIMARY only.
   // Prompt 15 part 2: a DERIVED East vacation day (unreviewed / away range) sits in the
@@ -1129,8 +1146,10 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // ("whitelist-month" - Burchett's December list omits 12/24 on purpose and names
   // 12/25) and the weeks list ("outside-available-weeks" - Mon 5/31 of Philip's
   // Memorial Day 2027 unit sits outside his listed weeks, which excludes him from
-  // the whole unit). anyoneMay still lifts the holiday
-  // opt-out family; it no longer softens a dated block.
+  // the whole unit). On a holiday-unit day the opt-out is
+  // enforced by holidaysOff (optedOut, hard) and the waiver family by
+  // holidays.ignoreWeekdayRules - nothing else about holiday cover is configurable
+  // (audit RG-1, 9/23: the former anyoneMayCoverUnlessOptedOut key was never read).
   if (datedBlock) hard.push(datedBlock);
 
   ctx._memo[key] = res;
