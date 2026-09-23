@@ -1,364 +1,384 @@
 {
-  "generatedAt": "2026-09-22T05:51:23.224Z",
+  "generatedAt": "2026-09-23T17:26:54.811Z",
   "davenportPublishedThrough": "2026-11-09",
   "period": {
     "start": "2026-11-16",
     "end": "2027-02-21",
     "numWeeks": 14
   },
-  "runs": 100,
+  "requestedRuns": 200,
+  "runs": 200,
+  "code": "FAK",
   "fakId": "s6",
   "busyProbabilityByDay": {
-    "2026-11-16": 0.25,
-    "2026-11-17": 0.29,
-    "2026-11-18": 0.04,
-    "2026-11-19": 0.02,
-    "2026-11-20": 0.09,
-    "2026-11-21": 0,
-    "2026-11-22": 0.09,
-    "2026-11-23": 0.67,
-    "2026-11-24": 0.21,
-    "2026-11-25": 0,
+    "2026-11-16": 0.425,
+    "2026-11-17": 0.455,
+    "2026-11-18": 0.085,
+    "2026-11-19": 0.1,
+    "2026-11-20": 0.105,
+    "2026-11-21": 0.07,
+    "2026-11-22": 0.035,
+    "2026-11-23": 0.6,
+    "2026-11-24": 0.005,
+    "2026-11-25": 0.005,
     "2026-11-26": 0,
     "2026-11-27": 0,
     "2026-11-28": 0,
     "2026-11-29": 0,
-    "2026-11-30": 0.27,
-    "2026-12-01": 0.41,
-    "2026-12-02": 0.24,
-    "2026-12-03": 0.28,
-    "2026-12-04": 0.12,
-    "2026-12-05": 0.09,
-    "2026-12-06": 0.03,
-    "2026-12-07": 0.41,
-    "2026-12-08": 0.26,
-    "2026-12-09": 0.28,
-    "2026-12-10": 0.05,
+    "2026-11-30": 0.4,
+    "2026-12-01": 0.345,
+    "2026-12-02": 0.21,
+    "2026-12-03": 0.205,
+    "2026-12-04": 0.2,
+    "2026-12-05": 0.08,
+    "2026-12-06": 0.12,
+    "2026-12-07": 0.335,
+    "2026-12-08": 0.265,
+    "2026-12-09": 0.32,
+    "2026-12-10": 0.08,
     "2026-12-11": 0,
     "2026-12-12": 0,
     "2026-12-13": 0,
-    "2026-12-14": 0.26,
-    "2026-12-15": 0.07,
-    "2026-12-16": 0.04,
-    "2026-12-17": 0.04,
-    "2026-12-18": 0.19,
+    "2026-12-14": 0.25,
+    "2026-12-15": 0.15,
+    "2026-12-16": 0.065,
+    "2026-12-17": 0.075,
+    "2026-12-18": 0.155,
     "2026-12-19": 0,
-    "2026-12-20": 0.19,
+    "2026-12-20": 0.155,
     "2026-12-21": 1,
     "2026-12-22": 1,
     "2026-12-23": 1,
     "2026-12-24": 1,
     "2026-12-25": 1,
     "2026-12-26": 1,
-    "2026-12-27": 0.72,
+    "2026-12-27": 0.955,
     "2026-12-28": 0,
-    "2026-12-29": 0.6,
-    "2026-12-30": 0.4,
+    "2026-12-29": 0.505,
+    "2026-12-30": 0.495,
     "2026-12-31": 0,
     "2027-01-01": 0,
     "2027-01-02": 0,
-    "2027-01-03": 0.03,
-    "2027-01-04": 0.19,
-    "2027-01-05": 0,
-    "2027-01-06": 0,
-    "2027-01-07": 0,
-    "2027-01-08": 0.03,
+    "2027-01-03": 0.025,
+    "2027-01-04": 0.25,
+    "2027-01-05": 0.04,
+    "2027-01-06": 0.02,
+    "2027-01-07": 0.01,
+    "2027-01-08": 0.035,
     "2027-01-09": 0,
-    "2027-01-10": 0.03,
-    "2027-01-11": 0.23,
-    "2027-01-12": 0.14,
-    "2027-01-13": 0.05,
-    "2027-01-14": 0.05,
-    "2027-01-15": 0.53,
+    "2027-01-10": 0.035,
+    "2027-01-11": 0.395,
+    "2027-01-12": 0.15,
+    "2027-01-13": 0.03,
+    "2027-01-14": 0.015,
+    "2027-01-15": 0.27,
     "2027-01-16": 0,
-    "2027-01-17": 0.53,
-    "2027-01-18": 0.26,
-    "2027-01-19": 0.24,
-    "2027-01-20": 0.21,
-    "2027-01-21": 0.21,
-    "2027-01-22": 0.07,
+    "2027-01-17": 0.27,
+    "2027-01-18": 0.27,
+    "2027-01-19": 0.375,
+    "2027-01-20": 0.14,
+    "2027-01-21": 0.135,
+    "2027-01-22": 0.025,
     "2027-01-23": 0,
-    "2027-01-24": 0.07,
-    "2027-01-25": 0.22,
-    "2027-01-26": 0.13,
-    "2027-01-27": 0.18,
-    "2027-01-28": 0.15,
-    "2027-01-29": 0.01,
-    "2027-01-30": 0,
-    "2027-01-31": 0.01,
-    "2027-02-01": 0.31,
-    "2027-02-02": 0.34,
-    "2027-02-03": 0.31,
-    "2027-02-04": 0.34,
-    "2027-02-05": 0.33,
-    "2027-02-06": 0.31,
-    "2027-02-07": 0.02,
-    "2027-02-08": 0.55,
-    "2027-02-09": 0.69,
-    "2027-02-10": 0.65,
-    "2027-02-11": 0.62,
-    "2027-02-12": 0.57,
-    "2027-02-13": 0.55,
+    "2027-01-24": 0.025,
+    "2027-01-25": 0.05,
+    "2027-01-26": 0.03,
+    "2027-01-27": 0.04,
+    "2027-01-28": 0.03,
+    "2027-01-29": 0.02,
+    "2027-01-30": 0.02,
+    "2027-01-31": 0,
+    "2027-02-01": 0.83,
+    "2027-02-02": 0.83,
+    "2027-02-03": 0.83,
+    "2027-02-04": 0.845,
+    "2027-02-05": 0.865,
+    "2027-02-06": 0.825,
+    "2027-02-07": 0.04,
+    "2027-02-08": 0.005,
+    "2027-02-09": 0.345,
+    "2027-02-10": 0.27,
+    "2027-02-11": 0.31,
+    "2027-02-12": 0.025,
+    "2027-02-13": 0.005,
     "2027-02-14": 0.02,
-    "2027-02-15": 0.08,
-    "2027-02-16": 0.28,
-    "2027-02-17": 0.24,
-    "2027-02-18": 0.24,
-    "2027-02-19": 0.31,
-    "2027-02-20": 0.05,
-    "2027-02-21": 0.26
+    "2027-02-15": 0.16,
+    "2027-02-16": 0.085,
+    "2027-02-17": 0.07,
+    "2027-02-18": 0.065,
+    "2027-02-19": 0.32,
+    "2027-02-20": 0,
+    "2027-02-21": 0.32
   },
   "reasonCountsByDay": {
     "2026-11-16": {
-      "night": 25
-    },
-    "2026-11-24": {
-      "night": 21
+      "night": 71,
+      "service-week": 14
     },
     "2026-12-01": {
-      "night": 32,
-      "service-week": 9
-    },
-    "2026-12-09": {
-      "night": 28
-    },
-    "2026-12-21": {
-      "service-week": 100
-    },
-    "2026-12-22": {
-      "service-week": 100
-    },
-    "2026-12-23": {
-      "service-week": 100
-    },
-    "2026-12-24": {
-      "service-week": 100
-    },
-    "2026-12-25": {
-      "service-week": 100,
-      "weekend": 72,
-      "holiday": 100
-    },
-    "2026-12-26": {
-      "service-week": 100,
-      "holiday": 100
-    },
-    "2026-12-27": {
-      "weekend": 72
-    },
-    "2026-12-30": {
-      "night": 40
-    },
-    "2027-01-15": {
-      "weekend": 53
-    },
-    "2027-01-17": {
-      "weekend": 53
-    },
-    "2027-01-20": {
-      "night": 21
-    },
-    "2027-01-27": {
-      "night": 18
-    },
-    "2027-02-08": {
-      "service-week": 55
-    },
-    "2027-02-09": {
-      "service-week": 55,
-      "night": 14
-    },
-    "2027-02-10": {
-      "service-week": 55,
-      "night": 10
-    },
-    "2027-02-11": {
-      "service-week": 55,
-      "night": 7
-    },
-    "2027-02-12": {
-      "service-week": 55,
-      "weekend": 2
-    },
-    "2027-02-13": {
-      "service-week": 55
-    },
-    "2027-02-17": {
-      "night": 19,
-      "service-week": 5
-    },
-    "2026-11-23": {
-      "night": 67
-    },
-    "2026-12-08": {
-      "night": 26
-    },
-    "2026-12-16": {
-      "night": 4
-    },
-    "2026-12-29": {
-      "night": 60
-    },
-    "2027-01-12": {
-      "night": 14
-    },
-    "2027-01-18": {
-      "night": 26
-    },
-    "2027-02-01": {
-      "service-week": 31
-    },
-    "2027-02-02": {
-      "service-week": 31,
-      "night": 3
-    },
-    "2027-02-03": {
-      "service-week": 31
-    },
-    "2027-02-04": {
-      "service-week": 31,
-      "night": 3
-    },
-    "2027-02-05": {
-      "service-week": 31,
-      "weekend": 2
-    },
-    "2027-02-06": {
-      "service-week": 31
-    },
-    "2027-02-19": {
-      "weekend": 26,
-      "service-week": 5
-    },
-    "2027-02-21": {
-      "weekend": 26
-    },
-    "2026-12-03": {
-      "night": 19,
-      "service-week": 9
+      "night": 53,
+      "service-week": 16
     },
     "2026-12-07": {
-      "night": 41
-    },
-    "2027-01-11": {
-      "night": 23
-    },
-    "2027-01-21": {
-      "night": 21
-    },
-    "2026-11-30": {
-      "night": 18,
-      "service-week": 9
-    },
-    "2027-01-28": {
-      "night": 15
-    },
-    "2027-02-16": {
-      "night": 23,
-      "service-week": 5
-    },
-    "2026-12-02": {
-      "night": 15,
-      "service-week": 9
-    },
-    "2026-12-17": {
-      "night": 4
-    },
-    "2027-01-25": {
-      "night": 22
-    },
-    "2027-02-15": {
-      "service-week": 5,
-      "night": 3
-    },
-    "2027-02-18": {
-      "service-week": 5,
-      "night": 19
-    },
-    "2027-02-20": {
-      "service-week": 5
-    },
-    "2027-01-26": {
-      "night": 13
+      "night": 67
     },
     "2026-12-18": {
-      "weekend": 19
+      "weekend": 31
     },
     "2026-12-20": {
-      "weekend": 19
+      "weekend": 31
+    },
+    "2026-12-21": {
+      "service-week": 200
+    },
+    "2026-12-22": {
+      "service-week": 200
+    },
+    "2026-12-23": {
+      "service-week": 200
+    },
+    "2026-12-24": {
+      "service-week": 200
+    },
+    "2026-12-25": {
+      "service-week": 200,
+      "weekend": 191,
+      "holiday": 200
+    },
+    "2026-12-26": {
+      "service-week": 200,
+      "holiday": 200
+    },
+    "2026-12-27": {
+      "weekend": 191
+    },
+    "2026-12-29": {
+      "night": 101
     },
     "2027-01-04": {
-      "night": 19
+      "night": 50
     },
-    "2027-01-14": {
-      "night": 5
+    "2027-01-20": {
+      "night": 28
     },
-    "2026-11-17": {
-      "night": 29
+    "2027-02-01": {
+      "service-week": 165,
+      "night": 1
     },
-    "2027-01-19": {
-      "night": 24
+    "2027-02-02": {
+      "service-week": 165,
+      "night": 1
     },
-    "2027-01-13": {
-      "night": 5
+    "2027-02-03": {
+      "service-week": 165,
+      "night": 1
     },
-    "2027-02-14": {
-      "weekend": 2
-    },
-    "2026-11-18": {
+    "2027-02-04": {
+      "service-week": 165,
       "night": 4
     },
-    "2026-11-20": {
-      "weekend": 9
+    "2027-02-05": {
+      "service-week": 165,
+      "weekend": 8
     },
-    "2026-11-22": {
-      "weekend": 9
+    "2027-02-06": {
+      "service-week": 165
     },
-    "2027-01-22": {
-      "weekend": 7
+    "2027-02-09": {
+      "night": 68,
+      "service-week": 1
     },
-    "2027-01-24": {
-      "weekend": 7
+    "2027-02-18": {
+      "night": 13
     },
-    "2026-12-14": {
-      "night": 26
-    },
-    "2026-12-15": {
-      "night": 7
-    },
-    "2027-01-03": {
-      "weekend": 3
+    "2026-11-23": {
+      "night": 120
     },
     "2026-12-10": {
-      "night": 5
+      "night": 16
     },
-    "2026-12-04": {
-      "service-week": 9,
-      "weekend": 3
+    "2026-12-30": {
+      "night": 99
     },
-    "2026-12-05": {
-      "service-week": 9
+    "2027-01-18": {
+      "night": 54
     },
-    "2027-01-08": {
-      "weekend": 3
+    "2027-02-10": {
+      "night": 53,
+      "service-week": 1
     },
-    "2027-01-10": {
-      "weekend": 3
+    "2027-02-19": {
+      "weekend": 64
     },
-    "2026-12-06": {
-      "weekend": 3
+    "2027-02-21": {
+      "weekend": 64
+    },
+    "2026-11-17": {
+      "night": 77,
+      "service-week": 14
+    },
+    "2026-12-02": {
+      "night": 26,
+      "service-week": 16
+    },
+    "2026-12-08": {
+      "night": 53
+    },
+    "2027-01-11": {
+      "night": 79
+    },
+    "2027-02-16": {
+      "night": 17
+    },
+    "2026-12-14": {
+      "night": 50
+    },
+    "2027-01-21": {
+      "night": 27
+    },
+    "2027-01-13": {
+      "night": 6
+    },
+    "2026-11-18": {
+      "service-week": 14,
+      "night": 3
     },
     "2026-11-19": {
+      "service-week": 14,
+      "night": 6
+    },
+    "2026-11-20": {
+      "service-week": 14,
+      "weekend": 7
+    },
+    "2026-11-21": {
+      "service-week": 14
+    },
+    "2026-11-30": {
+      "night": 64,
+      "service-week": 16
+    },
+    "2026-12-09": {
+      "night": 64
+    },
+    "2026-12-16": {
+      "night": 13
+    },
+    "2027-01-07": {
       "night": 2
     },
-    "2027-02-07": {
-      "weekend": 2
+    "2027-01-15": {
+      "weekend": 54
+    },
+    "2027-01-17": {
+      "weekend": 54
+    },
+    "2027-01-19": {
+      "night": 75
+    },
+    "2027-01-25": {
+      "night": 6,
+      "service-week": 4
+    },
+    "2027-01-05": {
+      "night": 8
+    },
+    "2027-01-08": {
+      "weekend": 7
+    },
+    "2027-01-10": {
+      "weekend": 7
+    },
+    "2027-02-11": {
+      "night": 61,
+      "service-week": 1
+    },
+    "2027-02-15": {
+      "night": 32
+    },
+    "2026-12-03": {
+      "night": 25,
+      "service-week": 16
+    },
+    "2027-01-12": {
+      "night": 30
+    },
+    "2026-12-15": {
+      "night": 30
+    },
+    "2027-01-26": {
+      "service-week": 4,
+      "night": 2
+    },
+    "2027-01-27": {
+      "service-week": 4,
+      "night": 4
+    },
+    "2027-01-28": {
+      "service-week": 4,
+      "night": 2
     },
     "2027-01-29": {
-      "weekend": 1
+      "service-week": 4
     },
-    "2027-01-31": {
-      "weekend": 1
+    "2027-01-30": {
+      "service-week": 4
+    },
+    "2027-02-12": {
+      "weekend": 4,
+      "service-week": 1
+    },
+    "2027-02-14": {
+      "weekend": 4
+    },
+    "2027-02-17": {
+      "night": 14
+    },
+    "2027-01-14": {
+      "night": 3
+    },
+    "2026-12-04": {
+      "weekend": 24,
+      "service-week": 16
+    },
+    "2026-12-06": {
+      "weekend": 24
+    },
+    "2026-12-17": {
+      "night": 15
+    },
+    "2027-01-22": {
+      "weekend": 5
+    },
+    "2027-01-24": {
+      "weekend": 5
+    },
+    "2026-11-25": {
+      "night": 1
+    },
+    "2026-12-05": {
+      "service-week": 16
+    },
+    "2026-11-22": {
+      "weekend": 7
+    },
+    "2027-02-07": {
+      "weekend": 8
+    },
+    "2026-11-24": {
+      "night": 1
+    },
+    "2027-01-06": {
+      "night": 4
+    },
+    "2027-01-03": {
+      "weekend": 5
+    },
+    "2027-02-08": {
+      "service-week": 1
+    },
+    "2027-02-13": {
+      "service-week": 1
     }
   },
   "fierceWeekProbability": {
@@ -420,9 +440,9 @@
     }
   },
   "fakServiceWeekProbability": {
-    "2026-11-16": 0,
+    "2026-11-16": 0.07,
     "2026-11-23": 0,
-    "2026-11-30": 0.09,
+    "2026-11-30": 0.08,
     "2026-12-07": 0,
     "2026-12-14": 0,
     "2026-12-21": 1,
@@ -430,19 +450,19 @@
     "2027-01-04": 0,
     "2027-01-11": 0,
     "2027-01-18": 0,
-    "2027-01-25": 0,
-    "2027-02-01": 0.31,
-    "2027-02-08": 0.55,
-    "2027-02-15": 0.05
+    "2027-01-25": 0.02,
+    "2027-02-01": 0.825,
+    "2027-02-08": 0.005,
+    "2027-02-15": 0
   },
   "notes": [
-    "Forecast of Khan's East (Davenport) call for the NEXT Davenport period, produced by running the real Davenport generator (best-of-50 inside each run) 100 times on live Davenport inputs. Not a published schedule.",
+    "Forecast of Khan's East (Davenport) call for the NEXT Davenport period, produced by running the real Davenport generator (best-of-50 inside each run) 200 times on live Davenport inputs. Not a published schedule.",
     "Derivation per run = east-feed.js deriveKhanBusyDays with eastBackupCountsAsBusy:true (service week Mon-Sat, weeknights, wknd = Fri + Sun, holiday 24h units; a holiday 24h held by another surgeon frees FAK for that whole day).",
     "Period start = last published Davenport week_monday + 7 days; Faraz may pick a different start/length when he actually generates.",
     "Davenport startMondayOverride in the blob is 2026-08-10 (the CURRENT period's start) and was deliberately not used.",
     "Not reproduced: edits Faraz makes before generating (new time_off rows, pendingLocks, holiday assignment changes, roster changes), his manual post-generation edits (week editor, dayCallOverrides, trades), and which best-of-50 candidate his single click lands on. Math.random is unseeded in the Davenport generator, so each run here is an independent draw.",
     "FAK Davenport vacation ranges in period (never scheduled there) were honoured; the dates are not recorded here",
     "FAK holds these Davenport holiday 24h units by blob assignment (deterministic, p=1): 2026-12-25 (Christmas Day 24h), 2026-12-26 (Sat 24h)",
-    "Davenport generator console: 13675 messages over 100 runs (x best-of-50 candidates), suppressed. Most frequent: \"[validation] UNRESOLVED: s2 has Service Week AND thu night, week 2026-11-23 (no legal repair candidate)\" x4989; \"[validation] UNRESOLVED: s5 has Service Week AND thu night, week 2026-12-28 (no legal repair candidate)\" x4963; \"[validation] UNRESOLVED: s6 has Service Week AND weekend, week 2026-12-21 (no legal repair candidate)\" x3723"
+    "Davenport generator console: 28724 messages over 200 runs (x best-of-50 candidates), suppressed. Most frequent: \"[validation] UNRESOLVED: s2 has Service Week AND thu night, week 2026-11-23 (no legal repair candidate)\" x9812; \"[validation] UNRESOLVED: s6 has Service Week AND weekend, week 2026-12-21 (no legal repair candidate)\" x9576; \"[validation] UNRESOLVED: s5 has Service Week AND thu night, week 2026-12-28 (no legal repair candidate)\" x8372; \"[validation] UNRESOLVED: s6 has Service Week then next Monday night, weeks 2026-11-16→2026-11-23 (no legal repair candidate)\" x518; \"[validation] UNRESOLVED: s1 has Service Week then next Monday night, weeks 2026-11-16→2026-11-23 (no legal repair candidate)\" x446"
   ]
 }
