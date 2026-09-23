@@ -430,6 +430,16 @@ range now starts there (§1 Period row) and fills those five backups, the eleven
 (locks untouched — the 10/15 – 11/1 fill-open-only script path above remains available). Whether the five pre-10/15 backups are wanted
 filled, or stay open, is Faraz’s call — a floor at 10/15 would be group-rule data, not a code branch (§8 item 11).
 
+⟶ **9/23 (Prompt 13 / P13R):** a slot a surgeon takes **himself** — through the Open shifts board (`claim_open_slot`,
+row source `claim`) or a trade (`apply_trade`, row source `trade`), neither of which sets a lock flag — is **fixed for
+the generator in both modes exactly like a lock** (every held role of that day; `generator.GEN_PERSON_FIXED_SOURCES`).
+A later Generate never silently discards it; its rule conflicts are facts in `diagnostics.fixedViolations`, and it
+counts in `diagnostics.fixedSlots`. An unlocked slot written in the **day editor** (source `manual`) stays regenerable —
+the lock toggle there is the scheduler's choice — and editing a claimed day in the day editor rewrites its source to
+`manual`. The board's "Take this shift" gate is `eligibility()` with the same option set the day editor uses (a surgeon
+completing his own Fri–Sun block is asked as a block member; outside surgeons are never candidates); the function checks
+data integrity only (guide §16.2).
+
 ## 8. Answered (9/21) and still open
 
 **Answered by Faraz on 9/21:** shift boundary 07:00→07:00; October stays as the emails describe it (Fierce 10/12 single

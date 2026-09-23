@@ -1,40 +1,261 @@
 {
-  "_comment": "Prompt 13 part 4: a generator diagnostics excerpt (range, uncovered, weekendUnits) and the lastGenerate record helpers.lastGenerateFromDiagnostics(diagnostics, at) must build from it. Reasons per surgeon are the rules.js hard codes as the generator emits them: ':detail' suffixes, '@YYYY-MM-DD' on holiday-unit days, the two generator placeholders. The rendered reason is operational wording only - never an id, a name or a date from the input.",
+  "_comment": "Prompt 13 part 4: a generator diagnostics excerpt (range, uncovered, weekendUnits) and the lastGenerate record helpers.lastGenerateFromDiagnostics(diagnostics, at) must build from it. Reasons per surgeon are the rules.js hard codes as the generator emits them: ':detail' suffixes, '@YYYY-MM-DD' on holiday-unit days, the two generator placeholders. The rendered reason is operational wording only - never an id, a name or a date from the input. P13R: the diagnostics excerpt also carries mode and fixedSlots (item T); the record repeats them.",
   "at": "2026-09-22T15:00:00.000Z",
   "diagnostics": {
     "seed": 1,
-    "range": { "start": "2026-11-02", "end": "2026-11-30", "days": 29, "months": ["2026-11"] },
+    "range": {
+      "start": "2026-11-02",
+      "end": "2026-11-30",
+      "days": 29,
+      "months": [
+        "2026-11"
+      ]
+    },
     "uncovered": [
-      { "day": "2026-11-07", "role": "backup", "weekday": "Sat", "holidayUnit": null,
-        "reasons": { "s1": ["holds-other-role"], "s2": ["backup-cap:7"], "s3": ["time-off:2026-11-07"], "s4": ["backup-opt-out"], "s5": ["derived-lock-held:2026-11-07"], "s6": ["max-consecutive:2"] } },
-      { "day": "2026-11-05", "role": "backup", "weekday": "Thu", "holidayUnit": null,
-        "reasons": { "s1": ["eligible-but-not-placed"], "s2": ["eligible-but-not-placed"], "s3": ["eligible-but-not-placed"], "s4": ["eligible-but-not-placed"], "s5": ["eligible-but-not-placed"], "s6": ["eligible-but-not-placed"] } },
-      { "day": "2026-11-05", "role": "primary", "weekday": "Thu", "holidayUnit": null,
-        "reasons": { "s1": ["east-busy"], "s2": ["monthly-cap:8"], "s3": ["recurring-unavailable:Thu"], "s4": ["outside-available-weeks"], "s5": ["weekday-pattern:Thu"], "s6": ["outside-window"] } },
-      { "day": "2026-11-26", "role": "primary", "weekday": "Thu", "holidayUnit": "Thanksgiving",
-        "reasons": { "s1": ["east-busy@2026-11-27"], "s2": ["time-off:2026-11-26@2026-11-26", "day-before-vacation@2026-11-27"], "s3": ["holiday-opt-out:Thanksgiving@2026-11-26"], "s4": ["slot-locked:import@2026-11-28"], "s5": ["inactive"], "s6": ["holiday-unit:eligible-but-unit-not-filled"] } }
+      {
+        "day": "2026-11-07",
+        "role": "backup",
+        "weekday": "Sat",
+        "holidayUnit": null,
+        "reasons": {
+          "s1": [
+            "holds-other-role"
+          ],
+          "s2": [
+            "backup-cap:7"
+          ],
+          "s3": [
+            "time-off:2026-11-07"
+          ],
+          "s4": [
+            "backup-opt-out"
+          ],
+          "s5": [
+            "derived-lock-held:2026-11-07"
+          ],
+          "s6": [
+            "max-consecutive:2"
+          ]
+        }
+      },
+      {
+        "day": "2026-11-05",
+        "role": "backup",
+        "weekday": "Thu",
+        "holidayUnit": null,
+        "reasons": {
+          "s1": [
+            "eligible-but-not-placed"
+          ],
+          "s2": [
+            "eligible-but-not-placed"
+          ],
+          "s3": [
+            "eligible-but-not-placed"
+          ],
+          "s4": [
+            "eligible-but-not-placed"
+          ],
+          "s5": [
+            "eligible-but-not-placed"
+          ],
+          "s6": [
+            "eligible-but-not-placed"
+          ]
+        }
+      },
+      {
+        "day": "2026-11-05",
+        "role": "primary",
+        "weekday": "Thu",
+        "holidayUnit": null,
+        "reasons": {
+          "s1": [
+            "east-busy"
+          ],
+          "s2": [
+            "monthly-cap:8"
+          ],
+          "s3": [
+            "recurring-unavailable:Thu"
+          ],
+          "s4": [
+            "outside-available-weeks"
+          ],
+          "s5": [
+            "weekday-pattern:Thu"
+          ],
+          "s6": [
+            "outside-window"
+          ]
+        }
+      },
+      {
+        "day": "2026-11-26",
+        "role": "primary",
+        "weekday": "Thu",
+        "holidayUnit": "Thanksgiving",
+        "reasons": {
+          "s1": [
+            "east-busy@2026-11-27"
+          ],
+          "s2": [
+            "time-off:2026-11-26@2026-11-26",
+            "day-before-vacation@2026-11-27"
+          ],
+          "s3": [
+            "holiday-opt-out:Thanksgiving@2026-11-26"
+          ],
+          "s4": [
+            "slot-locked:import@2026-11-28"
+          ],
+          "s5": [
+            "inactive"
+          ],
+          "s6": [
+            "holiday-unit:eligible-but-unit-not-filled"
+          ]
+        }
+      }
     ],
     "weekendUnits": [
-      { "friday": "2026-11-06", "present": ["2026-11-06", "2026-11-07", "2026-11-08"], "preempted": [], "reduced": false, "kind": "block", "members": ["s2"], "fallback": false },
-      { "friday": "2026-11-13", "present": ["2026-11-13", "2026-11-14", "2026-11-15"], "preempted": [], "reduced": false, "kind": "split", "members": ["s3", "s4"], "fallback": false },
-      { "friday": "2026-11-20", "present": ["2026-11-20", "2026-11-21", "2026-11-22"], "preempted": [], "reduced": false, "kind": "locked", "members": ["s1"], "fallback": false },
-      { "friday": "2026-11-27", "present": ["2026-11-27", "2026-11-28", "2026-11-29"], "preempted": ["2026-11-27", "2026-11-28", "2026-11-29"], "reduced": true, "kind": "daily", "members": [], "fallback": true },
-      { "friday": "not-a-day", "kind": "block" }
-    ]
+      {
+        "friday": "2026-11-06",
+        "present": [
+          "2026-11-06",
+          "2026-11-07",
+          "2026-11-08"
+        ],
+        "preempted": [],
+        "reduced": false,
+        "kind": "block",
+        "members": [
+          "s2"
+        ],
+        "fallback": false
+      },
+      {
+        "friday": "2026-11-13",
+        "present": [
+          "2026-11-13",
+          "2026-11-14",
+          "2026-11-15"
+        ],
+        "preempted": [],
+        "reduced": false,
+        "kind": "split",
+        "members": [
+          "s3",
+          "s4"
+        ],
+        "fallback": false
+      },
+      {
+        "friday": "2026-11-20",
+        "present": [
+          "2026-11-20",
+          "2026-11-21",
+          "2026-11-22"
+        ],
+        "preempted": [],
+        "reduced": false,
+        "kind": "locked",
+        "members": [
+          "s1"
+        ],
+        "fallback": false
+      },
+      {
+        "friday": "2026-11-27",
+        "present": [
+          "2026-11-27",
+          "2026-11-28",
+          "2026-11-29"
+        ],
+        "preempted": [
+          "2026-11-27",
+          "2026-11-28",
+          "2026-11-29"
+        ],
+        "reduced": true,
+        "kind": "daily",
+        "members": [],
+        "fallback": true
+      },
+      {
+        "friday": "not-a-day",
+        "kind": "block"
+      }
+    ],
+    "mode": "generate",
+    "fixedSlots": 12
   },
   "expected": {
     "at": "2026-09-22T15:00:00.000Z",
-    "range": { "start": "2026-11-02", "end": "2026-11-30" },
+    "range": {
+      "start": "2026-11-02",
+      "end": "2026-11-30"
+    },
+    "mode": "generate",
+    "fixedSlots": 12,
     "openSlots": [
-      { "day": "2026-11-05", "role": "primary", "reason": "no eligible surgeon - weekday patterns and stated availability, East feed busy, caps reached" },
-      { "day": "2026-11-05", "role": "backup", "reason": "generator could not place - report it" },
-      { "day": "2026-11-07", "role": "backup", "reason": "no eligible surgeon - vacations, East-derived week, caps reached, already on call that day, backup opt-outs" },
-      { "day": "2026-11-26", "role": "primary", "reason": "generator could not place - report it (other surgeons: vacations, East feed busy, holiday opt-outs, locks)" }
+      {
+        "day": "2026-11-05",
+        "role": "primary",
+        "reason": "no eligible surgeon - weekday patterns and stated availability, East feed busy, caps reached"
+      },
+      {
+        "day": "2026-11-05",
+        "role": "backup",
+        "reason": "generator could not place - report it"
+      },
+      {
+        "day": "2026-11-07",
+        "role": "backup",
+        "reason": "no eligible surgeon - vacations, East-derived week, caps reached, already on call that day, backup opt-outs"
+      },
+      {
+        "day": "2026-11-26",
+        "role": "primary",
+        "reason": "generator could not place - report it (other surgeons: vacations, East feed busy, holiday opt-outs, locks)"
+      }
     ],
-    "weekendKinds": { "2026-11-06": "block", "2026-11-13": "split", "2026-11-27": "daily" }
+    "weekendKinds": {
+      "2026-11-06": "block",
+      "2026-11-13": "split",
+      "2026-11-27": "daily"
+    }
   },
   "roster": [
-    { "id": "s1", "name": "Khan", "code": "FAK" }, { "id": "s2", "name": "Burchett", "code": "MAB" }, { "id": "s3", "name": "Acton", "code": "BDA" },
-    { "id": "s4", "name": "Philip", "code": "AFP" }, { "id": "s5", "name": "Fierce", "code": "NF" }, { "id": "s6", "name": "Sarkar", "code": "SRK" }
+    {
+      "id": "s1",
+      "name": "Khan",
+      "code": "FAK"
+    },
+    {
+      "id": "s2",
+      "name": "Burchett",
+      "code": "MAB"
+    },
+    {
+      "id": "s3",
+      "name": "Acton",
+      "code": "BDA"
+    },
+    {
+      "id": "s4",
+      "name": "Philip",
+      "code": "AFP"
+    },
+    {
+      "id": "s5",
+      "name": "Fierce",
+      "code": "NF"
+    },
+    {
+      "id": "s6",
+      "name": "Sarkar",
+      "code": "SRK"
+    }
   ]
 }

@@ -19,6 +19,17 @@
 //   open slots are filled. diagnostics.mode = "fill-open-only" / "generate",
 //   diagnostics.fixedSlots = the fixed count (the lock count in the default mode).
 //   lockViolations keeps reporting locked slots only.
+//   Prompt 13 / P13R (9/23): a day whose source is in GEN_PERSON_FIXED_SOURCES
+//   ("claim" - claim_open_slot; "trade" - apply_trade) carries a commitment a
+//   surgeon made himself, written without a lock flag (neither path has one), so
+//   every held role of that day is FIXED in BOTH modes exactly like a lock - a
+//   claim is never silently discarded by a later Generate. source is a row fact,
+//   so a generated holder in the other role of a claimed day is kept too
+//   (conservative: nothing on a claimed day moves). "manual" is NOT in the set:
+//   the day editor has its own lock toggle, and an unlocked manual slot stays
+//   regenerable (pinned by test/generator-regression.js, the fill-open-only
+//   fixture). An outside surgeon (item M) stays fixed by roster type, whatever
+//   the source.
 //   ctx comes from rules.buildContext(). rules.js reads ctx.schedule live on
 //   every eligibility() call, so each candidate installs its own working copy
 //   as ctx.schedule for the duration of the run and the original is restored
@@ -368,8 +379,10 @@ function genSeedLocks(G, original) {
     // run (so nobody is placed over him and his own days are never re-evaluated), its
     // own lock flag kept on the output (G.outLock). The day editor locks such a slot
     // anyway; this pins the same reading for an unlocked row.
-    var fixedP = lockedP || (fillOpen && !!e.primary) || genIsExternal(ctx, e.primary);
-    var fixedB = lockedB || (fillOpen && !!e.backup) || genIsExternal(ctx, e.backup);
+    // Prompt 13 / P13R: a claimed or traded day (row source) is a commitment of its holder - every held role fixed in both modes.
+    var personHeld = genHeldByPerson(e);
+    var fixedP = lockedP || (fillOpen && !!e.primary) || genIsExternal(ctx, e.primary) || (personHeld && !!e.primary);
+    var fixedB = lockedB || (fillOpen && !!e.backup) || genIsExternal(ctx, e.backup) || (personHeld && !!e.backup);
     base[d] = {
       primary: fixedP ? (e.primary || null) : null,
       backup: fixedB ? e.backup : null,
@@ -1035,6 +1048,11 @@ function genRefreshWeekendDiag(G, S) {
 // rules.buildContext keeps him out of ctx.activeIds altogether (every candidate loop here runs over
 // activeIds), so this test only guards the pool filter and the fixed-slot reading in genSeedLocks.
 function genIsExternal(ctx, id) { var r = id && ctx.rosterById && ctx.rosterById[id]; return !!(r && r.type === "external"); }
+// Prompt 13 / P13R: row sources written by a surgeon acting for himself, without a
+// lock flag - fixed for the generator in both modes (see the header). Data,
+// exported; test/open-shifts.test.js pins it against the SQL that writes each source.
+var GEN_PERSON_FIXED_SOURCES = ["claim", "trade"];
+function genHeldByPerson(e) { return !!(e && typeof e.source === "string" && GEN_PERSON_FIXED_SOURCES.indexOf(e.source) >= 0); }
 // The equal-share pool (J): active, poolMember !== false, no availability windows, not external.
 function genPoolIds(G) {
   return G.ctx.activeIds.filter(function (id) { var P = G.ctx.per[id]; return P.rules.poolMember !== false && !P.hasWindows && !genIsExternal(G.ctx, id); });
@@ -1446,6 +1464,7 @@ function rangePresets(lastPublishedDay, today) {
 if (typeof module !== "undefined") {
   module.exports = {
     generate: generate,
+    GEN_PERSON_FIXED_SOURCES: GEN_PERSON_FIXED_SOURCES,
     rangePresets: rangePresets,
     buildUnits: buildUnits,
     scoreCandidate: scoreCandidate,

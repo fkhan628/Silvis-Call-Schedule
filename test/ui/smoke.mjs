@@ -1201,7 +1201,9 @@ try {
   // has a live row or the grid shows a holder on it (this run never blanks a
   // held day, and refreshDays deletes a dropped day outright).
   const observed = {}; // day -> { primary, backup, ext } as the grid showed it at settle time (harnessDays days only)
-  const liveHolders = (d) => { const l = liveByDay[d] || {}; return { primary: l.primary_id || null, backup: l.backup_id || null, ext: l.external_cover || null }; };
+  // P13R: the board scenario's claim (claimedDays) is overlaid on every schedule_days GET the app makes, so for
+  // that day the harness's "live" is the overlaid row - the app's map keeps the claimer there across every poll.
+  const liveHolders = (d) => { const l = { ...(liveByDay[d] || {}), ...(claimedDays[d] || {}) }; return { primary: l.primary_id || null, backup: l.backup_id || null, ext: l.external_cover || null }; };
   const sameHolders = (a, b) => a.primary === b.primary && a.backup === b.backup && a.ext === b.ext;
   const curDay = (d) => observed[d] || liveHolders(d);
   const curHolder = (d, role) => { const c = curDay(d); return role === "primary" ? (c.primary || (c.ext ? "ext:" + c.ext : null)) : (c.backup || null); };
@@ -1215,7 +1217,7 @@ try {
     const out = {};
     for (const ym of [...new Set(days.map(d => d.slice(0, 7)))]) {
       await showMonth(+ym.slice(0, 4), +ym.slice(5, 7) - 1);
-      const cells = await page.$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || "", b: e.getAttribute("data-backup") || "", ext: e.getAttribute("data-ext") || "" })));
+      const cells = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || "", b: e.getAttribute("data-backup") || "", ext: e.getAttribute("data-ext") || "" })));
       days.filter(d => d.slice(0, 7) === ym).forEach(d => { const c = cells.find(x => x.day === d); if (c) out[d] = { primary: c.p || null, backup: c.b || null, ext: c.ext || null }; });
     }
     return out;
@@ -2925,7 +2927,10 @@ try {
         const slots = Array.isArray(lg.openSlots) ? lg.openSlots : null;
         const badSlot = slots ? slots.find(s => !s || !/^\d{4}-\d{2}-\d{2}$/.test(s.day) || !/^(primary|backup)$/.test(s.role) || typeof s.reason !== "string" || !sentence.test(s.reason) || rosterWord.test(s.reason)) : null;
         let denied = null; try { require(path.join(ROOT, "importer.js")).impRefuseNoteDenylist({ lastGenerate: lg }); } catch (e) { denied = String(e && e.message || e).split("\n")[0]; }
-        const extraKeys = Object.keys(lg).filter(k => !["at", "range", "openSlots", "weekendKinds"].includes(k));
+        // P13R (e): the record also carries the run facts of the Prompt 12 head's diagnostics - mode (item T) and fixedSlots - and carriedFrom when a sub-range run kept earlier reasons
+        const extraKeys = Object.keys(lg).filter(k => !["at", "range", "openSlots", "weekendKinds", "mode", "fixedSlots", "carriedFrom"].includes(k));
+        const runFactsOk = (lg.mode === "generate" || lg.mode === "fill-open-only") && (lg.fixedSlots === null || (Number.isInteger(lg.fixedSlots) && lg.fixedSlots >= 0)) && (!("carriedFrom" in lg) || typeof lg.carriedFrom === "string" || lg.carriedFrom === null);
+        if (!runFactsOk) extraKeys.push("bad run facts mode=" + lg.mode + " fixedSlots=" + lg.fixedSlots);
         if (!slots || !lg.range || typeof lg.weekendKinds !== "object" || !lg.weekendKinds || typeof lg.at !== "string" || extraKeys.length) fail("Accept & Publish: lastGenerate shape wrong (extra keys: " + extraKeys.join(",") + "): " + JSON.stringify(lg).slice(0, 300));
         else if (lg.range.start !== "2026-11-02" || !/^\d{4}-\d{2}-\d{2}$/.test(lg.range.end)) fail("Accept & Publish: lastGenerate.range is not the preview's 11/2..: " + JSON.stringify(lg.range));
         else if (badSlot) fail("Accept & Publish: lastGenerate.openSlots carries a non-operational entry: " + JSON.stringify(badSlot));

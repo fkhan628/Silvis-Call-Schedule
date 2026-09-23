@@ -531,7 +531,7 @@ parentheses, `- open`, and ` - <reason>` appended when the slot has one). Pinned
 TypeScript in `edge-functions/daily-reminder/index.ts` against the same fixture — this one function feeds everything:
 the coverage strip (`suCoverageGlance` computes its open lists through it), the "only OPEN" filter (a memoized Set of
 `openSlotKey`s over the grid's span, a generator preview overlaid per day exactly as the cells draw it; `slotIsOpen`
-remains only the per-cell rendering of the same rule), a new **Open shifts** view
+is the one predicate: `openSlots` applies it per slot as `slotIsOpen(d, dayHolder(a, role), today)` (P13R), and the cells render the same rule), a new **Open shifts** view
 (nav badge with the count; table of open slots from today to the end of the published range with weekday, role, unit,
 the generator's operational reason, who is eligible now, when it was last announced), and the notifications.
 After this prompt there is no second place that decides what "open" means.
@@ -577,9 +577,15 @@ everything (`audit_log` `schedule.claim`, `notifications` `shift_claimed`) in th
 `version + 1` write. The client never writes `schedule_days`, the audit row or the feed row for a claim itself; it
 logs `schedule.claim` only with `outcome: "failed"` when the function refused. For six surgeons that is the accepted
 boundary: a claim that slips past a client rule is visible in the audit log and the feed, and the scheduler corrects it
-from the day editor, which is untouched. Open for Faraz: a claim sets `source = 'claim'` and no lock flag, and Generate
-keeps only locked slots, so a later Generate over a claimed day discards the claim unless the claim also locks the role
-or Generate treats `claim` days as locked (`docs/SCHEMA-REVIEW.md`, review note 5). Definition in `sql/schema.sql`
+from the day editor, which is untouched. **Decided (P13R, 9/23 — the rebase onto the Prompt 12 head):** a claim sets `source = 'claim'` and no lock flag, and
+the generator treats a row whose source is `claim` or `trade` (`generator.GEN_PERSON_FIXED_SOURCES` — the two
+sources a surgeon writes for himself, neither path sets a lock) as **fixed in both modes exactly like a lock**: every
+held role of that day stays byte-identical, counts in `diagnostics.fixedSlots`, and its rule conflicts are facts in
+`diagnostics.fixedViolations` — a claim is never silently discarded by a later Generate. `manual` is not in the set:
+the day editor has its own lock toggle, so an unlocked manual slot stays regenerable (and a scheduler edit of a claimed
+day rewrites its source to `manual`, after which the lock flag decides). Pinned in `test/generator-regression.js`
+(fixture `test/fixtures/claim-fixed-2026-10.json`) and `test/open-shifts.test.js` (the SQL-to-generator contract);
+`docs/SCHEMA-REVIEW.md` review note 5 is closed. Definition in `sql/schema.sql`
 right after `apply_trade()`, applied live only through `sql/migrations/2026-09-22-claim-open-slot.sql` (never by a
 git push), proven by the rolled-back `sql/probes/claim-open-slot-probe.sql` and `scripts/verify-rls.sh` section 7
 (`docs/SCHEMA-REVIEW.md`).
@@ -640,13 +646,13 @@ function → cron, so nothing ever runs ungated). `12:00 UTC` = Monday 07:00 CDT
 `edge-functions/README.md` section 4 next to the other two jobs:
 
 ```sql
-select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $
+select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $$
   select net.http_post(
     url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder',
     headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
       coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
     body := '{"mode":"open-shifts"}'::jsonb);
-$);
+$$);
 
 select jobid, jobname, schedule, active from cron.job;                 -- expect three rows
 ```

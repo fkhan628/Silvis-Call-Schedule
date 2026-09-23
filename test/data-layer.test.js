@@ -570,7 +570,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(/settings, lastPublished,\s*\n\s*lastGenerate,/.test(bundle), "buildStateBundle lists lastGenerate next to lastPublished");
     assert.ok(src.includes("if (d.lastGenerate !== undefined) setLastGenerate(d.lastGenerate);"), "adoptBlob reads d.lastGenerate");
     const acc = src.slice(src.indexOf("const acceptMerged = async"), src.indexOf("// --- Seed import"));
-    const okAt = acc.indexOf("if (r && r.ok) {"), setAt = acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString()));");
+    const okAt = acc.indexOf("if (r && r.ok) {"), setAt = acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString(), lastGenerate));"); // P13R (e): the previous record travels too
     assert.ok(okAt > 0 && setAt > okAt && setAt < acc.indexOf("} else if (r && r.blocked)"), "acceptMerged stores the record only in the r.ok branch (a blocked / failed write leaves the old reasons)");
     assert.ok(src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows]);"), "autosave dependencies include lastGenerate");
     assert.ok(src.includes("setLastPublished(null); setLastGenerate(undefined);"), "the state reset clears lastGenerate together with lastPublished");

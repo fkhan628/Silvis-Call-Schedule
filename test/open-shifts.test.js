@@ -532,6 +532,19 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     pushed.forEach(c => assert.ok(R.HARD_REASONS.includes(c), "pushed code not in HARD_REASONS: " + c));
     ["whitelist-month", "outside-available-weeks", "bad-role:"].forEach(c => assert.ok(R.HARD_REASONS.includes(c), "code assigned outside hard.push missing: " + c));
   });
+  check("P13R (b) CLAIMS vs GENERATE: generator.GEN_PERSON_FIXED_SOURCES = ['claim', 'trade'] - the two row sources the SQL writes for a surgeon acting for himself without a lock flag (claim_open_slot, apply_trade); genSeedLocks fixes every held role of such a day in both modes; 'manual' is not in the set", () => {
+    const GEN = require(path.join(ROOT, "generator.js"));
+    assert.deepStrictEqual(GEN.GEN_PERSON_FIXED_SOURCES, ["claim", "trade"]);
+    const sql = fs.readFileSync(path.join(ROOT, "sql", "schema.sql"), "utf8");
+    const claimFn = sql.slice(sql.indexOf("create or replace function public.claim_open_slot"), sql.indexOf("grant execute on function public.claim_open_slot"));
+    assert.ok((claimFn.match(/source = 'claim'/g) || []).length >= 2 && !/_locked = true/.test(claimFn), "claim_open_slot writes source 'claim' on both role paths and sets no lock flag");
+    const tradeFn = sql.slice(sql.indexOf("create or replace function public.apply_trade"), sql.indexOf("create or replace function public.claim_open_slot"));
+    assert.ok((tradeFn.match(/source = 'trade'/g) || []).length >= 2 && /_locked = false/.test(tradeFn), "apply_trade writes source 'trade' and explicitly clears the lock flag");
+    const gen = fs.readFileSync(path.join(ROOT, "generator.js"), "utf8");
+    const seedLocks = gen.slice(gen.indexOf("function genSeedLocks("), gen.indexOf("var yieldWeeks = {};", gen.indexOf("function genSeedLocks(")));
+    ["var personHeld = genHeldByPerson(e);", "(personHeld && !!e.primary)", "(personHeld && !!e.backup)"].forEach(t => assert.ok(seedLocks.indexOf(t) >= 0, "genSeedLocks fixes both held roles of a claim/trade day - missing: " + t));
+    assert.ok(!GEN.GEN_PERSON_FIXED_SOURCES.includes("manual"), "manual stays regenerable when unlocked (the day editor has a lock toggle; pinned in generator-regression)");
+  });
   check("openSlotReason: each category of the fixed table renders from its own codes (detail after ':' and '@day' suffixes ignored)", () => {
     const table = {
       "vacations": ["time-off:2026-11-05", "day-before-vacation"],
@@ -599,7 +612,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   check("lastGenerateFromDiagnostics(diagnostics, at) on the fixture: { at, range: { start, end }, openSlots sorted by day then role, weekendKinds } - reasons are the rendered sentences, never the reasons map", () => {
     const out = H.lastGenerateFromDiagnostics(LG.diagnostics, LG.at);
     assert.deepStrictEqual(out, LG.expected);
-    assert.deepStrictEqual(Object.keys(out).sort(), ["at", "openSlots", "range", "weekendKinds"], "no extra keys (the diagnostics are NOT persisted)");
+    assert.deepStrictEqual(Object.keys(out).sort(), ["at", "fixedSlots", "mode", "openSlots", "range", "weekendKinds"], "no extra keys (the diagnostics are NOT persisted; mode + fixedSlots are the run facts, P13R)");
     noNames(JSON.stringify(out), "lastGenerate record");
     IMP.impRefuseNoteDenylist({ lastGenerate: out });
     // the board consumes the record as-is
@@ -614,14 +627,31 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   check("lastGenerateFromDiagnostics: junk / partial diagnostics -> an empty record (never throws); a missing 'at' is stamped now (ISO); openSlotWeekendKinds accepts a ready { friday: kind } map (the persisted form) and drops junk entries", () => {
     const before = Date.now();
     const empty = H.lastGenerateFromDiagnostics(null);
-    assert.deepStrictEqual(Object.keys(empty).sort(), ["at", "openSlots", "range", "weekendKinds"]);
-    assert.deepStrictEqual([empty.range, empty.openSlots, empty.weekendKinds], [{ start: null, end: null }, [], {}]);
+    assert.deepStrictEqual(Object.keys(empty).sort(), ["at", "fixedSlots", "mode", "openSlots", "range", "weekendKinds"]);
+    assert.deepStrictEqual([empty.range, empty.openSlots, empty.weekendKinds, empty.mode, empty.fixedSlots], [{ start: null, end: null }, [], {}, "generate", null]);
     assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(empty.at) && Date.parse(empty.at) >= before, "at is an ISO timestamp of now");
-    assert.deepStrictEqual(H.lastGenerateFromDiagnostics({ uncovered: "nope", weekendUnits: {} }, "2026-09-22T15:00:00.000Z"), { at: "2026-09-22T15:00:00.000Z", range: { start: null, end: null }, openSlots: [], weekendKinds: {} });
+    assert.deepStrictEqual(H.lastGenerateFromDiagnostics({ uncovered: "nope", weekendUnits: {} }, "2026-09-22T15:00:00.000Z"), { at: "2026-09-22T15:00:00.000Z", range: { start: null, end: null }, mode: "generate", fixedSlots: null, openSlots: [], weekendKinds: {} });
     assert.deepStrictEqual(H.lastGenerateFromDiagnostics({ range: { start: "2026-11-02", end: "2026-11-30" }, uncovered: [{ day: "2026-13-40", role: "primary", reasons: {} }, { day: "2026-11-03", role: "nurse", reasons: {} }, { day: "2026-11-03", role: "backup" }] }, "x").openSlots,
       [{ day: "2026-11-03", role: "backup", reason: "no eligible surgeon" }], "junk days / roles dropped; a slot without a reasons map still renders");
     assert.deepStrictEqual(H.openSlotWeekendKinds({ "2026-11-06": "block", "2026-11-13": "daily", "2026-11-20": "locked", "bad": "split", "2026-11-27": 7 }), { "2026-11-06": "block", "2026-11-13": "daily" });
     assert.deepStrictEqual(H.openSlotWeekendKinds(LG.diagnostics.weekendUnits), LG.expected.weekendKinds);
+  });
+  check("P13R (e) lastGenerateFromDiagnostics(dg, at, previous): mode + fixedSlots come from the target-head diagnostics (fill-open-only / generate, item T); a run over a sub-range keeps the previous record slots and weekend kinds OUTSIDE its range (carriedFrom = previous.at), replaces everything inside, sorts, and never carries junk or reason-less slots", () => {
+    const prevRec = { at: "2026-09-20T10:00:00.000Z", range: { start: "2026-10-07", end: "2027-01-03" }, mode: "generate", fixedSlots: 90,
+      openSlots: [{ day: "2026-10-15", role: "primary", reason: "no eligible surgeon - weekday patterns and stated availability" }, { day: "2026-11-05", role: "backup", reason: "no eligible surgeon" }, { day: "2026-12-24", role: "primary", reason: "no eligible surgeon - East feed busy" }, { day: "2026-12-25", role: "backup", reason: "  " }, { day: "junk", role: "primary", reason: "x" }],
+      weekendKinds: { "2026-10-16": "block", "2026-11-06": "split", "2026-12-25": "daily" } };
+    const dg = { range: { start: "2026-11-02", end: "2026-11-30" }, mode: "fill-open-only", fixedSlots: 40, uncovered: [{ day: "2026-11-05", role: "primary", reasons: { s1: ["east-busy"] } }], weekendUnits: [{ friday: "2026-11-06", kind: "block" }] };
+    const out = H.lastGenerateFromDiagnostics(dg, "2026-09-23T01:00:00.000Z", prevRec);
+    assert.deepStrictEqual(out, { at: "2026-09-23T01:00:00.000Z", range: { start: "2026-11-02", end: "2026-11-30" }, mode: "fill-open-only", fixedSlots: 40,
+      openSlots: [{ day: "2026-10-15", role: "primary", reason: "no eligible surgeon - weekday patterns and stated availability" }, { day: "2026-11-05", role: "primary", reason: "no eligible surgeon - East feed busy" }, { day: "2026-12-24", role: "primary", reason: "no eligible surgeon - East feed busy" }],
+      weekendKinds: { "2026-11-06": "block", "2026-10-16": "block", "2026-12-25": "daily" }, carriedFrom: "2026-09-20T10:00:00.000Z" });
+    IMP.impRefuseNoteDenylist({ lastGenerate: out });
+    // nothing to carry (previous covers the same range, or no previous / no range) -> no carriedFrom key
+    assert.ok(!("carriedFrom" in H.lastGenerateFromDiagnostics(dg, "x", { at: "y", openSlots: [{ day: "2026-11-20", role: "backup", reason: "r" }], weekendKinds: {} })), "an inside-range previous slot is replaced, not carried");
+    assert.ok(!("carriedFrom" in H.lastGenerateFromDiagnostics(dg, "x")), "no previous -> no carriedFrom");
+    assert.ok(!("carriedFrom" in H.lastGenerateFromDiagnostics({ uncovered: [] }, "x", prevRec)), "a run without a range carries nothing");
+    assert.strictEqual(H.lastGenerateFromDiagnostics({ mode: "nope", fixedSlots: -1 }, "x").mode, "generate", "unknown mode reads generate");
+    assert.strictEqual(H.lastGenerateFromDiagnostics({ mode: "nope", fixedSlots: -1 }, "x").fixedSlots, null, "a bad fixedSlots reads null");
   });
   check("a real generator run (seed 1, best of 1, Nov-Dec 2026 over the seed) yields a record whose every reason passes the denylist gate and names nobody", () => {
     const SA = require(path.join(__dirname, "seed-adapter.js"));
@@ -644,6 +674,8 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     const acc = appSrc.slice(appSrc.indexOf("const acceptMerged = async"), appSrc.indexOf("// --- Seed import"));
     const okAt = acc.indexOf("if (r && r.ok) {"), setAt = acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics,");
     assert.ok(okAt > 0 && setAt > okAt && setAt < acc.indexOf("} else if (r && r.blocked)"), "setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, ...)) sits inside the r.ok branch");
+    assert.ok(acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString(), lastGenerate))") > 0, "P13R (e): the previous record is passed so a sub-range run keeps earlier reasons outside its range");
+    assert.ok(appSrc.indexOf('data-testid="openshifts-lastgen"') > 0 && appSrc.indexOf("lastGenerate.mode === ") > 0 && appSrc.indexOf("lastGenerate.fixedSlots") > 0, "P13R (e): the board shows the last-generated line from the record mode and fixedSlots");
     assert.ok(/\}, \[loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows\]\);/.test(appSrc), "the autosave effect lists lastGenerate in its dependencies");
     assert.ok(/lastGenerate\.weekendKinds/.test(appSrc), "boardWeekendKinds reads the persisted weekendKinds map");
     assert.ok(/\{ \.\.\.openSlotWeekendKinds\(fromLast\), \.\.\.openSlotWeekendKinds\(fromPreview\) \}/.test(appSrc), "the preview still overlays the persisted kinds");
@@ -1048,12 +1080,14 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   const HEADS = ["### 16.1 The single definition", "### 16.2 The claim boundary", "### 16.3 The three notification paths", "### 16.4 The cron job", "### 16.5 What is NOT automatic"];
   const sub = (n) => { const i = guide.indexOf("\n" + HEADS[n - 1]); const j = n < HEADS.length ? guide.indexOf("\n" + HEADS[n]) : -1; assert.ok(i > 0, "sub-heading " + HEADS[n - 1]); return guide.slice(i, j > 0 ? j : undefined); };
 
-  check("docs/SILVIS-BUILD-GUIDE.md: section 16 carries the five sub-headings 16.1 The single definition .. 16.5 What is NOT automatic, in order, all after the '## 16.' heading (the last H2)", () => {
+  check("docs/SILVIS-BUILD-GUIDE.md: section 16 carries the five sub-headings 16.1 The single definition .. 16.5 What is NOT automatic, in order, all after the '## 16.' heading and before the next H2 (section 17 follows on the Prompt 12 head)", () => {
     const s16 = guide.indexOf("\n## 16. Open shifts");
     assert.ok(s16 > 0, "the '## 16. Open shifts' heading");
-    assert.strictEqual(guide.indexOf("\n## ", s16 + 1), -1, "section 16 is the last H2");
+    const nextH2 = guide.indexOf("\n## ", s16 + 1);
+    const s16End = nextH2 < 0 ? guide.length : nextH2;
+    assert.ok(nextH2 < 0 || /\n## 17\. /.test(guide.slice(nextH2, nextH2 + 8)), "the H2 after section 16 is section 17 (Prompt 14), nothing else");
     let last = s16;
-    HEADS.forEach(h => { const i = guide.indexOf("\n" + h); assert.ok(i > last, "missing or out of order: " + h); last = i; });
+    HEADS.forEach(h => { const i = guide.indexOf("\n" + h); assert.ok(i > last && i < s16End, "missing, out of order or outside section 16: " + h); last = i; });
     assert.strictEqual((guide.match(/\n### 16\.\d/g) || []).length, HEADS.length, "exactly five 16.x sub-headings");
   });
   check("guide 16.1 names openSlots as the one definition; 16.2 states the boundary (eligibility() in the client before the button, NOT in SQL; claim_open_slot guards integrity and logs schedule.claim); 16.3 names the three paths with category open_shifts, pref schedule_updates_email, audit openshifts.notify, mode open-shifts + job silvis-open-shifts-weekly, and shift_claimed on a claim", () => {

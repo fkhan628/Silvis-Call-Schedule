@@ -213,20 +213,42 @@ function openSlotReason(reasonsById) {
    penalties, nor the reasons map). openSlots are sorted by day then role
    (primary first); junk days / roles are dropped; a missing atIso is stamped
    now. Never throws. The board reads openSlots as its Why column and
-   weekendKinds as the unit patterns (openSlots(..., { reasons, weekendKinds })). */
-function lastGenerateFromDiagnostics(diagnostics, atIso) {
+   weekendKinds as the unit patterns (openSlots(..., { reasons, weekendKinds })).
+   P13R (9/23, the Prompt 12 head): the record also carries the run's
+   mode ("generate" | "fill-open-only", item T) and fixedSlots (the fixed count:
+   locks, outside surgeons, claims and trades; null when the diagnostics have
+   none) - the board's "last generated" line reads them. The optional third
+   argument is the PREVIOUS record: a run over a sub-range (the October
+   fill-open-only backfill, item AB's first-open start) must not erase the
+   reasons an earlier run recorded for days OUTSIDE its range, so those slots
+   (and the weekend kinds of Fridays outside the range) are carried over and
+   the record then carries carriedFrom = the earlier record's at. Slots inside
+   the new range are always the new run's. */
+function lastGenerateFromDiagnostics(diagnostics, atIso, previous) {
   const dg = diagnostics && typeof diagnostics === "object" ? diagnostics : {};
   const range = dg.range && typeof dg.range === "object" ? dg.range : {};
-  const openSlots = (Array.isArray(dg.uncovered) ? dg.uncovered : [])
+  const start = openSlotIsDay(range.start) ? range.start : null, end = openSlotIsDay(range.end) ? range.end : null;
+  const bySlot = (a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : OPEN_SLOT_ROLES.indexOf(a.role) - OPEN_SLOT_ROLES.indexOf(b.role);
+  const fresh = (Array.isArray(dg.uncovered) ? dg.uncovered : [])
     .filter(u => u && typeof u === "object" && openSlotIsDay(u.day) && OPEN_SLOT_ROLES.indexOf(u.role) >= 0)
-    .map(u => ({ day: u.day, role: u.role, reason: openSlotReason(u.reasons) }))
-    .sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : OPEN_SLOT_ROLES.indexOf(a.role) - OPEN_SLOT_ROLES.indexOf(b.role));
-  return {
+    .map(u => ({ day: u.day, role: u.role, reason: openSlotReason(u.reasons) }));
+  const prev = previous && typeof previous === "object" && start && end ? previous : null;
+  const carried = (prev && Array.isArray(prev.openSlots) ? prev.openSlots : [])
+    .filter(u => u && typeof u === "object" && openSlotIsDay(u.day) && OPEN_SLOT_ROLES.indexOf(u.role) >= 0 && (u.day < start || u.day > end) && typeof u.reason === "string" && u.reason.trim())
+    .map(u => ({ day: u.day, role: u.role, reason: u.reason.trim() }));
+  const weekendKinds = openSlotWeekendKinds(dg.weekendUnits);
+  const prevKinds = prev ? openSlotWeekendKinds(prev.weekendKinds) : {};
+  Object.keys(prevKinds).forEach(f => { if ((f < start || f > end) && weekendKinds[f] === undefined) weekendKinds[f] = prevKinds[f]; });
+  const out = {
     at: typeof atIso === "string" && atIso ? atIso : new Date().toISOString(),
-    range: { start: openSlotIsDay(range.start) ? range.start : null, end: openSlotIsDay(range.end) ? range.end : null },
-    openSlots: openSlots,
-    weekendKinds: openSlotWeekendKinds(dg.weekendUnits),
+    range: { start: start, end: end },
+    mode: dg.mode === "fill-open-only" ? "fill-open-only" : "generate",
+    fixedSlots: Number.isInteger(dg.fixedSlots) && dg.fixedSlots >= 0 ? dg.fixedSlots : null,
+    openSlots: fresh.concat(carried).sort(bySlot),
+    weekendKinds: weekendKinds,
   };
+  if (carried.length) out.carriedFrom = typeof prev.at === "string" && prev.at ? prev.at : null;
+  return out;
 }
 // openSlotsLine(slot, nameOfUnit?) -> 'Fri 11/06 - primary (weekend block) - open'
 // - the plain-text line the board's Copy list and the reminder e-mail use:

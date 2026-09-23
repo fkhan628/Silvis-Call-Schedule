@@ -345,3 +345,5 @@ delete would have left the row in the anon-readable table) and verifies the clea
 failed ..."` instead of an unconditional "cleanup done"). `test/schema.test.js` grades the section-7 case pins
 against the section-7 slice only (section 5's `expect_eq A ...` lines had satisfied cases A-H) and pins the 7e
 cleanup and the `source` comment; 291 assertions.
+
+**⟶ 9/23 (P13R, the rebase onto the Prompt 12 head) — review note 5 closed.** The generator treats a row whose source is `claim` or `trade` as fixed in both modes exactly like a lock (`generator.GEN_PERSON_FIXED_SOURCES`; every held role of that day, counted in `diagnostics.fixedSlots`, conflicts in `fixedViolations`), so a later Generate never discards a claim; `manual` stays governed by the day editor's lock toggle. No schema change: `claim_open_slot` still writes `source = 'claim'` and no lock flag. Pinned in `test/generator-regression.js` (fixture `claim-fixed-2026-10.json`) and `test/open-shifts.test.js`.

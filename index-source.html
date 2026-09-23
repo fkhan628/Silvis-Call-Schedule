@@ -2202,7 +2202,9 @@ function CallSchedule() {
       // operational wording, become blob key lastGenerate (next to lastPublished)
       // so the board still explains each open slot after a reload. Written only
       // once the days are on file: a blocked / failed write keeps the old record.
-      setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString()));
+      // P13R (e): the previous record is passed - a run over a sub-range (the October fill-open-only backfill,
+      // item AB's first-open start) keeps the earlier reasons for days outside its range; mode + fixedSlots are recorded.
+      setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString(), lastGenerate));
       showToast(`Saved ${changes.length} generated slot change(s). Review the publish diff.`, "success");
       // Prompt 13 part 5a (fix round): the group's open-shifts notice belongs to
       // Accept & Publish itself, not to the office e-mail - arm it here, once the
@@ -3542,19 +3544,31 @@ function CallSchedule() {
   // Eligibility per open slot for every active surgeon (hard rules decide the
   // button; soft entries feed the sheet). Only computed while the board is
   // showing - a few hundred eligibility() calls at most.
+  // P13R (c): the gate is eligibility() itself, with the target head's option set. An outside surgeon (item M,
+  // roster type external) is never a candidate here - written in by hand only, so he is left out rather than
+  // listed with 'external-surgeon'. A pool surgeon who already holds the other two days of that Fri-Sun in the
+  // role is asked as a block member, exactly as the day editor and the trade path ask (small items 9/22) -
+  // otherwise weekend-block-only would refuse the one day that completes his own block. No other option: no
+  // ignoreLocks (a locked slot is never open), no manual (that is the day editor's path).
+  const boardBlockMember = (day, role, id) => {
+    const dow = parse(day).getDay();
+    if (dow !== 5 && dow !== 6 && dow !== 0) return false;
+    const fri = suAddDays(day, dow === 5 ? 0 : dow === 6 ? -1 : -2);
+    return [0, 1, 2].map(k => suAddDays(fri, k)).every(d => d === day || !!(schedule[d] && schedule[d][role] === id));
+  };
   const boardElig = useMemo(() => {
     const out = {};
     if (view !== "openshifts" || !rulesCtx) return out;
     boardSlots.forEach(s => {
-      out[openSlotKey(s.day, s.role)] = activeSurgeons.map(sg => {
+      out[openSlotKey(s.day, s.role)] = activeSurgeons.filter(sg => sg.type !== "external").map(sg => {
         let r;
-        try { r = eligibility(rulesCtx, s.day, s.role, sg.id); }
+        try { r = eligibility(rulesCtx, s.day, s.role, sg.id, boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : undefined); }
         catch (e) { console.warn("board eligibility threw for", sg.id, s.role, s.day, e); r = { ok: false, hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)], soft: [] }; }
         return { id: sg.id, ok: !!r.ok, hard: (r.hard && r.hard.length) ? r.hard : (r.ok ? [] : ["unknown-surgeon"]), soft: r.soft || [] };
       });
     });
     return out;
-  }, [view, boardSlots, rulesCtx, activeSurgeons]);
+  }, [view, boardSlots, rulesCtx, activeSurgeons, schedule]);
   const boardRows = useMemo(() => obBoardRows(boardSlots, { today: todayStr, horizonDays: obHorizon === "all" ? null : obHorizon, role: obRole, weekendOnly: obWeekend }), [boardSlots, todayStr, obHorizon, obRole, obWeekend]);
   const boardUnitText = (u) => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : "weekend" + (u.pattern ? " " + u.pattern : "");
   const boardCopyList = async () => {
@@ -3619,6 +3633,10 @@ function CallSchedule() {
   const runClaim = async () => {
     const s = claimSheet;
     if (!s || claimBusy || !mySurgeon) return;
+    // P13R (c): the gate is eligibility() - read it again at confirm time (the rules or the schedule may have
+    // moved since the sheet opened); a refusal here never reached the function, so no audit row.
+    const gate = (boardElig[openSlotKey(s.day, s.role)] || []).find(o => o.id === mySurgeon);
+    if (!gate || !gate.ok) { showToast("Not eligible any more: " + (gate ? reasonLabel(gate.hard[0], nameOf) : reasonLabel("unknown-surgeon")), "error"); closeClaimSheet(); return; }
     setClaimBusy(true);
     const label = `${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} ${s.role}`;
     const a = await claimOpenSlotRpc(s.day, s.role);
@@ -4629,6 +4647,11 @@ function CallSchedule() {
                 {boardTail.primary + boardTail.backup > 0
                   ? <>Not listed: {boardTail.primary} primary / {boardTail.backup} backup day(s) between {fmtMD(boardTail.from)} and {fmtMD(boardTail.through)} have no schedule row yet{boardEnd ? ` (after the last published day, ${boardEndText})` : ""}. The coverage strip counts them as open; Generate covers them.</>
                   : <>The published schedule runs through {boardEndText} - this board and the coverage strip's next-60-days counts agree.</>}
+              </div>
+              <div data-testid="openshifts-lastgen" data-mode={lastGenerate && typeof lastGenerate === "object" && lastGenerate.mode ? lastGenerate.mode : ""} data-fixed={lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : ""} style={{fontSize:11,color:"#7a8a98",marginTop:4,lineHeight:1.5}}>
+                {lastGenerate && typeof lastGenerate === "object" && lastGenerate.at
+                  ? <>Why column: from the last Accept &amp; Publish on {new Date(lastGenerate.at).toLocaleString()}{lastGenerate.range && lastGenerate.range.start ? " over " + fmtMD(lastGenerate.range.start) + " - " + fmtMD(lastGenerate.range.end || lastGenerate.range.start) : ""} ({lastGenerate.mode === "fill-open-only" ? "fill open slots only" : "generate"}{Number.isInteger(lastGenerate.fixedSlots) ? ", " + lastGenerate.fixedSlots + " slot(s) fixed: locks, outside surgeons, claims and trades" : ""}){lastGenerate.carriedFrom ? "; earlier reasons kept for days outside that range" : ""}.</>
+                  : <>Why column: no generate recorded yet - it fills after the next Accept &amp; Publish.</>}
               </div>
               {claimSheet && (
                 <div data-testid="claim-sheet" onClick={() => { if (!claimBusy) closeClaimSheet(); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
