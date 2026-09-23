@@ -185,7 +185,7 @@ check("send-notification: categories offers_reminder and offers_closed exist, bo
 });
 check("daily-reminder: mode \"offers\" is dispatched behind the x-cron-secret gate with the shared dryRun flag; an unknown mode is still a 400", () => {
   assert.ok(/mode === "offers"\)\s*return await runOffers\(centralNow\(\), dryRun\)/.test(drSrc), "dispatch: mode offers -> runOffers(centralNow(), dryRun)");
-  const gate = drSrc.indexOf('req.headers.get("x-cron-secret") !== CRON_SECRET'), dispatch = drSrc.indexOf('mode === "offers"');
+  const gate = drSrc.indexOf('await cronSecretMatches(req.headers.get("x-cron-secret"), CRON_SECRET)'), dispatch = drSrc.indexOf('mode === "offers"');   // constant-time compare since Prompt 16 B5
   assert.ok(gate > 0 && dispatch > gate, "the gate is evaluated before the dispatch");
   assert.ok(/mode must be/.test(drSrc), "an unknown mode is a 400 with the accepted values named");
   assert.ok(drSrc.indexOf('typeof body.dryRun !== "boolean"') > 0 && drSrc.indexOf('typeof body.dryRun !== "boolean"') < dispatch, "dryRun is validated before the dispatch");

@@ -854,7 +854,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
 
   /* -- daily-reminder mode 'open-shifts' (source pins: the contract the orchestrator proves live with a dryRun) -- */
   check("daily-reminder/index.ts: body.mode 'open-shifts' | undefined/'reminder', any other value -> 400; the mode branches AFTER the x-cron-secret gate and the dryRun boolean check; the default path still starts with 'const now = centralNow();' + 'const tomorrow = addDays(now.ymd, 1);'", () => {
-    const gate = drSrc.indexOf('req.headers.get("x-cron-secret") !== CRON_SECRET');
+    const gate = drSrc.indexOf('await cronSecretMatches(req.headers.get("x-cron-secret"), CRON_SECRET)');   // constant-time compare since Prompt 16 B5
     const dry = drSrc.indexOf('typeof body.dryRun !== "boolean"');
     const mode = drSrc.indexOf('"open-shifts"', dry);
     assert.ok(gate > 0 && dry > gate && mode > dry, "gate -> dryRun check -> mode dispatch, in that order");

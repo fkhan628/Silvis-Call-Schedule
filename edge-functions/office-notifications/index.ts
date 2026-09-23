@@ -57,7 +57,8 @@
 //     scheduler                          -> every mode
 //   Anything else is 401 BEFORE any work. Fail closed: no CRON_SECRET set
 //   means the cron path is shut. The gateway verify_jwt stays OFF; this check
-//   is the boundary.
+//   is the boundary. The secret compare is constant time since Prompt 16 B5
+//   (2026-09-23; the @cronSecret block).
 //
 // Dropped from Davenport: schedule_weeks / week+slot diff (dayCall, nights,
 // wknd), APP roster + APP time-off exclusion, kind=nocall skip (time_off has
@@ -184,6 +185,50 @@ function escHtml(s: unknown): string {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// ---------------------------------------------------------------------------
+// Log redaction (Prompt 16 B5, review 2026-09-23 section 3). Plain JavaScript
+// between the markers: test/edge-functions.test.js extracts this block from all
+// three mail functions, checks the copies are identical, evaluates it with
+// new Function and runs a provider error body through it. Until 9/23 the
+// pattern had lost its two backslashes (it matched a run of capital S, an @
+// and another run of capital S - nothing real), so a Resend error naming the
+// address reached the function log verbatim.
+// ---------------------------------------------------------------------------
+// @logRedact-mirror-start
+function redactAddresses(text) {
+  return String(text == null ? "" : text).replace(/\S+@\S+/g, "<redacted>");
+}
+// @logRedact-mirror-end
+
+// ---------------------------------------------------------------------------
+// x-cron-secret compare (Prompt 16 B5, review 2026-09-23 section 3). Plain
+// JavaScript between the markers: test/edge-functions.test.js extracts this
+// block from both cron functions, checks the copies are identical, evaluates
+// it with new Function and runs it. Constant time: both sides are SHA-256
+// hashed (crypto.subtle.digest), so the compare always walks the same 32
+// bytes whatever the two lengths, and the bytes are XOR-folded with no early
+// exit - a near miss costs the same as a miss. Fail closed: an unset / empty
+// CRON_SECRET and a missing / empty header refuse before anything is hashed.
+// ---------------------------------------------------------------------------
+// @cronSecret-mirror-start
+async function sha256Bytes(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(text)));
+  return new Uint8Array(digest);
+}
+function bytesEqualConstantTime(a, b) {
+  let diff = a.length ^ b.length;
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) diff |= (i < a.length ? a[i] : 0) ^ (i < b.length ? b[i] : 0);
+  return diff === 0;
+}
+async function cronSecretMatches(given, expected) {
+  if (typeof expected !== "string" || expected.length === 0) return false;   // nothing configured: nobody gets in
+  if (typeof given !== "string" || given.length === 0) return false;         // no header / an empty header
+  const [g, e] = await Promise.all([sha256Bytes(given), sha256Bytes(expected)]);
+  return bytesEqualConstantTime(g, e);
+}
+// @cronSecret-mirror-end
+
 // Mail client. Logs counts/keys only - never the address.
 async function sendEmail(to: string, subject: string, html: string, logKey: string): Promise<{ ok: boolean; status: number }> {
   try {
@@ -194,11 +239,11 @@ async function sendEmail(to: string, subject: string, html: string, logKey: stri
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      console.error(`[email] ${logKey}: provider HTTP ${res.status} ${body.slice(0, 160).replace(/S+@S+/g, "<redacted>")}`);
+      console.error(`[email] ${logKey}: provider HTTP ${res.status} ${redactAddresses(body).slice(0, 160)}`);
     }
     return { ok: res.ok, status: res.status };
   } catch (e) {
-    console.error(`[email] ${logKey}: ${(e as Error).message}`);
+    console.error(`[email] ${logKey}: ${redactAddresses((e as Error).message)}`);
     return { ok: false, status: 0 };
   }
 }
@@ -212,8 +257,8 @@ async function authorize(req: Request): Promise<Caller | null> {
   const CRON_SECRET = Deno.env.get("CRON_SECRET") || "";
   const hdr = req.headers.get("x-cron-secret");
   if (hdr !== null) {
-    // A caller that presents the cron header is judged on it alone.
-    return (CRON_SECRET && hdr === CRON_SECRET) ? { via: "cron" } : null;
+    // A caller that presents the cron header is judged on it alone (constant-time compare, Prompt 16 B5).
+    return (await cronSecretMatches(hdr, CRON_SECRET)) ? { via: "cron" } : null;
   }
   const authz = req.headers.get("authorization") || "";
   const token = authz.replace(/^Bearer\s+/i, "").trim();

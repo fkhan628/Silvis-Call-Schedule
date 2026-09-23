@@ -3065,7 +3065,9 @@ function CallSchedule() {
   // --- Email via the send-notification edge function ---
   // Recipient resolution + per-category gating happen SERVER-SIDE (service
   // role reads user_profiles.email / notification_preferences). The client
-  // sends only the type, template data and optional targetIds.
+  // sends only the type, template data and optional targetIds. A trade_* send
+  // also carries data.trade_id (the shift_trade_requests row): since Prompt 16
+  // B5 the function reads that row and mails exactly its two parties.
   // Returns the outcome so a caller can word its own toast:
   //   { ok: true, sent, failed }            the function ran (failed > 0 already toasted)
   //   { ok: false, skipped: true }          an empty target list - nothing to send
@@ -3296,7 +3298,7 @@ function CallSchedule() {
           + (retDays.length > 1 ? `; ${fromName} would take ${roleWordOf(tradeReturnRole)} ${fmtMD(retDays[0])}-${fmtMD(retDays[retDays.length - 1])} in return` : retDays.length === 1 ? `; ${fromName} would take ${slotLabel(retDays[0], tradeReturnRole)} in return` : " (one-way - no return shift)");
       logAudit("trade.propose", msg, { trade_id: first.id, trade_ids: inserted.map(r => r.id), from: fromId, to: tradeTo, day: tradeDay, role: tradeRole, days, return_day: first.return_day, return_role: first.return_role, return_days: retDays, unit: unit ? unit.name : null });
       await addNotification("trade_proposed", "Shift trade proposed", msg, { from_surgeon_id: fromId, to_surgeon_id: tradeTo, trade_id: first.id, trade_ids: inserted.map(r => r.id), day: tradeDay });
-      sendEmailNotif("trade_proposed", { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)) }, [fromId, tradeTo]);
+      sendEmailNotif("trade_proposed", { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)), trade_id: first.id }, [fromId, tradeTo]);
       setTradeDay(""); setTradeReturnDay("");
       if (inserted.length === rows.length) showToast(whole ? `Trade proposed for the ${unitText(unit)} - ${inserted.length} rows.` : "Trade proposed.", "success");
     } catch(e) { console.warn("Submit trade error:", e); showToast("Couldn't submit the trade - check your connection and try again.", "error"); }
@@ -3354,7 +3356,7 @@ function CallSchedule() {
     if (opts && opts.silent) return true;
     const msg = tradeAppliedMsg(applied);
     await addNotification("trade_applied", "Shift trade applied", msg, { from_surgeon_id: t.from_surgeon_id, to_surgeon_id: t.to_surgeon_id, trade_id: t.id, day: t.day });
-    sendEmailNotif("trade_applied", { message: msg, subject: "Shift trade applied - " + slotLabel(t.day, t.role) }, [t.from_surgeon_id, t.to_surgeon_id]);
+    sendEmailNotif("trade_applied", { message: msg, subject: "Shift trade applied - " + slotLabel(t.day, t.role), trade_id: t.id }, [t.from_surgeon_id, t.to_surgeon_id]);
     showToast("Trade applied to the schedule.", "success");
     return true;
   };
@@ -3417,7 +3419,7 @@ function CallSchedule() {
       if (accepted.length > 1 && appliedAll) {
         const amsg = `Trade applied to the schedule: ${first.to_surgeon_name} takes ${roleWordOf(first.role)} ${fmtMD(first.day)}-${fmtMD(last.day)} (${unitName})${first.return_day ? "; " + first.from_surgeon_name + " takes " + slotLabel(first.return_day, first.return_role) + (retRows.length > 1 ? " and " + (retRows.length - 1) + " more return day(s)" : "") : ""}`;
         await addNotification("trade_applied", "Shift trade applied", amsg, { from_surgeon_id: first.from_surgeon_id, to_surgeon_id: first.to_surgeon_id, trade_id: first.id, trade_ids: accepted.map(r => r.id), day: first.day });
-        sendEmailNotif("trade_applied", { message: amsg, subject: "Shift trade applied - " + (tag ? tag.text : slotLabel(first.day, first.role)) }, [first.from_surgeon_id, first.to_surgeon_id]);
+        sendEmailNotif("trade_applied", { message: amsg, subject: "Shift trade applied - " + (tag ? tag.text : slotLabel(first.day, first.role)), trade_id: first.id }, [first.from_surgeon_id, first.to_surgeon_id]);
         showToast(`Trade applied to the schedule (${accepted.length} days).`, "success");
       }
     } catch (e) { console.warn("accept trade error:", e); showToast("Couldn't accept the trade - check your connection and try again.", "error"); }
@@ -3449,7 +3451,7 @@ function CallSchedule() {
       const msg = done.length > 1 ? `${first.to_surgeon_name} declined the trade: ${tag ? "the " + tag.text : done.length + " unit days"} (${done.length} days) - ${tradeLegsText(first, "would have taken")}` : tradeDeclineMsg(first);
       logAudit("trade.decline", msg, { trade_id: first.id, trade_ids: done.map(r => r.id), day: first.day, role: first.role, from: first.from_surgeon_id, to: first.to_surgeon_id });
       await addNotification("trade_declined", "Shift trade declined", msg, { from_surgeon_id: first.from_surgeon_id, to_surgeon_id: first.to_surgeon_id, trade_id: first.id, trade_ids: done.map(r => r.id), day: first.day });
-      sendEmailNotif("trade_declined", { message: msg, subject: "Shift trade declined - " + (tag ? tag.text : slotLabel(first.day, first.role)) }, [first.from_surgeon_id, first.to_surgeon_id]);
+      sendEmailNotif("trade_declined", { message: msg, subject: "Shift trade declined - " + (tag ? tag.text : slotLabel(first.day, first.role)), trade_id: first.id }, [first.from_surgeon_id, first.to_surgeon_id]);
       showToast(done.length > 1 ? `Trade declined (${done.length} days).` : "Trade declined.", "info");
     } catch (e) { console.warn("decline trade error:", e); showToast("Couldn't decline the trade - check your connection and try again.", "error"); }
     finally { setTradeBusy(""); }

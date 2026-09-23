@@ -46,6 +46,20 @@ workdir copy stays byte-identical to the repo file (record the version number he
 `send-notification` for a coordinator's vacation entry (the `vacation_logged` e-mail to the scheduler is skipped; the
 in-app feed row and the audit row are still written) - a coordinator's session would only collect 403s.
 
+**Prompt 16 B5 (security minors, 2026-09-23): nothing deployed yet.** Three functions change in the
+repo (constant-time `x-cron-secret` compare in `daily-reminder` and `office-notifications`, the
+`/\S+@\S+/g` log redaction in all three mail functions (applied to the WHOLE provider body before the
+160-character log truncation, so a cut inside an address cannot leave a local part behind), and in
+`send-notification` the mail-config checks below the role gate, the `targetIds` cap and the `trade_id`
+party check). The pending deploy record with the commands and the proofs is in section 3; the new
+refusals are in section 5. Deploy the client build that sends `trade_id` (a push to `main`) BEFORE
+`send-notification` v6, or trade mail from an older client answers 400 until the users reload.
+Open decision (review 2026-09-23, not in this deploy): a minimum length for the CONFIGURED `CRON_SECRET`
+(`cronSecretMatches` refuses an unset / empty configured value and any short, prefix or missing header,
+but accepts a one-character configured value). Adding a floor blind could lock the three pg_cron jobs
+out on redeploy; Faraz confirms the live secret's length (never its value) first, then the floor lands
+in both `@cronSecret` blocks with a test, or the secret is rotated per section 4 before it does.
+
 **Prompt 15 (East vacations, 2026-09-23): nothing deployed.** No function
 changed for this prompt and none was redeployed. The feature is the client
 (the East feed refresh reads Davenport's `time_off`, the review controls, the
@@ -151,9 +165,9 @@ Each function carries its own gate instead:
 | slug | gateway verify_jwt | real gate inside the function |
 |---|---|---|
 | calendar-sync | OFF (must stay OFF - calendar apps send no auth header) | none: public read-only feed of anon-readable data |
-| office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
-| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403 |
-| daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed |
+| office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline; constant-time compare since Prompt 16 B5 - SHA-256 both sides, XOR the bytes) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
+| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a missing row or an unlinked surgeon gets 403 |
+| daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed (constant-time compare since Prompt 16 B5) |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
 for that function. Always deploy from the CLI, and after any deploy re-run the
@@ -162,6 +176,34 @@ calendar-sync check in section 5.
 After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
+
+### Deploy record - Prompt 16 B5 (security minors, review 2026-09-23 section 3) - PENDING, filled by whoever deploys
+
+Three functions change; `calendar-sync` is untouched and is NOT redeployed. Read `supabase functions list`
+first (a `secrets set` re-versions all four), back each function up with `download` before overwriting,
+byte-compare after. Order: the client build that sends `data.trade_id` (a push to `main`) must be live
+BEFORE `send-notification` v6 - a newer client against the v5 function is fine (the extra field is ignored),
+an older client against v6 gets 400 on trade mail until it reloads. The other two functions do not depend on
+the client.
+
+| when (UTC) | slug | version before -> after | what changed | proof (section 5, no mail can result) |
+|---|---|---|---|---|
+| _pending_ | `send-notification` | v5 -> **v6 pending** | mail-config 500s below the role gate; `targetIds` capped at roster size + 1 (400); `trade_*` needs `data.trade_id` and the row's two parties must be exactly `targetIds` (400 / 403); `/\S+@\S+/g` log redaction | anon POST -> 401 (never a 500 naming a secret); scheduler JWT `trade_proposed` without `trade_id` -> 400; with a uuid that names no row -> 403; 9 ids -> 400; the v5 checks unchanged |
+| _pending_ | `daily-reminder` | v4 -> **v5 pending** | constant-time (timing-safe) `x-cron-secret` compare; log redaction | `{"dryRun":true}` with the secret -> 200 as before; `{"mode":"offers","dryRun":true}` -> 200 as before; a wrong secret -> 401; no secret -> 401 |
+| _pending_ | `office-notifications` | (read `supabase functions list`) -> **+1 pending** | the same constant-time compare in `authorize()`; log redaction | `{"mode":"digest","dryRun":true}` with the secret -> 200 as before; a wrong secret -> 401; no secret -> 401 |
+
+```powershell
+$wd = "<cli-workdir>"
+supabase functions list --project-ref bzhsroegtagqhutbnsrp
+foreach ($slug in "send-notification","daily-reminder","office-notifications") {
+  supabase functions download $slug --workdir $wd --project-ref bzhsroegtagqhutbnsrp     # backup of the live copy first
+}
+# copy the three repo files over $wd\supabase\functions\<slug>\index.ts, then:
+supabase functions deploy send-notification    --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
+supabase functions deploy daily-reminder       --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
+supabase functions deploy office-notifications --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
+supabase functions list --project-ref bzhsroegtagqhutbnsrp                                  # versions +1 each, verify_jwt off
+```
 
 ### Deploy record - offers mode (Prompt 14 part 4) - PLACEHOLDER, filled by whoever deploys
 
@@ -319,6 +361,8 @@ curl.exe -s -X POST "$URL/office-notifications" -H "x-cron-secret: $SECRET" -H "
 #   -> {"dryRun":true,"would_send":<active contacts>,"sent":0,...} plus a rendered "sample" when there are changes
 # publish is refused on the cron path (must be a scheduler session)
 curl.exe -s -i -X POST "$URL/office-notifications" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"publish"}' | Select-Object -First 1   # 403
+# a WRONG secret -> the same 401 as no secret (Prompt 16 B5: constant-time compare - a near miss costs what a miss costs; nothing read, nothing sent)
+curl.exe -s -i -X POST "$URL/office-notifications" -H "x-cron-secret: wrong-value" -H "Content-Type: application/json" -d '{"mode":"digest","dryRun":true}' | Select-Object -First 1   # 401
 ```
 Responses carry counts and contact ids only - never an address.
 
@@ -342,6 +386,17 @@ curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $SURGE
 curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $SURGEON_JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe"},"targetIds":["s2","s4"]}' | Select-Object -First 1
 # surgeon + EMPTY targetIds -> still 200 sent 0 (the empty-list short circuit sits ahead of the gate for every caller)
 curl.exe -s -X POST "$URL/send-notification" -H "Authorization: Bearer $SURGEON_JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe"},"targetIds":[]}'
+# Prompt 16 B5 (security minors, v6): configuration is checked only AFTER the role gate: with RESEND_API_KEY or
+# NOTIFICATION_FROM_EMAIL unset an anon POST still answers 401 and a viewer 403 - never a 500 naming the missing secret.
+# trade_* without data.trade_id -> 400 {"error":"trade_proposed needs data.trade_id (the shift_trade_requests row this mail is about) - reload the app to update"}
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe"},"targetIds":["s1","s2"]}' | Select-Object -First 1
+# trade_* with a uuid that names no row -> 403 {"error":"not allowed: data.trade_id names no trade"}; a real row whose two parties
+# (from_surgeon_id / to_surgeon_id) are not exactly the targetIds -> 403 {"error":"not allowed: targetIds must be exactly the trade's two parties"};
+# a trade_* broadcast (targetIds absent, even from the scheduler) -> 403 {"error":"not allowed: trade mail is never a broadcast - targetIds must name the two parties"}
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe","trade_id":"00000000-0000-4000-8000-000000000000"},"targetIds":["s1","s2"]}' | Select-Object -First 1
+# targetIds over the cap (roster size + 1: with the six-entry roster the cap is 7; count the blob's roster entries, outside surgeons included) -> 400
+#   {"error":"targetIds has 9 ids - the cap is 7 (roster size + 1)"} - nothing resolved, nothing sent
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"manual_edit","data":{"message":"probe"},"targetIds":["s1","s2","s3","s4","s5","s6","s7","s8","s9"]}' | Select-Object -First 1
 ```
 The positive surgeon case cannot be proven without a mail: a surgeon's `{"type":"test","targetIds":["<his own id>"]}`
 is one real e-mail to himself - it is listed in section 6 as the live proof of the gate's allow path.
@@ -350,6 +405,8 @@ is one real e-mail to himself - it is listed in section 6 as the live proof of t
 ```powershell
 # no secret -> 401 before any work
 curl.exe -s -i -X POST "$URL/daily-reminder" -H "Content-Type: application/json" -d '{}' | Select-Object -First 1
+# a WRONG secret -> the same 401 (Prompt 16 B5: constant-time compare, SHA-256 both sides - a near miss costs what a miss costs; nothing read, nothing sent)
+curl.exe -s -i -X POST "$URL/daily-reminder" -H "x-cron-secret: wrong-value" -H "Content-Type: application/json" -d '{"dryRun":true}' | Select-Object -First 1
 # dry run: reads tomorrow's row, composes, sends NOTHING
 curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"dryRun":true}'
 #   -> {"date_tomorrow":"...","current_hour":H,"dry_run":true,"on_call":2,"sent":0,...,"results":[{"person_id":"s?","role":"primary","status":"skipped_wrong_hour"|"dry_run_composed"...}]}

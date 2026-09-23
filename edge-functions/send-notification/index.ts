@@ -62,12 +62,27 @@
 //     passes on its role alone - a person_id link is not required, as in
 //     office-notifications; the role is admin-assigned in Setup and signup
 //     lands as viewer, so the link adds no protection, only a failure mode.
+//   - SECURITY MINORS (2026-09-23, review section 3; Prompt 16 B5, v6). Three
+//     tightenings over the v5 gate, none of which changes what the app sends:
+//     (a) the mail-configuration checks (RESEND_API_KEY, NOTIFICATION_FROM_EMAIL)
+//     run only AFTER the role gate, so an unauthenticated or unprivileged
+//     caller sees 401 / 403 and never a 500 naming a missing secret; (b)
+//     targetIds is capped at roster size + 1 (400 above it; the roster is read
+//     once and its names also serve the greeting); (c) every trade_* send names
+//     its shift_trade_requests row in data.trade_id (a uuid; 400 without it)
+//     and the row's two parties (from_surgeon_id / to_surgeon_id, read with the
+//     service role) must be exactly the targetIds as a set (403 otherwise) -
+//     for every caller, the scheduler included, so a trade frame can never be
+//     addressed to a third person or broadcast. The pure pieces (isTradeType,
+//     tradeIdOf, targetCap, tradePartyCheck) sit in the @sendGate block and are
+//     unit-tested; the log-redaction regex is the @logRedact block.
 //
 // Payload contract:
-//   POST { type: string, data: { subject?: string, message: string, detail?: string }, targetIds?: string[] }
+//   POST { type: string, data: { subject?: string, message: string, detail?: string, trade_id?: uuid }, targetIds?: string[] }
 //     targetIds ABSENT  -> broadcast to every linked person (opted in for the category)
 //     targetIds []      -> send to nobody (200, sent 0) - defense in depth
-//     targetIds [ids]   -> only those person ids (s1..s6)
+//     targetIds [ids]   -> only those person ids (s1..s6); at most roster size + 1 of them
+//     trade_*           -> data.trade_id required; targetIds must be exactly that row's two parties
 //   -> 200 { sent, failed, skipped_no_email, skipped_pref_off, results: [{ person_id, status }] }
 //
 // Secrets (by NAME): RESEND_API_KEY, NOTIFICATION_FROM_EMAIL (required - there is
@@ -127,19 +142,25 @@ async function rest(path: string, init: RequestInit = {}): Promise<any> {
 
 interface RosterEntry { id: string; name: string; code: string }
 
-async function loadRosterNames(): Promise<Record<string, string>> {
+interface RosterInfo { names: Record<string, string>; count: number }
+
+// The roster from the blob, read ONCE per request: names for the greeting and
+// the entry count for the targetIds cap (Prompt 16 B5). Names are cosmetic -
+// ids are an acceptable fallback, but say so; a failed read yields count 0,
+// which targetCap turns into the fallback size.
+async function loadRoster(): Promise<RosterInfo> {
   const names: Record<string, string> = {};
+  let count = 0;
   try {
     const rows = await rest("call_schedule_data?select=data&id=eq.main");
     const raw = rows?.[0]?.data;
     const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     const list: RosterEntry[] = Array.isArray(data?.roster) ? data.roster : [];
-    for (const r of list) if (r?.id) names[String(r.id)] = r.name || String(r.id);
+    for (const r of list) if (r?.id) { names[String(r.id)] = r.name || String(r.id); count++; }
   } catch (e) {
-    // Names are cosmetic (greeting) - ids are an acceptable fallback, but say so.
-    console.warn(`[send-notification] roster read failed, greeting by id: ${(e as Error).message}`);
+    console.warn(`[send-notification] roster read failed, greeting by id and capping at the fallback size: ${(e as Error).message}`);
   }
-  return names;
+  return { names, count };
 }
 
 function escHtml(s: unknown): string {
@@ -152,6 +173,21 @@ function textToHtml(s: string): string {
   return escHtml(s).replace(/\r?\n/g, "<br>");
 }
 
+// ---------------------------------------------------------------------------
+// Log redaction (Prompt 16 B5, review 2026-09-23 section 3). Plain JavaScript
+// between the markers: test/edge-functions.test.js extracts this block from all
+// three mail functions, checks the copies are identical, evaluates it with
+// new Function and runs a provider error body through it. Until 9/23 the
+// pattern had lost its two backslashes (it matched a run of capital S, an @
+// and another run of capital S - nothing real), so a Resend error naming the
+// address reached the function log verbatim.
+// ---------------------------------------------------------------------------
+// @logRedact-mirror-start
+function redactAddresses(text) {
+  return String(text == null ? "" : text).replace(/\S+@\S+/g, "<redacted>");
+}
+// @logRedact-mirror-end
+
 // Mail client. Logs counts/keys only - never the address.
 async function sendEmail(to: string, subject: string, html: string, logKey: string): Promise<{ ok: boolean; status: number }> {
   try {
@@ -162,11 +198,11 @@ async function sendEmail(to: string, subject: string, html: string, logKey: stri
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      console.error(`[email] ${logKey}: provider HTTP ${res.status} ${body.slice(0, 160).replace(/S+@S+/g, "<redacted>")}`);
+      console.error(`[email] ${logKey}: provider HTTP ${res.status} ${redactAddresses(body).slice(0, 160)}`);
     }
     return { ok: res.ok, status: res.status };
   } catch (e) {
-    console.error(`[email] ${logKey}: ${(e as Error).message}`);
+    console.error(`[email] ${logKey}: ${redactAddresses((e as Error).message)}`);
     return { ok: false, status: 0 };
   }
 }
@@ -266,6 +302,36 @@ function sendGate(caller, type, targetIds, schedulerIds) {
       return type + " is sent by the scheduler only";
   }
 }
+// Prompt 16 B5 (review 2026-09-23 section 3): the trade frame and the recipient cap.
+const TRADE_TYPES = ["trade_proposed", "trade_accepted", "trade_declined", "trade_applied"];
+function isTradeType(type) { return TRADE_TYPES.indexOf(type) >= 0; }
+// data.trade_id of a trade_* send: the uuid (trimmed), or null when missing / not a uuid (-> 400)
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function tradeIdOf(data) {
+  const id = data && typeof data.trade_id === "string" ? data.trade_id.trim() : "";
+  if (!UUID_SHAPE.test(id)) return null;
+  return id;
+}
+// The cap on targetIds.length: every roster entry plus one. When the roster
+// could not be read (count 0) the group's six stand in; the failure is logged.
+const ROSTER_SIZE_FALLBACK = 6;
+function targetCap(rosterCount) {
+  const n = Number(rosterCount);
+  return (n > 0 ? Math.floor(n) : ROSTER_SIZE_FALLBACK) + 1;
+}
+// A trade_* send goes to exactly the two parties of the shift_trade_requests
+// row that data.trade_id names (from_surgeon_id / to_surgeon_id), compared as
+// sets of strings. null = proceed, else the refusal (403). The handler reads
+// the row with the service role; an unknown id arrives here as null.
+function tradePartyCheck(trade, targetIds) {
+  if (!Array.isArray(targetIds) || targetIds.length === 0) return "trade mail is never a broadcast - targetIds must name the two parties";
+  if (!trade || trade.from_surgeon_id == null || trade.to_surgeon_id == null) return "data.trade_id names no trade";
+  const distinctSorted = function (ids) { return ids.map(String).filter(function (id, i, a) { return a.indexOf(id) === i; }).sort(); };
+  const want = distinctSorted([trade.from_surgeon_id, trade.to_surgeon_id]);
+  const got = distinctSorted(targetIds);
+  if (want.length !== got.length || want.some(function (id, i) { return id !== got[i]; })) return "targetIds must be exactly the trade's two parties";
+  return null;
+}
 // @sendGate-end
 
 // Person ids linked to an admin / scheduler account (the same lookup the
@@ -324,11 +390,10 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
 // ---------------------------------------------------------------------------
 interface Recipient { person_id: string; email: string | null; name: string; prefs: any }
 
-async function resolveRecipients(cat: Category, targetIds: string[] | null): Promise<{ list: Recipient[]; skippedPrefOff: number }> {
-  const [profiles, prefRows, names] = await Promise.all([
+async function resolveRecipients(cat: Category, targetIds: string[] | null, names: Record<string, string>): Promise<{ list: Recipient[]; skippedPrefOff: number }> {
+  const [profiles, prefRows] = await Promise.all([
     rest("user_profiles?select=person_id,email&person_id=not.is.null"),
     rest("notification_preferences?select=*"),
-    loadRosterNames(),
   ]);
   const prefsById: Record<string, any> = {};
   for (const p of (Array.isArray(prefRows) ? prefRows : [])) if (p?.person_id) prefsById[p.person_id] = p;
@@ -362,9 +427,10 @@ serve(async (req) => {
   if (req.method !== "POST") return json(405, { error: "method not allowed" });
 
   try {
+    // The injected project keys are needed for the auth check itself; the MAIL
+    // secrets are checked only after the role gate (Prompt 16 B5), so an
+    // unauthenticated caller learns nothing about configuration.
     if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json(500, { error: "function misconfigured: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing" });
-    if (!RESEND_API_KEY) return json(500, { error: "RESEND_API_KEY not configured" });
-    if (!FROM_EMAIL) return json(500, { error: "NOTIFICATION_FROM_EMAIL not configured" });
 
     // -- Auth: require a verified user session (GoTrue), not merely a project JWT.
     const authz = req.headers.get("authorization") || "";
@@ -392,6 +458,10 @@ serve(async (req) => {
       return json(403, { error: `not allowed: ${roleDenied}` });
     }
     const privileged = caller.role === "admin" || caller.role === "scheduler";
+
+    // -- Mail configuration, checked only for a caller the role gate let through.
+    if (!RESEND_API_KEY) return json(500, { error: "RESEND_API_KEY not configured" });
+    if (!FROM_EMAIL) return json(500, { error: "NOTIFICATION_FROM_EMAIL not configured" });
 
     const body = await req.json().catch(() => null);
     if (!body || typeof body !== "object") return json(400, { error: "JSON body required" });
@@ -423,6 +493,15 @@ serve(async (req) => {
       targetIds = body.targetIds.map((x: unknown) => String(x));
     }
 
+    // -- Recipient cap (Prompt 16 B5): roster size + 1. The roster is read once
+    //    here; its names also serve the greeting below.
+    const roster = await loadRoster();
+    const cap = targetCap(roster.count);
+    if (targetIds && targetIds.length > cap) {
+      console.warn(`[send-notification] rejected (400): role=${caller.role || "none"} type=${type} targets=${targetIds.length} - over the cap of ${cap} (roster size + 1)`);
+      return json(400, { error: `targetIds has ${targetIds.length} ids - the cap is ${cap} (roster size + 1)` });
+    }
+
     // -- Party gate (audit RLS-1): a surgeon sends only his own categories, to the
     //    parties the app names. The scheduler list is read only for a surgeon caller.
     const schedulerIds = privileged ? [] : await loadSchedulerIds();
@@ -432,7 +511,26 @@ serve(async (req) => {
       return json(403, { error: `not allowed: ${gateDenied}` });
     }
 
-    const { list, skippedPrefOff } = await resolveRecipients(cat, targetIds);
+    // -- Trade frame (Prompt 16 B5): a trade_* send names its shift_trade_requests
+    //    row in data.trade_id and the row's two parties must be exactly targetIds -
+    //    for every caller, the scheduler included (the app always has the row id;
+    //    trade mail is never a broadcast and never reaches a third person).
+    if (isTradeType(type)) {
+      const tradeId = tradeIdOf(data);
+      if (!tradeId) {
+        console.warn(`[send-notification] rejected (400): role=${caller.role || "none"} type=${type} - data.trade_id missing or malformed`);
+        return json(400, { error: `${type} needs data.trade_id (the shift_trade_requests row this mail is about) - reload the app to update` });
+      }
+      const rows = await rest(`shift_trade_requests?select=from_surgeon_id,to_surgeon_id&id=eq.${encodeURIComponent(tradeId)}`);
+      const trade = Array.isArray(rows) && rows[0] ? rows[0] : null;
+      const partyDenied = tradePartyCheck(trade, targetIds);
+      if (partyDenied) {
+        console.warn(`[send-notification] rejected (403): role=${caller.role || "none"} type=${type} targets=${targetIds ? targetIds.length : "broadcast"} trade=${trade ? "found" : "none"} - ${partyDenied}`);
+        return json(403, { error: `not allowed: ${partyDenied}` });
+      }
+    }
+
+    const { list, skippedPrefOff } = await resolveRecipients(cat, targetIds, roster.names);
     console.log(`[send-notification] type=${type} targets=${targetIds ? targetIds.join(",") : "broadcast"} -> ${list.length} candidate(s), ${skippedPrefOff} opted out`);
 
     const results: { person_id: string; status: string }[] = [];
