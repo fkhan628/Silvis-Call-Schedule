@@ -52,8 +52,15 @@
 //     no writes; import-dryrun.png) and a seed with an injected contact key
 //     (refused). Switch: failSnapshotInsert makes the snapshot POST answer 500.
 //   - fix round 2 (Slice E findings): the Generate presets start after the LAST
-//     PUBLISHED day (end of the contiguous block, 2026-11-01 -> 'Through end of
-//     year' = 2026-11-02 to 2027-01-03, wire-1); Accept with 'respect locks'
+//     PUBLISHED day (end of the longest contiguous block of rows, wire-1; since
+//     Prompt 12 item SM the start and both preset ends are DERIVED each run from
+//     the live rows by a restatement of the app's rule, after settleMapToLive
+//     has OBSERVED in the grid that the app's map equals the live rows on every
+//     day this run edited - waiting for the app's 60-s poll when it does not
+//     yet; likewise the time-off refusal's preselected trade day (its two
+//     deciding cells observed) and the Accept & Publish write set, where a
+//     holders-unchanged write must name a lock / source / note change against
+//     the live row - no pin encodes today's table); Accept with 'respect locks'
 //     OFF confirms BEFORE any write and a dismissed confirm writes nothing
 //     (safe-2); the publish dialog closes with 'Skip the notice' and says the
 //     changes are already saved (safe-2); an east_feed upsert aborted at the
@@ -1030,19 +1037,23 @@ try {
   // One schedule edit through the DAY EDITOR -> schedule_days POST v1 with CAS headers.
   await page.click('button[data-tab="calendar"]');
   await page.waitForTimeout(3300); // past the 3s post-load hydration window of the autosave
-  // The published rows (live anon read from 2026-09-01 on; the fixture rows when
-  // the live table is empty) drive (1) the choice of a row-less edit day below
-  // and (2) the independent Totals recount later. Every day this run edits or
-  // injects is recorded in harnessDays so the recount applies the same edits:
-  // the comparison never depends on which calendar month the run happens in
-  // and is never skipped (vis-002).
+  // The published rows (live anon read of EVERY row - no day floor, because the
+  // app's loadScheduleDays has none and the item-SM restatements below must see
+  // the same rows as the app's suLastContiguousDay; the fixture rows when the
+  // live table is empty) drive (1) the choice of a row-less edit day below,
+  // (2) the independent Totals recount later and (3) the item-SM live-state
+  // pins. The lock flags and the source ride along so a holders-unchanged
+  // Accept & Publish write can be checked field by field. Every day this run
+  // edits or injects is recorded in harnessDays so the recount applies the same
+  // edits: the comparison never depends on which calendar month the run happens
+  // in and is never skipped (vis-002).
   const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
   const todayIso = todayCentral; // the Central date, like the app's todayStr (helpers.js todayCentral) - the strip and the recount agree from any time zone
   let liveRows = [];
   try {
-    if (fixture) liveRows = fixture.schedule_days.filter(r => r.day >= "2026-09-01");
+    if (fixture) liveRows = fixture.schedule_days.slice();
     else {
-      const res = await fetch(`https://${SUPABASE_HOST}/rest/v1/schedule_days?select=day,primary_id,backup_id,external_cover,note&day=gte.2026-09-01&order=day.asc`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+      const res = await fetch(`https://${SUPABASE_HOST}/rest/v1/schedule_days?select=day,primary_id,backup_id,primary_locked,backup_locked,source,external_cover,note&order=day.asc`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
       if (!res.ok) throw new Error("live schedule_days read failed: HTTP " + res.status);
       const rows = await res.json();
       if (!Array.isArray(rows)) throw new Error("live schedule_days read: body is not an array");
@@ -1109,6 +1120,72 @@ try {
   } catch (e) { fail("coverage strip: " + errLine(e)); }
   const harnessDays = {}; // day -> { primary_id, backup_id } as this run leaves them in the app
   const noteEdit = (d, patch) => { harnessDays[d] = { ...(harnessDays[d] || {}), ...patch }; };
+  // Item SM (Prompt 12): the harness's OWN picture of the app's map = the live
+  // rows it fetched, overlaid - for the days this run edited or injected
+  // (harnessDays) - with what the GRID shows for them at pin time, observed
+  // through the DOM by observeHarnessDays below, never through an app function.
+  // The three live-state pins (Generate presets, time-off refusal preselect,
+  // Accept & Publish write set) derive their expectations from that picture
+  // with an independent restatement of each rule - never by calling the app's
+  // helper for the same computation and never by a constant that encodes
+  // today's table. Why the overlay: every write is intercepted, so no edited
+  // day ever reaches the table, and the app's 60-second background poll
+  // (refreshAll -> refreshDays) drops a persisted day the live read no longer
+  // holds - but WHEN that poll fires relative to the pins is a timer race
+  // (review finding on item SM: a ~5 s window today, and from October the edit
+  // day sits right next to the published block). So settleMapToLive() first
+  // observes the edited cells, waits for the poll (the app's own GET
+  // /rest/v1/schedule_days) while any of them still shows an edit, and only
+  // then lets the pins derive: the picture is whatever the app shows, and a
+  // cell still differing from the live rows after two polls is a FAIL, not a
+  // guess. curHolder follows the app's holder convention: an external cover
+  // stands in for an OPEN primary as "ext:<name>". A day is IN the map when it
+  // has a live row or the grid shows a holder on it (this run never blanks a
+  // held day, and refreshDays deletes a dropped day outright).
+  const observed = {}; // day -> { primary, backup, ext } as the grid showed it at settle time (harnessDays days only)
+  const liveHolders = (d) => { const l = liveByDay[d] || {}; return { primary: l.primary_id || null, backup: l.backup_id || null, ext: l.external_cover || null }; };
+  const sameHolders = (a, b) => a.primary === b.primary && a.backup === b.backup && a.ext === b.ext;
+  const curDay = (d) => observed[d] || liveHolders(d);
+  const curHolder = (d, role) => { const c = curDay(d); return role === "primary" ? (c.primary || (c.ext ? "ext:" + c.ext : null)) : (c.backup || null); };
+  const inMap = (d) => !!liveByDay[d] || (!!observed[d] && !!(observed[d].primary || observed[d].backup || observed[d].ext));
+  const curDays = () => [...new Set([...Object.keys(liveByDay), ...Object.keys(observed)])].filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && inMap(d)).sort();
+  const isoAddDays = (d, n) => utcDay(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + n * 86400000);
+  const mdOf = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`; // the app's fmtMD: M/D without zero padding
+  // Read the grid cell of every harnessDays day (one showMonth per month touched) - the app's map as it shows it.
+  const observeHarnessDays = async () => {
+    const days = Object.keys(harnessDays).sort();
+    const out = {};
+    for (const ym of [...new Set(days.map(d => d.slice(0, 7)))]) {
+      await showMonth(+ym.slice(0, 4), +ym.slice(5, 7) - 1);
+      const cells = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || "", b: e.getAttribute("data-backup") || "", ext: e.getAttribute("data-ext") || "" })));
+      days.filter(d => d.slice(0, 7) === ym).forEach(d => { const c = cells.find(x => x.day === d); if (c) out[d] = { primary: c.p || null, backup: c.b || null, ext: c.ext || null }; });
+    }
+    return out;
+  };
+  // Settle the picture: observe, and while an edited cell still differs from the live rows wait for the app's
+  // background schedule_days poll (at most twice - an edit still inside its 800 ms debounce at the first poll is
+  // kept as a local change by refreshDays and dropped by the next one), then freeze what the grid shows into
+  // `observed`. Returns the days still differing; empty = the app's map equals the live rows on every edited day.
+  const settleMapToLive = async (what) => {
+    const isDaysGet = (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/rest/v1/schedule_days";
+    let obs = await observeHarnessDays();
+    let stale = Object.keys(obs).filter(d => !sameHolders(obs[d], liveHolders(d)));
+    for (let round = 1; round <= 2 && stale.length; round++) {
+      console.log(`     (${what}: the grid still shows this run's edits on ${stale.join(", ")} - waiting for the app's background schedule_days poll, round ${round}/2)`);
+      const got = await page.waitForResponse(isDaysGet, { timeout: 75000 }).then(() => true).catch(() => false);
+      if (!got) console.log(`     (${what}: no GET /rest/v1/schedule_days seen within 75 s)`);
+      await page.waitForTimeout(1500); // the merge + render
+      obs = await observeHarnessDays();
+      stale = Object.keys(obs).filter(d => !sameHolders(obs[d], liveHolders(d)));
+    }
+    Object.keys(observed).forEach(k => delete observed[k]);
+    Object.assign(observed, obs);
+    const unread = Object.keys(harnessDays).filter(d => !obs[d]);
+    const show = (h) => `${h.primary || "-"}/${h.backup || "-"}${h.ext ? " ext " + h.ext : ""}`;
+    if (stale.length) fail(`${what}: the app's map still differs from the live rows on ${stale.map(d => `${d} (grid ${show(obs[d])}, live ${show(liveHolders(d))})`).join(", ")} after two background polls - the live-state pins derive from the grid as observed, but a later poll may still move the map under them`);
+    else ok(`${what}: the app's map equals the live rows on this run's ${Object.keys(obs).length} edited day(s) (${Object.keys(obs).join(", ")}) - observed in the grid${unread.length ? "; not readable: " + unread.join(", ") : ""}; the live-state pins derive from the live rows`);
+    return stale;
+  };
   const now = new Date();
   // The edit day: the first row-less day from the start of the current month
   // (so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett'),
@@ -1492,26 +1569,63 @@ try {
     const form = page.locator("[data-testid=timeoff-card]");
     await form.locator("select").first().selectOption("s1");
     const dates = form.locator("input[type=date]");
-    const nov26 = liveByDay["2026-11-26"];
-    if (!nov26 || (nov26.primary_id !== "s1" && nov26.backup_id !== "s1")) console.log("     (live 2026-11-26 does not have s1 on call - the refusal test still runs against whatever the app holds)");
-    const before = writes.length;
-    await dates.nth(0).fill("2026-11-26");
-    await dates.nth(1).fill("2026-11-26");
-    await page.click("[data-testid=vac-add]");
-    await page.waitForSelector("[data-testid=vac-conflict]", { timeout: 5000 });
-    const conflictText = await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "));
-    const conflictWrites = writesSince(before).filter(w => /\/rest\/v1\/(time_off|audit_log|notifications)/.test(w.path) || /send-notification/.test(w.path));
-    const tradeShortcut = await page.$("[data-testid=vac-conflict-trade]");
-    if (conflictWrites.length) fail("Time off refusal: a write went out although the client pre-check refused: " + JSON.stringify(conflictWrites.map(w => w.method + " " + w.path)));
-    else if (!/Khan is published on/.test(conflictText) || !/11\/26 (primary|backup)/.test(conflictText)) fail("Time off refusal panel wrong: " + conflictText);
-    else if (!tradeShortcut) fail("Time off refusal: no 'propose a trade' shortcut beside the conflicting date");
-    else ok("Time off: Khan 2026-11-26 refused client-side - panel lists '11/26 " + (/11\/26 (primary|backup)/.exec(conflictText) || [])[1] + "' with a 'propose a trade' shortcut, NO time_off / audit / notification write");
-    // the shortcut lands on the trade form with the day + role preselected
-    await page.click("[data-testid=vac-conflict-trade]");
-    await page.waitForTimeout(300);
-    const preDay = await page.$eval("[data-testid=trade-day]", el => el.value).catch(() => "");
-    if (preDay !== "2026-11-26") fail("Time off refusal: 'propose a trade' did not preselect 2026-11-26 in the trade form (got '" + preDay + "')"); else ok("Time off refusal: 'propose a trade' preselects 2026-11-26 in the trade form");
-    await page.fill("[data-testid=trade-day]", "");
+    // Item SM: the refused range and the expected preselect are DERIVED from the
+    // harness's picture of the map (live rows + this run's edits), restating the
+    // app's client pre-check (index-source.html vacationConflictItems, which
+    // mirrors the DB trigger): the conflict items are the day BEFORE the range
+    // when the surgeon is PRIMARY there (his 07:00 handoff falls on the first
+    // vacation day), then every day of the range where he holds primary (else
+    // backup), in date order; the panel counts them and 'propose a trade'
+    // preselects the FIRST item. The range is one day: Khan's Thanksgiving
+    // 2026-11-26 while it still collides (his 11/25 one-off lock makes the
+    // day-before rule the expected answer), otherwise his first held day on or
+    // after today - so the entered range always collides and no day is pinned.
+    const s1Holds = (d) => { const c = curDay(d); return c.primary === "s1" || c.backup === "s1"; };
+    const vacPreferred = "2026-11-26";
+    const vacDay = (vacPreferred >= todayIso && (s1Holds(vacPreferred) || curDay(isoAddDays(vacPreferred, -1)).primary === "s1")) ? vacPreferred : curDays().find(d => d >= todayIso && s1Holds(d));
+    // The app's pre-check reads its in-memory map, so the two days that decide the
+    // items - the day before the range and the range day - are OBSERVED in the grid
+    // now rather than trusted from the live read: this run's own edits may still sit
+    // in the map until the app's background poll drops them (review finding on SM).
+    const vacObs = {};
+    if (vacDay) for (const d of [isoAddDays(vacDay, -1), vacDay]) { const [y, m] = d.split("-"); await showMonth(+y, +m - 1); vacObs[d] = { primary: (await cellAttr(d, "data-primary").catch(() => "")) || null, backup: (await cellAttr(d, "data-backup").catch(() => "")) || null }; }
+    const vacItems = [];
+    if (vacDay) {
+      const dayBefore = isoAddDays(vacDay, -1);
+      if (vacObs[dayBefore].primary === "s1") vacItems.push({ day: dayBefore, role: "primary" });
+      if (vacObs[vacDay].primary === "s1" || vacObs[vacDay].backup === "s1") vacItems.push({ day: vacDay, role: vacObs[vacDay].primary === "s1" ? "primary" : "backup" });
+      const drift = Object.keys(vacObs).filter(d => vacObs[d].primary !== curDay(d).primary || vacObs[d].backup !== curDay(d).backup);
+      if (drift.length) console.log(`     (grid differs from the live rows on ${drift.join(", ")} - the expected conflict items follow the grid)`);
+      await page.click('button[data-tab="timeoff"]');
+      await page.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
+      await form.locator("select").first().selectOption("s1");
+    }
+    const vacFirst = vacItems[0];
+    if (!vacDay) fail("Time off refusal: no day on/after today with s1 on call in the live rows - the refusal step is skipped (the clean-range check below still runs)");
+    else if (!vacFirst) fail(`Time off refusal: the grid shows no s1 on ${isoAddDays(vacDay, -1)} (primary) nor on ${vacDay} although the live rows do - the range would not collide in the app; the refusal step is skipped`);
+    else {
+      console.log(`     (refusal range ${vacDay}: s1's conflict items by the restated rule over the grid are ${vacItems.map(i => mdOf(i.day) + " " + i.role).join(", ")} - the first is the expected preselect)`);
+      const before = writes.length;
+      await dates.nth(0).fill(vacDay);
+      await dates.nth(1).fill(vacDay);
+      await page.click("[data-testid=vac-add]");
+      await page.waitForSelector("[data-testid=vac-conflict]", { timeout: 5000 });
+      const conflictText = await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "));
+      const conflictWrites = writesSince(before).filter(w => /\/rest\/v1\/(time_off|audit_log|notifications)/.test(w.path) || /send-notification/.test(w.path));
+      const tradeShortcut = await page.$("[data-testid=vac-conflict-trade]");
+      const itemRx = (i) => new RegExp(mdOf(i.day).replace(/\//g, "\\/") + " " + i.role + "\\b");
+      const missingItems = vacItems.filter(i => !itemRx(i).test(conflictText));
+      if (conflictWrites.length) fail("Time off refusal: a write went out although the client pre-check refused: " + JSON.stringify(conflictWrites.map(w => w.method + " " + w.path)));
+      else if (!new RegExp("Khan is published on " + vacItems.length + " day\\(s\\)").test(conflictText) || missingItems.length) fail(`Time off refusal panel wrong: expected 'Khan is published on ${vacItems.length} day(s)' listing ${vacItems.map(i => mdOf(i.day) + " " + i.role).join(", ")}${missingItems.length ? " (missing: " + missingItems.map(i => mdOf(i.day) + " " + i.role).join(", ") + ")" : ""}: ` + conflictText);
+      else if (!tradeShortcut) fail("Time off refusal: no 'propose a trade' shortcut beside the conflicting date");
+      else ok(`Time off: Khan ${vacDay} refused client-side - panel lists ${vacItems.map(i => "'" + mdOf(i.day) + " " + i.role + "'").join(" + ")} (${vacItems.length} day(s), derived from the grid over the live rows) with a 'propose a trade' shortcut, NO time_off / audit / notification write`);
+      // the shortcut lands on the trade form with the FIRST conflict item's day preselected
+      await page.click("[data-testid=vac-conflict-trade]");
+      await page.waitForTimeout(300);
+      const preDay = await page.$eval("[data-testid=trade-day]", el => el.value).catch(() => "");
+      if (preDay !== vacFirst.day) fail(`Time off refusal: 'propose a trade' did not preselect the first conflict item ${vacFirst.day} (${vacFirst.role}, derived from the grid for the range ${vacDay}) in the trade form (got '${preDay}')`); else ok(`Time off refusal: 'propose a trade' preselects ${vacFirst.day} (${vacFirst.role} - the first conflict item for the range ${vacDay}) in the trade form`);
+      await page.fill("[data-testid=trade-day]", "");
+    }
     // clean range: two days with no schedule rows at all
     const before2 = writes.length;
     await form.locator("select").first().selectOption("s1");
@@ -2136,18 +2250,62 @@ try {
       }
     }
 
-    // ---- Generate: presets start after the LAST PUBLISHED day (end of the contiguous block, 2026-11-01),
-    //      not after the pre-assigned Thanksgiving unit (finding wire-1) ----
+    // ---- Generate: presets start after the LAST PUBLISHED day (end of the longest contiguous block of
+    //      rows), not after a pre-assigned unit weeks later (finding wire-1). Item SM: the expectation is
+    //      DERIVED each run from the harness's picture of the map (the live rows + the grid as observed for
+    //      this run's own edits by settleMapToLive() just above - poll-independent; see curDay) by an
+    //      independent restatement of the app's rules (helpers.js suLastContiguousDay / suLaterAssignedRanges,
+    //      generator.js rangePresets - none of them called here):
+    //        lastPub = the last day of the LONGEST run of consecutive days that have a row (a row with both
+    //                  slots open still counts: it is a published row); ties go to the later run
+    //        start   = lastPub + 1 day
+    //        'Through end of year' ends on the Sunday on/after Dec 31 of start's year
+    //        '3 months' ends on the last day of the 3rd calendar month counting start's month as month 1
+    //                  ('end of the third month'), pushed to the following Sunday when that day is a Fri or Sat
+    //        'Later locked days on file' = the assigned days (either role or external cover) strictly after
+    //                  lastPub, collapsed into M/D-M/D ranges in date order (a holiday name may follow in parentheses)
+    //      Open question (Faraz): the default start may change to "the first open slot from today" - when the
+    //      app's rule changes, this restatement must change with it. ----
+    // Premise first (review finding on SM): the app's map must be known, not assumed, before deriving. Nothing
+    // between here and the Accept & Publish pin edits the map, and the app's polls only reconcile it toward
+    // the live rows, so the picture settled here also serves the write-set derivation below.
+    await settleMapToLive("live-state premise");
+    await page.click('button[data-tab="setup"]');
+    await page.waitForTimeout(300);
     await openCard("setup_generate");
     {
+      const rowDays = curDays();
+      let lastPub = null, bestLen = 0, runStart = 0;
+      for (let i = 1; i <= rowDays.length; i++) {
+        if (i < rowDays.length && isoAddDays(rowDays[i - 1], 1) === rowDays[i]) continue;
+        const len = i - runStart;
+        if (len >= bestLen) { bestLen = len; lastPub = rowDays[i - 1]; }
+        runStart = i;
+      }
+      const dowOf = (d) => new Date(d + "T12:00:00Z").getUTCDay(); // 0 = Sun
+      const sundayOnOrAfter = (d) => isoAddDays(d, (7 - dowOf(d)) % 7);
+      const expStart = isoAddDays(lastPub, 1);
+      const expTeoyEnd = sundayOnOrAfter(expStart.slice(0, 4) + "-12-31");
+      const sy = +expStart.slice(0, 4), sm = +expStart.slice(5, 7);
+      const idx3 = sm + 2, ey = sy + Math.floor((idx3 - 1) / 12), em = ((idx3 - 1) % 12) + 1; // 1-based month of the 3rd calendar month
+      let exp3End = utcDay(Date.UTC(ey, em, 0)); // day 0 of the following month = the last day of month em
+      if (dowOf(exp3End) === 5 || dowOf(exp3End) === 6) exp3End = sundayOnOrAfter(exp3End);
+      const laterDays = rowDays.filter(d => d > lastPub && (curHolder(d, "primary") || curHolder(d, "backup")));
+      const laterRanges = [];
+      laterDays.forEach(d => { const r = laterRanges[laterRanges.length - 1]; if (r && isoAddDays(r.end, 1) === d) r.end = d; else laterRanges.push({ start: d, end: d }); });
+      const laterLabel = (r) => r.start === r.end ? mdOf(r.start) : mdOf(r.start) + "-" + mdOf(r.end);
+      const laterRx = laterRanges.length ? new RegExp("Later locked days on file: " + laterRanges.map(r => laterLabel(r).replace(/\//g, "\\/") + "( \\([^)]*\\))?").join(", ") + " - kept as locks") : null;
+      console.log(`     (derived from the ${rowDays.length} live row days ${rowDays[0]}..${rowDays[rowDays.length - 1]}: longest contiguous block of ${bestLen} row(s) ends ${lastPub} -> presets start ${expStart}; later assigned ranges ${laterRanges.map(laterLabel).join(", ") || "none"})`);
       const teoy = await page.getAttribute("[data-testid=gen-preset-through-end-of-year]", "title");
       const three = await page.getAttribute("[data-testid=gen-preset-3-months]", "title");
       const startDefault = await page.$eval("[data-testid=gen-start]", el => el.value);
       const endDefault = await page.$eval("[data-testid=gen-end]", el => el.value);
       const lp = await page.$eval("[data-testid=gen-last-published]", el => el.textContent);
-      if (teoy !== "2026-11-02 to 2027-01-03" || three !== "2026-11-02 to 2027-01-31" || startDefault !== "2026-11-02" || endDefault !== "2027-01-03") fail(`Generate presets: expected 'Through end of year' = 2026-11-02 to 2027-01-03 (default range) and '3 months' = ..2027-01-31, got teoy=${teoy} 3m=${three} start=${startDefault} end=${endDefault}`);
-      else if (!/Last published day on file: 2026-11-01/.test(lp) || !/Later locked days on file: 11\/26-11\/29 \(Thanksgiving\)/.test(lp)) fail("Generate panel text: expected 'Last published day on file: 2026-11-01' and 'Later locked days on file: 11/26-11/29 (Thanksgiving)': " + lp);
-      else ok("Generate presets: 'Through end of year' = 2026-11-02 to 2027-01-03 is the default range (milestone), 3 months ..2027-01-31; panel names the last published day 2026-11-01 and the later locked 11/26-11/29 (Thanksgiving)");
+      // sanity on the derivation itself: the start lies inside the rows' span + 1 day
+      if (!lastPub || !(expStart > rowDays[0] && expStart <= isoAddDays(rowDays[rowDays.length - 1], 1))) fail(`Generate presets: the harness's derived start ${expStart} is outside the live rows' span ${rowDays[0]}..${rowDays[rowDays.length - 1]} + 1 day - the restatement is broken`);
+      else if (teoy !== `${expStart} to ${expTeoyEnd}` || three !== `${expStart} to ${exp3End}` || startDefault !== expStart || endDefault !== expTeoyEnd) fail(`Generate presets: expected 'Through end of year' = ${expStart} to ${expTeoyEnd} (default range) and '3 months' = ${expStart} to ${exp3End} (derived: longest contiguous block of rows ends ${lastPub}), got teoy=${teoy} 3m=${three} start=${startDefault} end=${endDefault}`);
+      else if (!new RegExp("Last published day on file: " + lastPub).test(lp) || (laterRx ? !laterRx.test(lp) : /Later locked days on file/.test(lp))) fail(`Generate panel text: expected 'Last published day on file: ${lastPub}' and ${laterRanges.length ? "'Later locked days on file: " + laterRanges.map(laterLabel).join(", ") + "'" : "no 'Later locked days' phrase"}: ` + lp);
+      else ok(`Generate presets: 'Through end of year' = ${expStart} to ${expTeoyEnd} is the default range, 3 months = ${expStart} to ${exp3End} (both derived from the live rows: last contiguous published day ${lastPub}); panel names the last published day and the later assigned ${laterRanges.map(laterLabel).join(", ") || "(none)"}`);
     }
 
     // ---- Accept with 'respect locks' OFF over the locked import (10/5-10/11): a confirm BEFORE any write;
@@ -2213,7 +2371,10 @@ try {
     await page.click('button[data-tab="calendar"]');
     await page.waitForSelector("[data-testid=preview-banner]", { timeout: 5000 });
     const monthLabel = await page.$eval("[data-testid=cal-month]", el => el.textContent.trim());
-    const previewCells = await page.$$eval('[data-testid=cal-grid] .cal-cell[data-preview="1"]', els => els.map(e => e.getAttribute("data-day")));
+    // Item SM: the preview cells' holders (data-primary / data-backup / data-ext) are the harness's copy of
+    // the preview it is about to accept; the Accept & Publish write set below is derived from them.
+    const previewGrid = await page.$$eval('[data-testid=cal-grid] .cal-cell[data-preview="1"]', els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || "", b: e.getAttribute("data-backup") || "", ext: e.getAttribute("data-ext") || "" })));
+    const previewCells = previewGrid.map(c => c.day);
     const previewStyled = await page.$eval('[data-testid=cal-grid] .cal-cell[data-preview="1"]', el => getComputedStyle(el).outlineStyle).catch(() => "");
     if (monthLabel !== "November 2026" || previewCells.length !== 29 || previewCells[0] !== "2026-11-02" || previewStyled !== "dashed") fail(`Calendar preview: month ${monthLabel}, ${previewCells.length} preview cells (${previewCells[0]}..), outline ${previewStyled}`); else ok("Calendar preview: November 2026, 29 cells 11/2..11/30 drawn with the dashed preview outline + banner");
     await page.screenshot({ path: path.join(OUT, "generate-preview.png"), fullPage: true });
@@ -2271,13 +2432,51 @@ try {
     const dayWrites = seq.filter(w => w.path.startsWith("/rest/v1/schedule_days"));
     const casShaped = dayWrites.every(w => (w.method === "POST" && /"version":1/.test(w.body) && /return=representation/.test(w.prefer || "")) || (w.method === "PATCH" && /schedule_days\?day=eq\.\d{4}-\d{2}-\d{2}&version=eq\.\d+/.test(w.path)));
     const genAudit = auditSince(beforeOk, "schedule.generate_accept");
+    // Item SM: the write SET is derived from the harness's own data - the preview holders it read off the
+    // grid (previewGrid) against its picture of the map before the accept (the live rows; see curDay) -
+    // restating the sync's rule: one CAS write per day whose persisted row body changes. A day whose
+    // primary or backup holder differs in the grid MUST be written, and every write must lie inside the
+    // preview range and carry the preview's holders. The count is ">= the grid-visible day changes", not
+    // "==": the row body also holds the lock flags, the source and the note, none of them visible in a
+    // grid cell (e.g. a day the generator leaves fully open gets source 'generated'), so a write whose
+    // holders equal the ones already on file is accepted ONLY when it changes at least one of those
+    // persisted fields against the live row (primary_locked / backup_locked / source / note, compared the
+    // way assignmentToDayRow normalises them) or is the first row of a row-less day - each such write is
+    // listed with the fields it changes; a write that changes nothing the harness can name, changes
+    // holders the grid did not predict, or lands outside the range, fails. So the count is exact in
+    // substance: every write must change something nameable. The slot-change COUNT is pinned exactly: the
+    // app's audit row carries changes = the number of (day, role) holder changes it merged, which the
+    // harness recomputes from the same two pictures (the map picture was settled by settleMapToLive()
+    // before the presets pin; nothing since has edited the map).
+    const pvHolder = (c, role) => role === "primary" ? (c.p || (c.ext ? "ext:" + c.ext : null)) : (c.b || null);
+    const pvByDay = {}; previewGrid.forEach(c => { pvByDay[c.day] = c; });
+    const expectedDays = new Set(), expectedSlots = [];
+    previewGrid.forEach(c => { ["primary", "backup"].forEach(role => { if (pvHolder(c, role) !== curHolder(c.day, role)) { expectedDays.add(c.day); expectedSlots.push(`${mdOf(c.day)} ${role} ${curHolder(c.day, role) || "OPEN"}->${pvHolder(c, role) || "OPEN"}`); } }); });
+    const writtenDay = (w) => w.method === "PATCH" ? (/day=eq\.(\d{4}-\d{2}-\d{2})/.exec(w.path) || [])[1] : ((bodyOf(w) || {}).day || null);
+    const writtenHolder = (w, role) => { const b = bodyOf(w) || {}; return role === "primary" ? (b.primary_id || (b.external_cover ? "ext:" + b.external_cover : null)) : (b.backup_id || null); };
+    const writtenDays = new Set(dayWrites.map(writtenDay).filter(Boolean));
+    const missingWrites = [...expectedDays].filter(d => !writtenDays.has(d));
+    const outsideRange = [...writtenDays].filter(d => !pvByDay[d]);
+    const wrongHolders = dayWrites.filter(w => { const d = writtenDay(w); return pvByDay[d] && ["primary", "backup"].some(role => writtenHolder(w, role) !== pvHolder(pvByDay[d], role)); }).map(w => writtenDay(w) + " " + JSON.stringify(bodyOf(w)));
+    const metadataOnly = [...writtenDays].filter(d => pvByDay[d] && !expectedDays.has(d)); // holders unchanged -> must be a lock / source / note change or a new row
+    const metaOf = (r) => ({ primary_locked: r.primary_locked === true, backup_locked: r.backup_locked === true, source: r.source || null, note: (r.note === undefined || r.note === null || r.note === "") ? null : String(r.note) });
+    const metaDiff = (w) => { const d = writtenDay(w), live = liveByDay[d]; if (!live) return ["new row"]; const a = metaOf(bodyOf(w) || {}), b = metaOf(live); return Object.keys(a).filter(k => a[k] !== b[k]).map(k => `${k} ${JSON.stringify(b[k])}->${JSON.stringify(a[k])}`); };
+    const metaWrites = dayWrites.filter(w => metadataOnly.includes(writtenDay(w)));
+    const idleWrites = metaWrites.filter(w => !metaDiff(w).length).map(w => writtenDay(w) + " " + JSON.stringify(bodyOf(w)));
+    const metaNamed = metaWrites.map(w => `${mdOf(writtenDay(w))} (${metaDiff(w).join(", ") || "nothing"})`);
+    const auditChanges = genAudit && genAudit.detail ? genAudit.detail.changes : undefined;
+    console.log(`     (derived over the ${previewGrid.length}-day preview: ${expectedDays.size} day(s) with a grid-visible holder change, ${expectedSlots.length} slot change(s)${expectedSlots.length ? " - " + expectedSlots.slice(0, 6).join(", ") + (expectedSlots.length > 6 ? ", ..." : "") : ""}; the app wrote ${writtenDays.size} day(s)${metaNamed.length ? ", holders unchanged on " + metaNamed.join(", ") : ""})`);
     if (snapIdx < 0) fail("Accept & Publish: no snapshot insert recorded");
     else if (seq[snapIdx].snapshotReason !== "generate_publish") fail("Accept & Publish: snapshot reason is " + seq[snapIdx].snapshotReason + ", expected generate_publish");
     else if (dayIdx < 0) fail("Accept & Publish: no schedule_days write recorded");
     else if (dayIdx < snapIdx) fail(`Accept & Publish: a schedule_days write (#${dayIdx}) happened BEFORE the snapshot insert (#${snapIdx})`);
-    else if (dayWrites.length < 20 || !casShaped) fail(`Accept & Publish: ${dayWrites.length} schedule_days write(s), CAS-shaped=${casShaped}: ` + JSON.stringify(dayWrites.slice(0, 3).map(w => w.method + " " + w.path)));
+    else if (!casShaped) fail(`Accept & Publish: ${dayWrites.length} schedule_days write(s), CAS-shaped=false: ` + JSON.stringify(dayWrites.slice(0, 3).map(w => w.method + " " + w.path)));
+    else if (!expectedDays.size) fail(`Accept & Publish: the harness derived NO holder change between the preview and the map on file (${previewGrid.length} preview cells) - either the preview equals the published rows or the derivation is broken; ${dayWrites.length} write(s) went out`);
+    else if (missingWrites.length || outsideRange.length || wrongHolders.length || dayWrites.length !== writtenDays.size) fail(`Accept & Publish: write set != derived set - ${dayWrites.length} write(s) over ${writtenDays.size} day(s), expected every one of the ${expectedDays.size} grid-changed day(s) once, inside ${previewCells[0]}..${previewCells[previewCells.length - 1]}, carrying the preview's holders; missing ${JSON.stringify(missingWrites)}, outside the range ${JSON.stringify(outsideRange)}, wrong holders ${JSON.stringify(wrongHolders.slice(0, 3))}`);
+    else if (idleWrites.length) fail(`Accept & Publish: ${idleWrites.length} write(s) inside the preview range change nothing the harness can name (holders, lock flags, source and note all equal the live row): ${JSON.stringify(idleWrites.slice(0, 3))}`);
     else if (!genAudit) fail("Accept & Publish: no audit_log 'schedule.generate_accept'");
-    else ok(`Accept & Publish: snapshot 'generate_publish' (#${snapIdx}) precedes the first schedule_days write (#${dayIdx}); ${dayWrites.length} CAS writes (${dayWrites.filter(w => w.method === "POST").length} POST v1, ${dayWrites.filter(w => w.method === "PATCH").length} PATCH ?day&version); audit schedule.generate_accept; publish dialog opened`);
+    else if (auditChanges !== expectedSlots.length) fail(`Accept & Publish: the audit row 'schedule.generate_accept' reports ${auditChanges} slot change(s), the harness derived ${expectedSlots.length} (${expectedSlots.slice(0, 8).join(", ")}${expectedSlots.length > 8 ? ", ..." : ""})`);
+    else ok(`Accept & Publish: snapshot 'generate_publish' (#${snapIdx}) precedes the first schedule_days write (#${dayIdx}); ${dayWrites.length} CAS writes (${dayWrites.filter(w => w.method === "POST").length} POST v1, ${dayWrites.filter(w => w.method === "PATCH").length} PATCH ?day&version) = the ${expectedDays.size} grid-changed day(s) derived from the live rows${metaNamed.length ? " + " + metaNamed.length + " holders-unchanged write(s) each naming a lock / source / note change: " + metaNamed.join(", ") : " and no holders-unchanged write"}, all inside the preview range with the preview's holders; audit schedule.generate_accept changes=${auditChanges} = derived ${expectedSlots.length}; publish dialog opened`);
     const dlgText = await page.$eval("[data-testid=publish-dialog]", el => el.innerText);
     if (!/Publish schedule changes/.test(dlgText) || !/→/.test(dlgText)) fail("publish dialog after Accept lacks the diff lines: " + dlgText.slice(0, 200)); else ok("publish dialog after Accept: diff since last publish with arrow lines (" + (dlgText.match(/→/g) || []).length + ")");
     await page.screenshot({ path: path.join(OUT, "generate-publish-dialog.png"), fullPage: false });
