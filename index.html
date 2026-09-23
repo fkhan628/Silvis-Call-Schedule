@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Silvis Call">
-  <meta name="theme-color" content="#1f7a5c">
+  <meta name="theme-color" content="#FF5F05">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
@@ -18,7 +18,7 @@
   <title>Silvis Call Schedule</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #f0f2f5; overflow-x: hidden; }
+    body { background: #F6F8FB; overflow-x: hidden; }
     #root { min-height: 100vh; }
     /* Print-friendly styles */
     @media print {
@@ -39,8 +39,8 @@
        inline so dark mode's selectors keep working. */
     .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
     .cal-hdr { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; padding: 4px 0; }
-    .cal-cell { min-height: 84px; border: 1px solid #e0e4ea; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
-    .cal-cell:focus-visible { outline: 2px solid #1a6fa8; outline-offset: 1px; }
+    .cal-cell { min-height: 84px; border: 1px solid #DCE3EC; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
+    .cal-cell:focus-visible { outline: 2px solid #FF5F05; outline-offset: 1px; }
     .cal-line { display: flex; align-items: center; gap: 3px; margin-top: 2px; min-width: 0; }
     .cal-pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; padding: 0 5px; font-weight: 600; border: 1px solid transparent; }
     .cal-code { display: none; }
@@ -57,7 +57,7 @@
     .cal-cell.cal-preview { outline: 2px dashed #7a4fbf; outline-offset: -2px; background-image: repeating-linear-gradient(135deg, rgba(122,79,191,0.08) 0 6px, transparent 6px 12px) !important; }
     .cal-preview-tag { position: absolute; bottom: 2px; left: 4px; font-size: 8px; font-weight: 800; letter-spacing: 0.6px; color: #7a4fbf; }
     .setup-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .setup-table th { text-align: left; padding: 6px 8px; color: #5a6a78; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .setup-table th { text-align: left; padding: 6px 8px; color: #5B6B82; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
     .setup-table td { padding: 5px 8px; border-top: 1px solid #e8ecf0; vertical-align: top; }
     .setup-table input[type="text"], .setup-table input[type="number"], .setup-table input[type="date"], .setup-table select { font-size: 12px; padding: 3px 6px; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
@@ -87,7 +87,7 @@
          a right-edge shade + caption say so, because the action column
          (Delete / Remove / Save / coverage) sits past the edge. */
       .table-wrap { background: linear-gradient(90deg, #ffffff 30%, rgba(255,255,255,0)), linear-gradient(90deg, rgba(255,255,255,0), #ffffff 70%) 100% 0, radial-gradient(farthest-side at 0 50%, rgba(0,0,0,0.22), rgba(0,0,0,0)), radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,0.22), rgba(0,0,0,0)) 100% 0; background-repeat: no-repeat; background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%; background-attachment: local, local, scroll, scroll; }
-      .table-wrap::after { content: "swipe sideways for more columns"; display: block; font-size: 10px; color: #7a8a98; padding: 3px 8px; font-style: italic; }
+      .table-wrap::after { content: "swipe sideways for more columns"; display: block; font-size: 10px; color: #5B6B82; padding: 3px 8px; font-style: italic; }
       .setup-table input[type="text"] { max-width: 150px !important; }
       input[type="checkbox"] { width: 20px; height: 20px; }
       .trade-pick { width: 100% !important; }
@@ -111,7 +111,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23a";
+    var APP_VERSION = "2026.09.23b";
     (function() {
       var stored = localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
@@ -4370,15 +4370,16 @@ function CallSchedule() {
     }
   };
   const dk = darkMode;
-  const dkBg = dk ? "#1a1a2e" : "#f0f2f5";
-  const dkCardBorder = dk ? "#2a3a5e" : "#e0e4ea";
-  const dkText = dk ? "#e0e0f0" : "#2c3e50";
-  const dkSubtext = dk ? "#8a8aaa" : "#7a8a98";
-  const dkHdr = dk ? "linear-gradient(180deg,#16213e,#1a1a2e)" : "linear-gradient(180deg,#ffffff,#f8f9fb)";
+  const T = THEME[dk ? "dark" : "light"];
+  const dkBg = T.bg;
+  const dkCardBorder = T.border;
+  const dkText = T.text;
+  const dkSubtext = T.muted;
+  const dkHdr = T.navy;
   const dkInp = dk ? {
-    background: "#0f3460",
-    border: "1px solid #2a3a5e",
-    color: "#e0e0f0"
+    background: T.inputBg,
+    border: "1px solid " + T.inputBorder,
+    color: T.text
   } : {};
   const todayStr = todayCentral();
   const todayAssign = schedule[todayStr] || null;
@@ -4458,7 +4459,7 @@ function CallSchedule() {
       }
     }, "-");
     return React.createElement("span", {
-      style: _objectSpread(_objectSpread({}, css.badge(s.idx, s.name)), {}, {
+      style: _objectSpread(_objectSpread({}, css.badge(s.idx, s)), {}, {
         fontSize: small ? 10 : 11,
         padding: small ? "1px 6px" : "2px 9px"
       })
@@ -4466,7 +4467,7 @@ function CallSchedule() {
   };
   const OpenTag = () => React.createElement("span", {
     style: {
-      color: "#c04040",
+      color: T.open,
       fontWeight: 800,
       fontSize: 11,
       letterSpacing: 0.5
@@ -4531,8 +4532,8 @@ function CallSchedule() {
     setCalYear(n.getFullYear());
   };
   const toggleCalFilter = id => setCalSurgeonFilters(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
-  const colorOf = id => surgeonColors(codeOf(id), sMap[id] ? sMap[id].idx : 0);
-  const textColorOf = id => surgeonTextColor(colorOf(id), codeOf(id), dk);
+  const colorOf = id => rosterColors(sMap[id], sMap[id] ? sMap[id].idx : 0);
+  const textColorOf = id => rosterNameColor(colorOf(id), dk);
   const vacByDay = useMemo(() => {
     const map = {};
     if (!gridDays.length) return map;
@@ -5189,7 +5190,7 @@ function CallSchedule() {
   const inp = _objectSpread(_objectSpread({}, css.inp), dkInp);
   const label = {
     fontSize: 10,
-    color: "#7a8a98",
+    color: "#5B6B82",
     fontWeight: 600,
     textTransform: "uppercase",
     letterSpacing: 0.5,
@@ -5198,11 +5199,11 @@ function CallSchedule() {
   };
   const muted = {
     fontSize: 12,
-    color: "#7a8a98"
+    color: "#5B6B82"
   };
   const sectionNote = {
     fontSize: 12,
-    color: "#5a6a78",
+    color: "#5B6B82",
     margin: "0 0 10px",
     lineHeight: 1.5
   };
@@ -5241,7 +5242,7 @@ function CallSchedule() {
         alignItems: "center",
         gap: 8,
         padding: "6px 10px",
-        background: dk ? "#16213e" : "#f8f9fb",
+        background: dk ? "#13294B" : "#f8f9fb",
         borderRadius: 6,
         border: `1px solid ${dkCardBorder}`,
         flexWrap: "wrap"
@@ -5529,7 +5530,7 @@ function CallSchedule() {
       transform: "translateX(-50%)",
       zIndex: 9999,
       maxWidth: "90vw",
-      background: toast.tone === "success" ? "#1a7a4a" : toast.tone === "error" ? "#a83232" : "#1a2a3a",
+      background: toast.tone === "success" ? "#1a7a4a" : toast.tone === "error" ? "#a83232" : "#1F2A3A",
       color: "#fff",
       borderRadius: 9,
       padding: "10px 18px",
@@ -5569,12 +5570,12 @@ function CallSchedule() {
     style: {
       margin: "0 0 8px",
       fontSize: 16,
-      color: "#1a2a3a"
+      color: "#1F2A3A"
     }
   }, "Publish schedule changes"), React.createElement("p", {
     style: {
       fontSize: 13,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: "0 0 12px",
       lineHeight: 1.5
     }
@@ -5582,7 +5583,7 @@ function CallSchedule() {
     style: {
       maxHeight: 260,
       overflowY: "auto",
-      border: "1px solid #e0e4ea",
+      border: "1px solid #DCE3EC",
       borderRadius: 6,
       padding: "8px 10px",
       marginBottom: 12
@@ -5596,7 +5597,7 @@ function CallSchedule() {
     style: {
       fontSize: 11,
       fontWeight: 700,
-      color: "#1a6fa8",
+      color: T.title,
       textTransform: "uppercase",
       letterSpacing: 0.6,
       marginBottom: 3
@@ -5626,7 +5627,14 @@ function CallSchedule() {
       margin: "0 0 10px",
       lineHeight: 1.5
     }
-  }, "The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept & Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open."), React.createElement("div", {
+  }, "The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept & Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open."), React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "#5B6B82",
+      margin: "0 0 10px",
+      lineHeight: 1.5
+    }
+  }, "The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that)."), React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "flex-end",
@@ -5692,7 +5700,7 @@ function CallSchedule() {
       right: 0,
       bottom: 0,
       zIndex: 9998,
-      background: "#1a2a3a",
+      background: "#1F2A3A",
       color: "#fff",
       display: "flex",
       alignItems: "center",
@@ -5735,27 +5743,38 @@ function CallSchedule() {
       padding: "2px 6px"
     }
   }, "x")), darkMode && React.createElement("style", null, `
-        body { background: #1a1a2e !important; color: #e0e0f0 !important; }
-        div[style*="background: rgb(255, 255, 255)"], div[style*="background:#ffffff"], div[style*="background: #fff"] { background: #16213e !important; border-color: #2a3a5e !important; }
-        div[style*="background: linear-gradient"] { border-color: #2a3a5e !important; }
-        select, input[type="date"], input[type="number"], input[type="text"], input[type="password"], input[type="email"] { background: #0f3460 !important; border-color: #2a3a5e !important; color: #e0e0f0 !important; }
-        button { color: #c0c8d8 !important; }
+        /* Dark theme (Prompt 12 item O.2): deep navy page #0B1A33, surface #13294B, text #E6ECF5, muted #9FB0C8,
+           accent #FF8A4C. React serialises inline colours as rgb(), so the selectors below match the LIGHT
+           token literals in that form and re-paint them; the dk* variables / T tokens handle the rest. */
+        body { background: #0B1A33 !important; color: #E6ECF5 !important; }
+        div[style*="background: rgb(255, 255, 255)"] { background: #13294B !important; border-color: #24406B !important; }
+        div[style*="background: linear-gradient"] { border-color: #24406B !important; }
+        select, input[type="date"], input[type="number"], input[type="text"], input[type="password"], input[type="email"] { background: #0F2140 !important; border-color: #24406B !important; color: #E6ECF5 !important; }
+        /* roster pills rendered as buttons ([data-pill], their own tint + text colour) and the nav tabs / Alerts bell on the
+           navy bar (inline colours already theme-safe: active white, inactive #DCE5F2) keep their inline colour; :where()
+           keeps this rule at zero specificity so the gradient / orange-text button rules below still win */
+        button:where(:not([data-pill]):not([data-tab]):not([aria-label="Notifications"])) { color: #C9D6E8 !important; }
+        /* the light raised button (css.btn(false)) takes the dark raised surface */
+        button[style*="background: rgb(238, 242, 247)"] { background: #0F2140 !important; border-color: #24406B !important; }
         button[style*="background: linear-gradient"] { color: #fff !important; }
-        table { color: #c0c0d0 !important; }
-        th { color: #8a8aaa !important; }
-        td { color: #c0c0d0 !important; }
-        div[style*="color: rgb(42, 62, 80)"], div[style*="color:#2c3e50"], span[style*="color:#2c3e50"], p[style*="color:#2c3e50"] { color: #e0e0f0 !important; }
-        div[style*="color:#5a6a78"], span[style*="color:#5a6a78"], p[style*="color:#5a6a78"] { color: #9aa0b8 !important; }
-        div[style*="color:#7a8a98"], span[style*="color:#7a8a98"], p[style*="color:#7a8a98"], label[style*="color:#7a8a98"] { color: #7a80a0 !important; }
-        div[style*="color:#1a6fa8"], span[style*="color:#1a6fa8"] { color: #5aafe8 !important; }
-        div[style*="color:#4a5a68"], span[style*="color:#4a5a68"] { color: #b0b8c8 !important; }
-        div[style*="color:#8a94a0"], span[style*="color:#8a94a0"] { color: #7080a0 !important; }
-        div[style*="background:#f8f9fb"], div[style*="background:#f0f2f5"], div[style*="background:#f4f6f8"] { background: #16213e !important; border-color: #2a3a5e !important; }
+        /* the navy primary gradient and an active navy mini / filter button lift to a lighter navy on the dark surface */
+        button[style*="linear-gradient(135deg, rgb(19, 41, 75)"] { background: linear-gradient(135deg,#1F3A6B,#2E5090) !important; border-color: #2E5090 !important; }
+        button[style*="background: rgb(19, 41, 75)"] { background: #2E5090 !important; border-color: #2E5090 !important; color: #fff !important; }
+        table { color: #C9D6E8 !important; }
+        th { color: #9FB0C8 !important; }
+        td { color: #C9D6E8 !important; }
+        /* light token literals: body text, muted text, navy titles, orange text, OPEN red, page-tint backgrounds */
+        div[style*="color: rgb(31, 42, 58)"], span[style*="color: rgb(31, 42, 58)"], p[style*="color: rgb(31, 42, 58)"], h2[style*="color: rgb(31, 42, 58)"], h3[style*="color: rgb(31, 42, 58)"], label[style*="color: rgb(31, 42, 58)"] { color: #E6ECF5 !important; }
+        div[style*="color: rgb(91, 107, 130)"], span[style*="color: rgb(91, 107, 130)"], p[style*="color: rgb(91, 107, 130)"], label[style*="color: rgb(91, 107, 130)"] { color: #9FB0C8 !important; }
+        div[style*="color: rgb(19, 41, 75)"], span[style*="color: rgb(19, 41, 75)"], strong[style*="color: rgb(19, 41, 75)"], h3[style*="color: rgb(19, 41, 75)"] { color: #C9D6E8 !important; }
+        span[style*="color: rgb(194, 65, 12)"], button[style*="color: rgb(194, 65, 12)"], div[style*="color: rgb(194, 65, 12)"] { color: #FF8A4C !important; }
+        /* T.accentText / T.accent already resolve to the dark orange; the generic button rule above must not grey them */
+        button[style*="color: rgb(255, 138, 76)"] { color: #FF8A4C !important; }
+        span[style*="color: rgb(185, 28, 28)"], div[style*="color: rgb(185, 28, 28)"] { color: #F06060 !important; }
+        div[style*="background: rgb(246, 248, 251)"], div[style*="background: rgb(238, 242, 247)"], div[style*="background: rgb(248, 249, 251)"] { background: #0F2140 !important; border-color: #24406B !important; }
         div[style*="border: 1px dashed"] { border-color: #3a4a6e !important; }
-        div[style*="color:#1a2a3a"], h1[style*="color:#1a2a3a"] { color: #e0e0f0 !important; }
-        label[style*="color:#5a6a78"], label[style*="color:#3a4a58"] { color: #9aa0b8 !important; }
-        span[style*="color:#1a8040"] { color: #40c060 !important; }
-        span[style*="color:#c04040"] { color: #f06060 !important; }
+        span[style*="color: rgb(26, 128, 64)"] { color: #40c060 !important; }
+        span[style*="color: rgb(192, 64, 64)"] { color: #f06060 !important; }
         /* vis-004: flagged table cells keep their warning colour under the td override above
            (over cap / over the max-consecutive rule / deviation from target) */
         td[data-flag="over"], span[data-flag="over"] { color: #f06060 !important; }
@@ -5781,7 +5800,7 @@ function CallSchedule() {
       width: 44,
       height: 44,
       borderRadius: 10,
-      background: "linear-gradient(135deg,#1a6fa8,#2488c8)",
+      background: OPENING.gradient,
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
@@ -5797,7 +5816,7 @@ function CallSchedule() {
   }, "SSC")), React.createElement("p", {
     style: {
       fontSize: 13,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "Loading"))) : biometricPending && !isPublicMode ? authBox(React.createElement("div", {
     style: {
@@ -5808,7 +5827,7 @@ function CallSchedule() {
       width: 64,
       height: 64,
       borderRadius: 16,
-      background: "linear-gradient(135deg,#1a6fa8,#2488c8)",
+      background: OPENING.gradient,
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
@@ -5831,7 +5850,7 @@ function CallSchedule() {
   }, "Welcome back"), React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: "0 0 16px"
     }
   }, biometric.getStoredUser() || "Use biometric to unlock"), authError && React.createElement("div", {
@@ -5848,7 +5867,7 @@ function CallSchedule() {
   }, authError), React.createElement("button", {
     onClick: handleBiometricUnlock,
     disabled: authBusy,
-    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+    style: _objectSpread(_objectSpread({}, css.cta), {}, {
       width: "100%",
       padding: "13px 16px",
       fontSize: 15,
@@ -5864,7 +5883,7 @@ function CallSchedule() {
     style: {
       background: "none",
       border: "none",
-      color: "#1a6fa8",
+      color: T.accentText,
       fontSize: 12,
       cursor: "pointer",
       fontFamily: font,
@@ -5880,7 +5899,7 @@ function CallSchedule() {
       width: 48,
       height: 48,
       borderRadius: 10,
-      background: "linear-gradient(135deg,#1a6fa8,#2488c8)",
+      background: OPENING.gradient,
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
@@ -5903,7 +5922,7 @@ function CallSchedule() {
   }, "Silvis Call Schedule"), React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: 0
     }
   }, authMode === "login" ? "Sign in to your account" : authMode === "signup" ? "Create your account" : authMode === "reset" ? "Reset your password" : "Set a new password")), authMode === "newpassword" ? React.createElement("div", {
@@ -5915,7 +5934,7 @@ function CallSchedule() {
   }, React.createElement("p", {
     style: {
       fontSize: 13,
-      color: "#2c5a80",
+      color: T.text,
       margin: 0
     }
   }, "Enter your new password below."), React.createElement("input", {
@@ -5944,7 +5963,7 @@ function CallSchedule() {
   }), errBox(authError), React.createElement("button", {
     onClick: submitNewPassword,
     disabled: authBusy,
-    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+    style: _objectSpread(_objectSpread({}, css.cta), {}, {
       width: "100%",
       padding: "11px 16px",
       fontSize: 14,
@@ -5977,7 +5996,7 @@ function CallSchedule() {
     style: {
       background: "none",
       border: "none",
-      color: "#1a6fa8",
+      color: T.accentText,
       fontSize: 12,
       cursor: "pointer",
       fontFamily: font,
@@ -5987,7 +6006,7 @@ function CallSchedule() {
   }, "Back to sign in")) : React.createElement(React.Fragment, null, React.createElement("p", {
     style: {
       fontSize: 13,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: 0
     }
   }, "Enter the email address you signed up with. We'll send you a link to reset your password."), React.createElement("input", {
@@ -6006,7 +6025,7 @@ function CallSchedule() {
   }), errBox(authError), React.createElement("button", {
     onClick: submitReset,
     disabled: authBusy,
-    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+    style: _objectSpread(_objectSpread({}, css.cta), {}, {
       width: "100%",
       padding: "11px 16px",
       fontSize: 14,
@@ -6027,7 +6046,7 @@ function CallSchedule() {
     style: {
       background: "none",
       border: "none",
-      color: "#1a6fa8",
+      color: T.accentText,
       fontSize: 12,
       cursor: "pointer",
       fontFamily: font,
@@ -6074,14 +6093,14 @@ function CallSchedule() {
   }), authMode === "signup" && React.createElement("p", {
     style: {
       fontSize: 11.5,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: 0,
       lineHeight: 1.5
     }
   }, "Your account starts unlinked. The scheduler links it to your roster entry afterwards - you don't pick a name here."), errBox(authError), React.createElement("button", {
     onClick: handleAuthSubmit,
     disabled: authBusy,
-    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+    style: _objectSpread(_objectSpread({}, css.cta), {}, {
       width: "100%",
       padding: "11px 16px",
       fontSize: 14,
@@ -6102,7 +6121,7 @@ function CallSchedule() {
     style: {
       background: "none",
       border: "none",
-      color: "#1a6fa8",
+      color: T.accentText,
       fontSize: 12,
       cursor: "pointer",
       fontFamily: font,
@@ -6120,16 +6139,17 @@ function CallSchedule() {
     style: {
       background: "none",
       border: "none",
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontSize: 11,
       cursor: "pointer",
       fontFamily: font,
       textDecoration: "underline"
     }
   }, "Forgot your password?")))))) : React.createElement(React.Fragment, null, React.createElement("div", {
+    "data-testid": "app-header",
     style: _objectSpread(_objectSpread({}, css.hdr), {}, {
       background: dkHdr,
-      borderBottom: `1px solid ${dkCardBorder}`
+      borderBottom: `1px solid ${dk ? T.border : T.navy}`
     })
   }, React.createElement("div", {
     style: {
@@ -6142,12 +6162,12 @@ function CallSchedule() {
       width: 38,
       height: 38,
       borderRadius: 8,
-      background: "linear-gradient(135deg,#1a6fa8,#2488c8)",
+      background: OPENING.gradient,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       flexShrink: 0,
-      boxShadow: "0 2px 6px rgba(26,111,168,0.25)"
+      boxShadow: "0 2px 6px rgba(255,95,5,0.3)"
     }
   }, React.createElement("span", {
     style: {
@@ -6159,13 +6179,13 @@ function CallSchedule() {
     }
   }, "SSC")), React.createElement("div", null, React.createElement("h1", {
     style: _objectSpread(_objectSpread({}, css.h1), {}, {
-      color: dkText
+      color: T.onNavy
     })
   }, "Silvis Call Schedule"), React.createElement("p", {
     style: css.sub
   }, isPublicMode ? React.createElement(React.Fragment, null, React.createElement("span", {
     style: {
-      color: "#7a8a98"
+      color: T.navyMuted
     }
   }, "Read-only view"), blobTsRef.current && React.createElement(React.Fragment, null, " - Last updated: ", new Date(blobTsRef.current).toLocaleString(undefined, {
     month: "short",
@@ -6178,20 +6198,20 @@ function CallSchedule() {
     "aria-live": "polite",
     style: {
       marginLeft: 8,
-      color: saveError ? "#c04040" : "#1a8040",
+      color: saveError ? "#FF8A8A" : "#7FD39A",
       fontWeight: 600,
       fontSize: 11
     }
   }, saveStatus), loaded && !saveStatus && React.createElement("span", {
     style: {
       marginLeft: 8,
-      color: "#a0a8b0",
+      color: T.navyMuted,
       fontSize: 10
     }
   }, "Synced"), !loaded && React.createElement("span", {
     style: {
       marginLeft: 8,
-      color: "#6a7a88",
+      color: T.navyMuted,
       fontSize: 10
     }
   }, "Connecting"))))), !isPublicMode && React.createElement("div", {
@@ -6205,7 +6225,7 @@ function CallSchedule() {
     return tabs.map(([k, l]) => React.createElement("button", {
       key: k,
       "data-tab": k,
-      style: _objectSpread(_objectSpread({}, css.tab(view === k)), {}, {
+      style: _objectSpread(_objectSpread({}, css.tab(view === k, T.accent)), {}, {
         position: "relative"
       }),
       onClick: () => setView(k)
@@ -6214,8 +6234,8 @@ function CallSchedule() {
         position: "absolute",
         top: -4,
         right: -4,
-        background: "#e04040",
-        color: "#fff",
+        background: T.accent,
+        color: T.onAccent,
         borderRadius: 10,
         fontSize: 9,
         fontWeight: 700,
@@ -6252,7 +6272,7 @@ function CallSchedule() {
       if (!showNotifs) markNotifsSeen();
     },
     "aria-label": "Notifications",
-    style: _objectSpread(_objectSpread({}, css.tab(showNotifs)), {}, {
+    style: _objectSpread(_objectSpread({}, css.tab(showNotifs, T.accent)), {}, {
       position: "relative",
       fontSize: 12,
       padding: "5px 10px"
@@ -6262,8 +6282,8 @@ function CallSchedule() {
       position: "absolute",
       top: -4,
       right: -4,
-      background: "#e04040",
-      color: "#fff",
+      background: T.accent,
+      color: T.onAccent,
       borderRadius: 10,
       fontSize: 9,
       fontWeight: 700,
@@ -6279,7 +6299,7 @@ function CallSchedule() {
     style: _objectSpread(_objectSpread({}, css.tab(false)), {}, {
       fontSize: 12,
       padding: "4px 10px",
-      color: "#c09030"
+      color: T.accent
     }),
     title: `Undo (${scheduleHistory.length} steps)`
   }, "Undo"))), React.createElement("div", {
@@ -6315,7 +6335,7 @@ function CallSchedule() {
     style: {
       fontSize: 14,
       fontWeight: 700,
-      color: "#1a2a3a"
+      color: "#1F2A3A"
     }
   }, "Notifications"), React.createElement("div", {
     style: {
@@ -6383,8 +6403,8 @@ function CallSchedule() {
         marginBottom: 6,
         borderRadius: 6,
         cursor: targetTab ? "pointer" : "default",
-        background: n.created_at > notifLastSeen ? "#f0f8ff" : "#f8f9fb",
-        border: `1px solid ${n.created_at > notifLastSeen ? "#c0d8f0" : "#e8ecf0"}`
+        background: n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",
+        border: `1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`
       }
     }, React.createElement("div", {
       style: {
@@ -6396,7 +6416,7 @@ function CallSchedule() {
       style: {
         fontSize: 12,
         fontWeight: 600,
-        color: "#1a2a3a"
+        color: "#1F2A3A"
       }
     }, n.title), React.createElement("span", {
       style: {
@@ -6406,14 +6426,14 @@ function CallSchedule() {
     }, new Date(n.created_at).toLocaleDateString())), React.createElement("p", {
       style: {
         fontSize: 12,
-        color: "#5a6a78",
+        color: "#5B6B82",
         margin: "3px 0 0",
         lineHeight: 1.4
       }
     }, n.message), targetTab && React.createElement("span", {
       style: {
         fontSize: 10,
-        color: "#1a6fa8",
+        color: T.accentText,
         marginTop: 3,
         display: "inline-block"
       }
@@ -6436,7 +6456,7 @@ function CallSchedule() {
       style: {
         fontWeight: 400,
         fontSize: 11,
-        color: "#7a8a98"
+        color: "#5B6B82"
       }
     }, "- ", setupIssues.length ? setupIssues.length + " warning(s)" : "none"))
   }, setupIssues.length === 0 ? React.createElement("p", {
@@ -6515,7 +6535,7 @@ function CallSchedule() {
       style: {
         fontWeight: 400,
         fontSize: 11,
-        color: "#7a8a98"
+        color: "#5B6B82"
       }
     }, "- ", availabilityRows.length, " row(s)"))
   }, React.createElement(AvailabilityCard, {
@@ -6550,7 +6570,7 @@ function CallSchedule() {
       alignItems: "center",
       gap: 6,
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       marginBottom: 8,
       cursor: "pointer"
     }
@@ -6714,7 +6734,7 @@ function CallSchedule() {
       padding: "8px 12px",
       background: c.active ? "#fff" : "#f4f6f8",
       borderRadius: 6,
-      border: "1px solid #e0e4ea",
+      border: "1px solid #DCE3EC",
       opacity: c.active ? 1 : 0.6
     }
   }, React.createElement("div", {
@@ -6726,7 +6746,7 @@ function CallSchedule() {
     style: {
       fontSize: 13,
       fontWeight: 600,
-      color: "#2c3e50"
+      color: "#1F2A3A"
     }
   }, c.name, c.role ? React.createElement("span", {
     style: _objectSpread(_objectSpread({}, muted), {}, {
@@ -6735,7 +6755,7 @@ function CallSchedule() {
   }, c.role) : null), React.createElement("div", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontFamily: mono,
       overflow: "hidden",
       textOverflow: "ellipsis"
@@ -6833,7 +6853,7 @@ function CallSchedule() {
         className: "cal-skel",
         "data-testid": "loading-slot",
         style: {
-          background: dk ? "#243250" : "#e4e8ee"
+          background: T.skeleton
         }
       });else if (!holder && !slotIsOpen(day, holder, todayStr)) body = React.createElement("span", {
         className: "cal-pill cal-blank",
@@ -6841,7 +6861,7 @@ function CallSchedule() {
       }, "\xA0");else if (!holder) body = React.createElement("span", {
         className: "cal-pill cal-open",
         style: {
-          color: "#c04040",
+          color: T.open,
           fontWeight: 800,
           letterSpacing: 0.4
         }
@@ -6854,7 +6874,7 @@ function CallSchedule() {
             color: dk ? "#a0a8b0" : "#6a7a88",
             fontStyle: "italic",
             background: dk ? "#1e2a44" : "#eef1f4",
-            borderColor: dk ? "#2a3a5e" : "#d8dee6"
+            borderColor: dk ? "#24406B" : "#d8dee6"
           }
         }, React.createElement("span", {
           className: "cal-name"
@@ -6869,7 +6889,8 @@ function CallSchedule() {
           style: {
             background: c.tg,
             color: c.tx,
-            borderColor: c.bd
+            borderColor: c.bd,
+            borderStyle: c.dashed ? "dashed" : "solid"
           }
         }, React.createElement("span", {
           className: "cal-name"
@@ -6901,7 +6922,7 @@ function CallSchedule() {
       border: "1px solid " + color
     });
     const entryStyle = e => e.kind === "open" ? {
-      color: "#c04040",
+      color: T.open,
       fontWeight: 800
     } : e.kind === "external" ? {
       color: dk ? "#a0a8b0" : "#6a7a88",
@@ -6912,8 +6933,8 @@ function CallSchedule() {
     };
     const chipStyle = (on, c) => ({
       background: on ? c.tg : "transparent",
-      color: on ? c.tx : dk ? "#8a8aaa" : "#6a7a88",
-      border: "1px solid " + (on ? c.bd : dk ? "#2a3a5e" : "#c8d0d8"),
+      color: on ? c.tx : dk ? "#9FB0C8" : "#6a7a88",
+      border: "1px solid " + (on ? c.bd : dk ? "#24406B" : "#c8d0d8"),
       borderRadius: 6,
       padding: "3px 8px",
       fontSize: 11,
@@ -6964,7 +6985,7 @@ function CallSchedule() {
           color: dkSubtext,
           padding: "6px 8px",
           borderRadius: 6,
-          background: dk ? "#141c30" : "#f4f6f8",
+          background: dk ? "#0F2140" : "#f4f6f8",
           border: "1px solid " + dkCardBorder
         }
       }, React.createElement("span", {
@@ -7115,7 +7136,7 @@ function CallSchedule() {
       style: {
         fontSize: 12.5,
         color: dkText,
-        background: dk ? "#16213e" : "#f8f9fb",
+        background: dk ? "#13294B" : "#f8f9fb",
         border: "1px solid " + dkCardBorder,
         borderRadius: 6,
         padding: "6px 10px",
@@ -7199,8 +7220,8 @@ function CallSchedule() {
       key: h,
       className: "cal-hdr",
       style: {
-        color: i >= 4 ? "#3d6a8c" : dkSubtext,
-        background: i >= 4 ? dk ? "#141c30" : "#eef3f8" : "transparent",
+        color: i >= 4 ? dk ? T.muted : T.title : dkSubtext,
+        background: i >= 4 ? dk ? "#0F2140" : "#eef3f8" : "transparent",
         borderRadius: i === 4 ? "6px 0 0 6px" : i === 6 ? "0 6px 6px 0" : 0
       }
     }, h, i === 4 ? React.createElement("span", {
@@ -7230,9 +7251,9 @@ function CallSchedule() {
       const inFilter = calSurgeonFilters.length === 0 || a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup));
       const dim = !inFilter || calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup")));
       const isToday = d === todayStr;
-      const bg = hol ? dk ? "#3a3418" : "#fdf6dc" : isWk ? dk ? "#141c30" : "#f3f6f9" : dk ? "#16213e" : "#ffffff";
+      const bg = hol ? T.holiday : isWk ? T.weekend : T.surface;
       const bracket = isWk ? {
-        borderTop: "2px solid #a9c4da",
+        borderTop: "2px solid " + T.navyMuted,
         borderTopLeftRadius: dow === 5 ? 8 : 6,
         borderTopRightRadius: dow === 0 ? 8 : 6
       } : {};
@@ -7263,11 +7284,11 @@ function CallSchedule() {
         title: titleBits.join(" | "),
         style: _objectSpread(_objectSpread({
           background: bg,
-          border: isToday ? "2px solid #1a6fa8" : "1px solid " + dkCardBorder
+          border: isToday ? "2px solid " + T.accent : "1px solid " + dkCardBorder
         }, bracket), {}, {
           opacity: dim ? 0.28 : inMonth ? 1 : 0.5,
           color: dkText,
-          boxShadow: isToday ? "0 0 0 2px rgba(26,111,168,0.18)" : "none"
+          boxShadow: isToday ? "0 0 0 2px rgba(255,95,5,0.18)" : "none"
         })
       }, React.createElement("div", {
         style: {
@@ -7282,7 +7303,7 @@ function CallSchedule() {
           fontFamily: mono,
           fontSize: 11,
           fontWeight: isToday ? 800 : 600,
-          color: isToday ? "#1a6fa8" : inMonth ? dkText : "#9aa4ae"
+          color: isToday ? T.accentText : inMonth ? dkText : "#9aa4ae"
         }
       }, dt.getDate()), hol && React.createElement("span", {
         className: "cal-hol",
@@ -7301,7 +7322,7 @@ function CallSchedule() {
       }, derived && React.createElement("span", {
         "data-badge": "E",
         title: "East-derived week: " + derivedWho,
-        style: badge(true, "#1a6fa8")
+        style: badge(true, T.badge)
       }, "E"), fc && fc.p >= 0.2 && React.createElement("span", {
         "data-badge": fc.p >= forecastThreshold ? "F" : "f",
         title: "East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)",
@@ -7390,7 +7411,7 @@ function CallSchedule() {
       className: "cal-mobile-note"
     }, "top line = primary, bottom line = backup (tap a day for details)"), React.createElement("span", null, React.createElement("span", {
       style: {
-        color: "#c04040",
+        color: T.open,
         fontWeight: 800
       }
     }, "OPEN"), " = nobody assigned (today onward)"), React.createElement("span", null, React.createElement("span", {
@@ -7410,7 +7431,7 @@ function CallSchedule() {
         gap: 3
       }
     }, React.createElement("span", {
-      style: badge(true, "#1a6fa8")
+      style: badge(true, T.badge)
     }, "E"), " East-derived week"), React.createElement("span", {
       style: {
         display: "inline-flex",
@@ -7421,7 +7442,7 @@ function CallSchedule() {
       style: badge(true, "#8a5a10")
     }, "F"), " East forecast at or above ", Math.round(forecastThreshold * 100), "%, ", React.createElement("span", {
       style: badge(false, "#8a5a10")
-    }, "F"), " 20% or more"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), React.createElement("span", null, "blue outline = today"), isScheduler && !isPublicMode && React.createElement("span", null, "Click a day to edit (eligibility-checked); saves per day with compare-and-swap."))), React.createElement(Collapsible, {
+    }, "F"), " 20% or more"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), React.createElement("span", null, "orange outline = today"), isScheduler && !isPublicMode && React.createElement("span", null, "Click a day to edit (eligibility-checked); saves per day with compare-and-swap."))), React.createElement(Collapsible, {
       css: css,
       ck: "cal_weekrows",
       defaultOpen: true,
@@ -7508,9 +7529,10 @@ function CallSchedule() {
       return React.createElement("button", {
         key: s.id,
         "data-testid": "ics-" + s.code,
+        "data-pill": "1",
         onClick: () => downloadMyCal(s.id),
         title: "Download " + icsFileName(s),
-        style: _objectSpread(_objectSpread({}, css.badge(((_sMap$s$id = sMap[s.id]) === null || _sMap$s$id === void 0 ? void 0 : _sMap$s$id.idx) || 0, s.name)), {}, {
+        style: _objectSpread(_objectSpread({}, css.badge(((_sMap$s$id = sMap[s.id]) === null || _sMap$s$id === void 0 ? void 0 : _sMap$s$id.idx) || 0, s)), {}, {
           cursor: "pointer",
           padding: "4px 10px",
           fontSize: 11
@@ -8341,7 +8363,7 @@ function CallSchedule() {
         padding: "12px 14px",
         borderRadius: 8,
         marginBottom: 12,
-        background: next ? next.role === "primary" ? "linear-gradient(135deg,#1a6fa8,#2488c8)" : "linear-gradient(135deg,#8a6a20,#b08a30)" : dk ? "#16213e" : "#f0f2f5",
+        background: next ? next.role === "primary" ? `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})` : "linear-gradient(135deg,#8a6a20,#b08a30)" : T.raised,
         color: next ? "#fff" : dkText
       }
     }, !loaded ? React.createElement("span", {
@@ -8414,7 +8436,7 @@ function CallSchedule() {
         fontSize: 11,
         fontWeight: 700,
         width: 58,
-        color: x.role === "primary" ? "#1a6fa8" : "#7a5a20"
+        color: x.role === "primary" ? T.title : "#7a5a20"
       }
     }, roleWord(x.role)), React.createElement("span", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
@@ -8478,7 +8500,7 @@ function CallSchedule() {
       alignItems: "center",
       gap: 6,
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       marginBottom: 8,
       cursor: "pointer"
     }
@@ -8513,7 +8535,7 @@ function CallSchedule() {
     const tenseFor = st => st === "accepted" || st === "applied" ? "takes" : st === "declined" || st === "cancelled" ? "would have taken" : "would take";
     const rowBox = {
       padding: "8px 12px",
-      background: dk ? "#16213e" : "#f8f9fb",
+      background: dk ? "#13294B" : "#f8f9fb",
       borderRadius: 6,
       border: `1px solid ${dkCardBorder}`
     };
@@ -8917,7 +8939,7 @@ function CallSchedule() {
   }, React.createElement("span", {
     style: {
       fontSize: 13,
-      color: "#5a6a78"
+      color: "#5B6B82"
     }
   }, "Theme"), React.createElement("button", {
     onClick: () => setDarkMode(false),
@@ -8939,7 +8961,7 @@ function CallSchedule() {
       style: {
         fontWeight: 400,
         fontSize: 11,
-        color: "#7a8a98"
+        color: "#5B6B82"
       }
     }, "- who changed what")),
     right: React.createElement("button", {
@@ -8952,7 +8974,7 @@ function CallSchedule() {
         background: "none",
         border: "1px solid #d0d8e0",
         borderRadius: 6,
-        color: "#5a6a78",
+        color: "#5B6B82",
         cursor: "pointer",
         fontSize: 11,
         padding: "2px 8px",
@@ -8978,7 +9000,7 @@ function CallSchedule() {
     }
   }, auditEntries.map(en => {
     const si = surgeons.findIndex(s => s.id === en.actor_id);
-    const c = si >= 0 ? surgeonColors(surgeons[si].name, si) : null;
+    const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
     const summary = en.detail && en.detail.summary || en.action;
     return React.createElement("div", {
       key: en.id,
@@ -8998,8 +9020,8 @@ function CallSchedule() {
         padding: "2px 7px",
         borderRadius: 5,
         background: c ? c.tg : dk ? "#243240" : "#eef1f4",
-        color: c ? c.tx : "#5a6a78",
-        border: `1px solid ${c ? c.bd : dk ? "#2a3a48" : "#e0e4ea"}`,
+        color: c ? c.tx : "#5B6B82",
+        border: `1px solid ${c ? c.bd : dk ? "#2a3a48" : "#DCE3EC"}`,
         minWidth: 38,
         textAlign: "center"
       }
@@ -9030,7 +9052,7 @@ function CallSchedule() {
       style: {
         fontWeight: 400,
         fontSize: 11,
-        color: "#7a8a98"
+        color: "#5B6B82"
       }
     }, "- who's on which build")),
     right: React.createElement("button", {
@@ -9043,7 +9065,7 @@ function CallSchedule() {
         background: "none",
         border: "1px solid #d0d8e0",
         borderRadius: 6,
-        color: "#5a6a78",
+        color: "#5B6B82",
         cursor: "pointer",
         fontSize: 11,
         padding: "2px 8px",
@@ -9053,7 +9075,7 @@ function CallSchedule() {
   }, React.createElement("p", {
     style: {
       fontSize: 11.5,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: "0 0 8px",
       lineHeight: 1.5
     }
@@ -9100,9 +9122,9 @@ function CallSchedule() {
           color: "#c09030",
           border: "1px solid #e8d090"
         } : {
-          background: "#e8f0fa",
-          color: "#1a6fa8",
-          border: "1px solid #b8d4ec"
+          background: T.accentTint,
+          color: T.accentText,
+          border: "1px solid " + T.accent
         };
         status = React.createElement(React.Fragment, null, React.createElement("span", {
           style: _objectSpread({
@@ -9143,8 +9165,8 @@ function CallSchedule() {
             padding: "2px 7px",
             borderRadius: 5,
             background: dk ? "#243240" : "#eef1f4",
-            color: "#7a8a98",
-            border: "1px solid " + (dk ? "#2a3a48" : "#e0e4ea")
+            color: "#5B6B82",
+            border: "1px solid " + (dk ? "#2a3a48" : "#DCE3EC")
           }
         }, "Signed up - no heartbeat yet");
       } else {
@@ -9169,7 +9191,7 @@ function CallSchedule() {
           flexShrink: 0,
           fontSize: 12,
           fontWeight: 600,
-          color: dk ? "#c8d2dc" : "#2c3e50",
+          color: dk ? "#c8d2dc" : "#1F2A3A",
           minWidth: 60
         }
       }, name), React.createElement("span", {
@@ -9205,7 +9227,7 @@ function CallSchedule() {
   }, React.createElement("span", null, "Office notifications"), React.createElement("span", {
     style: {
       fontSize: 12,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, openSettingsCards.officeNotif ? "-" : "+")), openSettingsCards.officeNotif && React.createElement(React.Fragment, null, React.createElement("p", {
     style: sectionNote
@@ -9253,7 +9275,7 @@ function CallSchedule() {
   }, React.createElement("span", null, "Notification settings"), React.createElement("span", {
     style: {
       fontSize: 12,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, openSettingsCards.notifSettings ? "-" : "+")), openSettingsCards.notifSettings && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
@@ -9418,7 +9440,7 @@ function CallSchedule() {
     }
   }, "Signed in as ", React.createElement("strong", {
     style: {
-      color: "#1a6fa8"
+      color: T.title
     }
   }, mySurgeon ? nameOf(mySurgeon) : (userProfile === null || userProfile === void 0 ? void 0 : userProfile.display_name) || "unlinked account"), React.createElement("span", {
     style: _objectSpread(_objectSpread({}, muted), {}, {
@@ -9427,7 +9449,7 @@ function CallSchedule() {
   }, "(", (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) || "viewer", ")")), React.createElement("p", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: 0
     }
   }, authUser === null || authUser === void 0 ? void 0 : authUser.email)), React.createElement("button", {
@@ -9439,7 +9461,7 @@ function CallSchedule() {
   }, "Sign out")), biometricAvail ? React.createElement("div", {
     style: {
       paddingTop: 12,
-      borderTop: "1px solid #e0e4ea"
+      borderTop: "1px solid #DCE3EC"
     }
   }, React.createElement("div", {
     style: {
@@ -9459,7 +9481,7 @@ function CallSchedule() {
   }, "Biometric login"), React.createElement("p", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: 0
     }
   }, biometricEnrolled ? "Face ID / Touch ID is enabled" : "Use Face ID or Touch ID to unlock the app")), biometricEnrolled ? React.createElement("button", {
@@ -9477,7 +9499,7 @@ function CallSchedule() {
   }, "Enable"))) : React.createElement("div", {
     style: {
       paddingTop: 12,
-      borderTop: "1px solid #e0e4ea"
+      borderTop: "1px solid #DCE3EC"
     }
   }, React.createElement("div", {
     style: {
@@ -9503,7 +9525,7 @@ function CallSchedule() {
   }, "Biometric login unavailable"), React.createElement("p", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: "0 0 4px",
       lineHeight: 1.4
     }
@@ -9522,11 +9544,11 @@ function CallSchedule() {
   }, "Re-check")), biometricReason && React.createElement("div", {
     style: {
       background: dk ? "#0f1e30" : "#f4f6f8",
-      border: `1px solid ${dk ? "#2a3a5e" : "#e0e4ea"}`,
+      border: `1px solid ${dk ? "#24406B" : "#DCE3EC"}`,
       borderRadius: 6,
       padding: "6px 10px",
       fontSize: 11,
-      color: dk ? "#b0b8c0" : "#5a6a78",
+      color: dk ? "#b0b8c0" : "#5B6B82",
       lineHeight: 1.5,
       fontFamily: mono,
       wordBreak: "break-word",
@@ -9554,7 +9576,7 @@ function CallSchedule() {
   }, "Try enable anyway"), React.createElement("span", {
     style: {
       fontSize: 10,
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontStyle: "italic"
     }
   }, "Bypasses the availability check - the browser shows a Face ID prompt if it actually works.")))), React.createElement("div", {
@@ -9573,7 +9595,7 @@ function CallSchedule() {
       style: {
         fontSize: 11,
         fontWeight: 600,
-        color: "#5a6a78",
+        color: "#5B6B82",
         marginBottom: 4
       }
     }, "My calendar:"), React.createElement("div", {
@@ -9609,7 +9631,7 @@ function CallSchedule() {
     style: {
       fontSize: 11,
       fontWeight: 600,
-      color: "#5a6a78",
+      color: "#5B6B82",
       marginBottom: 4
     }
   }, "Full schedule:"), React.createElement("div", {
@@ -9640,7 +9662,7 @@ function CallSchedule() {
     style: {
       fontSize: 11,
       fontWeight: 600,
-      color: "#5a6a78",
+      color: "#5B6B82",
       marginBottom: 4
     }
   }, "Per surgeon (matched on code):"), React.createElement("div", {
@@ -9654,8 +9676,9 @@ function CallSchedule() {
     var _sMap$s$id2;
     return React.createElement("button", {
       key: s.id,
+      "data-pill": "1",
       onClick: () => copyText(`${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}`, s.id),
-      style: _objectSpread(_objectSpread({}, css.badge(((_sMap$s$id2 = sMap[s.id]) === null || _sMap$s$id2 === void 0 ? void 0 : _sMap$s$id2.idx) || 0, s.name)), {}, {
+      style: _objectSpread(_objectSpread({}, css.badge(((_sMap$s$id2 = sMap[s.id]) === null || _sMap$s$id2 === void 0 ? void 0 : _sMap$s$id2.idx) || 0, s)), {}, {
         cursor: "pointer",
         padding: "3px 10px",
         fontSize: 10,
@@ -9783,14 +9806,14 @@ function CallSchedule() {
   }, React.createElement("span", null, "Restore from snapshot"), React.createElement("span", {
     style: {
       fontSize: 12,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, openSettingsCards.restoreSnap ? "-" : "+")), openSettingsCards.restoreSnap && React.createElement(React.Fragment, null, React.createElement("p", {
     style: sectionNote
   }, "Snapshots are saved automatically before destructive actions and periodically. Restoring replaces the current schedule and setup for everyone with the selected copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so a restore can itself be undone."), snapshotsLoading && React.createElement("div", {
     style: {
       fontSize: 12,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "Loading snapshots"), !snapshotsLoading && snapshotLoadFailed && React.createElement("div", {
     style: {
@@ -9805,7 +9828,7 @@ function CallSchedule() {
   }, "Couldn't load your backups - this does NOT mean none exist. Tap Refresh; if it keeps failing, reload the app (your session may have expired)."), !snapshotsLoading && !snapshotLoadFailed && (!snapshotList || snapshotList.length === 0) && React.createElement("div", {
     style: {
       fontSize: 12,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "No snapshots yet."), !snapshotsLoading && snapshotList && snapshotList.map(sn => React.createElement("div", {
     key: sn.id,
@@ -9848,8 +9871,8 @@ function CallSchedule() {
     onClick: () => restoreSnapshot(sn),
     style: {
       background: "none",
-      border: "1px solid #b8cfe0",
-      color: restoreBusyId ? "#a8b4c0" : "#1a6fa8",
+      border: "1px solid " + T.inputBorder,
+      color: restoreBusyId ? T.muted : T.title,
       borderRadius: 6,
       padding: "5px 12px",
       fontSize: 11,
@@ -9863,7 +9886,7 @@ function CallSchedule() {
     style: {
       background: "none",
       border: "none",
-      color: "#1a6fa8",
+      color: T.accentText,
       fontSize: 11,
       cursor: "pointer",
       fontFamily: font,
@@ -9875,7 +9898,7 @@ function CallSchedule() {
 const thS = {
   textAlign: "left",
   padding: "7px 8px",
-  color: "#5a6a78",
+  color: "#5B6B82",
   fontWeight: 600,
   fontSize: 10,
   textTransform: "uppercase",
@@ -9911,11 +9934,11 @@ function MonthPainterSheet({
   const personName = id => (surgeons.find(s => s.id === id) || {}).name || id;
   const pillStyle = id => {
     const si = surgeons.findIndex(s => s.id === id);
-    const c = surgeonColors(si >= 0 ? surgeons[si].name : id, si >= 0 ? si : 0);
+    const c = rosterColors(si >= 0 ? surgeons[si] : null, si >= 0 ? si : 0);
     return {
       background: c.tg,
       color: c.tx,
-      border: `1px solid ${c.bd}`
+      border: pillBorder(c)
     };
   };
   const days = React.useMemo(() => {
@@ -10015,11 +10038,11 @@ function MonthPainterSheet({
   React.useEffect(() => () => {
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
   }, []);
-  const bg = dk ? "#1a1a2e" : "#f0f2f5";
-  const panelBg = dk ? "#16213e" : "#fff";
-  const border = dk ? "#2a3a5e" : "#e0e4ea";
-  const text = dk ? "#e0e0f0" : "#2c3e50";
-  const muted = dk ? "#8a8aaa" : "#7a8a98";
+  const bg = dk ? "#0B1A33" : "#F6F8FB";
+  const panelBg = dk ? "#13294B" : "#fff";
+  const border = dk ? "#24406B" : "#DCE3EC";
+  const text = dk ? "#E6ECF5" : "#1F2A3A";
+  const muted = dk ? "#9FB0C8" : "#5B6B82";
   return React.createElement("div", {
     style: {
       position: "fixed",
@@ -10133,9 +10156,9 @@ function MonthPainterSheet({
     },
     disabled: surgeons.length === 1,
     style: _objectSpread(_objectSpread(_objectSpread({}, css.inp), dk ? {
-      background: "#0f3460",
-      border: "1px solid #2a3a5e",
-      color: "#e0e0f0"
+      background: "#0F2140",
+      border: "1px solid #24406B",
+      color: "#E6ECF5"
     } : {}), {}, {
       minHeight: 40,
       flex: "1 1 140px"
@@ -10183,7 +10206,7 @@ function MonthPainterSheet({
     const off = offByDay[ds] || [];
     const coveredAll = draftCoveringAll(ds);
     const isPending = pendingStart === ds;
-    const rowBg = isPending ? dk ? "#1a3a5e" : "#dcecf8" : coveredAll.length > 0 ? dk ? "#1c3050" : "#e6f2ea" : isWknd ? dk ? "#141c30" : "#f6f8fa" : panelBg;
+    const rowBg = isPending ? dk ? "#1a3a5e" : "#dcecf8" : coveredAll.length > 0 ? dk ? "#1c3050" : "#e6f2ea" : isWknd ? dk ? "#0F2140" : "#f6f8fa" : panelBg;
     return React.createElement("button", {
       key: ds,
       onClick: () => tapDay(ds),
@@ -10200,7 +10223,7 @@ function MonthPainterSheet({
         cursor: "pointer",
         fontFamily: font,
         background: rowBg,
-        border: `1px solid ${isPending ? "#2488c8" : border}`
+        border: `1px solid ${isPending ? THEME[dk ? "dark" : "light"].accent : border}`
       }
     }, React.createElement("div", {
       style: {
@@ -10257,7 +10280,7 @@ function MonthPainterSheet({
       style: {
         fontSize: 11,
         fontWeight: 700,
-        color: "#2488c8",
+        color: THEME[dk ? "dark" : "light"].accentText,
         marginBottom: 2
       }
     }, "range starts here"), React.createElement("div", {
@@ -10676,11 +10699,11 @@ function Padlock({
     width: "7",
     height: "5",
     rx: "1",
-    fill: "#7a8a98"
+    fill: "#5B6B82"
   }), React.createElement("path", {
     d: "M3 4.7V3a2 2 0 0 1 4 0v1.7",
     fill: "none",
-    stroke: "#7a8a98",
+    stroke: "#5B6B82",
     strokeWidth: "1.3"
   }));
 }
@@ -10898,14 +10921,14 @@ function DayEditor(props) {
   }, [pending, dirty, onCancel, onNav]);
   const dt = parse(day);
   const title = DAY_HDR[dt.getDay()] + " " + MO[dt.getMonth()] + " " + dt.getDate() + ", " + dt.getFullYear();
-  const panelBg = dk ? "#16213e" : "#ffffff";
-  const text = dk ? "#e0e0f0" : "#2c3e50";
-  const sub = dk ? "#8a8aaa" : "#7a8a98";
-  const border = dk ? "#2a3a5e" : "#e0e4ea";
+  const panelBg = dk ? "#13294B" : "#ffffff";
+  const text = dk ? "#E6ECF5" : "#1F2A3A";
+  const sub = dk ? "#9FB0C8" : "#5B6B82";
+  const border = dk ? "#24406B" : "#DCE3EC";
   const inp = _objectSpread(_objectSpread({}, css.inp), dk ? {
-    background: "#0f3460",
-    border: "1px solid #2a3a5e",
-    color: "#e0e0f0"
+    background: "#0F2140",
+    border: "1px solid #24406B",
+    color: "#E6ECF5"
   } : {});
   const label = {
     fontSize: 10,
@@ -11350,7 +11373,7 @@ function DayEditor(props) {
     style: {
       background: "none",
       border: "none",
-      color: "#1a6fa8",
+      color: THEME[dk ? "dark" : "light"].accentText,
       fontSize: 12,
       cursor: "pointer",
       fontFamily: font,
@@ -11467,6 +11490,7 @@ function TotalsCard({
   ytdFloors,
   loaded
 }) {
+  const T = THEME[dk ? "dark" : "light"];
   const now = parse(today);
   const [mode, setMode] = useState("month");
   const [year, setYear] = useState(now.getFullYear());
@@ -11618,7 +11642,7 @@ function TotalsCard({
   const th = {
     textAlign: "right",
     padding: "7px 8px",
-    color: "#5a6a78",
+    color: "#5B6B82",
     fontWeight: 600,
     fontSize: 10,
     textTransform: "uppercase",
@@ -11633,17 +11657,17 @@ function TotalsCard({
     fontFamily: mono,
     fontSize: 12.5,
     textAlign: "right",
-    color: dk ? "#e0e0f0" : "#2c3e50",
+    color: dk ? "#E6ECF5" : "#1F2A3A",
     whiteSpace: "nowrap"
   };
   const tdL = _objectSpread(_objectSpread({}, td), {}, {
     textAlign: "left",
     fontFamily: font
   });
-  const border = dk ? "#2a3a5e" : "#e8ecf0";
-  const devColor = r => r.target === null ? "#8a94a0" : r.t.primary > r.target ? "#c04040" : r.t.primary < r.target ? "#1a6fa8" : "#1a8040";
+  const border = dk ? "#24406B" : "#e8ecf0";
+  const devColor = r => r.target === null ? "#8a94a0" : r.t.primary > r.target ? "#c04040" : r.t.primary < r.target ? T.primaryEnd : "#1a8040";
   const devFlag = r => r.target === null ? undefined : r.t.primary > r.target ? "over" : r.t.primary < r.target ? "under" : "ok";
-  const devColorB = r => r.targetB === null ? "#8a94a0" : r.t.backup > r.targetB ? "#c04040" : r.t.backup < r.targetB ? "#1a6fa8" : "#1a8040";
+  const devColorB = r => r.targetB === null ? "#8a94a0" : r.t.backup > r.targetB ? "#c04040" : r.t.backup < r.targetB ? T.primaryEnd : "#1a8040";
   const devFlagB = r => r.targetB === null ? undefined : r.t.backup > r.targetB ? "over" : r.t.backup < r.targetB ? "under" : "ok";
   const targetSum = r => r.target === null && r.targetB === null ? null : Math.round(((r.target || 0) + (r.targetB || 0)) * 10) / 10;
   const overCap = r => r.cap !== null && r.capUse > r.cap * nMonths;
@@ -11809,7 +11833,7 @@ function TotalsCard({
   })), sources.length > 1 && React.createElement("td", {
     style: _objectSpread(_objectSpread({}, tdL), {}, {
       fontSize: 11,
-      color: r.src === "preview" ? "#7a4fbf" : "#7a8a98"
+      color: r.src === "preview" ? "#7a4fbf" : "#5B6B82"
     })
   }, r.srcLabel), React.createElement("td", {
     style: td
@@ -11870,7 +11894,7 @@ function TotalsCard({
   }, React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: "0 0 10px",
       lineHeight: 1.5
     }
@@ -11907,22 +11931,24 @@ function TotalsCard({
         color: "#7a4fbf"
       }
     }, "preview")), React.createElement("div", {
+      "data-testid": "fairness-track",
       style: {
         flex: "1 1 220px",
         position: "relative",
         height: 18,
-        background: dk ? "#16213e" : "#eef1f4",
+        background: T.barTrack,
         borderRadius: 4,
         overflow: "hidden"
       }
     }, React.createElement("div", {
+      "data-testid": "fairness-fill",
       style: {
         position: "absolute",
         left: 0,
         top: 0,
         bottom: 0,
         width: pct(r.t.total) + "%",
-        background: overCap(r) ? "#c04040" : "linear-gradient(90deg,#1a6fa8,#2488c8)",
+        background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`,
         borderRadius: 4
       }
     }), countsEast(r.id) && r.eastP > 0 && React.createElement("div", {
@@ -11960,7 +11986,7 @@ function TotalsCard({
       style: {
         fontFamily: mono,
         fontSize: 12,
-        color: dk ? "#e0e0f0" : "#2c3e50",
+        color: dk ? "#E6ECF5" : "#1F2A3A",
         minWidth: 250
       }
     }, r.t.total, " total (", r.t.primary, " P + ", r.t.backup, " B)", showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : "", " - target ", r.target === null ? "-" : r.target, r.targetKind === "implied" ? "*" : "", " - target B ", r.targetB === null ? "-" : r.targetB, r.targetBKind === "implied" ? "*" : "", " - cap (P) ", r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths, " - ", React.createElement("span", {
@@ -11991,7 +12017,7 @@ function TotalsCard({
   }, "Outside surgeons"), React.createElement("div", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       marginBottom: 6
     }
   }, "Written in by hand (internal locums): their days come off the pool's open slots and count toward nobody's share or cap."), React.createElement("div", {
@@ -12038,7 +12064,7 @@ function TotalsCard({
   }, "inactive")), sources.length > 1 && React.createElement("td", {
     style: _objectSpread(_objectSpread({}, tdL), {}, {
       fontSize: 11,
-      color: o.src.key === "preview" ? "#7a4fbf" : "#7a8a98"
+      color: o.src.key === "preview" ? "#7a4fbf" : "#5B6B82"
     })
   }, o.src.label), React.createElement("td", {
     style: td
@@ -12051,13 +12077,13 @@ function TotalsCard({
   }, r.total)))))))), anyImplied && React.createElement("div", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       marginTop: 8
     }
   }, "* implied equal share (of the period's open primary slots and, separately, its open backup slots) from the last Generate preview's diagnostics - no explicit monthlyTarget in Setup."), showEast && React.createElement("div", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       marginTop: 4
     }
   }, "East days: days on Davenport call (published weeks, derived weeks and overrides) inside the period; a cap that counts them reads Silvis + East."));
@@ -12081,7 +12107,7 @@ function SuField({
   }, React.createElement("span", {
     style: {
       fontSize: 10,
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontWeight: 600,
       textTransform: "uppercase",
       letterSpacing: 0.5
@@ -12246,7 +12272,7 @@ function RosterEditor({
   }, React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: "0 0 8px",
       lineHeight: 1.5
     }
@@ -12266,7 +12292,7 @@ function RosterEditor({
     style: {
       fontSize: 11,
       fontWeight: 600,
-      color: r.type === "external" ? "#8a5a10" : "#7a8a98"
+      color: r.type === "external" ? "#8a5a10" : "#5B6B82"
     }
   }, r.type === "external" ? "outside" : "pool"), React.createElement("td", null, React.createElement("input", {
     type: "text",
@@ -12357,7 +12383,7 @@ function RosterEditor({
   }, "Revert"), React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, dirty ? "Unsaved changes" : "Saved in the shared setup (autosave).")));
 }
@@ -12389,14 +12415,14 @@ function UsersCard({
   }, React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: "0 0 8px",
       lineHeight: 1.5
     }
   }, "Accounts come from Supabase Auth (invite from the dashboard; the database creates the profile row). Link each one to a roster id and give it a role. The address column is read from user_profiles (authenticated-read) and is never copied anywhere else. ", admins <= 1 ? "There is one admin - it cannot be demoted until another exists." : admins + " admins."), loading && React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "Loading accounts"), error && React.createElement("div", {
     "data-testid": "users-error",
@@ -12404,7 +12430,7 @@ function UsersCard({
   }, error), !loading && !error && (!profiles || profiles.length === 0) && React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontStyle: "italic"
     }
   }, "No accounts loaded yet."), !loading && profiles && profiles.length > 0 && React.createElement("div", {
@@ -12433,7 +12459,7 @@ function UsersCard({
     style: {
       marginLeft: 6,
       fontSize: 10,
-      color: "#1a6fa8"
+      color: LIGHT.title
     }
   }, "you") : null), React.createElement("td", null, React.createElement("input", {
     type: "text",
@@ -12477,7 +12503,7 @@ function UsersCard({
   }, s.id, " ", s.name)))), React.createElement("td", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontFamily: mono
     }
   }, p.created_at ? String(p.created_at).slice(0, 10) : "")))))));
@@ -12531,7 +12557,7 @@ function PatternListEditor({
   }, label, " ", React.createElement("span", {
     style: {
       fontWeight: 400,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "(", items.length, ")"), hint ? React.createElement("span", {
     style: {
@@ -12630,14 +12656,14 @@ function PatternListEditor({
       "data-testid": "pattern-preview",
       style: {
         fontSize: 11,
-        color: "#5a6a78",
+        color: "#5B6B82",
         marginTop: 4,
         fontFamily: mono
       }
     }, React.createElement("span", {
       style: {
         fontFamily: font,
-        color: "#7a8a98"
+        color: "#5B6B82"
       }
     }, suPatternLabel(p), " - next 8: "), next.error ? React.createElement("span", {
       "data-testid": "pattern-error",
@@ -13004,7 +13030,7 @@ function RulesEditor({
   }, React.createElement("span", {
     style: {
       fontSize: 10,
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontWeight: 600,
       textTransform: "uppercase",
       letterSpacing: 0.5,
@@ -13018,7 +13044,7 @@ function RulesEditor({
   })), React.createElement("span", {
     style: {
       fontSize: 10,
-      color: "#7a8a98",
+      color: "#5B6B82",
       marginRight: 6
     }
   }, "applies to"), ["primary", "backup"].map(r => React.createElement(SuCheck, {
@@ -13029,7 +13055,7 @@ function RulesEditor({
   })), React.createElement("span", {
     style: {
       fontSize: 10,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "(default: primary only - backup is open to everyone since 9/22; at least one role stays ticked)")), React.createElement("div", null, React.createElement(SuCheck, {
     label: "Does not take backup",
@@ -13107,7 +13133,7 @@ function RulesEditor({
   }, "Availability windows ", React.createElement("span", {
     style: {
       fontWeight: 400,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "(whitelist-windows: only these date ranges)")), (get("availableWindows", []) || []).map((w, i) => React.createElement("div", {
     key: i,
@@ -13206,7 +13232,7 @@ function RulesEditor({
   }, "Weekday pattern outside East-derived weeks ", React.createElement("span", {
     style: {
       fontWeight: 400,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "(per weekday: allowed / not / only inside a Fri+Sat+Sun block)")), React.createElement(SuCheck, {
     label: "use a weekday pattern",
@@ -13327,7 +13353,7 @@ function RulesEditor({
   }, "Holiday rules"), React.createElement("span", {
     style: {
       fontSize: 10,
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontWeight: 600,
       textTransform: "uppercase",
       letterSpacing: 0.5,
@@ -13436,7 +13462,7 @@ function RulesEditor({
   }, rawOpen ? "Hide JSON" : "Edit as JSON (everything else)"), React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, dirty ? "Unsaved" : "Saved to surgeonRules." + sel + " (autosave)")), rawOpen && React.createElement("div", {
     style: {
@@ -13699,7 +13725,7 @@ function AvailabilityCard({
   }, React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: "0 0 8px",
       lineHeight: 1.5
     }
@@ -13913,7 +13939,7 @@ function AvailabilityCard({
     }
   }, parsed.dates.length === 0 ? React.createElement("span", {
     style: {
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "Nothing parsed yet.") : React.createElement(React.Fragment, null, React.createElement("strong", null, parsed.dates.length, " date(s)"), " in ", React.createElement("strong", null, ranges.length, " range(s)"), ": ", React.createElement("span", {
     style: {
@@ -13943,7 +13969,7 @@ function AvailabilityCard({
   }, React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "Show:"), React.createElement("button", {
     onClick: () => setFilter(""),
@@ -13965,7 +13991,7 @@ function AvailabilityCard({
   }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Person"), React.createElement("th", null, "Kind"), React.createElement("th", null, "Role"), React.createElement("th", null, "Dates"), React.createElement("th", null, "Note"), React.createElement("th", null, "Source"), React.createElement("th", null))), React.createElement("tbody", null, shown.length === 0 && React.createElement("tr", null, React.createElement("td", {
     colSpan: 7,
     style: {
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontStyle: "italic"
     }
   }, "No rows.")), shown.map(r => React.createElement("tr", {
@@ -13986,7 +14012,7 @@ function AvailabilityCard({
     }
   }, String(r.start_date).slice(0, 10), r.end_date !== r.start_date ? " to " + String(r.end_date).slice(0, 10) : ""), React.createElement("td", {
     style: {
-      color: "#5a6a78"
+      color: "#5B6B82"
     }
   }, r.note || ""), React.createElement("td", {
     style: {
@@ -14104,7 +14130,7 @@ function HolidaysCard({
   }, React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: "0 0 8px",
       lineHeight: 1.5
     }
@@ -14121,7 +14147,7 @@ function HolidaysCard({
   }, React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "Held since 9/14/2026 (units, major/minor):"), (roster || []).map(s => {
     const c = counts[s.id] || {
@@ -14135,7 +14161,7 @@ function HolidaysCard({
         fontSize: 11,
         fontFamily: mono,
         background: "#f4f6f8",
-        border: "1px solid #e0e4ea",
+        border: "1px solid #DCE3EC",
         borderRadius: 5,
         padding: "2px 7px"
       }
@@ -14270,7 +14296,7 @@ function HolidaysCard({
   }), (units[y] || []).length === 0 && React.createElement("tr", null, React.createElement("td", {
     colSpan: 5,
     style: {
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontStyle: "italic"
     }
   }, "No units for ", y, "."))))))), React.createElement("div", {
@@ -14311,13 +14337,13 @@ function HolidaysCard({
   }, "Revert"), React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, dirty ? "Unsaved changes" : "Saved in the shared setup (autosave).")), React.createElement("p", {
     "data-testid": "holidays-prefill-hint",
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: "6px 0 0"
     }
   }, groupRules && groupRules.holidays && groupRules.holidays.mondayMinorAbsorbsWeekend === true ? "New years are pre-filled from the group rule (minor Monday holidays absorb the weekend before); edit any unit's days." : "New years are pre-filled with single-day holidays (the Monday-minor group rule is off in the shared setup); edit any unit's days."));
@@ -14378,7 +14404,7 @@ function EastFeedCard({
     "data-testid": "east-status",
     style: {
       fontSize: 12.5,
-      color: "#2c3e50",
+      color: "#1F2A3A",
       lineHeight: 1.6,
       marginBottom: 8
     }
@@ -14418,7 +14444,7 @@ function EastFeedCard({
   }, refreshing ? "Fetching" : "Refresh from Davenport (read-only)"), React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "Reads the Davenport project's published weeks with its public key, caches them here, then rebuilds eligibility. A failed fetch keeps the cache and says so - it never reads as \"no East call\".")), React.createElement("div", {
     style: {
@@ -14434,7 +14460,7 @@ function EastFeedCard({
   }, "Forecast (while Davenport is unpublished)"), (forecastRows || []).length === 0 ? React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: 0
     }
   }, "No forecast rows.") : React.createElement("div", {
@@ -14456,7 +14482,7 @@ function EastFeedCard({
   }, fcDays.map(d => d + " " + Math.round(forecast[d] * 100) + "%").join(", "))), React.createElement("p", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: "4px 0 0"
     }
   }, "How to refresh: run ", React.createElement("span", {
@@ -14478,7 +14504,7 @@ function EastFeedCard({
   }, "Conflicts with the published schedule (", (conflicts || []).length, ")"), React.createElement("p", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: "0 0 4px"
     }
   }, "Days where the East data makes the assigned surgeon ineligible - on East call while Silvis primary, or a derived East week the schedule no longer matches. Locked days are listed too; open the day to trade or reassign."), React.createElement("div", {
@@ -14518,7 +14544,7 @@ function EastFeedCard({
   }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Day"), React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Busy"), React.createElement("th", null, "Note"), React.createElement("th", null))), React.createElement("tbody", null, (overrideRows || []).length === 0 && React.createElement("tr", null, React.createElement("td", {
     colSpan: 5,
     style: {
-      color: "#7a8a98",
+      color: "#5B6B82",
       fontStyle: "italic"
     }
   }, "No overrides.")), (overrideRows || []).map(r => React.createElement("tr", {
@@ -14604,7 +14630,7 @@ function EastFeedCard({
   }, "Derived weeks (East week to Silvis role)"), derived.length === 0 ? React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: 0
     }
   }, "None derived.") : React.createElement("div", {
@@ -14618,7 +14644,7 @@ function EastFeedCard({
     key: w.weekMonday + w.surgeonId
   }, w.weekMonday, " ", nameOf(w.surgeonId), " Silvis ", w.silvisRole, " ", React.createElement("span", {
     style: {
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "(", w.source, ")"))))), React.createElement("div", {
     style: {
@@ -14634,7 +14660,7 @@ function EastFeedCard({
   }, "East busy days in ", monthKey, " (published + overrides)"), busyIds.length === 0 ? React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: 0
     }
   }, "No surgeon has an East busy-days rule.") : busyIds.map(id => {
@@ -14653,7 +14679,7 @@ function EastFeedCard({
       }
     }, days.map(d => fmtMD(d)).join(", ")) : React.createElement("span", {
       style: {
-        color: "#7a8a98"
+        color: "#5B6B82"
       }
     }, "none"));
   }), busyIds.map(id => {
@@ -14665,7 +14691,7 @@ function EastFeedCard({
       style: {
         fontSize: 12,
         marginTop: 6,
-        color: "#2c3e50"
+        color: "#1F2A3A"
       }
     }, React.createElement("strong", null, nameOf(id)), " - Standing: ", React.createElement("span", {
       style: {
@@ -14727,7 +14753,7 @@ function GenDiagnostics({
         title: JSON.stringify(v)
       }, React.createElement("span", {
         style: {
-          color: "#7a8a98"
+          color: "#5B6B82"
         }
       }, k), " ", ks.length, " key", ks.length === 1 ? "" : "s", ": ", ks.slice(0, 4).map(x => x + "=" + v[x]).join(", "), ks.length > 4 ? ", ..." : "");
     }
@@ -14735,12 +14761,12 @@ function GenDiagnostics({
       key: k
     }, React.createElement("span", {
       style: {
-        color: "#7a8a98"
+        color: "#5B6B82"
       }
     }, k), " ", typeof v === "number" ? Number.isInteger(v) ? v : v.toFixed(2) : String(v));
   }), React.createElement("span", null, React.createElement("span", {
     style: {
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, "candidates"), " ", dg.candidatesTried, "/", dg.bestOf, dg.truncated ? " (time budget hit)" : ""))), React.createElement("div", {
     style: box
@@ -14804,7 +14830,7 @@ function GenDiagnostics({
   }, "Implied shares (equal-share fairness: target vs what the rules allow)"), React.createElement("p", {
     style: {
       fontSize: 11,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: "0 0 6px",
       lineHeight: 1.5
     }
@@ -14948,7 +14974,7 @@ function GenDiagnostics({
   }, "Holiday units in range (", (dg.holidayUnits || []).length, ")"), (dg.holidayUnits || []).length === 0 ? React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#7a8a98",
+      color: "#5B6B82",
       margin: 0
     }
   }, "None.") : (dg.holidayUnits || []).map((u, i) => React.createElement("div", {
@@ -15046,7 +15072,7 @@ function GeneratePanel({
   }, React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: "0 0 8px",
       lineHeight: 1.5
     }
@@ -15156,7 +15182,7 @@ function GeneratePanel({
     role: "status",
     style: {
       fontSize: 12,
-      color: "#1a6fa8",
+      color: LIGHT.title,
       fontWeight: 700,
       marginBottom: 8
     }
@@ -15234,7 +15260,7 @@ function SeedImportCard({
   }, React.createElement("p", {
     style: {
       fontSize: 12,
-      color: "#5a6a78",
+      color: "#5B6B82",
       margin: "0 0 8px",
       lineHeight: 1.5
     }
@@ -15274,7 +15300,7 @@ function SeedImportCard({
   }, state.fileName), state.loading && React.createElement("span", {
     style: {
       fontSize: 12,
-      color: "#1a6fa8"
+      color: LIGHT.title
     }
   }, "Reading live rows for the dry run")), state.error && React.createElement("div", {
     "data-testid": "seed-error",
@@ -15314,7 +15340,7 @@ function SeedImportCard({
       fontSize: 11,
       fontFamily: mono,
       background: "#fff",
-      border: "1px solid #e0e4ea",
+      border: "1px solid #DCE3EC",
       borderRadius: 6,
       padding: 8,
       maxHeight: 220,
@@ -15361,7 +15387,7 @@ function SeedImportCard({
   }, state.applying ? "Applying" : d.totalChanges === 0 ? "Nothing to apply" : "Apply (snapshot first)"), React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#7a8a98"
+      color: "#5B6B82"
     }
   }, d.totalChanges === 0 ? "The live tables already match the plan." : "A snapshot is captured first; if that fails nothing is written."))), state.result && React.createElement("div", {
     "data-testid": "seed-result",
@@ -15400,7 +15426,7 @@ class ErrorBoundary extends React.Component {
           justifyContent: "center",
           padding: 20,
           fontFamily: typeof font !== "undefined" ? font : "system-ui, sans-serif",
-          background: "#f0f2f5",
+          background: "#F6F8FB",
           boxSizing: "border-box"
         }
       }, React.createElement("div", {
@@ -15408,7 +15434,7 @@ class ErrorBoundary extends React.Component {
           maxWidth: 460,
           width: "100%",
           background: "#fff",
-          border: "1px solid #e0e4ea",
+          border: "1px solid #DCE3EC",
           borderRadius: 12,
           padding: 24,
           boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
@@ -15418,13 +15444,13 @@ class ErrorBoundary extends React.Component {
         style: {
           fontSize: 18,
           fontWeight: 700,
-          color: "#1a2a3a",
+          color: "#1F2A3A",
           marginBottom: 6
         }
       }, "Something went wrong"), React.createElement("div", {
         style: {
           fontSize: 13,
-          color: "#5a6a78",
+          color: "#5B6B82",
           lineHeight: 1.5,
           marginBottom: 16
         }
@@ -15448,8 +15474,8 @@ class ErrorBoundary extends React.Component {
           } catch (e) {}
         },
         style: {
-          background: "linear-gradient(135deg,#1a6fa8,#2488c8)",
-          border: "1px solid #1a6fa8",
+          background: typeof OPENING !== "undefined" ? OPENING.gradient : "#FF5F05",
+          border: "1px solid #E8520A",
           color: "#fff",
           borderRadius: 8,
           padding: "10px 22px",
