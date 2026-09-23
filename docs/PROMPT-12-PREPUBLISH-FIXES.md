@@ -739,3 +739,95 @@ retire the column; keep → stated exception) and the guide §3.1 names it. Also
 quotes the FINAL file's first failure (the flipped F assertion at line 652) with the HEAD counts, and the pre-AA inventory size reads
 94 (11 category + 79 drop + 4 public), not 90. Not fixed (outside AA's files): the stale message text in `test/generator-regression.js:1399`
 and the comment in `test/rules.test.js:1747`.
+
+## Item AB — default Generate start = the first open slot from today (Faraz, 9/22 late evening; appended by Claude Code)
+
+Faraz, verbatim: *"Default Generate start = first open slot from today (10/15). Locks are never touched, so starting at the first gap is
+safe and catches the October opens and any 11/5-type hole in one run."* (the third of his four late-evening instructions after "Go on
+the 17-change import").
+
+What changed: until AB the presets started the day after the LAST PUBLISHED day (`suLastContiguousDay`, the end of the longest
+contiguous block of rows — 2026-11-18 over the 73 rows, so the presets began 11/19 and left the open October backups, the 10/15 and
+10/24 primaries and the November holes to a separate fill-open-only pass). Now the range starts at the first open slot on or after
+today (Central) and one run covers all of it; locks are seeded first and never touched.
+
+**The date Faraz wrote (10/15) is not what the live rows give.** `suFirstOpenSlotDay` as specified — the first day ≥ today whose saved
+row leaves primary open (no holder, no external cover) or backup open, or a missing day inside the saved span — returns **2026-10-07**
+on the 73 rows of the 9/22 import run on 9/22: the backups of **10/7, 10/9, 10/10, 10/11 and 10/13** are open (the ER-panel author's 9/16 document;
+`existingAssignments`, all locked) and precede the open 10/15 primary. 10/15 is the first open *primary*; an open backup is exactly
+the "11/5-type hole" he wants caught, so the rule is implemented as stated and the panel names the computed day. Nothing in the app,
+the tests or the smoke encodes 10/15 or 10/7 as the answer — the smoke restates the day from the live rows each run — but the
+data-layer suite does pin the seed's rows to 10/07 from 9/22 so a silent change of the rule or the data shows. If Faraz wants the
+run to begin at 10/15 regardless, the five earlier backups must be assigned by hand first (or a floor becomes a group rule; not
+added — an unanswered question is not baked in).
+
+Delivered:
+- `helpers.js`: `suFirstOpenSlotDay(schedule, today)` beside `suLastContiguousDay` (pure, string dates via `suAddDays`, `dayHolder`
+  for the primary/external-cover convention; exported). Documented decisions: a day before today is never a candidate (item Q —
+  past slots are not OPEN); `externalCover` counts as a filled primary only (Atwell + open backup → that day); a missing day
+  AFTER the last saved row is not a candidate (the fallback's job); null when nothing is open on/after today.
+- `index-source.html` (CallSchedule): `genToday = todayCentral()`, `genFirstOpenDay = suFirstOpenSlotDay(schedule, genToday)`,
+  `genFallback = lastPublishedDay ? suAddDays(lastPublishedDay, 1) : genToday`, `genStart = genFirstOpenDay || max(genFallback, genToday)` (string compare; the clamp is the review fix below); `genPresets =
+  rangePresets(suAddDays(genStart, -1))` (rangePresets starts the day after its argument — its END rules are untouched: 'Through
+  end of year' still ends 2027-01-03 from any 2026 start, '3 months' from 10/07 ends 2026-12-31); `laterAssignedRanges =
+  suLaterAssignedRanges(schedule, suAddDays(genStart, -1))` = the assigned days from the start on. `GeneratePanel` gains
+  `genStart` / `genFirstOpenDay`; the sentence (ASCII) reads *"Range starts at the first open slot on or after today: <d> (locks are
+  never touched; the run fills every open slot from there and generates the rest). Last saved day (end of the contiguous block):
+  <lastPublishedDay>."* — or, with nothing open, *"No open slot on or after today - the range starts the day after the last saved
+  day (end of the contiguous block: <lastPublishedDay>), or today when that day has passed: <d>."* — then *" Days with a held slot from
+  the start on: <ranges> - locked slots stay as they are while 'respect locks' is on; the open slots on those days are filled."*; `data-testid="gen-last-published"` stays and carries `data-gen-start`. `todayStr` (declared later in the same
+  component) is not reachable at the wiring, hence the local `genToday`. Wording deviations from the brief: "Last saved day (end
+  of the contiguous block)" instead of "Last saved day" because the contiguous end (11/18) is not the last saved row (11/29), and
+  "Days with a held slot from the start on" instead of "Later locked days" because the list now includes the start day itself and
+  days whose other slot the run fills (review fix, below).
+- `test/data-layer.test.js` (`// ---- Prompt 12 AB (9/22 late) ----`, 7 checks): helper pins on synthetic maps (open backup today
+  → today; only past opens → null and today itself counts; missing day inside the span → that day; Atwell + open backup → that day,
+  Atwell + held backup → null; fully assigned / empty / null map / today after the span / gap after the span → null; today before
+  the span → the first gap inside it) and on the seed's `existingAssignments` (9/22 → 2026-10-07, 10/14 → 10/15, 11/18 → 11/19
+  missing day, 11/30 → null); a source pin on the wiring, both panel sentences, `data-gen-start`, the props, and the absence of
+  `rangePresets(lastPublishedDay)` and the old sentence. Fail-before against the unchanged code: `FAIL suFirstOpenSlotDay: an open
+  backup on today -> today (a held primary does not make the day filled)` / `-> H.suFirstOpenSlotDay is not a function` (six helper
+  pins) and `FAIL index-source.html: genStart = suFirstOpenSlotDay(...)` / `-> genFirstOpenDay memo (suFirstOpenSlotDay over the
+  saved schedule from the Central today)`; `75 passed, 7 failed`. After: `82 passed, 0 failed`.
+- `test/ui/smoke.mjs`: the wave-7 presets restatement is rewritten to the new rule — from the harness's own picture of the map
+  (live rows + observed edits, item SM) it walks the days from max(today Central, first row day) to the last row day and takes the
+  first with no row or an open role, else the contiguous fallback; asserts the app's 'Through end of year' / '3 months' titles, the
+  default Start/End, the panel's `data-gen-start` and both sentences, and the "locked days from the start on" ranges; the sanity
+  assertion now says a first open slot lies on/after today inside the span (fallback: inside the span + 1 day); the '3 months' end
+  restatement is unchanged. Fail-before (the new restatement against the OLD JSX, built from `HEAD:index-source.html`, live
+  project, 73 rows, 9/22): `FAIL Generate presets: expected the default start 2026-10-07 (first open slot on/after today
+  2026-09-22), 'Through end of year' = 2026-10-07 to 2027-01-03 (default range), '3 months' = 2026-10-07 to 2026-12-31 and
+  data-gen-start=2026-10-07, got teoy=2026-11-19 to 2027-01-03 3m=2026-11-19 to 2027-01-31 start=2026-11-19 end=2027-01-03
+  data-gen-start=null` — 227 ok / 6 FAIL. Pass-after (`npm run smoke` on the new JSX): `ok Generate presets: default start
+  2026-10-07 = the first open slot on/after today 2026-09-22; 'Through end of year' = 2026-10-07 to 2027-01-03 is the default
+  range, 3 months = 2026-10-07 to 2026-12-31, data-gen-start agrees (all derived from the live rows; last contiguous saved day
+  2026-11-18); panel names the start, the last saved day and the locked ranges from the start on 10/7-10/14, 10/16-10/23,
+  10/25-11/18, 11/20, 11/23, 11/25-11/29`; Accept & Publish pins unchanged (20 CAS writes, changes=25) — 228 ok / 5 FAIL, all
+  five expected drift until the orchestrator applies this wave's seed (two item-Z confirm-badge pins, three Import dry-run pins:
+  `Total changes: 7`).
+- Docs: guide §6 Generate paragraph and a §15 bullet; rules doc §1 "Period" row (one sentence); this entry.
+
+Live actions for the orchestrator: none for AB itself — no seed key, no blob key, no row changes (code + tests + docs only); the
+new default is live for the scheduler once this JSX reaches Pages, and the preview regeneration Faraz asked for should use the
+in-app default (start 2026-10-07 today) or `scripts/preview-generate.js` with that start so the October backfill and the milestone
+are one run.
+
+Review fixes (9/22 late, fix stage; all inside AB's files):
+- **Fallback clamped to today** (two reviewers): the day after `suLastContiguousDay` can lie in the PAST once today passes the last
+  saved row (published through 1/3, Generate opened 1/10 → start 1/4), and item Q says a past slot is never open. `genStart =
+  genFirstOpenDay || (genFallback > genToday ? genFallback : genToday)`; the fallback sentence names both; the data-layer source pin
+  and the smoke's fallback branch (`expStart = firstOpen || max(lastPub + 1, today)`, sanity allows `expStart === today`) follow.
+  Fail-before against the implementer's JSX: `FAIL index-source.html: genStart = suFirstOpenSlotDay(...)` / `-> genFallback = the day
+  after the last contiguous day (today when nothing is on file)` (81 passed, 1 failed); after: 82 passed, 0 failed. On today's rows
+  nothing changes (a first open slot exists).
+- **Panel wording**: the ranges list every day with ANY held slot (10/7, 10/9, 10/13 ... whose backup the run fills), so "Locked days
+  on file from the start on" was wrong by name → *"Days with a held slot from the start on: ... - locked slots stay as they are while
+  'respect locks' is on; the open slots on those days are filled."* (smoke `laterRx` and the data-layer pin updated in the same edit).
+- **Docs**: guide §2 milestone row (line 34) and the §5 Setup line (338) carry the AB arrow; rules doc §7 gains the sentence that the import
+  holds five open backups before 10/15 (10/7, 10/9–10/11 Acton, 10/13 Philip) and that the in-app default run from 10/7 covers the
+  backfill and the milestone in one run (the fill-open-only script path stays); the smoke comment carries "(decided 9/22 late)".
+- **Decision for Faraz (not code)**: the computed start is 10/7, not the "(10/15)" he wrote. If the five pre-10/15 backups should stay
+  open, they are assigned by hand first or a floor is recorded as `groupRules` data — never a code branch.
+- Not fixed, not AB's: the stale `groupRules.generationHorizons.note` in the seed ("from the last published day"; the importer drops
+  note keys, so it never reaches the blob) — the orchestrator reword/drops it at the next seed edit; the two pre-existing smoke flakes
+  (Rules "Primary contribution" blob pin, Factory-reset 900 ms write window vs the autosave upsert) are noted for a follow-up.

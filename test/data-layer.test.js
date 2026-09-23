@@ -793,6 +793,68 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes("const tradeIsFullWeekendBlock = (days) => {"), "no tradeIsFullWeekendBlock helper");
   });
 
+  // ---- Prompt 12 AB (9/22 late) ----
+  // Faraz: "Default Generate start = first open slot from today. Locks are never touched, so starting at the
+  // first gap is safe and catches the October opens and any 11/5-type hole in one run."
+  console.log(String.fromCharCode(10) + "[AB] default Generate start = first open slot from today (helpers.suFirstOpenSlotDay + the index-source.html wiring)");
+  const full = (p, b) => ({ primary: p, backup: b, primaryLocked: true, backupLocked: true, source: "import", externalCover: null, note: null });
+  check("suFirstOpenSlotDay: an open backup on today -> today (a held primary does not make the day filled)", () => {
+    const s = { "2026-10-06": full("s2", "s3"), "2026-10-07": full("s3", null), "2026-10-08": full("s4", "s1") };
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-10-07"), "2026-10-07");
+  });
+  check("suFirstOpenSlotDay: a day before today is never a candidate (item Q: past slots are not OPEN) - only past opens -> null", () => {
+    const s = { "2026-10-01": full("s2", null), "2026-10-02": full(null, null), "2026-10-03": full("s3", "s4") };
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-10-03"), null);
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-10-02"), "2026-10-02", "today itself counts");
+  });
+  check("suFirstOpenSlotDay: a missing day inside the saved span -> that day (an 11/19-type gap between saved rows)", () => {
+    const s = { "2026-11-17": full("s2", "s3"), "2026-11-18": full("s3", "s2"), "2026-11-20": full("s2", "s4") };
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-11-17"), "2026-11-19");
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-11-19"), "2026-11-19", "today can be the missing day");
+  });
+  check("suFirstOpenSlotDay: externalCover counts as a filled PRIMARY only - Atwell + open backup -> that day; Atwell + held backup -> not a candidate", () => {
+    const ext = (b) => ({ primary: null, backup: b, primaryLocked: true, backupLocked: !!b, source: "import", externalCover: "Atwell", note: null });
+    assert.strictEqual(H.suFirstOpenSlotDay({ "2026-09-28": ext(null), "2026-09-29": full("s1", "s2") }, "2026-09-28"), "2026-09-28");
+    assert.strictEqual(H.suFirstOpenSlotDay({ "2026-09-28": ext("s2"), "2026-09-29": full("s1", "s2") }, "2026-09-28"), null);
+  });
+  check("suFirstOpenSlotDay: fully assigned -> null; empty map -> null; today after the span -> null; a missing day AFTER the span is not a candidate", () => {
+    const s = { "2026-10-01": full("s1", "s2"), "2026-10-02": full("s2", "s3") };
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-10-01"), null);
+    assert.strictEqual(H.suFirstOpenSlotDay({}, "2026-10-01"), null);
+    assert.strictEqual(H.suFirstOpenSlotDay(null, "2026-10-01"), null);
+    assert.strictEqual(H.suFirstOpenSlotDay({ "2026-10-01": full("s1", "s2"), "2026-10-05": full(null, null) }, "2026-10-06"), null, "today after the last saved day");
+    assert.strictEqual(H.suFirstOpenSlotDay({ "2026-10-01": full("s1", "s2"), "2026-10-03": full("s2", "s1") }, "2026-09-30"), "2026-10-02", "today before the span: the first gap inside the span, never a day before the first row");
+  });
+  check("suFirstOpenSlotDay on the seed's rows from 2026-09-22 (Central today of the decision) = 2026-10-07: the first open October backup, before the open 10/15 primary", () => {
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const s = {}; seed.existingAssignments.forEach(r => { s[r.date] = { primary: r.primary || null, backup: r.backup || null, primaryLocked: !!r.locked, backupLocked: !!r.locked, source: r.source || null, externalCover: r.externalCover || null, note: null }; });
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-09-22"), "2026-10-07");
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-10-14"), "2026-10-15", "from 10/14 the next open slot is 10/15 (both roles open)");
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-11-18"), "2026-11-19", "the first November gap is a missing day inside the span");
+    assert.strictEqual(H.suFirstOpenSlotDay(s, "2026-11-30"), null, "past the last saved row: nothing open -> the caller falls back to the day after the last contiguous day");
+  });
+  check("index-source.html: genStart = suFirstOpenSlotDay(schedule, todayCentral()) || the day after lastPublishedDay; presets and the later ranges derive from genStart; the panel carries data-gen-start", () => {
+    assert.ok(src.includes("const genFirstOpenDay = useMemo(() => suFirstOpenSlotDay(schedule, genToday), [schedule, genToday]);"), "genFirstOpenDay memo (suFirstOpenSlotDay over the saved schedule from the Central today)");
+    // AB review fix (9/22 late): the fallback is clamped to today - the day after the contiguous block can lie in the
+    // PAST once today passes the last saved row, and a past day is never a start (item Q: past slots are not OPEN).
+    assert.ok(src.includes("const genFallback = lastPublishedDay ? suAddDays(lastPublishedDay, 1) : genToday;"), "genFallback = the day after the last contiguous day (today when nothing is on file)");
+    assert.ok(src.includes("const genStart = genFirstOpenDay || (genFallback > genToday ? genFallback : genToday);"), "genStart = the first open slot, else the fallback clamped to today (never a past day)");
+    assert.strictEqual(count("const genStart = genFirstOpenDay || (lastPublishedDay ? suAddDays(lastPublishedDay, 1) : genToday);"), 0, "the unclamped fallback remains");
+    assert.ok(src.includes("const lastPublishedDay = useMemo(() => suLastContiguousDay(schedule), [schedule]);"), "lastPublishedDay still = suLastContiguousDay (the fallback and the panel's last saved day)");
+    assert.ok(src.includes("return rangePresets(suAddDays(genStart, -1));"), "presets built from genStart (rangePresets starts the day after its argument)");
+    assert.strictEqual(count("rangePresets(lastPublishedDay)"), 0, "the old rangePresets(lastPublishedDay) call remains");
+    assert.ok(src.includes("suLaterAssignedRanges(schedule, suAddDays(genStart, -1))"), "laterAssignedRanges = the assigned days from genStart on");
+    assert.ok(src.includes('data-testid="gen-last-published" data-gen-start={genStart || ""}'), "gen-last-published span lacks data-gen-start");
+    assert.ok(src.includes('"Range starts at the first open slot on or after today: " + genStart + " (locks are never touched; the run fills every open slot from there and generates the rest). Last saved day (end of the contiguous block): " + lastPublishedDay + "."'), "panel sentence (first open slot)");
+    assert.ok(src.includes('"No open slot on or after today - the range starts the day after the last saved day (end of the contiguous block: " + lastPublishedDay + "), or today when that day has passed: " + genStart + "."'), "panel sentence (fallback, names the clamp)");
+    assert.strictEqual(count("the presets start the day after"), 0, "old panel sentence remains");
+    // AB review fix: the ranges list days with ANY held slot (an open backup beside a held primary is in it), so the
+    // panel no longer calls them "Locked days" - the run fills the open slots on those days.
+    assert.ok(src.includes('" Days with a held slot from the start on: " + laterText + " - locked slots stay as they are while \'respect locks\' is on; the open slots on those days are filled."'), "held-slot days phrase");
+    assert.strictEqual(count("Locked days on file from the start on"), 0, "old 'Locked days on file' phrase remains");
+    assert.ok(src.includes("genStart={genStart} genFirstOpenDay={genFirstOpenDay}"), "GeneratePanel receives genStart and genFirstOpenDay");
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

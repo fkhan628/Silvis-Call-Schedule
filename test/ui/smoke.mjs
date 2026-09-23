@@ -2256,22 +2256,33 @@ try {
       }
     }
 
-    // ---- Generate: presets start after the LAST PUBLISHED day (end of the longest contiguous block of
-    //      rows), not after a pre-assigned unit weeks later (finding wire-1). Item SM: the expectation is
-    //      DERIVED each run from the harness's picture of the map (the live rows + the grid as observed for
-    //      this run's own edits by settleMapToLive() just above - poll-independent; see curDay) by an
-    //      independent restatement of the app's rules (helpers.js suLastContiguousDay / suLaterAssignedRanges,
-    //      generator.js rangePresets - none of them called here):
+    // ---- Generate: the default range STARTS at the first open slot on or after today (Central) - Faraz 9/22
+    //      late, Prompt 12 AB (decided 9/22 late; the wave-7 open question "the default start may change to the
+    //      first open slot from today" is closed: "locks are never touched, so starting at the first gap is safe
+    //      and catches the October opens and any 11/5-type hole in one run"); before AB it started after the LAST
+    //      PUBLISHED day (end of the longest contiguous block of rows, finding wire-1), which is now the fallback,
+    //      clamped to today (AB review: a past day is never a start, item Q). Item SM: the
+    //      expectation is DERIVED each run from the harness's picture of the map (the live rows + the grid as
+    //      observed for this run's own edits by settleMapToLive() just above - poll-independent; see curDay) by
+    //      an independent restatement of the app's rules (helpers.js suFirstOpenSlotDay / suLastContiguousDay /
+    //      suLaterAssignedRanges, generator.js rangePresets - none of them called here):
+    //        firstOpen = the first day d, from max(today, first row day) through the last row day, such that d has
+    //                  no row (a missing day inside the saved span) or its row leaves PRIMARY open (no holder and
+    //                  no external cover - a cover stands in for the primary only) or BACKUP open; a day before
+    //                  today is never a candidate (item Q), nor is a day after the last row
     //        lastPub = the last day of the LONGEST run of consecutive days that have a row (a row with both
     //                  slots open still counts: it is a published row); ties go to the later run
-    //        start   = lastPub + 1 day
+    //        start   = firstOpen, or max(lastPub + 1 day, today) when nothing is open on/after today (the pre-AB
+    //                  rule, never a past day)
     //        'Through end of year' ends on the Sunday on/after Dec 31 of start's year
     //        '3 months' ends on the last day of the 3rd calendar month counting start's month as month 1
     //                  ('end of the third month'), pushed to the following Sunday when that day is a Fri or Sat
-    //        'Later locked days on file' = the assigned days (either role or external cover) strictly after
-    //                  lastPub, collapsed into M/D-M/D ranges in date order (a holiday name may follow in parentheses)
-    //      Open question (Faraz): the default start may change to "the first open slot from today" - when the
-    //      app's rule changes, this restatement must change with it. ----
+    //        'Days with a held slot from the start on' = the assigned days (either role or external cover) on or
+    //                  after start, collapsed into M/D-M/D ranges in date order (a holiday name may follow in
+    //                  parentheses); an open slot beside a held one is in the list (the run fills it), hence not
+    //                  "locked days"
+    //      On the 73 rows of the 9/22 import, run on 9/22: the first open October backup, 2026-10-07 (10/7, 10/9,
+    //      10/10, 10/11, 10/13 backups precede the open 10/15 primary); nothing here encodes that date. ----
     // Premise first (review finding on SM): the app's map must be known, not assumed, before deriving. Nothing
     // between here and the Accept & Publish pin edits the map, and the app's polls only reconcile it toward
     // the live rows, so the picture settled here also serves the write-set derivation below.
@@ -2281,6 +2292,7 @@ try {
     await openCard("setup_generate");
     {
       const rowDays = curDays();
+      const rowSet = new Set(rowDays);
       let lastPub = null, bestLen = 0, runStart = 0;
       for (let i = 1; i <= rowDays.length; i++) {
         if (i < rowDays.length && isoAddDays(rowDays[i - 1], 1) === rowDays[i]) continue;
@@ -2288,30 +2300,43 @@ try {
         if (len >= bestLen) { bestLen = len; lastPub = rowDays[i - 1]; }
         runStart = i;
       }
+      const spanFirst = rowDays[0], spanLast = rowDays[rowDays.length - 1];
+      let firstOpen = null;
+      for (let d = todayCentral > spanFirst ? todayCentral : spanFirst; d <= spanLast; d = isoAddDays(d, 1)) {
+        if (!rowSet.has(d) || !curHolder(d, "primary") || !curHolder(d, "backup")) { firstOpen = d; break; }
+      }
       const dowOf = (d) => new Date(d + "T12:00:00Z").getUTCDay(); // 0 = Sun
       const sundayOnOrAfter = (d) => isoAddDays(d, (7 - dowOf(d)) % 7);
-      const expStart = isoAddDays(lastPub, 1);
+      const expFallback = isoAddDays(lastPub, 1) > todayCentral ? isoAddDays(lastPub, 1) : todayCentral; // never a past day (item Q)
+      const expStart = firstOpen || expFallback;
       const expTeoyEnd = sundayOnOrAfter(expStart.slice(0, 4) + "-12-31");
       const sy = +expStart.slice(0, 4), sm = +expStart.slice(5, 7);
       const idx3 = sm + 2, ey = sy + Math.floor((idx3 - 1) / 12), em = ((idx3 - 1) % 12) + 1; // 1-based month of the 3rd calendar month
       let exp3End = utcDay(Date.UTC(ey, em, 0)); // day 0 of the following month = the last day of month em
       if (dowOf(exp3End) === 5 || dowOf(exp3End) === 6) exp3End = sundayOnOrAfter(exp3End);
-      const laterDays = rowDays.filter(d => d > lastPub && (curHolder(d, "primary") || curHolder(d, "backup")));
+      const laterDays = rowDays.filter(d => d >= expStart && (curHolder(d, "primary") || curHolder(d, "backup")));
       const laterRanges = [];
       laterDays.forEach(d => { const r = laterRanges[laterRanges.length - 1]; if (r && isoAddDays(r.end, 1) === d) r.end = d; else laterRanges.push({ start: d, end: d }); });
       const laterLabel = (r) => r.start === r.end ? mdOf(r.start) : mdOf(r.start) + "-" + mdOf(r.end);
-      const laterRx = laterRanges.length ? new RegExp("Later locked days on file: " + laterRanges.map(r => laterLabel(r).replace(/\//g, "\\/") + "( \\([^)]*\\))?").join(", ") + " - kept as locks") : null;
-      console.log(`     (derived from the ${rowDays.length} live row days ${rowDays[0]}..${rowDays[rowDays.length - 1]}: longest contiguous block of ${bestLen} row(s) ends ${lastPub} -> presets start ${expStart}; later assigned ranges ${laterRanges.map(laterLabel).join(", ") || "none"})`);
+      const laterRx = laterRanges.length ? new RegExp("Days with a held slot from the start on: " + laterRanges.map(r => laterLabel(r).replace(/\//g, "\\/") + "( \\([^)]*\\))?").join(", ") + " - locked slots stay as they are while 'respect locks' is on; the open slots on those days are filled") : null;
+      const rxEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const sentenceRx = firstOpen
+        ? new RegExp(rxEsc(`Range starts at the first open slot on or after today: ${expStart} (locks are never touched; the run fills every open slot from there and generates the rest). Last saved day (end of the contiguous block): ${lastPub}.`))
+        : new RegExp(rxEsc(`No open slot on or after today - the range starts the day after the last saved day (end of the contiguous block: ${lastPub}), or today when that day has passed: ${expStart}.`));
+      console.log(`     (derived from the ${rowDays.length} live row days ${spanFirst}..${spanLast}: first open slot on/after today ${todayCentral} = ${firstOpen || "none"}; longest contiguous block of ${bestLen} row(s) ends ${lastPub} -> default start ${expStart}; held-slot ranges from the start on: ${laterRanges.map(laterLabel).join(", ") || "none"})`);
       const teoy = await page.getAttribute("[data-testid=gen-preset-through-end-of-year]", "title");
       const three = await page.getAttribute("[data-testid=gen-preset-3-months]", "title");
       const startDefault = await page.$eval("[data-testid=gen-start]", el => el.value);
       const endDefault = await page.$eval("[data-testid=gen-end]", el => el.value);
       const lp = await page.$eval("[data-testid=gen-last-published]", el => el.textContent);
-      // sanity on the derivation itself: the start lies inside the rows' span + 1 day
-      if (!lastPub || !(expStart > rowDays[0] && expStart <= isoAddDays(rowDays[rowDays.length - 1], 1))) fail(`Generate presets: the harness's derived start ${expStart} is outside the live rows' span ${rowDays[0]}..${rowDays[rowDays.length - 1]} + 1 day - the restatement is broken`);
-      else if (teoy !== `${expStart} to ${expTeoyEnd}` || three !== `${expStart} to ${exp3End}` || startDefault !== expStart || endDefault !== expTeoyEnd) fail(`Generate presets: expected 'Through end of year' = ${expStart} to ${expTeoyEnd} (default range) and '3 months' = ${expStart} to ${exp3End} (derived: longest contiguous block of rows ends ${lastPub}), got teoy=${teoy} 3m=${three} start=${startDefault} end=${endDefault}`);
-      else if (!new RegExp("Last published day on file: " + lastPub).test(lp) || (laterRx ? !laterRx.test(lp) : /Later locked days on file/.test(lp))) fail(`Generate panel text: expected 'Last published day on file: ${lastPub}' and ${laterRanges.length ? "'Later locked days on file: " + laterRanges.map(laterLabel).join(", ") + "'" : "no 'Later locked days' phrase"}: ` + lp);
-      else ok(`Generate presets: 'Through end of year' = ${expStart} to ${expTeoyEnd} is the default range, 3 months = ${expStart} to ${exp3End} (both derived from the live rows: last contiguous published day ${lastPub}); panel names the last published day and the later assigned ${laterRanges.map(laterLabel).join(", ") || "(none)"}`);
+      const genStartAttr = await page.getAttribute("[data-testid=gen-last-published]", "data-gen-start");
+      // sanity on the derivation itself: a first open slot lies on/after today inside the rows' span; the fallback lies
+      // inside the span + 1 day, or IS today when the span already lies behind us (the clamp) - never before today
+      const sane = firstOpen ? (firstOpen >= todayCentral && firstOpen >= spanFirst && firstOpen <= spanLast) : (!!lastPub && expStart >= todayCentral && expStart > spanFirst && (expStart <= isoAddDays(spanLast, 1) || expStart === todayCentral));
+      if (!sane) fail(`Generate presets: the harness's derived start ${expStart} (first open ${firstOpen || "none"}, today ${todayCentral}) is outside the live rows' span ${spanFirst}..${spanLast} or before today - the restatement is broken`);
+      else if (teoy !== `${expStart} to ${expTeoyEnd}` || three !== `${expStart} to ${exp3End}` || startDefault !== expStart || endDefault !== expTeoyEnd || genStartAttr !== expStart) fail(`Generate presets: expected the default start ${expStart} (${firstOpen ? "first open slot on/after today " + todayCentral : "no open slot on/after today; the day after the longest contiguous block, which ends " + lastPub + ", clamped to today " + todayCentral}), 'Through end of year' = ${expStart} to ${expTeoyEnd} (default range), '3 months' = ${expStart} to ${exp3End} and data-gen-start=${expStart}, got teoy=${teoy} 3m=${three} start=${startDefault} end=${endDefault} data-gen-start=${genStartAttr}`);
+      else if (!sentenceRx.test(lp) || (laterRx ? !laterRx.test(lp) : /Days with a held slot from the start on/.test(lp))) fail(`Generate panel text: expected ${firstOpen ? "'Range starts at the first open slot on or after today: " + expStart + " ... Last saved day (end of the contiguous block): " + lastPub + ".'" : "'No open slot on or after today - the range starts the day after the last saved day (end of the contiguous block: " + lastPub + "), or today when that day has passed: " + expStart + ".'"} and ${laterRanges.length ? "'Days with a held slot from the start on: " + laterRanges.map(laterLabel).join(", ") + " - locked slots stay as they are ...'" : "no 'Days with a held slot' phrase"}: ` + lp);
+      else ok(`Generate presets: default start ${expStart} = ${firstOpen ? "the first open slot on/after today " + todayCentral : "the day after the longest contiguous block, clamped to today (nothing open on/after today " + todayCentral + ")"}; 'Through end of year' = ${expStart} to ${expTeoyEnd} is the default range, 3 months = ${expStart} to ${exp3End}, data-gen-start agrees (all derived from the live rows; last contiguous saved day ${lastPub}); panel names the start, the last saved day and the held-slot ranges from the start on ${laterRanges.map(laterLabel).join(", ") || "(none)"}`);
     }
 
     // ---- Accept with 'respect locks' OFF over the locked import (10/5-10/11): a confirm BEFORE any write;

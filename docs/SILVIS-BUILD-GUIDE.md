@@ -31,7 +31,7 @@ a feed.
 | Reuse | Clone the Davenport repo as the starting point; copy the shell and data layer; rewrite the generator. |
 | Roster | Six surgeons: Khan, Burchett, Acton, Philip, Fierce, Sarkar. **No Atwell** (his 9/28–10/4 week is imported as `externalCover`). |
 | **Contact data** | **None in the repo, the seed, the docs, the schema, `config.js`, or any anon-readable table.** It lives only in the private `silvis-contacts.md` (OneDrive, gitignored) and, once users exist, in `user_profiles` (via Supabase Auth) and `office_contacts` (entered in Setup) — both authenticated-read only. See §3.1. |
-| **First milestone** | **A published schedule through 2026-12-31.** Generation range 2026-11-02 → 2027-01-03 (covers the New Year's weekend) on top of the locked Sep 14–Nov 1 import. After this round, Generate offers **3 / 6 / 9 / 12-month presets** from the last published day. Everything in phases 0–6 serves the milestone; exports, edge functions and hardening follow. |
+| **First milestone** | **A published schedule through 2026-12-31.** Generation range 2026-11-02 → 2027-01-03 (covers the New Year's weekend) on top of the locked Sep 14–Nov 1 import. After this round, Generate offers **3 / 6 / 9 / 12-month presets** from the last published day ⟶ **9/22 late (Prompt 12 AB): from the first open slot on or after today** (locks are never touched; on the 9/22 rows that is 10/07, the first open October backup — §6, §15). Everything in phases 0–6 serves the milestone; exports, edge functions and hardening follow. |
 
 ## 2. Repo layout and the reuse map
 
@@ -258,7 +258,15 @@ a backup placement is never scored against it. `null` = equal share (§6).
 **Entry:** `generate(ctx, startDate, endDate, opts) → { schedule, diagnostics }`, deterministic per seed, randomized
 across runs, wrapped in **best-of-N** (N = 200 default; days × surgeons is tiny so this is cheap). The UI passes the
 range from a preset: **this round = through 2026-12-31 (2026-11-02 → 2027-01-03)**; afterwards **3 / 6 / 9 / 12 months
-from the last published day**. Any range works; the presets are conveniences.
+from the last published day**. Any range works; the presets are conveniences. ⟶ **9/22 late (Faraz, Prompt 12 AB): every
+preset now STARTS at the first open slot on or after today** (Central) — `helpers.suFirstOpenSlotDay(schedule, today)`: the
+first saved day ≥ today whose primary (no holder, no external cover) or backup is open, or a missing day inside the saved
+span; a past day is never a candidate (item Q), nor a day after the last saved row; when nothing is open from today on, the
+start falls back to the day after `suLastContiguousDay` (the pre-AB rule; today when nothing is on file), clamped to today — a past day is never a start (AB review). Locks are seeded
+first and never touched, so one run from that start fills October's open backups, the 10/15 and 10/24 primaries, every
+11/5-type hole and the milestone; the preset END rules are unchanged (`rangePresets` receives start − 1). On the 73 rows of
+the 9/22 import, run on 9/22, the start is **2026-10-07** — the first open October backup (10/7, 10/9–10/11, 10/13 precede the
+open 10/15 primary).
 
 **Pipeline for one candidate:**
 1. **Seed locks** — existing locked days, manual locks, Fierce derived weeks (both roles as applicable), imported assignments. Locks are never moved.
@@ -327,7 +335,7 @@ buttons, the notification center, the refresh/version banner, and Settings → D
 - **Day editor** (click a cell): set primary/backup from a dropdown that shows eligibility — eligible names first, ineligible greyed with the reason; lock toggle; note. Backup lists everyone (9/22: backup is open unless `backupOptOut`). Outside surgeons (M) sit under their own "Outside surgeons" heading for both roles; picking one locks the role and saves `source: "manual-external"`. A Fri/Sat/Sun candidate who already holds the other two block days is judged as a block member (small items 9/22 — Fierce can complete a Fri–Sun block by hand); the same holds for a block-style receiver of a whole Fri–Sun block in the trade path. The editor **fails closed**: a thrown eligibility check makes the option ineligible with the error as its reason and disables Save until the rules evaluate again.
 - **Open shifts** (board, self-claim, weekly reminders): §16.
 - **Theme (O/R, 9/22):** Illini navy structure with an orange accent inside the app, an orange opening (sign-in, biometric, loading) and SSC icons; OPEN stays red.
-- **Setup:** roster (names/codes; no contact fields); **Users** (link auth users to roster ids, set roles — the only place emails appear, read from `user_profiles`); **Rules** editor per surgeon (availability mode, recurring patterns with a live "next 8 matching dates" preview, weekend style + partner + "Primary contribution" ((none) / weekends, L), max consecutive (hard primary-only, soft any-role), holiday-unit-as-one-day opt-in, monthly cap (primary days) and target (blank = equal share; a number = primary target), "Does not take backup", holiday rules, East feed toggle); **Roster** also takes outside surgeons ("Add outside surgeon": name + code + operational note, M); **Availability** entry (dated rows by kind, plus quick paste of a date list like Burchett's); vacations (scheduler view of everyone's, with override entry); **Holidays** editor — per year, each unit's days (editable) and its primary + backup, with the major/minor fairness counts beside each name; East feed panel; **Generate** with range presets — *Through end of year* (this round) and *3 / 6 / 9 / 12 months from the last published day* — plus N, "respect locks", preview → publish with diff; import from `silvis-seed.json` (file picker; the importer writes no contact fields and refuses a file that contains any); office contacts (entered by hand — the ER-panel author).
+- **Setup:** roster (names/codes; no contact fields); **Users** (link auth users to roster ids, set roles — the only place emails appear, read from `user_profiles`); **Rules** editor per surgeon (availability mode, recurring patterns with a live "next 8 matching dates" preview, weekend style + partner + "Primary contribution" ((none) / weekends, L), max consecutive (hard primary-only, soft any-role), holiday-unit-as-one-day opt-in, monthly cap (primary days) and target (blank = equal share; a number = primary target), "Does not take backup", holiday rules, East feed toggle); **Roster** also takes outside surgeons ("Add outside surgeon": name + code + operational note, M); **Availability** entry (dated rows by kind, plus quick paste of a date list like Burchett's); vacations (scheduler view of everyone's, with override entry); **Holidays** editor — per year, each unit's days (editable) and its primary + backup, with the major/minor fairness counts beside each name; East feed panel; **Generate** with range presets — *Through end of year* (this round) and *3 / 6 / 9 / 12 months from the last published day* ⟶ **9/22 late (Prompt 12 AB): every preset starts at the first open slot on or after today** (§6, §15) — plus N, "respect locks", preview → publish with diff; import from `silvis-seed.json` (file picker; the importer writes no contact fields and refuses a file that contains any); office contacts (entered by hand — the ER-panel author).
 - **Totals:** per surgeon by month, year-to-date and rolling 12 months: primary shifts, backup shifts, weekend days, major/minor holidays, max consecutive (primary-only and any-role, real days), each vs target/cap — the cap is primary-only and the deviation is primary minus target (J/K); an "Outside surgeons" section lists their day counts (M); fairness view (deviation from target). One 24-h day = one shift, nothing weighted. **No stipend, pay or $ figures anywhere** (Faraz 9/21).
 - **Time off & trades:** a surgeon enters a vacation range for themselves — no approval; the entry is refused if any day in the range has them published as primary or backup (the conflicting dates are listed with a "propose a trade" shortcut), otherwise it is saved, logged to `audit_log`, and those days are blocked from call. Scheduler can enter for anyone and override. Trades by day+role with eligibility checked for the recipient; an accepted trade is applied to the schedule with an audit entry and notifications (scheduler can revert).
 
@@ -469,6 +477,16 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
   `availabilityPrecedenceNote`, `surgeonRules.s1.hardNeverWeekdaysNote`, `s6.availableWindowsNote`; pinned in
   `test/rules.test.js` (Prompt 12 W block) and `test/generator-regression.js` (generic hardNeverWeekdays pin +
   `test/fixtures/khan-dated-row-2026-12-01.json`).
+- **Default Generate start = the first open slot from today (Faraz 9/22 late; Prompt 12 AB)**: "Locks are never
+  touched, so starting at the first gap is safe and catches the October opens and any 11/5-type hole in one run."
+  `helpers.suFirstOpenSlotDay(schedule, todayCentral())` — the first saved day on/after today (Central) with an open
+  primary (no holder, no external cover) or an open backup, or a missing day inside the saved span; never a past day
+  (item Q), never a day beyond the last saved row; null → the day after `suLastContiguousDay` as before (today when
+  nothing is on file), clamped to today (AB review: never a past start). The presets, the default Start/End and the "days with a held slot from the start on" list all
+  derive from that start; the panel sentence names it (`data-testid="gen-last-published"`, `data-gen-start`). On the
+  live rows of 9/22 that is **2026-10-07** (the first open October backup), not 10/15 — five October backups precede
+  the open 10/15 primary. Proof: `test/data-layer.test.js` AB block (helper pins on synthetic maps and on the seed's
+  rows; source pin on the wiring), `test/ui/smoke.mjs` (the start restated from the live rows, never from the helper).
 
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
 

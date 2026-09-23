@@ -1206,6 +1206,34 @@ function suLastContiguousDay(schedule) {
   }
   return bestEnd;
 }
+// suFirstOpenSlotDay(schedule, today) -> the default Generate START (Faraz 9/22
+// late, Prompt 12 AB: "first open slot from today - locks are never touched, so
+// starting at the first gap is safe and catches the October opens and any
+// 11/5-type hole in one run"). The earliest day d >= today (ISO, Central) such
+// that either the saved schedule has a row for d with an OPEN role - primary
+// null with no externalCover (an external cover stands in for the primary
+// only, as dayHolder reads it), or backup null - or d has no row at all but
+// lies INSIDE the saved span (first saved day .. last saved day: an 11/19-type
+// gap between saved rows). Returns null when nothing is open on or after
+// today; the caller then falls back to the day after suLastContiguousDay, as
+// before AB. A day before today is never a candidate (item Q: a past slot is
+// not OPEN, nobody can be paged for it), a day after the last saved row is
+// not a candidate either (that is the fallback's job), and a held slot is
+// never rewritten by the run that starts here (locks are seeded first). Pure;
+// string dates via suAddDays, no Date-timezone arithmetic.
+function suFirstOpenSlotDay(schedule, today) {
+  const sched = schedule || {};
+  const days = Object.keys(sched).filter(suIsIso).sort();
+  if (!days.length || !suIsIso(today)) return null;
+  const last = days[days.length - 1];
+  let d = today > days[0] ? today : days[0];
+  for (; d <= last; d = suAddDays(d, 1)) {
+    const a = sched[d];
+    if (!a) return d; // a missing day inside the saved span
+    if (!dayHolder(a, "primary") || !dayHolder(a, "backup")) return d;
+  }
+  return null;
+}
 // suLaterAssignedRanges(schedule, afterDay) -> [{ start, end }] the assigned days
 // strictly after afterDay, collapsed into ranges (the Generate panel names them
 // so a pre-assigned unit beyond the published block stays visible).
@@ -1581,7 +1609,7 @@ function defaultHolidayUnits(year, opts) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
-    suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
+    suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,

@@ -2066,13 +2066,27 @@ function CallSchedule() {
     setEditorDay(day);
   };
   // --- Generate (preview -> Accept & Publish) ---
-  // Presets start after the LAST PUBLISHED day = the end of the contiguous block
-  // of schedule rows (2026-11-01 over the import), never after the last assigned
-  // day anywhere on file (the pre-assigned Thanksgiving unit, 11/26-11/29, would
-  // otherwise push every preset to 11/30 and leave Nov 2-29 open - finding wire-1).
+  // The default range STARTS at the first open slot on or after today (Central) -
+  // Faraz 9/22 late, Prompt 12 AB: locks are never touched, so starting at the
+  // first gap is safe and one run fills October's open backups, the 10/15 and
+  // 10/24 primaries, every 11/5-type hole and the milestone. helpers.js
+  // suFirstOpenSlotDay: a saved row with an open role, or a missing day inside
+  // the saved span; never a past day (item Q), never a day beyond the last row.
+  // Fallback when nothing is open from today on: the day after the LAST
+  // PUBLISHED day = the end of the contiguous block of schedule rows (never the
+  // last assigned day anywhere on file - a pre-assigned unit weeks later would
+  // push the start past the gap before it, finding wire-1); today when the map
+  // is empty; and never a PAST day (AB review: once today passes the last saved
+  // row that day-after lies behind us, and item Q says a past slot is not open -
+  // the fallback is clamped to today). rangePresets(x) starts the day AFTER x,
+  // so it gets genStart - 1; the preset END rules are unchanged.
+  const genToday = todayCentral();
   const lastPublishedDay = useMemo(() => suLastContiguousDay(schedule), [schedule]);
-  const laterAssignedRanges = useMemo(() => suLaterAssignedRanges(schedule, lastPublishedDay), [schedule, lastPublishedDay]);
-  const genPresets = useMemo(() => { try { return rangePresets(lastPublishedDay); } catch (e) { console.warn("rangePresets failed", e); return []; } }, [lastPublishedDay]);
+  const genFirstOpenDay = useMemo(() => suFirstOpenSlotDay(schedule, genToday), [schedule, genToday]);
+  const genFallback = lastPublishedDay ? suAddDays(lastPublishedDay, 1) : genToday;
+  const genStart = genFirstOpenDay || (genFallback > genToday ? genFallback : genToday);
+  const laterAssignedRanges = useMemo(() => suLaterAssignedRanges(schedule, suAddDays(genStart, -1)), [schedule, genStart]);
+  const genPresets = useMemo(() => { try { return rangePresets(suAddDays(genStart, -1)); } catch (e) { console.warn("rangePresets failed", e); return []; } }, [genStart]);
   // Inline run with a painted busy indicator. TODO(worker): a web worker would
   // need importScripts of config/helpers/rules/east-feed/generator and a
   // structured-clone of ctx (Sets are fine, the memo is not needed); for the
@@ -3878,7 +3892,7 @@ function CallSchedule() {
           </Collapsible>
 
           <Collapsible css={css} ck="setup_generate" defaultOpen={true} title="Generate (preview, then publish)">
-            <GeneratePanel css={css} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
+            <GeneratePanel css={css} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} genStart={genStart} genFirstOpenDay={genFirstOpenDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_import" defaultOpen={false} title="Import seed (docs/silvis-seed.json)">
@@ -6410,7 +6424,7 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
   );
 }
 
-function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onReroll, onAccept, onDiscard, nameOf, roster, rulesImported, lastPublishedDay, laterRanges, holidayNames }) {
+function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onReroll, onAccept, onDiscard, nameOf, roster, rulesImported, lastPublishedDay, genStart, genFirstOpenDay, laterRanges, holidayNames }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const p0 = presets && presets[0];
   const start = opts.start || (p0 ? p0.start : "");
@@ -6419,7 +6433,7 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onRe
   const laterText = (laterRanges || []).map(r => (r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)) + (holidayNames && holidayNames[r.start] ? " (" + holidayNames[r.start] + ")" : "")).join(", ");
   return (
     <div data-testid="generate-panel">
-      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Best-of-N over the rules (locks, vacations, availability, East feed, holiday units). The result is a PREVIEW drawn on the calendar with a dashed outline; nothing is written until Accept &amp; Publish, which snapshots first, writes the days through the compare-and-swap sync and then opens the publish dialog. <span data-testid="gen-last-published">{lastPublishedDay ? "Last published day on file: " + lastPublishedDay + " (end of the contiguous block of saved days; the presets start the day after)." : "No schedule days on file yet."}{laterText ? " Later locked days on file: " + laterText + " - kept as locks while 'respect locks' is on." : ""}</span></p>
+      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Best-of-N over the rules (locks, vacations, availability, East feed, holiday units). The result is a PREVIEW drawn on the calendar with a dashed outline; nothing is written until Accept &amp; Publish, which snapshots first, writes the days through the compare-and-swap sync and then opens the publish dialog. <span data-testid="gen-last-published" data-gen-start={genStart || ""}>{!lastPublishedDay ? "No schedule days on file yet." : genFirstOpenDay ? "Range starts at the first open slot on or after today: " + genStart + " (locks are never touched; the run fills every open slot from there and generates the rest). Last saved day (end of the contiguous block): " + lastPublishedDay + "." : "No open slot on or after today - the range starts the day after the last saved day (end of the contiguous block: " + lastPublishedDay + "), or today when that day has passed: " + genStart + "."}{laterText ? " Days with a held slot from the start on: " + laterText + " - locked slots stay as they are while 'respect locks' is on; the open slots on those days are filled." : ""}</span></p>
       {!rulesImported && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules are not imported yet - Generate needs surgeonRules / groupRules / holidays (Import seed below).</div>}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
         {(presets || []).map(p => <button key={p.label} data-testid={"gen-preset-" + p.label.replace(/\s+/g, "-").toLowerCase()} onClick={() => setOpts(o => ({ ...o, start: p.start, end: p.end }))} title={p.start + " to " + p.end} style={css.mini(isPreset(p))}>{p.label}</button>)}
