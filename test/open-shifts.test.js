@@ -1181,7 +1181,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     ["openshifts.png", "openshifts-sheet.png", "openshifts-email-preview.png", "openshifts-390.png", "openshifts-dark.png", "openshifts-390-dark.png"].forEach(f => assert.ok(smoke.indexOf(`"${f}"`) > 0, "screenshot " + f));
     const dark = smoke.slice(smoke.indexOf("const m2 = await mobileProbe()"), smoke.indexOf('"openshifts-390-dark.png"'));
     assert.ok(dark.length > 0, "the dark 390 probe precedes its screenshot");
-    assert.ok(/table-wrap/.test(dark) && /swipe sideways/.test(dark) && /minBtn/.test(dark) && /rgb\\\(26, 26, 46\\\)/.test(dark), "the dark 390 pass checks the wrapper hint, the button height and the dark body like the light pass");
+    assert.ok(/table-wrap/.test(dark) && /swipe sideways/.test(dark) && /minBtn/.test(dark) && /rgb\\\(11, 26, 51\\\)/.test(dark), "the dark 390 pass checks the wrapper hint, the button height and the dark body like the light pass");
     // fix round: the probe reads the wrapper's computed background-image and the dark pass fails on a white cover
     assert.ok(/wrapBg: wrap \? getComputedStyle\(wrap\)\.backgroundImage/.test(smoke), "mobileProbe returns the wrapper's computed backgroundImage as wrapBg");
     assert.ok(/rgb\\\(255, 255, 255\\\)\/\.test\(m2\.wrapBg\)/.test(dark), "the dark 390 pass fails when the swipe-hint cover is white");
