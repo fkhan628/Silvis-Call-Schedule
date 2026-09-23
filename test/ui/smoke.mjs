@@ -841,6 +841,8 @@ try {
       const rows = await res.json();
       if (!Array.isArray(rows)) throw new Error("live schedule_days read: body is not an array");
       liveRows = rows;
+      // P13R + SM2 merge: the harness-opened slot (blanked in liveEarlyByDay by the board scenario, never in the table) must show as OPEN here too, or every derived pin disagrees with what the app serves.
+      liveRows.forEach(r => { const e = liveEarlyByDay[r.day]; if (e && e.backup_id == null && r.backup_id != null) r.backup_id = null; if (e && e.primary_id == null && r.primary_id != null) r.primary_id = null; });
     }
     if (!liveRows.some(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && (r.primary_id || r.backup_id))) throw new Error("no October 2026 assignments in the live rows - the recount has nothing to compare");
   } catch (e) { fail("live schedule_days rows: could not read them for the pins and the recount: " + String(e && e.message || e).split("\n")[0]); }
@@ -3188,7 +3190,7 @@ try {
         const runFactsOk = (lg.mode === "generate" || lg.mode === "fill-open-only") && (lg.fixedSlots === null || (Number.isInteger(lg.fixedSlots) && lg.fixedSlots >= 0)) && (!("carriedFrom" in lg) || typeof lg.carriedFrom === "string" || lg.carriedFrom === null);
         if (!runFactsOk) extraKeys.push("bad run facts mode=" + lg.mode + " fixedSlots=" + lg.fixedSlots);
         if (!slots || !lg.range || typeof lg.weekendKinds !== "object" || !lg.weekendKinds || typeof lg.at !== "string" || extraKeys.length) fail("Accept & Publish: lastGenerate shape wrong (extra keys: " + extraKeys.join(",") + "): " + JSON.stringify(lg).slice(0, 300));
-        else if (lg.range.start !== "2026-11-02" || !/^\d{4}-\d{2}-\d{2}$/.test(lg.range.end)) fail("Accept & Publish: lastGenerate.range is not the preview's 11/2..: " + JSON.stringify(lg.range));
+        else if (lg.range.start !== genStart || lg.range.end !== genEnd) fail("Accept & Publish: lastGenerate.range is not the harness preview range " + genStart + ".." + genEnd + ": " + JSON.stringify(lg.range));
         else if (badSlot) fail("Accept & Publish: lastGenerate.openSlots carries a non-operational entry: " + JSON.stringify(badSlot));
         else if (denied) fail("Accept & Publish: lastGenerate fails the importer denylist gate: " + denied);
         else ok(`Accept & Publish: blob autosave carries data.lastGenerate { at, range ${lg.range.start}..${lg.range.end}, ${slots.length} open slot(s), ${Object.keys(lg.weekendKinds).length} weekend kind(s) } - every reason operational (${slots.slice(0, 2).map(s => s.day + " " + s.role + ": " + s.reason).join("; ") || "none open"}), past the importer denylist`);
