@@ -2244,3 +2244,93 @@ settings + 1 availability insert). The only fail left is the pre-existing stale 
 rows / 4 kept vs the 48-row plan / kept 15). Run 1 also tripped the timing-dependent "Rules: the saved blob carries
 surgeonRules.s1.primaryContribution" pin once (the harness grabs the last blob POST as soon as any POST appears, so an
 autosave from an earlier state change can land first); it passed on run 2 and is unrelated to RF2.
+
+## Item IB — `import-seed --apply` keeps app-edited days, as the app's Apply does (9/23 overnight; appended by Claude Code)
+
+**Observed.** After the server-side publish (item PUB: 70 rows, `updated_by 'publish-preview (Faraz, 2026-09-23
+overnight)'`, versions bumped, `source 'import'` kept on the updated locked days) every seed re-import saw 31 plan days
+whose live row is app-owned. The dry run listed them as BLOCKED (correct) and read `Total changes: 3 (+32 blocked)` — 32
+blocked slot lines over 31 days (10/24 has P and B) — but `--apply` refused with exit 3 ("refused to apply over app-edited
+days ... Resolve them in the app (or update the seed) and re-run"), so the three pending blob-only changes (settings:
+`seedRevisions` retired + `seedCoreHash` stamp; roster s6 `fullName ''`; `groupRules.timeOff.conflictRule`) could not
+land, and no future re-import could while a schedule is published. The app's Setup → Import → Apply keeps such days
+("kept (app-edited)", `helpers.suSeedDayMerge`) and applies the rest; the CLI now agrees.
+
+**Change.** `importer.js`: `planDiff` also returns `blockedDays` (ISO, sorted, deduped; the per-slot `blocked` line list
+is unchanged); `importSql(plan, { excludeDays })` filters those days out of BOTH `impSqlScheduleDays` and
+`impSqlStaleScheduleDays` (no VALUES row, not in the stale delete's `NOT IN` key list — the row is app-owned, so that
+delete's `source = 'import' and updated_by = 'seed'` clause could never reach it anyway; the comment says "N app-edited
+day(s) kept out of this key list", never the days) and the header reads `42 schedule_days (31 app-edited day(s) kept, not
+written)`; no option / empty list / unknown days → byte-identical SQL; every plan day kept → the no-wipe valve (no delete
+at all). `scripts/import-seed.js`: the SQL is always built with `excludeDays: diff.blockedDays` (dry run and apply, so the
+file on disk never carries a blocked day's statement); the exit decision moved into a pure exported `decideApply(diff,
+owner, coreWouldChange, args)` → `{ code, proceed, lines }` in today's order — 3 only under the new `--strict-blocked`
+flag (the old fail-closed refusal, nothing written), 4 the RF2 blob guard untouched, 1 no workdir, 0 proceed (the KEPT
+block prints the blocked list exactly as the dry run does) or nothing to apply; `verifyOutcome(verify, keptDays, strict)`
+accepts a fresh plan reading `Total changes: 0 (+N blocked)` (under `--strict-blocked` a blocked day after the apply still
+fails; a kept set that changed mid-run is NOTEd, never failed); `keptSummary(diff)` = `kept N app-edited day(s): <days>
+(M blocked slot change(s))` in the dry-run line, the KEPT block and the VERIFIED line; `main()` runs only under
+`require.main === module` so the test can require the helpers without a live fetch; the header's exit-code table
+documents 0 (kept) and 3 (`--strict-blocked` only). availability / time_off keep their own ownership rules; the RF2 blob
+guard (exit 4 / `--overwrite-blob`) is untouched. One older pin restated: the RF2 source pin `/return 4;/` became
+`/code: 4, proceed: false/` (the decision returns an object now).
+
+**Tests** (`test/importer.test.js`, IB block, test-first): a synthetic live set = the plan's rows with two app-owned
+differing days (10/7 by `source 'generated'`, 11/29 by `updated_by` alone — both published shapes), one seed-owned
+differing day (10/13 → update) and one seed-owned stale day (12/31 → delete): `blockedDays`, counts (blocked 2 / update 1
+/ delete 1, `Total changes: 2 ... (+2 blocked)`), the stale list never carries a blocked day, the SQL's schedule_days
+section has no statement for either day while 10/13 is written and keyed, 71 `::date` keys, the header, the 3a comment,
+snapshot/blob/availability/time_off sections byte-identical, `decideApply` → `[0, proceed]` / `--strict-blocked` → 3 /
+exit 4 before and after / `--overwrite-blob` lifts / no workdir → 1, `keptSummary`, and `verifyOutcome` on the
+post-apply state reading `Total changes: 0 (+2 blocked)` → VERIFIED (strict → not; a remaining change → NOT FULLY
+APPLIED; a grown blocked set → VERIFIED + NOTE; nothing kept → the old wording byte for byte). Fail-before (verbatim):
+`AssertionError [ERR_ASSERTION]: RF2: --apply refuses (exit 4) over an app-written blob without --overwrite-blob (IB
+restated the pin: ...)` — the run stops at the source pin before requiring the CLI, so a fail-before never touches the
+network; pass-after `ok 848 assertions` (`ok 788` before IB).
+
+**Read-only proof against the live project** (`node scripts/import-seed.js --dry-run`, anon key, nothing written):
+still `Total changes: 3 (+32 blocked)`, `schedule_days: insert 0, update 0, delete 0, unchanged 42, BLOCKED 31`; the
+summary now reads `dry-run: 3 change(s) would be applied; kept 31 app-edited day(s): 2026-10-07, ... 2026-11-29 (32
+blocked slot change(s)) - not in the SQL; --apply keeps them as the app's Apply does, --strict-blocked would refuse
+(exit 3).`; the SQL file (74017 bytes, header `42 schedule_days (31 app-edited day(s) kept, not written), 48 availability,
+7 time_off rows`) was grepped for each of the 31 days listed as BLOCKED inside its schedule_days section (`-- 3a.` …
+`-- 4a.`): **0 hits for every day** (before the change: 2 per day — the stale `NOT IN` list and the insert VALUES); 42
+`::date` keys and 42 VALUES rows remain. (`'<day>'::date` still appears for some of those dates in the availability /
+time_off sections — other tables' keys, unchanged by design.)
+
+**Live, for the orchestrator (not run here):** `node scripts/import-seed.js --apply --workdir <linked>` — expect the KEPT
+block (31 rows / 32 lines), 3 blob changes applied, `VERIFIED: the applied part is fully applied - a fresh plan reads
+'Total changes: 0 (+32 blocked)'; kept 31 app-edited day(s): ...`, exit 0; then a fresh `--dry-run` reading
+`Total changes: 0 (+32 blocked)`. Note the numbers: 31 days, 32 blocked slot lines.
+
+**IB review fixes (same night, six minor findings, all addressed).** *(1 + 4) plan/SQL agreement when every plan day is
+app-owned:* `importSql`'s filtered list was empty, so its "plan has no rows" valve suppressed the stale delete (an empty
+`NOT IN` list is not valid SQL) while `planDiff` still promised the delete — `planDiff` now shares one state helper
+(`impSdState`) and, when every plan day is blocked, reports the stale seed-owned days as KEPT (`[KEPT: every plan day is
+app-owned (kept), so the SQL writes no schedule_days statement - seed-owned day not deleted]`, `delete 0`, `Total changes: 0
+(+N blocked)`), and the 3a comment states the real reason (`every plan day is app-owned (N kept) - no stale delete
+emitted ...`; the "plan has no rows" wording is reserved for a plan that truly has none). The conservative side was
+chosen on purpose: no unlisted, wipe-shaped delete is ever emitted. Unreachable with today's live data (42 of 73 plan
+days are seed-owned). *(2)* the guide §4.4 and the CLI header now name the pre-existing divergence: `source 'import'` +
+NULL `updated_by` is seed-owned to the CLI (`coalesce(updated_by,'seed')`) but app-edited to `suSeedDayMerge`; left as is
+(aligning it changes which live rows a re-import may touch — report-first, follow-up item); none of the 31 published
+rows carries a NULL. *(3)* documented (header + §4.4): kept days keep their generated holders, so a seed vacation over a
+kept day's holder trips the `ON_CALL_CONFLICT` trigger and rolls the whole import back (one transaction, exit 1, nothing
+written); today's plan inserts no time_off row. *(5)* behavioural fail-befores reproduced and recorded below. *(6)*
+`verifyOutcome` under `--strict-blocked` with 0 applied changes and blocked days prints `APPLIED, but app-edited day(s)
+appeared during the run (--strict-blocked): <days> - they were not written and nothing may be kept under the flag;
+remaining diff:` before the diff (still exit 1) instead of blaming the apply; the header's exit-1 entry says so.
+
+Fail-befores (verbatim): the review-fix pins — `AssertionError [ERR_ASSERTION]: IB corner: with every plan day app-owned
+the stale seed-owned day DS is KEPT, not promised as a delete (fail-before: delete 1, totalChanges 1)` (actual
+`[1, 0, 1, 1]`) and `AssertionError [ERR_ASSERTION]: IB: strict + 0 applied changes + blocked days -> a distinct line
+naming the days (fail-before: 'NOT FULLY APPLIED - remaining diff:')` (actual `'NOT FULLY APPLIED - remaining diff:'`).
+The behavioural IB pins, reproduced by swapping in `HEAD:importer.js` against the new test and by a mutation that ignores
+`excludeDays` (`var sdRows = plan.scheduleDayRows;`), the file restored byte-identically (sha 6d1c8c01) after each:
+`AssertionError [ERR_ASSERTION]: IB: planDiff.blockedDays = the app-owned differing days, ISO, sorted (fail-before:
+undefined)` and `AssertionError [ERR_ASSERTION]: IB: the schedule_days section of the SQL carries no statement for kept
+day 2026-10-07 (fail-before: in the stale NOT IN list and in the insert VALUES)`. Pass-after `ok 859 assertions`
+(`ok 848` after the first IB pass, `ok 788` before IB); `test/publish.test.js` `ok 186`. Live dry run re-run after the
+fixes (read-only): exit 0, `Total changes: 3 (+32 blocked)`, `schedule_days: insert 0, update 0, delete 0, unchanged 42,
+BLOCKED 31`, SQL 74017 bytes, 0 hits for each of the 31 BLOCKED days inside the schedule_days section (42 `::date` keys,
+42 VALUES rows, one `NOT IN` delete), header unchanged.

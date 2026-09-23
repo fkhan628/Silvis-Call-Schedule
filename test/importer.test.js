@@ -1185,8 +1185,160 @@ eq(IMP.impBlobOwner(null), { hasRow: false, importerOwned: false, by: null, at: 
   ok(cli.indexOf("blob last written by ") >= 0, "RF2 review fix: 'blob last written by <who> at <ts>' is printed regardless of the verdict");
   ok(cli.indexOf("BLOB WAS EDITED IN THE APP at ") >= 0 && /a re-import would revert Setup edits/.test(cli), "RF2: the plan prints 'BLOB WAS EDITED IN THE APP at <ts> by <who>: a re-import would revert Setup edits'");
   ok(/t === "--overwrite-blob"/.test(cli) && /overwriteBlob/.test(cli), "RF2: --overwrite-blob is parsed");
-  ok(/REFUSING TO APPLY: the shared setup \(call_schedule_data\) was last saved in the app/.test(cli) && /return 4;/.test(cli), "RF2: --apply refuses (exit 4) over an app-written blob without --overwrite-blob");
+  ok(/REFUSING TO APPLY: the shared setup \(call_schedule_data\) was last saved in the app/.test(cli) && /code: 4, proceed: false/.test(cli), "RF2: --apply refuses (exit 4) over an app-written blob without --overwrite-blob (IB restated the pin: the decision moved into decideApply, which returns { code: 4 } instead of 'return 4;')");
   ok(/rows are unaffected by this guard/.test(cli), "RF2: the refusal says the rows are unaffected by the guard");
+}
+
+/* ------------------------------------ IB: --apply keeps app-edited days, as the app's Apply does (9/23 overnight) */
+// Observed 9/23 after the server-side publish (scripts/publish-preview.js): 31 plan days are app-owned (updated_by the
+// publish tag; 10/24 also source 'generated'), the dry run listed them as BLOCKED (correct) and --apply REFUSED with
+// exit 3 - so the three pending blob-only changes (settings seedRevisions retired + seedCoreHash stamp, roster s6
+// fullName '', groupRules.timeOff.conflictRule) could not land, and no re-import could while a schedule is published.
+// The app's Setup -> Import -> Apply keeps such days ('kept (app-edited)', helpers.suSeedDayMerge) and applies the
+// rest; the CLI now does the same. Contract restated here: planDiff reports the blocked DAYS (blockedDays, ISO,
+// sorted, deduped - the line list stays per slot); importSql(plan, { excludeDays }) writes NO statement for them (not
+// the insert/update VALUES, not the stale delete's key list) and says so in its header; decideApply proceeds with
+// everything else (exit 3 only under --strict-blocked, today's fail-closed refusal); the post-apply verify accepts a
+// fresh plan reading 'Total changes: 0 (+N blocked)'. availability / time_off and the RF2 blob guard are untouched.
+step("IB: --apply proceeds past app-edited days (kept, not written); --strict-blocked restores the exit-3 refusal");
+{
+  const cliPath = path.join(__dirname, "..", "scripts", "import-seed.js");
+  const cliSrc = require("fs").readFileSync(cliPath, "utf8");
+  // pinned BEFORE the require: a fail-before run must never run main() (a live fetch) from a test
+  ok(/if \(require\.main === module\)/.test(cliSrc), "IB: scripts/import-seed.js runs main() only as the entry point (require.main === module) - fail-before: main() ran on require");
+  const CLI = require(cliPath);
+  ok(typeof CLI.decideApply === "function" && typeof CLI.verifyOutcome === "function" && typeof CLI.keptSummary === "function" && typeof CLI.parseArgs === "function", "IB: the CLI exports parseArgs / decideApply / verifyOutcome / keptSummary");
+  eq([CLI.parseArgs(["--apply", "--strict-blocked"]).strictBlocked, CLI.parseArgs(["--apply"]).strictBlocked, CLI.parseArgs(["--dry-run"]).mode], [true, false, "dry-run"], "IB: --strict-blocked is parsed and off by default");
+  ok(/3 refused to apply over app-edited days - --strict-blocked only/.test(cliSrc) && /0 ok \(app-edited days, if any, kept/.test(cliSrc), "IB: the header's exit-code table documents both behaviours (0 keeps, 3 only under --strict-blocked)");
+  ok(cliSrc.indexOf("REFUSING TO APPLY: \" + diff.blocked.length") < 0, "IB: the unconditional exit-3 refusal is gone from main()");
+  ok(/IMP\.importSql\(plan, \{ excludeDays: keptDays \}\)/.test(cliSrc) && /const keptDays = diff\.blockedDays/.test(cliSrc), "IB: the CLI builds the SQL with the blocked days excluded (dry run and apply alike)");
+  ok(/verifyOutcome\(verify, keptDays, args\.strictBlocked\)/.test(cliSrc), "IB: the post-apply proof goes through verifyOutcome with the kept days");
+
+  // synthetic live set = the plan's own rows, plus: D1 app-owned by SOURCE ('generated', the 10/24 shape), D2 app-owned
+  // by updated_by alone (source still 'import', the shape of the 30 other published rows), both differing from the seed
+  // -> blocked; DU seed-owned and differing -> a real update; DS a seed-owned day the seed no longer lists -> delete.
+  const TAG = "publish-preview (Faraz, 2026-09-23 overnight)";
+  const D1 = "2026-10-07", D2 = "2026-11-29", DU = "2026-10-13", DS = "2026-12-31";
+  const other = (r) => (r.primary_id === "s1" ? "s2" : "s1");
+  const mkLive = () => {
+    const rows = clone(plan.scheduleDayRows).map((r) => {
+      if (r.day === D1) return Object.assign(r, { backup_id: other(r), source: "generated", updated_by: TAG, version: 3 });
+      if (r.day === D2) return Object.assign(r, { backup_id: other(r), source: "import", updated_by: TAG, version: 4 });
+      if (r.day === DU) return Object.assign(r, { backup_id: other(r), source: "import", updated_by: "seed", version: 1 });
+      return r;
+    });
+    rows.push({ day: DS, primary_id: "s2", backup_id: null, primary_locked: true, backup_locked: false, source: "import", external_cover: null, note: "seed: x", version: 1, updated_by: "seed" });
+    return { blob: clone(plan.blob), blobUpdatedAt: "2026-09-23T05:27:45+00:00", blobUpdatedBy: "seed", availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: rows };
+  };
+  ok(plan.scheduleDayRows.some((r) => r.day === D1) && plan.scheduleDayRows.some((r) => r.day === D2) && plan.scheduleDayRows.some((r) => r.day === DU) && !plan.scheduleDayRows.some((r) => r.day === DS), "IB fixture: D1/D2/DU are plan days, DS is not");
+  const live = mkLive();
+  const d = IMP.planDiff(plan, live);
+  // (1) planDiff: the blocked DAYS, and the applied counts exclude them
+  eq(d.blockedDays, [D1, D2], "IB: planDiff.blockedDays = the app-owned differing days, ISO, sorted (fail-before: undefined)");
+  eq(d.blocked.length, 2, "IB: the per-slot blocked line list is unchanged (one B change each)");
+  eq([d.tables.schedule_days.blocked, d.tables.schedule_days.update, d.tables.schedule_days.delete, d.tables.schedule_days.insert], [2, 1, 1, 0], "IB: schedule_days counts - blocked 2, update 1 (DU), delete 1 (DS), insert 0");
+  eq(d.totalChanges, 2, "IB: the applied count (update DU + delete DS) excludes the blocked days");
+  eq(d.lines[d.lines.length - 1], "Total changes: 2 (incl. 1 delete(s) of seed-owned rows) (+2 blocked)", "IB: the diff's last line");
+  ok(d.changes.some((t) => /^12\/31 .* -> deleted \(seed-owned day no longer in the seed\)$/.test(t)), "IB: DS is in the stale-delete list: " + d.changes.filter((t) => /deleted/.test(t)).join(" | "));
+  ok(!d.changes.some((t) => /deleted/.test(t) && (/^10\/7 /.test(t) || /^11\/29 /.test(t))), "IB: the stale-delete list never includes a blocked day");
+  ok(d.blocked.every((t) => /\[BLOCKED: live source '(generated|import)' updated_by 'publish-preview \(Faraz, 2026-09-23 overnight\)' v[34] - edited in the app, not overwritten\]$/.test(t)), "IB: the blocked lines read exactly as the dry run prints them: " + d.blocked.join(" | "));
+  // (2) importSql with the blocked days excluded: no statement for them anywhere in the schedule_days section
+  const sqlK = IMP.importSql(plan, { excludeDays: d.blockedDays });
+  const sdSection = (s) => s.slice(s.indexOf("-- 3a. schedule_days"), s.indexOf("-- 4a. availability"));
+  ok(sdSection(sqlK).length > 100 && sdSection(sql).length > 100, "IB: both SQLs carry a schedule_days section");
+  [D1, D2].forEach((day) => {
+    ok(sdSection(sqlK).indexOf("'" + day + "'") < 0, "IB: the schedule_days section of the SQL carries no statement for kept day " + day + " (fail-before: in the stale NOT IN list and in the insert VALUES)");
+    ok(sqlK.indexOf("('" + day + "', ") < 0, "IB: no schedule_days VALUES row for " + day + " anywhere in the SQL (a '<day>'::date key may still appear in the availability / time_off sections - other tables, checked above by section)");
+    ok(sdSection(sql).indexOf("'" + day + "'") >= 0, "IB fail-before shape: without excludeDays the day IS written (" + day + ")");
+  });
+  ok(sdSection(sqlK).indexOf("('" + DU + "', ") >= 0 && sdSection(sqlK).indexOf("'" + DU + "'::date") >= 0, "IB: the seed-owned differing day DU is still written and still in the stale key list");
+  eq((sdSection(sqlK).match(/::date/g) || []).length, plan.scheduleDayRows.length - 2, "IB: the stale delete's key list = every plan day minus the 2 kept (they are app-owned: the delete's ownership clause never matches them)");
+  ok(new RegExp("^-- seed generatedOn .*; " + (plan.scheduleDayRows.length - 2) + " schedule_days \\(2 app-edited day\\(s\\) kept, not written\\), " + plan.availabilityRows.length + " availability, " + plan.timeOffRows.length + " time_off rows$", "m").test(sqlK), "IB: the SQL header counts the written days and says how many were kept: " + (sqlK.match(/^-- seed generatedOn .*$/m) || [""])[0]);
+  ok(/-- 3a\. schedule_days: drop seed-owned days .*\n--     days the app has touched since .* are never deleted\n--     \(2 app-edited day\(s\) kept out of this key list: they are app-owned, so the ownership clause above never matches them\)/.test(sdSection(sqlK)), "IB: the stale-delete comment names the kept count, never the days");
+  // the rest of the SQL is byte-identical: blob merge, availability, time_off are unaffected
+  eq(sqlK.slice(sqlK.indexOf("-- 1. snapshot"), sqlK.indexOf("-- 3a.")), sql.slice(sql.indexOf("-- 1. snapshot"), sql.indexOf("-- 3a.")), "IB: snapshot + blob merge identical with and without excludeDays");
+  eq(sqlK.slice(sqlK.indexOf("-- 4a.")), sql.slice(sql.indexOf("-- 4a.")), "IB: availability + time_off sections identical with and without excludeDays (their app-edited protection is unchanged)");
+  eq(IMP.importSql(plan, {}), sql, "IB: importSql(plan, {}) is byte-identical to importSql(plan)");
+  eq(IMP.importSql(plan, { excludeDays: [] }), sql, "IB: an empty excludeDays changes nothing");
+  eq(IMP.importSql(plan, { excludeDays: ["2027-01-01", "2026-13-99"] }), sql, "IB: excluding days the plan does not carry changes nothing");
+  {
+    // IB review (findings 1/4): EVERY plan day app-owned -> planDiff and importSql must agree. An empty NOT IN list is
+    // not valid SQL and an unlisted delete would be wipe-shaped, so the SQL emits no stale delete; planDiff therefore
+    // reports the stale seed-owned days as KEPT (never promises a delete the SQL cannot carry) and the 3a comment states
+    // the real reason (the plan HAS rows - they are all kept). Unreachable with today's live data (42 of 73 seed-owned).
+    const liveAll = mkLive();
+    liveAll.schedule_days = liveAll.schedule_days.map((r) => r.day === DS ? r : Object.assign(r, { note: "app-edited", source: "import", updated_by: TAG, version: 5 }));
+    const dAll = IMP.planDiff(plan, liveAll);
+    eq(dAll.blockedDays, plan.scheduleDayRows.map((r) => r.day).slice().sort(), "IB corner fixture: every plan day is blocked");
+    eq([dAll.tables.schedule_days.delete, dAll.tables.schedule_days.kept, dAll.totalChanges, dAll.totalDeletes], [0, 1, 0, 0], "IB corner: with every plan day app-owned the stale seed-owned day DS is KEPT, not promised as a delete (fail-before: delete 1, totalChanges 1)");
+    ok(dAll.kept.length === 1 && /^schedule_days 12\/31 .* \[KEPT: every plan day is app-owned \(kept\), so the SQL writes no schedule_days statement - seed-owned day not deleted\]$/.test(dAll.kept[0]), "IB corner: the kept line says why: " + dAll.kept[0]);
+    ok(!dAll.changes.some((t) => /deleted/.test(t)), "IB corner: no delete line in the change list");
+    eq(dAll.lines[dAll.lines.length - 1], "Total changes: 0 (+" + dAll.blocked.length + " blocked)", "IB corner: the diff's last line promises nothing the SQL cannot carry");
+    const all = IMP.importSql(plan, { excludeDays: dAll.blockedDays });
+    ok(all.indexOf("-- 3a. schedule_days: every plan day is app-owned (" + plan.scheduleDayRows.length + " kept) - no stale delete emitted: the SQL writes no schedule_days statement, seed-owned live days left alone (no wipe)") >= 0, "IB corner: the 3a comment states the real reason (fail-before: 'plan has no rows' - untrue, the plan has " + plan.scheduleDayRows.length + " rows)");
+    ok(all.indexOf("delete from public.schedule_days") < 0 && all.indexOf("-- 3. schedule_days: nothing to import") >= 0, "IB corner: no schedule_days statement at all - no delete, no insert");
+    ok(all.indexOf("plan has no rows - seed-owned live days left alone") < 0, "IB corner: the 'plan has no rows' wording is reserved for a plan that truly has none");
+    ok(IMP.importSql(Object.assign({}, plan, { scheduleDayRows: [] })).indexOf("-- 3a. schedule_days: plan has no rows - seed-owned live days left alone (no wipe)") >= 0, "IB corner: ...and a plan with no schedule_days rows still says so, byte for byte");
+    eq(CLI.verifyOutcome(dAll, dAll.blockedDays, false).ok, true, "IB corner: a fresh plan after such an apply (all kept, 0 changes) VERIFIES - plan and SQL agree (fail-before: NOT FULLY APPLIED over a delete the SQL never issued)");
+  }
+  // (3) the exit-code decision (pure): 0 and proceed without the flag; 3 with it; the RF2 exit 4 and the workdir check keep their order
+  const owner = IMP.impBlobEditState(live);
+  eq([owner.hasRow, owner.appEdited], [true, false], "IB fixture: the live blob equals the plan (stamp matches) - the RF2 guard is quiet");
+  const args0 = { strictBlocked: false, overwriteBlob: false, workdir: "C:/linked" };
+  const dec = CLI.decideApply(d, owner, false, args0);
+  eq([dec.code, dec.proceed], [0, true], "IB: with blocked days and no flag the decision is exit-code path 0, proceed (fail-before: 3)");
+  ok(dec.lines[0] === "KEPT (app-edited, not written - as the app's Apply keeps them): 2 schedule_days row(s); the SQL carries no statement for them:", "IB: the apply report opens the kept block: " + dec.lines[0]);
+  eq(dec.lines.slice(1, 3), d.blocked.map((l) => "  " + l), "IB: ...and prints the blocked list exactly as the dry run does");
+  eq(CLI.keptSummary(d), "kept 2 app-edited day(s): 2026-10-07, 2026-11-29 (2 blocked slot change(s))", "IB: the summary line names the kept days");
+  eq(CLI.keptSummary(IMP.planDiff(plan, { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) })), "", "IB: no kept days -> empty summary (the old wording stays)");
+  const decS = CLI.decideApply(d, owner, false, Object.assign({}, args0, { strictBlocked: true }));
+  eq([decS.code, decS.proceed], [3, false], "IB: --strict-blocked restores the refusal (exit 3)");
+  ok(decS.lines[0] === "REFUSING TO APPLY (--strict-blocked): 2 schedule_days change(s) on app-edited day(s) (source != 'import' or updated_by != 'seed') differ from the seed:" && decS.lines[decS.lines.length - 1].indexOf("Resolve them in the app (or update the seed) and re-run") === 0, "IB: the strict refusal wording: " + decS.lines[0] + " ... " + decS.lines[decS.lines.length - 1]);
+  eq(decS.lines.slice(1, 3), d.blocked.map((l) => "  " + l), "IB: the strict refusal lists the blocked lines");
+  {
+    const liveU = mkLive(); liveU.schedule_days = liveU.schedule_days.map((r) => (r.day === D1 || r.day === D2) ? Object.assign(r, { backup_id: null, source: "import", updated_by: "seed", version: 1 }) : r);
+    const dU = IMP.planDiff(plan, liveU);
+    eq([dU.blockedDays, dU.totalChanges], [[], 2], "IB fixture: nothing blocked, DU + DS still pending");
+    eq([CLI.decideApply(dU, owner, false, Object.assign({}, args0, { strictBlocked: true })).code, CLI.decideApply(dU, owner, false, Object.assign({}, args0, { strictBlocked: true })).proceed], [0, true], "IB: --strict-blocked with nothing blocked proceeds");
+    eq(CLI.decideApply(dU, owner, false, args0).lines, [], "IB: nothing kept -> no KEPT block");
+  }
+  {
+    const edited = Object.assign({}, owner, { appEdited: true, basis: "seedCoreHash", by: "s1", at: "2026-09-24T14:00:00+00:00" });
+    const dec4 = CLI.decideApply(d, edited, true, args0);
+    eq([dec4.code, dec4.proceed], [4, false], "IB: the RF2 blob guard (exit 4) is untouched - it fires with blocked days kept");
+    ok(/^REFUSING TO APPLY: the shared setup \(call_schedule_data\) was last saved in the app at 2026-09-24T14:00:00\+00:00 by s1/.test(dec4.lines[0]), "IB: exit-4 wording unchanged: " + dec4.lines[0]);
+    eq(CLI.decideApply(d, edited, true, Object.assign({}, args0, { strictBlocked: true })).code, 3, "IB: under --strict-blocked the blocked refusal (3) still comes before the blob guard (4), as today");
+    eq(CLI.decideApply(d, edited, true, Object.assign({}, args0, { overwriteBlob: true })).code, 0, "IB: --overwrite-blob lifts 4 and the run proceeds with the days kept");
+    eq(CLI.decideApply(d, owner, false, Object.assign({}, args0, { workdir: null })).code, 1, "IB: no --workdir -> 1 (after the refusals, before the SQL)");
+  }
+  // (4) verify after the apply: the applied part matches, the kept days still differ -> 'Total changes: 0 (+N blocked)' is VERIFIED
+  const after = mkLive();
+  after.schedule_days = after.schedule_days.filter((r) => r.day !== DS).map((r) => r.day === DU ? Object.assign(r, { backup_id: null, version: 2 }) : r);
+  const v = IMP.planDiff(plan, after);
+  eq(v.lines[v.lines.length - 1], "Total changes: 0 (+2 blocked)", "IB: a fresh plan after the apply reads 'Total changes: 0 (+2 blocked)' (pinned: that is what the live re-run must print)");
+  eq([v.totalChanges, v.blockedDays], [0, [D1, D2]], "IB: ...zero applied changes, the same two days still blocked");
+  const vo = CLI.verifyOutcome(v, d.blockedDays, false);
+  eq(vo.ok, true, "IB: verifyOutcome accepts '(+N blocked)' (fail-before: NOT FULLY APPLIED because verify.blocked was non-empty)");
+  eq(vo.lines, ["VERIFIED: the applied part is fully applied - a fresh plan reads 'Total changes: 0 (+2 blocked)'; kept 2 app-edited day(s): 2026-10-07, 2026-11-29 (2 blocked slot change(s))."], "IB: the VERIFIED line names the kept days");
+  eq(CLI.verifyOutcome(v, d.blockedDays, true).ok, false, "IB: under --strict-blocked a blocked day after the apply is still a failure (nothing may be kept)");
+  {
+    // IB review (finding 6): under --strict-blocked the SQL only ever runs with nothing blocked, so a blocked day at
+    // verify time APPEARED during the run (a concurrent app edit). Every applied change landed - say so instead of
+    // blaming the apply; still exit 1 (nothing may be kept under the flag).
+    const vS = CLI.verifyOutcome(v, [], true);
+    eq([vS.ok, vS.lines[0], vS.lines[1], vS.lines.length], [false, "APPLIED, but app-edited day(s) appeared during the run (--strict-blocked): 2026-10-07, 2026-11-29 - they were not written and nothing may be kept under the flag; remaining diff:", v.text, 2], "IB: strict + 0 applied changes + blocked days -> a distinct line naming the days (fail-before: 'NOT FULLY APPLIED - remaining diff:')");
+    const vS2 = CLI.verifyOutcome(d, [], true);
+    eq(vS2.lines[0], "NOT FULLY APPLIED - remaining diff:", "IB: strict with an applied change still pending keeps the NOT FULLY APPLIED wording");
+  }
+  eq(CLI.verifyOutcome(d, d.blockedDays, false).ok, false, "IB: a remaining applied change (DU / DS still pending) is NOT verified");
+  ok(CLI.verifyOutcome(d, d.blockedDays, false).lines[0] === "NOT FULLY APPLIED - remaining diff:" && CLI.verifyOutcome(d, d.blockedDays, false).lines[1] === d.text, "IB: the failure prints the remaining diff");
+  {
+    const vDrift = CLI.verifyOutcome(v, [D1], false);
+    eq(vDrift.ok, true, "IB: a blocked set that grew while the run ran (a concurrent app edit) is still VERIFIED - the applied part is what is compared");
+    ok(vDrift.lines.length === 2 && /^NOTE: the app-edited set changed while this ran/.test(vDrift.lines[1]) && vDrift.lines[1].indexOf("newly blocked 2026-11-29") >= 0 && vDrift.lines[1].indexOf("2026-10-07") < 0, "IB: ...with a NOTE naming the newly blocked day only: " + vDrift.lines[1]);
+    const vClean = IMP.planDiff(plan, { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) });
+    eq(CLI.verifyOutcome(vClean, [], false).lines, ["VERIFIED: plan fully applied - a re-run would change nothing."], "IB: nothing kept -> the old VERIFIED wording, byte for byte");
+  }
 }
 
 console.log("ok " + n + " assertions");

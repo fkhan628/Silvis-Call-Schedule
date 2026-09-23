@@ -188,6 +188,28 @@ one-shot `intentionalScheduleWipeRef`, snapshot-before-destructive (capture fail
 restore UI in Settings, once-per-session snapshot if newest > 6 h. The two Davenport wipe incidents happened because
 LOAD is permissive and AUTOSAVE is unconditional — keep the same guards.
 
+**Seed re-import over a published schedule — the CLI and the app agree: app-edited days are kept (IB, 9/23 overnight).**
+A plan day whose live `schedule_days` row the app owns (`source` not `import`, or `updated_by` not `seed` — the shape of
+the 31 October/November days the server-side publish updated) and that differs from the seed is never overwritten by
+either path. Setup → Import → Apply skips it (`helpers.suSeedDayMerge`, reported as "kept (app-edited)") and applies
+the rest; `scripts/import-seed.js --apply` now does the same instead of refusing: `planDiff` lists the day as BLOCKED and
+returns it in `blockedDays`, `importSql(plan, { excludeDays })` emits **no statement** for it (neither the insert/update
+VALUES nor the stale delete's key list — and the row is app-owned, so that delete's ownership clause could not reach it
+anyway), the blob / availability / time_off parts apply, the report prints the blocked list plus `kept N app-edited
+day(s)`, and the post-apply verify accepts a fresh plan reading `Total changes: 0 (+N blocked)`. `--strict-blocked`
+restores the old fail-closed refusal (exit 3, nothing written). Without this a published schedule froze every
+blob-only seed change (observed 9/23: `Total changes: 3 (+32 blocked)` could not land). Pinned in `test/importer.test.js`
+(IB block: synthetic app-owned days, the SQL string, the exit-code decision, the verify). Three edges (IB review):
+**(1)** the two paths read one shape differently — a row with `source 'import'` and a **NULL** `updated_by` is
+seed-owned to the CLI (`planDiff` and the SQL guard `coalesce(updated_by, 'seed')`) but app-edited to the app's Apply
+(`suSeedDayMerge` reads NULL as not `seed`); pre-existing, left as is because aligning it changes which live rows a
+re-import may touch (report-first item); none of the 31 published rows has a NULL `updated_by`. **(2)** kept days keep
+their live (generated) holders, so a seed vacation that overlaps a kept day's holder is refused by the `time_off`
+`ON_CALL_CONFLICT` trigger and rolls the **whole** import back (one transaction, exit 1, nothing written) — trade or
+edit that day in the app first. **(3)** when *every* plan day is app-owned, the SQL emits no stale delete at all (an
+empty key list is not valid SQL; an unlisted delete would be wipe-shaped) and `planDiff` reports the stale seed-owned
+days as KEPT, so the dry run never promises a delete the SQL cannot carry.
+
 ## 5. Rules engine (`rules.js`) — pure functions
 
 ```js
@@ -808,8 +830,12 @@ node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL 
   `updated_by = 'publish-preview (Faraz, 2026-09-23 overnight)'`; `version` by compare-and-swap. **After `--apply`
   the updated days are app-owned**: `import-seed` applies only where `updated_by` is still `seed`, so it will no
   longer touch the 31 updated October/November days (their `updated_by` is the tag) — a later seed correction to any
-  of them goes through the app (the importer's dry run lists them as skipped). By design: it is what stops a
-  re-import from wiping the generated backups, and identical to what an app publish does.
+  of them goes through the app (the importer's dry run lists them as BLOCKED). By design: it is what stops a
+  re-import from wiping the generated backups, and identical to what an app publish does. IB (same night): those
+  BLOCKED days no longer stop the rest of a re-import — `import-seed --apply` keeps them exactly as the app's Apply
+  does (no SQL statement for them, `kept N app-edited day(s)` in the summary, verify accepts `Total changes: 0 (+N
+  blocked)`), so blob / availability / time_off changes still land while a schedule is published; `--strict-blocked`
+  restores the refusal (exit 3). See §4.4.
 - **SQL**: one transaction, one `DO $pub$ … $pub$` block (a tagged quote, so a note containing `$$` cannot end the
   body) — snapshot **first** (`reason 'generate_publish'`, `created_by` the tool
   tag, the same `jsonb_build_object` shape as `snapshots.capture` / `importer.js`), then per day

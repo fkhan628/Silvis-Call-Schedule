@@ -910,11 +910,21 @@ function impSqlTimeOff(rows) {
 
 // Deletes are set-based against the plan's keys, so they need no live fetch
 // and are idempotent. Each is skipped when the plan has no rows for the table.
-function impSqlStaleScheduleDays(rows) {
-  if (!rows.length) return "-- 3a. schedule_days: plan has no rows - seed-owned live days left alone (no wipe)\n";
+// keptN (IB): how many plan days the caller kept out of the key list because the
+// app owns them - said as a count, never as days (the SQL carries no statement for
+// a kept day); such rows fail the ownership clause, so the delete never reaches them.
+function impSqlStaleScheduleDays(rows, keptN) {
+  // IB review: an empty key list is not valid SQL and an unlisted delete would be wipe-shaped, so when every plan day
+  // is kept no stale delete is emitted at all - planDiff reports the stale seed-owned days as KEPT in that case (agree).
+  if (!rows.length) {
+    return keptN
+      ? "-- 3a. schedule_days: every plan day is app-owned (" + keptN + " kept) - no stale delete emitted: the SQL writes no schedule_days statement, seed-owned live days left alone (no wipe)\n"
+      : "-- 3a. schedule_days: plan has no rows - seed-owned live days left alone (no wipe)\n";
+  }
   return [
     "-- 3a. schedule_days: drop seed-owned days (source 'import', updated_by 'seed') the seed no longer lists;",
-    "--     days the app has touched since (any other source / updated_by) are never deleted",
+    "--     days the app has touched since (any other source / updated_by) are never deleted" +
+      (keptN ? "\n--     (" + keptN + " app-edited day(s) kept out of this key list: they are app-owned, so the ownership clause above never matches them)" : ""),
     "delete from public.schedule_days",
     " where source = 'import' and updated_by = 'seed'",
     "   and day not in (" + rows.map(function (r) { return impSqlStr(r.day) + "::date"; }).join(", ") + ");",
@@ -954,24 +964,36 @@ function impSqlStaleTimeOff(rows) {
   ].join("\n");
 }
 
-// importSql(plan) -> string. One transaction: snapshot, blob merge, then per
+// importSql(plan, options) -> string. One transaction: snapshot, blob merge, then per
 // table: stale seed-owned rows deleted, then insert/update. Idempotent: every
 // insert carries ON CONFLICT or WHERE NOT EXISTS, every update is guarded by
 // IS DISTINCT FROM, every delete is set-based against the plan's keys.
 // Prompt 12 B: ' (N awaiting confirmation)' after the schedule_days count in the
 // SQL header when any planned row carries the marker; empty otherwise so
 // unflagged seeds keep their header byte for byte.
+// IB (9/23 overnight): options.excludeDays = ISO days kept out of the schedule_days
+// statements altogether - the app-edited days planDiff reports as blockedDays, which
+// the CLI's --apply keeps exactly as the app's Apply keeps them. A kept day is neither
+// inserted/updated nor listed in the stale delete's key set (and it is app-owned, so
+// that delete's ownership clause never matches it either); the header says how many
+// were kept. No option, an empty list or days the plan lacks -> byte-identical output.
+// availability / time_off are untouched by the option.
 function impAwaitingHeader(plan) {
   var n = (plan.scheduleDayRows || []).filter(function (d) { return typeof d.note === "string" && d.note.indexOf(IMP_AWAITING_MARKER) === 0; }).length;
   return n ? " (" + n + " awaiting confirmation)" : "";
 }
 
-function importSql(plan) {
+function importSql(plan, options) {
   if (!plan || !plan.blob) throw new Error("importer: importSql needs a plan from importPlan()");
+  var exclude = {};
+  ((options && options.excludeDays) || []).forEach(function (d) { exclude[String(d).slice(0, 10)] = true; });
+  var sdRows = plan.scheduleDayRows.filter(function (r) { return !exclude[r.day]; });
+  var keptN = plan.scheduleDayRows.length - sdRows.length;
   var head = [
     "-- Silvis seed import - generated " + (plan.generatedAt || new Date().toISOString()) + " by importer.js",
     "-- seed generatedOn " + ((plan.blob.settings && plan.blob.settings.seedGeneratedOn) || "?") +
-      "; " + plan.scheduleDayRows.length + " schedule_days" + impAwaitingHeader(plan) + ", " + plan.availabilityRows.length + " availability, " + plan.timeOffRows.length + " time_off rows",
+      "; " + sdRows.length + " schedule_days" + impAwaitingHeader({ scheduleDayRows: sdRows }) + (keptN ? " (" + keptN + " app-edited day(s) kept, not written)" : "") +
+      ", " + plan.availabilityRows.length + " availability, " + plan.timeOffRows.length + " time_off rows",
     "-- Idempotent: safe to run again; a re-run of identical data changes nothing.",
     "begin;",
     ""
@@ -986,7 +1008,7 @@ function importSql(plan) {
     ""
   ].join("\n");
   return head + impSqlSnapshot() + "\n" + impSqlBlob(plan.blob) + "\n" +
-    impSqlStaleScheduleDays(plan.scheduleDayRows) + "\n" + impSqlScheduleDays(plan.scheduleDayRows) + "\n" +
+    impSqlStaleScheduleDays(sdRows, keptN) + "\n" + impSqlScheduleDays(sdRows) + "\n" +
     impSqlStaleAvailability(plan.availabilityRows) + "\n" + impSqlAvailability(plan.availabilityRows) + "\n" +
     impSqlStaleTimeOff(plan.timeOffRows) + "\n" + impSqlTimeOff(plan.timeOffRows) + "\n" + tail;
 }
@@ -1008,8 +1030,21 @@ function impDaySame(a, b) {
     (a.external_cover || null) === (b.external_cover || null) && (a.note || null) === (b.note || null);
 }
 
-// planDiff(plan, live) -> { text, lines, tables, changes, blocked, totalChanges }
+// impSdState(live row | undefined, plan row) -> 'insert' | 'unchanged' | 'blocked' | 'update': the one place that decides
+// a plan day's state (planDiff's two loops share it). 'blocked' = the app owns the live row - app-edited (source) or
+// app-filled (updated_by; a NULL updated_by reads as 'seed' here, matching the SQL guard's coalesce) - never overwritten.
+function impSdState(l, r) {
+  if (!l) return "insert";
+  if (impDaySame(l, r)) return "unchanged";
+  if (l.source !== "import" || (l.updated_by || "seed") !== "seed") return "blocked";
+  return "update";
+}
+
+// planDiff(plan, live) -> { text, lines, tables, changes, blocked, blockedDays, kept, totalChanges, totalDeletes }
 // live = { blob, availability[], time_off[], schedule_days[] } as fetched by the caller.
+// blocked = one line per differing SLOT of an app-owned plan day (what the dry run prints); blockedDays = those DAYS
+// (ISO, sorted, deduped) - IB (9/23 overnight): the CLI hands them to importSql({ excludeDays }) so --apply keeps them
+// exactly as the app's Apply does, instead of refusing.
 function planDiff(plan, live) {
   live = live || {};
   var names = {};
@@ -1018,6 +1053,7 @@ function planDiff(plan, live) {
   var lines = [];
   var changes = [];
   var blocked = [];
+  var blockedDaySet = {};
 
   // call_schedule_data
   var liveBlob = live.blob && typeof live.blob === "object" ? live.blob : null;
@@ -1096,11 +1132,16 @@ function planDiff(plan, live) {
   var sdT = { insert: 0, update: 0, unchanged: 0, blocked: 0, delete: 0, kept: 0, byMonth: {} };
   var planSd = {};
   plan.scheduleDayRows.forEach(function (r) { planSd[r.day] = true; });
+  // IB review: when EVERY plan day is app-owned, importSql (excludeDays = the blocked days) writes no schedule_days
+  // statement at all - no stale delete either (an empty NOT IN list is not valid SQL, an unlisted delete would be
+  // wipe-shaped) - so the stale seed-owned days are reported KEPT here, never promised as deletes the SQL cannot carry.
+  var allPlanBlocked = plan.scheduleDayRows.length > 0 && plan.scheduleDayRows.every(function (r) { return impSdState(liveSd[r.day], r) === "blocked"; });
   (live.schedule_days || []).forEach(function (r) {
     var day = String(r.day).slice(0, 10);
     if (r.source !== "import" || (r.updated_by || "") !== "seed" || planSd[day]) return;
     var label = impShortDay(day) + " P " + impSlotLabel(names, r.primary_id, r.external_cover) + " / B " + impSlotLabel(names, r.backup_id, null);
     if (!plan.scheduleDayRows.length) { sdT.kept++; stale.push("schedule_days " + label + " [KEPT: plan has no schedule_days rows, seed-owned day not deleted]"); return; }
+    if (allPlanBlocked) { sdT.kept++; stale.push("schedule_days " + label + " [KEPT: every plan day is app-owned (kept), so the SQL writes no schedule_days statement - seed-owned day not deleted]"); return; }
     sdT.delete++;
     var m = day.slice(0, 7);
     var bm = sdT.byMonth[m] || (sdT.byMonth[m] = { insert: 0, update: 0, unchanged: 0, blocked: 0, delete: 0 });
@@ -1109,12 +1150,9 @@ function planDiff(plan, live) {
   });
   plan.scheduleDayRows.forEach(function (r) {
     var l = liveSd[r.day];
-    var state;
-    if (!l) state = "insert";
-    else if (impDaySame(l, r)) state = "unchanged";
-    else if (l.source !== "import" || (l.updated_by || "seed") !== "seed") state = "blocked";   // app-edited (source) or app-filled (updated_by) days are never overwritten
-    else state = "update";
+    var state = impSdState(l, r);
     sdT[state]++;
+    if (state === "blocked") blockedDaySet[r.day] = true;   // IB: the DAY list the CLI keeps out of the SQL (the line list below stays per slot)
     var m = r.day.slice(0, 7);
     var bm = sdT.byMonth[m] || (sdT.byMonth[m] = { insert: 0, update: 0, unchanged: 0, blocked: 0, delete: 0 });
     bm[state]++;
@@ -1155,7 +1193,7 @@ function planDiff(plan, live) {
   lines.push(totalChanges === 0 && !blocked.length ? "No changes - the live tables already match the plan." :
     "Total changes: " + totalChanges + (totalDeletes ? " (incl. " + totalDeletes + " delete(s) of seed-owned rows)" : "") + (blocked.length ? " (+" + blocked.length + " blocked)" : ""));
 
-  return { text: lines.join("\n"), lines: lines, tables: tables, changes: changes, blocked: blocked, kept: stale, totalChanges: totalChanges, totalDeletes: totalDeletes };
+  return { text: lines.join("\n"), lines: lines, tables: tables, changes: changes, blocked: blocked, blockedDays: Object.keys(blockedDaySet).sort(), kept: stale, totalChanges: totalChanges, totalDeletes: totalDeletes };
 }
 
 /* ------------------------------------------------------------- exports */
