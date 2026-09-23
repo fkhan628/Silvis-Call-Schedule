@@ -53,6 +53,19 @@ preferences are shown as warnings on the confirm sheet but do not block. The sch
 day from the day editor afterwards. The group is also e-mailed on publish and every Monday morning while any shift in
 the next 30 days is open (covered by the "Schedule published / changes affecting me" e-mail preference in Settings).
 
+**East vacations (for the person with an East code — Khan today; tell them once).** The scheduler's **Setup → East
+feed → Refresh from Davenport** also brings over that person's Davenport vacations (kind vacation only; no-call days
+stay in Davenport). Nothing is mirrored blindly: every range arrives **unreviewed** and is treated as **away** — a
+Silvis vacation (no primary, no backup, and the day before blocked for primary) — until the person decides. They decide
+with one tap per range, **Unreviewed | Away | Home**, in **Setup → East feed** (scheduler), in their own **Time off**
+view or in **My schedule**: **away** keeps it a Silvis vacation; **home** makes those days available at Silvis and
+preferred for primary (no East call, no OR block, so the Tue/Thu rule is lifted there). No Silvis vacation row is ever
+written for an East range — a change of mind is one tap and leaves nothing behind — and their own Silvis vacations in
+**Time off** are entered exactly as before. If Davenport changes or cancels a range, the next refresh resets that range
+to unreviewed and the toast says so. On the calendar an East range is a small diamond (dashed = unreviewed, outline =
+away, filled green = home), the day editor names the state, and the coverage strip counts the unreviewed ranges until
+they are decided.
+
 Roles: `admin` (everything, including user links and roles), `scheduler` (generate, publish, edit, import, snapshots),
 `surgeon` (own vacations, propose/accept trades, own preferences), `viewer` (read-only — the ER-panel author).
 

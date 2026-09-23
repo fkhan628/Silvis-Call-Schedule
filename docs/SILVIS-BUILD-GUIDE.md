@@ -169,6 +169,7 @@ Paste `sql/schema.sql` into the Supabase SQL editor once. Summary:
 | `time_off` (`id uuid`, `person_id`, `start_date`, `end_date`, `note`, `created_by`, `created_at`) | **Vacations only** (no `kind` column — there are no no-call days). Self-entered by surgeons, no approval; a DB trigger refuses a range that overlaps a published day where that surgeon is primary or backup (see schema). Generator source. | adapted |
 | `availability` (`id uuid`, `person_id`, `kind: available\|unavailable\|avoid\|prefer\|backup_only\|no_backup`, `role: any\|primary\|backup`, `start_date`, `end_date`, `note`, `source`, `created_by`, `created_at`) | Dated availability statements (Sarkar windows, Burchett December list, Philip weeks, Acton October days…). Recurring patterns live in the config blob, not here. | new |
 | `east_feed` (`week_monday date pk`, `data jsonb`, `fetched_at`) + `east_overrides` (`day date pk`, `person_id`, `busy bool`, `note`) + `east_forecast` (`week_monday date pk`, `data jsonb`, `generated_at`) | Cached *published* Davenport weeks, manual corrections, and the separate East forecast (§7) | new |
+| `east_vacation_reviews` (`id uuid pk`, `person_id`, `"start" date`, `"end" date`, `decision: away\|home`, `decided_at`, `decided_by`; `unique (person_id, "start", "end")`) | The **away / home** decision per mirrored Davenport vacation range (§18). The ranges themselves stay in the `east_feed` payload `data.vacations`, and no `time_off` row is ever written for them. **Authenticated-read only — not in the anon list.** Prepared 2026-09-23 as `sql/migrations/2026-09-23-east-vacation-reviews.sql` (schema revision d). | new |
 | `shift_trade_requests` (`from_id`, `to_id`, `day`, `role`, `return_day`, `return_role`, `status`, …) | trades by day+role instead of week+shift | adapted |
 | `notifications`, `notification_preferences`, `audit_log`, `call_schedule_snapshots`, `client_versions`, `office_contacts`, `user_profiles` | same roles as Davenport (`office_contacts` drives office notifications; `client_versions` drives refresh; `call_schedule_snapshots` drives data management) | yes |
 
@@ -178,7 +179,7 @@ Davenport's `holidayAssignments`, keyed by year.
 ### 4.3 RLS posture (report-first before any change to a live DB)
 
 - **Anon-readable:** `schedule_days`, `call_schedule_data`, `time_off`, `availability`, `east_feed`, `east_overrides` (day, roster id, busy flag, an operational note), `east_forecast` (week flags + busy probabilities) and `client_versions` (anon reads the `main` row only) — required for the shareable page and the `calendar-sync` function (which sends no auth header). **Therefore nothing sensitive may live in them** — no contact data, no personal notes (§3.1).
-- **Authenticated write, role-gated:** all writes require a JWT; `schedule_days`, `call_schedule_data`, `availability`, `east_*`, `office_contacts`, `call_schedule_snapshots` writable only by `scheduler`/`admin` (checked via a `security definer` function `silvis_role()` that reads `user_profiles` for `auth.uid()`); `time_off` insertable/deletable by the surgeon named in the row (own vacations, self-service) and by scheduler/admin; `shift_trade_requests` insertable by the surgeon named in the row, updatable by scheduler/admin (and by the counter-party for accept/decline); `notifications` insert by any authenticated user, read by all authenticated; `user_profiles` read by all authenticated, self-update of display fields only, role changes admin-only; `audit_log` insert by authenticated, read by scheduler/admin.
+- **Authenticated write, role-gated:** all writes require a JWT; `schedule_days`, `call_schedule_data`, `availability`, `east_*`, `office_contacts`, `call_schedule_snapshots` writable only by `scheduler`/`admin` (checked via a `security definer` function `silvis_role()` that reads `user_profiles` for `auth.uid()`); `time_off` insertable/deletable by the surgeon named in the row (own vacations, self-service) and by scheduler/admin; `shift_trade_requests` insertable by the surgeon named in the row, updatable by scheduler/admin (and by the counter-party for accept/decline); `notifications` insert by any authenticated user, read by all authenticated; `user_profiles` read by all authenticated, self-update of display fields only, role changes admin-only; `audit_log` insert by authenticated, read by scheduler/admin; `east_vacation_reviews` (§18, prepared 2026-09-23) read by all authenticated only — **no anon policy** (a decision says where a surgeon is on a given day; an anon read is the silent `200 + []`) — and inserted / updated / deleted by the surgeon named in the row or by scheduler/admin.
 - Remember the Davenport lesson: **an RLS-blocked read returns HTTP 200 + `[]`** — the client must treat "empty" and "failed" differently (`db.query` throws on non-2xx; keep that).
 
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
@@ -858,7 +859,7 @@ possible later migration.
 - **The `home` → `either` offers step (Prompt 14).** With the offers painter present a home decision offers to paint
   the range's days as `either` offers in one tap (a confirm sheet listing the dates; `call_offers` rows inserted the
   normal way). Prompt 14's painter is on another branch tonight, so the hook is a **documented no-op**
-  (`console.info`, returns `{ pending: "prompt-14" }`, `TODO(Prompt 14 UI wave)`); the review itself is saved either
+  (`console.info`, returns `{ ok: true, offered: 0, pending: "prompt-14" }`, `TODO(Prompt 14 UI wave)`); the review itself is saved either
   way, and nothing on this branch writes `call_offers` (data-layer pin + smoke).
 - **Refresh resets.** After *Refresh from Davenport* caches the new lists and **re-reads the cache** (`loadEastTables`
   hands the `east_feed` rows back), for each East person whose code was read:
@@ -932,10 +933,84 @@ possible later migration.
   Refresh whose mocked Davenport answer moved one range and dropped another issues exactly two DELETEs by the old
   triples, two `eastvac.review` reset audits (reason `changed` / `removed`, `removed: 1`), names both in the toast and
   keeps the unchanged range's row; screenshots `eastvac-panel.png`, `eastvac-panel-390.png`, `eastvac-panel-dark.png`,
-  `eastvac-panel-390-dark.png`, `calendar-eastvac-2027-04.png`, `mine-eastvac.png`.
-- **Live (orchestrator, tonight, under Faraz's mandate):** apply the migration, run the probe, record the observed
-  strings in `docs/SCHEMA-REVIEW.md`; then Faraz's first action after the deploy is *Refresh from Davenport* (the 16
-  FAK ranges arrive) and the decision on **[range]** (home, per the prompt) and **[range]**.
+  `eastvac-panel-390-dark.png`, `calendar-eastvac-2027-04.png`, `mine-eastvac.png` — written to **`test/ui/out/`**, which
+  is **gitignored**; nothing was copied into `docs/screenshots/` on this branch (part 4 added no binaries — a
+  `docs/screenshots/east-vacations/` copy of the six files is a one-line follow-up). The files of the 2026-09-23 07:15
+  run are on disk (43 / 41 / 44 / 41 / 106 / 137 KB).
+- **`scripts/verify-rls.sh` section 9** (part 2; before the migration 9a / 9b accept the 404 by name, while 9c — linked
+  CLI only — prints two *expected* FAIL lines, "no sentinel-terminated PROBE_RESULTS" and "leftover count could not be
+  read (table missing before the migration is expected)", so the RESULT line is red by exactly those two until the
+  migration is applied; after it every section-9 line is PASS):
+  **9a** anon `GET /rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5` → after the migration
+  `HTTP 200` with the body exactly `[]` (no anon policy — the silent Davenport-lesson shape, so the script checks for an
+  *empty* body and a non-empty one is FAIL); before it `HTTP 404`, accepted by name ("not created yet - apply the
+  migration"). **9b** anon `POST` → `401`/`403` (`404` before). **9c** (linked CLI only) runs
+  `sql/probes/east-vacation-reviews-probe.sql` — one batch, fixtures in 2030-05 with `decided_by = 'probe-eastvac'`, two
+  throwaway `auth.users` `probe-eastvac-<uuid>@example.test` linked to `s3`/surgeon and `s1`/scheduler — and grades the
+  sentinel-terminated `PROBE_RESULTS ...;END` string case by case: A1 `rows=0`, A2 `ERR 42501`, B `ok visible=3`,
+  C `ERR 42501`, D `updated=0 decision=home`, E `deleted=0`, F `updated=1 decision=home`, G `updated=1 decision=away
+  deleted=1`, H `ERR 23514`, I `ERR 23505`, J `ERR 23514` (the SQLSTATE and the `=`-values, never the message text);
+  before the migration the probe's setup raises `PROBE_SETUP` and 9c reports "no sentinel". Then the rollback is
+  **observed**, never assumed: a `leftover` count over `east_vacation_reviews where decided_by = 'probe-eastvac'` plus
+  `auth.users where email like 'probe-eastvac-%@example.test'` must be `0`; a non-zero count prints the two clean-up
+  deletes and fails. **9d** (only with `SILVIS_SURGEON_JWT`, none exists until invites go out) a linked surgeon's REST
+  read → `200` + an array; read-only — a REST write there would be a real decision. `docs/SCHEMA-REVIEW.md` (section
+  *2026-09-23 - east_vacation_reviews*) holds the full expected string and the *Observed* placeholders the orchestrator
+  fills.
+- `test/data-layer.test.js` `[P15]` docs pins (part 4): the §18 sub-headings, the 4.2 / 4.3 rows, the rules doc's final
+  Khan wording and its §8 item, the ONBOARDING paragraph, the edge-functions README's "nothing deployed" statement, the
+  prompt's delivery note, and no address-shaped string in any of them.
+
+### 18.5 Live steps and open questions
+
+**Live steps (orchestrator, tonight, under Faraz's mandate; the only database change of this prompt — report-first is
+the `docs/SCHEMA-REVIEW.md` section; `<dir>` = the workdir linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`,
+`<abs>` = the absolute repo path):**
+
+1. Before: `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` — section 9 reads 9a `HTTP 404` (PASS, named), 9b `404`
+   blocked (PASS) and, with the CLI linked, the two expected FAIL lines from 9c ("no sentinel", "leftover count could
+   not be read ... table missing before the migration is expected"): the RESULT line is red by exactly those two until
+   step 2. Nothing else in the script changes.
+2. Apply: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-east-vacation-reviews.sql` —
+   idempotent; one table, one index, RLS on, four policies; touches no existing table, row, policy or function.
+3. Probe: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/east-vacation-reviews-probe.sql` — paste the
+   `PROBE_RESULTS ...;END` string verbatim into the *Observed* block of `docs/SCHEMA-REVIEW.md`; then the leftover
+   query printed there (`... ::int as leftover`) — must be `0`.
+4. After: `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` — 9a `HTTP 200` + `[]`, 9b `401`/`403`, 9c every case
+   graded + leftover `0`; record the 9a, 9b and RESULT lines in the same *Observed* block and turn its status line from
+   PREPARED to APPLIED (that section is the orchestrator's to fill).
+5. Nothing else is live for this prompt: no edge-function deploy, no cron change, no Davenport change, no data written
+   to either project (`edge-functions/README.md` records the "nothing deployed" state).
+6. Faraz, after the deploy: Setup → East feed → *Refresh from Davenport* (his 16 Davenport `time_off` rows arrive —
+   fewer *ranges* where adjacent or overlapping rows merge (`eastMergeRanges`), so the toast names the merged count,
+   which may be under 16), then **[range] → home** (per the prompt) and **12/11–12/13** as he decides. Until he
+   does, the
+   unreviewed default lists his four locked Thanksgiving days in the card's conflicts list (a report, never a block).
+
+**Open questions (unknowns, not defaults to bake in; every default taken is data in `groupRules` / `surgeonRules`):**
+
+1. **Horizon of the conservative default.** An unreviewed range reads as *away* at **any** horizon today, and the
+   coverage strip's unreviewed count is not windowed either (`unreviewedUpcoming` counts every range ending today or
+   later) — the nag already reaches every horizon; only the strip's open-slot counts use a 60-day window. The question
+   is only about the hard block: should it apply only inside the next **60 days** (the strip's open-slot window) and be
+   a soft penalty beyond that, with the nag unchanged? Davenport vacations reach a year ahead and Generate will offer 12-month
+   presets, so a forgotten review far out silently takes Khan off every weekend in it. If wanted this is one data key
+   (e.g. `groupRules.eastFeed.vacations.unreviewedHardDays`) and a small rules.js change — not built.
+2. **The command-line generate path.** `scripts/preview-generate.js` (and `publish-preview.js` after it) build the
+   engine input without `eastVacationRanges` / `eastVacationReviews`, so a CLI generation ignores East vacations
+   entirely; the app's Generate passes both. Either add the two inputs to the scripts (`east_feed` is anon-readable;
+   `east_vacation_reviews` needs a scheduler JWT or the service role server-side) or generate only from the app while
+   East vacations matter.
+3. **Server-side enforcement.** `rpc/claim_open_slot` (`CL009`), `apply_trade`'s vacation check and the `time_off`
+   trigger read `time_off` rows only; a derived East vacation is enforced by the client gate. Extend `claim_open_slot`
+   to read the feed + the reviews (a later migration), or accept client-side-only and say so to the group.
+4. **The `home` → `either` offers step** is a documented no-op until Prompt 14's painter is on this branch; the
+   confirm sheet listing the dates is that wave's.
+5. **Davenport side** (not changed from here): [removed]
+   [removed]; Silvis reads FAK's rows only. Faraz's call on the Davenport
+   project.
+6. **Who refreshes.** `east_feed` is scheduler-written, so a future East surgeon who is not the scheduler depends on
+   the scheduler's refresh for his ranges to appear (moot while Khan is both).
 
 ## 19. Publishing from the command line (Prompt 12 PUB, 2026-09-23 overnight)
 

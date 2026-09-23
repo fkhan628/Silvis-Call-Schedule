@@ -102,3 +102,51 @@ cancelled or shortened range would have survived in the cache (and a refresh tha
 host). Ranges the read cannot see (`end < from`) are kept as cached. (2) The `time_off` read has its own horizon,
 `opts.vacationsTo` (default: the weeks window's Sunday + 365 days), instead of ending with the published weeks.
 Tests: `test/east-feed.test.js` (the T1/T2 scenario, the 0-weeks case, no-churn, the `start_date=lte.` bound).
+
+## Delivery note (parts 1–4, branch `feat/east-vacations`, 2026-09-23)
+
+**Path 1a, as observed above.** The Davenport `time_off` table is read through the East feed's existing read path, so the East feed
+reads it directly; there is no paste box, no "Copy my vacations" button, and the **Davenport clone's README is not
+touched** (`..\davenport-ref` stays a read-only reference; nothing in the Davenport app changed). Every part is
+committed on this branch; nothing is pushed, nothing is published, no database was written from here.
+
+| part | commit | what |
+|---|---|---|
+| 1 (E1) | `e8de193` | `east-feed.js`: `fetchEastWeeks(from, to, { vacationCodes })` reads `time_off` (kind `vacation`, ids by roster **code** via the Davenport blob) into the `east_feed` payload `data.vacations`; `planVacationCache` over the whole cache; failure keeps the cache and warns. The app's *Refresh from Davenport* passes the codes and names the leg in the toast + `east.refresh` audit. Guide §7 (the *East vacations* bullet). |
+| 2 (E2) | `8e731ea` | `east_vacation_reviews` **prepared** (`sql/migrations/2026-09-23-east-vacation-reviews.sql` = `sql/schema.sql` rev. d, `sql/probes/east-vacation-reviews-probe.sql`, `scripts/verify-rls.sh` section 9, `docs/SCHEMA-REVIEW.md`); `rules.js` derives unreviewed / away = vacation (`time-off:` + `day-before-vacation`), home = `eastClear` (Tue/Thu lifted, primary bonus `weights.eastClear` 2), the feed wins over home; `helpers.js` `reviewStateFor` / `derivedEastVacations` (person-scoped); `generator.js` `diagnostics.eastVacations`. Rules doc §3 Khan. |
+| 3 (E3) | `1b7ba91` | The UI: `EastVacationList` in Setup → East feed, the person's Time off view and My schedule (three-way control, conflicts list); `saveEastVacationReview` (upsert on the triple / exact-triple delete, `dbAuthHeaders()`, audit `eastvac.review`); `loadEastVacationReviews` via `readAuthOnlyTable` (404 = `missing`); refresh resets (`changed` / `removed`) from the reloaded cache; calendar diamonds, day-editor lines, coverage-strip count, EV badge; digest / reminder / ER export untouched. Guide §18.1–18.4. |
+| 4 (E4) | this commit | Docs made to match parts 1–3 (every claim grepped against the source): guide §18 final (+ §18.5 live steps and open questions, the screenshot location `test/ui/out/`, verify-rls section 9 documented, the hook's exact return shape) and the `east_vacation_reviews` rows in guide §4.2 / §4.3; rules doc §3 Khan final wording + §8 item 16; ONBOARDING paragraph for the person with an East code; `edge-functions/README.md` states that nothing was deployed; this note; docs pins in `test/data-layer.test.js` `[P15]`. |
+
+**Tests.** `test/east-feed.test.js` (part 1), `test/rules.test.js` P15 + `test/generator-regression.js` P15 +
+`test/schema.test.js` (part 2), `test/data-layer.test.js` `[P15]` UI pins + `test/ui/smoke.mjs` (part 3; screenshots
+`eastvac-panel.png`, `eastvac-panel-390.png`, `eastvac-panel-dark.png`, `eastvac-panel-390-dark.png`,
+`calendar-eastvac-2027-04.png`, `mine-eastvac.png` in the gitignored `test/ui/out/`), `test/data-layer.test.js` `[P15]`
+docs pins (part 4). Part 4 changed no app file, so the smoke was not re-run for it.
+
+### Live steps (orchestrator, tonight, under Faraz's mandate — exact commands in guide §18.5)
+
+1. `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` before: section 9 reads 9a `HTTP 404` (PASS, named), 9b blocked
+   (PASS) and — CLI linked — two expected FAIL lines from 9c ("no sentinel", "leftover count could not be read ...
+   table missing before the migration is expected"); the RESULT line is red by exactly those two until step 2.
+2. `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-east-vacation-reviews.sql` — one new
+   table + index + four policies; nothing existing touched.
+3. `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/east-vacation-reviews-probe.sql` — record the
+   `PROBE_RESULTS ...;END` string verbatim in `docs/SCHEMA-REVIEW.md` (*Observed*), then the leftover query there → `0`.
+4. `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` after: 9a `HTTP 200` + `[]`, 9b `401`/`403`, 9c graded + leftover
+   `0`; record the lines and turn the SCHEMA-REVIEW status from PREPARED to APPLIED.
+5. No edge-function deploy, no cron change, no Davenport change, no data written to either project.
+6. Faraz after the deploy: *Refresh from Davenport* (his 16 Davenport rows; fewer ranges where adjacent rows merge —
+   the toast names the merged count), then [range] → **home**, [range] as he decides.
+
+### Open questions (see guide §18.5 for the full text)
+
+1. Should an unreviewed range hard-block the generator only inside the next 60 days (the strip's open-slot window;
+   its unreviewed count is not windowed, so the nag already reaches every horizon), soft penalty beyond? Today: away
+   at any horizon.
+2. `scripts/preview-generate.js` / `publish-preview.js` pass no East-vacation inputs — a CLI generation ignores them;
+   the app's Generate does not.
+3. Server-side enforcement (`claim_open_slot` `CL009`, `apply_trade`, the `time_off` trigger read `time_off` only) —
+   extend later or accept client-side-only.
+4. The `home` → `either` offers step is a no-op until Prompt 14's painter lands on this branch.
+5. The Davenport project's own read posture — Faraz's call on that project.
+6. A future East surgeon who is not the scheduler depends on the scheduler's refresh (`east_feed` is scheduler-written).

@@ -1244,6 +1244,102 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('data-eastvac-feedbusy={m.feedBusy ? "1" : undefined}'), "the cell marker carries the feed-busy flag");
   });
 
+  /* ---------------- P15 part 4: docs pins (E4) ---------------- */
+  // The docs are part of the contract: the orchestrator applies the migration and runs the
+  // probe BY HAND from these pages, and Faraz reads the rules doc and ONBOARDING. Pinned only on
+  // what must STAY true (headings, the table rows, the final wording, the "nothing deployed"
+  // statement, no address) - never on dates, counts or screenshot sizes.
+  console.log("\n[P15] East vacations docs (guide section 18, rules doc, ONBOARDING, edge-functions README, prompt delivery note)");
+  {
+    const readDoc = (...p) => { const f = path.join(ROOT, ...p); return fs.existsSync(f) ? fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n") : null; };
+    const guide = readDoc("docs", "SILVIS-BUILD-GUIDE.md") || "";
+    const rulesDoc = readDoc("docs", "SILVIS-CALL-RULES.md") || "";
+    const onboarding = readDoc("docs", "ONBOARDING.md") || "";
+    const efReadme = readDoc("edge-functions", "README.md") || "";
+    const prompt15 = readDoc("docs", "PROMPT-15-EAST-VACATIONS.md") || "";
+    const sec18 = (() => { const i = guide.indexOf("\n## 18. East vacations"); const j = guide.indexOf("\n## 19.", i + 1); return i > 0 ? guide.slice(i, j > 0 ? j : undefined) : ""; })();
+    check("P15 docs: guide section 18 carries the sub-headings 18.1 The pipeline .. 18.5 Live steps and open questions, in order, before section 19", () => {
+      assert.ok(sec18.length > 0, "'## 18. East vacations' heading missing (or section 19 does not follow)");
+      const HEADS = ["### 18.1 The pipeline", "### 18.2 The review step in the app", "### 18.3 Where it shows", "### 18.4 Proof", "### 18.5 Live steps and open questions"];
+      let last = -1;
+      HEADS.forEach(h => { const i = sec18.indexOf("\n" + h); assert.ok(i > last, "sub-heading '" + h + "' missing or out of order"); last = i; });
+    });
+    check("P15 docs: guide section 18 states where the smoke screenshots are (test/ui/out/, gitignored), the hook's exact return shape, and documents verify-rls.sh section 9 (9a-9d + the leftover count) and the exact live commands (migration + probe)", () => {
+      assert.ok(/test\/ui\/out\//.test(sec18), "the screenshots' location test/ui/out/ is not named");
+      assert.ok(/gitignored/.test(sec18), "section 18 must say the screenshot folder is gitignored (nothing was copied into docs/screenshots on this branch)");
+      assert.ok(sec18.includes('{ ok: true, offered: 0, pending: "prompt-14" }'), "the no-op hook's exact return shape");
+      ["9a", "9b", "9c", "9d"].forEach(k => assert.ok(new RegExp("\\b" + k + "\\b").test(sec18), "verify-rls section 9 case " + k + " not documented"));
+      assert.ok(/leftover/.test(sec18), "the observed-rollback leftover count is not documented");
+      assert.ok(sec18.includes("supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-east-vacation-reviews.sql"), "the exact migration command");
+      assert.ok(sec18.includes("supabase db query --linked --workdir <dir> -f <abs>/sql/probes/east-vacation-reviews-probe.sql"), "the exact probe command");
+      assert.ok(/scripts\/preview-generate\.js/.test(sec18) && /eastVacationRanges/.test(sec18), "the open question about the CLI generate path passing no East-vacation inputs");
+    });
+    check("P15 docs: guide 4.2 lists east_vacation_reviews as a table and 4.3 places it in the authenticated-read set, never in the anon-readable list", () => {
+      const s42 = guide.slice(guide.indexOf("\n### 4.2 Tables"), guide.indexOf("\n### 4.3 RLS posture"));
+      const s43 = guide.slice(guide.indexOf("\n### 4.3 RLS posture"), guide.indexOf("\n### 4.4 Data-loss safeguards"));
+      assert.ok(s42.length > 0 && s43.length > 0, "sections 4.2 / 4.3 not found");
+      assert.ok(/^\|\s*`east_vacation_reviews`/m.test(s42), "4.2 has no east_vacation_reviews row");
+      const anonLine = s43.split("\n").find(l => /\*\*Anon-readable:\*\*/.test(l)) || "";
+      assert.ok(anonLine.length > 0 && !/east_vacation_reviews/.test(anonLine), "east_vacation_reviews must not appear on the anon-readable line");
+      assert.ok(/east_vacation_reviews/.test(s43) && /authenticated/.test(s43), "4.3 must name east_vacation_reviews as authenticated-read");
+    });
+    check("P15 docs: rules doc section 3 Khan carries the final away / home wording (no 'after the UI part lands' placeholder) and section 8 has an East-vacations open item", () => {
+      const khan = rulesDoc.slice(rulesDoc.indexOf("\n### Khan (s1)"), rulesDoc.indexOf("\n### Burchett (s2)"));
+      assert.ok(khan.length > 0, "Khan section not found");
+      assert.ok(/East vacations, away \/ home \(Prompt 15\)/.test(khan), "the 9/22 evening East vacations entry");
+      assert.ok(!/after the UI part lands/.test(khan), "the part-2 placeholder 'after the UI part lands' must be gone (the UI landed 9/23)");
+      assert.ok(/Refresh from Davenport/.test(khan) && /home/.test(khan), "the first-action note (Refresh from Davenport, then the home decision)");
+      const s8 = rulesDoc.slice(rulesDoc.indexOf("\n## 8. Answered"));
+      assert.ok(/^\d+\. \*\*East vacations/m.test(s8), "section 8 needs a numbered '**East vacations' item");
+      assert.ok(/60 days/.test(s8), "the item must raise the 60-day question (should an unreviewed range block the generator only inside the next 60 days?)");
+    });
+    check("P15 docs: ONBOARDING has one paragraph for the person with an East code - East vacations in bold, Davenport, away / home, where to decide, and that no Silvis vacation row is written", () => {
+      assert.ok(/\*\*East vacations/.test(onboarding), "a bold 'East vacations' lead-in");
+      const para = onboarding.split("\n\n").find(p => /\*\*East vacations/.test(p)) || "";
+      assert.ok(/Davenport/.test(para), "names Davenport");
+      assert.ok(/\*\*away\*\*/.test(para) && /\*\*home\*\*/.test(para), "away and home in bold");
+      assert.ok(/Refresh from Davenport/.test(para), "the ranges arrive with the scheduler's Refresh from Davenport");
+      assert.ok(/Setup/.test(para) && /Time off/.test(para) && /My schedule/.test(para), "names the three places");
+      assert.ok(/unreviewed/.test(para) && /treated/.test(para), "explains that an unreviewed range is treated as away");
+      assert.ok(/no Silvis vacation row|never writes? a Silvis vacation|never a Silvis vacation row/i.test(para), "states that no Silvis vacation row is written");
+    });
+    check("P15 docs: edge-functions/README.md states that Prompt 15 deployed nothing (no function changed) and why", () => {
+      assert.ok(/Prompt 15/.test(efReadme), "Prompt 15 is not mentioned");
+      const para = efReadme.split("\n\n").find(p => /Prompt 15/.test(p)) || "";
+      assert.ok(/nothing deployed|nothing was deployed|no function (was )?(changed|deployed)/i.test(para), "must say nothing was deployed for Prompt 15");
+      assert.ok(/east_vacation_reviews/.test(para), "must name the one live step that exists instead (the east_vacation_reviews migration)");
+      assert.ok(/assignments, not availability/.test(para), "must say why the digest / reminder / calendar are unchanged");
+    });
+    check("P15 docs: PROMPT-15-EAST-VACATIONS.md carries the delivery note with the live steps, the open questions and the untouched Davenport clone", () => {
+      const i = prompt15.indexOf("\n## Delivery note");
+      assert.ok(i > 0, "'## Delivery note' heading missing");
+      const note = prompt15.slice(i);
+      assert.ok(/### Live steps/.test(note) && /### Open questions/.test(note), "the note needs 'Live steps' and 'Open questions' sub-headings");
+      assert.ok(note.includes("sql/migrations/2026-09-23-east-vacation-reviews.sql") && note.includes("sql/probes/east-vacation-reviews-probe.sql") && /verify-rls\.sh/.test(note), "the live steps name the migration, the probe and verify-rls.sh");
+      assert.ok(/Davenport clone|davenport-ref/.test(note) && /README/.test(note) && /not touched|untouched|NOT touched/.test(note), "states that the Davenport clone's README was not touched (path 1a, no Copy button)");
+    });
+    check("P15 docs: no address-shaped string in the Prompt 15 docs outside the @example.test / @example.com fixtures", () => {
+      const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g;
+      const hits = [];
+      [["guide", guide], ["rules", rulesDoc], ["ONBOARDING", onboarding], ["README", efReadme], ["PROMPT-15", prompt15]].forEach(([n, t]) => {
+        (t.match(EMAIL) || []).forEach(m => { if (!/@example\.(test|com)$/.test(m)) hits.push(n + ": " + m.replace(/[A-Za-z0-9]/g, "x")); });
+      });
+      assert.deepStrictEqual(hits, [], "address-shaped strings (masked)");
+    });
+    // Review round (E4): the observed figure is 16 Davenport time_off ROWS; eastMergeRanges merges adjacent rows and the
+    // toast counts the merged lists, so the docs never promise "16 ranges". And the strip's unreviewed count is not
+    // windowed (unreviewedUpcoming counts every range ending today or later; only the open-slot glance uses 60 days),
+    // so the 60-day question is about the hard block alone, never "the strip's own window".
+    check("P15 docs: the post-deploy note counts Davenport rows (the toast names the merged count), never '16 ranges'; the 60-day question names the strip's open-slot window and says the unreviewed nag is not windowed", () => {
+      const all = guide + "\n" + rulesDoc + "\n" + prompt15;
+      assert.ok(!/16 FAK ranges|the 16 ranges arrive|16 ranges arrive/.test(all), "no doc may promise '16 ranges' - the observed figure is 16 rows and adjacent rows merge");
+      assert.ok(/merged count/.test(guide) && /merged count/.test(rulesDoc) && /merged count/.test(prompt15), "each of the three notes says the toast names the merged count");
+      assert.ok(!/strip's own window/.test(all) && !/soft \+ nag|plus the nag beyond/.test(all), "the 60-day question must not call 60 days the strip's own window or move the nag");
+      assert.ok(/open-slot window/.test(guide) && /open-slot window/.test(rulesDoc) && /open-slot window/.test(prompt15), "each place names the strip's open-slot window");
+      assert.ok(/unreviewed count is not windowed/.test(guide) && /unreviewed count is not windowed/.test(rulesDoc) && /unreviewed count is not windowed/.test(prompt15), "each place says the unreviewed count is not windowed (the nag already reaches every horizon)");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

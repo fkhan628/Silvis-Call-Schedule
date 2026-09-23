@@ -24,7 +24,15 @@ with the Vault secret the same day: `{"mode":"open-shifts","dryRun":true}` ->
 default-mode dryRun still answers as before (200, tomorrow's two on-call people
 `skipped_wrong_hour`). The Monday cron job (section 4) is not created yet.
 
-function.
+**Prompt 15 (East vacations, 2026-09-23): nothing deployed.** No function
+changed for this prompt and none was redeployed. The feature is the client
+(the East feed refresh reads Davenport's `time_off`, the review controls, the
+markers) plus one new table, `east_vacation_reviews`, applied by hand as
+`sql/migrations/2026-09-23-east-vacation-reviews.sql` through the linked CLI's
+SQL path - a table migration, not a function deploy, and no cron change. The
+office digest, the daily reminder (both modes) and `calendar-sync` are unchanged
+on purpose: they show assignments, not availability, and a derived East
+vacation is never an assignment.
 
 **Deploy record.** All four functions were deployed 2026-09-22 from the CLI with
 `--no-verify-jwt` (verify_jwt OFF on each: `calendar-sync` answered a live
