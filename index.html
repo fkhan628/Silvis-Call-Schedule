@@ -111,7 +111,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23b";
+    var APP_VERSION = "2026.09.23c";
     (function() {
       var stored = localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
@@ -255,7 +255,8 @@ function CallSchedule() {
     end: "",
     bestOf: 200,
     seed: "",
-    respectLocks: true
+    respectLocks: true,
+    fillOpenOnly: false
   });
   const [profilesErr, setProfilesErr] = useState("");
   const [profilesLoading, setProfilesLoading] = useState(false);
@@ -283,6 +284,7 @@ function CallSchedule() {
   const loadedAtRef = useRef(null);
   const pendingSaveRef = useRef(null);
   const daySyncChainRef = useRef(Promise.resolve());
+  const daySyncBusyRef = useRef(0);
   const daySyncRetryRef = useRef(null);
   const everHadRealDataRef = useRef(false);
   const allowWipeSaveRef = useRef(false);
@@ -1210,6 +1212,7 @@ function CallSchedule() {
     return Array.isArray(a) ? a[0] || null : null;
   };
   const syncScheduleDays = nextSchedule => {
+    daySyncBusyRef.current += 1;
     const run = daySyncChainRef.current.then(() => syncScheduleDaysNow(nextSchedule)).catch(e => {
       console.warn("schedule_days sync error", e);
       showToast("Couldn't save schedule changes - check your connection.", "error");
@@ -1217,6 +1220,8 @@ function CallSchedule() {
         ok: false,
         error: String(e)
       };
+    }).finally(() => {
+      daySyncBusyRef.current = Math.max(0, daySyncBusyRef.current - 1);
     });
     daySyncChainRef.current = run.then(() => undefined, () => undefined);
     return run;
@@ -1728,6 +1733,10 @@ function CallSchedule() {
         const chk = scheduleWipeCheck(base, cur);
         if (chk.wipe && !intentionalScheduleWipeRef.current) {
           console.warn(`Keepalive flush (${source}): wipe-shaped diff skipped.`);
+        } else if (daySyncBusyRef.current > 0 && source === "visibilitychange") {
+          console.warn(`Keepalive flush (${source}): schedule_days leg skipped - ${daySyncBusyRef.current} CAS sync run(s) unresolved; the pending days are queued behind that chain.`);
+          pendingSaveRef.current = payload;
+          syncScheduleDays(payload.schedule);
         } else {
           let sent = 0;
           for (const day of Object.keys(Object.assign({}, base, cur))) {
@@ -2542,6 +2551,7 @@ function CallSchedule() {
         seed,
         bestOf,
         respectLocks: o.respectLocks !== false,
+        fillOpenOnly: o.fillOpenOnly === true,
         timeBudgetMs: 25000
       });
       const ms = Date.now() - t0;
@@ -2555,6 +2565,7 @@ function CallSchedule() {
         seed,
         bestOf,
         respectLocks: o.respectLocks !== false,
+        fillOpenOnly: o.fillOpenOnly === true,
         ranAt: new Date().toISOString(),
         ms
       });
@@ -2567,7 +2578,7 @@ function CallSchedule() {
       setCalMonth(sd.getMonth());
       setCalYear(sd.getFullYear());
       const open = (dg.uncovered || []).length;
-      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.`, open ? "info" : "success");
+      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms${o.fillOpenOnly === true ? ", fill open slots only" : ""}): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.`, open ? "info" : "success");
     } catch (e) {
       console.warn("generate failed", e);
       showToast("Generate failed: " + errText(e).slice(0, 160), "error");
@@ -2582,6 +2593,7 @@ function CallSchedule() {
       end: previewGen.end,
       bestOf: previewGen.bestOf,
       seed: "",
+      fillOpenOnly: previewGen.fillOpenOnly === true,
       respectLocks: previewGen.respectLocks
     });
   };
@@ -2597,10 +2609,13 @@ function CallSchedule() {
     const cur = scheduleRef.current || schedule;
     const next = suMergePreview(cur, pv.schedule, pv.respectLocks);
     const lockedChanges = suLockedSlotChanges(cur, next);
-    if (!pv.respectLocks || lockedChanges.length) {
+    const heldChanges = suHeldUnlockedSlotChanges(cur, next);
+    const heldText = list => `${list.length} held but unlocked assignment(s) will be replaced: ${list.slice(0, 8).map(c => `${fmtMD(c.day)} ${c.role === "primary" ? "P" : "B"} ${holderLabel(c.from, nameOf)} -> ${holderLabel(c.to, nameOf)}`).join(", ")}${list.length > 8 ? ` and ${list.length - 8} more` : ""}${pv.fillOpenOnly ? "" : " (tick 'Fill open slots only' to keep every held day)"}.`;
+    if (!pv.respectLocks || lockedChanges.length || heldChanges.length) {
       const first = lockedChanges[0];
       const firstText = first ? ` (first: ${fmtMD(first.day)} ${first.role} ${holderLabel(first.from, nameOf)} -> ${holderLabel(first.to, nameOf)})` : "";
-      const msg = `This replaces ${lockedChanges.length} locked / published slot(s)${firstText}${pv.respectLocks ? "" : " - this preview was generated with 'respect locks' OFF"}.\n\nThe days are written for every viewer as soon as you continue; the publish dialog that follows only sends the office notice. Continue?`;
+      const lockedText = !pv.respectLocks || lockedChanges.length ? `This replaces ${lockedChanges.length} locked / published slot(s)${firstText}${pv.respectLocks ? "" : " - this preview was generated with 'respect locks' OFF"}.\n\n` : "";
+      const msg = `${lockedText}${heldChanges.length ? heldText(heldChanges) + "\n\n" : ""}The days are written for every viewer as soon as you continue; the publish dialog that follows only sends the office notice. Continue?`;
       if (!confirm(msg)) {
         showToast("Nothing was written - the preview is kept.", "info");
         return;
@@ -2617,7 +2632,8 @@ function CallSchedule() {
       const cur2 = scheduleRef.current || schedule;
       const next2 = suMergePreview(cur2, pv.schedule, pv.respectLocks);
       const locked2 = suLockedSlotChanges(cur2, next2);
-      if (locked2.length > lockedChanges.length && !confirm(`The schedule changed while the snapshot was saving: the merge now replaces ${locked2.length} locked / published slot(s). Continue?`)) {
+      const held2 = suHeldUnlockedSlotChanges(cur2, next2);
+      if ((locked2.length > lockedChanges.length || held2.length > heldChanges.length) && !confirm(`The schedule changed while the snapshot was saving: the merge now replaces ${locked2.length} locked / published slot(s) and ${held2.length} held but unlocked assignment(s). Continue?`)) {
         showToast("Nothing was written - the preview is kept.", "info");
         setSaveStatus("");
         return;
@@ -2642,6 +2658,7 @@ function CallSchedule() {
       seed: String(pv.seed),
       bestOf: pv.bestOf,
       respectLocks: pv.respectLocks,
+      fillOpenOnly: pv.fillOpenOnly === true,
       changes: changes.length,
       uncovered: (pv.diagnostics.uncovered || []).length,
       snapshot: snap.counts || null,
@@ -2835,6 +2852,9 @@ function CallSchedule() {
         if (Array.isArray(core.roster) && IMP && typeof IMP.impMergeRoster === "function") core.roster = IMP.impMergeRoster(core.roster, liveBlob.roster);
         const merged = _objectSpread(_objectSpread(_objectSpread({}, liveBlob), core), {}, {
           settings: _objectSpread(_objectSpread({}, liveBlob.settings && typeof liveBlob.settings === "object" ? liveBlob.settings : {}), plan.blob.settings || {})
+        });
+        (IMP.IMP_RETIRED_SETTINGS_KEYS || []).forEach(k => {
+          delete merged.settings[k];
         });
         const casQ = seenAt ? `&updated_at=eq.${encodeURIComponent(seenAt)}` : "";
         const res = await fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main${casQ}`, {
@@ -14768,7 +14788,14 @@ function GenDiagnostics({
     style: {
       color: "#5B6B82"
     }
-  }, "candidates"), " ", dg.candidatesTried, "/", dg.bestOf, dg.truncated ? " (time budget hit)" : ""))), React.createElement("div", {
+  }, "candidates"), " ", dg.candidatesTried, "/", dg.bestOf, dg.truncated ? " (time budget hit)" : ""), React.createElement("span", {
+    "data-testid": "gen-mode",
+    title: "generate: unlocked held slots inside the range are regenerated (Accept names them first); fill-open-only: every held slot is fixed and only OPEN slots are filled. Fixed slots = the slots the run held still (the locked ones in the default mode)"
+  }, React.createElement("span", {
+    style: {
+      color: "#7a8a98"
+    }
+  }, "mode"), " ", dg.mode || "generate", ", fixed slots ", dg.fixedSlots === undefined || dg.fixedSlots === null ? "-" : dg.fixedSlots))), React.createElement("div", {
     style: box
   }, React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
@@ -15038,6 +15065,15 @@ function GenDiagnostics({
     key: i
   }, w))))));
 }
+function suHeldUnlockedSlotChanges(current, next) {
+  const cur = current || {};
+  return diffScheduleDays(cur, next || {}).filter(c => {
+    if (c.role !== "primary" && c.role !== "backup") return false;
+    const a = cur[c.day];
+    if (!a || c.from === null || c.from === undefined) return false;
+    return c.role === "primary" ? !a.primaryLocked : !a.backupLocked;
+  });
+}
 function GeneratePanel({
   css,
   presets,
@@ -15144,7 +15180,7 @@ function GeneratePanel({
     })
   })), React.createElement(SuField, {
     label: "Seed",
-    hint: "blank = random, shown after the run"
+    hint: "blank = random; the run toast and the preview line show the seed used - type it here to reproduce a run"
   }, React.createElement("input", {
     "data-testid": "gen-seed",
     type: "text",
@@ -15152,9 +15188,9 @@ function GeneratePanel({
     onChange: e => setOpts(o => _objectSpread(_objectSpread({}, o), {}, {
       seed: e.target.value
     })),
-    placeholder: "random",
+    placeholder: "random - the toast shows the seed",
     style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 110,
+      width: 200,
       fontFamily: mono
     })
   })), React.createElement(SuCheck, {
@@ -15164,6 +15200,14 @@ function GeneratePanel({
     checked: opts.respectLocks !== false,
     onChange: v => setOpts(o => _objectSpread(_objectSpread({}, o), {}, {
       respectLocks: v
+    }))
+  }), React.createElement(SuCheck, {
+    testid: "gen-fill-open-only",
+    label: "Fill open slots only (keep every held day)",
+    title: "On: every slot that already has a holder - locked or not - stays exactly as it is and only OPEN slots are filled (the mode the command-line preview used). Off: unlocked held slots inside the range are regenerated - Accept names them before anything is written",
+    checked: opts.fillOpenOnly === true,
+    onChange: v => setOpts(o => _objectSpread(_objectSpread({}, o), {}, {
+      fillOpenOnly: v
     }))
   }), React.createElement("button", {
     "data-testid": "gen-run",
@@ -15216,7 +15260,7 @@ function GeneratePanel({
     style: {
       fontFamily: mono
     }
-  }, String(preview.seed)), ", best of ", preview.bestOf, ", ", preview.ms, " ms, open slots ", (preview.diagnostics.uncovered || []).length, ". Shown on the calendar with a dashed outline - not saved."), React.createElement("span", {
+  }, String(preview.seed)), ", best of ", preview.bestOf, preview.fillOpenOnly ? ", fill open slots only" : "", ", ", preview.ms, " ms, open slots ", (preview.diagnostics.uncovered || []).length, ". Shown on the calendar with a dashed outline - not saved."), React.createElement("span", {
     style: {
       flex: 1
     }
