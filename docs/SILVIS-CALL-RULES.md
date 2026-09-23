@@ -117,6 +117,19 @@ decides the Trauma Director role.
 - Christmas: prefers to **split it up** (every other day, or 2 on then off).
 - October: available 10/6, 10/10, 10/11, 10/12 (backup only), 10/14, 10/26, 10/28. Not available 10/2–10/4, 10/18, 10/23, 10/24, 10/30, 10/31, 11/1. Takes 10/25 (Sun) with Sarkar on 10/24 (Sat).
 - December (can take primary or backup): 12/1, 12/5, 12/6, 12/9, 12/12, 12/13, 12/14, 12/19, 12/20, 12/23, 12/25, 12/26, 12/27, 12/28, 12/30, 12/31, 1/1, 1/2, 1/3. "I don't need all these dates but am able to do them."
+- ⟶ **9/23 (Faraz): his December list governs BOTH roles** — his 9/17 email offered "the dates I can take primary call (or
+  backup)", so `s2.explicitListMonths` carries `{ month: "2026-12", roles: ["primary", "backup"] }` like November (data
+  only; `rules.js` already reads the object form, and the importer keeps an entry as written). He is not placed on a December
+  day he did not offer in either role; 12/24 is off the list, so no Christmas-Eve backup either. **The published schedule is
+  not regenerated.** The entry invalidates three published backups, all generated and unlocked: **Fri 12/4** (primary Acton),
+  **Thu 12/10** (primary Fierce, his derived week) and **Fri 12/18** (primary Khan); his backups on the listed 12/6, 12/19 and
+  12/20 stand, as do his primaries (all on the list). Eligible replacements on the published schedule as it stands
+  (`eligibility(ctx, day, "backup", id)` with that slot cleared, live rows of 9/23): **12/4 → Khan or Fierce** (Acton holds
+  primary, Philip is at his 7-backup December cap and weekend cap, Sarkar is outside her window; Khan already holds the
+  12/1, 12/2 and 12/3 backups, so 12/4 would make a 4-day any-role standby run 12/1–12/4 — exactly his `maxConsecutiveAnyRole`
+  of 4, no penalty but at the limit; Fierce is the cheaper pick, soft 6 vs Khan's 9); **12/10 → Khan or Acton**
+  (Philip at cap, Fierce holds the derived primary, Sarkar outside her window); **12/18 → Acton, Fierce or Sarkar** (Khan
+  holds primary, Philip at cap). Faraz reassigns them in the day editor; the rest of December is untouched.
 - ⟶ **November (Burchett 9/17 "November Silvis Trauma Call days"; the ER-panel author entered them on 9/22): primary Tue 11/3,
   Sat 11/7, Sun 11/8, Wed 11/11, Fri 11/20, Mon 11/23, Wed 11/25; backup Mon 11/2, Wed 11/4, Fri 11/6, Mon 11/9,
   Sat 11/14, Sun 11/15, Mon 11/16, Wed 11/18.** ⟶ 9/22 evening: backup 11/9, 11/14, 11/15 and 11/16 go to Fierce instead (his derived week, Faraz's call), and **Khan takes Wed 11/25 primary from Burchett this year** — a one-off for 2026, locked, not a rule and not part of the Thanksgiving unit (which stays Thu 11/26 – Sun 11/29); his other entries stand. These match his recurring pattern exactly (1st Tue, 2nd/4th Mon and Wed,
@@ -129,7 +142,7 @@ decides the Trauma Director role.
   (`pendingDeltas`, status applied). Seed keys: `existingAssignments` primary 11/3, 11/7, 11/8, 11/11, 11/20, 11/23 and backup
   11/2, 11/4, 11/6, 11/18 (source `office-er-call-panels-2026-09-22`, locked); `s2.explicitListMonths` gains the object
   entry `{ month: "2026-11", roles: ["primary", "backup"] }`. `rules.js` reads the role scope literally: a plain `'YYYY-MM'`
-  entry governs **primary only** (the 9/22 backup rule — his October and December), an object entry governs **exactly the roles
+  entry governs **primary only** (the 9/22 backup rule — his October; his December was one too until 9/23, below), an object entry governs **exactly the roles
   it names**, so **November restricts BOTH roles**: he is not generated onto a November day he did not offer, in either role
   (`groupRules.whitelistMonths.roleScope`).
 - ⟶ **9/22 evening (Burchett email): weekends in early 2027 he CANNOT work, either role:** **Sat 1/9–Sun 1/10, Sat 1/16–Sun 1/17,

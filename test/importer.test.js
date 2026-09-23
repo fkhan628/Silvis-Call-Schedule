@@ -287,7 +287,7 @@ eq(plan.blob.groupRules, stripNoteKeys(seed.groupRules), "blob groupRules == see
 ok(IMP.impFindKeys(seed.holidays, NOTE_KEY).length >= 1, "the seed's holidays carry note-like keys (" + IMP.impFindKeys(seed.holidays, NOTE_KEY).length + ")");
 eq(plan.blob.holidays, stripNoteKeys(seed.holidays), "blob holidays == seed holidays minus note-like keys (unit notes are engine documentation; nothing reads them)");
 // explicitListMonths derived
-eq(plan.blob.surgeonRules[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, "2026-12"], "T: the explicit object entry for November survives the import as written");
+eq(plan.blob.surgeonRules[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, { month: "2026-12", roles: ["primary", "backup"] }], "T: the explicit object entries for November and (9/23) December survive the import as written");
 eq(plan.blob.surgeonRules[ACTON].explicitListMonths, ["2026-10"], "Y FLIP: Acton's November object entry is gone - his list is preferences (before Y: T's { month: '2026-11', roles: [primary, backup] })");
 eq(plan.blob.surgeonRules[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
 ok(!("explicitListMonths" in plan.blob.surgeonRules[KHAN]), "no list -> no key");
@@ -818,7 +818,7 @@ ok(!("2026-11" in (seed.surgeonRules[ACTON].explicitAvailable || {})), "Y: no s3
 ok(!("2026-11" in (plan.blob.surgeonRules[ACTON].explicitAvailable || {})), "Y: ...and none in the blob");
 eq(seed.surgeonRules[ACTON].explicitAvailable["2026-10"].primary.length + seed.surgeonRules[ACTON].explicitAvailable["2026-10"].backup.length, 13, "Y: his October list is untouched (10 primary + 3 backup dates)");
 eq(plan.availabilityRows.filter((r) => r.person_id === ACTON && r.start_date >= "2026-11-01" && r.start_date <= "2026-11-30").length, 0, "Y: no s3 November availability row in the plan (his listed days live on as locks, not as rows)");
-eq(plan.blob.surgeonRules[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, "2026-12"], "Y: Burchett's November whitelist stays (both roles)");
+eq(plan.blob.surgeonRules[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, { month: "2026-12", roles: ["primary", "backup"] }], "Y: Burchett's November whitelist stays (both roles); 9/23: December is the object form too");
 eq([seed.surgeonRules[BURCHETT].explicitAvailable["2026-11"].primary.length, seed.surgeonRules[BURCHETT].explicitAvailable["2026-11"].backup.length], [7, 8], "Y: Burchett's November statement unchanged (7 primary + 8 backup dates)");
 eq([byDay["2026-11-05"].primary_id, byDay["2026-11-05"].primary_locked, byDay["2026-11-05"].backup_id, byDay["2026-11-05"].backup_locked], [ACTON, true, null, false], "Y: 2026-11-05 = Acton primary locked, backup open (before Y: primary open, Acton backup locked)");
 eq(byDay["2026-11-05"].note, "seed: " + Y_SRC + " - Acton primary per his recurring rules (Faraz 9/22 evening); his relayed 11/5 backup entry superseded", "Y: the 11/5 row note = Faraz's source + the operational wording only");

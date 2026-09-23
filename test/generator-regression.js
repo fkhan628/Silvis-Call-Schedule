@@ -205,7 +205,7 @@ const governedRoles = (id) => { const out = {}; (SR[id].explicitListMonths || []
 const govText = (g) => Object.keys(g).sort().map((m) => m + ":" + [...g[m]].sort().join("+"));
 const BUR_AVAIL = explicitRoleDates(SR[BURCHETT].explicitAvailable), BUR_BACKUP_ONLY = explicitDates(SR[BURCHETT].explicitBackupOnly), BUR_UNAVAIL = explicitDates(SR[BURCHETT].explicitUnavailable);
 const BUR_GOV = governedRoles(BURCHETT);
-eq(govText(BUR_GOV), ["2026-10:primary", "2026-11:backup+primary", "2026-12:primary"], "seed: Burchett governed Oct/Dec primary only (plain entries), Nov both roles (object entry, T)");
+eq(govText(BUR_GOV), ["2026-10:primary", "2026-11:backup+primary", "2026-12:backup+primary"], "seed: Burchett governed Oct primary only (plain entry), Nov both roles (object entry, T) and Dec both roles (object entry, 9/23: his 9/17 list names primary or backup)");
 eq([[...BUR_AVAIL.primary].filter((d) => monthOf(d) === "2026-11").length, [...BUR_AVAIL.backup].filter((d) => monthOf(d) === "2026-11").length], [7, 8], "seed: Burchett November lists 7 primary + 8 backup dates (his statement, superseded entries included)");
 function burchettMay(d, role) {
   if (BUR_UNAVAIL.has(d)) return false;                    // explicit rows are never waived
@@ -1476,7 +1476,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   eq(SR[ACTON].explicitListMonths, ["2026-10"], "seed: Acton's explicitListMonths = October only (Y; before: + the November object entry)");
   ok(!("2026-11" in (SR[ACTON].explicitAvailable || {})), "seed: no s3.explicitAvailable['2026-11'] key (the importer would re-govern November from the key alone)");
   eq(govText(ACT_GOV), ["2026-10:primary"], "seed: Acton governed October primary only (Y)");
-  eq(govText(BUR_GOV), ["2026-10:primary", "2026-11:backup+primary", "2026-12:primary"], "seed: Burchett's November whitelist stays (Y changes nothing for him)");
+  eq(govText(BUR_GOV), ["2026-10:primary", "2026-11:backup+primary", "2026-12:backup+primary"], "seed: Burchett's November whitelist stays (Y changes nothing for him; December governs both roles since 9/23)");
   eq([INPUT["2026-11-05"].primary, INPUT["2026-11-05"].primaryLocked, INPUT["2026-11-05"].backup, INPUT["2026-11-05"].backupLocked], [ACTON, true, null, false], "seed: 11/5 = Acton primary locked, backup open (source faraz-2026-09-22-acton-1105)");
   eq(big.diagnostics.uncovered.map((u) => u.day + " " + u.role), [], "milestone preview (seed 1, bestOf 200): no open slot at all - 11/5 primary is Acton's lock now (T's one open slot)");
   eq([big.schedule["2026-11-05"].primary, big.schedule["2026-11-05"].primaryLocked], [ACTON, true], "Y: 11/5 primary = Acton, the lock untouched");

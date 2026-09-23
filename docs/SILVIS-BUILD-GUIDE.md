@@ -238,7 +238,9 @@ holds the other role that day; `backupOptOut` on a backup slot (I); would exceed
 
 **Backup is open to everyone (9/22, Prompt 12 I).** Every weekday-pattern, outreach, OR-day, Aledo and Clinton rule above
 restricts *primary* only; a governed month's explicit list restricts the roles its `explicitListMonths` entry names (a plain
-`'YYYY-MM'` = primary only; `{ month, roles }` = exactly those roles — Burchett's and Acton's November lists govern both).
+`'YYYY-MM'` = primary only; `{ month, roles }` = exactly those roles — Burchett's November and, since 9/23, December lists
+govern both; Acton's November entry left with Prompt 12 Y). A scope change is data: 9/23 flipped Burchett's December entry
+to the object form without touching code, and the published December rows were re-checked by hand rather than regenerated.
 Vacations, East busy days (primary only), holiday opt-outs, derived-week locks, "holds the other role" and `backupOptOut`
 still apply to backup.
 
@@ -408,7 +410,7 @@ even seeds), the fill-open-only October backfill runs (Prompt 12 T) and the fixt
 4. No assignment on a `time_off` day or on the day before a vacation day.
 5. Khan: never Tue/Thu **as primary** (backup any day since 9/22); never **primary** on an East busy day (backup on an East day is legal).
 6. Acton: never **primary** on a 2nd/4th Mon or Wed (backup allowed since 9/22); never **primary** on a Tuesday (X, 9/22 evening; backup allowed); never 2026-11-19..22 or 11-25..29; never Thanksgiving.
-7. Burchett: primary only on whitelist days (recurring or explicit `available`; a governed month's explicit list is not waived on a holiday-unit day); ≤ 2 consecutive primary days (real days); ≤ 8 **PRIMARY** days per month (backup never counts — K). Acton and Khan have no cap (a `monthlyCap: null` must not fall back to the group default).
+7. Burchett: primary only on whitelist days (recurring or explicit `available`; a governed month's explicit list is not waived on a holiday-unit day); backup only on listed days in a month whose entry governs backup too (November, and December since 9/23); ≤ 2 consecutive primary days (real days); ≤ 8 **PRIMARY** days per month (backup never counts — K). Acton and Khan have no cap (a `monthlyCap: null` must not fall back to the group default).
 8. Philip: never **primary** the day before an Aledo day (H); never **primary** outside his listed weeks from 11/2026 (holiday-unit days included — small items 9/22); never 2026-10-15; backup ≤ 7 days and ≤ 1 weekend per month; ≤ 1 major holiday; ≤ 4 consecutive primary days.
 9. Fierce: his derived weeks appear whole, with the correct role, as locks; outside them never **primary** on Tue/Thu or Mon (backup any day since 9/22), a Friday primary only as the start of a Fri+Sat+Sun block; Silvis primary days + East primary-week days ≤ 14 per month (K).
 10. Sarkar: only inside her windows (Mon–Fri since 9/22 evening), either role; no Fri–Sun block; ≤ 2 consecutive primary days (hard); the 2 primaries per window week are a **soft** target (diagnostics `windowWeeks`, never a violation — N revised).
