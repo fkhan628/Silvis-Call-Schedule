@@ -443,7 +443,7 @@ to read the `east_feed` vacations + `east_vacation_reviews` is a possible later 
 
 **Observed (orchestrator, 2026-09-23 04:37, linked CLI; recorded here 2026-09-23 on the rebased `feat/east-vacations`):**
 
-- Migration applied: 2026-09-23 04:37 (`supabase db query --linked ... -f .../2026-09-23-east-vacation-reviews.sql`, no error). `pg_policies` for
+- Migration applied: 2026-09-23 04:37 (linked CLI, the migration file of this section; the CLI output line of the apply itself was not handed to this record — the `pg_policies` rows, the probe and the anon GET below are the evidence that the objects exist as written). `pg_policies` for
   the table → **4 rows, every one `roles = {authenticated}`**: `east_vacation_reviews_read` SELECT, `east_vacation_reviews_self_insert` INSERT,
   `east_vacation_reviews_self_update` UPDATE, `east_vacation_reviews_self_delete` DELETE — no anon policy, no `for all` policy;
   `pg_class.relrowsecurity = true`. The table is empty (no rows) after the probe.
