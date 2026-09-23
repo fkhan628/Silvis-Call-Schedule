@@ -194,6 +194,19 @@
 //     still a gradient). Screenshots offers-greyed-390.png, offers-armed-390.png,
 //     offers-range-390.png, offers-saved-390.png, offers-desktop.png,
 //     offers-desktop-dark.png, offers-390-dark.png.
+//   - Prompt 14 part 3c (U3c): offers / periods are in ctxInputs. The harness
+//     store carries s3's offer (his held role) and s4's 'either' on one day
+//     inside the seed period (U3C, above the store): the day editor on that
+//     day lists "Offers (<label>): <name> - offered <role> | not offered - ...
+//     | rules (...)" per pool surgeon (restated from the store at run time),
+//     eligible dropdown options carry the tag; on the day after s4
+//     (exhaustive) is greyed 'not-offered' with the glossed reason and s3
+//     (preferred) reads the soft penalty; My schedule as s3 shows the pill
+//     "(placed)" and the upcoming row's offered / not offered chip; 390 px
+//     and dark for both. Screenshots day-editor-offers.png,
+//     day-editor-not-offered.png, day-editor-offers-390.png,
+//     myschedule-offers.png, myschedule-offers-390.png,
+//     day-editor-offers-dark.png, myschedule-offers-390-dark.png.
 //   - Prompt 12 item TH (theme, items O + R): the sign-in screen is opened
 //     WITHOUT a session on a second page (the auth token removed by an init
 //     script) and screenshotted in both themes (signin-light.png,
@@ -570,6 +583,7 @@ const consoleWarns = [];
 const writes = [];
 const tradeStore = []; // Slice G: shift_trade_requests rows the app wrote this run (see the Supabase route)
 const tradeGets = [];  // datalayer-001: every GET on shift_trade_requests with the Authorization it carried
+const offerGets = [];  // U3c review: every GET on call_offers / call_periods ({ table, auth, at }) - the stale-offers step watches the re-read
 const forcedConsoleErrors = []; // the browser's own "500" line for the snapshot insert the harness forced to fail
 const watchPage = (pg, tag) => {
   pg.on("pageerror", (e) => pageErrors.push(`${tag}: ` + String(e && e.message || e)));
@@ -646,7 +660,47 @@ const offerPeriod = (() => {
 })();
 const periodStore = offerPeriod ? [offerPeriod] : []; // Prompt 14 part 3b (U3b): GET call_periods serves this list; the Periods section's POST / PATCH move it (route below)
 const OTHER_OFFER_DAY = "2026-10-14";
-const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER_DAY, role_pref: "either", note: null, entered_by: "s2", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" }];
+// Prompt 14 part 3c (U3c): two offers INSIDE the seed period so the day editor has labels to read - s3 (Acton,
+// 'preferred' per the seed's offerModes) on the first in-period day on/after today that he HOLDS in the live rows
+// (in his role there, so the My-offers pill reads "(placed)" and the upcoming row carries the "offered" chip; the
+// fallback when he holds none - fixture mode, a wiped table - is start + 8 as primary), and s4 (Philip,
+// 'exhaustive') 'either' on the SAME day. On the day after, s3 reads "not offered - preferred days: penalty" and s4
+// "not offered - only these days: ineligible" (the editor greys him with the hard not-offered). s4 is thereby
+// submitted / exhaustive for the whole period in the harness: no later step needs him eligible inside it (the
+// Periods "Generate this period" step asserts the range and the absence of writes, never coverage).
+const U3C = (() => {
+  if (!offerPeriod) return null;
+  const from = offerPeriod.start_day > todayCentral ? offerPeriod.start_day : todayCentral;
+  let day = null, role = "primary";
+  for (let d = from; d <= offerPeriod.end_day && !day; d = isoPlus(d, 1)) { const r = liveEarlyByDay[d]; if (r && r.primary_id === "s3") { day = d; role = "primary"; } else if (r && r.backup_id === "s3") { day = d; role = "backup"; } }
+  const heldEarly = !!day;
+  if (!day) day = isoPlus(offerPeriod.start_day, 8) <= offerPeriod.end_day ? isoPlus(offerPeriod.start_day, 8) : offerPeriod.start_day;
+  // the "day after": the first later in-period day with a slot that is NOT locked in the live rows (a locked slot
+  // puts 'slot-locked:<id>' first for everyone and the option text shows hard[0] only) - primary preferred
+  let next = null, nextRole = "primary";
+  for (let d = isoPlus(day, 1); d <= offerPeriod.end_day && !next; d = isoPlus(d, 1)) {
+    const r = liveEarlyByDay[d];
+    if (!r || !r.primary_locked) { next = d; nextRole = "primary"; } else if (!r.backup_locked) { next = d; nextRole = "backup"; }
+  }
+  // U3c review fix (minor 4): a THIRD offer of s3's on a later in-period day he holds, in the OTHER role than the one
+  // he holds there - My schedule's row must read "offered P only" / "offered B only" (kind other-role), never
+  // "not offered". null when he holds no second in-period day in the live rows (the step logs a skip).
+  let other = null;
+  for (let d = isoPlus(day, 1); d <= offerPeriod.end_day && !other; d = isoPlus(d, 1)) {
+    const r = liveEarlyByDay[d];
+    if (r && r.primary_id === "s3") other = { day: d, heldRole: "primary", offeredRole: "backup" };
+    else if (r && r.backup_id === "s3") other = { day: d, heldRole: "backup", offeredRole: "primary" };
+  }
+  return { day, role, heldEarly, next, nextRole, other };
+})();
+const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER_DAY, role_pref: "either", note: null, entered_by: "s2", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" }]
+  .concat(U3C ? [
+    { id: crypto.randomUUID(), person_id: "s3", day: U3C.day, role_pref: U3C.role, note: null, entered_by: "s3", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" },
+    { id: crypto.randomUUID(), person_id: "s4", day: U3C.day, role_pref: "either", note: null, entered_by: "scheduler", source: "email-relay", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" },
+  ] : [])
+  .concat(U3C && U3C.other ? [
+    { id: crypto.randomUUID(), person_id: "s3", day: U3C.other.day, role_pref: U3C.other.offeredRole, note: null, entered_by: "s3", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" },
+  ] : []);
 let failSaveOffers = false;
 // applyOfferMode(who, periodId, mode) mirrors set_offer_mode: { code, message } on a refusal, { ok } after the write.
 // save_offers calls it for p_mode inside its "transaction" (the store is mutated only after every check passed, so a
@@ -780,7 +834,7 @@ const routeSupabase = async (route) => {
   // Prefer: return=representation, the unique start_day and the two checks refused like PostgREST), PATCH
   // ?id=eq.<id>&status=eq.upcoming merges only when the row still matches (the compare-and-swap: [] otherwise).
   if (url.pathname.startsWith("/rest/v1/call_periods")) {
-    if (method === "GET") return json(200, periodStore.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1));
+    if (method === "GET") { offerGets.push({ table: "call_periods", auth: req.headers()["authorization"] || "", at: Date.now() }); return json(200, periodStore.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1)); }
     const body = req.postData() || "";
     const prefer = req.headers()["prefer"] || "";
     writes.push({ method, path: url.pathname + url.search, body, prefer });
@@ -802,7 +856,7 @@ const routeSupabase = async (route) => {
     }
     return json(200, []);
   }
-  if (method === "GET" && url.pathname.startsWith("/rest/v1/call_offers")) return json(200, offerStore.slice().sort((a, b) => a.day < b.day ? -1 : 1));
+  if (method === "GET" && url.pathname.startsWith("/rest/v1/call_offers")) { offerGets.push({ table: "call_offers", auth: req.headers()["authorization"] || "", at: Date.now() }); return json(200, offerStore.slice().sort((a, b) => a.day < b.day ? -1 : 1)); }
   // Part 3b: the Periods "Remind" e-mail is answered like the deployed function would (sent = the targets), so the
   // happy path ("reminded <time>") is what the section shows; every other category keeps the generic 201 + [] below.
   if (method === "POST" && url.pathname === "/functions/v1/send-notification") {
@@ -2691,6 +2745,175 @@ try {
     }
   } catch (e) { fail("Offer painter: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-offers.png"), fullPage: false }); } catch (e2) {} }
 
+  // ---- Prompt 14 part 3c (U3c): the day editor's offer labels + My schedule's offer pills ----
+  // Fixture: U3C.day carries s3's offer (his held role) and s4's 'either' inside the seed period (the store above).
+  // Every expectation is restated from the harness store AT RUN TIME (s1's standing moved with the painter save
+  // above - his painted days may lie inside the period, and s5 chose "go by my rules" - so no line is pinned).
+  // Desktop light: the editor on U3C.day lists "Offers (<label>):" with one span per pool surgeon (s3 offered <role>,
+  // s4 offered either, the rest rules (chose go by my rules / nothing entered) or not offered + the mode's
+  // consequence); an eligible dropdown option carries the tag; on U3C.next s4 is GREYED 'not-offered' (hard) with
+  // the glossed reason line and s3 reads not offered - preferred days: penalty (soft). My schedule as s3: the
+  // My-offers pill for U3C.day with the role ("(placed)" when he holds it) and the upcoming rows' offered / not
+  // offered chips. 390 px: the offers line and the pills fit. Dark: both, at 1180 and 390.
+  if (U3C) try {
+    const per = offerPeriod;
+    const inPer = (o) => o.day >= per.start_day && o.day <= per.end_day;
+    const IDS6 = ["s1", "s2", "s3", "s4", "s5", "s6"];
+    const NAMES = { s1: "Khan", s2: "Burchett", s3: "Acton", s4: "Philip", s5: "Fierce", s6: "Sarkar" };
+    // the app's words, restated: status per offer_status() from the store, mode from the period, roles from the day's rows
+    const wordsFor = (id, day, role) => {
+      const rows = offerStore.filter(o => o.person_id === id && inPer(o));
+      const status = rows.length ? "submitted" : (per.rules_only_ids || []).includes(id) ? "rules_only" : "not_started";
+      if (status === "rules_only") return { kind: "rules", words: "rules (chose go by my rules)", tag: "rules" };
+      if (status === "not_started") return { kind: "rules", words: "rules (nothing entered)", tag: "rules" };
+      const mode = per.offer_modes[id] || "preferred";
+      const cons = mode === "exhaustive" ? "only these days: ineligible" : "preferred days: penalty";
+      const roles = new Set(); rows.filter(o => o.day === day).forEach(o => { if (o.role_pref === "either") { roles.add("primary"); roles.add("backup"); } else roles.add(o.role_pref); });
+      if (!roles.size) return { kind: "not-offered", words: "not offered - " + cons, tag: "not offered" };
+      const w = roles.size === 2 ? "either" : [...roles][0];
+      if (roles.size === 2 || roles.has(role)) return { kind: "offered", words: "offered " + w, tag: "offered " + w };
+      return { kind: "offered-other", words: `offered ${w} only, not ${role} - ${cons}`, tag: `offered ${w} only` };
+    };
+    const readOffersLine = (role) => page.$eval(`[data-testid=editor-${role}-offers]`, el => ({ text: el.innerText.replace(/\s+/g, " ").trim(), cands: Array.from(el.querySelectorAll("[data-testid=editor-offer-cand]")).map(s => ({ id: s.getAttribute("data-id"), kind: s.getAttribute("data-kind"), text: s.textContent.trim(), color: getComputedStyle(s).color })) })).catch(() => null);
+    const readOpts = (role) => page.$$eval(`[data-testid=editor-${role}] option`, els => els.filter(o => o.value).map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
+    const openEditor = async (d) => { await showMonth(+d.slice(0, 4), +d.slice(5, 7) - 1); await page.click(`[data-day="${d}"]`); await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 }); await page.waitForTimeout(250); };
+    const closeEditor = async () => { await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }); };
+    const checkLine = async (d, role, label) => {
+      const line = await readOffersLine(role);
+      if (!line) { fail(`U3c ${label}: no editor-${role}-offers line on ${d} (the day lies inside ${per.label} - offers / periods must be in ctxInputs)`); return null; }
+      const exp = IDS6.map(id => ({ id, ...wordsFor(id, d, role) }));
+      const bad = exp.filter(e => { const c = line.cands.find(x => x.id === e.id); return !c || c.kind !== e.kind || c.text !== `${NAMES[e.id]} - ${e.words}`; });
+      if (!line.text.startsWith(`Offers (${per.label}):`) || line.cands.length !== 6 || bad.length) fail(`U3c ${label}: the ${role} offers line on ${d} must name the period and read, per surgeon, "${exp.map(e => `${NAMES[e.id]} - ${e.words}`).join("; ")}"; got "${line.text}"`);
+      else ok(`U3c ${label}: ${role} offers line on ${d} = "${line.text.slice(0, 170)}${line.text.length > 170 ? "..." : ""}"`);
+      return line;
+    };
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await openEditor(U3C.day);
+    await checkLine(U3C.day, "primary", "offered day");
+    await checkLine(U3C.day, "backup", "offered day");
+    // the dropdown: every ELIGIBLE pool option carries its tag ("(offered either", "(rules", "(not offered")
+    const pOpts = await readOpts("primary");
+    const tagged = pOpts.filter(o => o.eligible === "true").map(o => ({ o, tag: wordsFor(o.value, U3C.day, "primary").tag }));
+    const untagged = tagged.filter(x => !x.o.text.includes("(" + x.tag));
+    if (!tagged.length) console.log(`     (U3c: no eligible primary option on ${U3C.day} - the dropdown tag has nothing to check)`);
+    else if (untagged.length) fail(`U3c: eligible primary options must carry their offer tag: ${JSON.stringify(untagged.map(x => x.o.text + " - expected (" + x.tag))}`);
+    else ok(`U3c: ${tagged.length} eligible primary option(s) carry the tag, e.g. "${tagged[0].o.text}"`);
+    await page.screenshot({ path: path.join(OUT, "day-editor-offers.png"), fullPage: false });
+    ok("screenshot test/ui/out/day-editor-offers.png");
+    await closeEditor();
+    // the day after (the first later in-period day with an unlocked slot): s4 (exhaustive) is greyed with the hard
+    // not-offered + the glossed reason - 'not-offered' is the first reason after the slot facts, and the slot is not
+    // locked, so it heads his list unless he holds the OTHER role that day; s3 (preferred) = the soft penalty
+    if (!U3C.next) console.log(`     (U3c day after: every later day of ${per.label} has both slots locked in the live rows - the greyed not-offered step has no day)`);
+    else {
+      const nr = U3C.nextRole;
+      await openEditor(U3C.next);
+      await checkLine(U3C.next, nr, "day after");
+      const nOpts = await readOpts(nr);
+      const s4o = nOpts.find(o => o.value === "s4"), s3o = nOpts.find(o => o.value === "s3");
+      const nReasons = await page.$eval(`[data-testid=editor-${nr}-reasons]`, el => el.textContent).catch(() => "");
+      // rules.js pushes not-offered BEFORE the slot facts and returns at the first hard reason, so the option reads
+      // 'Philip - not-offered' whether or not he holds the other role that day (review fix: no holds-other-role fork)
+      if (!s4o || s4o.eligible !== "false" || !/^Philip - not-offered$/.test(s4o.text)) fail(`U3c day after (${U3C.next} ${nr}): Philip (exhaustive, nothing offered that day) must be greyed 'Philip - not-offered' (not-offered is pushed before the slot facts in rules.js), got ${JSON.stringify(s4o)}`);
+      else if (!nReasons.includes("Philip - not among the days offered (only these days)")) fail(`U3c day after: the reason line must gloss not-offered for Philip: ${nReasons}`);
+      else ok(`U3c day after (${U3C.next} ${nr}): "${s4o.text}" greyed (hard), reason line 'Philip - not among the days offered (only these days)'`);
+      if (s3o && s3o.eligible === "true" && !s3o.text.includes("(not offered")) fail(`U3c day after: Acton (preferred) is eligible and must carry "(not offered", got ${s3o.text}`);
+      else if (s3o && s3o.eligible === "true") ok(`U3c day after: "${s3o.text}" - eligible under his rules with the soft penalty`);
+      else console.log(`     (U3c day after: Acton reads ${JSON.stringify(s3o)} - a hard rule of his own on ${U3C.next}; the offers line carries his standing)`);
+      await page.screenshot({ path: path.join(OUT, "day-editor-not-offered.png"), fullPage: false });
+      ok("screenshot test/ui/out/day-editor-not-offered.png");
+      await closeEditor();
+    }
+    // 390 px: the offers line stays inside the dialog
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openEditor(U3C.day);
+    const g390 = await page.evaluate(() => { const dlg = document.querySelector("[data-testid=day-editor] [role=dialog]"); const l = document.querySelector("[data-testid=editor-primary-offers]"); return { sw: dlg.scrollWidth, cw: dlg.clientWidth, line: !!l, lw: l ? l.scrollWidth : 0, lc: l ? l.clientWidth : 0 }; });
+    if (!g390.line || g390.sw > g390.cw + 1 || g390.lw > g390.lc + 1) fail(`U3c 390px: the offers line overflows the day editor (${JSON.stringify(g390)})`); else ok(`U3c 390px: the offers line fits the day editor (${g390.lw} in ${g390.lc}px; dialog ${g390.sw} in ${g390.cw})`);
+    await page.locator("[data-testid=editor-primary-offers]").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(OUT, "day-editor-offers-390.png"), fullPage: false });
+    ok("screenshot test/ui/out/day-editor-offers-390.png");
+    await closeEditor();
+    // My schedule as s3 (the scheduler's picker): the pill for U3C.day with the role, "(placed)" when he holds it; the chips
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await page.click('button[data-tab="myschedule"]');
+    await page.waitForSelector("[data-testid=mine-person]", { timeout: 5000 });
+    await page.selectOption("[data-testid=mine-person]", "s3");
+    await page.waitForTimeout(300);
+    const rowRole = await page.$eval(`[data-testid=mine-day][data-day="${U3C.day}"]`, el => el.getAttribute("data-role")).catch(() => null);
+    const horizon90 = isoAddDays(todayIso, 90);
+    const liveHeld = liveByDay[U3C.day] ? (liveByDay[U3C.day].primary_id === "s3" ? "primary" : liveByDay[U3C.day].backup_id === "s3" ? "backup" : null) : null;
+    const heldRole = rowRole || (U3C.day > horizon90 ? liveHeld : null); // inside the 90-day list the row is the truth; beyond it the served rows
+    const pill = await page.$eval(`[data-testid=mine-offer][data-day="${U3C.day}"]`, el => ({ text: el.textContent.trim(), placed: el.getAttribute("data-placed") })).catch(() => null);
+    const roleWordOf = (r) => r === "either" ? "P or B" : r === "primary" ? "P" : "B";
+    const expPill = `${mdOf(U3C.day)} ${roleWordOf(U3C.role)}` + (heldRole ? (heldRole === U3C.role ? " (placed)" : ` (placed ${heldRole === "primary" ? "P" : "B"})`) : "");
+    if (!pill || pill.text !== expPill || pill.placed !== (heldRole || "")) fail(`U3c My schedule (Acton): the My-offers pill for ${U3C.day} must read "${expPill}" with data-placed "${heldRole || ""}", got ${JSON.stringify(pill)}`);
+    else ok(`U3c My schedule (Acton): pill "${pill.text}"${heldRole ? " - he holds " + heldRole + " that day" : " - not placed" + (U3C.heldEarly ? " (the row moved during this run)" : "")}`);
+    if (rowRole) {
+      const chip = await page.$eval(`[data-testid=mine-day][data-day="${U3C.day}"] [data-testid=mine-offer-tag]`, el => ({ kind: el.getAttribute("data-offer"), text: el.textContent.trim() })).catch(() => null);
+      const expKind = rowRole === U3C.role ? "offered" : "outside";
+      if (!chip || chip.kind !== expKind || chip.text !== (expKind === "offered" ? "offered" : "not offered")) fail(`U3c My schedule (Acton): the upcoming row ${U3C.day} (${rowRole}) must carry the "${expKind}" chip, got ${JSON.stringify(chip)}`);
+      else ok(`U3c My schedule (Acton): upcoming row ${U3C.day} ${rowRole} carries the "${chip.text}" chip`);
+    } else console.log(`     (U3c My schedule: ${U3C.day} is not in Acton's 90-day list - the row chip has nothing to check)`);
+    // review fix (minor 4): the day he offered in the OTHER role only reads "offered P only" / "offered B only" (kind
+    // other-role, amber), never "not offered" - he did offer that day
+    const otherDay = U3C.other ? U3C.other.day : null;
+    const otherRowRole = otherDay ? await page.$eval(`[data-testid=mine-day][data-day="${otherDay}"]`, el => el.getAttribute("data-role")).catch(() => null) : null;
+    if (otherDay && otherRowRole) {
+      const oChip = await page.$eval(`[data-testid=mine-day][data-day="${otherDay}"] [data-testid=mine-offer-tag]`, el => ({ kind: el.getAttribute("data-offer"), text: el.textContent.trim(), bg: getComputedStyle(el).backgroundColor })).catch(() => null);
+      const offered = U3C.other.offeredRole;
+      const expOther = otherRowRole === offered ? { kind: "offered", text: "offered" } : { kind: "other-role", text: `offered ${offered === "primary" ? "P" : "B"} only` }; // the row moved to the offered role during this run -> plain offered
+      if (!oChip || oChip.kind !== expOther.kind || oChip.text !== expOther.text) fail(`U3c My schedule (Acton): the upcoming row ${otherDay} (${otherRowRole}; offered ${offered} only) must carry the "${expOther.text}" chip (kind ${expOther.kind}), got ${JSON.stringify(oChip)}`);
+      else ok(`U3c My schedule (Acton): upcoming row ${otherDay} ${otherRowRole} (offered ${offered} only) carries the "${oChip.text}" chip (kind ${oChip.kind}${oChip.kind === "other-role" ? ", amber " + oChip.bg : ""})`);
+    } else console.log(`     (U3c My schedule: ${otherDay ? otherDay + " is not in Acton's 90-day list" : "Acton holds no second in-period day in the live rows"} - the other-role chip has nothing to check)`);
+    // every OTHER upcoming row of his inside the period is a placement outside his offers
+    const others = await page.$$eval("[data-testid=mine-day]", (els, args) => els.filter(e => { const d = e.getAttribute("data-day"); return d !== args.day && d !== args.other && d >= args.s && d <= args.e; }).map(e => { const c = e.querySelector("[data-testid=mine-offer-tag]"); return { day: e.getAttribute("data-day"), chip: c ? c.getAttribute("data-offer") : null }; }), { day: U3C.day, other: otherDay || "", s: per.start_day, e: per.end_day });
+    if (!others.length) console.log("     (U3c My schedule: no other Acton day inside the period within 90 days - the 'not offered' chip has nothing to check)");
+    else if (others.some(o => o.chip !== "outside")) fail(`U3c My schedule (Acton): every other upcoming day inside ${per.label} must carry the "not offered" chip: ${JSON.stringify(others.filter(o => o.chip !== "outside").slice(0, 4))}`);
+    else ok(`U3c My schedule (Acton): ${others.length} other upcoming day(s) inside ${per.label} carry the "not offered" chip (e.g. ${others[0].day})`);
+    const outsidePer = await page.$$eval("[data-testid=mine-day]", (els, args) => els.filter(e => { const d = e.getAttribute("data-day"); return d < args.s || d > args.e; }).filter(e => e.querySelector("[data-testid=mine-offer-tag]")).map(e => e.getAttribute("data-day")), { s: per.start_day, e: per.end_day });
+    if (outsidePer.length) fail(`U3c My schedule (Acton): a day outside every period carries an offer chip: ${outsidePer.slice(0, 3).join(", ")}`); else ok("U3c My schedule (Acton): no chip on a day outside the period");
+    await page.screenshot({ path: path.join(OUT, "myschedule-offers.png"), fullPage: false });
+    ok("screenshot test/ui/out/myschedule-offers.png");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(250);
+    const m390 = await page.evaluate(() => { const c = document.querySelector("[data-testid=mine-offers]"); const p = document.querySelector("[data-testid=mine-offer]"); return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, csw: c ? c.scrollWidth : 0, ccw: c ? c.clientWidth : 0, pill: p ? p.scrollWidth <= p.clientWidth + 0.5 : null }; });
+    if (m390.sw > m390.cw + 1 || m390.csw > m390.ccw + 1 || m390.pill === false) fail(`U3c 390px My schedule: the offers card / a pill overflows (${JSON.stringify(m390)})`); else ok(`U3c 390px My schedule: no horizontal scroll (page ${m390.sw} in ${m390.cw}, card ${m390.csw} in ${m390.ccw}), pills unclipped`);
+    await page.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(OUT, "myschedule-offers-390.png"), fullPage: false });
+    ok("screenshot test/ui/out/myschedule-offers-390.png");
+    // dark: My schedule at 390, the editor at 1180 (the offers line takes the dark sub colour, never the light one)
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Dark')");
+    await page.click('button[data-tab="myschedule"]');
+    await page.waitForSelector("[data-testid=mine-offers]", { timeout: 5000 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(250);
+    await page.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(OUT, "myschedule-offers-390-dark.png"), fullPage: false });
+    ok("screenshot test/ui/out/myschedule-offers-390-dark.png");
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await openEditor(U3C.day);
+    const darkLine = await readOffersLine("primary");
+    const rulesCand = darkLine && darkLine.cands.find(c => c.kind === "rules");
+    if (!darkLine) fail("U3c dark: no offers line in the day editor");
+    else if (rulesCand && rulesCand.color !== "rgb(159, 176, 200)") fail(`U3c dark: a 'rules' span must take the editor's dark sub colour rgb(159, 176, 200), got ${rulesCand.color}`);
+    else ok(`U3c dark: the offers line renders in the dark editor${rulesCand ? " (rules span " + rulesCand.color + ")" : ""}`);
+    await page.screenshot({ path: path.join(OUT, "day-editor-offers-dark.png"), fullPage: false });
+    ok("screenshot test/ui/out/day-editor-offers-dark.png");
+    await closeEditor();
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Light')");
+    await page.click('button[data-tab="myschedule"]');
+    await page.waitForSelector("[data-testid=mine-person]", { timeout: 5000 });
+    await page.selectOption("[data-testid=mine-person]", "s1");
+  } catch (e) {
+    fail("U3c (offer labels): " + errLine(e));
+    try { await page.screenshot({ path: path.join(OUT, "failure-u3c.png"), fullPage: false }); } catch (e2) {}
+    if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+    await page.setViewportSize({ width: 1180, height: 900 });
+  } else console.log("     (U3c: the seed carries no offerPeriods[0] - the offer-label steps are skipped)");
+
   // ---- Time off: refused over a published day (client-side, no write); clean range writes once ----
   try {
     await page.click('button[data-tab="timeoff"]');
@@ -3981,6 +4204,55 @@ try {
     //      tallies at one month row per surgeon and the calendar preview inside one grid. ----
     if (!genRangeStart) fail("Generate preview: the presets restatement above yielded no start - the preview range falls back to the app's own default start (input only)");
     const genStart = genRangeStart || await page.$eval("[data-testid=gen-start]", el => el.value);
+    // ---- U3c review (major): a run while the offers / periods refresh was SKIPPED (session token expired) is
+    // stamped STALE - the preview shows the red warning, the toast says so; with the token back and the tables
+    // re-read the next run carries no warning. (The 'refuse' tier - never read this session - is a data-layer test:
+    // this page read both tables at load.) N=3 keeps the two runs short; both are discarded.
+    if (offerPeriod) try {
+      const genEndStale = utcDay(Date.UTC(+genStart.slice(0, 4), +genStart.slice(5, 7), 0));
+      const warnsB = consoleWarns.length;
+      await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), EXPIRED_JWT);
+      rtSendRow("call_offers", { id: "harness-stale-probe", person_id: "s2", day: OTHER_OFFER_DAY }, "UPDATE");
+      rtSendRow("call_periods", { id: offerPeriod.id }, "UPDATE");
+      const skipped = await waitFor(() => consoleWarns.slice(warnsB).some(t => /call_offers: read skipped/.test(t)) && consoleWarns.slice(warnsB).some(t => /call_periods: read skipped/.test(t)), 5000);
+      await page.fill("[data-testid=gen-start]", genStart);
+      await page.fill("[data-testid=gen-end]", genEndStale);
+      await page.fill("[data-testid=gen-n]", "3");
+      await page.fill("[data-testid=gen-seed]", "7");
+      const bStale = writes.length;
+      await page.click("[data-testid=gen-run]");
+      await page.waitForSelector("[data-testid=gen-preview]", { timeout: 90000 });
+      await page.waitForTimeout(400);
+      const staleWarn = await page.$eval("[data-testid=gen-preview-offers-warning]", el => el.textContent).catch(() => null);
+      const staleToast = await page.$eval("[data-testid=toast]", el => el.textContent).catch(() => "");
+      const staleBad = writesSince(bStale).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path));
+      if (!skipped) fail("U3c stale offers: with the token expired the realtime nudge did not make the app skip BOTH call_offers / call_periods reads (no 'read skipped' warn)");
+      else if (!staleWarn || !/WARNING: the offers may be stale - call_offers last read .* the latest refresh was skipped \(session token missing or expired\); call_periods last read/.test(staleWarn)) fail(`U3c stale offers: the preview must carry the red gen-preview-offers-warning naming both tables and the skipped refresh, got ${JSON.stringify(staleWarn)}`);
+      else if (!/WARNING: the offers may be stale/.test(staleToast)) fail(`U3c stale offers: the run toast must warn too, got ${JSON.stringify(staleToast.slice(0, 200))}`);
+      else if (staleBad.length) fail("U3c stale offers: the run wrote something: " + JSON.stringify(staleBad.map(w => w.method + " " + w.path)));
+      else ok(`U3c stale offers: token expired + skipped refresh -> the preview is stamped "${staleWarn.slice(0, 110)}..." and the toast warns; nothing written`);
+      await page.locator("[data-testid=card-setup_generate]").screenshot({ path: path.join(OUT, "generate-offers-stale.png") });
+      ok("screenshot test/ui/out/generate-offers-stale.png");
+      await page.click("[data-testid=gen-discard]");
+      await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
+      // token back, tables re-read -> the next run carries no warning
+      await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT);
+      const offerGetsB = offerGets.length;
+      rtSendRow("call_offers", { id: "harness-stale-probe", person_id: "s2", day: OTHER_OFFER_DAY }, "UPDATE");
+      rtSendRow("call_periods", { id: offerPeriod.id }, "UPDATE");
+      const reread = await waitFor(() => offerGets.slice(offerGetsB).some(g => g.table === "call_offers") && offerGets.slice(offerGetsB).some(g => g.table === "call_periods"), 5000);
+      await page.waitForTimeout(300);
+      await page.click("[data-testid=gen-run]");
+      await page.waitForSelector("[data-testid=gen-preview]", { timeout: 90000 });
+      await page.waitForTimeout(300);
+      const freshWarn = await page.$("[data-testid=gen-preview-offers-warning]");
+      if (!reread) fail("U3c stale offers: with the token back the realtime nudge did not re-read call_offers / call_periods");
+      else if (freshWarn) fail("U3c stale offers: after a successful re-read the preview still carries the stale warning");
+      else ok("U3c stale offers: token back + both tables re-read -> the next preview carries no warning");
+      await page.click("[data-testid=gen-discard]");
+      await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
+      { const tst = await page.$("[data-testid=toast]"); if (tst) await tst.click().catch(() => {}); }
+    } catch (e) { fail("U3c stale offers: " + errLine(e)); await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT); }
     const genEnd = utcDay(Date.UTC(+genStart.slice(0, 4), +genStart.slice(5, 7), 0)); // day 0 of the next month = the last day of genStart's month
     const genDays = daysBetween(genStart, genEnd).length;
     const genMonthLabel = `${["January","February","March","April","May","June","July","August","September","October","November","December"][+genStart.slice(5, 7) - 1]} ${genStart.slice(0, 4)}`;

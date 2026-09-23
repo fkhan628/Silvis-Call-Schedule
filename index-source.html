@@ -274,6 +274,14 @@ function CallSchedule() {
   const [offerRows, setOfferRows] = useState([]);
   const [periodRows, setPeriodRows] = useState([]);
   const [offerSheet, setOfferSheet] = useState(null);
+  // U3c review (9/23): whether the two tables were actually READ this session. readAuthOnlyTable answers null
+  // (not []) without a fresh token, so offerRows / periodRows stay [] while nothing was read - and a Generate
+  // over that would place nobody's offers first while the Periods copy promises it. loadOffers / loadPeriods
+  // record the outcome per table; runGenerate consults offersLoadVerdict(offersLoad) (module scope): refused
+  // before the first successful read of both, stamped on the preview (offersStale) when the latest refresh was
+  // skipped / failed after one. Public mode never reaches runGenerate (isScheduler).
+  const [offersLoad, setOffersLoad] = useState({ offers: "unread", periods: "unread", offersOkAt: null, periodsOkAt: null });
+  const markOffersLoad = (table, outcome) => setOffersLoad(s => ({ ...s, [table]: outcome, ...(outcome === "ok" ? { [table + "OkAt"]: new Date().toISOString() } : {}) }));
 
   // Calendar view defaults to the current month - the CENTRAL month (helpers.js
   // todayCentral), the same notion of today as the OPEN logic and the today ring
@@ -946,9 +954,11 @@ function CallSchedule() {
     try {
       const rows = await readAuthOnlyTable("call_offers", { order: "day.asc" });
       if (rows) setOfferRows(rows);
+      markOffersLoad("offers", rows ? "ok" : "skipped");
       return !!rows;
     } catch (e) {
       console.warn("call_offers load failed", e);
+      markOffersLoad("offers", "failed");
       if (!quiet) showToast("Couldn't load the offers - the painter may show an older picture.", "error");
       return false;
     }
@@ -957,9 +967,11 @@ function CallSchedule() {
     try {
       const rows = await readAuthOnlyTable("call_periods", { order: "start_day.asc" });
       if (rows) setPeriodRows(rows);
+      markOffersLoad("periods", rows ? "ok" : "skipped");
       return !!rows;
     } catch (e) {
       console.warn("call_periods load failed", e);
+      markOffersLoad("periods", "failed");
       if (!quiet) showToast("Couldn't load the offer periods - the painter may show an older picture.", "error");
       return false;
     }
@@ -1887,11 +1899,16 @@ function CallSchedule() {
     if (Object.keys(forecast).length) forecastIds.forEach(id => { eastForecast[id] = forecast; eastMeta[id].forecast = true; });
     return {
       roster: surgeons, surgeonRules: surgeonRules || {}, groupRules: groupRules || {}, holidays: holidays || {},
-      timeOffRows, availabilityRows, schedule,
+      timeOffRows, availabilityRows, schedule, offers: offerRows, periods: periodRows,
       eastBusyDays, eastForecast, eastOverrides, eastDerived, eastFeedCoverage: coverage, eastMeta,
       eastVacationRanges, eastVacationReviews: eastVacationReviewRows,
     };
-  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode, eastVacationReviewRows]);
+    // offers / periods (Prompt 14 part 3c, U3c 9/23): the call_offers / call_periods rows the app already holds
+    // (readAuthOnlyTable - [] for an anon reader, so public mode and a stale session read "no period"; nobody is
+    // ever governed by a table that was not read) reach buildContext here and ONLY here. From this line on an
+    // exhaustive surgeon's 'not-offered' is live in the day editor and the generator; the board gate and the trade
+    // path read a claim / an acceptance as an offer made on the spot (the eligibility claim flag - rules doc 2c).
+  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode, eastVacationReviewRows, offerRows, periodRows]);
   const rulesCtxState = useMemo(() => safeBuildContext(ctxInputs), [ctxInputs]);
   const rulesCtx = rulesCtxState.ctx;
   // Prompt 12 C.4 (9/22): the East conflict report over the WHOLE schedule map
@@ -2413,6 +2430,10 @@ function CallSchedule() {
     const bestOf = Math.max(1, Math.min(2000, Math.floor(Number(o.bestOf) || 200)));
     const seedIn = String(o.seed || "").trim();
     const seed = seedIn === "" ? (1 + Math.floor(Math.random() * 2147483646)) : (/^-?\d+$/.test(seedIn) ? Number(seedIn) : seedIn);
+    // U3c review: offers-first is only true when call_offers / call_periods were actually read (see offersLoad).
+    const ov = offersLoadVerdict(offersLoad);
+    if (ov.verdict === "refuse") { showToast("Not run: the offers and periods were not loaded (" + ov.why + "), so this run would place nobody's offered days first. Sign in again or reload, wait for the load, then generate. Nothing was run.", "error"); return; }
+    const offersStale = ov.verdict === "stale" ? ov.why : null;
     setGenBusy(true);
     await new Promise(r => setTimeout(r, 40)); // let the busy indicator paint before the synchronous run
     try {
@@ -2423,11 +2444,11 @@ function CallSchedule() {
       const ms = Date.now() - t0;
       const dg = res.diagnostics || {};
       if (dg.warnings && dg.warnings.length) console.warn("generate warnings:", dg.warnings);
-      setPreviewGen({ schedule: res.schedule || {}, diagnostics: dg, start, end, seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, ranAt: new Date().toISOString(), ms });
+      setPreviewGen({ schedule: res.schedule || {}, diagnostics: dg, start, end, seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, ranAt: new Date().toISOString(), ms, offersStale });
       setGenOpts(p => ({ ...p, start, end, bestOf }));
       const sd = parse(start); setCalMonth(sd.getMonth()); setCalYear(sd.getFullYear());
       const open = (dg.uncovered || []).length;
-      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms${o.fillOpenOnly === true ? ", fill open slots only" : ""}): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.`, open ? "info" : "success");
+      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms${o.fillOpenOnly === true ? ", fill open slots only" : ""}): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.${offersStale ? " WARNING: the offers may be stale (" + offersStale + ") - sign in again and re-run before accepting." : ""}`, offersStale ? "error" : open ? "info" : "success");
     } catch (e) {
       console.warn("generate failed", e);
       showToast("Generate failed: " + errText(e).slice(0, 160), "error");
@@ -2454,11 +2475,13 @@ function CallSchedule() {
     // written, exactly like a locked one. One confirm covers both lists; Cancel writes nothing.
     const heldChanges = suHeldUnlockedSlotChanges(cur, next);
     const heldText = (list) => `${list.length} held but unlocked assignment(s) will be replaced: ${list.slice(0, 8).map(c => `${fmtMD(c.day)} ${c.role === "primary" ? "P" : "B"} ${holderLabel(c.from, nameOf)} -> ${holderLabel(c.to, nameOf)}`).join(", ")}${list.length > 8 ? ` and ${list.length - 8} more` : ""}${pv.fillOpenOnly ? "" : " (tick 'Fill open slots only' to keep every held day)"}.`;
-    if (!pv.respectLocks || lockedChanges.length || heldChanges.length) {
+    if (!pv.respectLocks || lockedChanges.length || heldChanges.length || pv.offersStale) {
       const first = lockedChanges[0];
       const firstText = first ? ` (first: ${fmtMD(first.day)} ${first.role} ${holderLabel(first.from, nameOf)} -> ${holderLabel(first.to, nameOf)})` : "";
       const lockedText = (!pv.respectLocks || lockedChanges.length) ? `This replaces ${lockedChanges.length} locked / published slot(s)${firstText}${pv.respectLocks ? "" : " - this preview was generated with 'respect locks' OFF"}.\n\n` : "";
-      const msg = `${lockedText}${heldChanges.length ? heldText(heldChanges) + "\n\n" : ""}The days are written for every viewer as soon as you continue; the publish dialog that follows only sends the office notice. Continue?`;
+      // U3c review: a preview generated while the offers / periods refresh was skipped (session lapsed) says so here too
+      const staleText = pv.offersStale ? `WARNING - this preview was generated while the offers may have been STALE (${pv.offersStale}); offered days may not have been placed first. Sign in again and re-run to be sure.\n\n` : "";
+      const msg = `${staleText}${lockedText}${heldChanges.length ? heldText(heldChanges) + "\n\n" : ""}The days are written for every viewer as soon as you continue; the publish dialog that follows only sends the office notice. Continue?`;
       if (!confirm(msg)) { showToast("Nothing was written - the preview is kept.", "info"); return; }
     }
     setSaveStatus("Saving backup snapshot");
@@ -2815,7 +2838,10 @@ function CallSchedule() {
   const tradeEligibility = (day, role, candidateId, opts) => {
     if (!suIsIso(day) || !candidateId) return { ok: false, hard: ["bad-input"], soft: [] };
     if (!rulesCtx) return { ok: false, hard: ["rules-unavailable"], soft: [], unknown: true };
-    try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, ...(opts || {}) }); }
+    // The claim flag (Prompt 14 U3c, 9/23): a trade acceptance is an offer made on the spot (rules doc 2c, the same
+    // reading as a board claim) - the exhaustive surgeon's hard 'not-offered' is skipped, the soft 'outside-offers'
+    // still surfaces; every other hard rule stands. apply_trade() does not yet write the call_offers row (open).
+    try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }
     catch (e) {
       console.warn("trade eligibility check failed:", e);
       const msg = String(e && e.message || e).slice(0, 80);
@@ -3564,7 +3590,7 @@ function CallSchedule() {
       logAudit("period.close", `Offers for ${p.label} closed now by the scheduler (${words})`, { period_id: p.id, label: p.label, offers_close_at: p.offers_close_at, by: "scheduler", rollcall: roll });
       setPeriodRows(prev => prev.map(x => x.id === p.id ? { ...x, ...rows[0] } : x));
       loadPeriods(true);
-      showToast(`Offers for ${p.label} are closed. Generate the period when you are ready (today Generate places by the standing rules; offers-first placement lands with the engine wiring).`, "success");
+      showToast(`Offers for ${p.label} are closed. Generate the period when you are ready - offered days are placed first, the gaps by each surgeon's rules.`, "success");
       return { ok: true };
     } catch (e) { console.warn("Periods: close threw", e); showToast("Close failed - nothing was changed: " + String(e?.message || e), "error"); return { ok: false, error: String(e?.message || e) }; }
     finally { setPrdBusy(false); }
@@ -4108,7 +4134,9 @@ function CallSchedule() {
     boardSlots.forEach(s => {
       out[openSlotKey(s.day, s.role)] = activeSurgeons.filter(sg => sg.type !== "external").map(sg => {
         let r;
-        try { r = eligibility(rulesCtx, s.day, s.role, sg.id, boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : undefined); }
+        // The claim flag (Prompt 14 U3c): a claim is an offer made on the spot (rules doc 2c) - the hard 'not-offered' of an
+        // exhaustive surgeon is skipped for the board only; the soft 'outside-offers' rides along for the row's words
+        try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }
         catch (e) { console.warn("board eligibility threw for", sg.id, s.role, s.day, e); r = { ok: false, hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)], soft: [] }; }
         return { id: sg.id, ok: !!r.ok, hard: (r.hard && r.hard.length) ? r.hard : (r.ok ? [] : ["unknown-surgeon"]), soft: r.soft || [] };
       });
@@ -5323,6 +5351,22 @@ function CallSchedule() {
           };
           const countdown = (d) => { const n = suDaysBetween(todayStr, d); return n === 0 ? "today" : n === 1 ? "tomorrow" : "in " + n + " days"; };
           const roleWord = (r) => r === "primary" ? "Primary" : "Backup";
+          // Prompt 14 part 3c (U3c): an upcoming assignment inside a period the person SUBMITTED offers for is either
+          // one of the offered days or a placement outside them (the publish e-mail's "a day you did not list - trade
+          // if needed"). Read from rules.offerState on the app ctx; nothing for a rules-only / not-started period.
+          const offerTagOf = (d, role) => {
+            const st = rulesCtx ? offerState(rulesCtx, d, pid) : null;
+            if (!st || st.status !== "submitted") return null;
+            const w = offerCandidateWords(st, role);
+            if (!w) return null;
+            // three chips: offered (this role or either), other-role (he offered the day, in the other role only -
+            // amber; the words spell it out, on a phone the title is unreachable), outside (a day he did not list)
+            if (w.kind === "offered") return { kind: "offered", text: "offered", title: "You offered this day (" + w.words + ") - " + st.period.label, bg: "#e4f3e8", fg: "#1a6a3a" };
+            if (w.kind === "offered-other") return { kind: "other-role", text: w.tag.replace("primary", "P").replace("backup", "B"), title: "You offered this day in the other role only (" + w.words + ") - trade if needed - " + st.period.label, bg: "#fdf1d6", fg: "#7a5a10" };
+            return { kind: "outside", text: "not offered", title: "Placed on a day you did not offer (" + w.words + ") - trade if needed - " + st.period.label, bg: "#fbe9d8", fg: "#8a4a10" };
+          };
+          // the role the person already holds on an offered day, else null
+          const placedRole = (o) => { const a = schedule[String(o.day).slice(0, 10)]; return a ? (a.primary === pid ? "primary" : a.backup === pid ? "backup" : null) : null; };
           const syncUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(pid)}`;
           const pidVacs = (vacations[pid] || []).filter(([vs, ve]) => ve >= todayStr).length;
           return <>
@@ -5362,6 +5406,7 @@ function CallSchedule() {
                       <span style={{...muted,minWidth:120}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
                       {x.locked && <Padlock title="locked" size={9}/>}
                       {badgesFor(x.day).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
+                      {(() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
                       <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} style={{...css.mini(false),marginLeft:"auto",color:"#6030a0",borderColor:"#c0a8e0"}}>Propose a trade</button>
                     </div>
                   ))}
@@ -5381,7 +5426,7 @@ function CallSchedule() {
                     {nextPer && <span style={muted} data-testid="mine-offer-status">{nextPer.label}: {st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : "nothing entered yet"}{nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : ""}</span>}
                   </div>
                   {mine.length === 0 ? <p style={{...muted,fontStyle:"italic",margin:0}}>No future dates offered - use Paint my offers above.</p>
-                    : <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{mine.slice(0, 40).map(o => <span key={o.id || o.day} data-testid="mine-offer" data-day={String(o.day).slice(0, 10)} style={{fontFamily:mono,fontSize:11,padding:"1px 6px",borderRadius:4,border:`1px solid ${dkCardBorder}`,color:dkText}}>{fmtMD(String(o.day).slice(0, 10))} {word(o.role_pref)}</span>)}{mine.length > 40 && <span style={muted}>and {mine.length - 40} more</span>}</div>}
+                    : <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{mine.slice(0, 40).map(o => { const pr = placedRole(o); const offeredRole = o.role_pref === "either" ? pr : o.role_pref; return <span key={o.id || o.day} data-testid="mine-offer" data-day={String(o.day).slice(0, 10)} data-placed={placedRole(o) || ""} title={pr ? "Placed " + pr + " on this day" : "Offered, not placed yet"} style={{fontFamily:mono,fontSize:11,padding:"1px 6px",borderRadius:4,border:`1px solid ${pr ? "#1a6a3a" : dkCardBorder}`,color:dkText,background: pr ? (dk ? "rgba(26,106,58,0.25)" : "#e4f3e8") : "transparent"}}>{fmtMD(String(o.day).slice(0, 10))} {word(o.role_pref)}{pr ? (pr === offeredRole ? " (placed)" : " (placed " + (pr === "primary" ? "P" : "B") + ")") : ""}</span>; })}{mine.length > 40 && <span style={muted}>and {mine.length - 40} more</span>}</div>}
                 </>;
               })()}
             </div>
@@ -6521,6 +6566,8 @@ const REASON_WORDS = {
   "window-week-below-target": "at or under the window-week target", "window-week-over-target": "over the window-week target",
   "consecutive-primary": "consecutive primary days (prefers alternate days)", "long-run": "long any-role run",
   "east-clear": "home East vacation day (no East call, no OR block - preferred as primary)", // Prompt 15 part 2, primary-only bonus
+  // offers (Prompt 14 U3c, 9/23): the hard reason of an exhaustive surgeon off his offered days + the two soft ones
+  "not-offered": "not among the days offered (only these days)", "offered": "offered day (bonus)", "outside-offers": "outside the offered days (penalty)",
 };
 // Read an AUTHENTICATED-ONLY table (shift_trade_requests, notifications: RLS
 // 'to authenticated'). db.query reads with dbReadHeaders(), which falls back
@@ -6586,6 +6633,8 @@ function softTag(soft) {
     case "pattern-mismatch": return "style: " + arg;
     case "aledo-week": return "Aledo week";
     case "holiday-waiver": return "holiday waiver";
+    case "offered": return "offered day (bonus)";
+    case "outside-offers": return "outside the offered days (penalty)";
     default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
 }
@@ -6673,6 +6722,53 @@ function Padlock({ title, size, className }) {
   );
 }
 
+// --- Offer standing in words (Prompt 14 part 3c, U3c 9/23) ---
+// offerCandidateWords(st, role) -> null when st is not an offerState result (the
+// day lies in no period: nobody is offers-governed), else { kind, tag, words,
+// mode }: kind 'offered' (the asked role, or either, was offered), 'offered-other'
+// (a role was offered, not the asked one), 'not-offered' (submitted for the period,
+// nothing that day), 'rules' (rules_only or not_started - the standing rules apply);
+// tag = the short dropdown suffix, words = the candidate line. The consequence
+// follows the mode rules.js applies: exhaustive -> ineligible (hard 'not-offered'),
+// preferred -> penalty (soft 'outside-offers'). Plain JS at module scope (no JSX,
+// no DOM): the day editor and My schedule share it and test/data-layer.test.js
+// runs it.
+function offerCandidateWords(st, role) {
+  if (!st || typeof st !== "object") return null;
+  var modeWords = st.mode === "exhaustive" ? "only these days: ineligible" : "preferred days: penalty";
+  if (st.status === "submitted") {
+    var roles = Array.isArray(st.roles) ? st.roles : [];
+    var both = roles.indexOf("primary") >= 0 && roles.indexOf("backup") >= 0;
+    if (!roles.length) return { kind: "not-offered", tag: "not offered", words: "not offered - " + modeWords, mode: st.mode };
+    var offeredWord = both ? "either" : roles[0];
+    var asked = role === "primary" || role === "backup" ? role : null;
+    if (both || !asked || roles.indexOf(asked) >= 0) return { kind: "offered", tag: "offered " + offeredWord, words: "offered " + offeredWord, mode: st.mode };
+    return { kind: "offered-other", tag: "offered " + offeredWord + " only", words: "offered " + offeredWord + " only, not " + asked + " - " + modeWords, mode: st.mode };
+  }
+  if (st.status === "rules_only") return { kind: "rules", tag: "rules", words: "rules (chose go by my rules)", mode: null };
+  return { kind: "rules", tag: "rules", words: "rules (nothing entered)", mode: null };
+}
+
+// --- Were the offers actually read? (U3c review, 9/23) ---
+// offersLoadVerdict(offersLoad) -> { verdict: "ok" } | { verdict: "refuse", why } |
+// { verdict: "stale", why }. offersLoad = { offers, periods: "unread" | "ok" |
+// "skipped" | "failed", offersOkAt, periodsOkAt }, kept by loadOffers / loadPeriods.
+// "refuse": one of the tables has never been read this session (a missing or
+// expired token skips the read; a failed read keeps nothing) - offerRows /
+// periodRows are the initial [] and a run over them would be rules-only while
+// the copy promises offers-first. "stale": both were read once (the rows kept
+// are real) but the latest refresh was skipped / failed - the run goes ahead and
+// the preview says so. Plain JS at module scope; test/data-layer.test.js runs it.
+function offersLoadVerdict(st) {
+  var s = st && typeof st === "object" ? st : {};
+  var tables = ["offers", "periods"];
+  var never = tables.filter(function (t) { return !s[t + "OkAt"]; });
+  if (never.length) return { verdict: "refuse", why: never.map(function (t) { return "call_" + t + " " + (s[t] === "skipped" ? "not read (session token missing or expired)" : s[t] === "failed" ? "failed to load" : "not loaded yet"); }).join("; ") };
+  var notOk = tables.filter(function (t) { return s[t] !== "ok"; });
+  if (notOk.length) return { verdict: "stale", why: notOk.map(function (t) { return "call_" + t + " last read " + String(s[t + "OkAt"]).replace("T", " ").slice(0, 16) + " UTC, the latest refresh " + (s[t] === "failed" ? "failed" : "was skipped (session token missing or expired)"); }).join("; ") };
+  return { verdict: "ok" };
+}
+
 // --- Day editor (Slice D) ---
 // Module scope so a parent re-render never remounts it mid-edit (the parent
 // keys it by day, so moving to another day starts a fresh draft). Every
@@ -6750,6 +6846,28 @@ function DayEditor(props) {
   // Small items (9/22): any option whose check THREW -> the error is shown and Save is disabled (fail closed).
   const evalErrors = [].concat(opts.primary, opts.backup).filter(o => o.error);
   const evalBroken = evalErrors.length > 0;
+  // Prompt 14 part 3c (U3c): each pool surgeon's offer standing for this day, from rules.offerState on the SAME
+  // draft ctx the options are judged on (the offers / periods reached it through ctxInputs). null when the day
+  // lies in no period - then nothing is offers-governed and no line is shown. Outside surgeons never offer, and an
+  // INACTIVE surgeon is listed only while he holds a slot in the draft (the same rule as the dropdown pool).
+  const offerInfo = React.useMemo(() => {
+    if (!ctx || typeof offerState !== "function") return null;
+    const items = [];
+    let period = null;
+    roster.filter(s => s.type !== "external").filter(s => s.active !== false || s.id === draft.primary || s.id === draft.backup).forEach(s => {
+      let st = null;
+      try { st = offerState(ctx, day, s.id); } catch (e) { console.warn("offerState threw for", s.id, day, e); }
+      if (!st) return;
+      period = period || st.period;
+      items.push({ id: s.id, name: s.name, st });
+    });
+    return period ? { period, items } : null;
+  }, [ctx, day, roster, draft]);
+  const offerTagFor = (id, role) => {
+    const it = offerInfo ? offerInfo.items.find(x => x.id === id) : null;
+    const w = it ? offerCandidateWords(it.st, role) : null;
+    return w ? w.tag : null;
+  };
 
   const pick = (role, value) => {
     setHint(""); setInfo("");
@@ -6820,9 +6938,12 @@ function DayEditor(props) {
     return pill(v);
   };
   const myRole = mySurgeon && entry ? (entry.primary === mySurgeon ? "primary" : entry.backup === mySurgeon ? "backup" : null) : null;
-  const optionLabel = (o) => {
+  const optionLabel = (o, role) => {
     if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");
-    const tags = o.soft.map(softTag).filter(Boolean);
+    // U3c: the offer tag ("offered primary", "not offered", "rules") stands in for the soft offered / outside-offers
+    // notes, which would say the same thing twice; every other soft note keeps its tag.
+    const tag = offerTagFor(o.id, role);
+    const tags = (tag ? [tag] : []).concat(o.soft.filter(s => !tag || (s.reason !== "offered" && s.reason !== "outside-offers")).map(softTag).filter(Boolean));
     return o.name + (o.lockHolder ? " (locked holder)" : "") + (tags.length ? " (" + tags.join(", ") + ")" : "");
   };
   const roleBlock = (role) => {
@@ -6847,12 +6968,12 @@ function DayEditor(props) {
             <select data-testid={"editor-" + role} aria-label={role} value={draft[role] || ""} disabled={locked} onChange={e => pick(role, e.target.value)} style={{...inp,minWidth:230,fontSize:13,opacity:locked?0.6:1}}>
               <option value="" data-eligible="true">{role === "primary" && draft.externalCover ? draft.externalCover + " (external cover)" : "OPEN"}</option>
               {list.filter(o => !o.external).map(o => (
-                <option key={o.id} value={o.id} data-eligible={o.ok ? "true" : "false"} style={o.ok ? {} : {color:"#a0a8b0"}}>{optionLabel(o)}</option>
+                <option key={o.id} value={o.id} data-eligible={o.ok ? "true" : "false"} style={o.ok ? {} : {color:"#a0a8b0"}}>{optionLabel(o, role)}</option>
               ))}
               {list.some(o => o.external) && (
                 <optgroup label="Outside surgeons" data-testid={"editor-" + role + "-externals"}>
                   {list.filter(o => o.external).map(o => (
-                    <option key={o.id} value={o.id} data-eligible={o.ok ? "true" : "false"} style={o.ok ? {} : {color:"#a0a8b0"}}>{optionLabel(o)}</option>
+                    <option key={o.id} value={o.id} data-eligible={o.ok ? "true" : "false"} style={o.ok ? {} : {color:"#a0a8b0"}}>{optionLabel(o, role)}</option>
                   ))}
                 </optgroup>
               )}
@@ -6871,6 +6992,17 @@ function DayEditor(props) {
             <span style={{fontWeight:700}}>Not eligible:</span> {ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(o.hard[0]) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join("; ")}
           </div>
         )}
+        {offerInfo && (() => {
+          // U3c: the offer standing of every pool surgeon for THIS role - the manual pick is an informed one.
+          const rows = offerInfo.items.map(x => ({ ...x, w: offerCandidateWords(x.st, role) })).filter(x => x.w);
+          const tone = (k) => k === "offered" ? (dk ? "#8fd3a5" : "#1a6a3a") : k === "not-offered" ? (dk ? "#f0b070" : "#8a4a10") : sub;
+          return (
+            <div data-testid={"editor-" + role + "-offers"} style={{fontSize:11,color:sub,marginTop:6,lineHeight:1.5}}>
+              <span style={{fontWeight:700}}>Offers ({offerInfo.period.label}):</span>{" "}
+              {rows.map((x, i) => <React.Fragment key={x.id}>{i > 0 ? "; " : ""}<span data-testid="editor-offer-cand" data-id={x.id} data-kind={x.w.kind} style={{color: tone(x.w.kind), fontWeight: x.w.kind === "rules" ? 400 : 700}}>{x.name} - {x.w.words}</span></React.Fragment>)}
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -8257,7 +8389,7 @@ function PeriodsSection({ css, periods, offers, roster, groupRules, today, nameO
         <span style={{ flex: 1 }} />
         {!draft && <button type="button" data-testid="prd-new" onClick={openForm} disabled={busy} style={{ ...css.btn(true), padding: "5px 12px", fontSize: 11 }}>New period</button>}
       </div>
-      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). Today "Generate this period" places by the standing rules over the period's range; offers-first placement (offered days first, gaps by the rules) lands with the engine wiring - see the build guide, section 17. Status below is derived from the offers on file - submitted (days inside the period), rules only (chose "go by my rules"), not started.</p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). "Generate this period" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in "only these days" mode is never placed outside them, a "preferred days" surgeon only when a slot would otherwise stay open - the diagnostics list every such placement. Status below is derived from the offers on file - submitted (days inside the period), rules only (chose "go by my rules"), not started.</p>
       {draft && (
         <div data-testid="prd-form" style={{ border: "1px solid #c8d8e8", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#f8fbff" }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
@@ -8293,7 +8425,7 @@ function PeriodsSection({ css, periods, offers, roster, groupRules, today, nameO
               <span data-testid="prd-status" style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", padding: "2px 8px", borderRadius: 10, color: status === "upcoming" ? (open ? "#1a6030" : "#7a5a20") : status === "closed" ? "#a83232" : "#3a4a58", background: status === "upcoming" ? (open ? "#e8f8e8" : "#fbf1d8") : status === "closed" ? "#fdeaea" : "#eef2f7", border: "1px solid #DCE3EC" }}>{status === "upcoming" && !open ? "upcoming - frozen" : status}</span>
               <span style={{ flex: 1 }} />
               {status === "upcoming" && <button type="button" data-testid="prd-close-now" onClick={() => onCloseNow(p)} disabled={busy} title="Freeze the offers for this period now: surgeons can no longer paint or change their mode for it (you still can); status becomes 'closed'; nothing is generated or published" style={{ ...css.danger, padding: "5px 10px" }}>Close now</button>}
-              <button type="button" data-testid="prd-generate" onClick={() => onGenerate(p)} disabled={busy} title={"Run Generate over " + day(p.start_day) + " - " + day(p.end_day) + " (the existing preview flow, by the standing rules - offers are not placed first yet; Accept & Publish is below)"} style={{ ...css.btn(true), padding: "5px 12px", fontSize: 11 }}>Generate this period</button>
+              <button type="button" data-testid="prd-generate" onClick={() => onGenerate(p)} disabled={busy} title={"Run Generate over " + day(p.start_day) + " - " + day(p.end_day) + " (the existing preview flow: offered days first, the gaps by the rules; Accept & Publish is below)"} style={{ ...css.btn(true), padding: "5px 12px", fontSize: 11 }}>Generate this period</button>
             </div>
             <div style={{ fontSize: 12, color: PRD_MUTED, marginBottom: 6 }}>
               Offers close <strong>{close || "-"}</strong>{inWords(daysTo(close))} - publish by <strong>{pub || "-"}</strong>{inWords(daysTo(pub))} - {nSub} submitted, {nRules} rules only, <span style={{ color: nNot ? "#a83232" : "#1a6030", fontWeight: 600 }}>{nNot} not started</span>.
@@ -8363,6 +8495,7 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onRe
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
             <strong style={{ color: "#5a3a9f" }}>Preview</strong>
             <span data-testid="gen-preview-meta" style={{ fontSize: 12, color: "#3a4a58" }}>{fmtMD(preview.start)} - {fmtMD(preview.end)} ({Object.keys(preview.schedule || {}).length} days), seed <span style={{ fontFamily: mono }}>{String(preview.seed)}</span>, best of {preview.bestOf}{preview.fillOpenOnly ? ", fill open slots only" : ""}, {preview.ms} ms, open slots {(preview.diagnostics.uncovered || []).length}. Shown on the calendar with a dashed outline - not saved.</span>
+            {preview.offersStale && <span data-testid="gen-preview-offers-warning" role="alert" style={{ fontSize: 12, fontWeight: 700, color: "#a83232", flexBasis: "100%" }}>WARNING: the offers may be stale - {preview.offersStale}. Offered days may not have been placed first; sign in again and re-run before accepting.</span>}
             <span style={{ flex: 1 }} />
             <button data-testid="gen-reroll" onClick={onReroll} disabled={busy} style={css.mini(false)}>Re-roll (new seed)</button>
             <button data-testid="gen-accept" onClick={onAccept} disabled={busy} style={{ ...css.btn(true), padding: "5px 14px" }}>Accept &amp; Publish</button>

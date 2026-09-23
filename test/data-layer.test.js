@@ -1344,7 +1344,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const body = src.slice(fn, end);
     assert.ok(body.includes("const heldChanges = suHeldUnlockedSlotChanges(cur, next);"), "heldChanges from suHeldUnlockedSlotChanges(cur, next)");
     assert.ok(body.includes("const lockedChanges = suLockedSlotChanges(cur, next);"), "the locked list stays");
-    assert.ok(body.includes("if (!pv.respectLocks || lockedChanges.length || heldChanges.length) {"), "one confirm gate over both lists");
+    assert.ok(body.includes("if (!pv.respectLocks || lockedChanges.length || heldChanges.length || pv.offersStale) {"), "one confirm gate over both lists (U3c review 9/23: a preview stamped offersStale joins the same gate)");
     assert.ok(body.includes("held but unlocked assignment(s) will be replaced: "), "the confirm names and lists the held but unlocked assignments");
     assert.ok(body.includes("This replaces ${lockedChanges.length} locked / published slot(s)"), "the locked sentence is unchanged");
     assert.ok(body.includes('${pv.fillOpenOnly ? "" : " (tick \'Fill open slots only\' to keep every held day)"}'), "RF2 review fix: the checkbox pointer is appended only when the preview did NOT run fill-open-only (fail-before: unconditional)");
@@ -1404,7 +1404,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(cb.includes("eastVacations(eastFeedRows, s.code)"), "the ranges must come from east-feed.js eastVacations(rows, code) for the surgeon's CODE");
     assert.ok(cb.includes("eastVacationRanges[s.id] ="), "the map must be keyed by the roster id (s.id)");
     assert.ok(cb.includes("eastVacationRanges, eastVacationReviews: eastVacationReviewRows"), "both inputs must reach buildContext");
-    assert.ok(cb.includes("eastOverrideRows, eastIdByCode, eastVacationReviewRows]"), "the memo must rebuild when the review rows change");
+    assert.ok(cb.includes("eastOverrideRows, eastIdByCode, eastVacationReviewRows, offerRows, periodRows]"), "the memo must rebuild when the review rows change");
   });
   check("P15: east_vacation_reviews is an authenticated-only table - read through readAuthOnlyTable (null on a stale token, never an anon 200 + [] adopted), a 404 (migration not applied) is named, the load runs at start and in the 60-s poll", () => {
     assert.ok(src.includes('readAuthOnlyTable("east_vacation_reviews"'), "the reviews must be read with readAuthOnlyTable");
@@ -2022,8 +2022,108 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(sec.includes('{r.id === selfId ? "Paint my offers" : "Enter for " + nameOf(r.id)}') && src.includes("selfId={mySurgeon} draft={prdDraft} setDraft={setPrdDraft}"), "the scheduler's own row reads 'Paint my offers' (his own offers: entered_by him, source app), every other row 'Enter for <name>'");
       assert.ok(sec.includes('["end_day", "offers_close_at", "publish_by", "label"].forEach(f => { if (touched[f]) n[f] = d[f]; });') && sec.includes("touched: { ...touched, [k]: true }"), "a Start change re-derives only the fields the scheduler has not edited");
       assert.ok(src.includes("const [prdDraft, setPrdDraft] = useState(null);") && !sec.includes("React.useState(null)"), "the New-period draft lives in CallSchedule (the collapsed card / a tab change unmounts the section)");
-      assert.ok(sec.includes('Today "Generate this period" places by the standing rules over the period\'s range; offers-first placement (offered days first, gaps by the rules) lands with the engine wiring') && src.includes("today Generate places by the standing rules; offers-first placement lands with the engine wiring") && sec.includes("by the standing rules - offers are not placed first yet"), "the copy must not promise offers-first placement while offerRows / periodRows are not in ctxInputs");
-      assert.strictEqual(/ctxInputs[\s\S]{0,400}offers: offerRows/.test(src), false, "when offerRows enter ctxInputs, rewrite the Periods copy (intro, Close-now toast, Generate title) and drop this pin");
+      // U3c (9/23): offerRows / periodRows are in ctxInputs now - the copy promises offers-first placement and nothing else
+      assert.ok(sec.includes('"Generate this period" places what was offered first (offered days first, gaps by each surgeon\'s rules) over the period\'s range') && src.includes("Generate the period when you are ready - offered days are placed first, the gaps by each surgeon's rules.") && sec.includes("offered days first, the gaps by the rules; Accept & Publish is below"), "the Periods copy (intro, Close-now toast, Generate title) must say offers are placed first now that offerRows / periodRows are in ctxInputs");
+      assert.strictEqual(/standing rules - offers are not placed first yet|lands with the engine wiring/.test(src), false, "stale 'not offers-first yet' copy left behind");
+    });
+
+    /* ---------------- H. Prompt 14 part 3c (U3c): the day editor's offer labels + My schedule's offer pills ---------------- */
+    console.log("\n[H] Prompt 14 U3c: offer labels in the day editor + My schedule");
+    // offerCandidateWords lives in index-source.html at MODULE scope as plain JS (no JSX) so the day editor and My
+    // schedule share one vocabulary; the test lifts its source text and runs it here (a behaviour test, not a pin).
+    const ocwSrc = (() => { const a = src.indexOf("\nfunction offerCandidateWords("); if (a < 0) return null; const b = src.indexOf("\n}\n", a); return src.slice(a, b + 3); })();
+    check("U3c: offerCandidateWords speaks the labels from rules.offerState - 'offered <primary|backup|either>', 'offered <x> only, not <role>' + the mode's consequence, 'not offered' + the consequence (exhaustive: ineligible, preferred: penalty), 'rules' (chose / nothing entered); null outside every period or for junk", () => {
+      assert.ok(ocwSrc, "no module-scope offerCandidateWords in index-source.html");
+      const fn = new Function(ocwSrc + "\nreturn offerCandidateWords;")();
+      const per = { key: "p1", label: "Nov 2026 - Jan 2027" };
+      assert.strictEqual(fn(null, "primary"), null);
+      assert.strictEqual(fn("junk", "primary"), null);
+      assert.deepStrictEqual(fn({ period: per, status: "submitted", mode: "preferred", roles: ["primary"] }, "primary"), { kind: "offered", tag: "offered primary", words: "offered primary", mode: "preferred" });
+      assert.deepStrictEqual(fn({ period: per, status: "submitted", mode: "exhaustive", roles: ["primary", "backup"] }, "backup"), { kind: "offered", tag: "offered either", words: "offered either", mode: "exhaustive" });
+      assert.deepStrictEqual(fn({ period: per, status: "submitted", mode: "exhaustive", roles: ["backup"] }, "primary"), { kind: "offered-other", tag: "offered backup only", words: "offered backup only, not primary - only these days: ineligible", mode: "exhaustive" });
+      assert.deepStrictEqual(fn({ period: per, status: "submitted", mode: "preferred", roles: ["primary"] }, "backup"), { kind: "offered-other", tag: "offered primary only", words: "offered primary only, not backup - preferred days: penalty", mode: "preferred" });
+      assert.deepStrictEqual(fn({ period: per, status: "submitted", mode: "exhaustive", roles: [] }, "primary"), { kind: "not-offered", tag: "not offered", words: "not offered - only these days: ineligible", mode: "exhaustive" });
+      assert.deepStrictEqual(fn({ period: per, status: "submitted", mode: "preferred", roles: [] }, "backup"), { kind: "not-offered", tag: "not offered", words: "not offered - preferred days: penalty", mode: "preferred" });
+      assert.deepStrictEqual(fn({ period: per, status: "rules_only", mode: "preferred", roles: [] }, "primary"), { kind: "rules", tag: "rules", words: "rules (chose go by my rules)", mode: null });
+      assert.deepStrictEqual(fn({ period: per, status: "not_started", mode: "preferred", roles: [] }, "primary"), { kind: "rules", tag: "rules", words: "rules (nothing entered)", mode: null });
+      // an unknown role asks about the day, not a role: an offered day is 'offered <x>' whatever was asked
+      assert.strictEqual(fn({ period: per, status: "submitted", mode: "preferred", roles: ["backup"] }, undefined).kind, "offered");
+    });
+    check("U3c pins: offerRows / periodRows enter ctxInputs as offers / periods (with the memo deps) - the ONE wiring the engine, the day editor, the generator and the trade path share; no second buildContext input site adds them", () => {
+      assert.ok(src.includes("      timeOffRows, availabilityRows, schedule, offers: offerRows, periods: periodRows,\n"), "ctxInputs must carry offers: offerRows, periods: periodRows");
+      assert.ok(src.includes("}, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode, eastVacationReviewRows, offerRows, periodRows]);"), "the ctxInputs memo must depend on offerRows and periodRows (a realtime offer must reach the editor)");
+      assert.strictEqual((src.match(/offers: offerRows/g) || []).length, 1, "offers: offerRows appears once (the ctxInputs memo) - every consumer builds from ctxInputs");
+    });
+    check("U3c pins: the day editor lists the offer standing per candidate from offerState on the DRAFT ctx - one editor-<role>-offers line per role block with an editor-offer-cand per pool surgeon (data-id / data-kind), the period's label named; an eligible dropdown option carries the short tag; REASON_WORDS glosses not-offered and softTag knows offered / outside-offers", () => {
+      const ed = src.slice(src.indexOf("\nfunction DayEditor("), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
+      assert.ok(ed.length > 5000, "DayEditor body not found");
+      assert.ok(ed.includes("const offerInfo = React.useMemo(() => {") && ed.includes("try { st = offerState(ctx, day, s.id); } catch (e) {"), "the editor reads rules.offerState(ctx, day, id) on the draft ctx (a thrown read is logged, never a crash)");
+      assert.ok(ed.includes('data-testid={"editor-" + role + "-offers"}') && ed.includes('data-testid="editor-offer-cand" data-id={x.id} data-kind={x.w.kind}') && ed.includes("Offers ({offerInfo.period.label}):"), "the per-role offers line with one span per candidate");
+      assert.ok(ed.includes("const tag = offerTagFor(o.id, role);") && ed.includes('(tags.length ? " (" + tags.join(", ") + ")" : "")'), "the dropdown label carries the offer tag among the soft tags");
+      assert.ok(ed.includes('.filter(s => s.type !== "external")'), "outside surgeons never offer (rules.js drops their rows) - they are not on the line");
+      assert.ok(src.includes('"not-offered": "not among the days offered (only these days)"'), "REASON_WORDS must gloss the hard not-offered");
+      assert.ok(src.includes('case "offered": return "offered day (bonus)";') && src.includes('case "outside-offers": return "outside the offered days (penalty)";'), "softTag must word the two soft offer reasons");
+    });
+    check("U3c pins: with offers in the ctx a claim and a trade acceptance are offers made on the spot (rules doc 2c) - the board gate and tradeEligibility pass { claim: true } (the hard not-offered is skipped, the soft outside-offers still surfaces); the day editor and the generator do NOT claim", () => {
+      assert.ok(src.includes("try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }"), "tradeEligibility must pass claim: true");
+      assert.ok(src.includes("try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }"), "the open-shifts board gate must pass claim: true");
+      const ed = src.slice(src.indexOf("\nfunction DayEditor("), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
+      assert.strictEqual(/claim:\s*true/.test(ed), false, "the day editor never claims - a manual pick onto a not-offered day goes through the Override panel");
+      assert.strictEqual((src.match(/eligibility\([^;\n]*claim: true/g) || []).length, 3, "exactly three claim call sites: the painter, the board gate, the trade path");
+    });
+    check("U3c pins: My schedule marks each upcoming assignment inside a period the person submitted for as offered / outside the offers (mine-offer-tag, from offerState on the app ctx) and each My-offers pill says when the day is already placed (data-placed)", () => {
+      const ms = src.slice(src.indexOf("{/* ================ MY SCHEDULE (Prompt 6 Slice G) ================ */}"), src.indexOf("{/* ================ TIME OFF & TRADES (Prompt 6 Slice G) ================ */}"));
+      assert.ok(ms.length > 3000, "My schedule block not found");
+      assert.ok(ms.includes("const offerTagOf = (d, role) => {") && ms.includes("const st = rulesCtx ? offerState(rulesCtx, d, pid) : null;"), "the upcoming rows read offerState on the app ctx");
+      assert.ok(ms.includes('data-testid="mine-offer-tag" data-offer={t.kind}') && ms.includes('{ kind: "offered"') && ms.includes('{ kind: "outside"'), "the offered / outside chip per upcoming row");
+      // review fix (minor 4): a day offered in the OTHER role only is its own chip - "offered P only" / "offered B only", never "not offered"
+      assert.ok(ms.includes('if (w.kind === "offered-other") return { kind: "other-role", text: w.tag.replace("primary", "P").replace("backup", "B")'), "the other-role chip (he did offer the day) with the role spelled in the text, not only the title");
+      assert.ok(ms.includes('data-testid="mine-offer" data-day={String(o.day).slice(0, 10)} data-placed={placedRole(o) || ""}'), "the My-offers pill carries data-placed");
+    });
+    check("U3c review pins (9/23): the day editor's Offers line lists an INACTIVE surgeon only while he holds a slot in the draft (the dropdown pool's rule) - the memo depends on draft", () => {
+      const ed = src.slice(src.indexOf("\nfunction DayEditor("), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
+      assert.ok(ed.includes('.filter(s => s.type !== "external").filter(s => s.active !== false || s.id === draft.primary || s.id === draft.backup).forEach(s => {'), "the offers line filters inactive surgeons unless they hold the draft's slot");
+      assert.ok(ed.includes("    return period ? { period, items } : null;\n  }, [ctx, day, roster, draft]);"), "the offerInfo memo depends on draft");
+    });
+    // U3c review (major): offers-first is only true when call_offers / call_periods were actually READ. The verdict
+    // is plain JS at module scope; lifted and run here, then pinned to loadOffers / loadPeriods / runGenerate.
+    const olvSrc = (() => { const a = src.indexOf("\nfunction offersLoadVerdict("); if (a < 0) return null; const b = src.indexOf("\n}\n", a); return src.slice(a, b + 3); })();
+    check("U3c review (major): offersLoadVerdict refuses while either table was never read this session (unread / skipped / failed), says 'stale' when both were read once but the latest refresh was skipped or failed, 'ok' when both reads are current", () => {
+      assert.ok(olvSrc, "no module-scope offersLoadVerdict in index-source.html");
+      const fn = new Function(olvSrc + "\nreturn offersLoadVerdict;")();
+      const t = "2026-09-23T20:15:00.000Z";
+      assert.strictEqual(fn(null).verdict, "refuse");
+      assert.strictEqual(fn({ offers: "unread", periods: "unread", offersOkAt: null, periodsOkAt: null }).verdict, "refuse");
+      const skippedBoth = fn({ offers: "skipped", periods: "skipped", offersOkAt: null, periodsOkAt: null });
+      assert.strictEqual(skippedBoth.verdict, "refuse");
+      assert.strictEqual(skippedBoth.why, "call_offers not read (session token missing or expired); call_periods not read (session token missing or expired)");
+      const oneNever = fn({ offers: "ok", periods: "failed", offersOkAt: t, periodsOkAt: null });
+      assert.strictEqual(oneNever.verdict, "refuse");
+      assert.strictEqual(oneNever.why, "call_periods failed to load");
+      assert.strictEqual(fn({ offers: "ok", periods: "unread", offersOkAt: t, periodsOkAt: null }).why, "call_periods not loaded yet");
+      assert.deepStrictEqual(fn({ offers: "ok", periods: "ok", offersOkAt: t, periodsOkAt: t }), { verdict: "ok" });
+      const stale = fn({ offers: "skipped", periods: "ok", offersOkAt: t, periodsOkAt: t });
+      assert.strictEqual(stale.verdict, "stale");
+      assert.strictEqual(stale.why, "call_offers last read 2026-09-23 20:15 UTC, the latest refresh was skipped (session token missing or expired)");
+      const staleBoth = fn({ offers: "skipped", periods: "failed", offersOkAt: t, periodsOkAt: t });
+      assert.strictEqual(staleBoth.verdict, "stale");
+      assert.ok(/^call_offers last read .* was skipped \(session token missing or expired\); call_periods last read .* the latest refresh failed$/.test(staleBoth.why), staleBoth.why);
+    });
+    check("U3c review pins (major): loadOffers / loadPeriods record ok / skipped / failed per table (offersLoad, with the first-ok time); runGenerate consults offersLoadVerdict BEFORE it builds the ctx - 'refuse' toasts and returns (nothing run), 'stale' stamps previewGen.offersStale; the preview header shows the red warning and Accept & Publish confirms it; 'Generate this period' shares the path", () => {
+      assert.ok(src.includes('const [offersLoad, setOffersLoad] = useState({ offers: "unread", periods: "unread", offersOkAt: null, periodsOkAt: null });'), "the load state");
+      assert.ok(src.includes('const markOffersLoad = (table, outcome) => setOffersLoad(s => ({ ...s, [table]: outcome, ...(outcome === "ok" ? { [table + "OkAt"]: new Date().toISOString() } : {}) }));'), "markOffersLoad stamps the first-ok time");
+      assert.ok(src.includes('      if (rows) setOfferRows(rows);\n      markOffersLoad("offers", rows ? "ok" : "skipped");') && src.includes('      console.warn("call_offers load failed", e);\n      markOffersLoad("offers", "failed");'), "loadOffers records ok / skipped (null from readAuthOnlyTable) / failed (threw)");
+      assert.ok(src.includes('      if (rows) setPeriodRows(rows);\n      markOffersLoad("periods", rows ? "ok" : "skipped");') && src.includes('      console.warn("call_periods load failed", e);\n      markOffersLoad("periods", "failed");'), "loadPeriods records ok / skipped / failed");
+      const rg = src.slice(src.indexOf("  const runGenerate = async (o) => {"), src.indexOf("  const rerollGenerate = () => {"));
+      assert.ok(rg.length > 500, "runGenerate not found");
+      const iVerdict = rg.indexOf("const ov = offersLoadVerdict(offersLoad);"), iBusy = rg.indexOf("setGenBusy(true);"), iBuild = rg.indexOf("safeBuildContext(");
+      assert.ok(iVerdict > 0 && iVerdict < iBusy && iBusy < iBuild, "the verdict is read before the busy flag and the ctx build");
+      assert.ok(rg.includes('if (ov.verdict === "refuse") { showToast("Not run: the offers and periods were not loaded (" + ov.why + "), so this run would place nobody\'s offered days first. Sign in again or reload, wait for the load, then generate. Nothing was run.", "error"); return; }'), "refuse = toast + return, nothing run");
+      assert.ok(rg.includes('const offersStale = ov.verdict === "stale" ? ov.why : null;') && rg.includes("ranAt: new Date().toISOString(), ms, offersStale });"), "stale rides on previewGen.offersStale");
+      assert.ok(rg.includes('WARNING: the offers may be stale (" + offersStale + ") - sign in again and re-run before accepting.'), "the run toast warns");
+      assert.ok(src.includes('{preview.offersStale && <span data-testid="gen-preview-offers-warning" role="alert"'), "the preview header shows the warning");
+      assert.ok(src.includes("if (!pv.respectLocks || lockedChanges.length || heldChanges.length || pv.offersStale) {") && src.includes("const staleText = pv.offersStale ? `WARNING - this preview was generated while the offers may have been STALE (${pv.offersStale}); offered days may not have been placed first. Sign in again and re-run to be sure.\\n\\n` : \"\";"), "Accept & Publish forces the confirm and names the stale offers");
+      assert.ok(src.includes("    runGenerate({ ...genOpts, start, end });\n  };") && !/const generatePeriod = [\s\S]*?safeBuildContext/.test(src.slice(src.indexOf("const generatePeriod ="), src.indexOf("const generatePeriod =") + 600)), "'Generate this period' goes through runGenerate (one gate)");
     });
   }
 
