@@ -446,14 +446,19 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
   is headed **TRAUMA** (no "cardiothoracic"); an unassigned slot is **OPEN only from today forward** — earlier days
   render blank, never red.
 - **Minor Monday holidays absorb the weekend before (Faraz 9/22 evening, Prompt 12 U)**: a minor holiday (Memorial Day,
-  July 4th, Labor Day) that falls on a Monday is a **Sat–Mon** unit; the Friday is the reduced weekend unit. Data, not
+  July 4th, Labor Day) that falls on a Monday is a **Sat–Mon** unit; the Friday is the reduced weekend unit — and, since
+  9/22 late (Prompt 12 AC), July 4th is read on its **observed** day (Sunday → Monday, so 2027 = Sat 7/3 – Mon 7/5;
+  Saturday → the Friday; that unit's shape is still open, builder default the Friday alone) while Thanksgiving is
+  **Thu–Sun** every year (2027: 11/25–11/28). Data, not
   code: `groupRules.holidays.mondayMinorAbsorbsWeekend` (true), applied when a year's units are built —
   `helpers.defaultHolidayUnits(year, opts)` (generic, pure) pre-fills Setup → Holidays → Add year (name / tier / days
   only — no notes reach the blob); stored unit days stay authoritative and editable per year **until the next seed
   re-import**: the importer replaces `blob.holidays` from the seed wholesale (no app-edited guard, unlike
   `schedule_days`), so mirror Setup holiday edits into `docs/silvis-seed.json` before re-importing, or stop re-importing
-  the blob after go-live. 2027: Memorial Day 5/29–5/31, Labor Day 9/4–9/6, July 4 (a Sunday) alone; 2026 left as built
-  (the milestone range does not move). Proof: `test/holidays.test.js` (CI step "Holiday unit builder tests").
+  the blob after go-live. 2027: Memorial Day 5/29–5/31, Labor Day 9/4–9/6, July 4th Sat 7/3 – Mon 7/5 (observed Monday;
+  AC), Thanksgiving Thu 11/25 – Sun 11/28 (AC); 2026 left as built (the milestone range does not move; the seed's July 4
+  2026 stays 7/4 although the builder now reads a Saturday July 4 as the observed Friday). Proof: `test/holidays.test.js`
+  (CI step "Holiday unit builder tests").
 - **Standing East rule (Faraz 9/22 evening, Prompt 12 V)**: Khan is on Davenport call every Christmas Eve and Christmas
   Day, so he is never Silvis **primary** on 12/24–12/25 in any year (backup stays open under his East-day rule). Data,
   not code: `surgeonRules.<id>.eastStanding = [{ name, days: ["MM-DD"] }]` (s1: Christmas 12-24 + 12-25), read by

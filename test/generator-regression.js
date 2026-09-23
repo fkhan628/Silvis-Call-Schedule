@@ -1267,24 +1267,30 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
 // ---- Prompt 12 U (9/22 evening) ----
 // Seed pin, no generator run: a MINOR holiday on a Monday absorbs the weekend
 // before it (Sat-Mon) from 2027 on - Memorial Day 5/29-5/31, Labor Day 9/4-9/6,
-// July 4 2027 (a Sunday) alone - and 2026's units stay exactly as built before
-// the rule, so the milestone range 2026-11-02 -> 2027-01-03 does not move.
-// The Friday before each Sat-Mon unit is not a unit day in ctx (it is the
-// reduced weekend unit; test/holidays.test.js proves the generator's handling).
+// July 4 2027 (a Sunday, observed Monday 7/5) Sat 7/3 - Mon 7/5 and Thanksgiving
+// 2027 Thu 11/25 - Sun 11/28 (Prompt 12 AC, 9/22 late; under U July 4 was the
+// Sunday alone and Thanksgiving the Thursday) - and 2026's units stay exactly
+// as built before the rule, so the milestone range 2026-11-02 -> 2027-01-03
+// does not move. The Friday before each Sat-Mon unit is not a unit day in ctx
+// (it is the reduced weekend unit; test/holidays.test.js proves the generator's
+// handling).
 {
   CUR.range = "seed-U"; CUR.seed = "-"; CUR.day = "-";
   const unitDays = (y, name) => { const u = (seed.holidays.units[y] || []).find((x) => x.name === name); return u ? u.days : null; };
   eq(seed.groupRules.holidays.mondayMinorAbsorbsWeekend, true, "seed: groupRules.holidays.mondayMinorAbsorbsWeekend (Prompt 12 U)");
   eq(unitDays("2027", "Memorial Day"), ["2027-05-29", "2027-05-30", "2027-05-31"], "seed 2027 Memorial Day is Sat-Mon");
   eq(unitDays("2027", "Labor Day"), ["2027-09-04", "2027-09-05", "2027-09-06"], "seed 2027 Labor Day is Sat-Mon");
-  eq(unitDays("2027", "July 4th"), ["2027-07-04"], "seed 2027 July 4th (a Sunday) stays its own day");
+  // Prompt 12 AC (9/22 late) flip: was ["2027-07-04"] "stays its own day"; Thanksgiving 2027 pin added.
+  eq(unitDays("2027", "July 4th"), ["2027-07-03", "2027-07-04", "2027-07-05"], "seed 2027 July 4th (a Sunday, observed Monday 7/5) is Sat-Mon (Prompt 12 AC)");
+  eq(unitDays("2027", "Thanksgiving"), ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"], "seed 2027 Thanksgiving is Thu-Sun, 4 days (Prompt 12 AC)");
   eq(unitDays("2026", "Memorial Day"), ["2026-05-25"], "seed 2026 Memorial Day left as built (past)");
   eq(unitDays("2026", "July 4th"), ["2026-07-04"], "seed 2026 July 4th left as built (past)");
   eq(unitDays("2026", "Labor Day"), ["2026-09-07"], "seed 2026 Labor Day left as built (past)");
   eq(unitDays("2026", "Thanksgiving"), ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"], "seed 2026 Thanksgiving unchanged (Thu-Sun)");
   eq(unitDays("2026", "Christmas"), ["2026-12-24", "2026-12-25"], "seed 2026 Christmas unchanged");
   eq(unitDays("2026", "New Year's"), ["2026-12-31", "2027-01-01"], "seed 2026 New Year's unchanged");
-  [["2027-05-28", "2027-05-29", "Memorial Day"], ["2027-09-03", "2027-09-04", "Labor Day"]].forEach(([fri, sat, name]) => {
+  // Prompt 12 AC: the July 4th 2027 unit joins the Sat-Mon list (Fri 7/2 free, Sat 7/3 opens the 3-day unit).
+  [["2027-05-28", "2027-05-29", "Memorial Day"], ["2027-09-03", "2027-09-04", "Labor Day"], ["2027-07-02", "2027-07-03", "July 4th"]].forEach(([fri, sat, name]) => {
     CUR.day = fri;
     ok(!ctx.holidayByDay[fri] && !HOLIDAY[fri], "the Friday before the " + name + " unit is not a unit day (reduced weekend unit)");
     CUR.day = sat;

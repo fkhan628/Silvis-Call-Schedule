@@ -1547,22 +1547,29 @@ function schedulePublishedMsg(period, lines, maxLines) {
    defaultHolidayUnits(year, opts) -> the six holiday units of `year` in the
    seed's shape and order: [{ name, tier, days[, note] }] for Memorial Day,
    July 4th, Labor Day, Thanksgiving, Christmas, New Year's. Memorial Day =
-   last Monday of May, July 4th = 07-04, Labor Day = first Monday of
-   September, Thanksgiving = fourth Thursday of November (a single day by
-   default - the rules doc leaves Thu-only vs Thu-Sun open per year),
-   Christmas = 12-24 + 12-25, New Year's = 12-31 + 01-01 of the next year,
-   keyed under the eve's year like the seed. opts.tiers is the seed's
+   last Monday of May, Labor Day = first Monday of September, July 4th = the
+   OBSERVED day (Prompt 12 AC, Faraz 9/22 late: a Sunday July 4 is observed
+   Monday 07-05, a Saturday July 4 is observed Friday 07-03, otherwise 07-04),
+   Thanksgiving = fourth Thursday of November through the Sunday after (four
+   days, Thu-Sun, every year - Prompt 12 AC; under U it was the Thursday
+   alone), Christmas = 12-24 + 12-25, New Year's = 12-31 + 01-01 of the next
+   year, keyed under the eve's year like the seed. opts.tiers is the seed's
    holidays.rules.tiers shape ({ major: [names], minor: [names] }); a name in
    neither list keeps the standard tier. opts.mondayMinorAbsorbsWeekend ===
-   true (the seed's groupRules.holidays flag): a MINOR holiday whose date is a
-   Monday becomes [Sat, Sun, Mon] - "the unit is Sat-Mon; the Friday stays a
-   standalone weekend day (the reduced weekend unit)"; any other date stays a
-   single day (July 4 on a Monday - 2033 - absorbs; on a Sunday or a Tuesday
-   it does not). Setup's Add year pre-fills a new year from this; the stored
-   days remain authoritative and editable, and the engine reads only stored
-   days. Pure, generic (no surgeon or year branches): local-midnight Date
-   arithmetic through parse/fmt/addD above, never new Date("YYYY-MM-DD")
-   (UTC parsing, which shifts a day west of Greenwich). */
+   true (the seed's groupRules.holidays flag): a MINOR holiday whose (observed)
+   day is a Monday becomes [Sat, Sun, Mon] - "the unit is Sat-Mon; the Friday
+   stays a standalone weekend day (the reduced weekend unit)"; any other day
+   stays a single day. So July 4 on a Monday (2033) absorbs, on a Sunday
+   (2027, 2032) the observed Monday absorbs (Sat 7/3 - Mon 7/5), on a Tuesday
+   (2028) it is alone, and on a Saturday (2037) the observed Friday is alone:
+   the rule speaks of the weekend BEFORE a Monday, and no decision covers a
+   Friday-observed holiday (the open point in the seed's dayMembershipNote).
+   Setup's Add year pre-fills a new year from this; the stored days remain
+   authoritative and editable, and the engine reads only stored days (the
+   seed's 2026 July 4th stays 07-04 as built). Pure, generic (no surgeon or
+   year branches): local-midnight Date arithmetic through parse/fmt/addD
+   above, never new Date("YYYY-MM-DD") (UTC parsing, which shifts a day west
+   of Greenwich). */
 var HU_ORDER = ["Memorial Day", "July 4th", "Labor Day", "Thanksgiving", "Christmas", "New Year's"];
 var HU_STANDARD_TIER = { "Memorial Day": "minor", "July 4th": "minor", "Labor Day": "minor", "Thanksgiving": "major", "Christmas": "major", "New Year's": "major" };
 // The nth weekday (0 = Sun .. 6 = Sat) of month (1-12) as "YYYY-MM-DD":
@@ -1586,16 +1593,20 @@ function defaultHolidayUnits(year, opts) {
     ["major", "minor"].forEach(function (t) { (Array.isArray(opts.tiers[t]) ? opts.tiers[t] : []).forEach(function (n) { tierOf[n] = t; }); });
   }
   var ys = String(y), ns = String(y + 1);
+  // July 4th on its observed day: Sunday -> the Monday after, Saturday -> the Friday before (Prompt 12 AC).
+  var fourth = parse(ys + "-07-04");
+  var observedFourth = fourth.getDay() === 0 ? fmt(addD(fourth, 1)) : fourth.getDay() === 6 ? fmt(addD(fourth, -1)) : ys + "-07-04";
   var single = {
     "Memorial Day": huNthWeekday(y, 5, 1, -1),
-    "July 4th": ys + "-07-04",
-    "Labor Day": huNthWeekday(y, 9, 1, 1),
-    "Thanksgiving": huNthWeekday(y, 11, 4, 4)
+    "July 4th": observedFourth,
+    "Labor Day": huNthWeekday(y, 9, 1, 1)
   };
+  var thanksgiving = parse(huNthWeekday(y, 11, 4, 4));
   return HU_ORDER.map(function (name) {
     var tier = tierOf[name], days, note = null;
     if (name === "Christmas") { days = [ys + "-12-24", ys + "-12-25"]; note = "Eve + Day as one unit"; }
     else if (name === "New Year's") { days = [ys + "-12-31", ns + "-01-01"]; note = "Eve + Day as one unit"; }
+    else if (name === "Thanksgiving") { days = [0, 1, 2, 3].map(function (i) { return fmt(addD(thanksgiving, i)); }); } // Thu-Sun (Prompt 12 AC)
     else {
       var d = single[name], dt = parse(d);
       days = absorb && tier === "minor" && dt.getDay() === 1 ? [fmt(addD(dt, -2)), fmt(addD(dt, -1)), d] : [d];

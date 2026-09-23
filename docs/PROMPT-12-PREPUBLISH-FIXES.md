@@ -831,3 +831,88 @@ Review fixes (9/22 late, fix stage; all inside AB's files):
 - Not fixed, not AB's: the stale `groupRules.generationHorizons.note` in the seed ("from the last published day"; the importer drops
   note keys, so it never reaches the blob) — the orchestrator reword/drops it at the next seed edit; the two pre-existing smoke flakes
   (Rules "Primary contribution" blob pin, Factory-reset 900 ms write window vs the autosave upsert) are noted for a follow-up.
+
+## Item AC — 2027 holiday units: Thanksgiving Thu–Sun, July 4 on its observed day (Faraz, 9/22 late evening; appended by Claude Code)
+
+Faraz, verbatim: *"2027 units: Thanksgiving Thu–Sun (same shape as 2026); July 4, 2027 falls on a Sunday and is observed Monday 7/5,
+so the unit is Sat 7/3 – Mon 7/5 under the Monday-absorbs-the-weekend rule. Data only, editable in Setup."* (the fourth of his four
+late-evening instructions after "Go on the 17-change import").
+
+What changed: item U had left two 2027 questions open — Thanksgiving Thu-only (the builder default, 11/25) vs Thu–Sun, and July 4
+2027 (a Sunday) as the Sunday alone vs Sat–Sun. Both are closed as data: the seed's 2027 units carry the shapes he named, and the
+generic per-year builder (`helpers.defaultHolidayUnits`, what Setup → Holidays → Add year pre-fills) follows the same two rules in
+every year so a future Add year lands on the same shapes. Stored days stay authoritative and editable per year; the engine reads
+only stored days; no surgeon- or year-specific code.
+
+Delivered:
+- Seed (`docs/silvis-seed.json`, Edit tool, ASCII, key order intact): `holidays.units["2027"]` Thanksgiving → `11/25, 11/26,
+  11/27, 11/28`; July 4th → `07/03, 07/04, 07/05`; Memorial Day (5/29–5/31), Labor Day (9/4–9/6), Christmas, New Year's 2027 and
+  every 2026 unit unchanged. `holidays.rules.mondayMinor` (a rule string that reaches the blob) gains two sentences: July 4th is
+  read on its observed day (Sunday → Monday → Sat–Mon; Saturday → the Friday) and Thanksgiving is Thu–Sun every year — rule
+  only, no reason, and only what is ruled (the review dropped "the Friday alone" from it: that shape is undecided and lives in
+  `dayMembershipNote` / `openQuestions` / the rules doc, never in a blob-bound rule string). `holidays.rules.dayMembershipNote` (dropped by the importer) closes the two questions and names the one point
+  still open: a **Saturday** July 4 is observed on the Friday and the builder default is that Friday alone (next: 2037) — no
+  decision covers it. `openQuestions` 3 struck and answered; one `answeredQuestions` line; one `_meta.revisions` sentence
+  (reason-free — it lands in `settings.seedRevisions`).
+- `helpers.js` `defaultHolidayUnits(year, opts)`: Thanksgiving = the fourth Thursday of November through the Sunday after (four
+  days, every year, flag or not — a major never absorbs); July 4th = the observed day (Sunday → 07-05, Saturday → 07-03, else
+  07-04) and the existing Monday-minor step then reads that observed day, so a Sunday July 4 becomes [Sat, Sun, Mon] with the
+  flag (2027, 2032), a Monday July 4 still does (2033), a Tuesday is alone (2028) and a Saturday July 4 is the observed Friday
+  alone with or without the flag (2037) — the rule speaks of the weekend BEFORE a Monday and no decision covers a Friday, so the
+  builder does not invent one (documented in the header comment). Memorial Day, Labor Day, Christmas, New Year's, tiers, purity
+  and validation unchanged. The observed-day shift is independent of the tier (a July 4th listed as major still lands on its
+  observed day; only the absorb step reads the tier).
+- `test/holidays.test.js` (test-first): in-place flips with a comment naming AC — A3 (seed → ctx: July 2027 = 7/3–7/5, Fri 7/2
+  free), B2/B3 (builder 2027: July 4th observed Monday alone without the flag, Sat–Mon with it; Thanksgiving 4 days), B4 (2028
+  Thanksgiving 11/23–26), B6 (2026 builder view: July 4th leaves the "== seed" list, Thanksgiving builder == seed's Thu–Sun), B8
+  (2026–2040 loop: 4-day Thanksgiving Thu–Sun, July 4th = the observed day), C1 (dayMembershipNote pins: the two questions closed,
+  the Saturday shape named as open; mondayMinor states the observed-day reading) — and the new section E under
+  `// ---- Prompt 12 AC (9/22 late) ----`: E1 2028 (Tue 7/4 alone; Thanksgiving 11/23–26), E2 2032 (Sun 7/4 → 7/3–7/5 with the
+  flag, observed Monday alone without), E3 2033 (Mon 7/4 → 7/2–7/4), E4 2037 (Sat 7/4 → `["2037-07-03"]`, flag or not), E5 a
+  major July 4th still lands on its observed day without absorbing, E6 majors never absorb, E7 the 2026 builder view (Thanksgiving
+  11/26–29 = the seed's; July 4 2026, a Saturday → observed Fri 7/3 alone while the seed's `["2026-07-04"]` is asserted
+  unchanged — the difference is by design and commented), E8 engine proof from the seed (holidayUnits over 2027-11 = Thanksgiving
+  11/25–11/28 only, 11/24 and 11/29 free, four-day unit on every day), E9 `proveUnit` over 2027-07-01..2027-07-11 (seed 3, bestOf 4,
+  1500 ms): one primary + one backup through 7/3–7/5, Fri 7/2 a reduced weekend unit (`present: [7/2]`, `preempted: [7/3, 7/4]`,
+  `reduced: true`), no hard violations.
+  Fail-before, verbatim. Against the unchanged seed and builder: `FAIL [A3: seed -> ctx: July 4 2027 (a Sunday, observed Monday 7/5)
+  is Sat 7/3 - Mon 7/5; Fri 7/2 is not a unit day; the milestone-range units are untouched]: holidayUnits July 2027 expected
+  [{"name":"July 4th","tier":"minor","days":["2027-07-03","2027-07-04","2027-07-05"]}] got
+  [{"name":"July 4th","tier":"minor","days":["2027-07-04"]}]`. With the seed changed and the builder still unchanged: `FAIL [B2: flag
+  absent / false -> every minor holiday is a single day (July 4th: the observed day)]: July 4th 2027 without the flag = the observed
+  Monday alone expected ["2027-07-05"] got ["2027-07-04"]`; the unchanged builder's own output for 2027 (one-off node, since the
+  suite stops at the first failure): Thanksgiving `["2027-11-25"]` (the Thursday only) vs the seed's four days, July 4th
+  `["2027-07-04"]` (the Sunday alone) vs the seed's Sat–Mon — the C1 seed ⇔ builder pin fails on it. Pass-after: `ok 389 assertions
+  (112 ms; limit 4000 ms)` (was `ok 326 assertions`).
+- `test/generator-regression.js` (the U seed pin, flipped in place with the AC comment): `seed 2027 July 4th (a Sunday, observed
+  Monday 7/5) is Sat-Mon (Prompt 12 AC)` = `["2027-07-03","2027-07-04","2027-07-05"]`, a new line `seed 2027 Thanksgiving is Thu-Sun,
+  4 days (Prompt 12 AC)`, and `["2027-07-02", "2027-07-03", "July 4th"]` joins the Friday-free / Saturday-opens-the-3-day-unit
+  ctx loop; the 2026 pins and the budget are untouched. Fail-before against the unchanged seed: `FAIL [range seed-U seed - day -]:
+  seed 2027 July 4th (a Sunday, observed Monday 7/5) is Sat-Mon (Prompt 12 AC) expected ["2027-07-03","2027-07-04","2027-07-05"] got
+  ["2027-07-04"]`. Pass-after: `ok 276930 assertions, 50 seeds x 4 ranges ... (8744 ms total; budget 40000 ms via
+  SILVIS_GEN_BUDGET_MS)` — the override was used because another agent loaded the machine (the unchanged head took 16674 ms and
+  tripped the 10 s budget before any AC edit); the budget in the file is unchanged.
+- Importer dry run (read-only, live project): with this seed `call_schedule_data 'main': roster=unchanged, surgeonRules=update,
+  groupRules=update, holidays=update, settings=update` / `schedule_days: insert 0, update 4, delete 0, unchanged 69` (11/26–11/29
+  locks/note change — item Z's marker leaving the notes) / `availability: ... unchanged 48` / `time_off: ... unchanged 7` / `Total
+  changes: 8`. The same dry run with the HEAD seed (before AC) reads `holidays=unchanged` and `Total changes: 7`, so AC's whole
+  live footprint is the `holidays` blob key (units 2027 + rules.mondayMinor) plus its revision sentence in `settings`; no row changes.
+  The denylist gate passed (exit 0).
+- Docs: rules doc §5 (the 9/22 paragraph: "still to set" → decided 9/22 late; table rows July 4th and Thanksgiving carry the 2027
+  cells) and §8 item 3 struck; guide §15 U bullet gains the observed-day / Thu–Sun clause and its 2027 list; this entry.
+- Gates: `npm test` green (rules 1563, east-feed 83, data-layer 82/0, schema 118, importer 739, week-rows 16/0, exports 41/0,
+  totals 32/0, holidays 389, regression 276930 — under `SILVIS_GEN_BUDGET_MS=40000`, loaded machine); `node build.js` → `OK  build
+  complete` (1566 createElement calls, 0 injected imports) then `git checkout -- index.html version.json`. No smoke: `index-source.html`
+  and `test/ui/smoke.mjs` are untouched (Add year already reads the builder). Until the orchestrator applies the seed, the smoke's
+  "Import dry run" pins will show the drift above (`Total changes: 8`).
+- Decisions: a Saturday July 4 (observed Friday) is a single day in the builder — Faraz's rule names the weekend BEFORE a Monday and
+  says nothing about a Friday, so nothing is invented; the seed names it as the remaining open point (2037 is the next case). The
+  seed's 2026 July 4th stays `["2026-07-04"]` (past, as built) although the builder now reads that Saturday as the observed Friday —
+  stored days are authoritative and the milestone range does not move. The observed-day shift applies to July 4th only (Memorial Day
+  and Labor Day are Mondays by definition; the majors have fixed dates). `holidays.rules.mondayMinor` stays a rule string in the
+  blob (no reason in it); the reasons and the open point live in the rules doc §5 and the `dayMembershipNote` (dropped by the importer).
+
+Live actions for the orchestrator: apply this wave's seed (`scripts/import-seed.js --apply` after Faraz sees the dry-run diff) — AC's
+part is the `holidays` blob update (2027 Thanksgiving 4 days, July 4th 3 days, `rules.mondayMinor`) and the revision line in
+`settings`; nothing for `schedule_days`, `time_off` or `availability`; no edge function, no deploy needed for AC (helpers.js reaches
+Pages with the next push of `main`).

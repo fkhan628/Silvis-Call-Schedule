@@ -272,9 +272,13 @@ over any weekend unit it overlaps; the leftover weekend days form a reduced week
 table below stand as the rule. ⟶ **9/22 evening (Faraz): a minor holiday that falls on a Monday absorbs the weekend
 before it** — the unit is **Sat–Mon** (one primary + one backup through all three days); the Friday stays a standalone
 weekend day (the reduced weekend unit). So Memorial Day 2027 = Sat 5/29 – Mon 5/31 and Labor Day 2027 = Sat 9/4 – Mon 9/6.
-July 4 is its own day when it is not a Monday (2027: Sun 7/4 alone, the holiday unit taking precedence over that
-weekend's unit; 2028: Tue 7/4). Day membership stays **editable per year in Setup**; still to set when 2027 is
-generated: Thanksgiving 2027 Thu-only vs Thu–Sun.
+July 4 is its own day when its observed day is not a Monday (2028: Tue 7/4). Day membership stays **editable per year in Setup**.
+⟶ **Decided 9/22 late (Faraz, Prompt 12 AC): Thanksgiving is Thu–Sun every year** (2027: Thu 11/25 – Sun 11/28, the
+same shape as 2026), **and July 4 uses its observed day** — July 4, 2027 falls on a Sunday and is observed Monday 7/5,
+so the unit is **Sat 7/3 – Mon 7/5** under the Monday-absorbs-the-weekend rule (Fri 7/2 is the reduced weekend unit).
+A Saturday July 4 is observed on the Friday; the builder default for that shape is the Friday alone (next: 2037), which
+nobody has decided yet — the one point still open. Data only (`holidays.units["2027"]`), editable in Setup; the
+per-year builder follows the same shapes for Add year.
 Seed keys (Prompt 12 U): `groupRules.holidays.mondayMinorAbsorbsWeekend` (true) — read by the per-year unit builder (`helpers.defaultHolidayUnits`) that Setup's Add year pre-fills; stored days stay authoritative and editable in Setup **until the next seed re-import** (`scripts/import-seed.js --apply` replaces `blob.holidays` from the seed wholesale — mirror Setup holiday edits into `docs/silvis-seed.json` before re-importing, or stop re-importing the blob after go-live); 2026 left as built.
 
 ⟶ **9/22 evening — standing East rule: Khan is on Davenport call every Christmas Eve and Christmas Day.** That is
@@ -286,9 +290,9 @@ Seed key (Prompt 12 V): `surgeonRules.s1.eastStanding` (generic — any surgeon,
 | Holiday | Tier | 2026 unit days | Notes |
 |---|---|---|---|
 | Memorial Day | minor | Mon 5/25 (past) | 2027: **Sat 5/29 – Mon 5/31** (Monday absorbs the weekend) |
-| July 4th | minor | Sat 7/4 (past) | 2027: Sun 7/4 (decide whether the unit is the Sunday or Sat–Sun); 2028: Tue 7/4 |
+| July 4th | minor | Sat 7/4 (past) | 2027: **Sat 7/3 – Mon 7/5** (Sunday holiday observed Monday 7/5; the Monday absorbs the weekend — Faraz 9/22 late, Prompt 12 AC); 2028: Tue 7/4 alone |
 | Labor Day | minor | Mon 9/7 (past) | 2027: **Sat 9/4 – Mon 9/6** (Monday absorbs the weekend) |
-| Thanksgiving | major | **Thu 11/26 – Sun 11/29 (one unit; Khan primary — Faraz 9/21, confirmed by Faraz 9/22 evening; Prompt 12 Z)** | Acton never (opted out); Philip ≤ 1 major; backup: anyone not opted out |
+| Thanksgiving | major | **Thu 11/26 – Sun 11/29 (one unit; Khan primary — Faraz 9/21, confirmed by Faraz 9/22 evening; Prompt 12 Z)** | Acton never (opted out); Philip ≤ 1 major; backup: anyone not opted out. 2027: **Thu 11/25 – Sun 11/28** (Thu–Sun every year — Faraz 9/22 late, Prompt 12 AC) |
 | Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; **Khan never primary (East, every year)**; Burchett available 12/25–28 |
 | New Year's | major | Thu 12/31 + Fri 1/1/2027 | Eve + Day as one unit; Burchett available 12/30–1/3 |
 
@@ -475,7 +479,7 @@ sits outside them: not primary); only the recurring weekday patterns are waived 
 
 1. **10/15 (Thu)** — one of the two open primary days in the locked October import (the other is Sat 10/24, item 6); nobody's rules allow it. The group will discuss. (Imported unlocked; the generator lists it as uncovered with reasons.)
 2. **Sarkar's home email** — none on record (goes into the private `silvis-contacts.md`, not here).
-3. **Holiday unit days for 2027** — tiers confirmed and Monday minors absorb the weekend before (Sat–Mon), decided 9/22 evening; Christmas and New Year's stay Eve + Day. Still to set when 2027 is generated: Thanksgiving 2027 Thu-only or Thu–Sun.
+3. ~~Holiday unit days for 2027~~ — tiers confirmed and Monday minors absorb the weekend before (Sat–Mon), decided 9/22 evening; **decided 9/22 late (Prompt 12 AC): Thanksgiving is Thu–Sun every year (2027: 11/25–11/28) and July 4 uses its observed day (2027: Sunday → Monday 7/5, unit Sat 7/3 – Mon 7/5)**; Christmas and New Year's stay Eve + Day. Data in `holidays.units`, editable in Setup. Not yet decided: a Saturday July 4 (observed Friday; the builder default is the Friday alone; next in 2037).
 4. ~~Khan as backup on ordinary Tue/Thu~~ — answered 9/22: backup is open to everyone.
 5. **Philip's monthly cap** — none stated; the group default (8 primary) applies from November although his own October was 15 days.
 6. **Sat 10/24 primary** — open since Sarkar dropped to two days (Faraz 9/22 evening); who covers it (see §7 candidates).
