@@ -92,6 +92,23 @@ check("offerTimeline: absent rules fall back to the documented defaults (= the s
   eq(H.offerTimeline(null, seed.groupRules.offerPeriods), null);
   eq(H.offerTimeline({ start_day: "2026-11-02", length_months: 0 }, seed.groupRules.offerPeriods).length_months, 3, "a non-positive length reads as the default");
 });
+check("PD (9/23): the seed's offerPeriods[0] is published (read-only for a surgeon) and offerNextPeriod lands on offerPeriods[1] = Feb 2027 - Apr 2027 (Faraz's freeze 12/21 / publish by 1/4 = the 3-month preset's arithmetic; the end 4/30 is his, the preset would say Sunday 5/2)", () => {
+  const P = seed.offerPeriods;
+  eq(P.length, 2);
+  eq([P[0].label, P[0].status, P[0].start, P[0].end, P[0].offersCloseAt], ["Nov 2026 - Jan 2027", "published", "2026-11-02", "2027-01-03", "2026-10-02"]);
+  eq([P[1].label, P[1].start, P[1].end, P[1].offersCloseAt, P[1].publishBy, P[1].status, P[1].rulesOnly, P[1].offerModes], ["Feb 2027 - Apr 2027", "2027-02-01", "2027-04-30", "2026-12-21", "2027-01-04", "upcoming", [], {}]);
+  eq(H.offerPeriodOpen(P[0], "2026-09-23"), false, "published = frozen for a surgeon whatever the close date (the painter greys its days; OF003 in the database still reads offers_close_at only)");
+  eq(H.offerPeriodOpen(P[1], "2026-09-23"), true);
+  eq(H.offerNextPeriod(P, "2026-09-23").label, "Feb 2027 - Apr 2027", "the painter, My schedule and the Periods box speak to the second period");
+  eq(H.offerNextPeriod(P, "2026-12-20").label, "Feb 2027 - Apr 2027", "the day before the freeze it is still open");
+  eq(H.offerNextPeriod(P, "2026-12-21").label, "Nov 2026 - Jan 2027", "from the freeze (12/21) to 1/3 no period is open: the fallback is the earliest period still running - the published first one, read-only - until a third period exists or 1/3 passes (helpers.offerNextPeriod as documented; reported, not changed here)");
+  eq(H.offerNextPeriod(P, "2027-01-04").label, "Feb 2027 - Apr 2027", "from 1/4 the frozen second period is the only one running");
+  eq(H.offerNextPeriod([P[0]], "2026-09-23").label, "Nov 2026 - Jan 2027", "with the first period alone (today's live table) the painter falls back to it, read-only");
+  const t3 = H.offerTimeline({ start_day: "2027-02-01", length_months: 3 }, seed.groupRules.offerPeriods);
+  eq([t3.offers_close_at, t3.publish_by, t3.remind_on], ["2026-12-21", "2027-01-04", ["2026-12-07", "2026-12-18"]], "the preset's close / publish-by / reminder days for a 2/1 start");
+  eq(t3.end_day, "2027-05-02", "the preset's end would be Sunday 5/2 (4/30 is a Friday) - the seed keeps Faraz's stated 4/30 (seed open question 17)");
+  eq(H.offerTimeline(P[1], seed.groupRules.offerPeriods).remind_on, ["2026-12-07", "2026-12-18"], "the 9/29-style reminders now fall on 12/7 and 12/18");
+});
 
 /* ---------------- B. parity with rules.buildContext ---------------- */
 console.log("\n[B] parity: helpers.offerStatus == rules' derived status");

@@ -140,7 +140,7 @@ eq(derivedSR.d.explicitListMonths, undefined, "no explicit list -> nothing gover
 eq(SA.seedToSurgeonRules(seed)[ACTON].explicitListMonths, ["2026-10"], "Y: Acton's explicitListMonths = October only (T had the November object entry)");
 eq(SA.seedToSurgeonRules(seed)[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
 eq(SA.seedToSurgeonRules(seed)[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, { month: "2026-12", roles: ["primary", "backup"] }], "T: Burchett likewise, between his October and December entries (Y leaves his November object entry as written); 9/23: December is an object entry too - his 9/17 list names primary or backup");
-eq(SA.seedToTimeOffRows(seed).length, 7, "seven vacation rows (Acton x2, Philip x1, Burchett x4 - the 2027 weekends stated 9/22 evening)");
+eq(SA.seedToTimeOffRows(seed).length, 8, "eight vacation rows (Acton x2, Philip x1, Burchett x5 - the 2027 weekends stated 9/22 evening + 2027-07-22..08-02 stated 9/23)");
 const sched = SA.seedToSchedule(seed);
 eq(sched["2026-09-30"].primaryLocked, true, "externalCover day is primary-locked");
 eq(sched["2026-10-15"].primaryLocked, false, "null slot is never locked");

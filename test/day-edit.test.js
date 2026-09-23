@@ -72,7 +72,7 @@ const LIVE = [
   row("2026-10-21", "s3", true, "s5", false, "import", 2, PUB_TAG, OFFICE_SRC),
   row("2026-10-22", "s6", true, "s4", true, "import", 1, "seed", "seed: burchett-email-2026-09-17"),
   row("2026-10-23", "s3", true, "s5", false, "import", 2, PUB_TAG, "seed: burchett-email-2026-09-18"),
-  row("2026-10-24", "s1", false, "s5", false, "generated", 3, PUB_TAG, "seed: faraz-2026-09-22-sarkar-two-days - open \u2014 Sarkar at two days per week from 9/22"),
+  row("2026-10-24", "s1", false, "s5", false, "generated", 3, PUB_TAG, "open (9/22)"), // the live note after the 9/23 reword (Faraz: no person or status in an anon-readable note)
   row("2026-10-25", "s2", true, "s5", false, "import", 2, PUB_TAG, "seed: burchett-email-2026-09-17")
 ];
 const FOUR_SETS = ["2026-10-09:backup=s2", "2026-10-15:backup=s2", "2026-10-20:backup=s2", "2026-10-22:backup=s2"];

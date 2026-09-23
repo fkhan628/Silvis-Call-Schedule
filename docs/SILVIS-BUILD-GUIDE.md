@@ -1066,7 +1066,7 @@ backup rows are his derived week plus Faraz's 11/16 decision, locks), so he read
 Setup import does not until part 3** (it applies availability / time_off / schedule_days only and cannot write
 offers, so a period-aware default there would retire a whitelist without writing the offers) — plans one `call_periods`
 row (upsert by `start_day`; the seed owns label, dates, `rules_only_ids` and its `offer_modes` keys, merged so app-set
-modes for others stay; `status` is written on insert only, the app owns the lifecycle) and the `call_offers` rows: one
+modes for others stay; the seed's `status` advances the live row one way — upcoming < closed < generated < published — and never moves it back, so the 9/23 `published` of the first period reaches its row while a stale seed `upcoming` cannot reopen a period the cron or the app closed; PD 9/23, before it status was written on insert only) and the `call_offers` rows: one
 per listed day inside the period **on or after today in America/Chicago** (the trigger refuses a past day, OF001);
 `role_pref` from the list's role, a plain list = `either` (an optional `rolePref` on the tag overrides it); a day
 inside the person's seed vacation is skipped and listed (OF002 would refuse it); a day that is already locked stays an
@@ -1168,7 +1168,7 @@ painter, the Periods section, the day editor's offer column and My schedule's of
 order they must land (the orchestrator's live steps after the merge — the F03 remainder):** (1) the two RPCs —
 `sql/migrations/2026-09-23-offer-mode-rpc.sql` (`set_offer_mode`, `save_offers`) and their probe — the painter's Save
 answers `404 PGRST202` until then; (2) the seed apply — `node scripts/import-seed.js --apply --workdir <linked dir>` —
-one `call_periods` row, 79 `call_offers` rows (Burchett 34, Acton 10, Philip 35), the 20 retired `available` rows and
+one `call_periods` row, 79 `call_offers` rows (Burchett 34, Acton 10, Philip 35), the 20 retired `available` rows and (PD 9/23 afternoon, the second apply: the first period's row updated to `published`, the Feb 2027 – Apr 2027 row inserted — freeze 12/21, publish by 1/4, no rules-only list, no modes — Burchett's 2027-07-22..08-02 `time_off` row, the offers unchanged at 79) and
 the blob's `surgeonRules` / `groupRules` / `settings`, **before 2026-10-02** (OF003 refuses seed-entered offers inside
 the period from the close on); (3) `send-notification` (the offers categories over the v4 role / party gate) and
 `daily-reminder` (mode `offers` beside open-shifts) redeployed from this head, then the `silvis-offers-daily` cron

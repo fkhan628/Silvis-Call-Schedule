@@ -95,7 +95,8 @@
 // above (the in-app Setup import applies availability / time_off / schedule_days only and cannot write offers
 // until part 3, so a period-aware default there would retire a whitelist without writing the offers).
 //   offerPeriods[]                        -> call_periods rows (upsert by start_day; the seed owns label, dates,
-//                                            rules_only_ids and its offer_modes keys; status is written on insert only)
+//                                            rules_only_ids and its offer_modes keys; the seed's status ADVANCES the live
+//                                            one - upcoming < closed < generated < published - and never moves it back)
 //   surgeonRules[id].offerSources         -> tags { source, tag[, rolePref] } on the lists that ARE the offers:
 //     .explicitAvailable[month]              a plain list -> 'either', a role-keyed list -> that role
 //     .offeredDays[month]                    same shapes; a list the legacy derivation never reads (Acton's November)
@@ -391,6 +392,15 @@ var IMP_OFFER_ROLES = { primary: true, backup: true, either: true };
 var IMP_OFFER_SOURCES = { "email-relay": true, "import": true };
 var IMP_OFFER_LIST_KEYS = ["explicitAvailable", "offeredDays", "availableWeeks"];
 var IMP_PERIOD_STATUS = { upcoming: true, closed: true, generated: true, published: true };
+// PD (9/23): the lifecycle order. The seed's status advances a live period one way and never moves it back - the
+// app's Close now, the cron's close, Generate and Publish own the forward steps, and a seed re-import that still says
+// 'upcoming' must not reopen a period they closed. Mirrors the SQL case expression in impSqlPeriods; planDiff uses it
+// so the dry run reads the same row the apply would write.
+var IMP_PERIOD_STATUS_ORDER = ["upcoming", "closed", "generated", "published"];
+function impPeriodStatusAdvance(seedStatus, liveStatus) {
+  var a = IMP_PERIOD_STATUS_ORDER.indexOf(seedStatus), b = IMP_PERIOD_STATUS_ORDER.indexOf(liveStatus);
+  return a > b ? seedStatus : liveStatus;
+}
 var IMP_OFFER_TAG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 // Today in America/Chicago for an ISO instant: the DB trigger OF001 judges
@@ -1300,17 +1310,23 @@ function impSqlStaleTimeOff(rows) {
 
 /* ---- offer periods (P5): call_periods upsert, seed-owned call_offers delete + upsert */
 
-// The seed owns label / dates / rules_only_ids and its own offer_modes keys; a re-import never rewrites status (the
-// app's lifecycle) and keeps app-set modes for other people (live || seed: the seed's keys win).
+// The seed owns label / dates / rules_only_ids and its own offer_modes keys, keeps app-set modes for other people
+// (live || seed: the seed's keys win) and ADVANCES status one way (PD 9/23: upcoming < closed < generated <
+// published - the 9/23 publish reaches the first period's row as 'published' from the seed; a seed status behind the
+// live one never moves it back, so a re-import cannot reopen a period the cron or the app closed). Before PD the
+// status was written on insert only.
 function impSqlPeriods(rows) {
   if (!rows || !rows.length) return "-- 6. call_periods: nothing to import\n";
+  var rank = function (expr) { return "array_position(array['upcoming','closed','generated','published'], " + expr + ")"; };
+  var advance = "case when " + rank("excluded.status") + " > " + rank("call_periods.status") + " then excluded.status else call_periods.status end";
   var values = rows.map(function (r) {
     return "  (" + [impSqlStr(r.label), impSqlStr(r.start_day) + "::date", impSqlStr(r.end_day) + "::date", impSqlStr(r.offers_close_at) + "::date",
       impSqlStr(r.publish_by) + "::date", impSqlStr(r.status || "upcoming"), impSqlJson(r.rules_only_ids || []), impSqlJson(r.offer_modes || {}), impSqlStr(r.created_by || "seed")].join(", ") + ")";
   });
   return [
     "-- 6. call_periods: upsert by start_day (call_periods_start_idx); the seed owns label, dates, rules_only_ids and its",
-    "--    offer_modes keys (merged: app-set modes for other people stay); status is written on insert only (the app owns it)",
+    "--    offer_modes keys (merged: app-set modes for other people stay); the seed's status advances the live one",
+    "--    (upcoming < closed < generated < published) and never moves it back (the app / the cron own the forward steps)",
     "insert into public.call_periods (label, start_day, end_day, offers_close_at, publish_by, status, rules_only_ids, offer_modes, created_by)",
     "values",
     values.join(",\n"),
@@ -1319,12 +1335,13 @@ function impSqlPeriods(rows) {
     "  end_day         = excluded.end_day,",
     "  offers_close_at = excluded.offers_close_at,",
     "  publish_by      = excluded.publish_by,",
+    "  status          = " + advance + ",",
     "  rules_only_ids  = excluded.rules_only_ids,",
     "  offer_modes     = coalesce(call_periods.offer_modes, '{}'::jsonb) || excluded.offer_modes,",
     "  updated_at      = now()",
-    "where (call_periods.label, call_periods.end_day, call_periods.offers_close_at, call_periods.publish_by, call_periods.rules_only_ids, coalesce(call_periods.offer_modes, '{}'::jsonb) || excluded.offer_modes)",
+    "where (call_periods.label, call_periods.end_day, call_periods.offers_close_at, call_periods.publish_by, call_periods.status, call_periods.rules_only_ids, coalesce(call_periods.offer_modes, '{}'::jsonb) || excluded.offer_modes)",
     "      is distinct from",
-    "      (excluded.label, excluded.end_day, excluded.offers_close_at, excluded.publish_by, excluded.rules_only_ids, coalesce(call_periods.offer_modes, '{}'::jsonb));",
+    "      (excluded.label, excluded.end_day, excluded.offers_close_at, excluded.publish_by, " + advance + ", excluded.rules_only_ids, coalesce(call_periods.offer_modes, '{}'::jsonb));",
     ""
   ].join("\n");
 }
@@ -1622,24 +1639,30 @@ function planDiff(plan, live) {
     var jsonish = function (v) { if (typeof v !== "string") return v; try { return JSON.parse(v); } catch (e) { return v; } };
     // call_periods
     perT = { insert: 0, update: 0, unchanged: 0, upsert: 0, unknown: !Array.isArray(live.call_periods), rows: [] };
+    // PD (9/23): every period line names its status - 'status published' on an insert / unknown-live plan, 'status
+    // upcoming -> published' on an update that advances it (the SQL's case expression, impPeriodStatusAdvance here).
+    var perWords = function (p, statusWords) { return p.label + " " + p.start_day + ".." + p.end_day + " (close " + p.offers_close_at + ", publish by " + p.publish_by + ", status " + statusWords + ")"; };
     if (perT.unknown) {
       perT.upsert = perRows.length;
       offerLines.push("call_periods: plan " + perRows.length + " row(s) - live rows not readable with the anon key (authenticated-read table): upsert by start_day; verified from the SQL's returning rows after the apply");
+      perRows.forEach(function (p) { offerLines.push("  upsert " + perWords(p, p.status || "upcoming")); });
     } else {
       var livePer = {};
       live.call_periods.forEach(function (r) { livePer[dayOf(r.start_day)] = r; });
       perRows.forEach(function (p) {
         var l = livePer[p.start_day];
-        var state;
+        var state, statusWords = p.status || "upcoming";
         if (!l) state = "insert";
         else {
           var mergedModes = Object.assign({}, jsonish(l.offer_modes) || {}, p.offer_modes || {});
-          var mine = { label: p.label, end_day: p.end_day, offers_close_at: p.offers_close_at, publish_by: p.publish_by, rules_only_ids: p.rules_only_ids || [], offer_modes: mergedModes };
-          var theirs = { label: l.label, end_day: dayOf(l.end_day), offers_close_at: dayOf(l.offers_close_at), publish_by: dayOf(l.publish_by), rules_only_ids: jsonish(l.rules_only_ids) || [], offer_modes: jsonish(l.offer_modes) || {} };
+          var liveStatus = l.status || "upcoming", nextStatus = impPeriodStatusAdvance(p.status || "upcoming", liveStatus);
+          var mine = { label: p.label, end_day: p.end_day, offers_close_at: p.offers_close_at, publish_by: p.publish_by, status: nextStatus, rules_only_ids: p.rules_only_ids || [], offer_modes: mergedModes };
+          var theirs = { label: l.label, end_day: dayOf(l.end_day), offers_close_at: dayOf(l.offers_close_at), publish_by: dayOf(l.publish_by), status: liveStatus, rules_only_ids: jsonish(l.rules_only_ids) || [], offer_modes: jsonish(l.offer_modes) || {} };
           state = impSame(mine, theirs) ? "unchanged" : "update";
+          statusWords = nextStatus !== liveStatus ? liveStatus + " -> " + nextStatus : liveStatus;
         }
         perT[state]++;
-        if (state !== "unchanged") perT.rows.push(state + " " + p.label + " " + p.start_day + ".." + p.end_day + " (close " + p.offers_close_at + ", publish by " + p.publish_by + ")");
+        if (state !== "unchanged") perT.rows.push(state + " " + perWords(p, statusWords));
       });
       offerLines.push("call_periods: insert " + perT.insert + ", update " + perT.update + ", unchanged " + perT.unchanged + " (a live period the seed lacks is never deleted)");
       perT.rows.forEach(function (t) { offerLines.push("  " + t); });

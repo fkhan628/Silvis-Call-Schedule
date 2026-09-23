@@ -64,6 +64,21 @@ check("offerRollcall(period, offers, ids) == fixture: status like offerStatus, o
   eq(H.offerRollcall({ label: "no dates" }, RC.offers, RC.expectedPoolIds), [], "a period without dates rolls nobody");
   eq(H.offerRollcall(per(RC.period), null, ["s2"]), [{ id: "s2", status: "not_started", offered: 0 }], "no offers -> not_started unless rules-only");
 });
+// PD (9/23): the first period is PUBLISHED in docs/silvis-seed.json (its schedule went out 9/23). The cron must plan
+// nothing for it on its reminder day (9/29) and on its close day (10/2): no reminder, no CAS close, no scheduler mail.
+// runOffers never even reads it (call_periods?...&status=eq.upcoming, pinned in [C]); this is the maths' own guard.
+const SEED_PD = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+const seedPeriodRow = (p) => ({ label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: p.status, rules_only_ids: p.rulesOnly || [] });
+check("PD: the seed's first period (status published) -> offerCronPlan is action none / reason status:published on 9/29 and 10/2; the second period (upcoming, close 12/21) reminds on 12/7 and 12/18 and closes on 12/21", () => {
+  const [p0, p1] = SEED_PD.offerPeriods.map(seedPeriodRow);
+  eq([p0.status, p0.offers_close_at, p1.status, p1.offers_close_at], ["published", "2026-10-02", "upcoming", "2026-12-21"]);
+  const R = SEED_PD.groupRules.offerPeriods;
+  ["2026-09-23", "2026-09-29", "2026-10-02", "2026-10-03"].forEach(d => eq([H.offerCronPlan(p0, d, R).action, H.offerCronPlan(p0, d, R).reason], ["none", "status:published"], "first period @ " + d));
+  eq([H.offerCronPlan(p1, "2026-12-07", R).action, H.offerCronPlan(p1, "2026-12-07", R).reason], ["remind", "remind:14"]);
+  eq([H.offerCronPlan(p1, "2026-12-18", R).action, H.offerCronPlan(p1, "2026-12-18", R).reason], ["remind", "remind:3"]);
+  eq([H.offerCronPlan(p1, "2026-12-21", R).action, H.offerCronPlan(p1, "2026-12-21", R).reason], ["close", "close:today"]);
+  eq(H.offerCronPlan(p1, "2026-09-29", R).action, "none", "nothing for the second period on the first period's old reminder day");
+});
 
 console.log("\n[B] daily-reminder/index.ts: the TypeScript mirror (plain JS between the markers) on the same fixture");
 
@@ -113,6 +128,15 @@ check("mirror otmPoolIds / otmRollcall / otmStatus == fixture == helpers", () =>
   eq(m.rollcall(per(RC.period), RC.offers, RC.expectedPoolIds), H.offerRollcall(per(RC.period), RC.offers, RC.expectedPoolIds));
   RC.expectedPoolIds.forEach(id => assert.strictEqual(m.status(per(RC.period), RC.offers, id), H.offerStatus(per(RC.period), RC.offers, id), "status parity " + id));
   eq(m.rollcall({ label: "no dates" }, RC.offers, RC.expectedPoolIds), []);
+});
+check("PD: the mirror agrees on the seed's two periods - published -> none (status:published) on 9/29 and 10/2; Feb - Apr 2027 -> remind 12/7 + 12/18, close 12/21", () => {
+  const m = loadMirror();
+  const [p0, p1] = SEED_PD.offerPeriods.map(seedPeriodRow);
+  const R = SEED_PD.groupRules.offerPeriods;
+  ["2026-09-29", "2026-10-02", "2026-12-07", "2026-12-18", "2026-12-21"].forEach(d => { eq(m.plan(p0, d, R), H.offerCronPlan(p0, d, R), "mirror == helpers, first period @ " + d); eq(m.plan(p1, d, R), H.offerCronPlan(p1, d, R), "mirror == helpers, second period @ " + d); });
+  eq(m.plan(p0, "2026-09-29", R).reason, "status:published");
+  eq(m.plan(p0, "2026-10-02", R).action, "none");
+  eq([m.plan(p1, "2026-12-07", R).action, m.plan(p1, "2026-12-18", R).action, m.plan(p1, "2026-12-21", R).action], ["remind", "remind", "close"]);
 });
 check("mirror == helpers on 400 seeded random (period start 2026-10 .. 2028-12, length 1-12, close override or computed, reminder lists incl. 0 / duplicates / junk, status, today around the close): timeline and plan identical", () => {
   const m = loadMirror();

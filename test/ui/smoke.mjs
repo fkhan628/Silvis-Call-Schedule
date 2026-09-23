@@ -654,13 +654,15 @@ const dayStore = {};
 const claimedDays = {}; // day -> { primary_id? , backup_id?, source, updated_by, updated_at } overlaid on every schedule_days GET
 // Prompt 14 part 3a (the offer painter): call_offers / call_periods are authenticated-only tables, so the anon
 // passthrough would answer [] - the harness serves them: ONE period (the seed's first offerPeriods entry with a
-// fake uuid; s1 is on its rulesOnly list, exactly as the seed says) and an offer store seeded with one OTHER
+// fake uuid; s1 is on its rulesOnly list, exactly as the seed says) served OPEN - status 'upcoming' whatever the
+// seed's lifecycle status reads (PD 9/23: the seed marks it published after the 9/23 publish; the painter, mode and
+// Periods steps below exercise the open-period UI, the lifecycle belongs to the live row) - and an offer store seeded with one OTHER
 // surgeon's row (so "1 other offered" can be seen). rpc/save_offers and rpc/set_offer_mode are answered like the
 // SQL functions would (validation tokens included); every call is recorded in writes. failSaveOffers makes the
 // next save_offers answer a 400 with the OF002 vacation token (the "nothing was saved" path).
 const offerPeriod = (() => {
   const p = (JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).offerPeriods || [])[0];
-  return p ? { id: "00000000-0000-4000-8000-00000000a0f1", label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: p.status || "upcoming", rules_only_ids: (p.rulesOnly || []).slice(), offer_modes: { ...(p.offerModes || {}) }, created_by: "harness", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" } : null;
+  return p ? { id: "00000000-0000-4000-8000-00000000a0f1", label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: "upcoming", rules_only_ids: (p.rulesOnly || []).slice(), offer_modes: { ...(p.offerModes || {}) }, created_by: "harness", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" } : null;
 })();
 const periodStore = offerPeriod ? [offerPeriod] : []; // Prompt 14 part 3b (U3b): GET call_periods serves this list; the Periods section's POST / PATCH move it (route below)
 const OTHER_OFFER_DAY = "2026-10-14";
