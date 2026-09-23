@@ -842,15 +842,33 @@ passed; the scheduler may still enter a late offer). RLS is **authenticated-only
 carry person ids and free text): every signed-in user reads, a surgeon writes only their own rows, scheduler/admin
 any row and the periods. `call_periods.offer_modes` jsonb (`sql/migrations/2026-09-23-offer-modes.sql`; Faraz 9/22
 evening) holds `{person_id: 'exhaustive' | 'preferred'}`, an absent key meaning `preferred`; the SQL side checks only
-that it is an object. Proof: `sql/probes/offers-probe.sql` (rolls itself back) and `scripts/verify-rls.sh` section 8;
-the observed runs are in `docs/SCHEMA-REVIEW.md`.
+that it is an object — **that column is in the repo but not yet applied live as of 9/23** (anon probe: `42703`, column
+missing; the orchestrator applies it and writes the observed line into `docs/SCHEMA-REVIEW.md`; it must precede the
+seed apply of part 5, which writes `offer_modes`). Proof: `sql/probes/offers-probe.sql` (rolls itself back) and
+`scripts/verify-rls.sh` section 8; the observed runs are in `docs/SCHEMA-REVIEW.md`.
 
-**Entry is phone-first, modelled on Davenport's Paint Month sheet:** a full-screen vertical day list (one tall row per
-day, month navigation forward without limit), brushes Primary / Backup / Either / Clear, tap to paint, tap-start /
-tap-end for a range, greyed rows that say why a day cannot be offered (past, your vacation, East busy, your derived
-week, outside your window, frozen), what is already published that day and how many others offered it, a running count
+**Part 3 — the UI — is the next wave (not on `feat/offers` as of 9/23; `index-source.html` carries none of it yet: no
+`call_offers` / `call_periods` read, no `offers.save`).** Entry will be phone-first, modelled on Davenport's Paint Month
+sheet: a full-screen vertical day list (one tall row per day, month navigation forward without limit), brushes Primary
+/ Backup / Either / Clear, tap to paint, tap-start / tap-end for a range, greyed rows that say why a day cannot be
+offered (past, your vacation, East busy, your derived week, outside your window, frozen), a weekday-pattern day
+paintable behind one confirmation, what is already published that day and how many others offered it, a running count
 against the person's cap, drafts kept locally and **one Save = one batch write + one audit entry**, a failed save that
-writes nothing. A paste-a-date-list box remains for typists.
+writes nothing, a paste-a-date-list box for typists, a "Go by my rules for <period>" button and the mode toggle ("Only
+these days" / "These are my preferred days — use my rules to fill gaps", the default) that writes `offer_modes`. The UI
+wave owns three **audit actions**, named here so the SQL comments, the cron and the docs agree: `offers.save` (the
+painter's one Save — one batch write, one audit row with the count; already named in the `call_offers` comment of
+`sql/schema.sql`), `period.create` (Setup → Generate → Periods, from the presets in `groupRules.offerPeriods`) and
+`period.close` ("Close now" — the same action the cron writes with `actor_id` `cron`; the two closers meet on the
+part-4 compare-and-swap, so only one summary goes out). It also owns the wiring the engine is waiting for: pass
+`call_offers` / `call_periods` into `ctxInputs` → `buildContext` (`offers`, `periods`); switch the in-app Setup import
+to `importPlan(seed, { offerPeriods: true })` and refuse Apply when the seed carries periods the plan did not convert;
+give the trade path the claim reading (below); the day editor's "offered primary / either / backup — rules — not
+offered" line per candidate; My Schedule's own future offers; the Periods section (create from the presets, timeline
+editable, per-surgeon status, "Remind" on `offers_reminder`, "Enter for someone" as `entered_by 'scheduler'` /
+`source 'email-relay'`, Generate over the period, Accept & Publish); and the publish e-mail line from
+`diagnostics.offers.outsideOffers`. Smoke for that wave: paint five days with two brushes and a range at 390 px, flip
+the toggle, save once — one request, one audit row, the rows in `call_offers`, the mode on the period.
 
 **Eligibility is offers-first, at the hardness each surgeon chooses (built in Prompt 14 P2, 9/23):** `rules.buildContext`
 takes two more inputs, `offers` (`call_offers` rows) and `periods` (`call_periods` rows with `rules_only_ids` and
@@ -951,7 +969,8 @@ from `offers_close_at` on, roll the whole import back although nothing changed (
 scheduler; 9/23 review). As written, a re-run of identical data proposes nothing and fires no trigger; a re-run that
 *adds or changes* a seed-owned offer inside the period after `offers_close_at` (2026-10-02) is refused by OF003 and
 rolls back loudly — so **the seed's offers must be applied before 2026-10-02**, and late offers are the scheduler's to
-enter in the app. Three consistency refusals guard the seed itself, whether or not the option is on: a surgeon *with*
+enter in the app **once the Periods section ships (the UI wave)** — before that the only late path is a scheduler-JWT
+REST write (OF003 is skipped for `silvis_is_sched()`; the CLI is refused). Three consistency refusals guard the seed itself, whether or not the option is on: a surgeon *with*
 a mode in a period may not keep an **untagged** `explicitAvailable` / `offeredDays` / `availableWeeks` list that
 reaches into it (`OFFER_SOURCE_INVALID` — his status would retire the rows and the month while no offer carried the
 days), periods never overlap, and a period label is gated against the note denylist like an offer note (it reaches
@@ -1005,6 +1024,26 @@ categories, the gate and dispatch, the read set (periods, offers, blob, `user_pr
 never an anon-readable table for recipients), the CAS + dry-run guards, the README cron statement and this
 paragraph. For the first period (close 2026-10-02) the reminder days are 2026-09-18 (past) and 2026-09-29, and the
 close summary goes out on 2026-10-02 — the cron must be live by 9/29 for Fierce (`not_started`) to be reminded.
+
+**Where Prompt 14 stands at the end of the 9/23 wave (parts 1, 2, 4, 5 on `feat/offers`; part 6 = this text).** In the
+repo: the schema artefacts (`sql/migrations/2026-09-22-offers-periods.sql`, `2026-09-23-offer-modes.sql`,
+`2026-09-23-claim-offer.sql`, `sql/probes/offers-probe.sql`, `sql/schema.sql`), the engine (`rules.js`, `generator.js`,
+`helpers.js`), the importer plan and CLI (`importer.js`, `scripts/import-seed.js`), the two edge-function sources, the
+seed's `offerPeriods[]` / `offerSources` and every test named above. **Live:** only the 9/22 schema (`call_offers`,
+`call_periods`, `offer_status()`, OF001–OF003, authenticated-only RLS). **Not yet live, in the order they must land:**
+(1) the `offer_modes` column; (2) the seed apply — `node scripts/import-seed.js --apply` — one `call_periods` row and
+79 `call_offers` rows, **before 2026-10-02** (OF003 refuses seed-entered offers inside the period from the close on);
+(3) `send-notification` and `daily-reminder` redeployed from the merged head that also carries the Prompt 13 open-shifts
+mode, then the `silvis-offers-daily` cron (README §3 deploy record + §4) — **by 9/29** for the 3-day reminder;
+(4) `sql/migrations/2026-09-23-claim-offer.sql` (its base, `claim_open_slot`, is on `main` since the 9/23 open-shifts merge); (5) part 3, the UI wave (above),
+which must land with — or before — the first in-app Generate or trade over the period (the dated caveat under part 5:
+until then the in-app `eligibility()` consumers read Burchett and Philip by their recurring rules only, and the in-app
+Setup import must not be run). The **offers-aware preview regeneration** the prompt's part 5 asks for has **not** been
+run: `scripts/preview-generate.js` reads neither `--offers-json` nor `call_offers` yet — a UI-wave (or preview-script)
+item; until then the Prompt 14 P2 regression on `test/fixtures/offers-2026-11.json` is the proof that Burchett's and
+Acton's November days come out as the ER-panel author published. Open decisions for Faraz: the offer modes of the first period
+(rules doc §8 item 20 — Burchett / Philip exhaustive, Acton / Fierce preferred, Khan / Sarkar rules-only, set 9/23 as
+defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 (his default, renameable, data).
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 

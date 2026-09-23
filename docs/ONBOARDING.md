@@ -49,6 +49,26 @@ afterwards; the editor keeps query history).*
 
 4. Tell them: **Time off** is self-service (no approval) and is refused over a day they are already published — trade
    first. **Trades** are by day and role. Their calendar subscription URL is in **Settings → Live calendar sync**.
+   Then walk them through the offers section below.
+
+## What to tell a surgeon about offers (Prompt 14 — from the Nov 2026 – Jan 2027 period)
+
+Silvis runs offers-first. **Paint the dates you'll cover, any time**: primary, backup or either, one tap per day on your
+phone, for any date ahead, whenever you like — the app is where the offers live now (no more e-mailing lists around).
+**The next three months freeze six weeks before the current period ends**: what you painted inside that period is what
+the generator places first, then it fills the gaps; the app e-mails you 14 and 3 days before the freeze if you have
+entered nothing for that period (it honours your e-mail preference). **Or tell the app to go by your rules** for that
+period ("Go by my rules"): your recurring rules in Setup → Rules place you and you hear nothing more. When you submit,
+say whether the list is **"only these days"** (you are never placed on a day you did not list) or **"my preferred days
+— use my rules to fill gaps"** (the default: your days first, your rules cover what is still open, and your publish
+e-mail names every day you did not list — trade if needed). Vacations, East days, derived weeks, windows and caps still
+apply on an offered day. A day is refused if it is past, on your vacation, or inside a period that has already frozen —
+ask Faraz: the database lets the scheduler enter a late offer (OF003 is skipped for the scheduler role), and he will be
+able to do that from the Periods section once the UI wave ships; until then the only late path is a scheduler-JWT REST
+write, because the seed CLI runs as postgres and is refused by OF003 from 2026-10-02. *Until the UI wave ships, Faraz
+relays e-mailed dates as the scheduler (the first period's lists went in that way from the seed); the 14- and 3-day
+reminder e-mails start once the offers cron is live (target 9/29, `edge-functions/README.md` §3 deploy record); and the publish e-mail's
+off-list line arrives with the UI wave.*
 
 **Open shifts (tell every surgeon).** The **Open shifts** tab lists every unfilled primary or backup slot from today to
 the end of the published schedule, with the weekend or holiday unit it belongs to, why it is open, and who is eligible

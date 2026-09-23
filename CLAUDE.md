@@ -94,6 +94,7 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   assignment, repair, trade acceptance and manual edit consults it (manual edits may override with a visible warning).
 - No surgeon-specific `if (name === ...)` in code: every rule is data in `call_schedule_data.data.surgeonRules` and
   editable in Setup. Fierce's derived weeks and Khan's East dependency are generic `eastFeed` features.
+- **Offers are the mechanism (Prompt 14):** `rules.buildContext` reads `offers` (`call_offers`) and `periods` (`call_periods`) and eligibility is offers-first inside a period (exhaustive / preferred per surgeon, rules-only by choice); the seed's dated lists (`explicitAvailable`, `offeredDays`, `availableWeeks`, tagged `surgeonRules.<id>.offerSources`) are **offer sources** the importer turns into `call_offers` rows — never a second whitelist path; recurring patterns, derived weeks and windows stay rules.
 - `generator.js`: locks → weekend/day units → primary pass → backup pass → repair → target smoothing, wrapped in
   best-of-N; returns `{ schedule, diagnostics }` and **never silently leaves a slot empty** — open slots carry reasons.
 - `test/generator-regression.js` re-states every hard rule independently and runs 50 seeds × 4 ranges (Oct with the
