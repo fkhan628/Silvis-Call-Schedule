@@ -6,6 +6,28 @@
 // schedule_days + time_off + availability in Prompt 6 Slice A.
 
 /* ═══════════════════════════════════════════════════
+   SUPABASE SDK CAPTURE (Prompt 16 B8)
+   ═══════════════════════════════════════════════════ */
+// vendor/supabase.js (the supabase-js UMD build, loaded by index-source.html's
+// loader right before this file) declares a global `var supabase`. This file
+// declares its REST wrapper under the same name below, so the SDK is moved to
+// window._supabaseSDK first (Realtime is its only use - getSupabaseRT) and the
+// wrapper then takes the name with `var` (a legal redeclaration; a `const`
+// would be a SyntaxError against the UMD's non-configurable var). The
+// "supabase-sdk-ready" event is kept for the data-load effect's fallback
+// listener. If the vendored file did not load, nothing is captured and
+// getSupabaseRT() returns null: poll-only, as before.
+(function () {
+  try {
+    const sdk = typeof window !== "undefined" ? window.supabase : undefined;
+    if (sdk && typeof sdk.createClient === "function") {
+      window._supabaseSDK = { createClient: sdk.createClient };
+      if (typeof window.dispatchEvent === "function" && typeof CustomEvent === "function") window.dispatchEvent(new CustomEvent("supabase-sdk-ready"));
+    }
+  } catch (e) { console.warn("supabase-js SDK capture failed (Realtime off, poll only):", e); }
+})();
+
+/* ═══════════════════════════════════════════════════
    SUPABASE CONFIG
    ═══════════════════════════════════════════════════ */
 const SUPABASE_URL = "https://bzhsroegtagqhutbnsrp.supabase.co";
@@ -129,7 +151,8 @@ async function authFetch(url, init) {
 const _notImpl = (sig, hint) => () => {
   throw new Error(`supabase wrapper: ${sig} is not implemented — ${hint || "use db.*, dbAuth.*, or a raw fetch."}`);
 };
-const supabase = {
+// `var`, not `const`: the vendored supabase-js UMD declares a global of the same name (see the capture block at the top).
+var supabase = {
   from: (table) => ({
     select: (cols) => ({
       eq: (col, val) => ({
@@ -597,7 +620,8 @@ const INIT_SURGEONS = [
 
 // Lazily-created Supabase JS client for Realtime only (the REST wrapper above
 // carries every read/write). The SDK arrives as an ES module (see the module
-// script in index-source.html), so this returns null until it has loaded; the
+// script in index-source.html; since Prompt 16 B8 the vendored UMD, captured
+// at the top of this file), so this returns null if it did not load; the
 // data-load effect retries on the "supabase-sdk-ready" event and falls back to
 // its 60s poll if Realtime never comes up.
 let _supabaseRT = null;

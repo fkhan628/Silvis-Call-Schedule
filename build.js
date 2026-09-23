@@ -134,7 +134,34 @@ if (code.includes("react/jsx-runtime") || code.includes("_jsxRuntime") || /\b_js
   fail("automatic runtime artifacts present (jsx-runtime/_jsx).");
 }
 
-const out = before + '<script type="text/javascript">\n' + code + "\n  </script>" + after;
+let out = before + '<script type="text/javascript">\n' + code + "\n  </script>" + after;
+
+// Gate 3 (Prompt 16 B8): the Content-Security-Policy meta. script-src is a hash
+// list - the sha256 of every inline <script> this page carries (the APP_VERSION
+// script, the module loader, the transpiled app) replaces the
+// __CSP_SCRIPT_HASHES__ token in the source's meta, so no 'unsafe-inline' is
+// needed and an injected inline script is refused by the browser. A hash is
+// taken over the exact text between the tags (what the browser hashes), so it
+// is computed on the OUTPUT, after the transpile. The count is pinned: a new
+// inline script is a deliberate change (add it here and in test/ci.test.js).
+// No remote script may remain: the three libraries are vendored (vendor/README.md).
+const CSP_TOKEN = "__CSP_SCRIPT_HASHES__";
+const INLINE_SCRIPTS_EXPECTED = 3;
+const cspMetaRe = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/;
+if (!cspMetaRe.test(out)) fail("no <meta http-equiv=\"Content-Security-Policy\"> in " + SRC);
+if (out.split(CSP_TOKEN).length !== 2) fail("the CSP meta must carry the " + CSP_TOKEN + " token exactly once (found " + (out.split(CSP_TOKEN).length - 1) + ")");
+const scriptTags = Array.from(out.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g));
+const remote = scriptTags.filter((m) => /\bsrc\s*=\s*["']https?:\/\//i.test(m[1]));
+if (remote.length) fail("remote <script src> in the page (libraries are vendored under vendor/):\n" + remote.map((m) => m[0].slice(0, 120)).join("\n"));
+const inlineBodies = scriptTags.filter((m) => !/\bsrc\s*=/.test(m[1])).map((m) => m[2]);
+if (inlineBodies.length !== INLINE_SCRIPTS_EXPECTED) fail("expected exactly " + INLINE_SCRIPTS_EXPECTED + " inline <script> blocks (APP_VERSION, loader, app), found " + inlineBodies.length);
+const hashes = inlineBodies.map((s) => "'sha256-" + require("crypto").createHash("sha256").update(s, "utf8").digest("base64") + "'");
+out = out.replace(CSP_TOKEN, hashes.join(" "));
+if (out.includes(CSP_TOKEN)) fail("the CSP token survived the replacement");
+const emittedCsp = (out.match(cspMetaRe) || [])[1] || "";
+if (!/(^|;)\s*script-src 'self' 'sha256-/.test(emittedCsp)) fail("the emitted script-src does not read `'self' 'sha256-...'`: " + emittedCsp.slice(0, 200));
+if (/'unsafe-inline'[^;]*$/.test(emittedCsp.split(";").find((d) => /^\s*script-src/.test(d)) || "")) fail("script-src must not carry 'unsafe-inline'");
+
 fs.writeFileSync(OUT, out, "utf8");
 
 const ver = (html.match(/var APP_VERSION = "([^"]+)"/) || [])[1] || "unknown";
@@ -143,4 +170,5 @@ console.log("OK  build complete");
 console.log("    APP_VERSION         : " + ver);
 console.log("    createElement calls : " + ceCount);
 console.log("    injected imports    : 0");
+console.log("    inline script hashes: " + hashes.length + " (" + hashes.map((h) => h.slice(8, 20) + "...").join(", ") + ")");
 console.log("    " + SRC + " -> " + OUT + "  (" + out.length.toLocaleString() + " bytes)");

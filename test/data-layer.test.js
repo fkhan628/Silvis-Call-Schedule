@@ -568,6 +568,28 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(rxCount(/<script\s+type=["']text\/babel["']\s*>/g), 1);
     assert.ok(src.indexOf("'config.js'") < src.indexOf("'helpers.js'"));
   });
+  // Prompt 16 B8 (supply chain): React, ReactDOM and supabase-js come from vendor/ through the same ?v=APP_VERSION
+  // loader as the modules (no CDN script, no unpinned "latest"), and the <head> opens with the CSP meta whose
+  // script-src is a hash list (build.js fills __CSP_SCRIPT_HASHES__; test/ci.test.js checks the built hashes).
+  check("B8: no CDN script tag or module import; the loader serves vendor/react, react-dom, supabase.js before config.js", () => {
+    assert.strictEqual(rxCount(/<script[^>]+src="https?:\/\//g), 0, "a <script src=\"https://...\"> is still in index-source.html");
+    assert.strictEqual(count("unpkg.com") + count("cdn.jsdelivr.net") + count("cdnjs.cloudflare.com"), 0, "a CDN host is still named");
+    assert.strictEqual(rxCount(/<script type="module">/g), 0, "the <script type=\"module\"> SDK import is still there");
+    const loader = src.indexOf("['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js',");
+    assert.ok(loader > 0, "the loader list does not start with the vendored trio followed by config.js");
+    assert.ok(loader < src.indexOf('<script type="text/babel">'), "the loader must precede the JSX block");
+    assert.strictEqual(count("window._supabaseSDK"), 0, "index-source.html must not set window._supabaseSDK itself (config.js captures the vendored UMD's global)");
+  });
+  check("B8: the CSP meta is the first <meta> after charset, precedes every <script>, and its script-src is 'self' + the hash token (no 'unsafe-inline')", () => {
+    const meta = src.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/);
+    assert.ok(meta, "no CSP meta");
+    assert.ok(src.indexOf('<meta charset="UTF-8">') < meta.index && meta.index < src.indexOf("<script"), "the CSP meta must sit right after <meta charset> and before the first <script>");
+    const scriptSrc = (meta[1].split(";").map(s => s.trim()).find(s => /^script-src\s/.test(s)) || "").split(/\s+/).slice(1);
+    assert.deepStrictEqual(scriptSrc.slice(0, 2), ["'self'", "__CSP_SCRIPT_HASHES__"], "script-src must read 'self' __CSP_SCRIPT_HASHES__ ...: " + scriptSrc.join(" "));
+    assert.ok(!scriptSrc.includes("'unsafe-inline'") && !scriptSrc.includes("'unsafe-eval'"), "script-src must not carry 'unsafe-inline' / 'unsafe-eval'");
+    assert.ok(/connect-src [^;]*wss:\/\/bzhsroegtagqhutbnsrp\.supabase\.co/.test(meta[1]), "connect-src must allow the Realtime websocket host");
+    assert.ok(!/frame-ancestors/.test(meta[1]), "frame-ancestors is ignored in a <meta> policy");
+  });
   // Guard census. A new grant site needs its own disarm story AND this pin updated.
   check("intentionalScheduleWipeRef granted at exactly 2 sites (clearSchedule, applyScheduleViaCAS)", () => {
     assert.strictEqual(count("intentionalScheduleWipeRef.current = true"), 2);

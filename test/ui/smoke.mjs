@@ -407,13 +407,19 @@ const todayCentral = new Date().toLocaleDateString("en-CA", { timeZone: "America
 const dated = (until, what) => { if (todayCentral <= until) return true; console.log(`     (today ${todayCentral} is after ${until} - ${what} skipped)`); return false; };
 
 // ---- CDN cache + font stub (shared by every page in the run) ----
+// Prompt 16 B8: React, ReactDOM and supabase-js are vendored (vendor/), so NO request may leave for a CDN host
+// any more - every one is recorded in cdnRequests and fails the run at the end (the cache below still answers
+// it, so the rest of the run stays informative). vendorRequests records what the page fetched from vendor/.
 let cdnHits = 0, cdnMisses = 0;
+const cdnRequests = [];
+const vendorRequests = [];
 const cacheKey = (url) => path.join(CDN_CACHE, crypto.createHash("sha1").update(url).digest("hex"));
 const routeCdn = async (route) => {
   const req = route.request();
   const url = req.url();
   const host = new URL(url).hostname;
   if (FONT_HOSTS.includes(host)) return route.fulfill({ status: 200, contentType: "text/css", body: "/* fonts stubbed by test/ui/smoke.mjs */" });
+  if (CDN_HOSTS.includes(host)) cdnRequests.push(`${req.method()} ${url}`);
   if (!CDN_HOSTS.includes(host) || req.method() !== "GET") return route.continue();
   const key = cacheKey(url);
   if (!process.env.SMOKE_NO_CACHE && fs.existsSync(key + ".body") && fs.existsSync(key + ".json")) {
@@ -584,6 +590,16 @@ await context.addInitScript(({ token, version }) => {
     localStorage.setItem("silvis-app-version", version); // no version-mismatch reload loop
   } catch (e) {}
 }, { token: FAKE_JWT, version: APP_VERSION });
+// Prompt 16 B8: every document in the run (the app, the share page, the printable popup - which inherits the
+// opener's policy) records its CSP violations; a violation is also a console error, which fails the run.
+await context.addInitScript(() => {
+  window.__cspViolations = [];
+  document.addEventListener("securitypolicyviolation", (e) => {
+    const line = `${e.violatedDirective} blocked ${e.blockedURI || "inline"} at ${e.sourceFile || location.href}:${e.lineNumber || 0}`;
+    window.__cspViolations.push(line);
+    console.error("CSP violation: " + line);
+  });
+});
 await context.route(cdnMatcher, routeCdn);
 // Davenport (East) project: answered from the canned week + roster blob above (GET only, like the app). A named
 // handler: the A3 session scenario runs in a second BrowserContext that needs the same answers.
@@ -622,6 +638,7 @@ const watchPage = (pg, tag) => {
     if (msg.type() === "warning") consoleWarns.push(msg.text());
   });
   pg.on("requestfailed", (r) => { if (abortEastFeedPost && /\/rest\/v1\/east_feed/.test(r.url())) return; failedRequests.push(`${tag}: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`); });
+  pg.on("request", (r) => { if (/\/vendor\//.test(r.url())) vendorRequests.push(`${tag}: ${r.url()}`); });
 };
 watchPage(page, "main");
 await installRealtimeMock(page);
@@ -1396,6 +1413,12 @@ try {
     }
     const printAtwell = await pop.$eval('.cell[data-day="2026-10-01"] .shift .ext', el => el.textContent).catch(() => "");
     if (!/Atwell/.test(printAtwell)) fail("printable: 10/1 external cover missing: " + printAtwell); else ok("printable view: 10/1 shows '" + printAtwell + "'");
+    // Prompt 16 B8: the popup (window.open("") + document.write) inherits the app's CSP; its toolbar script is the
+    // one static hash in script-src. Proof it RAN under that policy: the flag it sets, no violation recorded.
+    const tb = await pop.evaluate(() => ({ ready: window.__silvisPrintToolbar === true, viol: Array.isArray(window.__cspViolations) ? window.__cspViolations.slice() : null, buttons: Array.from(document.querySelectorAll(".toolbar button")).map(b => b.id) }));
+    if (!tb.ready) fail("printable: the toolbar script did not run under the inherited CSP (window.__silvisPrintToolbar unset; violations: " + JSON.stringify(tb.viol) + ")");
+    else if (tb.viol && tb.viol.length) fail("printable: CSP violations in the popup: " + tb.viol.join(" | "));
+    else ok(`printable view: toolbar script ran under the inherited CSP (buttons ${tb.buttons.join(", ")}; violations recorded: ${tb.viol ? tb.viol.length : "n/a (init script not run in the popup)"})`);
     await pop.screenshot({ path: path.join(OUT, "printable-page.png"), fullPage: true });
     ok("screenshot test/ui/out/printable-page.png");
     await pop.close();
@@ -5870,6 +5893,36 @@ const expected = consoleErrors.filter(t => EXPECTED_CONSOLE_ERRORS.some(x => x.r
 if (expected.length) console.log(`     (${expected.length} expected console error(s) ignored: ${[...new Set(expected)].slice(0, 3).join(" | ")})`);
 if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400, the session scenario's 401s / rejected refresh - expected)`);
 if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ")); else ok("no unexpected console errors");
+
+// Prompt 16 B8 - supply chain + CSP: no request left for a CDN host; React, ReactDOM and supabase-js were fetched
+// from vendor/ with ?v=APP_VERSION; the served page carries the CSP meta with the three inline-script hashes and
+// no 'unsafe-inline' in script-src; the app document recorded no CSP violation.
+if (cdnRequests.length) fail(`${cdnRequests.length} request(s) went to a CDN host (the libraries are vendored):\n     ` + [...new Set(cdnRequests)].join("\n     ")); else ok("no request to unpkg / jsdelivr during the run");
+{
+  const want = ["vendor/react.production.min.js", "vendor/react-dom.production.min.js", "vendor/supabase.js"].map(f => `${BASE}${f}?v=${APP_VERSION}`);
+  const seen = new Set(vendorRequests.map(s => s.replace(/^[^:]+: /, "")));
+  const missing = want.filter(u => !seen.has(u));
+  if (missing.length) fail("vendored libraries not fetched with ?v=APP_VERSION: " + missing.join(", ") + " (seen: " + [...seen].join(", ") + ")");
+  else ok(`vendored libraries fetched from vendor/ with ?v=${APP_VERSION} (React, ReactDOM, supabase-js)`);
+  const csp = await page.evaluate(() => {
+    const m = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+    return { content: m ? m.getAttribute("content") : null, violations: Array.isArray(window.__cspViolations) ? window.__cspViolations.slice() : null, react: typeof React !== "undefined" ? React.version : null, sdk: !!(window._supabaseSDK && typeof window._supabaseSDK.createClient === "function"), wrapperIsRest: typeof window.supabase === "object" && typeof window.supabase.from === "function" && typeof window.supabase.createClient !== "function" };
+  }).catch(e => ({ error: String(e && e.message || e) }));
+  if (csp.error) fail("CSP meta check could not run on the app page: " + csp.error);
+  else {
+    const scriptSrc = ((csp.content || "").split(";").map(s => s.trim()).find(s => /^script-src\s/.test(s)) || "").split(/\s+/).slice(1);
+    const hashes = scriptSrc.filter(s => /^'sha256-/.test(s));
+    if (!csp.content) fail("the served page has no Content-Security-Policy meta");
+    else if (scriptSrc.includes("'unsafe-inline'") || scriptSrc.includes("'unsafe-eval'") || /__CSP_SCRIPT_HASHES__/.test(csp.content)) fail("served script-src is not a pure hash list: " + scriptSrc.join(" "));
+    else if (hashes.length !== 4) fail("served script-src should carry 4 hashes (3 inline scripts + the printable toolbar), found " + hashes.length);
+    else ok(`served CSP: script-src 'self' + ${hashes.length} sha256 hashes, no 'unsafe-inline'`);
+    if (csp.violations === null) fail("the app page has no window.__cspViolations (init script did not run)");
+    else if (csp.violations.length) fail("CSP violations recorded on the app page:\n     " + [...new Set(csp.violations)].join("\n     "));
+    else ok("no CSP violation recorded on the app page (securitypolicyviolation listener)");
+    if (csp.react !== "18.3.1") fail("React.version on the page is " + csp.react + ", expected the vendored 18.3.1"); else ok("React 18.3.1 on the page (vendored build)");
+    if (!csp.sdk || !csp.wrapperIsRest) fail(`supabase-js capture: _supabaseSDK.createClient=${csp.sdk}, window.supabase is the REST wrapper=${csp.wrapperIsRest}`); else ok("supabase-js UMD captured into window._supabaseSDK; window.supabase is config.js's REST wrapper");
+  }
+}
 
 console.log(`\ncdn cache: ${cdnHits} hit(s), ${cdnMisses} miss(es) (${path.relative(ROOT, CDN_CACHE)})`);
 console.log(`writes intercepted (${writes.length}):`);

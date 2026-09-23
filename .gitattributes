@@ -6,3 +6,6 @@
 *.ico binary
 *.woff binary
 *.woff2 binary
+# Vendored runtime libraries (vendor/README.md): the upstream bytes, never eol-converted,
+# so the sha256 pins in test/ci.test.js hold on every OS.
+vendor/** -text

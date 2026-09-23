@@ -1322,18 +1322,25 @@ function buildPrintableCalendarHTML(opts) {
 </head>
 <body>
 <div class="toolbar">
-  <button onclick="window.print()">Print</button>
-  <button class="secondary" onclick="
-    try { window.close(); } catch(e) { console.warn('close blocked by the browser', e); }
-    setTimeout(function() {
-      if (!window.closed) {
-        document.body.innerHTML = '<div style=\\'text-align:center;padding:60px 20px;font-family:Arial,Helvetica,sans-serif;color:#5a6a78\\'>You can close this tab now.</div>';
-      }
-    }, 100);
-  ">Close</button>
+  <button id="pp-print">Print</button>
+  <button class="secondary" id="pp-close">Close</button>
   <span class="hint">Use your browser's print dialog. Choose Letter portrait, default margins. If colours do not print, enable Background graphics under More settings.</span>
 </div>
 ${pages}
+<script>
+(function () {
+  document.getElementById("pp-print").addEventListener("click", function () { window.print(); });
+  document.getElementById("pp-close").addEventListener("click", function () {
+    try { window.close(); } catch (e) { console.warn("close blocked by the browser", e); }
+    setTimeout(function () {
+      if (!window.closed) {
+        document.body.innerHTML = "<div style='text-align:center;padding:60px 20px;font-family:Arial,Helvetica,sans-serif;color:#5a6a78'>You can close this tab now.</div>";
+      }
+    }, 100);
+  });
+  window.__silvisPrintToolbar = true;
+})();
+</script>
 </body>
 </html>`;
 }

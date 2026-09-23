@@ -248,4 +248,152 @@ ok(JSON.stringify(WP.watchedOf(watchedSample, filter)) === JSON.stringify(watche
 ok(WP.watchedOf(["test/fixturesX.json", "rules.jsx", "xindex-source.html"], filter).length === 0, "globs are anchored and '.' is literal");
 flush("deploy job pins");
 
+// ---- 8. supply chain (Prompt 16 B8): vendored libraries, the CSP, the lockfile, pinned actions ----
+// React, ReactDOM and supabase-js are served from vendor/ - the exact bytes the npm registry publishes for the
+// versions below, so a CDN outage, a CDN compromise or an unpinned "latest" can no longer change what the app
+// runs. The hashes here are the deploy gate; vendor/README.md is the record. Bumping a library = replace the
+// file, re-hash it, update this table and the README row together (the loader names stay).
+const crypto = require("crypto");
+const os = require("os");
+const sha256hex = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const sha256src = (text) => "'sha256-" + crypto.createHash("sha256").update(text, "utf8").digest("base64") + "'";
+const VENDORED = [
+  { file: "vendor/react.production.min.js", version: "18.3.1", sha256: "d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd" },
+  { file: "vendor/react-dom.production.min.js", version: "18.3.1", sha256: "35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d" },
+  { file: "vendor/supabase.js", version: "2.117.1", sha256: "dff1e545f4f35bd42895cd6f46431e56137dd13031e46a9759c446447c11a567" },
+];
+const vendorReadme = fs.existsSync(path.join(ROOT, "vendor", "README.md")) ? read("vendor/README.md") : "";
+ok(vendorReadme.length > 0, "vendor/README.md is missing (the record of every vendored file's source URL, version and sha256)");
+VENDORED.forEach(v => {
+  const p = path.join(ROOT, v.file);
+  ok(fs.existsSync(p), v.file + " is missing");
+  if (fs.existsSync(p)) {
+    const bytes = fs.readFileSync(p);
+    ok(sha256hex(bytes) === v.sha256, v.file + " sha256 is " + sha256hex(bytes) + ", expected " + v.sha256 + " (version " + v.version + ")");
+    ok(bytes.indexOf("\r") === -1, v.file + " carries CR bytes (an eol conversion changed the vendored bytes; vendor/** is -text in .gitattributes)");
+  }
+  const row = vendorReadme.split("\n").find(l => l.includes(v.file.replace(/^vendor\//, "")) && l.includes(v.sha256));
+  ok(!!row && row.includes(v.version) && /https:\/\/registry\.npmjs\.org\//.test(row), "vendor/README.md has no row naming " + v.file + " with version " + v.version + ", its registry.npmjs.org source URL and sha256 " + v.sha256);
+});
+ok(/^vendor\/\*\*\s+-text\s*$/m.test(read(".gitattributes")), ".gitattributes must mark `vendor/** -text` (vendored bytes are never eol-converted, so the sha256 pins hold on every OS)");
+ok(!fs.existsSync(path.join(ROOT, "vendor", "babel.min.js")) && !/babel(\.min)?\.js|@babel\/standalone/.test(idx), "Babel standalone must not be vendored or loaded at runtime (build.js transpiles; the served index.html carries no Babel)");
+ok(filter.includes("vendor/**"), "build.yml's paths filter must watch vendor/** (a library bump must run the suites and bump APP_VERSION so cache-busted clients refetch)");
+flush("vendored libraries");
+
+// The CSP meta in index-source.html carries a token that build.js replaces with the sha256 of every inline script
+// it emits (the APP_VERSION script, the loader, the transpiled app): a hash list, never 'unsafe-inline' for scripts.
+const CSP_TOKEN = "__CSP_SCRIPT_HASHES__";
+const cspOf = (html) => (html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/) || [])[1] || "";
+const directivesOf = (csp) => Object.fromEntries(csp.split(";").map(s => s.trim()).filter(Boolean).map(s => { const [k, ...v] = s.split(/\s+/); return [k, v]; }));
+const srcCsp = cspOf(idx);
+ok(srcCsp.length > 0, "index-source.html has no <meta http-equiv=\"Content-Security-Policy\" content=\"...\"> in <head>");
+ok(srcCsp.length > 0 && idx.indexOf('<meta http-equiv="Content-Security-Policy"') < idx.indexOf("<script"), "the CSP meta must come before the first <script> (a meta policy governs only what follows it)");
+ok(idx.split(CSP_TOKEN).length === 2, "index-source.html must carry the " + CSP_TOKEN + " token exactly once (inside the CSP meta's script-src)");
+const srcDirectives = directivesOf(srcCsp);
+const expectDirective = (name, values) => { const have = srcDirectives[name] || null; ok(!!have, "CSP lacks " + name); if (have) values.forEach(v => ok(have.includes(v), "CSP " + name + " lacks " + v + " (have: " + have.join(" ") + ")")); };
+expectDirective("default-src", ["'self'"]);
+expectDirective("script-src", ["'self'", CSP_TOKEN]);
+expectDirective("style-src", ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]);
+expectDirective("img-src", ["'self'", "data:", "blob:"]);
+expectDirective("connect-src", ["'self'", "https://bzhsroegtagqhutbnsrp.supabase.co", "wss://bzhsroegtagqhutbnsrp.supabase.co", "https://xqongyahdnkozqunpwmu.supabase.co"]);
+expectDirective("font-src", ["'self'", "data:", "https://fonts.gstatic.com"]);
+expectDirective("object-src", ["'none'"]);
+expectDirective("base-uri", ["'self'"]);
+expectDirective("form-action", ["'self'"]);
+ok(!("frame-ancestors" in srcDirectives), "frame-ancestors is ignored in a <meta> policy (every browser logs a warning); it must not be in the meta");
+["'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "http:", "https:", "*", "data:", "blob:"].forEach(v => ok(!(srcDirectives["script-src"] || []).includes(v), "script-src must not allow " + v));
+(srcDirectives["connect-src"] || []).forEach(v => ok(/^('self'|https:\/\/[a-z]+\.supabase\.co|wss:\/\/[a-z]+\.supabase\.co)$/.test(v), "connect-src entry outside the two Supabase projects: " + v));
+// no CDN script left in the source; the loader serves the vendored trio first, config.js right after
+const idxNoComments = idx.replace(/<!--[\s\S]*?-->/g, "");
+ok(!/<script[^>]+src="https?:\/\//.test(idx), "index-source.html still loads a script from a remote origin");
+ok(!/unpkg\.com|cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com/.test(idxNoComments), "index-source.html still names a CDN host (unpkg / jsdelivr / cdnjs)");
+ok(!/<script type="module">/.test(idx), "index-source.html still carries the <script type=\"module\"> SDK import");
+ok(idx.includes("['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js']"), "the ?v=APP_VERSION loader list must start with the vendored trio (React, ReactDOM, supabase-js, in that order) followed by config.js");
+// config.js: the UMD declares a non-configurable `var supabase` global; config.js captures it into window._supabaseSDK
+// before its own `var supabase` REST wrapper takes the name (a `const` would be a SyntaxError against the UMD's var).
+const cfg = read("config.js");
+ok(/^var supabase = \{$/m.test(cfg) && !/^const supabase = \{$/m.test(cfg), "config.js must declare the REST wrapper as `var supabase = {` (the vendored UMD's `var supabase` global makes a `const` a SyntaxError)");
+const capAt = cfg.indexOf("window._supabaseSDK = { createClient: sdk.createClient };");
+ok(capAt > 0 && capAt < cfg.indexOf("var supabase = {"), "config.js must capture window.supabase.createClient into window._supabaseSDK BEFORE `var supabase = {` takes the global name");
+// the printable popup (helpers.js buildPrintableCalendarHTML) inherits this policy: its ONE inline script is pinned by a static hash
+const H = require(path.join(ROOT, "helpers.js"));
+const printable = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 9, numMonths: 1, schedule: {}, roster: [], holidays: [], vacations: [] });
+const printScripts = Array.from(printable.matchAll(/<script>([\s\S]*?)<\/script>/g)).map(m => m[1]);
+ok(printScripts.length === 1, "the printable page must carry exactly one inline <script> (the toolbar), found " + printScripts.length);
+ok(!/\son(click|load)=/.test(printable), "the printable page must not use inline event handlers (they would need 'unsafe-hashes'; the toolbar script is hashed instead)");
+const printHash = printScripts.length === 1 ? sha256src(printScripts[0]) : null;
+ok(!!printHash && (srcDirectives["script-src"] || []).includes(printHash), "script-src must carry the printable toolbar script's hash " + printHash + " (helpers.js buildPrintableCalendarHTML changed? re-hash the script and update the meta)");
+flush("CSP meta (source)");
+
+// Build to a scratch file and check the emitted policy against the emitted inline scripts byte for byte.
+{
+  const tmpOut = path.join(os.tmpdir(), "silvis-ci-test-build-" + process.pid + ".html");
+  const b = cp.spawnSync(process.execPath, [path.join(ROOT, "build.js"), "index-source.html", tmpOut], { cwd: ROOT, encoding: "utf8", timeout: 180000 });
+  ok(b.status === 0, "build.js exited " + b.status + ": " + String(b.stderr || "").trim().slice(0, 300));
+  if (b.status === 0) {
+    const built = fs.readFileSync(tmpOut, "utf8");
+    const builtCsp = cspOf(built);
+    ok(builtCsp.length > 0 && !builtCsp.includes(CSP_TOKEN), "the built page still carries the " + CSP_TOKEN + " token");
+    const inline = Array.from(built.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)).filter(m => !/\bsrc=/.test(m[1])).map(m => m[2]);
+    ok(inline.length === 3, "the built page must carry exactly 3 inline scripts (APP_VERSION, loader, transpiled app), found " + inline.length);
+    const want = inline.map(sha256src);
+    const have = directivesOf(builtCsp)["script-src"] || [];
+    want.forEach((h, i) => ok(have.includes(h), "built script-src lacks the hash of inline script #" + (i + 1) + " " + h + " (have: " + have.join(" ") + ")"));
+    ok(have.filter(h => /^'sha256-/.test(h)).length === want.length + 1, "built script-src must carry exactly the 3 page hashes + the printable toolbar hash, found " + have.filter(h => /^'sha256-/.test(h)).length);
+    ok(!/<script[^>]+src="https?:\/\//.test(built), "the built page still loads a remote script");
+    ok(/__CSP_SCRIPT_HASHES__/.test(read("build.js")), "build.js does not fill the CSP token");
+  }
+  try { fs.unlinkSync(tmpOut); } catch (e) {}
+}
+flush("CSP meta (built)");
+
+// The lockfile is tracked and CI installs from it; the two actions are pinned to a full commit SHA; permissions are explicit.
+const gitignore = read(".gitignore").split("\n").filter(l => l.trim() && !/^\s*#/.test(l)).map(l => l.trim());
+ok(!gitignore.includes("package-lock.json"), ".gitignore must not ignore package-lock.json (CI runs npm ci against the committed lockfile)");
+ok(gitignore.includes("edge-functions/deployed-backup-*/"), ".gitignore must ignore edge-functions/deployed-backup-*/ (local pre-deploy backups of the live function sources)");
+// visible to git = present and not ignored (an intent-to-add or a not-yet-committed lockfile in a review worktree
+// passes; a lockfile that .gitignore swallows never does). `git ls-files` confirms the commit once it lands.
+ok(fs.existsSync(path.join(ROOT, "package-lock.json")), "package-lock.json is missing (run `npm install` once against the pinned package.json and commit it)");
+const lockIgnored = cp.spawnSync("git", ["check-ignore", "-q", "package-lock.json"], { cwd: ROOT, encoding: "utf8" });
+ok(lockIgnored.status === 1, "package-lock.json is ignored by git (check-ignore exit " + lockIgnored.status + ") - it must be committed");
+const vendorIgnored = cp.spawnSync("git", ["check-ignore", "-q", "vendor/supabase.js"], { cwd: ROOT, encoding: "utf8" });
+ok(vendorIgnored.status === 1, "vendor/ is ignored by git (check-ignore exit " + vendorIgnored.status + ") - the vendored files must be committed");
+if (fs.existsSync(path.join(ROOT, "package-lock.json"))) {
+  const lock = JSON.parse(read("package-lock.json"));
+  ok(lock.lockfileVersion >= 2 && lock.packages && lock.packages[""], "package-lock.json is not a v2+/v3 lockfile with a root entry");
+  const rootDev = ((lock.packages || {})[""] || {}).devDependencies || {};
+  Object.entries(pkg.devDependencies).forEach(([n, v]) => ok(rootDev[n] === v, "package-lock.json root devDependencies." + n + " is " + rootDev[n] + ", package.json pins " + v + " (lockfile out of step - npm ci would refuse)"));
+  Object.entries(pkg.devDependencies).forEach(([n, v]) => ok(((lock.packages || {})["node_modules/" + n] || {}).version === v, "package-lock.json resolves " + n + " to " + ((lock.packages || {})["node_modules/" + n] || {}).version + ", package.json pins " + v));
+  // Every non-root entry must carry a registry `resolved` URL and a sha512 `integrity`: without them `npm ci` pins
+  // versions only and verifies no tarball bytes (a lockfile generated over an existing node_modules comes out that
+  // way - regenerate from a clean tree: rm -rf node_modules package-lock.json && npm install).
+  const lockEntries = Object.entries(lock.packages || {}).filter(([k]) => k !== "");
+  const noResolved = lockEntries.filter(([, v]) => !/^https:\/\/registry\.npmjs\.org\//.test(v.resolved || "")).map(([k]) => k);
+  const noIntegrity = lockEntries.filter(([, v]) => !/^sha512-[A-Za-z0-9+/=]+$/.test(v.integrity || "")).map(([k]) => k);
+  ok(lockEntries.length > 0, "package-lock.json lists no packages");
+  ok(noResolved.length === 0, "package-lock.json: " + noResolved.length + "/" + lockEntries.length + " entries lack a https://registry.npmjs.org/ `resolved` URL (npm ci would verify nothing), e.g. " + noResolved.slice(0, 3).join(", "));
+  ok(noIntegrity.length === 0, "package-lock.json: " + noIntegrity.length + "/" + lockEntries.length + " entries lack a sha512 `integrity` hash (npm ci would verify nothing), e.g. " + noIntegrity.slice(0, 3).join(", "));
+}
+const installStep = stepBlocks.find(b => /name:\s*Install build deps/.test(b)) || "";
+ok(/run:\s*npm ci\b/.test(installStep) && !/npm install/.test(installStep.split("\n").filter(l => !/^\s*#/.test(l)).join("\n")), "build.yml's install step must run `npm ci` (never npm install) against the committed lockfile");
+const uses = Array.from(yml.matchAll(/^\s*uses:\s*(\S+)\s*(#.*)?$/gm)).map(m => ({ ref: m[1], comment: (m[2] || "").trim() }));
+ok(uses.length === 2, "build.yml must use exactly two actions (checkout, setup-node), found " + uses.map(u => u.ref).join(", "));
+const PINNED = { "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262", "actions/setup-node": "49933ea5288caeca8642d1e84afbd3f7d6820020" };
+uses.forEach(u => {
+  const [name, sha] = u.ref.split("@");
+  ok(PINNED[name] !== undefined, "unexpected action " + u.ref);
+  ok(/^[0-9a-f]{40}$/.test(sha || ""), u.ref + " is not pinned to a full 40-hex commit SHA");
+  ok(sha === PINNED[name], u.ref + " is pinned to a SHA this test does not know (tag v4 of " + name + " = v4.4.0 = " + PINNED[name] + " on 2026-09-23; a deliberate bump updates both)");
+  ok(/^#\s*v4\b/.test(u.comment), u.ref + " needs a trailing `# v4` comment naming the tag it pins");
+});
+const topPerms = yml.match(/^permissions:[ \t]*(.*)$/m);
+ok(!!topPerms && /^\{\s*\}$/.test((topPerms[1] || "").trim()), "build.yml must set workflow-level `permissions: {}` (nothing by default; the job grants what it needs)");
+const buildJob = yml.slice(yml.indexOf("\njobs:"));
+const jobPermBlock = (buildJob.match(/^ {4}permissions:[ \t]*\n((?: {6}\S.*\n)+)/m) || [])[1] || "";
+ok(jobPermBlock.trim() === "contents: write", "the build job's permissions block must be exactly `contents: write` (the commit-back push), found: " + JSON.stringify(jobPermBlock.trim()));
+const gateYml = read(".github/workflows/ci-owned-files-gate.yml");
+ok(/^permissions:\s*\n {2}contents: read\s*\n {2}pull-requests: read\s*$/m.test(gateYml), "ci-owned-files-gate.yml must declare `permissions:\\n  contents: read\\n  pull-requests: read`");
+ok(!/uses:/.test(gateYml), "ci-owned-files-gate.yml uses no actions (nothing to pin); if one is added, pin it by SHA and add it here");
+flush("lockfile / actions / permissions");
+
 console.log("ok " + N + " assertions (" + chain.length + " suites in the chain, " + filter.length + " paths in the filter, " + testSteps.length + " test steps)");

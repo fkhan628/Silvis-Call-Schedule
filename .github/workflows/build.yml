@@ -71,10 +71,15 @@ on:
       - "icon-512.png"
       - "icon-192.png"
       - "apple-touch-icon.png"
+      # Vendored runtime libraries (vendor/README.md): a bump is a deploy - the
+      # suites re-check the pinned hashes and APP_VERSION bumps so cache-busted
+      # clients refetch them.
+      - "vendor/**"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
-permissions:
-  contents: write
+# Nothing by default; the build job grants itself contents: write for the
+# commit-back push and nothing else (Prompt 16 B8).
+permissions: {}
 
 concurrency:
   group: build-${{ github.ref }}
@@ -86,9 +91,15 @@ jobs:
     # Skip the bot's own build commits (belt-and-suspenders; GITHUB_TOKEN pushes
     # don't trigger workflows anyway).
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    permissions:
+      contents: write
+    # Actions are pinned to the full commit SHA of their tag (a moving tag can be
+    # re-pointed by the action's maintainers or by whoever compromises them);
+    # test/ci.test.js pins the same SHAs. Bump: `gh api repos/actions/checkout/git/ref/tags/v4`
+    # (and setup-node), update both places, keep the `# v4` comment on the tag it pins.
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0, 2026-09-23)
 
       # Node 24 (current LTS): the Babel 8 packages declare engines
       # ^22.18.0 || >=24.11.0, and on Node 20 npm printed EBADENGINE for every
@@ -97,12 +108,15 @@ jobs:
       # developer machine. The Node 24 transpile is byte-identical to the Node 20
       # output of the same source.
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (v4.4.0, 2026-09-23)
         with:
           node-version: "24"
 
+      # npm ci: installs exactly what the committed package-lock.json resolves
+      # (Prompt 16 B8) and refuses if the lockfile and package.json disagree -
+      # a dependency change is a lockfile change in the same commit.
       - name: Install build deps
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # Guard the rules engine and the generator's hard rules BEFORE anything
       # is bumped or committed - a regression here fails the build and nothing

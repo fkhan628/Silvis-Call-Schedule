@@ -2,6 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- Content-Security-Policy (Prompt 16 B8). Scripts: this origin + a hash list - build.js replaces the
+       hash token below with the sha256 of the three inline scripts it emits; the last hash is the
+       printable popup's toolbar script (helpers.js buildPrintableCalendarHTML - the popup inherits this
+       policy; re-hash it if that script changes, test/ci.test.js checks both). Styles: inline (JSX style
+       props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
+       Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
+       because a <meta> policy cannot carry it (browsers ignore it and warn). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' __CSP_SCRIPT_HASHES__ 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -94,18 +102,9 @@
       .trade-pick-wrap { flex: 1 1 100%; }
     }
   </style>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script type="module">
-    // Load the Supabase JS SDK as an ES module. Exposes createClient under
-    // window._supabaseSDK so our non-module scripts below can use it (Realtime
-    // only - every read/write goes through the REST wrapper in config.js),
-    // without polluting the global scope with a `supabase` identifier that
-    // would collide with our const supabase REST wrapper.
-    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
-    window._supabaseSDK = { createClient };
-    window.dispatchEvent(new CustomEvent("supabase-sdk-ready"));
-  </script>
+  <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
+       ?v=APP_VERSION loader at the top of <body>; no script comes from a CDN. config.js captures the
+       supabase-js UMD's global for Realtime (getSupabaseRT). -->
   <script>
     // --- Auto-update: bump this version string each deploy ---
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
@@ -155,9 +154,11 @@
 <body>
   <div id="root"></div>
   <script>
-    // Cache-bust uses APP_VERSION (defined at the top of this file).
+    // Cache-bust uses APP_VERSION (defined at the top of this file). The vendored
+    // libraries come first (React before ReactDOM; supabase.js before config.js,
+    // which captures its global) - vendor/README.md records versions and hashes.
     var _v = APP_VERSION;
-    ['config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js'].forEach(function(f) {
+    ['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js'].forEach(function(f) {
       document.write('<script src="'+f+'?v='+_v+'"><\/script>');
     });
   </script>

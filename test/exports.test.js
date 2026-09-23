@@ -291,7 +291,11 @@ check("printable: one .page per month (2), Sunday-first DOW ribbon, vacation bar
   assert.ok(printable.includes('data-month="2026-10"') && printable.includes('data-month="2026-11"'));
   assert.ok(printable.includes('<div class="dow">Sunday</div><div class="dow">Monday</div>'));
   assert.ok(printable.includes('class="bar vac-surgeon"') && printable.includes(">Acton VAC</div>"));
-  assert.ok(printable.includes("@page { size: letter portrait") && printable.includes('onclick="window.print()">Print</button>'));
+  // Prompt 16 B8: the toolbar's handlers live in ONE inline <script> (its sha256 is a static entry in the app's
+  // CSP meta - the popup inherits that policy; test/ci.test.js re-hashes it), never in onclick attributes.
+  assert.ok(printable.includes("@page { size: letter portrait") && printable.includes('<button id="pp-print">Print</button>') && printable.includes('<button class="secondary" id="pp-close">Close</button>'));
+  assert.strictEqual((printable.match(/<script>/g) || []).length, 1, "exactly one inline script (the toolbar)");
+  assert.ok(printable.includes('document.getElementById("pp-print").addEventListener("click", function () { window.print(); });') && !/\son(click|load)=/.test(printable));
   assert.ok(printable.includes("Silvis Surgical Care - Trauma / Acute Care Surgery Call") && printable.includes("Printed "));
   assert.ok(!/DSG|Davenport|APP/.test(printable.replace(/APP_/g, "")), "Davenport wording left behind");
   assert.ok(!/[^\x00-\x7F]/.test(printable.replace(/&middot;/g, "")), "non-ASCII in the printable document");
