@@ -2185,6 +2185,207 @@ eq(Object.keys(evEmpty.eastVacations), [], "P15: ctx.eastVacations is empty"); e
 })));
 eq(R.eastVacationConflicts(makeCtx({})), [], "P15: no conflicts on the seed schedule without East vacation data");
 
+// ---- Prompt 14 P2 (9/23) ----
+// Offers first, rules as the fallback (docs/PROMPT-14-OFFER-PERIODS.md part 2, Faraz 9/22 evening). New ctx inputs:
+// `offers` (call_offers rows) and `periods` (call_periods rows incl. rules_only_ids + offer_modes). Per surgeon per
+// period the status is derived exactly like SQL offer_status(): 'submitted' when >= 1 offer lies inside the period,
+// else 'rules_only' when listed, else 'not_started'; the mode is offer_modes[id] or 'preferred'. Inside a period a
+// SUBMITTED surgeon is offers-governed: exhaustive -> hard "not-offered" off his offered days / roles; preferred ->
+// soft "offered" (-weights.offerBonus) on an offered day, soft "outside-offers" (+weights.outsideOffers) on any other
+// day under his ordinary rules. An offer is a DATED ROW (item W): it lifts the weekday-pattern family for its date and
+// role; the dated lists (whitelist-month, outside-available-weeks) are not applied to a submitted surgeon inside the
+// period; obligations never lift. rules_only / not_started / a day outside every period = today's behaviour.
+step("Prompt 14 P2: periods + offers parsed, status derived like offer_status(), mode from offer_modes");
+const P14_PERIOD = { id: "p14-test", label: "Nov 2026 - Jan 2027", start_day: "2026-11-02", end_day: "2027-01-03", offers_close_at: "2026-10-02", publish_by: "2026-10-05", status: "upcoming", rules_only_ids: [KHAN, SARKAR], offer_modes: { [BURCHETT]: "exhaustive", [ACTON]: "preferred" } };
+const P14_BUR = seed.surgeonRules[BURCHETT].explicitAvailable["2026-11"]; // his real November statement: 7 primary + 8 backup dates
+const P14_ACT = { primary: ["2026-11-02", "2026-11-04", "2026-11-06", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-18"], backup: ["2026-11-03", "2026-11-05", "2026-11-17"] }; // Burchett's 9/17 relay of Acton's days (rules doc section 3)
+const p14Offer = (id, day, pref, extra) => Object.assign({ person_id: id, day: day, role_pref: pref, source: "email-relay", entered_by: "scheduler", note: null }, extra || {});
+const p14List = (id, lists) => [].concat(lists.primary.map(d => p14Offer(id, d, "primary")), lists.backup.map(d => p14Offer(id, d, "backup")));
+const P14_OFFERS = p14List(BURCHETT, P14_BUR).concat(p14List(ACTON, P14_ACT));
+eq([P14_BUR.primary.length, P14_BUR.backup.length, P14_OFFERS.length], [7, 8, 25], "P2: 15 Burchett + 10 Acton offers");
+function p14Ctx(extras) { return makeCtx(Object.assign({ schedule: {}, periods: [P14_PERIOD], offers: P14_OFFERS }, extras || {})); }
+const oc = p14Ctx();
+eq(oc.warnings, [], "P2: a well-formed period + offers input raises no ctx warning");
+const p14State = (c, day, id) => { const s = R.offerState(c, day, id); return s && { key: s.period.key, status: s.status, mode: s.mode, roles: s.roles }; };
+eq(p14State(oc, "2026-11-10", BURCHETT), { key: "p14-test", status: "submitted", mode: "exhaustive", roles: [] }, "P2: Burchett submitted / exhaustive; nothing offered on 11/10");
+eq(p14State(oc, "2026-11-11", BURCHETT), { key: "p14-test", status: "submitted", mode: "exhaustive", roles: [P] }, "P2: 11/11 offered as primary");
+eq(p14State(oc, "2026-11-02", BURCHETT).roles, [B], "P2: 11/2 offered as backup only");
+eq(p14State(oc, "2026-11-02", ACTON), { key: "p14-test", status: "submitted", mode: "preferred", roles: [P] }, "P2: Acton submitted / preferred (the default mode)");
+eq(p14State(oc, "2026-11-10", KHAN), { key: "p14-test", status: "rules_only", mode: "preferred", roles: [] }, "P2: Khan listed in rules_only_ids");
+eq(p14State(oc, "2026-11-10", SARKAR).status, "rules_only", "P2: Sarkar listed in rules_only_ids");
+eq(p14State(oc, "2026-11-10", PHILIP), { key: "p14-test", status: "not_started", mode: "preferred", roles: [] }, "P2: Philip - no offer, not listed -> not_started");
+eq(p14State(oc, "2026-11-10", FIERCE).status, "not_started", "P2: Fierce not_started");
+eq([R.offerState(oc, "2026-10-15", BURCHETT), R.offerState(oc, "2027-01-04", BURCHETT)], [null, null], "P2: a day outside every period has no offer state");
+eq(p14State(oc, "2027-01-03", BURCHETT).status, "submitted", "P2: the period's last day is inside it (end_day inclusive, like SQL between)");
+eq([R.offeredOn(oc, "2026-11-11", P, BURCHETT), R.offeredOn(oc, "2026-11-11", B, BURCHETT), R.offeredOn(oc, "2026-11-02", B, BURCHETT), R.offeredOn(oc, "2026-11-02", P, BURCHETT)], [true, false, true, false], "P2: offeredOn reads the offered role");
+const ocEither = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(PHILIP, "2026-12-09", "either")]) });
+eq([R.offeredOn(ocEither, "2026-12-09", P, PHILIP), R.offeredOn(ocEither, "2026-12-09", B, PHILIP), p14State(ocEither, "2026-12-09", PHILIP).roles], [true, true, [P, B]], "P2: 'either' = both roles");
+eq(p14State(ocEither, "2026-11-10", PHILIP).status, "submitted", "P2: one offer anywhere inside the period makes the whole period 'submitted' for him");
+// SQL precedence: an offer inside the period beats the rules_only listing (offer_status() tests offers first)
+const ocSrk = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(SARKAR, "2026-11-17", "primary")]) });
+eq(p14State(ocSrk, "2026-11-10", SARKAR).status, "submitted", "P2: a listed rules_only surgeon who offers a day is 'submitted' (offer beats the list, as in SQL)");
+eq(oc.per[BURCHETT].offers["2026-11-11"], 1, "P2: the per-surgeon offer map carries the role mask (primary = 1)");
+eq(oc.per[BURCHETT].avail["2026-11-02"] && (oc.per[BURCHETT].avail["2026-11-02"].avail & 2), 2, "P2: an offer is folded into the same P.avail map the availability rows feed (backup mask) - one code path (W)");
+
+step("Prompt 14 P2: exhaustive - eligible ONLY on an offered day in the offered role; 'not-offered' is hard, first, and never 'whitelist-month'");
+const bur1110 = R.eligibility(oc, "2026-11-10", P, BURCHETT);
+blocked(bur1110, "not-offered", "P2: Burchett primary Tue 11/10 - not on his list");
+eq(bur1110.hard[0], "not-offered", "P2: not-offered is the first (visible) hard reason: " + JSON.stringify(bur1110.hard));
+lacks(bur1110.hard, "whitelist-month", "P2: the governed-month whitelist is NOT applied to a submitted surgeon inside the period (offers supersede the dated lists)");
+blocked(R.eligibility(oc, "2026-11-10", B, BURCHETT), "not-offered", "P2: ...backup 11/10 likewise (exhaustive governs both roles)");
+const bur1111 = R.eligibility(oc, "2026-11-11", P, BURCHETT);
+okElig(bur1111, "P2: Burchett primary Wed 11/11 - offered");
+eq(bur1111.soft.filter(s => s.reason === "offered").map(s => s.weight), [-6], "P2: an offered day carries the soft 'offered' bonus at -weights.offerBonus (6)");
+lacksSoft(bur1111, "outside-offers", "P2: no outside-offers on an offered day");
+blocked(R.eligibility(oc, "2026-11-02", P, BURCHETT), "not-offered", "P2: 11/2 offered as BACKUP only - primary is not-offered (role scope)");
+okElig(R.eligibility(oc, "2026-11-02", B, BURCHETT), "P2: ...backup 11/2 is eligible");
+hasSoft(R.eligibility(oc, "2026-11-02", B, BURCHETT), "offered", "P2: ...with the bonus");
+blocked(R.eligibility(oc, "2026-11-10", B, BURCHETT, { manual: true }), "not-offered", "P2: the day editor path (manual) still shows not-offered (a manual override warns, it does not silently pass)");
+// exhaustive on a holiday-unit day: the holiday waiver lifts weekday patterns, never a dated list (small items 9/22) - Christmas Day 12/25 is on his December list, Christmas Eve 12/24 is not
+const ocDec = p14Ctx({ offers: P14_OFFERS.concat(seed.surgeonRules[BURCHETT].explicitAvailable["2026-12"].map(d => p14Offer(BURCHETT, d, "either"))) });
+okElig(R.eligibility(ocDec, "2026-12-25", P, BURCHETT), "P2: Christmas Day - offered");
+blocked(R.eligibility(ocDec, "2026-12-24", P, BURCHETT), "not-offered", "P2: Christmas Eve - not offered, exhaustive: hard even on a holiday-unit day (the waiver never lifts a dated statement)");
+
+step("Prompt 14 P2: preferred - offered day bonus, non-offered day eligible under the ordinary rules with the outside-offers penalty");
+const act1102 = R.eligibility(oc, "2026-11-02", P, ACTON);
+okElig(act1102, "P2: Acton primary Mon 11/2 - offered");
+eq(act1102.soft.filter(s => s.reason === "offered").map(s => s.weight), [-6], "P2: offered bonus -6");
+lacksSoft(act1102, "outside-offers", "P2: no penalty on an offered day");
+const act1112 = R.eligibility(oc, "2026-11-12", P, ACTON);
+okElig(act1112, "P2: Acton primary Thu 11/12 - not offered, but his ordinary rules allow a Thursday (preferred mode)");
+eq(act1112.soft.filter(s => s.reason === "outside-offers").map(s => s.weight), [6], "P2: outside-offers penalty +weights.outsideOffers (6)");
+lacksSoft(act1112, "offered", "P2: no bonus on a non-offered day");
+lacks(act1112.hard, "not-offered", "P2: preferred never says not-offered");
+blocked(R.eligibility(oc, "2026-11-09", P, ACTON), "recurring-unavailable:Mon", "P2: a non-offered 2nd Monday is still his outreach day (ordinary rules apply, they are not lifted by the mode)");
+blocked(R.eligibility(oc, "2026-11-03", P, ACTON), "hard-never-weekday:Tue", "P2: 11/3 offered as BACKUP only - his Tuesday primary rule stands (an offer lifts the pattern for its own role only)");
+okElig(R.eligibility(oc, "2026-11-03", B, ACTON), "P2: ...11/3 backup is offered and eligible");
+hasSoft(R.eligibility(oc, "2026-11-03", B, ACTON), "offered", "P2: ...with the bonus");
+// an offer IS a dated row (W): Acton offering a Tuesday as primary lifts hardNeverWeekdays for that date and role
+const ocTue = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(ACTON, "2026-11-10", "primary")]) });
+const actTue = R.eligibility(ocTue, "2026-11-10", P, ACTON);
+okElig(actTue, "P2/W: Acton offered Tue 11/10 primary - the offer lifts hard-never-weekday:Tue like a dated row");
+lacks(actTue.hard, "hard-never-weekday", "P2/W: no OR-day reason on an offered Tuesday");
+hasSoft(actTue, "offered", "P2/W: ...and it carries the offered bonus");
+blocked(R.eligibility(oc, "2026-11-10", P, ACTON), "hard-never-weekday:Tue", "P2/W: without the offer the Tuesday rule stands (and he is not not-offered: preferred)");
+lacks(R.eligibility(oc, "2026-11-10", P, ACTON).hard, "not-offered", "P2/W: (preferred: never not-offered)");
+// Khan (rules_only in the base period) submits one Tuesday primary offer in a variant: the mode defaults to preferred and W lifts his OR-day rule
+const ocKhan = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(KHAN, "2026-12-01", "primary", { source: "app", entered_by: KHAN })]) });
+eq(p14State(ocKhan, "2026-12-01", KHAN), { key: "p14-test", status: "submitted", mode: "preferred", roles: [P] }, "P2: Khan's own offer makes him submitted (beats rules_only_ids), default mode preferred");
+const khanTue = R.eligibility(ocKhan, "2026-12-01", P, KHAN);
+okElig(khanTue, "P2/W: Khan primary on his offered Tuesday 12/1");
+lacks(khanTue.hard, "hard-never-weekday", "P2/W: the OR-day rule is lifted for that date");
+hasSoft(khanTue, "offered", "P2/W: offered bonus");
+blocked(R.eligibility(ocKhan, "2026-12-08", P, KHAN), "hard-never-weekday:Tue", "P2/W: the next Tuesday is not offered - OR day (hard) - and, preferred, it would carry outside-offers if it were eligible");
+
+step("Prompt 14 P2: obligations still apply on an offered day - East busy, vacation, trailing edge, derived lock, window, other role");
+const ocKhanEast = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(KHAN, "2026-12-01", "primary")]), eastBusyDays: { [KHAN]: ["2026-12-01"] } });
+blocked(R.eligibility(ocKhanEast, "2026-12-01", P, KHAN), "east-busy", "P2: an offered day that is East-busy stays blocked");
+lacks(R.eligibility(ocKhanEast, "2026-12-01", P, KHAN).hard, "hard-never-weekday", "P2: (the offer did lift the OR-day rule; East is the block)");
+okElig(R.eligibility(ocKhanEast, "2026-12-01", B, KHAN), "P2: backup on his East day stays allowed (eastBlocksBackup false) - not offered as backup, so outside-offers");
+hasSoft(R.eligibility(ocKhanEast, "2026-12-01", B, KHAN), "outside-offers", "P2: ...outside-offers on the non-offered role");
+const ocVac = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(ACTON, "2026-11-20", "primary")]) });
+blocked(R.eligibility(ocVac, "2026-11-20", P, ACTON), "time-off:2026-11-20", "P2: an offer inside his vacation (11/19-22) is still time-off (the DB trigger OF002 refuses such a row; the engine fails closed too)");
+blocked(R.eligibility(oc, "2026-11-18", P, ACTON), "day-before-vacation", "P2: his offered 11/18 primary is the day before his 11/19 vacation - trailing edge still hard");
+okElig(R.eligibility(oc, "2026-11-18", B, ACTON), "P2: ...11/18 backup is fine (trailing edge is primary-only) - offered as primary only, so outside-offers");
+eq(R.eligibility(ctx, "2026-11-18", P, ACTON).lockHolder, true, "P2: on the seed schedule his published 11/18 primary is a lock holder with the conflict listed");
+has(R.eligibility(makeCtx({ periods: [P14_PERIOD], offers: P14_OFFERS }), "2026-11-18", P, ACTON).conflicts || [], "day-before-vacation", "P2: ...in the offers context too");
+const ocFierce = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(FIERCE, "2026-11-10", "primary")]) });
+blocked(R.eligibility(ocFierce, "2026-11-10", P, FIERCE), "derived-lock:backup", "P2: an offered primary inside his East-primary (Silvis backup) week - the derived lock still governs");
+blocked(R.eligibility(ocSrk, "2026-11-23", P, SARKAR), "outside-window", "P2: Sarkar offering a day outside her window - the window is her only rule and no offer lifts it");
+okElig(R.eligibility(ocSrk, "2026-11-17", P, SARKAR), "P2: her offered window day is eligible");
+hasSoft(R.eligibility(ocSrk, "2026-11-17", P, SARKAR), "offered", "P2: ...with the bonus");
+const ocOther = p14Ctx({ schedule: { "2026-11-02": { primary: null, backup: ACTON } } });
+blocked(R.eligibility(ocOther, "2026-11-02", P, ACTON), "holds-other-role", "P2: an offered primary on a day he already holds backup - holds-other-role");
+// caps and runs: the same dynamic gates as always (max-consecutive here: his offered Sat 11/14 primary against a held 11/15-17 run = a 4th day over his max 3)
+const ocRun = p14Ctx({ schedule: { "2026-11-15": { primary: ACTON }, "2026-11-16": { primary: ACTON }, "2026-11-17": { primary: ACTON } } });
+blocked(R.eligibility(ocRun, "2026-11-14", P, ACTON), "max-consecutive:3", "P2: an offer never lifts max-consecutive");
+
+step("Prompt 14 P2: the dated lists are superseded for a SUBMITTED surgeon inside the period, still applied for rules_only / not_started");
+blocked(R.eligibility(oc, "2026-12-03", P, PHILIP), "outside-available-weeks", "P2: Philip not_started - his weeks whitelist still governs Thu 12/3 (week of 11/30 is not on his list)");
+const phOff = R.eligibility(ocEither, "2026-12-03", P, PHILIP);
+okElig(phOff, "P2: Philip submitted (one December offer) - the weeks whitelist is not applied inside the period; 12/3 is eligible under his ordinary rules (Aledo) with the penalty");
+lacks(phOff.hard, "outside-available-weeks", "P2: no outside-available-weeks for a submitted surgeon inside the period");
+hasSoft(phOff, "outside-offers", "P2: ...outside-offers on the non-offered day");
+hasSoft(phOff, "aledo-week", "P2: ...his ordinary Aledo-week soft still applies");
+blocked(R.eligibility(ocEither, "2026-12-15", P, PHILIP), "day-before-aledo", "P2: his hard day-before-Aledo rule still applies on a non-offered day (Tue 12/15 before the 3rd Wednesday)");
+blocked(R.eligibility(ocEither, "2027-01-05", P, PHILIP), "outside-available-weeks", "P2: ...but outside the period (1/5/2027 > end_day 1/3) his weeks list governs again");
+const ocBurRules = p14Ctx({ offers: p14List(ACTON, P14_ACT), periods: [Object.assign({}, P14_PERIOD, { rules_only_ids: [KHAN, SARKAR, BURCHETT] })] });
+eq(p14State(ocBurRules, "2026-11-10", BURCHETT).status, "rules_only", "P2: Burchett with no offers, listed -> rules_only");
+blocked(R.eligibility(ocBurRules, "2026-11-10", P, BURCHETT), "whitelist-month", "P2: rules_only - his November whitelist (governed both roles, T) applies exactly as before");
+blocked(R.eligibility(ocBurRules, "2026-11-10", B, BURCHETT), "whitelist-month", "P2: ...backup too (the object entry names both roles)");
+lacks(R.eligibility(ocBurRules, "2026-11-10", P, BURCHETT).hard, "not-offered", "P2: never not-offered for a rules_only surgeon");
+const ocBurNone = p14Ctx({ offers: p14List(ACTON, P14_ACT) });
+eq(p14State(ocBurNone, "2026-11-10", BURCHETT).status, "not_started", "P2: Burchett with no offers, not listed -> not_started");
+eq(R.eligibility(ocBurNone, "2026-11-10", P, BURCHETT), R.eligibility(clean, "2026-11-10", P, BURCHETT), "P2: not_started = today's answer, byte for byte");
+
+step("Prompt 14 P2: a claim is an offer made on the spot - opts.claim skips the exhaustive not-offered, every other rule stands");
+const claimOk = R.eligibility(oc, "2026-11-09", P, BURCHETT, { claim: true });
+okElig(claimOk, "P2: Burchett (exhaustive) may CLAIM Mon 11/9 primary - not offered, but a 2nd Monday is his recurring day");
+lacks(claimOk.hard, "not-offered", "P2: the claim path skips not-offered");
+hasSoft(claimOk, "outside-offers", "P2: ...and says it is outside his offers (the board shows the warning)");
+blocked(R.eligibility(oc, "2026-11-09", P, BURCHETT), "not-offered", "P2: the same slot without the claim flag is not-offered");
+const claimTue = R.eligibility(oc, "2026-11-10", P, BURCHETT, { claim: true });
+blocked(claimTue, "not-recurring-available", "P2: a claim on Tue 11/10 primary fails his ordinary rules (2nd Tuesday is not on his recurring list)");
+lacks(claimTue.hard, "not-offered", "P2: ...not-offered is not what blocks it");
+okElig(R.eligibility(oc, "2026-11-17", B, BURCHETT, { claim: true }), "P2: a backup claim on Tue 11/17 passes (backup is open to everyone; 11/10 would be Fierce's derived backup)");
+blocked(R.eligibility(oc, "2026-11-17", B, BURCHETT), "not-offered", "P2: ...and is not-offered without the claim flag");
+okElig(R.eligibility(oc, "2026-11-12", P, ACTON, { claim: true }), "P2: preferred + claim = the ordinary preferred answer");
+eq(R.eligibility(oc, "2026-11-12", P, ACTON, { claim: true }), R.eligibility(oc, "2026-11-12", P, ACTON), "P2: ...byte-identical (the flag only matters in exhaustive mode)");
+
+step("Prompt 14 P2: empty periods = today's behaviour, byte for byte; an offer outside every period is exactly a dated availability row");
+const novDays = []; for (let d = 1; d <= 30; d++) novDays.push("2026-11-" + (d < 10 ? "0" : "") + d);
+const ALL6 = [KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR];
+const emptyPer = makeCtx({ schedule: {}, periods: [], offers: [] });
+let same = 0;
+ALL6.forEach(id => novDays.forEach(d => [P, B].forEach(role => { if (JSON.stringify(R.eligibility(emptyPer, d, role, id)) === JSON.stringify(R.eligibility(clean, d, role, id))) same++; else fail("P2: periods [] changed " + id + " " + d + " " + role); })));
+eq(same, 360, "P2: 6 surgeons x 30 November days x 2 roles identical with periods: [] (the whole regression must pass unchanged)");
+// offers without a period: Acton's November list as offers == the same dates as available rows (the seed has no Acton November rows since Y)
+const ocNoPeriod = makeCtx({ schedule: {}, offers: p14List(ACTON, P14_ACT) });
+const rowsAct = withRows([].concat(P14_ACT.primary.map(d => row(ACTON, "available", d, "primary")), P14_ACT.backup.map(d => row(ACTON, "available", d, "backup"))));
+let sameRow = 0;
+novDays.forEach(d => [P, B].forEach(role => { if (JSON.stringify(R.eligibility(ocNoPeriod, d, role, ACTON)) === JSON.stringify(R.eligibility(rowsAct, d, role, ACTON))) sameRow++; else fail("P2: offer-as-row differs on " + d + " " + role + ": " + JSON.stringify(R.eligibility(ocNoPeriod, d, role, ACTON)) + " vs " + JSON.stringify(R.eligibility(rowsAct, d, role, ACTON))); }));
+eq(sameRow, 60, "P2: outside every period an offer is exactly a dated available row for its role (W), no bonus, no penalty");
+eq([R.offerState(ocNoPeriod, "2026-11-02", ACTON), R.offeredOn(ocNoPeriod, "2026-11-02", P, ACTON)], [null, false], "P2: ...and it is not an 'offer' for the generator (no period)");
+okElig(R.eligibility(ocNoPeriod, "2026-11-02", P, ACTON), "P2: (11/2 primary: eligible either way)");
+lacksSoft(R.eligibility(ocNoPeriod, "2026-11-02", P, ACTON), "offered", "P2: no offered bonus without a period");
+
+step("Prompt 14 P2: malformed inputs warn and fail closed - never a silent no-op, never a silent block");
+const ocBadMode = p14Ctx({ periods: [Object.assign({}, P14_PERIOD, { offer_modes: { [BURCHETT]: "only-these" } })] });
+ok(ocBadMode.warnings.some(w => /offer_modes\.s2 = "only-these"/.test(w) && /preferred/.test(w)), "P2: an unknown mode word warns and reads as preferred: " + JSON.stringify(ocBadMode.warnings));
+eq(p14State(ocBadMode, "2026-11-10", BURCHETT).mode, "preferred", "P2: ...mode preferred");
+lacks(R.eligibility(ocBadMode, "2026-11-10", P, BURCHETT).hard, "not-offered", "P2: ...so 11/10 is not not-offered (it is his ordinary not-recurring-available)");
+hasSoft(R.eligibility(ocBadMode, "2026-11-11", P, BURCHETT), "offered", "P2: ...offered days still carry the bonus");
+const ocBadOffer = p14Ctx({ offers: P14_OFFERS.concat([p14Offer("s9", "2026-11-10", "primary"), p14Offer(BURCHETT, "2026-11-10", "both"), p14Offer(BURCHETT, "11/12/2026", "primary")]) });
+ok(ocBadOffer.warnings.some(w => /offers\[25\]/.test(w) && /unknown person "s9"/.test(w)), "P2: an offer for an unknown person is dropped with a warning: " + JSON.stringify(ocBadOffer.warnings));
+ok(ocBadOffer.warnings.some(w => /offers\[26\]/.test(w) && /role_pref "both"/.test(w)), "P2: an unknown role_pref is dropped with a warning (fail closed - it never widens an exhaustive surgeon's days)");
+ok(ocBadOffer.warnings.some(w => /offers\[27\]/.test(w) && /day "11\/12\/2026"/.test(w)), "P2: a non-ISO day is dropped with a warning");
+blocked(R.eligibility(ocBadOffer, "2026-11-10", P, BURCHETT), "not-offered", "P2: ...the dropped 'both' row did not open 11/10 for him");
+eq(ocBadOffer.warnings.length, 3, "P2: exactly three warnings");
+const ocBadPeriod = p14Ctx({ periods: [P14_PERIOD, { id: "p2", label: "overlap", start_day: "2026-12-15", end_day: "2027-03-31", rules_only_ids: "[\"s4\"]", offer_modes: {} }, { id: "p3", start_day: "2027-05-01", end_day: "2027-04-01" }, { id: "p4", label: "no dates" }] });
+ok(ocBadPeriod.warnings.some(w => /periods\[1\]/.test(w) && /overlaps/.test(w) && /2026-12-15/.test(w)), "P2: overlapping periods warn (the earlier period keeps the shared days): " + JSON.stringify(ocBadPeriod.warnings));
+ok(ocBadPeriod.warnings.some(w => /periods\[2\]/.test(w) && /dropped/.test(w)), "P2: end before start -> dropped with a warning");
+ok(ocBadPeriod.warnings.some(w => /periods\[3\]/.test(w) && /dropped/.test(w)), "P2: no dates -> dropped with a warning");
+eq(p14State(ocBadPeriod, "2026-12-20", BURCHETT).key, "p14-test", "P2: a shared day belongs to the earlier period");
+eq(p14State(ocBadPeriod, "2027-02-01", PHILIP), { key: "p2", status: "rules_only", mode: "preferred", roles: [] }, "P2: rules_only_ids given as a JSON string is parsed (PostgREST returns arrays; older callers may stringify)");
+eq(ocBadPeriod.periods.length, 2, "P2: two periods survive");
+
+// Fix stage (9/23 review): two offer rows for one person and day warn (the DB unique (person_id, day) prevents it
+// live; a hand-built or duplicated input is the only way) - the roles are still OR-ed, never narrowed; and the
+// share taper weight (weights.offerBonusOverShare, read by the generator only) defaults to 0.
+step("Prompt 14 P2 (review): a duplicate offer row warns and merges; weights.offerBonusOverShare defaults to 0");
+// (Tue 11/17: not on his list in either role and outside Fierce's derived backup week 11/9-15, so the merged backup offer is what makes it eligible)
+const ocDup = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(BURCHETT, "2026-11-17", "primary"), p14Offer(BURCHETT, "2026-11-17", "backup")]) });
+eq(ocDup.warnings.length, 1, "P2: exactly one warning for the duplicated day: " + JSON.stringify(ocDup.warnings));
+ok(/offers\[26\]/.test(ocDup.warnings[0] || "") && /duplicate/.test(ocDup.warnings[0] || "") && /s2 2026-11-17/.test(ocDup.warnings[0] || "") && /merged/.test(ocDup.warnings[0] || ""), "P2: the warning names the second row, the person and the day and says the roles were merged: " + ocDup.warnings[0]);
+eq(ocDup.per[BURCHETT].offers["2026-11-17"], 3, "P2: the two rows OR into 'either' (mask 3)");
+blocked(R.eligibility(oc, "2026-11-17", B, BURCHETT), "not-offered", "P2: (without the rows 11/17 backup is not-offered)");
+okElig(R.eligibility(ocDup, "2026-11-17", B, BURCHETT), "P2: ...backup 11/17 is offered (merged)");
+lacks(R.eligibility(ocDup, "2026-11-17", P, BURCHETT).hard, "not-offered", "P2: ...primary 11/17 is offered too (merged; his ordinary rules decide the rest)");
+eq(p14State(ocDup, "2026-11-17", BURCHETT).roles, [P, B], "P2: ...offerState reads both roles");
+eq(R.defaultWeights().offerBonusOverShare, 0, "P2: defaultWeights().offerBonusOverShare = 0 (the offered bonus stops at the share; 6 = the pre-review reading)");
+eq(clean.weights.offerBonusOverShare, 0, "P2: ctx.weights carries offerBonusOverShare from the seed (0)");
+eq(seed.groupRules.weights.offerBonusOverShare, 0, "P2: seed groupRules.weights.offerBonusOverShare = 0");
+
 const total = Date.now() - t0;
 const BUDGET_MS = process.env.SILVIS_RULES_BUDGET_MS ? Math.floor(+process.env.SILVIS_RULES_BUDGET_MS) : 5000;
 const budgetNote = "budget " + BUDGET_MS + " ms" + (process.env.SILVIS_RULES_BUDGET_MS ? " via SILVIS_RULES_BUDGET_MS" : "");

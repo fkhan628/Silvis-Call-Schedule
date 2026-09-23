@@ -43,6 +43,7 @@ on:
       - "test/fixtures/open-slots.json"
       - "test/fixtures/last-generate-diagnostics.json"
       - "test/schema.test.js"
+      - "test/offers.test.js"
       - "importer.js"
       - "test/generator-regression.js"
       - "test/nov-backups.test.js"
@@ -165,6 +166,11 @@ jobs:
       # second definition out of index-source.html.
       - name: Open-shifts tests + source pins
         run: node test/open-shifts.test.js
+
+      # Offer periods (Prompt 14 P2): helpers period maths mirror SQL offer_status() / the timeline,
+      # parity with rules.buildContext, seed pins, the claim-as-offer migration pins.
+      - name: Offer period tests
+        run: node test/offers.test.js
 
       # send-notification's role/party gate (audit RLS-1): the plain-JS gate
       # block is extracted from the function source and run against a table

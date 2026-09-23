@@ -118,6 +118,44 @@
 //                 backupOptOut, caps, consecutive limits, the other role. A
 //                 manual/import lock is not a row: a lock holder on a pattern
 //                 day keeps the lock with the rule listed in `conflicts`.
+//   offers / periods (Prompt 14 P2, 9/23 - offers first, rules as the fallback):
+//                 offers  = call_offers rows { person_id, day, role_pref
+//                 primary|backup|either, source, entered_by, note }; periods =
+//                 call_periods rows { id, label, start_day, end_day,
+//                 offers_close_at, publish_by, status, rules_only_ids,
+//                 offer_modes }. Per surgeon per period the STATUS is derived
+//                 exactly like SQL offer_status(): 'submitted' when >= 1 offer
+//                 lies inside [start_day, end_day], else 'rules_only' when the
+//                 id is in rules_only_ids, else 'not_started'; the MODE is
+//                 offer_modes[id] ('exhaustive' | 'preferred'), absent =
+//                 'preferred'. Inside a period a SUBMITTED surgeon is
+//                 offers-governed: exhaustive -> hard 'not-offered' on any
+//                 day/role he did not offer ('either' = both roles); preferred
+//                 -> soft 'offered' (-weights.offerBonus) on an offered day and
+//                 soft 'outside-offers' (+weights.outsideOffers) on any other
+//                 day, which stays eligible under his ORDINARY rules (weekday
+//                 patterns, recurring lists, Aledo, caps, runs...). The
+//                 'offered' bonus is emitted in BOTH modes (so an offered day
+//                 beats a rules-only candidate whatever hardness he chose; the
+//                 generator tapers it at his share - weights.offerBonusOverShare),
+//                 and 'outside-offers' is pushed on every non-offered day of a
+//                 submitted surgeon in both modes too: in exhaustive mode the
+//                 day is also the hard 'not-offered', so the soft surfaces only
+//                 on a claim result (opts.claim) and names the day as outside
+//                 his offers for the open-shifts board. Every
+//                 offer is folded into P.avail as a dated available row for
+//                 its role (item W: it lifts the weekday-pattern family incl.
+//                 hardNeverWeekdays for that date and role; obligations never
+//                 lift) - one code path decides. The dated lists
+//                 (whitelist-month, outside-available-weeks) are NOT applied
+//                 to a submitted surgeon inside the period (offers supersede
+//                 them); for rules_only / not_started surgeons, and on any day
+//                 outside every period, today's rules apply byte for byte.
+//                 opts.claim (a Prompt 13 claim = an offer made on the spot)
+//                 skips the exhaustive 'not-offered' only. offerState(ctx,
+//                 day, id) / offeredOn(ctx, day, role, id) expose the facts;
+//                 malformed rows and periods warn and are dropped (fail
+//                 closed: a dropped offer never widens anyone's days).
 //   groupRules.backupPolicy.openToEveryone  the 9/22 switch (absent = true);
 //                 false restores the pre-9/22 both-roles reading of the rules
 //                 listed below (explicit per-surgeon data is honoured either way).
@@ -308,7 +346,10 @@ function defaultWeights() {
     noTargetWeekday: 1, eastUnknown: 1, eastForecastBelowThreshold: 2, smoothingTolerance: 2,
     longRunPerDay: 3, // Prompt 12 A (9/22): per day beyond surgeonRules.<id>.maxConsecutiveAnyRole (= medium)
     weekendContribution: 3, // Prompt 12 L (9/22): primaryContribution "weekends" - full-block primary bonus / weekend backup penalty (= medium)
-    eastClear: 2 // Prompt 15 part 2 (9/23): PRIMARY bonus on a 'home' East vacation day (no East call, no OR block); 0 switches it off
+    eastClear: 2, // Prompt 15 part 2 (9/23): PRIMARY bonus on a 'home' East vacation day (no East call, no OR block); 0 switches it off
+    offerBonus: 6,     // Prompt 14 P2 (9/23): soft 'offered' bonus on a submitted surgeon's offered day (strong; 0 = off)
+    outsideOffers: 6,  // Prompt 14 P2 (9/23): soft 'outside-offers' penalty on a submitted surgeon's non-offered day - preferred mode, and an exhaustive surgeon's claim result (strong; 0 = off)
+    offerBonusOverShare: 0 // Prompt 14 P2 review (9/23): what the 'offered' bonus reads in the GENERATOR once the placement no longer brings him towards his share for the role and month (0 = the bonus stops at the share; = offerBonus restores the untapered reading). rules.js itself always emits -offerBonus.
   };
 }
 
@@ -466,6 +507,8 @@ function buildContext(input) {
     backupOpen: backupOpen,
     rangeStart: input.rangeStart || null,
     rangeEnd: input.rangeEnd || null,
+    periods: [],                        // Prompt 14 P2: normalized call_periods rows, sorted by start (rdBuildOffers)
+    periodOfDay: Object.create(null),   // Prompt 14 P2: 'YYYY-MM-DD' -> index into ctx.periods (first period wins an overlap)
     warnings: [],
     _memo: Object.create(null)
   };
@@ -589,7 +632,12 @@ function buildContext(input) {
       // Prompt 12 L (9/22): "weekends" = weekend primary is his main contribution
       // (weights.weekendContribution as a full-block primary bonus / weekend backup
       // penalty); null = no contribution term.
-      contribution: rules.primaryContribution === "weekends" ? "weekends" : null
+      contribution: rules.primaryContribution === "weekends" ? "weekends" : null,
+      // Prompt 14 P2 (9/23): his offers ('YYYY-MM-DD' -> role mask) and, per period key, the derived status
+      // ('submitted' | 'rules_only' | 'not_started') and mode ('exhaustive' | 'preferred') - rdBuildOffers.
+      offers: Object.create(null),
+      offerStatus: Object.create(null),
+      offerMode: Object.create(null)
     };
     if (rules.primaryContribution !== undefined && rules.primaryContribution !== null && rules.primaryContribution !== "" && P.contribution === null) {
       ctx.warnings.push("surgeonRules." + id + ".primaryContribution = " + JSON.stringify(rules.primaryContribution) + " is not a value the engine knows (Prompt 12 L: only \"weekends\"): ignored - no contribution term for this surgeon");
@@ -802,7 +850,126 @@ function buildContext(input) {
     }
   });
 
+  // Offers + periods (Prompt 14 P2).
+  rdBuildOffers(ctx, input);
+
   return ctx;
+}
+
+/* ------------------------------------------------------ offers + periods */
+
+// Prompt 14 P2 (9/23). call_periods rows -> ctx.periods (sorted by start; a day
+// shared by two periods stays with the earlier one, with a warning) and
+// ctx.periodOfDay; call_offers rows -> P.offers (day -> role mask) AND P.avail
+// (an offer is a dated available row for its role - item W, one code path);
+// then, per surgeon per period, the derived status and mode exactly as SQL
+// offer_status() / offer_modes read them. Everything malformed is dropped with
+// one ctx warning naming the row - a dropped offer never widens anyone's days
+// (fail closed), a dropped period leaves its days ungoverned (today's rules).
+var RD_OFFER_MASK = { primary: 1, backup: 2, either: 3 };
+var RD_OFFER_MODES = { exhaustive: true, preferred: true };
+function rdDayOf(v) {
+  if (v instanceof Date && !isNaN(v)) return rdFmt(v);
+  var s = typeof v === "string" ? v.slice(0, 10) : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+function rdJsonish(v) {
+  if (typeof v !== "string") return v;
+  try { return JSON.parse(v); } catch (e) { return undefined; }
+}
+function rdBuildOffers(ctx, input) {
+  var warn = function (m) { ctx.warnings.push(m); };
+  var periodsIn = input.periods, offersIn = input.offers;
+  if (periodsIn !== undefined && periodsIn !== null && !Array.isArray(periodsIn)) { warn("periods: not a list - ignored (pass the call_periods rows)"); periodsIn = []; }
+  if (offersIn !== undefined && offersIn !== null && !Array.isArray(offersIn)) { warn("offers: not a list - ignored (pass the call_offers rows)"); offersIn = []; }
+  periodsIn = periodsIn || []; offersIn = offersIn || [];
+
+  var list = [];
+  periodsIn.forEach(function (p, idx) {
+    var label = p && (p.label || p.id) ? String(p.label || p.id) : "#" + idx;
+    var start = p ? rdDayOf(p.start_day !== undefined ? p.start_day : p.start) : null;
+    var end = p ? rdDayOf(p.end_day !== undefined ? p.end_day : p.end) : null;
+    if (!start || !end) { warn("periods[" + idx + "] (" + label + "): dropped - needs start_day + end_day as 'YYYY-MM-DD' (got " + JSON.stringify(p && p.start_day) + " .. " + JSON.stringify(p && p.end_day) + ")"); return; }
+    if (end < start) { warn("periods[" + idx + "] (" + label + "): dropped - end_day " + end + " is before start_day " + start); return; }
+    var ro = rdJsonish(p.rules_only_ids);
+    if (ro !== undefined && ro !== null && !Array.isArray(ro)) { warn("periods[" + idx + "] (" + label + "): rules_only_ids is not a list - read as [] (nobody is rules-only by listing)"); ro = []; }
+    var rulesOnly = new Set((ro || []).filter(function (x) { return typeof x === "string"; }));
+    var modesIn = rdJsonish(p.offer_modes);
+    if (modesIn !== undefined && modesIn !== null && (typeof modesIn !== "object" || Array.isArray(modesIn))) { warn("periods[" + idx + "] (" + label + "): offer_modes is not an object - read as {} (everyone preferred)"); modesIn = {}; }
+    var modes = Object.create(null);
+    Object.keys(modesIn || {}).forEach(function (id) {
+      var m = modesIn[id];
+      if (RD_OFFER_MODES[m]) modes[id] = m;
+      else warn("periods[" + idx + "] (" + label + "): offer_modes." + id + " = " + JSON.stringify(m) + " is not 'exhaustive' or 'preferred' - read as preferred");
+    });
+    list.push({
+      key: p.id !== undefined && p.id !== null ? String(p.id) : label + "|" + start, id: p.id !== undefined && p.id !== null ? p.id : null,
+      label: label, start: start, end: end, startN: rdInfo(start).n, endN: rdInfo(end).n,
+      closeAt: rdDayOf(p.offers_close_at), publishBy: rdDayOf(p.publish_by), status: typeof p.status === "string" ? p.status : null,
+      rulesOnly: rulesOnly, modes: modes, idx: idx
+    });
+  });
+  list.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : a.idx - b.idx; });
+  list.forEach(function (per, k) {
+    var shared = [];
+    rdEachDayInRange(per.start, per.end, function (d) {
+      if (ctx.periodOfDay[d] !== undefined) shared.push(d); else ctx.periodOfDay[d] = k;
+    });
+    if (shared.length) {
+      var other = list[ctx.periodOfDay[shared[0]]];
+      warn("periods[" + per.idx + "] (" + per.label + ") overlaps periods[" + other.idx + "] (" + other.label + ") on " + shared[0] + ".." + shared[shared.length - 1] + " - the earlier period keeps those days; fix the dates in Setup -> Periods");
+    }
+  });
+  ctx.periods = list;
+
+  offersIn.forEach(function (o, idx) {
+    var pid = o && o.person_id;
+    var P = pid ? ctx.per[pid] : null;
+    if (!P) { warn("offers[" + idx + "]: dropped - unknown person " + JSON.stringify(pid === undefined ? null : pid) + " (roster ids only)"); return; }
+    if (P.external) { warn("offers[" + idx + "]: dropped - " + pid + " is an outside surgeon (written in by hand only, never generated)"); return; }
+    var day = rdDayOf(o.day);
+    if (!day) { warn("offers[" + idx + "]: dropped - day " + JSON.stringify(o.day === undefined ? null : o.day) + " is not 'YYYY-MM-DD'"); return; }
+    var mask = RD_OFFER_MASK[o.role_pref];
+    if (!mask) { warn("offers[" + idx + "]: dropped - role_pref " + JSON.stringify(o.role_pref === undefined ? null : o.role_pref) + " is not primary / backup / either (fail closed: this row offers nothing)"); return; }
+    if (P.offers[day] !== undefined) warn("offers[" + idx + "]: duplicate row for " + pid + " " + day + " - roles merged (the table's unique (person_id, day) prevents this live; a hand-built or duplicated input is the only way here)");
+    P.offers[day] = (P.offers[day] || 0) | mask;
+    rdAvailRec(P.avail, day).avail |= mask; // W: an offer is a dated available row for its role
+  });
+
+  ctx.allIds.forEach(function (id) {
+    var P = ctx.per[id];
+    var days = Object.keys(P.offers);
+    ctx.periods.forEach(function (per) {
+      var submitted = false;
+      for (var i = 0; i < days.length && !submitted; i++) if (days[i] >= per.start && days[i] <= per.end) submitted = true;
+      P.offerStatus[per.key] = submitted ? "submitted" : per.rulesOnly.has(id) ? "rules_only" : "not_started";
+      P.offerMode[per.key] = per.modes[id] || "preferred";
+    });
+  });
+}
+
+// offerState(ctx, day, surgeonId) -> null when the day lies outside every period
+// (or the surgeon is unknown), else { period: { key, id, label, start, end,
+// status, closeAt, publishBy }, status: 'submitted' | 'rules_only' |
+// 'not_started', mode: 'exhaustive' | 'preferred', roles: the roles he offered
+// that day ([], ['primary'], ['backup'] or both) }. Read-only.
+function offerState(ctx, day, surgeonId) {
+  var P = ctx && ctx.per ? ctx.per[surgeonId] : null;
+  var k = ctx && ctx.periodOfDay ? ctx.periodOfDay[day] : undefined;
+  if (!P || k === undefined) return null;
+  var per = ctx.periods[k], m = P.offers[day] || 0, roles = [];
+  if (m & RD_MASK.primary) roles.push("primary");
+  if (m & RD_MASK.backup) roles.push("backup");
+  return {
+    period: { key: per.key, id: per.id, label: per.label, start: per.start, end: per.end, status: per.status, closeAt: per.closeAt, publishBy: per.publishBy },
+    status: P.offerStatus[per.key], mode: P.offerMode[per.key], roles: roles
+  };
+}
+// offeredOn(ctx, day, role, surgeonId) -> true when the day lies inside a period,
+// the surgeon is 'submitted' for it and offered that role that day.
+function offeredOn(ctx, day, role, surgeonId) {
+  var st = offerState(ctx, day, surgeonId);
+  return !!(st && st.status === "submitted" && st.roles.indexOf(role) >= 0);
 }
 
 /* ------------------------------------------------------------ helpers */
@@ -976,7 +1143,15 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // not-recurring-available, outside-available-weeks, outside-window,
 // external-cover, external-surgeon, slot-locked:, derived-lock:,
 // derived-lock-held:, holds-other-role, monthly-cap:, max-consecutive:,
-// backup-cap:, backup-weekend-cap:, max-major-holidays:.
+// backup-cap:, backup-weekend-cap:, max-major-holidays:, not-offered.
+// not-offered (Prompt 14 P2, 9/23): a SUBMITTED surgeon in EXHAUSTIVE mode on a
+// day/role he did not offer inside the period - decided in rdStatic
+// (res.notOffered), pushed by eligibility() unless opts.claim; it is the first
+// hard reason after the slot facts. Its soft siblings: offered
+// (-weights.offerBonus, any submitted surgeon's offered day) and outside-offers
+// (+weights.outsideOffers, any submitted surgeon's non-offered day - visible in
+// preferred mode and on an exhaustive surgeon's claim result, where not-offered
+// is skipped).
 // external-surgeon (Prompt 12 M, 9/22): the surgeon is a roster entry of type
 // "external" (an outside surgeon / internal locum, ids x1, x2, ...) - written in
 // by hand only. He is in ctx.rosterById / allIds and, when active, in
@@ -1076,6 +1251,29 @@ function rdStatic(ctx, date, role, id, asBlock) {
     if (role === "primary" && W.eastClear) soft.push({ reason: "east-clear", weight: -W.eastClear });
   }
 
+  // Offers (Prompt 14 P2, 9/23): inside a period a SUBMITTED surgeon is offers-governed.
+  // An offered day (P.offers mask covers the role; it is also in P.avail, so rowAvail
+  // is true and the weekday-pattern family below is lifted for it - W) earns the
+  // 'offered' bonus in either mode; a non-offered day is 'not-offered' (hard, applied
+  // by eligibility() unless the caller claims) in exhaustive mode and 'outside-offers'
+  // (soft) under the ordinary rules in preferred mode. offersGovern also switches the
+  // dated lists (whitelist-month, outside-available-weeks) off for him inside the
+  // period. rules_only / not_started, or a day outside every period: nothing here.
+  var offersGovern = false;
+  var perIdx = ctx.periodOfDay[date];
+  if (perIdx !== undefined) {
+    var perKey = ctx.periods[perIdx].key;
+    if (P.offerStatus[perKey] === "submitted") {
+      offersGovern = true;
+      if ((P.offers[date] || 0) & mask) { if (W.offerBonus) soft.push({ reason: "offered", weight: -W.offerBonus }); }
+      else {
+        if (P.offerMode[perKey] === "exhaustive") res.notOffered = true;   // hard unless the caller claims (eligibility)
+        if (W.outsideOffers) soft.push({ reason: "outside-offers", weight: W.outsideOffers }); // both modes: the day is outside his offers
+      }
+    }
+  }
+  res.offersGovern = offersGovern;
+
   // East feed: busy days / forecast / unknown for the roles East blocks.
   // Precedence (Prompt 12 C, 9/22): published > override > forecast. P.eastBusy
   // already carries the published busy days WITH the overrides applied (true added,
@@ -1128,7 +1326,7 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // lifts (edit the window in Setup instead) - unlike the weeks whitelist.
   var datedBlock = null;
   var isPrimary = role === "primary" || !ctx.backupOpen; // backupPolicy.openToEveryone false -> both roles again
-  var governed = !!((P.governedMonths[info.month] || 0) & mask);
+  var governed = !!((P.governedMonths[info.month] || 0) & mask) && !offersGovern; // P2: offers supersede the dated lists for a submitted surgeon
   if (governed) {
     if (!rowAvail) datedBlock = "whitelist-month";
   } else if (isPrimary && (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length))) {
@@ -1136,7 +1334,7 @@ function rdStatic(ctx, date, role, id, asBlock) {
     var weekendOk = rdIsWeekendDay(ctx, info) && wa && (wa === true || wa[role]);
     if (!(rowAvail || weekendOk || rdRecurringMatches(rules.recurringAvailable, date))) notRecurring = true;
   }
-  if (isPrimary && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
+  if (isPrimary && !offersGovern && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
   if (P.hasWindows && !P.windowDays.has(date)) hard.push("outside-window"); // both roles; still enforced on holidays; never lifted by a row (W)
 
   if (notRecurring && !waive) hard.push("not-recurring-available");
@@ -1187,6 +1385,10 @@ function rdAssumeMap(assume) {
 //                    are unaffected by the flag.
 //   skipPatternSoft - weekendUnitPatterns adds the style mismatch and the weekend-contribution
 //                    term (weekend-primary / weekend-backup) itself, once per pattern.
+//   claim          - a Prompt 13 claim is an offer made on the spot (Prompt 14 P2): a submitted
+//                    surgeon in exhaustive mode may claim a non-offered day when every other
+//                    hard rule passes - the flag skips 'not-offered' only (the result still
+//                    carries the soft 'outside-offers' so the board can say so).
 function eligibility(ctx, dateStr, role, surgeonId, opts) {
   opts = opts || {};
   if (role !== "primary" && role !== "backup") return { ok: false, hard: ["bad-role:" + role], soft: [] };
@@ -1212,6 +1414,7 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     return hard.length ? { ok: false, hard: hard, soft: [], external: true } : { ok: true, hard: [], soft: [], external: true };
   }
   var st = rdStatic(ctx, dateStr, role, surgeonId, !!opts.asBlockMember);
+  if (st.notOffered && !opts.claim) hard.push("not-offered"); // P2: exhaustive mode, the first reason after the slot facts
   hard = hard.concat(st.hard);
   soft = soft.concat(st.soft.map(function (s) { return { reason: s.reason, weight: s.weight }; })); // copies: the memo's entries stay pristine
   var P = ctx.per[surgeonId];
@@ -1795,6 +1998,8 @@ if (typeof module !== "undefined") {
     runThrough: rdRunThrough,
     monthlyCapFor: monthlyCapFor,
     standingEastDays: standingEastDays,
+    offerState: offerState,
+    offeredOn: offeredOn,
     rdFmt: rdFmt,
     rdParse: rdParse,
     rdAddDays: rdAddDays,

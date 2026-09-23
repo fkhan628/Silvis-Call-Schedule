@@ -26,7 +26,14 @@
 // opt-out, legacy group key, range edge, derived week overridden - a
 // November-only bestOf 1 run added by the Prompt 12 K fix stage, ~10 ms - the
 // two fill-open-only runs, plain + fill-open-only, Prompt 12 T, and the two
-// Prompt 12 W runs over Nov-Dec: Khan's dated Tuesday row, with and without).
+// Prompt 12 W runs over Nov-Dec: Khan's dated Tuesday row, with and without;
+// plus, since Prompt 14 P2 (9/23), five short offers runs - the November offers
+// fixture at bestOf 2, its no-offers control, the Philip 'either' variant, a
+// six-day open-slot-note run at bestOf 1 and one R2 run with periods [] that
+// must be byte-identical to the standard seed-1 run - and, since the P2 review
+// fix stage, seven more: Acton offering every November day on seeds 1-3 with
+// the share taper and its untapered control (6 runs at bestOf 2) and a one-week
+// Christmas run at bestOf 1 for the holiday-unit unplaced reason).
 // bestOf per range is 6 / 5 / 2 / 2
 // (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
 // on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
@@ -309,7 +316,8 @@ const REASON_PREFIXES = [
   "hard-never-weekday:", "recurring-unavailable:", "weekday-not-allowed:", "weekend-block-only", "weekday-pattern:", "day-before-aledo",
   "whitelist-month", "not-recurring-available", "outside-available-weeks", "outside-window",
   "east-busy", "east-forecast-busy:", "derived-lock:", "derived-lock-held:", "slot-locked:", "external-cover", "holds-other-role",
-  "monthly-cap:", "max-consecutive:", "backup-cap:", "backup-weekend-cap:", "max-major-holidays:"
+  "monthly-cap:", "max-consecutive:", "backup-cap:", "backup-weekend-cap:", "max-major-holidays:",
+  "not-offered" // Prompt 14 P2 (9/23): a submitted surgeon in exhaustive mode off his offered days / roles (both roles - never a primary-only reason)
 ]; // window-week-max: left the vocabulary 9/22 evening (Prompt 12 N: the window-week count is soft)
 // These two mean the GENERATOR (not a rule) left the slot open - always a failure.
 const PLACEHOLDER_REASONS = ["eligible-but-not-placed", "holiday-unit:eligible-but-unit-not-filled"];
@@ -429,12 +437,16 @@ function runLengths(view, days, id) {
 
 /* ------------------------------------------------------- the checks */
 // deep: also compare diagnostics.tallies[id].range run lengths with runLengths() (every R4 run + the bestOf-200 run).
-function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome) { // extraRows (W): dated rows a fixture run appended to the seed's;
+function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extraOffers) { // extraRows (W): dated rows a fixture run appended to the seed's;
   // extraVac (Prompt 15): { id: Set<day> } - a derived East vacation (unreviewed / away range) restated as a vacation
   // extraHome (Prompt 15 x WF, found rebasing the water-filled share onto East vacations 9/23): { id: Set<day> } - a HOME range
   // the fixture handed him (east-clear: OR-day rule lifted + a PRIMARY bonus). Only the quality-1 pin below reads it.
   CUR.range = range.name; CUR.seed = seedNo; CUR.day = "-";
   const vacHas = (id, d) => VAC[id].has(d) || !!(extraVac && extraVac[id] && extraVac[id].has(d));
+  // extraOffers (Prompt 14 P2 x WF, found rebasing offers onto the water-filled share 9/23): call_offers rows a fixture run
+  // handed the generator. An offer is a dated available row for its date and role(s): it lifts the weekday pattern (W)
+  // and, for the submitted surgeon inside the period, the whitelist-month / available-weeks lists are not applied.
+  const offerLifts = (id, d, role) => (extraOffers || []).some((o) => o.person_id === id && o.day === d && (o.role_pref === role || o.role_pref === "either"));
   const edgeHas = (id, d) => DAY_BEFORE_VAC[id].has(d) || (!!(extraVac && extraVac[id] && extraVac[id].has(addDays(d, 1))) && !vacHas(id, d));
   // a fixture's dated UNAVAILABLE row for that surgeon, date and role closes the slot to him (the allowed-slot counts below)
   const rowBlocks = (id, d, role) => (extraRows || []).some((r) => r.person_id === id && r.kind === "unavailable" && d >= r.start_date && d <= (r.end_date || r.start_date) && (!r.role || r.role === "any" || r.role === role));
@@ -446,7 +458,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome) { //
   // contract: shape, purity, writes confined to the range
   ok(ctx.schedule === ORIGINAL_SCHEDULE_REF, "generate() must restore ctx.schedule");
   eq(Object.keys(out.schedule).sort(), days, "output holds exactly the range days");
-  ["seed", "bestOf", "candidatesTried", "candidateScores", "score", "tallies", "uncovered", "softPenalties", "lockViolations", "holidayUnits", "weekendUnits", "impliedTargets", "eastFeedSnapshot", "eastForecast", "eastUnknownDays", "warnings", "truncated", "hardViolations"].forEach((k) => ok(k in D, "diagnostics." + k + " missing"));
+  ["seed", "bestOf", "candidatesTried", "candidateScores", "score", "tallies", "uncovered", "softPenalties", "lockViolations", "holidayUnits", "weekendUnits", "impliedTargets", "eastFeedSnapshot", "eastForecast", "eastUnknownDays", "warnings", "truncated", "hardViolations", "offers"].forEach((k) => ok(k in D, "diagnostics." + k + " missing"));
   eq(D.seed, seedNo, "diagnostics.seed"); eq(D.truncated, false, "not truncated");
   eq(D.hardViolations, [], "generator reports hard violations: " + JSON.stringify(D.hardViolations));
   eq(D.score.hardViolations, 0, "score.hardViolations");
@@ -528,7 +540,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome) { //
       // surgeon's hardNeverWeekdaysRoles list names (primary only by default) unless a dated row of his covers that
       // date and role. Before W this was the Khan-only line ok(!["Tue", "Thu"].includes(weekday(d))) - no row lifted it.
       if (!isHoliday(d) && HARD_NEVER[id].has(weekday(d)) && hardNeverApplies(id, role)) {
-        const lifted = datedRowLifts(id, d, role, extraRows);
+        const lifted = datedRowLifts(id, d, role, extraRows) || offerLifts(id, d, role);
         if (lifted) W_STATS.liftedByRow++; else W_STATS.forbiddenNoRow++;
         ok(lifted, CODE[id] + " " + role + " on a " + weekday(d) + " (" + d + ") his hardNeverWeekdays forbid, with no dated row of his for that date and role (W)");
       }
@@ -539,8 +551,8 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome) { //
         if (role === P && !isHoliday(d) && weekday(d) === "Tue") X_STATS.actonTuePrimary.push(range.name + " seed " + seedNo + " " + d); // item X: named pin at the end of the file
         ok(!(d >= "2026-11-19" && d <= "2026-11-22") && !(d >= "2026-11-25" && d <= "2026-11-29"), "Acton on his November time off");
         ok(!(HOLIDAY[d] && HOLIDAY[d].name === "Thanksgiving"), "Acton on a Thanksgiving unit day");
-        { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role) && !isHoliday(d)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary; Y: November ungoverned)"); }
-        { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary, November both roles; an explicit list is never waived on a holiday-unit day - small items 9/22)"); }
+        { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role) && !isHoliday(d) && !offerLifts(id, d, role)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary; Y: November ungoverned)"); }
+        { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role) && !offerLifts(id, d, role)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary, November both roles; an explicit list is never waived on a holiday-unit day - small items 9/22)"); }
       }
       // item 7 (9/22: backup any day unless explicitly unavailable)
       if (id === BURCHETT) ok(burchettMay(d, role), "Burchett " + role + " on a day his rules exclude (" + weekday(d) + ")");
@@ -550,8 +562,8 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome) { //
         ok(d !== "2026-10-15", "Philip on 2026-10-15");
         if (role === B) ok(!PHILIP_NO_BACKUP.has(d), "Philip backup on a no-backup date");
         // explicit dated lists (his October list, his weeks list) are never waived on a holiday-unit day (small items 9/22)
-        if (monthOf(d) === "2026-10" && role === P) ok(PHILIP_OCT_PRIMARY.has(d), "Philip October primary outside his list");
-        if (role === P && d >= PHILIP_WEEKS_FROM) ok(PHILIP_WEEK_DAYS.has(d) || PHILIP_OCT_PRIMARY.has(d), "Philip PRIMARY outside his available weeks (holiday-unit days included)");
+        if (monthOf(d) === "2026-10" && role === P && !offerLifts(id, d, role)) ok(PHILIP_OCT_PRIMARY.has(d), "Philip October primary outside his list");
+        if (role === P && d >= PHILIP_WEEKS_FROM && !offerLifts(id, d, role)) ok(PHILIP_WEEK_DAYS.has(d) || PHILIP_OCT_PRIMARY.has(d), "Philip PRIMARY outside his available weeks (holiday-unit days included; an offer of his for the date lifts the list - P2)");
       }
       // item 9b: Fierce outside derived weeks follows his per-role weekday pattern
       // (pinned above: primary Mon/Tue/Thu never, Wed yes, Fri-Sun block only; backup any day since 9/22)
@@ -1717,9 +1729,209 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
 
+
+// ---- Prompt 14 P2 (9/23) ----
+// Offers first, rules as the fallback (docs/PROMPT-14-OFFER-PERIODS.md part 2). test/fixtures/offers-2026-11.json = the
+// first period (2026-11-02..2027-01-03, offer_modes Burchett exhaustive / Acton preferred, Khan + Sarkar rules_only) with the
+// two real November lists as call_offers rows, generated over 2026-11-02..2026-11-30 against the live locks. Restated
+// here from the fixture and the seed: every day an EXHAUSTIVE surgeon holds is an offered day in the offered role; a
+// PREFERRED surgeon's placements off his list are exactly diagnostics.offers.outsideOffers; unplaced offers are reported
+// with the slot's reason; a rules_only surgeon's eligibility is byte-identical with and without the offers input and every
+// generated slot of his passes the no-offers rules on the final schedule; nobody outside the two submitters carries an
+// offered / outside-offers term; an offered day beats a rules-only candidate on a real slot (Philip's single 'either'
+// offer on Mon 11/30, a day he holds in neither role without it); a slot nobody offered and nobody's rules allow reads "no offer and no rule allows
+// it"; and with periods: [] the generator's output is byte-identical to the standard run of the same seed (the whole
+// suite above ran without periods - that is the pin the prompt asks for).
+{
+  const FIXP = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "offers-2026-11.json"), "utf8"));
+  const RP = { name: "P2 offers fixture 2026-11-02..2026-11-30", start: "2026-11-02", end: "2026-11-30" };
+  CUR.range = RP.name; CUR.seed = 1; CUR.day = "-";
+  const burOffers = FIXP.offers.filter((o) => o.person_id === BURCHETT), actOffers = FIXP.offers.filter((o) => o.person_id === ACTON);
+  eq(burOffers.filter((o) => o.role_pref === P).map((o) => o.day), SR[BURCHETT].explicitAvailable["2026-11"].primary, "fixture: Burchett's primary offers = his November statement in the seed (7 dates)");
+  eq(burOffers.filter((o) => o.role_pref === B).map((o) => o.day), SR[BURCHETT].explicitAvailable["2026-11"].backup, "fixture: Burchett's backup offers = his November statement in the seed (8 dates)");
+  eq(actOffers.map((o) => o.day.slice(5) + ":" + o.role_pref[0]), ["11-02:p", "11-04:p", "11-06:p", "11-14:p", "11-15:p", "11-16:p", "11-18:p", "11-03:b", "11-05:b", "11-17:b"], "fixture: Acton's relayed November days (rules doc section 3; Y removed them from the seed's lists, they live as locks)");
+  eq([FIXP.period.start_day, FIXP.period.end_day, FIXP.period.offer_modes, FIXP.period.rules_only_ids], ["2026-11-02", "2027-01-03", { [BURCHETT]: "exhaustive", [ACTON]: "preferred" }, [KHAN, SARKAR]], "fixture: the first period, modes and rules-only list");
+  eq(FIXP.offers.length, 25, "fixture: 25 offers");
+  ok(FIXP.offers.every((o) => o.note === null && o.source === "email-relay" && o.entered_by === "scheduler"), "fixture: relayed rows, no notes (no reasons in anon-readable data)");
+  const mkInput = (extras) => SA.seedToContextInput(seed, Object.assign({ eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } }, extras || {}));
+  const offeredIn = (id, d, role) => FIXP.offers.some((o) => o.person_id === id && o.day === d && (o.role_pref === role || o.role_pref === "either"));
+  const ctxP = R.buildContext(mkInput({ periods: [FIXP.period], offers: FIXP.offers }));
+  if (ctxP.warnings.length) fail("buildContext warnings (offers fixture): " + JSON.stringify(ctxP.warnings));
+  const outP = GEN.generate(ctxP, RP.start, RP.end, { seed: 1, bestOf: 2 });
+  checkRun(outP, RP, 1, false, undefined, undefined, undefined, FIXP.offers); // every per-run rule of the file still holds with offers in force (Burchett's list = his November whitelist; Acton's recurring rules)
+  CUR.range = RP.name; CUR.seed = 1; CUR.day = "-";
+  const DP = outP.diagnostics, pDays = daysList(RP.start, RP.end);
+  ok(DP.offers && DP.offers.byPerson && Array.isArray(DP.offers.outsideOffers) && Array.isArray(DP.offers.periods), "diagnostics.offers = { periods, byPerson, outsideOffers }: " + JSON.stringify(Object.keys(DP.offers || {})));
+  eq(DP.offers.periods.map((p) => p.key + " " + p.start + ".." + p.end + " " + p.status), ["p14-nov26-jan27 2026-11-02..2027-01-03 closed"], "diagnostics.offers.periods = the period touching the range");
+  eq(Object.keys(DP.offers.byPerson).sort(), IDS.slice().sort(), "diagnostics.offers.byPerson has a row for every active surgeon");
+  // exhaustive: every day Burchett holds (locked or generated) is an offered day in the offered role
+  pDays.forEach((d) => ROLES.forEach((role) => { if (outP.schedule[d][role] === BURCHETT) { CUR.day = d; ok(offeredIn(BURCHETT, d, role), "exhaustive: Burchett holds " + d + " " + role + " without an offer for it"); } }));
+  CUR.day = "-";
+  const bp = DP.offers.byPerson[BURCHETT];
+  eq([bp.status, bp.mode, bp.offered, bp.placed], ["submitted", "exhaustive", 15, 10], "Burchett: submitted / exhaustive, 15 offered days in range, 10 placed (his ten locks)");
+  eq(bp.unplaced.map((u) => u.day + " " + u.role + " " + u.reason), ["2026-11-09 backup slot-locked:" + FIERCE, "2026-11-14 backup slot-locked:" + FIERCE, "2026-11-15 backup slot-locked:" + FIERCE, "2026-11-16 backup slot-locked:" + FIERCE, "2026-11-25 primary slot-locked:" + KHAN], "Burchett: the five unplaced offers are the four backups Fierce's week holds and the 11/25 primary Khan holds, each with the slot's reason");
+  ok(!DP.offers.outsideOffers.some((o) => o.id === BURCHETT), "exhaustive: Burchett is never placed outside his offers");
+  ok(DP.warnings.some((w) => w === NAME[BURCHETT] + ": 5 offered day(s) not placed - see diagnostics.offers.byPerson"), "one warning names Burchett's unplaced count: " + JSON.stringify(DP.warnings.filter((w) => /offered day/.test(w))));
+  // preferred: Acton's generated placements off his list are exactly outsideOffers (his locks are his list; a lock is a fact, not a placement)
+  const actOutside = []; pDays.forEach((d) => ROLES.forEach((role) => { const e = outP.schedule[d]; if (e[role] === ACTON && !e[role + "Locked"] && !offeredIn(ACTON, d, role)) actOutside.push(d + " " + role); }));
+  eq(DP.offers.outsideOffers.filter((o) => o.id === ACTON).map((o) => o.day + " " + o.role), actOutside, "preferred: diagnostics.offers.outsideOffers lists exactly Acton's generated placements on day/roles he did not list (" + actOutside.length + ")");
+  eq(DP.offers.outsideOffers.map((o) => o.id).filter((id) => id !== ACTON), [], "outsideOffers names submitted surgeons only (Acton here)");
+  const ap = DP.offers.byPerson[ACTON];
+  eq([ap.status, ap.mode, ap.offered, ap.placed], ["submitted", "preferred", 10, 9], "Acton: submitted / preferred, 10 offered days, 9 placed (his nine locks)");
+  eq(ap.unplaced.map((u) => u.day + " " + u.role + " " + u.reason), ["2026-11-05 backup holds-other-role"], "Acton: his relayed 11/5 backup is unplaced because he holds 11/5 primary (Y) - the slot's reason");
+  if (actOutside.length) ok(DP.warnings.some((w) => w === DP.offers.outsideOffers.length + " placement(s) on a day the surgeon did not offer (preferred mode) - see diagnostics.offers.outsideOffers"), "one warning counts the outside-offers placements: " + JSON.stringify(DP.warnings.filter((w) => /did not offer/.test(w))));
+  // rules_only: Khan - status, no offers, never outside; eligibility identical with and without the offers input; generated slots pass the no-offers rules on the final schedule
+  const kp = DP.offers.byPerson[KHAN];
+  eq([kp.status, kp.mode, kp.offered, kp.placed, kp.unplaced], ["rules_only", "preferred", 0, 0, []], "Khan: rules_only, nothing offered");
+  eq(DP.offers.byPerson[SARKAR].status, "rules_only", "Sarkar: rules_only");
+  eq([DP.offers.byPerson[PHILIP].status, DP.offers.byPerson[FIERCE].status], ["not_started", "not_started"], "Philip / Fierce: not_started");
+  ok(!DP.offers.outsideOffers.some((o) => o.id === KHAN || o.id === SARKAR || o.id === PHILIP || o.id === FIERCE), "outsideOffers never names a rules_only / not_started surgeon");
+  let sameK = 0;
+  pDays.forEach((d) => ROLES.forEach((role) => { if (JSON.stringify(R.eligibility(ctxP, d, role, KHAN)) === JSON.stringify(R.eligibility(ctx, d, role, KHAN))) sameK++; }));
+  eq(sameK, pDays.length * 2, "rules_only: Khan's eligibility over November is byte-identical with and without the offers input");
+  const noOffersFinal = R.buildContext(mkInput({ schedule: makeView(outP) }));
+  const khanGen = pDays.filter((d) => ROLES.some((role) => outP.schedule[d][role] === KHAN && !outP.schedule[d][role + "Locked"]));
+  khanGen.forEach((d) => ROLES.forEach((role) => { if (outP.schedule[d][role] === KHAN && !outP.schedule[d][role + "Locked"]) { CUR.day = d; ok(R.eligibility(noOffersFinal, d, role, KHAN).ok, "rules_only: Khan's generated " + d + " " + role + " must pass the no-offers rules on the final schedule"); } }));
+  CUR.day = "-";
+  const outNo = GEN.generate(ctx, RP.start, RP.end, { seed: 1, bestOf: 2 });
+  const khanDiff = pDays.filter((d) => ROLES.some((role) => (outP.schedule[d][role] === KHAN) !== (outNo.schedule[d][role] === KHAN)));
+  console.log("P2 (offers fixture, seed 1 bestOf 2): Khan (rules_only) holds " + khanGen.length + " generated day(s); " + khanDiff.length + " day(s) differ from the no-offers run of the same seed (other surgeons' offers move the rest of the board - his rules, not his placements, are what stays unchanged): " + khanDiff.join(", "));
+  // the terms are in force for the two submitters only
+  eq(DP.softPenalties.filter((s) => (s.reason === "offered" || s.reason === "outside-offers") && s.id !== BURCHETT && s.id !== ACTON), [], "no offered / outside-offers term on a rules_only or not_started surgeon");
+  eq(DP.softPenalties.filter((s) => s.reason === "outside-offers" && s.id === ACTON).length, actOutside.length, "one outside-offers term (+6) per Acton placement off his list");
+  DP.softPenalties.filter((s) => s.reason === "outside-offers").forEach((s) => ok(s.weight === seed.groupRules.weights.outsideOffers, "outside-offers weight = groupRules.weights.outsideOffers"));
+  // an offered day beats a rules-only candidate on a real slot: Philip (not_started above) offers Mon 11/30 as 'either' - a day he
+  // holds in NEITHER role without the offer (pinned first, so the claim is not vacuous) - and then holds it
+  const PH_DAY = FIXP.philipOpenSlotOffer.day;
+  eq([PH_DAY, lockedIn(PH_DAY, P), lockedIn(PH_DAY, B), weekday(PH_DAY)], ["2026-11-30", false, false, "Mon"], "fixture: 11/30 is an unlocked Monday in the import");
+  ok(outP.schedule[PH_DAY].primary !== PHILIP && outP.schedule[PH_DAY].backup !== PHILIP, "without the offer Philip holds neither role on " + PH_DAY + " (got P=" + outP.schedule[PH_DAY].primary + " B=" + outP.schedule[PH_DAY].backup + ") - the pin below is not vacuous");
+  const ctxPh = R.buildContext(mkInput({ periods: [FIXP.period], offers: FIXP.offers.concat([FIXP.philipOpenSlotOffer]) }));
+  const outPh = GEN.generate(ctxPh, RP.start, RP.end, { seed: 1, bestOf: 2 });
+  CUR.day = PH_DAY;
+  const e19 = outPh.schedule[PH_DAY];
+  ok(e19.primary === PHILIP || e19.backup === PHILIP, "offers first: Philip's single 'either' offer on " + PH_DAY + " wins a slot over the rules-only candidates (got P=" + e19.primary + " B=" + e19.backup + ")");
+  const php = outPh.diagnostics.offers.byPerson[PHILIP];
+  eq([php.status, php.mode, php.offered, php.placed, php.unplaced], ["submitted", "preferred", 1, 1, []], "Philip: submitted by one offer, placed");
+  ok(outPh.diagnostics.softPenalties.some((s) => s.id === PHILIP && s.day === PH_DAY && s.reason === "offered" && s.weight === -seed.groupRules.weights.offerBonus), "the offered bonus (-weights.offerBonus) is on his " + PH_DAY + " slot in the soft list");
+  console.log("P2 (Philip " + PH_DAY + " 'either' offer): without it P " + (outP.schedule[PH_DAY].primary ? CODE[outP.schedule[PH_DAY].primary] : "open") + " / B " + (outP.schedule[PH_DAY].backup ? CODE[outP.schedule[PH_DAY].backup] : "open") + "; with it P " + (e19.primary ? CODE[e19.primary] : "open") + " / B " + (e19.backup ? CODE[e19.backup] : "open"));
+  checkRun(outPh, RP, 1, false, undefined, undefined, undefined, FIXP.offers.concat([FIXP.philipOpenSlotOffer]));
+  CUR.range = RP.name; CUR.seed = 1; CUR.day = "-";
+  // open slot nobody offered and nobody's rules allow: Khan's W control day (Tue 12/1 with the four unavailable rows) inside the period
+  const FIXW2 = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "khan-dated-row-2026-12-01.json"), "utf8"));
+  const inputOpen = mkInput({ periods: [FIXP.period], offers: FIXP.offers });
+  inputOpen.availabilityRows = inputOpen.availabilityRows.concat(FIXW2.otherRows);
+  const outOpen = GEN.generate(R.buildContext(inputOpen), "2026-12-01", "2026-12-06", { seed: 1, bestOf: 1 });
+  CUR.range = "P2 open-slot note 2026-12-01..2026-12-06"; CUR.day = "2026-12-01";
+  const uOpen = outOpen.diagnostics.uncovered.find((u) => u.day === "2026-12-01" && u.role === P);
+  ok(uOpen, "12/1 primary is open (nobody's rules allow it, nobody offered it)");
+  eq([uOpen.offered, uOpen.note], [[], "no offer and no rule allows it"], "the open slot carries the P2 note and an empty offered list: " + JSON.stringify(uOpen));
+  eq(uOpen.reasons[BURCHETT][0], "not-offered", "Burchett (exhaustive) reads not-offered first on 12/1");
+  ok(outOpen.diagnostics.uncovered.filter((u) => u.day > "2026-12-01").every((u) => typeof u.note === "string"), "every open slot inside the period carries a note");
+  // and with periods: [] the generator is byte-identical to the standard run of the same seed
+  CUR.range = "R2 + periods []"; CUR.day = "-";
+  const outEmpty = GEN.generate(R.buildContext(mkInput({ periods: [], offers: [] })), RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: BEST_OF[1] });
+  eq(JSON.stringify(outEmpty.schedule), JSON.stringify(a1.schedule), "periods: [] -> the schedule is byte-identical to the standard run (seed 1, R2)");
+  eq(outEmpty.diagnostics.offers, { periods: [], byPerson: {}, outsideOffers: [] }, "periods: [] -> diagnostics.offers is empty, never absent");
+  eq(JSON.stringify(Object.assign({}, outEmpty.diagnostics, { offers: null })), JSON.stringify(Object.assign({}, a1.diagnostics, { offers: null })), "periods: [] -> every other diagnostic is byte-identical too");
+  eq(outNo.diagnostics.uncovered.every((u) => u.note === null && Array.isArray(u.offered) && u.offered.length === 0), true, "no period -> an open slot carries note null and offered []");
+  CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 14 P2 fix stage (9/23 review) ----
+// (1) "An offer is not a demand" is enforced, not tolerated: the offered bonus (-weights.offerBonus) counts only while the
+//     placement still brings the surgeon towards his share for that role and month; at or over the share it reads
+//     -weights.offerBonusOverShare (seed 0), so a surgeon who paints the whole month ends the month at his share
+//     (+/- weights.smoothingTolerance), not share + 4..6 (the review measured Acton 8P/2B -> 12P/5B before this). The
+//     control run sets offerBonusOverShare = offerBonus (the pre-review reading) and must go over - proving the taper is
+//     what holds him, not the seed. Caps stay hard; below his share an offered day still beats a rules-only candidate
+//     (the Philip 11/30 pin above).
+// (2) An unplaced offer on a HOLIDAY-UNIT day names the unit and the unit's other day that failed (the cause), not the
+//     final-schedule slot fact (a consequence): Burchett offers Christmas Day but not Christmas Eve.
+{
+  const FIXP = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "offers-2026-11.json"), "utf8"));
+  const mkInputS = (seedIn, extras) => SA.seedToContextInput(seedIn, Object.assign({ eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } }, extras || {}));
+  const NOV = daysList("2026-11-02", "2026-11-30");
+  const tol = seed.groupRules.weights.smoothingTolerance;
+  eq(seed.groupRules.weights.offerBonusOverShare, 0, "seed: weights.offerBonusOverShare = 0 (the offered bonus stops at the share)");
+  const seedCtl = JSON.parse(JSON.stringify(seed)); seedCtl.groupRules.weights.offerBonusOverShare = seed.groupRules.weights.offerBonus;
+  const allActon = NOV.map((d) => ({ person_id: ACTON, day: d, role_pref: "either", source: "app", entered_by: ACTON, note: null }));
+  const allOffers = FIXP.offers.filter((o) => o.person_id !== ACTON).concat(allActon);
+  const countOf = (out, id, role) => NOV.filter((d) => out.schedule[d][role] === id).length;
+  // What "at his share" can mean in THIS month: under the water-filled share (WF 9/23) Acton's eight November primary locks
+  // already stand ABOVE his primary share (T = 5.6, never floored at his locked count), so no generated primary of his can
+  // still bring him towards it and the taper leaves every one of them without the bonus; his backup share (T = 5.8, two
+  // locked) leaves him a capacity of four. The pin is therefore the invariant, not a number: every generated day of his
+  // beyond his share is a slot where NO colleague below his own share was eligible (the surplus went to the volunteer only
+  // when nobody under-share could take it), his backup count is within tolerance of his target, the taper never places
+  // him above the untapered control in TOTAL (both roles: the control buys him a ninth primary with the untapered bonus,
+  // which costs him a backup day the taper run keeps - so the per-role reading may cross while the total may not) and
+  // places him below the control in at least one cell (measured on seeds 1-3 with the water-filled share: primary
+  // 8 / 8 / 8 against the control's 9 / 9 / 9, backup 5 / 5 / 6 against 4 / 5 / 5; before WF, with the locked floor
+  // T = 8, it read primary 11 / 10 / 9 against 12 / 12 / 12 and backup 3 / 3 / 3 against 5 / 5 / 5; before the review
+  // the untapered reading was the product).
+  let overCtl = 0, fewer = 0;
+  const lines = [];
+  [1, 2, 3].forEach((sd) => {
+    CUR.range = "P2 review: Acton offers every November day"; CUR.seed = sd; CUR.day = "-";
+    const ctxA = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers }));
+    if (ctxA.warnings.length) fail("buildContext warnings (all-days offers): " + JSON.stringify(ctxA.warnings));
+    const outA = GEN.generate(ctxA, "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
+    const outC = GEN.generate(R.buildContext(mkInputS(seedCtl, { periods: [FIXP.period], offers: allOffers })), "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
+    eq(outA.diagnostics.hardViolations, [], "all-days offers: no hard violation");
+    eq(outA.diagnostics.uncovered.filter((u) => u.role === P).length, 0, "all-days offers: no open primary");
+    const mm = outA.diagnostics.impliedTargets.months["2026-11"].members, m = mm[ACTON];
+    let capSum = 0, totA = 0, totC = 0;
+    ROLES.forEach((role) => {
+      const T = role === P ? m.primaryTarget : m.backupTarget;
+      const c = countOf(outA, ACTON, role), cc = countOf(outC, ACTON, role);
+      ok(typeof T === "number", "Acton carries a " + role + " target in November");
+      totA += c; totC += cc;
+      if (cc > T + tol) overCtl++;
+      if (c < cc) fewer++;
+      if (role === B) ok(c <= T + tol, "an offer is not a demand: Acton (preferred, every day offered) holds " + c + " November backup days against a target of " + T + " (tolerance " + tol + ")");
+      const gen = NOV.filter((d) => outA.schedule[d][role] === ACTON && !outA.schedule[d][role + "Locked"]);
+      const cap = Math.max(0, Math.ceil(T - 0.5) - (c - gen.length));
+      capSum += cap;
+      gen.slice(cap).forEach((d) => {
+        CUR.day = d;
+        const view = makeView(outA); view[d] = Object.assign({}, view[d]); view[d][role] = null; // the slot read as open on the final schedule
+        const fin = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers, schedule: view }));
+        const under = IDS.filter((id) => id !== ACTON && R.eligibility(fin, d, role, id).ok).filter((id) => { const t = mm[id][role + "Target"]; return typeof t === "number" && countOf(outA, id, role) < Math.ceil(t - 0.5); });
+        eq(under, [], "an offer is not a demand: Acton's over-share " + d + " " + role + " is his only because no colleague below his own share was eligible for it");
+      });
+      CUR.day = "-";
+      lines.push("seed " + sd + " " + role + ": target " + T + " (locked " + (c - gen.length) + "), with the taper " + c + ", control (offerBonusOverShare = offerBonus) " + cc);
+    });
+    ok(totA <= totC, "the taper never places Acton above the untapered control in total (both roles: " + totA + " vs " + totC + ")");
+    ok(outA.diagnostics.softPenalties.filter((s) => s.id === ACTON && s.reason === "offered").length <= capSum, "the evaluation carries the offered bonus on at most his share of GENERATED days per role (" + capSum + ")");
+    ok(!outA.diagnostics.softPenalties.some((s) => s.reason === "offered-over-share"), "offerBonusOverShare 0 -> no offered-over-share term in the soft list (zero-weight terms are dropped)");
+    const genC = NOV.filter((d) => ROLES.some((role) => outC.schedule[d][role] === ACTON && !outC.schedule[d][role + "Locked"])).length;
+    eq(outC.diagnostics.softPenalties.filter((s) => s.id === ACTON && s.reason === "offered").length, genC, "control: with offerBonusOverShare = offerBonus every GENERATED day of his keeps the offered bonus (" + genC + " generated, none re-labelled)");
+    ok(!outC.diagnostics.softPenalties.some((s) => s.reason === "offered-over-share"), "control: no offered-over-share term when offerBonusOverShare = offerBonus (nothing to taper)");
+  });
+  console.log("P2 review (Acton offers all of November as 'either', bestOf 2): " + lines.join("; "));
+  ok(overCtl > 0, "control: with offerBonusOverShare = offerBonus (the pre-review reading) Acton ends over his share + tolerance in at least one role and seed (" + overCtl + " of 6 role/seed cells over)");
+  ok(fewer > 0, "the taper places Acton below the control in at least one role and seed (" + fewer + " of 6 cells) - it is the taper that holds him, not the seed");
+  // (2) holiday-unit unplaced reason
+  CUR.range = "P2 review: Christmas unit 2026-12-21..2026-12-27"; CUR.seed = 1; CUR.day = "2026-12-25";
+  const decOffers = SR[BURCHETT].explicitAvailable["2026-12"].map((d) => ({ person_id: BURCHETT, day: d, role_pref: "either", source: "email-relay", entered_by: "scheduler", note: null }));
+  ok(decOffers.some((o) => o.day === "2026-12-25") && !decOffers.some((o) => o.day === "2026-12-24"), "fixture: Burchett's December list names Christmas Day, not Christmas Eve");
+  const ctxX = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: FIXP.offers.concat(decOffers) }));
+  if (ctxX.warnings.length) fail("buildContext warnings (December offers): " + JSON.stringify(ctxX.warnings));
+  const outX = GEN.generate(ctxX, "2026-12-21", "2026-12-27", { seed: 1, bestOf: 1 });
+  ok(outX.schedule["2026-12-25"].primary !== BURCHETT && outX.schedule["2026-12-25"].backup !== BURCHETT, "Burchett (exhaustive) is not the Christmas holder: the unit needs one holder for 12/24 + 12/25 and 12/24 is not-offered");
+  const bx = outX.diagnostics.offers.byPerson[BURCHETT];
+  const u25 = bx.unplaced.find((u) => u.day === "2026-12-25");
+  ok(u25, "12/25 is one of his unplaced offers: " + JSON.stringify(bx.unplaced));
+  eq(u25 && u25.holidayUnit, "Christmas", "the unplaced entry names the holiday unit");
+  eq(u25 && u25.reason, "primary: holiday-unit:Christmas 2026-12-24 not-offered; backup: holiday-unit:Christmas 2026-12-24 not-offered", "...and the reason is the unit's other day (the cause), not the final-schedule slot fact: " + JSON.stringify(u25));
+  bx.unplaced.filter((u) => u.day !== "2026-12-24" && u.day !== "2026-12-25").forEach((u) => eq(u.holidayUnit, null, "an unplaced offer outside a holiday unit carries holidayUnit null: " + JSON.stringify(u)));
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 16 fixture runs + 80 NB synthetic tally runs + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 23 fixture runs + 80 NB synthetic tally runs + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

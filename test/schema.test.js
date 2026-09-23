@@ -15,7 +15,11 @@
 //     refusals in order (the first four before the missing-row insert, all nine before
 //     the first update), version + 1 / source 'claim', the 'schedule.claim' audit row,
 //     the 'shift_claimed' notifications row, revoke from public/anon + grant to authenticated,
-//   - sql/migrations/2026-09-22-claim-open-slot.sql carries the byte-identical function,
+//   - sql/migrations/2026-09-22-claim-open-slot.sql is frozen as applied live 9/22 (sha256 of its body);
+//     since Prompt 14 part 2c (sql/migrations/2026-09-23-claim-offer.sql, applied live 9/23 07:05Z) the
+//     function ALSO upserts the claimer's call_offers row (a claim is an offer made on the spot; none for a
+//     rules_only claimer; the audit detail carries offer true/false) and call_offers_guard() skips
+//     OFFER_FROZEN while silvis.claim_in_progress is on - schema.sql mirrors both bodies from that file,
 //   - sql/probes/claim-open-slot-probe.sql is a rolled-back probe (fixtures in 2030-04 plus
 //     a 2020-01-01 lower bound, cases A..L) and scripts/verify-rls.sh section 7 grades it,
 //     checks the anon REST refusal and counts leftovers.
@@ -308,8 +312,8 @@ function checkClaim(n, s) {
   eq((fn.match(/version = version \+ 1, source = 'claim', updated_by = me, updated_at = now\(\)/g) || []).length, 2,
     n + ": both role updates must set version + 1, source 'claim', updated_by = caller, updated_at = now();");
   ok(!/_locked = /.test(fn), n + ": a claim must never touch a lock flag");
-  ok(/values \(me, my_name, 'schedule\.claim', jsonb_build_object\('day', p_day, 'role', p_role, 'person', me, 'version', new_ver\)\);/.test(fn),
-    n + ": audit row 'schedule.claim' {day, role, person, version} missing");
+  ok(/values \(me, my_name, 'schedule\.claim', jsonb_build_object\('day', p_day, 'role', p_role, 'person', me, 'version', new_ver(, 'offer', wrote_offer)?\)\);/.test(fn),
+    n + ": audit row 'schedule.claim' {day, role, person, version[, offer]} missing");
   ok(/values \('shift_claimed',\s+my_name \|\| ' took ' \|\| to_char\(p_day, 'FMMM\/FMDD'\) \|\| ' ' \|\| p_role,/.test(fn),
     n + ": notifications row type 'shift_claimed' with title `<Name> took <M/D> <role>` missing");
   ok(/jsonb_build_object\('day', p_day, 'role', p_role, 'surgeon_id', me, 'person_id', me\)\);/.test(fn),
@@ -331,15 +335,28 @@ checkClaim("schema.sql", schema);
   ok(/source\s+text,\s+-- import \| generated \| manual \| east-derived \| trade \| claim\b/.test(schema), "schedule_days.source column comment must list the sixth value 'claim' (the function writes it)");
 })();
 
-step("claim migration defines the same function, byte-identical");
+step("claim migration (9/22) frozen as applied; schema.sql's claim_open_slot = the claim-offer migration (9/23, the newest)");
 const claimMigration = read(CLAIM_MIGRATION);
 ok(!/\r/.test(claimMigration), "claim migration has CRLF line endings");
 checkClaim("claim migration", claimMigration);
 eq((claimMigration.match(/create or replace function/g) || []).length, 1, "the claim migration must define claim_open_slot and nothing else;");
 ok(!/drop function/.test(claimMigration), "the claim migration must not drop anything");
-(function identical() {
-  const a = functionText(schema, "claim_open_slot"), b = functionText(claimMigration, "claim_open_slot");
-  ok(a && b && a === b, "claim_open_slot(): migration text differs from schema.sql (keep them identical; the migration is what runs live)");
+// The 9/22 file is what ran live on 9/22 - frozen by sha256 (audit RLS-2 rule: an applied file is never edited).
+// Prompt 14 part 2c re-created the function on 9/23 07:05Z from sql/migrations/2026-09-23-claim-offer.sql (the
+// same body plus the call_offers upsert and the audit detail 'offer'); schema.sql mirrors THAT one.
+const CLAIM_OFFER_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-claim-offer.sql");
+(function frozenAndMirrored() {
+  const sha = (x) => require("crypto").createHash("sha256").update(x || "").digest("hex");
+  const base = functionText(claimMigration, "claim_open_slot");
+  eq(sha(base), "88ae39e5b2d14ec956a012532aeda897636f8efb49d472456d1b1ec0d987dd1b", "2026-09-22-claim-open-slot.sql: claim_open_slot() body sha256 changed - the applied 9/22 file is frozen; a new body goes in a new migration");
+  const claimOffer = read(CLAIM_OFFER_MIGRATION);
+  ok(!/\r/.test(claimOffer), "claim-offer migration has CRLF line endings");
+  const a = functionText(schema, "claim_open_slot"), b = functionText(claimOffer, "claim_open_slot");
+  ok(a && b && a === b, "claim_open_slot(): schema.sql differs from sql/migrations/2026-09-23-claim-offer.sql (the newest migration touching it, live since 9/23 07:05Z; keep them identical)");
+  ok(/insert into public\.call_offers \(person_id, day, role_pref, note, entered_by, source\)/.test(a) && /set_config\('silvis\.claim_in_progress', 'on', true\)/.test(a), "schema.sql: claim_open_slot must upsert the call_offers row under the silvis.claim_in_progress flag (claim-as-offer)");
+  ok(/rules_only_ids \? me/.test(a), "schema.sql: claim_open_slot writes no offer row for a claimer listed in the period's rules_only_ids");
+  ok(/'offer', wrote_offer/.test(a), "schema.sql: the schedule.claim audit detail must carry offer true/false");
+  ok(a.indexOf("insert into public.call_offers") < a.indexOf("'schedule.claim'"), "schema.sql: the call_offers upsert comes before the audit row");
 })();
 
 step("claim probe is self-rolling-back, lives in 2030-04 (+ 2020-01-01), covers cases A..L");
@@ -520,9 +537,14 @@ migFiles.forEach((f) => {
 ["apply_trade", "trade_insert_guard", "trade_update_guard", "claim_open_slot"].forEach((n) => ok(newest[n], "no migration under sql/migrations/ defines " + n + "()"));
 Object.keys(newest).forEach((name) => {
   const f = newest[name];
-  const a = functionText(schema, name), b = functionText(read(path.join(MIG_DIR, f)), name);
+  const migSql = read(path.join(MIG_DIR, f));
+  // a `language sql` body (offer_status) ends at `$$;` with no `end`: slicing it to the next `end $$;` would
+  // compare the NEIGHBOURING plpgsql function instead (found rebasing Prompt 14 onto this guard, 9/23)
+  const isSql = new RegExp("create or replace function public\\." + name + "\\([^)]*\\)[^$]*\\blanguage sql\\b").test(migSql);
+  const slice = isSql ? sqlFunctionText : functionText;
+  const a = slice(schema, name), b = slice(migSql, name);
   ok(a, "schema.sql has no `create or replace function public." + name + "(` but sql/migrations/" + f + " creates it - mirror it");
-  ok(b, "sql/migrations/" + f + " " + name + "(): body could not be sliced (expected a $$-quoted plpgsql body ending in `end $$;`)");
+  ok(b, "sql/migrations/" + f + " " + name + "(): body could not be sliced (expected a $$-quoted " + (isSql ? "sql body ending in `$$;`" : "plpgsql body ending in `end $$;`") + ")");
   ok(a === b, name + "(): schema.sql differs from the NEWEST migration touching it (sql/migrations/" + f + ") - mirror that body into schema.sql, or a wholesale re-run reverts the live function");
 });
 
@@ -662,10 +684,18 @@ eq(require("crypto").createHash("sha256").update(offersBody).digest("hex"), OFFE
   "offers migration body sha256 must equal the applied file's (strip nothing; annotate only in the trailer line);");
 checkOffersDDL("offers migration", offersMig);
 ok(offersMig.indexOf("offer_modes") < 0, "offers migration is the 9/22 body: offer_modes belongs to 2026-09-23-offer-modes.sql");
-["call_offers_guard", "call_offers_delete_guard"].forEach((name) => {
-  const a = functionText(schema, name), b = functionText(offersMig, name);
-  ok(a && b && a === b, name + "(): migration text differs from schema.sql (keep them identical; the migration is what ran live)");
-});
+// call_offers_delete_guard is still the 9/22 body; call_offers_guard was re-created on 9/23 07:05Z by the claim-offer
+// migration (OFFER_FROZEN skipped while silvis.claim_in_progress is on) - schema.sql mirrors the newest of each.
+(function guardsMirrored() {
+  const a = functionText(schema, "call_offers_delete_guard"), b = functionText(offersMig, "call_offers_delete_guard");
+  ok(a && b && a === b, "call_offers_delete_guard(): migration text differs from schema.sql (keep them identical; the migration is what ran live)");
+  const claimOffer = read(CLAIM_OFFER_MIGRATION);
+  const g = functionText(schema, "call_offers_guard"), h = functionText(claimOffer, "call_offers_guard");
+  ok(g && h && g === h, "call_offers_guard(): schema.sql differs from sql/migrations/2026-09-23-claim-offer.sql (the newest migration touching it)");
+  ok(/current_setting\('silvis\.claim_in_progress', true\)/.test(g), "schema.sql: call_offers_guard must skip OFFER_FROZEN only while silvis.claim_in_progress is on");
+  const base = functionText(offersMig, "call_offers_guard");
+  ok(base && /OF001/.test(base) && /OF002/.test(base) && /OF003/.test(base), "offers migration: the 9/22 call_offers_guard raises OF001 / OF002 / OF003");
+})();
 ok(sqlFunctionText(schema, "offer_status") === sqlFunctionText(offersMig, "offer_status"), "offer_status(): migration text differs from schema.sql");
 OFFER_POLICIES.forEach((p) => ok(policyText(schema, p) === policyText(offersMig, p), "policy " + p + ": migration text differs from schema.sql"));
 ["call_offers_guard_trg", "call_offers_delete_guard_trg"].forEach((t) => ok(triggerText(schema, t) === triggerText(offersMig, t), "trigger " + t + ": migration text differs from schema.sql"));

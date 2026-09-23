@@ -122,6 +122,33 @@
 // the final schedule: held slots the East data makes ineligible (east-busy,
 // east-forecast-busy, derived-lock, derived-lock-held) - generated slots never
 // appear there, locked / fixed ones may.
+//
+// Prompt 14 P2 (9/23) - offers first, rules as the fallback. The rules live in
+// rules.js (ctx.offers / ctx.periods: a submitted surgeon's offered day carries
+// the soft 'offered' bonus of -weights.offerBonus, a preferred-mode surgeon's
+// other days +weights.outsideOffers, an exhaustive surgeon's other days the
+// hard 'not-offered'). This file adds ORDER: after locks, holiday units and
+// derived weeks, the day and weekend units with at least one eligible surgeon
+// who OFFERED an open slot of the unit in that role are filled before the rest
+// (genOfferedUnits, measured once on the lock-only schedule; genOrder ranks
+// them ahead of the most-constrained-first order, holidays still first) - so a
+// surgeon's offered days are placed before his own non-offered placements can
+// consume his caps or runs. The bonus alone already makes an offered candidate
+// beat a rules-only candidate for the same slot (6 against a target delta of
+// weights.low per day off the share) - and it STOPS AT THE SHARE (review 9/23,
+// genOfferTaper / genTaperSoftList): once a placement no longer brings him
+// towards his target for the role and month the bonus reads
+// -weights.offerBonusOverShare (seed 0), so the equal shares decide between him
+// and a rules-only colleague exactly as before offers; caps and every other
+// hard rule are unchanged - an offer is not a demand. diagnostics.offers =
+// { periods, byPerson: { id: { status, mode, offered, placed, unplaced: [{ day,
+// role, reason, holidayUnit }], byPeriod } }, outsideOffers: [{ day, role, id }] }
+// (genOffersDiag; an unplaced offer on a holiday-unit day names the unit's other
+// day that failed - "holiday-unit:<name> <day> <reason>" - as the cause);
+// an open slot inside a period carries uncovered[].offered (the ids who offered
+// it) and uncovered[].note ("no offer and no rule allows it" when nobody did).
+// With no period touching the range nothing here changes the output
+// (test/generator-regression.js pins the byte-identical run).
 
 var GEN_DAY_MS = 86400000;
 var GEN_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -153,7 +180,8 @@ function genRulesApi() {
       talliesFor: talliesFor, runThrough: rdRunThrough, resolveWeight: resolveWeight, monthlyCapFor: monthlyCapFor, defaultWeights: defaultWeights,
       standingEastDays: standingEastDays,
       eastConflicts: eastConflicts,
-      eastVacationConflicts: eastVacationConflicts
+      eastVacationConflicts: eastVacationConflicts,
+      offerState: offerState, offeredOn: offeredOn // Prompt 14 P2
     };
   }
   return genRulesCache;
@@ -354,6 +382,69 @@ function genTargetDeltaForDays(G, S, id, days, role) {
   Object.keys(perMonth).forEach(function (m) { t += genTargetDelta(G, S, id, m, perMonth[m], null, role); });
   return t;
 }
+// Prompt 14 P2 review (9/23): the offered bonus stops at the share - "an offer is
+// not a demand". rules.js emits the soft 'offered' at -weights.offerBonus on every
+// offered day; here that bonus counts only while the placement still brings the
+// surgeon TOWARDS his target for the role and month (the same test genTargetDelta
+// makes: |c+1-T| < |c-T|, i.e. c < T - 0.5). Beyond that the term reads
+// -weights.offerBonusOverShare (seed 0; = offerBonus restores the untapered reading),
+// so between a surgeon at his share and a rules-only colleague below his, the share
+// term (weights.low per day) decides, as it did before offers. A surgeon with no
+// target for the role (a windows surgeon, poolMember false) is never tapered - only
+// his caps govern him. Capacity = the further placements that still improve the
+// share; for a multi-day unit the offered days are counted against it first.
+function genOfferCapacity(G, S, id, month, role, exceptDay, extra) {
+  var T = genTargetFor(G, month, id, role);
+  if (T === null) return Infinity;
+  var c = genMonthCount(G, S, id, month, role) + genPendingForced(G, S, id, month, exceptDay, role) + (extra || 0);
+  return Math.max(0, Math.ceil(T - 0.5) - c);
+}
+// The amount to ADD to a candidate's soft sum for taking `days` in `role`: each offered
+// day beyond the capacity swaps -offerBonus for -offerBonusOverShare. 0 whenever no
+// period touches the range (the pre-P2 path is untouched, rng included).
+function genOfferTaper(G, S, id, days, role, exceptDay, extra) {
+  var bonus = G.W.offerBonus || 0, over = G.W.offerBonusOverShare || 0;
+  if (!G.offersLive || !bonus || bonus === over) return 0;
+  var perMonth = {}, R = G.R, ctx = G.ctx;
+  for (var i = 0; i < days.length; i++) {
+    if (!R.offeredOn(ctx, days[i], role, id)) continue;
+    var m = genMonthOf(days[i]);
+    perMonth[m] = (perMonth[m] || 0) + 1;
+  }
+  var adj = 0;
+  Object.keys(perMonth).forEach(function (m) {
+    var overN = Math.max(0, perMonth[m] - genOfferCapacity(G, S, id, m, role, exceptDay, extra));
+    adj += overN * (bonus - over);
+  });
+  return adj;
+}
+// The same rule on a finished candidate (genEvaluate): per surgeon, month and role the
+// generated offered days in date order keep the bonus up to the capacity measured on the
+// lock-only schedule (ceil(T - 0.5) - the days he held before the run); the rest are
+// re-labelled 'offered-over-share' at -offerBonusOverShare (dropped when that is 0).
+function genTaperSoftList(G, softList) {
+  var bonus = G.W.offerBonus || 0, over = G.W.offerBonusOverShare || 0;
+  if (!G.offersLive || !bonus || bonus === over) return softList;
+  var groups = {};
+  softList.forEach(function (s, i) {
+    if (s.reason !== "offered" || !s.id) return;
+    var k = s.id + "|" + genMonthOf(s.day) + "|" + s.role;
+    (groups[k] = groups[k] || []).push(i);
+  });
+  var drop = {};
+  Object.keys(groups).forEach(function (k) {
+    var parts = k.split("|"), id = parts[0], month = parts[1], role = parts[2];
+    var T = genTargetFor(G, month, id, role);
+    if (T === null) return;
+    var cap = Math.max(0, Math.ceil(T - 0.5) - genMonthCountScan(G.base, id, month, role));
+    var idx = groups[k].slice().sort(function (a, b) { return softList[a].day < softList[b].day ? -1 : softList[a].day > softList[b].day ? 1 : 0; });
+    for (var j = cap; j < idx.length; j++) {
+      var s = softList[idx[j]];
+      if (over) { s.reason = "offered-over-share"; s.weight = -over; } else drop[idx[j]] = true;
+    }
+  });
+  return softList.filter(function (s, i) { return !drop[i]; });
+}
 // Holiday units of this tier the surgeon already holds (any day, any role, whole schedule).
 function genHolidayLoad(G, id, tier) {
   var W = G.ctx.schedule, n = 0, units = G.ctx.holidayUnitsAll;
@@ -553,12 +644,48 @@ function buildUnits(ctx, startDate, endDate) {
 
 // Holidays first (tightest first), then weekends and day units together,
 // most-constrained-first; ties: weekends before days, then seeded jitter.
+// Prompt 14 P2: among the weekend + day units, those an eligible surgeon
+// OFFERED (G.offeredUnit, per role) come first - the offers pass; with no
+// offers every unit ranks alike and the order is exactly the pre-P2 order (the
+// rng is consumed identically).
 function genOrder(G, role, rng) {
-  function decorate(list, kindRank) { return list.map(function (u) { return { u: u, t: u.tightness[role], k: kindRank(u), j: rng() }; }); }
+  var offered = G.offeredUnit || {};
+  function decorate(list, kindRank) { return list.map(function (u) { return { u: u, o: offered[u.key] && offered[u.key][role] ? 0 : 1, t: u.tightness[role], k: kindRank(u), j: rng() }; }); }
   function cmp(a, b) { return (a.t - b.t) || (a.k - b.k) || (a.j - b.j); }
+  function cmpOffers(a, b) { return (a.o - b.o) || cmp(a, b); }
   var hol = decorate(G.units.holidays, function () { return 0; }).sort(cmp);
-  var rest = decorate(G.units.weekends, function () { return 0; }).concat(decorate(G.units.days, function () { return 1; })).sort(cmp);
+  var rest = decorate(G.units.weekends, function () { return 0; }).concat(decorate(G.units.days, function () { return 1; })).sort(cmpOffers);
   return hol.concat(rest).map(function (x) { return x.u; });
+}
+
+// Prompt 14 P2: G.offeredUnit[unit.key] = { primary, backup } - true when some
+// active surgeon offered an OPEN slot of the unit in that role (rules.offeredOn:
+// inside a period, status submitted, role covered) and is eligible for it on the
+// lock-only schedule (solo, or as a block member of a full weekend). Measured
+// once per generate(); everything false when no period touches the range.
+function genOfferedUnits(G) {
+  var ctx = G.ctx, R = G.R, out = {};
+  var live = !!(ctx.periods && ctx.periods.length && typeof R.offeredOn === "function");
+  G.units.all.forEach(function (u) {
+    var o = { primary: false, backup: false };
+    if (live) {
+      var list = u.kind === "holiday" ? u.inRange : u.kind === "weekend" ? u.present : [u.day];
+      var full = u.kind === "weekend" && u.present.length === 3;
+      GEN_ROLES.forEach(function (role) {
+        for (var i = 0; i < list.length && !o[role]; i++) {
+          var d = list[i];
+          if (!genSlotOpen(ctx.schedule[d], role)) continue;
+          for (var j = 0; j < ctx.activeIds.length; j++) {
+            var id = ctx.activeIds[j];
+            if (!R.offeredOn(ctx, d, role, id)) continue;
+            if (R.eligibility(ctx, d, role, id).ok || (full && R.eligibility(ctx, d, role, id, { asBlockMember: true }).ok)) { o[role] = true; break; }
+          }
+        }
+      });
+    }
+    out[u.key] = o;
+  });
+  return out;
 }
 
 /* ----------------------------------------------------------- targets */
@@ -813,7 +940,7 @@ function genFillDay(G, S, day, role, rng) {
   for (var i = 0; i < ids.length; i++) {
     var r = R.eligibility(ctx, day, role, ids[i]);
     if (!r.ok) continue;
-    var s = genSoftSum(r) + genTargetDelta(G, S, ids[i], month, 1, day, role) + (rng ? rng() * G.jitter : 0);
+    var s = genSoftSum(r) + genOfferTaper(G, S, ids[i], [day], role, day) + genTargetDelta(G, S, ids[i], month, 1, day, role) + (rng ? rng() * G.jitter : 0);
     if (best === null || s < bestScore) { best = ids[i]; bestScore = s; }
   }
   if (best === null) return false;
@@ -882,7 +1009,7 @@ function genFillWeekend(G, S, unit, role, rng) {
       if (!perId) perId = {};
       (perId[mid] = perId[mid] || []).push(slotDay[j]);
     }
-    if (perId) for (var pid in perId) s += genTargetDeltaForDays(G, S, pid, perId[pid], role);
+    if (perId) for (var pid in perId) s += genTargetDeltaForDays(G, S, pid, perId[pid], role) + genOfferTaper(G, S, pid, perId[pid], role, null);
     if (best === null || s < bestScore) { best = pat; bestScore = s; }
   }
   ["fri", "sat", "sun"].forEach(function (k, i) {
@@ -955,7 +1082,7 @@ function genFillHoliday(G, S, unit, role, rng) {
       var r = R.eligibility(ctx, d, role, id, { assume: unit.inRange.filter(function (x) { return x !== d; }).map(function (x) { return { date: x, role: role }; }) });
       soft += genSoftSum(r);
     }
-    var s = soft + genTargetDeltaForDays(G, S, id, open, role) + genHolidayLoad(G, id, unit.tier) * G.W.medium + (rng ? rng() * G.jitter : 0);
+    var s = soft + genOfferTaper(G, S, id, open, role, null) + genTargetDeltaForDays(G, S, id, open, role) + genHolidayLoad(G, id, unit.tier) * G.W.medium + (rng ? rng() * G.jitter : 0);
     if (best === null || s < bestScore) { best = id; bestScore = s; }
   }
   open.forEach(function (d) { genSet(G, S, d, role, best); });
@@ -978,7 +1105,7 @@ function genBestFor(G, S, day, role, exclude) {
     if (exclude.indexOf(ids[i]) >= 0) continue;
     var r = R.eligibility(ctx, day, role, ids[i]);
     if (!r.ok) continue;
-    var s = genSoftSum(r) + genTargetDelta(G, S, ids[i], genMonthOf(day), 1, day, role);
+    var s = genSoftSum(r) + genOfferTaper(G, S, ids[i], [day], role, day) + genTargetDelta(G, S, ids[i], genMonthOf(day), 1, day, role);
     if (best === null || s < bestScore) { best = ids[i]; bestScore = s; }
   }
   return best;
@@ -1103,7 +1230,9 @@ function genSmooth(G, S) {
           var slots = Object.keys(S.placed).map(function (k) { return S.placed[k]; }).filter(function (p) { return p.id === H && p.role === role && p.unitKind === "day" && genMonthOf(p.day) === month; }).sort(function (a, b) { return a.day < b.day ? -1 : a.day > b.day ? 1 : 0; });
           for (var s = 0; s < slots.length && !moved; s++) {
             var slot = slots[s];
-            var oldSoft = genSoftSum(R.eligibility(ctx, slot.day, slot.role, H));
+            // P2 review: H's offered bonus on this day is tapered against his count WITHOUT the day (extra -1), so a
+            // day he holds over his share can move to a colleague below his (the untapered -6 used to pin it).
+            var oldSoft = genSoftSum(R.eligibility(ctx, slot.day, slot.role, H)) + genOfferTaper(G, S, H, [slot.day], slot.role, slot.day, -1);
             genUnset(G, S, slot.day, slot.role);
             for (var l = 0; l < lows.length; l++) {
               var L = lows[l];
@@ -1112,7 +1241,7 @@ function genSmooth(G, S) {
               var after = genDevCost(G, counts[H] - 1 - T[H]) + genDevCost(G, counts[L] + 1 - T[L]);
               if (after >= before) continue;
               var r = R.eligibility(ctx, slot.day, slot.role, L);
-              if (!r.ok || genSoftSum(r) - oldSoft > tol) continue;
+              if (!r.ok || genSoftSum(r) + genOfferTaper(G, S, L, [slot.day], slot.role, slot.day) - oldSoft > tol) continue;
               genSet(G, S, slot.day, slot.role, L);
               moved = true;
               break;
@@ -1182,6 +1311,8 @@ function genEvaluate(G, S) {
       for (var k = 0; k < r.soft.length; k++) if (r.soft[k].weight) { softList.push({ day: d, role: role, id: id, reason: r.soft[k].reason, weight: r.soft[k].weight }); softSum += r.soft[k].weight; }
     });
   });
+  softList = genTaperSoftList(G, softList); // P2 review: the offered bonus stops at the share (no-op without a period)
+  softSum = 0; softList.forEach(function (s) { softSum += s.weight; });
   S.patternPenalties.forEach(function (p) { softList.push(p); softSum += p.weight; });
   // J: one deviation per role (primary first in the lexicographic score); WF: the convex sum
   var primaryDeviation = 0, backupDeviation = 0;
@@ -1290,8 +1421,94 @@ function genUncoveredReasons(G, open) {
       var solo = R.eligibility(ctx, o.day, o.role, id);
       reasons[id] = solo.ok ? ["eligible-but-not-placed"] : solo.hard.slice();
     });
-    return { day: o.day, role: o.role, weekday: genWeekday(o.day), holidayUnit: hol ? hol.name : null, reasons: reasons };
+    // Prompt 14 P2: inside a period, who offered this slot, and the one-line reading for the board:
+    // "no offer and no rule allows it" when nobody did, else the offering surgeons with their first reason.
+    var offered = [], note = null;
+    if (ctx.periodOfDay && ctx.periodOfDay[o.day] !== undefined && typeof R.offeredOn === "function") {
+      ids.forEach(function (id) { if (R.offeredOn(ctx, o.day, o.role, id)) offered.push(id); });
+      note = offered.length
+        ? "offered by " + offered.map(function (id) { return (ctx.rosterById[id] && ctx.rosterById[id].name) || id; }).join(", ") + " but blocked: " + offered.map(function (id) { return (reasons[id] || [])[0] || "-"; }).join("; ")
+        : "no offer and no rule allows it";
+    }
+    return { day: o.day, role: o.role, weekday: genWeekday(o.day), holidayUnit: hol ? hol.name : null, reasons: reasons, offered: offered, note: note };
   });
+}
+
+// Prompt 14 P2: diagnostics.offers over the FINAL schedule (ctx.schedule = best.W).
+//   periods       the periods touching the range
+//   byPerson[id]  status / mode from the first period touching the range (byPeriod
+//                 carries every touching period), offered = his offered days inside
+//                 the range and a period where he is submitted ('either' counts
+//                 once), placed = those where he holds an offered role (locked or
+//                 generated), unplaced = the rest with the slot's reason: his first
+//                 hard reason on the final schedule, or held-by:<id> when the slot
+//                 went to someone else, or eligible-but-not-placed (a generator bug,
+//                 reported like an open slot). role 'either' reads "primary: ..;
+//                 backup: ..".
+//   outsideOffers every GENERATED (not locked / fixed) slot held by a submitted
+//                 surgeon inside a period on a day/role he did not offer - the
+//                 publish email tells him "trade if needed" (preferred mode only,
+//                 by construction).
+// Empty ({ periods: [], byPerson: {}, outsideOffers: [] }) when no period touches
+// the range - present always, never absent.
+function genOffersDiag(G, warnings) {
+  var ctx = G.ctx, R = G.R, W = ctx.schedule, ids = ctx.activeIds;
+  var out = { periods: [], byPerson: {}, outsideOffers: [] };
+  if (!(ctx.periods && ctx.periods.length && typeof R.offerState === "function")) return out;
+  var touching = ctx.periods.filter(function (p) { return p.start <= G.end && p.end >= G.start; });
+  if (!touching.length) return out;
+  out.periods = touching.map(function (p) { return { key: p.key, id: p.id, label: p.label, start: p.start, end: p.end, status: p.status, closeAt: p.closeAt, publishBy: p.publishBy }; });
+  var nameOf = function (id) { return (ctx.rosterById[id] && ctx.rosterById[id].name) || id; };
+  var unplacedTotal = {};
+  ids.forEach(function (id) {
+    var P = ctx.per[id], first = touching[0];
+    var row = { status: P.offerStatus[first.key], mode: P.offerMode[first.key], offered: 0, placed: 0, unplaced: [], byPeriod: {} };
+    touching.forEach(function (p) { row.byPeriod[p.key] = { status: P.offerStatus[p.key], mode: P.offerMode[p.key] }; });
+    G.days.forEach(function (d) {
+      var st = R.offerState(ctx, d, id);
+      if (!st || st.status !== "submitted" || !st.roles.length) return;
+      row.offered++;
+      var e = W[d], hol = G.units.holidayDaySet[d] || null;
+      var held = st.roles.filter(function (role) { return e && e[role] === id; });
+      if (held.length) { row.placed++; return; }
+      var why = st.roles.map(function (role) {
+        // Review 9/23: on a holiday-unit day the CAUSE is the unit - one holder for every in-range unit day - so the
+        // first other unit day he fails in that role is the reason ("holiday-unit:<name> <day> <reason>"), evaluated
+        // as the unit builder does (the other unit days assumed his); the final-schedule slot fact (held-by, a cap he
+        // reached elsewhere) is only a consequence and is reported when every unit day passes.
+        var reason = null;
+        if (hol) {
+          for (var k = 0; k < hol.inRange.length && !reason; k++) {
+            var d2 = hol.inRange[k];
+            if (d2 === d) continue;
+            var r2 = R.eligibility(ctx, d2, role, id, { assume: hol.inRange.filter(function (x) { return x !== d2; }).map(function (x) { return { date: x, role: role }; }) });
+            if (!r2.ok) reason = "holiday-unit:" + hol.name + " " + d2 + " " + r2.hard[0];
+          }
+        }
+        if (!reason) {
+          var r = R.eligibility(ctx, d, role, id, { asBlockMember: genHoldsFullBlock(W, d, role, id) });
+          reason = !r.ok ? r.hard[0] : (e && e[role]) ? "held-by:" + e[role] : (role === "primary" && e && e.externalCover) ? "external-cover" : "eligible-but-not-placed";
+          if (reason === "eligible-but-not-placed") warnings.push("offered slot " + d + " " + role + " is open although " + nameOf(id) + " offered it and is eligible - generator bug, report it");
+        }
+        return st.roles.length > 1 ? role + ": " + reason : reason;
+      });
+      row.unplaced.push({ day: d, role: st.roles.length > 1 ? "either" : st.roles[0], reason: why.join("; "), holidayUnit: hol ? hol.name : null });
+    });
+    if (row.unplaced.length) unplacedTotal[id] = row.unplaced.length;
+    out.byPerson[id] = row;
+  });
+  G.days.forEach(function (d) {
+    var e = W[d];
+    GEN_ROLES.forEach(function (role) {
+      var id = e && e[role];
+      if (!id || !ctx.per[id] || e[role + "Locked"] || (G.fixed && G.fixed[d] && G.fixed[d][role])) return;
+      var st = R.offerState(ctx, d, id);
+      if (st && st.status === "submitted" && st.roles.indexOf(role) < 0) out.outsideOffers.push({ day: d, role: role, id: id });
+    });
+  });
+  Object.keys(unplacedTotal).forEach(function (id) { warnings.push(nameOf(id) + ": " + unplacedTotal[id] + " offered day(s) not placed - see diagnostics.offers.byPerson"); });
+  if (out.outsideOffers.length) warnings.push(out.outsideOffers.length + " placement(s) on a day the surgeon did not offer (preferred mode) - see diagnostics.offers.outsideOffers");
+  return out;
 }
 
 function genDiagnostics(G, best, meta) {
@@ -1438,6 +1655,7 @@ function genDiagnostics(G, best, meta) {
   });
   var softByReason = {};
   ev.softList.forEach(function (s) { softByReason[s.reason] = (softByReason[s.reason] || 0) + s.weight; });
+  var offersDiag = genOffersDiag(G, warnings); // Prompt 14 P2 (adds its own warnings)
   return {
     seed: meta.seed, bestOf: meta.bestOf, candidatesTried: meta.tried, candidateScores: meta.scores.slice(), truncated: meta.truncated,
     range: { start: G.start, end: G.end, days: G.days.length, months: G.months.slice() },
@@ -1479,6 +1697,7 @@ function genDiagnostics(G, best, meta) {
     // away range, or the primary the day before one): generated slots never appear there,
     // locked / fixed ones may. Diagnostics only; rules.js owns the rule.
     eastVacations: genEastVacations(G, ctx),
+    offers: offersDiag, // Prompt 14 P2: { periods, byPerson, outsideOffers }
     placedCount: Object.keys(S.placed).length,
     warnings: warnings
   };
@@ -1553,6 +1772,8 @@ function generate(ctx, startDate, endDate, opts) {
     });
     G.targets = genTargets(G);
     G.forced = genForcedSlots(G);
+    G.offersLive = !!(ctx.periods && ctx.periods.length && typeof R.offeredOn === "function"); // Prompt 14 P2: a period touches the inputs -> offers terms and taper are live
+    G.offeredUnit = genOfferedUnits(G); // Prompt 14 P2: the offers pass (ordering)
     var master = genPrng(seed);
     var best = null, scores = [], tried = 0, truncated = false;
     var budget = typeof opts.timeBudgetMs === "number" && opts.timeBudgetMs > 0 ? opts.timeBudgetMs : 0;

@@ -845,20 +845,64 @@ week, outside your window, frozen), what is already published that day and how m
 against the person's cap, drafts kept locally and **one Save = one batch write + one audit entry**, a failed save that
 writes nothing. A paste-a-date-list box remains for typists.
 
-**Eligibility becomes offers-first, at the hardness each surgeon chooses:** when submitting, a surgeon picks "only
-these days" (exhaustive — eligible only on offered days in the offered role) or "my preferred days; use my rules to
-fill gaps" (preferred, the default — offered days first with a strong bonus; a non-offered day only under their
-ordinary rules, with a strong penalty, when the slot would otherwise stay open, and every such placement is named in
-their publish email). Vacations, East busy days, derived-week locks, holiday opt-outs and caps apply either way; a
-rules-only or silent surgeon is scheduled by the existing rules. This is the answer to the Tue/Thu gap (rules doc §8
-item 12): Acton's and Philip's rules allow those days even when their lists do not name them. The generator places offers before anything else (an offer is not a
-demand — fairness and caps still decide, and unplaced offers are reported per surgeon), fills the remaining slots from
-rules-only surgeons, then repairs and smooths as before; whatever stays open goes to the open-shifts board (§16), and a
-claim is an offer made on the spot. Every dated list in the seed (Burchett's October/December, Acton's October/November,
-Burchett's November, Philip's weeks, Fierce's single days) is migrated into `call_offers` (`source: email-relay`) so
-there is one mechanism, not two; recurring patterns, derived weeks and windows stay rules. the ER-panel author's Word document
-is **retired at go-live** (Faraz 9/22 evening): the app is the source of truth; the ER-panel author keeps a viewer account, the weekly
-office digest and the ER Call Panels export for a paper copy. Published assignments remain locks.
+**Eligibility is offers-first, at the hardness each surgeon chooses (built in Prompt 14 P2, 9/23):** `rules.buildContext`
+takes two more inputs, `offers` (`call_offers` rows) and `periods` (`call_periods` rows with `rules_only_ids` and
+`offer_modes`), and derives per surgeon per period the same status SQL `offer_status()` gives — submitted (one or more
+offers inside the period), else rules-only (listed), else not started — and the mode, `offer_modes[id]` or `preferred`.
+Inside a period a submitted surgeon is offers-governed: in **exhaustive** mode ("only these days") every day/role he
+did not offer is the hard `not-offered` (`either` covers both roles); in **preferred** mode (the default, "my
+preferred days; use my rules to fill gaps") an offered day carries the soft `offered` bonus (`-weights.offerBonus`, 6)
+and any other day is eligible under his ordinary rules with the soft `outside-offers` penalty (`+weights.outsideOffers`,
+6) — both weights Setup-editable like the others (`outside-offers` is also carried on an exhaustive surgeon's claim
+result, where `not-offered` is skipped, so the board can name the day as outside his offers). Every offer is folded into the same dated-row map the availability
+rows feed, so it is a dated row in item W's sense: it lifts the weekday-pattern family (hardNeverWeekdays included)
+for that date and role and never an obligation — vacations and the trailing edge, East busy / forecast / standing days,
+derived-week locks, windows, backupOptOut, caps, runs, the other role all still apply on an offered day. The dated
+lists (`whitelist-month`, `outside-available-weeks`) are not applied to a submitted surgeon inside the period (offers
+supersede them — one mechanism); rules-only and silent surgeons, and every day outside a period, get today's rules
+byte for byte (the whole regression runs unchanged with `periods: []`). This is the answer to the Tue/Thu gap (rules
+doc §8 item 12): Acton's and Philip's rules allow those days even when their lists do not name them. A Prompt 13
+claim is an offer made on the spot: `eligibility(ctx, day, role, id, { claim: true })` skips the exhaustive
+`not-offered` only, and `claim_open_slot()` writes the `call_offers` row (`sql/migrations/2026-09-23-claim-offer.sql`,
+applied after the open-shifts branch; the freeze guard yields to a claim in progress, transaction-locally) — except
+for a claimer listed in the period's `rules_only_ids`: he chose "go by my rules", one offer row would flip his derived
+status to submitted for the whole period, so his claim is recorded in `schedule_days` and the audit row (`detail.offer
+= false`) only; a surgeon with nothing entered does get the row and becomes submitted (preferred) by it. **Trades are
+not there yet (review 9/23):** the trade path (`tradeEligibility` / `tradeEligibilityOver` in `index-source.html`) calls
+`eligibility` without the claim flag and `apply_trade()` writes no offer row, so once part 3 passes `offers` / `periods`
+into `ctxInputs` an exhaustive surgeon could not be traded onto a non-offered day; part 3 must either pass `{ claim:
+true }` there (a trade acceptance is an offer made on the spot, the same reading as a claim) and give `apply_trade()`
+the same upsert block, or Faraz rules that such trades are refused — latent until then, because `ctxInputs` carries
+no offers today. The generator adds order and one fairness rule: after locks, holiday units and derived weeks, the
+day and weekend units an eligible surgeon offered are filled before the rest (`genOfferedUnits` / `genOrder`), so a
+surgeon's offered days are placed before his own non-offered placements can consume his caps or runs; the bonus
+already makes an offered candidate beat a rules-only candidate for the same slot; and **the bonus stops at the share**
+(`genOfferTaper` in every candidate score and `genTaperSoftList` in the evaluation): once a placement no longer brings
+him towards his target for the role and month, the offered term reads `-weights.offerBonusOverShare` (seed 0; 6 =
+the untapered reading), so a surgeon who paints the whole month ends the month at his share within
+`smoothingTolerance` and the rest goes to the colleagues below theirs — an offer is not a demand (review 9/23
+measured Acton offering every November day, seeds 1–3: 12 primaries / 5 backups against targets of 8 / 3 before the
+taper, 11 / 10 / 9 primaries and 3 backups after it — his eight primary locks already equal his target and November's
+open primaries exceed the sum of everyone's targets, so every over-share day of his is one no colleague below his own
+share could take, which is the invariant the regression pins; caps stay hard; a surgeon with no target — a windows
+surgeon — is never tapered). `diagnostics.offers`
+= the periods touching the range, `byPerson[id] = { status, mode, offered, placed, unplaced: [{ day, role, reason,
+holidayUnit }] }` (unplaced offers carry the slot's reason — `slot-locked:<id>`, `holds-other-role`, `held-by:<id>`…;
+on a holiday-unit day the cause, `holiday-unit:<name> <day> <reason>`, the unit's other day he fails, because one
+holder covers every unit day), and `outsideOffers = [{ day, role, id }]`
+(every generated placement of a submitted surgeon on a day he did not list — the publish email of part 4/6 reads it:
+"you were placed on 11/5, a day you did not list — trade if needed"); an open slot inside a period carries
+`offered` (who offered it) and the note "no offer and no rule allows it" when nobody did. Helpers own the period
+maths (`periodFor`, `offerStatus` mirroring the SQL, `offerTimeline` from `groupRules.offerPeriods`: close = start −
+6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close, end = the last day of the Nth month
+extended to a Sunday like the Generate presets). Every dated list in the seed (Burchett's October/December, Acton's
+October/November, Burchett's November, Philip's weeks, Fierce's single days) is migrated into `call_offers`
+(`source: email-relay`) in part 5 so there is one mechanism, not two; recurring patterns, derived weeks and windows
+stay rules. the ER-panel author's Word document is **retired at go-live** (Faraz 9/22 evening): the app is the source of
+truth; the ER-panel author keeps a viewer account, the weekly office digest and the ER Call Panels export for a paper copy.
+Published assignments remain locks. Proof: `test/rules.test.js` and `test/generator-regression.js` Prompt 14 P2
+blocks (the real November lists as offers, `test/fixtures/offers-2026-11.json`), `test/offers.test.js` (period maths,
+SQL parity, seed and migration pins).
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 

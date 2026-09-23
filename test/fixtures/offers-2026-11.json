@@ -1,0 +1,47 @@
+{
+  "_meta": {
+    "purpose": "Prompt 14 P2 (9/23): the first offer period with the two real November lists as call_offers rows. Burchett's 9/17 'November Silvis Trauma Call days' (7 primary + 8 backup dates, his statement incl. the four backups Fierce's derived week took and the 11/25 primary Khan took) in EXHAUSTIVE mode; Acton's days as relayed by Burchett on 9/17 (7 primary + 3 backup, incl. the 11/5 backup his own primary lock superseded - Prompt 12 Y) in PREFERRED mode (the default). Khan and Sarkar chose 'go by my rules' (rules_only_ids); Philip and Fierce entered nothing (not_started). Run over 2026-11-02..2026-11-30 against the live locks of the seed (the ER-panel author's 9/22 rows, Khan's Thanksgiving unit, Fierce's backup week). philipOpenSlotOffer: one extra 'either' offer by Philip (not_started otherwise) on Mon 2026-11-30 - a day with no lock in either role that he holds in neither role without the offer (seed 1, bestOf 2: primary Khan, backup Fierce) - so the pin 'an offered day beats a rules-only candidate' is not vacuous.",
+    "shape": "period = one call_periods row (offer_modes per Faraz's 9/22 evening amendment; offers_close_at set by hand for the first period, part 5); offers = call_offers rows (source email-relay, entered_by scheduler, note null); passed to rules.buildContext as input.periods / input.offers",
+    "sources": "docs/SILVIS-CALL-RULES.md section 3 (Burchett, Acton November) and section 7; docs/silvis-seed.json surgeonRules.s2.explicitAvailable['2026-11'] (the test pins the two agree)",
+    "contact_data": "none"
+  },
+  "period": {
+    "id": "p14-nov26-jan27",
+    "label": "Nov 2026 - Jan 2027",
+    "start_day": "2026-11-02",
+    "end_day": "2027-01-03",
+    "offers_close_at": "2026-10-02",
+    "publish_by": "2026-10-05",
+    "status": "closed",
+    "rules_only_ids": ["s1", "s6"],
+    "offer_modes": { "s2": "exhaustive", "s3": "preferred" }
+  },
+  "offers": [
+    { "person_id": "s2", "day": "2026-11-03", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-07", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-08", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-11", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-20", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-23", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-25", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-02", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-04", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-06", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-09", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-14", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-15", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-16", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s2", "day": "2026-11-18", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-02", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-04", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-06", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-14", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-15", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-16", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-18", "role_pref": "primary", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-03", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-05", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null },
+    { "person_id": "s3", "day": "2026-11-17", "role_pref": "backup", "source": "email-relay", "entered_by": "scheduler", "note": null }
+  ],
+  "philipOpenSlotOffer": { "person_id": "s4", "day": "2026-11-30", "role_pref": "either", "source": "app", "entered_by": "s4", "note": null }
+}

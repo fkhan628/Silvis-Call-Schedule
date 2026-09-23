@@ -2021,6 +2021,82 @@ function derivedEastVacations(ranges, reviews, personId) {
   return { ranges: out, stale: stale };
 }
 
+/* ═══ Offer periods (Prompt 14 P2, 9/23) ═══
+ * Pure period maths shared by Setup -> Periods, the day editor, the daily-reminder mirror and the tests. Rows are
+ * DB-shaped (call_periods: start_day / end_day / offers_close_at / publish_by / rules_only_ids / offer_modes;
+ * call_offers: person_id / day / role_pref); 'start' / 'end' are accepted as aliases of start_day / end_day and a
+ * timestamp-shaped day is read by its date. Nothing here reads the clock or the network. rules.js derives the same
+ * status inside buildContext (test/offers.test.js pins the parity); helpers own the timeline. */
+const OP_PERIOD_DEFAULTS = { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [14, 3] }; // = docs/silvis-seed.json groupRules.offerPeriods
+function opDay(v) {
+  if (v instanceof Date && !isNaN(v)) return fmt(v);
+  const s = typeof v === "string" ? v.slice(0, 10) : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+function opBounds(p) {
+  if (!p || typeof p !== "object") return null;
+  const a = opDay(p.start_day !== undefined ? p.start_day : p.start), b = opDay(p.end_day !== undefined ? p.end_day : p.end);
+  return a && b && b >= a ? { start: a, end: b } : null;
+}
+function opList(v) {
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { return []; } }
+  return Array.isArray(v) ? v : [];
+}
+// periodFor(day, periods) -> the period row (as given) whose [start_day, end_day] contains the day, the earliest
+// start winning an overlap; null for a bad day, no list or no match.
+function periodFor(day, periods) {
+  const d = opDay(day);
+  if (!d || !Array.isArray(periods)) return null;
+  let best = null, bestStart = null;
+  periods.forEach(p => { const b = opBounds(p); if (!b || d < b.start || d > b.end) return; if (best === null || b.start < bestStart) { best = p; bestStart = b.start; } });
+  return best;
+}
+// offerStatus(period, offers, personId) mirrors SQL offer_status(): 'submitted' when the person has >= 1 call_offers
+// row with day between start_day and end_day (inclusive), else 'rules_only' when listed in rules_only_ids (an array,
+// or a JSON string from an older caller), else 'not_started'; null when the period has no usable dates.
+function offerStatus(period, offers, personId) {
+  const b = opBounds(period);
+  if (!b) return null;
+  const rows = Array.isArray(offers) ? offers : [];
+  for (let i = 0; i < rows.length; i++) {
+    const o = rows[i];
+    if (!o || o.person_id !== personId) continue;
+    const d = opDay(o.day);
+    if (d && d >= b.start && d <= b.end) return "submitted";
+  }
+  return opList(period.rules_only_ids).indexOf(personId) >= 0 ? "rules_only" : "not_started";
+}
+// opEndOfPeriod(start, months) -> the last day of the Nth calendar month counting the start month as month 1,
+// extended to the following Sunday when it falls on a Friday or Saturday (the Generate presets' rule, so a period
+// never ends mid-weekend): 2026-11-02 + 3 -> 2027-01-31; + 6 -> 2027-04-30 (Fri) -> 2027-05-02.
+function opEndOfPeriod(start, months) {
+  const y = +start.slice(0, 4), m = +start.slice(5, 7);
+  const idx = m + months - 1, yy = y + Math.floor((idx - 1) / 12), mm = ((idx - 1) % 12) + 1;
+  let end = fmt(new Date(yy, mm, 0));
+  const dow = parse(end).getDay(); // 0 = Sun .. 6 = Sat
+  if (dow === 5 || dow === 6) end = suAddDays(end, 7 - dow);
+  return end;
+}
+// offerTimeline(period, rules) -> { start_day, end_day, length_months, offers_close_at, publish_by, remind_on: [...],
+// presets } for a new or existing period: start_day is required ('YYYY-MM-DD'; null otherwise); every other date the
+// row already carries is kept (each is editable per period), the rest are filled from rules =
+// groupRules.offerPeriods (absent keys -> OP_PERIOD_DEFAULTS): end from length_months (or lengthMonths, or the
+// rules' default), offers_close_at = start - closeWeeksBeforeStart weeks, publish_by = start - publishWeeksBeforeStart
+// weeks, remind_on = offers_close_at - each remindDaysBeforeClose, ascending.
+function offerTimeline(period, rules) {
+  const start = period && typeof period === "object" ? opDay(period.start_day !== undefined ? period.start_day : period.start) : null;
+  if (!start) return null;
+  const Rz = Object.assign({}, OP_PERIOD_DEFAULTS, rules && typeof rules === "object" ? rules : {});
+  const num = (v, d) => (typeof v === "number" && isFinite(v) && v > 0 ? v : d);
+  const months = num(period.length_months !== undefined ? period.length_months : period.lengthMonths, num(Rz.lengthMonths, OP_PERIOD_DEFAULTS.lengthMonths));
+  const closeW = num(Rz.closeWeeksBeforeStart, OP_PERIOD_DEFAULTS.closeWeeksBeforeStart), pubW = num(Rz.publishWeeksBeforeStart, OP_PERIOD_DEFAULTS.publishWeeksBeforeStart);
+  const remind = (Array.isArray(Rz.remindDaysBeforeClose) ? Rz.remindDaysBeforeClose : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter(n => typeof n === "number" && isFinite(n) && n >= 0);
+  const end = opDay(period.end_day !== undefined ? period.end_day : period.end) || opEndOfPeriod(start, months);
+  const close = opDay(period.offers_close_at) || suAddDays(start, -7 * closeW);
+  const publish = opDay(period.publish_by) || suAddDays(start, -7 * pubW);
+  return { start_day: start, end_day: end, length_months: months, offers_close_at: close, publish_by: publish, remind_on: remind.map(n => suAddDays(close, -n)).sort(), presets: Array.isArray(Rz.presets) ? Rz.presets.slice() : OP_PERIOD_DEFAULTS.presets.slice() };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     reviewStateFor, derivedEastVacations,
@@ -2043,5 +2119,6 @@ if (typeof module !== "undefined" && module.exports) {
     generateShareHTML, buildPrintableCalendarHTML,
     buildErCallPanelsHTML, buildErCallPanelsText, buildErCallPanelsDocument, erPanelSpan,
     defaultHolidayUnits, huNthWeekday, HU_ORDER, HU_STANDARD_TIER,
+    periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
   };
 }

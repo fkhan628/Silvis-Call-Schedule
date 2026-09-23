@@ -2,7 +2,7 @@
 -- Silvis Surgical Care Call Schedule — Supabase schema + RLS
 -- Project: https://bzhsroegtagqhutbnsrp.supabase.co
 -- Paste into the SQL editor once. Re-runnable (IF NOT EXISTS / OR REPLACE) - but re-runnable only when every applied
--- migration has been mirrored below; see the LIVE DIFFERS note at the end of this header.
+-- migration has been mirrored below (test/schema.test.js fails closed when a landed body is not); see the Revision lines.
 -- Design notes: mirrors the Davenport app's data layer but keyed by DAY.
 -- The anon key is public; every table below is either anon-READABLE by design
 -- (schedule, roster/config, time off, availability, east feed, versions) or
@@ -26,10 +26,10 @@
 -- call_offers + call_periods, offer_status(), guards OF001/OF002/OF003, authenticated-only RLS (never anon).
 -- Revision 2026-09-23 g (sql/migrations/2026-09-23-offer-modes.sql): call_periods.offer_modes jsonb
 -- {person_id: 'exhaustive' | 'preferred'}; absent = 'preferred' (Faraz 9/22 evening).
--- LIVE DIFFERS FROM THIS FILE since 2026-09-23 (audit RLS-2): claim_open_slot and call_offers_guard are live as the bodies in
--- sql/migrations/2026-09-23-claim-offer.sql (branch feat/offers, not yet merged). Do NOT re-run this file
--- wholesale until that mirror lands: CREATE OR REPLACE would silently revert claim_open_slot's claim-as-offer write.
--- test/schema.test.js fails closed the moment that migration file exists here without its bodies mirrored below.
+-- Revision 2026-09-23 h (Prompt 14 part 2c, sql/migrations/2026-09-23-claim-offer.sql, applied live 9/23 07:05Z): a claim is
+-- an offer made on the spot - claim_open_slot() upserts the claimer's call_offers row (none for a rules_only claimer; the
+-- audit detail carries offer true/false) and call_offers_guard() skips OFFER_FROZEN while silvis.claim_in_progress is on.
+-- The 2026-09-22 claim-open-slot migration stays frozen as applied; test/schema.test.js mirrors both bodies from this file.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -490,6 +490,7 @@ declare
   my_name   text;
   vac       text;
   new_ver   integer;
+  wrote_offer boolean := false;   -- P2 review: false for a rules_only claimer (no call_offers row)
 begin
   if auth.uid() is null or me is null then
     raise exception 'CLAIM_NOT_LINKED: sign in with an account that is linked to a roster entry to take a shift' using errcode = 'CL001';
@@ -559,6 +560,25 @@ begin
      returning version into new_ver;
   end if;
 
+  -- Prompt 14 P2 (9/23): a claim is an offer made on the spot - the record stays honest. One row per person and
+  -- day: the claimed role, entered by the claimer, source 'app', no note. An existing offer in the same role is
+  -- left as it was; one in the other role becomes 'either'. The freeze guard (OFFER_FROZEN) is bypassed for this
+  -- transaction-local write only - the period closed before the schedule was published; CLAIM_PAST and
+  -- CLAIM_VACATION above already enforce what OF001 / OF002 would.
+  -- Review 9/23: NOT for a claimer listed in rules_only_ids of the period containing the day - one offer row
+  -- would make offer_status() read 'submitted' for his whole period (see the header). Outside every period the
+  -- row is written like any other offer (it is then a plain dated availability row for the engine).
+  if not exists (select 1 from public.call_periods p where p_day between p.start_day and p.end_day and p.rules_only_ids ? me) then
+    perform set_config('silvis.claim_in_progress', 'on', true);
+    insert into public.call_offers (person_id, day, role_pref, note, entered_by, source)
+    values (me, p_day, p_role, null, me, 'app')
+    on conflict (person_id, day) do update
+       set role_pref  = case when public.call_offers.role_pref = excluded.role_pref then public.call_offers.role_pref else 'either' end,
+           updated_at = now();
+    perform set_config('silvis.claim_in_progress', '', true);
+    wrote_offer := true;
+  end if;
+
   -- Display name from the roster blob (last name); falls back to the id.
   select r->>'name' into my_name
     from public.call_schedule_data c, jsonb_array_elements(coalesce(c.data->'roster', '[]'::jsonb)) r
@@ -567,7 +587,7 @@ begin
   my_name := coalesce(nullif(my_name, ''), me);
 
   insert into public.audit_log (actor_id, actor_name, action, detail)
-  values (me, my_name, 'schedule.claim', jsonb_build_object('day', p_day, 'role', p_role, 'person', me, 'version', new_ver));
+  values (me, my_name, 'schedule.claim', jsonb_build_object('day', p_day, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer));
 
   -- In-app feed row: the claimer sees it through data.surgeon_id, the scheduler sees everything.
   insert into public.notifications (type, title, message, data)
@@ -668,7 +688,7 @@ begin
   if exists (select 1 from public.time_off t where t.person_id = new.person_id and new.day between t.start_date and t.end_date) then
     raise exception 'OFFER_ON_VACATION: % is inside a vacation of %', new.day, new.person_id using errcode = 'OF002';
   end if;
-  if not public.silvis_is_sched() then
+  if not public.silvis_is_sched() and coalesce(current_setting('silvis.claim_in_progress', true), '') <> 'on' then
     select p.label, p.offers_close_at into frozen
       from public.call_periods p
      where new.day between p.start_day and p.end_day and p.offers_close_at <= today_c
