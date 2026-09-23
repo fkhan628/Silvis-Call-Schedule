@@ -763,7 +763,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   });
   check("empty-schedule note and legend say OPEN is today onward", () => {
     assert.ok(src.includes("No schedule days in the database yet - every day from today shows OPEN."), "empty-schedule note");
-    assert.ok(src.includes('<span style={{color:"#c04040",fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>'), "legend");
+    // TH: the legend's OPEN is the theme's red token (T.open = #B91C1C light / #F06060 dark), same wording.
+    assert.ok(src.includes('<span style={{color:T.open,fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>'), "legend");
     assert.strictEqual(count("= nobody assigned</span>"), 0, "old legend wording remains");
   });
   check("REASON_WORDS glosses the 9/22 soft vocabulary (weekend-primary/backup, window-week targets, consecutive-primary, long-run) plus derived-lock-held, and softTag falls back to it", () => {
@@ -864,6 +865,135 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('" Days with a held slot from the start on: " + laterText + " - locked slots stay as they are while \'respect locks\' is on; the open slots on those days are filled."'), "held-slot days phrase");
     assert.strictEqual(count("Locked days on file from the start on"), 0, "old 'Locked days on file' phrase remains");
     assert.ok(src.includes("genStart={genStart} genFirstOpenDay={genFirstOpenDay}"), "GeneratePanel receives genStart and genFirstOpenDay");
+  });
+
+  /* ---------------- TH. theme pins (Prompt 12 items O.1-O.3 + R; O.4 superseded by R) ---------------- */
+  console.log("\n[TH] theme - Illini navy structure, orange accent, orange opening, SSC icons");
+  const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'])\/\/[^\n]*/g, "$1").replace(/<!--[\s\S]*?-->/g, "");
+  const readRoot = (f) => fs.readFileSync(path.join(ROOT, f), "utf8");
+  const stylesSrc = readRoot("app-styles.js");
+  const manifest = JSON.parse(readRoot("manifest.json"));
+  let styles = null;
+  check("app-styles.js exports THEME / SURGEON_COLOR_BY_ID / OUTSIDE_SURGEON_COLOR / OPENING / rosterColors / rosterNameColor to Node", () => {
+    styles = require(path.join(ROOT, "app-styles.js"));
+    for (const k of ["THEME", "SURGEON_COLOR_BY_ID", "OUTSIDE_SURGEON_COLOR", "OPENING", "rosterColors", "rosterNameColor"]) assert.ok(styles && styles[k], "missing export " + k);
+  });
+  check("O.1 light tokens carry the exact hex values (navy #13294B, accent #FF5F05, orange text #C2410C, tint #FFE8DB, page #F6F8FB, card #FFFFFF, text #1F2A3A, muted #5B6B82, OPEN #B91C1C)", () => {
+    const L = styles.THEME.light;
+    assert.deepStrictEqual(
+      { navy: L.navy, accent: L.accent, accentText: L.accentText, accentTint: L.accentTint, bg: L.bg, surface: L.surface, text: L.text, muted: L.muted, open: L.open, onAccent: L.onAccent },
+      { navy: "#13294B", accent: "#FF5F05", accentText: "#C2410C", accentTint: "#FFE8DB", bg: "#F6F8FB", surface: "#FFFFFF", text: "#1F2A3A", muted: "#5B6B82", open: "#B91C1C", onAccent: "#13294B" });
+  });
+  check("O.2 dark tokens carry the exact hex values (bg #0B1A33, surface #13294B, text #E6ECF5, accent #FF8A4C, muted #9FB0C8)", () => {
+    const D = styles.THEME.dark;
+    assert.deepStrictEqual({ bg: D.bg, surface: D.surface, text: D.text, accent: D.accent, muted: D.muted }, { bg: "#0B1A33", surface: "#13294B", text: "#E6ECF5", accent: "#FF8A4C", muted: "#9FB0C8" });
+    assert.deepStrictEqual(Object.keys(D).sort(), Object.keys(styles.THEME.light).sort(), "light and dark define the same token names");
+  });
+  check("O.3 per-surgeon colours are a table keyed by roster ID (s1 navy #1F3A6B, s2 orange #D9561A, s3 teal #0F766E, s4 plum #6B3FA0, s5 olive #6B7F1A, s6 slate #475569), never by name in code", () => {
+    const M = styles.SURGEON_COLOR_BY_ID;
+    assert.deepStrictEqual(Object.keys(M), ["s1", "s2", "s3", "s4", "s5", "s6"]);
+    assert.deepStrictEqual(Object.fromEntries(Object.keys(M).map(k => [k, M[k].tx])), { s1: "#1F3A6B", s2: "#D9561A", s3: "#0F766E", s4: "#6B3FA0", s5: "#6B7F1A", s6: "#475569" });
+    for (const k of Object.keys(M)) for (const f of ["tx", "bd", "tg", "dk"]) assert.match(M[k][f], /^#[0-9A-F]{6}$/, `${k}.${f}`);
+    const code = stripComments(stylesSrc);
+    for (const nm of ["Khan", "Burchett", "Acton", "Philip", "Fierce", "Sarkar", "FAK", "MAB", "BDA", "AFP", "SRK"]) assert.ok(!new RegExp('["\']?' + nm + '["\']?\\s*:').test(code), "colour table keyed by " + nm);
+    assert.strictEqual((stylesSrc.match(/\bSURGEON_COLOR_BY_CODE\b/g) || []).length, 0, "app-styles.js must not read the code-keyed Davenport table");
+  });
+  check("O.3 outside surgeons: grey #737373 with a dashed border, resolved by roster type through rosterColors(entry)", () => {
+    const X = styles.OUTSIDE_SURGEON_COLOR;
+    assert.strictEqual(X.tx, "#737373"); assert.strictEqual(X.dashed, true);
+    assert.strictEqual(styles.rosterColors({ id: "x9", type: "external", name: "Atwell" }, 0), X);
+    assert.strictEqual(styles.rosterColors({ id: "s2", name: "Burchett" }, 1), styles.SURGEON_COLOR_BY_ID.s2);
+    assert.strictEqual(styles.rosterColors({ id: "s7", name: "Newhire" }, 6).tx !== undefined, true, "an unpinned roster id still gets a colour");
+    assert.strictEqual(styles.rosterNameColor(styles.SURGEON_COLOR_BY_ID.s1, false), "#1F3A6B");
+    assert.strictEqual(styles.rosterNameColor(styles.SURGEON_COLOR_BY_ID.s1, true), styles.SURGEON_COLOR_BY_ID.s1.dk);
+  });
+  check("index-source.html resolves every surgeon colour through rosterColors / rosterNameColor (no surgeonColors / surgeonTextColor by name) and the dk* variables come from THEME", () => {
+    assert.strictEqual(count("surgeonColors("), 0, "index-source.html still calls config.js surgeonColors(name)");
+    assert.strictEqual(count("surgeonTextColor("), 0, "index-source.html still calls helpers.js surgeonTextColor(code)");
+    assert.ok(count("rosterColors(") >= 3, "rosterColors call sites (grid/colorOf, audit, painter)");
+    assert.ok(src.includes('const T = THEME[dk ? "dark" : "light"];'), "T = THEME[dark|light]");
+    for (const v of ["const dkBg = T.bg;", "const dkText = T.text;", "const dkSubtext = T.muted;", "const dkCardBorder = T.border;"]) assert.ok(src.includes(v), "missing " + v);
+  });
+  check("R.2 <meta name=\"theme-color\"> is #FF5F05 and manifest.json has theme_color + background_color #FF5F05 with name / short_name / both icons kept", () => {
+    assert.ok(src.includes('<meta name="theme-color" content="#FF5F05">'), "meta theme-color");
+    assert.strictEqual(manifest.theme_color, "#FF5F05");
+    assert.strictEqual(manifest.background_color, "#FF5F05");
+    assert.strictEqual(manifest.name, "Silvis Surgical Care Call Schedule");
+    assert.strictEqual(manifest.short_name, "Silvis Call");
+    assert.deepStrictEqual(manifest.icons.map(i => i.src + " " + i.sizes + " " + i.purpose), ["icon-192.png 192x192 any maskable", "icon-512.png 512x512 any maskable"]);
+  });
+  check("R.1 the three icon files are the supplied SSC tiles byte-for-byte (sha256 de6f32a6c6cc / 4a712c33e8ca / 55c55e57ad28)", () => {
+    const sha = (f) => require("crypto").createHash("sha256").update(fs.readFileSync(path.join(ROOT, f))).digest("hex");
+    assert.deepStrictEqual({ "icon-512.png": sha("icon-512.png").slice(0, 12), "icon-192.png": sha("icon-192.png").slice(0, 12), "apple-touch-icon.png": sha("apple-touch-icon.png").slice(0, 12) },
+      { "icon-512.png": "de6f32a6c6cc", "icon-192.png": "4a712c33e8ca", "apple-touch-icon.png": "55c55e57ad28" });
+  });
+  check("R.3 the opening gradient is the orange #FF5F05 -> #E8520A with white text, defined once (OPENING) and used by the sign-in / biometric / loading tiles, the opening buttons + links and the crash screen", () => {
+    assert.deepStrictEqual({ start: styles.OPENING.start, end: styles.OPENING.end, text: styles.OPENING.text }, { start: "#FF5F05", end: "#E8520A", text: "#FFFFFF" });
+    assert.strictEqual(styles.OPENING.gradient, "linear-gradient(135deg,#FF5F05,#E8520A)");
+    assert.ok(count("OPENING.gradient") >= 5, "opening tiles + crash button use OPENING.gradient (found " + count("OPENING.gradient") + ")");
+    assert.ok(count("css.cta") >= 4, "the sign-in / create / reset / set-password / biometric buttons use css.cta (found " + count("css.cta") + ")");
+    assert.ok(count("color:T.accentText") + count("color: T.accentText") >= 4, "opening links use the orange text token");
+  });
+  check("R.4 no Davenport blue (#1a6fa8 / #2488c8), old theme green (1f7a5c) or 'DSG' outside comments in index-source.html, app-styles.js, manifest.json, config.js, helpers.js", () => {
+    const hits = [];
+    for (const f of ["index-source.html", "app-styles.js", "manifest.json", "config.js", "helpers.js"]) {
+      const code = stripComments(readRoot(f));
+      for (const needle of ["#1a6fa8", "#2488c8", "1f7a5c", "DSG"]) {
+        const n = (code.match(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")) || []).length;
+        if (n) hits.push(`${f}: ${needle} x${n}`);
+      }
+    }
+    assert.deepStrictEqual(hits, []);
+  });
+  check("O.1 in-app structure: header bar / nav / primary buttons / card titles are navy tokens, the today ring + active tab underline + count badges are the orange accent, OPEN pills are T.open", () => {
+    assert.ok(stylesSrc.includes("hdr: { background:LIGHT.navy"), "css.hdr background is the navy token");
+    assert.ok(stylesSrc.includes("cardT: { fontSize:13, fontWeight:700, color:LIGHT.title"), "css.cardT uses the navy title token");
+    assert.ok(stylesSrc.includes("borderBottom:`2px solid ${a?(accent||LIGHT.accent)"), "active tab underline is the accent (the caller passes the theme accent)");
+    assert.strictEqual(count("css.tab(view===k, T.accent)") + count("css.tab(showNotifs, T.accent)"), 2, "both nav call sites pass T.accent");
+    assert.ok(src.includes('border: isToday ? "2px solid " + T.accent'), "today ring is the accent");
+    assert.ok(src.includes('className="cal-pill cal-open" style={{color:T.open'), "OPEN pill uses T.open");
+    assert.ok(src.includes("<span>orange outline = today</span>"), "legend names the orange outline");
+    assert.strictEqual(count("blue outline = today"), 0);
+  });
+  // Review fixes (wave 9 review of TH).
+  const ratio = (a, b) => { const lum = (hex) => { const c = [1, 3, 5].map(i => { let v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }; const la = lum(a), lb = lum(b); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); };
+  check("review: every css.badge call passes the roster entry (never x.name); the two pill buttons carry data-pill; the dark sheet's generic button rule excludes [data-pill] / [data-tab] / the Alerts bell instead of listing tint literals", () => {
+    assert.strictEqual((src.match(/css\.badge\([^)]*\.name\)/g) || []).length, 0, "css.badge called with a surgeon NAME (falls through to the fallback colours)");
+    assert.strictEqual(count('data-pill="1"'), 2, ".ics download buttons + calendar-sync URL buttons carry data-pill");
+    assert.ok(src.includes('button:where(:not([data-pill]):not([data-tab]):not([aria-label="Notifications"])) { color: #C9D6E8 !important; }'), "generic dark button rule keyed on data-pill / data-tab");
+    assert.strictEqual(count(':not([style*="background: rgb('), 0, "tint-literal :not() clauses remain in the dark sheet");
+  });
+  check("review: the Fairness bars use theme tokens (T.barTrack / T.barStart / T.barEnd) - TotalsCard resolves THEME by dk, THEME.light is never hard-wired in the JSX - and the dark fill clears 3:1 on its track", () => {
+    assert.strictEqual(count("THEME.light."), 0, "THEME.light hard-wired in the JSX");
+    const tc = src.slice(src.indexOf("function TotalsCard("), src.indexOf("function TotalsCard(") + 600);
+    assert.ok(tc.includes('const T = THEME[dk ? "dark" : "light"];'), "TotalsCard resolves T from dk");
+    assert.ok(src.includes('data-testid="fairness-track" style={{ flex: "1 1 220px", position: "relative", height: 18, background: T.barTrack'), "track uses T.barTrack");
+    assert.ok(src.includes('data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`'), "fill uses T.barStart -> T.barEnd");
+    for (const th of ["light", "dark"]) { const T = styles.THEME[th]; for (const k of ["barTrack", "barStart", "barEnd"]) assert.match(T[k] || "", /^#[0-9A-F]{6}$/, th + "." + k);
+      assert.ok(ratio(T.barStart, T.barTrack) >= 3, `${th} bar start ${T.barStart} on track ${T.barTrack} = ${ratio(T.barStart, T.barTrack).toFixed(2)}:1`);
+      assert.ok(ratio(T.barEnd, T.barTrack) >= 3, `${th} bar end ${T.barEnd} on track ${T.barTrack} = ${ratio(T.barEnd, T.barTrack).toFixed(2)}:1`); }
+    assert.ok(ratio(styles.THEME.light.onAccent, styles.THEME.light.accent) >= 4.5, "light count-badge digits on the accent read as text (>= 4.5:1)");
+  });
+  check("review: exports resolve colours through rosterColors(entry, idx) (helpers.js exportColorsFor), app-styles.js no longer rebinds config.js surgeonColors; in one context an id-keyed entry gets its table colour and an external entry grey + dashed", () => {
+    assert.strictEqual((stripComments(stylesSrc).match(/\bsurgeonColors\s*=/g) || []).length, 0, "app-styles.js rebinds the config.js surgeonColors declaration");
+    const hSrc = readRoot("helpers.js");
+    assert.ok(hSrc.includes('if (typeof rosterColors === "function" && entry) {'), "exportColorsFor tries rosterColors first");
+    assert.ok(hSrc.includes("rosterColors(entry, idx)"), "exportColorsFor passes the roster entry");
+    const vm = require("vm"); const ctx = vm.createContext({ console });
+    vm.runInContext(stylesSrc, ctx); vm.runInContext(hSrc, ctx);
+    const s1 = vm.runInContext('exportColorsFor({ id: "s1", code: "FAK", name: "Khan" }, 3)', ctx);
+    const ext = vm.runInContext('exportColorsFor({ id: "x1", type: "external", code: "ATW", name: "Atwell" }, 0)', ctx);
+    assert.strictEqual(s1.tx, "#1F3A6B", "s1 export pill is the id-keyed navy");
+    assert.strictEqual(ext.tx, "#737373", "external export pill is grey"); assert.strictEqual(ext.dashed, true);
+    assert.ok(hSrc.includes("border-style:dashed"), "the share page pill / legend swatch go dashed for an outside surgeon");
+    const H = require(path.join(ROOT, "helpers.js"));
+    assert.ok(H.exportColorsFor({ id: "s1" }, 0).tx, "Node without app-styles.js still gets a colour (the export palette)");
+  });
+  check("review: the grid's weekend header / bracket and the unread-notification tint are theme tokens (no off-palette blues #3d6a8c / #a9c4da / #f0f8ff / #c0d8f0)", () => {
+    for (const hex of ["#3d6a8c", "#a9c4da", "#f0f8ff", "#c0d8f0"]) assert.strictEqual(count(hex), 0, hex + " remains");
+    assert.ok(src.includes('color: i >= 4 ? (dk ? T.muted : T.title) : dkSubtext'), "weekend header text is a token");
+    assert.ok(src.includes('borderTop: "2px solid " + T.navyMuted'), "weekend bracket is T.navyMuted");
+    assert.ok(src.includes('background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`'), "unread notification uses the accent tint + accent border");
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Silvis Call">
-  <meta name="theme-color" content="#1f7a5c">
+  <meta name="theme-color" content="#FF5F05">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
@@ -18,7 +18,7 @@
   <title>Silvis Call Schedule</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #f0f2f5; overflow-x: hidden; }
+    body { background: #F6F8FB; overflow-x: hidden; }
     #root { min-height: 100vh; }
     /* Print-friendly styles */
     @media print {
@@ -39,8 +39,8 @@
        inline so dark mode's selectors keep working. */
     .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
     .cal-hdr { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; padding: 4px 0; }
-    .cal-cell { min-height: 84px; border: 1px solid #e0e4ea; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
-    .cal-cell:focus-visible { outline: 2px solid #1a6fa8; outline-offset: 1px; }
+    .cal-cell { min-height: 84px; border: 1px solid #DCE3EC; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
+    .cal-cell:focus-visible { outline: 2px solid #FF5F05; outline-offset: 1px; }
     .cal-line { display: flex; align-items: center; gap: 3px; margin-top: 2px; min-width: 0; }
     .cal-pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; padding: 0 5px; font-weight: 600; border: 1px solid transparent; }
     .cal-code { display: none; }
@@ -57,7 +57,7 @@
     .cal-cell.cal-preview { outline: 2px dashed #7a4fbf; outline-offset: -2px; background-image: repeating-linear-gradient(135deg, rgba(122,79,191,0.08) 0 6px, transparent 6px 12px) !important; }
     .cal-preview-tag { position: absolute; bottom: 2px; left: 4px; font-size: 8px; font-weight: 800; letter-spacing: 0.6px; color: #7a4fbf; }
     .setup-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .setup-table th { text-align: left; padding: 6px 8px; color: #5a6a78; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .setup-table th { text-align: left; padding: 6px 8px; color: #5B6B82; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
     .setup-table td { padding: 5px 8px; border-top: 1px solid #e8ecf0; vertical-align: top; }
     .setup-table input[type="text"], .setup-table input[type="number"], .setup-table input[type="date"], .setup-table select { font-size: 12px; padding: 3px 6px; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
@@ -87,7 +87,7 @@
          a right-edge shade + caption say so, because the action column
          (Delete / Remove / Save / coverage) sits past the edge. */
       .table-wrap { background: linear-gradient(90deg, #ffffff 30%, rgba(255,255,255,0)), linear-gradient(90deg, rgba(255,255,255,0), #ffffff 70%) 100% 0, radial-gradient(farthest-side at 0 50%, rgba(0,0,0,0.22), rgba(0,0,0,0)), radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,0.22), rgba(0,0,0,0)) 100% 0; background-repeat: no-repeat; background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%; background-attachment: local, local, scroll, scroll; }
-      .table-wrap::after { content: "swipe sideways for more columns"; display: block; font-size: 10px; color: #7a8a98; padding: 3px 8px; font-style: italic; }
+      .table-wrap::after { content: "swipe sideways for more columns"; display: block; font-size: 10px; color: #5B6B82; padding: 3px 8px; font-style: italic; }
       .setup-table input[type="text"] { max-width: 150px !important; }
       input[type="checkbox"] { width: 20px; height: 20px; }
       .trade-pick { width: 100% !important; }
@@ -3306,12 +3306,15 @@ function CallSchedule() {
 
   // --- Dark Mode Styles ---
   const dk = darkMode;
-  const dkBg = dk ? "#1a1a2e" : "#f0f2f5";
-  const dkCardBorder = dk ? "#2a3a5e" : "#e0e4ea";
-  const dkText = dk ? "#e0e0f0" : "#2c3e50";
-  const dkSubtext = dk ? "#8a8aaa" : "#7a8a98";
-  const dkHdr = dk ? "linear-gradient(180deg,#16213e,#1a1a2e)" : "linear-gradient(180deg,#ffffff,#f8f9fb)";
-  const dkInp = dk ? {background:"#0f3460",border:"1px solid #2a3a5e",color:"#e0e0f0"} : {};
+  // Theme tokens (app-styles.js THEME; Prompt 12 items O + R): the dk* names below stay for the
+  // many call sites that read them; new code reads T directly.
+  const T = THEME[dk ? "dark" : "light"];
+  const dkBg = T.bg;
+  const dkCardBorder = T.border;
+  const dkText = T.text;
+  const dkSubtext = T.muted;
+  const dkHdr = T.navy;
+  const dkInp = dk ? {background:T.inputBg,border:"1px solid "+T.inputBorder,color:T.text} : {};
 
   // --- Today --- ONE notion of today: the Central date (helpers.js
   // todayCentral) drives the today ring, the coverage strip and the OPEN
@@ -3370,9 +3373,9 @@ function CallSchedule() {
 
   const Badge = ({id,small}) => {
     const s=sMap[id]; if(!s) return <span style={{color:"#a0a8b0",fontSize:10}}>-</span>;
-    return <span style={{...css.badge(s.idx, s.name),fontSize:small?10:11,padding:small?"1px 6px":"2px 9px"}}>{s.name}</span>;
+    return <span style={{...css.badge(s.idx, s),fontSize:small?10:11,padding:small?"1px 6px":"2px 9px"}}>{s.name}</span>;
   };
-  const OpenTag = () => <span style={{color:"#c04040",fontWeight:800,fontSize:11,letterSpacing:0.5}}>OPEN</span>;
+  const OpenTag = () => <span style={{color:T.open,fontWeight:800,fontSize:11,letterSpacing:0.5}}>OPEN</span>;
   // Before the first load the schedule map is empty: a placeholder, never
   // OPEN, so a viewer cannot read the loading state as a false alarm (vis-008).
   const LoadingTag = () => <span data-testid="loading-holder" style={{color:dkSubtext,fontStyle:"italic",fontSize:11}}>loading</span>;
@@ -3401,11 +3404,11 @@ function CallSchedule() {
   const nextMonth = () => { if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); } else setCalMonth(m => m + 1); };
   const goToday = () => { const n = parse(todayCentral()); setCalMonth(n.getMonth()); setCalYear(n.getFullYear()); };
   const toggleCalFilter = (id) => setCalSurgeonFilters(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
-  const colorOf = (id) => surgeonColors(codeOf(id), sMap[id] ? sMap[id].idx : 0);
+  const colorOf = (id) => rosterColors(sMap[id], sMap[id] ? sMap[id].idx : 0);
   // Text colour for a surgeon's name written straight on the page (week rows,
-  // vacation dots): tx in light mode, the lightened dark palette in dark mode
-  // (helpers.js surgeonTextColor; vis-003). Pills keep tg/tx in both modes.
-  const textColorOf = (id) => surgeonTextColor(colorOf(id), codeOf(id), dk);
+  // vacation dots): tx in light mode, the per-id dk colour in dark mode
+  // (app-styles.js rosterNameColor; vis-003). Pills keep tg/tx in both modes.
+  const textColorOf = (id) => rosterNameColor(colorOf(id), dk);
   // Vacation dots: who is off on each visible day (time_off via the vacations map).
   const vacByDay = useMemo(() => {
     const map = {};
@@ -3863,9 +3866,9 @@ function CallSchedule() {
   const lastScheduledDay = Object.keys(schedule).sort().slice(-1)[0] || null;
 
   const inp = { ...css.inp, ...dkInp };
-  const label = { fontSize:10, color:"#7a8a98", fontWeight:600, textTransform:"uppercase", letterSpacing:0.5, display:"block", marginBottom:2 };
-  const muted = { fontSize:12, color:"#7a8a98" };
-  const sectionNote = { fontSize:12, color:"#5a6a78", margin:"0 0 10px", lineHeight:1.5 };
+  const label = { fontSize:10, color:"#5B6B82", fontWeight:600, textTransform:"uppercase", letterSpacing:0.5, display:"block", marginBottom:2 };
+  const muted = { fontSize:12, color:"#5B6B82" };
+  const sectionNote = { fontSize:12, color:"#5B6B82", margin:"0 0 10px", lineHeight:1.5 };
   const dowShort = (d) => DAY_HDR[parse(d).getDay()];
   const isWeekendDay = (d) => { const w = parse(d).getDay(); return w === 0 || w === 5 || w === 6; };
 
@@ -3877,7 +3880,7 @@ function CallSchedule() {
     return (
       <div style={{display:"flex",flexDirection:"column",gap:4}}>
         {rows.map(r => (
-          <div key={r.id || r.pid + r.vs} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:dk?"#16213e":"#f8f9fb",borderRadius:6,border:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
+          <div key={r.id || r.pid + r.vs} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:dk?"#13294B":"#f8f9fb",borderRadius:6,border:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
             <Badge id={r.pid} small/>
             {editVac && editVac.rowId === r.id ? (
               <>
@@ -3971,7 +3974,7 @@ function CallSchedule() {
       )}
       {/* Non-blocking toast */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...(paintSheet ? { top: 12 } : { bottom: 24 }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1a2a3a",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...(paintSheet ? { top: 12 } : { bottom: 24 }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           {toast.msg}
         </div>
       )}
@@ -3980,15 +3983,15 @@ function CallSchedule() {
       {showPublishDialog && !isPublicMode && (
         <div data-testid="publish-dialog" onClick={closePublishDialog} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,padding:24,maxWidth:520,width:"100%",maxHeight:"85vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.2)"}}>
-            <h3 style={{margin:"0 0 8px",fontSize:16,color:"#1a2a3a"}}>Publish schedule changes</h3>
-            <p style={{fontSize:13,color:"#5a6a78",margin:"0 0 12px",lineHeight:1.5}}>
+            <h3 style={{margin:"0 0 8px",fontSize:16,color:"#1F2A3A"}}>Publish schedule changes</h3>
+            <p style={{fontSize:13,color:"#5B6B82",margin:"0 0 12px",lineHeight:1.5}}>
               {publishChanges.length === 0 ? "Nothing has changed since the last publish." : `${publishChanges.length} change(s) since ${lastPublished?.at ? fmtAuditTime(lastPublished.at) : "the beginning"}:`}
             </p>
             {publishChanges.length > 0 && (
-              <div style={{maxHeight:260,overflowY:"auto",border:"1px solid #e0e4ea",borderRadius:6,padding:"8px 10px",marginBottom:12}}>
+              <div style={{maxHeight:260,overflowY:"auto",border:"1px solid #DCE3EC",borderRadius:6,padding:"8px 10px",marginBottom:12}}>
                 {describePublishDiff(publishChanges, nameOf).map(g => (
                   <div key={g.key} style={{marginBottom:8}}>
-                    <div style={{fontSize:11,fontWeight:700,color:"#1a6fa8",textTransform:"uppercase",letterSpacing:0.6,marginBottom:3}}>{g.label}</div>
+                    <div style={{fontSize:11,fontWeight:700,color:T.title,textTransform:"uppercase",letterSpacing:0.6,marginBottom:3}}>{g.label}</div>
                     {g.lines.map((l, i) => <div key={i} style={{fontSize:12,fontFamily:mono,color:"#3a4a58",lineHeight:1.5}}>{l.replace(" -> ", " \u2192 ")}</div>)}
                   </div>
                 ))}
@@ -3997,6 +4000,7 @@ function CallSchedule() {
             <label style={label}>Period label (subject line)</label>
             <input value={publishLabel} onChange={e=>setPublishLabel(e.target.value)} placeholder="e.g. Nov 2 - Jan 3" style={{...css.inp,width:"100%",marginBottom:16}}/>
             <p style={{fontSize:11.5,color:"#7a8a98",margin:"0 0 10px",lineHeight:1.5}}>The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept &amp; Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open.</p>
+            <p style={{fontSize:11.5,color:"#5B6B82",margin:"0 0 10px",lineHeight:1.5}}>The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that).</p>
             <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
               <button data-testid="publish-skip" onClick={closePublishDialog} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>Skip the notice</button>
               <button data-testid="publish-send" onClick={triggerPublishNotify} disabled={officeNotifBusy || publishChanges.length === 0} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:(officeNotifBusy || publishChanges.length === 0)?0.6:1}}>{officeNotifBusy?"Sending":"Send"}</button>
@@ -4013,34 +4017,45 @@ function CallSchedule() {
       )}
       {/* Update-available banner (version.json) */}
       {updateAvailable && !paintSheet && (
-        <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,bottom:0,zIndex:9998,background:"#1a2a3a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
+        <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,bottom:0,zIndex:9998,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
           <span>New version available ({updateAvailable})</span>
           <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Tap to reload</button>
           <button aria-label="Dismiss" onClick={()=>{ updateDismissedRef.current = updateAvailable; setUpdateAvailable(null); }} style={{background:"none",border:"none",color:"#8a9aa8",cursor:"pointer",fontSize:14,padding:"2px 6px"}}>x</button>
         </div>
       )}
       {darkMode && <style>{`
-        body { background: #1a1a2e !important; color: #e0e0f0 !important; }
-        div[style*="background: rgb(255, 255, 255)"], div[style*="background:#ffffff"], div[style*="background: #fff"] { background: #16213e !important; border-color: #2a3a5e !important; }
-        div[style*="background: linear-gradient"] { border-color: #2a3a5e !important; }
-        select, input[type="date"], input[type="number"], input[type="text"], input[type="password"], input[type="email"] { background: #0f3460 !important; border-color: #2a3a5e !important; color: #e0e0f0 !important; }
-        button { color: #c0c8d8 !important; }
+        /* Dark theme (Prompt 12 item O.2): deep navy page #0B1A33, surface #13294B, text #E6ECF5, muted #9FB0C8,
+           accent #FF8A4C. React serialises inline colours as rgb(), so the selectors below match the LIGHT
+           token literals in that form and re-paint them; the dk* variables / T tokens handle the rest. */
+        body { background: #0B1A33 !important; color: #E6ECF5 !important; }
+        div[style*="background: rgb(255, 255, 255)"] { background: #13294B !important; border-color: #24406B !important; }
+        div[style*="background: linear-gradient"] { border-color: #24406B !important; }
+        select, input[type="date"], input[type="number"], input[type="text"], input[type="password"], input[type="email"] { background: #0F2140 !important; border-color: #24406B !important; color: #E6ECF5 !important; }
+        /* roster pills rendered as buttons ([data-pill], their own tint + text colour) and the nav tabs / Alerts bell on the
+           navy bar (inline colours already theme-safe: active white, inactive #DCE5F2) keep their inline colour; :where()
+           keeps this rule at zero specificity so the gradient / orange-text button rules below still win */
+        button:where(:not([data-pill]):not([data-tab]):not([aria-label="Notifications"])) { color: #C9D6E8 !important; }
+        /* the light raised button (css.btn(false)) takes the dark raised surface */
+        button[style*="background: rgb(238, 242, 247)"] { background: #0F2140 !important; border-color: #24406B !important; }
         button[style*="background: linear-gradient"] { color: #fff !important; }
-        table { color: #c0c0d0 !important; }
-        th { color: #8a8aaa !important; }
-        td { color: #c0c0d0 !important; }
-        div[style*="color: rgb(42, 62, 80)"], div[style*="color:#2c3e50"], span[style*="color:#2c3e50"], p[style*="color:#2c3e50"] { color: #e0e0f0 !important; }
-        div[style*="color:#5a6a78"], span[style*="color:#5a6a78"], p[style*="color:#5a6a78"] { color: #9aa0b8 !important; }
-        div[style*="color:#7a8a98"], span[style*="color:#7a8a98"], p[style*="color:#7a8a98"], label[style*="color:#7a8a98"] { color: #7a80a0 !important; }
-        div[style*="color:#1a6fa8"], span[style*="color:#1a6fa8"] { color: #5aafe8 !important; }
-        div[style*="color:#4a5a68"], span[style*="color:#4a5a68"] { color: #b0b8c8 !important; }
-        div[style*="color:#8a94a0"], span[style*="color:#8a94a0"] { color: #7080a0 !important; }
-        div[style*="background:#f8f9fb"], div[style*="background:#f0f2f5"], div[style*="background:#f4f6f8"] { background: #16213e !important; border-color: #2a3a5e !important; }
+        /* the navy primary gradient and an active navy mini / filter button lift to a lighter navy on the dark surface */
+        button[style*="linear-gradient(135deg, rgb(19, 41, 75)"] { background: linear-gradient(135deg,#1F3A6B,#2E5090) !important; border-color: #2E5090 !important; }
+        button[style*="background: rgb(19, 41, 75)"] { background: #2E5090 !important; border-color: #2E5090 !important; color: #fff !important; }
+        table { color: #C9D6E8 !important; }
+        th { color: #9FB0C8 !important; }
+        td { color: #C9D6E8 !important; }
+        /* light token literals: body text, muted text, navy titles, orange text, OPEN red, page-tint backgrounds */
+        div[style*="color: rgb(31, 42, 58)"], span[style*="color: rgb(31, 42, 58)"], p[style*="color: rgb(31, 42, 58)"], h2[style*="color: rgb(31, 42, 58)"], h3[style*="color: rgb(31, 42, 58)"], label[style*="color: rgb(31, 42, 58)"] { color: #E6ECF5 !important; }
+        div[style*="color: rgb(91, 107, 130)"], span[style*="color: rgb(91, 107, 130)"], p[style*="color: rgb(91, 107, 130)"], label[style*="color: rgb(91, 107, 130)"] { color: #9FB0C8 !important; }
+        div[style*="color: rgb(19, 41, 75)"], span[style*="color: rgb(19, 41, 75)"], strong[style*="color: rgb(19, 41, 75)"], h3[style*="color: rgb(19, 41, 75)"] { color: #C9D6E8 !important; }
+        span[style*="color: rgb(194, 65, 12)"], button[style*="color: rgb(194, 65, 12)"], div[style*="color: rgb(194, 65, 12)"] { color: #FF8A4C !important; }
+        /* T.accentText / T.accent already resolve to the dark orange; the generic button rule above must not grey them */
+        button[style*="color: rgb(255, 138, 76)"] { color: #FF8A4C !important; }
+        span[style*="color: rgb(185, 28, 28)"], div[style*="color: rgb(185, 28, 28)"] { color: #F06060 !important; }
+        div[style*="background: rgb(246, 248, 251)"], div[style*="background: rgb(238, 242, 247)"], div[style*="background: rgb(248, 249, 251)"] { background: #0F2140 !important; border-color: #24406B !important; }
         div[style*="border: 1px dashed"] { border-color: #3a4a6e !important; }
-        div[style*="color:#1a2a3a"], h1[style*="color:#1a2a3a"] { color: #e0e0f0 !important; }
-        label[style*="color:#5a6a78"], label[style*="color:#3a4a58"] { color: #9aa0b8 !important; }
-        span[style*="color:#1a8040"] { color: #40c060 !important; }
-        span[style*="color:#c04040"] { color: #f06060 !important; }
+        span[style*="color: rgb(26, 128, 64)"] { color: #40c060 !important; }
+        span[style*="color: rgb(192, 64, 64)"] { color: #f06060 !important; }
         /* vis-004: flagged table cells keep their warning colour under the td override above
            (over cap / over the max-consecutive rule / deviation from target) */
         td[data-flag="over"], span[data-flag="over"] { color: #f06060 !important; }
@@ -4056,48 +4071,48 @@ function CallSchedule() {
       {authLoading ? (
         <div style={{display:"flex",justifyContent:"center",alignItems:"center",minHeight:"60vh"}}>
           <div style={{textAlign:"center"}}>
-            <div style={{width:44,height:44,borderRadius:10,background:"linear-gradient(135deg,#1a6fa8,#2488c8)",display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:12}}>
+            <div style={{width:44,height:44,borderRadius:10,background:OPENING.gradient,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:12}}>
               <span style={{color:"#fff",fontSize:16,fontWeight:800,fontFamily:font}}>SSC</span>
             </div>
-            <p style={{fontSize:13,color:"#7a8a98"}}>Loading</p>
+            <p style={{fontSize:13,color:"#5B6B82"}}>Loading</p>
           </div>
         </div>
       ) : biometricPending && !isPublicMode ? (
         authBox(<div style={{textAlign:"center"}}>
-          <div style={{width:64,height:64,borderRadius:16,background:"linear-gradient(135deg,#1a6fa8,#2488c8)",display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:16}}>
+          <div style={{width:64,height:64,borderRadius:16,background:OPENING.gradient,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:16}}>
             <span style={{color:"#fff",fontSize:18,fontWeight:800,fontFamily:font}}>SSC</span>
           </div>
           <h2 style={{fontSize:18,fontWeight:700,color:dkText,margin:"0 0 4px"}}>Welcome back</h2>
-          <p style={{fontSize:12,color:"#7a8a98",margin:"0 0 16px"}}>{biometric.getStoredUser() || "Use biometric to unlock"}</p>
+          <p style={{fontSize:12,color:"#5B6B82",margin:"0 0 16px"}}>{biometric.getStoredUser() || "Use biometric to unlock"}</p>
           {authError && <div style={{fontSize:12,color:"#c04040",padding:"6px 10px",background:"#fce8e8",borderRadius:6,border:"1px solid #e8c0c0",marginBottom:10,textAlign:"left"}}>{authError}</div>}
           <button onClick={handleBiometricUnlock} disabled={authBusy}
-            style={{...css.btn(true),width:"100%",padding:"13px 16px",fontSize:15,fontWeight:700,marginBottom:10,opacity:authBusy?0.6:1}}>
+            style={{...css.cta,width:"100%",padding:"13px 16px",fontSize:15,fontWeight:700,marginBottom:10,opacity:authBusy?0.6:1}}>
             {authBusy ? "Verifying" : "Unlock with Face ID / Touch ID"}
           </button>
           <button onClick={()=>{setBiometricPending(false);setAuthError("");}}
-            style={{background:"none",border:"none",color:"#1a6fa8",fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>
+            style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>
             Use email and password instead
           </button>
         </div>)
       ) : !authUser && !isPublicMode ? (
         authBox(<>
           <div style={{textAlign:"center",marginBottom:20}}>
-            <div style={{width:48,height:48,borderRadius:10,background:"linear-gradient(135deg,#1a6fa8,#2488c8)",display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:10}}>
+            <div style={{width:48,height:48,borderRadius:10,background:OPENING.gradient,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:10}}>
               <span style={{color:"#fff",fontSize:18,fontWeight:800,fontFamily:font}}>SSC</span>
             </div>
             <h2 style={{fontSize:18,fontWeight:700,color:dkText,margin:"0 0 4px"}}>Silvis Call Schedule</h2>
-            <p style={{fontSize:12,color:"#7a8a98",margin:0}}>
+            <p style={{fontSize:12,color:"#5B6B82",margin:0}}>
               {authMode==="login" ? "Sign in to your account" : authMode==="signup" ? "Create your account" : authMode==="reset" ? "Reset your password" : "Set a new password"}
             </p>
           </div>
           {authMode==="newpassword" ? (
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
-              <p style={{fontSize:13,color:"#2c5a80",margin:0}}>Enter your new password below.</p>
+              <p style={{fontSize:13,color:T.text,margin:0}}>Enter your new password below.</p>
               <input type="password" placeholder="New password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               <input type="password" placeholder="Confirm new password" value={newPasswordConfirm} onChange={e=>setNewPasswordConfirm(e.target.value)}
                 onKeyDown={e=>{if(e.key==="Enter") submitNewPassword();}} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               {errBox(authError)}
-              <button onClick={submitNewPassword} disabled={authBusy} style={{...css.btn(true),width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>
+              <button onClick={submitNewPassword} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>
                 {authBusy ? "Updating" : "Update password"}
               </button>
             </div>
@@ -4108,16 +4123,16 @@ function CallSchedule() {
                   <div style={{fontSize:13,color:"#1a6030",padding:"12px 14px",background:"#e8f8e8",borderRadius:8,border:"1px solid #a0d8a0",lineHeight:1.5}}>
                     Password reset email sent. Check your inbox for a link to reset your password.
                   </div>
-                  <button onClick={()=>{setAuthMode("login");setResetSent(false);setResetEmail("");setAuthError("");}} style={{background:"none",border:"none",color:"#1a6fa8",fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",textAlign:"center"}}>Back to sign in</button>
+                  <button onClick={()=>{setAuthMode("login");setResetSent(false);setResetEmail("");setAuthError("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",textAlign:"center"}}>Back to sign in</button>
                 </>
               ) : (
                 <>
-                  <p style={{fontSize:13,color:"#5a6a78",margin:0}}>Enter the email address you signed up with. We'll send you a link to reset your password.</p>
+                  <p style={{fontSize:13,color:"#5B6B82",margin:0}}>Enter the email address you signed up with. We'll send you a link to reset your password.</p>
                   <input type="email" placeholder="Email address" value={resetEmail} onChange={e=>setResetEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&resetEmail) submitReset();}} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
                   {errBox(authError)}
-                  <button onClick={submitReset} disabled={authBusy} style={{...css.btn(true),width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>{authBusy ? "Sending" : "Send reset link"}</button>
+                  <button onClick={submitReset} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>{authBusy ? "Sending" : "Send reset link"}</button>
                   <div style={{textAlign:"center",marginTop:4}}>
-                    <button onClick={()=>{setAuthMode("login");setAuthError("");setResetEmail("");}} style={{background:"none",border:"none",color:"#1a6fa8",fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Back to sign in</button>
+                    <button onClick={()=>{setAuthMode("login");setAuthError("");setResetEmail("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Back to sign in</button>
                   </div>
                 </>
               )}
@@ -4128,19 +4143,19 @@ function CallSchedule() {
               <input type="email" placeholder="Email address" value={authEmail} onChange={e=>setAuthEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               <input type="password" placeholder="Password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               {authMode==="signup" && (
-                <p style={{fontSize:11.5,color:"#5a6a78",margin:0,lineHeight:1.5}}>Your account starts unlinked. The scheduler links it to your roster entry afterwards - you don't pick a name here.</p>
+                <p style={{fontSize:11.5,color:"#5B6B82",margin:0,lineHeight:1.5}}>Your account starts unlinked. The scheduler links it to your roster entry afterwards - you don't pick a name here.</p>
               )}
               {errBox(authError)}
-              <button onClick={handleAuthSubmit} disabled={authBusy} style={{...css.btn(true),width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>
+              <button onClick={handleAuthSubmit} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>
                 {authBusy ? "Please wait" : authMode==="login" ? "Sign in" : "Create account"}
               </button>
               <div style={{textAlign:"center",marginTop:4}}>
-                <button onClick={()=>{setAuthMode(m=>m==="login"?"signup":"login");setAuthError("");setAuthNotice("");}} style={{background:"none",border:"none",color:"#1a6fa8",fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>
+                <button onClick={()=>{setAuthMode(m=>m==="login"?"signup":"login");setAuthError("");setAuthNotice("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>
                   {authMode==="login" ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
                 </button>
                 {authMode==="login" && (
                   <div style={{marginTop:8}}>
-                    <button onClick={()=>{setAuthMode("reset");setAuthError("");}} style={{background:"none",border:"none",color:"#7a8a98",fontSize:11,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Forgot your password?</button>
+                    <button onClick={()=>{setAuthMode("reset");setAuthError("");}} style={{background:"none",border:"none",color:"#5B6B82",fontSize:11,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Forgot your password?</button>
                   </div>
                 )}
               </div>
@@ -4150,26 +4165,26 @@ function CallSchedule() {
       ) : <>
 
       {/* --- Header --- */}
-      <div style={{...css.hdr,background:dkHdr,borderBottom:`1px solid ${dkCardBorder}`}}>
+      <div data-testid="app-header" style={{...css.hdr,background:dkHdr,borderBottom:`1px solid ${dk ? T.border : T.navy}`}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:38,height:38,borderRadius:8,background:"linear-gradient(135deg,#1a6fa8,#2488c8)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:"0 2px 6px rgba(26,111,168,0.25)"}}>
+          <div style={{width:38,height:38,borderRadius:8,background:OPENING.gradient,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:"0 2px 6px rgba(255,95,5,0.3)"}}>
             <span style={{color:"#fff",fontSize:15,fontWeight:800,letterSpacing:-0.5,fontFamily:font}}>SSC</span>
           </div>
           <div>
-            <h1 style={{...css.h1,color:dkText}}>Silvis Call Schedule</h1>
+            <h1 style={{...css.h1,color:T.onNavy}}>Silvis Call Schedule</h1>
             <p style={css.sub}>
               {isPublicMode ? (
                 <>
-                  <span style={{color:"#7a8a98"}}>Read-only view</span>
+                  <span style={{color:T.navyMuted}}>Read-only view</span>
                   {blobTsRef.current && <> - Last updated: {new Date(blobTsRef.current).toLocaleString(undefined, {month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})}</>}
                   {!loaded && <> - Loading schedule</>}
                 </>
               ) : (
                 <>
                   Silvis Surgical Care
-                  {saveStatus && <span role="status" aria-live="polite" style={{marginLeft:8,color:saveError?"#c04040":"#1a8040",fontWeight:600,fontSize:11}}>{saveStatus}</span>}
-                  {loaded && !saveStatus && <span style={{marginLeft:8,color:"#a0a8b0",fontSize:10}}>Synced</span>}
-                  {!loaded && <span style={{marginLeft:8,color:"#6a7a88",fontSize:10}}>Connecting</span>}
+                  {saveStatus && <span role="status" aria-live="polite" style={{marginLeft:8,color:saveError?"#FF8A8A":"#7FD39A",fontWeight:600,fontSize:11}}>{saveStatus}</span>}
+                  {loaded && !saveStatus && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Synced</span>}
+                  {!loaded && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Connecting</span>}
                 </>
               )}
             </p>
@@ -4183,10 +4198,10 @@ function CallSchedule() {
             if (!mySurgeon) tabs = tabs.filter(([k]) => k !== "myschedule");
             const pendingTrades = myTradeRequests.filter(r=>r.status==="pending").length;
             return tabs.map(([k,l]) =>
-              <button key={k} data-tab={k} style={{...css.tab(view===k),position:"relative"}} onClick={()=>setView(k)}>
+              <button key={k} data-tab={k} style={{...css.tab(view===k, T.accent),position:"relative"}} onClick={()=>setView(k)}>
                 {l}
                 {k==="timeoff" && pendingTrades > 0 && (
-                  <span style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
+                  <span style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
                 )}
                 {k==="openshifts" && boardSlots.length > 0 && (
                   <span data-testid="openshifts-badge" title={boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "")} style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{boardSlots.length}</span>
@@ -4195,14 +4210,14 @@ function CallSchedule() {
             );
           })()}
           <button onClick={()=>{setShowNotifs(p=>!p); if(!showNotifs) markNotifsSeen();}} aria-label="Notifications"
-            style={{...css.tab(showNotifs),position:"relative",fontSize:12,padding:"5px 10px"}}>
+            style={{...css.tab(showNotifs, T.accent),position:"relative",fontSize:12,padding:"5px 10px"}}>
             Alerts
             {myUnreadCount > 0 && (
-              <span style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{myUnreadCount}</span>
+              <span style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{myUnreadCount}</span>
             )}
           </button>
           {scheduleHistory.length > 0 && isScheduler && (
-            <button onClick={undoLastChange} style={{...css.tab(false),fontSize:12,padding:"4px 10px",color:"#c09030"}} title={`Undo (${scheduleHistory.length} steps)`}>Undo</button>
+            <button onClick={undoLastChange} style={{...css.tab(false),fontSize:12,padding:"4px 10px",color:T.accent}} title={`Undo (${scheduleHistory.length} steps)`}>Undo</button>
           )}
         </div>}
       </div>
@@ -4213,7 +4228,7 @@ function CallSchedule() {
         {!isPublicMode && showNotifs && (
           <div style={{position:"absolute",top:0,right:14,width:340,maxHeight:400,overflowY:"auto",background:"#fff",border:"1px solid #dce2e8",borderRadius:10,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",zIndex:100,padding:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <span style={{fontSize:14,fontWeight:700,color:"#1a2a3a"}}>Notifications</span>
+              <span style={{fontSize:14,fontWeight:700,color:"#1F2A3A"}}>Notifications</span>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
                 {myNotifications.length > 0 && (
                   <button onClick={clearAllNotifications} style={{background:"none",border:"1px solid #e8c0c0",color:"#904040",borderRadius:5,padding:"2px 8px",fontSize:10,cursor:"pointer",fontFamily:font}}>Clear all</button>
@@ -4228,13 +4243,13 @@ function CallSchedule() {
               const targetTab = tabMap[n.type] || null;
               return (
               <div key={n.id} onClick={()=>{if(targetTab){setView(targetTab);setShowNotifs(false);markNotifsSeen();}}}
-                style={{padding:"8px 10px",marginBottom:6,borderRadius:6,cursor:targetTab?"pointer":"default",background:n.created_at > notifLastSeen ? "#f0f8ff" : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? "#c0d8f0" : "#e8ecf0"}`}}>
+                style={{padding:"8px 10px",marginBottom:6,borderRadius:6,cursor:targetTab?"pointer":"default",background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span style={{fontSize:12,fontWeight:600,color:"#1a2a3a"}}>{n.title}</span>
+                  <span style={{fontSize:12,fontWeight:600,color:"#1F2A3A"}}>{n.title}</span>
                   <span style={{fontSize:10,color:"#a0a8b0"}}>{new Date(n.created_at).toLocaleDateString()}</span>
                 </div>
-                <p style={{fontSize:12,color:"#5a6a78",margin:"3px 0 0",lineHeight:1.4}}>{n.message}</p>
-                {targetTab && <span style={{fontSize:10,color:"#1a6fa8",marginTop:3,display:"inline-block"}}>Tap to view</span>}
+                <p style={{fontSize:12,color:"#5B6B82",margin:"3px 0 0",lineHeight:1.4}}>{n.message}</p>
+                {targetTab && <span style={{fontSize:10,color:T.accentText,marginTop:3,display:"inline-block"}}>Tap to view</span>}
               </div>
               );
             })}
@@ -4252,7 +4267,7 @@ function CallSchedule() {
 
         {/* ================ SETUP (scheduler) - Prompt 6 Slice E ================ */}
         {view==="setup" && !isPublicMode && isScheduler && <>
-          <Collapsible css={css} ck="setup_issues" defaultOpen={true} title={<>Setup issues <span style={{fontWeight:400,fontSize:11,color:"#7a8a98"}}>- {setupIssues.length ? setupIssues.length + " warning(s)" : "none"}</span></>}>
+          <Collapsible css={css} ck="setup_issues" defaultOpen={true} title={<>Setup issues <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>- {setupIssues.length ? setupIssues.length + " warning(s)" : "none"}</span></>}>
             {setupIssues.length === 0 ? <p data-testid="setup-issues" style={{...muted,color:"#1a8040"}}>None.</p> : (
               <ul data-testid="setup-issues" style={{margin:0,paddingLeft:18,fontSize:12.5,color:"#7a5a20",lineHeight:1.7}}>{setupIssues.map(s => <li key={s}>{s}</li>)}</ul>
             )}
@@ -4274,7 +4289,7 @@ function CallSchedule() {
               <RulesEditor css={css} dk={dk} roster={surgeons} surgeonRules={surgeonRules || {}} groupRules={groupRules || {}} holidayNames={holidayNamesAll} onSaveSurgeon={saveSurgeonRules} onSaveGroup={saveGroupRules} showToast={showToast} today={todayStr}/>}
           </Collapsible>
 
-          <Collapsible css={css} ck="setup_availability" defaultOpen={false} title={<>Availability statements <span style={{fontWeight:400,fontSize:11,color:"#7a8a98"}}>- {availabilityRows.length} row(s)</span></>}>
+          <Collapsible css={css} ck="setup_availability" defaultOpen={false} title={<>Availability statements <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>- {availabilityRows.length} row(s)</span></>}>
             <AvailabilityCard css={css} rows={availabilityRows} roster={poolSurgeons} nameOf={nameOf} onAdd={addAvailabilityRows} onDelete={deleteAvailabilityRow} busy={availBusy} today={todayStr}/>
           </Collapsible>
 
@@ -4282,7 +4297,7 @@ function CallSchedule() {
             right={<button onClick={(e)=>{e.stopPropagation(); setPaintSheet(true);}} style={{...css.btn(false),padding:"3px 10px",fontSize:11}}>Paint month</button>}>
             <p style={sectionNote}>Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is.</p>
             {renderVacationForm(poolSurgeons)}
-            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#7a8a98",marginBottom:8,cursor:"pointer"}}>
+            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
               <input type="checkbox" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past vacations
             </label>
             {renderVacationList(surgeons.map(s => s.id), true)}
@@ -4317,10 +4332,10 @@ function CallSchedule() {
             {officeContacts.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No office contacts yet.</p> : (
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {officeContacts.map(c => (
-                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:c.active?"#fff":"#f4f6f8",borderRadius:6,border:"1px solid #e0e4ea",opacity:c.active?1:0.6}}>
+                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:c.active?"#fff":"#f4f6f8",borderRadius:6,border:"1px solid #DCE3EC",opacity:c.active?1:0.6}}>
                     <div style={{flex:"1 1 auto",minWidth:0}}>
-                      <div style={{fontSize:13,fontWeight:600,color:"#2c3e50"}}>{c.name}{c.role ? <span style={{...muted,marginLeft:6}}>{c.role}</span> : null}</div>
-                      <div style={{fontSize:11,color:"#7a8a98",fontFamily:mono,overflow:"hidden",textOverflow:"ellipsis"}}>{c.email}</div>
+                      <div style={{fontSize:13,fontWeight:600,color:"#1F2A3A"}}>{c.name}{c.role ? <span style={{...muted,marginLeft:6}}>{c.role}</span> : null}</div>
+                      <div style={{fontSize:11,color:"#5B6B82",fontFamily:mono,overflow:"hidden",textOverflow:"ellipsis"}}>{c.email}</div>
                     </div>
                     <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",flexShrink:0}}>
                       <span style={{fontSize:10,color:c.active?"#1a8040":"#a0a8b0",fontWeight:600}}>{c.active?"Active":"Off"}</span>
@@ -4348,20 +4363,20 @@ function CallSchedule() {
           const SlotLine = ({ role, day, holder, locked }) => {
             const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
             let body;
-            if (!holder && !loaded) body = <span className="cal-skel" data-testid="loading-slot" style={{background:dk?"#243250":"#e4e8ee"}}/>;
+            if (!holder && !loaded) body = <span className="cal-skel" data-testid="loading-slot" style={{background:T.skeleton}}/>;
             // Unassigned before today (Central): a blank pill-height line - no text, no red (Faraz 9/22).
             else if (!holder && !slotIsOpen(day, holder, todayStr)) body = <span className="cal-pill cal-blank" aria-hidden="true">&nbsp;</span>;
-            else if (!holder) body = <span className="cal-pill cal-open" style={{color:"#c04040",fontWeight:800,letterSpacing:0.4}}>OPEN</span>;
-            else if (isExt) { const ext = holder.slice(4); body = <span className="cal-pill cal-ext" title={ext + " (external cover, outside the roster)"} style={{color:dk?"#a0a8b0":"#6a7a88",fontStyle:"italic",background:dk?"#1e2a44":"#eef1f4",borderColor:dk?"#2a3a5e":"#d8dee6"}}><span className="cal-name">{ext}</span><span className="cal-code">{ext.slice(0, 3).toUpperCase()}</span></span>; }
-            else { const c = colorOf(holder); body = <span className="cal-pill" title={nameOf(holder)} style={{background:c.tg,color:c.tx,borderColor:c.bd}}><span className="cal-name">{nameOf(holder)}</span><span className="cal-code">{codeOf(holder)}</span></span>; }
+            else if (!holder) body = <span className="cal-pill cal-open" style={{color:T.open,fontWeight:800,letterSpacing:0.4}}>OPEN</span>;
+            else if (isExt) { const ext = holder.slice(4); body = <span className="cal-pill cal-ext" title={ext + " (external cover, outside the roster)"} style={{color:dk?"#a0a8b0":"#6a7a88",fontStyle:"italic",background:dk?"#1e2a44":"#eef1f4",borderColor:dk?"#24406B":"#d8dee6"}}><span className="cal-name">{ext}</span><span className="cal-code">{ext.slice(0, 3).toUpperCase()}</span></span>; }
+            else { const c = colorOf(holder); body = <span className="cal-pill" title={nameOf(holder)} style={{background:c.tg,color:c.tx,borderColor:c.bd,borderStyle:c.dashed?"dashed":"solid"}}><span className="cal-name">{nameOf(holder)}</span><span className="cal-code">{codeOf(holder)}</span></span>; }
             return <div className="cal-line"><span className="cal-role">{role}</span>{body}{locked ? <Padlock className="cal-lock" title={(role === "P" ? "Primary" : "Backup") + " locked"}/> : null}</div>;
           };
           const badge = (solid, color) => ({ display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:3,fontSize:9,fontWeight:800,lineHeight:1,
             background: solid ? color : "transparent", color: solid ? "#fff" : color, border: "1px solid " + color });
           // Week-row text sits directly on the page background, so dark mode
           // uses the lightened per-code text palette (vis-003), not the pill's tx.
-          const entryStyle = (e) => e.kind === "open" ? { color:"#c04040", fontWeight:800 } : e.kind === "external" ? { color: dk ? "#a0a8b0" : "#6a7a88", fontStyle:"italic" } : { color: textColorOf(e.id), fontWeight:600 };
-          const chipStyle = (on, c) => ({ background: on ? c.tg : "transparent", color: on ? c.tx : (dk ? "#8a8aaa" : "#6a7a88"), border: "1px solid " + (on ? c.bd : (dk ? "#2a3a5e" : "#c8d0d8")), borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono, letterSpacing: 0.3 });
+          const entryStyle = (e) => e.kind === "open" ? { color:T.open, fontWeight:800 } : e.kind === "external" ? { color: dk ? "#a0a8b0" : "#6a7a88", fontStyle:"italic" } : { color: textColorOf(e.id), fontWeight:600 };
+          const chipStyle = (on, c) => ({ background: on ? c.tg : "transparent", color: on ? c.tx : (dk ? "#9FB0C8" : "#6a7a88"), border: "1px solid " + (on ? c.bd : (dk ? "#24406B" : "#c8d0d8")), borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono, letterSpacing: 0.3 });
           return <>
           <div style={css.card}>
             {/* Coverage at a glance (Prompt 11): every count links to its first day. */}
@@ -4378,7 +4393,7 @@ function CallSchedule() {
                 );
               };
               return (
-                <div data-testid="coverage-strip" style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",marginBottom:10,fontSize:11.5,color:dkSubtext,padding:"6px 8px",borderRadius:6,background:dk?"#141c30":"#f4f6f8",border:"1px solid " + dkCardBorder}}>
+                <div data-testid="coverage-strip" style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",marginBottom:10,fontSize:11.5,color:dkSubtext,padding:"6px 8px",borderRadius:6,background:dk?"#0F2140":"#f4f6f8",border:"1px solid " + dkCardBorder}}>
                   <span style={{fontWeight:700,color:dkText,marginRight:2}}>Next 60 days:</span>
                   {covItem("cov-open-primary", "open primary", glance.openPrimary, "#c04040")}
                   {covItem("cov-open-backup", "open backup", glance.openBackup, "#c04040")}
@@ -4416,7 +4431,7 @@ function CallSchedule() {
             </div>
 
             {/* On call today */}
-            <div data-testid="today-banner" style={{fontSize:12.5,color:dkText,background:dk?"#16213e":"#f8f9fb",border:"1px solid " + dkCardBorder,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <div data-testid="today-banner" style={{fontSize:12.5,color:dkText,background:dk?"#13294B":"#f8f9fb",border:"1px solid " + dkCardBorder,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
               <strong>On call today {fmtMD(todayStr)}:</strong>
               <span>P</span> <HolderTag a={todayAssign} role="primary" small/>
               <span>B</span> <HolderTag a={todayAssign} role="backup" small/>
@@ -4440,7 +4455,7 @@ function CallSchedule() {
             {/* The grid */}
             <div className="cal-grid" data-testid="cal-grid">
               {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((h, i) => (
-                <div key={h} className="cal-hdr" style={{color: i >= 4 ? "#3d6a8c" : dkSubtext, background: i >= 4 ? (dk ? "#141c30" : "#eef3f8") : "transparent", borderRadius: i === 4 ? "6px 0 0 6px" : i === 6 ? "0 6px 6px 0" : 0}}>{h}{i === 4 ? <span className="cal-wk-label" style={{fontWeight:500,letterSpacing:0,textTransform:"none",marginLeft:4,fontSize:9}}>weekend unit</span> : null}</div>
+                <div key={h} className="cal-hdr" style={{color: i >= 4 ? (dk ? T.muted : T.title) : dkSubtext, background: i >= 4 ? (dk ? "#0F2140" : "#eef3f8") : "transparent", borderRadius: i === 4 ? "6px 0 0 6px" : i === 6 ? "0 6px 6px 0" : 0}}>{h}{i === 4 ? <span className="cal-wk-label" style={{fontWeight:500,letterSpacing:0,textTransform:"none",marginLeft:4,fontSize:9}}>weekend unit</span> : null}</div>
               ))}
               {gridDays.map(d => {
                 // A generator preview (Setup > Generate) overlays its days: drawn
@@ -4459,8 +4474,8 @@ function CallSchedule() {
                 const inFilter = calSurgeonFilters.length === 0 || (a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup)));
                 const dim = !inFilter || (calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup")))); // only-OPEN reads the openSlots Set, never a per-cell rule
                 const isToday = d === todayStr;
-                const bg = hol ? (dk ? "#3a3418" : "#fdf6dc") : isWk ? (dk ? "#141c30" : "#f3f6f9") : (dk ? "#16213e" : "#ffffff");
-                const bracket = isWk ? { borderTop: "2px solid #a9c4da", borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
+                const bg = hol ? T.holiday : isWk ? T.weekend : T.surface;
+                const bracket = isWk ? { borderTop: "2px solid " + T.navyMuted, borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
                 const derivedWho = derived ? Object.keys(derived).map(r => nameOf(derived[r]) + " Silvis " + r).join(", ") : "";
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
                 const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
@@ -4471,13 +4486,13 @@ function CallSchedule() {
                   <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
                     onClick={()=>setEditorDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditorDay(d); } }}
                     title={titleBits.join(" | ")}
-                    style={{background:bg, border: isToday ? "2px solid #1a6fa8" : "1px solid " + dkCardBorder, ...bracket, opacity: dim ? 0.28 : inMonth ? 1 : 0.5, color:dkText, boxShadow: isToday ? "0 0 0 2px rgba(26,111,168,0.18)" : "none"}}>
+                    style={{background:bg, border: isToday ? "2px solid " + T.accent : "1px solid " + dkCardBorder, ...bracket, opacity: dim ? 0.28 : inMonth ? 1 : 0.5, color:dkText, boxShadow: isToday ? "0 0 0 2px rgba(255,95,5,0.18)" : "none"}}>
                     <div style={{display:"flex",alignItems:"center",gap:4,minWidth:0,paddingRight:Math.max(30, 4 + 15 * nBadges)}}>
-                      <span style={{fontFamily:mono,fontSize:11,fontWeight:isToday?800:600,color:isToday?"#1a6fa8":inMonth?dkText:"#9aa4ae"}}>{dt.getDate()}</span>
+                      <span style={{fontFamily:mono,fontSize:11,fontWeight:isToday?800:600,color:isToday?T.accentText:inMonth?dkText:"#9aa4ae"}}>{dt.getDate()}</span>
                       {hol && <span className="cal-hol" title={hol.name + " - holiday unit (" + hol.tier + ")"} style={{fontSize:9,fontWeight:700,color:"#8a6a10",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{hol.name}</span>}
                     </div>
                     <div className="cal-badges">
-                      {derived && <span data-badge="E" title={"East-derived week: " + derivedWho} style={badge(true, "#1a6fa8")}>E</span>}
+                      {derived && <span data-badge="E" title={"East-derived week: " + derivedWho} style={badge(true, T.badge)}>E</span>}
                       {fc && fc.p >= 0.2 && <span data-badge={fc.p >= forecastThreshold ? "F" : "f"} title={"East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)"} style={badge(fc.p >= forecastThreshold, "#8a5a10")}>F</span>}
                       {awaitingConfirmation(a) && <span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={badge(true, "#c2410c")}>?</span>}
                     </div>
@@ -4501,15 +4516,15 @@ function CallSchedule() {
                 <span key={s.id} style={{display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,borderRadius:3,background:c.tg,border:"1px solid " + c.bd,display:"inline-block"}}/>{s.name} <span style={{fontFamily:mono,fontSize:10}}>{s.code}</span></span>
               ); })}
               <span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>
-              <span><span style={{color:"#c04040",fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>
+              <span><span style={{color:T.open,fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>
               <span><span style={{fontStyle:"italic"}}>Atwell</span> = external cover</span>
               <span style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot</span>
-              <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#1a6fa8")}>E</span> East-derived week</span>
+              <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, T.badge)}>E</span> East-derived week</span>
               <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#8a5a10")}>F</span> East forecast at or above {Math.round(forecastThreshold * 100)}%, <span style={badge(false, "#8a5a10")}>F</span> 20% or more</span>
               <span>Fri-Sun tinted = weekend unit</span>
               <span>gold = holiday unit</span>
               <span>dots = vacations</span>
-              <span>blue outline = today</span>
+              <span>orange outline = today</span>
               {isScheduler && !isPublicMode && <span>Click a day to edit (eligibility-checked); saves per day with compare-and-swap.</span>}
             </div>
           </div>
@@ -4539,7 +4554,7 @@ function CallSchedule() {
                 <div style={{...css.toolTitle,color:dkText}}>Calendar files (.ics)</div>
                 <p style={sectionNote}>One event per shift, 07:00 to 07:00 the next day in Central time (the file carries the America/Chicago clock-change rules). Import the file once; for a feed that keeps itself current use the subscribe links in Settings.</p>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                  {activeSurgeons.map(s => <button key={s.id} data-testid={"ics-" + s.code} onClick={()=>downloadMyCal(s.id)} title={"Download " + icsFileName(s)} style={{...css.badge(sMap[s.id]?.idx||0, s.name),cursor:"pointer",padding:"4px 10px",fontSize:11}}>{s.name}</button>)}
+                  {activeSurgeons.map(s => <button key={s.id} data-testid={"ics-" + s.code} data-pill="1" onClick={()=>downloadMyCal(s.id)} title={"Download " + icsFileName(s)} style={{...css.badge(sMap[s.id]?.idx||0, s),cursor:"pointer",padding:"4px 10px",fontSize:11}}>{s.name}</button>)}
                   <button data-testid="ics-all" onClick={downloadGroupCal} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Full group</button>
                 </div>
               </div>
@@ -4747,7 +4762,7 @@ function CallSchedule() {
                   <button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")} title={"Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>{copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"}</button>
                 </span>
               </div>
-              <div data-testid="next-call" data-next-day={next ? next.day : ""} data-next-role={next ? next.role : ""} style={{padding:"12px 14px",borderRadius:8,marginBottom:12,background:next ? (next.role === "primary" ? "linear-gradient(135deg,#1a6fa8,#2488c8)" : "linear-gradient(135deg,#8a6a20,#b08a30)") : (dk ? "#16213e" : "#f0f2f5"),color:next ? "#fff" : dkText}}>
+              <div data-testid="next-call" data-next-day={next ? next.day : ""} data-next-role={next ? next.role : ""} style={{padding:"12px 14px",borderRadius:8,marginBottom:12,background:next ? (next.role === "primary" ? `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})` : "linear-gradient(135deg,#8a6a20,#b08a30)") : T.raised,color:next ? "#fff" : dkText}}>
                 {!loaded ? <span style={{fontStyle:"italic"}}>Loading schedule</span> : !next ? <span>No upcoming call on file for {nameOf(pid)}.</span> : (
                   <>
                     <div style={{fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",opacity:0.85}}>Next call - {countdown(next.day)}</div>
@@ -4765,7 +4780,7 @@ function CallSchedule() {
                   {upcoming.map(x => (
                     <div key={x.day} data-testid="mine-day" data-day={x.day} data-role={x.role} style={{display:"flex",gap:10,alignItems:"center",padding:"5px 8px",borderBottom:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
                       <span style={{fontFamily:mono,fontSize:12,color:dkText,width:92}}>{dowShort(x.day)} {fmtMD(x.day)}</span>
-                      <span style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?"#1a6fa8":"#7a5a20"}}>{roleWord(x.role)}</span>
+                      <span style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:"#7a5a20"}}>{roleWord(x.role)}</span>
                       <span style={{...muted,minWidth:120}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
                       {x.locked && <Padlock title="locked" size={9}/>}
                       {badgesFor(x.day).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
@@ -4793,7 +4808,7 @@ function CallSchedule() {
             {!mySurgeon && !isScheduler ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
               <>
                 {renderVacationForm(isScheduler ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
-                <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#7a8a98",marginBottom:8,cursor:"pointer"}}>
+                <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
                   <input type="checkbox" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past
                 </label>
                 {renderVacationList(isScheduler ? surgeons.map(s => s.id) : [mySurgeon], true)}
@@ -4824,7 +4839,7 @@ function CallSchedule() {
             const done = myTradeRequests.filter(r => r.status === "applied" || r.status === "declined" || r.status === "cancelled");
             const statusColor = (st) => st === "pending" ? "#c09030" : st === "declined" || st === "cancelled" ? "#c04040" : st === "accepted" ? "#6030a0" : "#1a8040";
             const tenseFor = (st) => st === "accepted" || st === "applied" ? "takes" : st === "declined" || st === "cancelled" ? "would have taken" : "would take";
-            const rowBox = { padding:"8px 12px", background: dk ? "#16213e" : "#f8f9fb", borderRadius:6, border:`1px solid ${dkCardBorder}` };
+            const rowBox = { padding:"8px 12px", background: dk ? "#13294B" : "#f8f9fb", borderRadius:6, border:`1px solid ${dkCardBorder}` };
             const tradeRow = (r) => {
               const named = tradeNamed(r);
               const canAnswer = r.status === "pending" && (isScheduler || r.to_surgeon_id === mySurgeon);
@@ -4933,7 +4948,7 @@ function CallSchedule() {
           <div style={css.card}>
             <div style={css.cardT}>Appearance</div>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <span style={{fontSize:13,color:"#5a6a78"}}>Theme</span>
+              <span style={{fontSize:13,color:"#5B6B82"}}>Theme</span>
               <button onClick={()=>setDarkMode(false)} style={{...css.btn(!darkMode),padding:"6px 16px",fontSize:12}}>Light</button>
               <button onClick={()=>setDarkMode(true)} style={{...css.btn(darkMode),padding:"6px 16px",fontSize:12}}>Dark</button>
             </div>
@@ -4941,8 +4956,8 @@ function CallSchedule() {
 
           {isScheduler && (
             <Collapsible css={css} ck="settings_audit" defaultOpen={false}
-              title={<>Activity log <span style={{fontWeight:400,fontSize:11,color:"#7a8a98"}}>- who changed what</span></>}
-              right={<button onClick={(e)=>{e.stopPropagation(); loadAudit();}} title="Refresh" style={{background:"none",border:"1px solid #d0d8e0",borderRadius:6,color:"#5a6a78",cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:font}}>Refresh</button>}>
+              title={<>Activity log <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>- who changed what</span></>}
+              right={<button onClick={(e)=>{e.stopPropagation(); loadAudit();}} title="Refresh" style={{background:"none",border:"1px solid #d0d8e0",borderRadius:6,color:"#5B6B82",cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:font}}>Refresh</button>}>
               {auditLoading ? (
                 <div style={{fontSize:12,color:"#8a94a0",padding:"6px 0"}}>Loading</div>
               ) : auditEntries.length === 0 ? (
@@ -4951,11 +4966,11 @@ function CallSchedule() {
                 <div style={{maxHeight:420,overflowY:"auto"}}>
                   {auditEntries.map(en => {
                     const si = surgeons.findIndex(s => s.id === en.actor_id);
-                    const c = si >= 0 ? surgeonColors(surgeons[si].name, si) : null;
+                    const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
                     const summary = (en.detail && en.detail.summary) || en.action;
                     return (
                       <div key={en.id} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"7px 2px",borderBottom:"1px solid "+(dk?"#243240":"#eef1f4")}}>
-                        <span style={{flexShrink:0,fontSize:10,fontWeight:700,letterSpacing:0.4,padding:"2px 7px",borderRadius:5,background:c?c.tg:(dk?"#243240":"#eef1f4"),color:c?c.tx:"#5a6a78",border:`1px solid ${c?c.bd:(dk?"#2a3a48":"#e0e4ea")}`,minWidth:38,textAlign:"center"}}>{en.actor_name || "?"}</span>
+                        <span style={{flexShrink:0,fontSize:10,fontWeight:700,letterSpacing:0.4,padding:"2px 7px",borderRadius:5,background:c?c.tg:(dk?"#243240":"#eef1f4"),color:c?c.tx:"#5B6B82",border:`1px solid ${c?c.bd:(dk?"#2a3a48":"#DCE3EC")}`,minWidth:38,textAlign:"center"}}>{en.actor_name || "?"}</span>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:12.5,color:dk?"#c8d2dc":"#3a4a58",lineHeight:1.35}}>{summary}</div>
                           <div style={{fontSize:10,color:"#9aa4ae",marginTop:1,fontFamily:mono}}>{fmtAuditTime(en.created_at)} - {en.action}</div>
@@ -4970,9 +4985,9 @@ function CallSchedule() {
 
           {isScheduler && (
             <Collapsible css={css} ck="settings_client_versions" defaultOpen={false}
-              title={<>Client versions <span style={{fontWeight:400,fontSize:11,color:"#7a8a98"}}>- who's on which build</span></>}
-              right={<button onClick={(e)=>{e.stopPropagation(); loadClientVersions();}} title="Refresh" style={{background:"none",border:"1px solid #d0d8e0",borderRadius:6,color:"#5a6a78",cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:font}}>Refresh</button>}>
-              <p style={{fontSize:11.5,color:"#7a8a98",margin:"0 0 8px",lineHeight:1.5}}>
+              title={<>Client versions <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>- who's on which build</span></>}
+              right={<button onClick={(e)=>{e.stopPropagation(); loadClientVersions();}} title="Refresh" style={{background:"none",border:"1px solid #d0d8e0",borderRadius:6,color:"#5B6B82",cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:font}}>Refresh</button>}>
+              <p style={{fontSize:11.5,color:"#5B6B82",margin:"0 0 8px",lineHeight:1.5}}>
                 Updated each time a signed-in user opens the app. "Current"/"Behind" compare against THIS device's build ({APP_VERSION}). Row 'main' (minimum version) is edited in SQL.
               </p>
               {clientVersionsErr && <div style={{fontSize:12,color:"#c04040",padding:"6px 0",fontWeight:600}}>{clientVersionsErr}</div>}
@@ -4994,7 +5009,7 @@ function CallSchedule() {
                         const cmp = vc === 0 ? "current" : (vc < 0 ? "behind" : "newer");
                         const bs = cmp === "current" ? {background:"#e8f6ec",color:"#1a8040",border:"1px solid #b8e0c4"}
                                  : cmp === "behind"  ? {background:"#fef8e8",color:"#c09030",border:"1px solid #e8d090"}
-                                                     : {background:"#e8f0fa",color:"#1a6fa8",border:"1px solid #b8d4ec"};
+                                                     : {background:T.accentTint,color:T.accentText,border:"1px solid "+T.accent};
                         status = <>
                           <span style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:5,...bs}}>{cmp === "current" ? "Current" : cmp === "behind" ? "Behind" : "Newer than you"}</span>
                           <span style={{fontSize:11,fontFamily:mono,color:dk?"#c8d2dc":"#3a4a58"}}>{row.app_version}</span>
@@ -5003,13 +5018,13 @@ function CallSchedule() {
                       } else if (profilesKnown && !hasProfile) {
                         status = <span style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:5,background:"#faeaea",color:"#c04040",border:"1px solid #eabcbc"}}>Never signed up / not linked</span>;
                       } else if (profilesKnown) {
-                        status = <span style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:5,background:dk?"#243240":"#eef1f4",color:"#7a8a98",border:"1px solid "+(dk?"#2a3a48":"#e0e4ea")}}>Signed up - no heartbeat yet</span>;
+                        status = <span style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:5,background:dk?"#243240":"#eef1f4",color:"#5B6B82",border:"1px solid "+(dk?"#2a3a48":"#DCE3EC")}}>Signed up - no heartbeat yet</span>;
                       } else {
                         status = <span style={{fontSize:11,color:"#8a94a0"}}>no heartbeat recorded</span>;
                       }
                       return (
                         <div key={key} style={{display:"flex",gap:8,alignItems:"center",padding:"7px 2px",borderBottom:"1px solid "+(dk?"#243240":"#eef1f4")}}>
-                          <span style={{flexShrink:0,fontSize:12,fontWeight:600,color:dk?"#c8d2dc":"#2c3e50",minWidth:60}}>{name}</span>
+                          <span style={{flexShrink:0,fontSize:12,fontWeight:600,color:dk?"#c8d2dc":"#1F2A3A",minWidth:60}}>{name}</span>
                           <span style={{flexShrink:0,fontSize:10,color:"#9aa4ae",fontFamily:mono,minWidth:22}}>{id}</span>
                           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>{status}</div>
                         </div>
@@ -5029,7 +5044,7 @@ function CallSchedule() {
             <div style={css.card}>
               <div onClick={()=>toggleSettingsCard("officeNotif")} style={{...css.cardT,margin:openSettingsCards.officeNotif?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",userSelect:"none"}}>
                 <span>Office notifications</span>
-                <span style={{fontSize:12,color:"#7a8a98"}}>{openSettingsCards.officeNotif ? "-" : "+"}</span>
+                <span style={{fontSize:12,color:"#5B6B82"}}>{openSettingsCards.officeNotif ? "-" : "+"}</span>
               </div>
               {openSettingsCards.officeNotif && <>
                 <p style={sectionNote}>
@@ -5048,7 +5063,7 @@ function CallSchedule() {
           <div style={css.card}>
             <div onClick={()=>toggleSettingsCard("notifSettings")} style={{...css.cardT,margin:openSettingsCards.notifSettings?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",userSelect:"none"}}>
               <span>Notification settings</span>
-              <span style={{fontSize:12,color:"#7a8a98"}}>{openSettingsCards.notifSettings ? "-" : "+"}</span>
+              <span style={{fontSize:12,color:"#5B6B82"}}>{openSettingsCards.notifSettings ? "-" : "+"}</span>
             </div>
             {openSettingsCards.notifSettings && <>
               <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:12}}>
@@ -5093,19 +5108,19 @@ function CallSchedule() {
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:12}}>
               <div>
                 <p style={{fontSize:13,color:dkText,margin:"0 0 2px"}}>
-                  Signed in as <strong style={{color:"#1a6fa8"}}>{mySurgeon ? nameOf(mySurgeon) : (userProfile?.display_name || "unlinked account")}</strong>
+                  Signed in as <strong style={{color:T.title}}>{mySurgeon ? nameOf(mySurgeon) : (userProfile?.display_name || "unlinked account")}</strong>
                   <span style={{...muted,marginLeft:6}}>({userProfile?.role || "viewer"})</span>
                 </p>
-                <p style={{fontSize:11,color:"#7a8a98",margin:0}}>{authUser?.email}</p>
+                <p style={{fontSize:11,color:"#5B6B82",margin:0}}>{authUser?.email}</p>
               </div>
               <button onClick={handleSignOut} style={{...css.btn(false),padding:"6px 14px",fontSize:12}}>Sign out</button>
             </div>
             {biometricAvail ? (
-              <div style={{paddingTop:12,borderTop:"1px solid #e0e4ea"}}>
+              <div style={{paddingTop:12,borderTop:"1px solid #DCE3EC"}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
                   <div>
                     <p style={{fontSize:12,fontWeight:600,color:dkText,margin:"0 0 2px"}}>Biometric login</p>
-                    <p style={{fontSize:11,color:"#7a8a98",margin:0}}>{biometricEnrolled ? "Face ID / Touch ID is enabled" : "Use Face ID or Touch ID to unlock the app"}</p>
+                    <p style={{fontSize:11,color:"#5B6B82",margin:0}}>{biometricEnrolled ? "Face ID / Touch ID is enabled" : "Use Face ID or Touch ID to unlock the app"}</p>
                   </div>
                   {biometricEnrolled
                     ? <button onClick={handleBiometricUnenroll} style={{...css.btn(false),padding:"6px 14px",fontSize:12}}>Disable</button>
@@ -5113,22 +5128,22 @@ function CallSchedule() {
                 </div>
               </div>
             ) : (
-              <div style={{paddingTop:12,borderTop:"1px solid #e0e4ea"}}>
+              <div style={{paddingTop:12,borderTop:"1px solid #DCE3EC"}}>
                 <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:8}}>
                   <div style={{flex:"1 1 240px",minWidth:0}}>
                     <p style={{fontSize:12,fontWeight:600,color:dkText,margin:"0 0 2px"}}>Biometric login unavailable</p>
-                    <p style={{fontSize:11,color:"#7a8a98",margin:"0 0 4px",lineHeight:1.4}}>Face ID / Touch ID isn't reported as available. On iPhone this needs Safari and the app installed from Safari's Share menu (Add to Home Screen).</p>
+                    <p style={{fontSize:11,color:"#5B6B82",margin:"0 0 4px",lineHeight:1.4}}>Face ID / Touch ID isn't reported as available. On iPhone this needs Safari and the app installed from Safari's Share menu (Add to Home Screen).</p>
                   </div>
                   <button onClick={async () => { const r = await biometric.isAvailable(); setBiometricAvail(r.available); setBiometricReason(r.reason); if (r.available) setBiometricEnrolled(biometric.isEnrolled()); }} style={{...css.btn(false),padding:"6px 14px",fontSize:12,flexShrink:0}}>Re-check</button>
                 </div>
                 {biometricReason && (
-                  <div style={{background:dk?"#0f1e30":"#f4f6f8",border:`1px solid ${dk?"#2a3a5e":"#e0e4ea"}`,borderRadius:6,padding:"6px 10px",fontSize:11,color:dk?"#b0b8c0":"#5a6a78",lineHeight:1.5,fontFamily:mono,wordBreak:"break-word",marginBottom:8}}>
+                  <div style={{background:dk?"#0f1e30":"#f4f6f8",border:`1px solid ${dk?"#24406B":"#DCE3EC"}`,borderRadius:6,padding:"6px 10px",fontSize:11,color:dk?"#b0b8c0":"#5B6B82",lineHeight:1.5,fontFamily:mono,wordBreak:"break-word",marginBottom:8}}>
                     <strong style={{color:dk?"#d0d4dc":"#3a4a58"}}>Diagnostic:</strong> {biometricReason}
                   </div>
                 )}
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                   <button onClick={handleBiometricForceEnroll} disabled={!authUser} style={{...css.btn(true),padding:"6px 14px",fontSize:12,opacity:authUser?1:0.5}}>Try enable anyway</button>
-                  <span style={{fontSize:10,color:"#7a8a98",fontStyle:"italic"}}>Bypasses the availability check - the browser shows a Face ID prompt if it actually works.</span>
+                  <span style={{fontSize:10,color:"#5B6B82",fontStyle:"italic"}}>Bypasses the availability check - the browser shows a Face ID prompt if it actually works.</span>
                 </div>
               </div>
             )}
@@ -5141,7 +5156,7 @@ function CallSchedule() {
               const myUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(mySurgeon)}`;
               return (
                 <div style={{marginBottom:10}}>
-                  <div style={{fontSize:11,fontWeight:600,color:"#5a6a78",marginBottom:4}}>My calendar:</div>
+                  <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>My calendar:</div>
                   <div style={{display:"flex",gap:6,alignItems:"center"}}>
                     <input readOnly value={myUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
                     <button onClick={()=>copyText(myUrl, "my")} style={{...css.btn(copiedUrl==="my"),padding:"4px 10px",fontSize:10,whiteSpace:"nowrap"}}>{copiedUrl==="my" ? "Copied" : "Copy"}</button>
@@ -5151,16 +5166,16 @@ function CallSchedule() {
             })()}
             {isScheduler && <>
               <div style={{marginBottom:10}}>
-                <div style={{fontSize:11,fontWeight:600,color:"#5a6a78",marginBottom:4}}>Full schedule:</div>
+                <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Full schedule:</div>
                 <div style={{display:"flex",gap:6,alignItems:"center"}}>
                   <input readOnly value={`${EDGE_FN_BASE}/calendar-sync`} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
                   <button onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync`, "full")} style={{...css.btn(copiedUrl==="full"),padding:"4px 10px",fontSize:10,whiteSpace:"nowrap"}}>{copiedUrl==="full" ? "Copied" : "Copy"}</button>
                 </div>
               </div>
-              <div style={{fontSize:11,fontWeight:600,color:"#5a6a78",marginBottom:4}}>Per surgeon (matched on code):</div>
+              <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Per surgeon (matched on code):</div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
                 {surgeons.map(s => (
-                  <button key={s.id} onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}`, s.id)} style={{...css.badge(sMap[s.id]?.idx||0, s.name),cursor:"pointer",padding:"3px 10px",fontSize:10,border:copiedUrl===s.id?"2px solid #1a8040":undefined}}>
+                  <button key={s.id} data-pill="1" onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}`, s.id)} style={{...css.badge(sMap[s.id]?.idx||0, s),cursor:"pointer",padding:"3px 10px",fontSize:10,border:copiedUrl===s.id?"2px solid #1a8040":undefined}}>
                     {copiedUrl===s.id ? "Copied " : ""}{s.name} ({s.code})
                   </button>
                 ))}
@@ -5194,25 +5209,25 @@ function CallSchedule() {
           {isScheduler && <div style={css.card}>
             <div onClick={()=>toggleSettingsCard("restoreSnap")} style={{...css.cardT,margin:openSettingsCards.restoreSnap?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",userSelect:"none"}}>
               <span>Restore from snapshot</span>
-              <span style={{fontSize:12,color:"#7a8a98"}}>{openSettingsCards.restoreSnap ? "-" : "+"}</span>
+              <span style={{fontSize:12,color:"#5B6B82"}}>{openSettingsCards.restoreSnap ? "-" : "+"}</span>
             </div>
             {openSettingsCards.restoreSnap && <>
               <p style={sectionNote}>Snapshots are saved automatically before destructive actions and periodically. Restoring replaces the current schedule and setup for everyone with the selected copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so a restore can itself be undone.</p>
-              {snapshotsLoading && <div style={{fontSize:12,color:"#7a8a98"}}>Loading snapshots</div>}
+              {snapshotsLoading && <div style={{fontSize:12,color:"#5B6B82"}}>Loading snapshots</div>}
               {!snapshotsLoading && snapshotLoadFailed && (
                 <div style={{fontSize:12,fontWeight:600,color:"#a02020",background:"#fce8e8",border:"1px solid #e0a8a8",borderRadius:6,padding:"6px 10px"}}>Couldn't load your backups - this does NOT mean none exist. Tap Refresh; if it keeps failing, reload the app (your session may have expired).</div>
               )}
-              {!snapshotsLoading && !snapshotLoadFailed && (!snapshotList || snapshotList.length === 0) && <div style={{fontSize:12,color:"#7a8a98"}}>No snapshots yet.</div>}
+              {!snapshotsLoading && !snapshotLoadFailed && (!snapshotList || snapshotList.length === 0) && <div style={{fontSize:12,color:"#5B6B82"}}>No snapshots yet.</div>}
               {!snapshotsLoading && snapshotList && snapshotList.map(sn => (
                 <div key={sn.id} data-testid="snapshot-row" data-snapshot-id={sn.id} data-reason={sn.reason || ""} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid #f0f2f4"}}>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:12,fontWeight:600,color:"#3a4a58"}}>{snapshotReasonLabel(sn.reason)}</div>
                     <div style={{fontSize:10,color:"#8a94a0",fontFamily:mono}}>{new Date(sn.created_at).toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})}</div>
                   </div>
-                  <button data-testid="snapshot-restore" disabled={!!restoreBusyId} onClick={()=>restoreSnapshot(sn)} style={{background:"none",border:"1px solid #b8cfe0",color:restoreBusyId?"#a8b4c0":"#1a6fa8",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:600,cursor:restoreBusyId?"default":"pointer",fontFamily:font}}>{restoreBusyId===sn.id ? "Restoring" : "Restore"}</button>
+                  <button data-testid="snapshot-restore" disabled={!!restoreBusyId} onClick={()=>restoreSnapshot(sn)} style={{background:"none",border:"1px solid "+T.inputBorder,color:restoreBusyId?T.muted:T.title,borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:600,cursor:restoreBusyId?"default":"pointer",fontFamily:font}}>{restoreBusyId===sn.id ? "Restoring" : "Restore"}</button>
                 </div>
               ))}
-              <button onClick={loadSnapshots} disabled={snapshotsLoading} style={{background:"none",border:"none",color:"#1a6fa8",fontSize:11,cursor:"pointer",fontFamily:font,padding:"8px 0 0",fontWeight:600}}>Refresh list</button>
+              <button onClick={loadSnapshots} disabled={snapshotsLoading} style={{background:"none",border:"none",color:T.accentText,fontSize:11,cursor:"pointer",fontFamily:font,padding:"8px 0 0",fontWeight:600}}>Refresh list</button>
             </>}
           </div>}
         </>}
@@ -5222,7 +5237,7 @@ function CallSchedule() {
   );
 }
 
-const thS = {textAlign:"left",padding:"7px 8px",color:"#5a6a78",fontWeight:600,fontSize:10,textTransform:"uppercase",letterSpacing:0.5};
+const thS = {textAlign:"left",padding:"7px 8px",color:"#5B6B82",fontWeight:600,fontSize:10,textTransform:"uppercase",letterSpacing:0.5};
 const tdS = {padding:"7px 8px",fontFamily:"'JetBrains Mono',monospace",color:"#4a5a68",fontSize:13};
 
 // --- Month painter - full-screen bulk vacation entry (phone-first) ---
@@ -5245,8 +5260,8 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
   const personName = (id) => (surgeons.find(s => s.id === id) || {}).name || id;
   const pillStyle = (id) => {
     const si = surgeons.findIndex(s => s.id === id);
-    const c = surgeonColors(si >= 0 ? surgeons[si].name : id, si >= 0 ? si : 0);
-    return { background: c.tg, color: c.tx, border: `1px solid ${c.bd}` };
+    const c = rosterColors(si >= 0 ? surgeons[si] : null, si >= 0 ? si : 0);
+    return { background: c.tg, color: c.tx, border: pillBorder(c) };
   };
   const days = React.useMemo(() => {
     const out = []; const n = new Date(ym.y, ym.m + 1, 0).getDate();
@@ -5308,11 +5323,11 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
     onClose();
   };
   React.useEffect(() => () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); }, []);
-  const bg = dk ? "#1a1a2e" : "#f0f2f5";
-  const panelBg = dk ? "#16213e" : "#fff";
-  const border = dk ? "#2a3a5e" : "#e0e4ea";
-  const text = dk ? "#e0e0f0" : "#2c3e50";
-  const muted = dk ? "#8a8aaa" : "#7a8a98";
+  const bg = dk ? "#0B1A33" : "#F6F8FB";
+  const panelBg = dk ? "#13294B" : "#fff";
+  const border = dk ? "#24406B" : "#DCE3EC";
+  const text = dk ? "#E6ECF5" : "#1F2A3A";
+  const muted = dk ? "#9FB0C8" : "#5B6B82";
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9300, background: bg, display: "flex", flexDirection: "column", fontFamily: font }}>
       <div style={{ background: panelBg, borderBottom: `1px solid ${border}`, padding: "10px 14px 10px", paddingTop: "calc(env(safe-area-inset-top, 0px) + 10px)", flexShrink: 0 }}>
@@ -5328,7 +5343,7 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
         <div style={{ marginTop: 8 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
             <select value={armedPerson} onChange={e => { setArmedPerson(e.target.value); setPendingStart(null); }} disabled={surgeons.length === 1}
-              style={{ ...css.inp, ...(dk ? { background: "#0f3460", border: "1px solid #2a3a5e", color: "#e0e0f0" } : {}), minHeight: 40, flex: "1 1 140px" }}>
+              style={{ ...css.inp, ...(dk ? { background: "#0F2140", border: "1px solid #24406B", color: "#E6ECF5" } : {}), minHeight: 40, flex: "1 1 140px" }}>
               <option value="">Select person</option>
               {surgeons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
@@ -5351,10 +5366,10 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
           const off = offByDay[ds] || [];
           const coveredAll = draftCoveringAll(ds);
           const isPending = pendingStart === ds;
-          const rowBg = isPending ? (dk ? "#1a3a5e" : "#dcecf8") : coveredAll.length > 0 ? (dk ? "#1c3050" : "#e6f2ea") : isWknd ? (dk ? "#141c30" : "#f6f8fa") : panelBg;
+          const rowBg = isPending ? (dk ? "#1a3a5e" : "#dcecf8") : coveredAll.length > 0 ? (dk ? "#1c3050" : "#e6f2ea") : isWknd ? (dk ? "#0F2140" : "#f6f8fa") : panelBg;
           return (
             <button key={ds} onClick={() => tapDay(ds)}
-              style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", minHeight: 52, padding: "7px 10px", marginBottom: 4, borderRadius: 9, cursor: "pointer", fontFamily: font, background: rowBg, border: `1px solid ${isPending ? "#2488c8" : border}` }}>
+              style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", minHeight: 52, padding: "7px 10px", marginBottom: 4, borderRadius: 9, cursor: "pointer", fontFamily: font, background: rowBg, border: `1px solid ${isPending ? THEME[dk ? "dark" : "light"].accent : border}` }}>
               <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
                 <div style={{ fontSize: 17, fontWeight: 800, color: text, fontFamily: mono }}>{d.getDate()}</div>
                 <div style={{ fontSize: 9.5, fontWeight: 700, color: isWknd ? "#a05010" : muted, textTransform: "uppercase" }}>{DAY_HDR[dow]}</div>
@@ -5368,7 +5383,7 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
                     <span style={{ fontSize: 9.5, fontWeight: 800, color: "#a05010" }}>unsaved - tap with that person armed to remove</span>
                   </div>
                 )}
-                {isPending && <div style={{ fontSize: 11, fontWeight: 700, color: "#2488c8", marginBottom: 2 }}>range starts here</div>}
+                {isPending && <div style={{ fontSize: 11, fontWeight: 700, color: THEME[dk ? "dark" : "light"].accentText, marginBottom: 2 }}>range starts here</div>}
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                   {off.length === 0 && coveredAll.length === 0 && !isPending && <span style={{ fontSize: 10.5, color: muted }}>nobody off</span>}
                   {off.map((pid, i) => (
@@ -5576,8 +5591,8 @@ function Padlock({ title, size, className }) {
   return (
     <svg role="img" aria-label={title || "locked"} className={className} width={s} height={s} viewBox="0 0 10 10" style={{flexShrink:0,display:"inline-block"}}>
       <title>{title || "locked"}</title>
-      <rect x="1.5" y="4.5" width="7" height="5" rx="1" fill="#7a8a98"/>
-      <path d="M3 4.7V3a2 2 0 0 1 4 0v1.7" fill="none" stroke="#7a8a98" strokeWidth="1.3"/>
+      <rect x="1.5" y="4.5" width="7" height="5" rx="1" fill="#5B6B82"/>
+      <path d="M3 4.7V3a2 2 0 0 1 4 0v1.7" fill="none" stroke="#5B6B82" strokeWidth="1.3"/>
     </svg>
   );
 }
@@ -5715,11 +5730,11 @@ function DayEditor(props) {
 
   const dt = parse(day);
   const title = DAY_HDR[dt.getDay()] + " " + MO[dt.getMonth()] + " " + dt.getDate() + ", " + dt.getFullYear();
-  const panelBg = dk ? "#16213e" : "#ffffff";
-  const text = dk ? "#e0e0f0" : "#2c3e50";
-  const sub = dk ? "#8a8aaa" : "#7a8a98";
-  const border = dk ? "#2a3a5e" : "#e0e4ea";
-  const inp = { ...css.inp, ...(dk ? { background: "#0f3460", border: "1px solid #2a3a5e", color: "#e0e0f0" } : {}) };
+  const panelBg = dk ? "#13294B" : "#ffffff";
+  const text = dk ? "#E6ECF5" : "#1F2A3A";
+  const sub = dk ? "#9FB0C8" : "#5B6B82";
+  const border = dk ? "#24406B" : "#DCE3EC";
+  const inp = { ...css.inp, ...(dk ? { background: "#0F2140", border: "1px solid #24406B", color: "#E6ECF5" } : {}) };
   const label = { fontSize: 10, color: sub, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 3 };
   const pill = (id) => { const c = colorOf(id); return <span style={{background:c.tg,color:c.tx,border:"1px solid " + c.bd,borderRadius:5,padding:"1px 8px",fontSize:12,fontWeight:700}}>{nameOf(id)}</span>; };
   const holderView = (role) => {
@@ -5840,7 +5855,7 @@ function DayEditor(props) {
         {/* Sticky footer: the Cancel / Save row stays in view while the dialog body scrolls (a phone showed it below the fold - Prompt 11). */}
         <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",borderTop:"1px solid " + border}}>
           {!isPublicMode && (canEdit || myRole) && (
-            <button type="button" data-testid="editor-trade" onClick={() => onTrade(day, myRole || (entry && entry.primary ? "primary" : "backup"))} style={{background:"none",border:"none",color:"#1a6fa8",fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0}}>Propose a trade for this day</button>
+            <button type="button" data-testid="editor-trade" onClick={() => onTrade(day, myRole || (entry && entry.primary ? "primary" : "backup"))} style={{background:"none",border:"none",color:THEME[dk ? "dark" : "light"].accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0}}>Propose a trade for this day</button>
           )}
           <span style={{flex:1}}/>
           <span style={{fontSize:10,color:sub}}>Esc closes - arrow keys move a day</span>
@@ -5924,6 +5939,7 @@ function suPatternLabel(p) {
 // diagnostics when it covers the range, else '-'.
 const TOTALS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, loaded }) {
+  const T = THEME[dk ? "dark" : "light"];
   const now = parse(today);
   const [mode, setMode] = useState("month"); // month | ytd | rolling | fairness
   const [year, setYear] = useState(now.getFullYear());
@@ -6019,17 +6035,17 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       showToast(real ? "Downloaded " + name : "Opened the CSV in a new view (this browser blocks downloads) - save it from there.", real ? "success" : "info");
     } catch (e) { console.warn("totals CSV export failed:", e); showToast("Couldn't export the CSV: " + (e && e.message ? e.message : String(e)), "error"); }
   };
-  const th = { textAlign: "right", padding: "7px 8px", color: "#5a6a78", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
+  const th = { textAlign: "right", padding: "7px 8px", color: "#5B6B82", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
   const thL = { ...th, textAlign: "left" };
-  const td = { padding: "6px 8px", fontFamily: mono, fontSize: 12.5, textAlign: "right", color: dk ? "#e0e0f0" : "#2c3e50", whiteSpace: "nowrap" };
+  const td = { padding: "6px 8px", fontFamily: mono, fontSize: 12.5, textAlign: "right", color: dk ? "#E6ECF5" : "#1F2A3A", whiteSpace: "nowrap" };
   const tdL = { ...td, textAlign: "left", fontFamily: font };
-  const border = dk ? "#2a3a5e" : "#e8ecf0";
+  const border = dk ? "#24406B" : "#e8ecf0";
   // J: the primary deviation compares PRIMARY days with the primary target, the backup deviation backup days with
   // the backup target (a surgeon's target is per role since 9/22 - never total days against one number)
-  const devColor = (r) => r.target === null ? "#8a94a0" : r.t.primary > r.target ? "#c04040" : r.t.primary < r.target ? "#1a6fa8" : "#1a8040";
+  const devColor = (r) => r.target === null ? "#8a94a0" : r.t.primary > r.target ? "#c04040" : r.t.primary < r.target ? T.primaryEnd : "#1a8040";
   // data-flag mirrors the colour so the dark sheet can keep it (its td rule overrides inline colours - vis-004)
   const devFlag = (r) => r.target === null ? undefined : r.t.primary > r.target ? "over" : r.t.primary < r.target ? "under" : "ok";
-  const devColorB = (r) => r.targetB === null ? "#8a94a0" : r.t.backup > r.targetB ? "#c04040" : r.t.backup < r.targetB ? "#1a6fa8" : "#1a8040";
+  const devColorB = (r) => r.targetB === null ? "#8a94a0" : r.t.backup > r.targetB ? "#c04040" : r.t.backup < r.targetB ? T.primaryEnd : "#1a8040";
   const devFlagB = (r) => r.targetB === null ? undefined : r.t.backup > r.targetB ? "over" : r.t.backup < r.targetB ? "under" : "ok";
   const targetSum = (r) => r.target === null && r.targetB === null ? null : Math.round(((r.target || 0) + (r.targetB || 0)) * 10) / 10;
   const overCap = (r) => r.cap !== null && r.capUse > r.cap * nMonths;
@@ -6065,7 +6081,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
             <tbody>
               {rows.map(r => (
                 <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-maxconsecany={r.t.maxConsecutiveAnyRole} data-east={r.east} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
-                  <td style={tdL}><Badge id={r.id}/></td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: r.src === "preview" ? "#7a4fbf" : "#7a8a98" }}>{r.srcLabel}</td>}
+                  <td style={tdL}><Badge id={r.id}/></td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: r.src === "preview" ? "#7a4fbf" : "#5B6B82" }}>{r.srcLabel}</td>}
                   <td style={td}>{r.t.primary}</td><td style={td}>{r.t.backup}</td><td style={{ ...td, fontWeight: 700 }}>{r.t.total}</td><td style={td}>{r.t.weekendDays}</td>
                   <td style={td} title={r.t.holidayUnits.join(", ") || "none"}>{r.t.majorHolidays} / {r.t.minorHolidays}</td>
                   <td data-col="maxconsec" data-flag={overConsec(r) ? "over" : undefined} style={{ ...td, color: overConsec(r) ? "#c04040" : td.color }}>{r.t.maxConsecutive}{r.maxRule !== null ? " (" + r.maxRule + ")" : ""}</td>
@@ -6083,20 +6099,20 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
         </div>
       ) : (
         <div data-testid="fairness-view">
-          <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 10px", lineHeight: 1.5 }}>Total days in {range.label} against each surgeon's targets (green mark = primary target + backup target) and primary cap (red mark). Fairness at Silvis (9/22) is an equal share of primary days and, separately, of backup days for every pool member, within each person's availability - the deviation reads primary days against the primary target, then backup days against the backup target; a surgeon without a target shows '-'.</p>
+          <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 10px", lineHeight: 1.5 }}>Total days in {range.label} against each surgeon's targets (green mark = primary target + backup target) and primary cap (red mark). Fairness at Silvis (9/22) is an equal share of primary days and, separately, of backup days for every pool member, within each person's availability - the deviation reads primary days against the primary target, then backup days against the backup target; a surgeon without a target shows '-'.</p>
           {(() => {
             const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, targetSum(r) === null ? 0 : targetSum(r))));
             const pct = (v) => Math.min(100, Math.round((v / scale) * 100));
             return rows.map(r => (
               <div key={r.id + r.src} data-testid={"fairness-row-" + r.id} data-source={r.src} data-total={r.t.total} data-deviation={r.deviation} data-deviation-b={r.deviationB} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid " + border, flexWrap: "wrap" }}>
                 <div style={{ width: 110, display: "flex", gap: 6, alignItems: "center" }}><Badge id={r.id}/>{r.src === "preview" && <span style={{ fontSize: 9, color: "#7a4fbf" }}>preview</span>}</div>
-                <div style={{ flex: "1 1 220px", position: "relative", height: 18, background: dk ? "#16213e" : "#eef1f4", borderRadius: 4, overflow: "hidden" }}>
-                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : "linear-gradient(90deg,#1a6fa8,#2488c8)", borderRadius: 4 }}/>
+                <div data-testid="fairness-track" style={{ flex: "1 1 220px", position: "relative", height: 18, background: T.barTrack, borderRadius: 4, overflow: "hidden" }}>
+                  <div data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`, borderRadius: 4 }}/>
                   {countsEast(r.id) && r.eastP > 0 && <div title={"+ " + r.eastP + " East primary-week day(s) counted toward the cap (P)"} style={{ position: "absolute", left: pct(r.t.total) + "%", top: 0, bottom: 0, width: Math.max(0, pct(r.t.total + r.eastP) - pct(r.t.total)) + "%", background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)" }}/>}
                   {targetSum(r) !== null && <div data-testid="fairness-target-mark" title={"target P " + (r.target === null ? "-" : r.target) + " + B " + (r.targetB === null ? "-" : r.targetB) + " = " + targetSum(r)} style={{ position: "absolute", left: pct(targetSum(r)) + "%", top: 0, bottom: 0, width: 2, background: "#1a8040" }}/>}
                   {r.cap !== null && <div title={"cap " + r.cap * nMonths} style={{ position: "absolute", left: pct(r.cap * nMonths) + "%", top: 0, bottom: 0, width: 2, background: "#c04040" }}/>}
                 </div>
-                <div style={{ fontFamily: mono, fontSize: 12, color: dk ? "#e0e0f0" : "#2c3e50", minWidth: 250 }}>
+                <div style={{ fontFamily: mono, fontSize: 12, color: dk ? "#E6ECF5" : "#1F2A3A", minWidth: 250 }}>
                   {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - target B {r.targetB === null ? "-" : r.targetB}{r.targetBKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" && r.deviationB === "-" ? "no target" : r.deviation === "-" ? "no primary target" : "deviation " + r.deviation + " P"}</span>{r.targetB !== null && <span data-flag={devFlagB(r)} style={{ color: devColorB(r), fontWeight: 700 }}> / {r.deviationB} B</span>}
                 </div>
               </div>
@@ -6107,14 +6123,14 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       {hasOutside && (
         <div data-testid="totals-external" style={{ marginTop: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: dk ? "#c0c0d8" : "#3a4a58", marginBottom: 2 }}>Outside surgeons</div>
-          <div style={{ fontSize: 11, color: "#7a8a98", marginBottom: 6 }}>Written in by hand (internal locums): their days come off the pool's open slots and count toward nobody's share or cap.</div>
+          <div style={{ fontSize: 11, color: "#5B6B82", marginBottom: 6 }}>Written in by hand (internal locums): their days come off the pool's open slots and count toward nobody's share or cap.</div>
           <div className="table-wrap" style={css.tableWrap}>
             <table data-testid="totals-external-table" style={{ borderCollapse: "collapse", minWidth: 360 }}>
               <thead><tr><th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}<th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th></tr></thead>
               <tbody>
                 {outside.map(o => o.rows.map(r => (
                   <tr key={r.id + o.src.key} data-testid={"totals-ext-row-" + r.id} data-source={o.src.key} data-primary={r.primary} data-backup={r.backup} data-total={r.total} style={{ borderTop: "1px solid " + border, opacity: o.src.key === "preview" ? 0.85 : 1, fontStyle: o.src.key === "preview" ? "italic" : "normal" }}>
-                    <td style={tdL}><Badge id={r.id}/>{!r.active && <span style={{ fontSize: 10, color: "#9aa4ae", marginLeft: 6 }}>inactive</span>}</td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: o.src.key === "preview" ? "#7a4fbf" : "#7a8a98" }}>{o.src.label}</td>}
+                    <td style={tdL}><Badge id={r.id}/>{!r.active && <span style={{ fontSize: 10, color: "#9aa4ae", marginLeft: 6 }}>inactive</span>}</td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: o.src.key === "preview" ? "#7a4fbf" : "#5B6B82" }}>{o.src.label}</td>}
                     <td style={td}>{r.primary}</td><td style={td}>{r.backup}</td><td style={{ ...td, fontWeight: 700 }}>{r.total}</td>
                   </tr>
                 )))}
@@ -6123,8 +6139,8 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
           </div>
         </div>
       )}
-      {anyImplied && <div style={{ fontSize: 11, color: "#7a8a98", marginTop: 8 }}>* implied equal share (of the period's open primary slots and, separately, its open backup slots) from the last Generate preview's diagnostics - no explicit monthlyTarget in Setup.</div>}
-      {showEast && <div style={{ fontSize: 11, color: "#7a8a98", marginTop: 4 }}>East days: days on Davenport call (published weeks, derived weeks and overrides) inside the period; a cap that counts them reads Silvis + East.</div>}
+      {anyImplied && <div style={{ fontSize: 11, color: "#5B6B82", marginTop: 8 }}>* implied equal share (of the period's open primary slots and, separately, its open backup slots) from the last Generate preview's diagnostics - no explicit monthlyTarget in Setup.</div>}
+      {showEast && <div style={{ fontSize: 11, color: "#5B6B82", marginTop: 4 }}>East days: days on Davenport call (published weeks, derived weeks and overrides) inside the period; a cap that counts them reads Silvis + East.</div>}
     </div>
   );
 }
@@ -6132,7 +6148,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
 function SuField({ label, children, width, hint }) {
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", gap: 2, marginRight: 10, marginBottom: 8, width: width || "auto", verticalAlign: "top" }}>
-      <span style={{ fontSize: 10, color: "#7a8a98", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</span>
+      <span style={{ fontSize: 10, color: "#5B6B82", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</span>
       {children}
       {hint ? <span style={{ fontSize: 10, color: "#9aa4ae" }}>{hint}</span> : null}
     </div>
@@ -6195,7 +6211,7 @@ function RosterEditor({ css, roster, schedule, availabilityRows, timeOffRows, on
   };
   return (
     <div data-testid="roster-editor">
-      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Names and codes only - the schedule stores ids, the calendar shows last names, narrow cells show the code. Contact details never live here (accounts are linked under Users; addresses stay in Supabase Auth). Outside surgeons (internal locums, 9/22) get their own button: written in by hand in the day editor, never generated, tallied under their own heading; their note is operational only (no personal wording - the setup is readable with the public key).</p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Names and codes only - the schedule stores ids, the calendar shows last names, narrow cells show the code. Contact details never live here (accounts are linked under Users; addresses stay in Supabase Auth). Outside surgeons (internal locums, 9/22) get their own button: written in by hand in the day editor, never generated, tallied under their own heading; their note is operational only (no personal wording - the setup is readable with the public key).</p>
       <div className="table-wrap" style={css.tableWrap}>
         <table className="setup-table">
           <thead><tr><th>Id</th><th>Type</th><th>Last name</th><th>Code</th><th>Full name</th><th>Active</th><th>Roles</th><th>Note</th><th></th></tr></thead>
@@ -6203,7 +6219,7 @@ function RosterEditor({ css, roster, schedule, availabilityRows, timeOffRows, on
             {rows.map((r, i) => (
               <tr key={r.id + ":" + i}>
                 <td style={{ fontFamily: mono }}>{r.id}</td>
-                <td data-testid={"roster-type-" + r.id} style={{ fontSize: 11, fontWeight: 600, color: r.type === "external" ? "#8a5a10" : "#7a8a98" }}>{r.type === "external" ? "outside" : "pool"}</td>
+                <td data-testid={"roster-type-" + r.id} style={{ fontSize: 11, fontWeight: 600, color: r.type === "external" ? "#8a5a10" : "#5B6B82" }}>{r.type === "external" ? "outside" : "pool"}</td>
                 <td><input type="text" data-testid={"roster-name-" + r.id} value={r.name || ""} onChange={e => edit(i, "name", e.target.value)} style={{ ...inp, width: 110 }} /></td>
                 <td><input type="text" data-testid={"roster-code-" + r.id} value={r.code || ""} maxLength={4} onChange={e => edit(i, "code", e.target.value.toUpperCase())} style={{ ...inp, width: 60, fontFamily: mono }} /></td>
                 <td><input type="text" value={r.fullName || ""} onChange={e => edit(i, "fullName", e.target.value)} style={{ ...inp, width: 190 }} /></td>
@@ -6221,7 +6237,7 @@ function RosterEditor({ css, roster, schedule, availabilityRows, timeOffRows, on
         <button data-testid="roster-add-external" onClick={addExternal} style={css.mini(false)} title="An outside surgeon (internal locum): written in by hand in the day editor, never generated, tallied under its own heading">Add outside surgeon</button>
         <button data-testid="roster-save" onClick={save} disabled={!dirty} style={{ ...css.btn(true), padding: "5px 14px", opacity: dirty ? 1 : 0.5 }}>Save roster</button>
         {dirty && <button onClick={() => { setRows(suClone(roster || [])); setDirty(false); }} style={css.mini(false)}>Revert</button>}
-        <span style={{ fontSize: 11, color: "#7a8a98" }}>{dirty ? "Unsaved changes" : "Saved in the shared setup (autosave)."}</span>
+        <span style={{ fontSize: 11, color: "#5B6B82" }}>{dirty ? "Unsaved changes" : "Saved in the shared setup (autosave)."}</span>
       </div>
     </div>
   );
@@ -6235,10 +6251,10 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
   const commitName = (p) => { const v = names[p.id]; if (v === undefined || v === (p.display_name || "")) return; onSave(p, { display_name: v.trim() || null }); };
   return (
     <div data-testid="users-card">
-      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Accounts come from Supabase Auth (invite from the dashboard; the database creates the profile row). Link each one to a roster id and give it a role. The address column is read from user_profiles (authenticated-read) and is never copied anywhere else. {admins <= 1 ? "There is one admin - it cannot be demoted until another exists." : admins + " admins."}</p>
-      {loading && <p style={{ fontSize: 12, color: "#7a8a98" }}>Loading accounts</p>}
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Accounts come from Supabase Auth (invite from the dashboard; the database creates the profile row). Link each one to a roster id and give it a role. The address column is read from user_profiles (authenticated-read) and is never copied anywhere else. {admins <= 1 ? "There is one admin - it cannot be demoted until another exists." : admins + " admins."}</p>
+      {loading && <p style={{ fontSize: 12, color: "#5B6B82" }}>Loading accounts</p>}
       {error && <div data-testid="users-error" style={css.errBox}>{error}</div>}
-      {!loading && !error && (!profiles || profiles.length === 0) && <p style={{ fontSize: 12, color: "#7a8a98", fontStyle: "italic" }}>No accounts loaded yet.</p>}
+      {!loading && !error && (!profiles || profiles.length === 0) && <p style={{ fontSize: 12, color: "#5B6B82", fontStyle: "italic" }}>No accounts loaded yet.</p>}
       {!loading && profiles && profiles.length > 0 && (
         <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="users-table">
@@ -6246,7 +6262,7 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
             <tbody>
               {profiles.map(p => (
                 <tr key={p.id} data-user={p.id} data-role={p.role}>
-                  <td style={{ fontFamily: mono, fontSize: 11, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{p.email || <span style={{ color: "#9aa4ae" }}>(none on file)</span>}{myId === p.id ? <span style={{ marginLeft: 6, fontSize: 10, color: "#1a6fa8" }}>you</span> : null}</td>
+                  <td style={{ fontFamily: mono, fontSize: 11, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{p.email || <span style={{ color: "#9aa4ae" }}>(none on file)</span>}{myId === p.id ? <span style={{ marginLeft: 6, fontSize: 10, color: LIGHT.title }}>you</span> : null}</td>
                   <td><input type="text" value={names[p.id] !== undefined ? names[p.id] : (p.display_name || "")} onChange={e => setNames(n => ({ ...n, [p.id]: e.target.value }))} onBlur={() => commitName(p)} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={{ ...inp, width: 130 }} /></td>
                   <td>
                     <select data-testid={"user-role-" + p.id} value={p.role || "viewer"} onChange={e => onSave(p, { role: e.target.value })} style={{ ...inp, width: 110 }}>
@@ -6259,7 +6275,7 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
                       {(roster || []).map(s => <option key={s.id} value={s.id}>{s.id} {s.name}</option>)}
                     </select>
                   </td>
-                  <td style={{ fontSize: 11, color: "#7a8a98", fontFamily: mono }}>{p.created_at ? String(p.created_at).slice(0, 10) : ""}</td>
+                  <td style={{ fontSize: 11, color: "#5B6B82", fontFamily: mono }}>{p.created_at ? String(p.created_at).slice(0, 10) : ""}</td>
                 </tr>
               ))}
             </tbody>
@@ -6292,7 +6308,7 @@ function PatternListEditor({ css, label, list, onChange, withWeight, today, hint
   const [texts, setTexts] = React.useState({});
   return (
     <div style={{ marginBottom: 10 }}>
-      <div style={{ ...css.subT, margin: "8px 0 4px" }}>{label} <span style={{ fontWeight: 400, color: "#7a8a98" }}>({items.length})</span>{hint ? <span style={{ fontWeight: 400, color: "#9aa4ae", marginLeft: 6, fontSize: 11 }}>{hint}</span> : null}</div>
+      <div style={{ ...css.subT, margin: "8px 0 4px" }}>{label} <span style={{ fontWeight: 400, color: "#5B6B82" }}>({items.length})</span>{hint ? <span style={{ fontWeight: 400, color: "#9aa4ae", marginLeft: 6, fontSize: 11 }}>{hint}</span> : null}</div>
       {items.map((p, i) => {
         const kind = suPatternKind(p);
         const text = texts[i] !== undefined ? texts[i] : suPatternValueText(p);
@@ -6313,8 +6329,8 @@ function PatternListEditor({ css, label, list, onChange, withWeight, today, hint
               <input type="text" value={p.note || ""} placeholder="operational note (public)" onChange={e => update(i, { ...p, note: e.target.value })} style={{ ...inp, flex: "1 1 160px" }} />
               <button onClick={() => onChange(items.filter((_, j) => j !== i))} style={css.danger}>Remove</button>
             </div>
-            <div data-testid="pattern-preview" style={{ fontSize: 11, color: "#5a6a78", marginTop: 4, fontFamily: mono }}>
-              <span style={{ fontFamily: font, color: "#7a8a98" }}>{suPatternLabel(p)} - next 8: </span>{next.error ? <span data-testid="pattern-error" style={{ color: "#a83232", fontFamily: font }}>pattern is invalid - the rules engine refused it ({next.error})</span> : next.length ? next.join(", ") : "no matching date in the next two years"}
+            <div data-testid="pattern-preview" style={{ fontSize: 11, color: "#5B6B82", marginTop: 4, fontFamily: mono }}>
+              <span style={{ fontFamily: font, color: "#5B6B82" }}>{suPatternLabel(p)} - next 8: </span>{next.error ? <span data-testid="pattern-error" style={{ color: "#a83232", fontFamily: font }}>pattern is invalid - the rules engine refused it ({next.error})</span> : next.length ? next.join(", ") : "no matching date in the next two years"}
             </div>
           </div>
         );
@@ -6417,11 +6433,11 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
             </>}
           </div>
           <div style={{ marginTop: 4 }}>
-            <span style={{ fontSize: 10, color: "#7a8a98", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 8 }}>Hard never on</span>
+            <span style={{ fontSize: 10, color: "#5B6B82", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 8 }}>Hard never on</span>
             {SU_WEEKDAYS.map(w => <SuCheck key={w} label={w} checked={(get("hardNeverWeekdays", []) || []).indexOf(w) >= 0} onChange={v => toggleList("hardNeverWeekdays", w, v)} />)}
-            <span style={{ fontSize: 10, color: "#7a8a98", marginRight: 6 }}>applies to</span>
+            <span style={{ fontSize: 10, color: "#5B6B82", marginRight: 6 }}>applies to</span>
             {["primary", "backup"].map(r => <SuCheck key={r} label={r} checked={(get("hardNeverWeekdaysRoles", ["primary"]) || []).indexOf(r) >= 0} onChange={v => toggleList("hardNeverWeekdaysRoles", r, v, ["primary"])} />)}
-            <span style={{ fontSize: 10, color: "#7a8a98" }}>(default: primary only - backup is open to everyone since 9/22; at least one role stays ticked)</span>
+            <span style={{ fontSize: 10, color: "#5B6B82" }}>(default: primary only - backup is open to everyone since 9/22; at least one role stays ticked)</span>
           </div>
           <div>
             <SuCheck label="Does not take backup" title="9/22: backup is open to everyone unless the surgeon explicitly opts out. Checked = a hard block on every backup slot, holiday units included; primary is unaffected." checked={draft.backupOptOut === true} onChange={v => set("backupOptOut", v ? true : undefined)} testid="rules-backup-opt-out" />
@@ -6450,7 +6466,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <SuField label="Available weeks (Mondays, comma separated)" width="100%" hint="whitelist-weeks: governs from the month of the first Monday onward">
             <input type="text" value={(get("availableWeeks", []) || []).join(", ")} onChange={e => set("availableWeeks", suIsoList(e.target.value).length ? suIsoList(e.target.value) : undefined)} style={{ ...inp, width: "100%", fontFamily: mono }} />
           </SuField>
-          <div style={css.subT}>Availability windows <span style={{ fontWeight: 400, color: "#7a8a98" }}>(whitelist-windows: only these date ranges)</span></div>
+          <div style={css.subT}>Availability windows <span style={{ fontWeight: 400, color: "#5B6B82" }}>(whitelist-windows: only these date ranges)</span></div>
           {(get("availableWindows", []) || []).map((w, i) => (
             <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
               <input type="date" value={w.start || ""} onChange={e => { const l = suClone(get("availableWindows", [])); l[i] = { ...l[i], start: e.target.value }; set("availableWindows", l); }} style={inp} />
@@ -6472,7 +6488,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
         </div>
 
         <div style={box}>
-          <div style={css.subT}>Weekday pattern outside East-derived weeks <span style={{ fontWeight: 400, color: "#7a8a98" }}>(per weekday: allowed / not / only inside a Fri+Sat+Sun block)</span></div>
+          <div style={css.subT}>Weekday pattern outside East-derived weeks <span style={{ fontWeight: 400, color: "#5B6B82" }}>(per weekday: allowed / not / only inside a Fri+Sat+Sun block)</span></div>
           <SuCheck label="use a weekday pattern" checked={!!wp} onChange={v => set("outsideDerivedWeeks", v ? { canBePrimary: true, weekdayPattern: {} } : undefined)} />
           {wp && (
             <div className="table-wrap" style={css.tableWrap}>
@@ -6509,7 +6525,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
 
         <div style={box}>
           <div style={css.subT}>Holiday rules</div>
-          <span style={{ fontSize: 10, color: "#7a8a98", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 8 }}>Never covers</span>
+          <span style={{ fontSize: 10, color: "#5B6B82", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 8 }}>Never covers</span>
           {holNames.map(h => <SuCheck key={h} label={h} checked={(get("holidayRules.holidaysOff", []) || []).indexOf(h) >= 0} onChange={v => toggleList("holidayRules.holidaysOff", h, v)} />)}
           <div><SuField label="Max major holidays (rolling 12 months)" hint="blank = no limit"><input type="number" min="0" max="3" value={get("holidayRules.maxMajorHolidays", null) === null ? "" : get("holidayRules.maxMajorHolidays", "")} onChange={e => set("holidayRules.maxMajorHolidays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField></div>
         </div>
@@ -6534,7 +6550,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <button data-testid="rules-save" onClick={save} disabled={!dirty} style={{ ...css.btn(true), padding: "6px 14px", opacity: dirty ? 1 : 0.5 }}>Save rules for {s.name || sel}</button>
           {dirty && <button onClick={() => { setDraft(suClone(surgeonRules[sel] || {})); setDirty(false); }} style={css.mini(false)}>Revert</button>}
           <button onClick={() => { setRawText(JSON.stringify(draft, null, 2)); setRawOpen(o => !o); setRawErr(""); }} style={css.mini(rawOpen)}>{rawOpen ? "Hide JSON" : "Edit as JSON (everything else)"}</button>
-          <span style={{ fontSize: 11, color: "#7a8a98" }}>{dirty ? "Unsaved" : "Saved to surgeonRules." + sel + " (autosave)"}</span>
+          <span style={{ fontSize: 11, color: "#5B6B82" }}>{dirty ? "Unsaved" : "Saved to surgeonRules." + sel + " (autosave)"}</span>
         </div>
         {rawOpen && (
           <div style={{ marginBottom: 10 }}>
@@ -6607,7 +6623,7 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
   const years = []; for (let y = new Date().getFullYear() - 1; y <= new Date().getFullYear() + 2; y++) years.push(String(y));
   return (
     <div data-testid="availability-card">
-      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Dated statements the rules engine reads: <em>available</em> rows make a month a whitelist for that surgeon (only listed days are eligible), <em>unavailable</em> always blocks, <em>backup_only</em> blocks primary, <em>no_backup</em> blocks backup, <em>avoid</em>/<em>prefer</em> are soft. Recurring patterns live in Rules, not here. Notes are public (operational wording only).</p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Dated statements the rules engine reads: <em>available</em> rows make a month a whitelist for that surgeon (only listed days are eligible), <em>unavailable</em> always blocks, <em>backup_only</em> blocks primary, <em>no_backup</em> blocks backup, <em>avoid</em>/<em>prefer</em> are soft. Recurring patterns live in Rules, not here. Notes are public (operational wording only).</p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 8, padding: "8px 10px", border: "1px solid #e8ecf0", borderRadius: 8 }}>
         <SuField label="Person"><select value={form.person_id} onChange={e => setForm(f => ({ ...f, person_id: e.target.value }))} style={{ ...inp, width: 120 }}><option value="">Select</option>{(roster || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></SuField>
         <SuField label="Kind"><select value={form.kind} onChange={e => setForm(f => ({ ...f, kind: e.target.value }))} style={{ ...inp, width: 120 }}>{SU_AVAIL_KINDS.map(k => <option key={k} value={k}>{k}</option>)}</select></SuField>
@@ -6629,7 +6645,7 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
         </div>
         <textarea data-testid="paste-text" value={paste.text} onChange={e => setPaste(p => ({ ...p, text: e.target.value }))} placeholder="10/6, 10/10, 10/11, 10/19-10/24 or 2026-12-01, 2026-12-03" style={{ ...inp, width: "100%", minHeight: 54, fontFamily: mono }} />
         <div data-testid="paste-preview" style={{ fontSize: 11.5, color: "#3a4a58", marginTop: 6, lineHeight: 1.5 }}>
-          {parsed.dates.length === 0 ? <span style={{ color: "#7a8a98" }}>Nothing parsed yet.</span> : <>
+          {parsed.dates.length === 0 ? <span style={{ color: "#5B6B82" }}>Nothing parsed yet.</span> : <>
             <strong>{parsed.dates.length} date(s)</strong> in <strong>{ranges.length} range(s)</strong>: <span style={{ fontFamily: mono }}>{ranges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ")}</span>
             {paste.person_id ? <span> - {pasteNew} new row(s), {pasteRows.length - pasteNew} already exist (skipped)</span> : <span> - pick a person</span>}
           </>}
@@ -6638,7 +6654,7 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
         <button data-testid="paste-insert" onClick={submitPaste} disabled={busy || !paste.person_id || !pasteNew || contactNote(paste.note)} style={{ ...css.btn(true), padding: "5px 12px", marginTop: 6, opacity: (busy || !paste.person_id || !pasteNew) ? 0.5 : 1 }}>Insert {pasteNew} row(s)</button>
       </div>
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, color: "#7a8a98" }}>Show:</span>
+        <span style={{ fontSize: 11, color: "#5B6B82" }}>Show:</span>
         <button onClick={() => setFilter("")} style={css.mini(!filter)}>everyone ({(rows || []).length})</button>
         {(roster || []).map(s => <button key={s.id} data-testid={"avail-filter-" + s.id} onClick={() => setFilter(s.id)} style={css.mini(filter === s.id)}>{s.name} ({(rows || []).filter(r => r.person_id === s.id).length})</button>)}
       </div>
@@ -6646,12 +6662,12 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
         <table className="setup-table" data-testid="avail-table">
           <thead><tr><th>Person</th><th>Kind</th><th>Role</th><th>Dates</th><th>Note</th><th>Source</th><th></th></tr></thead>
           <tbody>
-            {shown.length === 0 && <tr><td colSpan={7} style={{ color: "#7a8a98", fontStyle: "italic" }}>No rows.</td></tr>}
+            {shown.length === 0 && <tr><td colSpan={7} style={{ color: "#5B6B82", fontStyle: "italic" }}>No rows.</td></tr>}
             {shown.map(r => (
               <tr key={r.id} data-avail={r.id}>
                 <td>{nameOf(r.person_id)}</td><td style={{ fontFamily: mono }}>{r.kind}</td><td style={{ fontFamily: mono }}>{r.role || "any"}</td>
                 <td style={{ fontFamily: mono, whiteSpace: "nowrap" }}>{String(r.start_date).slice(0, 10)}{r.end_date !== r.start_date ? " to " + String(r.end_date).slice(0, 10) : ""}</td>
-                <td style={{ color: "#5a6a78" }}>{r.note || ""}</td><td style={{ fontFamily: mono, fontSize: 11 }}>{r.source || ""}</td>
+                <td style={{ color: "#5B6B82" }}>{r.note || ""}</td><td style={{ fontFamily: mono, fontSize: 11 }}>{r.source || ""}</td>
                 <td><button onClick={() => onDelete(r)} disabled={busy} style={css.danger}>Delete</button></td>
               </tr>
             ))}
@@ -6700,11 +6716,11 @@ function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onS
   const counts = suHolidayCounts(schedule, (holidays && holidays.units) || {}, "2026-09-14");
   return (
     <div data-testid="holidays-card">
-      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Each unit gets one primary and one backup who stick through every day of it; a unit pre-empts the weekend it overlaps. Days are editable per year (Faraz: "the days will have to be figured out"). Coverage is read from the saved schedule; edit a day through the day editor.</p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Each unit gets one primary and one backup who stick through every day of it; a unit pre-empts the weekend it overlaps. Days are editable per year (Faraz: "the days will have to be figured out"). Coverage is read from the saved schedule; edit a day through the day editor.</p>
       {!rulesImported && <div style={css.warnBox}>Rules are not imported yet - holiday units arrive with the seed import, or add a year and units here.</div>}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-        <span style={{ fontSize: 11, color: "#7a8a98" }}>Held since 9/14/2026 (units, major/minor):</span>
-        {(roster || []).map(s => { const c = counts[s.id] || { major: 0, minor: 0 }; return <span key={s.id} data-testid={"hol-count-" + s.id} style={{ fontSize: 11, fontFamily: mono, background: "#f4f6f8", border: "1px solid #e0e4ea", borderRadius: 5, padding: "2px 7px" }}>{s.name} {c.major}/{c.minor}</span>; })}
+        <span style={{ fontSize: 11, color: "#5B6B82" }}>Held since 9/14/2026 (units, major/minor):</span>
+        {(roster || []).map(s => { const c = counts[s.id] || { major: 0, minor: 0 }; return <span key={s.id} data-testid={"hol-count-" + s.id} style={{ fontSize: 11, fontFamily: mono, background: "#f4f6f8", border: "1px solid #DCE3EC", borderRadius: 5, padding: "2px 7px" }}>{s.name} {c.major}/{c.minor}</span>; })}
       </div>
       {years.map(y => (
         <div key={y} style={{ border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
@@ -6733,7 +6749,7 @@ function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onS
                     </tr>
                   );
                 })}
-                {(units[y] || []).length === 0 && <tr><td colSpan={5} style={{ color: "#7a8a98", fontStyle: "italic" }}>No units for {y}.</td></tr>}
+                {(units[y] || []).length === 0 && <tr><td colSpan={5} style={{ color: "#5B6B82", fontStyle: "italic" }}>No units for {y}.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -6744,9 +6760,9 @@ function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onS
         <button onClick={addYear} style={css.mini(false)}>Add year</button>
         <button data-testid="holidays-save" onClick={save} disabled={!dirty} style={{ ...css.btn(true), padding: "5px 14px", opacity: dirty ? 1 : 0.5 }}>Save holidays</button>
         {dirty && <button onClick={() => { setDraft(suClone(holidays && holidays.units ? holidays : { units: {} })); setDirty(false); }} style={css.mini(false)}>Revert</button>}
-        <span style={{ fontSize: 11, color: "#7a8a98" }}>{dirty ? "Unsaved changes" : "Saved in the shared setup (autosave)."}</span>
+        <span style={{ fontSize: 11, color: "#5B6B82" }}>{dirty ? "Unsaved changes" : "Saved in the shared setup (autosave)."}</span>
       </div>
-      <p data-testid="holidays-prefill-hint" style={{ fontSize: 11, color: "#7a8a98", margin: "6px 0 0" }}>{(groupRules && groupRules.holidays && groupRules.holidays.mondayMinorAbsorbsWeekend === true) ? "New years are pre-filled from the group rule (minor Monday holidays absorb the weekend before); edit any unit's days." : "New years are pre-filled with single-day holidays (the Monday-minor group rule is off in the shared setup); edit any unit's days."}</p>
+      <p data-testid="holidays-prefill-hint" style={{ fontSize: 11, color: "#5B6B82", margin: "6px 0 0" }}>{(groupRules && groupRules.holidays && groupRules.holidays.mondayMinorAbsorbsWeekend === true) ? "New years are pre-filled from the group rule (minor Monday holidays absorb the weekend before); edit any unit's days." : "New years are pre-filled with single-day holidays (the Monday-minor group rule is off in the shared setup); edit any unit's days."}</p>
     </div>
   );
 }
@@ -6776,27 +6792,27 @@ function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ct
   const tone = (k) => state(k) === "ok" ? "#1a8040" : state(k) === "failed" ? "#a83232" : "#8a5a10";
   return (
     <div data-testid="east-card">
-      <div data-testid="east-status" style={{ fontSize: 12.5, color: "#2c3e50", lineHeight: 1.6, marginBottom: 8 }}>
+      <div data-testid="east-status" style={{ fontSize: 12.5, color: "#1F2A3A", lineHeight: 1.6, marginBottom: 8 }}>
         <strong>East feed:</strong> fetched {suFmtTs(fetchedAt)}, {weeks.length} week(s), coverage {cov ? cov.from + ".." + cov.to : "none"}, next derived primary week {nextPrimary ? nextPrimary.weekMonday + " (" + nameOf(nextPrimary.surgeonId) + ", " + nextPrimary.source + ")" : "none on file"}.
         <span style={{ marginLeft: 8, fontSize: 11 }}>cache: <span style={{ color: tone("feed") }}>{state("feed")}</span>, forecast: <span style={{ color: tone("forecast") }}>{state("forecast")}</span>, overrides: <span style={{ color: tone("overrides") }}>{state("overrides")}</span></span>
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
         <button data-testid="east-refresh" onClick={onRefresh} disabled={refreshing} style={{ ...css.btn(true), padding: "5px 12px", opacity: refreshing ? 0.6 : 1 }}>{refreshing ? "Fetching" : "Refresh from Davenport (read-only)"}</button>
-        <span style={{ fontSize: 11, color: "#7a8a98" }}>Reads the Davenport project's published weeks with its public key, caches them here, then rebuilds eligibility. A failed fetch keeps the cache and says so - it never reads as "no East call".</span>
+        <span style={{ fontSize: 11, color: "#5B6B82" }}>Reads the Davenport project's published weeks with its public key, caches them here, then rebuilds eligibility. A failed fetch keeps the cache and says so - it never reads as "no East call".</span>
       </div>
       <div style={{ border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Forecast (while Davenport is unpublished)</div>
-        {(forecastRows || []).length === 0 ? <p style={{ fontSize: 12, color: "#7a8a98", margin: 0 }}>No forecast rows.</p> : (
+        {(forecastRows || []).length === 0 ? <p style={{ fontSize: 12, color: "#5B6B82", margin: 0 }}>No forecast rows.</p> : (
           <div style={{ fontSize: 12, color: "#3a4a58", lineHeight: 1.6 }}>
             generated {suFmtTs(fcGenerated)}, {fcRuns !== undefined ? fcRuns + " runs" : "runs unknown"}, {(forecastRows || []).length} week(s){fcInsideCov > 0 ? <span style={{ color: "#a83232" }}> ({fcInsideCov} inside the published coverage (ignored) - refresh the feed to delete them)</span> : null}; days at or above {Math.round((threshold || 0.5) * 100)}% in the next 90 days: {fcDays.length === 0 ? "none" : null}
             {fcDays.length > 0 && <div data-testid="east-forecast-days" style={{ fontFamily: mono, fontSize: 11 }}>{fcDays.map(d => d + " " + Math.round(forecast[d] * 100) + "%").join(", ")}</div>}
           </div>
         )}
-        <p style={{ fontSize: 11, color: "#7a8a98", margin: "4px 0 0" }}>How to refresh: run <span style={{ fontFamily: mono }}>node scripts/east-forecast.js --sql</span> on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Refreshing the feed caches Davenport's published weeks and deletes forecast rows for weeks that are now published; the forecast only ever fills weeks Davenport has not published.</p>
+        <p style={{ fontSize: 11, color: "#5B6B82", margin: "4px 0 0" }}>How to refresh: run <span style={{ fontFamily: mono }}>node scripts/east-forecast.js --sql</span> on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Refreshing the feed caches Davenport's published weeks and deletes forecast rows for weeks that are now published; the forecast only ever fills weeks Davenport has not published.</p>
       </div>
       <div style={{ border: "1px solid " + ((conflicts || []).length ? "#e0b4b4" : "#e8ecf0"), borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
         <div style={{ ...css.subT, margin: "0 0 4px", color: (conflicts || []).length ? "#a83232" : undefined }}>Conflicts with the published schedule ({(conflicts || []).length})</div>
-        <p style={{ fontSize: 11, color: "#7a8a98", margin: "0 0 4px" }}>Days where the East data makes the assigned surgeon ineligible - on East call while Silvis primary, or a derived East week the schedule no longer matches. Locked days are listed too; open the day to trade or reassign.</p>
+        <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 4px" }}>Days where the East data makes the assigned surgeon ineligible - on East call while Silvis primary, or a derived East week the schedule no longer matches. Locked days are listed too; open the day to trade or reassign.</p>
         <div data-testid="east-conflicts" style={{ fontSize: 12, fontFamily: mono, lineHeight: 1.7 }}>
           {(conflicts || []).length === 0 ? "none" : (conflicts || []).map(c => (
             <div key={c.day + c.role}>
@@ -6812,7 +6828,7 @@ function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ct
           <table className="setup-table" data-testid="east-overrides">
             <thead><tr><th>Day</th><th>Surgeon</th><th>Busy</th><th>Note</th><th></th></tr></thead>
             <tbody>
-              {(overrideRows || []).length === 0 && <tr><td colSpan={5} style={{ color: "#7a8a98", fontStyle: "italic" }}>No overrides.</td></tr>}
+              {(overrideRows || []).length === 0 && <tr><td colSpan={5} style={{ color: "#5B6B82", fontStyle: "italic" }}>No overrides.</td></tr>}
               {(overrideRows || []).map(r => (
                 <tr key={r.day + ":" + r.person_id}><td style={{ fontFamily: mono }}>{String(r.day).slice(0, 10)}</td><td>{nameOf(r.person_id)}</td><td>{r.busy ? "busy (on East call)" : "free (force clear)"}</td><td>{r.note || ""}</td><td><button onClick={() => onDeleteOverride(r.day, r.person_id)} style={css.danger}>Delete</button></td></tr>
               ))}
@@ -6830,24 +6846,24 @@ function EastFeedCard({ css, feedRows, forecastRows, overrideRows, loadState, ct
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 260px", border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px" }}>
           <div style={{ ...css.subT, margin: "0 0 4px" }}>Derived weeks (East week to Silvis role)</div>
-          {derived.length === 0 ? <p style={{ fontSize: 12, color: "#7a8a98", margin: 0 }}>None derived.</p> : (
+          {derived.length === 0 ? <p style={{ fontSize: 12, color: "#5B6B82", margin: 0 }}>None derived.</p> : (
             <div data-testid="east-derived" style={{ fontSize: 12, fontFamily: mono, lineHeight: 1.6 }}>
-              {derived.slice().sort((a, b) => a.weekMonday < b.weekMonday ? -1 : 1).map(w => <div key={w.weekMonday + w.surgeonId}>{w.weekMonday} {nameOf(w.surgeonId)} Silvis {w.silvisRole} <span style={{ color: "#7a8a98" }}>({w.source})</span></div>)}
+              {derived.slice().sort((a, b) => a.weekMonday < b.weekMonday ? -1 : 1).map(w => <div key={w.weekMonday + w.surgeonId}>{w.weekMonday} {nameOf(w.surgeonId)} Silvis {w.silvisRole} <span style={{ color: "#5B6B82" }}>({w.source})</span></div>)}
             </div>
           )}
         </div>
         <div style={{ flex: "1 1 260px", border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px" }}>
           <div style={{ ...css.subT, margin: "0 0 4px" }}>East busy days in {monthKey} (published + overrides)</div>
-          {busyIds.length === 0 ? <p style={{ fontSize: 12, color: "#7a8a98", margin: 0 }}>No surgeon has an East busy-days rule.</p> : busyIds.map(id => {
+          {busyIds.length === 0 ? <p style={{ fontSize: 12, color: "#5B6B82", margin: 0 }}>No surgeon has an East busy-days rule.</p> : busyIds.map(id => {
             const P = ctx && ctx.per ? ctx.per[id] : null;
             const days = P ? Array.from(P.eastBusy).filter(d => d.slice(0, 7) === monthKey).sort() : [];
-            return <div key={id} data-testid={"east-busy-" + id} style={{ fontSize: 12, marginBottom: 4 }}><strong>{nameOf(id)}</strong>{meta[id].eastId ? "" : " (East id unresolved)"}: {days.length ? <span style={{ fontFamily: mono }}>{days.map(d => fmtMD(d)).join(", ")}</span> : <span style={{ color: "#7a8a98" }}>none</span>}</div>;
+            return <div key={id} data-testid={"east-busy-" + id} style={{ fontSize: 12, marginBottom: 4 }}><strong>{nameOf(id)}</strong>{meta[id].eastId ? "" : " (East id unresolved)"}: {days.length ? <span style={{ fontFamily: mono }}>{days.map(d => fmtMD(d)).join(", ")}</span> : <span style={{ color: "#5B6B82" }}>none</span>}</div>;
           })}
           {busyIds.map(id => {
             // Prompt 12 V: standing East days (surgeonRules.<id>.eastStanding) - read-only; seed/blob data, no Setup field yet
             const P = ctx && ctx.per ? ctx.per[id] : null;
             const st = P && P.eastStandingList ? P.eastStandingList : [];
-            return st.length ? <div key={"standing-" + id} data-testid={"east-standing-" + id} style={{ fontSize: 12, marginTop: 6, color: "#2c3e50" }}><strong>{nameOf(id)}</strong> - Standing: <span style={{ fontFamily: mono }}>{st.map(e => e.name + " " + e.days.join(", ")).join("; ")}</span> (every year; Silvis primary blocked, backup per the East-day rule; seed/blob data, no Setup field yet)</div> : null;
+            return st.length ? <div key={"standing-" + id} data-testid={"east-standing-" + id} style={{ fontSize: 12, marginTop: 6, color: "#1F2A3A" }}><strong>{nameOf(id)}</strong> - Standing: <span style={{ fontFamily: mono }}>{st.map(e => e.name + " " + e.days.join(", ")).join("; ")}</span> (every year; Silvis primary blocked, backup per the East-day rule; seed/blob data, no Setup field yet)</div> : null;
           })}
         </div>
       </div>
@@ -6880,10 +6896,10 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
             const v = dg.score[k];
             // An object-valued key (weights) is summarised, never String()-ed
             // into "[object Object]"; the full JSON sits in the title.
-            if (v && typeof v === "object") { const ks = Object.keys(v); return <span key={k} data-testid={"gen-score-" + k} title={JSON.stringify(v)}><span style={{ color: "#7a8a98" }}>{k}</span> {ks.length} key{ks.length === 1 ? "" : "s"}: {ks.slice(0, 4).map(x => x + "=" + v[x]).join(", ")}{ks.length > 4 ? ", ..." : ""}</span>; }
-            return <span key={k}><span style={{ color: "#7a8a98" }}>{k}</span> {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : String(v)}</span>;
+            if (v && typeof v === "object") { const ks = Object.keys(v); return <span key={k} data-testid={"gen-score-" + k} title={JSON.stringify(v)}><span style={{ color: "#5B6B82" }}>{k}</span> {ks.length} key{ks.length === 1 ? "" : "s"}: {ks.slice(0, 4).map(x => x + "=" + v[x]).join(", ")}{ks.length > 4 ? ", ..." : ""}</span>; }
+            return <span key={k}><span style={{ color: "#5B6B82" }}>{k}</span> {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : String(v)}</span>;
           })}
-          <span><span style={{ color: "#7a8a98" }}>candidates</span> {dg.candidatesTried}/{dg.bestOf}{dg.truncated ? " (time budget hit)" : ""}</span>
+          <span><span style={{ color: "#5B6B82" }}>candidates</span> {dg.candidatesTried}/{dg.bestOf}{dg.truncated ? " (time budget hit)" : ""}</span>
         </div>
       </div>
       <div style={box}>
@@ -6909,7 +6925,7 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
       {hasShares && (
         <div style={box} data-testid="gen-shares">
           <div style={{ ...css.subT, margin: "0 0 4px" }}>Implied shares (equal-share fairness: target vs what the rules allow)</div>
-          <p style={{ fontSize: 11, color: "#7a8a98", margin: "0 0 6px", lineHeight: 1.5 }}>Pool: {(IT.pool || []).map(nameOf).join(", ")}. Every pool member is targeted at an equal share of the month's open primary slots (after the window surgeon's reserved primaries) and, separately, of its open backup slots, held to locked days, caps and availability. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and locked days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus locked days, summed); where a locked floor or a cap pins a member it reads below the open count and the surplus days are placed by the soft terms alone.</p>
+          <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 6px", lineHeight: 1.5 }}>Pool: {(IT.pool || []).map(nameOf).join(", ")}. Every pool member is targeted at an equal share of the month's open primary slots (after the window surgeon's reserved primaries) and, separately, of its open backup slots, held to locked days, caps and availability. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and locked days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus locked days, summed); where a locked floor or a cap pins a member it reads below the open count and the surplus days are placed by the soft terms alone.</p>
           {months.map(m => { const I = IT.months[m]; if (!I || !I.members) return null; return (
             <div key={m} style={{ marginBottom: 6 }}>
               <div style={{ fontSize: 12, fontFamily: mono }} data-testid={"gen-shares-head-" + m}>{m}: primary {I.primaryOpen} open - {I.reservedForWindows} reserved = share {I.primaryShare} each of {I.poolSize}; backup {I.backupOpen} open = share {I.backupShare}{I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : ""}{typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""}</div>
@@ -6946,7 +6962,7 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
       </div>
       <div style={box}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Holiday units in range ({(dg.holidayUnits || []).length})</div>
-        {(dg.holidayUnits || []).length === 0 ? <p style={{ fontSize: 12, color: "#7a8a98", margin: 0 }}>None.</p> : (dg.holidayUnits || []).map((u, i) => <div key={i} data-testid="gen-holiday" style={{ fontSize: 12 }}>{u.name || "unit"} {(u.days || u.inRange || []).map ? (u.days || u.inRange || []).map(fmtMD).join(", ") : ""}: P {u.primary ? (String(u.primary).indexOf("external:") === 0 ? u.primary.slice(9) + " (ext)" : nameOf(u.primary)) : "OPEN"} / B {u.backup ? nameOf(u.backup) : "OPEN"}{u.uncovered ? <span style={{ color: "#a83232" }}> (open slot)</span> : null}</div>)}
+        {(dg.holidayUnits || []).length === 0 ? <p style={{ fontSize: 12, color: "#5B6B82", margin: 0 }}>None.</p> : (dg.holidayUnits || []).map((u, i) => <div key={i} data-testid="gen-holiday" style={{ fontSize: 12 }}>{u.name || "unit"} {(u.days || u.inRange || []).map ? (u.days || u.inRange || []).map(fmtMD).join(", ") : ""}: P {u.primary ? (String(u.primary).indexOf("external:") === 0 ? u.primary.slice(9) + " (ext)" : nameOf(u.primary)) : "OPEN"} / B {u.backup ? nameOf(u.backup) : "OPEN"}{u.uncovered ? <span style={{ color: "#a83232" }}> (open slot)</span> : null}</div>)}
         <div style={{ ...css.subT, margin: "8px 0 4px" }}>Weekend units: {(dg.weekendUnits || []).length}, fallback (daily) {(dg.weekendUnits || []).filter(w => w.fallback).length}</div>
         <div style={{ ...css.subT, margin: "8px 0 4px", color: (dg.lockViolations || []).length ? "#a83232" : undefined }}>Lock violations ({(dg.lockViolations || []).length})</div>
         {(dg.lockViolations || []).map((v, i) => <div key={i} style={{ fontSize: 12 }}>{fmtMD(v.day)} {v.role} {nameOf(v.id)} ({v.lock}): {(v.reasons || []).map(r => reasonLabel(r, nameOf)).join(", ")}</div>)}
@@ -6969,7 +6985,7 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onRe
   const laterText = (laterRanges || []).map(r => (r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)) + (holidayNames && holidayNames[r.start] ? " (" + holidayNames[r.start] + ")" : "")).join(", ");
   return (
     <div data-testid="generate-panel">
-      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Best-of-N over the rules (locks, vacations, availability, East feed, holiday units). The result is a PREVIEW drawn on the calendar with a dashed outline; nothing is written until Accept &amp; Publish, which snapshots first, writes the days through the compare-and-swap sync and then opens the publish dialog. <span data-testid="gen-last-published" data-gen-start={genStart || ""}>{!lastPublishedDay ? "No schedule days on file yet." : genFirstOpenDay ? "Range starts at the first open slot on or after today: " + genStart + " (locks are never touched; the run fills every open slot from there and generates the rest). Last saved day (end of the contiguous block): " + lastPublishedDay + "." : "No open slot on or after today - the range starts the day after the last saved day (end of the contiguous block: " + lastPublishedDay + "), or today when that day has passed: " + genStart + "."}{laterText ? " Days with a held slot from the start on: " + laterText + " - locked slots stay as they are while 'respect locks' is on; the open slots on those days are filled." : ""}</span></p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Best-of-N over the rules (locks, vacations, availability, East feed, holiday units). The result is a PREVIEW drawn on the calendar with a dashed outline; nothing is written until Accept &amp; Publish, which snapshots first, writes the days through the compare-and-swap sync and then opens the publish dialog. <span data-testid="gen-last-published" data-gen-start={genStart || ""}>{!lastPublishedDay ? "No schedule days on file yet." : genFirstOpenDay ? "Range starts at the first open slot on or after today: " + genStart + " (locks are never touched; the run fills every open slot from there and generates the rest). Last saved day (end of the contiguous block): " + lastPublishedDay + "." : "No open slot on or after today - the range starts the day after the last saved day (end of the contiguous block: " + lastPublishedDay + "), or today when that day has passed: " + genStart + "."}{laterText ? " Days with a held slot from the start on: " + laterText + " - locked slots stay as they are while 'respect locks' is on; the open slots on those days are filled." : ""}</span></p>
       {!rulesImported && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules are not imported yet - Generate needs surgeonRules / groupRules / holidays (Import seed below).</div>}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
         {(presets || []).map(p => <button key={p.label} data-testid={"gen-preset-" + p.label.replace(/\s+/g, "-").toLowerCase()} onClick={() => setOpts(o => ({ ...o, start: p.start, end: p.end }))} title={p.start + " to " + p.end} style={css.mini(isPreset(p))}>{p.label}</button>)}
@@ -6981,7 +6997,7 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onRe
         <SuField label="Seed" hint="blank = random, shown after the run"><input data-testid="gen-seed" type="text" value={opts.seed} onChange={e => setOpts(o => ({ ...o, seed: e.target.value }))} placeholder="random" style={{ ...inp, width: 110, fontFamily: mono }} /></SuField>
         <SuCheck testid="gen-respect-locks" label="respect locks" title="Off: locked, already-published slots in the range are regenerated too - Accept asks for confirmation before anything is written" checked={opts.respectLocks !== false} onChange={v => setOpts(o => ({ ...o, respectLocks: v }))} />
         <button data-testid="gen-run" onClick={() => onRun({ ...opts, start, end })} disabled={busy || !rulesImported} style={{ ...css.btn(true), padding: "6px 16px", marginBottom: 8, opacity: (busy || !rulesImported) ? 0.6 : 1 }}>{busy ? "Generating" : "Run"}</button>
-        {busy && <span data-testid="gen-busy" role="status" style={{ fontSize: 12, color: "#1a6fa8", fontWeight: 700, marginBottom: 8 }}>Running best-of-{opts.bestOf} - the page stays responsive between candidates</span>}
+        {busy && <span data-testid="gen-busy" role="status" style={{ fontSize: 12, color: LIGHT.title, fontWeight: 700, marginBottom: 8 }}>Running best-of-{opts.bestOf} - the page stays responsive between candidates</span>}
       </div>
       {preview && (
         <div data-testid="gen-preview" style={{ border: "2px dashed #7a4fbf", borderRadius: 8, padding: "10px 12px", background: "#faf7ff" }}>
@@ -7008,12 +7024,12 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
   const canApply = !!(d && !state.applying && (d.totalChanges > 0));
   return (
     <div data-testid="seed-card">
-      <p style={{ fontSize: 12, color: "#5a6a78", margin: "0 0 8px", lineHeight: 1.5 }}>Reads docs/silvis-seed.json (repo or OneDrive copy) through importer.importPlan - a file that carries contact data is refused before anything is read into the app. The dry run diffs the plan against freshly read live rows. Apply snapshots first, merges the blob, inserts only missing availability / vacation rows and writes schedule days only where a day is missing or still source "import" (an app-edited day is never overwritten) through the compare-and-swap sync.</p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Reads docs/silvis-seed.json (repo or OneDrive copy) through importer.importPlan - a file that carries contact data is refused before anything is read into the app. The dry run diffs the plan against freshly read live rows. Apply snapshots first, merges the blob, inserts only missing availability / vacation rows and writes schedule days only where a day is missing or still source "import" (an app-edited day is never overwritten) through the compare-and-swap sync.</p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
         <input ref={fileRef} data-testid="seed-file" type="file" accept="application/json,.json" style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) onPick(f); }} />
         <button data-testid="seed-pick" onClick={() => fileRef.current && fileRef.current.click()} disabled={state.applying} style={{ ...css.btn(true), padding: "6px 14px" }}>Choose seed file (dry run)</button>
         {state.fileName && <span style={{ fontSize: 12, fontFamily: mono }}>{state.fileName}</span>}
-        {state.loading && <span style={{ fontSize: 12, color: "#1a6fa8" }}>Reading live rows for the dry run</span>}
+        {state.loading && <span style={{ fontSize: 12, color: LIGHT.title }}>Reading live rows for the dry run</span>}
       </div>
       {state.error && <div data-testid="seed-error" style={{ ...css.errBox, marginBottom: 8 }}><strong>Refused / failed:</strong> {state.error}</div>}
       {d && (
@@ -7026,7 +7042,7 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
             {t && <span>availability: insert {t.availability.insert}, update {t.availability.update}, unchanged {t.availability.unchanged}{t.availability.delete ? ", stale " + t.availability.delete : ""}</span>}
             {t && <span>time_off: insert {t.time_off.insert}, unchanged {t.time_off.unchanged}{t.time_off.delete ? ", stale " + t.time_off.delete : ""}</span>}
           </div>
-          <pre data-testid="seed-diff-text" style={{ fontSize: 11, fontFamily: mono, background: "#fff", border: "1px solid #e0e4ea", borderRadius: 6, padding: 8, maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", margin: "0 0 8px" }}>{d.text}</pre>
+          <pre data-testid="seed-diff-text" style={{ fontSize: 11, fontFamily: mono, background: "#fff", border: "1px solid #DCE3EC", borderRadius: 6, padding: 8, maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", margin: "0 0 8px" }}>{d.text}</pre>
           {d.totalDeletes > 0 && <div style={{ ...css.warnBox, marginBottom: 8 }}>{d.totalDeletes} stale seed-owned row(s) are listed above; the in-app import never deletes rows (the CLI import does). Remove them by hand if they should go.</div>}
           {state.live && state.live.blobUpdatedBy && state.live.blobUpdatedBy !== "seed" && t && Object.keys(t.call_schedule_data.keys).filter(k => t.call_schedule_data.keys[k] !== "unchanged").length > 0 && (
             <div data-testid="seed-blob-warning" style={{ ...css.warnBox, marginBottom: 8 }}>
@@ -7036,7 +7052,7 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
           {state.plan && state.plan.infoDeltas && state.plan.infoDeltas.length > 0 && <details style={{ fontSize: 11, marginBottom: 8 }}><summary>{state.plan.infoDeltas.length} email update(s) already applied inside the seed (informational)</summary><ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{state.plan.infoDeltas.map((l, i) => <li key={i}>{l}</li>)}</ul></details>}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button data-testid="seed-apply" onClick={onApply} disabled={!canApply} style={{ ...css.btn(true), padding: "6px 14px", opacity: canApply ? 1 : 0.5 }}>{state.applying ? "Applying" : d.totalChanges === 0 ? "Nothing to apply" : "Apply (snapshot first)"}</button>
-            <span style={{ fontSize: 11, color: "#7a8a98" }}>{d.totalChanges === 0 ? "The live tables already match the plan." : "A snapshot is captured first; if that fails nothing is written."}</span>
+            <span style={{ fontSize: 11, color: "#5B6B82" }}>{d.totalChanges === 0 ? "The live tables already match the plan." : "A snapshot is captured first; if that fails nothing is written."}</span>
           </div>
         </div>
       )}
@@ -7064,16 +7080,16 @@ class ErrorBoundary extends React.Component {
       var msg = (this.state.error && this.state.error.message) ? this.state.error.message : String(this.state.error);
       return React.createElement(
         "div",
-        { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: (typeof font !== "undefined" ? font : "system-ui, sans-serif"), background: "#f0f2f5", boxSizing: "border-box" } },
+        { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: (typeof font !== "undefined" ? font : "system-ui, sans-serif"), background: "#F6F8FB", boxSizing: "border-box" } },
         React.createElement(
           "div",
-          { style: { maxWidth: 460, width: "100%", background: "#fff", border: "1px solid #e0e4ea", borderRadius: 12, padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", textAlign: "center" } },
-          React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: "#1a2a3a", marginBottom: 6 } }, "Something went wrong"),
-          React.createElement("div", { style: { fontSize: 13, color: "#5a6a78", lineHeight: 1.5, marginBottom: 16 } }, "The app hit an unexpected error and stopped rendering. Your saved schedule is safe - reloading should recover it. If it keeps happening, export a JSON backup from the Settings tab and note what you were doing."),
+          { style: { maxWidth: 460, width: "100%", background: "#fff", border: "1px solid #DCE3EC", borderRadius: 12, padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", textAlign: "center" } },
+          React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: "#1F2A3A", marginBottom: 6 } }, "Something went wrong"),
+          React.createElement("div", { style: { fontSize: 13, color: "#5B6B82", lineHeight: 1.5, marginBottom: 16 } }, "The app hit an unexpected error and stopped rendering. Your saved schedule is safe - reloading should recover it. If it keeps happening, export a JSON backup from the Settings tab and note what you were doing."),
           React.createElement("div", { style: { fontFamily: (typeof mono !== "undefined" ? mono : "monospace"), fontSize: 11, color: "#a04040", background: "#fcecec", border: "1px solid #f0d0d0", borderRadius: 6, padding: "8px 10px", marginBottom: 16, wordBreak: "break-word", textAlign: "left" } }, msg),
           React.createElement(
             "button",
-            { onClick: function () { try { window.location.reload(); } catch (e) { /* reload blocked */ } }, style: { background: "linear-gradient(135deg,#1a6fa8,#2488c8)", border: "1px solid #1a6fa8", color: "#fff", borderRadius: 8, padding: "10px 22px", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: (typeof font !== "undefined" ? font : "system-ui, sans-serif") } },
+            { onClick: function () { try { window.location.reload(); } catch (e) { /* reload blocked */ } }, style: { background: (typeof OPENING !== "undefined" ? OPENING.gradient : "#FF5F05"), border: "1px solid #E8520A", color: "#fff", borderRadius: 8, padding: "10px 22px", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: (typeof font !== "undefined" ? font : "system-ui, sans-serif") } },
             "Reload app"
           )
         )

@@ -691,9 +691,14 @@ const EXPORT_PAL = [
 function escHtml(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
-// Pill colours for a roster entry: config.js surgeonColors (by code) in the
-// browser, the local palette by index elsewhere.
+// Pill colours for a roster entry: app-styles.js rosterColors(entry, idx) (the
+// id / type-keyed theme table - an outside surgeon comes back grey + dashed)
+// in the browser, config.js surgeonColors (by code) where only that is loaded,
+// the local palette by index elsewhere (Node tests).
 function exportColorsFor(entry, idx) {
+  if (typeof rosterColors === "function" && entry) {
+    try { const c = rosterColors(entry, idx); if (c && c.tx) return c; } catch (e) { console.warn("exportColorsFor: rosterColors threw - falling back", e); }
+  }
   if (typeof surgeonColors === "function" && entry) {
     try { const c = surgeonColors(entry.code || entry.name, idx); if (c && c.tx) return c; } catch (e) { console.warn("exportColorsFor: surgeonColors threw - using the export palette", e); }
   }
@@ -964,7 +969,7 @@ function generateShareHTML(schedule, roster, opts) {
   const nameById = {}, colorById = {};
   list.forEach((r, i) => { nameById[r.id] = r.name || r.id; colorById[r.id] = exportColorsFor(r, i); });
   const nameOf = (id) => nameById[id] || id;
-  const pill = (id) => { const c = colorById[id] || EXPORT_PAL[6]; return `<span class="bdg" style="background:${c.tg};color:${c.tx};border-color:${c.bd}">${escHtml(nameOf(id))}</span>`; };
+  const pill = (id) => { const c = colorById[id] || EXPORT_PAL[6]; return `<span class="bdg" style="background:${c.tg};color:${c.tx};border-color:${c.bd}${c.dashed ? ";border-style:dashed" : ""}">${escHtml(nameOf(id))}</span>`; };
   const holderHtml = (a, role, ds) => {
     const h = dayHolder(a, role);
     if (!h) return slotIsOpen(ds, h, today) ? `<span class="open">OPEN</span>` : "";
@@ -1002,7 +1007,7 @@ function generateShareHTML(schedule, roster, opts) {
     body += `<section class="mo" data-month="${range.start.slice(0, 7)}"><h2 class="mh">${escHtml(monthLabel(ym))}</h2>${grid}<h3 class="wh">Week rows - ${escHtml(monthLabel(ym))}</h3><div class="tw">${table}</div></section>`;
   });
 
-  const legend = list.map((s, i) => { const c = colorById[s.id]; return `<span><span class="sw" style="background:${c.tg};border-color:${c.bd}"></span>${escHtml(s.name)} <code>${escHtml(s.code || "")}</code></span>`; }).join("");
+  const legend = list.map((s, i) => { const c = colorById[s.id]; return `<span><span class="sw" style="background:${c.tg};border-color:${c.bd}${c.dashed ? ";border-style:dashed" : ""}"></span>${escHtml(s.name)} <code>${escHtml(s.code || "")}</code></span>`; }).join("");
   const span = months.length === 1 ? monthLabel(months[0]) : `${monthLabel(months[0])} to ${monthLabel(months[months.length - 1])}`;
   const stamp = `${generatedAt.getMonth() + 1}/${generatedAt.getDate()}/${generatedAt.getFullYear()} ${String(generatedAt.getHours()).padStart(2, "0")}:${String(generatedAt.getMinutes()).padStart(2, "0")}`;
   const css = `
@@ -1010,11 +1015,11 @@ function generateShareHTML(schedule, roster, opts) {
 body{font-family:'Outfit',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f0f2f5;color:#2c3e50;padding:16px;max-width:1100px;margin:0 auto}
 .hd{text-align:center;margin-bottom:16px;padding:18px;background:#fff;border:1px solid #dce2e8;border-radius:12px}
 .hd h1{font-size:20px;color:#1a2a3a;margin-bottom:4px}.hd p{font-size:12px;color:#6a7a88;line-height:1.5}
-.hd a{color:#1a6fa8}
-.ro{text-align:center;margin-bottom:16px;padding:8px 16px;background:#fff;border:1px solid #dce2e8;border-radius:8px;font-size:11px;color:#1a6fa8}
+.hd a{color:#C2410C}
+.ro{text-align:center;margin-bottom:16px;padding:8px 16px;background:#fff;border:1px solid #dce2e8;border-radius:8px;font-size:11px;color:#13294B}
 .mo{background:#fff;border:1px solid #dce2e8;border-radius:10px;margin-bottom:16px;padding:14px;overflow:hidden}
 .mh{font-size:16px;font-weight:700;color:#1a2a3a;margin-bottom:10px;text-align:center}
-.wh{font-size:12px;font-weight:700;color:#1a6fa8;margin:14px 0 6px;text-transform:uppercase;letter-spacing:1px}
+.wh{font-size:12px;font-weight:700;color:#13294B;margin:14px 0 6px;text-transform:uppercase;letter-spacing:1px}
 .cg{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
 .ch{text-align:center;font-size:10px;font-weight:700;color:#8a94a0;padding:4px 0;text-transform:uppercase;letter-spacing:1px}
 .ch.wk{color:#3d6a8c;background:#eef3f8;border-radius:4px}
@@ -1221,7 +1226,7 @@ function buildPrintableCalendarHTML(opts) {
     @page { size: letter portrait; margin: 0.4in; }
     body { margin: 0; padding: 20px; background: #e8e5dd; font-family: Arial, Helvetica, sans-serif; }
     .toolbar { max-width: 800px; margin: 0 auto 16px; text-align: center; }
-    .toolbar button { font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 600; padding: 8px 18px; background: linear-gradient(135deg,#1a6fa8,#2488c8); color: #fff; border: 1px solid #1a6fa8; border-radius: 6px; cursor: pointer; margin: 0 4px; }
+    .toolbar button { font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 600; padding: 8px 18px; background: linear-gradient(135deg,#13294B,#1F3A6B); color: #fff; border: 1px solid #13294B; border-radius: 6px; cursor: pointer; margin: 0 4px; }
     .toolbar button.secondary { background: #f0f2f5; color: #5a6a78; border: 1px solid #c8d0d8; }
     .toolbar button:hover { opacity: 0.92; }
     .toolbar .hint { color:#5a6a78; font-size:12px; margin-left:10px; }
@@ -1952,7 +1957,7 @@ if (typeof module !== "undefined" && module.exports) {
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
     ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,
-    buildWeekRows,
+    buildWeekRows, exportColorsFor,
     SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,
     escHtml, holidayNameByDay, monthsOfSchedule, normalizeMonths,
     icsDate, icsEscape, icsFold, icsVTimezone, buildICSEvents, icsFileName, generateICS,

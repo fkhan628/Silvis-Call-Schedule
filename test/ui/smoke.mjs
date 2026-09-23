@@ -145,6 +145,21 @@
 //     BEFORE Copy list, the sheet as a viewport shot), the dark 390 probe
 //     fails on a white swipe-hint cover, and the 'ok screenshots' line is
 //     earned - every file must exist, be from this run and stay under 300 KB.
+//   - Prompt 12 item TH (theme, items O + R): the sign-in screen is opened
+//     WITHOUT a session on a second page (the auth token removed by an init
+//     script) and screenshotted in both themes (signin-light.png,
+//     signin-dark.png; the theme is forced through the app's own
+//     silvis-dark-mode flag - the app has no prefers-color-scheme hook), the
+//     SSC tile / Sign in button / links are measured orange on computed
+//     colours; a signed-in month view per theme (theme-month-light.png,
+//     theme-month-dark.png) is measured: navy header, orange today ring,
+//     Khan pill #1F3A6B, dark page #0B1A33; every token pair of the theme is
+//     printed as a contrast table (test/ui/contrast.mjs: 4.5:1 text, 3:1
+//     bold labels / glyphs) and any failing row fails the run; the source
+//     grep for #1a6fa8 / #2488c8 / 1f7a5c / DSG outside comments must be
+//     empty in index-source.html, app-styles.js, manifest.json, config.js
+//     and helpers.js (the share page / printable CSS); the .ics pill buttons,
+//     the active-tab label and the dark Fairness bar fill are measured too
 // Exit code 1 on any failure.
 //
 // Determinism (finding removal-03): React / ReactDOM / the Supabase SDK are
@@ -179,6 +194,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+import { contrastTable, formatTable, loadTheme, hexToRgb, contrastRatio } from "./contrast.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
@@ -811,6 +827,9 @@ try {
   if (openRed) { if (!/rgb\(192, 64, 64\)/.test(openRed)) fail("week rows: OPEN entry is not red (#c04040): " + openRed); else ok("week rows: OPEN entries are red"); }
   else if (liveOpenBetween("2026-09-28", "2026-11-01")) fail("week rows: no OPEN entry found in the October 2026 week rows although the live rows have an open slot on " + liveOpenBetween("2026-09-28", "2026-11-01"));
   else console.log("     (week rows: no open slot in the live rows for the October 2026 weeks - the 'OPEN entries are red' pin has nothing to check)");
+  // TH: OPEN is the theme's red token #B91C1C (light) - item O.1 keeps OPEN red so it never competes with the orange accent.
+  if (openRed) { if (!/rgb\(185, 28, 28\)/.test(openRed)) fail("week rows: OPEN entry is not the OPEN red #B91C1C: " + openRed); else ok("week rows: OPEN entries are red #B91C1C"); }
+  else if (dated("2026-11-01", "the 'week rows OPEN entries are red' pin (no OPEN entry left in the October rows)")) fail("week rows: no OPEN entry found in the October 2026 week rows");
   await page.locator("[data-testid=week-rows]").screenshot({ path: path.join(OUT, "week-rows-oct-2026.png") });
   ok("screenshot test/ui/out/week-rows-oct-2026.png");
 
@@ -893,6 +912,9 @@ try {
     }
     const shareAtwell = await sharePage.$eval('table.wr[data-month="2026-10"] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
     if (!/9\/28-10\/4 Atwell/.test(shareAtwell)) fail("share page week rows lack '9/28-10/4 Atwell': " + shareAtwell); else ok("share page week rows: '9/28-10/4 Atwell' under the October grid");
+    // TH (O.3): the share page's pills carry the id-keyed surgeon colours the grid uses (Khan navy #1F3A6B).
+    const shareKhan = await sharePage.$$eval(".bdg", els => { const e = els.find(x => /Khan/.test(x.textContent)); return e ? getComputedStyle(e).color : ""; }).catch(() => "");
+    if (shareKhan !== "rgb(31, 58, 107)") fail("share page: Khan's pill is not the theme navy #1F3A6B: " + JSON.stringify(shareKhan)); else ok("share page: Khan's pill carries the theme navy #1F3A6B (id-keyed table reaches the exports)");
     const shareScroll = await sharePage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
     if (!shareScroll) fail("share page scrolls horizontally at 1180px"); else ok("share page: no horizontal scroll");
     await sharePage.screenshot({ path: path.join(OUT, "share-page.png"), fullPage: true });
@@ -1170,7 +1192,7 @@ try {
   const darkProbe = await contrastProbe();
   const darkRows = Object.entries(darkProbe.rows);
   const dimRows = darkRows.filter(([, p]) => !p || p.ratio === null || p.ratio < 3);
-  if (!/rgb\(26, 26, 46\)/.test(darkProbe.bodyBg)) fail("dark mode did not switch the body background: " + darkProbe.bodyBg); else ok("dark mode: body background " + darkProbe.bodyBg);
+  if (!/rgb\(11, 26, 51\)/.test(darkProbe.bodyBg)) fail("dark mode did not switch the body background to #0B1A33: " + darkProbe.bodyBg); else ok("dark mode: body background " + darkProbe.bodyBg);
   if (!darkRows.length) fail("dark mode: no [data-kind=surgeon] week-row entries to measure");
   else if (dimRows.length) fail("dark mode: week-row names below 3:1 contrast: " + dimRows.map(([n, p]) => `${n} ${p && p.color} ${p && p.ratio}:1`).join(", "));
   else ok("dark mode: week-row names readable - " + darkRows.map(([n, p]) => `${n} ${p.ratio}:1`).join(", "));
@@ -1905,6 +1927,20 @@ try {
     await page.waitForSelector("[data-testid=fairness-view]", { timeout: 4000 });
     const fairDarkDev = await page.$eval("[data-testid=fairness-row-s3] span[data-flag]", el => getComputedStyle(el).color).catch(() => null);
     if (fairDarkDev !== "rgb(240, 96, 96)" && fairDarkDev !== "rgb(90, 175, 232)" && fairDarkDev !== "rgb(64, 192, 96)") fail("Fairness dark: Acton's deviation text has no warning colour: " + fairDarkDev); else ok("Fairness dark: Acton's deviation text keeps its colour (" + fairDarkDev + ")");
+    {
+      // TH review: the bar fill (gradient start and end) must clear 3:1 against its track in dark mode.
+      const bar = await page.$eval("[data-testid=fairness-view] [data-testid=fairness-track]", (track) => { const fill = track.querySelector("[data-testid=fairness-fill]"); const cs = (el, p) => el ? getComputedStyle(el)[p] : ""; return { track: cs(track, "backgroundColor"), fill: cs(fill, "backgroundImage"), fillBg: cs(fill, "backgroundColor") }; }).catch((e) => ({ error: String(e && e.message || e).split("\n")[0] }));
+      const hexOf = (rgb) => { const m = /rgba?\((\d+), (\d+), (\d+)/.exec(rgb || ""); return m ? "#" + [m[1], m[2], m[3]].map(n => Number(n).toString(16).padStart(2, "0")).join("") : null; };
+      if (bar.error) fail("Fairness dark: bar fill / track not measurable: " + bar.error);
+      else {
+        const stops = (bar.fill.match(/rgb\(\d+, \d+, \d+\)/g) || (bar.fillBg ? [bar.fillBg] : [])).map(hexOf).filter(Boolean);
+        const tr = hexOf(bar.track);
+        const ratios = stops.map(s => contrastRatio(s, tr));
+        if (!stops.length || !tr) fail("Fairness dark: bar fill / track colours unreadable: " + JSON.stringify(bar));
+        else if (ratios.some(r => r < 3)) fail(`Fairness dark: the bar fill does not clear 3:1 on its track ${bar.track}: ` + stops.map((s, i) => `${s} ${ratios[i]}:1`).join(", "));
+        else ok(`Fairness dark: bar fill ${stops.join(" -> ")} on track ${tr} = ${ratios.map(r => r + ":1").join(" / ")}`);
+      }
+    }
     await page.screenshot({ path: path.join(OUT, "fairness-dark.png"), fullPage: true });
     await page.click('button[data-tab="settings"]');
     await page.click("button:has-text('Light')");
@@ -3290,6 +3326,137 @@ try {
     fail("Slice E harness exception: " + (e && e.stack || e));
     try { await page.screenshot({ path: path.join(OUT, "failure-setup.png"), fullPage: true }); } catch (e2) {}
   }
+
+  // ---- Prompt 12 item TH: theme (O.1-O.3 + R) ----
+  // (a) contrast table over every token pair the theme defines (contrast.mjs).
+  try {
+    const rows = contrastTable();
+    console.log("     theme contrast table (text 4.5:1, label 3:1):\n" + formatTable(rows).split("\n").map(l => "       " + l).join("\n"));
+    const bad = rows.filter(r => !r.ok);
+    if (bad.length) fail("theme contrast: " + bad.length + " pair(s) below their minimum: " + bad.map(r => `${r.theme} ${r.pair} ${r.fg} on ${r.bg} ${r.ratio}:1 (min ${r.min})`).join("; "));
+    else ok(`theme contrast: all ${rows.length} token pairs meet their minimum (${rows.filter(r => r.klass === "text").length} text pairs at 4.5:1, ${rows.filter(r => r.klass === "label").length} label / glyph pairs at 3:1)`);
+  } catch (e) { fail("theme contrast table: " + errLine(e)); }
+  // (b) source grep: the Davenport blues, the old theme green and "DSG" outside comments.
+  {
+    const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'])\/\/[^\n]*/g, "$1").replace(/<!--[\s\S]*?-->/g, "");
+    const needles = ["#1a6fa8", "#2488c8", "1f7a5c", "DSG"];
+    const countIn = (f) => { const code = stripComments(fs.readFileSync(path.join(ROOT, f), "utf8")); return needles.map(n => [n, (code.match(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")) || []).length]); };
+    const hits = [];
+    for (const f of ["index-source.html", "app-styles.js", "manifest.json", "config.js", "helpers.js"]) for (const [n, c] of countIn(f)) if (c) hits.push(`${f}: ${n} x${c}`);
+    if (hits.length) fail("theme grep: Davenport blue / old green / DSG still live in the source: " + hits.join(", "));
+    else ok("theme grep: #1a6fa8 / #2488c8 / 1f7a5c / DSG absent outside comments in index-source.html, app-styles.js, manifest.json, config.js, helpers.js");
+  }
+  // (c) the sign-in screen in both themes: a second page with the session token removed before the app boots.
+  const signin = await context.newPage();
+  watchPage(signin, "signin");
+  await signin.addInitScript(() => { try { localStorage.removeItem("silvis-auth-token"); localStorage.removeItem("silvis-auth-refresh"); } catch (e) {} });
+  await signin.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+    const req = route.request();
+    if (req.method() !== "GET") { writes.push({ method: req.method(), path: new URL(req.url()).pathname, body: req.postData() || "", public: true }); return route.fulfill({ status: 200, contentType: "application/json", body: "[]" }); }
+    const fx = fixtureAnswer(new URL(req.url()));
+    if (fx) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(fx) });
+    const headers = { ...req.headers() }; headers["authorization"] = "Bearer " + ANON_KEY;
+    return route.continue({ headers });
+  });
+  await signin.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+  const themeProbe = (pg) => pg.evaluate(() => {
+    const tile = Array.from(document.querySelectorAll("span")).find(s => s.textContent.trim() === "SSC");
+    const btn = Array.from(document.querySelectorAll("button")).find(b => /^(Sign in|Create account)$/.test(b.textContent.trim()));
+    const link = Array.from(document.querySelectorAll("button")).find(b => /Don't have an account|Already have an account/.test(b.textContent.trim()));
+    const cs = (el, p) => el ? getComputedStyle(el)[p] : "";
+    return { tileBg: cs(tile && tile.parentElement, "backgroundImage"), tileColor: cs(tile, "color"), btnBg: cs(btn, "backgroundImage"), btnColor: cs(btn, "color"), linkColor: cs(link, "color"), bodyBg: getComputedStyle(document.body).backgroundColor, title: (document.querySelector("h2") || {}).textContent || "" };
+  });
+  for (const theme of ["light", "dark"]) {
+    try {
+      await signin.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); } catch (e) {} }, theme === "dark");
+      await signin.goto(BASE, { waitUntil: "domcontentloaded" });
+      await signin.waitForSelector("text=Sign in to your account", { timeout: 20000 });
+      await signin.waitForTimeout(300);
+      const p = await themeProbe(signin);
+      const orange = /rgb\(255, 95, 5\)/;
+      if (!orange.test(p.tileBg) || !/rgb\(232, 82, 10\)/.test(p.tileBg)) fail(`sign-in ${theme}: the SSC tile is not the orange gradient #FF5F05 -> #E8520A: ${p.tileBg}`);
+      else if (p.tileColor !== "rgb(255, 255, 255)") fail(`sign-in ${theme}: SSC on the tile is not white: ${p.tileColor}`);
+      else ok(`sign-in ${theme}: SSC tile = orange gradient, white text`);
+      if (!orange.test(p.btnBg) || p.btnColor !== "rgb(255, 255, 255)") fail(`sign-in ${theme}: the Sign in button is not orange with white text: ${p.btnBg} / ${p.btnColor}`); else ok(`sign-in ${theme}: 'Sign in' button = orange gradient, white text`);
+      const wantLink = theme === "dark" ? "rgb(255, 138, 76)" : "rgb(194, 65, 12)";
+      if (p.linkColor !== wantLink) fail(`sign-in ${theme}: the sign-up link is not the orange text token (${wantLink}): ${p.linkColor}`); else ok(`sign-in ${theme}: sign-up link = orange text ${p.linkColor}`);
+      const wantBody = theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)";
+      if (p.bodyBg !== wantBody) fail(`sign-in ${theme}: page background is ${p.bodyBg}, expected ${wantBody}`); else ok(`sign-in ${theme}: page background ${p.bodyBg}`);
+      if (p.title.trim() !== "Silvis Call Schedule") fail(`sign-in ${theme}: card title is '${p.title}'`);
+      await signin.screenshot({ path: path.join(OUT, `signin-${theme}.png`), fullPage: true });
+      ok(`screenshot test/ui/out/signin-${theme}.png`);
+    } catch (e) { fail(`sign-in ${theme}: ` + errLine(e)); try { await signin.screenshot({ path: path.join(OUT, `failure-signin-${theme}.png`), fullPage: true }); } catch (e2) {} }
+  }
+  await signin.close();
+  // (d) a signed-in month view per theme on the main page: navy header, orange today ring, id-keyed pill colours, dark page.
+  const monthProbe = () => page.evaluate(() => {
+    const h1 = document.querySelector("h1");
+    const hdr = h1 && h1.closest("[data-testid=app-header]");
+    const cs = (el, p) => el ? getComputedStyle(el)[p] : "";
+    const d = new Date(); const todayLocal = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    const today = document.querySelector("[data-testid=cal-grid] .cal-cell[data-day='" + todayLocal + "']");
+    // Every visible P pill, keyed by the holder id the cell carries (the first pill of a cell is the P line).
+    const pills = {};
+    for (const cell of document.querySelectorAll("[data-testid=cal-grid] .cal-cell[data-primary]")) {
+      const id = cell.getAttribute("data-primary"); const pill = cell.querySelector(".cal-line .cal-pill");
+      if (id && !id.startsWith("ext:") && pill && !pills[id]) pills[id] = { color: cs(pill, "color"), bg: cs(pill, "backgroundColor"), border: cs(pill, "borderTopStyle") };
+    }
+    const open = document.querySelector("[data-testid=cal-grid] .cal-pill.cal-open");
+    const active = document.querySelector('button[data-tab="calendar"]');
+    const inactive = document.querySelector('button[data-tab="settings"]');
+    // The per-surgeon .ics download buttons (Calendar tools card): roster pills rendered as buttons.
+    const ics = Array.from(document.querySelectorAll("[data-testid^=ics-]:not([data-testid=ics-all])")).map(b => ({ code: b.getAttribute("data-testid").slice(4), color: cs(b, "color"), bg: cs(b, "backgroundColor"), border: cs(b, "borderTopStyle") }));
+    return { hdrBg: cs(hdr, "backgroundColor"), h1: cs(h1, "color"), todayBorder: today ? cs(today, "borderTopColor") : null, pills, open: open ? cs(open, "color") : null, tabUnderline: cs(active, "borderBottomColor"), tabColor: cs(active, "color"), inactiveTabColor: cs(inactive, "color"), ics, bodyBg: getComputedStyle(document.body).backgroundColor };
+  });
+  const themeMod = loadTheme();
+  const rgbOf = (hex) => "rgb(" + hexToRgb(hex).join(", ") + ")";
+  const hexOfRgb = (rgb) => { const m = /rgba?\((\d+), (\d+), (\d+)/.exec(rgb || ""); return m ? "#" + [m[1], m[2], m[3]].map(n => Number(n).toString(16).padStart(2, "0")).join("") : null; };
+  const seedRoster = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8")).roster || [];
+  for (const theme of ["light", "dark"]) {
+    try {
+      // Isolation from upstream drift: an open Day editor / publish dialog would block the Settings tab click.
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
+      const skipBtn = page.locator("[data-testid=publish-skip]"); if (await skipBtn.count()) await skipBtn.first().click().catch(() => {});
+      await page.click('button[data-tab="settings"]');
+      await page.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
+      await page.click('button[data-tab="calendar"]');
+      await page.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
+      const t = new Date(); await showMonth(t.getFullYear(), t.getMonth());
+      await openCard("cal_tools");
+      await page.waitForSelector("[data-testid^=ics-]", { timeout: 5000 });
+      await page.waitForTimeout(300);
+      const m = await monthProbe();
+      if (m.hdrBg !== "rgb(19, 41, 75)") fail(`month ${theme}: header bar is ${m.hdrBg}, expected navy #13294B`); else ok(`month ${theme}: header bar navy ${m.hdrBg}, title ${m.h1}`);
+      if (m.tabUnderline !== (theme === "dark" ? "rgb(255, 138, 76)" : "rgb(255, 95, 5)")) fail(`month ${theme}: the active tab underline is ${m.tabUnderline}, not the orange accent`); else ok(`month ${theme}: active tab underline ${m.tabUnderline}`);
+      // the active tab's label stays white on the navy bar in both themes and differs from the inactive tabs
+      if (m.tabColor !== "rgb(255, 255, 255)" || m.tabColor === m.inactiveTabColor) fail(`month ${theme}: the active tab label is ${m.tabColor} (inactive ${m.inactiveTabColor}) - expected white, distinct from the inactive tabs`); else ok(`month ${theme}: active tab label white, inactive ${m.inactiveTabColor}`);
+      // the .ics download buttons carry the id-keyed pill colours (text on its own tint, >= 3:1) in both themes
+      const icsBad = [];
+      for (const b of m.ics) {
+        const entry = seedRoster.find(r => r.code === b.code); const c = entry ? themeMod.rosterColors(entry, 0) : null;
+        const ratio = hexOfRgb(b.color) && hexOfRgb(b.bg) ? contrastRatio(hexOfRgb(b.color), hexOfRgb(b.bg)) : 0;
+        if (!c || b.color !== rgbOf(c.tx) || b.bg !== rgbOf(c.tg) || b.border !== (c.dashed ? "dashed" : "solid") || ratio < 3) icsBad.push(`${b.code} ${b.color} on ${b.bg} ${b.border} ${ratio}:1${c ? " (want " + rgbOf(c.tx) + " on " + rgbOf(c.tg) + ")" : " (no roster entry)"}`);
+      }
+      if (!m.ics.length) fail(`month ${theme}: no .ics download buttons found`);
+      else if (icsBad.length) fail(`month ${theme}: .ics pill buttons off the id-keyed table / under 3:1: ` + icsBad.join("; "));
+      else ok(`month ${theme}: ${m.ics.length} .ics pill buttons match the id-keyed table, all >= 3:1 - ` + m.ics.map(b => `${b.code} ${b.color}`).join(", "));
+      if (m.todayBorder === null) console.log(`     (month ${theme}: today's cell is not in the shown month - today ring not measured)`);
+      else if (m.todayBorder !== (theme === "dark" ? "rgb(255, 138, 76)" : "rgb(255, 95, 5)")) fail(`month ${theme}: today ring is ${m.todayBorder}, not the orange accent`); else ok(`month ${theme}: today ring ${m.todayBorder}`);
+      // every visible pill = the id-keyed table (tx on tg, both themes; an outside surgeon's border dashed)
+      const pillIds = Object.keys(m.pills);
+      const wrongPills = pillIds.filter(id => { const c = themeMod.rosterColors({ id, type: /^s\d+$/.test(id) ? undefined : "external" }, 0); const p = m.pills[id]; return p.color !== rgbOf(c.tx) || p.bg !== rgbOf(c.tg) || p.border !== (c.dashed ? "dashed" : "solid"); });
+      if (!pillIds.length) fail(`month ${theme}: no P pill with a roster holder in the shown month`);
+      else if (wrongPills.length) fail(`month ${theme}: pills off the id-keyed table: ` + wrongPills.map(id => `${id} ${JSON.stringify(m.pills[id])}`).join("; "));
+      else ok(`month ${theme}: ${pillIds.length} pill colour(s) match the id-keyed table - ` + pillIds.map(id => `${id} ${m.pills[id].color}`).join(", "));
+      if (m.open && m.open !== (theme === "dark" ? "rgb(240, 96, 96)" : "rgb(185, 28, 28)")) fail(`month ${theme}: OPEN pill is ${m.open}, expected ${theme === "dark" ? "#F06060" : "#B91C1C"}`); else if (m.open) ok(`month ${theme}: OPEN pill ${m.open}`);
+      const wantBody = theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)";
+      if (m.bodyBg !== wantBody) fail(`month ${theme}: page background ${m.bodyBg}, expected ${wantBody}`); else ok(`month ${theme}: page background ${m.bodyBg}`);
+      await page.screenshot({ path: path.join(OUT, `theme-month-${theme}.png`), fullPage: true });
+      ok(`screenshot test/ui/out/theme-month-${theme}.png`);
+    } catch (e) { fail(`month ${theme}: ` + errLine(e)); }
+  }
+  try { await page.click('button[data-tab="settings"]'); await page.click("button:has-text('Light')"); } catch (e) { /* leave the theme as it is */ }
 
   // Public read-only mode renders without auth.
   const pub = await context.newPage();
