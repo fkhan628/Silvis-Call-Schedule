@@ -507,7 +507,7 @@ await context.addInitScript(({ token, version }) => {
   try {
     localStorage.setItem("silvis-auth-token", token);
     localStorage.setItem("silvis-auth-refresh", "fake-refresh");
-    localStorage.setItem("silvis_app_version", version); // no version-mismatch reload loop
+    localStorage.setItem("silvis-app-version", version); // no version-mismatch reload loop
   } catch (e) {}
 }, { token: FAKE_JWT, version: APP_VERSION });
 await context.route(cdnMatcher, routeCdn);
@@ -3129,8 +3129,8 @@ try {
       else {
         // fix round: openCard above left the card open (its flag persisted as '1'), so the click has to be what opens
         // it - collapse the flag first (Collapsible reads it when the Setup view mounts) and assert it flips to '1'.
-        await page.evaluate(() => { try { localStorage.setItem("silvis_collapse_setup_east", "0"); } catch (e) {} });
-        const flagBefore = await page.evaluate(() => { try { return localStorage.getItem("silvis_collapse_setup_east"); } catch (e) { return null; } });
+        await page.evaluate(() => { try { localStorage.setItem("silvis-collapse-setup_east", "0"); } catch (e) {} });
+        const flagBefore = await page.evaluate(() => { try { return localStorage.getItem("silvis-collapse-setup_east"); } catch (e) { return null; } });
         await page.click("[data-testid=cov-eastvac-unreviewed]");
         await page.waitForTimeout(500);
         const opened = await page.getAttribute("[data-testid=card-setup_east]", "data-open").catch(() => null);

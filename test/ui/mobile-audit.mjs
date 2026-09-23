@@ -113,7 +113,7 @@ await context.addInitScript(({ token, version }) => {
   try {
     localStorage.setItem("silvis-auth-token", token);
     localStorage.setItem("silvis-auth-refresh", "fake-refresh");
-    localStorage.setItem("silvis_app_version", version);
+    localStorage.setItem("silvis-app-version", version);
   } catch (e) {}
 }, { token: FAKE_JWT, version: APP_VERSION });
 const cacheKey = (url) => path.join(CDN_CACHE, crypto.createHash("sha1").update(url).digest("hex"));
