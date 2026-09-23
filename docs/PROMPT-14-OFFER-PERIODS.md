@@ -42,11 +42,18 @@ review before pushing.
       Rules); creating a period from a start day + length fills the dates from these, each editable per period.
 
 2. RULES + GENERATOR — offers first, rules as the fallback
-   a. rules.js: new ctx inputs `offers` (call_offers rows) and `periodStatus` (the derived map). For a surgeon whose
-      status in the period being generated is 'submitted', eligibility(ctx, day, role, id) is TRUE ONLY on a day the
-      person offered, in the offered role ('either' = both) — everything else for that surgeon is 'not-offered' (hard).
-      Vacations, East busy days, derived-week locks, holiday opt-outs, "holds the other role today" and caps STILL apply
-      on offered days. For 'rules_only' and 'not_started' surgeons the existing rules apply unchanged. The seed's dated
+   a. rules.js: new ctx inputs `offers` (call_offers rows), `periodStatus` (the derived map) and, per surgeon per
+      period, `offerMode` — 'exhaustive' ("only these days") or 'preferred' ("my preferred days; use my rules to fill
+      gaps", the DEFAULT; Faraz 9/22 evening, prompted by Acton's November list). For a 'submitted' surgeon in
+      'exhaustive' mode, eligibility(ctx, day, role, id) is TRUE ONLY on a day the person offered, in the offered role
+      ('either' = both) — everything else for that surgeon is 'not-offered' (hard). For a 'submitted' surgeon in
+      'preferred' mode an offered day is eligible with a strong bonus and a non-offered day is eligible under that
+      person's ordinary rules with a strong penalty ('outside-offers'), so the generator reaches for it only when the
+      slot would otherwise stay open; every such placement is listed in diagnostics and in that surgeon's publish
+      email ("you were placed on 11/5, a day you did not list — trade if needed"). Vacations, East busy days,
+      derived-week locks, holiday opt-outs, "holds the other role today" and caps STILL apply on offered days. For
+      'rules_only' and 'not_started' surgeons the existing rules apply unchanged. Store the mode on
+      call_periods.offer_modes (jsonb {person_id: mode}), set from the painter (part 3a) or by the scheduler. The seed's dated
       lists (explicitAvailable / explicitListMonths / availableWeeks / Fierce's single days) become call_offers rows at
       import time (source 'import' or 'email-relay'), so there is ONE mechanism; recurring weekday patterns, derived
       weeks and Sarkar's windows stay rules.
@@ -73,15 +80,22 @@ review before pushing.
       the drafted/saved offer as a pill; what is already published for that day (holder names, or OPEN in red for a
       day at or after today); how many others have offered it ("2 others offered"); and, when the day cannot be
       offered, WHY, greyed and untappable: past, on your vacation, East busy (Khan), your derived East/Silvis week
-      (Fierce), outside your window (Sarkar), frozen (period closed — "ask Faraz"). A running count in the header:
+      (Fierce), outside your window (Sarkar), frozen (period closed — "ask Faraz"). A day your own WEEKDAY PATTERN
+      normally excludes (Khan's Tue/Thu OR days, Fierce's Clinton days, Burchett's outreach days, Acton's Tuesdays) is
+      NOT greyed: it is paintable behind one confirmation ("Tuesday is normally an OR day for you — offer it anyway?")
+      and the saved offer lifts that pattern for that date and role (rules doc §1 "own dates beat own patterns";
+      Faraz 9/22 evening: his OR days are not every Tue/Thu). Obligations (vacation, East feed, derived week, window)
+      are never liftable from the painter. A running count in the header:
       offered primary / backup / either for the month being viewed, and for the next period against the person's cap.
       Draft lives in the sheet; Save = ONE batch write (insert/update/delete diff) + ONE audit entry 'offers.save' with
       the count; a failed commit writes nothing, names every pending entry, keeps the draft and the unsaved indicator;
       Discard and Close confirm on a dirty draft; a saved note clears after 3 s. Also a "paste a date list" box for
       those who prefer typing (reuse the availability paste parser; rows become drafts, not writes). A "Go by my rules
       for <period>" button sets rules_only for the next period and explains that person's rules in words from
-      surgeonRules. Smoke harness: paint five days with two brushes and a range at 390 px, save once, assert one
-      request, one audit row, and the rows in call_offers.
+      surgeonRules. Above the Save button, one toggle for the next period: "Only these days" / "These are my preferred
+      days — use my rules to fill gaps" (default), with one line explaining the difference; it writes offer_modes.
+      Smoke harness: paint five days with two brushes and a range at 390 px, flip the toggle, save once, assert one
+      request, one audit row, the rows in call_offers and the mode on the period.
    b. Periods (Setup → Generate grows a "Periods" section): create the next period from the presets (3 / 6 months);
       the timeline (closes, publish by) editable; per-surgeon status (submitted N days / rules only / not started)
       with a "Remind" button (not_started only); Close now (freeze early); "Enter for someone" opens the painter as
@@ -115,7 +129,9 @@ review before pushing.
    date is already past, so set offers_close_at by hand to the day Faraz names, default 2026-10-02, and status
    'upcoming'). Enter, as email-relay offers with the email date in the note: Burchett's November and December lists,
    Acton's November list, Philip's available weeks, Fierce's stated single days; mark Khan rules_only (East feed) and
-   Sarkar rules_only (windows; her two days are a soft target, not offers). The locked the ER-panel author entries stay locks. Show
+   Sarkar rules_only (windows; her two days are a soft target, not offers). Offer modes for this first period as
+   Faraz sets them after asking (default 'preferred'; Burchett is the likely 'exhaustive'); the November whitelist
+   months from item T are replaced by these modes — one mechanism. The locked the ER-panel author entries stay locks. Show
    the resulting status table in the report; then regenerate the preview through the offers-aware path and diff it
    against the previous one — the November days Burchett and Acton offered must come out exactly as the ER-panel author published.
 

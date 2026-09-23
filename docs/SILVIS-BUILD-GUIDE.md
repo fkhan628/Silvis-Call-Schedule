@@ -495,9 +495,13 @@ week, outside your window, frozen), what is already published that day and how m
 against the person's cap, drafts kept locally and **one Save = one batch write + one audit entry**, a failed save that
 writes nothing. A paste-a-date-list box remains for typists.
 
-**Eligibility becomes offers-first:** a surgeon who submitted for the period is eligible only on offered days in the
-offered role (vacations, East busy days, derived-week locks, holiday opt-outs and caps still apply); a rules-only or
-silent surgeon is scheduled by the existing rules. The generator places offers before anything else (an offer is not a
+**Eligibility becomes offers-first, at the hardness each surgeon chooses:** when submitting, a surgeon picks "only
+these days" (exhaustive — eligible only on offered days in the offered role) or "my preferred days; use my rules to
+fill gaps" (preferred, the default — offered days first with a strong bonus; a non-offered day only under their
+ordinary rules, with a strong penalty, when the slot would otherwise stay open, and every such placement is named in
+their publish email). Vacations, East busy days, derived-week locks, holiday opt-outs and caps apply either way; a
+rules-only or silent surgeon is scheduled by the existing rules. This is the answer to the Tue/Thu gap (rules doc §8
+item 12): Acton's and Philip's rules allow those days even when their lists do not name them. The generator places offers before anything else (an offer is not a
 demand — fairness and caps still decide, and unplaced offers are reported per surgeon), fills the remaining slots from
 rules-only surgeons, then repairs and smooths as before; whatever stays open goes to the open-shifts board (§16), and a
 claim is an offer made on the spot. Every dated list in the seed (Burchett's October/December, Acton's October/November,
