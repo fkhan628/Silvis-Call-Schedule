@@ -111,7 +111,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23f";
+    var APP_VERSION = "2026.09.23g";
     (function() {
       var stored = localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
@@ -212,6 +212,9 @@ function CallSchedule() {
     forecast: "pending",
     overrides: "pending"
   });
+  const [eastVacationReviewRows, setEastVacationReviewRows] = useState([]);
+  const [eastVacReviewState, setEastVacReviewState] = useState("pending");
+  const [eastVacBusy, setEastVacBusy] = useState(null);
   const [eastIdByCode, setEastIdByCode] = useState(null);
   const [auditEntries, setAuditEntries] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -842,22 +845,47 @@ function CallSchedule() {
         const rows = await db.query(table, {
           order
         });
-        set(Array.isArray(rows) ? rows : []);
+        const list = Array.isArray(rows) ? rows : [];
+        set(list);
         setEastLoadState(s => _objectSpread(_objectSpread({}, s), {}, {
           [key]: "ok"
         }));
-        return true;
+        return list;
       } catch (e) {
         console.warn(`${table} load failed`, e);
         setEastLoadState(s => _objectSpread(_objectSpread({}, s), {}, {
           [key]: "failed"
         }));
-        return false;
+        return null;
       }
     };
     const r = await Promise.all([one("east_feed", "week_monday.asc", setEastFeedRows, "feed"), one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"), one("east_overrides", "day.asc", setEastOverrideRows, "overrides")]);
-    if (!quiet && r.some(x => !x)) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
-    return r.every(Boolean);
+    if (!quiet && r.some(x => x === null)) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
+    return {
+      ok: r.every(x => x !== null),
+      feedRows: r[0]
+    };
+  };
+  const loadEastVacationReviews = async quiet => {
+    if (isPublicMode) return true;
+    try {
+      const rows = await readAuthOnlyTable("east_vacation_reviews", {
+        order: "start.asc"
+      });
+      if (rows === null) {
+        setEastVacReviewState(s => s === "ok" ? s : "skipped");
+        return false;
+      }
+      setEastVacationReviewRows(rows);
+      setEastVacReviewState("ok");
+      return true;
+    } catch (e) {
+      const missing = /HTTP 404\b/.test(String(e && e.message || e));
+      console.warn("east_vacation_reviews load failed" + (missing ? " - the table is not on the database yet (migration 2026-09-23 not applied)" : ""), e);
+      setEastVacReviewState(missing ? "missing" : "failed");
+      if (!quiet && !missing) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
+      return false;
+    }
   };
   const vacationConflictItems = (personId, start, end) => {
     const out = [];
@@ -1425,6 +1453,7 @@ function CallSchedule() {
       await loadTimeOff();
       await loadAvailability();
       await loadEastTables();
+      await loadEastVacationReviews();
       setLoaded(true);
       loadedAtRef.current = Date.now();
     })();
@@ -1512,7 +1541,7 @@ function CallSchedule() {
       }
     };
     const refreshAll = async () => {
-      await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true)]);
+      await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true)]);
     };
     refreshDaysRef.current = refreshDays;
     refreshTradesRef.current = refreshTradeReqs;
@@ -1903,11 +1932,16 @@ function CallSchedule() {
       eastForecast = {},
       eastDerived = [],
       eastMeta = {};
+    const eastVacationRanges = {};
     const forecastIds = [];
     let unresolved = false;
     surgeons.forEach(s => {
       const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed || null;
       if (!ef || !ef.enabled) return;
+      if (eastVacationPerson(s, ef) && typeof eastVacations === "function") {
+        const ranges = eastVacations(eastFeedRows, s.code);
+        if (ranges.length) eastVacationRanges[s.id] = ranges;
+      }
       const meta = {
         code: s.code,
         busyDays: false,
@@ -1959,9 +1993,11 @@ function CallSchedule() {
       eastOverrides,
       eastDerived,
       eastFeedCoverage: coverage,
-      eastMeta
+      eastMeta,
+      eastVacationRanges,
+      eastVacationReviews: eastVacationReviewRows
     };
-  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode]);
+  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode, eastVacationReviewRows]);
   const rulesCtxState = useMemo(() => safeBuildContext(ctxInputs), [ctxInputs]);
   const rulesCtx = rulesCtxState.ctx;
   const eastConflictRows = useMemo(() => {
@@ -2353,17 +2389,39 @@ function CallSchedule() {
     try {
       const fromMon = fmt(monOf(addD(new Date(), -28)));
       const toMon = fmt(addD(parse(fromMon), 7 * 30));
+      const vacationCodes = surgeons.filter(s => {
+        const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
+        return eastVacationPerson(s, ef);
+      }).map(s => String(s.code).toUpperCase());
       let feed;
       try {
-        feed = await fetchEastWeeks(fromMon, toMon);
+        feed = await fetchEastWeeks(fromMon, toMon, {
+          vacationCodes
+        });
       } catch (e) {
         console.warn("East feed fetch failed - cache kept", e);
         showToast("East feed fetch FAILED - the cached weeks are kept and East status is unchanged (a failed fetch never means 'no East call'). " + errText(e).slice(0, 120), "error");
         return;
       }
-      const rows = toEastFeedRows(feed.weeks).map(r => _objectSpread(_objectSpread({}, r), {}, {
+      if (feed.vacationsError) console.warn("East time_off read failed - the cached East vacations are kept", feed.vacationsError);
+      const plan = feed.vacations ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, {
+        from: fromMon
+      }) : {
+        weeks: keepCachedVacations(feed.weeks, eastFeedRows),
+        rewritten: [],
+        carriers: 0
+      };
+      const vacationCount = feed.vacations ? Object.keys(feed.vacations).reduce((acc, c) => acc + feed.vacations[c].length, 0) : null;
+      const unresolvedWord = (feed.vacationCodesUnresolved || []).length ? ` (${feed.vacationCodesUnresolved.join(", ")} not in the Davenport roster)` : "";
+      const weekRows = toEastFeedRows(plan.weeks).map(r => _objectSpread(_objectSpread({}, r), {}, {
         fetched_at: feed.fetchedAt
       }));
+      const rewrittenRows = plan.rewritten.map(w => ({
+        week_monday: w.weekMonday,
+        data: w.data,
+        fetched_at: w.fetchedAt || feed.fetchedAt
+      }));
+      const rows = weekRows.concat(rewrittenRows);
       if (rows.length) {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/east_feed`, {
           method: "POST",
@@ -2375,7 +2433,7 @@ function CallSchedule() {
         if (!res.ok) {
           const t = await res.text().catch(() => "");
           console.warn("east_feed upsert failed", res.status, t);
-          showToast("Fetched " + rows.length + " week(s) but couldn't cache them: " + describeDbError(t), "error");
+          showToast("Fetched " + weekRows.length + " week(s) but couldn't cache them: " + describeDbError(t), "error");
           return;
         }
       }
@@ -2415,18 +2473,61 @@ function CallSchedule() {
         if (s && s.name && s.id) codes[String(s.name).toUpperCase()] = s.id;
       });
       setEastIdByCode(codes);
-      await loadEastTables();
+      const reloaded = await loadEastTables();
+      const cacheRows = reloaded && Array.isArray(reloaded.feedRows) ? reloaded.feedRows : null;
+      const reviewResets = [],
+        reviewResetFailures = [];
+      if (feed.vacations && cacheRows && typeof derivedEastVacations === "function" && typeof eastVacations === "function") {
+        for (const s of surgeons) {
+          const code = String(s.code || "").toUpperCase();
+          if (!code || vacationCodes.indexOf(code) < 0 || !Object.prototype.hasOwnProperty.call(feed.vacations, code)) continue;
+          const newRanges = eastVacations(cacheRows, code);
+          const stale = derivedEastVacations(newRanges, eastVacationReviewRows, s.id).stale.filter(st => st.review && suIsIso(st.review.end) && st.review.end >= fromMon);
+          for (const st of stale) {
+            const r = await saveEastVacationReview(s.id, {
+              start: st.review.start,
+              end: st.review.end
+            }, "unreviewed", {
+              quiet: true,
+              reason: st.reason
+            });
+            (r.ok ? reviewResets : reviewResetFailures).push({
+              person_id: s.id,
+              start: st.review.start,
+              end: st.review.end,
+              reason: st.reason,
+              decision: st.review.decision,
+              error: r.ok ? undefined : r.error
+            });
+          }
+        }
+      }
+      const resetText = x => `${fmtMD(x.start)}-${fmtMD(x.end)} (was ${x.decision}; ${x.reason === "changed" ? "dates changed" : "removed from Davenport"})`;
+      const resetWord = reviewResets.length || reviewResetFailures.length ? ` East vacation review(s) reset: ${reviewResets.map(resetText).join(", ") || "none"}${reviewResetFailures.length ? "; could NOT reset " + reviewResetFailures.map(resetText).join(", ") + " - delete the row by hand" : ""}.` : "";
       const pruneSummary = !publishedCoverage ? "forecast prune skipped (no published weeks)" : forecastRowsDeleted !== null ? forecastRowsDeleted + " forecast row(s) inside the published coverage deleted" : forecastCountUnknown ? "forecast rows inside the published coverage deleted, count unknown (no representation returned)" : "forecast prune FAILED";
-      logAudit("east.refresh", `Refreshed the East feed: ${rows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}`, {
+      const rewrittenWord = rewrittenRows.length ? `; ${rewrittenRows.length} older cached week(s) rewritten (East vacation ranges re-hosted or cleared)` : "";
+      const vacationSummary = !vacationCodes.length ? "no East vacation codes" : feed.vacationsError ? "East time_off read FAILED - cached East vacations kept" : feed.vacations ? `${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo}${unresolvedWord}${rewrittenWord}` : `no East vacations read${unresolvedWord}`;
+      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}`, {
         from: fromMon,
         to: toMon,
-        weeks: rows.length,
+        weeks: weekRows.length,
         coverage: publishedCoverage,
         forecastRowsDeleted,
-        forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null
+        forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null,
+        vacations: {
+          codes: vacationCodes,
+          ranges: vacationCount,
+          to: feed.vacationsTo || null,
+          rewrittenWeeks: rewrittenRows.length,
+          unresolved: feed.vacationCodesUnresolved || [],
+          error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null
+        },
+        reviewResets,
+        reviewResetFailures
       });
       const pruneWord = !publishedCoverage ? "" : forecastRowsDeleted !== null ? ` ${forecastRowsDeleted} forecast row(s) for now-published weeks deleted.` : forecastCountUnknown ? ` Forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were deleted but the count is unknown (no representation returned) - check the forecast strip.` : ` But the forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were NOT deleted - couldn't delete the forecast rows: ${describeDbError(forecastDeleteError)} (eligibility ignores them; delete them by hand).`;
-      showToast(rows.length ? `East feed refreshed: ${rows.length} published week(s) cached.${pruneWord}` : "East feed refreshed: Davenport has no published weeks in that window - cache unchanged.", rows.length ? forecastDeleteError ? "error" : "success" : "info");
+      const vacationWord = !vacationCodes.length ? "" : feed.vacationsError ? ` East time off could NOT be read - the cached East vacations are kept (a failed read never means 'no vacations'): ${String(feed.vacationsError).slice(0, 120)}` : feed.vacations ? plan.carriers ? ` ${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo} cached${unresolvedWord}${rewrittenWord}.` : ` ${vacationCount} East vacation range(s) read but NOT cached - no published week row to hold them.` : ` No East vacations read${unresolvedWord}.`;
+      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}` : `East feed refreshed: Davenport has no published weeks in that window - the cached weeks are unchanged.${vacationWord}${resetWord}`, feed.vacationsError || reviewResetFailures.length ? "error" : weekRows.length ? forecastDeleteError ? "error" : "success" : "info");
     } catch (e) {
       console.warn("East feed refresh failed", e);
       showToast("East feed refresh FAILED - the cached weeks are unchanged. " + errText(e).slice(0, 120), "error");
@@ -2494,6 +2595,130 @@ function CallSchedule() {
     } catch (e) {
       console.warn("east_overrides delete error", e);
       showToast("Couldn't remove the override - check your connection.", "error");
+    }
+  };
+  const offerEitherForHomeRange = (personId, range) => {
+    console.info("eastvac: " + nameOf(personId) + " marked " + range.start + ".." + range.end + " home - the 'paint these days as either offers' step arrives with Prompt 14's painter (no-op tonight; nothing written)");
+    return {
+      ok: true,
+      offered: 0,
+      pending: "prompt-14"
+    };
+  };
+  const saveEastVacationReview = async (personId, range, decision, opts) => {
+    const quiet = !!(opts && opts.quiet);
+    if (isPublicMode) return {
+      ok: false,
+      error: "public"
+    };
+    if (!isScheduler && personId !== mySurgeon) {
+      showToast("You can only review your own East vacations.", "error");
+      return {
+        ok: false,
+        error: "not-own"
+      };
+    }
+    if (!range || !suIsIso(range.start) || !suIsIso(range.end) || range.end < range.start) {
+      showToast("That East vacation range is not valid.", "error");
+      return {
+        ok: false,
+        error: "range"
+      };
+    }
+    if (decision !== "away" && decision !== "home" && decision !== "unreviewed") {
+      showToast("Pick away, home or unreviewed.", "error");
+      return {
+        ok: false,
+        error: "decision"
+      };
+    }
+    if (eastVacReviewState === "missing") {
+      if (!quiet) showToast("The East vacation reviews table is not on the database yet - the decision cannot be saved until the migration is applied.", "error");
+      return {
+        ok: false,
+        error: "missing"
+      };
+    }
+    const key = personId + "|" + range.start + "|" + range.end;
+    setEastVacBusy(key);
+    try {
+      const by = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || (authUser === null || authUser === void 0 ? void 0 : authUser.id) || null;
+      let res;
+      if (decision === "unreviewed") {
+        res = await fetch(`${SUPABASE_URL}/rest/v1/east_vacation_reviews?person_id=eq.${encodeURIComponent(personId)}&start=eq.${range.start}&end=eq.${range.end}`, {
+          method: "DELETE",
+          headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+            Prefer: "return=representation"
+          })
+        });
+      } else {
+        res = await fetch(`${SUPABASE_URL}/rest/v1/east_vacation_reviews?on_conflict=person_id,start,end`, {
+          method: "POST",
+          headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+            Prefer: "resolution=merge-duplicates,return=representation"
+          }),
+          body: JSON.stringify({
+            person_id: personId,
+            start: range.start,
+            end: range.end,
+            decision,
+            decided_at: new Date().toISOString(),
+            decided_by: by
+          })
+        });
+      }
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        console.warn("east_vacation_reviews " + (decision === "unreviewed" ? "delete" : "upsert") + " failed", res.status, t);
+        if (!quiet) showToast("Couldn't save the East vacation review: " + describeDbError(t), "error");
+        return {
+          ok: false,
+          error: describeDbError(t)
+        };
+      }
+      let rows = null;
+      try {
+        rows = await res.json();
+      } catch (e) {
+        rows = null;
+      }
+      if (decision !== "unreviewed" && (!Array.isArray(rows) || rows.length === 0)) {
+        console.warn("east_vacation_reviews upsert: 2xx but no row came back", rows);
+        if (!quiet) showToast("No review row came back - your session may lack permission for " + nameOf(personId) + "'s rows. Reload and retry.", "error");
+        await loadEastVacationReviews(true);
+        return {
+          ok: false,
+          error: "no-representation"
+        };
+      }
+      const removed = decision === "unreviewed" ? Array.isArray(rows) ? rows.length : null : undefined;
+      await loadEastVacationReviews(true);
+      const reason = opts && opts.reason || null;
+      const label = decision === "unreviewed" ? "reset" : decision;
+      logAudit("eastvac.review", `East vacation ${range.start}..${range.end} ${nameOf(personId)}: ${label}${reason ? " (" + reason + ")" : ""}`, _objectSpread({
+        person_id: personId,
+        start: range.start,
+        end: range.end,
+        decision: label,
+        reason
+      }, removed !== undefined ? {
+        removed
+      } : {}));
+      if (!quiet) showToast(decision === "home" ? `${fmtMD(range.start)}-${fmtMD(range.end)}: home - ${nameOf(personId)} is available at Silvis those days (no East call; preferred as primary).` : decision === "away" ? `${fmtMD(range.start)}-${fmtMD(range.end)}: away - treated as a Silvis vacation.` : `${fmtMD(range.start)}-${fmtMD(range.end)}: back to unreviewed (treated as away until decided).`, "success");
+      if (decision === "home") offerEitherForHomeRange(personId, range);
+      return {
+        ok: true,
+        removed
+      };
+    } catch (e) {
+      console.warn("east_vacation_reviews write error", e);
+      if (!quiet) showToast("Couldn't save the East vacation review - check your connection and try again.", "error");
+      return {
+        ok: false,
+        error: errText(e)
+      };
+    } finally {
+      setEastVacBusy(null);
     }
   };
   const goToDay = day => {
@@ -4593,6 +4818,87 @@ function CallSchedule() {
     })));
     return cov && cov.to ? cov.to : null;
   }, [eastFeedRows]);
+  const eastVacPeople = useMemo(() => {
+    const out = [];
+    if (isPublicMode) return out;
+    if (typeof eastVacations !== "function" || typeof derivedEastVacations !== "function") return out;
+    surgeons.forEach(s => {
+      const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
+      if (!eastVacationPerson(s, ef)) return;
+      const d = derivedEastVacations(eastVacations(eastFeedRows, s.code), eastVacationReviewRows, s.id);
+      out.push({
+        id: s.id,
+        code: s.code,
+        ranges: d.ranges,
+        stale: d.stale,
+        unreviewedUpcoming: d.ranges.filter(r => r.state === "unreviewed" && r.end >= todayStr).length
+      });
+    });
+    return out;
+  }, [surgeons, surgeonRules, eastFeedRows, eastVacationReviewRows, todayStr, isPublicMode]);
+  const eastVacById = useMemo(() => {
+    const m = {};
+    eastVacPeople.forEach(p => {
+      m[p.id] = p;
+    });
+    return m;
+  }, [eastVacPeople]);
+  const eastVacUnreviewed = eastVacPeople.reduce((n, p) => n + p.unreviewedUpcoming, 0);
+  const eastVacByDay = useMemo(() => {
+    const map = {};
+    if (!gridDays.length) return map;
+    const lo = gridDays[0],
+      hi = gridDays[gridDays.length - 1];
+    eastVacPeople.forEach(p => {
+      const P = rulesCtx && rulesCtx.per && rulesCtx.per[p.id] && rulesCtx.per[p.id].eastVacationDays && rulesCtx.per[p.id].eastClear ? rulesCtx.per[p.id] : null;
+      p.ranges.forEach(r => {
+        if (r.end < lo || r.start > hi) return;
+        const stop = r.end > hi ? hi : r.end;
+        for (let dd = parse(r.start < lo ? lo : r.start); fmt(dd) <= stop; dd = addD(dd, 1)) {
+          const d = fmt(dd);
+          let m = {
+            id: p.id,
+            state: r.state
+          };
+          if (P) {
+            if (P.eastVacationDays[d]) m = {
+              id: p.id,
+              state: P.eastVacationDays[d]
+            };else if (P.eastClear.has(d)) m = {
+              id: p.id,
+              state: "home"
+            };else if (P.vacation && P.vacation.has(d)) continue;else if (r.state === "home") m = {
+              id: p.id,
+              state: "home",
+              feedBusy: true
+            };
+          }
+          (map[d] = map[d] || []).push(m);
+        }
+      });
+    });
+    return map;
+  }, [eastVacPeople, gridDays, rulesCtx]);
+  const eastVacConflictRows = useMemo(() => {
+    if (!rulesCtx || typeof eastVacationConflicts !== "function") return [];
+    try {
+      return eastVacationConflicts(rulesCtx);
+    } catch (e) {
+      console.warn("East vacation conflict report failed", e);
+      return [];
+    }
+  }, [rulesCtx]);
+  const openEastVacPanel = () => {
+    if (isPublicMode) return;
+    if (isScheduler) {
+      try {
+        localStorage.setItem("silvis_collapse_setup_east", "1");
+      } catch (e) {
+        console.warn("Couldn't persist the East panel state:", e);
+      }
+      setView("setup");
+    } else setView("timeoff");
+  };
   const snapshotAgeText = iso => {
     if (!iso) return "none on file";
     const t = new Date(iso).getTime();
@@ -6621,6 +6927,7 @@ function CallSchedule() {
     title: "East feed (Davenport, read-only)"
   }, React.createElement(EastFeedCard, {
     css: css,
+    dk: dk,
     feedRows: eastFeedRows,
     forecastRows: eastForecastRows,
     overrideRows: eastOverrideRows,
@@ -6638,7 +6945,13 @@ function CallSchedule() {
     threshold: forecastThreshold,
     today: todayStr,
     conflicts: eastConflictRows,
-    onEditDay: goToDay
+    onEditDay: goToDay,
+    eastVac: eastVacPeople,
+    eastVacReviewState: eastVacReviewState,
+    onReviewEastVac: saveEastVacationReview,
+    eastVacBusyKey: eastVacBusy,
+    canReviewEastVac: pid => isScheduler || pid === mySurgeon,
+    eastVacConflicts: eastVacConflictRows
   })), React.createElement(Collapsible, {
     css: css,
     ck: "setup_generate",
@@ -7022,7 +7335,24 @@ function CallSchedule() {
         style: {
           fontFamily: mono
         }
-      }, eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown")), React.createElement("span", {
+      }, eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown")), !isPublicMode && (isScheduler ? eastVacPeople.length > 0 : !!eastVacById[mySurgeon]) && React.createElement("button", {
+        type: "button",
+        "data-testid": "cov-eastvac-unreviewed",
+        "data-count": eastVacUnreviewed,
+        onClick: openEastVacPanel,
+        title: (eastVacUnreviewed ? "Undecided Davenport vacation range(s) - treated as away (a Silvis vacation) until reviewed. " : "Every upcoming East vacation is reviewed. ") + (isScheduler ? "Opens Setup > East feed." : "Opens Time off."),
+        style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+          color: eastVacUnreviewed ? "#8a5a10" : "#1a8040",
+          borderColor: eastVacUnreviewed ? "#8a5a10" : "#a0d8b0",
+          fontFamily: font,
+          cursor: "pointer"
+        })
+      }, "unreviewed East vacations: ", React.createElement("span", {
+        style: {
+          fontFamily: mono,
+          fontWeight: 800
+        }
+      }, eastVacUnreviewed), eastVacPeople.length === 1 ? " (" + nameOf(eastVacPeople[0].id) + ")" : ""), React.createElement("span", {
         "data-testid": "cov-last-published",
         "data-value": lastPublished && lastPublished.at || ""
       }, "last published ", React.createElement("strong", null, lastPublished && lastPublished.at ? fmtAuditTime(lastPublished.at) : "never")), isScheduler && !isPublicMode && React.createElement("span", {
@@ -7282,6 +7612,7 @@ function CallSchedule() {
       if (hol) titleBits.push(hol.name + " (holiday unit)");
       if (derivedWho) titleBits.push("East-derived: " + derivedWho);
       if (a && a.note) titleBits.push("note: " + a.note);
+      if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
       const nBadges = (derived ? 1 : 0) + (fc && fc.p >= 0.2 ? 1 : 0) + (awaitingConfirmation(a) ? 1 : 0);
       return React.createElement("div", {
         key: d,
@@ -7362,10 +7693,10 @@ function CallSchedule() {
         day: d,
         holder: bH,
         locked: !!(a && a.backupLocked)
-      }), (vacByDay[d] || []).length > 0 && React.createElement("div", {
+      }), ((vacByDay[d] || []).length > 0 || (eastVacByDay[d] || []).length > 0) && React.createElement("div", {
         className: "cal-dots",
-        title: "On vacation: " + vacByDay[d].map(nameOf).join(", ")
-      }, vacByDay[d].map(pid => React.createElement("span", {
+        title: [(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ")
+      }, (vacByDay[d] || []).map(pid => React.createElement("span", {
         key: pid,
         "data-vac": pid,
         style: {
@@ -7375,6 +7706,13 @@ function CallSchedule() {
           background: textColorOf(pid),
           display: "inline-block"
         }
+      })), (eastVacByDay[d] || []).map(m => React.createElement("span", {
+        key: "ev" + m.id,
+        "data-eastvac": m.id,
+        "data-eastvac-state": m.state,
+        "data-eastvac-feedbusy": m.feedBusy ? "1" : undefined,
+        title: nameOf(m.id) + ": East (Davenport) vacation - " + (m.state === "home" ? m.feedBusy ? "home, but the East feed says busy that day - the feed wins (no east-clear; check the Davenport schedule or the override)" : "home: available at Silvis (no East call)" : m.state === "away" ? "away: a Silvis vacation" : "unreviewed: treated as a Silvis vacation until decided"),
+        style: eastVacMarkStyle(m.state, dk, textColorOf(m.id))
       }))), a && a.note && React.createElement("span", {
         className: "cal-note",
         title: a.note,
@@ -7462,7 +7800,20 @@ function CallSchedule() {
       style: badge(true, "#8a5a10")
     }, "F"), " East forecast at or above ", Math.round(forecastThreshold * 100), "%, ", React.createElement("span", {
       style: badge(false, "#8a5a10")
-    }, "F"), " 20% or more"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), React.createElement("span", null, "orange outline = today"), isScheduler && !isPublicMode && React.createElement("span", null, "Click a day to edit (eligibility-checked); saves per day with compare-and-swap."))), React.createElement(Collapsible, {
+    }, "F"), " 20% or more"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), eastVacPeople.length > 0 && React.createElement("span", {
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5
+      },
+      title: "A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"
+    }, React.createElement("span", {
+      style: eastVacMarkStyle("unreviewed", dk)
+    }), " unreviewed ", React.createElement("span", {
+      style: eastVacMarkStyle("away", dk, dkSubtext)
+    }), " away ", React.createElement("span", {
+      style: eastVacMarkStyle("home", dk)
+    }), " home = East vacation"), React.createElement("span", null, "orange outline = today"), isScheduler && !isPublicMode && React.createElement("span", null, "Click a day to edit (eligibility-checked); saves per day with compare-and-swap."))), React.createElement(Collapsible, {
       css: css,
       ck: "cal_weekrows",
       defaultOpen: true,
@@ -8315,6 +8666,20 @@ function CallSchedule() {
         bg: "#e0eef8",
         fg: "#1a5a88"
       });
+      const ev = P && P.eastVacationDays ? P.eastVacationDays[d] : null;
+      if (ev) out.push({
+        k: "V",
+        text: "EV",
+        title: "East (Davenport) vacation, " + ev + " - treated as a Silvis vacation; this held day conflicts (decide home or trade)",
+        bg: "#fbf1d8",
+        fg: "#8a5a10"
+      });else if (P && P.eastClear && P.eastClear.has(d)) out.push({
+        k: "V",
+        text: "EV",
+        title: "East (Davenport) vacation, home - available at Silvis (no East call)",
+        bg: "#e4f3e8",
+        fg: "#1a6a3a"
+      });
       return out;
     };
     const countdown = d => {
@@ -8421,7 +8786,7 @@ function CallSchedule() {
       style: css.subT
     }, "Upcoming - next 90 days (", upcoming.length, ")"), React.createElement("span", {
       style: muted
-    }, "H holiday unit - E East-derived week - F East forecast busy")), upcoming.length === 0 ? React.createElement("p", {
+    }, "H holiday unit - E East-derived week - F East forecast busy - EV East (Davenport) vacation")), upcoming.length === 0 ? React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         fontStyle: "italic"
       })
@@ -8504,7 +8869,36 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
         marginLeft: "auto"
       })
-    }, "Enter a vacation")), renderVacationList([pid], true)));
+    }, "Enter a vacation")), renderVacationList([pid], true)), eastVacById[pid] && React.createElement("div", {
+      style: css.card,
+      "data-testid": "mine-eastvac"
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        marginBottom: 8
+      }
+    }, React.createElement("div", {
+      style: _objectSpread(_objectSpread({}, css.cardT), {}, {
+        margin: 0
+      })
+    }, "My East (Davenport) vacations (", eastVacById[pid].unreviewedUpcoming, " unreviewed)")), React.createElement("p", {
+      style: sectionNote
+    }, "Mirrored from the Davenport app by the East feed refresh. Away = also off at Silvis; home = available at Silvis (no East call, no OR block - your best Silvis days). Unreviewed counts as away."), React.createElement(EastVacationList, {
+      css: css,
+      dk: dk,
+      people: [eastVacById[pid]],
+      reviewState: eastVacReviewState,
+      onReview: saveEastVacationReview,
+      busyKey: eastVacBusy,
+      canReview: id => isScheduler || id === mySurgeon,
+      nameOf: nameOf,
+      today: todayStr,
+      testid: "mine-eastvac-list",
+      compact: true
+    })));
   })(), view === "timeoff" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
     style: css.card,
     "data-testid": "timeoff-card"
@@ -8528,7 +8922,25 @@ function CallSchedule() {
     type: "checkbox",
     checked: showPastVacations,
     onChange: e => setShowPastVacations(e.target.checked)
-  }), " Show past"), renderVacationList(isScheduler ? surgeons.map(s => s.id) : [mySurgeon], true))), (() => {
+  }), " Show past"), renderVacationList(isScheduler ? surgeons.map(s => s.id) : [mySurgeon], true))), (isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon)).length > 0 && React.createElement("div", {
+    style: css.card,
+    "data-testid": "eastvac-timeoff"
+  }, React.createElement("div", {
+    style: css.cardT
+  }, isScheduler ? "East (Davenport) vacations" : "My East (Davenport) vacations"), React.createElement("p", {
+    style: sectionNote
+  }, "Mirrored from the Davenport app by the East feed refresh - nothing is entered here and no Silvis vacation row is written. Decide each range: ", React.createElement("strong", null, "away"), " = also off at Silvis (treated exactly like a vacation above); ", React.createElement("strong", null, "home"), " = available at Silvis (no East call, no OR block - the Tue/Thu rule is lifted and you are preferred as primary). Unreviewed counts as away until you decide."), React.createElement(EastVacationList, {
+    css: css,
+    dk: dk,
+    people: isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon),
+    reviewState: eastVacReviewState,
+    onReview: saveEastVacationReview,
+    busyKey: eastVacBusy,
+    canReview: id => isScheduler || id === mySurgeon,
+    nameOf: nameOf,
+    today: todayStr,
+    testid: "eastvac-timeoff-list"
+  })), (() => {
     const fromId = isScheduler ? tradeFrom || mySurgeon || "" : mySurgeon || "";
     const mine = upcomingDaysOf(fromId, null);
     const theirs = upcomingDaysOf(tradeTo, null);
@@ -10507,7 +10919,8 @@ const REASON_WORDS = {
   "window-week-below-target": "at or under the window-week target",
   "window-week-over-target": "over the window-week target",
   "consecutive-primary": "consecutive primary days (prefers alternate days)",
-  "long-run": "long any-role run"
+  "long-run": "long any-role run",
+  "east-clear": "home East vacation day (no East call, no OR block - preferred as primary)"
 };
 async function readAuthOnlyTable(table, opts) {
   let token = null;
@@ -10616,6 +11029,9 @@ function softTag(soft) {
       return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
 }
+function eastVacationPerson(s, ef) {
+  return !!(s && ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code && s.type !== "external");
+}
 function eastStatusLines(ctx, ctxInputs, day, nameOf) {
   const out = [];
   const meta = ctxInputs && ctxInputs.eastMeta || {};
@@ -10674,6 +11090,30 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
         id,
         text: name + ": no East week",
         tone: "ok"
+      });
+    }
+    if (P && P.eastVacationDays && P.eastVacationDays[day]) {
+      const st = P.eastVacationDays[day];
+      out.push({
+        id,
+        eastVac: st,
+        text: name + ": East (Davenport) vacation, " + st + " - treated as a Silvis vacation" + (st === "unreviewed" ? " until decided (Setup > East feed / Time off)" : ""),
+        tone: "busy"
+      });
+    } else if (P && P.eastClear && P.eastClear.has(day)) {
+      out.push({
+        id,
+        eastVac: "home",
+        text: name + ": East (Davenport) vacation, home - available at Silvis: no East call, Tue/Thu rule lifted, preferred as primary",
+        tone: "home"
+      });
+    } else if (P && P.eastDayBefore && P.eastDayBefore[day]) {
+      const st = P.eastDayBefore[day];
+      out.push({
+        id,
+        eastVac: st,
+        text: name + ": East (Davenport) vacation (" + st + ") starts tomorrow - primary blocked (07:00 handoff)",
+        tone: "warn"
       });
     }
   });
@@ -10828,7 +11268,9 @@ function DayEditor(props) {
         lockHolder: !!r.lockHolder,
         conflicts: r.conflicts || [],
         error: r.error || null,
-        eastStanding: r.eastStanding || null
+        eastStanding: r.eastStanding || null,
+        eastVacation: r.eastVacation || null,
+        eastClear: !!r.eastClear
       };
     });
     const pool = list.filter(o => !o.external),
@@ -11132,7 +11574,7 @@ function DayEditor(props) {
       style: {
         fontWeight: 700
       }
-    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "")).join("; ")));
+    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(o.hard[0]) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join("; ")));
   };
   return React.createElement("div", {
     "data-testid": "day-editor",
@@ -11228,10 +11670,16 @@ function DayEditor(props) {
   }, hol.name), " holiday unit (", hol.tier, "): ", hol.days.map(fmtMD).join(", "), " - one primary and one backup stick through the unit.") : "Not in a holiday unit."), east.length === 0 ? React.createElement("div", null, "East: ", rulesImported ? "no East features configured" : "rules not imported yet") : east.map(l => React.createElement("div", {
     key: l.id + l.text,
     "data-testid": "east-status",
+    "data-eastvac": l.eastVac || undefined,
     style: {
-      color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : sub
+      color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : l.tone === "home" ? "#1a8040" : sub
     }
-  }, "East - ", l.text)), React.createElement("div", null, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off"), ctxError && React.createElement("div", {
+  }, l.eastVac ? React.createElement("span", {
+    style: _objectSpread(_objectSpread({}, eastVacMarkStyle(l.eastVac, dk, sub)), {}, {
+      marginRight: 6,
+      verticalAlign: "middle"
+    })
+  }) : null, "East - ", l.text)), React.createElement("div", null, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off"), ctxError && React.createElement("div", {
     style: {
       color: "#a83232",
       fontWeight: 700
@@ -14368,8 +14816,217 @@ function HolidaysCard({
     }
   }, groupRules && groupRules.holidays && groupRules.holidays.mondayMinorAbsorbsWeekend === true ? "New years are pre-filled from the group rule (minor Monday holidays absorb the weekend before); edit any unit's days." : "New years are pre-filled with single-day holidays (the Monday-minor group rule is off in the shared setup); edit any unit's days."));
 }
+function EastVacationList({
+  css,
+  dk,
+  people,
+  reviewState,
+  onReview,
+  busyKey,
+  canReview,
+  nameOf,
+  today,
+  testid,
+  conflicts,
+  onEditDay,
+  compact
+}) {
+  const [showPast, setShowPast] = React.useState(false);
+  const stateText = reviewState === "ok" ? null : reviewState === "missing" ? "The east_vacation_reviews table is not on the database yet (migration 2026-09-23) - every range reads as unreviewed (treated as away) and decisions cannot be saved." : reviewState === "skipped" ? "Reviews not loaded - the session token is missing or expired; every range reads as unreviewed until the session refreshes." : reviewState === "failed" ? "Couldn't load the reviews - every range reads as unreviewed until they load." : "Loading the reviews.";
+  const STATES = ["unreviewed", "away", "home"];
+  const stateWord = st => st === "home" ? "home - available at Silvis" : st === "away" ? "away - a Silvis vacation" : "unreviewed - treated as away";
+  const rowBg = dk ? "#13294B" : "#f8f9fb",
+    rowBorder = dk ? "#24406B" : "#e8ecf0";
+  const list = people || [];
+  const past = list.reduce((n, p) => n + p.ranges.filter(r => r.end < today).length, 0);
+  return React.createElement("div", {
+    "data-testid": testid || "eastvac-list"
+  }, stateText && React.createElement("div", {
+    "data-testid": "eastvac-review-state",
+    "data-state": reviewState,
+    style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+      marginBottom: 8
+    })
+  }, stateText), !stateText && React.createElement("span", {
+    "data-testid": "eastvac-review-state",
+    "data-state": reviewState,
+    style: {
+      display: "none"
+    }
+  }), list.length === 0 && React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#5B6B82",
+      margin: 0
+    }
+  }, "No surgeon has an East code with a Davenport vacation on file (refresh the East feed)."), list.map(p => {
+    const rows = p.ranges.filter(r => showPast || r.end >= today);
+    const undecided = p.ranges.filter(r => r.state === "unreviewed" && r.end >= today).length;
+    return React.createElement("div", {
+      key: p.id,
+      "data-testid": "eastvac-person-" + p.id,
+      style: {
+        marginBottom: 8
+      }
+    }, !compact && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: "#1F2A3A",
+        marginBottom: 4
+      }
+    }, React.createElement("strong", null, nameOf(p.id)), " (", p.code, ") - ", p.ranges.length, " Davenport vacation range(s) on file, ", React.createElement("span", {
+      "data-testid": "eastvac-undecided-" + p.id,
+      style: {
+        color: undecided ? "#8a5a10" : "#1a8040",
+        fontWeight: 700
+      }
+    }, undecided, " unreviewed")), rows.length === 0 && React.createElement("p", {
+      style: {
+        fontSize: 12,
+        color: "#5B6B82",
+        margin: 0,
+        fontStyle: "italic"
+      }
+    }, "No ", showPast ? "" : "upcoming ", "East vacation ranges."), React.createElement("div", {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 4
+      }
+    }, rows.map(r => {
+      const key = p.id + "|" + r.start + "|" + r.end;
+      const busy = busyKey === key;
+      const editable = typeof canReview === "function" ? canReview(p.id) : false;
+      const days = suDaysBetween(r.start, r.end) + 1;
+      return React.createElement("div", {
+        key: r.start + r.end,
+        "data-testid": "eastvac-range-" + p.id + "-" + r.start,
+        "data-start": r.start,
+        "data-end": r.end,
+        "data-state": r.state,
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "6px 10px",
+          background: rowBg,
+          borderRadius: 6,
+          border: "1px solid " + rowBorder,
+          flexWrap: "wrap",
+          opacity: r.end < today ? 0.7 : 1
+        }
+      }, React.createElement("span", {
+        "data-testid": "eastvac-row-mark",
+        style: _objectSpread(_objectSpread({}, eastVacMarkStyle(r.state, dk, dk ? "#E6ECF5" : "#1F2A3A")), {}, {
+          flexShrink: 0
+        })
+      }), React.createElement("span", {
+        style: {
+          fontFamily: mono,
+          fontSize: 12,
+          color: "#1F2A3A",
+          minWidth: 118
+        }
+      }, fmtMD(r.start), "-", fmtMD(r.end)), React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: "#5B6B82",
+          minWidth: 52
+        }
+      }, days, " day", days === 1 ? "" : "s", r.end < today ? " - past" : ""), editable ? React.createElement("span", {
+        role: "group",
+        "aria-label": "East vacation " + r.start + " to " + r.end,
+        style: {
+          display: "inline-flex",
+          gap: 4,
+          flexWrap: "wrap"
+        }
+      }, STATES.map(st => React.createElement("button", {
+        key: st,
+        type: "button",
+        "data-testid": "eastvac-set-" + st,
+        "aria-pressed": r.state === st,
+        disabled: busy || r.state === st,
+        title: stateWord(st),
+        onClick: () => {
+          if (r.state !== st) onReview(p.id, {
+            start: r.start,
+            end: r.end
+          }, st);
+        },
+        style: _objectSpread(_objectSpread({}, eastVacSegStyle(r.state === st, st, dk)), {}, {
+          opacity: busy ? 0.6 : 1,
+          cursor: r.state === st ? "default" : "pointer"
+        })
+      }, busy && r.state !== st ? "..." : st.charAt(0).toUpperCase() + st.slice(1)))) : React.createElement("span", {
+        "data-testid": "eastvac-state-text",
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          color: r.state === "home" ? "#1a8040" : r.state === "away" ? "#1F2A3A" : "#8a5a10"
+        }
+      }, stateWord(r.state)), r.review && r.review.decided_at && React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: "#9aa4ae",
+          fontFamily: mono
+        }
+      }, "decided ", suFmtTs(r.review.decided_at), r.review.decided_by ? " by " + nameOf(r.review.decided_by) : ""));
+    })));
+  }), past > 0 && React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      fontSize: 11,
+      color: "#5B6B82",
+      marginTop: 6,
+      cursor: "pointer"
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: showPast,
+    onChange: e => setShowPast(e.target.checked)
+  }), " Show ", past, " past range(s)"), Array.isArray(conflicts) && React.createElement("div", {
+    style: {
+      marginTop: 8,
+      border: "1px solid " + (conflicts.length ? "#e0b4b4" : rowBorder),
+      borderRadius: 8,
+      padding: "8px 10px"
+    }
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: "0 0 4px",
+      color: conflicts.length ? "#a83232" : undefined
+    })
+  }, "Published days inside unreviewed / away ranges (", conflicts.length, ")"), React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "#5B6B82",
+      margin: "0 0 4px"
+    }
+  }, "The vacation trigger's refusal, mirrored for these derived ranges: a published day the person holds inside one (or a published primary the day before it). A report only - the lock stays; decide ", React.createElement("em", null, "home"), " or trade the shift."), React.createElement("div", {
+    "data-testid": "eastvac-conflicts",
+    style: {
+      fontSize: 12,
+      fontFamily: mono,
+      lineHeight: 1.7
+    }
+  }, conflicts.length === 0 ? "none" : conflicts.map(c => React.createElement("div", {
+    key: c.day + c.role
+  }, React.createElement("button", {
+    type: "button",
+    onClick: () => onEditDay && onEditDay(c.day),
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      fontFamily: mono,
+      padding: "1px 6px",
+      marginRight: 6
+    })
+  }, c.day), " ", c.role, " ", nameOf(c.surgeonId), ": East vacation (", c.state, ")", c.trailingEdge ? " starts the next morning" : "")))));
+}
 function EastFeedCard({
   css,
+  dk,
   feedRows,
   forecastRows,
   overrideRows,
@@ -14387,7 +15044,13 @@ function EastFeedCard({
   threshold,
   today,
   conflicts,
-  onEditDay
+  onEditDay,
+  eastVac,
+  eastVacReviewState,
+  onReviewEastVac,
+  eastVacBusyKey,
+  canReviewEastVac,
+  eastVacConflicts
 }) {
   const inp = _objectSpread(_objectSpread({}, css.inp), {}, {
     padding: "3px 6px",
@@ -14545,6 +15208,37 @@ function EastFeedCard({
       marginRight: 6
     })
   }, c.day), " ", c.role, " ", nameOf(c.id), ": ", (c.reasons || []).map(r => reasonLabel(r, nameOf)).join(", "))))), React.createElement("div", {
+    "data-testid": "eastvac-card",
+    style: {
+      border: "1px solid " + ((eastVac || []).some(p => p.unreviewedUpcoming > 0) ? "#e8d090" : "#e8ecf0"),
+      borderRadius: 8,
+      padding: "8px 10px",
+      marginBottom: 10
+    }
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: "0 0 4px"
+    })
+  }, "East vacations (Davenport time off, reviewed here)"), React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "#5B6B82",
+      margin: "0 0 6px"
+    }
+  }, "Refreshing the feed also reads the person's Davenport vacations (kind vacation only, matched by roster code). Each range is ", React.createElement("strong", null, "unreviewed"), " until he decides: ", React.createElement("strong", null, "away"), " = also off at Silvis (a derived vacation - both roles blocked, primary the day before, no time_off row written); ", React.createElement("strong", null, "home"), " = available at Silvis (no East call, no OR block: the Tue/Thu rule is lifted and he is preferred as primary). Unreviewed counts as away. A range Davenport changes or removes resets to unreviewed on the next refresh and the toast says so. The person can decide from his own Time off view too. The one-tap \"paint these days as offers\" step arrives with Prompt 14's painter."), React.createElement(EastVacationList, {
+    css: css,
+    dk: dk,
+    people: eastVac || [],
+    reviewState: eastVacReviewState,
+    onReview: onReviewEastVac,
+    busyKey: eastVacBusyKey,
+    canReview: canReviewEastVac,
+    nameOf: nameOf,
+    today: today,
+    testid: "eastvac-list",
+    conflicts: eastVacConflicts || [],
+    onEditDay: onEditDay
+  })), React.createElement("div", {
     style: {
       border: "1px solid #e8ecf0",
       borderRadius: 8,
