@@ -257,9 +257,11 @@ function CallSchedule() {
   const [timeOffRows, setTimeOffRows] = useState([]); // raw rows (export / restore)
   const [availabilityRows, setAvailabilityRows] = useState([]); // dated availability statements
 
-  // Calendar view defaults to the current month.
-  const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
-  const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+  // Calendar view defaults to the current month - the CENTRAL month (helpers.js
+  // todayCentral), the same notion of today as the OPEN logic and the today ring
+  // (small items 9/22), never the device clock.
+  const [calMonth, setCalMonth] = useState(() => parse(todayCentral()).getMonth());
+  const [calYear, setCalYear] = useState(() => parse(todayCentral()).getFullYear());
   // Calendar tools (Prompt 9 exports): month count for the share page /
   // printable view (from the visible month), and the ER Call Panels range
   // (null = the visible month; the date inputs and the presets set it).
@@ -270,7 +272,7 @@ function CallSchedule() {
   // accepts in-range values swallows every keystroke ("2", "20", "202" are all
   // out of range), so the text is local and commits to calYear once it is a
   // 4-digit year in range; blur / Enter snap it back to calYear.
-  const [calYearText, setCalYearText] = useState(() => String(new Date().getFullYear()));
+  const [calYearText, setCalYearText] = useState(() => String(parse(todayCentral()).getFullYear()));
   useEffect(() => { setCalYearText(String(calYear)); }, [calYear]);
   const [calSurgeonFilters, setCalSurgeonFilters] = useState([]); // roster ids; [] = everyone (chips dim the rest)
   const [calOnlyOpen, setCalOnlyOpen] = useState(false);          // dim every day without an OPEN slot
@@ -2458,10 +2460,22 @@ function CallSchedule() {
   // Eligibility over EVERY day of a unit (the other unit days assumed held, as
   // holidayUnitCandidates does): the first failing day's result, else ok with
   // the union of the soft notes.
+  // Small items (9/22): a full Fri+Sat+Sun block (three consecutive days from a
+  // Friday, none in a holiday unit) offered to a BLOCK-style receiver is evaluated
+  // with asBlockMember on every day - exactly as the generator evaluates a block -
+  // so Fierce can receive a weekend block (his Friday alone is weekend-block-only).
+  const tradeIsFullWeekendBlock = (days) => {
+    if (!days || days.length !== 3 || !days.every(suIsIso)) return false;
+    const d0 = parse(days[0]);
+    if (d0.getDay() !== 5 || days[1] !== fmt(addD(d0, 1)) || days[2] !== fmt(addD(d0, 2))) return false;
+    return !(rulesCtx && rulesCtx.holidayByDay && days.some(d => rulesCtx.holidayByDay[d]));
+  };
   const tradeEligibilityOver = (days, role, candidateId) => {
     const soft = [];
+    const PR = rulesCtx && rulesCtx.per ? rulesCtx.per[candidateId] : null;
+    const asBlock = !!(PR && PR.weekendStyle === "block" && tradeIsFullWeekendBlock(days));
     for (let i = 0; i < days.length; i++) {
-      const r = tradeEligibility(days[i], role, candidateId, { assume: days.filter(x => x !== days[i]).map(x => ({ date: x, role })) });
+      const r = tradeEligibility(days[i], role, candidateId, { assume: days.filter(x => x !== days[i]).map(x => ({ date: x, role })), ...(asBlock ? { asBlockMember: true } : {}) });
       if (!r.ok) return { ...r, day: days[i] };
       (r.soft || []).forEach(s => { if (!soft.some(x => x.reason === s.reason)) soft.push(s); });
     }
@@ -3292,7 +3306,7 @@ function CallSchedule() {
   }, [calYear, calMonth]);
   const prevMonth = () => { if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); } else setCalMonth(m => m - 1); };
   const nextMonth = () => { if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); } else setCalMonth(m => m + 1); };
-  const goToday = () => { const n = new Date(); setCalMonth(n.getMonth()); setCalYear(n.getFullYear()); };
+  const goToday = () => { const n = parse(todayCentral()); setCalMonth(n.getMonth()); setCalYear(n.getFullYear()); };
   const toggleCalFilter = (id) => setCalSurgeonFilters(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
   const colorOf = (id) => surgeonColors(codeOf(id), sMap[id] ? sMap[id].idx : 0);
   // Text colour for a surgeon's name written straight on the page (week rows,
@@ -3999,7 +4013,7 @@ function CallSchedule() {
                 <button onClick={()=>setView("setup")} style={css.mini(false)}>Diagnostics</button>
               </div>
             )}
-            {loaded && Object.keys(schedule).length === 0 && <p style={{...muted,fontStyle:"italic",marginBottom:8}}>No schedule days in the database yet - every day shows OPEN.</p>}
+            {loaded && Object.keys(schedule).length === 0 && <p style={{...muted,fontStyle:"italic",marginBottom:8}}>No schedule days in the database yet - every day from today shows OPEN.</p>}
             {!rulesImported && loaded && <p style={{...muted,marginBottom:8}}>Rules not imported yet: East and holiday badges appear once Setup imports the seed (Slice E).</p>}
 
             {/* The grid */}
@@ -4066,7 +4080,7 @@ function CallSchedule() {
                 <span key={s.id} style={{display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,borderRadius:3,background:c.tg,border:"1px solid " + c.bd,display:"inline-block"}}/>{s.name} <span style={{fontFamily:mono,fontSize:10}}>{s.code}</span></span>
               ); })}
               <span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>
-              <span><span style={{color:"#c04040",fontWeight:800}}>OPEN</span> = nobody assigned</span>
+              <span><span style={{color:"#c04040",fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>
               <span><span style={{fontStyle:"italic"}}>Atwell</span> = external cover</span>
               <span style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot</span>
               <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#1a6fa8")}>E</span> East-derived week</span>
@@ -4893,6 +4907,11 @@ const REASON_WORDS = {
   "outside-window": "outside the availability window", "not-recurring-available": "not a recurring available day",
   "holds-other-role": "already holds the other role that day", "unknown-surgeon": "not on the roster", "bad-role": "unknown role",
   "backup-opt-out": "does not take backup", "external-surgeon": "outside surgeon (written in by hand)",
+  "derived-lock-held": "East week slot belongs to someone else", "rules-error": "eligibility check failed",
+  // soft vocabulary (softTag falls back here) - Prompt 12 L / N / A, 9/22
+  "weekend-primary": "weekend primary block (contribution bonus)", "weekend-backup": "weekend backup (contribution penalty)",
+  "window-week-below-target": "at or under the window-week target", "window-week-over-target": "over the window-week target",
+  "consecutive-primary": "consecutive primary days (prefers alternate days)", "long-run": "long any-role run",
 };
 // Read an AUTHENTICATED-ONLY table (shift_trade_requests, notifications: RLS
 // 'to authenticated'). db.query reads with dbReadHeaders(), which falls back
@@ -4916,6 +4935,7 @@ function reasonLabel(code, nameOf) {
   const who = (id) => (typeof nameOf === "function" ? nameOf(id) : id);
   switch (key) {
     case "rules-unavailable": return "the rules have not loaded yet - try again in a moment" + (arg ? " (" + arg + ")" : "");
+    case "rules-error": return "eligibility check failed: " + arg;
     case "unit-split": return "part of the " + arg + " - trade the whole unit";
     case "slot-locked": return "slot locked to " + who(arg);
     case "derived-lock": return "East week: Silvis " + arg + " that week";
@@ -4957,7 +4977,7 @@ function softTag(soft) {
     case "pattern-mismatch": return "style: " + arg;
     case "aledo-week": return "Aledo week";
     case "holiday-waiver": return "holiday waiver";
-    default: return s;
+    default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
 }
 // East status lines for one day, per surgeon with an East feature (data-driven
@@ -5047,6 +5067,21 @@ function DayEditor(props) {
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
   const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
+  // Small items (9/22): the Fri/Sat/Sun triple this day belongs to (null on Mon-Thu, or
+  // when any of the three days is a holiday-unit day - a holiday unit is not a weekend
+  // unit). A candidate who holds the OTHER two days of it in the role being asked about
+  // (ctxInputs.schedule - the saved rows) is evaluated as a full-block member, as the
+  // generator evaluates a block, so Fierce can complete a Fri-Sun block by hand.
+  const editorBlockDays = React.useMemo(() => {
+    const dow = parse(day).getDay();
+    const idx = dow === 5 ? 0 : dow === 6 ? 1 : dow === 0 ? 2 : -1;
+    if (idx < 0) return null;
+    const fri = addD(parse(day), -idx);
+    const days = [0, 1, 2].map(i => fmt(addD(fri, i)));
+    if (ctx && ctx.holidayByDay && days.some(d => ctx.holidayByDay[d])) return null;
+    return days;
+  }, [day, ctx]);
+  const holdsOtherBlockDays = (role, id) => !!editorBlockDays && editorBlockDays.every(d => d === day || !!(ctxInputs.schedule && ctxInputs.schedule[d] && ctxInputs.schedule[d][role] === id));
   const evalRole = (role) => {
     const list = roster.map(s => {
       const external = s.type === "external";
@@ -5055,6 +5090,18 @@ function DayEditor(props) {
       try { r = ctx ? eligibility(ctx, day, role, s.id, external ? { manual: true } : undefined) : { ok: true, hard: [], soft: [] }; }
       catch (e) { console.warn("eligibility threw for", s.id, role, day, e); r = { ok: true, hard: [], soft: [], error: true }; }
       return { id: s.id, name: s.name, code: s.code, active: s.active !== false, external, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: !!r.error, eastStanding: r.eastStanding || null }; // eastStanding: Prompt 12 V - the standing East entry's name behind an east-busy
+      // Prompt 12 M: an outside surgeon is asked on the manual path (slot facts only, never external-surgeon);
+      // a pool surgeon completing a Fri-Sun block is asked as a block member (small items 9/22)
+      const eopts = external ? { manual: true } : (holdsOtherBlockDays(role, s.id) ? { asBlockMember: true } : undefined);
+      try { r = ctx ? eligibility(ctx, day, role, s.id, eopts) : { ok: true, hard: [], soft: [] }; }
+      catch (e) {
+        // fail CLOSED (small items 9/22): a thrown check makes the option ineligible with the error as its
+        // reason, and evalBroken (below) disables Save until the rules evaluate again - never a silent ok
+        console.warn("eligibility threw for", s.id, role, day, e);
+        const msg = String(e && e.message || e).slice(0, 120);
+        r = { ok: false, hard: ["rules-error:" + msg], soft: [], error: msg };
+      }
+      return { id: s.id, name: s.name, code: s.code, active: s.active !== false, external, ok: !!r.ok, hard: r.hard || [], soft: r.soft || [], lockHolder: !!r.lockHolder, conflicts: r.conflicts || [], error: r.error || null };
     });
     // pool: eligible first, then ineligible (roster order kept inside each group); inactive only if currently held;
     // outside surgeons (M) come last as their own group - the select shows them under "Outside surgeons"
@@ -5063,11 +5110,16 @@ function DayEditor(props) {
       .concat(ext.filter(o => o.active || o.id === draft[role]));
   };
   const opts = React.useMemo(() => ({ primary: evalRole("primary"), backup: evalRole("backup") }), [ctx, day, draft, roster]); // eslint-disable-line
+  // Small items (9/22): any option whose check THREW -> the error is shown and Save is disabled (fail closed).
+  const evalErrors = [].concat(opts.primary, opts.backup).filter(o => o.error);
+  const evalBroken = evalErrors.length > 0;
 
   const pick = (role, value) => {
     setHint(""); setInfo("");
     if (!value) { setDraft(d => ({ ...d, [role]: null })); setOverrides(o => o.filter(x => x.role !== role)); return; }
     const opt = opts[role].find(o => o.id === value);
+    // a thrown check is not overridable - the error is shown; Save stays disabled while evalBroken
+    if (opt && opt.error) { setHint("Eligibility check failed for " + opt.name + " (" + opt.error + ") - nobody can be assigned until the rules evaluate again."); return; }
     if (opt && !opt.ok) { setPending({ id: value, role, reasons: opt.hard.slice() }); return; }
     // Prompt 12 M: an outside surgeon is written in by hand - the role locks with the pick and the save
     // carries source manual-external (saveDayEdit reads the roster type). His only blocks are slot facts
@@ -5095,6 +5147,7 @@ function DayEditor(props) {
   };
   const toggleLock = (role) => setDraft(d => ({ ...d, [role + "Locked"]: !d[role + "Locked"] }));
   const save = () => {
+    if (evalBroken) { setHint("Eligibility check failed - saving is disabled until the rules evaluate again."); return; }
     if (!dirty) { onCancel(); return; }
     if (draft.primary && draft.primary === draft.backup) { setHint("Primary and backup must be different people."); return; }
     onSave({ ...draft }, { overrides });
@@ -5236,6 +5289,7 @@ function DayEditor(props) {
         )}
 
         {info && <div role="status" data-testid="editor-info" style={{fontSize:12,color:sub,fontWeight:600,marginBottom:8}}>{info}</div>}
+        {evalBroken && <div role="alert" data-testid="editor-eval-error" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>Eligibility check failed for {Array.from(new Set(evalErrors.map(o => o.name))).join(", ")}: {evalErrors[0].error} - saving is disabled until the rules evaluate again (reload the page; if it persists, tell the scheduler).</div>}
         {hint && <div role="status" data-testid="editor-hint" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>{hint}</div>}
         {/* Sticky footer: the Cancel / Save row stays in view while the dialog body scrolls (a phone showed it below the fold - Prompt 11). */}
         <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",borderTop:"1px solid " + border}}>
@@ -5245,7 +5299,7 @@ function DayEditor(props) {
           <span style={{flex:1}}/>
           <span style={{fontSize:10,color:sub}}>Esc closes - arrow keys move a day</span>
           <button type="button" onClick={onCancel} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>{canEdit ? "Cancel" : "Close"}</button>
-          {canEdit && <button type="button" data-testid="editor-save" onClick={save} disabled={!dirty} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:dirty?1:0.5}}>Save</button>}
+          {canEdit && <button type="button" data-testid="editor-save" onClick={save} disabled={!dirty || evalBroken} title={evalBroken ? "Eligibility check failed - saving is disabled" : undefined} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:(dirty && !evalBroken)?1:0.5}}>Save</button>}
         </div>
       </div>
     </div>
@@ -5796,13 +5850,14 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <div style={css.subT}>Availability and shape - {s.name || sel}</div>
           <SuField label="Availability mode"><select value={get("availabilityMode", "")} onChange={e => set("availabilityMode", e.target.value || undefined)} style={{ ...inp, width: 260 }}>{SU_MODES.map(m => <option key={m} value={m}>{m || "(open - every day unless blocked)"}</option>)}</select></SuField>
           <SuField label="Weekend style"><select data-testid="rules-weekend-style" value={get("weekendStyle", "")} onChange={e => set("weekendStyle", e.target.value || undefined)} style={{ ...inp, width: 190 }}><option value="">(none)</option><option value="block">block (Fri+Sat+Sun)</option><option value="split">split (Fri+Sun / Sat)</option><option value="daily">daily (standalone days)</option><option value="saturday-only">saturday-only (legacy)</option></select></SuField>
+          <SuField label="Primary contribution" hint="soft; weekends = a bonus for a full Fri-Sun primary block and a penalty for a weekend backup (weights.weekendContribution)"><select data-testid="rules-primary-contribution" value={get("primaryContribution", "")} onChange={e => set("primaryContribution", e.target.value || undefined)} style={{ ...inp, width: 190 }}><option value="">(none)</option><option value="weekends">weekends (Prompt 12 L)</option></select></SuField>
           <SuField label="Fri-Sun block penalty" hint="soft; added to every multi-day block or split membership of this surgeon"><select data-testid="rules-weekend-block-penalty" value={get("weekendBlockPenalty", "") === null ? "" : String(get("weekendBlockPenalty", ""))} onChange={e => set("weekendBlockPenalty", e.target.value === "" ? undefined : (/^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value))} style={{ ...inp, width: 130 }}><option value="">none</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("weekendBlockPenalty", ""); return v === null || v === undefined || v === "" || v === "medium" || v === "strong" ? null : <option value={String(v)}>custom: {String(v)}</option>; })()}</select></SuField>
           <SuCheck label="prefer alternate days (soft)" title="Prompt 12 N (9/22 evening): a medium penalty on a primary whose day before or after is this surgeon's own primary." checked={draft.preferAlternateDays === true} onChange={v => set("preferAlternateDays", v ? true : undefined)} testid="rules-prefer-alternate-days" />
           <SuField label="Split partner"><select value={get("splitPartner", "")} onChange={e => set("splitPartner", e.target.value || undefined)} style={{ ...inp, width: 130 }}><option value="">(none)</option>{(roster || []).filter(x => x.id !== sel).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></SuField>
           <SuField label="Max consecutive days" hint="blank = group default; hard, primary days only"><input type="number" min="1" max="14" value={get("maxConsecutiveDays", "") === null ? "" : get("maxConsecutiveDays", "")} onChange={e => set("maxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
           <SuField label="Max consecutive any role (soft)" hint="blank = none; primary or backup, a penalty that grows per day beyond it"><input data-testid="rules-max-consec-any" type="number" min="1" max="14" value={get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", "")} onChange={e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
           <SuCheck label="a holiday unit counts as one day for the consecutive limits" title="Prompt 12 A (9/22): a per-surgeon opt-in (Khan: his 4-day Thanksgiving unit vs his max 3). Unchecked = real days." checked={draft.holidayUnitCountsAsOneDay === true} onChange={v => set("holidayUnitCountsAsOneDay", v ? true : undefined)} testid="rules-holiday-unit-one-day" />
-          <SuField label="Monthly target" hint="blank = no target"><input data-testid="rules-monthly-target" type="number" min="0" max="31" value={get("monthlyTarget", null) === null ? "" : get("monthlyTarget", "")} onChange={e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
+          <SuField label="Monthly target" hint="blank = equal share; a number = primary target"><input data-testid="rules-monthly-target" type="number" min="0" max="31" value={get("monthlyTarget", null) === null ? "" : get("monthlyTarget", "")} onChange={e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
           <div>
             <SuField label="Monthly cap">
               <select data-testid="rules-cap-mode" value={capMode} onChange={e => { const v = e.target.value; if (v === "default") set("monthlyCap", undefined); else if (v === "none") set("monthlyCap", null); else set("monthlyCap", { primary: capPrimaryVal || 8 }); }} style={{ ...inp, width: 200 }}>

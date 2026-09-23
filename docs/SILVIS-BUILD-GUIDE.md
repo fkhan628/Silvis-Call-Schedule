@@ -85,12 +85,12 @@ ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) 
 
 | id | name | code | pool |
 |---|---|---|---|
-| s1 | Khan | FAK | weekends; Mon/Wed auto-offered when East is clear; never Tue/Thu; East blocks primary only |
+| s1 | Khan | FAK | weekend primary when East allows (`primaryContribution: "weekends"`, 9/22); Mon/Wed auto-offered when East is clear; never Tue/Thu as primary (backup any day since 9/22); East blocks primary only |
 | s2 | Burchett | MAB | yes |
 | s3 | Acton | BDA | yes |
 | s4 | Philip | AFP | yes |
 | s5 | Fierce | NF | derived weeks (locks) + weekday pattern outside them; cap 14/month |
-| s6 | Sarkar | SRK | monthly windows only; 3–4 days/week; Sat OK, never Fri/Sun |
+| s6 | Sarkar | SRK | monthly windows only (Mon–Fri, 9/22 evening); soft target 2 primary days per window week, alternate days preferred; a window Friday may stand alone, never a Fri–Sun block; backup inside her windows allowed, not targeted |
 
 ### 3.1 Contact data policy (Faraz 9/21 — established by the Prompt 0A redaction)
 
@@ -193,15 +193,29 @@ eligibility(ctx, dateStr, role, surgeonId) → { ok: bool, hard: [reasons], soft
 Khan, derived Fierce weeks), holidays, the schedule so far (for consecutive-day and monthly-cap checks), and tallies.
 
 Hard blocks (any → `ok:false`): inactive on that date; `time_off` covering the day (vacation — blocks the day itself
-*and the day before*, because the shift ends 07:00 on the vacation day; there are no no-call days); `availabilityMode` semantics violated (whitelist: any
+*and, for primary only, the day before*, because the shift ends 07:00 on the vacation day — `groupRules.dayBeforeRules`, H; there are no no-call days); `availabilityMode` semantics violated (whitelist: any
 `available` row for that surgeon in that month makes uncovered days ineligible; `unavailable` rows always block;
-`backup_only` blocks primary; `no_backup` blocks backup); recurring `recurringUnavailable`; `hardNeverWeekdays`
-(Khan: Tue/Thu; Sarkar: Fri/Sun); Khan **primary** on an East busy day (backup is allowed — `eastBlocksBackup:false`);
-Philip's day-before-Aledo; Fierce's weekday pattern outside his derived weeks (Tue/Thu none; Mon backup-only; Wed preferred;
-Fri/Sat/Sun only as one Fri+Sat+Sun block); Sarkar outside her windows or beyond `daysPerWindowWeek.max`; already
-holds the other role that day; would exceed `maxConsecutiveDays` (primary-only count by default,
-`groupRules.countBackupInConsecutive` toggles); would exceed `monthlyCap.primary` (primary placements only — see the
+`backup_only` blocks primary; `no_backup` blocks backup); recurring `recurringUnavailable` (primary only since 9/22); `hardNeverWeekdays`
+(Khan: Tue/Thu — primary only since 9/22, `hardNeverWeekdaysRoles`; Sarkar has none since 9/22 evening); Khan **primary** on an East busy day (backup is allowed — `eastBlocksBackup:false`);
+Philip's day-before-Aledo (primary only — `aledoDayBeforeRoles`, H); Fierce's weekday pattern outside his derived weeks (primary: Tue/Thu none, Mon backup-only, Wed preferred,
+Fri/Sat/Sun only as one Fri+Sat+Sun block; backup every day since 9/22); Sarkar outside her windows (both roles; `daysPerWindowWeek` is a soft target since 9/22 evening); already
+holds the other role that day; `backupOptOut` on a backup slot (I); would exceed `maxConsecutiveDays` (primary-only count by default,
+`groupRules.countBackupInConsecutive` toggles; real days unless `holidayUnitCountsAsOneDay`, A); would exceed `monthlyCap.primary` (primary placements only — see the
 9/22 paragraph below); Philip's `backupCap`.
+
+**Backup is open to everyone (9/22, Prompt 12 I).** Every weekday-pattern, outreach, OR-day, Aledo and Clinton rule above
+restricts *primary* only; a governed month's explicit list restricts the roles its `explicitListMonths` entry names (a plain
+`'YYYY-MM'` = primary only; `{ month, roles }` = exactly those roles — Burchett's and Acton's November lists govern both).
+Vacations, East busy days (primary only), holiday opt-outs, derived-week locks, "holds the other role" and `backupOptOut`
+still apply to backup.
+
+**Holiday-unit days (small items, 9/22).** The holiday waiver (`groupRules.holidays.ignoreWeekdayRules`) lifts the
+*recurring weekday patterns* only — `hardNeverWeekdays`, `recurringUnavailable`, the weekday allow-list, Fierce's outside-derived-weeks
+pattern, the Aledo rules and the recurring whitelist. An **explicit dated list is never waived**: in a governed month
+`whitelist-month` stays hard on a holiday-unit day (Burchett's December list omits 12/24 on purpose, so he cannot hold
+the Christmas unit; 12/25, 12/31 and 1/1 are on it), and so does Philip's weeks list (`outside-available-weeks` —
+Memorial Day 2027 sits outside his listed weeks). Still enforced on holidays as before: vacations, East, derived locks,
+Sarkar's windows, caps, `maxMajorHolidays`, `backupOptOut`.
 
 Soft penalties (weights configurable in `groupRules.weights`): `recurringAvoid` / `avoid` rows (medium), Philip on an
 Aledo week (strong), `prefer` rows (negative), weekend-style mismatch (block-style surgeon on a lone Sat, etc.), holiday
@@ -224,7 +238,9 @@ trips `monthly-cap:N` or `over-preferred-cap:N` and backup days never count. `bu
 `silvisRole: "backup"`); his East *backup* week is Silvis primary and counts through the primaries he holds; Khan's
 busy-day set is never added to anyone's cap. Philip's `backupCap` (≤ 7 backup days, ≤ 1 backup weekend per month) is the
 separate, explicit backup rule. The generator's `genTargets` clip and the tallies' `cap` field follow the primary cap
-(preview column "Cap (P)"); the numeric `monthlyTarget` term still uses the any-role count until Prompt 12 J.
+(preview column "Cap (P)"). A numeric `surgeonRules.<id>.monthlyTarget` is a **primary** target (J; small items 9/22): its soft
+`over-target:<n>` / `under-target` term measures the same primary count as the cap and applies to a primary placement only —
+a backup placement is never scored against it. `null` = equal share (§6).
 
 ## 6. Generator (`generator.js`)
 
@@ -237,15 +253,15 @@ from the last published day**. Any range works; the presets are conveniences.
 1. **Seed locks** — existing locked days, manual locks, Fierce derived weeks (both roles as applicable), imported assignments. Locks are never moved.
 2. **Build units** — each holiday (from `config.holidays.units[year]`) is a *holiday unit*: its days get **one primary and one backup who stick through the whole unit**; a holiday unit pre-empts any weekend unit it overlaps, and the leftover Fri/Sat/Sun days form a reduced weekend unit. Each remaining Fri/Sat/Sun triple is a *weekend unit*; every other day is a *day unit*. Holiday units are scored against the holiday pools (major/minor counts, tenure-normalized) and per-surgeon holiday rules (`neverThanksgiving`, `maxMajorHolidays`).
 3. **Primary pass** — order units by constraint tightness (fewest eligible candidates first; weekend units generally first). For each unit enumerate legal patterns: day unit → each eligible surgeon; weekend unit → `block(x)`, `split(x,y)`, `daily(x,y,z)` per §4 of the rules. Score = Σ soft penalties + target-deviation term + pattern penalty (`daily` is expensive; `split` cheap for split-style pairs; `block` cheap for block-style surgeons) + small jitter. Pick the min. If a unit has **no** legal pattern, leave it open and record `diagnostics.uncovered` with the blocking reasons per surgeon (the UI shows this — never silently skip).
-4. **Backup pass** — same as 3 with primary fixed; backup ≠ primary; caps count primary+backup.
+4. **Backup pass** — same as 3 with primary fixed; backup ≠ primary; backup placements are scored against the per-role backup targets (J); caps count primary only (K), so a backup placement never trips a cap (Philip's explicit `backupCap` is the one backup cap).
 5. **Repair pass** — for each open slot, try 1-hop and 2-hop swaps that free an eligible surgeon (mirrors Davenport's Phase-1B chain swaps) while keeping every move inside `eligibility()`.
 6. **Target smoothing** — per role, primary first: while any pool surgeon is above his primary (then backup) target and another below, move a *non-locked* day-unit slot of that role from high→low if eligibility holds, the soft score does not worsen beyond `weights.smoothingTolerance` and that role's total deviation strictly falls.
 
 **Candidate score (lexicographic, lower is better) — Prompt 12 J, 9/22:**
 `uncoveredPrimary ×1e9 + uncoveredBackup ×1e7 + hardViolations ×1e6 (should be 0 by construction) + Σsoft ×1e3 + primaryDeviation ×300 + backupDeviation ×100 + weekendSpread ×10 + holidaySpread`.
-Targets are per role and equal by default (`genTargets`): each pool member (active, `poolMember !== false`, no
+Targets are per role and equal by default (`genTargets`, **equal shares — Faraz 9/22**): each pool member (active, `poolMember !== false`, no
 `availableWindows`, not `type: "external"`) gets a primary target = an equal share of the month's open primary slots
-(after the windows surgeon's reserved window primaries), clipped by the K cap and floored by locked primaries, and a
+(after the windows surgeon's reserved window primaries — Sarkar's own target is `daysPerWindowWeek.target` × her window weeks in the month, N), clipped by the K cap and floored by locked primaries, and a
 backup target = an equal share of the month's open backup slots (clipped by `backupCap.perMonthDays`, floored by locked
 backups); `monthlyTarget: null` means equal share, a number sets the primary target, `{ primary, backup }` sets each;
 there is no neutral term. Step 4 scores backup placements against the backup targets (caps count primary only — K),
@@ -255,6 +271,13 @@ property of the flat share (9/22 J review, kept on purpose pending a decision): 
 pool while the deviation counts whole-month days, so in a month where a locked floor or a clip pins a member the targets
 sum to fewer placements than there are open slots (`months[m].placeableAtTarget` vs `primaryOpen` / `backupOpen`) and
 the surplus days are placed by the soft terms alone; read the deviation numbers with that in mind.
+
+**Fill-open-only mode (T, 9/22):** `generate(ctx, start, end, { fillOpenOnly: true })` fixes every slot held on the input
+(locked or not, `externalCover` included) and fills only the open ones — `diagnostics.mode = "fill-open-only"`,
+`diagnostics.fixedSlots`, and a held unlocked slot that breaks a rule is a fact in `diagnostics.fixedViolations`, never a
+hard violation. `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups).
+Outside surgeons (`type: "external"`, M) are never generated: a day one holds is a fixed slot in every mode and comes off
+the pool's open-slot count.
 
 **Diagnostics** returned with every run: per-surgeon tallies (primary, backup, weekend days, holidays, consecutive max,
 month totals vs cap/target), a list of open slots with reasons, the soft penalties incurred (so Faraz can see *why*
@@ -290,9 +313,11 @@ buttons, the notification center, the refresh/version banner, and Settings → D
 
 - **Month grid cell:** two lines — `P Burchett` / `B Acton` — colored per surgeon; open slot = red "OPEN" (the ER-panel author's convention); weekend units get a subtle bracket; locked slots show a padlock; East-derived (Fierce) slots show a small "E".
 - **Week rows list:** the same rows as the ER-panel author's Word document (MON/SUN DATES | PRIMARY | BACKUP) with ranges collapsed (`9/15–9/18 Philip`) — this is also the export format (§9).
-- **Day editor** (click a cell): set primary/backup from a dropdown that shows eligibility — eligible names first, ineligible greyed with the reason; lock toggle; note.
-- **Setup:** roster (names/codes; no contact fields); **Users** (link auth users to roster ids, set roles — the only place emails appear, read from `user_profiles`); **Rules** editor per surgeon (availability mode, recurring patterns with a live "next 8 matching dates" preview, weekend style + partner, max consecutive, monthly cap/target, holiday rules, East feed toggle); **Availability** entry (dated rows by kind, plus quick paste of a date list like Burchett's); vacations (scheduler view of everyone's, with override entry); **Holidays** editor — per year, each unit's days (editable) and its primary + backup, with the major/minor fairness counts beside each name; East feed panel; **Generate** with range presets — *Through end of year* (this round) and *3 / 6 / 9 / 12 months from the last published day* — plus N, "respect locks", preview → publish with diff; import from `silvis-seed.json` (file picker; the importer writes no contact fields and refuses a file that contains any); office contacts (entered by hand — the ER-panel author).
-- **Totals:** per surgeon by month, year-to-date and rolling 12 months: primary shifts, backup shifts, weekend days, major/minor holidays, max consecutive, each vs target/cap; fairness view (deviation from target). One 24-h day = one shift, nothing weighted. **No stipend, pay or $ figures anywhere** (Faraz 9/21).
+- **Day editor** (click a cell): set primary/backup from a dropdown that shows eligibility — eligible names first, ineligible greyed with the reason; lock toggle; note. Backup lists everyone (9/22: backup is open unless `backupOptOut`). Outside surgeons (M) sit under their own "Outside surgeons" heading for both roles; picking one locks the role and saves `source: "manual-external"`. A Fri/Sat/Sun candidate who already holds the other two block days is judged as a block member (small items 9/22 — Fierce can complete a Fri–Sun block by hand); the same holds for a block-style receiver of a whole Fri–Sun block in the trade path. The editor **fails closed**: a thrown eligibility check makes the option ineligible with the error as its reason and disables Save until the rules evaluate again.
+- **Open shifts** (board, self-claim, weekly reminders): §16.
+- **Theme (O/R, 9/22):** Illini navy structure with an orange accent inside the app, an orange opening (sign-in, biometric, loading) and SSC icons; OPEN stays red.
+- **Setup:** roster (names/codes; no contact fields); **Users** (link auth users to roster ids, set roles — the only place emails appear, read from `user_profiles`); **Rules** editor per surgeon (availability mode, recurring patterns with a live "next 8 matching dates" preview, weekend style + partner + "Primary contribution" ((none) / weekends, L), max consecutive (hard primary-only, soft any-role), holiday-unit-as-one-day opt-in, monthly cap (primary days) and target (blank = equal share; a number = primary target), "Does not take backup", holiday rules, East feed toggle); **Roster** also takes outside surgeons ("Add outside surgeon": name + code + operational note, M); **Availability** entry (dated rows by kind, plus quick paste of a date list like Burchett's); vacations (scheduler view of everyone's, with override entry); **Holidays** editor — per year, each unit's days (editable) and its primary + backup, with the major/minor fairness counts beside each name; East feed panel; **Generate** with range presets — *Through end of year* (this round) and *3 / 6 / 9 / 12 months from the last published day* — plus N, "respect locks", preview → publish with diff; import from `silvis-seed.json` (file picker; the importer writes no contact fields and refuses a file that contains any); office contacts (entered by hand — the ER-panel author).
+- **Totals:** per surgeon by month, year-to-date and rolling 12 months: primary shifts, backup shifts, weekend days, major/minor holidays, max consecutive (primary-only and any-role, real days), each vs target/cap — the cap is primary-only and the deviation is primary minus target (J/K); an "Outside surgeons" section lists their day counts (M); fairness view (deviation from target). One 24-h day = one shift, nothing weighted. **No stipend, pay or $ figures anywhere** (Faraz 9/21).
 - **Time off & trades:** a surgeon enters a vacation range for themselves — no approval; the entry is refused if any day in the range has them published as primary or backup (the conflicting dates are listed with a "propose a trade" shortcut), otherwise it is saved, logged to `audit_log`, and those days are blocked from call. Scheduler can enter for anyone and override. Trades by day+role with eligibility checked for the recipient; an accepted trade is applied to the schedule with an audit entry and notifications (scheduler can revert).
 
 ## 9. Exports
@@ -301,7 +326,7 @@ buttons, the notification center, the refresh/version banner, and Settings → D
 - **Shareable read-only HTML** — same mechanism as Davenport (self-contained page, Outfit font), month grid + week rows.
 - **Printable month** — reuse `buildPrintableCalendarHTML` with the new cell content.
 - **ER Call Panels export for the ER-panel author** — an HTML table in her exact layout (MON/SUN DATES | TRAUMA | TRAUMA BACKUP; one row per Mon–Sun week; entries `M/D Name`, consecutive same-surgeon days collapsed `M/D–M/D Name`; open days in red) with a **Copy for Word** button (writes `text/html` to the clipboard so it pastes as a table). Stretch: true `.docx` via the `docx` UMD build from cdnjs.
-- Unassigned slots before today (Central) render blank in the grid, week rows and every export; OPEN is shown from today forward (Faraz 9/22).
+- Unassigned slots before today (Central) render blank in the grid, week rows and every export; OPEN is shown from today forward (Faraz 9/22, Q): one definition, `slotIsOpen(dateStr, holder, today)` / `buildWeekRows(..., { today })` in `helpers.js`, and one notion of today — `todayCentral()` — shared by the grid, the legend ("OPEN = nobody assigned (today onward)"), the calendar's default month, the exports and `generator.rangePresets`.
 
 ## 10. Notifications, office notifications, calendar sync, refresh, data management
 
@@ -338,12 +363,12 @@ date helpers), generate 50 seeds × 3 ranges (Oct 2026 with imports; Nov–Dec 2
 2. `primary !== backup` on every day.
 3. Locks (imports, manual, Fierce derived) are byte-identical in the output.
 4. No assignment on a `time_off` day or on the day before a vacation day.
-5. Khan: never Tue/Thu; never **primary** on an East busy day (backup on an East day is legal).
-6. Acton: never 2nd/4th Mon or Wed; never 2026-11-19..22 or 11-25..29; never Thanksgiving.
-7. Burchett: primary only on whitelist days (recurring or explicit `available`); ≤ 2 consecutive primary days; ≤ 8 total days per month. Acton and Khan have no cap (a `monthlyCap: null` must not fall back to the group default).
-8. Philip: never the day before an Aledo day; never 2026-10-15; backup ≤ 7 days and ≤ 1 weekend per month; ≤ 1 major holiday.
-9. Fierce: his derived weeks appear whole, with the correct role, as locks; outside them never Tue/Thu, never primary on Mon, a Friday only as the start of a Fri+Sat+Sun block; Silvis days + East week days ≤ 14 per month.
-10. Sarkar: only inside her windows; never Fri/Sun; ≤ 4 days per window week; ≤ 2 consecutive.
+5. Khan: never Tue/Thu **as primary** (backup any day since 9/22); never **primary** on an East busy day (backup on an East day is legal).
+6. Acton: never **primary** on a 2nd/4th Mon or Wed (backup allowed since 9/22); never 2026-11-19..22 or 11-25..29; never Thanksgiving.
+7. Burchett: primary only on whitelist days (recurring or explicit `available`; a governed month's explicit list is not waived on a holiday-unit day); ≤ 2 consecutive primary days (real days); ≤ 8 **PRIMARY** days per month (backup never counts — K). Acton and Khan have no cap (a `monthlyCap: null` must not fall back to the group default).
+8. Philip: never **primary** the day before an Aledo day (H); never **primary** outside his listed weeks from 11/2026 (holiday-unit days included — small items 9/22); never 2026-10-15; backup ≤ 7 days and ≤ 1 weekend per month; ≤ 1 major holiday; ≤ 4 consecutive primary days.
+9. Fierce: his derived weeks appear whole, with the correct role, as locks; outside them never **primary** on Tue/Thu or Mon (backup any day since 9/22), a Friday primary only as the start of a Fri+Sat+Sun block; Silvis primary days + East primary-week days ≤ 14 per month (K).
+10. Sarkar: only inside her windows (Mon–Fri since 9/22 evening), either role; no Fri–Sun block; ≤ 2 consecutive primary days (hard); the 2 primaries per window week are a **soft** target (diagnostics `windowWeeks`, never a violation — N revised).
 11. Weekend units: block-style surgeons never hold a lone Fri/Sat/Sun unless the unit is flagged `fallback:true` in diagnostics.
 12. Best-of-N returns the candidate with the minimum score; determinism: same seed → same output.
 13. Holiday units: every unit in range has one primary and one backup for all its days (same surgeon throughout), the unit pre-empts the overlapping weekend unit, `neverThanksgiving` and `maxMajorHolidays` hold.

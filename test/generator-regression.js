@@ -210,9 +210,9 @@ eq([[...BUR_AVAIL.primary].filter((d) => monthOf(d) === "2026-11").length, [...B
 function burchettMay(d, role) {
   if (BUR_UNAVAIL.has(d)) return false;                    // explicit rows are never waived
   if (role === P && BUR_BACKUP_ONLY.has(d)) return false;  // a backup_only row blocks primary
-  if (isHoliday(d)) return true;                           // day rules do not apply on holiday-unit days (rules doc section 5)
   const gov = BUR_GOV[monthOf(d)];
-  if (gov && gov.has(role)) return BUR_AVAIL[role].has(d); // governed month + role: exactly his list
+  if (gov && gov.has(role)) return BUR_AVAIL[role].has(d); // governed month + role: exactly his list - an explicit dated list is never waived, holiday-unit days included (small items 9/22)
+  if (isHoliday(d)) return true;                           // the recurring weekday rules below do not apply on holiday-unit days (rules doc section 5)
   if (role === B) return true;                             // 9/22: backup any day
   if (BUR_AVAIL[P].has(d)) return true;
   return burchettRecurring(d) || isWeekend(d);
@@ -523,6 +523,7 @@ function checkRun(out, range, seedNo, deep, extraRows) { // extraRows (W): dated
         ok(!(d >= "2026-11-19" && d <= "2026-11-22") && !(d >= "2026-11-25" && d <= "2026-11-29"), "Acton on his November time off");
         ok(!(HOLIDAY[d] && HOLIDAY[d].name === "Thanksgiving"), "Acton on a Thanksgiving unit day");
         { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role) && !isHoliday(d)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary; Y: November ungoverned)"); }
+        { const g6 = ACT_GOV[monthOf(d)]; if (g6 && g6.has(role)) ok(ACT_AVAIL[role].has(d), "Acton " + role + " in governed " + monthOf(d) + " is off his explicit list (T: October primary, November both roles; an explicit list is never waived on a holiday-unit day - small items 9/22)"); }
       }
       // item 7 (9/22: backup any day unless explicitly unavailable)
       if (id === BURCHETT) ok(burchettMay(d, role), "Burchett " + role + " on a day his rules exclude (" + weekday(d) + ")");
@@ -531,8 +532,9 @@ function checkRun(out, range, seedNo, deep, extraRows) { // extraRows (W): dated
         if (role === P && !isHoliday(d)) ok(!isAledoDay(addDays(d, 1)), "Philip PRIMARY the day before an Aledo day");
         ok(d !== "2026-10-15", "Philip on 2026-10-15");
         if (role === B) ok(!PHILIP_NO_BACKUP.has(d), "Philip backup on a no-backup date");
-        if (monthOf(d) === "2026-10" && role === P && !isHoliday(d)) ok(PHILIP_OCT_PRIMARY.has(d), "Philip October primary outside his list");
-        if (role === P && d >= PHILIP_WEEKS_FROM && !isHoliday(d)) ok(PHILIP_WEEK_DAYS.has(d) || PHILIP_OCT_PRIMARY.has(d), "Philip PRIMARY outside his available weeks");
+        // explicit dated lists (his October list, his weeks list) are never waived on a holiday-unit day (small items 9/22)
+        if (monthOf(d) === "2026-10" && role === P) ok(PHILIP_OCT_PRIMARY.has(d), "Philip October primary outside his list");
+        if (role === P && d >= PHILIP_WEEKS_FROM) ok(PHILIP_WEEK_DAYS.has(d) || PHILIP_OCT_PRIMARY.has(d), "Philip PRIMARY outside his available weeks (holiday-unit days included)");
       }
       // item 9b: Fierce outside derived weeks follows his per-role weekday pattern
       // (pinned above: primary Mon/Tue/Thu never, Wed yes, Fri-Sun block only; backup any day since 9/22)

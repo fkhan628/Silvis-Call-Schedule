@@ -1323,7 +1323,8 @@ try {
     const over = Array.from(document.querySelectorAll("[data-testid=totals-table] tbody td[data-flag=over]")).map(td => ({ row: td.parentElement.getAttribute("data-testid").replace("totals-row-", ""), col: td.getAttribute("data-col"), color: c(td) }));
     return { plain: c(plain), over };
   });
-  const expDev = (() => { const d = recount.s3 ? recount.s3.total - ACTON_TARGET : 0; return d > 0 ? "+" + d : String(d); })();
+  // Item J (9/22): a numeric monthlyTarget is a PRIMARY target, so the Totals deviation is primary minus target.
+  const expDev = (() => { const d = recount.s3 ? recount.s3.primary - ACTON_TARGET : 0; return d > 0 ? "+" + d : String(d); })();
   let targetSet = false;
   try {
     // ---- Totals: October 2026 ----
@@ -1347,7 +1348,7 @@ try {
       console.log(`     (October: ${octTotal} tallied shifts across the six; ${octExternal} externally covered primary day(s) excluded; holiday units in October: ${octHoliday ? "yes" : "none"})`);
       const acton = published.find(r => r.id === "s3");
       if (!acton || acton.visible.target !== String(ACTON_TARGET) || acton.visible.deviation !== expDev || acton.flags.deviation !== (expDev.startsWith("+") ? "over" : expDev === "0" ? "ok" : "under")) fail(`Totals target: Acton should show Target ${ACTON_TARGET} / Deviation ${expDev} (flag ${expDev.startsWith("+") ? "over" : "under/ok"}), got target '${acton && acton.visible.target}' deviation '${acton && acton.visible.deviation}' flag ${acton && acton.flags.deviation}`);
-      else ok(`Totals target: Acton (monthlyTarget ${ACTON_TARGET} saved through the Rules card) shows Target ${ACTON_TARGET} and Deviation ${expDev} = ${recount.s3.total} - ${ACTON_TARGET}`);
+      else ok(`Totals target: Acton (monthlyTarget ${ACTON_TARGET} saved through the Rules card) shows Target ${ACTON_TARGET} and Deviation ${expDev} = ${recount.s3.primary} (primary) - ${ACTON_TARGET}`);
       const others = published.filter(r => r.id !== "s3");
       if (others.some(r => r.visible.target !== "-" || r.visible.deviation !== "-")) fail("Totals target: a surgeon without a target shows a target/deviation: " + JSON.stringify(others.map(r => [r.id, r.visible.target, r.visible.deviation])));
     }
@@ -1779,6 +1780,144 @@ try {
     page.off("dialog", acceptAll);
     fail("Trades harness exception: " + errLine(e));
     try { await page.screenshot({ path: path.join(OUT, "failure-trades.png"), fullPage: true }); } catch (e2) {}
+  }
+
+  // ====================== Prompt 12 small items (9/22) ======================
+  // Legend / empty-note wording (Q follow-up), the day editor failing CLOSED when
+  // eligibility throws, asBlockMember through the day editor (Fierce completes a
+  // Fri-Sun block by hand) and through the trade path (Fierce receives Khan's
+  // Fri-Sun block), and the Setup -> Rules 'Primary contribution' select (L
+  // follow-up). Runs on the LIVE rows, before the Setup section generates and
+  // publishes December; every write is intercepted like the rest of the run.
+  try {
+    await page.click('button[data-tab="calendar"]');
+    await page.waitForSelector(".cal-legend", { timeout: 5000 });
+    const legendText = await page.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " "));
+    if (!legendText.includes("OPEN = nobody assigned (today onward)")) fail("Legend: expected 'OPEN = nobody assigned (today onward)', got: " + legendText);
+    else ok("Legend reads 'OPEN = nobody assigned (today onward)'");
+
+    // ---- (1) the day editor fails CLOSED when eligibility throws ----
+    // rules.js is a classic script: `eligibility` is a global the JSX resolves at call
+    // time, so the harness can make it throw for one editor open and restore it after.
+    const fcDay = "2026-12-16"; // a Wednesday with no live row (December is generated later in the run)
+    await page.evaluate(() => { window.__realEligibility = window.eligibility; window.eligibility = () => { throw new Error("harness: synthetic rules failure"); }; });
+    try {
+      await showMonth(2026, 11);
+      await page.click(`[data-day="${fcDay}"]`);
+      await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      const fcOpts = await page.$$eval("[data-testid=editor-primary] option", els => els.filter(o => o.value).map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
+      const fcErr = await page.$eval("[data-testid=editor-eval-error]", el => el.textContent).catch(() => "");
+      await page.selectOption("[data-testid=editor-primary]", "s3");
+      await page.waitForTimeout(250);
+      const fcOverride = await page.$("[data-testid=override-confirm]");
+      const fcHint = await page.$eval("[data-testid=editor-hint]", el => el.textContent).catch(() => "");
+      const fcSaveDisabled = await page.$eval("[data-testid=editor-save]", el => el.disabled);
+      const fcDraft = await page.$eval("[data-testid=editor-primary]", el => el.value);
+      if (!fcOpts.length || !fcOpts.every(o => o.eligible === "false" && o.text.includes("rules-error:harness: synthetic rules failure"))) fail("Day editor fail-closed: every pool option must be ineligible with the thrown error as its reason: " + JSON.stringify(fcOpts));
+      else if (!fcErr.includes("Eligibility check failed for") || !fcErr.includes("harness: synthetic rules failure")) fail("Day editor fail-closed: no editor-eval-error line naming the error: " + JSON.stringify(fcErr));
+      else if (fcOverride || fcDraft) fail(`Day editor fail-closed: picking a surgeon must not open the override confirm nor set the draft (override=${!!fcOverride}, draft='${fcDraft}')`);
+      else if (!fcHint.includes("Eligibility check failed for Acton")) fail("Day editor fail-closed: no hint after the refused pick: " + JSON.stringify(fcHint));
+      else if (!fcSaveDisabled) fail("Day editor fail-closed: Save must be disabled while a check threw");
+      else ok(`Day editor fail-closed (${fcDay}): ${fcOpts.length} pool options ineligible 'rules-error:harness: synthetic rules failure', eval-error line shown, the pick is refused with a hint, Save disabled`);
+      await page.screenshot({ path: path.join(OUT, "day-editor-fail-closed.png") });
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+    } finally {
+      await page.evaluate(() => { if (window.__realEligibility) { window.eligibility = window.__realEligibility; delete window.__realEligibility; } });
+    }
+    // the restored check works again: the same day opens with eligible options
+    await page.click(`[data-day="${fcDay}"]`);
+    await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+    const fcAfter = await page.$$eval("[data-testid=editor-primary] option", els => els.filter(o => o.value).map(o => o.getAttribute("data-eligible")));
+    const fcErrAfter = await page.$("[data-testid=editor-eval-error]");
+    if (!fcAfter.includes("true") || fcErrAfter) fail("Day editor: after restoring eligibility the editor still reads broken: " + JSON.stringify(fcAfter));
+    else ok("Day editor: with eligibility restored the same day opens with eligible options and no eval-error line");
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+
+    // ---- (2) asBlockMember in the day editor: Fierce completes a Fri-Sun block by hand ----
+    // Sat 1/9 and Sun 1/10/2027 -> Fierce primary (each alone is 'weekend-block-only' -> the
+    // harness accepts the override), then Fri 1/8 must list Fierce as ELIGIBLE: the other two
+    // block days are his in the saved rows, so the editor asks rules.js as a block member.
+    if (dated("2027-01-07", "day-editor block-member check on 1/8-1/10/2027")) {
+      const blk = ["2027-01-08", "2027-01-09", "2027-01-10"];
+      const blkHeld = await Promise.all(blk.map(d => cellAttr(d, "data-primary").catch(() => null)));
+      if (blkHeld.some(Boolean)) console.log(`     (1/8-1/10/2027 already hold a primary: ${blkHeld.join(", ")} - the block-member check runs on top of them)`);
+      await editDay(blk[1], "primary", "s5"); noteEdit(blk[1], { primary_id: "s5" });
+      await editDay(blk[2], "primary", "s5"); noteEdit(blk[2], { primary_id: "s5" });
+      await showMonth(2027, 0);
+      await page.click(`[data-day="${blk[0]}"]`);
+      await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      const friOpts = await page.$$eval("[data-testid=editor-primary] option", els => els.map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
+      const friFierce = friOpts.find(o => o.value === "s5");
+      if (!friFierce) fail("Day editor 1/8/2027: Fierce is not in the Primary dropdown: " + JSON.stringify(friOpts));
+      else if (friFierce.eligible !== "true") fail(`Day editor 1/8/2027: Fierce holds Sat+Sun and must be ELIGIBLE for the Friday as a block member, got '${friFierce.text}' [${friFierce.eligible}]`);
+      else {
+        await page.selectOption("[data-testid=editor-primary]", "s5");
+        await page.waitForTimeout(250);
+        const friOverride = await page.$("[data-testid=override-confirm]");
+        if (friOverride) fail("Day editor 1/8/2027: picking Fierce (block member) must not open the override confirm");
+        else ok(`Day editor 1/8/2027: Fierce reads eligible as the third day of his Fri-Sun block ('${friFierce.text}'), no override on the pick`);
+      }
+      await page.screenshot({ path: path.join(OUT, "day-editor-block-member.png") });
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+    }
+
+    // ---- (3) asBlockMember in the trade path: Fierce can receive Khan's Fri-Sun block ----
+    // Fri 12/18 - Sun 12/20 -> Khan primary (block style), then the trade card offers the
+    // three days as one weekend-block unit; Fierce must read ELIGIBLE as the counter-party.
+    if (dated("2026-12-17", "trade block-receiver check on 12/18-12/20")) {
+      const wk = ["2026-12-18", "2026-12-19", "2026-12-20"];
+      for (const d of wk) { await editDay(d, "primary", "s1"); noteEdit(d, { primary_id: "s1" }); }
+      await page.click('button[data-tab="timeoff"]');
+      await page.waitForSelector("[data-testid=trade-card]", { timeout: 5000 });
+      await page.selectOption("[data-testid=trade-from]", "s1");
+      await page.waitForTimeout(150);
+      const mineVals = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => o.value).filter(Boolean));
+      if (!mineVals.includes("2026-12-18|primary")) fail("Trades block: Khan's picker does not list 2026-12-18|primary after the three edits: " + mineVals.join(", "));
+      else {
+        await page.selectOption("[data-testid=trade-mine-pick]", "2026-12-18|primary");
+        await page.waitForTimeout(200);
+        const unitText = await page.$eval("[data-testid=trade-unit]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+        const blockOpts = await readToOpts();
+        const fierceOpt = blockOpts.find(o => o.value === "s5");
+        if (!unitText.includes("weekend block")) fail("Trades block: 12/18 primary is not offered as a weekend-block unit: " + JSON.stringify(unitText));
+        else if (!fierceOpt) fail("Trades block: Fierce is not a counter-party option: " + JSON.stringify(blockOpts));
+        else if (fierceOpt.eligible !== "true") fail(`Trades block: Fierce must be ELIGIBLE to receive the whole Fri-Sun block (asBlockMember), got '${fierceOpt.text}' [${fierceOpt.eligible}]`);
+        else ok(`Trades block: Khan's 12/18-12/20 primary is one weekend-block unit and Fierce reads eligible to receive it ('${fierceOpt.text}')`);
+        await page.screenshot({ path: path.join(OUT, "trade-block-receiver.png") });
+        await page.selectOption("[data-testid=trade-mine-pick]", "");
+      }
+    }
+
+    // ---- (4) Setup -> Rules: the 'Primary contribution' select writes surgeonRules.<id>.primaryContribution ----
+    await page.click('button[data-tab="setup"]');
+    await openCard("setup_rules");
+    await page.click("[data-testid=rules-pick-s1]");
+    await page.waitForSelector("[data-testid=rules-primary-contribution]", { timeout: 5000 });
+    const pcHint = await page.$eval("[data-testid=rules-monthly-target]", el => el.parentElement.innerText.replace(/\s+/g, " "));
+    if (!pcHint.includes("blank = equal share; a number = primary target")) fail("Rules: the Monthly target hint should read 'blank = equal share; a number = primary target', got: " + JSON.stringify(pcHint));
+    else ok("Rules: Monthly target hint reads 'blank = equal share; a number = primary target'");
+    const pcOpts = await page.$$eval("[data-testid=rules-primary-contribution] option", os => os.map(o => o.value));
+    const pcWas = await page.$eval("[data-testid=rules-primary-contribution]", el => el.value);
+    const pcNew = pcWas === "weekends" ? "" : "weekends";
+    const beforePc = writes.length;
+    await page.selectOption("[data-testid=rules-primary-contribution]", pcNew);
+    await page.click("[data-testid=rules-save]");
+    const pcBlob = (await waitFor(() => writesSince(beforePc, "/rest/v1/call_schedule_data").some(w => w.method === "POST"), 6000, 100)) ? writesSince(beforePc, "/rest/v1/call_schedule_data").filter(w => w.method === "POST").pop() : null;
+    const pcSaved = pcBlob ? (() => { try { return JSON.parse(pcBlob.body).data.surgeonRules.s1.primaryContribution; } catch (e) { return "(unparsed)"; } })() : "(no blob write)";
+    if (pcOpts.join(",") !== ",weekends") fail("Rules: Primary contribution options should be (none) / weekends, got: " + pcOpts.join(","));
+    else if (!pcBlob) fail("Rules: no call_schedule_data write after saving the Primary contribution change");
+    else if ((pcNew || undefined) !== pcSaved) fail(`Rules: the saved blob carries surgeonRules.s1.primaryContribution = ${JSON.stringify(pcSaved)}, expected ${JSON.stringify(pcNew || undefined)}`);
+    else ok(`Rules: Primary contribution select (live value '${pcWas}') -> '${pcNew || "(none)"}' -> blob write carries surgeonRules.s1.primaryContribution ${JSON.stringify(pcSaved)}`);
+    // put it back so the rest of the run sees the live rules
+    await page.selectOption("[data-testid=rules-primary-contribution]", pcWas);
+    if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) { await page.click("[data-testid=rules-save]"); await page.waitForTimeout(1200); }
+    await page.click('button[data-tab="calendar"]');
+  } catch (e) {
+    fail("small items harness exception: " + errLine(e));
+    try { await page.screenshot({ path: path.join(OUT, "failure-small-items.png"), fullPage: true }); } catch (e2) {}
   }
 
   // ====================== Prompt 6 Slice E: the Setup view ======================

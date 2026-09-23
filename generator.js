@@ -181,7 +181,16 @@ function genWindowWeeks(ctx) {
   return out;
 }
 function genSundayOnOrAfter(s) { var w = genWeekdayIndex(s); return w === 6 ? s : genAddDays(s, 6 - w); }
-function genTodayStr() { var d = new Date(); return d.getFullYear() + "-" + genPad2(d.getMonth() + 1) + "-" + genPad2(d.getDate()); }
+// One notion of today (small items 9/22): the CENTRAL date - the same expression as
+// helpers.js todayCentral - so the rangePresets default agrees with the app whatever
+// the device zone; the device date is the fallback when time zone data is missing.
+function genTodayStr() {
+  try {
+    var s = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(s)) return s;
+  } catch (e) { /* fall through to the device date */ }
+  var d = new Date(); return d.getFullYear() + "-" + genPad2(d.getMonth() + 1) + "-" + genPad2(d.getDate());
+}
 
 /* ------------------------------------------------------------------- prng */
 

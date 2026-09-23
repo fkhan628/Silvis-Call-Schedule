@@ -298,7 +298,7 @@ Seed key (Prompt 12 V): `surgeonRules.s1.eastStanding` (generic — any surgeon,
 | Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; Burchett available 12/25–28 |
 | New Year's | major | Thu 12/31 + Fri 1/1/2027 | Eve + Day as one unit; Burchett available 12/30–1/3 |
 
-**The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, and Philip's one-major-holiday limit. ⟶ 9/22 (Prompt 12 A): a holiday unit counts as one day for the consecutive limits **only for a surgeon who opted in** (`surgeonRules.<id>.holidayUnitCountsAsOneDay` — Khan); everyone else counts real days. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed.
+**The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, Philip's one-major-holiday limit and, since 9/22, every explicit dated list (a governed month's list, Philip's listed weeks — see the small-items note below). ⟶ 9/22 (Prompt 12 A): a holiday unit counts as one day for the consecutive limits **only for a surgeon who opted in** (`surgeonRules.<id>.holidayUnitCountsAsOneDay` — Khan); everyone else counts real days. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed. ⟶ 9/22 (Prompt 12 small items): an **EXPLICIT dated list is never waived** — a governed month's list (`whitelist-month`) and Philip's weeks list (`outside-available-weeks`) stay hard on a holiday-unit day (Burchett's December list omits 12/24 on purpose, so he cannot hold the Christmas unit, and his both-role November list keeps him off Thanksgiving backup; Philip is not primary on Memorial Day 2027, which sits outside his listed weeks); only the recurring weekday patterns above are waived.
 
 Burchett's stated Christmas preference ("2 days on then off") is satisfied by the two-day unit. Holiday fairness is
 tracked separately from shift counts: major and minor counts per surgeon, lifetime, tenure-normalized — the same idea
@@ -463,6 +463,14 @@ derivation rule follows moving forward (East primary = Silvis backup, Silvis pri
 11/15, 11/16 are superseded (item 10); Khan takes 11/25 from Burchett **for 2026 only** — a locked one-off, not a rule, not part
 of the Thanksgiving unit (still Thu 11/26 – Sun 11/29); the rest of the ER-panel author's November entries are imported as locks and both
 November lists govern both roles.
+
+**Notes recorded with the Prompt 12 small items (9/22):** Acton's October backup list (10/6, 10/8, 10/20) no longer governs
+under the open-backup rule — his October entry is a plain (primary-only) governed month, so it only matters for an October
+backfill; Sarkar may be backup on her window Fridays since 9/22 (her windows are her only hard rule; a Friday primary stands
+alone). Also since 9/22 (small items): an explicit dated list is never waived on a holiday-unit day — Burchett cannot hold the
+Christmas unit (12/24 is off his December list; 12/25, 12/31 and 1/1 are on it) and, his November list governing both roles,
+he is not a Thanksgiving backup candidate either; Philip's listed weeks are an explicit dated list too (Memorial Day 2027
+sits outside them: not primary); only the recurring weekday patterns are waived on holidays (§5).
 
 **Still open:**
 

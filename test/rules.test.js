@@ -292,9 +292,14 @@ blocked(R.eligibility(clean, "2026-12-02", P, BURCHETT), "whitelist-month");
 blocked(R.eligibility(clean, "2026-12-08", P, BURCHETT), "whitelist-month", "1st-Tuesday recurring rule does not apply in a governed month (12/1 is the 1st Tue anyway)");
 okElig(R.eligibility(clean, "2026-12-08", B, BURCHETT), "9/22: a governed month restricts primary only - backup any day");
 blocked(R.eligibility(clean, "2026-12-11", P, BURCHETT), "whitelist-month", "unlisted Friday in a governed month");
-const dec24 = R.eligibility(clean, "2026-12-24", P, BURCHETT); // primary: since 9/22 backup is never governed by the list
-okElig(dec24, "Christmas Eve is a holiday-unit day: anyone may cover unless opted out");
-hasSoft(dec24, "holiday-waiver:whitelist-month", "but off-list holiday days carry a medium penalty");
+// Small items (9/22): an EXPLICIT dated list is never waived on a holiday-unit day - only the recurring
+// weekday patterns are. Burchett's December list omits 12/24 on purpose and names 12/25.
+const dec24 = R.eligibility(clean, "2026-12-24", P, BURCHETT);
+blocked(dec24, "whitelist-month", "Christmas Eve is a holiday-unit day, but 12/24 is missing from his explicit December list: hard");
+lacksSoft(dec24, "holiday-waiver:whitelist-month", "no soft waiver for an explicit list either");
+okElig(R.eligibility(clean, "2026-12-25", P, BURCHETT), "...while 12/25, which IS on his list, stays eligible");
+okElig(R.eligibility(clean, "2026-12-24", P, FIERCE), "a recurring weekday pattern (Fierce's Thursday) is still waived on the same holiday-unit day");
+lacks(R.eligibility(clean, "2026-12-24", P, KHAN).hard, "hard-never-weekday", "...and so is Khan's Thursday");
 step("Burchett January 2027 is NOT whitelist mode");
 okElig(R.eligibility(clean, "2027-01-02", P, BURCHETT), "spill-over date is additive");
 okElig(R.eligibility(clean, "2027-01-03", B, BURCHETT), "spill-over date is additive");
@@ -448,6 +453,14 @@ blocked(R.eligibility(clean, "2026-11-12", B, PHILIP), "derived-lock-held:s5", "
 blocked(R.eligibility(clean, "2026-11-04", P, PHILIP), "outside-available-weeks", "week of 11/2 is not on his list");
 okElig(R.eligibility(clean, "2026-11-04", B, PHILIP), "9/22: the weeks whitelist restricts primary only");
 blocked(R.eligibility(clean, "2026-11-30", P, PHILIP), "outside-available-weeks");
+// Small items (9/22, review): his weeks list is an EXPLICIT dated list too - never waived on a holiday-unit day.
+// Memorial Day 2027 (Mon 5/31) is a holiday-unit day outside every listed week (5/24 covers 5/24-5/30).
+const memorial27 = R.eligibility(clean, "2027-05-31", P, PHILIP);
+blocked(memorial27, "outside-available-weeks", "Memorial Day 2027 sits outside his listed weeks: hard although it is a holiday-unit day");
+lacksSoft(memorial27, "holiday-waiver", "no soft holiday waiver for an explicit weeks list");
+okElig(R.eligibility(clean, "2027-05-31", B, PHILIP), "...backup that day is still open (the weeks list restricts primary only)");
+okElig(R.eligibility(clean, "2027-05-25", P, PHILIP), "Tue 5/25 inside the listed week of 5/24 (5/26 is the 4th Wed, not Aledo)");
+okElig(R.eligibility(clean, "2026-11-26", P, PHILIP), "Thanksgiving 11/26 is inside his listed week of 11/23: eligible as before");
 okElig(R.eligibility(clean, "2026-12-08", B, PHILIP), "week of 12/7 (backup; primary that week is Fierce's derived lock)");
 blocked(R.eligibility(clean, "2026-12-08", P, PHILIP), "derived-lock-held:s5");
 const aledoWeek = R.eligibility(clean, "2026-12-14", P, PHILIP); // week of 12/14 contains 3rd Wed 12/16 + Fri 12/18 (not on his list anyway)
@@ -653,7 +666,8 @@ has(noEx.conflicts, "max-consecutive:3", "...but without his opt-in the 4th lock
 const unlockedTg = {}; ["2026-11-26", "2026-11-27", "2026-11-28"].forEach(d => { unlockedTg[d] = { primary: KHAN }; });
 blocked(R.eligibility(makeCtx({ schedule: unlockedTg, surgeonRules: srNoCollapse }), "2026-11-29", P, KHAN), "max-consecutive:3", "unlocked: without his opt-in the 4th real day breaks his max 3");
 okElig(R.eligibility(makeCtx({ schedule: unlockedTg }), "2026-11-29", P, KHAN), "unlocked with his opt-in: fine");
-okElig(R.eligibility(ctx, "2026-11-26", B, BURCHETT), "Burchett backup on a Thursday: holiday exemption");
+blocked(R.eligibility(ctx, "2026-11-26", B, BURCHETT), "whitelist-month", "Burchett backup on Thanksgiving Thursday: his November list governs both roles (T) and an explicit list is not waived on a holiday-unit day (small items 9/22)");
+okElig(R.eligibility(makeCtx({ schedule: {} }), "2026-12-31", B, BURCHETT), "Burchett backup on New Year's Eve Thursday: a recurring pattern holiday exemption in an ungoverned-for-backup month (December governs primary only)");
 okElig(R.eligibility(ctx, "2026-11-26", B, FIERCE), "Fierce backup on a Thursday: holiday exemption");
 okElig(R.eligibility(ctx, "2026-11-28", B, FIERCE), "Fierce lone Saturday: holiday exemption");
 okElig(R.eligibility(ctx, "2026-11-26", B, PHILIP), "Philip: week of 11/23 is available; first major holiday");
@@ -671,21 +685,27 @@ eq(units[2].year, "2026");
 eq(R.holidayUnits(ctx, "2027-01-01", "2027-01-10").map(u => u.name), ["New Year's"], "found by its second day across the year boundary");
 eq(R.holidayUnits(ctx, "2026-12-01", "2026-12-23"), []);
 eq(R.holidayUnitCandidates(ctx, units[0], P), [KHAN], "locked primary is the only primary candidate");
-eq(R.holidayUnitCandidates(ctx, units[0], B), [BURCHETT, PHILIP, FIERCE], "backup candidates: not Khan (primary), not Acton (opt-out), not Sarkar (window)");
+eq(R.holidayUnitCandidates(ctx, units[0], B), [PHILIP, FIERCE], "backup candidates: not Khan (primary), not Acton (opt-out), not Sarkar (window), not Burchett (his both-role November list omits 11/26-29 and an explicit list is not waived on a holiday - small items 9/22)");
 const xmasP = R.holidayUnitCandidates(clean, units[1], P);
 ok(xmasP.indexOf(ACTON) >= 0 && xmasP.indexOf(PHILIP) >= 0, "Christmas primary candidates include Acton, Philip: " + xmasP);
 ok(xmasP.indexOf(KHAN) < 0, "...but not Khan since V (9/22 evening): standing East call on 12/24 + 12/25 every year - see the V block at the end: " + xmasP);
 ok(xmasP.indexOf(SARKAR) < 0, "Sarkar is outside her window at Christmas");
-// unit-wide counting: Burchett with 7 December PRIMARY days already cannot take the 2-day Christmas unit as primary (cap 8 primary days)
+// Small items (9/22): Burchett's explicit December list omits 12/24 on purpose, so he can never hold the whole
+// Christmas unit (12/24 + 12/25) as primary - the list is not waived on a holiday-unit day; New Year's (12/31 + 1/1,
+// both on his list) is still his to take.
+ok(xmasP.indexOf(BURCHETT) < 0, "Burchett is NOT a Christmas primary candidate (12/24 is off his explicit list): " + xmasP);
+ok(R.holidayUnitCandidates(clean, units[2], P).indexOf(BURCHETT) >= 0, "...but he is a New Year's primary candidate (12/31 and 1/1 are on it)");
+// unit-wide counting: Philip (group cap 8 primary days; the week of 12/21 is on his list) with 7 December PRIMARY days
+// already cannot take the 2-day Christmas unit as primary
 const bx = {};
-["2026-12-01", "2026-12-05", "2026-12-06", "2026-12-09", "2026-12-14", "2026-12-19", "2026-12-20"].forEach(d => { bx[d] = { primary: BURCHETT }; });
-ok(R.holidayUnitCandidates(makeCtx({ schedule: bx }), units[1], P).indexOf(BURCHETT) < 0, "a 2-day unit is counted as a whole against the cap");
-ok(R.eligibility(makeCtx({ schedule: bx }), "2026-12-25", P, BURCHETT).ok, "...even though each day alone would fit");
+["2026-12-07", "2026-12-08", "2026-12-09", "2026-12-10", "2026-12-21", "2026-12-22", "2026-12-28"].forEach(d => { bx[d] = { primary: PHILIP }; });
+ok(R.holidayUnitCandidates(makeCtx({ schedule: bx }), units[1], P).indexOf(PHILIP) < 0, "a 2-day unit is counted as a whole against the cap");
+ok(R.eligibility(makeCtx({ schedule: bx }), "2026-12-25", P, PHILIP).ok, "...even though each day alone would fit");
 // 9/22 (Prompt 12 K): the same 7 days held as BACKUP do not count - his candidacy for the primary unit is whatever it is with an empty December
 const bxB = {};
-Object.keys(bx).forEach(d => { bxB[d] = { backup: BURCHETT }; });
-eq(R.holidayUnitCandidates(makeCtx({ schedule: bxB }), units[1], P).indexOf(BURCHETT) >= 0, R.holidayUnitCandidates(clean, units[1], P).indexOf(BURCHETT) >= 0, "K: 7 backup days held do not cost him the 2-day primary unit (was excluded by monthly-cap:8)");
-ok(R.holidayUnitCandidates(clean, units[1], P).indexOf(BURCHETT) >= 0, "fixture: Burchett is a Christmas primary candidate with an empty December (so the line above is a real check)");
+Object.keys(bx).forEach(d => { bxB[d] = { backup: PHILIP }; });
+eq(R.holidayUnitCandidates(makeCtx({ schedule: bxB }), units[1], P).indexOf(PHILIP) >= 0, R.holidayUnitCandidates(clean, units[1], P).indexOf(PHILIP) >= 0, "K: 7 backup days held do not cost him the 2-day primary unit (was excluded by monthly-cap:8)");
+ok(R.holidayUnitCandidates(clean, units[1], P).indexOf(PHILIP) >= 0, "fixture: Philip is a Christmas primary candidate with an empty December (so the line above is a real check)");
 
 /* ------------------------------------------------ external cover and locks */
 step("externalCover 2026-09-30");
@@ -888,13 +908,17 @@ okElig(R.eligibility(clean, "2026-11-10", B, FIERCE), "un-overridden derived wee
 eq(R.eligibility(clean, "2026-11-10", B, FIERCE).lockHolder, true);
 
 step("fidelity-04: maxMajorHolidays window = 12 calendar months between unit starts, symmetric");
-const tgHeld = makeCtx({ schedule: { "2026-11-26": { primary: PHILIP }, "2026-11-27": { primary: PHILIP }, "2026-11-28": { primary: PHILIP }, "2026-11-29": { primary: PHILIP } } });
+// Philip's seed weeks list ends 6/28/2027 and an explicit weeks list is never waived on a holiday-unit day (small
+// items 9/22), so this window fixture extends his list to the 2027 holiday weeks (11/22 and 12/20) - data, not a waiver.
+const srPhil27 = clone(SA.seedToSurgeonRules(seed)); srPhil27[PHILIP].availableWeeks = srPhil27[PHILIP].availableWeeks.concat(["2027-11-22", "2027-12-20"]);
+blocked(R.eligibility(clean, "2027-11-25", P, PHILIP), "outside-available-weeks", "with the seed list alone Thanksgiving 2027 is outside his weeks (no waiver)");
+const tgHeld = makeCtx({ surgeonRules: srPhil27, schedule: { "2026-11-26": { primary: PHILIP }, "2026-11-27": { primary: PHILIP }, "2026-11-28": { primary: PHILIP }, "2026-11-29": { primary: PHILIP } } });
 okElig(R.eligibility(tgHeld, "2027-11-25", P, PHILIP), "Thanksgiving 2026 -> Thanksgiving 2027 (364 days, 12 months): allowed");
-const xmHeld = makeCtx({ schedule: { "2026-12-24": { primary: PHILIP }, "2026-12-25": { primary: PHILIP } } });
+const xmHeld = makeCtx({ surgeonRules: srPhil27, schedule: { "2026-12-24": { primary: PHILIP }, "2026-12-25": { primary: PHILIP } } });
 okElig(R.eligibility(xmHeld, "2027-12-24", P, PHILIP), "Christmas 2026 -> Christmas 2027 (365 days, 12 months): allowed, same as Thanksgiving");
 blocked(R.eligibility(xmHeld, "2027-11-25", P, PHILIP), "max-major-holidays:1", "Christmas 2026 -> Thanksgiving 2027 is 11 months");
 blocked(R.eligibility(xmHeld, "2026-12-31", P, PHILIP), "max-major-holidays:1", "Christmas -> New Year's, same month");
-const tg27 = makeCtx({ schedule: { "2027-11-25": { primary: PHILIP } } });
+const tg27 = makeCtx({ surgeonRules: srPhil27, schedule: { "2027-11-25": { primary: PHILIP } } });
 blocked(R.eligibility(tg27, "2026-12-24", P, PHILIP), "max-major-holidays:1", "symmetric: a later held unit blocks an earlier date inside 12 months");
 okElig(R.eligibility(tg27, "2026-11-26", P, PHILIP), "...but not one exactly 12 months earlier");
 
@@ -914,7 +938,7 @@ const lh = R.eligibility(eastTg, "2026-11-26", P, KHAN);
 okElig(lh, "locked Thanksgiving primary on an East-busy day");
 eq(lh.lockHolder, true); eq(lh.hard, []); has(lh.conflicts, "east-busy");
 eq(R.holidayUnitCandidates(eastTg, units[0], P), [KHAN], "the locked holder is still the unit's primary candidate");
-eq(R.holidayUnitCandidates(eastTg, units[0], B), [BURCHETT, PHILIP, FIERCE]);
+eq(R.holidayUnitCandidates(eastTg, units[0], B), [PHILIP, FIERCE], "backup candidates (Burchett's November list is not waived on the unit - small items 9/22)");
 blocked(R.eligibility(eastTg, "2026-11-13", P, KHAN), "east-busy", "an unlocked East-busy day is still blocked");
 ok(R.weekendUnitPatterns(eastTg, "2026-11-27").length === 1 && R.weekendUnitPatterns(eastTg, "2026-11-27")[0].members.fri === KHAN, "Thanksgiving weekend keeps its locked block");
 const lh2 = R.eligibility(makeCtx({ schedule: { "2026-11-03": { primary: KHAN, primaryLocked: true } } }), "2026-11-03", P, KHAN);
@@ -1106,6 +1130,13 @@ const over2 = R.eligibility(makeCtx({ schedule: { "2026-11-04": { primary: ACTON
 eq(over2.soft.filter(s => s.reason.indexOf("target") >= 0), [{ reason: "over-target:2", weight: 2 }], "low * 2 over");
 eq(R.eligibility(makeCtx({ schedule: { "2026-11-04": { primary: ACTON } }, surgeonRules: srTarget }), "2026-11-16", P, ACTON).soft.filter(s => s.reason.indexOf("target") >= 0), [], "exactly on target: nothing");
 eq(R.eligibility(clean, "2026-11-16", P, ACTON).soft.filter(s => s.reason.indexOf("target") >= 0), [], "monthlyTarget null: nothing");
+// Small items (9/22, after J): a numeric monthlyTarget is a PRIMARY target - backup days never count toward it and a
+// backup placement is never scored against it.
+const tgtB = R.eligibility(makeCtx({ schedule: { "2026-11-03": { backup: ACTON }, "2026-11-05": { backup: ACTON }, "2026-11-17": { backup: ACTON } }, surgeonRules: srTarget }), "2026-11-06", P, ACTON);
+eq(tgtB.soft.filter(s => s.reason.indexOf("target") >= 0), [{ reason: "under-target", weight: -1 }], "three BACKUP days held: still under the primary target of 2 (was over-target:2 when backup counted)");
+const tgtOnB = R.eligibility(makeCtx({ schedule: { "2026-11-02": { primary: ACTON }, "2026-11-04": { primary: ACTON }, "2026-11-06": { primary: ACTON } }, surgeonRules: srTarget }), "2026-11-03", B, ACTON);
+okElig(tgtOnB, "Acton backup 11/3 (on his list)");
+eq(tgtOnB.soft.filter(s => s.reason.indexOf("target") >= 0), [], "a BACKUP placement carries no over/under-target term even with 3 primaries over a target of 2");
 const ap = withRows([row(ACTON, "avoid", "2026-11-16"), row(ACTON, "prefer", "2026-11-17"), row(BURCHETT, "avoid", "2026-11-09", "any", "strong"), row(BURCHETT, "prefer", "2026-11-23", "any", -4)]);
 eq(R.eligibility(ap, "2026-11-16", P, ACTON).soft.filter(s => s.reason === "avoid-row"), [{ reason: "avoid-row", weight: 3 }], "avoid defaults to medium");
 eq(R.eligibility(ap, "2026-11-17", P, ACTON).soft.filter(s => s.reason === "prefer-row"), [{ reason: "prefer-row", weight: -1 }], "prefer defaults to weights.preferred");
@@ -1429,8 +1460,8 @@ blocked(R.eligibility(clean, "2026-12-08", P, BURCHETT), "whitelist-month", "T: 
 okElig(R.eligibility(clean, "2026-10-13", B, BURCHETT), "T: October stays the plain form - Burchett backup any day (item I, unchanged)");
 okElig(R.eligibility(clean, "2026-10-14", B, ACTON), "T: Acton October backup on a non-list day (item I, unchanged)");
 const tgBur = R.eligibility(clean, "2026-11-27", B, BURCHETT);
-okElig(tgBur, "T: a Thanksgiving-unit day off his November list: the holiday waiver applies to backup as to primary");
-hasSoft(tgBur, "holiday-waiver:whitelist-month");
+blocked(tgBur, "whitelist-month", "T + small items: November governs both roles and an explicit list is not waived on a Thanksgiving-unit day (backup too)");
+lacksSoft(tgBur, "holiday-waiver:whitelist-month", "no soft waiver");
 blocked(R.eligibility(closed, "2026-11-10", B, BURCHETT), "whitelist-month", "T: the object entry governs backup under the closed policy too");
 blocked(R.eligibility(closed, "2026-12-03", B, BURCHETT), "whitelist-month", "T: closed policy: a plain month governs both roles again (unchanged)");
 step("Prompt 12 T: the 9/22 locks on the seed schedule");

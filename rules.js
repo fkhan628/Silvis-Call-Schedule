@@ -970,10 +970,14 @@ function rdStatic(ctx, date, role, id, asBlock) {
   if (P.hasWindows && !P.windowDays.has(date)) hard.push("outside-window"); // both roles; still enforced on holidays; never lifted by a row (W)
 
   if (notRecurring && !waive) hard.push("not-recurring-available");
-  if (datedBlock) {
-    if (anyoneMay) soft.push({ reason: "holiday-waiver:" + datedBlock, weight: W.medium });
-    else hard.push(datedBlock);
-  }
+  // Small items (9/22): an EXPLICIT dated list stays HARD on a holiday-unit day -
+  // the holiday waiver (waive, above) lifts the recurring weekday patterns only,
+  // never the dates a surgeon offered himself: a governed month's list
+  // ("whitelist-month" - Burchett's December list omits 12/24 on purpose and names
+  // 12/25) and the weeks list ("outside-available-weeks" - Philip's Memorial Day
+  // 2027 sits outside his listed weeks). anyoneMay still lifts the holiday
+  // opt-out family; it no longer softens a dated block.
+  if (datedBlock) hard.push(datedBlock);
 
   ctx._memo[key] = res;
   return res;
@@ -1096,18 +1100,18 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // The check applies to a PRIMARY placement only: a backup placement never trips
   // monthly-cap or over-preferred-cap, and backup days never count. An explicit
   // backup cap (rules.backupCap, Philip) is the separate block below.
-  // monthCount keeps the pre-K any-role count (Silvis either role + every East day)
-  // for the numeric monthlyTarget term below until Prompt 12 J replaces the
-  // target model; monthPrimary is the count the cap is measured against.
+  // A numeric surgeonRules.<id>.monthlyTarget is a PRIMARY target (Prompt 12 J,
+  // small items 9/22): its soft over/under-target term below measures the same
+  // monthPrimary count as the cap and applies to a primary placement only - a
+  // backup placement is never scored against it and backup days never count.
   var monthDays = rdMonthDays(info.month);
   var capApplies = role === "primary" && (P.capPrimary !== null || P.capPreferred !== null);
-  var hasTarget = typeof rules.monthlyTarget === "number";
-  var monthCount = 0, monthPrimary = 0;
+  var hasTarget = role === "primary" && typeof rules.monthlyTarget === "number";
+  var monthPrimary = 0;
   if (capApplies || hasTarget) {
     for (var i = 0; i < monthDays.length; i++) {
       var md = monthDays[i];
       if (holdsRole(md, "primary") || (P.countsEastDays && P.eastPrimaryDays.has(md))) monthPrimary++;
-      if (hasTarget && (holdsAny(md) || (P.countsEastDays && P.eastDays.has(md)))) monthCount++;
     }
   }
   if (capApplies) {
@@ -1257,9 +1261,10 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     }
   }
 
-  if (typeof rules.monthlyTarget === "number") {
-    if (monthCount > rules.monthlyTarget) soft.push({ reason: "over-target:" + (monthCount - rules.monthlyTarget), weight: W.low * (monthCount - rules.monthlyTarget) });
-    else if (monthCount < rules.monthlyTarget) soft.push({ reason: "under-target", weight: W.preferred });
+  // Numeric monthly target = PRIMARY days only (see the cap block above).
+  if (hasTarget) {
+    if (monthPrimary > rules.monthlyTarget) soft.push({ reason: "over-target:" + (monthPrimary - rules.monthlyTarget), weight: W.low * (monthPrimary - rules.monthlyTarget) });
+    else if (monthPrimary < rules.monthlyTarget) soft.push({ reason: "under-target", weight: W.preferred });
   }
 
   if (importHolder) return { ok: true, hard: hard, soft: soft, lockHolder: true, conflicts: [] };

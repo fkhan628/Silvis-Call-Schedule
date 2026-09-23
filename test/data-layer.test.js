@@ -728,6 +728,71 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(issues.filter(t => /No rules for/.test(t)), [], "issues: " + JSON.stringify(issues));
   });
 
+  /* ---------------- G. small items (Prompt 12, 9/22) ---------------- */
+  console.log(String.fromCharCode(10) + "[G] small items 9/22 (one notion of today; day editor fail-closed; block members; Setup fields; wording)");
+  check("generator.js rangePresets(null) starts on the CENTRAL date whatever the device zone (genTodayStr = helpers todayCentral)", () => {
+    const cp = require("child_process");
+    const chicago = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    // one of these two device zones always disagrees with Chicago about the calendar date (they are 26 hours apart)
+    const zone = ["Pacific/Kiritimati", "Etc/GMT+12"].find(z => new Date().toLocaleDateString("en-CA", { timeZone: z }) !== chicago);
+    assert.ok(zone, "no device zone differs from Chicago right now");
+    const code = 'const G = require(process.argv[1]); const d = new Date(); console.log(JSON.stringify({ device: d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"), start: G.rangePresets(null)[0].start }));';
+    const r = cp.spawnSync(process.execPath, ["-e", code, path.join(ROOT, "generator.js")], { env: { ...process.env, TZ: zone }, encoding: "utf8" });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout.trim());
+    assert.notStrictEqual(out.device, chicago, "fixture: the device date under TZ=" + zone + " should differ from Chicago's");
+    assert.strictEqual(out.start, chicago, "rangePresets(null).start under TZ=" + zone + ": expected the Central date " + chicago + ", got " + out.start + " (device date " + out.device + ")");
+  });
+  check("the calendar's default month/year and 'Today' come from todayCentral(), not the device clock", () => {
+    assert.ok(src.includes("const [calMonth, setCalMonth] = useState(() => parse(todayCentral()).getMonth());"), "calMonth initialiser");
+    assert.ok(src.includes("const [calYear, setCalYear] = useState(() => parse(todayCentral()).getFullYear());"), "calYear initialiser");
+    assert.ok(src.includes("const [calYearText, setCalYearText] = useState(() => String(parse(todayCentral()).getFullYear()));"), "calYearText initialiser");
+    assert.ok(src.includes("const goToday = () => { const n = parse(todayCentral());"), "goToday");
+    assert.strictEqual(count("useState(() => new Date().getMonth())"), 0, "a device-clock month initialiser remains");
+  });
+  check("empty-schedule note and legend say OPEN is today onward", () => {
+    assert.ok(src.includes("No schedule days in the database yet - every day from today shows OPEN."), "empty-schedule note");
+    assert.ok(src.includes('<span style={{color:"#c04040",fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>'), "legend");
+    assert.strictEqual(count("= nobody assigned</span>"), 0, "old legend wording remains");
+  });
+  check("REASON_WORDS glosses the 9/22 soft vocabulary (weekend-primary/backup, window-week targets, consecutive-primary, long-run) plus derived-lock-held, and softTag falls back to it", () => {
+    const rw = src.slice(src.indexOf("const REASON_WORDS = {"), src.indexOf("};", src.indexOf("const REASON_WORDS = {")));
+    ["weekend-primary", "weekend-backup", "window-week-below-target", "window-week-over-target", "consecutive-primary", "long-run", "derived-lock-held", "backup-opt-out", "external-surgeon", "rules-error"].forEach(k => assert.ok(rw.includes('"' + k + '":'), "REASON_WORDS lacks " + k));
+    const st = src.slice(src.indexOf("function softTag(soft) {"), src.indexOf(String.fromCharCode(10) + "}" + String.fromCharCode(10), src.indexOf("function softTag(soft) {")));
+    assert.ok(st.includes("default: return REASON_WORDS[key] ? REASON_WORDS[key]"), "softTag does not fall back to REASON_WORDS");
+  });
+  check("Setup -> Rules: 'Monthly target' hint reads 'blank = equal share; a number = primary target' and a 'Primary contribution' select writes primaryContribution ((none) / weekends)", () => {
+    assert.ok(src.includes('<SuField label="Monthly target" hint="blank = equal share; a number = primary target">'), "monthly target hint");
+    assert.strictEqual(count('hint="blank = no target"'), 0, "old hint remains");
+    const i = src.indexOf('data-testid="rules-primary-contribution"');
+    assert.ok(i > 0, "no rules-primary-contribution select");
+    const sel = src.slice(src.lastIndexOf("<SuField", i), src.indexOf("</SuField>", i));
+    assert.ok(sel.includes('label="Primary contribution"'), "label");
+    assert.ok(sel.includes('value={get("primaryContribution", "")}') && sel.includes('set("primaryContribution", e.target.value || undefined)'), "reads/writes surgeonRules.<id>.primaryContribution");
+    assert.ok(sel.includes('<option value="">(none)</option>') && sel.includes('<option value="weekends">'), "options (none) / weekends");
+    assert.ok(i > src.indexOf('data-testid="rules-weekend-style"'), "sits beside (after) Weekend style");
+  });
+  check("day editor: a thrown eligibility check fails CLOSED (option ineligible with the error as its reason; Save disabled with a hint)", () => {
+    const ev = src.slice(src.indexOf("const evalRole = (role) => {"), src.indexOf("const pick = (role, value) => {"));
+    assert.ok(!ev.includes("r = { ok: true, hard: [], soft: [], error: true };"), "a thrown check still yields ok: true");
+    assert.ok(ev.includes('r = { ok: false, hard: ["rules-error:" + msg], soft: [], error: msg };'), "thrown check -> ok:false with rules-error:<message>");
+    assert.ok(src.includes("const evalBroken = "), "no evalBroken flag");
+    assert.ok(src.includes('data-testid="editor-save" onClick={save} disabled={!dirty || evalBroken}'), "Save is not disabled by evalBroken");
+    // review (small items): defence in depth - save() itself refuses while evalBroken, not only the button attribute
+    const sv = src.slice(src.indexOf("const save = () => {"), src.indexOf("onSave({ ...draft }, { overrides });"));
+    assert.ok(sv.includes('if (evalBroken) { setHint("Eligibility check failed - saving is disabled until the rules evaluate again."); return; }'), "save() does not refuse while evalBroken");
+    assert.ok(src.includes('data-testid="editor-eval-error"'), "no eval-error hint line");
+    assert.ok(src.includes('case "rules-error": return "eligibility check failed: " + arg;'), "reasonLabel lacks rules-error");
+  });
+  check("asBlockMember flows through the day editor (draft + the other two Fri/Sat/Sun days held by the candidate) and the trade path (full Fri-Sun block, block-style receiver)", () => {
+    const ev = src.slice(src.indexOf("const evalRole = (role) => {"), src.indexOf("const pick = (role, value) => {"));
+    assert.ok(ev.includes("asBlockMember"), "evalRole never passes asBlockMember");
+    assert.ok(src.includes("const editorBlockDays = "), "no editorBlockDays helper (Fri/Sat/Sun triple of the edited day, no holiday-unit day)");
+    const tr = src.slice(src.indexOf("const tradeEligibilityOver = (days, role, candidateId) => {"), src.indexOf("const tradeReasonText = "));
+    assert.ok(tr.includes("asBlockMember: true") && tr.includes('weekendStyle === "block"'), "tradeEligibilityOver does not evaluate a block-style receiver as a block member");
+    assert.ok(src.includes("const tradeIsFullWeekendBlock = (days) => {"), "no tradeIsFullWeekendBlock helper");
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });
