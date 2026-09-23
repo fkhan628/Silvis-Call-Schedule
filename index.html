@@ -111,7 +111,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23k";
+    var APP_VERSION = "2026.09.23l";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -162,6 +162,9 @@
     });
   </script>
   <script type="text/javascript">
+const _excluded = ["touched"];
+function _objectWithoutProperties(e, t) { if (null == e) return {}; var o, r, i = _objectWithoutPropertiesLoose(e, t); if (Object.getOwnPropertySymbols) { var n = Object.getOwnPropertySymbols(e); for (r = 0; r < n.length; r++) o = n[r], -1 === t.indexOf(o) && {}.propertyIsEnumerable.call(e, o) && (i[o] = e[o]); } return i; }
+function _objectWithoutPropertiesLoose(r, e) { if (null == r) return {}; var t = {}; for (var n in r) if ({}.hasOwnProperty.call(r, n)) { if (-1 !== e.indexOf(n)) continue; t[n] = r[n]; } return t; }
 function ownKeys(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
 function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys(Object(t), !0).forEach(function (r) { _defineProperty(e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
 function _defineProperty(e, r, t) { return (r = _toPropertyKey(r)) in e ? Object.defineProperty(e, r, { value: t, enumerable: !0, configurable: !0, writable: !0 }) : e[r] = t, e; }
@@ -196,6 +199,20 @@ function CallSchedule() {
   const [vacations, setVacations] = useState({});
   const [timeOffRows, setTimeOffRows] = useState([]);
   const [availabilityRows, setAvailabilityRows] = useState([]);
+  const [offerRows, setOfferRows] = useState([]);
+  const [periodRows, setPeriodRows] = useState([]);
+  const [offerSheet, setOfferSheet] = useState(null);
+  const [offersLoad, setOffersLoad] = useState({
+    offers: "unread",
+    periods: "unread",
+    offersOkAt: null,
+    periodsOkAt: null
+  });
+  const markOffersLoad = (table, outcome) => setOffersLoad(s => _objectSpread(_objectSpread({}, s), {}, {
+    [table]: outcome
+  }, outcome === "ok" ? {
+    [table + "OkAt"]: new Date().toISOString()
+  } : {}));
   const [calMonth, setCalMonth] = useState(() => parse(todayCentral()).getMonth());
   const [calYear, setCalYear] = useState(() => parse(todayCentral()).getFullYear());
   const [toolMonths, setToolMonths] = useState(1);
@@ -278,7 +295,8 @@ function CallSchedule() {
     error: "",
     applying: false,
     result: null,
-    loading: false
+    loading: false,
+    periodGap: 0
   });
   const [vacConflict, setVacConflict] = useState(null);
   const [loaded, setLoaded] = useState(false);
@@ -469,6 +487,19 @@ function CallSchedule() {
   const [notifTestSent, setNotifTestSent] = useState("");
   const lastNotifCountRef = useRef(null);
   const mySurgeon = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || "";
+  useEffect(() => {
+    if (!authUser || isPublicMode || !mySurgeon) return;
+    if (window.location.hash === "#offers") {
+      setOfferSheet({
+        personId: mySurgeon
+      });
+      try {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      } catch (e) {
+        console.warn("could not drop #offers from the URL", e);
+      }
+    }
+  }, [authUser, isPublicMode, mySurgeon]);
   useEffect(() => {
     if (mySurgeon) {
       setTradeFrom(prev => prev || mySurgeon);
@@ -844,6 +875,36 @@ function CallSchedule() {
       return false;
     }
   };
+  const loadOffers = async quiet => {
+    try {
+      const rows = await readAuthOnlyTable("call_offers", {
+        order: "day.asc"
+      });
+      if (rows) setOfferRows(rows);
+      markOffersLoad("offers", rows ? "ok" : "skipped");
+      return !!rows;
+    } catch (e) {
+      console.warn("call_offers load failed", e);
+      markOffersLoad("offers", "failed");
+      if (!quiet) showToast("Couldn't load the offers - the painter may show an older picture.", "error");
+      return false;
+    }
+  };
+  const loadPeriods = async quiet => {
+    try {
+      const rows = await readAuthOnlyTable("call_periods", {
+        order: "start_day.asc"
+      });
+      if (rows) setPeriodRows(rows);
+      markOffersLoad("periods", rows ? "ok" : "skipped");
+      return !!rows;
+    } catch (e) {
+      console.warn("call_periods load failed", e);
+      markOffersLoad("periods", "failed");
+      if (!quiet) showToast("Couldn't load the offer periods - the painter may show an older picture.", "error");
+      return false;
+    }
+  };
   const loadEastTables = async quiet => {
     const one = async (table, order, set, key) => {
       try {
@@ -917,7 +978,7 @@ function CallSchedule() {
   const vacationConflicts = (personId, start, end) => vacationConflictItems(personId, start, end).map(c => `${fmtMD(c.day)} (${c.role})`);
   const describeDbError = err => {
     const s = typeof err === "string" ? err : JSON.stringify(err || {});
-    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+/;
+    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+/;
     if (OWN.test(s)) {
       let verbatim = "";
       try {
@@ -928,7 +989,7 @@ function CallSchedule() {
         verbatim = "";
       }
       if (!OWN.test(verbatim)) {
-        const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+)[^"}\\]*/.exec(s);
+        const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+)[^"}\\]*/.exec(s);
         verbatim = m ? m[0] : s.slice(0, 240);
       }
       return verbatim;
@@ -1452,6 +1513,8 @@ function CallSchedule() {
         } catch (e) {
           console.warn("Notifications load failed:", e);
         }
+        await loadOffers(true);
+        await loadPeriods(true);
         try {
           const mainRows = await db.query("client_versions", {
             eq: {
@@ -1563,7 +1626,7 @@ function CallSchedule() {
       }
     };
     const refreshAll = async () => {
-      await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true)]);
+      await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
     };
     refreshDaysRef.current = refreshDays;
     refreshTradesRef.current = refreshTradeReqs;
@@ -1631,6 +1694,18 @@ function CallSchedule() {
           table: "availability"
         }, () => {
           loadAvailability(true);
+        }).on("postgres_changes", {
+          event: "*",
+          schema: "public",
+          table: "call_offers"
+        }, () => {
+          loadOffers(true);
+        }).on("postgres_changes", {
+          event: "*",
+          schema: "public",
+          table: "call_periods"
+        }, () => {
+          loadPeriods(true);
         }).on("postgres_changes", {
           event: "*",
           schema: "public",
@@ -2012,6 +2087,8 @@ function CallSchedule() {
       timeOffRows,
       availabilityRows,
       schedule,
+      offers: offerRows,
+      periods: periodRows,
       eastBusyDays,
       eastForecast,
       eastOverrides,
@@ -2021,7 +2098,7 @@ function CallSchedule() {
       eastVacationRanges,
       eastVacationReviews: eastVacationReviewRows
     };
-  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode, eastVacationReviewRows]);
+  }, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode, eastVacationReviewRows, offerRows, periodRows]);
   const rulesCtxState = useMemo(() => safeBuildContext(ctxInputs), [ctxInputs]);
   const rulesCtx = rulesCtxState.ctx;
   const eastConflictRows = useMemo(() => {
@@ -2786,6 +2863,12 @@ function CallSchedule() {
     const bestOf = Math.max(1, Math.min(2000, Math.floor(Number(o.bestOf) || 200)));
     const seedIn = String(o.seed || "").trim();
     const seed = seedIn === "" ? 1 + Math.floor(Math.random() * 2147483646) : /^-?\d+$/.test(seedIn) ? Number(seedIn) : seedIn;
+    const ov = offersLoadVerdict(offersLoad);
+    if (ov.verdict === "refuse") {
+      showToast("Not run: the offers and periods were not loaded (" + ov.why + "), so this run would place nobody's offered days first. Sign in again or reload, wait for the load, then generate. Nothing was run.", "error");
+      return;
+    }
+    const offersStale = ov.verdict === "stale" ? ov.why : null;
     setGenBusy(true);
     await new Promise(r => setTimeout(r, 40));
     try {
@@ -2816,7 +2899,8 @@ function CallSchedule() {
         respectLocks: o.respectLocks !== false,
         fillOpenOnly: o.fillOpenOnly === true,
         ranAt: new Date().toISOString(),
-        ms
+        ms,
+        offersStale
       });
       setGenOpts(p => _objectSpread(_objectSpread({}, p), {}, {
         start,
@@ -2827,7 +2911,7 @@ function CallSchedule() {
       setCalMonth(sd.getMonth());
       setCalYear(sd.getFullYear());
       const open = (dg.uncovered || []).length;
-      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms${o.fillOpenOnly === true ? ", fill open slots only" : ""}): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.`, open ? "info" : "success");
+      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms${o.fillOpenOnly === true ? ", fill open slots only" : ""}): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.${offersStale ? " WARNING: the offers may be stale (" + offersStale + ") - sign in again and re-run before accepting." : ""}`, offersStale ? "error" : open ? "info" : "success");
     } catch (e) {
       console.warn("generate failed", e);
       showToast("Generate failed: " + errText(e).slice(0, 160), "error");
@@ -2860,11 +2944,12 @@ function CallSchedule() {
     const lockedChanges = suLockedSlotChanges(cur, next);
     const heldChanges = suHeldUnlockedSlotChanges(cur, next);
     const heldText = list => `${list.length} held but unlocked assignment(s) will be replaced: ${list.slice(0, 8).map(c => `${fmtMD(c.day)} ${c.role === "primary" ? "P" : "B"} ${holderLabel(c.from, nameOf)} -> ${holderLabel(c.to, nameOf)}`).join(", ")}${list.length > 8 ? ` and ${list.length - 8} more` : ""}${pv.fillOpenOnly ? "" : " (tick 'Fill open slots only' to keep every held day)"}.`;
-    if (!pv.respectLocks || lockedChanges.length || heldChanges.length) {
+    if (!pv.respectLocks || lockedChanges.length || heldChanges.length || pv.offersStale) {
       const first = lockedChanges[0];
       const firstText = first ? ` (first: ${fmtMD(first.day)} ${first.role} ${holderLabel(first.from, nameOf)} -> ${holderLabel(first.to, nameOf)})` : "";
       const lockedText = !pv.respectLocks || lockedChanges.length ? `This replaces ${lockedChanges.length} locked / published slot(s)${firstText}${pv.respectLocks ? "" : " - this preview was generated with 'respect locks' OFF"}.\n\n` : "";
-      const msg = `${lockedText}${heldChanges.length ? heldText(heldChanges) + "\n\n" : ""}The days are written for every viewer as soon as you continue; the publish dialog that follows only sends the office notice. Continue?`;
+      const staleText = pv.offersStale ? `WARNING - this preview was generated while the offers may have been STALE (${pv.offersStale}); offered days may not have been placed first. Sign in again and re-run to be sure.\n\n` : "";
+      const msg = `${staleText}${lockedText}${heldChanges.length ? heldText(heldChanges) + "\n\n" : ""}The days are written for every viewer as soon as you continue; the publish dialog that follows only sends the office notice. Continue?`;
       if (!confirm(msg)) {
         showToast("Nothing was written - the preview is kept.", "info");
         return;
@@ -2976,7 +3061,8 @@ function CallSchedule() {
       error: "",
       applying: false,
       result: null,
-      loading: true
+      loading: true,
+      periodGap: 0
     });
     let seed;
     try {
@@ -3004,6 +3090,7 @@ function CallSchedule() {
       showToast(/CONTACT_DATA_REFUSED/.test(msg) ? "Seed REFUSED: it carries contact data. Nothing was read into the app." : "Seed refused: " + msg.slice(0, 160), "error");
       return;
     }
+    const periodGap = plan.offerPeriods && plan.offerPeriods.enabled !== true ? plan.offerPeriods.seedPeriods || 0 : 0;
     try {
       const live = await fetchLiveForImport();
       const diff = IMP.planDiff(plan, live);
@@ -3011,9 +3098,10 @@ function CallSchedule() {
         loading: false,
         plan,
         diff,
-        live
+        live,
+        periodGap
       }));
-      showToast(diff.totalChanges === 0 ? "Dry run: the live tables already match the seed." : `Dry run: ${diff.totalChanges} change(s) - review, then Apply.`, "info");
+      showToast(diff.totalChanges === 0 ? "Dry run: the live tables already match the seed." : periodGap > 0 ? `Dry run: ${diff.totalChanges} change(s) - Apply is refused in the app: the seed carries ${periodGap} offer period(s) this import does not convert. Apply it with the CLI (scripts/import-seed.js --apply).` : `Dry run: ${diff.totalChanges} change(s) - review, then Apply.`, periodGap > 0 && diff.totalChanges > 0 ? "error" : "info");
     } catch (e) {
       console.warn("seed dry run failed", e);
       setSeedState(s => _objectSpread(_objectSpread({}, s), {}, {
@@ -3026,6 +3114,10 @@ function CallSchedule() {
   const applySeedImport = async () => {
     const st = seedState;
     if (!isScheduler || !st.plan || !st.diff || st.applying) return;
+    if ((st.periodGap || 0) > 0) {
+      showToast(`Apply refused: the seed carries ${st.periodGap} offer period(s) this in-app import does not convert - apply it with the CLI (scripts/import-seed.js --apply). Nothing was written.`, "error");
+      return;
+    }
     if (!blobLoadedRef.current) {
       showToast("The shared setup has not loaded this session - reload before importing (a blob merge over unread data is refused).", "error");
       return;
@@ -3390,7 +3482,8 @@ function CallSchedule() {
     };
     try {
       return eligibility(rulesCtx, day, role, candidateId, _objectSpread({
-        ignoreLocks: true
+        ignoreLocks: true,
+        claim: true
       }, opts || {}));
     } catch (e) {
       console.warn("trade eligibility check failed:", e);
@@ -4459,6 +4552,321 @@ function CallSchedule() {
       };
     }
   };
+  const commitOffersPaint = async ({
+    personId,
+    diff,
+    mode,
+    period
+  }) => {
+    const withMode = !!(mode && period && period.id);
+    const summary = {
+      person_id: personId,
+      inserted: diff.insert.length,
+      updated: diff.update.length,
+      deleted: diff.delete.length,
+      count: diff.count,
+      period_id: period ? period.id : null,
+      period: period ? period.label : null,
+      mode: withMode ? mode : null
+    };
+    try {
+      if (diff.count === 0 && !withMode) return {
+        ok: true,
+        nothing: true
+      };
+      if (diff.count > 0) {
+        const rows = diff.insert.concat(diff.update).map(r => ({
+          day: r.day,
+          role_pref: r.role_pref
+        }));
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, {
+          method: "POST",
+          headers: _objectSpread({}, dbAuthHeaders()),
+          body: JSON.stringify({
+            p_person: personId,
+            p_rows: rows,
+            p_clear: diff.delete,
+            p_period: withMode ? period.id : null,
+            p_mode: withMode ? mode : null
+          })
+        });
+        if (!res.ok) {
+          const t = await res.text().catch(() => "");
+          console.warn("Paint offers: save_offers failed", res.status, t.slice(0, 300));
+          return {
+            ok: false,
+            error: describeDbError(t)
+          };
+        }
+      } else {
+        const r2 = await fetch(`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, {
+          method: "POST",
+          headers: _objectSpread({}, dbAuthHeaders()),
+          body: JSON.stringify({
+            p_period: period.id,
+            p_mode: mode,
+            p_person: personId
+          })
+        });
+        if (!r2.ok) {
+          const t2 = await r2.text().catch(() => "");
+          console.warn("Paint offers: set_offer_mode failed", r2.status, t2.slice(0, 300));
+          return {
+            ok: false,
+            error: describeDbError(t2)
+          };
+        }
+      }
+      logAudit("offers.save", `${nameOf(personId)}: ${diff.count} offer change(s)${withMode ? ", mode " + mode : ""}${period ? " (" + period.label + ")" : ""}`, summary);
+      loadOffers(true);
+      loadPeriods(true);
+      return {
+        ok: true
+      };
+    } catch (e) {
+      console.warn("Paint offers: commit threw", e);
+      return {
+        ok: false,
+        error: String((e === null || e === void 0 ? void 0 : e.message) || e)
+      };
+    }
+  };
+  const [prdBusy, setPrdBusy] = useState(false);
+  const [prdRemind, setPrdRemind] = useState({});
+  const [prdDraft, setPrdDraft] = useState(null);
+  const createPeriod = async row => {
+    if (!isScheduler) return {
+      ok: false,
+      error: "scheduler only"
+    };
+    setPrdBusy(true);
+    try {
+      const body = {
+        label: row.label,
+        start_day: row.start_day,
+        end_day: row.end_day,
+        offers_close_at: row.offers_close_at,
+        publish_by: row.publish_by,
+        status: "upcoming",
+        rules_only_ids: [],
+        offer_modes: {},
+        created_by: (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || "scheduler"
+      };
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/call_periods`, {
+        method: "POST",
+        headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+          Prefer: "return=representation"
+        }),
+        body: JSON.stringify(body)
+      });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) {
+        console.warn("Periods: create failed", res.status, text.slice(0, 300));
+        return {
+          ok: false,
+          error: describeDbError(text)
+        };
+      }
+      let rows = [];
+      try {
+        rows = JSON.parse(text || "[]");
+      } catch (e) {
+        rows = [];
+      }
+      if (!Array.isArray(rows) || rows.length !== 1 || !rows[0].id) {
+        console.warn("Periods: create answered without the new row (RLS no-op?)", text.slice(0, 200));
+        return {
+          ok: false,
+          error: "the database answered without the new row - nothing was created (does your account write periods?)"
+        };
+      }
+      const created = rows[0];
+      logAudit("period.create", `Period ${created.label} (${created.start_day} - ${created.end_day}): offers close ${created.offers_close_at}, publish by ${created.publish_by}`, {
+        period_id: created.id,
+        label: created.label,
+        start_day: created.start_day,
+        end_day: created.end_day,
+        offers_close_at: created.offers_close_at,
+        publish_by: created.publish_by,
+        length_months: row.length_months || null
+      });
+      setPeriodRows(prev => (prev.some(p => p.id === created.id) ? prev : prev.concat([created])).slice().sort((a, b) => String(a.start_day) < String(b.start_day) ? -1 : 1));
+      loadPeriods(true);
+      showToast(`Period ${created.label} created - offers close ${fmtMD(String(created.offers_close_at).slice(0, 10))}, publish by ${fmtMD(String(created.publish_by).slice(0, 10))}. Nothing is generated or sent by this.`, "success");
+      return {
+        ok: true,
+        period: created
+      };
+    } catch (e) {
+      console.warn("Periods: create threw", e);
+      return {
+        ok: false,
+        error: String((e === null || e === void 0 ? void 0 : e.message) || e)
+      };
+    } finally {
+      setPrdBusy(false);
+    }
+  };
+  const closePeriodNow = async p => {
+    if (!isScheduler || !p || !p.id) return {
+      ok: false
+    };
+    const roll = offerRollcall(p, offerRows, offerPoolIds(surgeons));
+    const words = roll.map(r => `${nameOf(r.id)}: ${r.status === "submitted" ? r.offered + " day" + (r.offered === 1 ? "" : "s") : r.status === "rules_only" ? "rules" : "nothing"}`).join(", ");
+    if (!confirm(`Close offers for ${p.label} now?\n\nSurgeons can no longer paint days or change their mode for it (you still can, as the scheduler). Standing now - ${words}.\n\nThe status becomes 'closed'. Nothing is generated, published or e-mailed by this.`)) {
+      showToast("Nothing was changed - the period stays open.", "info");
+      return {
+        ok: false,
+        cancelled: true
+      };
+    }
+    setPrdBusy(true);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/call_periods?id=eq.${encodeURIComponent(p.id)}&status=eq.upcoming`, {
+        method: "PATCH",
+        headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+          Prefer: "return=representation"
+        }),
+        body: JSON.stringify({
+          status: "closed",
+          updated_at: new Date().toISOString()
+        })
+      });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) {
+        console.warn("Periods: close failed", res.status, text.slice(0, 300));
+        showToast("Close failed - nothing was changed: " + describeDbError(text), "error");
+        return {
+          ok: false,
+          error: describeDbError(text)
+        };
+      }
+      let rows = [];
+      try {
+        rows = JSON.parse(text || "[]");
+      } catch (e) {
+        rows = [];
+      }
+      if (!Array.isArray(rows) || rows.length !== 1) {
+        console.warn("Periods: close matched no upcoming row", p.id, text.slice(0, 200));
+        showToast(`${p.label} was not closed by this click: it is no longer 'upcoming' (the morning run or another scheduler closed it), or your account cannot write periods. Reloading the list.`, "info");
+        loadPeriods(true);
+        return {
+          ok: false,
+          raced: true
+        };
+      }
+      logAudit("period.close", `Offers for ${p.label} closed now by the scheduler (${words})`, {
+        period_id: p.id,
+        label: p.label,
+        offers_close_at: p.offers_close_at,
+        by: "scheduler",
+        rollcall: roll
+      });
+      setPeriodRows(prev => prev.map(x => x.id === p.id ? _objectSpread(_objectSpread({}, x), rows[0]) : x));
+      loadPeriods(true);
+      showToast(`Offers for ${p.label} are closed. Generate the period when you are ready - offered days are placed first, the gaps by each surgeon's rules.`, "success");
+      return {
+        ok: true
+      };
+    } catch (e) {
+      console.warn("Periods: close threw", e);
+      showToast("Close failed - nothing was changed: " + String((e === null || e === void 0 ? void 0 : e.message) || e), "error");
+      return {
+        ok: false,
+        error: String((e === null || e === void 0 ? void 0 : e.message) || e)
+      };
+    } finally {
+      setPrdBusy(false);
+    }
+  };
+  const remindOffers = async (p, personId) => {
+    if (!isScheduler || !p || !p.id || !personId) return {
+      ok: false
+    };
+    const key = p.id + ":" + personId;
+    const pref = notifPrefs && notifPrefs[personId];
+    if (pref && pref.schedule_updates_email === false) {
+      showToast(`${nameOf(personId)} has schedule-update e-mails turned off - no reminder can be sent; ask in person.`, "info");
+      setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
+        [key]: {
+          ok: false,
+          note: "e-mail off - not sent"
+        }
+      }));
+      return {
+        ok: false,
+        prefOff: true
+      };
+    }
+    const start = String(p.start_day || "").slice(0, 10),
+      end = String(p.end_day || "").slice(0, 10),
+      close = String(p.offers_close_at || "").slice(0, 10);
+    const n = suIsIso(close) ? suDaysBetween(todayStr, close) : null;
+    const when = n === null ? "" : n === 0 ? " (today)" : n === 1 ? " (tomorrow)" : n > 1 ? ` (in ${n} days)` : "";
+    const closeLabel = prdDayWords(close);
+    const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;
+    const message = `Your dates for ${p.label} (${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'.\n\nNothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page (the morning run sends the same note ${(groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose || OP_PERIOD_DEFAULTS.remindDaysBeforeClose).join(" and ")} days before the freeze).`;
+    const detail = "Paint my offers: " + window.location.origin + window.location.pathname + "#offers";
+    setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
+      [key]: {
+        ok: false,
+        note: "sending"
+      }
+    }));
+    const r = await sendEmailNotif("offers_reminder", {
+      subject,
+      message,
+      detail
+    }, [personId]);
+    const stamp = new Date().toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit"
+    });
+    if (r && r.ok && r.sent > 0) {
+      setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
+        [key]: {
+          ok: true,
+          note: `reminded ${stamp}`
+        }
+      }));
+      showToast(`Reminder e-mailed to ${nameOf(personId)}.`, "success");
+    } else if (r && r.ok) {
+      setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
+        [key]: {
+          ok: false,
+          note: r.skippedPrefOff ? "e-mail off - not sent" : "no linked e-mail - not sent"
+        }
+      }));
+      showToast(`No reminder went out: ${nameOf(personId)} ${r.skippedPrefOff ? "has schedule-update e-mails turned off" : "has no linked account e-mail"}.`, "info");
+    } else setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
+      [key]: {
+        ok: false,
+        note: r && r.notEnabled ? "e-mail category not deployed yet" : "not sent - " + String(r && r.error || "failed").slice(0, 60)
+      }
+    }));
+    return r;
+  };
+  const enterOffersFor = (p, personId) => {
+    if (!isScheduler || !personId) return;
+    setOfferSheet({
+      personId,
+      periodId: p && p.id ? p.id : null
+    });
+  };
+  const generatePeriod = p => {
+    if (!isScheduler || !p) return;
+    const start = String(p.start_day || "").slice(0, 10),
+      end = String(p.end_day || "").slice(0, 10);
+    setGenOpts(o => _objectSpread(_objectSpread({}, o), {}, {
+      start,
+      end
+    }));
+    runGenerate(_objectSpread(_objectSpread({}, genOpts), {}, {
+      start,
+      end
+    }));
+  };
   const [snapshotList, setSnapshotList] = useState(null);
   const [snapshotsLoading, setSnapshotsLoading] = useState(false);
   const [snapshotLoadFailed, setSnapshotLoadFailed] = useState(false);
@@ -4550,12 +4958,23 @@ function CallSchedule() {
     everHadRealDataRef.current = true;
   };
   const partialApplyMessage = (r, what) => r.scheduleRestored ? `Setup and schedule restored; the vacation/availability rows did not (${r.error || "unknown error"}) - run the ${what} again to finish.` : `Setup restored; the schedule did not (${r.error || "unknown error"}) - reload, then run the ${what} again.`;
+  const notAppliedList = r => Array.isArray(r && r.notApplied) ? r.notApplied : [];
+  const notAppliedSuffix = r => notAppliedList(r).length ? ` - PARTIAL: ${notAppliedList(r).join(" / ")} in the backup were not written (the app does not restore them yet)` : "";
+  const notAppliedDetail = r => notAppliedList(r).length ? {
+    notApplied: notAppliedList(r),
+    outcome: "partial"
+  } : {};
   const afterPayloadApplied = (r, what) => {
     var _c$schedule_days, _c$time_off, _c$availability;
     loadSnapshots();
     const c = r.counts || {};
-    alert(`${what} complete.\n\nRESTORED: ${(_c$schedule_days = c.schedule_days) !== null && _c$schedule_days !== void 0 ? _c$schedule_days : 0} schedule day(s), ${(_c$time_off = c.time_off) !== null && _c$time_off !== void 0 ? _c$time_off : 0} vacation row(s), ${(_c$availability = c.availability) !== null && _c$availability !== void 0 ? _c$availability : 0} availability row(s), plus roster/rules/settings.\n\nExisting vacation/availability rows not in the backup were left in place (restore never deletes).`);
-    showToast(`${what} complete - other devices will pick it up on their next sync.`, "success");
+    const na = notAppliedList(r);
+    const naLine = na.length ? `\n\nNOT restored (captured in the backup only - the app does not write these tables yet): ${na.map(k => {
+      var _c;
+      return `${(_c = c[k + "_in_backup"]) !== null && _c !== void 0 ? _c : "?"} ${k} row(s)`;
+    }).join(", ")}. Re-enter them in Setup -> Generate -> Periods and the painter, or restore them with the SQL path.` : "";
+    alert(`${what} complete${na.length ? " (PARTIAL)" : ""}.\n\nRESTORED: ${(_c$schedule_days = c.schedule_days) !== null && _c$schedule_days !== void 0 ? _c$schedule_days : 0} schedule day(s), ${(_c$time_off = c.time_off) !== null && _c$time_off !== void 0 ? _c$time_off : 0} vacation row(s), ${(_c$availability = c.availability) !== null && _c$availability !== void 0 ? _c$availability : 0} availability row(s), plus roster/rules/settings.\n\nExisting vacation/availability rows not in the backup were left in place (restore never deletes).${naLine}`);
+    showToast(na.length ? `${what} complete - PARTIAL: ${na.join(" / ")} in the backup were not written (the app does not restore them yet).` : `${what} complete - other devices will pick it up on their next sync.`, na.length ? "error" : "success");
   };
   const restoreSnapshot = async snap => {
     if (!isScheduler) return;
@@ -4566,7 +4985,7 @@ function CallSchedule() {
       hour: "numeric",
       minute: "2-digit"
     });
-    if (!confirm(`Restore the "${snapshotReasonLabel(snap.reason)}" snapshot from ${when}?\n\nThis replaces the CURRENT schedule and setup for everyone with that saved copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so this restore can itself be undone.`)) return;
+    if (!confirm(`Restore the "${snapshotReasonLabel(snap.reason)}" snapshot from ${when}?\n\nThis replaces the CURRENT schedule and setup for everyone with that saved copy and re-adds its vacation/availability rows (offer and period rows in the backup are NOT written back by the app yet - the result says so). A fresh snapshot of the current state is saved first, so this restore can itself be undone.`)) return;
     setRestoreBusyId(snap.id);
     setSaveStatus("Restoring snapshot");
     const r = await snapshots.restore(snap.id, applyScheduleViaCAS, applyTablesUpsert, adoptRestoredBlob);
@@ -4595,12 +5014,12 @@ function CallSchedule() {
       showToast(partialApplyMessage(r, "restore"), "error");
       return;
     }
-    logAudit("snapshot.restore", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}`, {
+    logAudit("snapshot.restore", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}${notAppliedSuffix(r)}`, _objectSpread({
       snapshot_id: snap.id,
       reason: snap.reason,
       created_at: snap.created_at,
       counts: r.counts
-    });
+    }, notAppliedDetail(r)));
     setSaveStatus("Snapshot restored");
     setTimeout(() => setSaveStatus(""), 3000);
     afterPayloadApplied(r, "Restore");
@@ -4656,10 +5075,10 @@ function CallSchedule() {
       showToast(partialApplyMessage(r, "import"), "error");
       return;
     }
-    logAudit("data.import", `Imported JSON backup (${file.name})`, {
+    logAudit("data.import", `Imported JSON backup (${file.name})${notAppliedSuffix(r)}`, _objectSpread({
       counts: r.counts,
       file: file.name
-    });
+    }, notAppliedDetail(r)));
     setSaveStatus("Backup imported");
     setTimeout(() => setSaveStatus(""), 3000);
     afterPayloadApplied(r, "Import");
@@ -5093,9 +5512,11 @@ function CallSchedule() {
       out[openSlotKey(s.day, s.role)] = activeSurgeons.filter(sg => sg.type !== "external").map(sg => {
         let r;
         try {
-          r = eligibility(rulesCtx, s.day, s.role, sg.id, boardBlockMember(s.day, s.role, sg.id) ? {
+          r = eligibility(rulesCtx, s.day, s.role, sg.id, _objectSpread({
+            claim: true
+          }, boardBlockMember(s.day, s.role, sg.id) ? {
             asBlockMember: true
-          } : undefined);
+          } : {}));
         } catch (e) {
           console.warn("board eligibility threw for", sg.id, s.role, s.day, e);
           r = {
@@ -5916,6 +6337,24 @@ function CallSchedule() {
     vacations: vacations,
     onCommit: commitTimeOffPaint,
     onClose: () => setPaintSheet(false)
+  }), offerSheet && !isPublicMode && React.createElement(OfferPainterSheet, {
+    css: css,
+    dk: dk,
+    person: sMap[offerSheet.personId] || null,
+    asScheduler: isScheduler && offerSheet.personId !== mySurgeon,
+    isScheduler: isScheduler,
+    offers: offerRows,
+    periods: periodRows,
+    schedule: schedule,
+    ctx: rulesCtx,
+    ctxError: rulesCtxState.error,
+    surgeonRules: surgeonRules,
+    groupRules: groupRules,
+    today: todayStr,
+    nameOf: nameOf,
+    preferPeriodId: offerSheet.periodId || null,
+    onCommit: commitOffersPaint,
+    onClose: () => setOfferSheet(null)
   }), toast && React.createElement("div", {
     role: "status",
     "aria-live": "polite",
@@ -5924,7 +6363,7 @@ function CallSchedule() {
     style: _objectSpread(_objectSpread({
       position: "fixed",
       left: "50%"
-    }, paintSheet ? {
+    }, paintSheet || offerSheet ? {
       top: 12
     } : {
       bottom: 24
@@ -6058,7 +6497,7 @@ function CallSchedule() {
       fontSize: 12,
       opacity: officeNotifBusy || publishChanges.length === 0 ? 0.6 : 1
     })
-  }, officeNotifBusy ? "Sending" : "Send")))), forceUpdate && !paintSheet && React.createElement("div", {
+  }, officeNotifBusy ? "Sending" : "Send")))), forceUpdate && !paintSheet && !offerSheet && React.createElement("div", {
     role: "alert",
     style: {
       position: "fixed",
@@ -6093,7 +6532,7 @@ function CallSchedule() {
       cursor: "pointer",
       fontFamily: font
     }
-  }, "Reload now")), updateAvailable && !paintSheet && React.createElement("div", {
+  }, "Reload now")), updateAvailable && !paintSheet && !offerSheet && React.createElement("div", {
     role: "status",
     "aria-live": "polite",
     style: {
@@ -6704,7 +7143,17 @@ function CallSchedule() {
       color: T.accent
     }),
     title: `Undo (${scheduleHistory.length} steps)`
-  }, "Undo"))), React.createElement("div", {
+  }, "Undo"), mySurgeon && React.createElement("button", {
+    "data-testid": "nav-paint-offers",
+    onClick: () => setOfferSheet({
+      personId: mySurgeon
+    }),
+    style: _objectSpread(_objectSpread({}, css.tab(false, T.accent)), {}, {
+      fontSize: 12,
+      padding: "5px 10px"
+    }),
+    title: "Paint the dates you'll cover (primary / backup / either), any time ahead"
+  }, "Paint offers"))), React.createElement("div", {
     style: {
       maxWidth: 1020,
       margin: "0 auto",
@@ -7033,7 +7482,26 @@ function CallSchedule() {
     ck: "setup_generate",
     defaultOpen: true,
     title: "Generate (preview, then publish)"
-  }, React.createElement(GeneratePanel, {
+  }, React.createElement(PeriodsSection, {
+    css: css,
+    periods: periodRows,
+    offers: offerRows,
+    roster: surgeons,
+    groupRules: groupRules,
+    today: todayStr,
+    nameOf: nameOf,
+    notifPrefs: notifPrefs,
+    busy: prdBusy || genBusy,
+    remindState: prdRemind,
+    selfId: mySurgeon,
+    draft: prdDraft,
+    setDraft: setPrdDraft,
+    onCreate: createPeriod,
+    onCloseNow: closePeriodNow,
+    onRemind: remindOffers,
+    onEnterFor: enterOffersFor,
+    onGenerate: generatePeriod
+  }), React.createElement(GeneratePanel, {
     css: css,
     presets: genPresets,
     opts: genOpts,
@@ -8763,6 +9231,37 @@ function CallSchedule() {
       return n === 0 ? "today" : n === 1 ? "tomorrow" : "in " + n + " days";
     };
     const roleWord = r => r === "primary" ? "Primary" : "Backup";
+    const offerTagOf = (d, role) => {
+      const st = rulesCtx ? offerState(rulesCtx, d, pid) : null;
+      if (!st || st.status !== "submitted") return null;
+      const w = offerCandidateWords(st, role);
+      if (!w) return null;
+      if (w.kind === "offered") return {
+        kind: "offered",
+        text: "offered",
+        title: "You offered this day (" + w.words + ") - " + st.period.label,
+        bg: "#e4f3e8",
+        fg: "#1a6a3a"
+      };
+      if (w.kind === "offered-other") return {
+        kind: "other-role",
+        text: w.tag.replace("primary", "P").replace("backup", "B"),
+        title: "You offered this day in the other role only (" + w.words + ") - trade if needed - " + st.period.label,
+        bg: "#fdf1d6",
+        fg: "#7a5a10"
+      };
+      return {
+        kind: "outside",
+        text: "not offered",
+        title: "Placed on a day you did not offer (" + w.words + ") - trade if needed - " + st.period.label,
+        bg: "#fbe9d8",
+        fg: "#8a4a10"
+      };
+    };
+    const placedRole = o => {
+      const a = schedule[String(o.day).slice(0, 10)];
+      return a ? a.primary === pid ? "primary" : a.backup === pid ? "backup" : null : null;
+    };
     const syncUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(pid)}`;
     const pidVacs = (vacations[pid] || []).filter(([vs, ve]) => ve >= todayStr).length;
     return React.createElement(React.Fragment, null, React.createElement("div", {
@@ -8801,6 +9300,16 @@ function CallSchedule() {
         flexWrap: "wrap"
       }
     }, React.createElement("button", {
+      "data-testid": "paint-offers",
+      onClick: () => setOfferSheet({
+        personId: pid
+      }),
+      title: pid === mySurgeon ? "Paint the dates you'll cover (primary / backup / either), any time ahead" : "Enter " + nameOf(pid) + "'s offered dates as the scheduler (relayed; entered_by scheduler)",
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "5px 12px",
+        fontSize: 11
+      })
+    }, pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)), React.createElement("button", {
       "data-testid": "download-my-calendar",
       onClick: () => downloadMyCal(pid),
       title: "One 07:00-to-07:00 event per shift (America/Chicago), importable into Google, Apple or Outlook calendars",
@@ -8918,7 +9427,23 @@ function CallSchedule() {
         background: b.bg,
         color: b.fg
       }
-    }, b.text)), React.createElement("button", {
+    }, b.text)), (() => {
+      const t = offerTagOf(x.day, x.role);
+      return t ? React.createElement("span", {
+        "data-testid": "mine-offer-tag",
+        "data-offer": t.kind,
+        title: t.title,
+        style: {
+          fontSize: 9,
+          fontWeight: 800,
+          padding: "0 5px",
+          borderRadius: 4,
+          background: t.bg,
+          color: t.fg,
+          whiteSpace: "nowrap"
+        }
+      }, t.text) : null;
+    })(), React.createElement("button", {
       "data-testid": "mine-trade",
       onClick: () => proposeTradeForDay(x.day, x.role),
       style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
@@ -8927,6 +9452,62 @@ function CallSchedule() {
         borderColor: "#c0a8e0"
       })
     }, "Propose a trade"))))), React.createElement("div", {
+      style: css.card,
+      "data-testid": "mine-offers"
+    }, (() => {
+      const mine = offerRows.filter(o => o.person_id === pid && String(o.day).slice(0, 10) >= todayStr).sort((a, b) => a.day < b.day ? -1 : 1);
+      const nextPer = offerNextPeriod(periodRows, todayStr);
+      const st = nextPer ? offerStatus(nextPer, offerRows, pid) : null;
+      const word = r => r === "either" ? "P or B" : r === "primary" ? "P" : "B";
+      return React.createElement(React.Fragment, null, React.createElement("div", {
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+          marginBottom: 6
+        }
+      }, React.createElement("div", {
+        style: _objectSpread(_objectSpread({}, css.cardT), {}, {
+          margin: 0
+        })
+      }, "My offers (", mine.length, " upcoming day", mine.length === 1 ? "" : "s", ")"), nextPer && React.createElement("span", {
+        style: muted,
+        "data-testid": "mine-offer-status"
+      }, nextPer.label, ": ", st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : "nothing entered yet", nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : "")), mine.length === 0 ? React.createElement("p", {
+        style: _objectSpread(_objectSpread({}, muted), {}, {
+          fontStyle: "italic",
+          margin: 0
+        })
+      }, "No future dates offered - use Paint my offers above.") : React.createElement("div", {
+        style: {
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 4
+        }
+      }, mine.slice(0, 40).map(o => {
+        const pr = placedRole(o);
+        const offeredRole = o.role_pref === "either" ? pr : o.role_pref;
+        return React.createElement("span", {
+          key: o.id || o.day,
+          "data-testid": "mine-offer",
+          "data-day": String(o.day).slice(0, 10),
+          "data-placed": placedRole(o) || "",
+          title: pr ? "Placed " + pr + " on this day" : "Offered, not placed yet",
+          style: {
+            fontFamily: mono,
+            fontSize: 11,
+            padding: "1px 6px",
+            borderRadius: 4,
+            border: `1px solid ${pr ? "#1a6a3a" : dkCardBorder}`,
+            color: dkText,
+            background: pr ? dk ? "rgba(26,106,58,0.25)" : "#e4f3e8" : "transparent"
+          }
+        }, fmtMD(String(o.day).slice(0, 10)), " ", word(o.role_pref), pr ? pr === offeredRole ? " (placed)" : " (placed " + (pr === "primary" ? "P" : "B") + ")" : "");
+      }), mine.length > 40 && React.createElement("span", {
+        style: muted
+      }, "and ", mine.length - 40, " more")));
+    })()), React.createElement("div", {
       style: css.card
     }, React.createElement("div", {
       style: {
@@ -10895,6 +11476,1104 @@ function writeCollapseFlag(ck, open) {
   localStorage.setItem("silvis-collapse-" + ck, open ? "1" : "0");
   localStorage.removeItem("silvis_collapse_" + ck);
 }
+function OfferPainterSheet({
+  css,
+  dk,
+  person,
+  asScheduler,
+  isScheduler,
+  offers,
+  periods,
+  schedule,
+  ctx,
+  ctxError,
+  surgeonRules,
+  groupRules,
+  today,
+  nameOf,
+  preferPeriodId,
+  onCommit,
+  onClose
+}) {
+  const T = THEME[dk ? "dark" : "light"];
+  const pid = person ? person.id : "";
+  const t0 = parse(today);
+  const preferred = React.useMemo(() => (preferPeriodId && Array.isArray(periods) ? periods.find(p => p && p.id === preferPeriodId) : null) || null, [periods, preferPeriodId]);
+  const m0 = (() => {
+    const s = preferred ? String(preferred.start_day || "").slice(0, 10) : "";
+    return suIsIso(s) && s > today ? parse(s) : t0;
+  })();
+  const [ym, setYm] = React.useState({
+    y: m0.getFullYear(),
+    m: m0.getMonth()
+  });
+  const [armed, setArmed] = React.useState("either");
+  const [rangeMode, setRangeMode] = React.useState(false);
+  const [pendingStart, setPendingStart] = React.useState(null);
+  const [draft, setDraft] = React.useState({});
+  const [modeDraft, setModeDraft] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [commitError, setCommitError] = React.useState(null);
+  const [savedNote, setSavedNote] = React.useState("");
+  const [hint, setHint] = React.useState("");
+  const [pasteOpen, setPasteOpen] = React.useState(false);
+  const [pasteText, setPasteText] = React.useState("");
+  const [pasteYear, setPasteYear] = React.useState(String(t0.getFullYear()));
+  const [rulesOpen, setRulesOpen] = React.useState(false);
+  const [periodOpenBox, setPeriodOpenBox] = React.useState(false);
+  const savedTimerRef = React.useRef(null);
+  React.useEffect(() => () => {
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+  }, []);
+  const savedByDay = React.useMemo(() => {
+    const m = {};
+    (offers || []).forEach(o => {
+      if (o && o.person_id === pid) m[String(o.day).slice(0, 10)] = o.role_pref;
+    });
+    return m;
+  }, [offers, pid]);
+  const othersByDay = React.useMemo(() => {
+    const m = {};
+    (offers || []).forEach(o => {
+      if (o && o.person_id !== pid) {
+        const d = String(o.day).slice(0, 10);
+        m[d] = (m[d] || 0) + 1;
+      }
+    });
+    return m;
+  }, [offers, pid]);
+  const effective = ds => ds in draft ? draft[ds] : savedByDay[ds] || null;
+  const dirtyDays = Object.keys(draft);
+  const period = React.useMemo(() => preferred || offerNextPeriod(periods, today), [preferred, periods, today]);
+  const periodOpen = !!period && (isScheduler || offerPeriodOpen(period, today));
+  const periodStatus = period ? offerStatus(period, offers, pid) : null;
+  const savedMode = period ? (period.offer_modes && typeof period.offer_modes === "object" ? period.offer_modes[pid] : null) || "preferred" : "preferred";
+  const shownMode = modeDraft || savedMode;
+  const modeDirty = !!modeDraft && modeDraft !== savedMode;
+  const periodLabel = period ? String(period.label || period.start_day + " - " + period.end_day) : "";
+  const periodClose = period && period.offers_close_at ? String(period.offers_close_at).slice(0, 10) : null;
+  const inPeriod = ds => !!period && ds >= String(period.start_day).slice(0, 10) && ds <= String(period.end_day).slice(0, 10);
+  const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
+  const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
+  const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
+  const cap = ctx && typeof monthlyCapFor === "function" && pid ? monthlyCapFor(ctx, pid).primary : null;
+  const days = React.useMemo(() => {
+    const out = [];
+    const n = new Date(ym.y, ym.m + 1, 0).getDate();
+    for (let d = 1; d <= n; d++) {
+      const dt = new Date(ym.y, ym.m, d);
+      const ds = fmt(dt);
+      const dow = dt.getDay();
+      const row = {
+        ds,
+        d,
+        dow,
+        weekend: dow === 0 || dow === 6,
+        past: ds < today,
+        frozen: null,
+        block: {},
+        confirm: {},
+        grey: null
+      };
+      const per = periodFor(ds, periods || []);
+      if (per && !isScheduler && !offerPeriodOpen(per, today)) {
+        const close = per.offers_close_at ? String(per.offers_close_at).slice(0, 10) : null;
+        row.frozen = "frozen - offers for " + (per.label || "this period") + " closed" + (close ? " " + fmtMD(close) : "") + " - ask the scheduler";
+      }
+      if (ctx && pid) {
+        ["primary", "backup"].forEach(role => {
+          let elig = null;
+          try {
+            elig = eligibility(ctx, ds, role, person.id, {
+              claim: true
+            });
+          } catch (e) {
+            console.warn("Paint offers: eligibility threw for " + ds + " " + role, e);
+          }
+          const why = offerDayWhy(elig ? elig.hard : []);
+          row.block[role] = why.block;
+          row.confirm[role] = why.confirm;
+        });
+      }
+      if (row.past) row.grey = "past";else if (row.frozen) row.grey = row.frozen;else if (row.block.primary && row.block.backup) row.grey = row.block.primary === row.block.backup ? row.block.primary : row.block.primary + " / " + row.block.backup;
+      const a = schedule ? schedule[ds] : null;
+      row.holders = {
+        primary: a ? dayHolder(a, "primary") : null,
+        backup: a ? dayHolder(a, "backup") : null
+      };
+      row.others = othersByDay[ds] || 0;
+      out.push(row);
+    }
+    return out;
+  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay]);
+  const rowByDay = React.useMemo(() => {
+    const m = {};
+    days.forEach(r => {
+      m[r.ds] = r;
+    });
+    return m;
+  }, [days]);
+  const monthCounts = React.useMemo(() => {
+    const c = {
+      primary: 0,
+      backup: 0,
+      either: 0
+    };
+    days.forEach(r => {
+      const e = effective(r.ds);
+      if (e && c[e] !== undefined) c[e] += 1;
+    });
+    return c;
+  }, [days, draft, savedByDay]);
+  const periodCount = React.useMemo(() => {
+    if (!period) return 0;
+    const set = new Set();
+    Object.keys(savedByDay).forEach(d => {
+      if (inPeriod(d) && !(d in draft)) set.add(d);
+    });
+    Object.keys(draft).forEach(d => {
+      if (inPeriod(d) && draft[d]) set.add(d);
+    });
+    return set.size;
+  }, [period, savedByDay, draft]);
+  const periodMonths = period ? Math.max(1, Math.round(suDaysBetween(String(period.start_day).slice(0, 10), String(period.end_day).slice(0, 10)) / 30.4)) : 0;
+  const brushWord = b => (OFFER_BRUSH[b] || OFFER_BRUSH.clear).label.toLowerCase();
+  const roleWord = b => b === "either" ? "primary or backup" : b;
+  const rolesOf = b => b === "either" ? ["primary", "backup"] : [b];
+  const dayText = ds => DAY_HDR[parse(ds).getDay()] + " " + fmtMD(ds);
+  const setDraftDay = (n, ds, want) => {
+    const saved = savedByDay[ds] || null;
+    if (want === saved || !want && !saved) delete n[ds];else n[ds] = want;
+  };
+  const clearable = r => !!r && !r.past && !r.frozen && !!savedByDay[r.ds];
+  const paintDays = (list, brush, opts) => {
+    setCommitError(null);
+    const single = !!(opts && opts.single);
+    const skipped = [],
+      asks = [],
+      go = [];
+    list.forEach(ds => {
+      const r = rowByDay[ds];
+      if (brush === "clear") {
+        if (!effective(ds)) return;
+        if (!r) {
+          skipped.push(dayText(ds) + ": outside the shown month");
+          return;
+        }
+        if (r.grey && !clearable(r)) {
+          skipped.push(dayText(ds) + ": " + r.grey);
+          return;
+        }
+        go.push(ds);
+        return;
+      }
+      if (!r) {
+        skipped.push(dayText(ds) + ": outside the shown month");
+        return;
+      }
+      if (r.grey) {
+        skipped.push(dayText(ds) + ": " + r.grey);
+        return;
+      }
+      const need = rolesOf(brush);
+      const blocked = need.filter(role => r.block[role]);
+      if (blocked.length) {
+        skipped.push(dayText(ds) + ": " + blocked.map(role => role + " - " + r.block[role]).join(", "));
+        return;
+      }
+      const cur = effective(ds);
+      if (single && cur === brush) {
+        go.push(ds);
+        return;
+      }
+      const asking = need.map(role => r.confirm[role]).filter(Boolean);
+      if (asking.length && cur !== brush) asks.push({
+        ds,
+        why: asking[0],
+        dow: DAY_HDR[r.dow]
+      });
+      go.push(ds);
+    });
+    let ok = go.slice();
+    if (asks.length) {
+      const first = asks[0];
+      const long = {
+        Sun: "Sunday",
+        Mon: "Monday",
+        Tue: "Tuesday",
+        Wed: "Wednesday",
+        Thu: "Thursday",
+        Fri: "Friday",
+        Sat: "Saturday"
+      }[first.dow] || first.dow;
+      const msg = asks.length === 1 ? `${long} ${fmtMD(first.ds)} is normally not one of your ${roleWord(brush)} call days (${first.why}) - offer it anyway?\n\nThe saved offer lifts that pattern for this date.` : `${asks.length} of these days are normally not one of your ${roleWord(brush)} call days (${asks.slice(0, 6).map(a => a.dow + " " + fmtMD(a.ds)).join(", ")}${asks.length > 6 ? ", ..." : ""} - ${first.why}) - offer them anyway?\n\nThe saved offers lift that pattern for those dates.`;
+      if (!confirm(msg)) {
+        const drop = new Set(asks.map(a => a.ds));
+        ok = ok.filter(ds => !drop.has(ds));
+        skipped.push(asks.length + " pattern day(s) left out");
+      }
+    }
+    if (ok.length) setDraft(p => {
+      const n = _objectSpread({}, p);
+      ok.forEach(ds => {
+        const cur = effective(ds);
+        setDraftDay(n, ds, brush === "clear" ? null : single && cur === brush ? null : brush);
+      });
+      return n;
+    });
+    setHint(skipped.length ? "Skipped " + skipped.length + " day(s): " + skipped.slice(0, 4).join("; ") + (skipped.length > 4 ? "; ..." : "") : "");
+  };
+  const tapDay = ds => {
+    const r = rowByDay[ds];
+    if (!r || r.grey && !(armed === "clear" && clearable(r))) return;
+    if (!rangeMode) {
+      paintDays([ds], armed, {
+        single: true
+      });
+      return;
+    }
+    if (!pendingStart) {
+      setPendingStart(ds);
+      setHint("");
+      return;
+    }
+    const [s, e] = pendingStart <= ds ? [pendingStart, ds] : [ds, pendingStart];
+    const list = [];
+    for (let d = s; d <= e; d = suAddDays(d, 1)) list.push(d);
+    setPendingStart(null);
+    paintDays(list, armed, {
+      single: false
+    });
+  };
+  const pasteParsed = React.useMemo(() => suParseDateList(pasteText, pasteYear), [pasteText, pasteYear]);
+  const addPaste = () => {
+    if (!pasteParsed.dates.length) return;
+    const brush = armed === "clear" ? "either" : armed;
+    const byMonth = {};
+    pasteParsed.dates.forEach(d => {
+      const k = d.slice(0, 7);
+      (byMonth[k] = byMonth[k] || []).push(d);
+    });
+    const months = Object.keys(byMonth).sort();
+    if (months.length === 1 && months[0] === fmt(new Date(ym.y, ym.m, 1)).slice(0, 7)) {
+      paintDays(byMonth[months[0]], brush, {
+        single: false
+      });
+      setPasteText("");
+      return;
+    }
+    const here = fmt(new Date(ym.y, ym.m, 1)).slice(0, 7);
+    if (byMonth[here]) paintDays(byMonth[here], brush, {
+      single: false
+    });
+    const rest = pasteParsed.dates.filter(d => d.slice(0, 7) !== here);
+    if (rest.length) {
+      const f = parse(rest[0]);
+      setYm({
+        y: f.getFullYear(),
+        m: f.getMonth()
+      });
+      setPasteText(rest.join(", "));
+      setHint("Showing " + MO[f.getMonth()] + " " + f.getFullYear() + " - press Add again for the " + rest.length + " pasted day(s) in it.");
+    } else setPasteText("");
+  };
+  const describeDraft = () => dirtyDays.slice().sort().map(ds => dayText(ds) + ": " + (draft[ds] ? brushWord(draft[ds]) : "clear")).concat(modeDirty ? ["mode for " + periodLabel + ": " + modeDraft] : []);
+  const doSave = async () => {
+    if (!dirtyCount || busy) return;
+    setBusy(true);
+    setCommitError(null);
+    setSavedNote("");
+    const items = describeDraft();
+    const diff = offersDraftDiff(savedByDay, draft);
+    if (diff.bad.length) {
+      setBusy(false);
+      setCommitError({
+        msg: "a drafted day is malformed (" + diff.bad.join(", ") + ") - discard it",
+        items
+      });
+      return;
+    }
+    const addsInPeriod = diff.insert.concat(diff.update).some(r => inPeriod(r.day));
+    const mode = !periodOpen ? null : modeDirty ? modeDraft : periodStatus === "rules_only" && addsInPeriod ? shownMode : null;
+    if (diff.count === 0 && !mode) {
+      setBusy(false);
+      setDraft({});
+      setModeDraft(null);
+      setPendingStart(null);
+      setSavedNote("Already saved - nothing to write");
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000);
+      return;
+    }
+    let r;
+    try {
+      r = await onCommit({
+        personId: pid,
+        diff,
+        mode,
+        period: period || null,
+        items
+      });
+    } catch (e) {
+      console.warn("Paint offers: commit threw", e);
+      r = {
+        ok: false,
+        error: String((e === null || e === void 0 ? void 0 : e.message) || e)
+      };
+    } finally {
+      setBusy(false);
+    }
+    if (r && r.ok) {
+      setDraft({});
+      setModeDraft(null);
+      setPendingStart(null);
+      setPeriodOpenBox(false);
+      setSavedNote(`Saved ${diff.count} change${diff.count === 1 ? "" : "s"}${mode ? " - " + (mode === "rules_only" ? "going by your rules" : "mode: " + (mode === "exhaustive" ? "only these days" : "preferred days")) : ""}`);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000);
+    } else {
+      setCommitError({
+        msg: r && r.error || "unknown error",
+        items
+      });
+    }
+  };
+  const doRulesOnly = async () => {
+    if (!period || !periodOpen || busy) return;
+    if (dirtyDays.some(ds => draft[ds] && inPeriod(ds))) {
+      setHint("You have drafted days inside " + periodLabel + " - discard them first to go by your rules.");
+      return;
+    }
+    if (!confirm(`Go by your rules for ${periodLabel}?\n\nThe generator places you from your rules alone and you hear nothing more about this period:\n- ${rulesWords.join("\n- ")}\n\nYou can still paint days later (that takes you off the rules-only list).`)) return;
+    setBusy(true);
+    setCommitError(null);
+    setSavedNote("");
+    let r;
+    try {
+      r = await onCommit({
+        personId: pid,
+        diff: {
+          insert: [],
+          update: [],
+          delete: [],
+          bad: [],
+          count: 0
+        },
+        mode: "rules_only",
+        period,
+        items: ["mode for " + periodLabel + ": rules_only"]
+      });
+    } catch (e) {
+      console.warn("Paint offers: rules-only commit threw", e);
+      r = {
+        ok: false,
+        error: String((e === null || e === void 0 ? void 0 : e.message) || e)
+      };
+    } finally {
+      setBusy(false);
+    }
+    if (r && r.ok) {
+      setModeDraft(null);
+      setPeriodOpenBox(false);
+      setSavedNote("Saved - going by your rules for " + periodLabel);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000);
+    } else setCommitError({
+      msg: r && r.error || "unknown error",
+      items: ["mode for " + periodLabel + ": rules_only"]
+    });
+  };
+  const doDiscard = () => {
+    if (!dirtyCount) return;
+    if (!confirm(`Discard ${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"}?`)) return;
+    setDraft({});
+    setModeDraft(null);
+    setPendingStart(null);
+    setCommitError(null);
+    setSavedNote("");
+    setHint("");
+    setPeriodOpenBox(false);
+  };
+  const doClose = () => {
+    if (busy) return;
+    if (dirtyCount && !confirm(`Discard ${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"} and close?`)) return;
+    onClose();
+  };
+  const bg = T.bg,
+    panelBg = T.surface,
+    border = T.border,
+    text = T.text,
+    muted = T.muted;
+  const openRed = T.open;
+  const pillFor = b => {
+    const c = OFFER_BRUSH[b] || OFFER_BRUSH.clear;
+    return {
+      display: "inline-flex",
+      alignItems: "center",
+      padding: "3px 10px",
+      borderRadius: 6,
+      fontSize: 12.5,
+      fontWeight: 800,
+      background: c.tint,
+      color: c.text,
+      border: `1px solid ${c.border}`
+    };
+  };
+  const holderText = (v, ds) => v ? holderLabel(v, nameOf) : ds >= today ? "OPEN" : "-";
+  const monthLabel = MO[ym.m] + " " + ym.y;
+  const atCurrentMonth = ym.y === t0.getFullYear() && ym.m === t0.getMonth();
+  const periodExpanded = periodOpen && (periodOpenBox || modeDirty);
+  const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : "yourself as " + brushWord(armed)}; tap again with the same brush to clear it.` : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
+  if (!person) {
+    return React.createElement("div", {
+      "data-testid": "ofp-sheet",
+      style: {
+        position: "fixed",
+        inset: 0,
+        zIndex: 9300,
+        background: bg,
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: font,
+        padding: 20,
+        color: text
+      }
+    }, React.createElement("p", null, "Your account is not linked to a roster entry yet - the scheduler will link it. Nothing can be offered until then."), React.createElement("button", {
+      "data-testid": "ofp-close",
+      onClick: onClose,
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        minHeight: 44,
+        alignSelf: "flex-start"
+      })
+    }, "Close"));
+  }
+  return React.createElement("div", {
+    "data-testid": "ofp-sheet",
+    "data-person": pid,
+    "data-month": fmt(new Date(ym.y, ym.m, 1)).slice(0, 7),
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 9300,
+      background: bg,
+      display: "flex",
+      flexDirection: "column",
+      fontFamily: font
+    }
+  }, React.createElement("div", {
+    style: {
+      background: panelBg,
+      borderBottom: `1px solid ${border}`,
+      padding: "8px 12px 8px",
+      paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)",
+      flexShrink: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 800,
+      color: text
+    }
+  }, asScheduler ? "Paint offers for " + person.name : "Paint my offers", asScheduler && React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: muted,
+      marginLeft: 6
+    }
+  }, "as the scheduler (relayed)")), React.createElement("button", {
+    "data-testid": "ofp-close",
+    onClick: doClose,
+    "aria-label": "Close",
+    style: {
+      background: "none",
+      border: "none",
+      color: muted,
+      fontSize: 22,
+      cursor: "pointer",
+      padding: "6px 10px",
+      minWidth: 44,
+      minHeight: 44
+    }
+  }, "x")), React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6
+    }
+  }, React.createElement("button", {
+    "data-testid": "ofp-prev",
+    disabled: atCurrentMonth,
+    onClick: () => {
+      if (atCurrentMonth) return;
+      setPendingStart(null);
+      setYm(p => {
+        const m = p.m - 1;
+        return m < 0 ? {
+          y: p.y - 1,
+          m: 11
+        } : {
+          y: p.y,
+          m
+        };
+      });
+    },
+    "aria-label": "Previous month",
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minWidth: 48,
+      minHeight: 44,
+      fontSize: 15,
+      opacity: atCurrentMonth ? 0.45 : 1,
+      cursor: atCurrentMonth ? "default" : "pointer"
+    })
+  }, "‹"), React.createElement("span", {
+    "data-testid": "ofp-month",
+    style: {
+      fontSize: 14,
+      fontWeight: 700,
+      color: text,
+      minWidth: 150,
+      textAlign: "center"
+    }
+  }, monthLabel), React.createElement("button", {
+    "data-testid": "ofp-next",
+    onClick: () => {
+      setPendingStart(null);
+      setYm(p => {
+        const m = p.m + 1;
+        return m > 11 ? {
+          y: p.y + 1,
+          m: 0
+        } : {
+          y: p.y,
+          m
+        };
+      });
+    },
+    "aria-label": "Next month",
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minWidth: 48,
+      minHeight: 44,
+      fontSize: 15
+    })
+  }, "›")), React.createElement("div", {
+    "data-testid": "ofp-counts",
+    "data-month-primary": monthCounts.primary,
+    "data-month-backup": monthCounts.backup,
+    "data-month-either": monthCounts.either,
+    "data-period-count": periodCount,
+    style: {
+      fontSize: 11,
+      color: muted,
+      textAlign: "center",
+      marginTop: 2,
+      lineHeight: 1.5
+    }
+  }, monthLabel, ": ", React.createElement("b", {
+    style: {
+      color: text
+    }
+  }, monthCounts.primary), " primary, ", React.createElement("b", {
+    style: {
+      color: text
+    }
+  }, monthCounts.backup), " backup, ", React.createElement("b", {
+    style: {
+      color: text
+    }
+  }, monthCounts.either), " either offered", period && React.createElement(React.Fragment, null, " - ", periodLabel, ": ", React.createElement("b", {
+    style: {
+      color: text
+    }
+  }, periodCount), " day", periodCount === 1 ? "" : "s", cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : "")), React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 6,
+      marginTop: 6,
+      alignItems: "center"
+    }
+  }, ["primary", "backup", "either", "clear"].map(k => React.createElement("button", {
+    key: k,
+    "data-testid": "ofp-brush-" + k,
+    "data-armed": armed === k ? "1" : "0",
+    onClick: () => {
+      setArmed(k);
+      setPendingStart(null);
+      setHint("");
+    },
+    style: css.brush(armed === k, k)
+  }, OFFER_BRUSH[k].label)), React.createElement("button", {
+    "data-testid": "ofp-range",
+    "data-on": rangeMode ? "1" : "0",
+    onClick: () => {
+      setRangeMode(v => !v);
+      setPendingStart(null);
+      setHint("");
+    },
+    title: "Paint a run of days: tap the start day, then the end day",
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minHeight: 44,
+      padding: "8px 12px",
+      fontSize: 12,
+      marginLeft: "auto"
+    }, rangeMode ? {
+      background: `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})`,
+      color: "#fff",
+      borderColor: T.navy
+    } : {})
+  }, rangeMode ? "Range: on" : "Range")), React.createElement("div", {
+    "data-testid": "ofp-hint",
+    style: {
+      fontSize: 11,
+      color: hint ? "#a05010" : muted,
+      marginTop: 6,
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      lineHeight: 1.4
+    }
+  }, hint ? React.createElement("span", null, hint) : rangeMode && pendingStart ? React.createElement(React.Fragment, null, React.createElement("span", null, "Start ", dayText(pendingStart), " - tap the end day (same day = just that day)."), React.createElement("button", {
+    "data-testid": "ofp-cancel-start",
+    onClick: () => setPendingStart(null),
+    style: {
+      minHeight: 30,
+      padding: "3px 10px",
+      borderRadius: 7,
+      fontSize: 11,
+      fontWeight: 700,
+      fontFamily: font,
+      cursor: "pointer",
+      background: "transparent",
+      color: "#c04040",
+      border: "1px solid #c05050"
+    }
+  }, "x cancel start")) : React.createElement("span", null, rangeHint)), !ctx && React.createElement("div", {
+    role: "alert",
+    "data-testid": "ofp-rules-unavailable",
+    style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+      marginTop: 6,
+      fontSize: 11
+    })
+  }, "Rules unavailable", ctxError ? " (" + String(ctxError).slice(0, 120) + ")" : "", " - only past and frozen days are greyed; the database still refuses a vacation day.")), React.createElement("div", {
+    "data-testid": "ofp-list",
+    style: {
+      flex: 1,
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
+      padding: "6px 10px 12px"
+    }
+  }, days.map(r => {
+    const ds = r.ds;
+    const eff = effective(ds);
+    const drafted = ds in draft;
+    const isPending = pendingStart === ds;
+    const grey = !!r.grey;
+    const tappable = !grey || armed === "clear" && clearable(r);
+    const partial = !grey && (r.block.primary || r.block.backup) ? r.block.primary ? "backup only - " + r.block.primary : "primary only - " + r.block.backup : null;
+    const rowBg = grey ? dk ? "#0F1B33" : "#F1F3F6" : isPending ? dk ? "#1a3a5e" : "#dcecf8" : drafted ? dk ? "#1c3050" : "#eaf3fb" : r.weekend ? T.weekend : panelBg;
+    const holderP = holderText(r.holders.primary, ds),
+      holderB = holderText(r.holders.backup, ds);
+    return React.createElement("button", {
+      key: ds,
+      "data-testid": "ofp-day",
+      "data-day": ds,
+      "data-state": grey && !drafted ? "blocked" : drafted ? "draft" : eff ? "saved" : "free",
+      "data-offer": eff || "",
+      "data-why": r.grey || partial || "",
+      "data-clearable": grey && clearable(r) ? "1" : "0",
+      disabled: !tappable,
+      onClick: () => tapDay(ds),
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        width: "100%",
+        textAlign: "left",
+        minHeight: 52,
+        padding: "7px 10px",
+        marginBottom: 4,
+        borderRadius: 9,
+        cursor: tappable ? "pointer" : "not-allowed",
+        fontFamily: font,
+        background: rowBg,
+        opacity: grey ? 0.6 : 1,
+        border: `1px solid ${isPending ? T.accent : drafted ? T.accent : border}`
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 44,
+        flexShrink: 0,
+        textAlign: "center"
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 17,
+        fontWeight: 800,
+        color: text,
+        fontFamily: mono
+      }
+    }, r.d), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: r.weekend ? "#a05010" : muted,
+        textTransform: "uppercase"
+      }
+    }, DAY_HDR[r.dow])), React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        flexWrap: "wrap"
+      }
+    }, eff ? React.createElement("span", {
+      style: pillFor(eff)
+    }, OFFER_BRUSH[eff].label) : React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: drafted ? "#a05010" : muted,
+        fontWeight: drafted ? 700 : 400
+      }
+    }, drafted ? "will clear" : grey ? "" : "not offered"), drafted && React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 800,
+        color: "#a05010"
+      }
+    }, "unsaved"), isPending && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: T.accentText
+      }
+    }, "range starts here"), grey && React.createElement("span", {
+      "data-testid": "ofp-why",
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: muted
+      }
+    }, r.grey, clearable(r) ? " - saved offer: Clear can take it back" : ""), !grey && partial && React.createElement("span", {
+      "data-testid": "ofp-why",
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: "#a05010"
+      }
+    }, partial)), React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 8,
+        fontSize: 10.5,
+        color: muted,
+        marginTop: 2
+      }
+    }, React.createElement("span", null, "P ", React.createElement("span", {
+      style: {
+        color: holderP === "OPEN" ? openRed : text,
+        fontWeight: holderP === "OPEN" ? 800 : 600
+      }
+    }, holderP)), React.createElement("span", null, "B ", React.createElement("span", {
+      style: {
+        color: holderB === "OPEN" ? openRed : text,
+        fontWeight: holderB === "OPEN" ? 800 : 600
+      }
+    }, holderB)), r.others > 0 && React.createElement("span", {
+      "data-testid": "ofp-others"
+    }, r.others, " other", r.others === 1 ? "" : "s", " offered"))));
+  })), React.createElement("div", {
+    "data-testid": "ofp-footer",
+    style: {
+      background: panelBg,
+      borderTop: `1px solid ${border}`,
+      padding: "8px 12px",
+      paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 8px)",
+      flexShrink: 0,
+      maxHeight: "55vh",
+      overflowY: "auto"
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginBottom: 6
+    }
+  }, period && React.createElement("span", {
+    "data-testid": "ofp-period-line",
+    style: {
+      flex: "1 1 170px",
+      minWidth: 0,
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: text,
+      lineHeight: 1.35
+    }
+  }, periodLabel, " - ", periodOpen ? periodClose ? "freezes " + fmtMD(periodClose) : "open" : "closed" + (periodClose ? " " + fmtMD(periodClose) : ""), " - ", periodStatus === "submitted" ? "days offered" : periodStatus === "rules_only" ? "by your rules" : "nothing yet", periodOpen ? " - " + (shownMode === "exhaustive" ? "only these days" : "preferred days") : "", modeDirty && React.createElement("span", {
+    style: {
+      color: "#a05010",
+      marginLeft: 6
+    }
+  }, "mode unsaved")), period && periodOpen && React.createElement("button", {
+    "data-testid": "ofp-period-toggle",
+    "data-on": periodExpanded ? "1" : "0",
+    onClick: () => setPeriodOpenBox(v => !v),
+    style: _objectSpread(_objectSpread({}, css.mini(periodExpanded)), {}, {
+      minHeight: 36
+    })
+  }, periodExpanded ? "Done" : "Change"), React.createElement("button", {
+    "data-testid": "ofp-paste-toggle",
+    onClick: () => setPasteOpen(v => !v),
+    style: _objectSpread(_objectSpread({}, css.mini(pasteOpen)), {}, {
+      minHeight: 36
+    })
+  }, pasteOpen ? "Hide paste" : "Paste dates"), period && React.createElement("button", {
+    "data-testid": "ofp-rules-toggle",
+    onClick: () => setRulesOpen(v => !v),
+    style: _objectSpread(_objectSpread({}, css.mini(rulesOpen)), {}, {
+      minHeight: 36
+    })
+  }, rulesOpen ? "Hide rules" : "My rules")), pasteOpen && React.createElement("div", {
+    "data-testid": "ofp-paste",
+    style: {
+      marginBottom: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginBottom: 4
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: muted
+    }
+  }, "Dates like 11/3, 11/5-11/8 or 2026-12-01 (M/D uses the year on the right); they become drafts with the armed brush", armed === "clear" ? " (either, since Clear is armed)" : "", "."), React.createElement("select", {
+    "data-testid": "ofp-paste-year",
+    value: pasteYear,
+    onChange: e => setPasteYear(e.target.value),
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      minHeight: 36
+    })
+  }, [t0.getFullYear(), t0.getFullYear() + 1, t0.getFullYear() + 2].map(y => React.createElement("option", {
+    key: y,
+    value: String(y)
+  }, y)))), React.createElement("textarea", {
+    "data-testid": "ofp-paste-text",
+    value: pasteText,
+    onChange: e => setPasteText(e.target.value),
+    placeholder: "11/3, 11/5, 11/16-11/20",
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      width: "100%",
+      minHeight: 48,
+      fontFamily: mono,
+      boxSizing: "border-box"
+    })
+  }), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap",
+      marginTop: 4
+    }
+  }, React.createElement("span", {
+    "data-testid": "ofp-paste-preview",
+    style: {
+      fontSize: 11,
+      color: pasteParsed.bad.length ? "#a05010" : muted
+    }
+  }, pasteParsed.dates.length, " date(s)", pasteParsed.bad.length ? " - not understood: " + pasteParsed.bad.slice(0, 5).join(", ") : ""), React.createElement("button", {
+    "data-testid": "ofp-paste-add",
+    onClick: addPaste,
+    disabled: !pasteParsed.dates.length,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      minHeight: 36,
+      opacity: pasteParsed.dates.length ? 1 : 0.5
+    })
+  }, "Add ", pasteParsed.dates.length, " day(s) to the draft"))), period && rulesOpen && React.createElement("div", {
+    "data-testid": "ofp-rules-words",
+    style: {
+      fontSize: 11.5,
+      color: text,
+      lineHeight: 1.5,
+      marginBottom: 8,
+      padding: "6px 10px",
+      borderRadius: 8,
+      background: T.raised,
+      border: `1px solid ${border}`
+    }
+  }, React.createElement("b", null, "Your rules, as the generator reads them:"), React.createElement("ul", {
+    style: {
+      margin: "4px 0 0",
+      paddingLeft: 18
+    }
+  }, rulesWords.map((w, i) => React.createElement("li", {
+    key: i
+  }, w)))), period && React.createElement("div", {
+    "data-testid": "ofp-period",
+    "data-period-id": period.id || "",
+    "data-status": periodStatus || "",
+    "data-mode": shownMode,
+    "data-open": periodOpen ? "1" : "0",
+    "data-expanded": periodExpanded ? "1" : "0",
+    style: periodExpanded || !periodOpen ? {
+      marginBottom: 8,
+      padding: "8px 10px",
+      borderRadius: 8,
+      border: `1px solid ${modeDirty ? T.accent : border}`,
+      background: T.raised
+    } : {
+      display: "none"
+    }
+  }, !periodOpen && React.createElement("div", {
+    "data-testid": "ofp-period-closed",
+    style: {
+      fontSize: 11.5,
+      color: muted,
+      lineHeight: 1.45
+    }
+  }, "Offers for ", periodLabel, " closed", periodClose ? " " + fmtMD(periodClose) : "", " - ask the scheduler for a late change. ", periodStatus === "submitted" ? "You offered days for it" : periodStatus === "rules_only" ? "You go by your rules for it" : "You entered nothing for it", period.offer_modes && period.offer_modes[pid] ? ", mode " + (savedMode === "exhaustive" ? "only these days" : "preferred days") : "", "."), periodOpen && periodExpanded && React.createElement(React.Fragment, null, React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, React.createElement("button", {
+    "data-testid": "ofp-mode-exhaustive",
+    "data-on": shownMode === "exhaustive" ? "1" : "0",
+    onClick: () => setModeDraft("exhaustive" === savedMode ? null : "exhaustive"),
+    style: _objectSpread(_objectSpread({}, css.mini(shownMode === "exhaustive")), {}, {
+      minHeight: 40,
+      padding: "6px 12px",
+      fontSize: 12
+    })
+  }, "Only these days"), React.createElement("button", {
+    "data-testid": "ofp-mode-preferred",
+    "data-on": shownMode === "preferred" ? "1" : "0",
+    onClick: () => setModeDraft("preferred" === savedMode ? null : "preferred"),
+    style: _objectSpread(_objectSpread({}, css.mini(shownMode === "preferred")), {}, {
+      minHeight: 40,
+      padding: "6px 12px",
+      fontSize: 12
+    })
+  }, "These are my preferred days - use my rules to fill gaps")), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: muted,
+      marginTop: 4,
+      lineHeight: 1.45
+    }
+  }, shownMode === "exhaustive" ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)." : "Your days are placed first; when a slot would otherwise stay open your ordinary rules may place you on another day, and your publish e-mail names every such day - trade if needed. (The default.)", periodStatus === "rules_only" ? " Choosing a mode or painting a day inside this period takes you off the rules-only list." : ""), periodStatus !== "submitted" && React.createElement("div", {
+    style: {
+      marginTop: 6,
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, periodStatus === "rules_only" ? React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: muted
+    }
+  }, "You go by your rules for ", periodLabel, " - paint days above to offer specific dates instead.") : React.createElement("button", {
+    "data-testid": "ofp-rules-only",
+    onClick: doRulesOnly,
+    disabled: busy,
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minHeight: 40,
+      fontSize: 12
+    })
+  }, "Go by my rules for ", periodLabel)))), commitError && React.createElement("div", {
+    role: "alert",
+    "data-testid": "ofp-error",
+    style: {
+      marginBottom: 8,
+      padding: "8px 10px",
+      borderRadius: 8,
+      background: dk ? "#3a1a1a" : "#fdeaea",
+      border: "1px solid #c05050",
+      maxHeight: 130,
+      overflowY: "auto"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 800,
+      color: "#c04040"
+    }
+  }, `Nothing was saved - ${commitError.items.length} entr${commitError.items.length === 1 ? "y is" : "ies are"} still unsaved:`), commitError.items.map((it, i) => React.createElement("div", {
+    key: i,
+    style: {
+      fontSize: 11,
+      color: dk ? "#e0b0b0" : "#8a3030",
+      fontFamily: mono
+    }
+  }, "- ", it)), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: muted,
+      marginTop: 3
+    }
+  }, "(", commitError.msg, ") - your taps are kept; fix the issue and Save again.")), React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, React.createElement("div", {
+    "data-testid": "ofp-status",
+    style: {
+      flex: 1,
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: dirtyCount ? "#a05010" : muted
+    }
+  }, dirtyCount ? `${dirtyCount} unsaved` : savedNote ? React.createElement("span", {
+    "data-testid": "ofp-saved",
+    style: {
+      color: "#1a8040"
+    }
+  }, savedNote) : "No unsaved changes"), React.createElement("button", {
+    "data-testid": "ofp-discard",
+    onClick: doDiscard,
+    disabled: !dirtyCount || busy,
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minHeight: 44,
+      opacity: dirtyCount && !busy ? 1 : 0.45
+    })
+  }, "Discard"), React.createElement("button", {
+    "data-testid": "ofp-save",
+    onClick: doSave,
+    disabled: !dirtyCount || busy,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      minHeight: 44,
+      minWidth: 110,
+      opacity: dirtyCount && !busy ? 1 : 0.55
+    })
+  }, busy ? "Saving" : `Save${dirtyCount ? ` (${dirtyCount})` : ""}`))));
+}
 function Collapsible({
   title,
   ck,
@@ -11004,7 +12683,10 @@ const REASON_WORDS = {
   "window-week-over-target": "over the window-week target",
   "consecutive-primary": "consecutive primary days (prefers alternate days)",
   "long-run": "long any-role run",
-  "east-clear": "home East vacation day (no East call, no OR block - preferred as primary)"
+  "east-clear": "home East vacation day (no East call, no OR block - preferred as primary)",
+  "not-offered": "not among the days offered (only these days)",
+  "offered": "offered day (bonus)",
+  "outside-offers": "outside the offered days (penalty)"
 };
 async function readAuthOnlyTable(table, opts) {
   let token = null;
@@ -11109,6 +12791,10 @@ function softTag(soft) {
       return "Aledo week";
     case "holiday-waiver":
       return "holiday waiver";
+    case "offered":
+      return "offered day (bonus)";
+    case "outside-offers":
+      return "outside the offered days (penalty)";
     default:
       return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
@@ -11251,6 +12937,71 @@ function Padlock({
     strokeWidth: "1.3"
   }));
 }
+function offerCandidateWords(st, role) {
+  if (!st || typeof st !== "object") return null;
+  var modeWords = st.mode === "exhaustive" ? "only these days: ineligible" : "preferred days: penalty";
+  if (st.status === "submitted") {
+    var roles = Array.isArray(st.roles) ? st.roles : [];
+    var both = roles.indexOf("primary") >= 0 && roles.indexOf("backup") >= 0;
+    if (!roles.length) return {
+      kind: "not-offered",
+      tag: "not offered",
+      words: "not offered - " + modeWords,
+      mode: st.mode
+    };
+    var offeredWord = both ? "either" : roles[0];
+    var asked = role === "primary" || role === "backup" ? role : null;
+    if (both || !asked || roles.indexOf(asked) >= 0) return {
+      kind: "offered",
+      tag: "offered " + offeredWord,
+      words: "offered " + offeredWord,
+      mode: st.mode
+    };
+    return {
+      kind: "offered-other",
+      tag: "offered " + offeredWord + " only",
+      words: "offered " + offeredWord + " only, not " + asked + " - " + modeWords,
+      mode: st.mode
+    };
+  }
+  if (st.status === "rules_only") return {
+    kind: "rules",
+    tag: "rules",
+    words: "rules (chose go by my rules)",
+    mode: null
+  };
+  return {
+    kind: "rules",
+    tag: "rules",
+    words: "rules (nothing entered)",
+    mode: null
+  };
+}
+function offersLoadVerdict(st) {
+  var s = st && typeof st === "object" ? st : {};
+  var tables = ["offers", "periods"];
+  var never = tables.filter(function (t) {
+    return !s[t + "OkAt"];
+  });
+  if (never.length) return {
+    verdict: "refuse",
+    why: never.map(function (t) {
+      return "call_" + t + " " + (s[t] === "skipped" ? "not read (session token missing or expired)" : s[t] === "failed" ? "failed to load" : "not loaded yet");
+    }).join("; ")
+  };
+  var notOk = tables.filter(function (t) {
+    return s[t] !== "ok";
+  });
+  if (notOk.length) return {
+    verdict: "stale",
+    why: notOk.map(function (t) {
+      return "call_" + t + " last read " + String(s[t + "OkAt"]).replace("T", " ").slice(0, 16) + " UTC, the latest refresh " + (s[t] === "failed" ? "failed" : "was skipped (session token missing or expired)");
+    }).join("; ")
+  };
+  return {
+    verdict: "ok"
+  };
+}
 function DayEditor(props) {
   const {
     day,
@@ -11367,6 +13118,35 @@ function DayEditor(props) {
   }), [ctx, day, draft, roster]);
   const evalErrors = [].concat(opts.primary, opts.backup).filter(o => o.error);
   const evalBroken = evalErrors.length > 0;
+  const offerInfo = React.useMemo(() => {
+    if (!ctx || typeof offerState !== "function") return null;
+    const items = [];
+    let period = null;
+    roster.filter(s => s.type !== "external").filter(s => s.active !== false || s.id === draft.primary || s.id === draft.backup).forEach(s => {
+      let st = null;
+      try {
+        st = offerState(ctx, day, s.id);
+      } catch (e) {
+        console.warn("offerState threw for", s.id, day, e);
+      }
+      if (!st) return;
+      period = period || st.period;
+      items.push({
+        id: s.id,
+        name: s.name,
+        st
+      });
+    });
+    return period ? {
+      period,
+      items
+    } : null;
+  }, [ctx, day, roster, draft]);
+  const offerTagFor = (id, role) => {
+    const it = offerInfo ? offerInfo.items.find(x => x.id === id) : null;
+    const w = it ? offerCandidateWords(it.st, role) : null;
+    return w ? w.tag : null;
+  };
   const pick = (role, value) => {
     setHint("");
     setInfo("");
@@ -11516,9 +13296,10 @@ function DayEditor(props) {
     return pill(v);
   };
   const myRole = mySurgeon && entry ? entry.primary === mySurgeon ? "primary" : entry.backup === mySurgeon ? "backup" : null : null;
-  const optionLabel = o => {
+  const optionLabel = (o, role) => {
     if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");
-    const tags = o.soft.map(softTag).filter(Boolean);
+    const tag = offerTagFor(o.id, role);
+    const tags = (tag ? [tag] : []).concat(o.soft.filter(s => !tag || s.reason !== "offered" && s.reason !== "outside-offers").map(softTag).filter(Boolean));
     return o.name + (o.lockHolder ? " (locked holder)" : "") + (tags.length ? " (" + tags.join(", ") + ")" : "");
   };
   const roleBlock = role => {
@@ -11605,7 +13386,7 @@ function DayEditor(props) {
       style: o.ok ? {} : {
         color: "#a0a8b0"
       }
-    }, optionLabel(o))), list.some(o => o.external) && React.createElement("optgroup", {
+    }, optionLabel(o, role))), list.some(o => o.external) && React.createElement("optgroup", {
       label: "Outside surgeons",
       "data-testid": "editor-" + role + "-externals"
     }, list.filter(o => o.external).map(o => React.createElement("option", {
@@ -11615,7 +13396,7 @@ function DayEditor(props) {
       style: o.ok ? {} : {
         color: "#a0a8b0"
       }
-    }, optionLabel(o))))), React.createElement("label", {
+    }, optionLabel(o, role))))), React.createElement("label", {
       style: {
         display: "flex",
         alignItems: "center",
@@ -11658,7 +13439,35 @@ function DayEditor(props) {
       style: {
         fontWeight: 700
       }
-    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(o.hard[0]) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join("; ")));
+    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(o.hard[0]) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join("; ")), offerInfo && (() => {
+      const rows = offerInfo.items.map(x => _objectSpread(_objectSpread({}, x), {}, {
+        w: offerCandidateWords(x.st, role)
+      })).filter(x => x.w);
+      const tone = k => k === "offered" ? dk ? "#8fd3a5" : "#1a6a3a" : k === "not-offered" ? dk ? "#f0b070" : "#8a4a10" : sub;
+      return React.createElement("div", {
+        "data-testid": "editor-" + role + "-offers",
+        style: {
+          fontSize: 11,
+          color: sub,
+          marginTop: 6,
+          lineHeight: 1.5
+        }
+      }, React.createElement("span", {
+        style: {
+          fontWeight: 700
+        }
+      }, "Offers (", offerInfo.period.label, "):"), " ", rows.map((x, i) => React.createElement(React.Fragment, {
+        key: x.id
+      }, i > 0 ? "; " : "", React.createElement("span", {
+        "data-testid": "editor-offer-cand",
+        "data-id": x.id,
+        "data-kind": x.w.kind,
+        style: {
+          color: tone(x.w.kind),
+          fontWeight: x.w.kind === "rules" ? 400 : 700
+        }
+      }, x.name, " - ", x.w.words))));
+    })());
   };
   return React.createElement("div", {
     "data-testid": "day-editor",
@@ -15853,6 +17662,487 @@ function suHeldUnlockedSlotChanges(current, next) {
     return c.role === "primary" ? !a.primaryLocked : !a.backupLocked;
   });
 }
+const PRD_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const PRD_DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function prdLabelFor(start, end) {
+  if (!suIsIso(start) || !suIsIso(end)) return "";
+  const a = PRD_MON[+start.slice(5, 7) - 1] + " " + start.slice(0, 4),
+    b = PRD_MON[+end.slice(5, 7) - 1] + " " + end.slice(0, 4);
+  return a === b ? a : a + " - " + b;
+}
+function prdDayWords(iso) {
+  if (!suIsIso(iso)) return String(iso || "");
+  const dt = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)));
+  return PRD_DOW[dt.getUTCDay()] + ", " + PRD_MON[dt.getUTCMonth()] + " " + dt.getUTCDate();
+}
+const PRD_MUTED = "#5B6B82";
+function PeriodsSection({
+  css,
+  periods,
+  offers,
+  roster,
+  groupRules,
+  today,
+  nameOf,
+  notifPrefs,
+  busy,
+  remindState,
+  selfId,
+  draft,
+  setDraft,
+  onCreate,
+  onCloseNow,
+  onRemind,
+  onEnterFor,
+  onGenerate
+}) {
+  const inp = _objectSpread(_objectSpread({}, css.inp), {}, {
+    padding: "3px 6px",
+    fontSize: 12
+  });
+  const rules = groupRules && groupRules.offerPeriods || {};
+  const presets = Array.isArray(rules.presets) && rules.presets.length ? rules.presets : OP_PERIOD_DEFAULTS.presets;
+  const ids = React.useMemo(() => offerPoolIds(roster || []), [roster]);
+  const day = v => v === undefined || v === null ? "" : String(v).slice(0, 10);
+  const all = React.useMemo(() => (periods || []).filter(p => p && suIsIso(day(p.start_day)) && suIsIso(day(p.end_day))).slice().sort((a, b) => day(a.start_day) < day(b.start_day) ? -1 : 1), [periods]);
+  const shown = all.filter(p => day(p.end_day) >= today);
+  const hidden = all.length - shown.length;
+  const lastEnd = all.length ? day(all[all.length - 1].end_day) : null;
+  const defaultStart = lastEnd && suAddDays(lastEnd, 1) > today ? suAddDays(lastEnd, 1) : today;
+  const [formError, setFormError] = React.useState("");
+  const fromTimeline = (start, months) => {
+    const t = offerTimeline({
+      start_day: start,
+      length_months: months
+    }, rules);
+    if (!t) return {
+      start_day: start,
+      length_months: months,
+      end_day: "",
+      offers_close_at: "",
+      publish_by: "",
+      label: "",
+      touched: {}
+    };
+    return {
+      start_day: t.start_day,
+      length_months: t.length_months,
+      end_day: t.end_day,
+      offers_close_at: t.offers_close_at,
+      publish_by: t.publish_by,
+      label: prdLabelFor(t.start_day, t.end_day),
+      touched: {}
+    };
+  };
+  const openForm = () => {
+    setFormError("");
+    setDraft(fromTimeline(defaultStart, Number(rules.lengthMonths) || OP_PERIOD_DEFAULTS.lengthMonths));
+  };
+  const setField = (k, v) => setDraft(d => {
+    if (!d) return d;
+    const touched = d.touched || {};
+    if (k === "start_day") {
+      if (!suIsIso(v)) return _objectSpread(_objectSpread({}, d), {}, {
+        start_day: v
+      });
+      const t = fromTimeline(v, d.length_months);
+      const n = _objectSpread(_objectSpread({}, t), {}, {
+        touched
+      });
+      ["end_day", "offers_close_at", "publish_by", "label"].forEach(f => {
+        if (touched[f]) n[f] = d[f];
+      });
+      if (!touched.label && suIsIso(n.end_day)) n.label = prdLabelFor(v, n.end_day);
+      return n;
+    }
+    const n = _objectSpread(_objectSpread({}, d), {}, {
+      [k]: v,
+      touched: _objectSpread(_objectSpread({}, touched), {}, {
+        [k]: true
+      })
+    });
+    if (k === "end_day" && !touched.label && suIsIso(v) && suIsIso(n.start_day)) n.label = prdLabelFor(n.start_day, v);
+    return n;
+  });
+  const overlap = d => all.find(p => !(day(p.end_day) < d.start_day || day(p.start_day) > d.end_day)) || null;
+  const validate = d => {
+    if (!d) return "nothing to create";
+    if (!suIsIso(d.start_day) || !suIsIso(d.end_day) || !suIsIso(d.offers_close_at) || !suIsIso(d.publish_by)) return "Every date must be a full YYYY-MM-DD.";
+    if (d.end_day < d.start_day) return "The end must be on or after the start.";
+    if (d.offers_close_at > d.start_day) return "Offers must close on or before the start day (the database refuses a later close).";
+    if (!String(d.label || "").trim()) return "Give the period a label.";
+    if (all.some(p => day(p.start_day) === d.start_day)) return "A period already starts on " + d.start_day + ".";
+    const o = overlap(d);
+    if (o) return "This range overlaps " + (o.label || day(o.start_day) + " - " + day(o.end_day)) + " - periods must not overlap.";
+    return "";
+  };
+  const submit = async () => {
+    const err = validate(draft);
+    if (err) {
+      setFormError(err);
+      return;
+    }
+    setFormError("");
+    const {
+        touched
+      } = draft,
+      fields = _objectWithoutProperties(draft, _excluded);
+    const r = await onCreate(_objectSpread(_objectSpread({}, fields), {}, {
+      label: String(draft.label).trim()
+    }));
+    if (r && r.ok) setDraft(null);else if (r && r.error) setFormError("Not created: " + r.error);
+  };
+  const modeWord = (p, r) => {
+    const m = p.offer_modes && typeof p.offer_modes === "object" ? p.offer_modes[r.id] : null;
+    if (r.status === "rules_only") return "-";
+    return m === "exhaustive" ? "only these days" : m === "preferred" ? "preferred days" : "preferred days (default)";
+  };
+  const statusWord = r => r.status === "submitted" ? `submitted ${r.offered} day${r.offered === 1 ? "" : "s"}` : r.status === "rules_only" ? "rules only" : "not started";
+  const statusColor = s => s === "submitted" ? "#1a6030" : s === "rules_only" ? PRD_MUTED : "#a83232";
+  const roleBreakdown = (p, id) => {
+    const c = {
+      primary: 0,
+      backup: 0,
+      either: 0
+    };
+    (offers || []).forEach(o => {
+      if (o && o.person_id === id && day(o.day) >= day(p.start_day) && day(o.day) <= day(p.end_day) && c[o.role_pref] !== undefined) c[o.role_pref]++;
+    });
+    return `${c.primary} primary / ${c.backup} backup / ${c.either} either`;
+  };
+  const daysTo = d => suIsIso(d) ? suDaysBetween(today, d) : null;
+  const inWords = n => n === null ? "" : n === 0 ? " (today)" : n === 1 ? " (tomorrow)" : n > 1 ? ` (in ${n} days)` : ` (${-n} day${n === -1 ? "" : "s"} ago)`;
+  const draftWarn = draft && suIsIso(draft.offers_close_at) && draft.offers_close_at <= today ? "The close date has passed or is today: surgeons will be frozen out of this period as soon as it exists and the morning run will mark it closed. Move the date later to collect offers." : draft && suIsIso(draft.publish_by) && suIsIso(draft.start_day) && draft.publish_by > draft.start_day ? "Publish-by lies after the start - the schedule would be due after the period begins." : "";
+  return React.createElement("div", {
+    "data-testid": "periods-section",
+    style: {
+      marginBottom: 14,
+      paddingBottom: 12,
+      borderBottom: "1px dashed #c8d8e8"
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      marginBottom: 6
+    }
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: 0
+    })
+  }, "Periods"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "#5B6B82"
+    }
+  }, all.length === 0 ? "No period on file yet." : `${shown.length} current / upcoming${hidden ? `, ${hidden} earlier hidden` : ""}`), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), !draft && React.createElement("button", {
+    type: "button",
+    "data-testid": "prd-new",
+    onClick: openForm,
+    disabled: busy,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "5px 12px",
+      fontSize: 11
+    })
+  }, "New period")), React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#5B6B82",
+      margin: "0 0 8px",
+      lineHeight: 1.5
+    }
+  }, "A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). \"Generate this period\" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in \"only these days\" mode is never placed outside them, a \"preferred days\" surgeon only when a slot would otherwise stay open - the diagnostics list every such placement. Status below is derived from the offers on file - submitted (days inside the period), rules only (chose \"go by my rules\"), not started."), draft && React.createElement("div", {
+    "data-testid": "prd-form",
+    style: {
+      border: "1px solid #c8d8e8",
+      borderRadius: 8,
+      padding: "10px 12px",
+      marginBottom: 10,
+      background: "#f8fbff"
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginBottom: 8
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "#5B6B82",
+      fontWeight: 600,
+      textTransform: "uppercase",
+      letterSpacing: 0.5
+    }
+  }, "Length"), presets.map(n => React.createElement("button", {
+    key: n,
+    type: "button",
+    "data-testid": "prd-preset-" + n,
+    onClick: () => setDraft(d => fromTimeline(d && suIsIso(d.start_day) ? d.start_day : defaultStart, Number(n))),
+    style: css.mini(draft.length_months === Number(n))
+  }, n, " months")), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "#5B6B82"
+    }
+  }, "from groupRules.offerPeriods (close ", Number(rules.closeWeeksBeforeStart) || OP_PERIOD_DEFAULTS.closeWeeksBeforeStart, " weeks and publish ", Number(rules.publishWeeksBeforeStart) || OP_PERIOD_DEFAULTS.publishWeeksBeforeStart, " weeks before the start); every date below stays editable")), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "flex-end"
+    }
+  }, React.createElement(SuField, {
+    label: "Label"
+  }, React.createElement("input", {
+    "data-testid": "prd-label",
+    type: "text",
+    value: draft.label,
+    onChange: e => setField("label", e.target.value),
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: 170
+    })
+  })), React.createElement(SuField, {
+    label: "Start"
+  }, React.createElement("input", {
+    "data-testid": "prd-start",
+    type: "date",
+    value: draft.start_day,
+    onChange: e => setField("start_day", e.target.value),
+    style: inp
+  })), React.createElement(SuField, {
+    label: "End"
+  }, React.createElement("input", {
+    "data-testid": "prd-end",
+    type: "date",
+    value: draft.end_day,
+    onChange: e => setField("end_day", e.target.value),
+    style: inp
+  })), React.createElement(SuField, {
+    label: "Offers close",
+    hint: "the freeze - surgeons can no longer paint or change their mode after this day"
+  }, React.createElement("input", {
+    "data-testid": "prd-close",
+    type: "date",
+    value: draft.offers_close_at,
+    onChange: e => setField("offers_close_at", e.target.value),
+    style: inp
+  })), React.createElement(SuField, {
+    label: "Publish by"
+  }, React.createElement("input", {
+    "data-testid": "prd-publish",
+    type: "date",
+    value: draft.publish_by,
+    onChange: e => setField("publish_by", e.target.value),
+    style: inp
+  })), React.createElement("button", {
+    type: "button",
+    "data-testid": "prd-create",
+    onClick: submit,
+    disabled: busy,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "6px 14px",
+      marginBottom: 8,
+      opacity: busy ? 0.6 : 1
+    })
+  }, busy ? "Creating" : "Create period"), React.createElement("button", {
+    type: "button",
+    "data-testid": "prd-cancel",
+    onClick: () => {
+      setDraft(null);
+      setFormError("");
+    },
+    disabled: busy,
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      marginBottom: 8
+    })
+  }, "Cancel")), draftWarn && React.createElement("div", {
+    "data-testid": "prd-form-warn",
+    style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+      marginTop: 4
+    })
+  }, draftWarn), formError && React.createElement("div", {
+    "data-testid": "prd-form-error",
+    style: _objectSpread(_objectSpread({}, css.errBox), {}, {
+      marginTop: 4
+    })
+  }, formError)), shown.length === 0 && !draft && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#5B6B82",
+      fontStyle: "italic",
+      marginBottom: 8
+    }
+  }, "Create the next period from a preset above; the seed's first period arrives with the offers import."), shown.map(p => {
+    const roll = offerRollcall(p, offers || [], ids);
+    const status = p.status || "upcoming";
+    const open = offerPeriodOpen(p, today);
+    const close = day(p.offers_close_at),
+      pub = day(p.publish_by);
+    const nSub = roll.filter(r => r.status === "submitted").length,
+      nRules = roll.filter(r => r.status === "rules_only").length,
+      nNot = roll.length - nSub - nRules;
+    return React.createElement("div", {
+      key: p.id || day(p.start_day),
+      "data-testid": "prd-period",
+      "data-period-id": p.id || "",
+      "data-status": status,
+      "data-start": day(p.start_day),
+      "data-end": day(p.end_day),
+      style: {
+        border: "1px solid #DCE3EC",
+        borderRadius: 8,
+        padding: "8px 10px",
+        marginBottom: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        marginBottom: 6
+      }
+    }, React.createElement("strong", {
+      "data-testid": "prd-label-text",
+      style: {
+        fontSize: 13
+      }
+    }, p.label || prdLabelFor(day(p.start_day), day(p.end_day))), React.createElement("span", {
+      style: {
+        fontFamily: mono,
+        fontSize: 11,
+        color: PRD_MUTED
+      }
+    }, day(p.start_day), " - ", day(p.end_day)), React.createElement("span", {
+      "data-testid": "prd-status",
+      style: {
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: 0.5,
+        textTransform: "uppercase",
+        padding: "2px 8px",
+        borderRadius: 10,
+        color: status === "upcoming" ? open ? "#1a6030" : "#7a5a20" : status === "closed" ? "#a83232" : "#3a4a58",
+        background: status === "upcoming" ? open ? "#e8f8e8" : "#fbf1d8" : status === "closed" ? "#fdeaea" : "#eef2f7",
+        border: "1px solid #DCE3EC"
+      }
+    }, status === "upcoming" && !open ? "upcoming - frozen" : status), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), status === "upcoming" && React.createElement("button", {
+      type: "button",
+      "data-testid": "prd-close-now",
+      onClick: () => onCloseNow(p),
+      disabled: busy,
+      title: "Freeze the offers for this period now: surgeons can no longer paint or change their mode for it (you still can); status becomes 'closed'; nothing is generated or published",
+      style: _objectSpread(_objectSpread({}, css.danger), {}, {
+        padding: "5px 10px"
+      })
+    }, "Close now"), React.createElement("button", {
+      type: "button",
+      "data-testid": "prd-generate",
+      onClick: () => onGenerate(p),
+      disabled: busy,
+      title: "Run Generate over " + day(p.start_day) + " - " + day(p.end_day) + " (the existing preview flow: offered days first, the gaps by the rules; Accept & Publish is below)",
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "5px 12px",
+        fontSize: 11
+      })
+    }, "Generate this period")), React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: PRD_MUTED,
+        marginBottom: 6
+      }
+    }, "Offers close ", React.createElement("strong", null, close || "-"), inWords(daysTo(close)), " - publish by ", React.createElement("strong", null, pub || "-"), inWords(daysTo(pub)), " - ", nSub, " submitted, ", nRules, " rules only, ", React.createElement("span", {
+      style: {
+        color: nNot ? "#a83232" : "#1a6030",
+        fontWeight: 600
+      }
+    }, nNot, " not started"), "."), React.createElement("div", {
+      className: "table-wrap",
+      style: css.tableWrap
+    }, React.createElement("table", {
+      className: "setup-table",
+      "data-testid": "prd-table"
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Status"), React.createElement("th", null, "Mode"), React.createElement("th", null, "Action"))), React.createElement("tbody", null, roll.map(r => {
+      const key = (p.id || day(p.start_day)) + ":" + r.id;
+      const rs = remindState && remindState[key];
+      const pref = notifPrefs && notifPrefs[r.id];
+      const mailOff = !!(pref && pref.schedule_updates_email === false);
+      return React.createElement("tr", {
+        key: r.id,
+        "data-testid": "prd-row",
+        "data-person": r.id,
+        "data-status": r.status,
+        "data-offered": r.offered
+      }, React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap",
+          fontWeight: 700
+        }
+      }, nameOf(r.id)), React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap",
+          color: statusColor(r.status),
+          fontWeight: 600
+        },
+        title: r.status === "submitted" ? roleBreakdown(p, r.id) : ""
+      }, statusWord(r)), React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap",
+          fontSize: 12
+        }
+      }, modeWord(p, r)), React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap"
+        }
+      }, React.createElement("div", {
+        style: {
+          display: "flex",
+          gap: 4,
+          alignItems: "center",
+          flexWrap: "nowrap"
+        }
+      }, r.status === "not_started" && status === "upcoming" && open && React.createElement("button", {
+        type: "button",
+        "data-testid": "prd-remind",
+        onClick: () => onRemind(p, r.id),
+        disabled: busy || mailOff || rs && rs.note === "sending",
+        title: mailOff ? nameOf(r.id) + " has schedule-update e-mails turned off - no reminder can be sent" : "E-mail " + nameOf(r.id) + " that the dates for " + (p.label || "this period") + " freeze on " + prdDayWords(close) + " (the same note the morning run sends)",
+        style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+          padding: "5px 9px",
+          opacity: mailOff ? 0.5 : 1
+        })
+      }, rs && rs.note === "sending" ? "Sending" : "Remind"), React.createElement("button", {
+        type: "button",
+        "data-testid": "prd-enter-for",
+        onClick: () => onEnterFor(p, r.id),
+        disabled: busy,
+        title: r.id === selfId ? "Paint the dates you'll cover for " + (p.label || "this period") + " (your own offers: entered_by you, source app)" : "Open the offer painter as " + nameOf(r.id) + " (a relayed e-mail: entered_by scheduler, source email-relay)",
+        style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+          padding: "5px 9px"
+        })
+      }, r.id === selfId ? "Paint my offers" : "Enter for " + nameOf(r.id)), rs && rs.note && rs.note !== "sending" && React.createElement("span", {
+        "data-testid": "prd-remind-note",
+        style: {
+          fontSize: 11,
+          color: rs.ok ? "#1a8040" : "#c2410c"
+        }
+      }, rs.note))));
+    })))));
+  }));
+}
 function GeneratePanel({
   css,
   presets,
@@ -16039,7 +18329,16 @@ function GeneratePanel({
     style: {
       fontFamily: mono
     }
-  }, String(preview.seed)), ", best of ", preview.bestOf, preview.fillOpenOnly ? ", fill open slots only" : "", ", ", preview.ms, " ms, open slots ", (preview.diagnostics.uncovered || []).length, ". Shown on the calendar with a dashed outline - not saved."), React.createElement("span", {
+  }, String(preview.seed)), ", best of ", preview.bestOf, preview.fillOpenOnly ? ", fill open slots only" : "", ", ", preview.ms, " ms, open slots ", (preview.diagnostics.uncovered || []).length, ". Shown on the calendar with a dashed outline - not saved."), preview.offersStale && React.createElement("span", {
+    "data-testid": "gen-preview-offers-warning",
+    role: "alert",
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: "#a83232",
+      flexBasis: "100%"
+    }
+  }, "WARNING: the offers may be stale - ", preview.offersStale, ". Offered days may not have been placed first; sign in again and re-run before accepting."), React.createElement("span", {
     style: {
       flex: 1
     }
@@ -16077,7 +18376,8 @@ function SeedImportCard({
   const fileRef = React.useRef(null);
   const d = state.diff;
   const t = d && d.tables;
-  const canApply = !!(d && !state.applying && d.totalChanges > 0);
+  const periodBlocked = (state.periodGap || 0) > 0;
+  const canApply = !!(d && !state.applying && d.totalChanges > 0 && !periodBlocked);
   return React.createElement("div", {
     "data-testid": "seed-card"
   }, React.createElement("p", {
@@ -16192,7 +18492,16 @@ function SeedImportCard({
     }
   }, state.plan.infoDeltas.map((l, i) => React.createElement("li", {
     key: i
-  }, l)))), React.createElement("div", {
+  }, l)))), periodBlocked && React.createElement("div", {
+    "data-testid": "seed-period-block",
+    style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+      marginBottom: 8
+    })
+  }, React.createElement("strong", null, "Apply is refused in the app for this seed:"), " it carries ", state.periodGap, " offer period(s) and this in-app import plans without them (the legacy plan) - it would write no call_periods / call_offers rows and would re-add the whitelist months and available rows the period retires for the surgeons who submitted offers. Apply it from the repo with the CLI: ", React.createElement("span", {
+    style: {
+      fontFamily: mono
+    }
+  }, "node scripts/import-seed.js --apply --workdir <linked dir>"), " (dry run first). The dry run above is informational only."), React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -16207,12 +18516,12 @@ function SeedImportCard({
       padding: "6px 14px",
       opacity: canApply ? 1 : 0.5
     })
-  }, state.applying ? "Applying" : d.totalChanges === 0 ? "Nothing to apply" : "Apply (snapshot first)"), React.createElement("span", {
+  }, state.applying ? "Applying" : periodBlocked ? "Apply refused (offer periods - use the CLI)" : d.totalChanges === 0 ? "Nothing to apply" : "Apply (snapshot first)"), React.createElement("span", {
     style: {
       fontSize: 11,
       color: "#5B6B82"
     }
-  }, d.totalChanges === 0 ? "The live tables already match the plan." : "A snapshot is captured first; if that fails nothing is written."))), state.result && React.createElement("div", {
+  }, periodBlocked ? "Dry run only - see the note above." : d.totalChanges === 0 ? "The live tables already match the plan." : "A snapshot is captured first; if that fails nothing is written."))), state.result && React.createElement("div", {
     "data-testid": "seed-result",
     style: state.result.errors.length ? css.errBox : css.okBox
   }, React.createElement("strong", null, state.result.errors.length ? "Import finished with errors" : "Import applied"), " - blob ", state.result.counts.blob, "; availability inserted ", state.result.counts.availability_inserted, ", skipped ", state.result.counts.availability_skipped, "; time_off inserted ", state.result.counts.time_off_inserted, ", skipped ", state.result.counts.time_off_skipped, state.result.counts.time_off_failed.length ? ", refused " + state.result.counts.time_off_failed.length : "", "; schedule_days inserted ", state.result.counts.schedule_days_inserted, ", updated ", state.result.counts.schedule_days_updated, ", kept (app-edited) ", state.result.counts.schedule_days_skipped, ".", state.result.errors.map((e, i) => React.createElement("div", {
