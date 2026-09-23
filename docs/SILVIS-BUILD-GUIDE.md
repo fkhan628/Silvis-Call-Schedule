@@ -553,9 +553,13 @@ so the sentence never carries an id, a name, a date or free text from the diagno
 importer's denylist gate (`impRefuseNoteDenylist`, Prompt 12 F) and pins the fixture `test/fixtures/last-generate-diagnostics.json`;
 the Playwright smoke reads the recorded blob write after Accept & Publish and checks the same. The board's Why column and
 unit patterns read this record, and a live preview overlays the slots and weekends it covers (rendered through the same
-`openSlotReason`). Each Accept replaces the record wholesale (design decision, open for Faraz): an open slot from an
-earlier generate that lies outside the newest range stays listed on the board but its Why column reads `-` until the
-slot is filled or regenerated.
+`openSlotReason`). **Merge across runs (P13R (e), 9/23):** `lastGenerateFromDiagnostics(diagnostics, atIso, previous)`
+records the run facts too — `mode` (`generate` | `fill-open-only`, item T) and `fixedSlots` — and inside the newest run's
+range its reasons and weekend kinds replace the earlier ones; slots and weekends OUTSIDE that range keep the earlier
+record's entries, and the record then carries `carriedFrom` = that earlier record's `at` (so an October fill-open-only
+backfill, or item AB's first-open default start, never erases the November–January reasons). The board's
+`openshifts-lastgen` line shows mode, fixed count, range and the carried note (`no generate recorded yet` before the
+first Accept). Accept & Publish passes the previous record (`acceptMerged`); the fixture and the smoke pin the shape.
 
 ### 16.2 The claim boundary
 
@@ -582,10 +586,21 @@ the generator treats a row whose source is `claim` or `trade` (`generator.GEN_PE
 sources a surgeon writes for himself, neither path sets a lock) as **fixed in both modes exactly like a lock**: every
 held role of that day stays byte-identical, counts in `diagnostics.fixedSlots`, and its rule conflicts are facts in
 `diagnostics.fixedViolations` — a claim is never silently discarded by a later Generate. `manual` is not in the set:
-the day editor has its own lock toggle, so an unlocked manual slot stays regenerable (and a scheduler edit of a claimed
-day rewrites its source to `manual`, after which the lock flag decides). Pinned in `test/generator-regression.js`
-(fixture `test/fixtures/claim-fixed-2026-10.json`) and `test/open-shifts.test.js` (the SQL-to-generator contract);
-`docs/SCHEMA-REVIEW.md` review note 5 is closed. Definition in `sql/schema.sql`
+the day editor has its own lock toggle, so an unlocked manual slot stays regenerable. **A scheduler edit of a
+claimed / traded day keeps its source (P13R-2 review fix, 9/23)** while any role the day held before still has the same
+holder: a note, a lock toggle, or "Assign..." on the open partner role from the board leave `source = claim` /
+`trade` in place (`saveDayEdit` `keepPersonSource`), so the claimer's unlocked slot never becomes a regenerable
+`manual` one behind his back; only when every held role changes hands or is cleared does the row become `manual` — the
+scheduler's explicit replacement, audited (`schedule.day_edit`) and mailed (`manual_edit`) to every holder involved.
+**Known limitation (row-level fixing):** `schedule_days.source` is one fact per DAY, so on a claimed day the OTHER
+role is fixed too — a generated fill of the partner role (or a scheduler's later Assign there) stays put on every
+later Generate, and the published row keeps `source = claim` for that generated holder. Conservative on purpose
+(nothing on a claimed day moves; conflicts are facts in `fixedViolations`); role-level precision needs the claimed
+role recorded (a `claimed_roles` column, or a role-suffixed source such as `claim:backup`) — a schema change, open
+for Faraz. To hand a claimed day back to the generator the scheduler clears or replaces every holder on it (source
+`manual`) and regenerates. Pinned in `test/generator-regression.js` (fixture `test/fixtures/claim-fixed-2026-10.json`,
+plus the unlocked-partner run) and `test/open-shifts.test.js` (the SQL-to-generator contract and the `saveDayEdit`
+source rule); `docs/SCHEMA-REVIEW.md` review note 5 is closed. Definition in `sql/schema.sql`
 right after `apply_trade()`, applied live only through `sql/migrations/2026-09-22-claim-open-slot.sql` (never by a
 git push), proven by the rolled-back `sql/probes/claim-open-slot-probe.sql` and `scripts/verify-rls.sh` section 7
 (`docs/SCHEMA-REVIEW.md`).

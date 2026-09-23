@@ -1795,7 +1795,14 @@ function CallSchedule() {
     // Prompt 12 M: a day that carries an outside surgeon (roster type "external") in either role is a
     // hand-written assignment - source manual-external (the generator never moves such a slot).
     const isExternalId = (id) => !!(id && sMap[id] && sMap[id].type === "external");
-    after.source = (isExternalId(after.primary) || isExternalId(after.backup)) ? "manual-external" : "manual";
+    // Prompt 13 review (P13R-2, 9/23): a claimed / traded day KEEPS its row source while any role it held before
+    // still has the same holder - a note, a lock toggle, or "Assign..." on the open partner role from the Open
+    // shifts board must never turn the claimer's unlocked slot into a regenerable "manual" one (the generator fixes
+    // claim / trade rows: generator.GEN_PERSON_FIXED_SOURCES). The source is a row fact, so this errs towards
+    // keeping it: only when every held role changes hands (or is cleared) does the row become "manual" - the
+    // scheduler's explicit replacement, audited as schedule.day_edit and mailed as manual_edit to every holder.
+    const keepPersonSource = (before.source === "claim" || before.source === "trade") && ["primary", "backup"].some(r => !!before[r] && before[r] === after[r]);
+    after.source = (isExternalId(after.primary) || isExternalId(after.backup)) ? "manual-external" : keepPersonSource ? before.source : "manual";
     if (sameAssignment(day, before, after)) return true; // nothing changed - nothing to write
     pushUndo(schedule);
     setSchedule(p => ({ ...p, [day]: after }));

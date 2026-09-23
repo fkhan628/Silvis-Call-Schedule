@@ -169,6 +169,10 @@
 //       SMOKE_NO_CACHE=1 bypass the CDN cache for this run
 //       SMOKE_FIXTURE=1 force the seed fixtures even when live data exists
 //       SMOKE_LIVE=1    forbid the fixture fallback (an empty live table then fails)
+// LIVE mode (P13R-2, 9/23): every OPEN expectation derives from an up-front anon read of the live rows (never a
+// dated constant), and when the live board has no open slot s1 may take, the harness OPENS ONE backup slot in what
+// it serves (a Mon/Wed 'generated' row after the seed's range, chosen by asking the app's own board) so the claim
+// scenario runs - see harnessOpen. Nothing is ever written to the project.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -366,6 +370,33 @@ const fixture = await (async () => {
     availability: plan.availabilityRows.map((r, i) => ({ id: "fixture-avail-" + (i + 1), ...r, created_at: ts })),
   };
 })();
+// ---- The live rows, read once up front (anon) ----
+// Every OPEN expectation below (the 10/15 cell, the week rows, the ER panel, Copy for Word, the mobile pill) derives
+// from these rows, never from a dated constant that encodes one day's table (the 9/23 overnight publish filled the
+// October backups and all of 11/2-1/3). In fixture mode they ARE the fixture rows. updated_by rides along for the
+// importer's seed-ownership rule (Import dry run / apply pins).
+const IMPORTER = require(path.join(ROOT, "importer.js"));
+const liveRowsEarly = await (async () => {
+  if (fixture) return fixture.schedule_days.map(r => ({ ...r }));
+  try {
+    const res = await fetch(`https://${SUPABASE_HOST}/rest/v1/schedule_days?select=day,primary_id,backup_id,primary_locked,backup_locked,source,external_cover,note,updated_by&order=day.asc`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const rows = await res.json();
+    if (!Array.isArray(rows)) throw new Error("body is not an array");
+    return rows;
+  } catch (e) { console.log("     (live schedule_days read up front failed: " + (e && e.message || e) + " - the OPEN expectations treat every day as open)"); return []; }
+})();
+const liveEarlyByDay = {}; liveRowsEarly.forEach(r => { liveEarlyByDay[r.day] = r; });
+// the app's holder rule: an external cover stands in for a primary; a day with no row is open in both roles
+const liveOpenEarly = (d, role) => { const r = liveEarlyByDay[d]; return role === "primary" ? !(r && (r.primary_id || r.external_cover)) : !(r && r.backup_id); };
+const isoPlus = (d, n) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + n * 86400000).toISOString().slice(0, 10);
+// the first open slot (today or later - the app's OPEN rule) between two ISO days inclusive, else null
+const liveOpenBetween = (from, to) => { for (let d = from < todayCentral ? todayCentral : from; d <= to; d = isoPlus(d, 1)) if (liveOpenEarly(d, "primary") || liveOpenEarly(d, "backup")) return d; return null; };
+// LIVE mode only: the slot the harness opens for the claim scenario (the search after the first load). The GET
+// overlay blanks it in every schedule_days answer and liveRowsEarly (hence liveRows / liveByDay) carries the blank
+// too, so every pin derived from the live rows sees the same table the app does. Empty in fixture mode and when no
+// candidate is claimable.
+const harnessOpen = { day: null, role: null };
 const fixtureHasDay = (d) => !!(fixture && fixture.schedule_days.some(r => r.day === d));
 // PostgREST-shaped answer for a fixture table GET (honours eq. filters); null = not a fixture table.
 const fixtureAnswer = (url) => {
@@ -582,13 +613,20 @@ const routeSupabase = async (route) => {
     return json(200, (Array.isArray(rows) ? rows : []).map(r => ({ ...r, ...blobReadOverride })));
   }
   // Prompt 13 part 3: a claimed day reads back with the claimer, version + 1 (what the function's UPDATE leaves).
-  if (Object.keys(claimedDays).length && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
+  // ... and the harness-opened slot (LIVE mode, P13R-2) reads back blank with its live source and version.
+  if ((Object.keys(claimedDays).length || harnessOpen.day) && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
     let rows = fixtureAnswer(url);
     if (!rows) {
       const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
       rows = await res.json().catch(() => []);
     }
-    return json(200, (Array.isArray(rows) ? rows : []).map(r => claimedDays[r.day] ? { ...r, ...claimedDays[r.day], version: (Number(r.version) || 0) + 1 } : r));
+    const overlay = (r) => {
+      let o = r;
+      if (harnessOpen.day && r.day === harnessOpen.day) o = { ...o, [harnessOpen.role === "primary" ? "primary_id" : "backup_id"]: null };
+      if (claimedDays[r.day]) o = { ...o, ...claimedDays[r.day], version: (Number(r.version) || 0) + 1 };
+      return o;
+    };
+    return json(200, (Array.isArray(rows) ? rows : []).map(overlay));
   }
   const fx = fixtureAnswer(url);
   if (fx) return json(200, fx);
@@ -633,6 +671,41 @@ try {
   // Realtime mock joined?
   if (await waitFor(() => rt.joined, 15000)) ok(`realtime mock joined ${rt.topic} (frames: ${[...new Set(rt.frames)].join(", ")})`);
   else fail("the app never joined the mocked realtime channel (SDK handshake changed? frames seen: " + rt.frames.join(",") + ")");
+
+  // ---- LIVE mode: the claim scenario needs one open slot s1 may take (P13R-2, 9/23) ----
+  // Since the 9/23 publish the live table has next to no open slot, and what is open (10/15 primary, a Thursday) is
+  // never Khan's. The harness then OPENS one backup slot in what it serves: a Mon/Wed 'generated' row after the
+  // seed's range (the seed import sees no diff), outside the holiday units, unlocked, held by neither s1 nor an
+  // outside cover - tried in date order, each candidate judged by the app's OWN board (Take enabled for s1 =
+  // eligibility() said yes), at most six reloads. The chosen blank goes into liveRowsEarly too, so every pin derived
+  // from the live rows (strip, board, premise, Accept & Publish write set, Import pins) sees what the app sees.
+  if (!fixture) {
+    const boardTake = async (slot) => {
+      await page.click('button[data-tab="openshifts"]');
+      await page.waitForSelector("[data-testid=openshifts-table]", { timeout: 8000 });
+      await page.click("[data-testid=ob-horizon-all]"); await page.waitForTimeout(250);
+      return page.$$eval("[data-testid=openshifts-table] tbody tr[data-slot]", (trs, s) => trs.map(tr => { const b = tr.querySelector("[data-testid=ob-take]"); return { slot: tr.getAttribute("data-slot"), on: !!b && !b.disabled }; }).filter(r => r.on && (!s || r.slot === s)).map(r => r.slot), slot);
+    };
+    const already = await boardTake(null);
+    if (already.length) console.log(`     (live board: s1 may take ${already.length} open slot(s) as the table stands, e.g. ${already[0]} - no harness-opened slot needed)`);
+    else {
+      const wd = (d) => new Date(d + "T12:00:00Z").getUTCDay();
+      const inUnit = (d) => (d >= "2026-11-23" && d <= "2026-11-29") || d >= "2026-12-21";
+      const cands = liveRowsEarly.filter(r => r.day > "2026-11-01" && r.day >= isoPlus(todayCentral, 3) && (wd(r.day) === 1 || wd(r.day) === 3) && !inUnit(r.day) && r.source === "generated" && r.backup_id && !r.backup_locked && r.primary_id && r.primary_id !== "s1" && r.backup_id !== "s1" && !r.external_cover).map(r => r.day).slice(0, 6);
+      const reload = async () => { await loadWithRetry(page, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "reload (harness-opened slot)"); await page.waitForSelector("text=Synced", { timeout: 30000 }).catch(() => {}); };
+      let chosen = null;
+      for (const d of cands) {
+        harnessOpen.day = d; harnessOpen.role = "backup";
+        await reload();
+        if ((await boardTake(d + "|backup")).length) { chosen = d; break; }
+        console.log(`     (harness-opened slot: ${d} backup - s1 is not eligible there, next candidate)`);
+      }
+      if (chosen) { liveEarlyByDay[chosen].backup_id = null; ok(`LIVE mode: the harness opens ${chosen} backup in what it serves (live holder blanked in the answers, never in the table; s1 may take it per the app's own board) so the claim scenario runs against the live table`); }
+      else { harnessOpen.day = null; harnessOpen.role = null; if (cands.length) await reload(); console.log(`     (LIVE mode: none of ${cands.length} candidate day(s) is claimable by s1 - the claim flow is not exercised this run)`); }
+    }
+    await page.click('button[data-tab="calendar"]');
+    await page.waitForSelector("[data-testid=cal-month]", { timeout: 15000 });
+  }
 
   // Every nav tab, screenshot each.
   const tabs = await page.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
@@ -680,6 +753,14 @@ try {
     await showMonth(Number(y), Number(m) - 1);
     await page.click(`[data-day="${d}"]`);
     await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+    // P13R-2: the live table may already hold the intended holder (the 9/23 publish put Khan on 12/18-12/20) - then
+    // there is nothing to save (Save stays disabled) and the editor must be closed, never left over the nav.
+    if ((await page.$eval(`[data-testid=editor-${role}]`, el => el.value)) === id) {
+      console.log(`     (${d} ${role} already ${id} in the app's map - no edit needed)`);
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+      return;
+    }
     await page.selectOption(`[data-testid=editor-${role}]`, id);
     const ov = await page.$("[data-testid=override-confirm]");
     if (ov) { console.log(`     (${d} ${role} -> ${id} needed an override: ${(await ov.innerText()).split("\n").slice(0, 2).join(" / ")})`); await page.click("[data-testid=override-accept]"); }
@@ -696,9 +777,15 @@ try {
   if (octCells.length !== 35 || octCells[0].day !== "2026-09-28" || octCells[34].day !== "2026-11-01") fail(`October 2026 grid is not 5 Mon-Sun rows 9/28..11/1: ${octCells.length} cells, ${octCells[0] && octCells[0].day}..${octCells[34] && octCells[34].day}`);
   else ok("October 2026 grid: 35 Mon..Sun cells from 9/28 to 11/1 (weekend unit Fri-Sun in one row)");
   if (!pCells.length) fail("October 2026: no cell carries a primary assignment"); else ok(`October 2026: ${pCells.length} day(s) with 'P <name>', e.g. ${pCells[0].day} P ${pCells[0].p}`);
-  if (dated("2026-11-01", "the 'October 2026 shows OPEN cells' pin (the grid ends 11/1; past unassigned days are blank)")) { if (!openCells.length) fail("October 2026: no cell shows OPEN"); else ok(`October 2026: ${openCells.length} cell(s) show OPEN (e.g. ${openCells[0].day} open=${openCells[0].open})`); }
+  { const octOpen = liveOpenBetween("2026-10-01", "2026-10-31");
+    if (!openCells.length) { if (octOpen) fail("October 2026: no cell shows OPEN although the live rows have an open slot on " + octOpen); else console.log("     (October 2026: no open slot in the live rows from today on - no OPEN cell expected)"); }
+    else if (!octOpen) fail(`October 2026: ${openCells.length} cell(s) show OPEN but the live rows have no open slot from today on (e.g. ${openCells[0].day})`);
+    else ok(`October 2026: ${openCells.length} cell(s) show OPEN (e.g. ${openCells[0].day} open=${openCells[0].open}; live: first open ${octOpen})`); }
   const oct15 = octCells.find(c => c.day === "2026-10-15");
-  if (dated("2026-10-15", "the '2026-10-15 renders P OPEN' pin")) { if (!oct15 || oct15.p || !/OPEN/.test(oct15.text)) fail("2026-10-15 should render P OPEN (the one open primary of the import): " + JSON.stringify(oct15)); else ok("2026-10-15 renders P OPEN"); }
+  if (dated("2026-10-15", "the '2026-10-15 renders P OPEN' pin")) {
+    if (liveOpenEarly("2026-10-15", "primary")) { if (!oct15 || oct15.p || !/OPEN/.test(oct15.text)) fail("2026-10-15 should render P OPEN (open primary in the live rows): " + JSON.stringify(oct15)); else ok("2026-10-15 renders P OPEN (open in the live rows)"); }
+    else if (!oct15 || !oct15.p || oct15.p !== ((liveEarlyByDay["2026-10-15"] || {}).primary_id || null)) fail("2026-10-15 primary is held in the live rows but the cell shows " + JSON.stringify(oct15)); else ok(`2026-10-15 primary held live by ${oct15.p} - the cell shows the holder, not OPEN`);
+  }
   const atwellCells = octCells.filter(c => c.day >= "2026-09-28" && c.day <= "2026-10-04");
   if (atwellCells.length !== 7 || !atwellCells.every(c => c.ext === "Atwell" && /Atwell/.test(c.text) && !/OPEN[^]*OPEN/.test(c.text))) fail("week of 9/28: the Atwell external cover is not shown on every cell: " + JSON.stringify(atwellCells.map(c => [c.day, c.ext, c.text.slice(0, 30)])));
   else ok("week of 9/28: all 7 cells show the external cover label 'Atwell' in the primary line (muted, not OPEN)");
@@ -716,10 +803,14 @@ try {
   if (!/9\/28-10\/4 Atwell/.test(row928) || !/9\/28-10\/4 Fierce/.test(row928)) fail("week row 9/28 lacks '9/28-10/4 Atwell' / '9/28-10/4 Fierce': " + row928); else ok("week row 9/28: '9/28-10/4 Atwell' (primary) and '9/28-10/4 Fierce' (backup) collapsed");
   const row1005 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-10-05"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
   if (!/10\/9-10\/11 Acton/.test(row1005)) fail("week row 10/5 lacks '10/9-10/11 Acton': " + row1005); else ok("week row 10/5: same-surgeon run collapsed to '10/9-10/11 Acton'");
-  if (dated("2026-10-07", "the '10/7 OPEN' week-row pin (a past open backup is blank)")) { if (!/10\/7 OPEN/.test(row1005)) fail("week row 10/5 lacks '10/7 OPEN' (open backup, today or later): " + row1005); else ok("week row 10/5: open backup shown as '10/7 OPEN'"); }
+  if (dated("2026-10-07", "the '10/7 OPEN' week-row pin (a past open backup is blank)")) {
+    if (liveOpenEarly("2026-10-07", "backup")) { if (!/10\/7 OPEN/.test(row1005)) fail("week row 10/5 lacks '10/7 OPEN' (open backup in the live rows, today or later): " + row1005); else ok("week row 10/5: open backup shown as '10/7 OPEN'"); }
+    else if (/10\/7 OPEN/.test(row1005)) fail("week row 10/5 shows '10/7 OPEN' although the live row holds a backup (" + liveEarlyByDay["2026-10-07"].backup_id + "): " + row1005); else ok(`week row 10/5: 10/7 backup held live by ${liveEarlyByDay["2026-10-07"].backup_id} - no OPEN entry`);
+  }
   const openRed = await page.$eval('[data-testid=week-rows] [data-kind="open"]', el => getComputedStyle(el).color).catch(() => "");
   if (openRed) { if (!/rgb\(192, 64, 64\)/.test(openRed)) fail("week rows: OPEN entry is not red (#c04040): " + openRed); else ok("week rows: OPEN entries are red"); }
-  else if (dated("2026-11-01", "the 'week rows OPEN entries are red' pin (no OPEN entry left in the October rows)")) fail("week rows: no OPEN entry found in the October 2026 week rows");
+  else if (liveOpenBetween("2026-09-28", "2026-11-01")) fail("week rows: no OPEN entry found in the October 2026 week rows although the live rows have an open slot on " + liveOpenBetween("2026-09-28", "2026-11-01"));
+  else console.log("     (week rows: no open slot in the live rows for the October 2026 weeks - the 'OPEN entries are red' pin has nothing to check)");
   await page.locator("[data-testid=week-rows]").screenshot({ path: path.join(OUT, "week-rows-oct-2026.png") });
   ok("screenshot test/ui/out/week-rows-oct-2026.png");
 
@@ -796,7 +887,7 @@ try {
     watchPage(sharePage, "share");
     await sharePage.goto(BASE + "test/ui/out/" + s.name, { waitUntil: "load" });
     await sharePage.waitForSelector(".mo .cg .cd", { timeout: 5000 });
-    if (dated("2026-10-15", "the 'share page 10/15 P OPEN red' pin")) {
+    if (dated("2026-10-15", "the 'share page 10/15 P OPEN red' pin") && (liveOpenEarly("2026-10-15", "primary") || (console.log("     (share page: 10/15 primary is held live - the OPEN-red pin has nothing to check)"), false))) {
       const shareOpen = await sharePage.$eval('.cd[data-day="2026-10-15"] .open', el => getComputedStyle(el).color).catch(() => "");
       if (!/rgb\(192, 64, 64\)/.test(shareOpen)) fail("share page: 10/15 P OPEN is not red: " + shareOpen); else ok("share page renders: 10/15 P OPEN in red");
     }
@@ -817,7 +908,7 @@ try {
     const printTitle = await pop.title();
     const printCell = await pop.$eval('.cell[data-day="2026-10-05"]', el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
     if (!/P (Khan|Burchett|Acton|Philip|Fierce|Sarkar|OPEN)/.test(printCell) || !/B (Khan|Burchett|Acton|Philip|Fierce|Sarkar|OPEN)/.test(printCell)) fail("printable 10/5 cell lacks 'P <Name>' / 'B <Name>': " + printCell); else ok(`printable view '${printTitle}': 10/5 cell reads "${printCell}"`);
-    if (dated("2026-10-15", "the 'printable 10/15 P OPEN red' pin")) {
+    if (dated("2026-10-15", "the 'printable 10/15 P OPEN red' pin") && (liveOpenEarly("2026-10-15", "primary") || (console.log("     (printable: 10/15 primary is held live - the OPEN-red pin has nothing to check)"), false))) {
       const printOpen = await pop.$eval('.cell[data-day="2026-10-15"] .shift .open', el => getComputedStyle(el).color).catch(() => "");
       if (!/rgb\(192, 0, 0\)/.test(printOpen)) fail("printable: 10/15 OPEN not red: " + printOpen); else ok("printable view: 10/15 P OPEN in red");
     }
@@ -845,7 +936,8 @@ try {
     if (!/^Whole weeks: the table runs 9\/28 - 11\/1 \(the Mon-Sun weeks around 10\/1 - 10\/31\)/.test(erSpanNote)) fail("ER panel: widened-range note missing or wrong: '" + erSpanNote + "'"); else ok("ER panel: note says the month was widened to whole weeks 9/28 - 11/1");
     const erOpenRed = await page.$eval('[data-testid=er-panel-preview] [data-kind="open"]', el => getComputedStyle(el).color).catch(() => "");
     if (erOpenRed) { if (!/rgb\(255, 0, 0\)/.test(erOpenRed)) fail("ER panel OPEN not red: " + erOpenRed); else ok("ER panel: OPEN entries red (#ff0000)"); }
-    else if (dated("2026-11-01", "the 'ER panel OPEN red' pin (no OPEN entry left in the visible-month panel)")) fail("ER panel: no OPEN entry in the visible-month (Oct 2026) preview");
+    else if (liveOpenBetween("2026-09-28", "2026-11-01")) fail("ER panel: no OPEN entry in the visible-month (Oct 2026) preview although the live rows have an open slot on " + liveOpenBetween("2026-09-28", "2026-11-01"));
+    else console.log("     (ER panel: no open slot in the live rows for 9/28-11/1 - the 'OPEN red' pin has nothing to check)");
     await page.click("[data-testid=er-preset-1213]");
     await page.waitForFunction(() => { const r = document.querySelectorAll("[data-testid=er-panel-preview] tr[data-week]"); return r.length === 6 && r[0].getAttribute("data-week") === "2026-11-02"; }, null, { timeout: 3000 });
     const erFromV = await page.$eval("[data-testid=er-from]", el => el.value), erToV = await page.$eval("[data-testid=er-to]", el => el.value);
@@ -880,12 +972,15 @@ try {
     const toastText = (((await page.evaluate(() => document.body.innerText)) || "").match(/(Copied - paste into the Word document[^\n]*|Clipboard blocked[^\n]*)/) || [])[1] || "";
     const item = clipWrites.length === 1 && clipWrites[0].length === 1 ? clipWrites[0][0] : null;
     const clipHtml = item ? item["text/html"] || "" : "", clipText = item ? item["text/plain"] || "" : "";
+    // the red OPEN span is expected exactly when the live rows (as served) have an open slot inside 11/2-12/13
+    const erOpenDay = liveOpenBetween("2026-11-02", "2026-12-13");
+    const erSpanOk = /<span data-kind="open" style="color:#ff0000;font-weight:bold">/.test(clipHtml) === !!erOpenDay;
     if (!item) fail(`Copy for Word: expected exactly one navigator.clipboard.write call with one ClipboardItem, saw ${JSON.stringify(clipWrites.map(w => w.map(i => Object.keys(i))))}; toast "${toastText}"`);
-    else if (!clipHtml.startsWith('<table data-export="er-call-panels"') || (clipHtml.match(/<tr data-week=/g) || []).length !== 6 || !/MON\/SUN DATES<\/th><th [^>]*>TRAUMA<\/th><th [^>]*>TRAUMA BACKUP<\/th>/.test(clipHtml) || !/<span data-kind="open" style="color:#ff0000;font-weight:bold">/.test(clipHtml)) fail("Copy for Word: text/html flavour is not the 6-row ER table: " + clipHtml.slice(0, 200));
+    else if (!clipHtml.startsWith('<table data-export="er-call-panels"') || (clipHtml.match(/<tr data-week=/g) || []).length !== 6 || !/MON\/SUN DATES<\/th><th [^>]*>TRAUMA<\/th><th [^>]*>TRAUMA BACKUP<\/th>/.test(clipHtml) || !erSpanOk) fail(`Copy for Word: text/html flavour is not the 6-row ER table (red OPEN span expected: ${!!erOpenDay}${erOpenDay ? " - live open slot on " + erOpenDay : " - no open slot in 11/2-12/13 live"}): ` + clipHtml.slice(0, 200));
     else if (!/^MON\/SUN DATES\tTRAUMA\tTRAUMA BACKUP\n11\/2 - 11\/8\t/.test(clipText) || clipText.split("\n").length !== 7) fail("Copy for Word: text/plain flavour wrong: " + clipText.slice(0, 120));
     else if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(clipHtml + clipText)) fail("Copy for Word: an email address is on the clipboard");
     else if (!/^Copied - paste into the Word document/.test(toastText)) fail(`Copy for Word: flavours written but the toast reads "${toastText}"`);
-    else ok(`Copy for Word: one clipboard write with ${Object.keys(item).join(" + ")} - 6-row ER table (inline styles, red OPEN spans) + tab-separated text; toast "${toastText}"`);
+    else ok(`Copy for Word: one clipboard write with ${Object.keys(item).join(" + ")} - 6-row ER table (inline styles${erOpenDay ? ", red OPEN spans" : "; no OPEN span - nothing open in 11/2-12/13 live"}) + tab-separated text; toast "${toastText}"`);
     const clip = await page.evaluate(async () => {
       try { const items = await navigator.clipboard.read(); const out = {}; for (const it of items) for (const t of it.types) out[t] = await (await it.getType(t)).text(); return { ok: true, types: Object.keys(out), rows: ((out["text/html"] || "").match(/<tr data-week=/g) || []).length }; }
       catch (e) { return { ok: false, error: String(e && e.message || e) }; }
@@ -1004,7 +1099,7 @@ try {
   const clipped = await page.$$eval("[data-testid=cal-grid] .cal-pill", els => els.filter(e => e.scrollWidth > e.clientWidth + 0.5).map(e => { const cell = e.closest("[data-day]"); return (cell ? cell.getAttribute("data-day") + ":" : "") + e.textContent + " " + e.scrollWidth + ">" + e.clientWidth; }));
   if (clipped.length) fail(`mobile 390px: ${clipped.length} pill(s) clipped, e.g. ${clipped.slice(0, 4).join(", ")}`); else ok("mobile 390px: no pill is clipped (every .cal-pill scrollWidth <= clientWidth)");
   const openPills = await page.$$eval("[data-testid=cal-grid] .cal-pill.cal-open", els => els.map(e => ({ text: e.textContent, fits: e.scrollWidth <= e.clientWidth + 0.5, line: e.parentElement.scrollWidth <= e.parentElement.clientWidth + 0.5 })));
-  if (!openPills.length) { if (dated("2026-10-15", "the 'mobile OPEN pill renders the full word' pin (10/15 is blank once past)")) fail("mobile 390px: no OPEN pill found in October 2026 (10/15 is open)"); } else if (!openPills.every(p => p.text === "OPEN" && p.fits && p.line)) fail("mobile 390px: OPEN pill truncated: " + JSON.stringify(openPills.filter(p => !(p.fits && p.line)).slice(0, 3))); else ok(`mobile 390px: ${openPills.length} OPEN pill(s) render the full word`);
+  if (!openPills.length) { const o = liveOpenBetween("2026-10-01", "2026-10-31"); if (o) fail("mobile 390px: no OPEN pill found in October 2026 although the live rows have an open slot on " + o); else console.log("     (mobile 390px: no open slot in October 2026 live - the OPEN pill pin has nothing to check)"); } else if (!openPills.every(p => p.text === "OPEN" && p.fits && p.line)) fail("mobile 390px: OPEN pill truncated: " + JSON.stringify(openPills.filter(p => !(p.fits && p.line)).slice(0, 3))); else ok(`mobile 390px: ${openPills.length} OPEN pill(s) render the full word`);
   const lineOverflow = await page.$$eval("[data-testid=cal-grid] .cal-line", els => els.filter(e => e.scrollWidth > e.clientWidth + 0.5).map(e => { const cell = e.closest("[data-day]"); return (cell ? cell.getAttribute("data-day") : "?") + ":" + e.textContent + (e.querySelector("svg") ? "+lock" : "") + " " + e.scrollWidth + ">" + e.clientWidth; }));
   if (lineOverflow.length) fail(`mobile 390px: ${lineOverflow.length} P/B line(s) overflow their cell, e.g. ${lineOverflow.slice(0, 5).join(", ")}`); else ok("mobile 390px: no P/B line overflows its cell (padlock included)");
   await page.screenshot({ path: path.join(OUT, "calendar-mobile.png"), fullPage: true });
@@ -1111,11 +1206,8 @@ try {
   try {
     if (fixture) liveRows = fixture.schedule_days.slice();
     else {
-      const res = await fetch(`https://${SUPABASE_HOST}/rest/v1/schedule_days?select=day,primary_id,backup_id,primary_locked,backup_locked,source,external_cover,note&order=day.asc`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
-      if (!res.ok) throw new Error("live schedule_days read failed: HTTP " + res.status);
-      const rows = await res.json();
-      if (!Array.isArray(rows)) throw new Error("live schedule_days read: body is not an array");
-      liveRows = rows;
+      if (!liveRowsEarly.length) throw new Error("the up-front live schedule_days read failed (see the note after the data-source line)");
+      liveRows = liveRowsEarly.map(r => ({ ...r })); // the up-front anon read (+ updated_by), the harness-opened slot already blanked
     }
     if (!liveRows.some(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && (r.primary_id || r.backup_id))) throw new Error("no October 2026 assignments in the live rows - the recount has nothing to compare");
   } catch (e) { fail("Slices F+G: could not read the live schedule_days rows for the recount: " + errLine(e)); }
@@ -1298,7 +1390,7 @@ try {
     laterAssigned.forEach(d => { const o = openIn(d); if (o.p) expRows.push(d + "|primary"); if (o.b) expRows.push(d + "|backup"); });
     if (all.from !== todayIso) fail(`Open shifts: the board starts at ${all.from}, expected today ${todayIso}`);
     else if (JSON.stringify(all.rows.map(r => r.slot)) !== JSON.stringify(expRows)) fail(`Open shifts: the board lists ${all.rows.length} slot(s) for ${all.from}..${all.to} (+ ${laterAssigned.length} later assigned day(s)), the live rows say ${expRows.length}: board ${JSON.stringify(all.rows.map(r => r.slot).slice(-5))} vs live ${JSON.stringify(expRows.slice(-5))}`);
-    else if (!all.rows.length) { if (dated("2026-11-01", "board rows > 0 on the live data")) fail(`Open shifts: the board has no rows on the live data (${all.from}..${all.to}) - expected 10/15 primary and the October backups`); }
+    else if (!all.rows.length) console.log("     (Open shifts: the board is empty - and so is the open-slot list recounted from the live rows; the equality above is the pin)");
     else ok(`Open shifts: ${all.rows.length} open slot(s) ${all.from}..${all.to}${laterAssigned.length ? " + " + laterAssigned.length + " later assigned day(s) " + laterAssigned[0] + ".." + laterAssigned[laterAssigned.length - 1] : ""} equal the live rows (${all.rows.filter(r => r.role === "primary").length} primary, ${all.rows.filter(r => r.role === "backup").length} backup), first ${all.rows[0].slot}, last ${all.rows[all.rows.length - 1].slot}`);
     if (badge !== all.rows.length || all.total !== all.rows.length) fail(`Open shifts: the nav badge reads ${badge} (data-total ${all.total}), the 'all' board has ${all.rows.length} row(s)`); else ok(`Open shifts: nav badge ${badge} = the board's row count for the whole published range${badge ? "" : " (hidden at 0)"}`);
     // Faraz's pin: the coverage strip's open counts equal the board's for the
@@ -1364,8 +1456,10 @@ try {
     else ok(`Open shifts: Copy list -> ${lines.length} line(s), e.g. "${lines[0]}"${lines.length > 1 ? ` ... "${lines[lines.length - 1]}"` : ""}`);
     // Take this shift as s1 on the first row where s1 is eligible.
     const target = all.rows.find(r => r.take === "enabled");
+    let claimExercised = false;
     if (!target) console.log("     (no row where s1 is eligible under the current rules - the claim flow is not exercised)");
     else {
+      claimExercised = true;
       const [cDay, cRole] = target.slot.split("|");
       const beforeClaim = writes.length;
       await clearToast();
@@ -1520,7 +1614,9 @@ try {
     await clearToast();
     await page.screenshot({ path: path.join(OUT, "openshifts-390-dark.png"), fullPage: true });
     // The 'ok screenshots' line is earned: the sheet and preview shots sit inside conditionals, so check that every one of the six exists, is from THIS run and is under 300 KB (docs/screenshots/open-shifts/ is copied from these files).
-    const SIX = ["openshifts.png", "openshifts-sheet.png", "openshifts-email-preview.png", "openshifts-390.png", "openshifts-dark.png", "openshifts-390-dark.png"];
+    // (the sheet shot exists only when the claim flow ran - LIVE mode without a claimable slot skips it and says so)
+    const SIX = ["openshifts.png", "openshifts-sheet.png", "openshifts-email-preview.png", "openshifts-390.png", "openshifts-dark.png", "openshifts-390-dark.png"].filter(f => f !== "openshifts-sheet.png" || claimExercised);
+    if (!claimExercised) console.log("     (openshifts-sheet.png not required: the claim flow did not run)");
     const shotState = SIX.map(f => { const p = path.join(OUT, f); if (!fs.existsSync(p)) return { f, why: "missing" }; const st = fs.statSync(p); if (st.mtimeMs < shotStart - 2000) return { f, why: "stale (" + new Date(st.mtimeMs).toISOString() + ")" }; if (st.size > 300 * 1024) return { f, why: "too big (" + st.size + " bytes)" }; return { f, size: st.size }; });
     const badShots = shotState.filter(s => s.why);
     if (badShots.length) fail("screenshots missing or stale: " + badShots.map(s => `${s.f} ${s.why}`).join(", "));
@@ -2268,14 +2364,19 @@ try {
     // ---- (1) the day editor fails CLOSED when eligibility throws ----
     // rules.js is a classic script: `eligibility` is a global the JSX resolves at call
     // time, so the harness can make it throw for one editor open and restore it after.
-    const fcDay = "2026-12-16"; // a Wednesday with no live row (December is generated later in the run)
+    // a Wednesday with no live row and no in-session edit: the first one after the last published day (the editor
+    // pre-fills its select with a held holder, so only a row-less day makes 'no draft' mean 'no pick')
+    const fcLast = Object.keys(liveByDay).sort().pop() || todayIso;
+    let fcDay = isoAddDays(fcLast, 1);
+    while (new Date(fcDay + "T12:00:00Z").getUTCDay() !== 3 || liveByDay[fcDay] || harnessDays[fcDay]) fcDay = isoAddDays(fcDay, 1);
     await page.evaluate(() => { window.__realEligibility = window.eligibility; window.eligibility = () => { throw new Error("harness: synthetic rules failure"); }; });
     try {
-      await showMonth(2026, 11);
+      await showMonth(+fcDay.slice(0, 4), +fcDay.slice(5, 7) - 1);
       await page.click(`[data-day="${fcDay}"]`);
       await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
       const fcOpts = await page.$$eval("[data-testid=editor-primary] option", els => els.filter(o => o.value).map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
       const fcErr = await page.$eval("[data-testid=editor-eval-error]", el => el.textContent).catch(() => "");
+      const fcDraft0 = await page.$eval("[data-testid=editor-primary]", el => el.value);
       await page.selectOption("[data-testid=editor-primary]", "s3");
       await page.waitForTimeout(250);
       const fcOverride = await page.$("[data-testid=override-confirm]");
@@ -2284,7 +2385,7 @@ try {
       const fcDraft = await page.$eval("[data-testid=editor-primary]", el => el.value);
       if (!fcOpts.length || !fcOpts.every(o => o.eligible === "false" && o.text.includes("rules-error:harness: synthetic rules failure"))) fail("Day editor fail-closed: every pool option must be ineligible with the thrown error as its reason: " + JSON.stringify(fcOpts));
       else if (!fcErr.includes("Eligibility check failed for") || !fcErr.includes("harness: synthetic rules failure")) fail("Day editor fail-closed: no editor-eval-error line naming the error: " + JSON.stringify(fcErr));
-      else if (fcOverride || fcDraft) fail(`Day editor fail-closed: picking a surgeon must not open the override confirm nor set the draft (override=${!!fcOverride}, draft='${fcDraft}')`);
+      else if (fcOverride || fcDraft !== fcDraft0) fail(`Day editor fail-closed: picking a surgeon must not open the override confirm nor set the draft (override=${!!fcOverride}, draft='${fcDraft}', was '${fcDraft0}')`);
       else if (!fcHint.includes("Eligibility check failed for Acton")) fail("Day editor fail-closed: no hint after the refused pick: " + JSON.stringify(fcHint));
       else if (!fcSaveDisabled) fail("Day editor fail-closed: Save must be disabled while a check threw");
       else ok(`Day editor fail-closed (${fcDay}): ${fcOpts.length} pool options ineligible 'rules-error:harness: synthetic rules failure', eval-error line shown, the pick is refused with a hint, Save disabled`);
@@ -2292,6 +2393,8 @@ try {
       await page.keyboard.press("Escape");
       await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
     } finally {
+      // a FAIL above must not leave the editor open over the nav (the next slices click Setup)
+      if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
       await page.evaluate(() => { if (window.__realEligibility) { window.eligibility = window.__realEligibility; delete window.__realEligibility; } });
     }
     // the restored check works again: the same day opens with eligible options
@@ -2943,7 +3046,15 @@ try {
     // The seed's schedule_days range (the days the importer compares): the
     // board scenario's claimed day(s) inside it are app-edited (source 'claim')
     // and must read as BLOCKED / kept in the dry run and the apply below.
-    const planDaysAll = new Set(require(path.join(ROOT, "importer.js")).importPlan(JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8")), { now: new Date().toISOString() }).scheduleDayRows.map(r => r.day));
+    const planSdRows = IMPORTER.importPlan(JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8")), { now: new Date().toISOString() }).scheduleDayRows;
+    const planDaysAll = new Set(planSdRows.map(r => r.day));
+    // The importer's ownership rule restated (importer.js planDiff / helpers.js suSeedDayMerge): the live row as the
+    // app is served it (the claim overlay included), seed-owned = source 'import' AND updated_by 'seed', and the
+    // field set impDaySame compares. Since the 9/23 publish many seed-range days are publish-filled (source
+    // 'generated', updated_by 'publish-preview ...'): BLOCKED in the dry run, kept on apply.
+    const liveFor = (d) => ({ ...(liveByDay[d] || {}), ...(claimedDays[d] || {}) });
+    const seedOwned = (l) => l.source === "import" && (l.updated_by || "seed") === "seed";
+    const rowDiffers = (l, p) => (l.primary_id || null) !== (p.primary_id || null) || (l.backup_id || null) !== (p.backup_id || null) || !!l.primary_locked !== !!p.primary_locked || !!l.backup_locked !== !!p.backup_locked || (l.external_cover || null) !== (p.external_cover || null) || (l.note || null) !== (p.note || null);
 
     // ---- Prompt 12 M: outside surgeons - Setup adds 'Locum' (LOC), the day editor writes him in
     //      (locked, source manual-external, no override confirm), Totals lists him under its own heading ----
@@ -3040,16 +3151,21 @@ try {
       // app-edited day inside the seed's range: the importer must report it as
       // BLOCKED (kept), never overwrite it. Expect exactly that many.
       const claimedInPlan = Object.keys(claimedDays).filter(d => planDaysAll.has(d)).sort();
-      const nBlocked = claimedInPlan.length;
+      // ... and every other plan day whose live row is app-owned and differs from the plan (the publish-filled days).
+      // The importer's "+N blocked" counts LINES, one per differing role (P when primary / external cover differ, B when
+      // the backup differs, one "locks/note change" line otherwise) - a day differing in both roles counts twice.
+      const blockedDays = planSdRows.filter(p => liveByDay[p.day] && !seedOwned(liveFor(p.day)) && rowDiffers(liveFor(p.day), p)).map(p => p.day).sort();
+      const blockedLines = (d) => { const l = liveFor(d), p = planSdRows.find(r => r.day === d); let n = 0; if ((l.primary_id || null) !== (p.primary_id || null) || (l.external_cover || null) !== (p.external_cover || null)) n++; if ((l.backup_id || null) !== (p.backup_id || null)) n++; return n || 1; };
+      const nBlocked = blockedDays.reduce((s, d) => s + blockedLines(d), 0);
       const totalOk = nBlocked ? new RegExp("^Total changes: 0 \\(\\+" + nBlocked + " blocked: app-edited days kept\\)$").test(total.trim()) : /Total changes: 0$/.test(total.trim());
       const lastLine = diffText.split("\n").slice(-1)[0];
       const lastOk = nBlocked ? lastLine === "Total changes: 0 (+" + nBlocked + " blocked)" : /No changes - the live tables already match the plan\./.test(lastLine);
       // the importer names a blocked day as '10/7 B open -> Khan [BLOCKED: live source 'claim' updated_by 's1' v2 - edited in the app, not overwritten]'
       const blockedNamed = claimedInPlan.every(d => new RegExp("^\\s*" + (+d.slice(5, 7)) + "/" + (+d.slice(8, 10)) + " [PB] .*\\[BLOCKED: live source 'claim' updated_by 's1'", "m").test(diffText));
-      if (!totalOk || !lastOk || !blockedNamed) fail(`Import dry run: expected zero changes against the live rows${nBlocked ? ` (+${nBlocked} blocked: the claimed day(s) ${claimedInPlan.join(", ")} kept, named with source 'claim')` : ""}: ` + total + " | " + lastLine);
+      if (!totalOk || !lastOk || !blockedNamed) fail(`Import dry run: expected zero changes against the live rows${nBlocked ? ` (+${nBlocked} blocked line(s) over ${blockedDays.length} app-owned plan day(s) differing from the seed${claimedInPlan.length ? ", the claimed " + claimedInPlan.join(", ") + " among them, named with source 'claim'" : ""})` : ""}: ` + total + " | " + lastLine);
       else if (!applyDisabled) fail("Import dry run: Apply must be disabled when there is nothing to apply");
       else if (impWrites.length) fail("Import dry run wrote something: " + JSON.stringify(impWrites.map(w => w.method + " " + w.path)));
-      else ok(`Import seed dry run (docs/silvis-seed.json): 0 changes against the live rows${nBlocked ? ` (+${nBlocked} blocked: the claimed ${claimedInPlan.join(", ")} kept as app-edited)` : ""}, Apply disabled, no writes`);
+      else ok(`Import seed dry run (docs/silvis-seed.json): 0 changes against the live rows${nBlocked ? ` (+${nBlocked} blocked line(s) over ${blockedDays.length} app-owned plan day(s) kept${claimedInPlan.length ? ", the claimed " + claimedInPlan.join(", ") + " among them" : ""}; recounted from the live rows)` : ""}, Apply disabled, no writes`);
       diffText.split("\n").filter(l => /^(call_schedule_data|schedule_days|availability|time_off)/.test(l)).forEach(l => console.log("     " + l));
       await page.locator("[data-testid=card-setup_import]").screenshot({ path: path.join(OUT, "import-dryrun.png") });
       ok("screenshot test/ui/out/import-dryrun.png");
@@ -3092,18 +3208,28 @@ try {
         // background poll may already have re-adopted the live rows (backup null)
         // - a mock artefact, not a product fact. Expect exactly as many kept days
         // as still differ from the live rows at this moment.
+        // suSeedDayMerge restated over EVERY plan day (P13R-2 re-baseline): a plan day is KEPT when its live row is
+        // not seed-owned (the publish-filled days, the claimed day), or the grid shows holders that differ from that
+        // live row (this run's edits and generated fills the poll has not re-adopted - read right before Apply), or
+        // it is one of this run's edited days (harnessDays: an edit leaves source 'manual' even with equal holders).
+        // A plan day with no live row at all is an insert, not kept.
         await page.click('button[data-tab="calendar"]');
-        await showMonth(2026, 10);
-        const tgCells = await readCells();
-        const keptThanksgiving = ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].filter(d => { const c = tgCells.find(x => x.day === d); const live = liveByDay[d]; return !!c && (c.b || "") !== ((live && live.backup_id) || ""); }).length;
-        // ... plus the board scenario's claimed day(s): source 'claim' in the
-        // mocked table, inside the seed's range -> kept (app-edited) as well.
+        const gridNow = {};
+        for (const ym of [...new Set([...planDaysAll].map(d => d.slice(0, 7)))].sort()) { await showMonth(+ym.slice(0, 4), +ym.slice(5, 7) - 1); (await readCells()).forEach(c => { if (c.day) gridNow[c.day] = c; }); }
+        const keptDays = [...planDaysAll].filter(d => {
+          const c = gridNow[d] || {}, l = liveFor(d);
+          if (!liveByDay[d]) return !!(c.p || c.b || c.ext);
+          const holdersDiffer = (c.p || null) !== (l.primary_id || null) || (c.b || null) !== (l.backup_id || null) || (c.ext || null) !== (l.external_cover || null);
+          return !seedOwned(l) || holdersDiffer || !!harnessDays[d];
+        }).sort();
         const keptClaimed = Object.keys(claimedDays).filter(d => planDaysAll.has(d)).length;
-        const keptExpected = keptThanksgiving + keptClaimed;
+        const keptExpected = keptDays.length;
+        // availability: every plan row but the injected extra date already exists live -> skipped = plan rows - 1
+        const avPlanRows = IMPORTER.importPlan(seed3, { now: new Date().toISOString() }).availabilityRows.length;
         await page.click('button[data-tab="setup"]');
         await openCard("setup_import");
         await page.waitForSelector("[data-testid=seed-apply]", { timeout: 5000 });
-        console.log(`     (Thanksgiving days still carrying in-session generated backups: ${keptThanksgiving} of 4, plus ${keptClaimed} claimed day(s) - the apply must report exactly ${keptExpected} kept)`);
+        console.log(`     (plan days kept = ${keptExpected}: ${keptDays.length ? keptDays.slice(0, 6).join(", ") + (keptDays.length > 6 ? ", ... (" + keptDays.length + ")" : "") : "none"} - app-owned live rows, grid holders differing from the live row right before Apply, or this run's edited days (${keptClaimed} claimed); availability plan rows ${avPlanRows} -> skipped ${avPlanRows - 1})`);
         const onDialog = (d) => d.accept();
         page.on("dialog", onDialog);
         const beforeApply = writes.length;
@@ -3126,7 +3252,7 @@ try {
         else if (!(blobBody.data && blobBody.data.surgeonRules && blobBody.data.surgeonRules.s2 && blobBody.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra)) || !blobBody.data.roster || "schedule" in blobBody.data) fail("Import apply: the merged blob is wrong: keys " + Object.keys(blobBody.data || {}).join(","));
         else if (aAv < 0 || aAv < aSnap || avBody.length !== 1 || avBody[0].start_date !== extra || avBody[0].person_id !== "s2" || avBody[0].source !== "seed") fail(`Import apply: availability insert wrong (index ${aAv}, snap ${aSnap}): ` + JSON.stringify(avBody));
         else if (aBad.length) fail("Import apply: schedule_days / time_off were written although nothing changed there: " + JSON.stringify(aBad.map(w => w.method + " " + w.path)));
-        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !/availability inserted 1, skipped 36/.test(resText) || !new RegExp("schedule_days inserted 0, updated 0, kept \\(app-edited\\) " + keptExpected + "\\b").test(resText)) fail(`Import apply: result panel wrong (expected 1 availability insert of 37 plan rows, no schedule_days change, ${keptExpected} day(s) kept = ${keptThanksgiving} Thanksgiving day(s) whose in-session generated backups differ from the seed-owned live rows + ${keptClaimed} claimed day(s)): ` + resText);
+        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !new RegExp("availability inserted 1, skipped " + (avPlanRows - 1) + "\\b").test(resText) || !new RegExp("schedule_days inserted 0, updated 0, kept \\(app-edited\\) " + keptExpected + "\\b").test(resText)) fail(`Import apply: result panel wrong (expected 1 availability insert of ${avPlanRows} plan rows, no schedule_days change, ${keptExpected} day(s) kept = plan days app-owned live, or differing from their live row in the grid right before Apply, or edited this run [${keptDays.slice(0, 8).join(", ")}${keptDays.length > 8 ? ", ..." : ""}]; ${keptClaimed} claimed): ` + resText);
         else if (!impAudit) fail("Import apply: no audit_log 'seed.import'");
         else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the 1 missing row (${extra}); no schedule_days / time_off write; audit seed.import; result: "${resText.slice(0, 120)}"`);
         // Roster autosave after the merge must not regress: the extra date stays in the next blob write.

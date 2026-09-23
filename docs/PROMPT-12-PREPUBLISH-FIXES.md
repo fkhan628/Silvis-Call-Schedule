@@ -598,7 +598,13 @@ Thanksgiving note is updated although the brief did not name it — B's review B
 blob; (5) the §8 "Answered by Faraz on 9/21" parenthetical is updated as part of item 8; (6) `_meta.generatedOn` untouched;
 (7) the regression's 10 s budget is untouched — the env-var run is reported with the A/B evidence.
 Open: the smoke's Import-apply pin (`skipped 36`, `kept 4`) needs a re-baseline against the head's 48-row plan and the harness's
-in-session edit count — outside item Z's files.
+in-session edit count — outside item Z's files. ⟶ **Closed 9/23 (Prompt 13 review fix, P13R-2, feat/open-shifts):** the pin now
+derives both numbers — `skipped` = the plan's availability rows − 1 (`importer.importPlan` on the seed the harness uploads), `kept`
+= `suSeedDayMerge` restated over every plan day (live row not seed-owned, or grid holders differing from the live row right before
+Apply, or one of this run's edited days); the Import dry run's `blocked` count is restated the same way (the 9/23 publish left many
+seed-range days app-owned), and every OPEN pin (10/15 cell, `10/7 OPEN` week row, ER panel, Copy for Word, mobile pill, share /
+printable) reads the live rows fetched up front instead of a dated constant. Against the live project the harness opens ONE backup
+slot in what it serves (never in the table) so the claim scenario runs — `harnessOpen` in test/ui/smoke.mjs.
 
 Review (fix stage, 9/22 late): (Z-1, minor, applied) the two 11/26 badge pins no longer label every `confirm` badge as
 "expected drift" - `liveByDay` is built after those pins, so the harness reads the 2026-11-26 row note itself (the fixture row,

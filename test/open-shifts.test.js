@@ -545,6 +545,23 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     ["var personHeld = genHeldByPerson(e);", "(personHeld && !!e.primary)", "(personHeld && !!e.backup)"].forEach(t => assert.ok(seedLocks.indexOf(t) >= 0, "genSeedLocks fixes both held roles of a claim/trade day - missing: " + t));
     assert.ok(!GEN.GEN_PERSON_FIXED_SOURCES.includes("manual"), "manual stays regenerable when unlocked (the day editor has a lock toggle; pinned in generator-regression)");
   });
+  check("P13R-2 (review): saveDayEdit keeps a claim/trade row source while any role held before keeps its holder - a note, a lock toggle or the board's Assign... on the open partner role never turns the claimer into a regenerable manual slot", () => {
+    const fn = appSrc.slice(appSrc.indexOf("const saveDayEdit = "), appSrc.indexOf("const proposeTradeForDay"));
+    assert.ok(fn.length > 0, "saveDayEdit found");
+    assert.ok(fn.includes(`const keepPersonSource = (before.source === "claim" || before.source === "trade") && ["primary", "backup"].some(r => !!before[r] && before[r] === after[r]);`), "the keep rule: claim/trade source AND some previously held role unchanged");
+    assert.ok(fn.includes(`after.source = (isExternalId(after.primary) || isExternalId(after.backup)) ? "manual-external" : keepPersonSource ? before.source : "manual";`), "the source line reads manual-external > kept person source > manual");
+    assert.strictEqual((fn.match(/after.source = /g) || []).length, 1, "exactly one source assignment in saveDayEdit");
+    // the rule itself, restated: the same sources the generator fixes, and both scenarios the review named
+    const keep = (before, after) => (before.source === "claim" || before.source === "trade") && ["primary", "backup"].some(r => !!before[r] && before[r] === after[r]);
+    const GEN = require(path.join(ROOT, "generator.js"));
+    assert.deepStrictEqual(GEN.GEN_PERSON_FIXED_SOURCES, ["claim", "trade"], "the kept sources are exactly the generator-fixed ones");
+    assert.ok(keep({ source: "claim", primary: null, backup: "s1" }, { primary: "s6", backup: "s1" }), "board Assign... on the open partner role keeps source claim");
+    assert.ok(keep({ source: "claim", primary: "s6", backup: "s1" }, { primary: "s4", backup: "s1" }), "replacing the partner keeps source claim (the claimer stays fixed)");
+    assert.ok(keep({ source: "trade", primary: "s3", backup: null }, { primary: "s3", backup: null, note: "x" }), "a note on a traded day keeps source trade");
+    assert.ok(!keep({ source: "claim", primary: null, backup: "s1" }, { primary: null, backup: "s5" }), "replacing the only holder -> manual (the scheduler's explicit choice)");
+    assert.ok(!keep({ source: "claim", primary: null, backup: "s1" }, { primary: null, backup: null }), "clearing the only holder -> manual");
+    assert.ok(!keep({ source: "manual", primary: "s2", backup: "s1" }, { primary: "s2", backup: "s1" }), "a manual row never gains protection from this rule");
+  });
   check("openSlotReason: each category of the fixed table renders from its own codes (detail after ':' and '@day' suffixes ignored)", () => {
     const table = {
       "vacations": ["time-off:2026-11-05", "day-before-vacation"],

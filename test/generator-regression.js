@@ -1064,6 +1064,25 @@ for (let s = 1; s <= SEEDS; s++) {
     openC.forEach((k) => { const [d, role] = k.split(" "); ok(!!outC.schedule[d][role] !== inUncovered(outC, d, role), "fixture (" + modeName + "): open slot " + k + " filled XOR listed"); });
     eq(openC.length, bfOpen.length - 2, "fixture (" + modeName + "): two fewer open slots than the seed (10/21 backup, 10/24 primary held)");
   });
+  // P13R-2 (review, 9/23): the board scenario - Khan claimed the 10/21 backup, then the scheduler took "Assign..." on the
+  // open partner role from the Open shifts board: saveDayEdit keeps source "claim" and the partner is UNLOCKED. Row-level
+  // fixing keeps BOTH holders in both modes (nothing on a claimed day moves); the fixed count is unchanged (the primary
+  // moved from the lock count to the source-fixed count).
+  {
+    const inputA = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } });
+    Object.keys(FIXC.schedule).forEach((d) => { inputA.schedule[d] = JSON.parse(JSON.stringify(FIXC.schedule[d])); });
+    inputA.schedule["2026-10-21"].primaryLocked = false;
+    inputA.schedule["2026-10-21"].note = "fixture: Khan claimed the backup; the scheduler assigned Acton on the open primary from the board (source kept: claim)";
+    const ctxA = R.buildContext(inputA);
+    [["generate", {}], ["fill-open-only", { fillOpenOnly: true }]].forEach(([modeName, extra]) => {
+      const outA = GEN.generate(ctxA, BF.start, BF.end, Object.assign({ seed: 1, bestOf: 2 }, extra));
+      const a21 = outA.schedule["2026-10-21"];
+      CUR.range = "claim-fixed fixture, unlocked partner, " + modeName; CUR.day = "2026-10-21";
+      eq([a21.primary, a21.primaryLocked, a21.backup, a21.backupLocked, a21.source, a21.note], [ACTON, false, KHAN, false, "claim", inputA.schedule["2026-10-21"].note], "fixture (" + modeName + "): 10/21 with an UNLOCKED partner primary - both holders, both lock flags, source and note byte-identical");
+      eq(outA.diagnostics.fixedSlots, bfFixed + 2, "fixture (" + modeName + "): the fixed count is unchanged when the partner's lock comes off (source fixes it now)");
+      eq(outA.diagnostics.hardViolations, [], "fixture (" + modeName + "): no hard violation from the unlocked partner");
+    });
+  }
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
 

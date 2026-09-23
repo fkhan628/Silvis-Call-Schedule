@@ -435,8 +435,11 @@ row source `claim`) or a trade (`apply_trade`, row source `trade`), neither of w
 the generator in both modes exactly like a lock** (every held role of that day; `generator.GEN_PERSON_FIXED_SOURCES`).
 A later Generate never silently discards it; its rule conflicts are facts in `diagnostics.fixedViolations`, and it
 counts in `diagnostics.fixedSlots`. An unlocked slot written in the **day editor** (source `manual`) stays regenerable —
-the lock toggle there is the scheduler's choice — and editing a claimed day in the day editor rewrites its source to
-`manual`. The board's "Take this shift" gate is `eligibility()` with the same option set the day editor uses (a surgeon
+the lock toggle there is the scheduler's choice. Editing a claimed or traded day (a note, a lock, an assignment on
+its open partner role) **keeps** its source while any holder it had stays in place (P13R-2, 9/23); only replacing or
+clearing every holder turns it into a `manual` row — the scheduler's explicit, audited and mailed replacement. Because
+the source is one fact per day, the partner role of a claimed day is fixed with it (known limitation; guide §16.2). The
+board's "Take this shift" gate is `eligibility()` with the same option set the day editor uses (a surgeon
 completing his own Fri–Sun block is asked as a block member; outside surgeons are never candidates); the function checks
 data integrity only (guide §16.2).
 
