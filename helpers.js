@@ -2312,9 +2312,45 @@ function offerRulesWords(rules, groupRules) {
   return out;
 }
 
+/* === Auth link errors (Prompt 16 A2) === */
+// GoTrue sends a failed invite / recovery / magic link back to the redirect URL as
+//   #error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired
+// (the hash form) and, in some flows, as the same three keys in the query (?error=...). Whatever the
+// code, the person can do only two things - ask for a new invite or use Forgot your password - so every
+// such shape reads as this ONE message. The success shape (#access_token=...&type=recovery|invite) is
+// not an error and returns null; so do the app's own deep links (#openshifts, #offers, ?public=1).
+const AUTH_LINK_ERROR_MESSAGE = "This invite or reset link has expired or was already used - ask the scheduler for a new invite, or use Forgot your password.";
+const AUTH_LINK_ERROR_KEYS = ["error", "error_code", "error_description"];
+// authLinkError(hash, search) -> null, or { message, code, description, from: "hash" | "query", cleanSearch }
+// where cleanSearch is the query with the three error keys removed ("" or "?k=v...") - what the app hands
+// to history.replaceState so a reload does not repeat the message. The hash is read first (one message).
+function authLinkError(hash, search) {
+  const paramsOf = (s, lead) => {
+    if (typeof s !== "string") return null;
+    const body = s.charAt(0) === lead ? s.slice(1) : s;
+    if (!body) return null;
+    try { return new URLSearchParams(body); } catch (e) { return null; }
+  };
+  const read = (p) => {
+    if (!p) return null;
+    const code = p.get("error_code") || "", error = p.get("error") || "";
+    if (!code && !error) return null;
+    return { code: code || error, description: p.get("error_description") || "" };
+  };
+  const qp = paramsOf(search, "?");
+  const fromQuery = read(qp);
+  let cleanSearch = "";
+  if (qp) { AUTH_LINK_ERROR_KEYS.forEach(k => qp.delete(k)); const rest = qp.toString(); cleanSearch = rest ? "?" + rest : ""; }
+  const fromHash = read(paramsOf(hash, "#"));
+  const hit = fromHash || fromQuery;
+  if (!hit) return null;
+  return { message: AUTH_LINK_ERROR_MESSAGE, code: hit.code, description: hit.description, from: fromHash ? "hash" : "query", cleanSearch };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     reviewStateFor, derivedEastVacations,
+    authLinkError, AUTH_LINK_ERROR_MESSAGE,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

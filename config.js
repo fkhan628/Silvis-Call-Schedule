@@ -593,18 +593,8 @@ const auth = {
     } catch(e) { console.warn("Couldn't clear stored session:", e); }
   },
 
-  // Sign up with email & password
-  async signUp(email, password) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
-      method: "POST",
-      headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (!res.ok) return { user: null, error: data.msg || data.error_description || data.message || "Sign up failed" };
-    if (data.access_token) auth._saveSession(data);
-    return { user: data.user || data, session: data, error: null };
-  },
+  // No sign-up helper (Prompt 16 A2): accounts are created by invitation from the Supabase
+  // dashboard (public sign-ups are off) and the app has no sign-up form.
 
   // Sign in with email & password
   async signIn(email, password) {

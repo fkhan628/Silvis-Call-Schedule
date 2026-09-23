@@ -20,7 +20,7 @@ afterwards; the editor keeps query history).*
 
 ## Your own account (first — already done for Faraz per `docs/STATUS-2026-09-23.md`: `admin`, roster `s1`; kept for a rebuild)
 
-1. Open the app, **Sign up** with the address you want to use, set a password.
+1. Public sign-ups are off and the app has no sign-up form (Prompt 16 A2): invite your own address from the dashboard (**Authentication → Users → Invite user**), open the link, set a password.
 2. The database creates your `user_profiles` row automatically as `viewer`.
 3. Promote yourself once, in the SQL editor (or the linked CLI):
 
@@ -34,7 +34,10 @@ afterwards; the editor keeps query history).*
 ## Inviting a surgeon or a viewer
 
 1. **Supabase dashboard → Authentication → Users → Invite user.** Paste the person's home address from the private file.
-   Supabase emails them a link; they set a password through it and land in the app.
+   Supabase emails them a link; they set a password through it and land in the app. Accounts exist by invitation only, and
+   if they open an invite or reset link that has expired or was already used the app says so in one line ("This invite or
+   reset link has expired or was already used - ask the scheduler for a new invite, or use Forgot your password") — send a
+   fresh invite from the same dashboard page, or, once they have a password, they use **Forgot your password?** on the card.
 2. The moment the invite is created, the database creates their `user_profiles` row (`viewer`, unlinked) — even if they
    never open the email. You can link them right away.
 3. **Setup → Users** (in the app: the card titled "Users (accounts, roles, roster links)", visible only when your role is

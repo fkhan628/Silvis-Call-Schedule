@@ -4999,8 +4999,8 @@ try {
   await signin.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
   const themeProbe = (pg) => pg.evaluate(() => {
     const tile = Array.from(document.querySelectorAll("span")).find(s => s.textContent.trim() === "SSC");
-    const btn = Array.from(document.querySelectorAll("button")).find(b => /^(Sign in|Create account)$/.test(b.textContent.trim()));
-    const link = Array.from(document.querySelectorAll("button")).find(b => /Don't have an account|Already have an account/.test(b.textContent.trim()));
+    const btn = Array.from(document.querySelectorAll("button")).find(b => /^Sign in$/.test(b.textContent.trim()));
+    const link = Array.from(document.querySelectorAll("button")).find(b => /^Forgot your password\?$/.test(b.textContent.trim()));
     const cs = (el, p) => el ? getComputedStyle(el)[p] : "";
     return { tileBg: cs(tile && tile.parentElement, "backgroundImage"), tileColor: cs(tile, "color"), btnBg: cs(btn, "backgroundImage"), btnColor: cs(btn, "color"), linkColor: cs(link, "color"), bodyBg: getComputedStyle(document.body).backgroundColor, title: (document.querySelector("h2") || {}).textContent || "" };
   });
@@ -5017,13 +5017,51 @@ try {
       else ok(`sign-in ${theme}: SSC tile = orange gradient, white text`);
       if (!orange.test(p.btnBg) || p.btnColor !== "rgb(255, 255, 255)") fail(`sign-in ${theme}: the Sign in button is not orange with white text: ${p.btnBg} / ${p.btnColor}`); else ok(`sign-in ${theme}: 'Sign in' button = orange gradient, white text`);
       const wantLink = theme === "dark" ? "rgb(255, 138, 76)" : "rgb(194, 65, 12)";
-      if (p.linkColor !== wantLink) fail(`sign-in ${theme}: the sign-up link is not the orange text token (${wantLink}): ${p.linkColor}`); else ok(`sign-in ${theme}: sign-up link = orange text ${p.linkColor}`);
+      if (p.linkColor !== wantLink) fail(`sign-in ${theme}: the 'Forgot your password?' link is not the orange text token (${wantLink}): ${p.linkColor}`); else ok(`sign-in ${theme}: 'Forgot your password?' link = orange text ${p.linkColor}`);
       const wantBody = theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)";
       if (p.bodyBg !== wantBody) fail(`sign-in ${theme}: page background is ${p.bodyBg}, expected ${wantBody}`); else ok(`sign-in ${theme}: page background ${p.bodyBg}`);
       if (p.title.trim() !== "Silvis Call Schedule") fail(`sign-in ${theme}: card title is '${p.title}'`);
       await signin.screenshot({ path: path.join(OUT, `signin-${theme}.png`), fullPage: true });
       ok(`screenshot test/ui/out/signin-${theme}.png`);
     } catch (e) { fail(`sign-in ${theme}: ` + errLine(e)); try { await signin.screenshot({ path: path.join(OUT, `failure-signin-${theme}.png`), fullPage: true }); } catch (e2) {} }
+  }
+  // (e) Prompt 16 A2: an expired / already-used invite or reset link. GoTrue redirects back with
+  // #error=access_denied&error_code=otp_expired&error_description=... (or the ?error= query form): the sign-in card
+  // shows ONE message, the URL is cleaned so a reload does not repeat it, and the card offers no sign-up path.
+  {
+    const A2_MSG = "This invite or reset link has expired or was already used - ask the scheduler for a new invite, or use Forgot your password.";
+    const A2_HASH = "#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired";
+    const cardState = () => signin.evaluate(() => {
+      const err = document.querySelector("[data-testid=auth-error]");
+      return { msg: err ? err.textContent.trim() : "", hash: location.hash, search: location.search, text: document.body.innerText };
+    });
+    try {
+      // a real navigation each time: a hash-only change of the current URL is same-document and would never remount the app
+      await signin.goto("about:blank");
+      await signin.goto(BASE + A2_HASH, { waitUntil: "domcontentloaded" });
+      await signin.waitForSelector("text=Sign in to your account", { timeout: 20000 });
+      await signin.waitForSelector("[data-testid=auth-error]", { timeout: 10000 });
+      const a = await cardState();
+      if (a.msg !== A2_MSG) fail("A2 expired link (hash): the card message is '" + a.msg + "'"); else ok("A2 expired link (hash): the sign-in card shows the one message - '" + a.msg + "'");
+      if (a.hash !== "" || a.search !== "") fail("A2 expired link (hash): the URL still carries the error after mount: " + a.hash + a.search); else ok("A2 expired link (hash): the hash is clean after the message (history.replaceState)");
+      if (/Sign up|Create account|Don't have an account/.test(a.text)) fail("A2: the sign-in card still offers a sign-up path"); else ok("A2: no 'Sign up' / 'Create account' on the sign-in card (invite-only)");
+      if (!/Forgot your password[?]/.test(a.text)) fail("A2: 'Forgot your password?' is missing from the sign-in card"); else ok("A2: 'Forgot your password?' stays on the card");
+      await signin.screenshot({ path: path.join(OUT, "signin-expired-link.png"), fullPage: true });
+      ok("screenshot test/ui/out/signin-expired-link.png");
+      // a reload of the cleaned URL shows no message
+      await signin.reload({ waitUntil: "domcontentloaded" });
+      await signin.waitForSelector("text=Sign in to your account", { timeout: 20000 });
+      await signin.waitForTimeout(600);
+      const b = await cardState();
+      if (b.msg) fail("A2 expired link: the message repeats after a reload of the cleaned URL: " + b.msg); else ok("A2 expired link: a reload of the cleaned URL shows no message");
+      // the query form, beside another query key that must survive the clean-up
+      await signin.goto("about:blank");
+      await signin.goto(BASE + "?keep=1&error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired", { waitUntil: "domcontentloaded" });
+      await signin.waitForSelector("[data-testid=auth-error]", { timeout: 20000 });
+      const c = await cardState();
+      if (c.msg !== A2_MSG) fail("A2 expired link (query): the card message is '" + c.msg + "'"); else ok("A2 expired link (query): ?error=... shows the same message");
+      if (c.search !== "?keep=1" || c.hash !== "") fail("A2 expired link (query): the URL after mount is '" + c.search + c.hash + "', expected '?keep=1'"); else ok("A2 expired link (query): the error keys left the query, ?keep=1 stayed");
+    } catch (e) { fail("A2 expired link: " + errLine(e)); try { await signin.screenshot({ path: path.join(OUT, "failure-signin-expired-link.png"), fullPage: true }); } catch (e2) {} }
   }
   await signin.close();
   // (d) a signed-in month view per theme on the main page: navy header, orange today ring, id-keyed pill colours, dark page.

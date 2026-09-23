@@ -466,13 +466,12 @@ function CallSchedule() {
   const [authLoading, setAuthLoading] = useState(true);  // checking session on mount
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
-  const [authMode, setAuthMode] = useState("login");     // "login" | "signup" | "reset" | "newpassword"
+  const [authMode, setAuthMode] = useState("login");     // "login" | "reset" | "newpassword"
   const [resetEmail, setResetEmail] = useState("");
   const [resetSent, setResetSent] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [authError, setAuthError] = useState("");
-  const [authNotice, setAuthNotice] = useState("");      // non-error message on the login card (e.g. "check your email")
   const [authBusy, setAuthBusy] = useState(false);
   const [userProfile, setUserProfile] = useState(null);  // { id, person_id, display_name, role }
   const [profileLoadFailed, setProfileLoadFailed] = useState(false); // failed != unlinked
@@ -505,7 +504,7 @@ function CallSchedule() {
   }, [userProfile]);
   const isAdmin = userProfile?.role === "admin";
   // Signed in, profile loaded, but not linked to a roster entry (viewers, and
-  // every fresh signup until the scheduler links them in Setup -> Users).
+  // every freshly invited account until the scheduler links it in Setup -> Users).
   const isUnlinked = !!authUser && !!userProfile && !userProfile.person_id;
 
   // --- Client version heartbeat (client_versions table) ---
@@ -659,8 +658,8 @@ function CallSchedule() {
     return Array.isArray(rows) ? (rows[0] || null) : null;
   };
   // After any successful sign-in: adopt the user, load the profile (the DB
-  // trigger creates the row at signup, so a missing row is treated as an
-  // unlinked viewer), re-run the data load with the session JWT.
+  // trigger creates the row when the Auth user is invited, so a missing row is
+  // treated as an unlinked viewer), re-run the data load with the session JWT.
   const adoptSignedInUser = async (user) => {
     setAuthUser(user);
     setProfileLoadFailed(false);
@@ -682,6 +681,19 @@ function CallSchedule() {
     if (isPublicMode) { setAuthLoading(false); return; }
     (async () => {
       try {
+        // Prompt 16 A2: an expired or already-used invite / reset link comes back from GoTrue as
+        // #error=...&error_code=otp_expired&error_description=... (or the ?error=... query form).
+        // helpers.authLinkError reads both shapes as ONE message; the error keys then leave the URL
+        // (other query keys survive) so a reload does not repeat it. The success shape is handled below.
+        const linkErr = authLinkError(window.location.hash, window.location.search);
+        if (linkErr) {
+          console.warn("auth link error from the mail link:", linkErr.code, linkErr.description);
+          try { window.history.replaceState(null, "", window.location.pathname + linkErr.cleanSearch); } catch (e) { console.warn("could not drop the auth error from the URL", e); }
+          // one message: on the card at once when signed out; with a stored session the choice waits until the
+          // session is checked below (a toast when it signs the person in or waits on biometrics, the card when
+          // the stored session turns out dead) - a toast fired here would play out under the Loading spinner
+          if (!auth.getSession()) setAuthError(linkErr.message);
+        }
         // Password recovery AND invite links land here with
         // #access_token=...&type=recovery|invite - both mean "set a password".
         const hash = window.location.hash;
@@ -706,6 +718,7 @@ function CallSchedule() {
         const session = auth.getSession();
 
         if (bioEnrolled && session) {
+          if (linkErr) showToast(linkErr.message, "error"); // the biometric tile renders, not the card
           setBiometricPending(true);
           setAuthLoading(false);
           return; // wait for the biometric prompt
@@ -713,7 +726,8 @@ function CallSchedule() {
 
         if (session && !bioEnrolled) {
           const { user } = await auth.getUser();
-          if (user) await adoptSignedInUser(user);
+          if (user) { if (linkErr) showToast(linkErr.message, "error"); await adoptSignedInUser(user); }
+          else if (linkErr) setAuthError(linkErr.message); // the stored session was dead: the card follows and carries the message
         }
       } catch(e) { console.error("Auth check error:", e); }
       setAuthLoading(false);
@@ -771,30 +785,17 @@ function CallSchedule() {
     setBiometricEnrolled(false);
   };
 
-  // Auth handlers. SIGNUP NEVER SENDS person_id: the DB trigger creates the
-  // profile row as an unlinked viewer and Setup -> Users links it later (the
-  // RLS self-insert policy pins person_id null and role viewer anyway).
+  // Auth handlers. Sign-in only (Prompt 16 A2): accounts are created by invitation from the
+  // Supabase dashboard - public sign-ups are off and the app has no sign-up form. The DB trigger
+  // creates the profile row as an unlinked viewer when the user is invited and Setup -> Users links
+  // it later (the RLS self-insert policy pins person_id null and role viewer anyway).
   const handleAuthSubmit = async () => {
-    setAuthError(""); setAuthNotice(""); setAuthBusy(true);
+    setAuthError(""); setAuthBusy(true);
     try {
-      if (authMode === "signup") {
-        const { user, session, error } = await auth.signUp(authEmail, authPassword);
-        if (error) { setAuthError(error); setAuthBusy(false); return; }
-        if (session && session.access_token && (user || session.user)) {
-          await adoptSignedInUser(user || session.user);
-          setAuthEmail(""); setAuthPassword("");
-        } else {
-          // Email confirmation is on: no session yet.
-          setAuthMode("login");
-          setAuthNotice("Account created. Check your email for a confirmation link, then sign in.");
-          setAuthPassword("");
-        }
-      } else {
-        const { user, error } = await auth.signIn(authEmail, authPassword);
-        if (error) { setAuthError(error); setAuthBusy(false); return; }
-        await adoptSignedInUser(user);
-        setAuthEmail(""); setAuthPassword("");
-      }
+      const { user, error } = await auth.signIn(authEmail, authPassword);
+      if (error) { setAuthError(error); setAuthBusy(false); return; }
+      await adoptSignedInUser(user);
+      setAuthEmail(""); setAuthPassword("");
     } catch(e) { console.warn("Auth submit failed:", e); setAuthError(e.message || "Auth error"); }
     setAuthBusy(false);
   };
@@ -4709,7 +4710,7 @@ function CallSchedule() {
             </div>
             <h2 style={{fontSize:18,fontWeight:700,color:dkText,margin:"0 0 4px"}}>Silvis Call Schedule</h2>
             <p style={{fontSize:12,color:"#5B6B82",margin:0}}>
-              {authMode==="login" ? "Sign in to your account" : authMode==="signup" ? "Create your account" : authMode==="reset" ? "Reset your password" : "Set a new password"}
+              {authMode==="login" ? "Sign in to your account" : authMode==="reset" ? "Reset your password" : "Set a new password"}
             </p>
           </div>
           {authMode==="newpassword" ? (
@@ -4734,7 +4735,7 @@ function CallSchedule() {
                 </>
               ) : (
                 <>
-                  <p style={{fontSize:13,color:"#5B6B82",margin:0}}>Enter the email address you signed up with. We'll send you a link to reset your password.</p>
+                  <p style={{fontSize:13,color:"#5B6B82",margin:0}}>Enter the email address your invite was sent to. We'll send you a link to reset your password.</p>
                   <input type="email" placeholder="Email address" value={resetEmail} onChange={e=>setResetEmail(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&resetEmail) submitReset();}} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
                   {errBox(authError)}
                   <button onClick={submitReset} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>{authBusy ? "Sending" : "Send reset link"}</button>
@@ -4746,25 +4747,15 @@ function CallSchedule() {
             </div>
           ) : (
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
-              {authNotice && <div style={{fontSize:12,color:"#1a6030",padding:"8px 10px",background:"#e8f8e8",borderRadius:6,border:"1px solid #a0d8a0",lineHeight:1.5}}>{authNotice}</div>}
               <input type="email" placeholder="Email address" value={authEmail} onChange={e=>setAuthEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               <input type="password" placeholder="Password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
-              {authMode==="signup" && (
-                <p style={{fontSize:11.5,color:"#5B6B82",margin:0,lineHeight:1.5}}>Your account starts unlinked. The scheduler links it to your roster entry afterwards - you don't pick a name here.</p>
-              )}
-              {errBox(authError)}
+              {authError && <div data-testid="auth-error" role="alert">{errBox(authError)}</div>}
               <button onClick={handleAuthSubmit} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>
-                {authBusy ? "Please wait" : authMode==="login" ? "Sign in" : "Create account"}
+                {authBusy ? "Please wait" : "Sign in"}
               </button>
+              {/* Prompt 16 A2: invite-only - no sign-up link; the reset is the card's one secondary action. */}
               <div style={{textAlign:"center",marginTop:4}}>
-                <button onClick={()=>{setAuthMode(m=>m==="login"?"signup":"login");setAuthError("");setAuthNotice("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>
-                  {authMode==="login" ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
-                </button>
-                {authMode==="login" && (
-                  <div style={{marginTop:8}}>
-                    <button onClick={()=>{setAuthMode("reset");setAuthError("");}} style={{background:"none",border:"none",color:"#5B6B82",fontSize:11,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Forgot your password?</button>
-                  </div>
-                )}
+                <button onClick={()=>{setAuthMode("reset");setAuthError("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Forgot your password?</button>
               </div>
             </div>
           )}

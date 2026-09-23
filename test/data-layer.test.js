@@ -2170,6 +2170,72 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- G. Prompt 16 A2: invite-only sign-in; GoTrue's error hash / query reads as ONE message ---------------- */
+  console.log("\n[A2] Prompt 16 A2 (invite-only sign-in card, expired-link message)");
+  {
+    const A2_MSG = "This invite or reset link has expired or was already used - ask the scheduler for a new invite, or use Forgot your password.";
+    check("authLinkError: the hash form (#error=...&error_code=otp_expired&error_description=...) reads as the one message, with the code and the decoded description, from 'hash', clean search", () => {
+      const r = H.authLinkError("#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired", "");
+      assert.deepStrictEqual(r, { message: A2_MSG, code: "otp_expired", description: "Email link is invalid or has expired", from: "hash", cleanSearch: "" });
+      assert.strictEqual(H.AUTH_LINK_ERROR_MESSAGE, A2_MSG);
+    });
+    check("authLinkError: the query form (?error=...) reads as the same message from 'query'; cleanSearch drops only the three error keys and keeps the rest (?public=1)", () => {
+      const r = H.authLinkError("", "?error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired");
+      assert.deepStrictEqual(r, { message: A2_MSG, code: "otp_expired", description: "Email link is invalid or has expired", from: "query", cleanSearch: "" });
+      const keep = H.authLinkError("", "?public=1&error=access_denied&error_code=otp_expired");
+      assert.strictEqual(keep.message, A2_MSG);
+      assert.strictEqual(keep.cleanSearch, "?public=1");
+      // GoTrue's older shapes: an error without a code, a code without an error - both are the message
+      assert.strictEqual(H.authLinkError("#error=access_denied", "").code, "access_denied");
+      assert.strictEqual(H.authLinkError("", "?error_code=otp_expired").code, "otp_expired");
+      // the hash wins when both carry an error (one message, one parse)
+      assert.strictEqual(H.authLinkError("#error=access_denied&error_code=otp_expired", "?error=x").from, "hash");
+    });
+    check("authLinkError: the success hash (#access_token=...&type=recovery|invite), the app's own deep links (#openshifts, #offers, ?public=1), an empty URL and non-strings are NOT errors (null)", () => {
+      assert.strictEqual(H.authLinkError("#access_token=abc&refresh_token=def&type=recovery", ""), null);
+      assert.strictEqual(H.authLinkError("#access_token=abc&type=invite", "?public=1"), null);
+      for (const h of ["", "#", "?", "#openshifts", "#offers", "?public=1", "#error", "?error="]) {
+        assert.strictEqual(H.authLinkError(h, ""), null, JSON.stringify(h) + " as hash");
+        assert.strictEqual(H.authLinkError("", h), null, JSON.stringify(h) + " as search");
+      }
+      assert.strictEqual(H.authLinkError(null, undefined), null);
+      assert.strictEqual(H.authLinkError({}, 42), null);
+    });
+    check("A2 pins: the sign-in card has no sign-up path - no 'Sign up' / 'Create account' / \"signup\" mode / auth.signUp call in index-source.html; config.js carries no signUp helper and no auth/v1/signup; 'Forgot your password?' stays (once)", () => {
+      assert.strictEqual(count("Sign up"), 0, "'Sign up' text");
+      assert.strictEqual(count("Create account"), 0, "'Create account' button");
+      assert.strictEqual(count("Create your account"), 0, "'Create your account' subtitle");
+      assert.strictEqual(count('"signup"'), 0, "the signup authMode");
+      assert.strictEqual(count("auth.signUp("), 0, "auth.signUp call");
+      assert.strictEqual(count('const [authMode, setAuthMode] = useState("login");     // "login" | "reset" | "newpassword"'), 1, "the authMode comment names the three remaining modes");
+      const cfg = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
+      assert.ok(!cfg.includes("signUp(") && !cfg.includes("/auth/v1/signup"), "config.js still has the signUp helper");
+      assert.strictEqual(count("Forgot your password?</button>"), 1, "the forgot-password link");
+    });
+    check("A2 pins: the mount effect reads authLinkError(hash, search) BEFORE the success-hash branch, cleans the URL with replaceState(pathname + cleanSearch), and shows the message once - on the card when signed out or when the stored session turns out dead, as a toast only once a stored session signs the person in or waits on biometrics; the card error carries data-testid auth-error", () => {
+      const start = src.indexOf("  // --- Auth: Check session on mount ---");
+      assert.ok(start > 0, "mount effect not found");
+      const eff = src.slice(start, start + 3500);
+      const iErr = eff.indexOf("const linkErr = authLinkError(window.location.hash, window.location.search);");
+      const iOk = eff.indexOf('if (hash && (hash.includes("type=recovery") || hash.includes("type=invite"))) {');
+      assert.ok(iErr > 0, "authLinkError not read in the mount effect");
+      assert.ok(iOk > iErr, "the error parse must precede the success-hash branch");
+      assert.strictEqual(count("const linkErr = authLinkError("), 1, "one parse site");
+      assert.ok(eff.includes('window.history.replaceState(null, "", window.location.pathname + linkErr.cleanSearch);'), "the URL is cleaned with cleanSearch");
+      assert.ok(eff.includes("if (!auth.getSession()) setAuthError(linkErr.message);"), "signed out: the card carries the message at once");
+      assert.ok(!eff.includes('if (auth.getSession()) showToast(linkErr.message, "error");'), "the toast must not fire at mount on a stored session that may be dead (Loading spinner, then a card with no message)");
+      const iBio = eff.indexOf("if (bioEnrolled && session) {");
+      const iLive = eff.indexOf("if (user) { if (linkErr) showToast(linkErr.message, \"error\"); await adoptSignedInUser(user); }");
+      const iDead = eff.indexOf("else if (linkErr) setAuthError(linkErr.message);");
+      assert.ok(iBio > 0 && eff.slice(iBio, iBio + 200).includes('if (linkErr) showToast(linkErr.message, "error");'), "biometric wait: the toast (the tile renders, not the card)");
+      assert.ok(iLive > iBio, "live session: the toast, then adoptSignedInUser");
+      assert.ok(iDead > iLive && iDead - iLive < 300, "dead session (getUser returned no user): the card that follows carries the message");
+      assert.strictEqual(count("showToast(linkErr.message"), 2, "two toast sites (biometric wait, live session), none at mount");
+      assert.strictEqual(count("setAuthError(linkErr.message)"), 2, "two card sites (signed out, dead session)");
+      assert.strictEqual(count('data-testid="auth-error"'), 1, "the card error testid");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });
