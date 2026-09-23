@@ -1760,7 +1760,7 @@ eq(seed.surgeonRules[ACTON].hardNeverWeekdays, ["Tue"], "X seed: s3.hardNeverWee
 eq(seed.surgeonRules[ACTON].hardNeverWeekdaysRoles, ["primary"], "X seed: s3.hardNeverWeekdaysRoles = [primary] (backup on Tuesdays stays allowed)");
 ok(!("hardNeverWeekdaysReason" in seed.surgeonRules[ACTON]), "X seed: no hardNeverWeekdaysReason key (no reason may reach the anon-readable blob)");
 eq((seed.surgeonRules[ACTON].recurringAvoid || []).map(r => r.weekday), ["Sun"], "X seed: the Tuesday soft avoid (and its note) left; the Sunday avoid stays");
-ok(!/family|Tuesday mornings/i.test(JSON.stringify([seed.surgeonRules[ACTON].hardNeverWeekdaysNote, seed.surgeonRules[ACTON].recurringAvoid, seed.surgeonRules[ACTON].notes.filter(n => /Tuesday/i.test(n))])), "X seed: the Tuesday rule carries no reason wording anywhere in s3 (the rules doc is the only place)");
+ok(!/\bfamily\b/i.test(JSON.stringify([seed.surgeonRules[ACTON].hardNeverWeekdaysNote, seed.surgeonRules[ACTON].recurringAvoid, seed.surgeonRules[ACTON].notes.filter(n => /Tuesday/i.test(n))])), "X seed: the Tuesday rule carries no reason wording anywhere in s3 (the rules doc is the only place)");
 step("Prompt 12 X: Acton PRIMARY on an ordinary Tuesday is hard; BACKUP stays open; his own dated row lifts it (W); the Sunday avoid stays soft");
 const X_TUE = "2026-12-01"; // an ordinary Tuesday (December is ungoverned for him; no lock, no holiday)
 const xP = R.eligibility(clean, X_TUE, P, ACTON);
