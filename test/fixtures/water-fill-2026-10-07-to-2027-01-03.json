@@ -1,0 +1,2392 @@
+{
+ "_meta": {
+  "purpose": "Regression case for the water-filled share (Faraz, decision 2026-09-23; docs/REPORT-WATER-FILL-2026-09-23.md): the generator inputs EXACTLY as they stood before the 2026-09-23 06:32Z publish (docs/PUBLISH-2026-09-23.md), rebuilt from the anon-readable tables read 2026-09-23 12:38:55Z with the 110 OPEN -> holder changes of the publish log set back to open and the 12:37Z December blob change (surgeonRules.s2.explicitListMonths 2026-12 object entry) set back to the plain entry the 05:28Z generate saw. Proven: the generator at 8b38740 (flat share) run over these inputs - milestone 2026-11-02..2027-01-03 then backfill 2026-10-07..2026-11-01 fill-open-only, seed 7, bestOf 200 - reproduces the published preview byte for byte (0 holder mismatches, score 77321, candidate 20; backfill 10/15 primary open). Contents: the blob parts (roster, surgeonRules, groupRules, holidays - the importer output, note-free), the 71 pre-publish schedule_days rows (ids, dates, lock flags, source; no notes), time_off and availability rows (ids, dates, kinds, roles), and the East inputs as scripts/preview-generate.js derives them (Khan busy days, the forecast probabilities outside the published coverage, the coverage, Fierce derived weeks). Build the ctx with rules.buildContext(Object.assign({}, fixture.input, { rangeStart, rangeEnd })).",
+  "ranges": {
+   "milestone": {
+    "start": "2026-11-02",
+    "end": "2027-01-03"
+   },
+   "backfill": {
+    "start": "2026-10-07",
+    "end": "2026-11-01",
+    "fillOpenOnly": true
+   }
+  },
+  "seed": 7,
+  "bestOf": 200,
+  "snapshotFetchedAt": "2026-09-23T12:38:55Z",
+  "publishedAt": "2026-09-23T06:32:30Z",
+  "published": {
+   "2026-09-14": {
+    "primary": "s2",
+    "backup": "s4"
+   },
+   "2026-09-15": {
+    "primary": "s4",
+    "backup": "s2"
+   },
+   "2026-09-16": {
+    "primary": "s4",
+    "backup": "s3"
+   },
+   "2026-09-17": {
+    "primary": "s4",
+    "backup": "s2"
+   },
+   "2026-09-18": {
+    "primary": "s4",
+    "backup": "s3"
+   },
+   "2026-09-19": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-09-20": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-09-21": {
+    "primary": "s3",
+    "backup": "s4"
+   },
+   "2026-09-22": {
+    "primary": "s3",
+    "backup": "s4"
+   },
+   "2026-09-23": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-09-24": {
+    "primary": "s3",
+    "backup": "s4"
+   },
+   "2026-09-25": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-09-26": {
+    "primary": "s3",
+    "backup": "s2"
+   },
+   "2026-09-27": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-09-28": {
+    "primary": null,
+    "backup": "s5"
+   },
+   "2026-09-29": {
+    "primary": null,
+    "backup": "s5"
+   },
+   "2026-09-30": {
+    "primary": null,
+    "backup": "s5"
+   },
+   "2026-10-01": {
+    "primary": null,
+    "backup": "s5"
+   },
+   "2026-10-02": {
+    "primary": null,
+    "backup": "s5"
+   },
+   "2026-10-03": {
+    "primary": null,
+    "backup": "s5"
+   },
+   "2026-10-04": {
+    "primary": null,
+    "backup": "s5"
+   },
+   "2026-10-05": {
+    "primary": "s3",
+    "backup": "s4"
+   },
+   "2026-10-06": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-10-07": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-10-08": {
+    "primary": "s4",
+    "backup": "s3"
+   },
+   "2026-10-09": {
+    "primary": "s3",
+    "backup": "s1"
+   },
+   "2026-10-10": {
+    "primary": "s3",
+    "backup": "s1"
+   },
+   "2026-10-11": {
+    "primary": "s3",
+    "backup": "s1"
+   },
+   "2026-10-12": {
+    "primary": "s5",
+    "backup": "s2"
+   },
+   "2026-10-13": {
+    "primary": "s4",
+    "backup": "s2"
+   },
+   "2026-10-14": {
+    "primary": "s2",
+    "backup": "s4"
+   },
+   "2026-10-15": {
+    "primary": null,
+    "backup": "s1"
+   },
+   "2026-10-16": {
+    "primary": "s4",
+    "backup": "s2"
+   },
+   "2026-10-17": {
+    "primary": "s3",
+    "backup": "s4"
+   },
+   "2026-10-18": {
+    "primary": "s3",
+    "backup": "s4"
+   },
+   "2026-10-19": {
+    "primary": "s3",
+    "backup": "s4"
+   },
+   "2026-10-20": {
+    "primary": "s6",
+    "backup": "s3"
+   },
+   "2026-10-21": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-10-22": {
+    "primary": "s6",
+    "backup": "s4"
+   },
+   "2026-10-23": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-10-24": {
+    "primary": "s1",
+    "backup": "s5"
+   },
+   "2026-10-25": {
+    "primary": "s2",
+    "backup": "s5"
+   },
+   "2026-10-26": {
+    "primary": "s2",
+    "backup": "s4"
+   },
+   "2026-10-27": {
+    "primary": "s4",
+    "backup": "s3"
+   },
+   "2026-10-28": {
+    "primary": "s2",
+    "backup": "s4"
+   },
+   "2026-10-29": {
+    "primary": "s4",
+    "backup": "s1"
+   },
+   "2026-10-30": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-10-31": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-11-01": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-11-02": {
+    "primary": "s3",
+    "backup": "s2"
+   },
+   "2026-11-03": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-11-04": {
+    "primary": "s3",
+    "backup": "s2"
+   },
+   "2026-11-05": {
+    "primary": "s3",
+    "backup": "s1"
+   },
+   "2026-11-06": {
+    "primary": "s3",
+    "backup": "s2"
+   },
+   "2026-11-07": {
+    "primary": "s2",
+    "backup": "s1"
+   },
+   "2026-11-08": {
+    "primary": "s2",
+    "backup": "s1"
+   },
+   "2026-11-09": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-11-10": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-11-11": {
+    "primary": "s2",
+    "backup": "s5"
+   },
+   "2026-11-12": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-11-13": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-11-14": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-11-15": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-11-16": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-11-17": {
+    "primary": "s6",
+    "backup": "s3"
+   },
+   "2026-11-18": {
+    "primary": "s3",
+    "backup": "s2"
+   },
+   "2026-11-19": {
+    "primary": "s6",
+    "backup": "s5"
+   },
+   "2026-11-20": {
+    "primary": "s2",
+    "backup": "s5"
+   },
+   "2026-11-21": {
+    "primary": "s1",
+    "backup": "s5"
+   },
+   "2026-11-22": {
+    "primary": "s1",
+    "backup": "s5"
+   },
+   "2026-11-23": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-11-24": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-11-25": {
+    "primary": "s1",
+    "backup": "s5"
+   },
+   "2026-11-26": {
+    "primary": "s1",
+    "backup": "s4"
+   },
+   "2026-11-27": {
+    "primary": "s1",
+    "backup": "s4"
+   },
+   "2026-11-28": {
+    "primary": "s1",
+    "backup": "s4"
+   },
+   "2026-11-29": {
+    "primary": "s1",
+    "backup": "s4"
+   },
+   "2026-11-30": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-12-01": {
+    "primary": "s2",
+    "backup": "s1"
+   },
+   "2026-12-02": {
+    "primary": "s5",
+    "backup": "s1"
+   },
+   "2026-12-03": {
+    "primary": "s3",
+    "backup": "s1"
+   },
+   "2026-12-04": {
+    "primary": "s3",
+    "backup": "s2"
+   },
+   "2026-12-05": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-12-06": {
+    "primary": "s3",
+    "backup": "s2"
+   },
+   "2026-12-07": {
+    "primary": "s5",
+    "backup": "s4"
+   },
+   "2026-12-08": {
+    "primary": "s5",
+    "backup": "s4"
+   },
+   "2026-12-09": {
+    "primary": "s5",
+    "backup": "s4"
+   },
+   "2026-12-10": {
+    "primary": "s5",
+    "backup": "s2"
+   },
+   "2026-12-11": {
+    "primary": "s5",
+    "backup": "s4"
+   },
+   "2026-12-12": {
+    "primary": "s5",
+    "backup": "s4"
+   },
+   "2026-12-13": {
+    "primary": "s5",
+    "backup": "s4"
+   },
+   "2026-12-14": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-12-15": {
+    "primary": "s6",
+    "backup": "s3"
+   },
+   "2026-12-16": {
+    "primary": "s5",
+    "backup": "s3"
+   },
+   "2026-12-17": {
+    "primary": "s6",
+    "backup": "s4"
+   },
+   "2026-12-18": {
+    "primary": "s1",
+    "backup": "s2"
+   },
+   "2026-12-19": {
+    "primary": "s1",
+    "backup": "s2"
+   },
+   "2026-12-20": {
+    "primary": "s1",
+    "backup": "s2"
+   },
+   "2026-12-21": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-12-22": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-12-23": {
+    "primary": "s2",
+    "backup": "s3"
+   },
+   "2026-12-24": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-12-25": {
+    "primary": "s3",
+    "backup": "s5"
+   },
+   "2026-12-26": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-12-27": {
+    "primary": "s4",
+    "backup": "s5"
+   },
+   "2026-12-28": {
+    "primary": "s2",
+    "backup": "s1"
+   },
+   "2026-12-29": {
+    "primary": "s4",
+    "backup": "s1"
+   },
+   "2026-12-30": {
+    "primary": "s4",
+    "backup": "s3"
+   },
+   "2026-12-31": {
+    "primary": "s2",
+    "backup": "s1"
+   },
+   "2027-01-01": {
+    "primary": "s2",
+    "backup": "s1"
+   },
+   "2027-01-02": {
+    "primary": "s1",
+    "backup": "s4"
+   },
+   "2027-01-03": {
+    "primary": "s1",
+    "backup": "s4"
+   }
+  },
+  "publishedNote": "the 112 schedule_days rows as published (read 2026-09-23 12:38:55Z, before the 13:38Z hand edits), ids only"
+ },
+ "input": {
+  "roster": [
+   {
+    "id": "s1",
+    "code": "FAK",
+    "name": "Khan",
+    "roles": [
+     "surgeon",
+     "scheduler",
+     "admin"
+    ],
+    "active": true,
+    "fullName": "Faraz Khan"
+   },
+   {
+    "id": "s2",
+    "code": "MAB",
+    "name": "Burchett",
+    "roles": [
+     "surgeon"
+    ],
+    "active": true,
+    "fullName": "Michael Burchett"
+   },
+   {
+    "id": "s3",
+    "code": "BDA",
+    "name": "Acton",
+    "roles": [
+     "surgeon"
+    ],
+    "active": true,
+    "fullName": "Benjamin Acton"
+   },
+   {
+    "id": "s4",
+    "code": "AFP",
+    "name": "Philip",
+    "roles": [
+     "surgeon"
+    ],
+    "active": true,
+    "fullName": "Andrew Philip"
+   },
+   {
+    "id": "s5",
+    "code": "NF",
+    "name": "Fierce",
+    "roles": [
+     "surgeon"
+    ],
+    "active": true,
+    "fullName": "Nathan Fierce"
+   },
+   {
+    "id": "s6",
+    "code": "SRK",
+    "name": "Sarkar",
+    "roles": [
+     "surgeon"
+    ],
+    "active": true,
+    "fullName": ""
+   }
+  ],
+  "surgeonRules": {
+   "s1": {
+    "name": "Khan",
+    "eastFeed": {
+     "rule": "PRIMARY: eligible only on days with no Davenport (East) call assignment. BACKUP: allowed even on East call days (Faraz 9/21). East assignments are read from the Davenport app's schedule_weeks for the surgeon whose code is FAK.",
+     "enabled": true,
+     "forecast": true,
+     "eastBlocksBackup": false,
+     "eastBlocksPrimary": true,
+     "eastBackupCountsAsBusy": true
+    },
+    "weekdays": {
+     "allowed": [
+      "Mon",
+      "Wed"
+     ],
+     "autoOffer": true
+    },
+    "monthlyCap": null,
+    "poolMember": true,
+    "backupOptOut": false,
+    "eastStanding": [
+     {
+      "days": [
+       "12-24",
+       "12-25"
+      ],
+      "name": "Christmas"
+     }
+    ],
+    "holidays2026": {
+     "thanksgiving": {
+      "days": [
+       "2026-11-26",
+       "2026-11-27",
+       "2026-11-28",
+       "2026-11-29"
+      ],
+      "role": "primary",
+      "source": "Faraz 9/21 (evening); confirmed by Faraz 9/22 (evening)"
+     }
+    },
+    "weekendStyle": "block",
+    "monthlyTarget": null,
+    "weekendsInPool": true,
+    "availabilityMode": "weekends-plus-weekdays",
+    "hardNeverWeekdays": [
+     "Tue",
+     "Thu"
+    ],
+    "maxConsecutiveDays": 3,
+    "primaryContribution": "weekends",
+    "maxConsecutiveAnyRole": 4,
+    "hardNeverWeekdaysRoles": [
+     "primary"
+    ],
+    "holidayUnitCountsAsOneDay": true
+   },
+   "s2": {
+    "name": "Burchett",
+    "timeOff": [
+     {
+      "end": "2027-01-10",
+      "start": "2027-01-09"
+     },
+     {
+      "end": "2027-01-17",
+      "start": "2027-01-16"
+     },
+     {
+      "end": "2027-02-14",
+      "start": "2027-02-12"
+     },
+     {
+      "end": "2027-04-11",
+      "start": "2027-04-09"
+     }
+    ],
+    "monthlyCap": {
+     "primary": 8,
+     "preferred": 7
+    },
+    "poolMember": true,
+    "backupOptOut": false,
+    "splitPartner": "s3",
+    "weekendStyle": "split",
+    "availabilityMode": "whitelist-recurring",
+    "explicitAvailable": {
+     "2026-10": [
+      "2026-10-06",
+      "2026-10-10",
+      "2026-10-11",
+      "2026-10-14",
+      "2026-10-25",
+      "2026-10-26",
+      "2026-10-28"
+     ],
+     "2026-11": {
+      "backup": [
+       "2026-11-02",
+       "2026-11-04",
+       "2026-11-06",
+       "2026-11-09",
+       "2026-11-14",
+       "2026-11-15",
+       "2026-11-16",
+       "2026-11-18"
+      ],
+      "primary": [
+       "2026-11-03",
+       "2026-11-07",
+       "2026-11-08",
+       "2026-11-11",
+       "2026-11-20",
+       "2026-11-23",
+       "2026-11-25"
+      ]
+     },
+     "2026-12": [
+      "2026-12-01",
+      "2026-12-05",
+      "2026-12-06",
+      "2026-12-09",
+      "2026-12-12",
+      "2026-12-13",
+      "2026-12-14",
+      "2026-12-19",
+      "2026-12-20",
+      "2026-12-23",
+      "2026-12-25",
+      "2026-12-26",
+      "2026-12-27",
+      "2026-12-28",
+      "2026-12-30",
+      "2026-12-31",
+      "2027-01-01",
+      "2027-01-02",
+      "2027-01-03"
+     ]
+    },
+    "holidayPreference": "Split Christmas: every other day, or 2 on then off",
+    "weekendsAvailable": {
+     "backup": true,
+     "primary": true
+    },
+    "explicitBackupOnly": {
+     "2026-10": [
+      "2026-10-12"
+     ]
+    },
+    "explicitListMonths": [
+     "2026-10",
+     {
+      "month": "2026-11",
+      "roles": [
+       "primary",
+       "backup"
+      ]
+     },
+     "2026-12"
+    ],
+    "maxConsecutiveDays": 2,
+    "recurringAvailable": [
+     {
+      "nth": [
+       2,
+       4
+      ],
+      "weekday": "Mon"
+     },
+     {
+      "nth": [
+       1
+      ],
+      "weekday": "Tue"
+     },
+     {
+      "nth": [
+       2,
+       4
+      ],
+      "weekday": "Wed"
+     }
+    ],
+    "explicitUnavailable": {
+     "2026-10": [
+      "2026-10-02",
+      "2026-10-03",
+      "2026-10-04",
+      "2026-10-18",
+      "2026-10-23",
+      "2026-10-24",
+      "2026-10-30",
+      "2026-10-31",
+      "2026-11-01"
+     ]
+    },
+    "maxConsecutiveAnyRole": 3,
+    "holidayUnitCountsAsOneDay": false
+   },
+   "s3": {
+    "name": "Acton",
+    "timeOff": [
+     {
+      "end": "2026-11-22",
+      "start": "2026-11-19"
+     },
+     {
+      "end": "2026-11-29",
+      "start": "2026-11-25"
+     }
+    ],
+    "monthlyCap": null,
+    "poolMember": true,
+    "backupOptOut": false,
+    "holidayRules": {
+     "holidaysOff": [
+      "Thanksgiving"
+     ],
+     "alternatingDaysOk": true,
+     "neverThanksgiving": true,
+     "christmasOrNewYearOk": true
+    },
+    "splitPartner": "s2",
+    "weekendStyle": "split",
+    "recurringAvoid": [
+     {
+      "weight": "medium",
+      "weekday": "Sun",
+      "beforeNthMonday": [
+       2,
+       4
+      ]
+     }
+    ],
+    "availabilityMode": "blacklist-recurring",
+    "explicitAvailable": {
+     "2026-10": {
+      "backup": [
+       "2026-10-06",
+       "2026-10-08",
+       "2026-10-20"
+      ],
+      "primary": [
+       "2026-10-05",
+       "2026-10-07",
+       "2026-10-09",
+       "2026-10-10",
+       "2026-10-11",
+       "2026-10-17",
+       "2026-10-18",
+       "2026-10-19",
+       "2026-10-21",
+       "2026-10-23"
+      ]
+     }
+    },
+    "hardNeverWeekdays": [
+     "Tue"
+    ],
+    "explicitListMonths": [
+     "2026-10"
+    ],
+    "maxConsecutiveDays": 3,
+    "recurringUnavailable": [
+     {
+      "nth": [
+       2,
+       4
+      ],
+      "weekday": "Mon"
+     },
+     {
+      "nth": [
+       2,
+       4
+      ],
+      "weekday": "Wed"
+     }
+    ],
+    "maxConsecutiveAnyRole": 4,
+    "hardNeverWeekdaysRoles": [
+     "primary"
+    ],
+    "holidayUnitCountsAsOneDay": false
+   },
+   "s4": {
+    "name": "Philip",
+    "aledo": {
+     "weekdays": [
+      {
+       "nth": [
+        1,
+        3
+       ],
+       "weekday": "Wed"
+      },
+      {
+       "weekday": "Fri",
+       "nthWeekOfMonth": 3
+      }
+     ],
+     "avoidWholeWeek": "strong",
+     "hardAvoidDayBefore": true
+    },
+    "timeOff": [
+     {
+      "end": "2026-10-15",
+      "start": "2026-10-15"
+     }
+    ],
+    "backupCap": {
+     "perMonthDays": 7,
+     "weekendsPerMonth": 1
+    },
+    "poolMember": true,
+    "preferences": {
+     "noFullWeek": true,
+     "maxMajorHolidays": 1
+    },
+    "backupOptOut": false,
+    "holidayRules": {
+     "maxMajorHolidays": 1
+    },
+    "weekendStyle": "block",
+    "availableWeeks": [
+     "2026-11-09",
+     "2026-11-23",
+     "2026-12-07",
+     "2026-12-21",
+     "2026-12-28",
+     "2027-01-11",
+     "2027-01-25",
+     "2027-02-08",
+     "2027-02-22",
+     "2027-03-08",
+     "2027-03-22",
+     "2027-03-29",
+     "2027-04-12",
+     "2027-04-26",
+     "2027-05-10",
+     "2027-05-24",
+     "2027-06-07",
+     "2027-06-21",
+     "2027-06-28"
+    ],
+    "availabilityMode": "whitelist-weeks",
+    "explicitAvailable": {
+     "2026-10": {
+      "primary": [
+       "2026-10-08",
+       "2026-10-13",
+       "2026-10-16",
+       "2026-10-27",
+       "2026-10-29",
+       "2026-10-30",
+       "2026-10-31",
+       "2026-11-01"
+      ]
+     }
+    },
+    "explicitListMonths": [
+     {
+      "month": "2026-10",
+      "roles": [
+       "primary"
+      ]
+     }
+    ],
+    "maxConsecutiveDays": 4,
+    "maxConsecutiveAnyRole": 4,
+    "explicitBackupUnavailable": {
+     "2026-10": [
+      "2026-10-15",
+      "2026-10-07",
+      "2026-10-21",
+      "2026-10-23"
+     ]
+    },
+    "holidayUnitCountsAsOneDay": false
+   },
+   "s5": {
+    "name": "Fierce",
+    "eastFeed": {
+     "rule": "Davenport week flagged isBackup (Fierce PRIMARY at East) → Fierce is Silvis BACKUP every day Mon–Sun. Davenport week flagged isFierceBackup (Fierce BACKUP at East) → Fierce is Silvis PRIMARY every day Mon–Sun (24/7).",
+     "enabled": true,
+     "deriveFrom": "2026-11-02",
+     "statedWeeks": {
+      "source": "Faraz 9/21 (evening)",
+      "eastBackup": [
+       "2026-10-12",
+       "2026-12-07"
+      ],
+      "eastPrimary": [
+       "2026-11-09"
+      ]
+     },
+     "liveVerifiedOn": "2026-09-21",
+     "liveVerifiedThrough": "2026-11-15",
+     "liveVerifiedDavenportBackupWeeks": [
+      "2026-10-12"
+     ],
+     "liveVerifiedDavenportPrimaryWeeks": [
+      "2026-09-28",
+      "2026-11-09"
+     ]
+    },
+    "monthlyCap": {
+     "primary": 14,
+     "countsEastDays": true
+    },
+    "poolMember": true,
+    "backupOptOut": false,
+    "weekendStyle": "block",
+    "availabilityMode": "derived-from-east-plus-weekday-pattern",
+    "maxConsecutiveDays": 7,
+    "outsideDerivedWeeks": {
+     "source": "Fierce via Faraz 9/21",
+     "canBePrimary": true,
+     "weekdayPattern": {
+      "Fri": {
+       "where": "Clinton or Dubuque (rotates)",
+       "backup": true,
+       "primary": "weekend-block-only"
+      },
+      "Mon": {
+       "where": "East (Davenport)",
+       "backup": true,
+       "primary": false
+      },
+      "Sat": {
+       "where": "—",
+       "backup": true,
+       "primary": "weekend-block-only"
+      },
+      "Sun": {
+       "where": "—",
+       "backup": true,
+       "primary": "weekend-block-only"
+      },
+      "Thu": {
+       "where": "Clinton all day",
+       "backup": true,
+       "primary": false
+      },
+      "Tue": {
+       "where": "Clinton all day",
+       "backup": true,
+       "primary": false
+      },
+      "Wed": {
+       "where": "Office Clinton/Silvis",
+       "backup": true,
+       "primary": true,
+       "preferred": true
+      }
+     }
+    },
+    "maxConsecutiveAnyRole": 7,
+    "holidayUnitCountsAsOneDay": false
+   },
+   "s6": {
+    "name": "Sarkar",
+    "poolMember": true,
+    "backupOptOut": false,
+    "weekendStyle": "daily",
+    "monthlyTarget": null,
+    "availabilityMode": "whitelist-windows",
+    "availableWindows": [
+     {
+      "end": "2026-10-23",
+      "start": "2026-10-19"
+     },
+     {
+      "end": "2026-11-20",
+      "start": "2026-11-16"
+     },
+     {
+      "end": "2026-12-18",
+      "start": "2026-12-14"
+     },
+     {
+      "end": "2027-01-15",
+      "start": "2027-01-11"
+     }
+    ],
+    "daysPerWindowWeek": {
+     "target": 2,
+     "countsBackup": false
+    },
+    "maxConsecutiveDays": 2,
+    "preferAlternateDays": true,
+    "weekendBlockPenalty": "strong",
+    "maxConsecutiveAnyRole": 2,
+    "handoffPartnerRequired": true,
+    "holidayUnitCountsAsOneDay": false
+   }
+  },
+  "groupRules": {
+   "locks": {
+    "nullSlotIsNeverLocked": true
+   },
+   "timeOff": {
+    "kinds": [
+     "vacation"
+    ],
+    "approval": "none — surgeons enter their own vacations; the app logs them (audit) and blocks those days from call",
+    "noCallDays": false,
+    "conflictRule": "A vacation cannot be entered over a day the surgeon is already published as primary or backup — the entry is refused with the conflicting dates and a link to open a trade; enter the vacation after the trade is applied (the scheduler's only override is to edit the schedule first - the DB trigger refuses every caller)",
+    "trailingEdge": "A vacation day also blocks the day before it (the 07:00 shift end falls on the vacation day)"
+   },
+   "weights": {
+    "low": 1,
+    "medium": 3,
+    "strong": 10,
+    "preferred": -1,
+    "eastUnknown": 1,
+    "patternDaily": 5,
+    "longRunPerDay": 3,
+    "noTargetWeekday": 1,
+    "patternMismatch": 3,
+    "backToBackWeekend": 3,
+    "backupAfterPrimary": 1,
+    "smoothingTolerance": 2,
+    "weekendContribution": 3,
+    "eastForecastBelowThreshold": 2
+   },
+   "eastFeed": {
+    "forecast": {
+     "runs": 200,
+     "enabled": true,
+     "busyThreshold": 0.5,
+     "penaltyBelowThreshold": "eastForecastBelowThreshold"
+    },
+    "unknownIsBusy": false
+   },
+   "holidays": {
+    "ignoreWeekdayRules": true,
+    "mondayMinorAbsorbsWeekend": true,
+    "anyoneMayCoverUnlessOptedOut": true
+   },
+   "fillOrder": [
+    "primary",
+    "backup"
+   ],
+   "slotsPerDay": [
+    "primary",
+    "backup"
+   ],
+   "weekendUnit": {
+    "days": [
+     "Fri",
+     "Sat",
+     "Sun"
+    ],
+    "patterns": {
+     "block": "one surgeon Fri+Sat+Sun",
+     "daily": "three independent days (fallback only)",
+     "split": "one surgeon Fri+Sun, another surgeon Sat"
+    }
+   },
+   "backupPolicy": {
+    "source": "Faraz 9/22",
+    "openToEveryone": true
+   },
+   "dailyHandoff": "Service hands off every morning at shift change; the weekend surgeon covers everyone Fri–Sun; only the primary must be physically in Silvis.",
+   "holidayPolicy": "Same holiday set as Davenport (3 major + 3 minor) as UNITS with one primary + one backup sticking through each unit — see holidays.rules.",
+   "dayBeforeRules": {
+    "trailingEdgeRoles": [
+     "primary"
+    ],
+    "aledoDayBeforeRoles": [
+     "primary"
+    ]
+   },
+   "regressionScope": "Hard-rule assertions in test/generator-regression.js apply to generator-placed slots only; locks are byte-identical (item 3) and lock collisions are reported as warnings; item 1 accepts externalCover; item 13 accepts 'uncovered with reasons'.",
+   "shiftAccounting": {
+    "unit": "one 24-hour day = 1 shift",
+    "tallies": [
+     "month",
+     "yearToDate",
+     "rolling12Months"
+    ],
+    "weights": null,
+    "partialShifts": false,
+    "countSeparately": [
+     "primary",
+     "backup",
+     "weekendDays",
+     "holidays"
+    ]
+   },
+   "whitelistMonths": {
+    "rule": "A month is governed by an explicit date list only when it appears in surgeonRules[id].explicitListMonths (completed from the seed's explicitAvailable keys, for every surgeon who has one: Burchett Oct+Nov+Dec, Acton Oct (his November list is preferences since 9/22 evening, Prompt 12 Y), Philip Oct). In a governed month the eligible set for a governed ROLE is exactly the explicit available/backup_only rows minus unavailable rows; in other months (and for a role the entry does not govern) recurring patterns + weekendsAvailable minus unavailable rows. Dates in a list that spill into a neighbouring month are additive there and do not put that month into whitelist mode.",
+    "roleScope": "9/22 (Prompt 12 I + T): rules.js reads the role scope literally. A plain 'YYYY-MM' entry governs PRIMARY only (backup is open to everyone - Burchett's Oct, Acton's Oct); an object entry { month: 'YYYY-MM', roles: [...] } governs exactly the roles it names, so { month: '2026-11', roles: ['primary', 'backup'] } restricts BOTH roles (Burchett's November list: the ER-panel author published it, so he is not placed on a November day he did not offer in either role; Acton's November object entry left with Prompt 12 Y; 9/23: Burchett's December entry is the object form too - his 9/17 list names primary or backup). The importer keeps an explicit entry as written; when it completes a missing month from the explicitAvailable keys it writes the plain (primary-only) form for a plain or two-role list and { month, roles: [role] } for a one-role list - an author who wants backup governed writes the object entry in the seed. Under groupRules.backupPolicy.openToEveryone false a plain entry governs both roles again."
+   },
+   "compensationInApp": false,
+   "defaultMonthlyCap": {
+    "primary": 8
+   },
+   "generationHorizons": {
+    "presets": [
+     {
+      "months": 3
+     },
+     {
+      "months": 6
+     },
+     {
+      "months": 9
+     },
+     {
+      "months": 12
+     }
+    ],
+    "firstRound": {
+     "end": "2027-01-03",
+     "start": "2026-11-02"
+    }
+   },
+   "everyDayNeedsBackup": true,
+   "responseTimeMinutes": 30,
+   "droppedFromDavenport": [
+    "APP roster/shifts/vacations",
+    "Fierce separate backup weeks (replaced by daily backup + derived weeks)",
+    "no-call days",
+    "vacation approval workflow + deadline reminders",
+    "half-day / weighted shift accounting",
+    "compensation and $ display",
+    "Davenport holiday A/B (day + night-before) convention"
+   ],
+   "everyDayNeedsPrimary": true,
+   "availabilityPrecedence": [
+    "time_off (+ trailing edge: the day before a vacation blocks PRIMARY)",
+    "explicit unavailable / no_backup rows",
+    "explicit available / backup_only rows (a dated row for a role lifts the next tier for that date and role only; a manual lock is not a row)",
+    "weekday-pattern rules a dated row lifts: hardNeverWeekdays (roles per hardNeverWeekdaysRoles, primary only by default since 9/22; row-liftable since 9/22 evening, Prompt 12 W), recurring patterns (recurringUnavailable), weekday patterns (weekdays.allowed, outsideDerivedWeeks incl. weekend-block-only), weeks / governed months, day-before-Aledo - since 9/22 every member of this tier restricts PRIMARY only unless its roles say otherwise (outsideDerivedWeeks is per-role data and says backup:true everywhere)",
+    "mode defaults (weekendsAvailable, pool membership)",
+    "independent gates no row lifts: availableWindows (both roles, holidays included; edit the window in Setup instead - Prompt 12 W), backupOptOut (hard on every backup slot), East busy / forecast-busy, derived East weeks, caps, maxConsecutiveDays, same-day other role, holiday opt-outs"
+   ],
+   "carriedOverFromDavenport": [
+    "office notifications (office_contacts + digest emails)",
+    "calendar sync (per-surgeon ICS subscription feed)",
+    "refresh / client version check",
+    "data management (backup, restore, export, import, snapshots)",
+    "all safety features (payloadLooksWiped, intentional-wipe ref, snapshot-before-destructive, restore UI, audit log)",
+    "shift trades",
+    "in-app notifications + email"
+   ],
+   "countBackupInConsecutive": false,
+   "backupDistinctFromPrimary": true,
+   "defaultMaxConsecutiveDays": 2,
+   "noOperatingElsewhereWhilePrimary": true
+  },
+  "holidays": {
+   "rules": {
+    "tiers": {
+     "major": [
+      "New Year's",
+      "Thanksgiving",
+      "Christmas"
+     ],
+     "minor": [
+      "Memorial Day",
+      "July 4th",
+      "Labor Day"
+     ]
+    },
+    "fairness": "Track major and minor holiday counts per surgeon separately, lifetime, tenure-normalized (same idea as the Davenport holidayRate).",
+    "unitModel": "One primary + one backup per holiday unit; both stick through every day of the unit. A holiday unit takes precedence over the weekend unit it overlaps; the leftover weekend days form a reduced weekend unit.",
+    "mondayMinor": "A minor holiday (Memorial Day, July 4th, Labor Day) that falls on a Monday absorbs the weekend before it: the unit is Sat-Mon, one primary and one backup through all three days; the Friday stays a standalone weekend day (the reduced weekend unit). A minor holiday on any other weekday is its own day. July 4th is read on its observed day: a Sunday July 4 is observed Monday (Sat-Mon); a Saturday July 4 is observed Friday. Thanksgiving is Thu-Sun every year. Faraz 9/22 evening and 9/22 late; switch: groupRules.holidays.mondayMinorAbsorbsWeekend, applied when a year's units are built."
+   },
+   "units": {
+    "2026": [
+     {
+      "days": [
+       "2026-05-25"
+      ],
+      "name": "Memorial Day",
+      "tier": "minor"
+     },
+     {
+      "days": [
+       "2026-07-04"
+      ],
+      "name": "July 4th",
+      "tier": "minor"
+     },
+     {
+      "days": [
+       "2026-09-07"
+      ],
+      "name": "Labor Day",
+      "tier": "minor"
+     },
+     {
+      "days": [
+       "2026-11-26",
+       "2026-11-27",
+       "2026-11-28",
+       "2026-11-29"
+      ],
+      "name": "Thanksgiving",
+      "tier": "major"
+     },
+     {
+      "days": [
+       "2026-12-24",
+       "2026-12-25"
+      ],
+      "name": "Christmas",
+      "tier": "major"
+     },
+     {
+      "days": [
+       "2026-12-31",
+       "2027-01-01"
+      ],
+      "name": "New Year's",
+      "tier": "major"
+     }
+    ],
+    "2027": [
+     {
+      "days": [
+       "2027-05-29",
+       "2027-05-30",
+       "2027-05-31"
+      ],
+      "name": "Memorial Day",
+      "tier": "minor"
+     },
+     {
+      "days": [
+       "2027-07-03",
+       "2027-07-04",
+       "2027-07-05"
+      ],
+      "name": "July 4th",
+      "tier": "minor"
+     },
+     {
+      "days": [
+       "2027-09-04",
+       "2027-09-05",
+       "2027-09-06"
+      ],
+      "name": "Labor Day",
+      "tier": "minor"
+     },
+     {
+      "days": [
+       "2027-11-25",
+       "2027-11-26",
+       "2027-11-27",
+       "2027-11-28"
+      ],
+      "name": "Thanksgiving",
+      "tier": "major"
+     },
+     {
+      "days": [
+       "2027-12-24",
+       "2027-12-25"
+      ],
+      "name": "Christmas",
+      "tier": "major"
+     },
+     {
+      "days": [
+       "2027-12-31",
+       "2028-01-01"
+      ],
+      "name": "New Year's",
+      "tier": "major"
+     }
+    ]
+   }
+  },
+  "timeOffRows": [
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-15",
+    "end_date": "2026-10-15",
+    "kind": "vacation"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-11-19",
+    "end_date": "2026-11-22",
+    "kind": "vacation"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-11-25",
+    "end_date": "2026-11-29",
+    "kind": "vacation"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2027-01-09",
+    "end_date": "2027-01-10",
+    "kind": "vacation"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2027-01-16",
+    "end_date": "2027-01-17",
+    "kind": "vacation"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2027-02-12",
+    "end_date": "2027-02-14",
+    "kind": "vacation"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2027-04-09",
+    "end_date": "2027-04-11",
+    "kind": "vacation"
+   }
+  ],
+  "availabilityRows": [
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-02",
+    "end_date": "2026-10-04",
+    "kind": "unavailable",
+    "role": "any"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-05",
+    "end_date": "2026-10-05",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-06",
+    "end_date": "2026-10-06",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-06",
+    "end_date": "2026-10-06",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-07",
+    "end_date": "2026-10-07",
+    "kind": "no_backup",
+    "role": "backup"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-07",
+    "end_date": "2026-10-07",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-08",
+    "end_date": "2026-10-08",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-08",
+    "end_date": "2026-10-08",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-09",
+    "end_date": "2026-10-11",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-10",
+    "end_date": "2026-10-11",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-12",
+    "end_date": "2026-10-12",
+    "kind": "backup_only",
+    "role": "any"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-13",
+    "end_date": "2026-10-13",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-14",
+    "end_date": "2026-10-14",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-15",
+    "end_date": "2026-10-15",
+    "kind": "no_backup",
+    "role": "backup"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-16",
+    "end_date": "2026-10-16",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-17",
+    "end_date": "2026-10-19",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-18",
+    "end_date": "2026-10-18",
+    "kind": "unavailable",
+    "role": "any"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-20",
+    "end_date": "2026-10-20",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-21",
+    "end_date": "2026-10-21",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-21",
+    "end_date": "2026-10-21",
+    "kind": "no_backup",
+    "role": "backup"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-23",
+    "end_date": "2026-10-23",
+    "kind": "no_backup",
+    "role": "backup"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-23",
+    "end_date": "2026-10-24",
+    "kind": "unavailable",
+    "role": "any"
+   },
+   {
+    "person_id": "s3",
+    "start_date": "2026-10-23",
+    "end_date": "2026-10-23",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-25",
+    "end_date": "2026-10-26",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-27",
+    "end_date": "2026-10-27",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-28",
+    "end_date": "2026-10-28",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s4",
+    "start_date": "2026-10-29",
+    "end_date": "2026-11-01",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-10-30",
+    "end_date": "2026-11-01",
+    "kind": "unavailable",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-02",
+    "end_date": "2026-11-02",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-03",
+    "end_date": "2026-11-03",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-04",
+    "end_date": "2026-11-04",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-06",
+    "end_date": "2026-11-06",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-07",
+    "end_date": "2026-11-08",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-09",
+    "end_date": "2026-11-09",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-11",
+    "end_date": "2026-11-11",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-14",
+    "end_date": "2026-11-16",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-18",
+    "end_date": "2026-11-18",
+    "kind": "available",
+    "role": "backup"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-20",
+    "end_date": "2026-11-20",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-23",
+    "end_date": "2026-11-23",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-11-25",
+    "end_date": "2026-11-25",
+    "kind": "available",
+    "role": "primary"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-12-01",
+    "end_date": "2026-12-01",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-12-05",
+    "end_date": "2026-12-06",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-12-09",
+    "end_date": "2026-12-09",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-12-12",
+    "end_date": "2026-12-14",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-12-19",
+    "end_date": "2026-12-20",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-12-23",
+    "end_date": "2026-12-23",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-12-25",
+    "end_date": "2026-12-28",
+    "kind": "available",
+    "role": "any"
+   },
+   {
+    "person_id": "s2",
+    "start_date": "2026-12-30",
+    "end_date": "2027-01-03",
+    "kind": "available",
+    "role": "any"
+   }
+  ],
+  "schedule": {
+   "2026-09-14": {
+    "primary": "s2",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-15": {
+    "primary": "s4",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-16": {
+    "primary": "s4",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-17": {
+    "primary": "s4",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-18": {
+    "primary": "s4",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-19": {
+    "primary": "s2",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-20": {
+    "primary": "s2",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-21": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-22": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-23": {
+    "primary": "s2",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-24": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-25": {
+    "primary": "s2",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-26": {
+    "primary": "s3",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-27": {
+    "primary": "s2",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-09-28": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": "Atwell"
+   },
+   "2026-09-29": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": "Atwell"
+   },
+   "2026-09-30": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": "Atwell"
+   },
+   "2026-10-01": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": "Atwell"
+   },
+   "2026-10-02": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": "Atwell"
+   },
+   "2026-10-03": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": "Atwell"
+   },
+   "2026-10-04": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": "Atwell"
+   },
+   "2026-10-05": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-06": {
+    "primary": "s2",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-07": {
+    "primary": "s3",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-08": {
+    "primary": "s4",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-09": {
+    "primary": "s3",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-10": {
+    "primary": "s3",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-11": {
+    "primary": "s3",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-12": {
+    "primary": "s5",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-13": {
+    "primary": "s4",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-14": {
+    "primary": "s2",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-16": {
+    "primary": "s4",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-17": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-18": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-19": {
+    "primary": "s3",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-20": {
+    "primary": "s6",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-21": {
+    "primary": "s3",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-22": {
+    "primary": "s6",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-23": {
+    "primary": "s3",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-25": {
+    "primary": "s2",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-26": {
+    "primary": "s2",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-27": {
+    "primary": "s4",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-28": {
+    "primary": "s2",
+    "backup": "s4",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-29": {
+    "primary": "s4",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-30": {
+    "primary": "s4",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-10-31": {
+    "primary": "s4",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-01": {
+    "primary": "s4",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-02": {
+    "primary": "s3",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-03": {
+    "primary": "s2",
+    "backup": "s3",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-04": {
+    "primary": "s3",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-05": {
+    "primary": "s3",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-06": {
+    "primary": "s3",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-07": {
+    "primary": "s2",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-08": {
+    "primary": "s2",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-09": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": false,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-10": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": false,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-11": {
+    "primary": "s2",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-12": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": false,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-13": {
+    "primary": null,
+    "backup": "s5",
+    "primaryLocked": false,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-14": {
+    "primary": "s3",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-15": {
+    "primary": "s3",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-16": {
+    "primary": "s3",
+    "backup": "s5",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-17": {
+    "primary": null,
+    "backup": "s3",
+    "primaryLocked": false,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-18": {
+    "primary": "s3",
+    "backup": "s2",
+    "primaryLocked": true,
+    "backupLocked": true,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-20": {
+    "primary": "s2",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-23": {
+    "primary": "s2",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-25": {
+    "primary": "s1",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-26": {
+    "primary": "s1",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-27": {
+    "primary": "s1",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-28": {
+    "primary": "s1",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   },
+   "2026-11-29": {
+    "primary": "s1",
+    "backup": null,
+    "primaryLocked": true,
+    "backupLocked": false,
+    "source": "import",
+    "externalCover": null
+   }
+  },
+  "eastBusyDays": {
+   "s1": {}
+  },
+  "eastForecast": {
+   "s1": {
+    "2026-11-16": 0.25,
+    "2026-11-17": 0.29,
+    "2026-11-18": 0.04,
+    "2026-11-19": 0.02,
+    "2026-11-20": 0.09,
+    "2026-11-21": 0,
+    "2026-11-22": 0.09,
+    "2026-11-23": 0.67,
+    "2026-11-24": 0.21,
+    "2026-11-25": 0,
+    "2026-11-26": 0,
+    "2026-11-27": 0,
+    "2026-11-28": 0,
+    "2026-11-29": 0,
+    "2026-11-30": 0.27,
+    "2026-12-01": 0.41,
+    "2026-12-02": 0.24,
+    "2026-12-03": 0.28,
+    "2026-12-04": 0.12,
+    "2026-12-05": 0.09,
+    "2026-12-06": 0.03,
+    "2026-12-07": 0.41,
+    "2026-12-08": 0.26,
+    "2026-12-09": 0.28,
+    "2026-12-10": 0.05,
+    "2026-12-11": 0,
+    "2026-12-12": 0,
+    "2026-12-13": 0,
+    "2026-12-14": 0.26,
+    "2026-12-15": 0.07,
+    "2026-12-16": 0.04,
+    "2026-12-17": 0.04,
+    "2026-12-18": 0.19,
+    "2026-12-19": 0,
+    "2026-12-20": 0.19,
+    "2026-12-21": 1,
+    "2026-12-22": 1,
+    "2026-12-23": 1,
+    "2026-12-24": 1,
+    "2026-12-25": 1,
+    "2026-12-26": 1,
+    "2026-12-27": 0.72,
+    "2026-12-28": 0,
+    "2026-12-29": 0.6,
+    "2026-12-30": 0.4,
+    "2026-12-31": 0,
+    "2027-01-01": 0,
+    "2027-01-02": 0,
+    "2027-01-03": 0.03,
+    "2027-01-04": 0.19,
+    "2027-01-05": 0,
+    "2027-01-06": 0,
+    "2027-01-07": 0,
+    "2027-01-08": 0.03,
+    "2027-01-09": 0,
+    "2027-01-10": 0.03,
+    "2027-01-11": 0.23,
+    "2027-01-12": 0.14,
+    "2027-01-13": 0.05,
+    "2027-01-14": 0.05,
+    "2027-01-15": 0.53,
+    "2027-01-16": 0,
+    "2027-01-17": 0.53,
+    "2027-01-18": 0.26,
+    "2027-01-19": 0.24,
+    "2027-01-20": 0.21,
+    "2027-01-21": 0.21,
+    "2027-01-22": 0.07,
+    "2027-01-23": 0,
+    "2027-01-24": 0.07,
+    "2027-01-25": 0.22,
+    "2027-01-26": 0.13,
+    "2027-01-27": 0.18,
+    "2027-01-28": 0.15,
+    "2027-01-29": 0.01,
+    "2027-01-30": 0,
+    "2027-01-31": 0.01,
+    "2027-02-01": 0.31,
+    "2027-02-02": 0.34,
+    "2027-02-03": 0.31,
+    "2027-02-04": 0.34,
+    "2027-02-05": 0.33,
+    "2027-02-06": 0.31,
+    "2027-02-07": 0.02,
+    "2027-02-08": 0.55,
+    "2027-02-09": 0.69,
+    "2027-02-10": 0.65,
+    "2027-02-11": 0.62,
+    "2027-02-12": 0.57,
+    "2027-02-13": 0.55,
+    "2027-02-14": 0.02,
+    "2027-02-15": 0.08,
+    "2027-02-16": 0.28,
+    "2027-02-17": 0.24,
+    "2027-02-18": 0.24,
+    "2027-02-19": 0.31,
+    "2027-02-20": 0.05,
+    "2027-02-21": 0.26
+   }
+  },
+  "eastOverrides": {},
+  "eastFeedCoverage": {
+   "from": "2026-09-28",
+   "to": "2026-11-15"
+  },
+  "eastDerived": [
+   {
+    "weekMonday": "2026-11-09",
+    "surgeonId": "s5",
+    "silvisRole": "backup",
+    "source": "feed"
+   },
+   {
+    "weekMonday": "2026-12-07",
+    "surgeonId": "s5",
+    "silvisRole": "primary",
+    "source": "stated"
+   }
+  ]
+ }
+}

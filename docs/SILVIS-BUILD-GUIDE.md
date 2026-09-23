@@ -303,18 +303,17 @@ open 10/15 primary).
 
 **Candidate score (lexicographic, lower is better) — Prompt 12 J, 9/22:**
 `uncoveredPrimary ×1e9 + uncoveredBackup ×1e7 + hardViolations ×1e6 (should be 0 by construction) + Σsoft ×1e3 + primaryDeviation ×300 + backupDeviation ×100 + weekendSpread ×10 + holidaySpread`.
-Targets are per role and equal by default (`genTargets`, **equal shares — Faraz 9/22**): each pool member (active, `poolMember !== false`, no
-`availableWindows`, not `type: "external"`) gets a primary target = an equal share of the month's open primary slots
-(after the windows surgeon's reserved window primaries — Sarkar's own target is `daysPerWindowWeek.target` × her window weeks in the month, N), clipped by the K cap and floored by locked primaries, and a
-backup target = an equal share of the month's open backup slots (clipped by `backupCap.perMonthDays`, floored by locked
-backups); `monthlyTarget: null` means equal share, a number sets the primary target, `{ primary, backup }` sets each;
-there is no neutral term. Step 4 scores backup placements against the backup targets (caps count primary only — K),
-step 6 smooths primary days and then backup days separately, and `diagnostics.impliedTargets` shows every share plus,
-per member, the two targets and the "allowed by rules" slot counts so an availability shortfall is visible. Known
-property of the flat share (9/22 J review, kept on purpose pending a decision): it divides the *open* slots by the whole
-pool while the deviation counts whole-month days, so in a month where a locked floor or a clip pins a member the targets
-sum to fewer placements than there are open slots (`months[m].placeableAtTarget` vs `primaryOpen` / `backupOpen`) and
-the surplus days are placed by the soft terms alone; read the deviation numbers with that in mind.
+Targets are per role (`genTargets`; **equal shares — Faraz 9/22; water-filled share — Faraz 9/23, item WF**): each pool
+member (active, `poolMember !== false`, no `availableWindows`, not `type: "external"`) gets, per role, the **water-filled
+share** of *all* the pool's slots of the month — the open ones (primary: after the windows surgeon's reserved window
+primaries; Sarkar's own target is `daysPerWindowWeek.target` × her window weeks in the month, N) **plus** the days pool
+members already hold — poured over the members up to each member's clip (the K cap for primary, `backupCap.perMonthDays`
+for backup); a member's target is `min(level, clip)`, **never floored at his locked days** (they count against his share).
+`monthlyTarget: null` means that share, a number sets the primary target, `{ primary, backup }` sets each; there is no
+neutral term. The deviation term is convex (`|count − target| ^ weights.deviationConvexity`, 2). Step 4 scores backup
+placements against the backup targets (caps count primary only — K), step 6 smooths primary days and then backup days
+separately, and `diagnostics.impliedTargets` shows every level plus, per member, the two targets, `lockedHeld` and the
+"allowed by rules" slot counts so an availability shortfall is visible. The model, the knob and the diagnostics are in §15.
 
 **Fill-open-only mode (T, 9/22):** `generate(ctx, start, end, { fillOpenOnly: true })` fixes every slot held on the input
 (locked or not, `externalCover` included) and fills only the open ones — `diagnostics.mode = "fill-open-only"`,
@@ -461,6 +460,37 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   for every pool member; no neutral/zero terms; primary spread then backup spread in the score; smoothing moves backup
   days too. Sarkar is outside the equal-share pool; her soft target is 2 primary days per window week instead (the clinic manager
   9/22 evening; supersedes the daytime 3–4; Prompt 12 N revised).
+- **Water-filled share + convex deviation (Faraz 9/23, item WF, after `docs/REPORT-NOV-BACKUPS-2026-09-23.md`)** —
+  supersedes §6's "flat share" paragraph. *Model* (`generator.js genTargets` / `genWaterFill` / `genDevCost`): per role and
+  calendar month the pool's slots = the open in-range slots (primary: after Sarkar's reserved window primaries) **plus every
+  day of the month a pool member already holds** (import, manual, derived, claimed, published outside the range); they are
+  water-filled over the members up to each member's clip (K clip for primary, `backupCap.perMonthDays` for backup): a member
+  whose clip is below the level takes the clip and the rest share the remainder; a member's target = min(level, clip),
+  **never floored at `lockedHeld`** — his fixed days count against his share and, when they exceed it, he stands above
+  target. A numeric `monthlyTarget` still overrides (the member leaves the fill for that role, his number comes off the
+  slots). The deviation term is `|count − target| ^ convexity` in every place it is read — `genTargetDelta` (day fill,
+  weekend / holiday unit patterns summed per member, repair's `genBestFor`), `genSmooth` (donor = furthest above, receiver
+  = furthest below, any pair whose convex sum strictly falls) and `genEvaluate` (`primaryDeviation` / `backupDeviation` are
+  the convex sums; `GEN_SCORE_WEIGHTS` unchanged). *Knob*: `groupRules.weights.deviationConvexity`, seed **2** = code
+  default `GEN_DEVIATION_CONVEXITY`; `1` is the old flat term; anything below 1 or non-numeric reads as 2. *Diagnostics*:
+  `impliedTargets.convexity`, per month `poolSlots`, `heldByPool`, `primaryShare` / `backupShare` (= the level),
+  `placeableAtTarget` (≥ the open slots now) and `heldAboveShare` (the fixed days over share). *Effect on the published
+  range* (report, nothing regenerated): November backups Fierce 16 → 11, Khan 3 → 5; 34 of 224 slots differ; soft sum 70 →
+  96 — the fairness term outweighs medium soft terms once a member is 2+ days from share, which is the decision's intent;
+  the knob is the lever if the group wants it softer. Tests: `test/nov-backups.test.js` (synthetic; fails on a locked floor
+  and on a flat term) and `test/water-fill.test.js` (`test/fixtures/water-fill-2026-10-07-to-2027-01-03.json`, the
+  pre-publish inputs, the two bestOf-200 runs of the publish, pinned tallies; its own chain step and workflow step, default
+  budget 6000 ms via `SILVIS_GEN_BUDGET_MS`, pinned by `test/ci.test.js`). *Review fixes (9/23, fix stage):* the November
+  case left `test/generator-regression.js` (the harness read 9.9–11.1 s loaded with it inside against its 10 s failing
+  budget); `genWaterFill` reports `level: null` when every member sits on his clip (`primaryShare` / `backupShare` null, the
+  shares at the clips — it read 0); a `weights.deviationConvexity` that is present but rejected is named in
+  `diagnostics.warnings` ("… ignored: needs a finite number >= 1; using 2"); the seed's `s1.monthlyTargetNote` no longer
+  describes the flat share. *Still open outside this item* (wording only; the numbers shown are the new diagnostics): the
+  Generate panel's per-month head line in `index-source.html` (`primary X open − Y reserved = share Z each of N`, an
+  equation that no longer holds — Z is the level over `poolSlots`), its "equal share of the month's open slots" paragraph,
+  the Totals titles, and the same heading in `scripts/preview-generate.js`; `rules.js defaultWeights()` does not carry
+  `deviationConvexity` yet, so Setup shows no placeholder until the blob has it; rules doc §8 item 18 (Sarkar as backup
+  inside her windows under the convex term).
 - **Caps count primary days only**; backup does not count toward any total cap (Burchett's 8, Fierce's 14). Philip's
   explicit backup cap (≤ 7 days, ≤ 1 weekend) remains.
 - **Khan contributes primary on weekends when available**; his backup count is balanced like everyone else's; East

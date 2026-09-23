@@ -327,16 +327,25 @@ Burchett's stated Christmas preference ("2 days on then off") is satisfied by th
 tracked separately from shift counts: major and minor counts per surgeon, lifetime, tenure-normalized — the same idea
 as the Davenport holiday pools.
 
-## 6. Fairness model (differs from Davenport) — ⟶ rewritten 9/22
+## 6. Fairness model (differs from Davenport) — ⟶ rewritten 9/22; ⟶ water-filled share decided 9/23
 
 **"We want everyone to be as equal as possible."** Fairness is measured on two separate counts per surgeon per month
 (and rolling 12 months): **primary shifts** and **backup shifts**. The generator drives both spreads down across the
 pool, within each person's availability:
 
-- **Equal share by default.** Every active pool member (Khan, Burchett, Acton, Philip, Fierce) gets an implied target of
-  an equal share of the month's primary slots and, separately, of its backup slots — after subtracting locked days
-  (Fierce's derived weeks, imports) and Sarkar's own primaries. Nobody has a "neutral" or zero term; `monthlyTarget: null`
-  means "equal share", not "no target".
+- **Water-filled share by default (Faraz 9/23, after `docs/REPORT-NOV-BACKUPS-2026-09-23.md`).** Every active pool member
+  (Khan, Burchett, Acton, Philip, Fierce) gets an implied target per role = his share of **all** the month's slots of the
+  pool for that role — the open ones **and** the ones already fixed (imports, manual locks, Fierce's derived weeks, claims,
+  published days outside the range) — water-filled across the members' clips (a member whose cap / East-day clip is below
+  the level takes the clip and the remainder is shared by the others). A surgeon's own locked and derived-week days
+  **count against** his share; the target is **never floored at his locked count**. The deviation term is **convex**
+  (`|count − target| ^ 2` by default): each slot above share costs more than the one before, and of two candidates below
+  share the one **furthest below** wins — so the leftover slots of a month go to whoever is furthest below share, in both
+  roles, instead of being split by soft terms and jitter (November 2026: Fierce's 8 derived-week backups made his flat
+  target 8 and he took 8 more; with the water-filled share he stands above his 5.8 and the generated backups go to
+  Khan / Acton / Philip — the what-if in `docs/REPORT-WATER-FILL-2026-09-23.md`). Nobody has a "neutral" or zero term;
+  `monthlyTarget: null` means "equal share", not "no target". The published schedule was **not** regenerated for the
+  decision; it applies to every Generate from 9/23 on.
 - **Availability limits the share, not the intent.** Someone who cannot take Thursdays or 2nd/4th Mondays gets fewer of
   those, and the generator makes it up elsewhere for them where it can; the diagnostics show each person's share vs.
   what their rules allowed.
@@ -371,16 +380,28 @@ pool, within each person's availability:
   `members[id]` = `{ primaryTarget, backupTarget, lockedHeld: { primary, backup }, clipPrimary, eastPrimaryDays,
   allowedPrimary, allowedBackup }` — `allowed` is the number of the month's open slots the rules let the surgeon take
   (a weekend day of a full Fri–Sat–Sun unit counts as a block member, a holiday day as a unit candidate), so a target
-  above it is an availability shortfall. `lockedHeld` and the targets are whole-calendar-month figures even where the
-  range only touches the month (`rangeDays`). `placeableAtTarget` = Σ max(0, target − lockedHeld) per role: the flat
-  share divides the *open* slots by the whole pool, so in a month where a locked floor or a clip pins a member (Khan's
-  locked Thanksgiving primaries, Fierce's derived week) it reads *below* `primaryOpen` / `backupOpen` and the surplus days
-  are placed by the soft terms alone — visible, not hidden; whether to redistribute (a water-filled share) is an open
-  decision from the 9/22 J review. `diagnostics.tallies[id].months[m].target` = `{ primary, backup }` (the Totals
+  above it is an availability shortfall. `lockedHeld`, `poolSlots` and the targets are whole-calendar-month figures even
+  where the range only touches the month (`rangeDays`). ⟶ 9/23: `poolSlots: { primary, backup }` = the pool's slots of
+  the month (open + held by pool members), `heldByPool`, `primaryShare` / `backupShare` = the water **level** (the share
+  of an unclipped member), `placeableAtTarget` = Σ max(0, target − lockedHeld) per role = the room below the targets (at
+  least the open slots; above them by `heldAboveShare` = Σ max(0, lockedHeld − target), the fixed days already over share,
+  which the generator balances only by placing nothing more on their holders), `convexity` = the exponent in force;
+  `primaryShare` / `backupShare` read `null` when every member sits on his clip (no level exists — ⟶ 9/23 review fix; the
+  seed never produces that month).
+  `diagnostics.tallies[id].months[m].target` = `{ primary, backup }` (the Totals
   view's **Target** and **Target B** columns — both compare that role's days only; the range row carries the sums).
+- `groupRules.weights.deviationConvexity` (⟶ 9/23; seed value **2**, also the code default): the exponent of the deviation
+  term, `|count − target| ^ convexity`, read wherever the deviation is scored — the primary and backup passes, weekend and
+  holiday unit patterns (the pattern total sums the per-member convex terms), repair, target smoothing and the best-of-N
+  score. `1` restores the flat ±1 term; values between temper the growth (the report shows 1.5 and 1 next to 2). A value
+  that is present but rejected (non-numeric, `NaN`, below 1) is named in `diagnostics.warnings` (`weights.deviationConvexity
+  … ignored: needs a finite number >= 1; using 2`) and 2 applies (⟶ 9/23 review fix; `impliedTargets.convexity` shows the
+  value in force either way).
 - Score parts, lexicographic: `uncoveredPrimary`, `uncoveredBackup`, `hardViolations`, `softSum`, **`primaryDeviation`
-  (×300)**, **`backupDeviation` (×100)**, `weekendSpread`, `holidaySpread`; target smoothing moves primary days and,
-  separately, backup days from above-target to below-target surgeons through `eligibility()`.
+  (×300)**, **`backupDeviation` (×100)**, `weekendSpread`, `holidaySpread` — the two deviations are the sums of the
+  per-member convex terms since 9/23; target smoothing moves primary days and, separately, backup days from the surgeon
+  furthest above his target to one further below through `eligibility()` whenever the convex deviation strictly falls
+  (two members both above share included).
 
 ## 7. Existing assignments to import (locks)
 
@@ -520,7 +541,10 @@ sits outside them: not primary); only the recurring weekday patterns are waived 
 **Answered by Faraz on 9/23 (morning):** Burchett's December list governs **both roles** — his 9/17 email gives the dates as the
 ones he can take primary call or backup — so the seed's December entry becomes an object entry naming both roles (§3, Burchett);
 the three published December backups off his list (12/4, 12/10, 12/18) are reassigned by hand in the day editor, nothing is
-regenerated (`docs/REPORT-BURCHETT-DECEMBER-2026-09-23.md`). Item 16 below: TRIM.
+regenerated (`docs/REPORT-BURCHETT-DECEMBER-2026-09-23.md`). Item 16 below: TRIM. **Also 9/23 (after
+`docs/REPORT-NOV-BACKUPS-2026-09-23.md`): the water-filled share is adopted** — the open spec decision the 9/22 J review left
+(§6): fixed days count against the share, never a locked floor, convex deviation, both roles; the published schedule is not
+regenerated (`docs/REPORT-WATER-FILL-2026-09-23.md`).
 
 **Still open:**
 
@@ -573,3 +597,9 @@ regenerated (`docs/REPORT-BURCHETT-DECEMBER-2026-09-23.md`). Item 16 below: TRIM
     command-line generation (`scripts/preview-generate.js`) passes no East-vacation inputs — generate from the app
     while East vacations matter. His first action after the deploy: *Refresh from Davenport*, then **home** on
     [range] ([range] as he decides).
+18. **Sarkar as backup inside her windows under the convex term (raised by the 9/23 WF review).** A candidate with no
+    target for a role — the windows surgeon as backup (§6, item N: no backup target) — carries a zero deviation delta, so once
+    every pool member stands at or above his backup share she becomes the preferred backup on a window day (the what-if hands
+    her Fri 11/20). Legal since 9/22 (backup allowed inside her window; §3, Sarkar). Ask the group: should she take backup on
+    her window days at all, and if not, should a no-target candidate carry a flat soft weight for that role? Either answer is
+    data — her `backupOptOut` / a `groupRules` weight — never a name branch. Not changed for now.

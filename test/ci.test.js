@@ -8,7 +8,7 @@
 // skipped the very test that guards it. This file keeps the three lists
 // (package.json chain, workflow steps, workflow paths filter) aligned, pins the
 // offline switch on the exports step, pins the overridable wall-clock gates
-// (test/rules.test.js, test/generator-regression.js, test/holidays.test.js),
+// (test/rules.test.js, test/generator-regression.js, test/water-fill.test.js, test/holidays.test.js),
 // and pins the docs statements that the 2026-09-23 whole-branch review found
 // stale.
 //
@@ -151,6 +151,13 @@ const holSrc = read("test/holidays.test.js");
 ok(/process\.env\.SILVIS_GEN_BUDGET_MS/.test(holSrc), "test/holidays.test.js no longer shares SILVIS_GEN_BUDGET_MS for its wall-clock limit");
 ok(/SILVIS_GEN_BUDGET_MS[\s\S]{0,80}:\s*4000\b/.test(holSrc), "test/holidays.test.js wall-clock default must be 4000 ms");
 ok(/if \(total > LIMIT_MS\) \{[^\n]*process\.exit\(1\)/.test(holSrc), "test/holidays.test.js wall-clock limit must stay a hard exit(1)");
+// The water-fill suite (9/23 fix stage: the November 2026 fixture case moved out of
+// the regression so that one stays under 10 s) rides the same variable: default
+// 6000 ms, a failing `ok(total <= BUDGET_MS ...)`.
+const wfSrc = read("test/water-fill.test.js");
+ok(/process\.env\.SILVIS_GEN_BUDGET_MS/.test(wfSrc), "test/water-fill.test.js has no SILVIS_GEN_BUDGET_MS override for its wall-clock budget");
+ok(/SILVIS_GEN_BUDGET_MS[\s\S]{0,80}:\s*6000\b/.test(wfSrc), "test/water-fill.test.js wall-clock default must be 6000 ms (the CI gate)");
+ok(/ok\(total <= BUDGET_MS/.test(wfSrc), "test/water-fill.test.js budget must stay a failing assertion (`ok(total <= BUDGET_MS ...)`), never a warning");
 flush("rules wall-clock gate");
 
 // ---- 5. docs statements the 2026-09-23 review found stale ------------------
