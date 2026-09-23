@@ -1,7 +1,8 @@
 -- ============================================================================
 -- Silvis Surgical Care Call Schedule — Supabase schema + RLS
 -- Project: https://bzhsroegtagqhutbnsrp.supabase.co
--- Paste into the SQL editor once. Re-runnable (IF NOT EXISTS / OR REPLACE).
+-- Paste into the SQL editor once. Re-runnable (IF NOT EXISTS / OR REPLACE) - but re-runnable only when every applied
+-- migration has been mirrored below; see the LIVE DIFFERS note at the end of this header.
 -- Design notes: mirrors the Davenport app's data layer but keyed by DAY.
 -- The anon key is public; every table below is either anon-READABLE by design
 -- (schedule, roster/config, time off, availability, east feed, versions) or
@@ -19,6 +20,15 @@
 -- lets a linked surgeon take an OPEN slot (security definer; nine CL0xx refusals; audit + feed rows).
 -- Revision 2026-09-23 d (Prompt 15 part 2, sql/migrations/2026-09-23-east-vacation-reviews.sql): east_vacation_reviews -
 -- the away/home decision per mirrored Davenport vacation range (authenticated-read; own rows or scheduler write).
+-- Revision 2026-09-23 e (audit RLS-6, sql/migrations/2026-09-23-trade-past-guard.sql): TRADE_PAST - a non-scheduler may
+-- not apply, or accept, a trade whose day or return day is before today in America/Chicago (strict <, like CL003).
+-- LIVE DIFFERS FROM THIS FILE since 2026-09-23 (audit RLS-2): claim_open_slot and call_offers_guard are live as the bodies in
+-- sql/migrations/2026-09-23-claim-offer.sql (branch feat/offers, not yet merged), and call_periods / call_offers /
+-- offer_status / the OF001-OF003 offer guards exist live but appear nowhere in this file. Do NOT re-run this file
+-- wholesale until that mirror lands: CREATE OR REPLACE would silently revert claim_open_slot's claim-as-offer write.
+-- test/schema.test.js fails closed the moment that migration file exists here without its bodies mirrored below.
+-- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
+-- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
 
 create extension if not exists pgcrypto;
@@ -226,9 +236,14 @@ create index if not exists trade_day_idx    on public.shift_trade_requests(day);
 
 -- Non-schedulers may only move a PENDING trade's status: the counter-party to accepted/declined,
 -- the proposer to cancelled. Legs (who/day/role/return) are immutable except for the scheduler.
+-- 2026-09-23 (audit RLS-6): the counter-party may not ACCEPT a trade whose day or return day is
+-- already past in Central time (strict <: today's 07:00 shift stays tradeable) - TRADE_PAST, the
+-- same sentence apply_trade() raises; declining or cancelling a stale trade stays open to them.
 create or replace function public.trade_update_guard() returns trigger
 language plpgsql as $$
-declare me text := public.silvis_person_id();
+declare
+  me      text := public.silvis_person_id();
+  today_c date := (now() at time zone 'America/Chicago')::date;
 begin
   if public.silvis_is_sched() then return new; end if;
   if new.from_surgeon_id <> old.from_surgeon_id or new.to_surgeon_id <> old.to_surgeon_id
@@ -242,7 +257,13 @@ begin
   if old.status <> 'pending' then
     raise exception 'TRADE_NOT_PENDING: this trade is already %', old.status using errcode = 'P0001';
   end if;
-  if me = old.to_surgeon_id and new.status in ('accepted', 'declined') then return new; end if;
+  if me = old.to_surgeon_id and new.status in ('accepted', 'declined') then
+    if new.status = 'accepted' and (old.day < today_c or (old.return_day is not null and old.return_day < today_c)) then
+      raise exception 'TRADE_PAST: % is before today (%) in Central time; past days are changed by the scheduler only',
+        case when old.day < today_c then old.day else old.return_day end, today_c using errcode = 'P0001';
+    end if;
+    return new;
+  end if;
   if me = old.from_surgeon_id and new.status = 'cancelled' then return new; end if;
   raise exception 'TRADE_FORBIDDEN: % may not set status % on this trade', coalesce(me, 'anon'), new.status using errcode = 'P0001';
 end $$;
@@ -309,6 +330,9 @@ create trigger trade_insert_guard_trg
 --       'already holds' - before this change the same case tripped schedule_days_distinct_roles and
 --       the client refuses it too; it is not a supported trade shape.
 -- The app shows these messages verbatim, so they read as sentences.
+-- 2026-09-23 (audit RLS-6): right after the 'accepted' check and before the first row lock, a caller
+-- who is not the scheduler is refused with TRADE_PAST when the day or the return day is before today
+-- in America/Chicago (strict <, like claim_open_slot's CL003) - past days are the scheduler's to change.
 create or replace function public.apply_trade(p_trade_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -317,6 +341,7 @@ declare
   d2       public.schedule_days%rowtype;
   me       text    := public.silvis_person_id();
   sched    boolean := public.silvis_is_sched();
+  today_c  date    := (now() at time zone 'America/Chicago')::date;
   holder   text;
   roster   jsonb;
   to_name  text;
@@ -329,6 +354,11 @@ begin
   end if;
   if t.status <> 'accepted' then
     raise exception 'TRADE_NOT_ACCEPTED: status is %', t.status using errcode = 'P0001';
+  end if;
+  -- (2026-09-23, audit RLS-6) a past day is the scheduler's to change: a member may not rewrite history
+  if not sched and (t.day < today_c or (t.return_day is not null and t.return_day < today_c)) then
+    raise exception 'TRADE_PAST: % is before today (%) in Central time; past days are changed by the scheduler only',
+      case when t.day < today_c then t.day else t.return_day end, today_c using errcode = 'P0001';
   end if;
   select * into d1 from public.schedule_days where day = t.day for update;
   holder := case when t.role = 'primary' then d1.primary_id else d1.backup_id end;

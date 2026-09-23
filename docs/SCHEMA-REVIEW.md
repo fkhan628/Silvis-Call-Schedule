@@ -5,6 +5,8 @@ time). Findings marked **applied** were written into `sql/schema.sql` in the sam
 Supabase CLI's linked Management-API path (`supabase db query --linked -f sql/schema.sql`), so no live data was at risk.
 Verification: `scripts/verify-rls.sh`.*
 
+**Live differs from `sql/schema.sql` since 2026-09-23 (audit RLS-2):** `claim_open_slot` and `call_offers_guard` are live as the bodies in `sql/migrations/2026-09-23-claim-offer.sql` (branch `feat/offers`, not yet merged) and `call_periods` / `call_offers` / `offer_status` / the `OF001`-`OF003` guards exist live but appear nowhere on `main`; do not re-run `schema.sql` wholesale until that mirror lands (its header carries the same note and `test/schema.test.js` fails closed once the migration file exists unmirrored).
+
 ## (a) Tables, one line each
 
 | Table | Purpose |
@@ -143,6 +145,8 @@ is checked, in this order, raising `TRADE_INELIGIBLE: <plain-English reason>` (e
 
 Unchanged: `security definer`, `set search_path = public`, `version + 1`, `source = 'trade'`, the `silvis.apply_trade`
 bypass token for the status transition, the audit row, `revoke ... from public, anon` / `grant ... to authenticated`.
+
+**2026-09-23 (audit RLS-6) - `TRADE_PAST`:** `apply_trade` (right after the `accepted` check, before the first row lock) and `trade_update_guard` (the counter-party's pending -> accepted move only; decline and cancel stay open) raise `TRADE_PAST: <day> is before today (<today>) in Central time; past days are changed by the scheduler only` (errcode `P0001`, shown verbatim by the app) for a non-scheduler when the day or the return day is before today in America/Chicago - strict `<`, so today's already-started 07:00 shift stays tradeable, matching `claim_open_slot`'s `CL003`; the scheduler still applies or accepts a past-day trade (a phoned-in swap, Prompt 12 Q); `sql/migrations/2026-09-23-trade-past-guard.sql` carries both bodies byte-identically to `schema.sql`, the 2026-09-22 migration stays frozen as applied (sha256 pins), probe cases **I**-**M** (2020-02 fixtures) and `verify-rls.sh` section 5 prove it, and the live apply record (timestamp + probe output) is to be added here when it is applied.
 
 **3. The probe - `sql/probes/trade-guards-probe.sql` (persists nothing).** One multi-statement batch with no
 `BEGIN`/`COMMIT`: with `--linked` the CLI submits the file as one multi-statement request through the Management API,

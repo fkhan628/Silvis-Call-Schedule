@@ -39,6 +39,7 @@ on:
       - "test/publish.test.js"
       - "test/day-edit.test.js"
       - "test/open-shifts.test.js"
+      - "test/edge-functions.test.js"
       - "test/fixtures/open-slots.json"
       - "test/fixtures/last-generate-diagnostics.json"
       - "test/schema.test.js"
@@ -158,6 +159,13 @@ jobs:
       # second definition out of index-source.html.
       - name: Open-shifts tests + source pins
         run: node test/open-shifts.test.js
+
+      # send-notification's role/party gate (audit RLS-1): the plain-JS gate
+      # block is extracted from the function source and run against a table
+      # of callers; source pins keep it in the handler's auth path and keep
+      # the README's verification steps. Pure - no network, no Deno.
+      - name: Edge-function gate tests + source pins
+        run: node test/edge-functions.test.js
       # CI + gate hygiene: package.json's test chain, the steps above and the
       # paths filter stay aligned, the exports step stays offline, the three
       # wall-clock gates (rules 5000 ms via SILVIS_RULES_BUDGET_MS; regression

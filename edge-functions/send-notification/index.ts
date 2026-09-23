@@ -39,6 +39,25 @@
 //     invents schedule facts. Strings are HTML-escaped; newlines become <br>.
 //   - No vacation approve/deny templates (vacations need no approval at
 //     Silvis), no APP names, no no-call wording, no $ / weighted logic.
+//   - WHO MAY SEND (2026-09-23, audit RLS-1; v4). A verified session alone is
+//     not enough: before this change any signed-in account - a viewer, any
+//     surgeon - could POST any category with any text and no targetIds and
+//     the function broadcast it to every linked surgeon from the group
+//     sender. Now the caller's user_profiles row (read with the service role
+//     by the GoTrue-verified id) decides, in the plain-JS block between
+//     '// @sendGate-start' and '// @sendGate-end' that test/edge-functions.test.js
+//     extracts and runs: admin / scheduler send every category, targeted or
+//     broadcast; a linked surgeon sends only what the app sends on his own
+//     behalf and always targeted (trade_* to the two parties with himself
+//     among them; shift_claimed to himself + scheduler-linked ids;
+//     vacation_logged to scheduler-linked ids; test to himself); a viewer,
+//     a missing row or an unlinked surgeon sends nothing. Refusals are 403
+//     and the log carries the role and the reason only. The empty-targetIds
+//     short circuit (200, sent 0) stays ahead of the gate for every caller.
+//     Accepted deviation (fix review 9/23): an admin / scheduler account
+//     passes on its role alone - a person_id link is not required, as in
+//     office-notifications; the role is admin-assigned in Setup and signup
+//     lands as viewer, so the link adds no protection, only a failure mode.
 //
 // Payload contract:
 //   POST { type: string, data: { subject?: string, message: string, detail?: string }, targetIds?: string[] }
@@ -176,6 +195,74 @@ const TYPE_ALIASES: Record<string, string> = {
   trade_submitted: "trade_proposed",
 };
 
+// ---------------------------------------------------------------------------
+// Who may send what (2026-09-23, audit RLS-1). Plain JavaScript on purpose:
+// test/edge-functions.test.js extracts the block between the markers,
+// evaluates it with new Function and runs it against a table of callers, so
+// keep it free of type annotations. Both functions return null when the send
+// may proceed, else the refusal text (answered as 403; logged with the role).
+//   caller       { role, personId } from user_profiles (role null = no row)
+//   type         the resolved category (aliases already mapped)
+//   targetIds    null = broadcast, else the caller's list
+//   schedulerIds person ids linked to an admin / scheduler account
+// ---------------------------------------------------------------------------
+// @sendGate-start
+function senderRole(caller) {
+  const role = caller && caller.role;
+  if (role === "admin" || role === "scheduler") return null;   // the scheduler sends every category
+  if (role !== "surgeon") return "role " + (role || "none") + " may not send notifications";   // viewer, no row, unknown
+  if (!(caller.personId !== null && caller.personId !== undefined && String(caller.personId) !== "")) {
+    return "this account is not linked to a roster entry - nothing to send on its behalf";
+  }
+  return null;
+}
+function sendGate(caller, type, targetIds, schedulerIds) {
+  const early = senderRole(caller);
+  if (early) return early;
+  const role = caller.role;
+  if (role === "admin" || role === "scheduler") return null;
+  // a surgeon: only the categories the app sends on his own behalf, always targeted
+  const me = String(caller.personId);
+  if (!Array.isArray(targetIds)) return "a surgeon never broadcasts - " + type + " needs targetIds";
+  const ids = targetIds.map(function (x) { return String(x); });
+  const scheds = (Array.isArray(schedulerIds) ? schedulerIds : []).map(function (x) { return String(x); });
+  const isSched = function (id) { return scheds.indexOf(id) >= 0; };
+  switch (type) {
+    case "trade_proposed":
+    case "trade_accepted":
+    case "trade_declined":
+    case "trade_applied":
+      if (ids.length > 2) return type + " goes to the two parties only";
+      if (ids.indexOf(me) < 0) return type + " must include the caller as a party";
+      return null;
+    case "shift_claimed":
+      if (ids.indexOf(me) < 0) return "shift_claimed must include the claimer (the caller)";
+      if (!ids.every(function (id) { return id === me || isSched(id); })) return "shift_claimed goes to the claimer and the scheduler(s) only";
+      return null;
+    case "vacation_logged":
+      // the client filters the vacationer out of the targets, so the caller is not required here
+      if (!ids.every(isSched)) return "vacation_logged goes to the scheduler(s) only";
+      return null;
+    case "test":
+      if (ids.length !== 1 || ids[0] !== me) return "test goes to the caller only";
+      return null;
+    default:
+      return type + " is sent by the scheduler only";
+  }
+}
+// @sendGate-end
+
+// Person ids linked to an admin / scheduler account (the same lookup the
+// client's schedulerIdsLoud makes), read with the service role. Only needed
+// for a surgeon caller; a failure throws (never a silent empty list that
+// would refuse a legitimate send without saying why).
+async function loadSchedulerIds(): Promise<string[]> {
+  const rows = await rest("user_profiles?select=person_id,role&role=in.(admin,scheduler)&person_id=not.is.null");
+  const out = new Set<string>();
+  for (const r of (Array.isArray(rows) ? rows : [])) if (r?.person_id) out.add(String(r.person_id));
+  return Array.from(out);
+}
+
 // A missing prefs row or a missing flag defaults to ON; only an explicit false opts out.
 function emailEnabled(cat: Category, prefs: any): boolean {
   if (!cat.pref) return true;
@@ -273,6 +360,22 @@ serve(async (req) => {
     if (!userRes.ok) {
       return json(401, { error: "authentication required - sign in again (a stale app build may need a reload)" });
     }
+    const user = await userRes.json().catch(() => null);
+    const userId = typeof user?.id === "string" ? user.id : "";
+    if (!userId) return json(401, { error: "authentication required - sign in again (a stale app build may need a reload)" });
+
+    // -- Role gate (audit RLS-1): the caller's profile, read by the VERIFIED id with the
+    //    service role. A viewer, a missing row or an unlinked surgeon sends nothing, and
+    //    is told so before the body is even read.
+    const prof = await rest(`user_profiles?select=role,person_id&id=eq.${encodeURIComponent(userId)}`);
+    const row = Array.isArray(prof) && prof[0] ? prof[0] : null;
+    const caller = { role: row && typeof row.role === "string" ? row.role : null, personId: row && row.person_id != null ? String(row.person_id) : null };
+    const roleDenied = senderRole(caller);
+    if (roleDenied) {
+      console.warn(`[send-notification] rejected (403): role=${caller.role || "none"} - ${roleDenied}`);
+      return json(403, { error: `not allowed: ${roleDenied}` });
+    }
+    const privileged = caller.role === "admin" || caller.role === "scheduler";
 
     const body = await req.json().catch(() => null);
     if (!body || typeof body !== "object") return json(400, { error: "JSON body required" });
@@ -302,6 +405,15 @@ serve(async (req) => {
         return json(200, { sent: 0, failed: 0, skipped_no_email: 0, skipped_pref_off: 0, results: [] });
       }
       targetIds = body.targetIds.map((x: unknown) => String(x));
+    }
+
+    // -- Party gate (audit RLS-1): a surgeon sends only his own categories, to the
+    //    parties the app names. The scheduler list is read only for a surgeon caller.
+    const schedulerIds = privileged ? [] : await loadSchedulerIds();
+    const gateDenied = sendGate(caller, type, targetIds, schedulerIds);
+    if (gateDenied) {
+      console.warn(`[send-notification] rejected (403): role=${caller.role || "none"} type=${type} targets=${targetIds ? targetIds.length : "broadcast"} - ${gateDenied}`);
+      return json(403, { error: `not allowed: ${gateDenied}` });
     }
 
     const { list, skippedPrefOff } = await resolveRecipients(cat, targetIds);

@@ -19,11 +19,22 @@
 //   - sql/probes/claim-open-slot-probe.sql is a rolled-back probe (fixtures in 2030-04 plus
 //     a 2020-01-01 lower bound, cases A..L) and scripts/verify-rls.sh section 7 grades it,
 //     checks the anon REST refusal and counts leftovers.
+// Audit 2026-09-23 (RLS-6, TRADE_PAST): apply_trade() refuses a non-scheduler applying a trade
+//   whose day or return day is before today in America/Chicago (strict <, like CL003), and
+//   trade_update_guard() refuses the same non-scheduler ACCEPT (decline / cancel stay open);
+//   both live in sql/migrations/2026-09-23-trade-past-guard.sql, byte-identical to schema.sql;
+//   the 2026-09-22 trade-guards migration is frozen as applied (sha256 pins); the probe covers
+//   cases I..M on 2020-02 fixtures and verify-rls.sh section 5 grades them.
+// Audit 2026-09-23 (RLS-2, live drift): schema.sql's header must record every file under
+//   sql/migrations/, may name an unmerged migration only while that file does not exist (fail
+//   closed once it lands), and every function a migration CREATE OR REPLACEs must be mirrored
+//   in schema.sql byte-identically from the NEWEST migration touching it.
 //   node test/schema.test.js
 
 "use strict";
 
 const assert = require("assert");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -89,12 +100,30 @@ const CHECKS = [
   ["(c) locked (non-scheduler)", "is locked; ask the scheduler"],
   ["(d) other role held", "already holds"],
 ];
-function checkApplyTrade(n, s) {
+// TRADE_PAST (audit RLS-6): one message in both functions, so the client shows one sentence.
+const PAST_MSG = "TRADE_PAST: % is before today (%) in Central time; past days are changed by the scheduler only";
+const TODAY_C = /today_c\s+date\s+:= \(now\(\) at time zone 'America\/Chicago'\)::date;/;
+// `past` = true for schema.sql and the 2026-09-23 migration; false for the 2026-09-22 migration, frozen as applied.
+function checkApplyTrade(n, s, past) {
   const fn = functionText(s, "apply_trade");
   ok(fn, n + ": no `create or replace function public.apply_trade(p_trade_id uuid)` block");
   ok(/security definer set search_path = public/.test(fn), n + ": apply_trade must stay security definer with search_path = public");
   const firstWrite = fn.indexOf("update public.schedule_days");
   ok(firstWrite > 0, n + ": apply_trade has no `update public.schedule_days`");
+  if (past) {
+    ok(TODAY_C.test(fn), n + ": apply_trade must compute today_c in America/Chicago (like claim_open_slot)");
+    const cond = "if not sched and (t.day < today_c or (t.return_day is not null and t.return_day < today_c)) then";
+    const pastAt = fn.indexOf(cond);
+    ok(pastAt > 0, n + ": apply_trade lacks the TRADE_PAST condition `" + cond + "`");
+    ok(pastAt > fn.indexOf("TRADE_NOT_ACCEPTED"), n + ": TRADE_PAST must come after the TRADE_NOT_ACCEPTED check");
+    ok(pastAt < fn.indexOf("select * into d1 from public.schedule_days"), n + ": TRADE_PAST must come before the first row lock / any write");
+    ok(fn.slice(pastAt, pastAt + 420).indexOf("raise exception '" + PAST_MSG + "'") > 0, n + ": TRADE_PAST must raise exactly `" + PAST_MSG + "`");
+    ok(/using errcode = 'P0001'/.test(fn.slice(pastAt, pastAt + 420)), n + ": TRADE_PAST uses errcode P0001 like the other TRADE_* errors (CL codes are claim_open_slot's)");
+    ok(!/<=\s*today_c|today_c\s*>=/.test(fn), n + ": TRADE_PAST must be a strict `<` (today's already-started 07:00 shift stays tradeable, matching claim_open_slot)");
+    ok((fn.match(/TRADE_PAST/g) || []).length === 1, n + ": exactly one TRADE_PAST raise in apply_trade");
+  } else {
+    ok(!/TRADE_PAST|today_c/.test(fn), n + ": is frozen as applied on 2026-09-22 - TRADE_PAST belongs to sql/migrations/2026-09-23-trade-past-guard.sql");
+  }
   let last = -1;
   CHECKS.forEach(([label, needle]) => {
     const at = fn.indexOf(needle);
@@ -121,20 +150,68 @@ function checkApplyTrade(n, s) {
   ok(/grant execute on function public\.apply_trade\(uuid\) to authenticated;/.test(s), n + ": grant on apply_trade missing");
 }
 step("apply_trade() eligibility checks, in order, before the first schedule_days write (schema.sql)");
-checkApplyTrade("schema.sql", schema);
+checkApplyTrade("schema.sql", schema, true);
+
+/* ---------------------------------------- trade_update_guard() (RLS-6) */
+function checkUpdateGuard(n, s) {
+  const fn = functionText(s, "trade_update_guard");
+  ok(fn, n + ": no `create or replace function public.trade_update_guard()` ... `end $$;` block");
+  ok(/returns trigger/.test(fn), n + ": trade_update_guard must return trigger");
+  const bypass = fn.indexOf("if public.silvis_is_sched() then return new; end if;");
+  ok(bypass > 0, n + ": the scheduler bypass must stay the first statement");
+  ok(TODAY_C.test(fn), n + ": trade_update_guard must compute today_c in America/Chicago");
+  const acc = fn.indexOf("if me = old.to_surgeon_id and new.status in ('accepted', 'declined') then");
+  const cond = "if new.status = 'accepted' and (old.day < today_c or (old.return_day is not null and old.return_day < today_c)) then";
+  const pastAt = fn.indexOf(cond);
+  const cancel = fn.indexOf("if me = old.from_surgeon_id and new.status = 'cancelled' then return new; end if;");
+  ok(acc > bypass, n + ": the counter-party accept/decline branch is missing");
+  ok(pastAt > acc && pastAt < cancel, n + ": TRADE_PAST must sit inside the counter-party branch (accept only; decline and cancel stay open): `" + cond + "`");
+  ok(fn.slice(pastAt, pastAt + 420).indexOf("raise exception '" + PAST_MSG + "'") > 0, n + ": trade_update_guard must raise exactly `" + PAST_MSG + "`");
+  ok(/using errcode = 'P0001'/.test(fn.slice(pastAt, pastAt + 420)), n + ": TRADE_PAST uses errcode P0001");
+  ok(!/<=\s*today_c|today_c\s*>=/.test(fn), n + ": TRADE_PAST must be a strict `<`");
+  ok((fn.match(/TRADE_PAST/g) || []).length === 1, n + ": exactly one TRADE_PAST raise in trade_update_guard");
+  ["TRADE_IMMUTABLE: only the scheduler may change the legs of a trade", "current_setting('silvis.apply_trade', true) = '1' and old.status = 'accepted' and new.status = 'applied'",
+   "TRADE_NOT_PENDING: this trade is already %", "TRADE_FORBIDDEN: % may not set status % on this trade"].forEach((needle) => {
+    ok(fn.indexOf(needle) >= 0, n + ": trade_update_guard lost `" + needle + "`");
+  });
+  ok(/drop trigger if exists trade_update_guard_trg on public\.shift_trade_requests;/.test(s), n + ": trade_update_guard_trg drop-if-exists missing (idempotency)");
+  ok(/create trigger trade_update_guard_trg\s+before update on public\.shift_trade_requests\s+for each row execute function public\.trade_update_guard\(\);/.test(s),
+    n + ": `create trigger trade_update_guard_trg before update on public.shift_trade_requests for each row execute function public.trade_update_guard();` missing");
+}
+step("trade_update_guard(): TRADE_PAST inside the counter-party ACCEPT branch, scheduler bypass first (schema.sql)");
+checkUpdateGuard("schema.sql", schema);
 
 /* ------------------------------------------------- the migration file */
-step("migration file defines the same objects");
+step("2026-09-22 migration file defines the same objects (apply_trade as applied, without TRADE_PAST)");
 const migration = read(MIGRATION);
 ok(!/\r/.test(migration), "migration has CRLF line endings");
 checkInsertGuard("migration", migration);
-checkApplyTrade("migration", migration);
+checkApplyTrade("migration", migration, false);
 
-step("migration function bodies are byte-identical to schema.sql");
-["trade_insert_guard", "apply_trade"].forEach((name) => {
-  const a = functionText(schema, name), b = functionText(migration, name);
-  ok(a && b && a === b, name + "(): migration text differs from schema.sql (keep them identical; the migration is what runs live)");
+step("2026-09-22 migration: trade_insert_guard byte-identical to schema.sql; both bodies frozen as applied live (sha256)");
+(function frozen() {
+  const a = functionText(schema, "trade_insert_guard"), b = functionText(migration, "trade_insert_guard");
+  ok(a && b && a === b, "trade_insert_guard(): migration text differs from schema.sql (keep them identical; the migration is what ran live)");
+  const sha = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
+  eq(sha(functionText(migration, "apply_trade")), "d9ec012b9265b8a7fe4f6db7242165e181709d58f824bdf72a793a7c9d908737",
+    "2026-09-22-trade-guards.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-22 (a change belongs in a NEW migration);");
+  eq(sha(b), "b2b5e23fe401765241523846131265825bdcca18bcfb41f1d328d54729357a5b",
+    "2026-09-22-trade-guards.sql trade_insert_guard() must stay byte-for-byte what was applied live on 2026-09-22;");
+})();
+
+const PAST_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-trade-past-guard.sql");
+step("2026-09-23 trade-past-guard migration: apply_trade + trade_update_guard, byte-identical to schema.sql, trigger re-created, grants re-run");
+const pastMigration = read(PAST_MIGRATION);
+ok(!/\r/.test(pastMigration), "trade-past migration has CRLF line endings");
+checkApplyTrade("trade-past migration", pastMigration, true);
+checkUpdateGuard("trade-past migration", pastMigration);
+eq((pastMigration.match(/create or replace function/g) || []).length, 2, "the trade-past migration must define apply_trade and trade_update_guard and nothing else;");
+ok(!/drop function|drop table|create table|drop policy|create policy/.test(pastMigration), "the trade-past migration must not drop or create anything besides the trigger re-create");
+["apply_trade", "trade_update_guard"].forEach((name) => {
+  const a = functionText(schema, name), b = functionText(pastMigration, name);
+  ok(a && b && a === b, name + "(): trade-past migration text differs from schema.sql (keep them identical; the migration is what runs live)");
 });
+ok(/-- Revision 2026-09-23 e \(audit RLS-6, sql\/migrations\/2026-09-23-trade-past-guard\.sql\)/.test(schema), "schema.sql header must record revision e (TRADE_PAST)");
 
 /* ------------------------------------------------------------- probe */
 step("probe is self-rolling-back");
@@ -165,6 +242,20 @@ ok(/as leftover/.test(vr) && /email like 'probe-%@example\.test'/.test(vr) && /d
   "verify-rls.sh must count probe leftovers (schedule_days 2030-03 / trades / time_off / auth.users) after the probe and fail on non-zero");
 ok(/delete from public\.shift_trade_requests where id = '\$tid' and detail = 'verify-rls\.sh 6a probe'/.test(vr),
   "verify-rls.sh 6a must delete its trade row through the linked CLI (PATCH cancelled is only the no-CLI fallback)");
+
+/* ------------------------------------------ TRADE_PAST probe cases (RLS-6) */
+step("probe covers TRADE_PAST cases I..M on 2020-02 fixtures; verify-rls.sh section 5 grades them and counts them as leftovers");
+["'I'", "'J'", "'K'", "'L'", "'M'"].forEach((k) => ok(probe.indexOf("values (" + k) >= 0, "probe lacks case " + k));
+ok(probe.indexOf("'2020-02-") > 0, "probe's past-day fixtures must live in 2020-02 (the claim probe owns 2020-01-01)");
+ok(probe.indexOf("'2020-01-01'") < 0, "probe must not touch the claim probe's 2020-01-01 row");
+ok(/TRADE_PAST/.test(probe.slice(0, probe.indexOf("create temp table probe_results"))), "probe header must list the TRADE_PAST expectations (I, K refused; J, L as scheduler; M decline stays open)");
+ok(/'probe I'|'probe J'|'probe K'|'probe L'|'probe M'/.test(probe), "probe's past-day trade rows must carry detail 'probe <case>' (the leftover count keys on `detail like 'probe %'`)");
+const s5 = vr.slice(vr.indexOf('echo "== 5.'), vr.indexOf('echo "== 6.'));
+ok(s5.length > 0, "verify-rls.sh section 5 could not be sliced out");
+["I", "J", "K", "L", "M"].forEach((k) => ok(new RegExp("expect_(eq|past)\\s+" + k + "\\s").test(s5), "verify-rls.sh section 5 does not grade probe case " + k));
+ok(/expect_past\(\)/.test(s5) && /TRADE_PAST/.test(s5), "verify-rls.sh section 5 needs an expect_past helper that checks for TRADE_PAST + the day (today's date varies)");
+ok(/day between '2020-02-01' and '2020-02-29' and source = 'probe'/.test(s5), "verify-rls.sh section 5 leftover count must include the 2020-02 schedule_days fixtures");
+ok((s5.match(/day between '2020-02-01' and '2020-02-29'/g) || []).length >= 2, "verify-rls.sh section 5 cleanup statements must also name the 2020-02 fixtures");
 
 /* ------------------------------------ claim_open_slot() (Prompt 13 part 2) */
 const CLAIM_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-22-claim-open-slot.sql");
@@ -400,6 +491,60 @@ ok(/LEFT ROWS BEHIND/.test(s9), "verify-rls.sh section 9 must report leftovers a
 ok(/SILVIS_SURGEON_JWT/.test(s9), "verify-rls.sh 9d must be gated on SILVIS_SURGEON_JWT (SKIP when unset)");
 const s9d = s9.slice(s9.indexOf("# 9d."));
 ok(s9d.length > 0 && !/-X (POST|PATCH|DELETE|PUT)/.test(s9d), "verify-rls.sh 9d must be read-only over REST (a REST write would be a real, persisted decision)");
+
+/* -------------------------- migrations vs schema.sql (RLS-2 recurrence guard) */
+// Every function a migration CREATE OR REPLACEs must read in schema.sql exactly as in the NEWEST
+// migration touching it - otherwise a wholesale re-run of schema.sql would silently revert a live
+// body. Files order by their date prefix; two SAME-DAY migrations redefining one function are never
+// ordered by file name (an alphabetical guess could pick the wrong body silently): the file applied
+// later must declare it with a header line `-- supersedes: sql/migrations/<the earlier file>`, else
+// the suite fails closed. An already-applied file is never renamed - the apply record cites its name.
+step("every function a migration CREATE OR REPLACEs is mirrored in schema.sql from the newest migration touching it");
+const MIG_DIR = path.join(ROOT, "sql", "migrations");
+const migFiles = fs.readdirSync(MIG_DIR).filter((f) => /\.sql$/.test(f)).sort();
+ok(migFiles.length >= 4, "expected at least the four migrations under sql/migrations/ (2026-09-22 x2, 2026-09-23 x2; found " + migFiles.length + ")");
+const migText = {};
+migFiles.forEach((f) => { migText[f] = read(path.join(MIG_DIR, f)); });
+const supersedes = (later, earlier) => new RegExp("^--\\s*supersedes:?\\s+sql/migrations/" + earlier.replace(/\./g, "\\.") + "\\s*$", "m").test(migText[later]);
+const newest = {};
+migFiles.forEach((f) => {
+  Array.from(migText[f].matchAll(/^create or replace function public\.([a-z_]+)\(/gm)).map((m) => m[1]).forEach((name) => {
+    const prev = newest[name];
+    if (prev && prev.slice(0, 10) === f.slice(0, 10)) {
+      if (supersedes(prev, f)) return;   // the file sorting first was applied later - it stays the newest
+      if (!supersedes(f, prev)) fail(name + "() is redefined by two migrations dated the same day (" + prev + ", " + f + ") and neither declares the order: add `-- supersedes: sql/migrations/<the earlier one>` to the header of the file applied later");
+    }
+    newest[name] = f;
+  });
+});
+["apply_trade", "trade_insert_guard", "trade_update_guard", "claim_open_slot"].forEach((n) => ok(newest[n], "no migration under sql/migrations/ defines " + n + "()"));
+Object.keys(newest).forEach((name) => {
+  const f = newest[name];
+  const a = functionText(schema, name), b = functionText(read(path.join(MIG_DIR, f)), name);
+  ok(a, "schema.sql has no `create or replace function public." + name + "(` but sql/migrations/" + f + " creates it - mirror it");
+  ok(b, "sql/migrations/" + f + " " + name + "(): body could not be sliced (expected a $$-quoted plpgsql body ending in `end $$;`)");
+  ok(a === b, name + "(): schema.sql differs from the NEWEST migration touching it (sql/migrations/" + f + ") - mirror that body into schema.sql, or a wholesale re-run reverts the live function");
+});
+
+step("schema.sql header records every migration file; an unmerged migration may be named only while its file is absent");
+const header = schema.slice(0, schema.indexOf("create extension if not exists pgcrypto;"));
+ok(header.length > 0, "schema.sql header (everything before `create extension if not exists pgcrypto;`) could not be sliced");
+const namedInHeader = Array.from(header.matchAll(/sql\/migrations\/([A-Za-z0-9._-]+\.sql)/g)).map((m) => m[1]);
+migFiles.forEach((f) => ok(namedInHeader.includes(f), "sql/migrations/" + f + " is not recorded in schema.sql's header (add a Revision line naming it)"));
+header.split("\n").forEach((line) => {
+  Array.from(line.matchAll(/sql\/migrations\/([A-Za-z0-9._-]+\.sql)/g)).forEach((m) => {
+    const exists = fs.existsSync(path.join(MIG_DIR, m[1]));
+    if (/not yet merged/.test(line)) {
+      ok(!exists, "schema.sql header names sql/migrations/" + m[1] + " as 'not yet merged', but the file exists: the mirror landed - mirror its bodies into schema.sql (the newest-migration pin above enforces it), add its Revision line and drop the LIVE DIFFERS note");
+    } else {
+      ok(exists, "schema.sql header names sql/migrations/" + m[1] + " but no such file exists");
+    }
+  });
+});
+eq(/LIVE DIFFERS FROM THIS FILE/.test(header), header.split("\n").some((l) => /not yet merged/.test(l)), "the LIVE DIFFERS note and a 'not yet merged' migration line go together (both present or both gone);");
+ok(!/^-- Paste into the SQL editor once\. Re-runnable \(IF NOT EXISTS \/ OR REPLACE\)\.\s*$/m.test(header), "schema.sql line 4 must not claim unconditional re-runnability");
+// (comment lines wrap: join the `-- ` continuations before matching the sentence)
+ok(/re-runnable only when every applied migration has been mirrored/i.test(header.replace(/\n-- /g, " ")), "schema.sql header must say it is re-runnable only when every applied migration has been mirrored below");
 
 /* ----------------------------------------------------- no contact data */
 step("no contact-like values under sql/");

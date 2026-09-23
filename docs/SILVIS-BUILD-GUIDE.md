@@ -663,6 +663,8 @@ passes the hard rules (soft-rule warnings are shown, not blocking); the write go
 no vacation conflict, inside the published range), logs `schedule.claim`, and adds an in-app feed row. The scheduler
 assigns from the day editor as before, or writes in outside cover.
 
+**Past days (audit RLS-6, 2026-09-23).** `apply_trade` and `trade_update_guard` refuse a non-scheduler applying, or accepting, a trade whose day or return day is before today in Central time (`TRADE_PAST`, strict `<` like `claim_open_slot`'s `CL003`; `sql/migrations/2026-09-23-trade-past-guard.sql`, applied by hand like the other migrations - the apply record lives in `docs/SCHEMA-REVIEW.md`).
+
 **The claim boundary (Prompt 13 part 2).** The JS eligibility rules (OR days, Clinton/Aledo days, caps, weekday
 patterns, consecutive runs, East busy days, holiday opt-outs) are enforced in the client before the "Take this shift"
 button is offered - `eligibility()` must pass the hard rules; soft-rule warnings are shown, not blocking - and NOT in

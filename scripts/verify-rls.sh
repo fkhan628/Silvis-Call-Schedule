@@ -96,19 +96,27 @@ if linked; then
     expect_eq         F "status=applied locked=false"            "scheduler applies a locked slot and the lock clears"
     expect_ineligible G "two different"                          "from = to is refused"
     expect_eq         H "status=pending from=s2"                 "from_surgeon_id is forced to the caller's roster id"
+    # 2026-09-23 (audit RLS-6): TRADE_PAST. "today" is Central at run time, so match the token + the day, not the sentence.
+    expect_past() { v=$(case_val "$1"); if echo "$v" | grep -q 'TRADE_PAST' && echo "$v" | grep -q -- "$2"; then ok "probe $1: $3"; else bad "probe $1: $3 (got '$v', expected TRADE_PAST ... $2)"; fi; }
+    expect_past       I "2020-02-03"                             "surgeon applying an accepted trade on a past day is refused"
+    expect_eq         J "status=applied 02-05p=s2"               "scheduler applies a past-day trade (past days are the scheduler's to change)"
+    expect_past       K "2020-02-03"                             "surgeon accepting a pending trade on a past day is refused (trade_update_guard)"
+    expect_eq         L "status=accepted"                        "scheduler accepts the same past-day trade"
+    expect_eq         M "status=declined"                        "surgeon may still decline a past-day trade (only accept is gated)"
   fi
   # Did it roll back? Count every kind of fixture the probe creates (all anon-readable or auth rows).
-  LEFTOVER_SQL="select ((select count(*) from public.schedule_days where day between '2030-03-01' and '2030-03-31' and source = 'probe') + (select count(*) from public.shift_trade_requests where detail like 'probe %') + (select count(*) from public.time_off where note = 'probe') + (select count(*) from auth.users where email like 'probe-%@example.test'))::int as leftover"
+  LEFTOVER_SQL="select ((select count(*) from public.schedule_days where day between '2030-03-01' and '2030-03-31' and source = 'probe') + (select count(*) from public.schedule_days where day between '2020-02-01' and '2020-02-29' and source = 'probe') + (select count(*) from public.shift_trade_requests where detail like 'probe %') + (select count(*) from public.time_off where note = 'probe') + (select count(*) from auth.users where email like 'probe-%@example.test'))::int as leftover"
   r=$(q "$LEFTOVER_SQL")
   if [ "$(verdict "$r")" != "accepted" ]; then
     bad "probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
   elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then   # ::int, but tolerate a string-typed 0
-    ok "probe persisted nothing (leftover count 0: schedule_days 2030-03 / trades / time_off / auth.users)"
+    ok "probe persisted nothing (leftover count 0: schedule_days 2030-03 + 2020-02 / trades / time_off / auth.users)"
   else
     bad "probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
     echo "      delete from public.shift_trade_requests where detail like 'probe %';"
     echo "      delete from public.time_off where note = 'probe';"
     echo "      delete from public.schedule_days where day between '2030-03-01' and '2030-03-31' and source = 'probe';"
+    echo "      delete from public.schedule_days where day between '2020-02-01' and '2020-02-29' and source = 'probe';"
     echo "      delete from auth.users where email like 'probe-%@example.test';   -- user_profiles rows cascade"
   fi
 else

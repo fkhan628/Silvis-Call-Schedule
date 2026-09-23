@@ -8,7 +8,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 |---|---|---|---|
 | `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET) | never |
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
-| `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT) | yes - any non-empty send |
+| `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23) | yes - any non-empty send the gate lets through |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (planned, section 4 - not created yet) with body `{"mode":"open-shifts"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
@@ -23,6 +23,11 @@ with the Vault secret the same day: `{"mode":"open-shifts","dryRun":true}` ->
 [{"person_id":"s1","status":"dry_run_composed"}]}`; `{"mode":"nope"}` -> 400; the
 default-mode dryRun still answers as before (200, tomorrow's two on-call people
 `skipped_wrong_hour`). The third (Monday open-shifts) cron job in section 4 is not created yet.
+
+**Audit RLS-1 (2026-09-23): `send-notification` source changed, NOT redeployed yet.** The role/party
+gate (header of `edge-functions/send-notification/index.ts`; `test/edge-functions.test.js`) is in the repo
+only. Deploy by hand from the CLI (section 3; expected version 4), download and byte-compare, run the
+section 5 checks (viewer 403, surgeon broadcast 403), then replace this paragraph with the dated record.
 
 **Prompt 15 (East vacations, 2026-09-23): nothing deployed.** No function
 changed for this prompt and none was redeployed. The feature is the client
@@ -130,7 +135,7 @@ Each function carries its own gate instead:
 |---|---|---|
 | calendar-sync | OFF (must stay OFF - calendar apps send no auth header) | none: public read-only feed of anon-readable data |
 | office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
-| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) |
+| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast; a viewer, a missing row or an unlinked surgeon gets 403 |
 | daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
@@ -267,7 +272,20 @@ curl.exe -s -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H 
 #   -> {"sent":0,"failed":0,"skipped_no_email":0,"skipped_pref_off":0,"results":[]}
 # legacy payload -> 400
 curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"test","recipients":[]}' | Select-Object -First 1
+# role/party gate (2026-09-23, audit RLS-1; $VIEWER_JWT = the ER-panel author's session token, $SURGEON_JWT = a surgeon-role session token, e.g. s3's):
+# viewer -> 403 before the body is read (nothing resolved, nothing sent)
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $VIEWER_JWT" -H "Content-Type: application/json" -d '{"type":"test","targetIds":[]}' | Select-Object -First 1
+# surgeon broadcast (targetIds absent) -> 403; the same for manual_edit / open_shifts
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $SURGEON_JWT" -H "Content-Type: application/json" -d '{"type":"schedule_published","data":{"message":"probe"}}' | Select-Object -First 1
+# surgeon test aimed at someone else -> 403 (test goes to the caller only)
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $SURGEON_JWT" -H "Content-Type: application/json" -d '{"type":"test","targetIds":["s1"]}' | Select-Object -First 1
+# surgeon trade_proposed without himself among the parties -> 403
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $SURGEON_JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe"},"targetIds":["s2","s4"]}' | Select-Object -First 1
+# surgeon + EMPTY targetIds -> still 200 sent 0 (the empty-list short circuit sits ahead of the gate for every caller)
+curl.exe -s -X POST "$URL/send-notification" -H "Authorization: Bearer $SURGEON_JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe"},"targetIds":[]}'
 ```
+The positive surgeon case cannot be proven without a mail: a surgeon's `{"type":"test","targetIds":["<his own id>"]}`
+is one real e-mail to himself - it is listed in section 6 as the live proof of the gate's allow path.
 
 ### daily-reminder
 ```powershell
@@ -303,7 +321,10 @@ curl above) and quote the 200 body.
   non-empty - every active office contact.
 - `office-notifications` `{mode:"test"}` - one email to the calling scheduler's own account.
 - `send-notification` with a non-empty `targetIds` or with `targetIds` omitted
-  (broadcast to every linked account that has not opted out).
+  (broadcast to every linked account that has not opted out) - from an admin / scheduler
+  session; since the 2026-09-23 gate a surgeon session sends only his own targeted categories,
+  and the live proof of that allow path is the surgeon's own `test` (`targetIds` = his own id:
+  one mail, to himself, 200 `sent 1`).
 - `daily-reminder` live (`{}`) at an hour matching an on-call person's reminder hour.
 - `daily-reminder` live `{"mode":"open-shifts"}` while any published slot in the next 30 days
   is open - every linked surgeon with `schedule_updates_email` on (the Monday cron job).

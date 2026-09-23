@@ -47,6 +47,21 @@
 --   H  surgeon (s2) inserts a trade naming s3 as from_surgeon_id
 --        BEFORE: RLS refuses it (from <> caller)    -> H=ERR new row violates row-level security policy ...
 --        AFTER : from_surgeon_id forced to s2       -> H=status=pending from=s2
+-- 2026-09-23 (audit RLS-6, sql/migrations/2026-09-23-trade-past-guard.sql) - past days, fixtures in 2020-02
+-- (the claim probe owns 2020-01-01). "today" is America/Chicago at run time, so the graders match the
+-- TRADE_PAST token + the day rather than the whole sentence.
+--   I  accepted trade on 2020-02-03 (past); s2 (not a scheduler) applies
+--        BEFORE: applies, history rewritten          -> I=status=applied
+--        AFTER : refused                            -> I=ERR TRADE_PAST: 2020-02-03 is before today (<today>) in Central time  past days are changed by the scheduler only
+--   J  accepted trade on 2020-02-05 (past); the SCHEDULER applies
+--        BEFORE and AFTER: applies (past days are the scheduler's to change) -> J=status=applied 02-05p=s2
+--   K  PENDING trade on 2020-02-03 (past); s2, the counter-party, sets status 'accepted'
+--        BEFORE: accepted                           -> K=status=accepted
+--        AFTER : refused by trade_update_guard      -> K=ERR TRADE_PAST: 2020-02-03 is before today (<today>) ...
+--   L  the same pending trade; the SCHEDULER sets status 'accepted'
+--        BEFORE and AFTER: accepted                 -> L=status=accepted
+--   M  PENDING trade on 2020-02-05 (past); s2 declines it
+--        BEFORE and AFTER: declined (only ACCEPT is gated) -> M=status=declined
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -83,7 +98,9 @@ begin
          ('2030-03-09', 's3', null, true,  false, 'probe', 1),   -- D: locked, surgeon applies
          ('2030-03-11', 's3', null, false, false, 'probe', 1),   -- E: control leg 1
          ('2030-03-13', null, 's2', false, false, 'probe', 1),   -- E: control return leg
-         ('2030-03-15', 's3', null, true,  false, 'probe', 1)    -- F: locked, scheduler applies
+         ('2030-03-15', 's3', null, true,  false, 'probe', 1),   -- F: locked, scheduler applies
+         ('2020-02-03', 's3', null, false, false, 'probe', 1),   -- I / K: past day, surgeon applies / accepts
+         ('2020-02-05', 's3', null, false, false, 'probe', 1)    -- J / M: past day, scheduler applies / surgeon declines
   on conflict (day) do update set primary_id = excluded.primary_id, backup_id = excluded.backup_id,
     primary_locked = excluded.primary_locked, backup_locked = excluded.backup_locked, source = excluded.source;
   insert into public.time_off (person_id, start_date, end_date, note, created_by)
@@ -94,8 +111,12 @@ begin
          ('00000000-0000-4000-8000-00000000000c', 's3', 's2', '2030-03-07', 'primary', null, null, 'accepted', 'probe C'),
          ('00000000-0000-4000-8000-00000000000d', 's3', 's2', '2030-03-09', 'primary', null, null, 'accepted', 'probe D'),
          ('00000000-0000-4000-8000-00000000000e', 's3', 's2', '2030-03-11', 'primary', '2030-03-13', 'backup', 'accepted', 'probe E'),
-         ('00000000-0000-4000-8000-00000000000f', 's3', 's2', '2030-03-15', 'primary', null, null, 'accepted', 'probe F');
-  if (select count(*) from public.shift_trade_requests where detail like 'probe %' and status = 'accepted') <> 5 then
+         ('00000000-0000-4000-8000-00000000000f', 's3', 's2', '2030-03-15', 'primary', null, null, 'accepted', 'probe F'),
+         ('00000000-0000-4000-8000-000000000019', 's3', 's2', '2020-02-03', 'primary', null, null, 'accepted', 'probe I'),
+         ('00000000-0000-4000-8000-00000000001a', 's3', 's2', '2020-02-05', 'primary', null, null, 'accepted', 'probe J'),
+         ('00000000-0000-4000-8000-00000000001b', 's3', 's2', '2020-02-03', 'primary', null, null, 'pending',  'probe K'),
+         ('00000000-0000-4000-8000-00000000001d', 's3', 's2', '2020-02-05', 'primary', null, null, 'pending',  'probe M');
+  if (select count(*) from public.shift_trade_requests where detail like 'probe %' and status = 'accepted') <> 7 then
     raise exception 'PROBE_SETUP: fixture trades were not stored as accepted (was the probe run as postgres?)';
   end if;
 end $$;
@@ -266,6 +287,107 @@ begin
     v := 'ERR ' || sqlerrm;
   end;
   insert into probe_results values ('H', v);
+end $$;
+
+-- ---------- I: past day, accepted trade, surgeon applies (TRADE_PAST)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    perform public.apply_trade('00000000-0000-4000-8000-000000000019');
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = '00000000-0000-4000-8000-000000000019';
+    v := 'status=' || st;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('I', v);
+end $$;
+
+-- ---------- J: past day, accepted trade, SCHEDULER applies (allowed)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'sched');
+  st text; p1 text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    perform public.apply_trade('00000000-0000-4000-8000-00000000001a');
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = '00000000-0000-4000-8000-00000000001a';
+    select primary_id into p1 from public.schedule_days where day = '2020-02-05';
+    v := 'status=' || st || ' 02-05p=' || coalesce(p1, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('J', v);
+end $$;
+
+-- ---------- K: past day, PENDING trade, the counter-party (s2) accepts (TRADE_PAST from trade_update_guard)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    update public.shift_trade_requests set status = 'accepted', decided_at = now() where id = '00000000-0000-4000-8000-00000000001b';
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = '00000000-0000-4000-8000-00000000001b';
+    v := 'status=' || st;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('K', v);
+end $$;
+
+-- ---------- L: the same pending past-day trade, the SCHEDULER accepts (allowed)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'sched');
+  st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    update public.shift_trade_requests set status = 'accepted', decided_at = now() where id = '00000000-0000-4000-8000-00000000001b';
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = '00000000-0000-4000-8000-00000000001b';
+    v := 'status=' || st;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('L', v);
+end $$;
+
+-- ---------- M: past day, PENDING trade, the counter-party declines (only ACCEPT is gated)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    update public.shift_trade_requests set status = 'declined', decided_at = now() where id = '00000000-0000-4000-8000-00000000001d';
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = '00000000-0000-4000-8000-00000000001d';
+    v := 'status=' || st;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('M', v);
 end $$;
 
 -- ---------- report + ROLL BACK EVERYTHING (this raise aborts the batch's transaction)

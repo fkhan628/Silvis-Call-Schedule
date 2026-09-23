@@ -28,7 +28,10 @@ project. This document names secrets by NAME only and contains no addresses.*
 4. **Auth posture is tighter than Davenport's.** office-notifications had NO gate in Davenport
    (any holder of the public anon key could trigger a publish broadcast); Silvis requires either
    the `x-cron-secret` (digest / rebaseline only) or a GoTrue-verified session whose
-   `user_profiles.role` is admin/scheduler. send-notification keeps the GoTrue check;
+   `user_profiles.role` is admin/scheduler. send-notification keeps the GoTrue check (and since
+   2026-09-23, audit RLS-1, adds a role/party gate on `user_profiles`: admin / scheduler send
+   every category, a linked surgeon only his own targeted categories, a viewer nothing - the
+   table in `edge-functions/README.md` section 3 and `test/edge-functions.test.js` carry it);
    daily-reminder keeps the fail-closed cron gate; calendar-sync stays public (read-only feed of
    anon-readable data). All four keep gateway `verify_jwt` OFF (`--no-verify-jwt`).
 5. **Address hygiene fixed.** Davenport's office-notifications echoes contact addresses in
