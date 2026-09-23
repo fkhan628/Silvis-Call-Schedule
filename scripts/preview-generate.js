@@ -163,25 +163,28 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     // measure). Real days; a holiday unit is one day only for a surgeon who opted in (Prompt 12 A, 9/22). Both are the
     // longest runs TOUCHING the month / range, followed across its edges (12/30 -> 1/1 reads 3 in Dec and in Jan).
     // Target P / Target B (Prompt 12 J, 9/22): the per-role targets of diagnostics.tallies[id].months[m].target
-    // = { primary, backup } - equal shares for a pool member, the window target for Sarkar (no backup target), '-'
+    // = { primary, backup } - the water-filled share per role for a pool member (WF 9/23), the window target for Sarkar (no backup target), '-'
     // where none. A legacy numeric target (a pre-J preview) reads as the primary target.
     const tgt = (x, role) => { const t = x && x.target; if (t && typeof t === "object") return typeof t[role] === "number" ? Math.round(t[role] * 10) / 10 : "-"; return role === "primary" && typeof t === "number" ? Math.round(t * 10) / 10 : "-"; };
     L.push("| Surgeon | Month | Primary | Backup | Total | Weekend days | Major | Minor | Max consec. P | Max consec. any | Cap (P) | Target P | Target B |"); L.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for (const s of roster) { const tl = dg.tallies[s.id]; if (!tl) continue; const months = Object.keys(tl.months).sort(); for (const m of months) { const x = tl.months[m]; L.push(`| ${s.name} | ${m} | ${x.primary} | ${x.backup} | ${x.total} | ${x.weekendDays} | ${x.majorHolidays} | ${x.minorHolidays} | ${x.maxConsecutive} | ${x.maxConsecutiveAnyRole} | ${x.cap == null ? "-" : x.cap} | ${tgt(x, "primary")} | ${tgt(x, "backup")} |`); } if (tl.range) { const x = tl.range; L.push(`| **${s.name}** | **range** | **${x.primary}** | **${x.backup}** | **${x.total}** | **${x.weekendDays}** | **${x.majorHolidays}** | **${x.minorHolidays}** | **${x.maxConsecutive}** | **${x.maxConsecutiveAnyRole}** | | **${tgt(x, "primary")}** | **${tgt(x, "backup")}** |`); } }
-    // Implied shares (J): per month the open slots, the pool and the two shares, then per member the target
+    // Implied shares (J, water-filled WF 9/23): per month the pool slots (open + held), the pool and the two levels, then per member the target
     // against what the rules ALLOW on the lock-only schedule - a target above the allowed count is an
     // availability shortfall the generator cannot close, not a defect.
     const IT = dg.impliedTargets;
     if (IT && IT.months && Object.values(IT.months).some(I => I && I.members)) {
-      L.push(""); L.push("## Implied shares (equal-share fairness; target vs what the rules allow)"); L.push("");
+      L.push(""); L.push("## Implied shares (water-filled share per role; target vs what the rules allow)"); L.push("");
       L.push(`*Pool: ${(IT.pool || []).map(nameOf).join(", ")}. ${md(IT.rule || "")}*`); L.push("");
       for (const m of Object.keys(IT.months).sort()) {
         const I = IT.months[m]; if (!I || !I.members) continue;
-        // placeable at target (J fix stage): the open slots the targets ask for; below the open count where a locked
-        // floor or a cap pins a member (flat share, not redistributed) - those days are placed by the soft terms alone
+        // placeable at target (J fix stage, WF): the open slots the targets ask for; below the open count where a cap
+        // clips a member or he already holds more than the level - those days are placed by the soft terms alone
         const pl = I.placeableAtTarget ? ` | placeable at target ${I.placeableAtTarget.primary} P / ${I.placeableAtTarget.backup} B of ${I.primaryOpen} / ${I.backupOpen} open` : "";
         const partial = typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? ` | partial month: ${I.rangeDays} day(s) in range, whole-month targets` : "";
-        L.push(`### ${m}: primary ${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows = share ${I.primaryShare} each of ${I.poolSize}; backup ${I.backupOpen} open = share ${I.backupShare}${pl}${partial}`); L.push("");
+        const lvl = (x) => (x == null ? "at caps" : x);
+        L.push(I.poolSlots
+          ? `### ${m}: primary ${I.poolSlots.primary} pool slots (${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows + ${I.heldByPool ? I.heldByPool.primary : "-"} held) = level ${lvl(I.primaryShare)} each of ${I.poolSize}; backup ${I.poolSlots.backup} pool slots (${I.backupOpen} open + ${I.heldByPool ? I.heldByPool.backup : "-"} held) = level ${lvl(I.backupShare)}${pl}${partial}`
+          : `### ${m}: pre-9/23 preview (flat share): primary ${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows, share ${I.primaryShare} each of ${I.poolSize}; backup ${I.backupOpen} open, share ${I.backupShare}${pl}${partial}`); L.push("");
         L.push("| Surgeon | Target P | Allowed P | Locked P | Clip P | Target B | Allowed B | Locked B |"); L.push("|---|---|---|---|---|---|---|---|");
         for (const s of roster) { const M = I.members[s.id]; if (!M) continue; const v = (x) => (x == null ? "-" : x); const flagP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget ? " (short)" : ""; const flagB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget ? " (short)" : ""; L.push(`| ${s.name} | ${v(M.primaryTarget)} | ${M.allowedPrimary}${flagP} | ${M.lockedHeld.primary} | ${v(M.clipPrimary)} | ${v(M.backupTarget)} | ${M.allowedBackup}${flagB} | ${M.lockedHeld.backup} |`); }
         L.push("");

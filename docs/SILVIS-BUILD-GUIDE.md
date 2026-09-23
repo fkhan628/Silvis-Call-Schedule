@@ -485,12 +485,14 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   budget); `genWaterFill` reports `level: null` when every member sits on his clip (`primaryShare` / `backupShare` null, the
   shares at the clips — it read 0); a `weights.deviationConvexity` that is present but rejected is named in
   `diagnostics.warnings` ("… ignored: needs a finite number >= 1; using 2"); the seed's `s1.monthlyTargetNote` no longer
-  describes the flat share. *Still open outside this item* (wording only; the numbers shown are the new diagnostics): the
-  Generate panel's per-month head line in `index-source.html` (`primary X open − Y reserved = share Z each of N`, an
-  equation that no longer holds — Z is the level over `poolSlots`), its "equal share of the month's open slots" paragraph,
-  the Totals titles, and the same heading in `scripts/preview-generate.js`; `rules.js defaultWeights()` does not carry
-  `deviationConvexity` yet, so Setup shows no placeholder until the blob has it; rules doc §8 item 18 (Sarkar as backup
-  inside her windows under the convex term).
+  describes the flat share. *Wording follow-up (9/23, after the rebase):* the Generate panel's per-month head line in
+  `index-source.html` now prints the pool slots and the level (`primary S pool slots (X open − Y reserved + H held) = level
+  L each of N; backup …`, `at caps` when every member sits on his clip and the level is null; a preview persisted before
+  9/23 without `poolSlots` is labelled `pre-9/23 preview (flat share)`), its shares paragraph, the Totals fairness sentence,
+  footnote and `Target P` / `Target B` titles describe the water-filled share, and `scripts/preview-generate.js` prints the
+  same head line and heading; `test/data-layer.test.js` pins the wording. *Still open outside this item:* `rules.js
+  defaultWeights()` does not carry `deviationConvexity` yet, so Setup shows no placeholder until the blob has it; rules doc
+  §8 item 18 (Sarkar as backup inside her windows under the convex term).
 - **Caps count primary days only**; backup does not count toward any total cap (Burchett's 8, Fierce's 14). Philip's
   explicit backup cap (≤ 7 days, ≤ 1 weekend) remains.
 - **Khan contributes primary on weekends when available**; his backup count is balanced like everyone else's; East

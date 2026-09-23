@@ -773,6 +773,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const st = src.slice(src.indexOf("function softTag(soft) {"), src.indexOf(String.fromCharCode(10) + "}" + String.fromCharCode(10), src.indexOf("function softTag(soft) {")));
     assert.ok(st.includes("default: return REASON_WORDS[key] ? REASON_WORDS[key]"), "softTag does not fall back to REASON_WORDS");
   });
+  check("Generate panel (WF 9/23): the implied-shares head line reads the water-filled level over the pool slots (poolSlots / heldByPool, 'at caps' when the level is null), the paragraph and the Totals titles no longer state the flat open-slot share", () => {
+    const head = src.slice(src.indexOf('data-testid={"gen-shares-head-" + m}'), src.indexOf("</div>", src.indexOf('data-testid={"gen-shares-head-" + m}')));
+    assert.ok(head.length > 0, "no gen-shares-head line");
+    assert.ok(head.includes("pool slots") && head.includes("I.poolSlots") && head.includes("I.heldByPool"), "head line does not print the pool slots (open + held)");
+    assert.ok(head.includes('"at caps"'), "head line has no 'at caps' rendering for a null level");
+    assert.strictEqual(count("reserved = share"), 0, "the flat equation 'open - reserved = share' is still printed");
+    assert.strictEqual(count("Implied shares (equal-share fairness"), 0, "the Implied shares heading still says equal-share fairness");
+    assert.strictEqual(count("equal share of the month's open primary slots"), 0, "the shares paragraph / Totals titles still describe the flat open-slot share");
+    assert.strictEqual(count("implied equal share of the month's open"), 0, "a Totals title still describes the flat open-slot share");
+    assert.ok(count("water-filled") >= 3, "the Generate panel and Totals name the water-filled share fewer than 3 times");
+  });
   check("Setup -> Rules: 'Monthly target' hint reads 'blank = equal share; a number = primary target' and a 'Primary contribution' select writes primaryContribution ((none) / weekends)", () => {
     assert.ok(src.includes('<SuField label="Monthly target" hint="blank = equal share; a number = primary target">'), "monthly target hint");
     assert.strictEqual(count('hint="blank = no target"'), 0, "old hint remains");
