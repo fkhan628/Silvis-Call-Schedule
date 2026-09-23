@@ -916,3 +916,136 @@ Live actions for the orchestrator: apply this wave's seed (`scripts/import-seed.
 part is the `holidays` blob update (2027 Thanksgiving 4 days, July 4th 3 days, `rules.mondayMinor`) and the revision line in
 `settings`; nothing for `schedule_days`, `time_off` or `availability`; no edge function, no deploy needed for AC (helpers.js reaches
 Pages with the next push of `main`).
+
+## Item PUB — publish the regenerated preview from the command line (Faraz, 9/22 evening; appended by Claude Code, 9/23 overnight)
+
+Faraz (asleep): "You can go ahead and deploy, publish and move forward without my go - just ensure it is accurate to the best
+of your ability. No one has access yet except me." Accept & Publish runs under his signed-in scheduler session and nobody else
+can sign in as him, so the orchestrator publishes `docs/PREVIEW-2026-11-02-to-2027-01-03.json` (milestone 11/2 → 1/3 plus the
+October fill-open-only backfill 10/7 → 11/1) SERVER-SIDE with a tool that mirrors that path and proves what it did. This item
+BUILDS and TESTS the tool; it was never run with `--apply` here.
+
+- `scripts/publish-preview.js` (new). Default = DRY RUN (anon reads exactly like `scripts/preview-generate.js`): builds the
+  plan, runs the preflight, prints per-month insert / update / unchanged / refused counts, every change as `M/D P/B before ->
+  after` (`helpers.formatDayChange`), the refused list and the preflight result, writes the SQL (`<dirname(workdir)>/
+  publish-preview.sql`, else `<tmp>/silvis-publish-preview.sql`; `--out`) and a Markdown report beside it (`--report`; on
+  `--apply` it goes to `docs/PUBLISH-2026-09-23.md`). `--apply --workdir <linked dir>` runs the SQL through `supabase db query
+  --linked --workdir … -o json -f <abs>` (the importer's runner, copied — `scripts/import-seed.js` runs `main()` on require),
+  then VERIFIES: the batch's final `SELECT` (snapshot_id, snapshots_before → snapshots_after = +1, audit_id, days_by_tool =
+  planned rows), an anon re-read (`verifyApplied`: every planned row on file with the planned body, `version` = seen + 1 or 1,
+  `updated_by` the tag), a fresh plan reading zero rows, per-surgeon per-month tallies; exit 1 on any mismatch, 2 when the plan
+  or the preflight refuses. Exported pure functions: `buildDesired`, `planPublish`, `applyToLive`, `verifyApplied`, `tallies`,
+  `previewChecks`, `preflight`, `publishSql`, `auditDetail`, `renderPlan`, `renderPreflight`, `renderReport`; `fetchLive` /
+  `buildLiveContext` do the network (the ctx build of `preview-generate.js` DUPLICATED faithfully — same seven sources, same
+  East resolve, same `buildContext` input — because that script is a top-level async runner with no exports; extracting a shared
+  module would have meant editing a file this item does not own).
+- Decisions, each with the app line mirrored:
+  - **source**: the preview entry's source. `generator.js genSeedLocks`: `source: (fixedP || fixedB) ? (e.source || "import") :
+    "generated"` — a day with a locked import slot keeps `import` when its other role is generated, a fully generated day (10/15,
+    10/24: live `import` rows with both roles open and unlocked) becomes `generated`, a derived week with no import lock is
+    `east-derived` (`e.source = "east-derived"` a few lines below); `helpers.suMergePreview` then copies the preview entry
+    wholesale (`Object.assign(emptyDayAssignment(), p)`) and `syncScheduleDays` PATCHes the whole `assignmentToDayRow` body.
+    One guard the app does not need: a live row whose source is an app source (manual / trade / claim) and whose held slots are
+    all untouched keeps its own source (never downgraded to `generated`); a changed app-edited slot is refused anyway.
+  - **locks**: a live lock with a holder stays (`suMergePreview`: `if (respectLocks && cur.primaryLocked && (cur.primary ||
+    cur.externalCover)) { … a.primaryLocked = true }`), otherwise the preview's flag — generated slots come out unlocked, a
+    derived-week slot comes out locked exactly as `genSnapshot` writes it (`primaryLocked: … !!e.primaryLocked`).
+  - **note**: an existing live note is never overwritten (a differing preview note is warned about, not written); a new
+    generated day gets the preview's note = `null` (`genSeedLocks` carries only the input's note: `note: e.note === undefined ?
+    null : e.note`). The dry run showed no differing note.
+  - **holder → OPEN**: only when the preview left the slot open AND the live holder is `generated`; an `import` or app holder
+    is never cleared (refused and listed). The real preview has no such case (milestone `uncovered` empty; the backfill fixes
+    every held slot).
+  - **external_cover**: the live value, never set or cleared; a preview primary over a cover aborts (none in either range;
+    Atwell's 10/1–10/4 lie before the backfill).
+  - **audit**: `actor_id null`, `actor_name` = the tool tag, `action 'schedule.generate_accept'`, `detail` = the app's keys
+    (`summary`, `start`, `end`, `seed` as a string, `bestOf`, `respectLocks`, `changes`, `uncovered`, `snapshot` counts,
+    `outcome`, `error`) plus `mode: "command-line"`, `note: "published from the command line on Faraz's authorisation of
+    2026-09-22 evening"`, `authorisedBy: "s1"`, the preview file / generatedAt, inserted / updated / refused, the backfill range
+    and its changes, and the snapshot id and before/after counts added by the DO block.
+  - **snapshot**: `reason 'generate_publish'` (index-source.html: `snapshots.capture("generate_publish")`), `created_by` the
+    tag, `data` = the importer's `jsonb_build_object` (`config`, `schedule_days`, `time_off`, `availability`) — pinned equal to
+    `importer.importSql`'s lines in the test; `source_updated_at` = the blob's `updated_at`; unconditional (the tables are not
+    empty) and guarded: `RETURNING id` + a before/after count, else `RAISE`.
+  - **CAS**: `UPDATE … SET version = version + 1, updated_by = '<tag>', updated_at = now() WHERE day = X AND version = <seen>`
+    then `GET DIAGNOSTICS v_n = ROW_COUNT; IF v_n <> 1 THEN RAISE EXCEPTION 'PUBLISH_CAS_MISMATCH…'`; inserts `version 1 … ON
+    CONFLICT (day) DO NOTHING` with the same guard (`PUBLISH_INSERT_CONFLICT`); a final `count(*) … where updated_by = tag and
+    updated_at = now()` must equal the planned rows. All inside ONE `DO $$` block between `begin;` / `commit;` (the probe of
+    9/22 showed the linked CLI runs the file as one request; a raise persists nothing). The SQL is 7-bit clean
+    (`importer.impSqlStr`: the 10/24 note's em dash becomes `E'…\u2014…'`).
+  - **never**: no `notifications` row, no `send-notification` / `office-notifications` call, no key printed or stored, no
+    contact data. The tool tag names the run, not a person; the office notice stays the app's publish dialog, by Faraz.
+- `importer.js`: exports only — `impSqlStr`, `impSqlBool`, `impSqlJson` (no behaviour change).
+- `test/publish.test.js` (new; `npm test` before the regression; CI step "Publish-preview plan tests") +
+  `test/fixtures/publish-synthetic-2026-10.json` (10 synthetic live rows, a synthetic two-range preview; roster ids only).
+  A: `buildDesired` — 14 days, an identical overlap takes the milestone row, a differing one is listed and aborts the plan. B:
+  the fixture plan — locked roles untouched (10/6 skipped), the open backup on a locked-import day filled by a CAS update on the
+  seen version with the lock kept and the generated slot unlocked (10/5), holder → holder on an import-unlocked slot (10/7),
+  manual (10/8) and trade (10/17) slots refused and listed with the day skipped, a claim holder left and its open backup filled
+  with the `claim` source preserved (10/18), external cover untouched (10/9), holder → OPEN for a `generated` holder (10/10) and
+  refused for an `import` holder (10/11), a new day inserted at v1 (10/12), an all-open new day not inserted (10/13), per-month
+  counts, the final open list, `--force-app-edited` writing the app-edited days but still never clearing an import holder. C:
+  aborts — a differing locked holder, primary == backup, a preview primary over an external cover; a range day missing from
+  the preview is warned about and left alone. D: row shape — key order, source / lock / note / external_cover semantics above.
+  E: SQL pins — snapshot first with `'generate_publish'`, the importer's data shape, a CAS `WHERE day = X AND version = V` and
+  `version = version + 1` per update, `values (…, 1, '<tag>') on conflict (day) do nothing` per insert, one `get diagnostics`
+  guard per row, one raise per update / insert, the snapshot and final-count raises, one DO block, begin/commit, the audit row
+  (parsed back: summary, keys, `mode`, the note, the backfill range, `refused`), no `notification` substring anywhere, no
+  edge-function URL or `@`, the tag in every `updated_by`, 7-bit clean, the final select's columns, no rows → no SQL. F: gate
+  (a) — the fixture's open milestone day FAILS it (the real preview leaves none), covered it passes, a hard violation in either
+  pass fails; `preflight` on a ctx from the seed — the seed's October week passes once its opens are listed and fails (c) when
+  they are not, Khan planted as an unlocked Tuesday primary is caught (`hard-never-weekday:Tue`), the same holder locked is a
+  locked fact, an unlisted uncovered day fails (c) and passes once listed. G: `applyToLive` then re-plan → zero rows, zero
+  changes, the three refusals still listed; `verifyApplied` passes on the simulated state and catches a differing holder and an
+  unmoved version; tallies (Acton P 2 / B 4, Khan P 1 / B 1). H: the real preview — no overlap, ranges 10/7..11/1 and
+  11/2..1/3 (89 days), gate (a) passes, backfill open = 10/15 primary, 9 known locked facts, a plan over an empty live set
+  renders.
+  Fail-before, verbatim (the module did not exist): `Error: Cannot find module
+  '<your projects folder>\Silvis-p12-w6\scripts\publish-preview.js'`. First implementation: five assertions I had written
+  wrong were corrected against the tool's (specified) behaviour — `final open slots` (10/11 P stays Burchett: the clear was
+  refused), the force flag (`refused` = `["2026-10-11"]`, an import clear is never forced), the snapshot-shape line filter
+  (it also matched the audit line), gate (a) on the fixture (`the milestone leaves 2 slot(s) open: 2026-10-13 primary,
+  2026-10-13 backup` — correct: the fixture leaves 10/13 open on purpose) and the seed week's opens (coverage (c) fails until
+  they are listed). Pass-after: `ok 161 assertions (351 ms)`.
+- Dry run observed (read-only, live project, 2026-09-23 ~05:53 UTC, after the wave-8 seed apply — blob updated 05:27:45,
+  preview generatedAt 05:28:27): `live rows: schedule_days 73, time_off 7, availability 48, east_feed 7, east_forecast 14,
+  east_overrides 0`; plan `2026-10: insert 0, update 15, unchanged 10 … slot changes 16 / 2026-11: insert 5, update 16,
+  unchanged 9 … 26 / 2026-12: insert 31 … 62 / 2027-01: insert 3 … 6`; `changes (110)` from `10/7 B OPEN -> Fierce` to `1/3 B
+  OPEN -> Philip` — every one an OPEN → holder fill (no holder replaced, no clear); `refused (0)`; `open slots in the final
+  state (1): 10/15 P`; `rows to write: 70 (39 insert(s), 31 update(s))`; ctx `East coverage 2026-09-28..2026-11-15; derived
+  weeks 2026-11-09:backup, 2026-12-07:primary`; preflight `(a) … ok; milestone open 0; backfill open 1 (2026-10-15 primary)`,
+  `(b) … 177 slot(s) evaluated; hard reasons remaining 0; locked facts 9` (10/12 P Fierce `weekday-pattern:Mon`; 10/14, 10/17,
+  10/18, 10/19, 10/22, 10/26, 10/28 B Philip `backup-cap:7`; 11/18 P Acton `day-before-vacation`), `(c) coverage: ok`, `(d)
+  distinct roles: ok`, `preflight result: PASS`; `SQL written … (45351 bytes)`; exit 0. The SQL: 70 `get diagnostics` guards,
+  0 `notification` hits, 0 non-ASCII bytes. Final-row tallies (both ranges) in the report: e.g. Nov Fierce B 16 (his derived
+  backup week + fills), Dec Fierce P 9 (derived primary week 12/7 + Wed/Fri pattern), Sarkar P 2 per month.
+- Gates: `npm test` green (publish 161 added before the regression); `node build.js` → `OK  build complete` then `git checkout
+  -- index.html version.json`. No smoke: `index-source.html` untouched.
+
+Live actions for the orchestrator (in this order; both from the worktree, never from the main clone):
+```
+cd <your projects folder>\Silvis-p12-w6
+node scripts/publish-preview.js --dry-run
+node scripts/publish-preview.js --apply --workdir <linked supabase dir>
+```
+The dry run must still read `rows to write: 70`, `refused (0)` and `preflight result: PASS` immediately before the apply (a
+row edited in between changes its version and the apply's CAS would raise — re-run the dry run, not `--force-app-edited`).
+`--apply` writes `docs/PUBLISH-2026-09-23.md` (commit it with the same message) and ends `VERIFIED: the preview is published`
+or exits non-zero with the mismatch listed. Then, when Faraz is up: the app's publish dialog for the office notice (the tool
+sent nothing), and 10/15 primary stays the group's open question (rules doc §8).
+
+Fix stage (9/23, after review — 12 findings, all addressed, no behaviour change for the 9/23 data): a ctx note from
+`buildLiveContext` (no East id for an `eastBlocks` surgeon, a failed roster resolve) now FAILS the preflight instead of
+being printed and ignored (`preflight(ctx, plan, ctxNotes)`; the major finding); the app's wipe guard
+(`helpers.scheduleWipeCheck`, live → final) aborts a plan that would empty more than half of the populated primaries; the DO
+body is quoted `$pub$ … $pub$` (a `$$` in a note cannot end it); the final `SELECT` reports `stamped_at` and counts the
+tool's rows at that timestamp only (the tag is a constant — a second run must not accumulate); `--apply` also proves every
+row OUTSIDE the plan unchanged and the total moved by exactly the inserts (`verifyUntouched`); a post-apply re-read that
+throws still writes the report and exits 1 saying the batch was sent; `parseCliRows` parses the final row from the END
+of stdout and prints the trailing 400 characters on failure; section H of the test pins the 9/23 preview's numbers only
+while `generatedAt` is that file's (a regenerated preview cannot turn `npm test` red); the guide's §15 wording (notes are
+written, never overwritten) and §19 (seed ownership, the flags-only deviation) were corrected. **Seed ownership after
+`--apply`**: the 31 updated days carry `updated_by` = the tag, so `import-seed` (which applies only where `updated_by` is
+still `seed`) will no longer touch them — a later seed correction to 10/7 … 11/29 goes through the app; the importer's dry
+run lists them as skipped. This is what stops a re-import from wiping the generated backups, and it is what an app publish
+does too. Test: `node test/publish.test.js` → `ok 186 assertions` (was 161).

@@ -1,0 +1,70 @@
+{
+  "_comment": "Synthetic live schedule_days rows + a synthetic preview for test/publish.test.js (Prompt 12 PUB). Backfill 2026-10-05..10-11 (Mon-Sun), milestone 2026-10-12..10-18 (Mon-Sun). Every case the plan must decide is one day here; abort cases are built by the test from copies. Roster ids only - no contact data.",
+  "roster": [
+    { "id": "s1", "name": "Khan", "code": "FAK", "active": true },
+    { "id": "s2", "name": "Burchett", "code": "MAB", "active": true },
+    { "id": "s3", "name": "Acton", "code": "BDA", "active": true },
+    { "id": "s4", "name": "Philip", "code": "AFP", "active": true },
+    { "id": "s5", "name": "Fierce", "code": "NF", "active": true },
+    { "id": "s6", "name": "Sarkar", "code": "SRK", "active": true }
+  ],
+  "live": [
+    { "day": "2026-10-05", "primary_id": "s3", "backup_id": null, "primary_locked": true,  "backup_locked": false, "source": "import",    "external_cover": null,     "note": "seed: synthetic-panel", "version": 1, "updated_by": "seed" },
+    { "day": "2026-10-06", "primary_id": "s3", "backup_id": "s2",  "primary_locked": true,  "backup_locked": true,  "source": "import",    "external_cover": null,     "note": "seed: synthetic-panel", "version": 2, "updated_by": "seed" },
+    { "day": "2026-10-07", "primary_id": "s4", "backup_id": "s1",  "primary_locked": false, "backup_locked": false, "source": "import",    "external_cover": null,     "note": "seed: synthetic-panel", "version": 1, "updated_by": "seed" },
+    { "day": "2026-10-08", "primary_id": "s2", "backup_id": null,  "primary_locked": false, "backup_locked": false, "source": "manual",    "external_cover": null,     "note": null,                    "version": 3, "updated_by": "s1" },
+    { "day": "2026-10-09", "primary_id": null, "backup_id": "s5",  "primary_locked": true,  "backup_locked": true,  "source": "import",    "external_cover": "Atwell", "note": "seed: synthetic-panel", "version": 1, "updated_by": "seed" },
+    { "day": "2026-10-10", "primary_id": "s2", "backup_id": "s1",  "primary_locked": false, "backup_locked": false, "source": "generated", "external_cover": null,     "note": null,                    "version": 4, "updated_by": "s1" },
+    { "day": "2026-10-11", "primary_id": "s2", "backup_id": null,  "primary_locked": false, "backup_locked": false, "source": "import",    "external_cover": null,     "note": "seed: synthetic-panel", "version": 1, "updated_by": "seed" },
+    { "day": "2026-10-14", "primary_id": "s5", "backup_id": null,  "primary_locked": true,  "backup_locked": false, "source": "import",    "external_cover": null,     "note": "seed: synthetic-panel", "version": 1, "updated_by": "seed" },
+    { "day": "2026-10-17", "primary_id": "s4", "backup_id": "s3",  "primary_locked": false, "backup_locked": false, "source": "trade",     "external_cover": null,     "note": null,                    "version": 2, "updated_by": "s4" },
+    { "day": "2026-10-18", "primary_id": "s6", "backup_id": null,  "primary_locked": false, "backup_locked": false, "source": "claim",     "external_cover": null,     "note": null,                    "version": 1, "updated_by": "s6" }
+  ],
+  "preview": {
+    "start": "2026-10-12",
+    "end": "2026-10-18",
+    "seed": 7,
+    "bestOf": 200,
+    "generatedAt": "2026-09-23T05:00:00.000Z",
+    "schedule": {
+      "2026-10-12": { "primary": "s1", "backup": "s4", "primaryLocked": false, "backupLocked": false, "source": "generated", "externalCover": null, "note": null },
+      "2026-10-13": { "primary": null, "backup": null, "primaryLocked": false, "backupLocked": false, "source": "generated", "externalCover": null, "note": null },
+      "2026-10-14": { "primary": "s5", "backup": "s6", "primaryLocked": true,  "backupLocked": false, "source": "import",    "externalCover": null, "note": "seed: synthetic-panel" },
+      "2026-10-15": { "primary": "s2", "backup": "s3", "primaryLocked": false, "backupLocked": false, "source": "generated", "externalCover": null, "note": null },
+      "2026-10-16": { "primary": "s2", "backup": "s3", "primaryLocked": false, "backupLocked": false, "source": "generated", "externalCover": null, "note": null },
+      "2026-10-17": { "primary": "s2", "backup": "s3", "primaryLocked": false, "backupLocked": false, "source": "generated", "externalCover": null, "note": null },
+      "2026-10-18": { "primary": "s6", "backup": "s3", "primaryLocked": false, "backupLocked": false, "source": "claim",     "externalCover": null, "note": null }
+    },
+    "diagnostics": {
+      "hardViolations": [],
+      "uncovered": [
+        { "day": "2026-10-13", "role": "primary", "reasons": {} },
+        { "day": "2026-10-13", "role": "backup", "reasons": {} }
+      ],
+      "lockViolations": [],
+      "mode": "generate"
+    },
+    "backfill": {
+      "range": { "start": "2026-10-05", "end": "2026-10-11" },
+      "schedule": {
+        "2026-10-05": { "primary": "s3", "backup": "s5", "primaryLocked": true,  "backupLocked": false, "source": "import",    "externalCover": null,     "note": "seed: synthetic-panel" },
+        "2026-10-06": { "primary": "s3", "backup": "s2", "primaryLocked": true,  "backupLocked": true,  "source": "import",    "externalCover": null,     "note": "seed: synthetic-panel" },
+        "2026-10-07": { "primary": "s4", "backup": "s2", "primaryLocked": false, "backupLocked": false, "source": "import",    "externalCover": null,     "note": "seed: synthetic-panel" },
+        "2026-10-08": { "primary": "s3", "backup": "s5", "primaryLocked": false, "backupLocked": false, "source": "generated", "externalCover": null,     "note": null },
+        "2026-10-09": { "primary": null, "backup": "s5", "primaryLocked": true,  "backupLocked": true,  "source": "import",    "externalCover": "Atwell", "note": "seed: synthetic-panel" },
+        "2026-10-10": { "primary": null, "backup": "s1", "primaryLocked": false, "backupLocked": false, "source": "generated", "externalCover": null,     "note": null },
+        "2026-10-11": { "primary": null, "backup": "s5", "primaryLocked": false, "backupLocked": false, "source": "import",    "externalCover": null,     "note": "seed: synthetic-panel" }
+      },
+      "diagnostics": {
+        "hardViolations": [],
+        "uncovered": [
+          { "day": "2026-10-10", "role": "primary", "reasons": {} },
+          { "day": "2026-10-11", "role": "primary", "reasons": {} }
+        ],
+        "lockViolations": [],
+        "mode": "fill-open-only"
+      },
+      "openSlots": []
+    }
+  }
+}

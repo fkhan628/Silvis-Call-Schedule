@@ -36,6 +36,7 @@ on:
       - "test/exports.test.js"
       - "test/totals.test.js"
       - "test/holidays.test.js"
+      - "test/publish.test.js"
       - "test/schema.test.js"
       - "importer.js"
       - "test/generator-regression.js"
@@ -108,6 +109,12 @@ jobs:
 
       - name: Holiday unit builder tests
         run: node test/holidays.test.js
+
+      # Command-line publish plan (scripts/publish-preview.js, Prompt 12 PUB):
+      # locked roles untouched, app-edited slots refused, CAS + RAISE guards in
+      # the SQL, no notifications table anywhere in it. Pure - no network.
+      - name: Publish-preview plan tests
+        run: node test/publish.test.js
 
       - name: Bump APP_VERSION
         run: node bump-version.js

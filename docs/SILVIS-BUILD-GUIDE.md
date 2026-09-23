@@ -492,6 +492,16 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
   live rows of 9/22 that is **2026-10-07** (the first open October backup), not 10/15 — five October backups precede
   the open 10/15 primary. Proof: `test/data-layer.test.js` AB block (helper pins on synthetic maps and on the seed's
   rows; source pin on the wiring), `test/ui/smoke.mjs` (the start restated from the live rows, never from the helper).
+- **Publishing from the command line (Faraz 9/22 evening: "go ahead and deploy, publish and move forward without my
+  go"; Prompt 12 PUB, 9/23 overnight)**: `scripts/publish-preview.js` publishes the regenerated preview
+  (`docs/PREVIEW-2026-11-02-to-2027-01-03.json`, milestone + October backfill) server-side, mirroring Accept & Publish
+  step for step — snapshot `generate_publish` first, compare-and-swap writes on the version the dry run saw, one
+  `schedule.generate_accept` audit row — as ONE atomic DO block through the linked CLI. Dry run by default (anon
+  reads; prints the plan, writes the SQL and a report to the scratch path); `--apply --workdir <linked dir>` runs it
+  and verifies by re-reading. Locked roles never change (a differing locked holder aborts), app-edited slots
+  (manual / trade / claim) are refused and listed, an import holder is never cleared, `external_cover` is never set or
+  cleared and an existing note is never overwritten, the app's wipe guard runs, and it sends no notice of any kind — the app's publish dialog (office notice, in-app notice, mail)
+  stays Faraz's step. Details in §19. Proof: `test/publish.test.js` (CI step "Publish-preview plan tests").
 
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
 
@@ -543,3 +553,71 @@ Burchett's November, Philip's weeks, Fierce's single days) is migrated into `cal
 there is one mechanism, not two; recurring patterns, derived weeks and windows stay rules. the ER-panel author's Word document
 is **retired at go-live** (Faraz 9/22 evening): the app is the source of truth; the ER-panel author keeps a viewer account, the weekly
 office digest and the ER Call Panels export for a paper copy. Published assignments remain locks.
+
+## 19. Publishing from the command line (Prompt 12 PUB, 2026-09-23 overnight)
+
+Publishing normally happens in the app (Setup → Generate → Accept & Publish) under the scheduler's signed-in session.
+On 9/22 evening Faraz authorised the overnight run to publish without him ("no one has access yet except me"), and
+nobody else can sign in as him, so `scripts/publish-preview.js` publishes a preview JSON written by
+`scripts/preview-generate.js` **server-side**, mirroring the app's path exactly and proving what it did.
+
+```
+node scripts/publish-preview.js                                  # dry run (default): plan + preflight, SQL + report to the scratch path
+node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL through `supabase db query --linked -f`, then verifies
+   [--preview docs/PREVIEW-<start>-to-<end>.json] [--out <sql>] [--report <md>] [--force-app-edited]
+```
+
+- **Input**: the preview's `.schedule` (milestone `.start..end`) and `.backfill.schedule` (`.backfill.range`, the
+  fill-open-only pass). A day in both must be identical (else abort). Live rows come from the seven anon-readable
+  sources `preview-generate.js` reads; the rules ctx is rebuilt the same way (that builder is duplicated in the tool
+  because `preview-generate.js` is a top-level runner without exports).
+- **Plan, per day and role**: a locked live role is never changed and the preview must hold the same holder (else
+  abort); a held, unlocked slot whose live source is not `import` / `generated` / `east-derived` is app-edited — the
+  change is refused and listed, the day skipped, the run continues (`--force-app-edited` lifts that; unused); an
+  `external_cover` is never cleared or set; otherwise a differing preview holder is a change, and holder → OPEN is
+  allowed only when the preview left the slot open and the live holder was `generated` (an import holder is never
+  cleared — refused and listed). Unchanged days are skipped; a day with no live row and both roles open is not
+  inserted; `primary <> backup` is checked on every written row. **Documented deviation**: "unchanged" means the
+  holders are equal — a lock / source / note-only difference is never written (the app's sync compares the whole
+  row body and would PATCH such a day); conservative, and never the case on 9/23. The app's accidental-wipe guard
+  (`helpers.scheduleWipeCheck`, live → final) aborts the plan when more than half of the populated primaries would
+  be emptied, even when each single clear is allowed.
+- **Row shape** (= `helpers.assignmentToDayRow` + what Accept & Publish writes): `source` is the preview entry's
+  (`generator.js genSeedLocks`: a day with a fixed slot keeps its source — so a locked-import day whose backup was
+  generated stays `import` — else `generated`; a derived week with no import lock is `east-derived`; a live app source
+  whose held slots are untouched is kept); a live lock stays, otherwise the preview's flag (generated slots unlocked,
+  a derived-week lock locked); an existing note is never overwritten (a new generated day gets `null`);
+  `updated_by = 'publish-preview (Faraz, 2026-09-23 overnight)'`; `version` by compare-and-swap. **After `--apply`
+  the updated days are app-owned**: `import-seed` applies only where `updated_by` is still `seed`, so it will no
+  longer touch the 31 updated October/November days (their `updated_by` is the tag) — a later seed correction to any
+  of them goes through the app (the importer's dry run lists them as skipped). By design: it is what stops a
+  re-import from wiping the generated backups, and identical to what an app publish does.
+- **SQL**: one transaction, one `DO $pub$ … $pub$` block (a tagged quote, so a note containing `$$` cannot end the
+  body) — snapshot **first** (`reason 'generate_publish'`, `created_by` the tool
+  tag, the same `jsonb_build_object` shape as `snapshots.capture` / `importer.js`), then per day
+  `UPDATE … SET version = version + 1 … WHERE day = X AND version = <seen>` or `INSERT … version 1 … ON CONFLICT DO
+  NOTHING`, each followed by `GET DIAGNOSTICS` + `RAISE` unless exactly one row moved, a final count guard, then one
+  `audit_log` row shaped like the app's `schedule.generate_accept` (`actor_name` = the tag, `mode: "command-line"`,
+  the authorisation note, the snapshot id and counts). Any raise rolls everything back. **No `notifications` row, no
+  edge-function call, no mail** — the office notice is the app's publish dialog, by Faraz, afterwards.
+- **Preflight** (before any SQL): (a) `diagnostics.hardViolations` empty in both passes and the milestone's
+  `uncovered` empty (backfill opens are listed); (b) `rules.eligibility` over every placed slot of both ranges on the
+  FINAL schedule — a lock holder's `conflicts` are the known locked facts (the preview's `lockViolations`), any other
+  hard reason aborts; a ctx the builder could not complete (no East id resolved for an `eastBlocks` surgeon, a failed
+  Davenport roster read) **fails the preflight outright** — an incomplete ctx would evaluate Khan's East days `ok`
+  and PASS silently; (c) every range day covered or listed open; (d) distinct roles. `--apply` refuses unless all pass.
+- **Verification on `--apply`**: the batch's final `SELECT` (snapshot id, snapshots before → after, audit id,
+  `stamped_at` and the rows stamped **at that timestamp** — the tag is a constant, so the count is scoped to the
+  latest run, never all-time), an anon re-read proving every planned row with its incremented version and tag AND
+  every row outside the plan unchanged with the total moved by exactly the inserts (`verifyUntouched`), a fresh plan
+  reading zero rows, per-surgeon per-month tallies of the final rows; `docs/PUBLISH-2026-09-23.md` is written
+  (on a dry run the report goes to the scratch path). Exit 0 verified / 1 not verified / 2 plan or preflight abort.
+  A re-read that throws after the batch was sent still writes the report and exits 1 saying the batch may have
+  committed (the remedy is a fresh dry run: it must read zero rows). The CLI's `-o json` shape was never observed:
+  the final select's row is parsed from the END of stdout, and on a parse failure the trailing 400 characters are
+  printed so the snapshot / audit ids can be read by hand.
+- **Dry run of 2026-09-23 (read-only, live project)**: 73 live rows; plan 70 rows (39 inserts, 31 updates), 110 slot
+  changes, 0 refused, 10/15 primary the only open slot; preflight PASS with the 9 known locked facts (Fierce 10/12 Mon
+  pattern, Philip's seven October backup-cap locks, Acton 11/18 day-before-vacation).
+- Proof: `test/publish.test.js` (synthetic live rows in `test/fixtures/publish-synthetic-2026-10.json`, a synthetic
+  ctx from the seed for the preflight, SQL pins, idempotence); CI step "Publish-preview plan tests".

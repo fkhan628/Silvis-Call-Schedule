@@ -1099,7 +1099,12 @@ var impExports = {
   impFindContactValues: impFindContactValues,
   impScrubRuleNotes: impScrubRuleNotes,
   impRefuseNoteDenylist: impRefuseNoteDenylist,
-  impCanon: impCanon
+  impCanon: impCanon,
+  // SQL literal helpers (Prompt 12 PUB, 9/23: scripts/publish-preview.js writes
+  // its CAS batch with the same 7-bit-clean literals; exports only, no change)
+  impSqlStr: impSqlStr,
+  impSqlBool: impSqlBool,
+  impSqlJson: impSqlJson
 };
 
 if (typeof module !== "undefined" && module.exports) {
