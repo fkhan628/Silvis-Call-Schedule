@@ -781,7 +781,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count("reserved = share"), 0, "the flat equation 'open - reserved = share' is still printed");
     assert.strictEqual(count("Implied shares (equal-share fairness"), 0, "the Implied shares heading still says equal-share fairness");
     assert.strictEqual(count("equal share of the month's open primary slots"), 0, "the shares paragraph / Totals titles still describe the flat open-slot share");
-    assert.strictEqual(count("implied equal share of the month's open"), 0, "a Totals title still describes the flat open-slot share");
+    assert.strictEqual(count("implied equal share of the open"), 0, "a Totals title (TotalsCard Target / Target B) still describes the flat open-slot share");
+    assert.ok(count("Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap)") === 1 && count("Backup-day target for the period: an explicit { backup } target in Setup, else min(level, backup cap)") === 1, "the Totals table's Target / Target B titles do not name min(level, cap)");
+    const sharesHead = src.slice(src.indexOf('data-testid={"gen-shares-" + m}'), src.indexOf("</tr></thead>", src.indexOf('data-testid={"gen-shares-" + m}')));
+    assert.ok(sharesHead.includes(">Held P</th>") && sharesHead.includes(">Held B</th>") && !sharesHead.includes("Locked P") && !sharesHead.includes("Locked B"), "the shares table still heads its held-day columns 'Locked P' / 'Locked B'");
     assert.ok(count("water-filled") >= 3, "the Generate panel and Totals name the water-filled share fewer than 3 times");
   });
   check("Setup -> Rules: 'Monthly target' hint reads 'blank = equal share; a number = primary target' and a 'Primary contribution' select writes primaryContribution ((none) / weekends)", () => {

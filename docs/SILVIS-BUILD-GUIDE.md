@@ -488,9 +488,12 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   describes the flat share. *Wording follow-up (9/23, after the rebase):* the Generate panel's per-month head line in
   `index-source.html` now prints the pool slots and the level (`primary S pool slots (X open − Y reserved + H held) = level
   L each of N; backup …`, `at caps` when every member sits on his clip and the level is null; a preview persisted before
-  9/23 without `poolSlots` is labelled `pre-9/23 preview (flat share)`), its shares paragraph, the Totals fairness sentence,
-  footnote and `Target P` / `Target B` titles describe the water-filled share, and `scripts/preview-generate.js` prints the
-  same head line and heading; `test/data-layer.test.js` pins the wording. *Still open outside this item:* `rules.js
+  9/23 without `poolSlots` is labelled `pre-9/23 preview (flat share)`), its shares paragraph and per-member table (the
+  held-day columns read `Held P` / `Held B`, once `Locked P` / `Locked B`; held = locked, derived, claimed or published),
+  the Generate tallies table's `Target P` / `Target B` titles, and the Totals table's fairness sentence, footnote and
+  `Target` / `Target B` column titles (`TotalsCard`; the second follow-up commit — the first had re-titled only the tallies
+  table) describe the water-filled share, and `scripts/preview-generate.js` prints the same head line, heading and table
+  header; `test/data-layer.test.js` pins the wording. *Still open outside this item:* `rules.js
   defaultWeights()` does not carry `deviationConvexity` yet, so Setup shows no placeholder until the blob has it; rules doc
   §8 item 18 (Sarkar as backup inside her windows under the convex term).
 - **Caps count primary days only**; backup does not count toward any total cap (Burchett's 8, Fierce's 14). Philip's

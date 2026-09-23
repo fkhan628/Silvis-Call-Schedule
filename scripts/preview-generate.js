@@ -185,7 +185,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
         L.push(I.poolSlots
           ? `### ${m}: primary ${I.poolSlots.primary} pool slots (${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows + ${I.heldByPool ? I.heldByPool.primary : "-"} held) = level ${lvl(I.primaryShare)} each of ${I.poolSize}; backup ${I.poolSlots.backup} pool slots (${I.backupOpen} open + ${I.heldByPool ? I.heldByPool.backup : "-"} held) = level ${lvl(I.backupShare)}${pl}${partial}`
           : `### ${m}: pre-9/23 preview (flat share): primary ${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows, share ${I.primaryShare} each of ${I.poolSize}; backup ${I.backupOpen} open, share ${I.backupShare}${pl}${partial}`); L.push("");
-        L.push("| Surgeon | Target P | Allowed P | Locked P | Clip P | Target B | Allowed B | Locked B |"); L.push("|---|---|---|---|---|---|---|---|");
+        L.push("| Surgeon | Target P | Allowed P | Held P | Clip P | Target B | Allowed B | Held B |"); L.push("|---|---|---|---|---|---|---|---|");
         for (const s of roster) { const M = I.members[s.id]; if (!M) continue; const v = (x) => (x == null ? "-" : x); const flagP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget ? " (short)" : ""; const flagB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget ? " (short)" : ""; L.push(`| ${s.name} | ${v(M.primaryTarget)} | ${M.allowedPrimary}${flagP} | ${M.lockedHeld.primary} | ${v(M.clipPrimary)} | ${v(M.backupTarget)} | ${M.allowedBackup}${flagB} | ${M.lockedHeld.backup} |`); }
         L.push("");
       }
