@@ -32,8 +32,8 @@ or in the app ever needs an address typed anywhere except the Supabase dashboard
 2. The moment the invite is created, the database creates their `user_profiles` row (`viewer`, unlinked) — even if they
    never open the email. You can link them right away.
 3. **Setup → Users** (in the app): pick the new user, set **roster id** (s1–s6) and **role** (`surgeon` for the five
-   surgeons, `viewer` for the ER-panel author, `scheduler` for anyone who should publish). Until Setup → Users exists (Prompt 6
-   Slice E), the same thing in SQL:
+   surgeons, `viewer` for the ER-panel author, `scheduler` for anyone who should publish). Setup → Users is the normal path; if the
+   app is unreachable, the same thing in SQL:
 
    ```sql
    update public.user_profiles set role = 'surgeon', person_id = 's2'

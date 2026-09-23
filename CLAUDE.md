@@ -33,7 +33,9 @@ MercyOne/MercyHealth work addresses.
 One calendar day = one 24-hour shift (07:00 → 07:00). Two roles per day: `primary` (in Silvis) and `backup`.
 In-memory schedule: `{ "YYYY-MM-DD": { primary, backup, primaryLocked, backupLocked, source, externalCover, note } }`.
 Persisted one row per day in `schedule_days` with compare-and-swap on `version`. Fri/Sat/Sun form a *weekend unit*
-(block / split / daily). Fairness is per-surgeon targets + caps, not equal shares. Fill primary first, then backup.
+(block / split / daily). Fairness is an **equal share per role** — of the open primary slots and, separately, of the open
+backup slots — for every pool member, with per-surgeon caps and explicit targets on top (Prompt 12 J, 9/22). Fill primary
+first, then backup.
 One 24-h day = **one shift** — no partial or weighted shifts; totals are a running yearly tally. Time off is
 **vacations only** (no no-call days), self-entered with **no approval**, refused over a day the surgeon is already on call
 (DB trigger + client check — trade first). Holidays are the same six as Davenport, as **units** with one primary + one
@@ -44,7 +46,9 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 ## Working locations
 
 1. **Git clone: `<your clone>`** — the ONLY place to edit repo files. Git identity is
-   configured repo-locally. The Davenport reference clone lives beside it at `..\davenport-ref` (read-only, fresh clone of `fkhan628/Call-Schedule-App`; `..\Call-Schedule-App` is Faraz's own Davenport working clone — never edit either from here).
+   configured repo-locally. The Davenport reference clone lives beside it at `..\davenport-ref` (read-only, fresh clone
+   of `fkhan628/Call-Schedule-App`; `..\Call-Schedule-App` is Faraz's own Davenport working clone — never edit either
+   from here).
 2. **OneDrive folder** `<the OneDrive folder>` — non-repo material (the ER-panel author's Word docs,
    email exports, backups), the private `silvis-contacts.md`, and the source copies of `CLAUDE.md`, `docs/` and `sql/`
    (identical to the repo's — both contact-free). Never edit app files there.
@@ -56,8 +60,10 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 
 - Edit **only** `index-source.html` (one `<script type="text/babel">` JSX block) and the plain-JS modules
   (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`).
-- **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with `[skip ci]`, Pages redeploys.
-- Before ANY push: `npm test && node build.js` (= rules, east-feed, generator regression, data-layer tests, then the build);
+- **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with
+  `[skip ci]`, Pages redeploys.
+- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — rules, east-feed, data-layer,
+  schema, importer, week-rows, exports, totals, holidays, publish, ci — then the generator regression, then the build);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
   writes `index.html` locally as a byproduct — `git restore index.html` before committing (CI owns it).
@@ -68,7 +74,9 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 
 - Two client auth paths in `config.js`: `dbReadHeaders()` (expiry-aware, anon fallback) for reads; `dbAuthHeaders()`
   (user JWT, sends even an expired token so a dead write fails loudly) for **every** mutation.
-- **RLS:** anon-readable — `schedule_days`, `call_schedule_data`, `time_off`, `availability`, `east_feed`, `client_versions`.
+- **RLS:** anon-readable — `schedule_days`, `call_schedule_data`, `time_off`, `availability`, `east_feed`, `east_overrides`
+  (day, roster id, busy flag, an operational note), `east_forecast` (week flags + busy probabilities) and `client_versions` (anon
+  reads the `main` row only).
   An RLS-blocked read returns HTTP 200 + `[]` — **silent**. Reads must distinguish failure from empty (`db.query` throws on
   non-2xx; keep that). **The service-role key is server-side only — never in client code or a URL.** RLS changes apply to
   the live DB instantly — always report-first with blast radius.
@@ -86,9 +94,10 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   editable in Setup. Fierce's derived weeks and Khan's East dependency are generic `eastFeed` features.
 - `generator.js`: locks → weekend/day units → primary pass → backup pass → repair → target smoothing, wrapped in
   best-of-N; returns `{ schedule, diagnostics }` and **never silently leaves a slot empty** — open slots carry reasons.
-- `test/generator-regression.js` re-states every hard rule independently and runs 50 seeds × 3 ranges from
-  `docs/silvis-seed.json`; CI runs it before the build. When a rule changes, update `docs/SILVIS-CALL-RULES.md`, the
-  seed, and the test in the same PR.
+- `test/generator-regression.js` re-states every hard rule independently and runs 50 seeds × 4 ranges (Oct with the
+  imports, Nov–Dec, Jan–Mar, the milestone 11/2 → 1/3 on the even seeds) plus the fill-open-only October backfill runs
+  and the fixture runs, all from `docs/silvis-seed.json` and `test/fixtures/`; CI runs it before the build. When a rule
+  changes, update `docs/SILVIS-CALL-RULES.md`, the seed, and the test in the same PR.
 
 ## Session ground rules (non-negotiable)
 
@@ -97,10 +106,13 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 - Show every edit and every command before running it. No auto-accept.
 - Verify by OBSERVING behavior (a passing test, a real row in Supabase, a green CI run, a byte-diff) — never by
   assuming success. Silent failures are this codebase family's signature bug class.
-- Current milestone: **a published schedule through 2026-12-31** (generate 2026-11-02 → 2027-01-03 over the locked
-  Sep 14 – Nov 1 import); after that, Generate offers 3 / 6 / 9 / 12-month presets. Don't gold-plate exports or edge
-  functions until the milestone is live.
-- Pending inputs: who takes 10/15 (group discussion), Sarkar's home email, Khan as backup on ordinary Tue/Thu, Philip's
-  monthly cap — see `docs/SILVIS-CALL-RULES.md §8`. Treat those as unknowns, not assumptions to bake in. Every default
+- Current milestone: **a published schedule through 2026-12-31** — **published 2026-09-23** from the committed preview
+  (`docs/PUBLISH-2026-09-23.md`: 2026-10-07 → 2027-01-03 over the locks, which now run to 11/29). Generate's default range
+  and its 3 / 6 / 9 / 12-month presets start at the first open slot on or after today (Prompt 12 AB); locks are never
+  touched.
+  Don't gold-plate exports or edge functions until the surgeons are on the live app.
+- Pending inputs: who takes Thu 10/15 primary (group discussion — the 9/23 publish left it OPEN), Sarkar's home email,
+  Philip's monthly cap (Khan as backup on ordinary Tue/Thu was answered 9/22: backup is open to everyone) — see
+  `docs/SILVIS-CALL-RULES.md §8`. Treat those as unknowns, not assumptions to bake in. Every default
   taken for an unanswered question is data in `call_schedule_data.data.groupRules` / `surgeonRules` (listed in
   `docs/ORIENTATION-2026-09-21.md` §3), never a code branch.

@@ -27,7 +27,7 @@ a feed.
 | Hosting | New public GitHub repo (suggested name `Silvis-Call-Schedule`) under `fkhan628`, GitHub Pages from `main`, same `build.yml` CI as Davenport (bump version → transpile → commit `index.html` back with `[skip ci]`). |
 | Features | **Keep from Davenport:** generator + calendar views + locks; vacations + holidays; shift trades; stats (shift counts + fairness, running yearly tally); exports (.ics, shareable read-only HTML, printable, the ER-panel author's panel); auth + roles; **office notifications; calendar sync; refresh / client-version check; data management (backup, restore, export, import, snapshots); every safety feature; audit log; in-app notifications + email.** **Drop:** APP roster/shifts/vacations; Fierce's separate backup weeks; no-call days; the vacation approval workflow + deadline reminders; half-day / weighted shift accounting; anything to do with compensation (no $ display, no stipend math); the Davenport holiday A/B convention. OneSignal push is not requested (optional later). |
 | Shift model | Daily 24-h primary + backup, 07:00→07:00 (confirmed). Weekend handled as a unit (block / split / daily). Holidays are units (same six as Davenport) with one primary + one backup sticking through the unit. **One 24-h day = one shift** — no partial or weighted shifts. |
-| Fairness | Targets + caps per surgeon (see rules §6), not equal shares. |
+| Fairness | An **equal share per role** — of the open primary slots and, separately, of the open backup slots — for every pool member, with per-surgeon caps and explicit targets on top (rules §6; Prompt 12 J, 9/22, §15). |
 | Reuse | Clone the Davenport repo as the starting point; copy the shell and data layer; rewrite the generator. |
 | Roster | Six surgeons: Khan, Burchett, Acton, Philip, Fierce, Sarkar. **No Atwell** (his 9/28–10/4 week is imported as `externalCover`). |
 | **Contact data** | **None in the repo, the seed, the docs, the schema, `config.js`, or any anon-readable table.** It lives only in the private `silvis-contacts.md` (OneDrive, gitignored) and, once users exist, in `user_profiles` (via Supabase Auth) and `office_contacts` (entered in Setup) — both authenticated-read only. See §3.1. |
@@ -177,7 +177,7 @@ Davenport's `holidayAssignments`, keyed by year.
 
 ### 4.3 RLS posture (report-first before any change to a live DB)
 
-- **Anon-readable:** `schedule_days`, `call_schedule_data`, `time_off`, `availability`, `east_feed`, `client_versions` — required for the shareable page and the `calendar-sync` function (which sends no auth header). **Therefore nothing sensitive may live in them** — no contact data, no personal notes (§3.1).
+- **Anon-readable:** `schedule_days`, `call_schedule_data`, `time_off`, `availability`, `east_feed`, `east_overrides` (day, roster id, busy flag, an operational note), `east_forecast` (week flags + busy probabilities) and `client_versions` (anon reads the `main` row only) — required for the shareable page and the `calendar-sync` function (which sends no auth header). **Therefore nothing sensitive may live in them** — no contact data, no personal notes (§3.1).
 - **Authenticated write, role-gated:** all writes require a JWT; `schedule_days`, `call_schedule_data`, `availability`, `east_*`, `office_contacts`, `call_schedule_snapshots` writable only by `scheduler`/`admin` (checked via a `security definer` function `silvis_role()` that reads `user_profiles` for `auth.uid()`); `time_off` insertable/deletable by the surgeon named in the row (own vacations, self-service) and by scheduler/admin; `shift_trade_requests` insertable by the surgeon named in the row, updatable by scheduler/admin (and by the counter-party for accept/decline); `notifications` insert by any authenticated user, read by all authenticated; `user_profiles` read by all authenticated, self-update of display fields only, role changes admin-only; `audit_log` insert by authenticated, read by scheduler/admin.
 - Remember the Davenport lesson: **an RLS-blocked read returns HTTP 200 + `[]`** — the client must treat "empty" and "failed" differently (`db.query` throws on non-2xx; keep that).
 
@@ -207,7 +207,7 @@ Hard blocks (any → `ok:false`): inactive on that date; `time_off` covering the
 *and, for primary only, the day before*, because the shift ends 07:00 on the vacation day — `groupRules.dayBeforeRules`, H; there are no no-call days); `availabilityMode` semantics violated (whitelist: any
 `available` row for that surgeon in that month makes uncovered days ineligible; `unavailable` rows always block;
 `backup_only` blocks primary; `no_backup` blocks backup); recurring `recurringUnavailable` (primary only since 9/22); `hardNeverWeekdays`
-(Khan: Tue/Thu — primary only since 9/22, `hardNeverWeekdaysRoles`; Sarkar has none since 9/22 evening); Khan **primary** on an East busy day (backup is allowed — `eastBlocksBackup:false`);
+(Khan: Tue/Thu; Acton: Tue since 9/22 evening, Prompt 12 X — both primary only, `hardNeverWeekdaysRoles`; Sarkar has none since 9/22 evening); Khan **primary** on an East busy day (backup is allowed — `eastBlocksBackup:false`);
 Philip's day-before-Aledo (primary only — `aledoDayBeforeRoles`, H); Fierce's weekday pattern outside his derived weeks (primary: Tue/Thu none, Mon backup-only, Wed preferred,
 Fri/Sat/Sun only as one Fri+Sat+Sun block; backup every day since 9/22); Sarkar outside her windows (both roles; `daysPerWindowWeek` is a soft target since 9/22 evening); already
 holds the other role that day; `backupOptOut` on a backup slot (I); would exceed `maxConsecutiveDays` (primary-only count by default,
@@ -331,7 +331,7 @@ Keep Davenport's auth gate, toasts, dark mode, Collapsible, publish dialog, snap
 buttons, the notification center, the refresh/version banner, and Settings → Data management exactly as they are.
 
 - **Month grid cell:** two lines — `P Burchett` / `B Acton` — colored per surgeon; open slot = red "OPEN" (the ER-panel author's convention); weekend units get a subtle bracket; locked slots show a padlock; East-derived (Fierce) slots show a small "E".
-- **Week rows list:** the same rows as the ER-panel author's Word document (MON/SUN DATES | PRIMARY | BACKUP) with ranges collapsed (`9/15–9/18 Philip`) — this is also the export format (§9).
+- **Week rows list:** the same rows as the ER-panel author's Word document (MON/SUN DATES | TRAUMA | TRAUMA BACKUP — the primary column is headed TRAUMA since 9/22, Prompt 12 P) with ranges collapsed (`9/15–9/18 Philip`) — this is also the export format (§9).
 - **Day editor** (click a cell): set primary/backup from a dropdown that shows eligibility — eligible names first, ineligible greyed with the reason; lock toggle; note. Backup lists everyone (9/22: backup is open unless `backupOptOut`). Outside surgeons (M) sit under their own "Outside surgeons" heading for both roles; picking one locks the role and saves `source: "manual-external"`. A Fri/Sat/Sun candidate who already holds the other two block days is judged as a block member (small items 9/22 — Fierce can complete a Fri–Sun block by hand); the same holds for a block-style receiver of a whole Fri–Sun block in the trade path. The editor **fails closed**: a thrown eligibility check makes the option ineligible with the error as its reason and disables Save until the rules evaluate again.
 - **Open shifts** (board, self-claim, weekly reminders): §16.
 - **Theme (O/R, 9/22; delivered 9/23, Prompt 12 TH):** every colour is a named token in `app-styles.js` — `THEME.light` / `THEME.dark`, read in the JSX as `T = THEME[dk ? "dark" : "light"]` (the older `dkBg` / `dkText` / `dkSubtext` / `dkCardBorder` names are aliases of `T.*`). Light: navy `#13294B` for the header bar, nav, primary buttons and card titles; orange `#FF5F05` as an **accent only** (count badges, the active-tab underline, the today ring, the primary call to action `css.cta`), `#C2410C` wherever orange is text on white, `#FFE8DB` as its tint; page `#F6F8FB`, card white, text `#1F2A3A`, muted `#5B6B82`; **OPEN stays red `#B91C1C`**. Dark: page `#0B1A33`, surface `#13294B`, text `#E6ECF5`, accent `#FF8A4C`, muted `#9FB0C8` (OPEN `#F06060`); the dark `<style>` sheet matches the light literals in React's `rgb()` form and re-paints them. Per-surgeon colours are **data keyed by roster id** (`SURGEON_COLOR_BY_ID`: s1 navy `#1F3A6B`, s2 orange `#D9561A`, s3 teal `#0F766E`, s4 plum `#6B3FA0`, s5 olive `#6B7F1A`, s6 slate `#475569`; each with a pill tint and a dark-page variant) and by roster **type** (`OUTSIDE_SURGEON_COLOR`: grey `#737373`, dashed border) — `rosterColors(entry, idx)` / `rosterNameColor(c, dark)` / `pillBorder(c)`, never a name in code; P/B stay text weight. The opening screens (sign-in / sign-up / reset / set-password card's SSC tile, links and button, the biometric tile, loading, crash) use the orange `OPENING` gradient `#FF5F05 → #E8520A` with white text in both themes; `manifest.json` `theme_color` + `background_color` and `<meta name="theme-color">` are `#FF5F05`; the three icons are the supplied orange "SSC" tiles (installed PWAs pick them up on their next manifest refresh; iOS may need remove + re-add). The exports (share page, printable month, ER panels — `helpers.js exportColorsFor`) resolve through the same `rosterColors(entry, idx)`, and the export CSS carries the theme (`.hd a` `#C2410C`, `.ro` / `.wh` `#13294B`, navy toolbar button); roster pills rendered as buttons carry `data-pill`, which the dark sheet's generic button rule (`button:where(:not([data-pill]):not([data-tab]):not([aria-label="Notifications"]))`) leaves alone; the Fairness bars use `T.barTrack` / `T.barStart` / `T.barEnd` (both gradient stops ≥ 3:1 on the track in each theme); count-badge digits are `onAccent` (`#13294B` light, `#0B1A33` dark, ≥ 4.5:1). Dark mode is the Settings toggle (`silvis-dark-mode`); there is no `prefers-color-scheme` hook. Proof: `test/data-layer.test.js` [TH] pins, `test/ui/contrast.mjs` (every token pair, 4.5:1 text / 3:1 bold labels and glyphs, printed by the smoke), `test/ui/smoke.mjs` (sign-in + month view screenshots per theme, computed-colour probes, the source grep for the Davenport blues / `DSG`).
@@ -368,7 +368,7 @@ deployed source before overwriting, byte-diff after). OneSignal push is not requ
 ## 11. Build & deploy (identical to Davenport — follow its CLAUDE.md rules)
 
 - Edit only `index-source.html` and the plain-JS modules. `index.html` and `APP_VERSION` are CI-owned.
-- Before every push: `node test/rules.test.js && node test/generator-regression.js && node build.js`; all gates green; `git restore index.html` before committing.
+- Before every push: `npm test && node build.js` (every suite in package.json's test chain, the generator regression last, then the build); all gates green; `git restore index.html` before committing; `npm run smoke` for anything touching `index-source.html`.
 - Repo secrets: none needed (Pages + `GITHUB_TOKEN`). The Supabase anon key is public by design; the service-role key is never committed.
 - Pages URL once live: `https://fkhan628.github.io/Silvis-Call-Schedule/`.
 - One push to `main` is a live deploy — branch + PR for anything touching destructive paths, sync/state, RLS, or many call sites.
@@ -376,15 +376,16 @@ deployed source before overwriting, byte-diff after). OneSignal push is not requ
 ## 12. Testing
 
 `test/generator-regression.js` must **re-state every hard rule independently** (no shared code with `rules.js` beyond
-date helpers), generate 50 seeds × 3 ranges (Oct 2026 with imports; Nov–Dec 2026; Jan–Mar 2027) from
-`docs/silvis-seed.json` + a synthetic East feed, and assert:
+date helpers), generate 50 seeds × 4 ranges (Oct 2026 with imports; Nov–Dec 2026; Jan–Mar 2027; the milestone 2026-11-02 → 2027-01-03 on the
+even seeds), the fill-open-only October backfill runs (Prompt 12 T) and the fixture runs from
+`docs/silvis-seed.json` + a synthetic East feed (`test/fixtures/`), and assert:
 
 1. Every day in range has a primary and a backup, **or** appears in `diagnostics.uncovered` with reasons (never both, never neither).
 2. `primary !== backup` on every day.
 3. Locks (imports, manual, Fierce derived) are byte-identical in the output.
 4. No assignment on a `time_off` day or on the day before a vacation day.
 5. Khan: never Tue/Thu **as primary** (backup any day since 9/22); never **primary** on an East busy day (backup on an East day is legal).
-6. Acton: never **primary** on a 2nd/4th Mon or Wed (backup allowed since 9/22); never 2026-11-19..22 or 11-25..29; never Thanksgiving.
+6. Acton: never **primary** on a 2nd/4th Mon or Wed (backup allowed since 9/22); never **primary** on a Tuesday (X, 9/22 evening; backup allowed); never 2026-11-19..22 or 11-25..29; never Thanksgiving.
 7. Burchett: primary only on whitelist days (recurring or explicit `available`; a governed month's explicit list is not waived on a holiday-unit day); ≤ 2 consecutive primary days (real days); ≤ 8 **PRIMARY** days per month (backup never counts — K). Acton and Khan have no cap (a `monthlyCap: null` must not fall back to the group default).
 8. Philip: never **primary** the day before an Aledo day (H); never **primary** outside his listed weeks from 11/2026 (holiday-unit days included — small items 9/22); never 2026-10-15; backup ≤ 7 days and ≤ 1 weekend per month; ≤ 1 major holiday; ≤ 4 consecutive primary days.
 9. Fierce: his derived weeks appear whole, with the correct role, as locks; outside them never **primary** on Tue/Thu or Mon (backup any day since 9/22), a Friday primary only as the start of a Fri+Sat+Sun block; Silvis primary days + East primary-week days ≤ 14 per month (K).
@@ -432,15 +433,17 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   apply to backup. (Resolves the open Thursday backups.)
 - **Fairness = everyone as equal as possible**: implied equal shares of primary slots and, separately, of backup slots
   for every pool member; no neutral/zero terms; primary spread then backup spread in the score; smoothing moves backup
-  days too. Sarkar targets her 3–4 primaries per window week instead.
+  days too. Sarkar is outside the equal-share pool; her soft target is 2 primary days per window week instead (the clinic manager
+  9/22 evening; supersedes the daytime 3–4; Prompt 12 N revised).
 - **Caps count primary days only**; backup does not count toward any total cap (Burchett's 8, Fierce's 14). Philip's
   explicit backup cap (≤ 7 days, ≤ 1 weekend) remains.
 - **Khan contributes primary on weekends when available**; his backup count is balanced like everyone else's; East
   cross-reference covers all Davenport call (service weeks, nights, weekends, backup weeks, holiday coverage, forecast).
 - **Outside surgeons ("internal locums")**: roster entries of `type: "external"`, written in by hand in the day editor,
   never generated, tallied separately, exported like anyone else. Legacy `externalCover` stays for the Atwell import.
-- **Sarkar**: primary 3–4 days per window week (primary counts only), alternating days when possible (soft), Friday and
-  Saturday allowed as standalone days, never a Fri–Sun block, max 2 consecutive (hard), backup optional inside windows.
+- **Sarkar**: soft target 2 primary days per window week (9/22 evening; the daytime statement said 3–4; primary counts only),
+  alternating days when possible (soft), windows Mon–Fri (a window Friday is an ordinary standalone day; the Saturdays came
+  off with the Mon–Fri windows), never a Fri–Sun block, max 2 consecutive (hard), backup optional inside windows.
 - **Day-before rules stay primary-only** under the open-backup rule.
 - **Theme**: University of Illinois blue and orange, softened — navy #13294B as the structural color, orange #FF5F05 as
   an accent only (darkened #C2410C for text on white), red reserved for OPEN; dark mode on deep navy. See Prompt 12 O.
@@ -529,6 +532,10 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   Prompt 12 SM2 (9/23, after the overnight publish through 2027-01-03): the smoke's other date-bound pins — week-row / ER-copy OPEN entries, the fail-closed and Fri–Sun block days, the Generate preview range (that derived start through the end of its month) and the Import dry-run / apply counts (blocked days, availability / time_off skipped, "kept (app-edited)") — derive from the live rows and the importer's own plan the same way, so the harness survives a published schedule.
 
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
+
+*Status 2026-09-23 (overnight review): built on branch `feat/open-shifts`, merged to `main` and live — the Pages build
+`2026.09.23b` (origin/main `0d78493`) carries it; `claim_open_slot` and both edge functions are deployed (commit `d6df687`).
+The Prompt 12 review branch this note was written on predates that merge; the section reads as built.*
 
 After generation some slots may stay open. Prompt 13 (`docs/PROMPT-13-OPEN-SHIFTS.md`) gives the group one list of
 them, lets any surgeon take one, and tells everyone while any remain. Five things to know, in order: what "open"
@@ -726,6 +733,11 @@ step is proven by observing it (a real row, a quoted 200 body, a byte-diff) — 
 Nothing in Prompt 13 publishes a schedule, and no part of it sends mail on its own before steps 2–3 are done.
 
 ## 17. Offers — paint the dates you'll cover; the generator fills the gaps (Faraz 9/22 evening; Prompt 14)
+
+*Status 2026-09-23 (overnight review): being built on branch `feat/offers` — local only, unmerged, not on `origin`, not
+deployed as of this review (its head then was `19d4094` "Offers part 5"; a parallel lane keeps advancing it, so trust
+`git log feat/offers` over this line) — nothing below is in the live app until that branch is merged to `main`. Read the
+section as the specification.*
 
 Silvis is an **offers** problem where Davenport is a rules problem: the schedule has always been assembled from the
 days each surgeon emails in, relayed through whoever is collecting them and retyped by the ER-panel author. From Prompt 14 the

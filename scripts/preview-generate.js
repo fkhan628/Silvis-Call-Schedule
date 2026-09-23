@@ -145,7 +145,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   L.push("## Calendar (week rows, the ER-panel author's layout)"); L.push("");
   if (typeof H.buildWeekRows === "function") {
     const rows = H.buildWeekRows(merged, roster, START, END, {});
-    L.push("| MON/SUN DATES | PRIMARY | BACKUP |"); L.push("|---|---|---|");
+    L.push("| MON/SUN DATES | TRAUMA | TRAUMA BACKUP |"); L.push("|---|---|---|");
     for (const r of rows) {
       const cell = k => (r[k] || r[k === "primary" ? "primaryEntries" : "backupEntries"] || []).map(e => (typeof e === "string" ? e : (e.text || e.label || JSON.stringify(e)))).join("<br>");
       L.push(`| ${md(r.label || r.dates || (r.monday + " - " + r.sunday))} | ${md(cell("primary"))} | ${md(cell("backup"))} |`);

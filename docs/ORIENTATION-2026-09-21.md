@@ -827,8 +827,8 @@ trigger although §3.1 says the email is "populated by Supabase Auth at signup".
    above a threshold as busy for primary, shows a forecast badge, and swaps in the real feed with a conflict report
    when Davenport publishes. Faraz can also enter his published Silvis days as Davenport constraints at year end.
 3. **Fierce East weeks:** East primary week of 2026-11-09 (Silvis backup Mon–Sun); East backup weeks of 2026-10-12
-   (October stays single-day 10/12) and 2026-12-07 (Silvis primary 12/7–12/13, entered as an East override until the
-   Davenport rows exist).
+   (October stays single-day 10/12) and 2026-12-07 (Silvis primary 12/7–12/13, carried by `surgeonRules.s5.eastFeed.statedWeeks`
+   until the Davenport rows exist — not an `east_overrides` row; that table is empty as of 9/23).
 4. **"The day rules are not for holidays. Anyone can be on backup for holidays unless they explicitly want that holiday
    off."** Encoded as item 4 in §3; assumed to cover primary as well as backup.
 5. **Porting stance:** not a verbatim translation; use the bones and safety features and adjust whatever will not work
