@@ -24,7 +24,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
-| `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **prepared, see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. |
+| `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. |
 
 Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`.
 
@@ -43,7 +43,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `audit_log` | scheduler/admin | insert: any authenticated user |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
-| `east_vacation_reviews` (prepared 2026-09-23) | authenticated (**no anon policy** — an anon read is a silent `200 + []`) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
+| `east_vacation_reviews` (applied 2026-09-23) | authenticated (**no anon policy** — an anon read is a silent `200 + []`) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 
 ## (c) Findings
 
@@ -352,10 +352,11 @@ cleanup and the `source` comment; 291 assertions.
 
 ## 2026-09-23 - east_vacation_reviews (Prompt 15 part 2)
 
-**Status: PREPARED, NOT APPLIED** — report-first (guide §4.3). The migration `sql/migrations/2026-09-23-east-vacation-reviews.sql`
-and the byte-identical text in `sql/schema.sql` (revision `d`; `test/schema.test.js` pins the identity, the columns, the
-constraints, the four policies, the absence of an anon policy and the placement) are ready for the orchestrator to apply
-tonight under Faraz's mandate; the observed probe strings go into the placeholders at the end of this section.
+**Status: APPLIED — 2026-09-23 04:37 by the orchestrator via the linked CLI, under Faraz's mandate** (report-first per
+guide §4.3: this section was written and reviewed before the apply). The migration `sql/migrations/2026-09-23-east-vacation-reviews.sql`
+went in as written — the byte-identical text sits in `sql/schema.sql` (revision `d`; `test/schema.test.js` pins the identity, the
+columns, the constraints, the four policies, the absence of an anon policy and the placement); the observed strings are in the
+*Observed* block at the end of this section. The table is empty until a review is saved from the app.
 
 **What it is.** Prompt 15 mirrors the person's Davenport vacations into Silvis (part 1: `east_feed` payload
 `data.vacations`), and nothing is mirrored blindly: each range is **unreviewed** (no row), **away** (also off at Silvis) or
@@ -440,9 +441,15 @@ conflict list. **Server-side:** `rpc/claim_open_slot` (`CL009 CLAIM_VACATION`), 
 `time_off` trigger read `time_off` rows only; a derived East vacation is enforced by the client gate. Extending `CL009`
 to read the `east_feed` vacations + `east_vacation_reviews` is a possible later migration, not part of this one.
 
-**Observed (orchestrator, to be filled in when applied):**
+**Observed (orchestrator, 2026-09-23 04:37, linked CLI; recorded here 2026-09-23 on the rebased `feat/east-vacations`):**
 
-- Migration applied: `<date/time, CLI output summary>`
-- Probe AFTER: `<paste the PROBE_RESULTS ... ;END string verbatim>`
-- Leftover count: `<n>` (must be 0)
-- `verify-rls.sh` section 9: `<9a line, 9b line, RESULT line>`
+- Migration applied: 2026-09-23 04:37 (`supabase db query --linked ... -f .../2026-09-23-east-vacation-reviews.sql`, no error). `pg_policies` for
+  the table → **4 rows, every one `roles = {authenticated}`**: `east_vacation_reviews_read` SELECT, `east_vacation_reviews_self_insert` INSERT,
+  `east_vacation_reviews_self_update` UPDATE, `east_vacation_reviews_self_delete` DELETE — no anon policy, no `for all` policy;
+  `pg_class.relrowsecurity = true`. The table is empty (no rows) after the probe.
+- Probe AFTER (verbatim, the whole sentinel): `PROBE_RESULTS A1=rows=0;A2=ERR 42501 new row violates row-level security policy for table "east_vacation_reviews";B=ok visible=3;C=ERR 42501 new row violates row-level security policy for table "east_vacation_reviews";D=updated=0 decision=home;E=deleted=0;F=updated=1 decision=home;G=updated=1 decision=away deleted=1;H=ERR 23514 new row for relation "east_vacation_reviews" violates check constraint "east_vacation_reviews_decision_check";I=ERR 23505 duplicate key value violates unique constraint "east_vacation_reviews_person_id_start_end_key";J=ERR 23514 new row for relation "east_vacation_reviews" violates check constraint "east_vacation_reviews_check";END` — every case matches the expected picture above (A1 silent `rows=0`,
+  A2 / C 42501, D / E silent no-ops, F / G the own-row and scheduler writes, H / I / J the constraints).
+- Leftover count: `0` (the rollback observed, not assumed).
+- `verify-rls.sh` section 9: **9a** anon `GET /rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5` → `HTTP 200` + `[]`
+  (the post-migration expectation: the silent RLS empty read, no 404). The 9b and RESULT lines of the after-run were not handed to this
+  record — paste them here on the next `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` run (expected 9b `401`/`403`, RESULT all-PASS).

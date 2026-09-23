@@ -113,7 +113,7 @@ committed on this branch; nothing is pushed, nothing is published, no database w
 | part | commit | what |
 |---|---|---|
 | 1 (E1) | `e8de193` | `east-feed.js`: `fetchEastWeeks(from, to, { vacationCodes })` reads `time_off` (kind `vacation`, ids by roster **code** via the Davenport blob) into the `east_feed` payload `data.vacations`; `planVacationCache` over the whole cache; failure keeps the cache and warns. The app's *Refresh from Davenport* passes the codes and names the leg in the toast + `east.refresh` audit. Guide §7 (the *East vacations* bullet). |
-| 2 (E2) | `8e731ea` | `east_vacation_reviews` **prepared** (`sql/migrations/2026-09-23-east-vacation-reviews.sql` = `sql/schema.sql` rev. d, `sql/probes/east-vacation-reviews-probe.sql`, `scripts/verify-rls.sh` section 9, `docs/SCHEMA-REVIEW.md`); `rules.js` derives unreviewed / away = vacation (`time-off:` + `day-before-vacation`), home = `eastClear` (Tue/Thu lifted, primary bonus `weights.eastClear` 2), the feed wins over home; `helpers.js` `reviewStateFor` / `derivedEastVacations` (person-scoped); `generator.js` `diagnostics.eastVacations`. Rules doc §3 Khan. |
+| 2 (E2) | `8e731ea` | `east_vacation_reviews` **prepared, then applied live 2026-09-23 04:37 by the orchestrator** (`sql/migrations/2026-09-23-east-vacation-reviews.sql` = `sql/schema.sql` rev. d, `sql/probes/east-vacation-reviews-probe.sql`, `scripts/verify-rls.sh` section 9, `docs/SCHEMA-REVIEW.md`); `rules.js` derives unreviewed / away = vacation (`time-off:` + `day-before-vacation`), home = `eastClear` (Tue/Thu lifted, primary bonus `weights.eastClear` 2), the feed wins over home; `helpers.js` `reviewStateFor` / `derivedEastVacations` (person-scoped); `generator.js` `diagnostics.eastVacations`. Rules doc §3 Khan. |
 | 3 (E3) | `1b7ba91` | The UI: `EastVacationList` in Setup → East feed, the person's Time off view and My schedule (three-way control, conflicts list); `saveEastVacationReview` (upsert on the triple / exact-triple delete, `dbAuthHeaders()`, audit `eastvac.review`); `loadEastVacationReviews` via `readAuthOnlyTable` (404 = `missing`); refresh resets (`changed` / `removed`) from the reloaded cache; calendar diamonds, day-editor lines, coverage-strip count, EV badge; digest / reminder / ER export untouched. Guide §18.1–18.4. |
 | 4 (E4) | this commit | Docs made to match parts 1–3 (every claim grepped against the source): guide §18 final (+ §18.5 live steps and open questions, the screenshot location `test/ui/out/`, verify-rls section 9 documented, the hook's exact return shape) and the `east_vacation_reviews` rows in guide §4.2 / §4.3; rules doc §3 Khan final wording + §8 item 16; ONBOARDING paragraph for the person with an East code; `edge-functions/README.md` states that nothing was deployed; this note; docs pins in `test/data-layer.test.js` `[P15]`. |
 
@@ -123,7 +123,7 @@ committed on this branch; nothing is pushed, nothing is published, no database w
 `calendar-eastvac-2027-04.png`, `mine-eastvac.png` in the gitignored `test/ui/out/`), `test/data-layer.test.js` `[P15]`
 docs pins (part 4). Part 4 changed no app file, so the smoke was not re-run for it.
 
-### Live steps (orchestrator, tonight, under Faraz's mandate — exact commands in guide §18.5)
+### Live steps (done by the orchestrator 2026-09-23 04:37 via the linked CLI, under Faraz's mandate — exact commands and the observed strings in guide §18.5 and `docs/SCHEMA-REVIEW.md`)
 
 1. `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` before: section 9 reads 9a `HTTP 404` (PASS, named), 9b blocked
    (PASS) and — CLI linked — two expected FAIL lines from 9c ("no sentinel", "leftover count could not be read ...
@@ -133,7 +133,8 @@ docs pins (part 4). Part 4 changed no app file, so the smoke was not re-run for 
 3. `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/east-vacation-reviews-probe.sql` — record the
    `PROBE_RESULTS ...;END` string verbatim in `docs/SCHEMA-REVIEW.md` (*Observed*), then the leftover query there → `0`.
 4. `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` after: 9a `HTTP 200` + `[]`, 9b `401`/`403`, 9c graded + leftover
-   `0`; record the lines and turn the SCHEMA-REVIEW status from PREPARED to APPLIED.
+   `0`; record the lines and turn the SCHEMA-REVIEW status from PREPARED to APPLIED. **Done:** status APPLIED, the probe string,
+   the four policies, `relrowsecurity` true, leftover `0` and the anon `200` + `[]` recorded; the after-run's 9b / RESULT lines remain to be pasted.
 5. No edge-function deploy, no cron change, no Davenport change, no data written to either project.
 6. Faraz after the deploy: *Refresh from Davenport* (his 16 Davenport rows; fewer ranges where adjacent rows merge —
    the toast names the merged count), then [range] → **home**, [range] as he decides.
