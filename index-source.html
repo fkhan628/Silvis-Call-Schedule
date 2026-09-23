@@ -336,7 +336,7 @@ function CallSchedule() {
   // NOTHING is written until acceptPreview (snapshot -> CAS sync -> publish dialog).
   const [previewGen, setPreviewGen] = useState(null); // { schedule, diagnostics, start, end, seed, bestOf, respectLocks, ranAt, ms }
   const [genBusy, setGenBusy] = useState(false);
-  const [genOpts, setGenOpts] = useState({ start: "", end: "", bestOf: 200, seed: "", respectLocks: true });
+  const [genOpts, setGenOpts] = useState({ start: "", end: "", bestOf: 200, seed: "", respectLocks: true, fillOpenOnly: false });
   const [profilesErr, setProfilesErr] = useState("");       // Users card: failed != empty
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [availBusy, setAvailBusy] = useState(false);
@@ -366,6 +366,7 @@ function CallSchedule() {
   const loadedAtRef = useRef(null); // timestamp when initial load completed - prevents auto-save race
   const pendingSaveRef = useRef(null); // payload queued for debounced save; flushed immediately on page hide/unload
   const daySyncChainRef = useRef(Promise.resolve()); // serializes syncScheduleDays runs
+  const daySyncBusyRef = useRef(0); // RF2 b: syncScheduleDays runs enqueued or in flight; the keepalive flush skips its schedule_days leg while > 0
   const daySyncRetryRef = useRef(null); // auto-retry timer after a failed day write
   // --- Data-loss guard refs ---
   // everHadRealDataRef arms the empty-save guard: it flips true the first time
@@ -1143,11 +1144,15 @@ function CallSchedule() {
   // -> conflict -> reload the table, keep local edits that don't collide.
   // Rows are NEVER deleted here; a day dropped from memory is written empty.
   const syncScheduleDays = (nextSchedule) => {
+    // RF2 b: counted from enqueue to settle so the keepalive flush (a synchronous event handler) can tell that a
+    // CAS loop is still writing - a long Accept & Publish with the phone locked mid-way used to get the same days
+    // PATCHed a second time, at the same versions, from the flush.
+    daySyncBusyRef.current += 1;
     const run = daySyncChainRef.current.then(() => syncScheduleDaysNow(nextSchedule)).catch(e => {
       console.warn("schedule_days sync error", e);
       showToast("Couldn't save schedule changes - check your connection.", "error");
       return { ok: false, error: String(e) };
-    });
+    }).finally(() => { daySyncBusyRef.current = Math.max(0, daySyncBusyRef.current - 1); });
     daySyncChainRef.current = run.then(() => undefined, () => undefined);
     return run;
   };
@@ -1589,6 +1594,19 @@ function CallSchedule() {
         const chk = scheduleWipeCheck(base, cur);
         if (chk.wipe && !intentionalScheduleWipeRef.current) {
           console.warn(`Keepalive flush (${source}): wipe-shaped diff skipped.`);
+        } else if (daySyncBusyRef.current > 0 && source === "visibilitychange") {
+          // RF2 b: a syncScheduleDays run is enqueued or still writing (a long Accept & Publish, the phone locked
+          // mid-way): its serialized CAS loop owns these days right now, and parallel PATCHes for the same days at
+          // the same versions would race it. Skip the days leg only, keep the payload armed, and enqueue the pending
+          // days BEHIND the in-flight run - the chain serializes them, so they land as soon as it settles even if
+          // the debounce timer never fires again (a later timer run is a no-op against lastSyncRef); then go on to
+          // the blob leg below. Page-ALIVE case only (review fix): on pagehide / beforeunload the chain is about to
+          // die with the page, so the keepalive days leg still goes out there - a CAS duplicate matches zero rows at
+          // the DB, harmless. A never-settling fetch keeps the count > 0 for the session by design (the chain is
+          // blocked behind it too).
+          console.warn(`Keepalive flush (${source}): schedule_days leg skipped - ${daySyncBusyRef.current} CAS sync run(s) unresolved; the pending days are queued behind that chain.`);
+          pendingSaveRef.current = payload;
+          syncScheduleDays(payload.schedule);
         } else {
           let sent = 0;
           for (const day of Object.keys(Object.assign({}, base, cur))) {
@@ -2136,21 +2154,21 @@ function CallSchedule() {
       const built = safeBuildContext({ ...ctxInputs, schedule: scheduleRef.current || schedule, rangeStart: start, rangeEnd: end });
       if (!built.ctx) throw new Error(built.error || "rules context unavailable");
       const t0 = Date.now();
-      const res = generate(built.ctx, start, end, { seed, bestOf, respectLocks: o.respectLocks !== false, timeBudgetMs: 25000 });
+      const res = generate(built.ctx, start, end, { seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, timeBudgetMs: 25000 });
       const ms = Date.now() - t0;
       const dg = res.diagnostics || {};
       if (dg.warnings && dg.warnings.length) console.warn("generate warnings:", dg.warnings);
-      setPreviewGen({ schedule: res.schedule || {}, diagnostics: dg, start, end, seed, bestOf, respectLocks: o.respectLocks !== false, ranAt: new Date().toISOString(), ms });
+      setPreviewGen({ schedule: res.schedule || {}, diagnostics: dg, start, end, seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, ranAt: new Date().toISOString(), ms });
       setGenOpts(p => ({ ...p, start, end, bestOf }));
       const sd = parse(start); setCalMonth(sd.getMonth()); setCalYear(sd.getFullYear());
       const open = (dg.uncovered || []).length;
-      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.`, open ? "info" : "success");
+      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms${o.fillOpenOnly === true ? ", fill open slots only" : ""}): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.`, open ? "info" : "success");
     } catch (e) {
       console.warn("generate failed", e);
       showToast("Generate failed: " + errText(e).slice(0, 160), "error");
     } finally { setGenBusy(false); }
   };
-  const rerollGenerate = () => { if (!previewGen) return; runGenerate({ start: previewGen.start, end: previewGen.end, bestOf: previewGen.bestOf, seed: "", respectLocks: previewGen.respectLocks }); };
+  const rerollGenerate = () => { if (!previewGen) return; runGenerate({ start: previewGen.start, end: previewGen.end, bestOf: previewGen.bestOf, seed: "", fillOpenOnly: previewGen.fillOpenOnly === true, respectLocks: previewGen.respectLocks }); };
   const discardPreview = () => { if (!previewGen) return; setPreviewGen(null); showToast("Preview discarded - nothing was written.", "info"); };
   // Latest-closure bridge (conventions item 1): acceptPreview awaits the CAS
   // sync, then opens the publish dialog through the CURRENT render's
@@ -2166,10 +2184,16 @@ function CallSchedule() {
     const cur = scheduleRef.current || schedule;
     const next = suMergePreview(cur, pv.schedule, pv.respectLocks);
     const lockedChanges = suLockedSlotChanges(cur, next);
-    if (!pv.respectLocks || lockedChanges.length) {
+    // RF2 a: a HELD but UNLOCKED slot (a manual / trade / claim / generated / import holder, or an external cover,
+    // not locked in that role) is regenerated by any run that is not fill-open-only - it is named before it is
+    // written, exactly like a locked one. One confirm covers both lists; Cancel writes nothing.
+    const heldChanges = suHeldUnlockedSlotChanges(cur, next);
+    const heldText = (list) => `${list.length} held but unlocked assignment(s) will be replaced: ${list.slice(0, 8).map(c => `${fmtMD(c.day)} ${c.role === "primary" ? "P" : "B"} ${holderLabel(c.from, nameOf)} -> ${holderLabel(c.to, nameOf)}`).join(", ")}${list.length > 8 ? ` and ${list.length - 8} more` : ""}${pv.fillOpenOnly ? "" : " (tick 'Fill open slots only' to keep every held day)"}.`;
+    if (!pv.respectLocks || lockedChanges.length || heldChanges.length) {
       const first = lockedChanges[0];
       const firstText = first ? ` (first: ${fmtMD(first.day)} ${first.role} ${holderLabel(first.from, nameOf)} -> ${holderLabel(first.to, nameOf)})` : "";
-      const msg = `This replaces ${lockedChanges.length} locked / published slot(s)${firstText}${pv.respectLocks ? "" : " - this preview was generated with 'respect locks' OFF"}.\n\nThe days are written for every viewer as soon as you continue; the publish dialog that follows only sends the office notice. Continue?`;
+      const lockedText = (!pv.respectLocks || lockedChanges.length) ? `This replaces ${lockedChanges.length} locked / published slot(s)${firstText}${pv.respectLocks ? "" : " - this preview was generated with 'respect locks' OFF"}.\n\n` : "";
+      const msg = `${lockedText}${heldChanges.length ? heldText(heldChanges) + "\n\n" : ""}The days are written for every viewer as soon as you continue; the publish dialog that follows only sends the office notice. Continue?`;
       if (!confirm(msg)) { showToast("Nothing was written - the preview is kept.", "info"); return; }
     }
     setSaveStatus("Saving backup snapshot");
@@ -2185,7 +2209,8 @@ function CallSchedule() {
       const cur2 = scheduleRef.current || schedule;
       const next2 = suMergePreview(cur2, pv.schedule, pv.respectLocks);
       const locked2 = suLockedSlotChanges(cur2, next2);
-      if (locked2.length > lockedChanges.length && !confirm(`The schedule changed while the snapshot was saving: the merge now replaces ${locked2.length} locked / published slot(s). Continue?`)) { showToast("Nothing was written - the preview is kept.", "info"); setSaveStatus(""); return; }
+      const held2 = suHeldUnlockedSlotChanges(cur2, next2);
+      if ((locked2.length > lockedChanges.length || held2.length > heldChanges.length) && !confirm(`The schedule changed while the snapshot was saving: the merge now replaces ${locked2.length} locked / published slot(s) and ${held2.length} held but unlocked assignment(s). Continue?`)) { showToast("Nothing was written - the preview is kept.", "info"); setSaveStatus(""); return; }
       return acceptMerged(pv, cur2, next2, snap);
     }
     return acceptMerged(pv, cur, next, snap);
@@ -2202,7 +2227,7 @@ function CallSchedule() {
     // Audited AFTER the CAS sync with its outcome (Prompt 11): a wipe-blocked
     // or failed write must not leave a row saying the schedule was accepted.
     const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";
-    logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, changes: changes.length, uncovered: (pv.diagnostics.uncovered || []).length, snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
+    logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, fillOpenOnly: pv.fillOpenOnly === true, changes: changes.length, uncovered: (pv.diagnostics.uncovered || []).length, snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
     if (r && r.ok) {
       setSaveStatus("Generated days saved"); setTimeout(() => setSaveStatus(""), 2000);
       // WHY IS IT OPEN (Prompt 13 part 4): the generator's reasons, rendered to
@@ -2327,6 +2352,9 @@ function CallSchedule() {
         // their schedule_days rows still name them.
         if (Array.isArray(core.roster) && IMP && typeof IMP.impMergeRoster === "function") core.roster = IMP.impMergeRoster(core.roster, liveBlob.roster);
         const merged = { ...liveBlob, ...core, settings: { ...((liveBlob.settings && typeof liveBlob.settings === "object") ? liveBlob.settings : {}), ...(plan.blob.settings || {}) } };
+        // RF2 e: the settings merge is one level deep, so a key no importer writes any more (the seedRevisions
+        // paragraphs) would survive every Apply - remove it here as the SQL path does.
+        (IMP.IMP_RETIRED_SETTINGS_KEYS || []).forEach(k => { delete merged.settings[k]; });
         // Compare-and-swap on the stamp seen at dry-run time: zero rows back = the
         // setup changed between the check above and this write - nothing merged.
         const casQ = seenAt ? `&updated_at=eq.${encodeURIComponent(seenAt)}` : "";
@@ -6900,6 +6928,7 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
             return <span key={k}><span style={{ color: "#5B6B82" }}>{k}</span> {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : String(v)}</span>;
           })}
           <span><span style={{ color: "#5B6B82" }}>candidates</span> {dg.candidatesTried}/{dg.bestOf}{dg.truncated ? " (time budget hit)" : ""}</span>
+          <span data-testid="gen-mode" title="generate: unlocked held slots inside the range are regenerated (Accept names them first); fill-open-only: every held slot is fixed and only OPEN slots are filled. Fixed slots = the slots the run held still (the locked ones in the default mode)"><span style={{ color: "#7a8a98" }}>mode</span> {dg.mode || "generate"}, fixed slots {(dg.fixedSlots === undefined || dg.fixedSlots === null) ? "-" : dg.fixedSlots}</span>
         </div>
       </div>
       <div style={box}>
@@ -6976,6 +7005,20 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
   );
 }
 
+// RF2 a (9/23): the merged map's (day, role) changes whose CURRENT holder is a surgeon or an external cover
+// that is NOT locked in that role - a manual / trade / claim / generated / import assignment a run that is not
+// fill-open-only regenerates. Complements helpers.suLockedSlotChanges (the locked ones); together they are every
+// held slot Accept & Publish would replace. Pure; pinned and exercised in test/data-layer.test.js [RF2].
+function suHeldUnlockedSlotChanges(current, next) {
+  const cur = current || {};
+  return diffScheduleDays(cur, next || {}).filter(c => {
+    if (c.role !== "primary" && c.role !== "backup") return false;
+    const a = cur[c.day];
+    if (!a || c.from === null || c.from === undefined) return false;
+    return c.role === "primary" ? !a.primaryLocked : !a.backupLocked;
+  });
+}
+
 function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onReroll, onAccept, onDiscard, nameOf, roster, rulesImported, lastPublishedDay, genStart, genFirstOpenDay, laterRanges, holidayNames }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const p0 = presets && presets[0];
@@ -6994,8 +7037,9 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onRe
         <SuField label="Start"><input data-testid="gen-start" type="date" value={start} onChange={e => setOpts(o => ({ ...o, start: e.target.value }))} style={inp} /></SuField>
         <SuField label="End"><input data-testid="gen-end" type="date" value={end} onChange={e => setOpts(o => ({ ...o, end: e.target.value }))} style={inp} /></SuField>
         <SuField label="Candidates (N)"><input data-testid="gen-n" type="number" min="1" max="2000" value={opts.bestOf} onChange={e => setOpts(o => ({ ...o, bestOf: e.target.value }))} style={{ ...inp, width: 70 }} /></SuField>
-        <SuField label="Seed" hint="blank = random, shown after the run"><input data-testid="gen-seed" type="text" value={opts.seed} onChange={e => setOpts(o => ({ ...o, seed: e.target.value }))} placeholder="random" style={{ ...inp, width: 110, fontFamily: mono }} /></SuField>
+        <SuField label="Seed" hint="blank = random; the run toast and the preview line show the seed used - type it here to reproduce a run"><input data-testid="gen-seed" type="text" value={opts.seed} onChange={e => setOpts(o => ({ ...o, seed: e.target.value }))} placeholder="random - the toast shows the seed" style={{ ...inp, width: 200, fontFamily: mono }} /></SuField>
         <SuCheck testid="gen-respect-locks" label="respect locks" title="Off: locked, already-published slots in the range are regenerated too - Accept asks for confirmation before anything is written" checked={opts.respectLocks !== false} onChange={v => setOpts(o => ({ ...o, respectLocks: v }))} />
+        <SuCheck testid="gen-fill-open-only" label="Fill open slots only (keep every held day)" title="On: every slot that already has a holder - locked or not - stays exactly as it is and only OPEN slots are filled (the mode the command-line preview used). Off: unlocked held slots inside the range are regenerated - Accept names them before anything is written" checked={opts.fillOpenOnly === true} onChange={v => setOpts(o => ({ ...o, fillOpenOnly: v }))} />
         <button data-testid="gen-run" onClick={() => onRun({ ...opts, start, end })} disabled={busy || !rulesImported} style={{ ...css.btn(true), padding: "6px 16px", marginBottom: 8, opacity: (busy || !rulesImported) ? 0.6 : 1 }}>{busy ? "Generating" : "Run"}</button>
         {busy && <span data-testid="gen-busy" role="status" style={{ fontSize: 12, color: LIGHT.title, fontWeight: 700, marginBottom: 8 }}>Running best-of-{opts.bestOf} - the page stays responsive between candidates</span>}
       </div>
@@ -7003,7 +7047,7 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onRe
         <div data-testid="gen-preview" style={{ border: "2px dashed #7a4fbf", borderRadius: 8, padding: "10px 12px", background: "#faf7ff" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
             <strong style={{ color: "#5a3a9f" }}>Preview</strong>
-            <span data-testid="gen-preview-meta" style={{ fontSize: 12, color: "#3a4a58" }}>{fmtMD(preview.start)} - {fmtMD(preview.end)} ({Object.keys(preview.schedule || {}).length} days), seed <span style={{ fontFamily: mono }}>{String(preview.seed)}</span>, best of {preview.bestOf}, {preview.ms} ms, open slots {(preview.diagnostics.uncovered || []).length}. Shown on the calendar with a dashed outline - not saved.</span>
+            <span data-testid="gen-preview-meta" style={{ fontSize: 12, color: "#3a4a58" }}>{fmtMD(preview.start)} - {fmtMD(preview.end)} ({Object.keys(preview.schedule || {}).length} days), seed <span style={{ fontFamily: mono }}>{String(preview.seed)}</span>, best of {preview.bestOf}{preview.fillOpenOnly ? ", fill open slots only" : ""}, {preview.ms} ms, open slots {(preview.diagnostics.uncovered || []).length}. Shown on the calendar with a dashed outline - not saved.</span>
             <span style={{ flex: 1 }} />
             <button data-testid="gen-reroll" onClick={onReroll} disabled={busy} style={css.mini(false)}>Re-roll (new seed)</button>
             <button data-testid="gen-accept" onClick={onAccept} disabled={busy} style={{ ...css.btn(true), padding: "5px 14px" }}>Accept &amp; Publish</button>

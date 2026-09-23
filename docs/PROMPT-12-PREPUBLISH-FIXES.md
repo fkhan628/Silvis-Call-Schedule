@@ -2154,3 +2154,93 @@ every run tonight is live-state drift outside TH (the Thanksgiving backups vs th
   editor fail-closed: picking a surgeon must not open the override confirm nor set the draft (override=false, draft='s5')` and the
   two `harness exception: page.click: Timeout 30000ms exceeded` lines that follow it (small items, Slice E). The earlier `Import
   apply` drift line is gone.
+
+## Review fixes 2 — RF2, app safety (whole-branch review, 9/23 overnight; appended by Claude Code)
+
+Five confirmed findings of the whole-branch review, all on the deploy set, none touching the published rows:
+
+- **(a) Accept & Publish counted only LOCKED replacements.** An unlocked manual / trade / claim / generated / import
+  holder inside the Generate range was regenerated and written for every viewer without a word. Now `acceptPreview`
+  builds a second list — `suHeldUnlockedSlotChanges(cur, next)` (index-source.html, pure, module level): every
+  primary / backup change of `diffScheduleDays` whose CURRENT holder is a surgeon or an external cover and whose role
+  is not locked — and, when it is non-empty, the confirm (the same one as the locked prompt, which keeps its sentence)
+  reads "N held but unlocked assignment(s) will be replaced: 10/24 P Khan -> Acton, ... (tick 'Fill open slots only'
+  to keep every held day)". Cancel writes nothing (the confirm precedes the snapshot). The post-snapshot re-derivation
+  re-checks both lists. Proof: `test/data-layer.test.js` [RF2] (the helper is extracted into the helpers sandbox and
+  exercised on synthetic maps; source pins on the order), `test/ui/smoke.mjs` (the confirm on both Accept clicks,
+  its count derived from the preview grid vs the live rows' lock flags).
+- **(b) Keepalive flush during a long publish.** `syncScheduleDays` counts its runs from enqueue to settle
+  (`daySyncBusyRef`); while the count is > 0 the flush skips ONLY its `schedule_days` leg (logs it, re-arms the
+  pending payload) and still runs the blob leg, so a phone locked mid-way through Accept & Publish no longer fires
+  parallel PATCHes for the same days at the same versions. Proof: data-layer source pins; smoke step (e) holds a CAS
+  write open for 5 s (`delayScheduleWriteMs`), fires `visibilitychange` with a second edit pending, asserts zero
+  schedule_days writes from the flush, the warn, the blob POST, and that the skipped edit lands afterwards.
+- **(c) Fill open slots only + the seed.** GeneratePanel: "Fill open slots only (keep every held day)"
+  (`gen-fill-open-only`, default off) passes `{ fillOpenOnly: true }` to `generate()` (item T's option — the mode the
+  command-line preview used), kept on re-roll, named in the run toast, the preview meta line and the audit detail; the
+  Seed placeholder reads `random - the toast shows the seed` (the toast and the meta line already showed it — confirmed,
+  pinned). Guide §12 one line.
+- **(d) A seed re-import silently reverted Setup edits.** `scripts/import-seed.js` `fetchLive` now selects the blob's
+  `updated_by`; `importer.impBlobOwner(live)` says who wrote it last (the app stamps the person_id from the autosave
+  and the in-app Apply — read off `applyTablesUpsert` / the blob upsert — the CLI stamps `seed`). When it is not
+  `seed` the plan prints "BLOB WAS EDITED IN THE APP at <ts> by <who>: a re-import would revert Setup edits" and
+  `--apply` refuses (exit 4) whenever the plan would change the blob, unless `--overwrite-blob` is given; rows are
+  unaffected by the guard. Live on 9/23 05:27Z the blob is still `seed`-owned (anon read), so tonight's re-import
+  needs no flag. Proof: `test/importer.test.js` RF2 (synthetic live metadata + CLI source pins).
+- **(e) `settings.seedRevisions` in the anon-readable blob.** 15 paragraphs (~17 KB) of internal history were readable
+  with the public key. `importer.js` now writes `seedRevisionCount` + `seedLastRevision` (the date prefix of the last
+  entry) — the paragraphs stay in the seed. The settings merge is one level deep, so the retired key is removed
+  explicitly: the SQL subtracts it (`(coalesce(data -> 'settings', '{}') - 'seedRevisions') || <settings>`) in the
+  SET **and** in the idempotency WHERE (a live row still carrying it IS a change), `planDiff` reads such a live blob as
+  `settings=update`, and the in-app Apply deletes `IMP_RETIRED_SETTINGS_KEYS` from the merged settings. The next
+  `import-seed.js --apply` (orchestrator) therefore removes the paragraphs from the live blob; until then the in-app
+  dry run against the live project shows exactly one change (settings=update) — the smoke derives that drift from a
+  read-only read of the live settings keys and requires zero again once the key is gone.
+
+Gates: `node test/importer.test.js` → `ok 766 assertions`; `node test/data-layer.test.js` → `91 passed, 0 failed`
+(fail-before `82 passed, 9 failed`); `node build.js` → `OK  build complete` then `git checkout -- index.html version.json`;
+`SILVIS_GEN_BUDGET_MS=40000 npm test` and `npm run smoke` as reported in the RF2 delivery.
+
+### Review of RF2 (same night, 9/23 overnight) - eight findings, all addressed
+
+- **(d) major x2 - the guard keyed on `updated_by` alone.** The autosave upserts the blob with `updated_by = person_id`
+  on ANY state change (a day edit, a trade, a realtime adopt of a foreign write), so after the first app session every
+  re-import that touched the blob would have printed BLOB WAS EDITED and demanded `--overwrite-blob` - the flag would
+  have become routine and finding 38's failure mode would have returned under a flag. Now content-based: `importPlan`
+  stamps `settings.seedCoreHash = impCoreHash(blob)` (canonical JSON of the pool roster rows, surgeonRules, groupRules,
+  holidays; two FNV-1a lanes, pure JS because importer.js also runs in the browser); the CLI hashes the LIVE blob's
+  same keys (`impBlobEditState`) and reads app-edited only when a stamp is present and differs. `updated_by` is still
+  printed ("blob last written by <who> at <ts>") and is the verdict only while the live row carries no stamp (tonight's
+  row: `seed`, no stamp -> importer-owned; the next `--apply` writes the stamp). `--apply` refuses (exit 4) only when a
+  CORE key would change (`coreWouldChange`); a settings-only plan reads "settings keys only - nothing under Setup is
+  reverted". Consequence in `planDiff`: a seed change under a core key now counts 2 blob updates (the key + settings,
+  the stamp follows) - three older assertions restated.
+- **(d) minor - fresh install exit 4.** `sql/schema.sql` seeds `('main', '{}')` with `updated_at` default now(); an
+  empty data object is now no row whatever `updated_at` says (`impBlobOwner`).
+- **(b) major - pagehide / beforeunload.** The busy skip applied on every flush source; on pagehide / beforeunload the
+  chain dies with the page and nobody would have written the remaining days. The skip is now `visibilitychange` only
+  (page alive); the other two sources keep the keepalive days leg (a CAS duplicate matches zero rows at the DB).
+- **(b) minor - the re-armed payload had no consumer.** The skip branch also calls `syncScheduleDays(payload.schedule)`:
+  the days queue behind the in-flight run and land when it settles even if the debounce timer never fires; a later
+  timer run is a no-op against `lastSyncRef`. The comment says a never-settling fetch keeps the count > 0 by design.
+- **(c) minor - mode not in the diagnostics.** `GenDiagnostics` prints `mode <generate|fill-open-only>, fixed slots N`
+  (`gen-mode`) next to the score line.
+- **(a) minor - pointer text.** "(tick 'Fill open slots only' ...)" is appended only when the preview did not run
+  fill-open-only.
+- **(a) minor - the positive confirm branch never ran.** The smoke fixture now carries one held but UNLOCKED November
+  day (2026-11-19 backup s2, source generated - the shape of the published rows) inside the Generate range; under
+  `SMOKE_FIXTURE=1` the harness REQUIRES that slot in its derived list, so the confirm is shown, counted and matched.
+  The importer ignores an app-generated row the seed lacks, so the Import pins are unaffected.
+
+Gates after the review fixes: `node test/importer.test.js` -> `ok 788 assertions` (fail-before
+`TypeError: IMP.impCoreHash is not a function`); `node test/data-layer.test.js` -> `91 passed, 0 failed` (fail-before
+`88 passed, 3 failed`: the visibilitychange-only guard, the conditional pointer, the gen-mode line);
+`SILVIS_GEN_BUDGET_MS=40000 npm test` -> exit 0; `node build.js` -> `OK  build complete` then
+`git checkout -- index.html version.json`; the fixture smoke as reported in the commit message.
+Fixture smoke (`SMOKE_FIXTURE=1`, two runs): every RF2 assertion ok, including the positive Accept confirm ("1 held but
+unlocked assignment(s) will be replaced: 11/19 B Burchett -> Philip ... - 1 held but unlocked assignment(s) = derived")
+and `RF2 GenDiagnostics: mode generate, fixed slots 33`; the Import apply dry run now reads 3 changes (surgeonRules +
+settings + 1 availability insert). The only fail left is the pre-existing stale pin at test/ui/smoke.mjs:2801 (37 plan
+rows / 4 kept vs the 48-row plan / kept 15). Run 1 also tripped the timing-dependent "Rules: the saved blob carries
+surgeonRules.s1.primaryContribution" pin once (the harness grabs the last blob POST as soon as any POST appears, so an
+autosave from an earlier state change can land first); it passed on run 2 and is unrelated to RF2.

@@ -264,6 +264,7 @@ const FAKE_EMAIL = "scheduler@example.com";
 const FAKE_PROFILE = { id: FAKE_UID, person_id: "s1", role: "admin", display_name: "Khan", email: null, created_at: "2026-09-22T00:00:00Z" };
 let failSnapshotInsert = false; // Slice E harness switch (see the Supabase route)
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
+let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH open for N ms so a CAS sync run is provably in flight
 let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_by } stamped onto every call_schedule_data GET row
 // Davenport (East) project mock - fetchEastWeeks reads schedule_weeks + the
 // roster blob from this host with its public key; the harness answers both so
@@ -408,7 +409,11 @@ const fixture = await (async () => {
   console.log(forced ? "data source: SEED FIXTURES (SMOKE_FIXTURE=1)" : "data source: SEED FIXTURES - the live schedule_days table is EMPTY; serving docs/silvis-seed.json via importer.importPlan for schedule_days / call_schedule_data / time_off / availability (east tables stay live)");
   const ts = PLAN_TS, plan = PLAN;
   return {
-    schedule_days: plan.scheduleDayRows.map(r => ({ ...r, version: 1, updated_at: ts })),
+    // RF2 review fix: one HELD but UNLOCKED November day (an app-generated backup, the shape the published rows have)
+    // inside the Generate range 11/2-11/30, so the Accept confirm's POSITIVE branch runs under the fixture: the default
+    // run (fill-open-only OFF) regenerates that backup and Accept must name it. The importer ignores an app-generated
+    // row the seed lacks (planDiff: source != import and not in the plan), so the Import pins are unaffected.
+    schedule_days: plan.scheduleDayRows.map(r => ({ ...r, version: 1, updated_at: ts })).concat([{ day: "2026-11-19", primary_id: null, backup_id: "s2", primary_locked: false, backup_locked: false, source: "generated", external_cover: null, note: null, version: 1, updated_by: "fixture", updated_at: ts }]),
     call_schedule_data: [{ id: "main", data: plan.blob, updated_by: "seed", updated_at: ts }],
     time_off: plan.timeOffRows.map((r, i) => ({ id: "fixture-timeoff-" + (i + 1), ...r, created_at: ts })),
     availability: plan.availabilityRows.map((r, i) => ({ id: "fixture-avail-" + (i + 1), ...r, created_at: ts })),
@@ -616,6 +621,13 @@ const routeSupabase = async (route) => {
     if (abortEastFeedPost && method === "POST" && url.pathname.startsWith("/rest/v1/east_feed")) {
       writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", aborted: true });
       return route.abort("failed");
+    }
+    // RF2 b harness switch: the write is recorded when it ARRIVES (so the step can see the sync start) and answered
+    // only after the delay - the app's CAS loop stays unresolved that long, which is what the keepalive flush must see.
+    if (delayScheduleWriteMs > 0 && url.pathname.startsWith("/rest/v1/schedule_days") && (method === "POST" || method === "PATCH")) {
+      writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", delayedMs: delayScheduleWriteMs });
+      await new Promise(r => setTimeout(r, delayScheduleWriteMs));
+      return json(method === "POST" ? 201 : 200, representation(method, url, body));
     }
     if (method === "DELETE" && url.pathname + url.search === "/rest/v1/schedule_days?day=not.is.null") { daysWiped = true; Object.keys(dayStore).forEach(k => delete dayStore[k]); }
     if (daysWiped && url.pathname === "/rest/v1/schedule_days" && method === "POST") { try { const b = JSON.parse(body); if (b && b.day) dayStore[b.day] = { ...b }; } catch (e) {} }
@@ -1839,6 +1851,48 @@ try {
     const lowVersion = flushWrites.map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).filter(b => b && b.day === third && typeof b.version === "number" && b.version <= 3);
     if (lowVersion.length) fail("keepalive flush wrote a version at or below the last seen v3: " + JSON.stringify(lowVersion.map(b => b.version))); else ok("keepalive flush never writes a version at or below the one last seen");
     await page.waitForTimeout(1500); // let the debounced sync settle before the next step
+
+    // (e) RF2 b: while a CAS sync run is unresolved (a long Accept & Publish, the phone locked mid-way), the
+    //     keepalive flush must NOT send parallel schedule_days writes - the same days at the same versions would go
+    //     out twice. It skips the days leg, says so, keeps the blob leg, and the pending edit lands through the
+    //     serialized sync afterwards (never lost). The harness holds the first edit's write open for 5 s.
+    const fourth = days.find(d => ![day, other, third].includes(d) && d.slice(0, 7) === day.slice(0, 7) && !fixtureHasDay(d));
+    const fifth = days.find(d => ![day, other, third, fourth].includes(d) && d.slice(0, 7) === day.slice(0, 7) && !fixtureHasDay(d));
+    if (!fourth || !fifth) fail("RF2 keepalive-busy: no two free days left in the month for the step");
+    else {
+      delayScheduleWriteMs = 5000;
+      const sinceBusy = (n, prefix) => writes.slice(n).filter(w => !prefix || w.path.startsWith(prefix)); // writesSince is declared further down the harness
+      try {
+        const beforeBusy = writes.length;
+        await editDay(fourth, "backup", "s6"); noteEdit(fourth, { backup_id: "s6" });
+        const started = await waitFor(() => sinceBusy(beforeBusy, "/rest/v1/schedule_days").length > 0, 4000); // the debounced sync is now in flight (held by the harness)
+        const heldWrites = sinceBusy(beforeBusy, "/rest/v1/schedule_days");
+        await editDay(fifth, "backup", "s3"); noteEdit(fifth, { backup_id: "s3" });
+        const beforeFlush2 = writes.length;
+        const warnsBefore = consoleWarns.length;
+        await page.evaluate(() => {
+          Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+          document.dispatchEvent(new Event("visibilitychange"));
+          delete document.hidden;
+        });
+        await page.waitForTimeout(400);
+        const flushDays = sinceBusy(beforeFlush2, "/rest/v1/schedule_days");
+        const flushBlob = sinceBusy(beforeFlush2).filter(w => w.method === "POST" && /call_schedule_data\?on_conflict=id/.test(w.path));
+        const skipWarn = consoleWarns.slice(warnsBefore).find(t => /schedule_days leg skipped/.test(t));
+        if (!started) fail(`RF2 keepalive-busy: the ${fourth} edit produced no schedule_days write within 4 s`);
+        else if (!heldWrites.every(w => w.delayedMs)) fail("RF2 keepalive-busy: the harness did not hold the first write open: " + JSON.stringify(heldWrites.map(w => w.method + " " + w.path)));
+        else if (flushDays.length) fail(`RF2 keepalive-busy: the flush sent ${flushDays.length} schedule_days write(s) while a sync run was in flight: ` + JSON.stringify(flushDays.map(w => w.method + " " + w.path)));
+        else if (!skipWarn) fail("RF2 keepalive-busy: no console.warn saying the schedule_days leg was skipped (warns since: " + JSON.stringify(consoleWarns.slice(warnsBefore).slice(0, 4)) + ")");
+        else if (!flushBlob.length) fail("RF2 keepalive-busy: the blob leg did not run (no keepalive call_schedule_data POST after the flush)");
+        else ok(`RF2 keepalive-busy: flush while the ${fourth} CAS write is held open -> zero schedule_days writes, blob leg sent, warn "${skipWarn.slice(0, 100)}"`);
+        // the skipped edit lands afterwards through the serialized sync (the debounced autosave queued behind the held run)
+        const landedFifth = () => sinceBusy(beforeFlush2, "/rest/v1/schedule_days").some(w => { try { const b = JSON.parse(w.body || "{}"); return (b.day === fifth || new RegExp("day=eq\\." + fifth).test(w.path)) && b.backup_id === "s3"; } catch (e) { return false; } });
+        const landed = await waitFor(landedFifth, 12000);
+        if (!landed) fail(`RF2 keepalive-busy: the ${fifth} edit never reached schedule_days after the flush skipped it (writes since: ` + JSON.stringify(sinceBusy(beforeFlush2, "/rest/v1/schedule_days").map(w => w.method + " " + w.path)) + ")");
+        else ok(`RF2 keepalive-busy: the skipped ${fifth} edit landed through the serialized sync afterwards (never lost)`);
+      } finally { delayScheduleWriteMs = 0; }
+      await page.waitForTimeout(6000); // let the held write answer and the chain drain before the next step
+    }
   }
 
   // ---- Publish dialog: the diff line shows a real arrow, not the text "\u2192" ----
@@ -2956,6 +3010,17 @@ try {
       await page.check("[data-testid=gen-respect-locks]");
     }
 
+    // RF2 c: the 'Fill open slots only' checkbox exists, is OFF by default, and the Seed field says where the seed shows
+    {
+      const foo = await page.$("[data-testid=gen-fill-open-only]");
+      const fooChecked = foo ? await foo.isChecked().catch(() => null) : null;
+      const seedPh = await page.getAttribute("[data-testid=gen-seed]", "placeholder");
+      if (!foo) fail("RF2 GeneratePanel: no [data-testid=gen-fill-open-only] checkbox");
+      else if (fooChecked !== false) fail("RF2 GeneratePanel: 'Fill open slots only' must be OFF by default, isChecked=" + fooChecked);
+      else if (seedPh !== "random - the toast shows the seed") fail("RF2 GeneratePanel: Seed placeholder is " + JSON.stringify(seedPh));
+      else ok("RF2 GeneratePanel: 'Fill open slots only (keep every held day)' checkbox present and OFF by default; Seed placeholder 'random - the toast shows the seed'");
+    }
+
     // ---- Generate: preview from the app's derived default start (item AB: the first open slot on/after
     //      today, else the day after the last saved block, clamped to today) through the END OF THAT MONTH,
     //      N=10, seed 7 -> diagnostics, no writes. Prompt 12 SM2: the range follows the live rows (it was
@@ -2991,6 +3056,10 @@ try {
     if (!/total/.test(scoreText)) fail("Generate score breakdown missing: " + scoreText);
     else if (/\[object Object\]/.test(scoreText)) fail("Generate score renders '[object Object]' (the weights object is String()-ed): " + scoreText.slice(0, 160));
     else ok("Generate score: " + scoreText.slice(0, 120));
+    // RF2 review fix: the diagnostics print the run mode and the fixed-slot count (the default run: mode generate; fixed = the locked slots in the range)
+    const modeText = await page.$eval("[data-testid=gen-mode]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => null);
+    if (!modeText || !/^mode generate, fixed slots \d+$/.test(modeText)) fail("RF2 GenDiagnostics: expected a 'mode generate, fixed slots N' line ([data-testid=gen-mode]), got " + JSON.stringify(modeText));
+    else ok("RF2 GenDiagnostics: " + modeText + " (diagnostics.mode / fixedSlots surfaced next to the score)");
     const weightsCell = await page.$eval("[data-testid=gen-score-weights]", el => ({ text: el.textContent, title: el.getAttribute("title") })).catch(() => null);
     if (weightsCell && !/weights \d+ keys?: \w+=/.test(weightsCell.text)) fail("Generate score: the weights summary is not 'weights N keys: k=v, ...': " + weightsCell.text);
     else if (weightsCell) ok("Generate score: weights summarised as '" + weightsCell.text.slice(0, 80) + "' (full JSON in the title)");
@@ -3034,6 +3103,19 @@ try {
     await page.click('button[data-tab="setup"]');
     await page.waitForSelector("[data-testid=gen-accept]", { timeout: 5000 });
 
+    // RF2 a: Accept names every HELD but UNLOCKED slot the merge replaces (a manual / trade / claim / generated /
+    // import holder, or an external cover, not locked in that role) in a confirm BEFORE the snapshot - the locked
+    // ones keep their own sentence. Derived from the same two pictures as the write set below: the preview holders
+    // off the grid vs the harness's picture of the map, with the lock flags of the live row (a harness-edited
+    // row-less day is unlocked). Both Accept clicks (failing snapshot, real) get the same confirm; it is accepted.
+    const pvHolderOf = (c, role) => role === "primary" ? (c.p || (c.ext ? "ext:" + c.ext : null)) : (c.b || null);
+    const lockedIn = (d, role) => { const l = liveByDay[d]; return !!(l && l[role + "_locked"]); };
+    const heldUnlocked = [];
+    previewGrid.forEach(c => { ["primary", "backup"].forEach(role => { const from = curHolder(c.day, role); if (from && !lockedIn(c.day, role) && pvHolderOf(c, role) !== from) heldUnlocked.push(`${mdOf(c.day)} ${role === "primary" ? "P" : "B"} ${from}`); }); });
+    const acceptDialogs = [];
+    const onAcceptDlg = (d) => { acceptDialogs.push(d.message()); d.accept(); };
+    page.on("dialog", onAcceptDlg);
+
     // ---- Accept & Publish with a FAILING snapshot: nothing is written, the preview is kept ----
     failSnapshotInsert = true;
     const beforeFail = writes.length;
@@ -3055,6 +3137,28 @@ try {
     await page.click("[data-testid=gen-accept]");
     await page.waitForSelector("[data-testid=publish-dialog]", { timeout: 60000 });
     await page.waitForTimeout(500);
+    page.off("dialog", onAcceptDlg);
+    {
+      const heldMsgs = acceptDialogs.filter(m => /held but unlocked assignment\(s\) will be replaced: /.test(m));
+      const otherMsgs = acceptDialogs.filter(m => !/held but unlocked assignment\(s\) will be replaced: /.test(m));
+      if (otherMsgs.length) fail("RF2 Accept confirm: an unexpected dialog on Accept (respect locks ON, no locked change expected): " + JSON.stringify(otherMsgs.map(m => m.slice(0, 160))));
+      // RF2 review fix: under the fixture the positive branch is REQUIRED - the injected unlocked generated backup
+      // (2026-11-19 B s2, see the fixture) must be regenerated to another holder (or cleared) and named by the app.
+      if (fixture && !heldUnlocked.some(s => s.startsWith(mdOf("2026-11-19") + " B "))) fail("RF2 Accept confirm (fixture): the injected held but unlocked 2026-11-19 backup (s2) was not regenerated - the positive branch did not run; grid cell: " + JSON.stringify(previewGrid.find(c => c.day === "2026-11-19")) + ", derived: " + JSON.stringify(heldUnlocked));
+      if (heldUnlocked.length === 0) {
+        if (heldMsgs.length) fail("RF2 Accept confirm: the harness derived no held but unlocked slot in the preview range, yet the app asked: " + heldMsgs[0].slice(0, 220));
+        else ok("RF2 Accept confirm: no held but unlocked slot in the preview range (derived from the grid vs the live rows) - no confirm asked");
+      } else if (heldMsgs.length !== 2) fail(`RF2 Accept confirm: expected the confirm on both Accept clicks (failing snapshot + real), got ${heldMsgs.length} of ${acceptDialogs.length} dialog(s): ` + JSON.stringify(acceptDialogs.map(m => m.slice(0, 140))));
+      else {
+        const m = heldMsgs[1];
+        const n = Number((m.match(/(\d+) held but unlocked assignment\(s\) will be replaced: /) || [])[1]);
+        const first = heldUnlocked[0].split(" ").slice(0, 2).join(" "); // "M/D P|B" of the first derived slot (the app lists the same order: by day, primary before backup)
+        if (n !== heldUnlocked.length) fail(`RF2 Accept confirm: the app counts ${n} held but unlocked assignment(s), the harness derived ${heldUnlocked.length} (${heldUnlocked.slice(0, 8).join(", ")}${heldUnlocked.length > 8 ? ", ..." : ""}): ` + m.slice(0, 300));
+        else if (m.indexOf("will be replaced: " + first + " ") < 0) fail(`RF2 Accept confirm: the first listed slot should be ${first}: ` + m.slice(0, 300));
+        else if (!/tick 'Fill open slots only' to keep every held day/.test(m)) fail("RF2 Accept confirm: the confirm does not point at the fill-open-only checkbox: " + m.slice(0, 300));
+        else ok(`RF2 Accept confirm on both clicks, BEFORE the snapshot: "${m.split("\n")[0].slice(0, 150)}" - ${n} held but unlocked assignment(s) = derived, first ${first}; accepted`);
+      }
+    }
     const seq = writesSince(beforeOk);
     const snapIdx = seq.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/call_schedule_snapshots"));
     const dayIdx = seq.findIndex(w => w.path.startsWith("/rest/v1/schedule_days"));
@@ -3311,6 +3415,7 @@ try {
     }
 
     // ---- Import seed: dry run shows zero changes against the live rows and writes nothing ----
+    let rf2Drift = false; // RF2 e: set by the dry run below when the LIVE blob still carries the retired settings.seedRevisions key (one extra settings=update until the re-import)
     {
       await openCard("setup_import");
       const before = writes.length;
@@ -3390,8 +3495,9 @@ try {
         await page.waitForTimeout(400);
         const total3 = await page.$eval("[data-testid=seed-total]", el => el.innerText.replace(/\s+/g, " "));
         const diff3 = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
-        if (total3.trim() !== "Total changes: 2" + blockedSuffix || !new RegExp("insert s2 available/any " + extra).test(diff3) || !/surgeonRules=update/.test(diff3)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: 2${blockedSuffix}' (blob surgeonRules + 1 availability insert${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules/.test(l)).join(" | ")}`);
-        else ok(`Import apply dry run: extra Burchett date ${extra} -> 2 changes (surgeonRules=update, insert s2 available/any ${extra})${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
+        // RF2 review fix: a seed change under a core key moves settings too (the seedCoreHash stamp follows the seed-owned content), so the extra date reads surgeonRules=update + settings=update + 1 availability insert = 3 changes
+        if (total3.trim() !== "Total changes: 3" + blockedSuffix || !/settings=update/.test(diff3) || !new RegExp("insert s2 available/any " + extra).test(diff3) || !/surgeonRules=update/.test(diff3)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: 2${blockedSuffix}' (blob surgeonRules + 1 availability insert${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules/.test(l)).join(" | ")}`);
+        else ok(`Import apply dry run: extra Burchett date ${extra} -> 3 changes (surgeonRules=update, settings=update - the seedCoreHash stamp, insert s2 available/any ${extra})${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
         // Prompt 12 SM2: the result panel's counts are restated from the harness's own data, never from
         // the app's summary (the pre-SM2 pin hard-coded Prompt 6's 37-row plan and four Thanksgiving days):
         //   availability / time_off - the plan for seed3 (the seed + the extra date), keyed the way the app

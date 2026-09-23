@@ -70,7 +70,10 @@
 //   surgeonRules                          -> blob.surgeonRules (+ explicitListMonths derived; notes scrubbed;
 //                                            timeOff as { start, end } only)
 //   groupRules, holidays                  -> blob.groupRules, blob.holidays (note-like keys dropped from both)
-//   _meta.generatedOn / _meta.revisions   -> blob.settings.seedGeneratedOn / seedRevisions
+//   _meta.generatedOn / _meta.revisions   -> blob.settings.seedGeneratedOn / seedRevisionCount + seedLastRevision
+//                                            (RF2 9/23: the count and the LAST entry's date prefix only - the
+//                                            paragraphs stay in the seed; the blob is anon-readable. The old key
+//                                            seedRevisions is retired: the SQL and the app's Apply remove it.)
 //   surgeonRules[id].explicitAvailable    -> availability available/any (plain list)
 //                                            or available/primary + available/backup (role-scoped)
 //   surgeonRules[id].explicitBackupOnly   -> availability backup_only/any
@@ -573,6 +576,77 @@ function impStats(plan) {
   };
 }
 
+// RF2 (9/23): settings keys an earlier importer wrote that no importer writes any more. The blob's settings merge
+// is one level deep (live keys survive), so these are removed explicitly - the SQL subtracts them ('-' operator) in
+// the SET and in the idempotency WHERE, planDiff reads a live blob still carrying one as settings=update, and the
+// app's Apply deletes them from the merged settings.
+var IMP_RETIRED_SETTINGS_KEYS = ["seedRevisions"];
+
+// impRevisionSummary(_meta.revisions) -> { count, last }: how much of the seed's revision history reaches the
+// anon-readable blob - the number of entries and the date prefix (YYYY-MM-DD) of the LAST one, never the wording.
+function impRevisionSummary(revisions) {
+  var list = Array.isArray(revisions) ? revisions : [];
+  var last = list.length ? String(list[list.length - 1]) : "";
+  var m = last.match(/^(\d{4}-\d{2}-\d{2})/);
+  return { count: list.length, last: m ? m[1] : null };
+}
+
+// impBlobOwner(live) -> { hasRow, importerOwned, by, at }: who wrote call_schedule_data 'main' last. The CLI importer
+// stamps updated_by 'seed'; the app stamps the person_id (autosave, in-app seed Apply - or null from a session without
+// a profile). Anything but 'seed' on an existing row is app-written: a re-import would replace surgeonRules,
+// groupRules, holidays and the pool roster rows wholesale and revert every Setup edit under them (RF2 guard).
+function impBlobOwner(live) {
+  var l = live && typeof live === "object" ? live : {};
+  // An EMPTY data object is no row whatever updated_at says: sql/schema.sql seeds ('main', '{}') with updated_at
+  // default now() and no updated_by, and the first --apply on a fresh install must not read that as app-written.
+  var hasRow = !!(l.blob && typeof l.blob === "object" && Object.keys(l.blob).length);
+  if (!hasRow) return { hasRow: false, importerOwned: false, by: null, at: null };
+  var by = l.blobUpdatedBy === undefined || l.blobUpdatedBy === null || l.blobUpdatedBy === "" ? "(unknown)" : String(l.blobUpdatedBy);
+  return { hasRow: true, importerOwned: by === "seed", by: by, at: l.blobUpdatedAt || null };
+}
+
+// RF2 review fix (9/23): the app-edited guard is CONTENT-based. impCoreHash(blob) = a stable hash of the seed-owned
+// keys exactly as the importer writes them - the pool roster rows (type != external: outside surgeons live in the
+// live roster alone), surgeonRules, groupRules, holidays - over canonical JSON (sorted keys, as jsonb stores them),
+// two FNV-1a 32-bit lanes -> 16 hex chars. Pure JS on purpose: importer.js also runs in the browser (in-app Apply).
+// importPlan stamps it into settings.seedCoreHash; the CLI hashes the LIVE blob's same keys and compares.
+var IMP_CORE_KEYS = ["roster", "surgeonRules", "groupRules", "holidays"];
+function impCoreOf(blob) {
+  var b = blob && typeof blob === "object" ? blob : {};
+  var out = {};
+  IMP_CORE_KEYS.forEach(function (k) {
+    var v = b[k];
+    if (k === "roster") v = (Array.isArray(v) ? v : []).filter(function (r) { return !(r && r.type === "external"); });
+    out[k] = v === undefined ? null : v;
+  });
+  return impClone(out);
+}
+function impCoreHash(blob) {
+  var s = impCanon(impCoreOf(blob));
+  var h1 = 0x811c9dc5, h2 = 0x9747b28c;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619) >>> 0;
+    h2 = Math.imul(h2 ^ c, 16777619) >>> 0;
+  }
+  var hex = function (n) { return ("00000000" + n.toString(16)).slice(-8); };
+  return hex(h1) + hex(h2);
+}
+// impBlobEditState(live) -> { hasRow, importerOwned, by, at, stamp, liveHash, basis, appEdited }: has the app changed
+// a seed-owned key since the last import? updated_by alone cannot say - the autosave re-stamps the person_id on ANY
+// state change (a day edit, a trade, a realtime adopt of a foreign write) - so with a stamp on the live row the
+// verdict is liveHash !== stamp (basis 'seedCoreHash'); without one (a row written before this fix) it falls back to
+// !importerOwned (basis 'updated_by'). The CLI refuses --apply only when appEdited AND the plan changes a core key.
+function impBlobEditState(live) {
+  var owner = impBlobOwner(live);
+  var l = live && typeof live === "object" ? live : {};
+  var st = owner.hasRow && l.blob && l.blob.settings && typeof l.blob.settings.seedCoreHash === "string" ? l.blob.settings.seedCoreHash : null;
+  var liveHash = owner.hasRow ? impCoreHash(l.blob) : null;
+  var basis = st ? "seedCoreHash" : "updated_by";
+  var appEdited = !owner.hasRow ? false : (st ? liveHash !== st : !owner.importerOwned);
+  return { hasRow: owner.hasRow, importerOwned: owner.importerOwned, by: owner.by, at: owner.at, stamp: st, liveHash: liveHash, basis: basis, appEdited: appEdited };
+}
+
 // importPlan(seed, { now }) -> { blob, availabilityRows, timeOffRows, scheduleDayRows,
 //                                infoDeltas, refusals, stats }
 // Throws Error('CONTACT_DATA_REFUSED: ...') when roster[] or site carries contact data.
@@ -604,9 +678,11 @@ function importPlan(seed, options) {
     settings: {
       importedAt: now,
       seedGeneratedOn: meta.generatedOn || null,
-      seedRevisions: impClone(meta.revisions || [])
+      seedRevisionCount: impRevisionSummary(meta.revisions).count,
+      seedLastRevision: impRevisionSummary(meta.revisions).last
     }
   };
+  blob.settings.seedCoreHash = impCoreHash(blob);   // RF2 review fix: the content stamp the CLI's app-edited guard compares against
   var leaks = impFindKeys(blob, IMP_BLOB_KEY);
   if (leaks.length) throw new Error("CONTACT_DATA_REFUSED: the blob would carry contact-looking keys at " + leaks.join(", "));
   impRefuseNoteDenylist(blob);                                        // throws NOTE_DENYLIST
@@ -733,21 +809,26 @@ function impSqlBlob(blob) {
     " where r ->> 'type' = 'external' and not (r ->> 'id' = any (array[" + seedIds + "]::text[]))), '[]'::jsonb)";
   var coreExpr = "jsonb_set((coalesce(call_schedule_data.data, '{}'::jsonb) - 'settings') || " + impSqlJson(core) + ",\n" +
     "                   '{roster}', " + impSqlJson(roster) + " || " + liveExternals + ", true)";
+  // RF2: the live settings minus the retired keys, then the seed's keys on top - same expression in the SET and in
+  // the WHERE, so a live row that still carries a retired key is a change (the '||' merge alone would keep it forever).
+  var liveSettings = "(coalesce(call_schedule_data.data -> 'settings', '{}'::jsonb)" +
+    IMP_RETIRED_SETTINGS_KEYS.map(function (k) { return " - " + impSqlStr(k); }).join("") + ")";
   return [
     "-- 2. config blob: merge the imported keys into row 'main' (keys the app adds later are kept;",
     "--    outside surgeons added in Setup (roster rows of type \"external\") are kept beside the seed's roster;",
-    "--    settings merge one level deeper; a byte-identical re-run leaves the row untouched)",
+    "--    settings merge one level deeper, minus the retired settings key(s) " + IMP_RETIRED_SETTINGS_KEYS.join(", ") + ";",
+    "--    a byte-identical re-run leaves the row untouched)",
     "insert into public.call_schedule_data (id, data, updated_by, updated_at)",
     "values ('main', " + impSqlJson(blob) + ", 'seed', now())",
     "on conflict (id) do update set",
     "  data = jsonb_set(" + coreExpr + ",",
     "                   '{settings}',",
-    "                   coalesce(call_schedule_data.data -> 'settings', '{}'::jsonb) || " + impSqlJson(settings) + ", true),",
+    "                   " + liveSettings + " || " + impSqlJson(settings) + ", true),",
     "  updated_by = 'seed',",
     "  updated_at = now()",
     "where " + coreExpr,
     "        is distinct from (coalesce(call_schedule_data.data, '{}'::jsonb) - 'settings')",
-    "   or coalesce(call_schedule_data.data -> 'settings', '{}'::jsonb) || " + impSqlJson(settingsStable),
+    "   or " + liveSettings + " || " + impSqlJson(settingsStable),
     "        is distinct from coalesce(call_schedule_data.data -> 'settings', '{}'::jsonb);",
     ""
   ].join("\n");
@@ -953,8 +1034,9 @@ function planDiff(plan, live) {
     if (k === "settings") {
       mine = Object.assign({}, mine); delete mine.importedAt;
       theirs = theirs ? Object.assign({}, theirs) : theirs; if (theirs) delete theirs.importedAt;
-      // settings are merged, so compare only the keys the seed sets
-      if (theirs) { var sub = {}; Object.keys(mine).forEach(function (kk) { sub[kk] = theirs[kk]; }); theirs = sub; }
+      // settings are merged, so compare only the keys the seed sets - plus any RETIRED key the live row still
+      // carries (RF2: the SQL removes it, so its presence is a change the dry run must show)
+      if (theirs) { var sub = {}; Object.keys(mine).forEach(function (kk) { sub[kk] = theirs[kk]; }); IMP_RETIRED_SETTINGS_KEYS.forEach(function (kk) { if (kk in theirs) sub[kk] = theirs[kk]; }); theirs = sub; }
     }
     var state = theirs === undefined ? (liveEmpty ? "insert" : "update") : (impSame(mine, theirs) ? "unchanged" : "update");
     blobT[state]++;
@@ -1083,6 +1165,11 @@ var impExports = {
   importSql: importSql,
   planDiff: planDiff,
   IMP_AWAITING_MARKER: IMP_AWAITING_MARKER,     // Prompt 12 B: the schedule_days note prefix the app's "confirm" badge reads
+  IMP_RETIRED_SETTINGS_KEYS: IMP_RETIRED_SETTINGS_KEYS,   // RF2: settings keys the SQL / the app's Apply remove from the live blob
+  impRevisionSummary: impRevisionSummary,       // RF2: _meta.revisions -> { count, last }
+  impBlobOwner: impBlobOwner,                   // RF2: who wrote the blob last (information; the fallback of the guard below)
+  impCoreHash: impCoreHash,                     // RF2 review fix: content stamp of the seed-owned blob keys (settings.seedCoreHash)
+  impBlobEditState: impBlobEditState,           // RF2 review fix: has the app changed a seed-owned key since the last import? (the CLI guard)
   // seed -> shape helpers (test/seed-adapter.js delegates here)
   impSeedRoster: impSeedRoster,
   impMergeRoster: impMergeRoster,

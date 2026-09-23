@@ -2,7 +2,7 @@
 // Silvis - seed import CLI (Prompt 5).
 //
 //   node scripts/import-seed.js [--seed docs/silvis-seed.json] [--dry-run | --apply]
-//                               [--workdir <linked supabase dir>] [--out <sql path>]
+//                               [--workdir <linked supabase dir>] [--out <sql path>] [--overwrite-blob]
 //
 // --dry-run (default): builds the plan with importer.js, fetches the live rows
 //   with the PUBLIC anon key from config.js (the four tables are anon-readable),
@@ -20,9 +20,26 @@
 // time_off created_by 'seed', schedule_days source 'import' + updated_by 'seed')
 // are reported as 'delete' in the diff and removed by the SQL (importer.js header).
 //
+// App-edited blob guard (RF2, 9/23; content-based since the RF2 review): fetchLive
+// also reads updated_by / updated_at of call_schedule_data 'main'. importPlan stamps
+// settings.seedCoreHash = importer.impCoreHash(blob) (the seed-owned keys: pool
+// roster rows, surgeonRules, groupRules, holidays); the plan hashes the LIVE blob's
+// same keys (importer.impBlobEditState) and, when a stamp is present and differs -
+// or, on a row with no stamp yet, when updated_by is not the importer's tag 'seed' -
+// prints
+//   BLOB WAS EDITED IN THE APP at <ts> by <who>: a re-import would revert Setup edits
+// and --apply REFUSES (exit 4) when the plan would change a CORE key (anything but
+// settings), unless --overwrite-blob is given. updated_by alone is no verdict: the
+// app's autosave re-stamps the person_id on any state change (a day edit, a trade,
+// a realtime adopt), so 'blob last written by <who> at <ts>' is always printed as
+// information. A settings-only plan never refuses (the settings merge is one level
+// deep; nothing under Setup is reverted). schedule_days / availability / time_off
+// are unaffected by this guard (they keep their own ownership rules above).
+//
 // Exit codes: 0 ok / 1 error or not fully applied / 2 refusal (contact data, or a
 // denylist word left in the blob - see importer.js header "Rule-note scrub") /
-// 3 refused to apply over app-edited days.
+// 3 refused to apply over app-edited days / 4 refused to apply over an app-edited
+// blob (re-run with --overwrite-blob after mirroring the Setup edits into the seed).
 // --dry-run also prints the scrub inventory (path -> drop): every note-like key
 // of surgeonRules, groupRules and holidays is dropped from the blob - no category
 // tokens since 9/22 late (Prompt 12 AA: reasons live in docs/SILVIS-CALL-RULES.md,
@@ -45,11 +62,12 @@ const IMP = require(path.join(ROOT, "importer.js"));
 /* ------------------------------------------------------------- args */
 
 function parseArgs(argv) {
-  const a = { seed: path.join(ROOT, "docs", "silvis-seed.json"), mode: "dry-run", workdir: process.env.SILVIS_SUPABASE_WORKDIR || null, out: null };
+  const a = { seed: path.join(ROOT, "docs", "silvis-seed.json"), mode: "dry-run", workdir: process.env.SILVIS_SUPABASE_WORKDIR || null, out: null, overwriteBlob: false };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === "--dry-run") a.mode = "dry-run";
     else if (t === "--apply") a.mode = "apply";
+    else if (t === "--overwrite-blob") a.overwriteBlob = true;
     else if (t === "--seed") a.seed = path.resolve(argv[++i]);
     else if (t === "--workdir") a.workdir = argv[++i];
     else if (t === "--out") a.out = path.resolve(argv[++i]);
@@ -61,7 +79,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log("usage: node scripts/import-seed.js [--seed docs/silvis-seed.json] [--dry-run | --apply] [--workdir <linked dir>] [--out <sql path>]");
+  console.log("usage: node scripts/import-seed.js [--seed docs/silvis-seed.json] [--dry-run | --apply] [--workdir <linked dir>] [--out <sql path>] [--overwrite-blob]");
 }
 
 /* ------------------------------------------------------------- config */
@@ -97,7 +115,7 @@ async function fetchAll(cfg, table, query) {
 
 async function fetchLive(cfg) {
   const [blobRows, availability, timeOff, scheduleDays] = await Promise.all([
-    fetchAll(cfg, "call_schedule_data", "id=eq.main&select=data,updated_at"),
+    fetchAll(cfg, "call_schedule_data", "id=eq.main&select=data,updated_at,updated_by"),
     fetchAll(cfg, "availability", "select=person_id,kind,role,start_date,end_date,note,source&order=person_id,start_date"),
     fetchAll(cfg, "time_off", "select=person_id,start_date,end_date,note,created_by&order=person_id,start_date"),
     fetchAll(cfg, "schedule_days", "select=day,primary_id,backup_id,primary_locked,backup_locked,source,external_cover,note,version,updated_by&order=day")
@@ -105,6 +123,7 @@ async function fetchLive(cfg) {
   return {
     blob: (blobRows[0] && blobRows[0].data) || {},
     blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null,
+    blobUpdatedBy: blobRows[0] ? (blobRows[0].updated_by || null) : null,
     availability,
     time_off: timeOff,
     schedule_days: scheduleDays
@@ -190,6 +209,28 @@ async function main() {
   console.log("\n--- plan diff ---");
   console.log(diff.text);
 
+  // RF2 (review fix 9/23): has the app changed a seed-owned blob key since the last import? CONTENT-based - the live
+  // blob's pool roster / surgeonRules / groupRules / holidays hashed the way importPlan stamped settings.seedCoreHash
+  // (updated_by is information only: the autosave re-stamps the person_id on any state change; it is the fallback
+  // only while the live row carries no stamp yet). --apply refuses below only when the plan would change a CORE key -
+  // a settings-only plan (importedAt / seedRevisionCount drift) reverts nothing, the settings merge is one level deep.
+  // schedule_days / availability / time_off rows are unaffected by this guard.
+  const owner = IMP.impBlobEditState(live);
+  const blobKeys = (diff.tables && diff.tables.call_schedule_data && diff.tables.call_schedule_data.keys) || {};
+  const coreWouldChange = Object.keys(blobKeys).some((k) => k !== "settings" && blobKeys[k] !== "unchanged");
+  const blobWouldChange = Object.keys(blobKeys).some((k) => blobKeys[k] !== "unchanged");
+  if (owner.hasRow) {
+    console.log("\nblob last written by " + owner.by + " at " + owner.at + (owner.basis === "seedCoreHash"
+      ? " (seedCoreHash " + (owner.appEdited ? "differs from the live seed-owned keys: edited in the app" : "matches the live seed-owned keys: no Setup edit since the last import") + ")"
+      : " (no seedCoreHash stamp on the live row yet - " + (owner.importerOwned ? "importer-owned" : "app-written") + " by updated_by; this import writes the stamp)"));
+  }
+  if (owner.hasRow && owner.appEdited) {
+    console.log("BLOB WAS EDITED IN THE APP at " + owner.at + " by " + owner.by + ": a re-import would revert Setup edits (surgeonRules, groupRules, holidays and the pool roster rows are replaced wholesale by the seed's copy)." +
+      (coreWouldChange ? " --apply refuses unless --overwrite-blob is given; schedule_days / availability / time_off rows are unaffected by this guard."
+        : blobWouldChange ? " This plan changes settings keys only - nothing under Setup is reverted, so the guard does not apply to this run."
+        : " The plan changes no blob key, so the guard does not apply to this run."));
+  }
+
   const sql = IMP.importSql(plan);
   fs.mkdirSync(path.dirname(args.out), { recursive: true });
   fs.writeFileSync(args.out, sql, "utf8");
@@ -208,6 +249,13 @@ async function main() {
     diff.blocked.forEach((l) => console.error("  " + l));
     console.error("Resolve them in the app (or update the seed) and re-run.");
     return 3;
+  }
+  if (owner.hasRow && owner.appEdited && coreWouldChange && !args.overwriteBlob) {
+    console.error("\nREFUSING TO APPLY: the shared setup (call_schedule_data) was last saved in the app at " + owner.at + " by " + owner.by +
+      " (" + (owner.basis === "seedCoreHash" ? "its seed-owned keys no longer match the seedCoreHash stamp of the last import" : "no seedCoreHash stamp yet: judged by updated_by") + ")" +
+      " - applying would revert the Setup edits under " + Object.keys(blobKeys).filter((k) => k !== "settings" && blobKeys[k] !== "unchanged").join(", ") + ".");
+    console.error("Mirror the Setup edits into docs/silvis-seed.json first, then re-run with --overwrite-blob (rows are unaffected by this guard - it is the blob alone).");
+    return 4;
   }
   if (!args.workdir) { console.error("--apply needs --workdir <linked supabase dir> (or SILVIS_SUPABASE_WORKDIR)"); return 1; }
   if (diff.totalChanges === 0) { console.log("nothing to apply - live tables already match the plan."); return 0; }

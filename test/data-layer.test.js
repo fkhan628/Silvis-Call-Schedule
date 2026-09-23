@@ -996,6 +996,101 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`'), "unread notification uses the accent tint + accent border");
   });
 
+  // ---- Review fixes 2 (RF2, 9/23 overnight): app safety ----
+  // (a) Accept & Publish counted only LOCKED replacements: an unlocked manual / trade / claim / generated / import
+  //     holder inside the range was regenerated and written without a word. (b) the keepalive flush fired parallel
+  //     PATCHes for the same days while a long Accept & Publish CAS loop was still running. (c) the app could not
+  //     reproduce a fill-open-only run and defaulted to a random seed without saying where the seed shows.
+  //     (e) the in-app seed Apply merged settings one level deep and kept the retired seedRevisions key.
+  console.log(String.fromCharCode(10) + "[RF2] acceptPreview confirms held-but-unlocked replacements; keepalive flush yields to an in-flight CAS sync; fill-open-only + seed text; in-app seed Apply drops retired settings keys");
+  const heldFnText = (() => { const i = src.indexOf("function suHeldUnlockedSlotChanges("); if (i < 0) return null; const j = src.indexOf("\n}\n", i); return j < 0 ? null : src.slice(i, j + 2); })();
+  check("RF2 a: index-source.html defines suHeldUnlockedSlotChanges(current, next) at module level (hoisted, pure)", () => {
+    assert.ok(heldFnText, "no 'function suHeldUnlockedSlotChanges(' in index-source.html");
+    assert.ok(!/\b(setState|useState|document|window|fetch)\b/.test(heldFnText), "the helper must stay pure");
+  });
+  const heldFn = heldFnText ? vm.runInContext(heldFnText + "\nsuHeldUnlockedSlotChanges;", sandbox) : null;
+  const heldList = (cur, next) => JSON.parse(JSON.stringify(heldFn(cur, next))); // the sandbox realm's arrays, re-created here so deepStrictEqual compares values, not prototypes
+  const mk = (p, b, pl, bl, extra) => Object.assign({ primary: p, backup: b, primaryLocked: !!pl, backupLocked: !!bl, source: "manual", externalCover: null, note: null }, extra || {});
+  check("RF2 a: an unlocked held slot whose holder changes is listed; a LOCKED held slot is not (the locked prompt owns it); an OPEN slot filled is not; an unchanged held slot is not", () => {
+    assert.ok(heldFn, "helper missing");
+    const cur = { "2026-10-24": mk("s1", "s2", false, false), "2026-10-25": mk("s3", "s4", true, true), "2026-10-26": mk(null, null, false, false), "2026-10-27": mk("s5", "s6", false, false) };
+    const next = { "2026-10-24": mk("s3", "s4", false, false, { source: "generated" }), "2026-10-25": mk("s1", "s2", true, true), "2026-10-26": mk("s1", "s2", false, false, { source: "generated" }), "2026-10-27": mk("s5", "s6", false, false) };
+    assert.deepStrictEqual(heldList(cur, next).map(c => c.day + " " + c.role + " " + c.from + "->" + c.to), ["2026-10-24 primary s1->s3", "2026-10-24 backup s2->s4"]);
+  });
+  check("RF2 a: a locked primary beside an unlocked held backup: only the backup is listed; a mixed day (locked P replaced under 'respect locks' off) still lists only the unlocked role", () => {
+    const cur = { "2026-11-05": mk("s3", "s2", true, false) };
+    assert.deepStrictEqual(heldList(cur, { "2026-11-05": mk("s3", "s4", true, false) }).map(c => c.role + " " + c.from + "->" + c.to), ["backup s2->s4"]);
+    assert.deepStrictEqual(heldList(cur, { "2026-11-05": mk("s1", "s4", true, false) }).map(c => c.role + " " + c.from + "->" + c.to), ["backup s2->s4"], "the locked primary belongs to suLockedSlotChanges, not here");
+  });
+  check("RF2 a: an unlocked externalCover primary counts as held (ext:<name>); a locked one does not", () => {
+    const cur = { "2026-09-28": mk(null, "s5", false, false, { externalCover: "Atwell" }), "2026-09-29": mk(null, "s5", true, false, { externalCover: "Atwell" }) };
+    const next = { "2026-09-28": mk("s2", "s3", false, false), "2026-09-29": mk(null, "s3", true, false, { externalCover: "Atwell" }) };
+    assert.deepStrictEqual(heldList(cur, next).map(c => c.day + " " + c.role + " " + c.from + "->" + c.to), ["2026-09-28 primary ext:Atwell->s2", "2026-09-28 backup s5->s3", "2026-09-29 backup s5->s3"]);
+  });
+  check("RF2 a: a held slot cleared to OPEN is listed too; null / missing maps never throw; a day missing from next reads as cleared", () => {
+    assert.deepStrictEqual(heldList({ "2026-11-03": mk("s1", null, false, false) }, { "2026-11-03": mk(null, null, false, false) }).map(c => c.role + " " + c.to), ["primary null"]);
+    assert.deepStrictEqual(heldList(null, null), []);
+    assert.deepStrictEqual(heldList({ "2026-11-03": mk("s1", null, false, false) }, {}), [{ day: "2026-11-03", role: "primary", from: "s1", to: null }]);
+    assert.deepStrictEqual(heldList({}, { "2026-11-03": mk("s1", null, false, false) }), [], "a day new in next has no held holder in current");
+  });
+  check("RF2 a: acceptPreview builds the held-but-unlocked list from the merged map, confirms it BEFORE the snapshot (Cancel aborts, nothing written), keeps the locked sentence, and re-checks both lists after the snapshot", () => {
+    const fn = src.indexOf("const acceptPreview = async () => {");
+    const end = src.indexOf("const acceptMerged = async", fn);
+    assert.ok(fn > 0 && end > fn, "acceptPreview / acceptMerged not found");
+    const body = src.slice(fn, end);
+    assert.ok(body.includes("const heldChanges = suHeldUnlockedSlotChanges(cur, next);"), "heldChanges from suHeldUnlockedSlotChanges(cur, next)");
+    assert.ok(body.includes("const lockedChanges = suLockedSlotChanges(cur, next);"), "the locked list stays");
+    assert.ok(body.includes("if (!pv.respectLocks || lockedChanges.length || heldChanges.length) {"), "one confirm gate over both lists");
+    assert.ok(body.includes("held but unlocked assignment(s) will be replaced: "), "the confirm names and lists the held but unlocked assignments");
+    assert.ok(body.includes("This replaces ${lockedChanges.length} locked / published slot(s)"), "the locked sentence is unchanged");
+    assert.ok(body.includes('${pv.fillOpenOnly ? "" : " (tick \'Fill open slots only\' to keep every held day)"}'), "RF2 review fix: the checkbox pointer is appended only when the preview did NOT run fill-open-only (fail-before: unconditional)");
+    assert.ok(!body.includes("more` : \"\"} (tick 'Fill open slots only'"), "RF2 review fix: the unconditional pointer is gone");
+    const gate = body.indexOf("if (!confirm(msg))"), snap = body.indexOf('snapshots.capture("generate_publish")');
+    assert.ok(gate > 0 && snap > gate, "the confirm precedes the snapshot capture (nothing is written on Cancel)");
+    assert.ok(body.includes("const held2 = suHeldUnlockedSlotChanges(cur2, next2);") && body.includes("held2.length > heldChanges.length"), "the post-snapshot re-derivation re-checks the held list too");
+  });
+  check("RF2 b: daySyncBusyRef counts the unresolved syncScheduleDays runs (+1 on enqueue, -1 when the run settles); the keepalive flush skips ONLY its schedule_days leg while the count is > 0, re-arms the pending payload and still runs the blob leg", () => {
+    assert.ok(src.includes("const daySyncBusyRef = useRef(0);"), "daySyncBusyRef declared as a counter");
+    const sync = src.slice(src.indexOf("const syncScheduleDays = (nextSchedule) => {"), src.indexOf("const syncScheduleDaysNow = async"));
+    assert.ok(sync.includes("daySyncBusyRef.current += 1;"), "+1 on enqueue");
+    assert.ok(sync.includes(".finally(() => { daySyncBusyRef.current = Math.max(0, daySyncBusyRef.current - 1); })"), "-1 when the run settles (ok, blocked, conflict or thrown alike)");
+    const fl = src.slice(src.indexOf("flushRef.current = (source) => {"), src.indexOf("const onVisibilityChange = () => {"));
+    // RF2 review fix: the skip is for the page-ALIVE case only (visibilitychange: the chain drains after the phone
+    // unlocks); on pagehide / beforeunload the chain is about to die, so the keepalive days leg still goes out (a CAS
+    // duplicate is harmless at the DB). And the skipped days are enqueued BEHIND the in-flight run, never left to the
+    // debounce timer alone.
+    assert.ok(!fl.includes("} else if (daySyncBusyRef.current > 0) {"), "RF2 review fix: the busy skip is no longer unconditional on the flush source (fail-before: skipped on pagehide / beforeunload too)");
+    const guard = fl.indexOf('} else if (daySyncBusyRef.current > 0 && source === "visibilitychange") {');
+    const loop = fl.indexOf("for (const day of Object.keys(Object.assign({}, base, cur)))");
+    const blobLeg = fl.indexOf("call_schedule_data?on_conflict=id");
+    assert.ok(guard > 0 && loop > guard && blobLeg > loop, `guard=${guard} loop=${loop} blob=${blobLeg}`);
+    const guardBlock = fl.slice(guard, fl.indexOf("} else {", guard));
+    assert.ok(guardBlock.includes("pendingSaveRef.current = payload;"), "the skip re-arms the pending payload for the next sync");
+    assert.ok(guardBlock.includes("syncScheduleDays(payload.schedule);"), "RF2 review fix: the skipped days are enqueued behind the in-flight run (the chain serializes it; a later timer run is a no-op against lastSyncRef)");
+    assert.ok(guardBlock.includes("never-settling fetch"), "RF2 review fix: the comment says a never-settling fetch keeps the count > 0 for the session by design");
+    assert.ok(!/\breturn\b/.test(guardBlock), "the skip never returns (the blob leg below still runs)");
+    assert.ok(guardBlock.includes("schedule_days leg skipped"), "the skip is logged, never silent");
+  });
+  check("RF2 c: GeneratePanel has the 'Fill open slots only' checkbox (default off) wired to generate({ fillOpenOnly }), re-roll keeps it, the meta line names it, the Seed placeholder says where the seed shows, and the run toast / meta line show the seed", () => {
+    assert.ok(src.includes('<SuCheck testid="gen-fill-open-only" label="Fill open slots only (keep every held day)"'), "checkbox");
+    assert.ok(src.includes("checked={opts.fillOpenOnly === true} onChange={v => setOpts(o => ({ ...o, fillOpenOnly: v }))}"), "checkbox state");
+    assert.ok(src.includes('useState({ start: "", end: "", bestOf: 200, seed: "", respectLocks: true, fillOpenOnly: false })'), "default off");
+    assert.ok(src.includes("generate(built.ctx, start, end, { seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, timeBudgetMs: 25000 })"), "generate() receives fillOpenOnly (T's option)");
+    assert.ok(src.includes("fillOpenOnly: o.fillOpenOnly === true, ranAt:"), "the preview records the mode");
+    assert.ok(src.includes("fillOpenOnly: previewGen.fillOpenOnly === true, respectLocks: previewGen.respectLocks"), "re-roll keeps the mode");
+    assert.ok(src.includes('{preview.fillOpenOnly ? ", fill open slots only" : ""}'), "the meta line names the mode");
+    assert.ok(src.includes('placeholder="random - the toast shows the seed"'), "seed placeholder");
+    assert.strictEqual(count('placeholder="random"'), 0, "the bare 'random' placeholder remains");
+    assert.ok(src.includes("showToast(`Preview ready (seed ${seed}, "), "the run toast shows the seed");
+    assert.ok(src.includes("seed <span style={{ fontFamily: mono }}>{String(preview.seed)}</span>"), "the preview meta line shows the seed");
+    // RF2 review fix: diagnostics.mode ('generate' | 'fill-open-only') and diagnostics.fixedSlots are printed in GenDiagnostics too
+    const gd = src.slice(src.indexOf("function GenDiagnostics("), src.indexOf("function GeneratePanel("));
+    assert.ok(gd.length > 0 && gd.includes('data-testid="gen-mode"') && gd.includes('{dg.mode || "generate"}') && gd.includes("dg.fixedSlots"), "RF2 review fix: GenDiagnostics prints the run mode and the fixed-slot count (gen-mode) next to the score line (fail-before: only the toast and the meta line named the mode)");
+  });
+  check("RF2 e: the in-app seed Apply drops the retired settings keys (importer.IMP_RETIRED_SETTINGS_KEYS) from the merged blob, as the SQL path does", () => {
+    assert.ok(src.includes("(IMP.IMP_RETIRED_SETTINGS_KEYS || []).forEach(k => { delete merged.settings[k]; });"), "retired keys deleted from merged.settings before the CAS PATCH");
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

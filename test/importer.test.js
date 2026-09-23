@@ -270,7 +270,8 @@ eq(plan.blob.roster.map((r) => r.code), ["FAK", "MAB", "BDA", "AFP", "NF", "SRK"
 eq(IMP.impFindKeys(plan.blob, /email|phone|contact/i), [], "no key named email/phone/contact at any depth");
 ok(!/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(JSON.stringify(plan.blob)), "no email-looking value in the blob");
 ok(!("site" in plan.blob) && JSON.stringify(plan.blob).indexOf("traumaCoordinator") < 0 && JSON.stringify(plan.blob).indexOf("adminContact") < 0, "site block stripped");
-eq(plan.blob.settings, { importedAt: NOW, seedGeneratedOn: seed._meta.generatedOn, seedRevisions: seed._meta.revisions });
+// RF2 (9/23): the revision paragraphs stay in the seed; the blob carries their count and the last entry's date only
+eq(plan.blob.settings, { importedAt: NOW, seedGeneratedOn: seed._meta.generatedOn, seedRevisionCount: seed._meta.revisions.length, seedLastRevision: (String(seed._meta.revisions[seed._meta.revisions.length - 1]).match(/^\d{4}-\d{2}-\d{2}/) || [])[0], seedCoreHash: IMP.impCoreHash(plan.blob) }, "RF2: settings = importedAt, seedGeneratedOn, seedRevisionCount, seedLastRevision, seedCoreHash (fail-before: seedRevisions carried every paragraph; RF2 review fix: no seedCoreHash stamp)");
 // groupRules reach the blob minus every note-like key (Prompt 12 F: all of them are engine documentation);
 // stripped independently here, never through importer.js
 const NOTE_KEY = /^(note|notes)$|Note$|Notes$|Reason$/;
@@ -585,7 +586,8 @@ const eC = edited((fx) => { fx.surgeonRules.s2.explicitAvailable["2026-12"] = fx
 const dC = IMP.planDiff(eC.plan, liveEq);
 ok(dC.tables.availability.delete >= 1, "row(s) carrying 12/23 deleted (" + dC.tables.availability.delete + " delete, " + dC.tables.availability.insert + " insert; 12/23 is its own single-day row in the seed)");
 ok(dC.tables.availability.rows.some((l) => /^delete s2 available\/any 2026-12-23/.test(l)), "the 12/23 row is the one deleted: " + dC.tables.availability.rows.join(" | "));
-eq(dC.tables.call_schedule_data.update, 1, "surgeonRules blob updates too");
+eq(dC.tables.call_schedule_data.keys.surgeonRules, "update", "surgeonRules blob updates too");
+eq(dC.tables.call_schedule_data.update, 2, "RF2 review fix: ...and settings with it - the seedCoreHash stamp follows the seed-owned content (surgeonRules + settings = 2 blob updates; fail-before: 1)");
 ok(/delete from public\.availability\n where source = 'seed'\n   and \(person_id, kind, role, start_date, end_date\) not in \(/.test(IMP.importSql(eC.plan)), "guarded set-based delete on availability");
 const rC = converges("12/23 removed", eC);
 ok(!expand(rC.model.availability).has("s2|available|any|2026-12-23"), "12/23 statement gone from the live rows");
@@ -607,7 +609,8 @@ const eG = edited((fx) => { Object.values(fx.surgeonRules).forEach((r) => { dele
 const dG = IMP.planDiff(eG.plan, liveEq);
 eq(dG.tables.time_off.delete, 0); eq(dG.tables.time_off.kept, 7); eq(dG.kept.length, 7, "7 seed vacations listed as kept");
 ok(dG.kept.every((l) => /^time_off .* \[KEPT: plan has no time_off rows/.test(l)), dG.kept.join(" | "));
-eq(dG.totalChanges, 1, "only the blob update counts");
+eq(dG.tables.time_off.insert + dG.tables.time_off.update + dG.tables.availability.insert + dG.tables.availability.update + dG.tables.schedule_days.insert + dG.tables.schedule_days.update, 0, "only the blob update counts (no row change)");
+eq(dG.totalChanges, 2, "RF2 review fix: the blob update = surgeonRules + settings (the seedCoreHash stamp follows the seed-owned content; fail-before: 1)");
 ok(/-- 5a\. time_off: plan has no rows - seed-owned live rows left alone/.test(IMP.importSql(eG.plan)) && !/delete from public\.time_off/.test(IMP.importSql(eG.plan)), "no time_off delete emitted");
 // (h) SQL shape: every delete is ownership-guarded and runs after the snapshot and before its table's insert
 const sqlStmts = sql.split(/;\s*\n/).map((s) => s.replace(/^\s*--.*$/gm, "").trim()).filter(Boolean);
@@ -847,7 +850,7 @@ eq(days.filter((d) => d.day >= "2026-11-02" && d.day <= "2026-11-25" && d.backup
   const s3Nov = planPreY.availabilityRows.filter((r) => r.person_id === ACTON && r.start_date >= "2026-11-01" && r.start_date <= "2026-11-30");
   eq(s3Nov.length, 8, "Y: T's s3 November availability rows collapse to 8 (5 primary ranges: 11/2, 11/4, 11/6, 11/14-16, 11/18; 3 backup rows: 11/3, 11/5, 11/17)");
   const dY = IMP.planDiff(plan, livePreY);
-  eq([dY.tables.schedule_days.insert, dY.tables.schedule_days.update, dY.tables.schedule_days.delete, dY.tables.schedule_days.blocked, dY.tables.availability.insert, dY.tables.availability.update, dY.tables.availability.delete, dY.tables.call_schedule_data.update, dY.tables.time_off.insert, dY.tables.time_off.delete], [0, 1, 0, 0, 0, 0, s3Nov.length, 1, 0, 0], "Y: expected live diff = 1 day update (11/5), " + s3Nov.length + " availability deletes (s3 November), 1 blob update, no time_off change (got " + JSON.stringify(dY.tables) + ")");
+  eq([dY.tables.schedule_days.insert, dY.tables.schedule_days.update, dY.tables.schedule_days.delete, dY.tables.schedule_days.blocked, dY.tables.availability.insert, dY.tables.availability.update, dY.tables.availability.delete, dY.tables.call_schedule_data.update, dY.tables.time_off.insert, dY.tables.time_off.delete], [0, 1, 0, 0, 0, 0, s3Nov.length, 2, 0, 0], "Y: expected live diff = 1 day update (11/5), " + s3Nov.length + " availability deletes (s3 November), 2 blob updates (surgeonRules + settings: the seedCoreHash stamp follows - RF2 review fix), no time_off change (got " + JSON.stringify(dY.tables) + ")");
   eq(dY.changes, ["11/5 P OPEN -> Acton", "11/5 B Acton -> OPEN"], "Y: the one day change reads both roles of 11/5");
   eq(dY.blocked, [], "Y: nothing blocked (the live 11/5 row is the import's own: source import, updated_by seed)");
   eq(dY.tables.schedule_days.byMonth["2026-11"], { insert: 0, update: 1, unchanged: 24, blocked: 0, delete: 0 }, "Y: November = the 11/5 update + 24 unchanged rows");
@@ -935,7 +938,7 @@ ok(seed.answeredQuestions.some((t) => /^Thanksgiving 2026:/.test(t) && /confirme
 ok(seed.openQuestions.some((t) => /^8\. ~~Thanksgiving 11\/26-29 for Khan~~/.test(t) && /confirmed/.test(t)), "Z: open question 8 is struck through with the answer");
 ok(!seed.openQuestions.concat(seed.answeredQuestions).some((t) => /re-confirm/.test(t)), "Z: no 're-confirm' left in either question list");
 ok(seed._meta.revisions.some((t) => /Prompt 12 item Z/.test(t) && /confirmed/.test(t)), "Z: _meta.revisions records the item");
-ok(plan.blob.settings.seedRevisions.some((t) => /Prompt 12 item Z/.test(t)), "Z: ...and it rides into blob.settings.seedRevisions (the settings=update of the dry run)");
+ok(seed._meta.revisions.some((t) => /Prompt 12 item Z/.test(t)) && plan.blob.settings.seedRevisionCount === seed._meta.revisions.length, "Z: ...and it counts in blob.settings.seedRevisionCount (RF2: the paragraph itself stays in the seed)");
 eq((plan.blob.holidays.units["2026"] || plan.blob.holidays.units[2026]).find((u) => u.name === "Thanksgiving").days, B_ROWS, "Z: the blob's 2026 Thanksgiving unit still spans the four days");
 // the expected live diff for the orchestrator (REPORT-FIRST): live = the rows as they stand after the applied 9/22 import
 // of item B's seed (the four notes marked, the B holiday source in the blob, no Z revision). Rebuilt from the seed itself by
@@ -1049,16 +1052,16 @@ ok(aaPublic.every((x) => !DENY.test(x) && !AA_WORDS.test(x) && !/\b(clinic|Aledo
   ok(cli.indexOf("mapped to a category") < 0 && cli.indexOf("NOTE_UNCLASSIFIED") < 0 && !/action -> category/.test(cli), "AA: scripts/import-seed.js prints no 'N mapped to a category' and expects no NOTE_UNCLASSIFIED");
   ok(/e\.path \+ " -> " \+ e\.action/.test(cli), "AA: the CLI still prints the inventory (path -> action)");
 }
-// (10) the revision entry rides into blob.settings.seedRevisions and itself carries no reason or token
-const aaRev = (plan.blob.settings.seedRevisions || []).filter((t) => /Prompt 12 item AA/.test(t));
-eq(aaRev.length, 1, "AA: one _meta.revisions entry for the item reaches blob.settings.seedRevisions (the settings=update of the dry run)");
+// (10) the revision entry counts in blob.settings.seedRevisionCount (RF2: the paragraph stays in the seed) and itself carries no reason or token
+const aaRev = (seed._meta.revisions || []).filter((t) => /Prompt 12 item AA/.test(t));
+eq(aaRev.length, 1, "AA: one _meta.revisions entry for the item (counted in blob.settings.seedRevisionCount; the wording never reaches the blob since RF2)");
 ok(aaRev.every((t) => !AA_WORDS.test(t) && !DENY.test(t)), "AA: the revision wording carries no former token, reason word or denylist word");
 // (11) expected live diff, derived by rebuilding the pre-AA live blob from the plan itself: blob-only (surgeonRules + settings), no row change
 {
   const livePreAA = { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) };
   livePreAA.blob.surgeonRules[KHAN].hardNeverWeekdaysReason = "OR day";   // what the live blob holds until the orchestrator applies this item
   livePreAA.blob.surgeonRules[ACTON].holidayRules.neverThanksgivingNote = "family";
-  livePreAA.blob.settings.seedRevisions = livePreAA.blob.settings.seedRevisions.filter((t) => !/Prompt 12 item AA/.test(t));
+  livePreAA.blob.settings = { importedAt: NOW, seedGeneratedOn: seed._meta.generatedOn, seedRevisions: seed._meta.revisions.filter((t) => !/Prompt 12 item AA/.test(t)) };   // the pre-AA (and pre-RF2) live shape
   // AA review (9/22 late): the live blob also still holds the two non-note prose keys the review moved to Note keys
   livePreAA.blob.surgeonRules[FIERCE].statedPreferenceNotARule = seed.surgeonRules[FIERCE].statedPreferenceNotARuleNote;
   livePreAA.blob.groupRules.holidayPolicy = seed.groupRules.holidayPolicy + " " + seed.groupRules.holidayPolicyNote;
@@ -1091,5 +1094,99 @@ eq(walkStrings(plan.blob, "blob", []).filter((x) => AA_WORDS.test(x.value) || AA
 ok(!AA_PHRASES.test(sql), "AA review: nor in the generated SQL");
 // (15) the AA revision entry (now naming the two moved keys) still passes its own gate
 ok(aaRev.every((t) => !AA_PHRASES.test(t)), "AA review: the revision wording carries none of the moved phrases either");
+
+// ---- Review fixes 2 (RF2, 9/23 overnight): the blob carries a revision COUNT and the LAST revision date, never the
+// paragraphs (finding: 13-15 internal-history paragraphs, ~17 KB, readable with the public key); the CLI refuses to
+// re-import over a blob the app has written since (finding: a re-import silently reverts every Setup edit) ----
+step("RF2: settings.seedRevisions -> seedRevisionCount + seedLastRevision; the SQL removes the old key; app-edited blob guard");
+const RF2_REVS = seed._meta.revisions;
+const RF2_LAST = (String(RF2_REVS[RF2_REVS.length - 1]).match(/^\d{4}-\d{2}-\d{2}/) || [])[0];
+ok(RF2_REVS.length >= 13 && /^\d{4}-\d{2}-\d{2}$/.test(RF2_LAST || ""), "RF2: the seed still holds the revision paragraphs (" + RF2_REVS.length + ") and the last one starts with a date");
+eq(IMP.impRevisionSummary(["2026-09-21 a", "2026-09-22 evening b", "no date here"]), { count: 3, last: null }, "RF2: impRevisionSummary - the LAST entry's date prefix (none here -> null)");
+eq(IMP.impRevisionSummary(["2026-09-21 a", "2026-09-22 evening (b)"]), { count: 2, last: "2026-09-22" }, "RF2: impRevisionSummary count + last date");
+eq(IMP.impRevisionSummary(undefined), { count: 0, last: null }, "RF2: impRevisionSummary of nothing");
+eq(plan.blob.settings.seedRevisionCount, RF2_REVS.length, "RF2: blob.settings.seedRevisionCount = the seed's entry count");
+eq(plan.blob.settings.seedLastRevision, RF2_LAST, "RF2: blob.settings.seedLastRevision = the date prefix of the last entry");
+ok(!("seedRevisions" in plan.blob.settings), "RF2: blob.settings carries no seedRevisions key (fail-before: every paragraph in the anon-readable blob)");
+const rf2Blob = JSON.stringify(plan.blob);
+const rf2Sql = IMP.importSql(plan);
+ok(RF2_REVS.every((t) => rf2Blob.indexOf(String(t).slice(0, 60)) < 0 && rf2Sql.indexOf(String(t).slice(0, 60)) < 0), "RF2: no revision paragraph (first 60 chars of any entry) reaches the blob or the SQL");
+eq(IMP.IMP_RETIRED_SETTINGS_KEYS, ["seedRevisions"], "RF2: the retired settings keys list");
+// SQL: the settings merge is one level deep and keeps every live key, so the retired key must be removed explicitly
+// (jsonb '-' operator) - in the SET and in the idempotency WHERE, so a live blob still carrying the key IS a change.
+const rf2Expr = "(coalesce(call_schedule_data.data -> 'settings', '{}'::jsonb) - 'seedRevisions') || ";
+eq(rf2Sql.split(rf2Expr).length - 1, 2, "RF2: the SQL subtracts 'seedRevisions' from the live settings before the merge, in the SET and in the WHERE (string pin)");
+ok(!/coalesce\(call_schedule_data\.data -> 'settings', '\{\}'::jsonb\) \|\| /.test(rf2Sql), "RF2: the unsubtracted settings merge is gone from the SQL");
+// planDiff: a live blob equal to the plan except a leftover seedRevisions -> settings=update (the next --apply removes it)
+{
+  const liveSame = { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) };
+  eq(IMP.planDiff(plan, liveSame).totalChanges, 0, "RF2: a live blob with the new settings shape = no change");
+  const liveOld = clone(liveSame); liveOld.blob.settings.seedRevisions = clone(RF2_REVS);
+  const dOld = IMP.planDiff(plan, liveOld);
+  eq(dOld.tables.call_schedule_data.keys.settings, "update", "RF2: a live settings still carrying seedRevisions reads as settings=update (fail-before: unchanged - the diff compared the seed's keys only)");
+  eq(dOld.totalChanges, 1, "RF2: ...and it is the only change");
+  const liveToday = clone(liveSame); liveToday.blob.settings = { importedAt: "2026-09-23T05:27:45.838Z", seedGeneratedOn: seed._meta.generatedOn, seedRevisions: clone(RF2_REVS) };
+  eq(IMP.planDiff(plan, liveToday).tables.call_schedule_data.keys.settings, "update", "RF2: the live blob of 9/23 (old shape: importedAt, seedGeneratedOn, seedRevisions) -> settings=update on the next dry run");
+}
+// impBlobOwner: what the CLI guard reads. The app stamps updated_by with the person_id (autosave: userProfile.person_id;
+// in-app seed Apply: person_id or the auth uid; null from a session without a profile); the CLI importer stamps 'seed'.
+// Anything but 'seed' on an existing row is app-written.
+eq(IMP.impBlobOwner({ blob: { roster: [] }, blobUpdatedAt: "2026-09-23T05:27:45+00:00", blobUpdatedBy: "seed" }), { hasRow: true, importerOwned: true, by: "seed", at: "2026-09-23T05:27:45+00:00" }, "RF2: impBlobOwner - importer-owned row");
+eq(IMP.impBlobOwner({ blob: { roster: [] }, blobUpdatedAt: "2026-09-24T14:00:00+00:00", blobUpdatedBy: "s1" }), { hasRow: true, importerOwned: false, by: "s1", at: "2026-09-24T14:00:00+00:00" }, "RF2: impBlobOwner - app-written row (person_id)");
+eq(IMP.impBlobOwner({ blob: { roster: [] }, blobUpdatedAt: "2026-09-24T14:00:00+00:00", blobUpdatedBy: null }), { hasRow: true, importerOwned: false, by: "(unknown)", at: "2026-09-24T14:00:00+00:00" }, "RF2: impBlobOwner - a row with no updated_by is NOT importer-owned");
+eq(IMP.impBlobOwner({ blob: {}, blobUpdatedAt: null, blobUpdatedBy: null }), { hasRow: false, importerOwned: false, by: null, at: null }, "RF2: impBlobOwner - no row (fresh install): no guard");
+eq(IMP.impBlobOwner({ blob: {}, blobUpdatedAt: "2026-09-23T00:00:00+00:00", blobUpdatedBy: null }), { hasRow: false, importerOwned: false, by: null, at: null }, "RF2 review fix: the schema's own seed row ('main', '{}': updated_at default now(), updated_by null) is NO row - the first --apply after sql/schema.sql must not exit 4 (fail-before: hasRow true through updated_at)");
+eq(IMP.impBlobOwner(null), { hasRow: false, importerOwned: false, by: null, at: null }, "RF2: impBlobOwner tolerates a missing live object");
+// RF2 review fix (9/23): the guard is CONTENT-based. importPlan stamps settings.seedCoreHash = impCoreHash(blob) over the
+// seed-owned keys (pool roster rows, surgeonRules, groupRules, holidays; canonical JSON, two FNV-1a lanes); the CLI hashes
+// the LIVE blob's same keys and reads 'app-edited' only when a stamp is present and differs. updated_by alone is no
+// signal: the autosave re-stamps the person_id on ANY state change (a day edit, a trade, a realtime adopt), so it stays
+// information - and the fallback only while the live row carries no stamp yet (before the first RF2 re-import).
+{
+  const b0 = clone(plan.blob);
+  const h0 = IMP.impCoreHash(b0);
+  ok(/^[0-9a-f]{16}$/.test(h0), "RF2 review fix: impCoreHash is 16 hex chars (two FNV-1a lanes), got " + JSON.stringify(h0));
+  eq(plan.blob.settings.seedCoreHash, h0, "RF2 review fix: importPlan stamps settings.seedCoreHash = impCoreHash(blob)");
+  const bReordered = clone(b0); bReordered.groupRules = {}; Object.keys(b0.groupRules).reverse().forEach((k) => { bReordered.groupRules[k] = b0.groupRules[k]; });
+  eq(IMP.impCoreHash(bReordered), h0, "RF2 review fix: key order does not change the hash (jsonb re-orders keys)");
+  const bSettings = clone(b0); bSettings.settings = { importedAt: "x", anything: 1 }; bSettings.lastPublished = { at: "2026-09-23T06:00:00Z" };
+  eq(IMP.impCoreHash(bSettings), h0, "RF2 review fix: settings and lastPublished (app-owned keys) are outside the hash");
+  const bExt = clone(b0); bExt.roster = bExt.roster.concat([{ id: "x1", name: "Atwell", code: "ATW", fullName: "Atwell", type: "external", active: true, roles: ["surgeon"] }]);
+  eq(IMP.impCoreHash(bExt), h0, "RF2 review fix: a live outside surgeon (roster type external) is outside the hash - the seed owns the pool rows only");
+  const bRule = clone(b0); bRule.groupRules = Object.assign({}, b0.groupRules, { maxConsecutivePrimaryDays: 99 });
+  ok(IMP.impCoreHash(bRule) !== h0, "RF2 review fix: a changed groupRules key changes the hash");
+  const bPool = clone(b0); bPool.roster = bPool.roster.map((r, i) => i === 0 ? Object.assign({}, r, { active: false }) : r);
+  ok(IMP.impCoreHash(bPool) !== h0, "RF2 review fix: a changed pool roster row changes the hash");
+  const mk = (blob, by, at) => ({ blob, blobUpdatedAt: at || "2026-09-24T14:00:00+00:00", blobUpdatedBy: by });
+  const stTouched = IMP.impBlobEditState(mk(clone(b0), "s1"));
+  eq([stTouched.hasRow, stTouched.basis, stTouched.appEdited, stTouched.by, stTouched.importerOwned], [true, "seedCoreHash", false, "s1", false], "RF2 review fix: a blob re-stamped by the app (updated_by s1) whose seed-owned keys still equal the stamp is NOT app-edited (fail-before: refused on updated_by alone)");
+  const stRule = IMP.impBlobEditState(mk(bRule, "s1"));
+  eq([stRule.basis, stRule.appEdited], ["seedCoreHash", true], "RF2 review fix: groupRules changed in Setup (live hash != stamp) -> app-edited");
+  const stExt = IMP.impBlobEditState(mk(bExt, "s1"));
+  eq([stExt.basis, stExt.appEdited], ["seedCoreHash", false], "RF2 review fix: an outside surgeon added in Setup is not a seed-owned edit");
+  const noStamp = clone(b0); delete noStamp.settings.seedCoreHash;
+  const stOldApp = IMP.impBlobEditState(mk(noStamp, "s1"));
+  eq([stOldApp.basis, stOldApp.appEdited], ["updated_by", true], "RF2 review fix: no stamp on the live row yet + updated_by s1 -> app-edited through the updated_by fallback");
+  const stOldSeed = IMP.impBlobEditState(mk(noStamp, "seed", "2026-09-23T05:27:45.838645+00:00"));
+  eq([stOldSeed.basis, stOldSeed.appEdited, stOldSeed.importerOwned, stOldSeed.at], ["updated_by", false, true, "2026-09-23T05:27:45.838645+00:00"], "RF2 review fix: no stamp + updated_by seed (the live row of 9/23) -> importer-owned, not app-edited");
+  eq(IMP.impBlobEditState(mk({}, null, "2026-09-23T00:00:00+00:00")).hasRow, false, "RF2 review fix: the schema's empty row is no row for the edit state either");
+  eq(IMP.impBlobEditState(null).hasRow, false, "RF2 review fix: impBlobEditState tolerates a missing live object");
+  ok(rf2Sql.indexOf("seedCoreHash") >= 0, "RF2 review fix: the SQL writes settings.seedCoreHash (the stamp reaches the live row through the merge)");
+}
+// the CLI (scripts/import-seed.js runs main() on require, so its guard is pinned on the source + the pure helper above)
+{
+  const cli = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "import-seed.js"), "utf8");
+  ok(/"call_schedule_data", "id=eq\.main&select=data,updated_at,updated_by"/.test(cli), "RF2: fetchLive selects updated_by of the blob (fail-before: data,updated_at)");
+  ok(/blobUpdatedBy: blobRows\[0\] \? \(blobRows\[0\]\.updated_by \|\| null\) : null/.test(cli), "RF2: fetchLive returns blobUpdatedBy");
+  ok(/IMP\.impBlobEditState\(live\)/.test(cli), "RF2 review fix: the CLI reads the edit state through impBlobEditState (content-based; updated_by is the fallback and information)");
+  ok(/const coreWouldChange = Object\.keys\(blobKeys\)\.some\(\(k\) => k !== "settings" && blobKeys\[k\] !== "unchanged"\);/.test(cli), "RF2 review fix: coreWouldChange = a non-settings blob key changes in the plan");
+  ok(/owner\.hasRow && owner\.appEdited && coreWouldChange && !args\.overwriteBlob/.test(cli), "RF2 review fix: the refusal keys on appEdited AND a CORE key change - a settings-only plan (importedAt / seedRevisionCount drift) never refuses");
+  ok(cli.indexOf("settings keys only - nothing under Setup is reverted") >= 0, "RF2 review fix: the settings-only case is worded as such");
+  ok(cli.indexOf("blob last written by ") >= 0, "RF2 review fix: 'blob last written by <who> at <ts>' is printed regardless of the verdict");
+  ok(cli.indexOf("BLOB WAS EDITED IN THE APP at ") >= 0 && /a re-import would revert Setup edits/.test(cli), "RF2: the plan prints 'BLOB WAS EDITED IN THE APP at <ts> by <who>: a re-import would revert Setup edits'");
+  ok(/t === "--overwrite-blob"/.test(cli) && /overwriteBlob/.test(cli), "RF2: --overwrite-blob is parsed");
+  ok(/REFUSING TO APPLY: the shared setup \(call_schedule_data\) was last saved in the app/.test(cli) && /return 4;/.test(cli), "RF2: --apply refuses (exit 4) over an app-written blob without --overwrite-blob");
+  ok(/rows are unaffected by this guard/.test(cli), "RF2: the refusal says the rows are unaffected by the guard");
+}
 
 console.log("ok " + n + " assertions");

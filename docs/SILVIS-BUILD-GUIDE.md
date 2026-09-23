@@ -358,6 +358,7 @@ All of these are **in scope and carried over from Davenport** (Faraz 9/21):
 - **Shift reminders** — the `daily-reminder` edge function pattern (reminder hour per user, Central time).
 - **Refresh** — `client_versions` min-version check with the reload banner, plus the `reloadTrigger` second-pass load.
 - **Data management** — Settings → JSON backup/restore, export, import, snapshots list + one-click restore, factory reset behind the wipe guards.
+- **Keepalive flush (RF2, 9/23)** — while a `syncScheduleDays` run is enqueued or in flight (`daySyncBusyRef`), a `visibilitychange` flush skips its `schedule_days` leg (keeps the blob leg), re-arms the pending payload and enqueues the pending days BEHIND the in-flight run (the chain serializes them; nothing is left to the debounce timer), so a long Accept & Publish with the phone locked mid-way never gets the same days PATCHed twice at the same versions. `pagehide` / `beforeunload` keep the keepalive days leg (review fix: the chain dies with the page there; a CAS duplicate matches zero rows). A never-settling fetch keeps the count > 0 for the session by design.
 
 Edge-function sources are **not in the Davenport repo**: Faraz will copy them from his OneDrive
 `...\Genesis\Schedules\Call Schedule App\edge-functions\` folder into `...\Silvis Call Schedule\edge-functions\` for
@@ -397,6 +398,8 @@ date helpers), generate 50 seeds × 3 ranges (Oct 2026 with imports; Nov–Dec 2
 whitelist vs blacklist semantics, trailing-edge vacation logic, East-feed derivations.
 
 CI runs both before the build, exactly like Davenport's workflow runs its regression harness.
+
+RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotChanges` (extracted from index-source.html into the helpers sandbox) and pins the Accept confirm order, the flush guard, the fill-open-only checkbox / seed text and the in-app Apply's retired-key removal; `test/importer.test.js` RF2 pins `seedRevisionCount` / `seedLastRevision`, the SQL's `- 'seedRevisions'` in SET and WHERE, `planDiff` reading a leftover key as `settings=update`, `impBlobOwner` and the CLI guard's source; `test/ui/smoke.mjs` asserts the held-but-unlocked confirm on both Accept clicks (count derived from the grid vs the live rows), the flush during a held-open CAS write (zero schedule_days writes, blob leg sent, the skipped edit lands afterwards) and the checkbox default. Review of RF2 (same night): `importer.test.js` pins `impCoreHash` / `impBlobEditState` (the content-based guard, the `settings.seedCoreHash` stamp, the schema's empty row is no row) and the CLI's `coreWouldChange` refusal; `data-layer` pins the `visibilitychange`-only skip with its enqueue, the conditional checkbox pointer and the `gen-mode` diagnostics line; the fixture smoke injects one unlocked generated November backup (2026-11-19) so the Accept confirm's positive branch runs and is counted.
 
 ## 13. Guardrails carried over from the Davenport CLAUDE.md (non-negotiable)
 
@@ -498,6 +501,20 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
   live rows of 9/22 that is **2026-10-07** (the first open October backup), not 10/15 — five October backups precede
   the open 10/15 primary. Proof: `test/data-layer.test.js` AB block (helper pins on synthetic maps and on the seed's
   rows; source pin on the wiring), `test/ui/smoke.mjs` (the start restated from the live rows, never from the helper).
+- **Review fixes 2 — app safety (RF2, 9/23 overnight)**: Accept & Publish names every **held but unlocked** slot the
+  merge replaces (manual / trade / claim / generated / import holder or external cover, not locked in that role) in the
+  same confirm as the locked ones, before the snapshot — Cancel writes nothing; Generate has a **"Fill open slots only
+  (keep every held day)"** checkbox (T's `fillOpenOnly`, default off, kept on re-roll, named in the toast / meta line /
+  audit detail) and the Seed field says where the seed shows (`random - the toast shows the seed`); the keepalive flush
+  yields to an in-flight CAS sync (§10); `scripts/import-seed.js` reads the blob's `updated_by` and prints **BLOB WAS
+  EDITED IN THE APP at <ts> by <who>** when the live blob's seed-owned keys (pool roster, surgeonRules, groupRules,
+  holidays) no longer match the `settings.seedCoreHash` stamp `importPlan` writes (review fix: content-based - the
+  autosave re-stamps `updated_by` on any state change, so `updated_by` is information and the fallback only until the
+  first stamped import), refusing `--apply` (exit 4) only when the plan would change a **core** key, unless
+  `--overwrite-blob` (a settings-only plan never refuses; rows unaffected); and `blob.settings.seedRevisions` (the
+  paragraphs) is replaced by `seedRevisionCount` +
+  `seedLastRevision` — the SQL subtracts the retired key in SET and WHERE, the in-app Apply deletes it, so the next
+  re-import removes the paragraphs from the live blob.
 - **Publishing from the command line (Faraz 9/22 evening: "go ahead and deploy, publish and move forward without my
   go"; Prompt 12 PUB, 9/23 overnight)**: `scripts/publish-preview.js` publishes the regenerated preview
   (`docs/PREVIEW-2026-11-02-to-2027-01-03.json`, milestone + October backfill) server-side, mirroring Accept & Publish
