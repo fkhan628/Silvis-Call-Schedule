@@ -24,7 +24,8 @@ appear in `docs/`, `sql/`, `config.js`, tests or any tracked file (the repo is p
 `schedule_days`, `time_off`, `availability`, `east_feed` or `client_versions` (readable with the public anon key). They
 exist only in the private `silvis-contacts.md` in the OneDrive folder (gitignored; Faraz uses it to invite users) and, in
 Supabase, only in `user_profiles` (via Auth signup) and `office_contacts` (entered in Setup) — both authenticated-read.
-Notes in anon-readable tables stay operational, never personal reasons. Surgeons are contacted at home addresses, never
+Notes in anon-readable tables carry no reasons at all (not even category tokens); the rule itself is the only content -
+since 9/22 (reasons live in `docs/SILVIS-CALL-RULES.md`). Surgeons are contacted at home addresses, never
 MercyOne/MercyHealth work addresses.
 
 ## Shift model — the thing that differs from Davenport

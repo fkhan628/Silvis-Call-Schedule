@@ -21,12 +21,12 @@
 // are reported as 'delete' in the diff and removed by the SQL (importer.js header).
 //
 // Exit codes: 0 ok / 1 error or not fully applied / 2 refusal (contact data, or a
-// rule note the scrub cannot classify / a denylist word left in the blob - see
-// importer.js header "Rule-note scrub") / 3 refused to apply over app-edited days.
-// --dry-run also prints the scrub inventory (path -> action -> category): which
-// seed notes become a category token and which are dropped from the blob
-// (every groupRules and holidays note, plus surgeonRules notes that read as
-// engine/seed documentation). Set through process.exitCode so the
+// denylist word left in the blob - see importer.js header "Rule-note scrub") /
+// 3 refused to apply over app-edited days.
+// --dry-run also prints the scrub inventory (path -> drop): every note-like key
+// of surgeonRules, groupRules and holidays is dropped from the blob - no category
+// tokens since 9/22 late (Prompt 12 AA: reasons live in docs/SILVIS-CALL-RULES.md,
+// the seed keeps its wording). Set through process.exitCode so the
 // event loop drains (process.exit() right after fetch() trips a libuv assertion
 // on Node 24 / Windows and exits 127).
 //
@@ -149,13 +149,14 @@ function printStats(plan) {
 }
 
 // Dry run only: the rule-note scrub inventory, sorted by path, printed once.
-// Paths, actions and category tokens only - never the seed's wording.
+// Paths and actions only - never the seed's wording (and, since Prompt 12 AA,
+// no category tokens exist to print).
 function printNoteScrub(plan) {
-  const ns = plan.noteScrub || { inventory: [], counts: { category: 0, drop: 0 } };
-  console.log("\nrule notes scrubbed before the blob (importer.js, guide 3.1): " + ns.counts.category + " mapped to a category, " +
-    ns.counts.drop + " dropped (engine/seed documentation, every groupRules and holidays note); the seed keeps its private wording; " +
+  const ns = plan.noteScrub || { inventory: [], counts: { drop: 0 } };
+  console.log("\nrule notes dropped before the blob (importer.js, guide 3.1; no reasons, no category tokens - reasons live in docs/SILVIS-CALL-RULES.md): " +
+    ns.counts.drop + " note-like key(s) dropped (every surgeonRules, groupRules and holidays note); the seed keeps its wording; " +
     (ns.counts.timeOffPublic || 0) + " public vacation note(s) written to time_off as stated (public: true)");
-  ns.inventory.forEach((e) => console.log("  " + e.path + " -> " + e.action + (e.action === "category" ? " -> " + e.to : "")));
+  ns.inventory.forEach((e) => console.log("  " + e.path + " -> " + e.action));
 }
 
 async function main() {
@@ -166,7 +167,7 @@ async function main() {
   try {
     plan = IMP.importPlan(seed, { now: new Date().toISOString() });
   } catch (e) {
-    if (/^(CONTACT_DATA_REFUSED|NOTE_UNCLASSIFIED|NOTE_DENYLIST)/.test(e.message)) { console.error("REFUSED: " + e.message); return 2; }
+    if (/^(CONTACT_DATA_REFUSED|NOTE_DENYLIST)/.test(e.message)) { console.error("REFUSED: " + e.message); return 2; }
     throw e;
   }
 

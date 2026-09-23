@@ -106,26 +106,37 @@ ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) 
   file; the surgeon sets a password through the emailed link; the app creates their `user_profiles` row as `viewer`;
   Faraz assigns `person_id` + role in Setup → Users. No email ever passes through the client except the one the user
   types at login.
-- **Notes are public too**: `note` columns in anon-readable tables and rule notes in the blob stay operational
-  ("unavailable (personal)", "outreach") — never personal reasons. The importer enforces this for the blob (next bullet);
-  table notes are checked at entry.
-- **Rule notes are scrubbed by the importer (Prompt 12 F)**: the seed keeps its prose, the blob never gets it.
-  `importer.js` (`impScrubRuleNotes`) rewrites every note-like key in `surgeonRules`, `groupRules` and `holidays` — `note`,
-  `notes[]`, any `*Note`, `*Notes` or `*Reason`, at any depth — before `call_schedule_data` is assembled: a note
-  about a surgeon's situation becomes one category token (`outreach`, `family`, `personal`, `OR day`, `preference`,
-  classified by a keyword table in priority order), a note that reads as engine or seed documentation is dropped,
-  every `groupRules` and `holidays` note is dropped (unit notes, `dayMembershipNote`), the blob's `timeOff` entries
-  carry dates only, and a `surgeonRules` note that matches nothing refuses the import (`NOTE_UNCLASSIFIED: <path>`)
-  rather than being kept. A denylist gate then scans every string in the blob (family/families, wife, husband,
-  kid(s), child(ren), daughter, son, parents, in-laws, school, medical, maternity, hosts/hosting, illness, funeral as
-  whole words) and refuses on any hit (`NOTE_DENYLIST: <path> ("<word>")`). `node scripts/import-seed.js --dry-run`
-  prints the inventory (path → action → category) so the scrub is visible before anything is written; refusal
-  messages name paths, never the note text. Nothing in the app parses notes, so the scrub changes no rule. Two
-  known limits: the documentation test runs before classification, so a person note that also uses engine words
-  ("on the list for…", "block party") is dropped rather than refused — it appears as `drop` in the dry-run
-  inventory, never in the blob; and the denylist is a word list, not a classifier — a non-note prose key
-  (`weekdayPattern[].where`, `holidayPreference`, `dailyHandoff`…) is checked for those words only. Setup's
-  "Edit as JSON" editors do not yet run the gate (follow-up).
+- **Notes are public too**: `note` columns in anon-readable tables and every string in the blob carry **no reasons at
+  all — not even a category token** (Faraz 9/22 late: "one standard for the blob: no reasons, only the rule"); a table
+  note is operational status at most ("unavailable (stated 9/22)", "vacation (seed)", "Khan covers 11/25, 2026 only").
+  Reasons live in `docs/SILVIS-CALL-RULES.md`. The importer enforces this for the blob (next bullet); table notes are
+  checked at entry.
+- **Rule notes are dropped by the importer, never classified (Prompt 12 F, then AA on 9/22 late)**: the seed keeps
+  its prose, the blob never gets it in any form. `importer.js` (`impScrubRuleNotes`) removes every note-like key in
+  `surgeonRules`, `groupRules` and `holidays` — `note`, `notes[]`, any `*Note`, `*Notes` or `*Reason`, at any depth,
+  arrays included — before `call_schedule_data` is assembled; the blob's `timeOff` entries carry dates only. There is
+  no keyword table, no category token and no `NOTE_UNCLASSIFIED` refusal any more (item F's `outreach` / `family` /
+  `personal` / `OR day` / `preference` tokens were themselves reasons; `s1.hardNeverWeekdaysReason` left the seed with
+  them — its wording sits in `s1.hardNeverWeekdaysNote` and in the rules doc §3). A denylist gate then scans every
+  string in the assembled blob (family/families, wife, husband, kid(s), child(ren), daughter, son, parents, in-laws,
+  school, medical, maternity, hosts/hosting, illness, funeral as whole words) and refuses on any hit
+  (`NOTE_DENYLIST: <path> ("<word>")`), no string exempt; the order is pinned — the scrub runs first, so a note-like
+  key can never trip the gate, and a reason smuggled under a non-note key is caught only when it uses a listed word
+  (the denylist is a word list, not a classifier). `node scripts/import-seed.js --dry-run` prints the inventory
+  (`<path> -> drop`, one line per note-like key) so the scrub is visible before anything is written; refusal messages
+  name paths, never the note text. Nothing in the app parses notes, so the scrub changes no rule. `time_off` public
+  notes (`public: true`, item S) are not blob keys: they are written as stated when they pass the same denylist and
+  name no roster surname, and the tests assert that none of the seed's carries a reason word. The standard covers
+  non-note keys too (AA review): a stated wish under a plain prose key belongs in a `*Note` key, not the blob —
+  `s5.statedPreferenceNotARule` became `statedPreferenceNotARuleNote` and the Burchett sentence of `groupRules.holidayPolicy`
+  moved to `groupRules.holidayPolicyNote` (both dropped; a test walks every string of the blob). One prose field remains by
+  design pending Faraz's ruling: Fierce's `weekdayPattern.<day>.where` ("Clinton all day", "East (Davenport)"…), which Setup →
+  Rules shows as the *Where* column and no engine code reads — if a location counts as a reason it becomes `whereNote` and
+  the column is retired (rules doc §3 Fierce). Two entry paths in the app still bypass the gate (follow-ups): Setup's
+  "Edit as JSON" editors, and the pattern-row note input in Setup → Rules (`PatternListEditor`, placeholder "operational
+  note (public)", used by recurringAvailable / recurringUnavailable / recurringAvoid / clinic days) — a note typed there
+  autosaves into `call_schedule_data` verbatim, unchecked, and the next seed import silently drops it; gate it with
+  `SU_NOTE_DENYLIST` or remove the field. Until then the importer is the only enforcement of the standard.
 
 There is deliberately **no Atwell entry**. A `DayAssignment` may carry `externalCover: "Atwell"` (primary `null`) for
 the imported 9/28–10/4 week; the UI renders the label instead of OPEN and tallies ignore it.

@@ -612,3 +612,130 @@ exactly the seed's - a flagged 2026-11-27 fixture row would read as `schedule_da
 owned pins. The badge rendering stays pinned statically in `test/data-layer.test.js` (13px `?` square via `badge()`, gutter widened
 per badge, the word `confirm` in the day editor) and the marker semantics on synthetic flagged rows in `test/importer.test.js`; a
 runtime geometry check needs its own fixture pass (a flagged clone rendered before the import checks) - a smoke item of its own.
+
+## Item AA — one standard for the blob: no reasons, only the rule (Faraz, 9/22 late evening; appended by Claude Code)
+
+Faraz, verbatim: *"Drop the 'OR day' reason token from Khan's rule; one standard for the blob: no reasons, only the rule. Reasons
+live in docs/SILVIS-CALL-RULES.md."* (the second of his four late-evening instructions after "Go on the 17-change import").
+
+What was wrong: item F's scrub classified a `surgeonRules` note into one of five category tokens (`outreach`, `family`, `personal`,
+`OR day`, `preference`) and wrote the token to the anon-readable blob — the live blob carried `s1.hardNeverWeekdaysReason = "OR day"`,
+`s2` / `s3` / `s4` `outreach`, `s3.holidayRules.neverThanksgivingNote = "family"`, `s4` / `s5` `preference` (the dry run's eleven
+`-> category -> …` lines). A token is a reason in one word. Since AA the importer DROPS every note-like key of `surgeonRules` exactly as
+it already did for `groupRules` and `holidays`; nothing classifies, no token exists in the code, and the reason for a rule is
+documented in the rules doc only.
+
+Seed (`docs/silvis-seed.json`, Edit tool, ASCII, LF, valid JSON, key order intact): `surgeonRules.s1.hardNeverWeekdaysReason` deleted
+— the only `*Reason` key in the file (checked at every depth) — and its wording folded into the existing `s1.hardNeverWeekdaysNote`
+("Tue/Thu are his OR days - the reason stays in this Note key and in docs/SILVIS-CALL-RULES.md section 3 only …"; a Note key the
+importer drops). One `_meta.revisions` entry (it rides into `blob.settings.seedRevisions`, so it names keys and mechanics and carries
+no reason word, no former token and no denylist word — pinned). `_meta.generatedOn` untouched. No row of `existingAssignments`,
+`timeOff` or availability statements changed.
+
+Importer (`importer.js`): `impScrubRuleNotes` drops every note-like key (`note`, `notes[]`, `*Note`, `*Notes`, `*Reason`, any depth,
+arrays included) from all three blocks; `IMP_NOTE_TOKENS`, `IMP_NOTE_CATEGORIES`, `IMP_NOTE_DOC`, `impNoteIsDocumentation`,
+`impNoteCategory` and the `NOTE_UNCLASSIFIED` refusal are REMOVED (dead tables invite reuse; a test asserts none of those names
+appears in the file); `impRefuseNoteDenylist` keeps its word list and loses the "an exact token is exempt" branch — no blob string is
+exempt; the order is unchanged and now pinned: scrub first, then the gate over the assembled blob, so a denylist word under a
+note-like key is dropped and never refused while the same word under a non-note key still refuses. The inventory keeps its shape
+(`{ path, action: 'drop', from, to: null }`) with ONE entry per note-like key (item F listed `notes[i]` per element; the drop is
+per key, as `groupRules` always was); `plan.noteScrub.counts` loses `category` (`{ drop, timeOffPublic, awaitingConfirmation }`).
+`impTimeOffNote` (item S: `public: true` vacation notes to `time_off`) is untouched — those notes are not blob keys and were stated
+as public by the surgeon; the seed's four read `unavailable (stated 9/22)` and a test asserts none carries a denylist word, a former
+token or a reason word (the status word "unavailable" is not a reason). `scripts/import-seed.js`: the header, the exit-code comment
+and the `--dry-run` summary no longer name categories ("72 note-like key(s) dropped …"; each line `<path> -> drop`); `NOTE_UNCLASSIFIED`
+left its refusal regex. UI check: the only reader of a `surgeonRules` note is Setup → Rules' `PatternListEditor` (`p.note || ""` into
+the note input; `if (p.note) n.note = p.note`) — guarded, renders an empty field; nothing reads `hardNeverWeekdaysReason`, `notes[]`,
+`neverThanksgivingNote` or `aledo.note`; the `helpers.js` note readers are day notes. No JSX change; no data-layer or smoke pin
+expected a token.
+
+Docs: guide §3.1 — the "Notes are public too" bullet and the scrub bullet rewritten (drop, never classify; no tokens; the gate and
+its order; `time_off` public notes; reasons live in the rules doc); `CLAUDE.md` — "Notes in anon-readable tables carry no reasons at
+all (not even category tokens); the rule itself is the only content - since 9/22"; rules doc §3 Khan — one line (the OR-day reason
+stays there and nowhere else) and the item-X Acton parenthetical corrected (a `*Reason` key is dropped now, not tokenised).
+
+Tests (`test/importer.test.js`, test-first). The item-F block is flipped in place (every flipped assertion says "AA FLIP" and what F
+expected: the classified keys are absent, `notes[]` is gone as a key, the inventory lists `drop` only, the counts object has no
+`category`, an unclassifiable note is dropped instead of refused, relatives / hosting under `notes[]` never reach the blob in any form,
+the exact word `family` in a non-note key now REFUSES where F exempted it, the direct `impScrubRuleNotes` call leaves no note-like key).
+The AA block at the end pins: no former token or reason word in any string value under the blob's `surgeonRules` (values, not key
+names — `preferences` is a key) and none of the eight literals as a JSON string value; no note-like key under `surgeonRules`
+(recursive) and no `*Reason` key anywhere in blob or seed; the wording kept in `s1.hardNeverWeekdaysNote`; rule and roles unchanged;
+one `drop` per note-like key of the seed's `surgeonRules` (paths equal, `timeOff` notes excluded), zero `category` entries, counts;
+the scrub-before-gate order (a `*Reason` / `notes[]` / `*Note` key carrying `family day` / `wife's birthday dinner` / `school run`
+imports with none of the three keys or their wording in blob or SQL, while `s1.label = "family"` and `s1.hardNeverWeekdaysWhy =
+"school days"` refuse); no category export and no category name in `importer.js`; idempotency; the four public `time_off` notes;
+the CLI source prints no "mapped to a category"; the revision in `blob.settings.seedRevisions`; and the expected live diff derived by
+putting the tokens back on a copy of the plan (`roster=unchanged, surgeonRules=update, groupRules=update, holidays=unchanged,
+settings=update`; no row change; total 3 — `groupRules` and the third key since the review's `holidayPolicy` move, see below).
+Fail-before (unchanged importer and seed): with the FINAL test file overlaid on a scratch `git archive HEAD` the flipped F block fails
+first — `AssertionError [ERR_ASSERTION]: AA FLIP: neverThanksgivingNote is dropped from the blob (F: '[removed]' -> the token
+'family')` (test/importer.test.js:652; the HEAD counts there read `{"category":11,"drop":79,"timeOffPublic":4,"awaitingConfirmation":0}`,
+94 inventory entries). The AA block alone, appended before the flips, failed with `AssertionError [ERR_ASSERTION]: AA: no former
+category token or reason word in any surgeonRules string of the planned blob (fail-before: 'OR day', 'outreach', 'family', 'preference')` — actual
+`['surgeonRules.s1.hardNeverWeekdaysReason = "OR day"', 'surgeonRules.s2.recurringAvailable[0].note = "outreach"',
+'surgeonRules.s2.notes[0] = "outreach"', 'surgeonRules.s3.recurringUnavailable[0].note = "outreach"',
+'surgeonRules.s3.recurringUnavailable[1].note = "outreach"', 'surgeonRules.s3.recurringAvoid[0].note = "outreach"',
+'surgeonRules.s3.holidayRules.neverThanksgivingNote = "family"', 'surgeonRules.s4.aledo.note = "outreach"',
+'surgeonRules.s4.notes[0] = "outreach"', 'surgeonRules.s4.notes[1] = "preference"',
+'surgeonRules.s5.outsideDerivedWeeks.weekdayPattern.Wed.note = "preference"']`, expected `[]`. After: `ok 728 assertions` (was 689).
+
+Importer dry run (read-only, `node scripts/import-seed.js --dry-run`, the REPORT-FIRST artefact): summary `rule notes dropped before the
+blob (importer.js, guide 3.1; no reasons, no category tokens - reasons live in docs/SILVIS-CALL-RULES.md): 74 note-like key(s) dropped
+(every surgeonRules, groupRules and holidays note); the seed keeps its wording; 4 public vacation note(s) written to time_off as stated
+(public: true)` (72 before the review's two new Note keys; before AA: `11 mapped to a category, 79 dropped` — 94 entries = 11 category +
+79 drop + 4 public, `notes[i]` per element); every inventory line reads `<path> -> drop` (74 of them, incl. `groupRules.holidayPolicyNote`
+and `surgeonRules.s5.statedPreferenceNotARuleNote`), zero `-> category` lines, no `surgeonRules.s1.hardNeverWeekdaysReason` line (the key
+left the seed). Plan diff (observed after the review edits): `call_schedule_data 'main': roster=unchanged, surgeonRules=update,
+groupRules=update, holidays=unchanged, settings=update`; `schedule_days: insert 0, update 4, delete 0, unchanged 69` (the four
+`11/26..29 locks/note change` lines are item Z's, still pending live — AA changes no row); `availability: insert 0, update 0, delete 0,
+unchanged 48`; `time_off: insert 0, delete 0, unchanged 7`; `Total changes: 7` (= Z's 4 rows + the 3 blob keys; AA alone is
+surgeonRules + groupRules + settings). Nothing was applied.
+
+Gates: `npm test` — every file green (`ok 1563`, `ok 83`, data-layer, schema, `ok 728` importer, week-rows, exports, totals,
+`ok 326` holidays) and the generator regression passes all `ok 276927 assertions`; inside the `npm test` chain on this shared machine
+it read `11092 ms total; budget 10000 ms` (`FAIL … over the 10000 ms budget`), alone right afterwards `8862 ms total; budget 10000 ms`
+(green), and under `SILVIS_GEN_BUDGET_MS=40000` `11260 ms total` — machine load, not the item (AA touches importer / seed notes only;
+the regression's ctx comes through `impSeedSurgeonRules`, not the scrub); the file's budget is untouched. `node build.js`: `OK build
+complete` (APP_VERSION 2026.09.22n locally; `index.html` / `version.json` restored with `git checkout --`, never committed). Smoke not
+run: neither `index-source.html` nor `test/ui/smoke.mjs` changed; against the LIVE project the smoke's "Import dry run" pins will read
+this item (blob `surgeonRules` + `groupRules` + `settings`) plus item Z's four rows (Total changes: 7) as expected drift until the
+orchestrator applies the seed.
+
+Decisions: (1) one inventory entry per note-like KEY (arrays whole), the shape `groupRules` always had — F's `notes[i]` lines are gone;
+(2) `counts.category` removed rather than reported as 0 (a dead field invites reuse), tests re-pinned; (3) the token tables and the
+documentation heuristic are removed, not kept behind a flag; (4) the denylist gate exempts nothing any more — the exact word `family` in
+a non-note key refuses (F let it through as a token); (5) `time_off` public notes stay as stated (status, not reason) with a test
+asserting no reason word; (6) the revision wording is mechanics only so it passes its own gate; (7) guide §3.1's adjacent "Notes are
+public too" bullet is rewritten too (its example table note was the token `outreach`), and the rules doc's item-X Acton parenthetical
+is corrected — both inside the owned sections, named here as deviations from the one-paragraph / one-line brief.
+Open: `test/generator-regression.js:1399` and `test/rules.test.js:1747` still say "(a *Reason key reaches the blob as a category
+token)" in an assertion message / comment — the assertions hold (no such key) and the files are outside item AA; message-only
+staleness for the owner of those files. Two app entry paths still bypass the gate (pre-existing, unchanged by AA): Setup's "Edit as
+JSON" editors, and the pattern-row note input in Setup → Rules (`PatternListEditor`, placeholder "operational note (public)",
+index-source.html ~5763) — a note typed there autosaves into the blob unchecked and the next seed import drops it; gate it with
+`SU_NOTE_DENYLIST` or remove the field (guide §3.1 names both).
+
+**AA review (9/22 late, same night — fix stage).** The reviewer walked the planned blob and found two NON-note prose keys still
+carrying a surgeon's stated wish: `surgeonRules.s5.statedPreferenceNotARule` ("Fierce described an ideal … recorded only in his
+words" — its own name says it is not a rule; no reader in rules.js / generator.js / east-feed.js / helpers.js / index-source.html /
+tests) and the second sentence of `groupRules.holidayPolicy` ("Burchett's stated preference (Christmas split …)" — the only
+`preference` string left in the SQL). Both are data-only moves in the seed: the s5 key is renamed `statedPreferenceNotARuleNote`
+(value kept) and the sentence moves to a new `groupRules.holidayPolicyNote` right after `holidayPolicy` (which keeps the unit rule and
+its pointer to `holidays.rules`); both are Note keys the importer drops (inventory `-> drop`, 74 drops now). Tests appended under
+`// ---- Prompt 12 AA review (9/22 late) ----` in `test/importer.test.js`: no `statedPreference*` key anywhere in the blob, the seed keeps
+the wording, `holidayPolicy` names no surgeon / no preference and still ends with the `holidays.rules` pointer, `holidayPolicyNote` never
+in the blob, both paths in the inventory as drops, and — blob-wide, all five keys — no former token, reason word or moved phrase in
+ANY string value or in the SQL; the AA revision entry (now naming the two moves) passes its own gate. Fail-before against the
+worktree before the seed edits: `AssertionError [ERR_ASSERTION]: AA review: neither statedPreferenceNotARule nor its Note form under s5
+in the blob (fail-before: the key was in the blob)`. After: `ok 739 assertions` (was 728). The expected-live-diff pin (11) is flipped
+in place: the reconstruction puts both prose keys back, so `groupRules: "update"` and total 3 (blob keys only; still no row change).
+The `_meta.revisions` AA entry names the two moves and the `where` ruling below, worded without any reason word or moved phrase.
+NOT changed, reported for Faraz's ruling (reviewer major 2): Fierce's `weekdayPattern.<day>.where` values ("Clinton all day",
+"Office Clinton/Silvis", "Clinton or Dubuque (rotates)", "East (Davenport)") remain in the blob — no engine code reads them, but Setup →
+Rules has a *Where* column (index-source.html ~5930–5938) that writes the key back, so retiring it is a JSX change outside AA and a
+location may or may not count as a reason under his standard; the rules doc §3 Fierce carries the open ruling (strict → `whereNote` +
+retire the column; keep → stated exception) and the guide §3.1 names it. Also fixed from the review: the fail-before sentence above now
+quotes the FINAL file's first failure (the flipped F assertion at line 652) with the HEAD counts, and the pre-AA inventory size reads
+94 (11 category + 79 drop + 4 public), not 90. Not fixed (outside AA's files): the stale message text in `test/generator-regression.js:1399`
+and the comment in `test/rules.test.js:1747`.

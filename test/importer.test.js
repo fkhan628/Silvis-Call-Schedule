@@ -621,9 +621,10 @@ ok(sql.indexOf("insert into public.schedule_days") < sql.indexOf("delete from pu
 // (i) unchanged live == plan still reports zero deletes
 eq(IMP.planDiff(plan, liveEq).totalDeletes, 0);
 
-/* ------------------------------------------ rule-note scrub (Prompt 12 F) */
-step("rule notes scrubbed before the blob (Prompt 12 F): categories, drops, denylist, refusals, idempotency");
-const CATS = ["outreach", "family", "personal", "OR day", "preference"];
+/* ------------------------------------------ rule-note scrub (Prompt 12 F; flipped in place by Prompt 12 AA, 9/22 late) */
+// AA FLIP: F classified a surgeonRules note into one of five category tokens; since AA every note-like key is dropped
+// (no tokens, no classification, no NOTE_UNCLASSIFIED). Each flipped assertion says "AA FLIP" and what F expected.
+step("rule notes scrubbed before the blob (Prompt 12 F / AA): every note-like key dropped, denylist, refusals, idempotency");
 const DENY = /\b(family|families|wife|husband|kid|kids|child|children|daughter|son|parents|in-laws|school|medical|maternity|hosts|hosting|illness|funeral)\b/i;
 function walkStrings(o, p, out) {
   if (typeof o === "string") { out.push({ path: p, value: o }); return out; }
@@ -648,35 +649,34 @@ eq(seed.surgeonRules[ACTON].holidayRules.neverThanksgivingNote, "[removed]", "se
 // Prompt 12 X FLIP (9/22 evening): the second offender - Acton's Tuesday avoid with its '[removed]' note - left the seed
 // entirely (his Tuesday is now the hard primary rule s3.hardNeverWeekdays, with no reason key); the pins below read its absence.
 ok(!seed.surgeonRules[ACTON].recurringAvoid.some((r) => r.weekday === "Tue") && !("hardNeverWeekdaysReason" in seed.surgeonRules[ACTON]), "X: no Tuesday avoid entry and no hardNeverWeekdaysReason key in the seed (the rule carries no reason)");
-eq(plan.blob.surgeonRules[ACTON].holidayRules.neverThanksgivingNote, "family", "'[removed]' -> family");
-eq(plan.blob.surgeonRules[ACTON].recurringAvoid.map((r) => r.note), ["outreach"], "X: only the Sunday avoid remains in the blob, its note a category token");
+ok(!("neverThanksgivingNote" in plan.blob.surgeonRules[ACTON].holidayRules), "AA FLIP: neverThanksgivingNote is dropped from the blob (F: '[removed]' -> the token 'family')");
+eq(plan.blob.surgeonRules[ACTON].recurringAvoid.map((r) => "note" in r), [false], "AA FLIP: only the Sunday avoid remains in the blob (X) and it carries no note (F: the token 'outreach')");
 ok(JSON.stringify(plan.blob).indexOf("[removed]") < 0 && JSON.stringify(plan.blob).indexOf("[removed]") < 0, "neither phrase anywhere in the blob");
 ok(sql.indexOf("[removed]") < 0 && sql.indexOf("[removed]") < 0, "neither phrase in the generated SQL");
-// (2) every note-like string left in the blob's surgeonRules is exactly a category token
+// (2) AA FLIP: no note-like string is left in the blob's surgeonRules at all (F: >= 8 survived as category tokens)
 const blobNotes = noteValues(plan.blob.surgeonRules, "surgeonRules", []);
-ok(blobNotes.length >= 8, "some person-situation notes survive as categories (" + blobNotes.length + ")");
-ok(blobNotes.every((x) => CATS.indexOf(x.value) >= 0), "every surviving note is a category token: " + blobNotes.filter((x) => CATS.indexOf(x.value) < 0).map((x) => x.path).join(", "));
-// classification spot checks against the real seed
-eq(plan.blob.surgeonRules[KHAN].hardNeverWeekdaysReason, "OR day", "'Tue/Thu are his OR days' -> OR day");
-eq(plan.blob.surgeonRules[BURCHETT].recurringAvailable[0].note, "outreach", "'unless in Jackson County' -> outreach");
-// a seed note located by its wording -> its inventory entry (robust to notes being added/reordered by other seed edits)
+eq(blobNotes, [], "AA FLIP: no note-like string survives under surgeonRules (F: some person-situation notes survived as categories)");
+// spot checks against the real seed: the keys F classified are gone (AA FLIP)
+ok(!("hardNeverWeekdaysReason" in plan.blob.surgeonRules[KHAN]) && !("hardNeverWeekdaysReason" in seed.surgeonRules[KHAN]), "AA FLIP: no hardNeverWeekdaysReason in the blob - the key left the seed too (F: 'Tue/Thu are his OR days' -> 'OR day')");
+ok(!("note" in plan.blob.surgeonRules[BURCHETT].recurringAvailable[0]), "AA FLIP: Burchett's recurringAvailable[0] carries no note (F: 'unless in Jackson County' -> 'outreach')");
+// a seed note located by its wording (proves the seed keeps it) -> the inventory entry of its notes[] key
+// (AA FLIP: notes[] is dropped as ONE key, so the entry is surgeonRules.<id>.notes; F listed notes[i] per element)
 function invForNote(id, re) {
   const notes = seed.surgeonRules[id].notes || [];
   const i = notes.findIndex((t) => re.test(t));
   ok(i >= 0, "seed " + id + " has a note matching " + re);
-  const e = plan.noteScrub.inventory.find((x) => x.path === "surgeonRules." + id + ".notes[" + i + "]");
-  ok(e, "inventory has an entry for surgeonRules." + id + ".notes[" + i + "]");
+  const e = plan.noteScrub.inventory.find((x) => x.path === "surgeonRules." + id + ".notes");
+  ok(e, "inventory has an entry for surgeonRules." + id + ".notes");
   return e || {};
 }
-eq([invForNote(BURCHETT, /Jackson County/).action, invForNote(BURCHETT, /Jackson County/).to], ["category", "outreach"], "Burchett 'DeWitt/Jackson County' -> outreach");
-eq(invForNote(BURCHETT, /per month/).action, "drop", "Burchett cap restatement (primary+backup per month) dropped as documentation");
-ok(plan.blob.surgeonRules[BURCHETT].notes.indexOf("outreach") >= 0 && plan.blob.surgeonRules[BURCHETT].notes.every((t) => CATS.indexOf(t) >= 0), "Burchett blob notes are tokens incl. outreach");
-eq(plan.blob.surgeonRules[ACTON].recurringUnavailable.map((r) => r.note), ["outreach", "outreach"], "'outreach (Maquoketa)' -> outreach");
-eq(plan.blob.surgeonRules[ACTON].recurringAvoid[0].note, "outreach", "Maquoketa carryover -> outreach");
-eq(plan.blob.surgeonRules[PHILIP].aledo.note, "outreach", "Aledo day-before note -> outreach");
-eq([invForNote(PHILIP, /Aledo/).action, invForNote(PHILIP, /Aledo/).to], ["category", "outreach"], "Philip 'Aledo weeks' -> outreach");
-eq([invForNote(PHILIP, /no more full weeks/).action, invForNote(PHILIP, /no more full weeks/).to], ["category", "preference"], "Philip 'no more full weeks' -> preference");
-eq(plan.blob.surgeonRules[FIERCE].outsideDerivedWeeks.weekdayPattern.Wed.note, "preference", "'good day to be on call' -> preference");
+eq([invForNote(BURCHETT, /Jackson County/).action, invForNote(BURCHETT, /Jackson County/).to], ["drop", null], "AA FLIP: Burchett 'DeWitt/Jackson County' -> drop (F: category outreach)");
+eq(invForNote(BURCHETT, /per month/).action, "drop", "Burchett cap restatement (primary+backup per month) dropped (F: as documentation; AA: like every note)");
+ok(!("notes" in plan.blob.surgeonRules[BURCHETT]), "AA FLIP: Burchett has no notes[] in the blob (F: tokens incl. outreach)");
+eq(plan.blob.surgeonRules[ACTON].recurringUnavailable.map((r) => "note" in r), [false, false], "AA FLIP: the 'outreach (Maquoketa)' entries carry no note (F: 'outreach')");
+ok(!("note" in plan.blob.surgeonRules[ACTON].recurringAvoid[0]), "AA FLIP: the Maquoketa carryover avoid carries no note (F: 'outreach')");
+ok(!("note" in plan.blob.surgeonRules[PHILIP].aledo), "AA FLIP: the Aledo day-before rule carries no note (F: 'outreach')");
+eq([invForNote(PHILIP, /Aledo/).action, invForNote(PHILIP, /no more full weeks/).action], ["drop", "drop"], "AA FLIP: Philip's notes[] -> drop (F: outreach / preference)");
+ok(!("note" in plan.blob.surgeonRules[FIERCE].outsideDerivedWeeks.weekdayPattern.Wed), "AA FLIP: Fierce's Wednesday pattern carries no note (F: 'preference')");
 // (3) engine / seed documentation is dropped (the seed keeps it; the app never parses notes)
 ok(!("notes" in plan.blob.surgeonRules[FIERCE]), "Fierce notes (all derivation documentation) dropped as a key");
 ok(!("hardNeverWeekdaysNote" in plan.blob.surgeonRules[KHAN]) && !("forecastNote" in plan.blob.surgeonRules[KHAN].eastFeed), "Khan documentation notes dropped");
@@ -691,22 +691,23 @@ eq(plan.blob.surgeonRules[ACTON].recurringAvoid[0].weekday, seed.surgeonRules[AC
 eq(stripNoteKeys(Object.assign({}, plan.blob.surgeonRules[KHAN], { timeOff: null })), stripNoteKeys(Object.assign({}, seed.surgeonRules[KHAN], { timeOff: null })), "Khan rules minus notes == seed minus notes");
 // (4) denylist never fires on the real seed after scrubbing (the plan at the top was built) and nothing personal remains
 const blobStrings = walkStrings(plan.blob, "blob", []);
-eq(blobStrings.filter((x) => DENY.test(x.value) && CATS.indexOf(x.value) < 0).map((x) => x.path), [], "no denylist word in any blob string");
-// (5) inventory lists both live offenders with action 'category', every groupRules entry as 'drop', sorted by path
+eq(blobStrings.filter((x) => DENY.test(x.value)).map((x) => x.path), [], "no denylist word in any blob string (AA FLIP: no token exemption any more)");
+// (5) inventory lists every note-like key as 'drop' (AA FLIP: F listed the two live offenders as 'category'), sorted by path
 const inv = plan.noteScrub.inventory;
 ok(Array.isArray(inv) && inv.length > 20, "inventory present (" + (inv && inv.length) + " entries)");
-ok(inv.some((e) => e.path === "surgeonRules.s3.holidayRules.neverThanksgivingNote" && e.action === "category" && e.to === "family"), "inventory: neverThanksgivingNote -> category family");
+ok(inv.some((e) => e.path === "surgeonRules.s3.holidayRules.neverThanksgivingNote" && e.action === "drop" && e.to === null), "AA FLIP: inventory: neverThanksgivingNote -> drop (F: category family)");
 ok(!inv.some((e) => e.path === "surgeonRules.s3.recurringAvoid[1].note") && inv.some((e) => e.path === "surgeonRules.s3.hardNeverWeekdaysNote" && e.action === "drop"), "X: inventory has no recurringAvoid[1] entry any more and drops s3.hardNeverWeekdaysNote (no reason reaches the blob)"); // Prompt 12 X FLIP: was 'recurringAvoid[1].note -> category family'
 ok(inv.filter((e) => e.path.indexOf("groupRules.") === 0).every((e) => e.action === "drop"), "every groupRules entry is a drop");
 ok(inv.filter((e) => e.path.indexOf("holidays.") === 0).every((e) => e.action === "drop"), "every holidays entry is a drop");
 eq(inv.filter((e) => e.path.indexOf("holidays.") === 0).length, IMP.impFindKeys(seed.holidays, NOTE_KEY).length, "one drop per holidays note-like key");
 eq(inv.filter((e) => e.path.indexOf("groupRules.") === 0).length, IMP.impFindKeys(seed.groupRules, NOTE_KEY).length, "one drop per groupRules note-like key");
-ok(inv.every((e) => (e.action === "category" && CATS.indexOf(e.to) >= 0) || (e.action === "drop" && e.to === null) || (e.action === "public" && e.to === "time_off") || (e.action === "private-name" && e.to === null) || (e.action === "awaiting-confirmation" && e.to === "schedule_days")), "inventory actions are category/drop, plus 'public' / 'private-name' for time_off notes (item S) and 'awaiting-confirmation' for flagged existingAssignments (item B)");
+ok(inv.every((e) => (e.action === "drop" && e.to === null) || (e.action === "public" && e.to === "time_off") || (e.action === "private-name" && e.to === null) || (e.action === "awaiting-confirmation" && e.to === "schedule_days")), "inventory actions are drop (AA FLIP: never 'category'), plus 'public' / 'private-name' for time_off notes (item S) and 'awaiting-confirmation' for flagged existingAssignments (item B)");
 ok(!inv.some((e) => e.action === "awaiting-confirmation"), "Z FLIP: the real seed's inventory lists no awaiting row (B: the four Thanksgiving rows, until Faraz confirmed on 9/22)");
 ok(!inv.some((e) => e.action === "private-name"), "the real seed has no public note naming a surgeon");
 eq(inv.map((e) => e.path), inv.map((e) => e.path).slice().sort(), "inventory sorted by path");
-eq(plan.noteScrub.counts, { category: inv.filter((e) => e.action === "category").length, drop: inv.filter((e) => e.action === "drop").length, timeOffPublic: inv.filter((e) => e.action === "public").length, awaitingConfirmation: inv.filter((e) => e.action === "awaiting-confirmation").length }, "counts agree with the inventory");
-// (6) refusals: unclassifiable surgeon note -> NOTE_UNCLASSIFIED; denylist word in a non-note string -> NOTE_DENYLIST
+eq(plan.noteScrub.counts, { drop: inv.filter((e) => e.action === "drop").length, timeOffPublic: inv.filter((e) => e.action === "public").length, awaitingConfirmation: inv.filter((e) => e.action === "awaiting-confirmation").length }, "counts agree with the inventory (AA FLIP: no 'category' count)");
+// (6) refusals: AA FLIP - there is no NOTE_UNCLASSIFIED any more (nothing classifies): an unclassifiable surgeon note is
+// dropped like every other; a denylist word in a NON-note string -> NOTE_DENYLIST (unchanged)
 function refusesWith(prefix, mutate, label) {
   const fx = clone(seed);
   mutate(fx);
@@ -715,16 +716,16 @@ function refusesWith(prefix, mutate, label) {
   ok(msg && msg.indexOf(prefix) === 0, label + " -> " + prefix + " (" + (msg || "no error").slice(0, 90) + ")");
   return msg;
 }
-const s3NoteIdx = seed.surgeonRules[ACTON].notes.length;   // the pushed note's index, whatever the seed holds today
-const mU = refusesWith("NOTE_UNCLASSIFIED: surgeonRules.s3.notes[" + s3NoteIdx + "]", (fx) => { fx.surgeonRules.s3.notes.push("dinner reservation downtown"); }, "unclassifiable note");
-ok(mU.indexOf("dinner reservation") < 0, "the refusal names the path, never the note text");
-refusesWith("NOTE_UNCLASSIFIED: surgeonRules.s1.weekdays.whyNote", (fx) => { fx.surgeonRules.s1.weekdays.whyNote = "meets the accountant"; }, "unclassifiable *Note key");
-// 'wife's birthday dinner' classifies under the binding table (wife -> family, before birthday -> personal): mapped, not refused
-const fxW = clone(seed); fxW.surgeonRules.s4.notes.push("wife's birthday dinner");
-eq(IMP.importPlan(fxW, { now: NOW }).blob.surgeonRules[PHILIP].notes, (plan.blob.surgeonRules[PHILIP].notes || []).concat(["family"]), "'wife's birthday dinner' -> family appended (never written verbatim)");
-// relatives / hosting beyond the binding list classify as family on a note key (mapped, not refused)
-const fxR = clone(seed); fxR.surgeonRules.s4.notes.push("daughter's recital", "hosting Thanksgiving with parents", "in-laws visiting");
-eq(IMP.importPlan(fxR, { now: NOW }).blob.surgeonRules[PHILIP].notes, (plan.blob.surgeonRules[PHILIP].notes || []).concat(["family", "family", "family"]), "daughter / hosting+parents / in-laws -> family");
+{
+  const fxU = clone(seed); fxU.surgeonRules.s3.notes.push("dinner reservation downtown"); fxU.surgeonRules.s1.weekdays.whyNote = "meets the accountant";
+  const pU = IMP.importPlan(fxU, { now: NOW });
+  ok(!("notes" in pU.blob.surgeonRules[ACTON]) && !("whyNote" in pU.blob.surgeonRules[KHAN].weekdays) && JSON.stringify(pU.blob).indexOf("dinner reservation") < 0 && JSON.stringify(pU.blob).indexOf("accountant") < 0, "AA FLIP: an unclassifiable note / *Note key is dropped, never refused, never written (F: NOTE_UNCLASSIFIED)");
+}
+// 'wife's birthday dinner' / relatives / hosting under a notes[] key: dropped with the key, never written, never refused
+// (AA FLIP: F mapped each to the token 'family')
+const fxW = clone(seed); fxW.surgeonRules.s4.notes.push("wife's birthday dinner", "daughter's recital", "hosting Thanksgiving with parents", "in-laws visiting");
+const pW = IMP.importPlan(fxW, { now: NOW });
+ok(!("notes" in pW.blob.surgeonRules[PHILIP]) && !/birthday|recital|hosting|in-laws/.test(JSON.stringify(pW.blob)), "AA FLIP: relatives / hosting in notes[] never reach the blob in any form (F: 'family' tokens appended)");
 refusesWith("NOTE_DENYLIST: surgeonRules.s2.label (\"Family\")", (fx) => { fx.surgeonRules.s2.label = "Family reunion"; }, "non-note string 'Family reunion'");
 refusesWith("NOTE_DENYLIST: groupRules.dailyHandoff (\"school\")", (fx) => { fx.groupRules.dailyHandoff = "before the school run"; }, "groupRules non-note string");
 refusesWith("NOTE_DENYLIST: surgeonRules.s6.availableWindows[0].label (\"kids\")", (fx) => { fx.surgeonRules.s6.availableWindows[0].label = "kids off"; }, "denylist inside an array element");
@@ -734,11 +735,12 @@ refusesWith("NOTE_DENYLIST: surgeonRules.s2.label (\"hosting\")", (fx) => { fx.s
 refusesWith("NOTE_DENYLIST: surgeonRules.s2.label (\"daughter\")", (fx) => { fx.surgeonRules.s2.label = "daughter's recital"; }, "'daughter'");
 refusesWith("NOTE_DENYLIST: surgeonRules.s2.label (\"in-laws\")", (fx) => { fx.surgeonRules.s2.label = "in-laws visiting"; }, "'in-laws'");
 refusesWith("NOTE_DENYLIST: holidays.rules.extra (\"family\")", (fx) => { fx.holidays.rules.dayMembershipNote = "family day"; fx.holidays.rules.extra = "family day"; }, "denylist covers holidays too (the note key is dropped first; the non-note key trips)");
-// 'familiar' is not 'family'; an exact category token passes even where it is not a note
-const fxF = clone(seed); fxF.surgeonRules.s2.label = "familiar territory"; fxF.surgeonRules.s5.label = "family";
+// 'familiar' is not 'family'; AA FLIP: an exact former token no longer passes anywhere (F exempted it from the gate)
+const fxF = clone(seed); fxF.surgeonRules.s2.label = "familiar territory";
 eq(IMP.importPlan(fxF, { now: NOW }).blob.surgeonRules[BURCHETT].label, "familiar territory", "'familiar' passes the denylist");
-// the CLI classifies both refusals as refusals (exit 2), not crashes
-ok(/^NOTE_(UNCLASSIFIED|DENYLIST):/.test(mU), "refusal prefix shape");
+const mD = refusesWith("NOTE_DENYLIST: surgeonRules.s5.label (\"family\")", (fx) => { fx.surgeonRules.s5.label = "family"; }, "AA FLIP: the exact word 'family' in a non-note key refuses (F: exempt as a category token)");
+// the CLI classifies the refusal as a refusal (exit 2), not a crash
+ok(/^NOTE_DENYLIST:/.test(mD), "refusal prefix shape");
 // (7) idempotency: scrubbing the scrubbed blob changes nothing; importSql is deterministic
 const twice = IMP.impScrubRuleNotes(clone(plan.blob.surgeonRules), clone(plan.blob.groupRules), clone(plan.blob.holidays));
 eq(twice.surgeonRules, plan.blob.surgeonRules, "scrub applied twice == once (surgeonRules)");
@@ -749,9 +751,9 @@ eq(IMP.importSql(IMP.importPlan(seed, { now: NOW })), sql, "importSql(plan) dete
 // direct call on raw seed rules (vacation notes removed: those are replaced before the scrub in importPlan)
 const rawSr = clone(seed.surgeonRules); Object.values(rawSr).forEach((r) => { (r.timeOff || []).forEach((t) => { delete t.note; }); });
 const direct = IMP.impScrubRuleNotes(rawSr, clone(seed.groupRules));
-eq(direct.surgeonRules[ACTON].holidayRules.neverThanksgivingNote, "family");
+ok(!("neverThanksgivingNote" in direct.surgeonRules[ACTON].holidayRules), "AA FLIP: the direct call drops neverThanksgivingNote (F: 'family')");
 eq(IMP.impFindKeys(direct.groupRules, NOTE_KEY), []);
-eq(noteValues(direct.surgeonRules, "surgeonRules", []).filter((x) => CATS.indexOf(x.value) < 0), [], "direct call leaves only category tokens");
+eq(IMP.impFindKeys(direct.surgeonRules, NOTE_KEY), [], "AA FLIP: the direct call leaves no note-like key (F: only category tokens)");
 ok(rawSr[ACTON].holidayRules.neverThanksgivingNote === "[removed]", "impScrubRuleNotes does not mutate its input");
 // empty / absent inputs
 eq(IMP.impScrubRuleNotes({}, {}), { surgeonRules: {}, groupRules: {}, holidays: {}, inventory: [] });
@@ -927,7 +929,7 @@ ok(!/pending|re-?confirm|awaiting|recorded by Claude Code/i.test(JSON.stringify(
 eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.source, seed.surgeonRules[KHAN].holidays2026.thanksgiving.source, "Z: holidays2026.thanksgiving.source reaches the blob as written (source is not a note key)");
 eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.source, "Faraz 9/21 (evening); confirmed by Faraz 9/22 (evening)", "Z: ...and it is the plain attribution");
 ok(!("note" in plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving), "Z: its note is engine documentation (unit / consecutive wording) and stays out of the blob");
-ok(!JSON.stringify(plan.blob.surgeonRules[KHAN].notes || []).includes("Thanksgiving"), "Z: the s1.notes Thanksgiving line is dropped as documentation (only category tokens survive in notes[])");
+ok(!JSON.stringify(plan.blob.surgeonRules[KHAN].notes || []).includes("Thanksgiving"), "Z: the s1.notes Thanksgiving line is dropped (AA: every notes[] key is dropped; F kept category tokens)");
 eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.role, "primary", "Z: the s1 holiday role is unchanged");
 ok(seed.answeredQuestions.some((t) => /^Thanksgiving 2026:/.test(t) && /confirmed by Faraz 9\/22/.test(t)), "Z: answeredQuestions' Thanksgiving line says confirmed by Faraz 9/22");
 ok(seed.openQuestions.some((t) => /^8\. ~~Thanksgiving 11\/26-29 for Khan~~/.test(t) && /confirmed/.test(t)), "Z: open question 8 is struck through with the answer");
@@ -966,5 +968,128 @@ eq((plan.blob.holidays.units["2026"] || plan.blob.holidays.units[2026]).find((u)
   eq([dE.tables.schedule_days.update, dE.tables.schedule_days.blocked], [3, 1], "Z: an app-edited live 11/26 row is blocked, the other three unit days update");
   ok(dE.blocked.length === 1 && /^11\/26 locks\/note change \[BLOCKED: live source 'manual'/.test(dE.blocked[0]), "Z: the blocked line names 11/26 and the live source: " + dE.blocked[0]);
 }
+
+// ---- Prompt 12 AA (9/22 late) ----
+// Faraz: "Drop the 'OR day' reason token from Khan's rule; one standard for the blob: no reasons, only the rule. Reasons
+// live in docs/SILVIS-CALL-RULES.md." The importer no longer classifies a surgeonRules note into a category token
+// ("outreach", "family", "personal", "OR day", "preference"): every note-like key (note, notes[], *Note, *Notes,
+// *Reason, any depth) is dropped before the blob is assembled, in surgeonRules exactly as in groupRules and holidays.
+// The denylist gate over every string of the assembled blob stays and runs AFTER the scrub (so a dropped key can never
+// trip it, and an exact former token is no longer exempt). time_off public notes are not blob keys and stay (item S).
+step("Prompt 12 AA: no reasons in the blob - every surgeonRules note-like key is dropped, no category tokens, the denylist gate still refuses");
+const AA_WORDS = /\b(OR day|outreach|family|personal|preference|Maquoketa|hosts)\b|Tue\/Thu are his OR days/i;
+const AA_FORBIDDEN = ["OR day", "outreach", "family", "personal", "preference", "Tue/Thu are his OR days", "Maquoketa", "hosts"];
+// paths of note-like keys, NOT descending into one (mirrors a per-key drop); independent of importer.js
+function aaNoteKeys(o, p, out) {
+  if (!o || typeof o !== "object") return out;
+  if (Array.isArray(o)) { o.forEach((v, i) => aaNoteKeys(v, p + "[" + i + "]", out)); return out; }
+  Object.keys(o).forEach((k) => { const q = p ? p + "." + k : k; if (NOTE_KEY.test(k)) out.push(q); else aaNoteKeys(o[k], q, out); });
+  return out;
+}
+// (1) the blob: no former token, no reason word in ANY string under surgeonRules (values, not key names - 'preferences' is a key)
+const aaStrings = walkStrings(plan.blob.surgeonRules, "surgeonRules", []);
+eq(aaStrings.filter((x) => AA_WORDS.test(x.value)).map((x) => x.path + " = " + JSON.stringify(x.value)), [], "AA: no former category token or reason word in any surgeonRules string of the planned blob (fail-before: 'OR day', 'outreach', 'family', 'preference')");
+AA_FORBIDDEN.forEach((w) => ok(JSON.stringify(plan.blob.surgeonRules).indexOf(JSON.stringify(w)) < 0, "AA: the blob's surgeonRules JSON holds no string value " + JSON.stringify(w)));
+ok(aaStrings.length > 20, "AA: the non-note strings of surgeonRules are still there (" + aaStrings.length + ": rule text, sources, labels)");
+// (2) no note-like key survives under surgeonRules in the blob (recursive walk, arrays included)
+eq(IMP.impFindKeys(plan.blob.surgeonRules, NOTE_KEY), [], "AA: no key named note / notes or ending in Note / Notes / Reason under surgeonRules in the blob");
+eq(noteValues(plan.blob.surgeonRules, "surgeonRules", []), [], "AA: no note-like string value under surgeonRules in the blob");
+eq(IMP.impFindKeys(plan.blob, /Reason$/), [], "AA: no *Reason key anywhere in the blob");
+// (3) the seed: s1.hardNeverWeekdaysReason is gone, its wording folded into s1.hardNeverWeekdaysNote (Note keys never reach the blob)
+eq(IMP.impFindKeys(seed, /Reason$/), [], "AA: the seed carries no *Reason key at any depth (s1.hardNeverWeekdaysReason removed)");
+ok(!("hardNeverWeekdaysReason" in seed.surgeonRules[KHAN]) && /Tue\/Thu are his OR days/.test(seed.surgeonRules[KHAN].hardNeverWeekdaysNote), "AA: the seed keeps the wording inside s1.hardNeverWeekdaysNote");
+eq(seed.surgeonRules[KHAN].hardNeverWeekdays, ["Tue", "Thu"], "AA: the rule itself is unchanged");
+eq(seed.surgeonRules[KHAN].hardNeverWeekdaysRoles, ["primary"], "AA: ...and so are its roles");
+ok(!("hardNeverWeekdaysNote" in plan.blob.surgeonRules[KHAN]) && !("hardNeverWeekdaysReason" in plan.blob.surgeonRules[KHAN]), "AA: neither key reaches the blob");
+eq(plan.blob.surgeonRules[KHAN].hardNeverWeekdays, ["Tue", "Thu"], "AA: the blob carries the rule");
+// (4) the dry-run inventory: every surgeonRules note-like key -> drop (one entry per key, sorted by path), zero 'category' entries
+const aaInv = plan.noteScrub.inventory;
+eq(aaInv.filter((e) => e.action === "category"), [], "AA: no 'category' entry in the inventory");
+ok(!aaInv.some((e) => "to" in e && e.to !== null && e.action === "drop"), "AA: a drop carries to: null");
+const aaSeedRules = clone(seed.surgeonRules); Object.values(aaSeedRules).forEach((r) => { (r.timeOff || []).forEach((t) => { delete t.note; }); });   // vacation notes never enter the scrub
+eq(aaInv.filter((e) => e.path.indexOf("surgeonRules.") === 0 && e.action === "drop").map((e) => e.path).sort(), aaNoteKeys(aaSeedRules, "surgeonRules", []).sort(), "AA: one 'drop' per surgeonRules note-like key of the seed (timeOff notes excluded), paths equal");
+ok(aaInv.some((e) => e.path === "surgeonRules.s1.hardNeverWeekdaysNote" && e.action === "drop"), "AA: s1.hardNeverWeekdaysNote -> drop");
+ok(!aaInv.some((e) => e.path === "surgeonRules.s1.hardNeverWeekdaysReason"), "AA: no s1.hardNeverWeekdaysReason entry (the key left the seed)");
+ok(aaInv.some((e) => e.path === "surgeonRules.s3.holidayRules.neverThanksgivingNote" && e.action === "drop"), "AA: s3.holidayRules.neverThanksgivingNote -> drop (F: category)");
+ok(aaInv.some((e) => e.path === "surgeonRules.s2.notes" && e.action === "drop"), "AA: s2.notes -> drop as one key");
+ok(aaInv.every((e) => ["drop", "public", "private-name", "awaiting-confirmation"].indexOf(e.action) >= 0), "AA: inventory actions are drop / public / private-name / awaiting-confirmation only");
+eq(Object.keys(plan.noteScrub.counts).sort(), ["awaitingConfirmation", "drop", "timeOffPublic"], "AA: counts has no 'category' field any more");
+eq(plan.noteScrub.counts.drop, aaInv.filter((e) => e.action === "drop").length, "AA: counts.drop agrees with the inventory");
+// (5) order: the scrub runs first, the denylist gate on the assembled blob after it - a *Reason / note key with a denylist
+// word is dropped, never refused (it never reaches the blob); the same word in a non-note key still refuses (existing pins)
+{
+  const fx = clone(seed); fx.surgeonRules[KHAN].hardNeverWeekdaysReason = "family day"; fx.surgeonRules[PHILIP].notes.push("wife's birthday dinner"); fx.surgeonRules[ACTON].weekdays = { whyNote: "school run" };
+  let msg = null, p = null;
+  try { p = IMP.importPlan(fx, { now: NOW }); } catch (e) { msg = e.message; }
+  ok(msg === null && p, "AA: a denylist word under a *Reason / notes[] / *Note key is dropped before the gate, not refused (" + (msg || "no error").slice(0, 70) + ")");
+  ok(p && !("hardNeverWeekdaysReason" in p.blob.surgeonRules[KHAN]) && !("notes" in p.blob.surgeonRules[PHILIP]) && !("whyNote" in p.blob.surgeonRules[ACTON].weekdays), "AA: ...and none of the three keys reaches the blob");
+  ok(p && JSON.stringify(p.blob).indexOf("family day") < 0 && JSON.stringify(p.blob).indexOf("birthday") < 0 && JSON.stringify(p.blob).indexOf("school") < 0 && IMP.importSql(p).indexOf("birthday") < 0, "AA: ...nor the wording, in the blob or the SQL");
+  ok(p && p.noteScrub.inventory.some((e) => e.path === "surgeonRules.s1.hardNeverWeekdaysReason" && e.action === "drop"), "AA: the inventory lists the *Reason key as a drop");
+}
+refusesWith("NOTE_DENYLIST: surgeonRules.s1.label (\"family\")", (fx) => { fx.surgeonRules[KHAN].label = "family"; }, "AA: an exact former token in a NON-note key is no longer exempt from the gate (F let 'family' through)");
+refusesWith("NOTE_DENYLIST: surgeonRules.s1.hardNeverWeekdaysWhy (\"school\")", (fx) => { fx.surgeonRules[KHAN].hardNeverWeekdaysWhy = "school days"; }, "AA: a reason smuggled under a non-note key name still refuses on a denylist word");
+// (6) an unclassifiable note is simply dropped (F refused it as NOTE_UNCLASSIFIED); nothing classifies any more
+{
+  const fx = clone(seed); fx.surgeonRules[ACTON].notes.push("dinner reservation downtown"); fx.surgeonRules[KHAN].weekdays.whyNote = "meets the accountant";
+  const p = IMP.importPlan(fx, { now: NOW });
+  ok(!("notes" in p.blob.surgeonRules[ACTON]) && !("whyNote" in p.blob.surgeonRules[KHAN].weekdays) && JSON.stringify(p.blob).indexOf("accountant") < 0, "AA: an unclassifiable note is dropped, never refused and never written");
+}
+ok(IMP.IMP_NOTE_CATEGORIES === undefined && IMP.IMP_NOTE_TOKENS === undefined && IMP.impNoteCategory === undefined && IMP.impNoteIsDocumentation === undefined, "AA: no category / token table or classifier is exported (dead tables invite reuse)");
+ok(!/IMP_NOTE_CATEGORIES|IMP_NOTE_TOKENS|impNoteCategory|impNoteIsDocumentation|NOTE_UNCLASSIFIED|IMP_NOTE_DOC\b/.test(require("fs").readFileSync(path.join(__dirname, "..", "importer.js"), "utf8")), "AA: importer.js carries no category table, token list, documentation heuristic or NOTE_UNCLASSIFIED refusal any more");
+// (7) idempotency holds trivially: scrubbing the scrubbed blob finds nothing
+eq(IMP.impScrubRuleNotes(clone(plan.blob.surgeonRules), clone(plan.blob.groupRules), clone(plan.blob.holidays)).inventory, [], "AA: a second scrub has nothing to drop");
+// (8) time_off public notes are not blob keys and stay as stated (item S) - but none carries a denylist word or a former
+// token / reason word (the plain status word 'unavailable' / 'vacation' is not a reason)
+const aaPublic = plan.timeOffRows.map((t) => t.note).filter((x) => x !== "vacation (seed)");
+eq(aaPublic, ["unavailable (stated 9/22)", "unavailable (stated 9/22)", "unavailable (stated 9/22)", "unavailable (stated 9/22)"], "AA: the public time_off notes as stated by the surgeon");
+ok(aaPublic.every((x) => !DENY.test(x) && !AA_WORDS.test(x) && !/\b(clinic|Aledo|Clinton|DeWitt|Jackson County|hunting|birthday|wife|husband)\b/i.test(x)), "AA: no public time_off note carries a denylist word, a former token or a reason word");
+// (9) the CLI's printed scrub summary names no category; NOTE_UNCLASSIFIED is no longer a refusal it expects
+{
+  const cli = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "import-seed.js"), "utf8");
+  ok(cli.indexOf("mapped to a category") < 0 && cli.indexOf("NOTE_UNCLASSIFIED") < 0 && !/action -> category/.test(cli), "AA: scripts/import-seed.js prints no 'N mapped to a category' and expects no NOTE_UNCLASSIFIED");
+  ok(/e\.path \+ " -> " \+ e\.action/.test(cli), "AA: the CLI still prints the inventory (path -> action)");
+}
+// (10) the revision entry rides into blob.settings.seedRevisions and itself carries no reason or token
+const aaRev = (plan.blob.settings.seedRevisions || []).filter((t) => /Prompt 12 item AA/.test(t));
+eq(aaRev.length, 1, "AA: one _meta.revisions entry for the item reaches blob.settings.seedRevisions (the settings=update of the dry run)");
+ok(aaRev.every((t) => !AA_WORDS.test(t) && !DENY.test(t)), "AA: the revision wording carries no former token, reason word or denylist word");
+// (11) expected live diff, derived by rebuilding the pre-AA live blob from the plan itself: blob-only (surgeonRules + settings), no row change
+{
+  const livePreAA = { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) };
+  livePreAA.blob.surgeonRules[KHAN].hardNeverWeekdaysReason = "OR day";   // what the live blob holds until the orchestrator applies this item
+  livePreAA.blob.surgeonRules[ACTON].holidayRules.neverThanksgivingNote = "family";
+  livePreAA.blob.settings.seedRevisions = livePreAA.blob.settings.seedRevisions.filter((t) => !/Prompt 12 item AA/.test(t));
+  // AA review (9/22 late): the live blob also still holds the two non-note prose keys the review moved to Note keys
+  livePreAA.blob.surgeonRules[FIERCE].statedPreferenceNotARule = seed.surgeonRules[FIERCE].statedPreferenceNotARuleNote;
+  livePreAA.blob.groupRules.holidayPolicy = seed.groupRules.holidayPolicy + " " + seed.groupRules.holidayPolicyNote;
+  const d = IMP.planDiff(plan, livePreAA);
+  eq(d.tables.call_schedule_data.keys, { roster: "unchanged", surgeonRules: "update", groupRules: "update", holidays: "unchanged", settings: "update" }, "AA: expected live diff = blob surgeonRules + groupRules + settings update (review: groupRules.holidayPolicy too)");
+  eq([d.tables.schedule_days.update, d.tables.schedule_days.insert, d.tables.schedule_days.delete, d.tables.availability.insert, d.tables.availability.delete, d.tables.time_off.insert, d.tables.time_off.delete, d.totalChanges], [0, 0, 0, 0, 0, 0, 0, 3], "AA: no schedule_days / availability / time_off change; total 3 (the three blob keys)");
+}
+
+// ---- Prompt 12 AA review (9/22 late) ----
+// Review of AA: two NON-note prose keys still carried a surgeon's stated wish into the anon-readable blob -
+// surgeonRules.s5.statedPreferenceNotARule (its own name says it is not a rule; nothing in the app reads it) and the second
+// sentence of groupRules.holidayPolicy (a named surgeon's Christmas wish). Both move to Note keys in the seed
+// (statedPreferenceNotARuleNote, holidayPolicyNote - dropped by the importer, wording kept), and the standard is pinned
+// over EVERY string of the blob, not only under surgeonRules. The weekdayPattern `where` column (s5) is NOT touched here:
+// Setup -> Rules has a Where column for it, so whether a location counts as a reason is Faraz's ruling (rules doc section 3).
+step("Prompt 12 AA review: no stated preference under a non-note key anywhere in the blob");
+const AA_PHRASES = /recorded only in his words|described an ideal|stated preference|Christmas split/i;
+// (12) s5.statedPreferenceNotARule -> statedPreferenceNotARuleNote: gone from the blob, kept in the seed, a drop in the inventory
+ok(!("statedPreferenceNotARule" in plan.blob.surgeonRules[FIERCE]) && !("statedPreferenceNotARuleNote" in plan.blob.surgeonRules[FIERCE]), "AA review: neither statedPreferenceNotARule nor its Note form under s5 in the blob (fail-before: the key was in the blob)");
+ok(!("statedPreferenceNotARule" in seed.surgeonRules[FIERCE]) && /described an ideal/.test(seed.surgeonRules[FIERCE].statedPreferenceNotARuleNote || ""), "AA review: the seed keeps the wording under s5.statedPreferenceNotARuleNote");
+ok(aaInv.some((e) => e.path === "surgeonRules.s5.statedPreferenceNotARuleNote" && e.action === "drop"), "AA review: the inventory lists s5.statedPreferenceNotARuleNote as a drop");
+eq(IMP.impFindKeys(plan.blob, /statedPreference/), [], "AA review: no statedPreference* key anywhere in the blob");
+// (13) groupRules.holidayPolicy carries the unit rule only; the Burchett sentence sits in groupRules.holidayPolicyNote (dropped)
+ok(!/\bpreference\b|Burchett/i.test(plan.blob.groupRules.holidayPolicy), "AA review: blob.groupRules.holidayPolicy names no surgeon and no preference (fail-before: 'Burchett's stated preference (Christmas split ...)')");
+ok(/see holidays\.rules\.$/.test(plan.blob.groupRules.holidayPolicy), "AA review: holidayPolicy ends with the pointer to holidays.rules (the rule text itself is unchanged)");
+ok(!("holidayPolicyNote" in plan.blob.groupRules) && /2 on \/ off/.test(seed.groupRules.holidayPolicyNote || ""), "AA review: the sentence lives in seed.groupRules.holidayPolicyNote, never in the blob");
+ok(aaInv.some((e) => e.path === "groupRules.holidayPolicyNote" && e.action === "drop"), "AA review: ...and the inventory lists that key as a drop");
+// (14) blob-wide: no former token, reason word or moved phrase in ANY string value of the blob (all five keys) or in the SQL
+eq(walkStrings(plan.blob, "blob", []).filter((x) => AA_WORDS.test(x.value) || AA_PHRASES.test(x.value)).map((x) => x.path), [], "AA review: no former token / reason phrase in any string of the whole blob (fail-before: blob.groupRules.holidayPolicy, blob.surgeonRules.s5.statedPreferenceNotARule)");
+ok(!AA_PHRASES.test(sql), "AA review: nor in the generated SQL");
+// (15) the AA revision entry (now naming the two moved keys) still passes its own gate
+ok(aaRev.every((t) => !AA_PHRASES.test(t)), "AA review: the revision wording carries none of the moved phrases either");
 
 console.log("ok " + n + " assertions");
