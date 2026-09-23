@@ -275,7 +275,7 @@
       "aledoDayBeforeRoles": [
         "primary"
       ],
-      "note": "Both day-before rules (vacation trailing edge; Philip's day-before-Aledo) apply to PRIMARY only. Matches the group's own hand schedule (Philip was backup 10/14 before his 10/15 day and backup 10/22 before Aledo Friday 10/23) and the DB trigger, which checks start_date - 1 for primary only."
+      "note": "Both day-before rules (vacation trailing edge; Philip's day-before-Aledo) apply to PRIMARY only. Matches the group's own hand schedule (Philip was backup 10/14 before his 10/15 day and backup 10/22 before Aledo Friday 10/23) and the DB trigger, which checks start_date - 1 for primary only. 9/22 (Faraz, Prompt 12 H): under the open-backup rule both day-before rules stay PRIMARY-only - a standby backup the day before a vacation or an Aledo day is acceptable. trailingEdgeRoles and aledoDayBeforeRoles are the data levers (no dedicated Setup field: editable in Setup via the group rules Edit-as-JSON editor); widening them to both roles would also need the DB trigger widened."
     },
     "locks": {
       "nullSlotIsNeverLocked": true,

@@ -356,6 +356,19 @@ blocked(R.eligibility(vacJan, "2027-01-19", P, ACTON), "day-before-vacation");
 okElig(R.eligibility(vacJan, "2027-01-19", B, ACTON), "day before a vacation blocks PRIMARY only");
 blocked(R.eligibility(clean, "2026-11-18", P, ACTON), "day-before-vacation", "his real edge: 11/18 is on his November primary list, the vacation rule still blocks primary");
 blocked(R.eligibility(ctx, "2026-11-24", P, ACTON), "day-before-vacation", "before the Thanksgiving-week vacation");
+// Prompt 12 H (9/22, Faraz): under the open-backup rule both day-before rules stay PRIMARY-only - a standby backup the
+// day before a vacation or an Aledo day is acceptable. Pinned in the seed (role lists exactly [primary], note records
+// the decision) and in the built ctx; on his real edges the trailing edge never reaches the backup slot (since T his
+// 11/18 and 11/24 backups are off his both-role November list, so whitelist-month - not day-before-vacation - is what
+// keeps him off them; the January vacation above shows the backup slot eligible).
+eq(seed.groupRules.dayBeforeRules.trailingEdgeRoles, [P], "H: seed dayBeforeRules.trailingEdgeRoles is exactly [primary]");
+eq(seed.groupRules.dayBeforeRules.aledoDayBeforeRoles, [P], "H: seed dayBeforeRules.aledoDayBeforeRoles is exactly [primary]");
+ok(/9\/22/.test(seed.groupRules.dayBeforeRules.note || ""), "H: seed dayBeforeRules.note records the 9/22 decision, got: " + JSON.stringify(seed.groupRules.dayBeforeRules.note));
+ok(/standby backup/.test(seed.groupRules.dayBeforeRules.note || ""), "H: seed dayBeforeRules.note says a standby backup the day before is acceptable");
+eq(ctx.trailingEdgeRoles, [P], "H: ctx.trailingEdgeRoles from the seed");
+eq(ctx.aledoDayBeforeRoles, [P], "H: ctx.aledoDayBeforeRoles from the seed");
+lacks(R.eligibility(clean, "2026-11-18", B, ACTON).hard, "day-before-vacation", "H: Acton backup 11/18 (day before his 11/19 vacation) carries no day-before-vacation");
+lacks(R.eligibility(clean, "2026-11-24", B, ACTON).hard, "day-before-vacation", "H: Acton backup 11/24 (day before his Thanksgiving-week vacation) carries no day-before-vacation");
 step("Acton recurring blacklist and avoid");
 // Pinned in January 2027, an ungoverned month: since Prompt 12 T (9/22) November is governed for both of his roles by
 // the ER-panel author's published list, so a November day off that list reads whitelist-month before anything recurring.
@@ -447,6 +460,13 @@ blocked(R.eligibility(clean, "2026-10-14", P, PHILIP), "day-before-vacation");
 okElig(R.eligibility(clean, "2026-10-14", B, PHILIP), "he was backup 10/14 in the hand schedule");
 blocked(R.eligibility(clean, "2026-10-22", P, PHILIP), "day-before-aledo", "Thu 10/22 before Aledo Friday 10/23");
 okElig(R.eligibility(clean, "2026-10-22", B, PHILIP), "he was backup 10/22 in the hand schedule");
+// Prompt 12 H (9/22): day-before-Aledo stays PRIMARY-only under the open-backup rule - a standby backup the day before
+// an Aledo day is acceptable (his November edges too: Tue 11/03 and 11/17, Thu 11/19).
+["2026-11-03", "2026-11-17", "2026-11-19", "2026-10-22"].forEach(d => {
+  blocked(R.eligibility(clean, d, P, PHILIP), "day-before-aledo", "H: Philip primary " + d);
+  lacks(R.eligibility(clean, d, B, PHILIP).hard, "day-before-aledo", "H: Philip backup " + d);
+  okElig(R.eligibility(clean, d, B, PHILIP), "H: Philip backup " + d + " the day before an Aledo day is eligible");
+});
 blocked(R.eligibility(clean, "2026-10-23", B, PHILIP), "no-backup-row");
 okElig(R.eligibility(clean, "2026-10-13", P, PHILIP), "October primary list day");
 step("Philip backup caps");

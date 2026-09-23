@@ -160,6 +160,8 @@ Object.keys(SR).forEach((id) => (SR[id].timeOff || []).forEach((t) => daysList(t
 IDS.forEach((id) => VAC[id].forEach((d) => { const b = addDays(d, -1); if (!VAC[id].has(b)) DAY_BEFORE_VAC[id].add(b); }));
 eq(seed.groupRules.dayBeforeRules.trailingEdgeRoles, [P], "seed: trailing edge is primary-only");
 eq(seed.groupRules.dayBeforeRules.aledoDayBeforeRoles, [P], "seed: day-before-Aledo is primary-only");
+// Prompt 12 H (9/22): the seed note records that both stay primary-only under the open-backup rule (a standby backup the day before is acceptable).
+ok(/9\/22/.test(seed.groupRules.dayBeforeRules.note || "") && /standby backup/.test(seed.groupRules.dayBeforeRules.note || ""), "seed: dayBeforeRules.note records the 9/22 primary-only decision");
 eq(seed.groupRules.countBackupInConsecutive, false, "seed: consecutive counts primary days only");
 // Prompt 12 A (9/22): the hard limit is per surgeon on REAL primary days; the holiday-unit
 // collapse is a per-surgeon opt-in (Khan only); the old group key is gone.
