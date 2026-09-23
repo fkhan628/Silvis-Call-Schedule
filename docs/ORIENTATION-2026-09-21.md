@@ -809,7 +809,7 @@ The three numbered §8 questions plus the implicit ones the analysts surfaced. E
 | 19 | `source` values and provenance | importer | `source = "import"`; the seed's provenance string goes into `note`. Personal text in notes is replaced by `vacation (seed)` (notes are anon-readable). |
 | 20 | Holiday assignments: blob vs `schedule_days` | Holidays editor | The blob holds unit definitions only; who covers a unit is read from `schedule_days`. |
 
-Where the docs disagree with each other (de-facto open questions, condensed): Burchett's cap "7–8" vs `total 8 / preferred 7`;
+Where the docs disagree with each other (de-facto open questions, condensed): ~~Burchett's cap "7–8" vs `total 8 / preferred 7`~~ (resolved by Prompt 12 K: 7 preferred, soft, every month; 8 hard);
 group default cap vs no cap in the rules doc; consecutive counting role; Fierce East-day attribution; Khan Thu block vs
 Thanksgiving (resolved by §4); Sarkar consecutive vs handoff partner; `maxMajorHolidays` under `preferences` vs hard;
 `source` enum vs seed strings; single `locked` flag vs two lock columns; the `time_off` trigger not checking the day

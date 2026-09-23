@@ -176,7 +176,10 @@ jobs:
         run: node test/water-fill.test.js
 
       # Last, as in `npm test`: the fast unit suites fail first. Its default
-      # 10 s wall-clock budget IS the CI gate (runners read ~3.6 s);
+      # 10 s wall-clock budget IS the CI gate (runners read ~5.6-6.5 s on
+      # 2026-09-23 and the figure grows with every added block - re-check
+      # headroom before extending the regression; raise the default only
+      # deliberately);
       # SILVIS_GEN_BUDGET_MS is for a loaded developer machine and is never
       # set here.
       - name: Generator regression test

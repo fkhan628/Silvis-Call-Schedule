@@ -238,7 +238,7 @@
       "ignoreWeekdayRules": true,
       "anyoneMayCoverUnlessOptedOut": true,
       "mondayMinorAbsorbsWeekend": true,
-      "mondayMinorAbsorbsWeekendNote": "Faraz 9/22 evening: 'A minor holiday that falls on a Monday absorbs the weekend before it: the unit is Sat-Mon; the Friday stays a standalone weekend day (the reduced weekend unit).' Applied when a year's units are built (helpers.defaultHolidayUnits, which Setup's Add year pre-fills; 2027: Memorial Day 5/29-5/31, Labor Day 9/4-9/6); 2026's units were built before the rule and are past - left as they were; days stay editable per year in Setup. July 4 stays its own day when it is not a Monday (2027: Sun 7/4; 2028: Tue 7/4). Nothing in the milestone range changes.",
+      "mondayMinorAbsorbsWeekendNote": "Faraz 9/22 evening: 'A minor holiday that falls on a Monday absorbs the weekend before it: the unit is Sat-Mon; the Friday stays a standalone weekend day (the reduced weekend unit).' Applied when a year's units are built (helpers.defaultHolidayUnits, which Setup's Add year pre-fills; 2027: Memorial Day 5/29-5/31, Labor Day 9/4-9/6); 2026's units were built before the rule and are past - left as they were; days stay editable per year in Setup. July 4 is read on its OBSERVED day (Prompt 12 AC, Faraz 9/22 late): a Sunday July 4 is observed Monday, so 2027 = Sat 7/3 - Mon 7/5 under this rule; a weekday July 4 stays its own day (2028: Tue 7/4); a Saturday July 4 is observed Friday and the builder default is the Friday alone (undecided, next 2037). Nothing in the milestone range changes.",
       "note": "Faraz 9/21 (evening): 'The day rules are not for holidays. Anyone can be on backup for holidays unless they explicitly want that holiday off.' On a holiday-unit day the weekday-pattern rules (Khan Tue/Thu + Mon/Wed, Burchett recurring whitelist, Acton 2nd/4th Mon/Wed, Fierce Clinton days + Monday-backup-only, Philip Aledo weekday rules) are not applied to primary (since 9/22 they never apply to backup on any day - see backupPolicy). Still applied: vacations, per-surgeon holidayRules.holidaysOff, backupOptOut, maxMajorHolidays, East busy days / forecast, Fierce derived-week locks, Sarkar windows, monthly caps. 9/22 (Prompt 12 A): a holiday unit counts as ONE day for the consecutive limits only for a surgeon whose surgeonRules.<id>.holidayUnitCountsAsOneDay is true (Khan: his 4-day Thanksgiving unit vs his max 3); everyone else counts real days. The former group key unitExemptFromMaxConsecutive is gone - rules.js ignores it with a warning if an older blob still carries it."
     },
     "backupPolicy": {
@@ -1341,7 +1341,7 @@
       "backup": null,
       "source": "faraz-2026-09-22-sarkar-two-days",
       "locked": true,
-      "note": "open \u2014 Sarkar at two days per week from 9/22"
+      "note": "Sarkar off Sat 10/24 \u2014 two days per window week from 9/22 (the clinic manager 9/22, Faraz 9/22 evening)"
     },
     {
       "date": "2026-10-25",
@@ -1641,7 +1641,7 @@
       "replaces": "s6",
       "source": "faraz-2026-09-22-sarkar-two-days",
       "status": "applied",
-      "note": "the clinic manager's 9/22 email: Sarkar at two days per week for Oct 19-23; Faraz 9/22 evening: October locks included, so 10/24 comes off Sarkar (open primary, locked-open like 10/15)"
+      "note": "the clinic manager's 9/22 email: Sarkar at two days per week for Oct 19-23; Faraz 9/22 evening: October locks included, so 10/24 comes off Sarkar (primary set to null and locked, as 10/15 is; the row note names the constraint, never the slot status)"
     },
     {
       "date": "2026-11-25",

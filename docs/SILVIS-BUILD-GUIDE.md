@@ -96,7 +96,8 @@ ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) 
 
 - **Never in a tracked file**: not in `docs/`, `sql/`, `config.js`, tests, fixtures or commit messages. The repo is public.
 - **Never in an anon-readable table**: `call_schedule_data` (the roster/config blob), `schedule_days`, `time_off`,
-  `availability`, `east_feed`, `client_versions` are readable with the public anon key, so anything in them is as public
+  `availability`, `east_feed`, `east_overrides` (its operational note included), `east_forecast` and `client_versions` — the
+  eight tables listed under §4.3 — are readable with the public anon key, so anything in them is as public
   as the repo. The roster in the blob carries names and codes only.
 - **Where it lives**: the private `silvis-contacts.md` in the OneDrive folder (listed in `.gitignore`), which Faraz uses
   to invite users; `user_profiles.email` (populated by Supabase Auth at signup, authenticated-read only); and
@@ -341,7 +342,7 @@ Week row `data` shape (Davenport `generator.js` line ~825):
 where ids are Davenport ids (FAK = `s6`). Resolve FAK by matching the Davenport roster code, not by hard-coding `s6`.
 
 Derivations (pure functions, unit-tested):
-- **Khan busy days:** `dayCall === FAK` → Mon…Sat busy (service week; Sat 07:00→Sun 07:00 is his); `nights.mon/tue/wed/thu === FAK` → that day busy; `nights.wknd === FAK` → Fri and Sun busy (Sat 07:00–Sun 07:00 is not his, but a lone Silvis Saturday breaks his block style — allow only as fallback); `holidayCoverage[d].surgeonId === FAK` → `d` busy. Busy days block Silvis **primary only** — Khan may be Silvis **backup** on an East call day (Faraz 9/21). East backup weeks (`isBackup` true) count as busy for primary too.
+- **Khan busy days:** `dayCall === FAK` → Mon…Sat busy (service week; Sat 07:00→Sun 07:00 is his); `nights.mon/tue/wed/thu === FAK` → that day busy; `nights.wknd === FAK` → Fri and Sun busy (Sat 07:00–Sun 07:00 is not his, but a lone Silvis Saturday breaks his block style — allow only as fallback); `holidayCoverage[d].surgeonId === FAK` → `d` busy. Busy days block Silvis **primary only** — Khan may be Silvis **backup** on an East call day (Faraz 9/21). East backup weeks (`isBackup` true) count as busy for primary too — but only the shifts he actually holds in such a week (his dayCall / override / night / weekend / holiday days), never all seven days; pinned by `test/east-feed.test.js` ("never busy wholesale").
 - **Precedence on one date: holiday 24h > `dayCallOverrides` > `dayCall`.** A `holidayCoverage[d]` entry for *another* surgeon means that surgeon holds the whole 07:00→07:00 day (Davenport's calendar drops the Svc/Sat/Ngt/Wknd entries for `d`; its generator reassigns the night/weekend slot), so `d` carries **no** Khan reason — not service-week, override, night or weekend. Verified on the live row 2026-09-07 (dayCall FAK, Labor Day held by another surgeon). In the milestone window this matters for Thanksgiving Thu–Sat 2026 and New Year 12/31–1/2 whenever FAK is the East service surgeon (reviewer finding east-1, 2026-09-22).
 - **Fierce derived weeks:** `isBackup` → Silvis **backup** Mon–Sun; `isFierceBackup` → Silvis **primary** Mon–Sun. Faraz's stated weeks (`surgeonRules.s5.eastFeed.statedWeeks`) fill only weeks with no *published* row.
 - Cache each fetched week into `east_feed`; the generator reads the cache, never the network. Setup shows "East feed: fetched 2026-09-21 14:02, 26 weeks, next Fierce primary week 2026-12-07" plus a manual override list (`east_overrides`) for days Faraz knows differ. If the fetch fails, keep the cache and warn — never treat failure as "no East call".
@@ -702,7 +703,7 @@ git push), proven by the rolled-back `sql/probes/claim-open-slot-probe.sql` and 
 
 **The group is told** on Accept & Publish when open
 slots remain (`send-notification` category `open_shifts`, honouring `schedule_updates_email`), on demand from the board
-("Email the group now", logged as `openshifts.notify`), and every **Monday 07:00 Central** (12:00 UTC: 07:00 CDT /
+("Email the group now", logged as `openshifts.notify`), and — once the job of 16.4 exists (not yet, 2026-09-23) — every **Monday 07:00 Central** (12:00 UTC: 07:00 CDT /
 06:00 CST, see 16.4) while any open slot lies in
 the next 30 days (`daily-reminder` mode `open-shifts`, cron job `silvis-open-shifts-weekly`, Vault secret like the
 others). Reasons persisted in `call_schedule_data.data.lastGenerate` are operational wording only (anon-readable blob).
@@ -762,7 +763,7 @@ select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $$
     body := '{"mode":"open-shifts"}'::jsonb);
 $$);
 
-select jobid, jobname, schedule, active from cron.job;                 -- expect three rows
+select jobid, jobname, schedule, active from cron.job;                 -- expect three rows after this block (two exist today; this statement creates the third)
 ```
 
 The secret is read from Vault (`vault.create_secret('<value>', 'silvis_cron_secret')` once; the other two live jobs read
@@ -795,10 +796,19 @@ Nothing in Prompt 13 publishes a schedule, and no part of it sends mail on its o
 
 ## 17. Offers — paint the dates you'll cover; the generator fills the gaps (Faraz 9/22 evening; Prompt 14)
 
-*Status 2026-09-23 (overnight review): being built on branch `feat/offers` — local only, unmerged, not on `origin`, not
-deployed as of this review (its head then was `19d4094` "Offers part 5"; a parallel lane keeps advancing it, so trust
-`git log feat/offers` over this line) — nothing below is in the live app until that branch is merged to `main`. Read the
-section as the specification.*
+*Status 2026-09-23 (overnight review; corrected by the 9/23 audit): the DATA part is live — `call_periods` (incl. the
+`offer_modes` column, confirmed by a column probe 9/23 although the branch delivery note said it was pending), `call_offers`,
+`offer_status()` and the OF001–OF003 triggers, applied from three `feat/offers` files: `sql/migrations/2026-09-22-offers-periods.sql`
+(9/22 15:15), `2026-09-23-offer-modes.sql` and `2026-09-23-claim-offer.sql` (9/23; rolled-back probes A–K and the claim probe
+A–L green per `docs/STATUS-2026-09-23.md` — not re-verifiable by an anon read, the tables being authenticated-read only). Both
+tables were empty at the 9/23 probes; nothing on `main` reads them, and the only writer reachable from `main` is the live
+`claim_open_slot` (the Open shifts board's "Take this shift", `index-source.html` ~3908): a claim by a surgeon who is not
+rules-only for the period upserts one `call_offers` row. The painter RPCs (`2026-09-23-offer-mode-rpc.sql`), the rules/generator
+changes, the painter UI, the seed period and the offers cron are on `feat/offers` — local, unmerged, not deployed (its head at
+review time was `19d4094` "Offers part 5"; trust `git log feat/offers` over this line). Until the merge, `sql/schema.sql` and
+`docs/SCHEMA-REVIEW.md` on `main` lag the live database by those objects — use `feat/offers:sql/schema.sql` for a schema
+review, and add the applied-migration rows to `docs/SCHEMA-REVIEW.md` and the schema table of §4.2 when it merges.
+Nothing below is in the live app; read the section as the specification.*
 
 Silvis is an **offers** problem where Davenport is a rules problem: the schedule has always been assembled from the
 days each surgeon emails in, relayed through whoever is collecting them and retyped by the ER-panel author. From Prompt 14 the
@@ -835,6 +845,12 @@ office digest and the ER Call Panels export for a paper copy. Published assignme
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 
+*Status 2026-09-23: merged to `main` (branch `feat/east-vacations`, head `19b9efc`) and live on Pages since build `2026.09.23g`
+(`23efd7f`, built from that commit; every later build carries it — trust `version.json`). `east_vacation_reviews` was applied
+04:37 (§18.5; leftover 0 at apply time). The East feed has NOT been refreshed since the deploy (newest `east_feed.fetched_at`
+2026-09-22 05:54 UTC, no `data.vacations` key in any cached week — anon probe 9/23), so no Davenport vacation is cached and
+nothing derived is in force: Setup → East feed → Refresh from Davenport is the first live step (§18.5 item 6).*
+
 Faraz: *"there are days where I am on vacation at East, where we are not going anywhere, and I can cover call at
 Silvis."* So the East feed mirrors his Davenport vacations into Silvis and **nothing is mirrored blindly**: each range
 is **unreviewed** until he decides **away** (also off at Silvis) or **home** (available at Silvis — and his best Silvis
@@ -842,7 +858,7 @@ days, because a Davenport vacation day has no East call and no OR block). A gene
 surgeon with an East code (matched by roster **code** through the Davenport roster blob, never by a Davenport id);
 only Khan (FAK) has one today. Rules-doc text: `SILVIS-CALL-RULES.md` §3 Khan (the 9/22 evening entry).
 
-### 18.1 The pipeline (three parts, one branch `feat/east-vacations`)
+### 18.1 The pipeline (three parts, delivered on branch `feat/east-vacations`, merged)
 
 | part | what | where |
 |---|---|---|
@@ -895,7 +911,7 @@ possible later migration.
   the range's days as `either` offers in one tap (a confirm sheet listing the dates; `call_offers` rows inserted the
   normal way). Prompt 14's painter is on another branch tonight, so the hook is a **documented no-op**
   (`console.info`, returns `{ ok: true, offered: 0, pending: "prompt-14" }`, `TODO(Prompt 14 UI wave)`); the review itself is saved either
-  way, and nothing on this branch writes `call_offers` (data-layer pin + smoke).
+  way, and nothing in this delivery writes `call_offers` (data-layer pin + smoke).
 - **Refresh resets.** After *Refresh from Davenport* caches the new lists and **re-reads the cache** (`loadEastTables`
   hands the `east_feed` rows back), for each East person whose code was read:
   `derivedEastVacations(eastVacations(cacheRows, CODE), reviewRows, rosterId).stale` — computed against the **reloaded
@@ -969,7 +985,7 @@ possible later migration.
   triples, two `eastvac.review` reset audits (reason `changed` / `removed`, `removed: 1`), names both in the toast and
   keeps the unchanged range's row; screenshots `eastvac-panel.png`, `eastvac-panel-390.png`, `eastvac-panel-dark.png`,
   `eastvac-panel-390-dark.png`, `calendar-eastvac-2027-04.png`, `mine-eastvac.png` — written to **`test/ui/out/`**, which
-  is **gitignored**; nothing was copied into `docs/screenshots/` on this branch (part 4 added no binaries — a
+  is **gitignored**; nothing was copied into `docs/screenshots/` in this delivery, as of `19b9efc` (part 4 added no binaries — a
   `docs/screenshots/east-vacations/` copy of the six files is a one-line follow-up). The files of the 2026-09-23 07:15
   run are on disk (43 / 41 / 44 / 41 / 106 / 137 KB).
 - **`scripts/verify-rls.sh` section 9** (part 2; before the migration 9a / 9b accept the 404 by name, while 9c — linked
@@ -1027,22 +1043,13 @@ the `docs/SCHEMA-REVIEW.md` section; `<dir>` = the workdir linked with `supabase
 
 **Open questions (unknowns, not defaults to bake in; every default taken is data in `groupRules` / `surgeonRules`):**
 
-1. **Horizon of the conservative default.** An unreviewed range reads as *away* at **any** horizon today, and the
-   coverage strip's unreviewed count is not windowed either (`unreviewedUpcoming` counts every range ending today or
-   later) — the nag already reaches every horizon; only the strip's open-slot counts use a 60-day window. The question
-   is only about the hard block: should it apply only inside the next **60 days** (the strip's open-slot window) and be
-   a soft penalty beyond that, with the nag unchanged? Davenport vacations reach a year ahead and Generate will offer 12-month
-   presets, so a forgotten review far out silently takes Khan off every weekend in it. If wanted this is one data key
-   (e.g. `groupRules.eastFeed.vacations.unreviewedHardDays`) and a small rules.js change — not built.
-2. **The command-line generate path.** `scripts/preview-generate.js` (and `publish-preview.js` after it) build the
-   engine input without `eastVacationRanges` / `eastVacationReviews`, so a CLI generation ignores East vacations
-   entirely; the app's Generate passes both. Either add the two inputs to the scripts (`east_feed` is anon-readable;
-   `east_vacation_reviews` needs a scheduler JWT or the service role server-side) or generate only from the app while
-   East vacations matter.
-3. **Server-side enforcement.** `rpc/claim_open_slot` (`CL009`), `apply_trade`'s vacation check and the `time_off`
-   trigger read `time_off` rows only; a derived East vacation is enforced by the client gate. Extend `claim_open_slot`
-   to read the feed + the reviews (a later migration), or accept client-side-only and say so to the group.
-4. **The `home` → `either` offers step** is a documented no-op until Prompt 14's painter is on this branch; the
+1. **Horizon of the conservative default** — should the hard block apply only inside the next **60 days** (the strip's
+   open-slot window; the strip's unreviewed count is not windowed, so the nag already reaches every horizon)? Open; the
+   canonical text is `SILVIS-CALL-RULES.md` §8 item 17 (not built).
+2. **The command-line generate path** — `scripts/preview-generate.js` (and `publish-preview.js` after it) pass no
+   `eastVacationRanges` / `eastVacationReviews` inputs — open; see `SILVIS-CALL-RULES.md` §8 item 17.
+3. **Server-side enforcement** (`claim_open_slot`, `apply_trade`, the `time_off` trigger) — open; see `SILVIS-CALL-RULES.md` §8 item 17.
+4. **The `home` → `either` offers step** is a documented no-op until Prompt 14's painter lands on `main`; the
    confirm sheet listing the dates is that wave's.
 5. **Davenport side** (not changed from here): [removed]
    [removed]; Silvis reads FAK's rows only. Faraz's call on the Davenport
@@ -1065,7 +1072,7 @@ node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL 
 
 - **Input**: the preview's `.schedule` (milestone `.start..end`) and `.backfill.schedule` (`.backfill.range`, the
   fill-open-only pass). A day in both must be identical (else abort). Live rows come from the seven anon-readable
-  sources `preview-generate.js` reads; the rules ctx is rebuilt the same way (that builder is duplicated in the tool
+  sources `preview-generate.js` reads (`client_versions`, the eighth anon-readable table, is not an input); the rules ctx is rebuilt the same way (that builder is duplicated in the tool
   because `preview-generate.js` is a top-level runner without exports).
 - **Plan, per day and role**: a locked live role is never changed and the preview must hold the same holder (else
   abort); a held, unlocked slot whose live source is not `import` / `generated` / `east-derived` is app-edited — the

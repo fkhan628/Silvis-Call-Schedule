@@ -1127,8 +1127,9 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // the holiday waiver (waive, above) lifts the recurring weekday patterns only,
   // never the dates a surgeon offered himself: a governed month's list
   // ("whitelist-month" - Burchett's December list omits 12/24 on purpose and names
-  // 12/25) and the weeks list ("outside-available-weeks" - Philip's Memorial Day
-  // 2027 sits outside his listed weeks). anyoneMay still lifts the holiday
+  // 12/25) and the weeks list ("outside-available-weeks" - Mon 5/31 of Philip's
+  // Memorial Day 2027 unit sits outside his listed weeks, which excludes him from
+  // the whole unit). anyoneMay still lifts the holiday
   // opt-out family; it no longer softens a dated block.
   if (datedBlock) hard.push(datedBlock);
 

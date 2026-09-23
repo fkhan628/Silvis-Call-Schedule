@@ -47,7 +47,7 @@ eq(byDay["2026-10-15"].backup_id, BURCHETT, "BK 9/23: 10/15 backup is Burchett (
 eq(byDay["2026-10-24"].primary_id, null, "10/24 primary open since 9/22 evening (Sarkar at two days per week)");
 eq(byDay["2026-10-24"].backup_id, null, "10/24 backup was already open");
 eq(byDay["2026-10-24"].primary_locked, false, "10/24 locked-open: a null slot is never locked"); eq(byDay["2026-10-24"].backup_locked, false);
-eq(byDay["2026-10-24"].note, "seed: faraz-2026-09-22-sarkar-two-days - open \u2014 Sarkar at two days per week from 9/22", "10/24 note = provenance + the seed's operational note");
+eq(byDay["2026-10-24"].note, "seed: faraz-2026-09-22-sarkar-two-days - Sarkar off Sat 10/24 \u2014 two days per window week from 9/22 (the clinic manager 9/22, Faraz 9/22 evening)", "10/24 note = provenance + the seed's operational note (status-free since the 9/23 audit)");
 eq(days.filter((d) => d.primary_id === "s6").map((d) => d.day), ["2026-10-20", "2026-10-22"], "Sarkar keeps exactly 10/20 and 10/22 in the import");
 ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].forEach((d) => {
   eq(byDay[d].primary_id, KHAN, d + " Khan"); eq(byDay[d].primary_locked, true, d + " locked"); eq(byDay[d].backup_locked, false, d + " backup open");
@@ -392,7 +392,7 @@ eq(tp.scheduleDayRows[0].backup_locked, false);
 step("SQL idempotency shape");
 ok(/^[\x00-\x7f]*$/.test(sql), "SQL is 7-bit ASCII (non-ASCII escaped inside jsonb AND in text columns)");
 // a text column carrying non-ASCII (the 10/24 note's em dash) is emitted as an E'' literal with \uXXXX; ASCII strings stay plain '...'
-ok(sql.indexOf("E'seed: faraz-2026-09-22-sarkar-two-days - open \\u2014 Sarkar at two days per week from 9/22'") >= 0, "10/24 note -> E'' literal with \\u2014 (found: " + JSON.stringify((sql.match(/E'seed: faraz[^']*'/) || [])[0]) + ")");
+ok(sql.indexOf("E'seed: faraz-2026-09-22-sarkar-two-days - Sarkar off Sat 10/24 \\u2014 two days per window week from 9/22 (the clinic manager 9/22, Faraz 9/22 evening)'") >= 0, "10/24 note -> E'' literal with \\u2014 (found: " + JSON.stringify((sql.match(/E'seed: faraz[^']*'/) || [])[0]) + ")");
 ok(sql.indexOf("'seed: office-er-call-panels-2026-09-16'") >= 0 && !/E'seed: holly/.test(sql), "ASCII notes keep the plain '...' literal");
 // the non-ASCII test is stateless: consecutive non-ASCII notes, an ASCII one between them and a repeat all classify the same way
 const fxNA = clone(seed);

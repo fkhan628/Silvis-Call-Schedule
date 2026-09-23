@@ -21,7 +21,8 @@ The Davenport app uses a different id namespace (FAK is `s6` there) — the East
 
 **No contact data in the repo — or in any anon-readable table (Faraz 9/21, guide §3.1):** emails and phone numbers never
 appear in `docs/`, `sql/`, `config.js`, tests or any tracked file (the repo is public), and never in `call_schedule_data`,
-`schedule_days`, `time_off`, `availability`, `east_feed` or `client_versions` (readable with the public anon key). They
+`schedule_days`, `time_off`, `availability`, `east_feed`, `east_overrides`, `east_forecast` or `client_versions` (every
+anon-readable table under RLS below; `east_overrides` carries an operational note field). They
 exist only in the private `silvis-contacts.md` in the OneDrive folder (gitignored; Faraz uses it to invite users) and, in
 Supabase, only in `user_profiles` (via Auth signup) and `office_contacts` (entered in Setup) — both authenticated-read.
 Notes in anon-readable tables carry no reasons at all (not even category tokens); the rule itself is the only content -
@@ -52,7 +53,8 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 2. **OneDrive folder** `<the OneDrive folder>` — non-repo material (the ER-panel author's Word docs,
    email exports, backups), the private `silvis-contacts.md`, and the source copies of `CLAUDE.md`, `docs/` and `sql/`
    (identical to the repo's — both contact-free). Never edit app files there.
-3. **Supabase** — schema in `sql/schema.sql` (applied by hand in the SQL editor). Edge-function sources live in the repo
+3. **Supabase** — schema in `sql/schema.sql` plus the hand-applied files in `sql/migrations/` (each recorded in
+   `docs/SCHEMA-REVIEW.md`; applied by hand in the SQL editor or through the linked CLI). Edge-function sources live in the repo
    under `edge-functions/<slug>/index.ts` but are deployed by hand with the Supabase CLI (`--no-verify-jwt`), exactly
    like Davenport — a git push does NOT deploy functions.
 
@@ -63,7 +65,7 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with
   `[skip ci]`, Pages redeploys.
 - Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — rules, east-feed, data-layer,
-  schema, importer, week-rows, exports, totals, holidays, publish, ci — then the generator regression, then the build);
+  schema, importer, week-rows, exports, totals, holidays, publish, day-edit, open-shifts, ci — then the generator regression, then the build);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
   writes `index.html` locally as a byproduct — `git restore index.html` before committing (CI owns it).
@@ -107,7 +109,8 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
 - Verify by OBSERVING behavior (a passing test, a real row in Supabase, a green CI run, a byte-diff) — never by
   assuming success. Silent failures are this codebase family's signature bug class.
 - Current milestone: **a published schedule through 2026-12-31** — **published 2026-09-23** from the committed preview
-  (`docs/PUBLISH-2026-09-23.md`: 2026-10-07 → 2027-01-03 over the locks, which now run to 11/29). Generate's default range
+  (`docs/PUBLISH-2026-09-23.md`: 2026-10-07 → 2027-01-03 over the import locks (to 11/29); east-derived primary locks run
+  12/7–12/13 and manual backup locks reach 12/18 — Generate never touches any lock). Generate's default range
   and its 3 / 6 / 9 / 12-month presets start at the first open slot on or after today (Prompt 12 AB); locks are never
   touched.
   Don't gold-plate exports or edge functions until the surgeons are on the live app.

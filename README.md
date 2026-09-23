@@ -23,9 +23,9 @@ npm test && node build.js     # the pre-push gate: every suite in package.json's
 npm run smoke                 # for any change to index-source.html (Playwright smoke harness; needs Chromium + network)
 ```
 
-`npm test` is the same twelve-suite chain CI runs step by step (rules, East feed, data layer + source pins, schema,
-importer, week rows, exports, totals, holidays, publish plan, CI hygiene) and ends with the generator regression;
-`test/ci.test.js` keeps the chain, the workflow steps and the workflow paths filter aligned. `build.js` writes
+`npm test` runs every suite in `package.json`'s test chain - the same suites CI runs step by step - and ends with the
+generator regression; `test/ci.test.js` asserts that the chain, the workflow steps and the workflow paths filter stay
+aligned (no suite count is stated here on purpose: it changes with every added suite). `build.js` writes
 `index.html` locally as a byproduct - `git restore index.html` before committing, never commit it by hand. On a loaded
 machine the wall-clock gates can be raised locally with `SILVIS_RULES_BUDGET_MS` (rules, default 5000 ms) and
 `SILVIS_GEN_BUDGET_MS` (the generator regression, default 10000 ms, and the holidays suite, default 4000 ms, share it);
