@@ -823,6 +823,7 @@ changes, the painter UI, the seed period and the offers cron are on `feat/offers
 review time was `19d4094` "Offers part 5"; trust `git log feat/offers` over this line). Until the merge, `sql/schema.sql` and
 `docs/SCHEMA-REVIEW.md` on `main` lag the live database by those objects — use `feat/offers:sql/schema.sql` for a schema
 review, and add the applied-migration rows to `docs/SCHEMA-REVIEW.md` and the schema table of §4.2 when it merges.
+**9/23 (item IP):** the in-app Setup import's dry run is now period-aware — `pickSeedFile` plans with `importPlan(seed, { now, offerPeriods: true })` exactly as the CLI does (same Central `today`, the two authenticated-read tables unknown), displays the `call_periods` / `call_offers` legs (`seed-period-legs`) and reads the CLI's totals, while Apply of a period-carrying seed remains the CLI's (`scripts/import-seed.js --apply`); rule (review, same day): once a period is live, `docs/silvis-seed.json` is never applied in-app with its `offerPeriods` removed — the app cannot read `call_periods`, and a period-free plan re-adds the available rows the period retired (the Setup card says so) — and the "legacy plan" statements later in this section describe the state before IP.
 Nothing below is in the live app; read the section as the specification.*
 
 Silvis is an **offers** problem where Davenport is a rules problem: the schedule has always been assembled from the
@@ -1417,6 +1418,8 @@ node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL 
 ```
 
 *9/23 (audit T1 / T4): the committed `docs/PREVIEW-2026-11-02-to-2027-01-03.{md,json}` and `docs/PUBLISH-2026-09-23.md` are the record of the 9/23 publish and are never regenerated or overwritten in place — `preview-generate.js` writes to the OS temp dir unless `--out` names a file (a new range gets a new file name), and `publish-preview.js` writes a dry run's, a refused apply's or a nothing-to-apply run's report to the scratch path and a real apply's report to a new dated `docs/PUBLISH-<YYYY-MM-DD>-<hhmm>.md` (UTC) unless `--report` names one; every script under `scripts/` answers `--help` and refuses an unknown flag without running anything (`test/ci.test.js` section 6).*
+
+*9/23 (item IP): `scripts/import-seed.js --apply` remains the only apply path for a seed that carries offer periods — the in-app Setup import now plans period-aware like the CLI for its dry run (same `offerPeriods: true`, same Central `today`, `call_offers` / `call_periods` passed as unknown), displays the period / offer legs and refuses Apply for such a seed.*
 
 - **Input**: the preview's `.schedule` (milestone `.start..end`) and `.backfill.schedule` (`.backfill.range`, the
   fill-open-only pass). A day in both must be identical (else abort). Live rows come from the seven anon-readable

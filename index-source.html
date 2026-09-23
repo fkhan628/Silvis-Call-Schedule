@@ -2555,7 +2555,10 @@ function CallSchedule() {
     }
     let blob = blobRows[0] ? blobRows[0].data : null;
     if (typeof blob === "string") { try { blob = JSON.parse(blob); } catch (e) { throw new Error("config blob is not JSON"); } }
-    return { blob, blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null, blobUpdatedBy: blobRows[0] ? (blobRows[0].updated_by || null) : null, schedule_days: days, time_off: await get("time_off?select=*", "time_off"), availability: await get("availability?select=*", "availability") };
+    // Prompt 14 IP (9/23): call_offers / call_periods are authenticated-read - passed as null (unknown) exactly as the
+    // CLI's fetchLive passes them, so planDiff counts every planned row as an upsert and the numbers equal the CLI's
+    // dry run; an anon read would answer 200 + [] and read as 'every row missing'. The legs are the CLI's to apply.
+    return { blob, blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null, blobUpdatedBy: blobRows[0] ? (blobRows[0].updated_by || null) : null, schedule_days: days, time_off: await get("time_off?select=*", "time_off"), availability: await get("availability?select=*", "availability"), call_offers: null, call_periods: null };
   };
   const pickSeedFile = async (file) => {
     if (!file || !isScheduler) return;
@@ -2566,7 +2569,7 @@ function CallSchedule() {
     try { seed = JSON.parse(await file.text()); }
     catch (e) { setSeedState(s => ({ ...s, loading: false, error: "That file is not valid JSON: " + errText(e) })); showToast("Seed file is not valid JSON.", "error"); return; }
     let plan;
-    try { plan = IMP.importPlan(seed, { now: new Date().toISOString() }); }
+    try { plan = IMP.importPlan(seed, { now: new Date().toISOString(), offerPeriods: true }); }   // IP: period-aware, exactly like scripts/import-seed.js
     catch (e) {
       const msg = errText(e);
       console.warn("importPlan refused the seed:", msg);
@@ -2574,17 +2577,20 @@ function CallSchedule() {
       showToast(/CONTACT_DATA_REFUSED/.test(msg) ? "Seed REFUSED: it carries contact data. Nothing was read into the app." : "Seed refused: " + msg.slice(0, 160), "error");
       return;
     }
-    // Prompt 14 (9/23 rebase review): this is the LEGACY plan (no offerPeriods option) - it converts none of the seed's
-    // offer periods into call_periods / call_offers and would re-add the whitelist months and 'available' rows the
-    // period-aware CLI apply retired for the surgeons who submitted offers. A seed that carries periods is therefore
-    // dry-run only in the app (Apply refused below and in applySeedImport); scripts/import-seed.js --apply is the
-    // period-aware path. plan.offerPeriods = { enabled: false, seedPeriods } (importer.js importPlan).
-    const periodGap = plan.offerPeriods && plan.offerPeriods.enabled !== true ? (plan.offerPeriods.seedPeriods || 0) : 0;
+    // Prompt 14 IP (9/23): the plan is PERIOD-AWARE, exactly like scripts/import-seed.js (offerPeriods: true; today =
+    // the Central date of now, importer.impCentralToday), and fetchLiveForImport passes the two authenticated-read
+    // tables as null (unknown) as the CLI does, so the diff text, the counts and 'Total changes' read as the CLI's dry
+    // run does (every planned call_periods / call_offers row counts as an upsert). The app has NO writer for those two
+    // legs and never deletes the availability rows a period retires, so a plan that carries periods is dry-run only
+    // here (Apply refused below and in applySeedImport): scripts/import-seed.js --apply is the one apply path for such
+    // a seed. A seed without offerPeriods plans and applies exactly as before (plan.offerPeriods.seedPeriods = 0, no
+    // legs, Apply allowed; its diff text carries the CLI's two 'call_periods / call_offers: plan 0 row(s)' lines).
+    const periodGap = plan.offerPeriods ? (plan.offerPeriods.seedPeriods || 0) : 0;
     try {
       const live = await fetchLiveForImport();
       const diff = IMP.planDiff(plan, live);
       setSeedState(s => ({ ...s, loading: false, plan, diff, live, periodGap }));
-      showToast(diff.totalChanges === 0 ? "Dry run: the live tables already match the seed." : periodGap > 0 ? `Dry run: ${diff.totalChanges} change(s) - Apply is refused in the app: the seed carries ${periodGap} offer period(s) this import does not convert. Apply it with the CLI (scripts/import-seed.js --apply).` : `Dry run: ${diff.totalChanges} change(s) - review, then Apply.`, periodGap > 0 && diff.totalChanges > 0 ? "error" : "info");
+      showToast(periodGap > 0 ? `Dry run: ${diff.totalChanges} change(s) as the CLI's dry run counts them (the ${(plan.periodRows || []).length} period / ${(plan.offerRows || []).length} offer rows are upserts the app cannot verify) - Apply is refused in the app: the seed carries ${periodGap} offer period(s); apply it with the CLI (scripts/import-seed.js --apply).` : diff.totalChanges === 0 ? "Dry run: the live tables already match the seed." : `Dry run: ${diff.totalChanges} change(s) - review, then Apply.`, "info");
     } catch (e) {
       console.warn("seed dry run failed", e);
       setSeedState(s => ({ ...s, loading: false, error: "Dry run failed (live rows could not be read): " + errText(e) }));
@@ -2594,7 +2600,7 @@ function CallSchedule() {
   const applySeedImport = async () => {
     const st = seedState;
     if (!isScheduler || !st.plan || !st.diff || st.applying) return;
-    if ((st.periodGap || 0) > 0) { showToast(`Apply refused: the seed carries ${st.periodGap} offer period(s) this in-app import does not convert - apply it with the CLI (scripts/import-seed.js --apply). Nothing was written.`, "error"); return; }
+    if ((st.periodGap || 0) > 0) { showToast(`Apply refused: the seed carries ${st.periodGap} offer period(s) - the app writes no call_periods / call_offers rows and deletes none of the availability rows a period retires; apply it with the CLI (scripts/import-seed.js --apply). Nothing was written.`, "error"); return; }
     if (!blobLoadedRef.current) { showToast("The shared setup has not loaded this session - reload before importing (a blob merge over unread data is refused).", "error"); return; }
     const IMP = window.SilvisImporter;
     if (!confirm(`Apply the seed import?\n\n${st.diff.totalChanges} change(s) in the dry run. A snapshot is saved first; if that fails nothing is written. App-edited days are never overwritten.`)) return;
@@ -8533,11 +8539,11 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
   const fileRef = React.useRef(null);
   const d = state.diff;
   const t = d && d.tables;
-  const periodBlocked = (state.periodGap || 0) > 0; // Prompt 14: the legacy plan did not convert the seed's offer periods - dry run only
+  const periodBlocked = (state.periodGap || 0) > 0; // Prompt 14 IP: the plan carries offer periods - its call_periods / call_offers legs are the CLI's to apply; dry run only here
   const canApply = !!(d && !state.applying && (d.totalChanges > 0) && !periodBlocked);
   return (
     <div data-testid="seed-card">
-      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Reads docs/silvis-seed.json (repo or OneDrive copy) through importer.importPlan - a file that carries contact data is refused before anything is read into the app. The dry run diffs the plan against freshly read live rows. Apply snapshots first, merges the blob, inserts only missing availability / vacation rows and writes schedule days only where a day is missing or still source "import" (an app-edited day is never overwritten) through the compare-and-swap sync.</p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Reads docs/silvis-seed.json (repo or OneDrive copy) through importer.importPlan - a file that carries contact data is refused before anything is read into the app. The dry run diffs the plan against freshly read live rows. Apply snapshots first, merges the blob, inserts only missing availability / vacation rows and writes schedule days only where a day is missing or still source "import" (an app-edited day is never overwritten) through the compare-and-swap sync. A seed that carries offer periods is planned period-aware (as the CLI plans it) and is dry-run only here: its call_periods / call_offers legs and the retirement of the availability rows they replace are the CLI's to apply. Once a period is live, never apply the seed here with its offerPeriods removed: the app cannot see call_periods, and a period-free plan re-adds the available rows the period retired.</p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
         <input ref={fileRef} data-testid="seed-file" type="file" accept="application/json,.json" style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) onPick(f); }} />
         <button data-testid="seed-pick" onClick={() => fileRef.current && fileRef.current.click()} disabled={state.applying} style={{ ...css.btn(true), padding: "6px 14px" }}>Choose seed file (dry run)</button>
@@ -8555,6 +8561,15 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
             {t && <span>availability: insert {t.availability.insert}, update {t.availability.update}, unchanged {t.availability.unchanged}{t.availability.delete ? ", stale " + t.availability.delete : ""}</span>}
             {t && <span>time_off: insert {t.time_off.insert}, unchanged {t.time_off.unchanged}{t.time_off.delete ? ", stale " + t.time_off.delete : ""}</span>}
           </div>
+          {periodBlocked && state.plan && (
+            <div data-testid="seed-period-legs" style={{ fontSize: 12, marginBottom: 6, padding: "6px 8px", border: "1px dashed #c8d8e8", borderRadius: 6, background: "#fff" }}>
+              <div style={{ marginBottom: 2 }}><strong>Offer periods in this plan</strong> (planned as the CLI plans them; today {state.plan.offerPeriods && state.plan.offerPeriods.today} Central):</div>
+              {(state.plan.periodRows || []).map(p => <div key={p.start_day} data-testid="seed-period-row">call_periods: <strong>{p.label}</strong> {p.start_day}..{p.end_day} (offers close {p.offers_close_at}, publish by {p.publish_by}; rules-only: {(p.rules_only_ids || []).map(id => nameOf(id)).join(", ") || "nobody"})</div>)}
+              <div data-testid="seed-offer-row">call_offers: {(state.plan.offerRows || []).length} row(s) - {Object.keys((state.plan.stats && state.plan.stats.offersByPerson) || {}).map(id => nameOf(id) + " " + state.plan.stats.offersByPerson[id]).join(", ") || "none"}{state.plan.offerSkips && state.plan.offerSkips.length ? `; ${state.plan.offerSkips.length} skipped (inside a seed vacation)` : ""}</div>
+              <div>availability rows the period retires (seed-owned, no longer in the plan): delete {t ? t.availability.delete : 0}{t && t.availability.delete ? " - listed in the diff below" : " - none left live"}</div>
+              <div style={{ color: "#a83232", marginTop: 4 }}>These legs are applied by the CLI only (node scripts/import-seed.js --apply): the app writes no call_periods / call_offers rows and deletes no retired availability rows. Both tables are authenticated-read, so - like the CLI's dry run - every planned period / offer row above counts as an upsert in 'Total changes'; the CLI verifies them from its own returning rows after the apply.</div>
+            </div>
+          )}
           <pre data-testid="seed-diff-text" style={{ fontSize: 11, fontFamily: mono, background: "#fff", border: "1px solid #DCE3EC", borderRadius: 6, padding: 8, maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", margin: "0 0 8px" }}>{d.text}</pre>
           {d.totalDeletes > 0 && <div style={{ ...css.warnBox, marginBottom: 8 }}>{d.totalDeletes} stale seed-owned row(s) are listed above; the in-app import never deletes rows (the CLI import does). Remove them by hand if they should go.</div>}
           {state.live && state.live.blobUpdatedBy && state.live.blobUpdatedBy !== "seed" && t && Object.keys(t.call_schedule_data.keys).filter(k => t.call_schedule_data.keys[k] !== "unchanged").length > 0 && (
@@ -8565,7 +8580,7 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
           {state.plan && state.plan.infoDeltas && state.plan.infoDeltas.length > 0 && <details style={{ fontSize: 11, marginBottom: 8 }}><summary>{state.plan.infoDeltas.length} email update(s) already applied inside the seed (informational)</summary><ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{state.plan.infoDeltas.map((l, i) => <li key={i}>{l}</li>)}</ul></details>}
           {periodBlocked && (
             <div data-testid="seed-period-block" style={{ ...css.warnBox, marginBottom: 8 }}>
-              <strong>Apply is refused in the app for this seed:</strong> it carries {state.periodGap} offer period(s) and this in-app import plans without them (the legacy plan) - it would write no call_periods / call_offers rows and would re-add the whitelist months and available rows the period retires for the surgeons who submitted offers. Apply it from the repo with the CLI: <span style={{ fontFamily: mono }}>node scripts/import-seed.js --apply --workdir &lt;linked dir&gt;</span> (dry run first). The dry run above is informational only.
+              <strong>Apply is refused in the app for this seed:</strong> it carries {state.periodGap} offer period(s). The dry run plans them exactly as the CLI does, but the app has no writer for call_periods / call_offers and never deletes the availability rows a period retires - applying the other tables alone would leave the period half-applied. Apply it from the repo with the CLI: <span style={{ fontFamily: mono }}>node scripts/import-seed.js --apply --workdir &lt;linked dir&gt;</span> (dry run first). The dry run above is informational only.
             </div>
           )}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

@@ -485,6 +485,10 @@ const IMP = require(path.join(ROOT, "importer.js"));
 const SEED_PATH = path.join(ROOT, "docs", "silvis-seed.json");
 const PLAN_TS = "2026-09-22T00:00:00.000Z";
 const PLAN = IMP.importPlan(JSON.parse(fs.readFileSync(SEED_PATH, "utf8")), { now: PLAN_TS });
+// Prompt 14 IP (9/23): the app's Setup import plans PERIOD-AWARE like scripts/import-seed.js (offerPeriods: true, today =
+// the Central date of the real now - offers are planned for days on/after today only), so the Import pins restate the
+// period / offer legs from this plan; PLAN above (the legacy plan) still serves the fixtures and the schedule days.
+const PLAN_P = IMP.importPlan(JSON.parse(fs.readFileSync(SEED_PATH, "utf8")), { now: new Date().toISOString(), offerPeriods: true });
 
 // ---- Seed fixture fallback (see the header) ----
 const fixture = await (async () => {
@@ -4658,7 +4662,7 @@ try {
       const total = await page.$eval("[data-testid=seed-total]", el => el.innerText.replace(/\s+/g, " "));
       const diffText = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
       const applyDisabled = await page.$eval("[data-testid=seed-apply]", el => el.disabled);
-      const impWrites = writesSince(before).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
+      const impWrites = writesSince(before).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off|call_offers|call_periods)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
       // Prompt 12 SM2: the expectation is the harness's own diff of PLAN (the importer's plan for the seed,
       // computed at the top of this file) against the live rows (the fixture rows in fixture mode),
       // restating the importer's ownership rule: a plan day whose live row differs (holders, lock flags,
@@ -4672,29 +4676,72 @@ try {
       const seedOwned = (l) => !!l && l.source === "import" && (l.updated_by || "") === "seed";
       const planByDay = {}; PLAN.scheduleDayRows.forEach(r => { planByDay[r.day] = r; });
       const planDays = Object.keys(planByDay).sort();
-      const planInserts = planDays.filter(d => !liveByDay[d]);
-      const planUpdates = planDays.filter(d => liveByDay[d] && !sameRow(liveByDay[d], planByDay[d]) && seedOwned(liveByDay[d]));
-      const planBlocked = planDays.filter(d => liveByDay[d] && !sameRow(liveByDay[d], planByDay[d]) && !seedOwned(liveByDay[d]));
-      const planUnchanged = planDays.filter(d => liveByDay[d] && sameRow(liveByDay[d], planByDay[d]));
+      // IP fix (9/23): the table the app is served carries the board scenario's claim (claimedDays, overlaid on every
+      // schedule_days GET - source 'claim', updated_by 's1'), so the restatement reads the same rows the app does (the
+      // Apply restatement below already does, via liveFor). Without it fixture mode read the claimed 10/07 as
+      // 'unchanged' while the app read it BLOCKED ('+1 blocked' on every Import pin there since the claim scenario).
+      const liveImp = {}; planDays.forEach(d => { if (liveByDay[d]) liveImp[d] = { ...liveByDay[d], ...(claimedDays[d] || {}) }; });
+      const planInserts = planDays.filter(d => !liveImp[d]);
+      const planUpdates = planDays.filter(d => liveImp[d] && !sameRow(liveImp[d], planByDay[d]) && seedOwned(liveImp[d]));
+      const planBlocked = planDays.filter(d => liveImp[d] && !sameRow(liveImp[d], planByDay[d]) && !seedOwned(liveImp[d]));
+      const planUnchanged = planDays.filter(d => liveImp[d] && sameRow(liveImp[d], planByDay[d]));
       // The importer lists a blocked day as one line per changed slot ('P a -> b', 'B a -> b'; one 'locks/note
       // change' line when the holders agree), and the panel's '(+N blocked)' counts those LINES; the diff's
       // schedule_days summary line counts the DAYS. Both are restated.
-      const blockedLinesOf = (d) => { const l = liveByDay[d], r = planByDay[d]; const p = (l.primary_id || null) !== (r.primary_id || null) || (l.external_cover || null) !== (r.external_cover || null); const b = (l.backup_id || null) !== (r.backup_id || null); return Math.max(1, (p ? 1 : 0) + (b ? 1 : 0)); };
+      const blockedLinesOf = (d) => { const l = liveImp[d], r = planByDay[d]; const p = (l.primary_id || null) !== (r.primary_id || null) || (l.external_cover || null) !== (r.external_cover || null); const b = (l.backup_id || null) !== (r.backup_id || null); return Math.max(1, (p ? 1 : 0) + (b ? 1 : 0)); };
       const planBlockedLines = planBlocked.reduce((n, d) => n + blockedLinesOf(d), 0);
       const blockedSuffix = planBlockedLines ? ` (+${planBlockedLines} blocked: app-edited days kept)` : "";
-      const expDryTotal = "Total changes: 0" + blockedSuffix;
-      const expDryTail = planBlockedLines ? `Total changes: 0 (+${planBlockedLines} blocked)` : "No changes - the live tables already match the plan.";
+      // Prompt 14 IP (9/23): the app plans PERIOD-AWARE like scripts/import-seed.js and - like the CLI - passes the two
+      // authenticated-read tables as unknown, so every planned call_periods / call_offers row counts as an upsert in
+      // 'Total changes' (the CLI's dry run against the live project on 9/23 read 'Total changes: 80 (+30 blocked)' =
+      // 1 period + 79 offers; the 0 of the pre-IP pin is what the CLI's post-apply VERIFIED line reads, which diffs the
+      // rows the SQL returned). Restated from the harness's own period-aware plan (PLAN_P) plus the availability rows
+      // the plan lacks / the seed-owned live rows the plan no longer carries (0 / 0 once the period apply retired
+      // Burchett's 20 in-period rows; the fixture rows still hold them, so fixture mode reads them as deletes).
+      const nm = (id) => ((PLAN_P.blob.roster || []).find(r => r.id === id) || {}).name || id;
+      const perLabel = PLAN_P.periodRows[0] ? PLAN_P.periodRows[0].label : "";
+      const avKey0 = (r) => [r.person_id, r.kind, r.role || "any", String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10), r.source || ""].join("|");
+      const anonRowsOf = async (table, select) => { const r = await fetch(`https://${SUPABASE_HOST}/rest/v1/${table}?select=${select}`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } }); if (!r.ok) throw new Error(`${table} anon read: HTTP ${r.status}`); const rows = await r.json(); if (!Array.isArray(rows)) throw new Error(`${table} anon read: body is not an array`); return rows; };
+      const liveAv0 = fixture ? fixture.availability : await anonRowsOf("availability", "person_id,kind,role,start_date,end_date,source");
+      const havePlanAv = new Set(PLAN_P.availabilityRows.map(avKey0)), haveLiveAv = new Set(liveAv0.map(avKey0));
+      const avIns0 = PLAN_P.availabilityRows.filter(r => !haveLiveAv.has(avKey0(r)));
+      const avDel0 = liveAv0.filter(r => r.source === "seed" && !havePlanAv.has(avKey0(r)));
+      const offerUpserts = PLAN_P.periodRows.length + PLAN_P.offerRows.length;
+      const offersWords = Object.keys(PLAN_P.stats.offersByPerson).map(id => `${nm(id)} ${PLAN_P.stats.offersByPerson[id]}`).join(", ");
+      // IP fix (9/23, review): the blob keys the plan would change, restated from the plan's blob against the blob the
+      // app reads (liveBlobData: the live 'main' row, or the fixture's) under the importer's own key rules - the seed
+      // owns the pool roster only (live outside surgeons ride along), settings are merged so only the seed's keys (and
+      // a retired key still live) compare, importedAt never counts; a key the live blob lacks is a change. 0 in live
+      // mode once the period apply left the blob = the period-aware plan's; in fixture mode the fixture blob is the
+      // LEGACY plan's, so surgeonRules (the retired months) and settings (the seedCoreHash stamp) read as updates there.
+      const canonJ = (v) => v === undefined ? "undefined" : (v === null || typeof v !== "object") ? JSON.stringify(v) : Array.isArray(v) ? "[" + v.map(canonJ).join(",") + "]" : "{" + Object.keys(v).sort().map(k => JSON.stringify(k) + ":" + canonJ(v[k])).join(",") + "}";
+      const blobDeltaOf = (planBlob) => Object.keys(planBlob).filter(k => {
+        let mine = planBlob[k], theirs = liveBlobData ? liveBlobData[k] : undefined;
+        if (theirs === undefined) return true;
+        if (k === "roster" && Array.isArray(theirs)) { const ids = new Set(mine.map(r => r.id)); mine = mine.concat(theirs.filter(r => r && r.type === "external" && !ids.has(r.id))); }
+        if (k === "settings") { mine = { ...mine }; delete mine.importedAt; const sub = {}; Object.keys(mine).forEach(kk => { sub[kk] = theirs[kk]; }); if ("seedRevisions" in theirs) sub.seedRevisions = theirs.seedRevisions; theirs = sub; }
+        return canonJ(mine) !== canonJ(theirs);
+      });
+      const blobDelta = blobDeltaOf(PLAN_P.blob);
+      const expChanges = blobDelta.length + offerUpserts + avIns0.length + avDel0.length;
+      const expDryTotal = `Total changes: ${expChanges}` + blockedSuffix;
+      const expDryTail = `Total changes: ${expChanges}` + (avDel0.length ? ` (incl. ${avDel0.length} delete(s) of seed-owned rows)` : "") + (planBlockedLines ? ` (+${planBlockedLines} blocked)` : "");
+      const legs0 = await page.$eval("[data-testid=seed-period-legs]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
       const expSdLine = `schedule_days: insert ${planInserts.length}, update ${planUpdates.length}, delete 0, unchanged ${planUnchanged.length}${planBlocked.length ? ", BLOCKED " + planBlocked.length : ""}`;
       const dryLines = diffText.trim().split("\n").map(l => l.trim());
       const dryTail = dryLines.slice(-1)[0];
       const drySdLine = dryLines.find(l => l.startsWith("schedule_days: ")) || "(no schedule_days line)";
       console.log(`     (Import dry run, restated from the plan's ${planDays.length} days vs the ${liveRows.length} ${fixture ? "fixture" : "live"} rows: ${planInserts.length} missing, ${planUpdates.length} seed-owned day(s) differing (would update), ${planUnchanged.length} unchanged, ${planBlocked.length} day(s) differing that the app edited / published since the import = ${planBlockedLines} blocked slot line(s) (never overwritten${planBlocked.length ? ": " + planBlocked.slice(0, 5).join(", ") + (planBlocked.length > 5 ? ", ... " + planBlocked.slice(-1)[0] : "") : ""}))`);
-      if (planInserts.length || planUpdates.length) fail(`Import dry run premise: the live rows do not hold the seed - ${planInserts.length} plan day(s) missing, ${planUpdates.length} seed-owned day(s) differing (${[...planInserts, ...planUpdates].slice(0, 6).join(", ")}) - the orchestrator's pending seed apply, not a harness expectation`);
-      if (total.trim() !== expDryTotal || dryTail !== expDryTail || drySdLine !== expSdLine) fail(`Import dry run: expected '${expDryTotal}', the diff text ending '${expDryTail}' and its schedule_days line '${expSdLine}' (${planBlocked.length} blocked day(s) = ${planBlockedLines} blocked line(s), restated from the live rows), got '${total.trim()}' | '${dryTail}' | '${drySdLine}'`);
-      else if (!applyDisabled) fail("Import dry run: Apply must be disabled when there is nothing to apply");
+      const expBlobLine = "call_schedule_data 'main': " + Object.keys(PLAN_P.blob).map(k => k + "=" + (blobDelta.includes(k) ? (liveBlobData && Object.keys(liveBlobData).length ? "update" : "insert") : "unchanged")).join(", ");
+      const dryBlobLine = dryLines.find(l => l.startsWith("call_schedule_data 'main': ")) || "(no call_schedule_data line)";
+      if (planInserts.length || planUpdates.length || avIns0.length || (!fixture && blobDelta.length)) fail(`Import dry run premise: the live rows do not hold the seed - ${planInserts.length} plan day(s) missing, ${planUpdates.length} seed-owned day(s) differing (${[...planInserts, ...planUpdates].slice(0, 6).join(", ")}), ${avIns0.length} availability row(s) of the period-aware plan missing (${avIns0.slice(0, 4).map(r => r.person_id + " " + r.start_date).join(", ")}), blob key(s) differing from the period-aware plan's: ${blobDelta.join(", ") || "none"} - the orchestrator's pending seed apply, not a harness expectation`);
+      if (total.trim() !== expDryTotal || dryTail !== expDryTail || drySdLine !== expSdLine || dryBlobLine !== expBlobLine) fail(`Import dry run: expected '${expDryTotal}', the diff text ending '${expDryTail}', its schedule_days line '${expSdLine}' (${planBlocked.length} blocked day(s) = ${planBlockedLines} blocked line(s), restated from the rows the app is served) and its blob line '${expBlobLine}' (${blobDelta.length} key(s) restated against the ${fixture ? "fixture" : "live"} blob), got '${total.trim()}' | '${dryTail}' | '${drySdLine}' | '${dryBlobLine}'`);
+      else if (!new RegExp("call_periods: plan " + PLAN_P.periodRows.length + " row\\(s\\)").test(diffText) || !new RegExp("call_offers: plan " + PLAN_P.offerRows.length + " row\\(s\\)").test(diffText) || !diffText.includes(`offers status (${perLabel})`)) fail(`Import dry run: the diff text must carry the CLI's period legs ('call_periods: plan ${PLAN_P.periodRows.length} row(s)', 'call_offers: plan ${PLAN_P.offerRows.length} row(s)', 'offers status (${perLabel})'): ` + diffText.split("\n").filter(l => /^call_(periods|offers)|^offers status/.test(l)).join(" | ").slice(0, 400));
+      else if (!legs0.includes(perLabel) || !Object.keys(PLAN_P.stats.offersByPerson).every(id => legs0.includes(`${nm(id)} ${PLAN_P.stats.offersByPerson[id]}`)) || !/applied by the CLI only/.test(legs0)) fail(`Import dry run: the seed-period-legs panel must name the period '${perLabel}', the offers per surgeon (${offersWords}) and say the legs are applied by the CLI only: ` + legs0.slice(0, 300));
+      else if (!applyDisabled) fail("Import dry run: Apply must be disabled for a plan that carries offer periods (the legs are the CLI's)");
       else if (impWrites.length) fail("Import dry run wrote something: " + JSON.stringify(impWrites.map(w => w.method + " " + w.path)));
-      else ok(`Import seed dry run (docs/silvis-seed.json): 0 changes against the live rows${planBlocked.length ? ` (+${planBlockedLines} blocked slot lines on ${planBlocked.length} plan days the app published since the import, kept as they are; ${planUnchanged.length} unchanged)` : ""}, Apply disabled, no writes`);
-      diffText.split("\n").filter(l => /^(call_schedule_data|schedule_days|availability|time_off)/.test(l)).forEach(l => console.log("     " + l));
+      else ok(`Import seed dry run (docs/silvis-seed.json): period-aware like the CLI - ${expChanges} change(s) = ${PLAN_P.periodRows.length} call_periods + ${PLAN_P.offerRows.length} call_offers upserts (authenticated-read tables, unknown to this dry run as to the CLI's; ${offersWords}) + ${avIns0.length} availability insert(s) + ${avDel0.length} retired-row delete(s) + ${blobDelta.length} blob key(s)${blobDelta.length ? " (" + blobDelta.join(", ") + " - the " + (fixture ? "fixture blob is the legacy plan's" : "live blob differs") + ")" : ""}; time_off / schedule_days 0 change(s)${planBlocked.length ? ` (+${planBlockedLines} blocked slot lines on ${planBlocked.length} plan days the app published since the import, kept as they are; ${planUnchanged.length} unchanged)` : ""}; the legs panel names '${perLabel}' and the offers per surgeon; Apply refused, no writes`);
+      diffText.split("\n").filter(l => /^(call_schedule_data|schedule_days|availability|time_off|call_periods|call_offers|offers status|Total changes)/.test(l)).forEach(l => console.log("     " + l));
       await page.locator("[data-testid=card-setup_import]").screenshot({ path: path.join(OUT, "import-dryrun.png") });
       ok("screenshot test/ui/out/import-dryrun.png");
       // a seed with an injected contact KEY (no address anywhere - the key name alone is refused)
@@ -4728,14 +4775,26 @@ try {
         await page.waitForTimeout(400);
         const total3 = await page.$eval("[data-testid=seed-total]", el => el.innerText.replace(/\s+/g, " "));
         const diff3 = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
-        // RF2 review fix: a seed change under a core key moves settings too (the seedCoreHash stamp follows the seed-owned content), so the extra date reads surgeonRules=update + settings=update + 1 availability insert = 3 changes
-        if (total3.trim() !== "Total changes: 3" + blockedSuffix || !/settings=update/.test(diff3) || !new RegExp("insert s2 available/any " + extra).test(diff3) || !/surgeonRules=update/.test(diff3)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: 3${blockedSuffix}' (blob surgeonRules + 1 availability insert${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules/.test(l)).join(" | ")}`);
-        else ok(`Import apply dry run: extra Burchett date ${extra} -> 3 changes (surgeonRules=update, settings=update - the seedCoreHash stamp, insert s2 available/any ${extra})${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
-        // Prompt 14 (9/23 rebase review): the in-app plan is the LEGACY one (no offerPeriods), so a seed that carries
-        // periods is dry-run only in the app - the block note shows, Apply is disabled although the diff has 3 changes,
-        // the importer's own 'did NOT convert' line is in the diff text, nothing is written. The Apply mechanics below
-        // then run on the same seed WITHOUT offerPeriods (importer: a byte-identical legacy plan - blob, availability,
-        // time_off and schedule days - checked at node level: importPlan(seed) vs importPlan(seed minus offerPeriods)).
+        // RF2 review fix: a seed change under a core key moves settings too (the seedCoreHash stamp follows the seed-owned content).
+        // Prompt 14 IP (9/23): the extra date sits inside the period Burchett submitted for (exhaustive), so the period-aware
+        // plan makes it an OFFER row, not an available row (the period retires his in-period available rows): surgeonRules=update
+        // + settings=update + the period / offer upserts (+ the retired-row deletes of the first pin, 0 live). The CLI's dry run
+        // against the live project on 9/23 read 'Total changes: 83 (+30 blocked)' = 2 + 1 period + 80 offers.
+        const plan3P = IMP.importPlan(seed3, { now: new Date().toISOString(), offerPeriods: true });
+        // the extra date moves surgeonRules and settings; in fixture mode those two keys already differ (the fixture blob is
+        // the legacy plan's), so the blob's share is the union - restated from plan3P's blob, as the first pin restates PLAN_P's
+        const blobDelta3 = blobDeltaOf(plan3P.blob);
+        if (!blobDelta3.includes("surgeonRules") || !blobDelta3.includes("settings")) fail(`Import apply dry run (extra ${extra}) premise: the extra date must move surgeonRules and settings in the restatement (blob keys differing: ${blobDelta3.join(", ") || "none"})`);
+        const expTotal3 = blobDelta3.length + plan3P.periodRows.length + plan3P.offerRows.length + avDel0.length;
+        const legs3 = await page.$eval("[data-testid=seed-period-legs]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+        if (plan3P.offerRows.length !== PLAN_P.offerRows.length + 1 || plan3P.availabilityRows.length !== PLAN_P.availabilityRows.length) fail(`Import apply dry run (extra ${extra}) premise: the period-aware plan of the seed plus one Burchett December date must carry one more offer row and the same availability rows (offers ${PLAN_P.offerRows.length} -> ${plan3P.offerRows.length}, availability ${PLAN_P.availabilityRows.length} -> ${plan3P.availabilityRows.length})`);
+        else if (total3.trim() !== `Total changes: ${expTotal3}` + blockedSuffix || !/settings=update/.test(diff3) || !/surgeonRules=update/.test(diff3) || new RegExp("insert s2 available/any " + extra).test(diff3) || !new RegExp("call_offers: plan " + plan3P.offerRows.length + " row\\(s\\)").test(diff3) || !legs3.includes(`${nm("s2")} ${plan3P.stats.offersByPerson.s2}`)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: ${expTotal3}${blockedSuffix}' (surgeonRules + settings + ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts${avDel0.length ? " + " + avDel0.length + " retired-row delete(s)" : ""}, NO 'insert s2 available/any ${extra}' - the date is an offer - and the legs naming ${nm("s2")} ${plan3P.stats.offersByPerson.s2}${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules|call_offers: plan/.test(l)).join(" | ")} | legs: ${legs3.slice(0, 200)}`);
+        else ok(`Import apply dry run: extra Burchett date ${extra} -> ${expTotal3} changes as the CLI counts them (surgeonRules=update, settings=update - the seedCoreHash stamp, ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts - the date is one more offer of ${nm("s2")}'s, not an available row)${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
+        // Prompt 14 IP (9/23): the in-app plan is period-aware, but the app has no writer for call_periods / call_offers and
+        // never deletes the rows a period retires, so a seed that carries periods is dry-run only in the app - the block note
+        // and the legs panel show, Apply is disabled although the diff has changes, the importer's period-aware status table
+        // is in the diff text, nothing is written. The Apply mechanics below then run on the same seed WITHOUT offerPeriods
+        // (the legacy plan: no legs, and Burchett's retired in-period available rows are back in it - see the restatement).
         {
           const seedPeriodCount = Array.isArray(seed3.offerPeriods) ? seed3.offerPeriods.length : 0;
           const blockNote = await page.$("[data-testid=seed-period-block]");
@@ -4744,10 +4803,11 @@ try {
           const periodWrites = writesSince(before3).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off|call_offers|call_periods)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
           if (!seedPeriodCount) fail("Import period refusal premise: docs/silvis-seed.json carries no offerPeriods[] - the refusal cannot be exercised");
           else if (!blockNote || !new RegExp("carries " + seedPeriodCount + " offer period\\(s\\)").test(blockText) || !/scripts\/import-seed\.js --apply/.test(blockText)) fail("Import period refusal: the seed-period-block note is missing or does not name the period count and the CLI command: " + blockText.slice(0, 240));
-          else if (!applyDisabled3) fail("Import period refusal: Apply must be disabled for a seed that carries offer periods the in-app plan did not convert (3 changes in the diff, still refused)");
-          else if (!new RegExp("offer periods: the seed carries " + seedPeriodCount + " period\\(s\\) that this plan did NOT convert").test(diff3)) fail("Import period refusal: the importer's 'did NOT convert' line is missing from the diff text");
+          else if (!applyDisabled3) fail(`Import period refusal: Apply must be disabled for a plan that carries offer periods (${expTotal3} changes in the diff, still refused - the legs are the CLI's)`);
+          else if (!/offers status \(/.test(diff3) || /did NOT convert/.test(diff3)) fail("Import period refusal: the diff text must carry the importer's period-aware status table ('offers status (<label>): ...') and no 'did NOT convert' line");
+          else if (!legs3 || !legs3.includes(seed3.offerPeriods[0].label) || !/applied by the CLI only/.test(legs3)) fail("Import period refusal: the seed-period-legs panel must name the period and say the legs are applied by the CLI only: " + legs3.slice(0, 240));
           else if (periodWrites.length) fail("Import period refusal wrote something: " + JSON.stringify(periodWrites.map(w => w.method + " " + w.path)));
-          else ok(`Import: a seed carrying ${seedPeriodCount} offer period(s) is dry-run only in the app - seed-period-block note (period count + the CLI command), Apply disabled at 3 changes, the importer's 'did NOT convert' line in the diff, no writes`);
+          else ok(`Import: a seed carrying ${seedPeriodCount} offer period(s) is dry-run only in the app - seed-period-block note (period count + the CLI command), the legs panel (period '${seed3.offerPeriods[0].label}', offers per surgeon, 'applied by the CLI only'), Apply disabled at ${expTotal3} changes, the period-aware status table in the diff, no writes`);
           await page.locator("[data-testid=card-setup_import]").screenshot({ path: path.join(OUT, "import-period-refusal.png") });
           ok("screenshot test/ui/out/import-period-refusal.png");
           delete seed3.offerPeriods;
@@ -4757,10 +4817,23 @@ try {
           await page.waitForSelector("[data-testid=seed-dryrun]", { timeout: 60000 });
           await page.waitForTimeout(600);
           const total3b = await page.$eval("[data-testid=seed-total]", el => el.innerText.replace(/\s+/g, " "));
-          if (total3b.trim() !== total3.trim()) fail(`Import apply dry run (no periods): the legacy plan of the same seed without offerPeriods must read the same total - got '${total3b.trim()}' vs '${total3.trim()}'`);
-          else if (await page.$("[data-testid=seed-period-block]")) fail("Import apply dry run (no periods): the period block note must not show for a period-free seed");
-          else if (await page.$eval("[data-testid=seed-apply]", el => el.disabled)) fail("Import apply dry run (no periods): Apply must be enabled (3 changes, no periods)");
-          else ok(`Import apply dry run (no periods): the same seed without offerPeriods -> ${total3b.trim()}, no block note, Apply enabled`);
+          const diff3b = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
+          // IP: without offerPeriods the plan equals the legacy one (the app still passes offerPeriods: true, as the CLI
+          // does, so the diff text carries the CLI's two 'plan 0 row(s)' lines and no status table; no legs panel, no
+          // block note) and the available rows the period retired (Burchett's in-period lists) are back in it, so the dry
+          // run reads surgeonRules + settings + every availability row the live table lacks (the retired rows + the extra
+          // date; just the extra before the period apply).
+          const plan3L = IMP.importPlan(seed3, { now: PLAN_TS });
+          const plan3LKeys = new Set(plan3L.availabilityRows.map(avKey0));
+          const avIns3L = plan3L.availabilityRows.filter(r => !haveLiveAv.has(avKey0(r)));
+          const avDel3L = liveAv0.filter(r => r.source === "seed" && !plan3LKeys.has(avKey0(r)));
+          const blobDelta3L = blobDeltaOf(plan3L.blob); // surgeonRules + settings (the extra date) - the legacy plan's blob, restated like the pins above
+          const expTotal3b = blobDelta3L.length + avIns3L.length + avDel3L.length;
+          if (total3b.trim() !== `Total changes: ${expTotal3b}` + blockedSuffix || !new RegExp("insert s2 available/any " + extra).test(diff3b) || !/call_periods: plan 0 row\(s\)/.test(diff3b) || !/call_offers: plan 0 row\(s\)/.test(diff3b) || /offers status \(/.test(diff3b)) fail(`Import apply dry run (no periods): the plan of the same seed without offerPeriods must read 'Total changes: ${expTotal3b}${blockedSuffix}' (surgeonRules + settings + ${avIns3L.length} availability insert(s) incl. 'insert s2 available/any ${extra}'${avDel3L.length ? " + " + avDel3L.length + " delete(s)" : ""}; the CLI's 'call_periods: plan 0 row(s)' / 'call_offers: plan 0 row(s)' lines, no status table) - got '${total3b.trim()}' | ${diff3b.split("\n").filter(l => /^availability|insert s2 available\/any 2026-12|^call_(periods|offers)|^offers status/.test(l)).slice(0, 6).join(" | ")}`);
+          else if (await page.$("[data-testid=seed-period-block]") || await page.$("[data-testid=seed-period-legs]")) fail("Import apply dry run (no periods): neither the period block note nor the legs panel may show for a period-free seed");
+          else if (await page.$eval("[data-testid=seed-apply]", el => el.disabled)) fail(`Import apply dry run (no periods): Apply must be enabled (${expTotal3b} changes, no periods)`);
+          else ok(`Import apply dry run (no periods): the same seed without offerPeriods -> ${total3b.trim()} (= the legacy plan: ${avIns3L.length} availability insert(s) = the extra date${avIns3L.length > 1 ? " + the " + (avIns3L.length - 1) + " rows the period retired, which a period-free seed would re-add - the reason a period-carrying seed is refused" : ""}; the CLI's 'plan 0 row(s)' lines for the two offer tables), no block note, no legs, Apply enabled`);
+
         }
         // Prompt 12 SM2: the result panel's counts are restated from the harness's own data, never from
         // the app's summary (the pre-SM2 pin hard-coded Prompt 6's 37-row plan and four Thanksgiving days):
@@ -4792,7 +4865,13 @@ try {
         const haveAv = new Set(liveAv.map(avKey)), haveTo = new Set(liveTo.map(toKey));
         const expAvIns = plan3.availabilityRows.filter(r => !haveAv.has(avKey(r))), expToIns = plan3.timeOffRows.filter(r => !haveTo.has(toKey(r)));
         const expAvSkip = plan3.availabilityRows.length - expAvIns.length, expToSkip = plan3.timeOffRows.length - expToIns.length;
-        if (expAvIns.length !== 1 || expAvIns[0].start_date !== extra || expToIns.length) fail(`Import apply premise: the live availability / time_off tables do not hold the seed - ${expAvIns.length} availability row(s) missing (${expAvIns.map(r => r.person_id + " " + r.start_date).join(", ")}; expected only the extra ${extra}), ${expToIns.length} time_off row(s) missing - the orchestrator's pending seed apply`);
+        // IP (9/23): a period-free seed's legacy plan carries the available rows the period retired for the submitted surgeons
+        // (exactly plan3 minus the period-aware plan3P - Burchett's in-period rows); the app re-adds them, which is why a seed
+        // WITH periods is refused. The premise allows exactly those rows plus the extra date to be missing live, nothing else.
+        const planPKeys = new Set(plan3P.availabilityRows.map(avKey));
+        const retiredKeys = new Set(plan3.availabilityRows.map(avKey).filter(k => !planPKeys.has(k)));
+        const unexpectedMissing = expAvIns.filter(r => !retiredKeys.has(avKey(r)));
+        if (unexpectedMissing.length || !expAvIns.some(r => r.start_date === extra && r.person_id === "s2") || expToIns.length) fail(`Import apply premise: the live availability / time_off tables do not hold the seed - ${expAvIns.length} availability row(s) missing (${expAvIns.map(r => r.person_id + " " + r.start_date).join(", ")}; expected the extra ${extra} plus at most the ${Math.max(0, retiredKeys.size - 1)} row(s) the period retires; unexpected: ${unexpectedMissing.map(r => r.person_id + " " + r.start_date).join(", ") || "none"}), ${expToIns.length} time_off row(s) missing - the orchestrator's pending seed apply`);
         const planMonths = [...new Set(planDays.map(d => d.slice(0, 7)))];
         const readPlanCells = async () => { const out = {}; for (const ym of planMonths) { await showMonth(+ym.slice(0, 4), +ym.slice(5, 7) - 1); const cells = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || null, b: e.getAttribute("data-backup") || null, ext: e.getAttribute("data-ext") || null }))); cells.forEach(c => { if (planByDay[c.day]) out[c.day] = c; }); } return out; };
         const cellDiffers = (c, d) => { const l = liveByDay[d] || {}; return !c || c.p !== (l.primary_id || null) || c.b !== (l.backup_id || null) || c.ext !== (l.external_cover || null); };
@@ -4842,11 +4921,12 @@ try {
         if (aSnap < 0 || aseq[aSnap].snapshotReason !== "seed_import") fail("Import apply: no snapshot 'seed_import' recorded: " + JSON.stringify(aseq.map(w => w.method + " " + w.path)));
         else if (aBlob < 0 || aBlob < aSnap) fail(`Import apply: blob PATCH missing or before the snapshot (snap #${aSnap}, blob #${aBlob})`);
         else if (!(blobBody.data && blobBody.data.surgeonRules && blobBody.data.surgeonRules.s2 && blobBody.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra)) || !blobBody.data.roster || "schedule" in blobBody.data) fail("Import apply: the merged blob is wrong: keys " + Object.keys(blobBody.data || {}).join(","));
-        else if (aAv < 0 || aAv < aSnap || avBody.length !== 1 || avBody[0].start_date !== extra || avBody[0].person_id !== "s2" || avBody[0].source !== "seed") fail(`Import apply: availability insert wrong (index ${aAv}, snap ${aSnap}): ` + JSON.stringify(avBody));
+        else if (aAv < 0 || aAv < aSnap || avBody.length !== expAvIns.length || !avBody.some(r => r.start_date === extra && r.person_id === "s2" && r.source === "seed") || avBody.some(r => !expAvIns.some(e => avKey(e) === avKey(r)))) fail(`Import apply: availability insert wrong (index ${aAv}, snap ${aSnap}; expected exactly the ${expAvIns.length} missing row(s) incl. ${extra}): ` + JSON.stringify(avBody).slice(0, 600));
         else if (aBad.length) fail("Import apply: schedule_days / time_off were written although the restatement expects no change there: " + JSON.stringify(aBad.map(w => w.method + " " + w.path)));
         else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !resText.includes(expResult)) fail(`Import apply: result panel wrong (expected 'Import applied - blob merged; ${expResult}' - ${expAvIns.length} availability insert of ${plan3.availabilityRows.length} plan rows, ${expToIns.length} time_off insert of ${plan3.timeOffRows.length}, ${expKept} plan day(s) kept = ${keptNotOwned.length} not seed-owned live + ${keptDirty.length} still carrying this run's edits): ` + resText);
         else if (!impAudit) fail("Import apply: no audit_log 'seed.import'");
-        else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the 1 missing row (${extra}); ${(expInserted + expUpdated) ? "" : "no schedule_days write, "}${expToIns.length ? "" : "no time_off write; "}audit seed.import; result equals the restatement: "${resText.slice(resText.indexOf("availability inserted"), resText.indexOf("availability inserted") + expResult.length)}"`);
+        else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the ${expAvIns.length} missing row(s) (${extra}${expAvIns.length > 1 ? " + the " + (expAvIns.length - 1) + " rows the period retired - what a period-free seed re-adds" : ""}); ${(expInserted + expUpdated) ? "" : "no schedule_days write, "}${expToIns.length ? "" : "no time_off write; "}audit seed.import; result equals the restatement: "${resText.slice(resText.indexOf("availability inserted"), resText.indexOf("availability inserted") + expResult.length)}"`);
+
         // Roster autosave after the merge must not regress: the extra date stays in the next blob write.
         await page.waitForTimeout(1200);
         const laterBlob = writesSince(beforeApply, "/rest/v1/call_schedule_data").filter(w => w.method === "POST").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).filter(Boolean).slice(-1)[0];

@@ -1760,14 +1760,33 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(/NOT restored \(captured in the backup only/.test(body) && /\(PARTIAL\)/.test(body), "the alert names the tables not restored and says PARTIAL");
     assert.ok(body.includes('na.length ? "error" : "success"'), "the toast is an error when something in the backup was not written");
   });
-  check("P5 (rebase review): the in-app seed import refuses Apply for a seed carrying offer periods the legacy plan did not convert", () => {
-    assert.ok(src.includes("plan = IMP.importPlan(seed, { now: new Date().toISOString() });"), "the in-app plan is still the legacy plan (no offerPeriods) - the refusal below is what makes that safe");
-    assert.ok(src.includes("const periodGap = plan.offerPeriods && plan.offerPeriods.enabled !== true ? (plan.offerPeriods.seedPeriods || 0) : 0;"), "periodGap from plan.offerPeriods");
+  // Prompt 14 IP (9/23): the in-app dry run plans PERIOD-AWARE exactly like scripts/import-seed.js (offerPeriods: true,
+  // today = the Central date of now inside importer.js, the two authenticated-read tables passed as null = unknown, as
+  // the CLI's fetchLive passes them), so its diff text, counts and 'Total changes' read as the CLI's dry run does; the
+  // call_periods / call_offers legs are displayed (seed-period-legs) under the line that says the CLI alone applies
+  // them, and Apply stays refused for a plan that carries periods (the app has no writer for the two tables and never
+  // deletes the availability rows a period retires). A seed without offerPeriods plans and applies exactly as before.
+  check("P5 / IP: the in-app seed import plans period-aware like the CLI, displays the CLI-only legs and refuses Apply for a plan that carries offer periods", () => {
+    assert.ok(src.includes("plan = IMP.importPlan(seed, { now: new Date().toISOString(), offerPeriods: true });"), "the in-app plan is the CLI's period-aware plan (offerPeriods: true; today = the Central date of now inside importer.js)");
+    assert.ok(!src.includes("plan = IMP.importPlan(seed, { now: new Date().toISOString() });"), "the legacy (period-less) plan call is gone from pickSeedFile");
+    assert.ok(src.includes("call_offers: null, call_periods: null"), "fetchLiveForImport passes the two authenticated-read tables as unknown, exactly as the CLI's fetchLive does (never an anon 200 + [] read as empty)");
+    assert.ok(src.includes("const periodGap = plan.offerPeriods ? (plan.offerPeriods.seedPeriods || 0) : 0;"), "periodGap = the offer periods the plan carries (0 for a seed without offerPeriods)");
     assert.ok(src.includes("setSeedState(s => ({ ...s, loading: false, plan, diff, live, periodGap }));"), "periodGap reaches the seed state");
-    assert.ok(src.includes('if ((st.periodGap || 0) > 0) { showToast(`Apply refused: the seed carries ${st.periodGap} offer period(s) this in-app import does not convert - apply it with the CLI (scripts/import-seed.js --apply). Nothing was written.`, "error"); return; }'), "applySeedImport's own guard, before the blob check");
-    assert.ok(src.includes("const canApply = !!(d && !state.applying && (d.totalChanges > 0) && !periodBlocked);"), "canApply requires no period gap");
+    assert.ok(src.includes('if ((st.periodGap || 0) > 0) { showToast(`Apply refused: the seed carries ${st.periodGap} offer period(s) - the app writes no call_periods / call_offers rows and deletes none of the availability rows a period retires; apply it with the CLI (scripts/import-seed.js --apply). Nothing was written.`, "error"); return; }'), "applySeedImport's own guard, before the blob check");
+    assert.ok(src.includes("const canApply = !!(d && !state.applying && (d.totalChanges > 0) && !periodBlocked);"), "canApply requires a plan without periods");
+    assert.ok(src.includes('<div data-testid="seed-period-legs"'), "the plan's call_periods / call_offers legs are displayed in the dry-run panel");
+    assert.ok(src.includes("These legs are applied by the CLI only (node scripts/import-seed.js --apply): the app writes no call_periods / call_offers rows and deletes no retired availability rows."), "the CLI-only line under the legs");
     assert.ok(src.includes('<div data-testid="seed-period-block" style={{ ...css.warnBox, marginBottom: 8 }}>'), "the block note");
     assert.ok(src.includes("node scripts/import-seed.js --apply --workdir &lt;linked dir&gt;"), "the note names the CLI command");
+    // IP review: the documented rule for the one path the gate cannot see (a seed with offerPeriods stripped by hand plans period-free and Apply is allowed)
+    assert.ok(src.includes("Once a period is live, never apply the seed here with its offerPeriods removed: the app cannot see call_periods, and a period-free plan re-adds the available rows the period retired."), "the Setup card states the rule: never apply the seed in-app with offerPeriods removed once a period is live");
+    // the app never gets an apply path for the two legs: no REST call on call_offers / call_periods and no DELETE inside applySeedImport
+    const apStart = src.indexOf("  const applySeedImport = async () => {");
+    const apEnd = src.indexOf("  const resetAllData = async () => {", apStart);
+    assert.ok(apStart > 0 && apEnd > apStart, "applySeedImport is followed by resetAllData");
+    const apBody = src.slice(apStart, apEnd);
+    assert.ok(!/rest\/v1\/call_(offers|periods)/.test(apBody), "applySeedImport writes neither call_offers nor call_periods");
+    assert.ok(!/method: "DELETE"/.test(apBody), "applySeedImport deletes nothing (the retired availability rows are the CLI's)");
   });
 
   /* ---------------- F. Prompt 14 part 3a (U3a): the offer painter's pure pieces + source pins ---------------- */
