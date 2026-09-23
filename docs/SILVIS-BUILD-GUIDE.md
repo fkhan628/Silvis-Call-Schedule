@@ -509,6 +509,8 @@ CI runs both before the build, exactly like Davenport's workflow runs its regres
   cleared and an existing note is never overwritten, the app's wipe guard runs, and it sends no notice of any kind — the app's publish dialog (office notice, in-app notice, mail)
   stays Faraz's step. Details in §19. Proof: `test/publish.test.js` (CI step "Publish-preview plan tests").
 
+  Prompt 12 SM2 (9/23, after the overnight publish through 2027-01-03): the smoke's other date-bound pins — week-row / ER-copy OPEN entries, the fail-closed and Fri–Sun block days, the Generate preview range (that derived start through the end of its month) and the Import dry-run / apply counts (blocked days, availability / time_off skipped, "kept (app-edited)") — derive from the live rows and the importer's own plan the same way, so the harness survives a published schedule.
+
 ## 16. Open shifts — board, self-claim, notifications (Faraz 9/22; Prompt 13)
 
 After generation some slots may stay open. Prompt 13 (`docs/PROMPT-13-OPEN-SHIFTS.md`) gives the group one list of

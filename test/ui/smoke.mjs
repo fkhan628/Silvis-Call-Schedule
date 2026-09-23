@@ -51,6 +51,27 @@
 //     first schedule_days write, publish dialog), Import seed dry run (0 changes,
 //     no writes; import-dryrun.png) and a seed with an injected contact key
 //     (refused). Switch: failSnapshotInsert makes the snapshot POST answer 500.
+//   - Prompt 12 item SM2 (the schedule is published through 2027-01-03 since the
+//     9/23 overnight publish): no pin names a day the schedule can fill. The
+//     week-row OPEN entries, the ER copy's red OPEN span, the fail-closed /
+//     block-member / trade-block days (first row-less weekday and Fri-Sun
+//     triples on/after today), the Generate preview range (the app's derived
+//     start through the end of that month), the re-checked post-publish cell
+//     and the Import dry-run / apply counts (blocked days, availability /
+//     time_off inserted vs skipped, 'kept (app-edited)') are derived from the
+//     live rows, the importer's own plan for the seed (PLAN, computed once at
+//     the top) and this run's edits, with an observed premise (every plan-day
+//     cell equals its live row, and a schedule_days poll after this run's last
+//     write) before the apply. Left as dated pins: the 10/15 'P OPEN' family
+//     (the one open primary, pending the group's 10/15 decision) and the
+//     'respect locks OFF over 10/5-10/11' preview. SM2 review: the row-less day
+//     scans run to 400 days past the LAST live row and skip Fri-Sun triples that
+//     overlap a holiday unit of the blob; the outside surgeon's day is the first
+//     row-less weekday after this run's last edit and the whole outside-surgeon
+//     block (roster save, editor, Totals) runs at the top of a fresh poll
+//     interval (freshPollWindow - the poll re-adopts the live blob and drops
+//     the mocked row); the post-publish probe prefers a cell the accept changed
+//     and checks both holders.
 //   - fix round 2 (Slice E findings): the Generate presets start after the LAST
 //     PUBLISHED day (end of the longest contiguous block of rows, wire-1; since
 //     Prompt 12 item SM the start and both preset ends are DERIVED each run from
@@ -362,6 +383,16 @@ const rtSendRow = (table, record, type) => {
 const rtSendDayRow = (record, type) => rtSendRow("schedule_days", record, type);
 const dayRow = (day, over) => ({ day, primary_id: null, backup_id: null, primary_locked: false, backup_locked: false, source: "manual", external_cover: null, note: null, version: 1, updated_by: "s4", updated_at: new Date().toISOString(), ...over });
 
+// The importer's plan for docs/silvis-seed.json, computed once (Prompt 12 SM2): it
+// serves the seed fixtures below and, in every mode, the Import dry-run / apply
+// restatements - the harness's OWN reading of what the seed asks for, never the
+// app's summary. The plan's rows do not depend on `now` (only the blob's
+// settings.importedAt does), so one plan serves both.
+const IMP = require(path.join(ROOT, "importer.js"));
+const SEED_PATH = path.join(ROOT, "docs", "silvis-seed.json");
+const PLAN_TS = "2026-09-22T00:00:00.000Z";
+const PLAN = IMP.importPlan(JSON.parse(fs.readFileSync(SEED_PATH, "utf8")), { now: PLAN_TS });
+
 // ---- Seed fixture fallback (see the header) ----
 const fixture = await (async () => {
   let liveCount = null;
@@ -375,10 +406,7 @@ const fixture = await (async () => {
   const want = forced || (liveCount === 0 && process.env.SMOKE_LIVE !== "1");
   if (!want) { console.log(`data source: LIVE Silvis project (schedule_days rows: ${liveCount === null ? "unknown" : liveCount})`); return null; }
   console.log(forced ? "data source: SEED FIXTURES (SMOKE_FIXTURE=1)" : "data source: SEED FIXTURES - the live schedule_days table is EMPTY; serving docs/silvis-seed.json via importer.importPlan for schedule_days / call_schedule_data / time_off / availability (east tables stay live)");
-  const IMP = require(path.join(ROOT, "importer.js"));
-  const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
-  const ts = "2026-09-22T00:00:00.000Z";
-  const plan = IMP.importPlan(seed, { now: ts });
+  const ts = PLAN_TS, plan = PLAN;
   return {
     schedule_days: plan.scheduleDayRows.map(r => ({ ...r, version: 1, updated_at: ts })),
     call_schedule_data: [{ id: "main", data: plan.blob, updated_by: "seed", updated_at: ts }],
@@ -784,6 +812,62 @@ try {
     await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
   };
 
+  // ---- The published rows (Prompt 12 SM2: read here, before the first pin that depends on them) ----
+  // Live anon read of EVERY row - no day floor, because the app's loadScheduleDays
+  // has none and the item-SM restatements must see the same rows as the app's
+  // suLastContiguousDay; the fixture rows when the live table is empty. They
+  // drive (1) the OPEN pins of the week rows and the ER copy (an open slot is
+  // OPEN only on/after today), (2) the choice of every row-less day this run
+  // edits (the editor edit day, the fail-closed / block-member / trade-block
+  // days), (3) the independent Totals recount, (4) the item-SM live-state pins
+  // and (5) the Import dry-run / apply restatements. The lock flags, the source,
+  // the note and updated_by ride along: a holders-unchanged Accept & Publish
+  // write is checked field by field and the importer's seed-owned rule
+  // (source 'import' + updated_by 'seed') is restated from them. Every day this
+  // run edits or injects is recorded in harnessDays so the recount applies the
+  // same edits: the comparison never depends on which calendar month the run
+  // happens in and is never skipped (vis-002).
+  const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
+  const todayIso = todayCentral; // the Central date, like the app's todayStr (helpers.js todayCentral) - the strip and the recount agree from any time zone
+  const isoAddDays = (d, n) => utcDay(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + n * 86400000);
+  const mdOf = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`; // the app's fmtMD: M/D without zero padding
+  const daysBetween = (a, b) => { const out = []; for (let d = a; d <= b; d = isoAddDays(d, 1)) out.push(d); return out; };
+  let liveRows = [];
+  try {
+    if (fixture) liveRows = fixture.schedule_days.slice();
+    else {
+      const res = await fetch(`https://${SUPABASE_HOST}/rest/v1/schedule_days?select=day,primary_id,backup_id,primary_locked,backup_locked,source,external_cover,note,updated_by&order=day.asc`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+      if (!res.ok) throw new Error("live schedule_days read failed: HTTP " + res.status);
+      const rows = await res.json();
+      if (!Array.isArray(rows)) throw new Error("live schedule_days read: body is not an array");
+      liveRows = rows;
+    }
+    if (!liveRows.some(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && (r.primary_id || r.backup_id))) throw new Error("no October 2026 assignments in the live rows - the recount has nothing to compare");
+  } catch (e) { fail("live schedule_days rows: could not read them for the pins and the recount: " + String(e && e.message || e).split("\n")[0]); }
+  const liveByDay = {}; liveRows.forEach(r => { liveByDay[r.day] = r; });
+  const lastLiveDay = liveRows.length ? liveRows[liveRows.length - 1].day : todayIso; // the row-less day scans below are bounded from here, not from today (SM2 review)
+  // The live blob (call_schedule_data.data), one anon read like the app's, or the fixture's: the coverage
+  // strip's lastPublished and - SM2 review - the holiday-unit days (data in the blob, editable in Setup)
+  // that the row-less Fri-Sun triples below must not overlap (a Sat inside a unit is 'holiday-unit',
+  // not 'weekend-block-only', so the block-member override would not be offered).
+  let liveBlobData = null;
+  try {
+    if (fixture) liveBlobData = fixture.call_schedule_data[0].data;
+    else {
+      const br = await fetch(`https://${SUPABASE_HOST}/rest/v1/call_schedule_data?id=eq.main&select=data`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+      if (!br.ok) throw new Error("HTTP " + br.status);
+      const brows = await br.json();
+      let d = brows[0] && brows[0].data; if (typeof d === "string") d = JSON.parse(d);
+      if (!d || typeof d !== "object") throw new Error("no data on the main row");
+      liveBlobData = d;
+    }
+  } catch (e) { fail("live blob: could not read call_schedule_data for lastPublished / the holiday units: " + String(e && e.message || e).split("\n")[0]); }
+  const holidayUnitDays = new Set(Object.values((liveBlobData && liveBlobData.holidays && liveBlobData.holidays.units) || {}).flat().flatMap(u => (u && Array.isArray(u.days)) ? u.days : []));
+  // An open slot per the live rows (the app's rule): primary is open with no holder and no external
+  // cover (a cover stands in for the primary), backup with no holder; a row-less day is open in both.
+  const liveOpen = (d, role) => { const r = liveByDay[d]; return role === "primary" ? !(r && (r.primary_id || r.external_cover)) : !(r && r.backup_id); };
+  console.log(`     (${liveRows.length} ${fixture ? "fixture" : "live"} schedule_days rows ${liveRows[0] ? liveRows[0].day + ".." + liveRows[liveRows.length - 1].day : "(none)"}; open slots on/after today ${todayIso}: ${liveRows.filter(r => r.day >= todayIso && (liveOpen(r.day, "primary") || liveOpen(r.day, "backup"))).map(r => r.day).join(", ") || "none inside the rows"})`);
+
   // ---- Slice B: October 2026 grid on the imported data ----
   await showMonth(2026, 9);
   const octCells = await readCells();
@@ -819,17 +903,20 @@ try {
   if (!/9\/28-10\/4 Atwell/.test(row928) || !/9\/28-10\/4 Fierce/.test(row928)) fail("week row 9/28 lacks '9/28-10/4 Atwell' / '9/28-10/4 Fierce': " + row928); else ok("week row 9/28: '9/28-10/4 Atwell' (primary) and '9/28-10/4 Fierce' (backup) collapsed");
   const row1005 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-10-05"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
   if (!/10\/9-10\/11 Acton/.test(row1005)) fail("week row 10/5 lacks '10/9-10/11 Acton': " + row1005); else ok("week row 10/5: same-surgeon run collapsed to '10/9-10/11 Acton'");
-  if (dated("2026-10-07", "the '10/7 OPEN' week-row pin (a past open backup is blank)")) {
-    if (liveOpenEarly("2026-10-07", "backup")) { if (!/10\/7 OPEN/.test(row1005)) fail("week row 10/5 lacks '10/7 OPEN' (open backup in the live rows, today or later): " + row1005); else ok("week row 10/5: open backup shown as '10/7 OPEN'"); }
-    else if (/10\/7 OPEN/.test(row1005)) fail("week row 10/5 shows '10/7 OPEN' although the live row holds a backup (" + liveEarlyByDay["2026-10-07"].backup_id + "): " + row1005); else ok(`week row 10/5: 10/7 backup held live by ${liveEarlyByDay["2026-10-07"].backup_id} - no OPEN entry`);
-  }
+  // Prompt 12 SM2: the week row's OPEN entries are derived from the live rows, never pinned to a date -
+  // an unassigned slot on/after today (Central) is one 'M/D OPEN' entry per open role (buildWeekRows
+  // never collapses OPEN days), a past open slot produces no entry (item Q). On the 9/22 import this
+  // read '10/7 OPEN' (the first open October backup); since the 9/23 overnight publish the week is full.
+  const expOpen1005 = daysBetween("2026-10-05", "2026-10-11").filter(d => d >= todayIso).flatMap(d => ["primary", "backup"].filter(role => liveOpen(d, role)).map(() => `${mdOf(d)} OPEN`)).sort();
+  const gotOpen1005 = (row1005.match(/\d{1,2}\/\d{1,2} OPEN/g) || []).sort();
+  if (gotOpen1005.join(", ") !== expOpen1005.join(", ")) fail(`week row 10/5: OPEN entries [${gotOpen1005.join(", ")}] differ from the live rows' open slots on/after today ${todayIso} [${expOpen1005.join(", ")}]: ` + row1005);
+  else ok(`week row 10/5: OPEN entries equal the live rows' open slots on/after today (${expOpen1005.length ? expOpen1005.join(", ") : "none - the week is fully assigned or past"})`);
   const openRed = await page.$eval('[data-testid=week-rows] [data-kind="open"]', el => getComputedStyle(el).color).catch(() => "");
-  if (openRed) { if (!/rgb\(185, 28, 28\)/.test(openRed)) fail("week rows: OPEN entry is not red (#B91C1C, theme O.1): " + openRed); else ok("week rows: OPEN entries are red (#B91C1C)"); }
-  else if (liveOpenBetween("2026-09-28", "2026-11-01")) fail("week rows: no OPEN entry found in the October 2026 week rows although the live rows have an open slot on " + liveOpenBetween("2026-09-28", "2026-11-01"));
-  else console.log("     (week rows: no open slot in the live rows for the October 2026 weeks - the 'OPEN entries are red' pin has nothing to check)");
+  const octOpenExpected = daysBetween("2026-09-28", "2026-11-01").some(d => d >= todayIso && (liveOpen(d, "primary") || liveOpen(d, "backup")));
   // TH: OPEN is the theme's red token #B91C1C (light) - item O.1 keeps OPEN red so it never competes with the orange accent.
   if (openRed) { if (!/rgb\(185, 28, 28\)/.test(openRed)) fail("week rows: OPEN entry is not the OPEN red #B91C1C: " + openRed); else ok("week rows: OPEN entries are red #B91C1C"); }
-  else if (dated("2026-11-01", "the 'week rows OPEN entries are red' pin (no OPEN entry left in the October rows)")) fail("week rows: no OPEN entry found in the October 2026 week rows");
+  else if (octOpenExpected) fail("week rows: no OPEN entry found in the October 2026 week rows although the live rows leave a slot open on/after today " + todayIso);
+  else console.log(`     (no open slot on/after today ${todayIso} in the October 2026 week rows - the 'OPEN entries are red' pin is not exercised; the share-page / printable pins cover the colour while 10/15 is open)`);
   await page.locator("[data-testid=week-rows]").screenshot({ path: path.join(OUT, "week-rows-oct-2026.png") });
   ok("screenshot test/ui/out/week-rows-oct-2026.png");
 
@@ -994,15 +1081,17 @@ try {
     const toastText = (((await page.evaluate(() => document.body.innerText)) || "").match(/(Copied - paste into the Word document[^\n]*|Clipboard blocked[^\n]*)/) || [])[1] || "";
     const item = clipWrites.length === 1 && clipWrites[0].length === 1 ? clipWrites[0][0] : null;
     const clipHtml = item ? item["text/html"] || "" : "", clipText = item ? item["text/plain"] || "" : "";
-    // the red OPEN span is expected exactly when the live rows (as served) have an open slot inside 11/2-12/13
-    const erOpenDay = liveOpenBetween("2026-11-02", "2026-12-13");
-    const erSpanOk = /<span data-kind="open" style="color:#ff0000;font-weight:bold">/.test(clipHtml) === !!erOpenDay;
+    const erOpenDays = daysBetween("2026-11-02", "2026-12-13").filter(d => d >= todayIso && (liveOpen(d, "primary") || liveOpen(d, "backup")));
+    const erHasOpenSpan = /<span data-kind="open" style="color:#ff0000;font-weight:bold">/.test(clipHtml);
     if (!item) fail(`Copy for Word: expected exactly one navigator.clipboard.write call with one ClipboardItem, saw ${JSON.stringify(clipWrites.map(w => w.map(i => Object.keys(i))))}; toast "${toastText}"`);
-    else if (!clipHtml.startsWith('<table data-export="er-call-panels"') || (clipHtml.match(/<tr data-week=/g) || []).length !== 6 || !/MON\/SUN DATES<\/th><th [^>]*>TRAUMA<\/th><th [^>]*>TRAUMA BACKUP<\/th>/.test(clipHtml) || !erSpanOk) fail(`Copy for Word: text/html flavour is not the 6-row ER table (red OPEN span expected: ${!!erOpenDay}${erOpenDay ? " - live open slot on " + erOpenDay : " - no open slot in 11/2-12/13 live"}): ` + clipHtml.slice(0, 200));
+    else if (!clipHtml.startsWith('<table data-export="er-call-panels"') || (clipHtml.match(/<tr data-week=/g) || []).length !== 6 || !/MON\/SUN DATES<\/th><th [^>]*>TRAUMA<\/th><th [^>]*>TRAUMA BACKUP<\/th>/.test(clipHtml)) fail("Copy for Word: text/html flavour is not the 6-row ER table: " + clipHtml.slice(0, 200));
+    // Prompt 12 SM2: a red OPEN span is expected exactly while the panel's range 11/2-12/13 still has an
+    // open slot on/after today in the live rows (none since the 9/23 overnight publish) - derived, not pinned.
+    else if (erHasOpenSpan !== (erOpenDays.length > 0)) fail(`Copy for Word: red OPEN span ${erHasOpenSpan ? "present" : "missing"} in text/html while the live rows leave ${erOpenDays.length} day(s) with an open slot on/after today in 11/2-12/13${erOpenDays.length ? " (" + erOpenDays.slice(0, 4).join(", ") + ")" : ""}`);
     else if (!/^MON\/SUN DATES\tTRAUMA\tTRAUMA BACKUP\n11\/2 - 11\/8\t/.test(clipText) || clipText.split("\n").length !== 7) fail("Copy for Word: text/plain flavour wrong: " + clipText.slice(0, 120));
     else if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(clipHtml + clipText)) fail("Copy for Word: an email address is on the clipboard");
     else if (!/^Copied - paste into the Word document/.test(toastText)) fail(`Copy for Word: flavours written but the toast reads "${toastText}"`);
-    else ok(`Copy for Word: one clipboard write with ${Object.keys(item).join(" + ")} - 6-row ER table (inline styles${erOpenDay ? ", red OPEN spans" : "; no OPEN span - nothing open in 11/2-12/13 live"}) + tab-separated text; toast "${toastText}"`);
+    else ok(`Copy for Word: one clipboard write with ${Object.keys(item).join(" + ")} - 6-row ER table (inline styles${erOpenDays.length ? ", red OPEN spans" : ", no OPEN span - the range is fully assigned in the live rows"}) + tab-separated text; toast "${toastText}"`);
     const clip = await page.evaluate(async () => {
       try { const items = await navigator.clipboard.read(); const out = {}; for (const it of items) for (const t of it.types) out[t] = await (await it.getType(t)).text(); return { ok: true, types: Object.keys(out), rows: ((out["text/html"] || "").match(/<tr data-week=/g) || []).length }; }
       catch (e) { return { ok: false, error: String(e && e.message || e) }; }
@@ -1212,28 +1301,9 @@ try {
   // One schedule edit through the DAY EDITOR -> schedule_days POST v1 with CAS headers.
   await page.click('button[data-tab="calendar"]');
   await page.waitForTimeout(3300); // past the 3s post-load hydration window of the autosave
-  // The published rows (live anon read of EVERY row - no day floor, because the
-  // app's loadScheduleDays has none and the item-SM restatements below must see
-  // the same rows as the app's suLastContiguousDay; the fixture rows when the
-  // live table is empty) drive (1) the choice of a row-less edit day below,
-  // (2) the independent Totals recount later and (3) the item-SM live-state
-  // pins. The lock flags and the source ride along so a holders-unchanged
-  // Accept & Publish write can be checked field by field. Every day this run
-  // edits or injects is recorded in harnessDays so the recount applies the same
-  // edits: the comparison never depends on which calendar month the run happens
-  // in and is never skipped (vis-002).
-  const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
-  const todayIso = todayCentral; // the Central date, like the app's todayStr (helpers.js todayCentral) - the strip and the recount agree from any time zone
-  let liveRows = [];
-  try {
-    if (fixture) liveRows = fixture.schedule_days.slice();
-    else {
-      if (!liveRowsEarly.length) throw new Error("the up-front live schedule_days read failed (see the note after the data-source line)");
-      liveRows = liveRowsEarly.map(r => ({ ...r })); // the up-front anon read (+ updated_by), the harness-opened slot already blanked
-    }
-    if (!liveRows.some(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && (r.primary_id || r.backup_id))) throw new Error("no October 2026 assignments in the live rows - the recount has nothing to compare");
-  } catch (e) { fail("Slices F+G: could not read the live schedule_days rows for the recount: " + errLine(e)); }
-  const liveByDay = {}; liveRows.forEach(r => { liveByDay[r.day] = r; });
+  // liveRows / liveByDay / liveOpen and the date helpers (utcDay, todayIso, isoAddDays, mdOf,
+  // daysBetween) are read and defined before Slice B (Prompt 12 SM2) - the week-row and ER
+  // pins need them first; the recount below and the item-SM pins use the same rows.
 
   // ---- Prompt 11: coverage at a glance = an independent 60-day recount of the live rows ----
   // Runs BEFORE this run's first edit, so the app's map still equals the live
@@ -1259,18 +1329,9 @@ try {
       const erows = await er.json();
       if (Array.isArray(erows) && erows[0] && erows[0].week_monday) expEastEnd = utcDay(Date.parse(String(erows[0].week_monday).slice(0, 10) + "T12:00:00Z") + 6 * 86400000);
     } catch (e) { fail("coverage strip: could not read east_feed for the expected coverage end: " + errLine(e)); }
-    // Last published: the blob's lastPublished.at (anon read; the fixture blob has none).
-    let expLastPub = "";
-    try {
-      if (fixture) expLastPub = (fixture.call_schedule_data[0].data.lastPublished && fixture.call_schedule_data[0].data.lastPublished.at) || "";
-      else {
-        const br = await fetch(`https://${SUPABASE_HOST}/rest/v1/call_schedule_data?id=eq.main&select=data`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
-        if (!br.ok) throw new Error("HTTP " + br.status);
-        const brows = await br.json();
-        let d = brows[0] && brows[0].data; if (typeof d === "string") d = JSON.parse(d);
-        expLastPub = (d && d.lastPublished && d.lastPublished.at) || "";
-      }
-    } catch (e) { fail("coverage strip: could not read the blob for lastPublished: " + errLine(e)); }
+    // Last published: the blob's lastPublished.at (the one anon read of the blob above; the fixture blob has none).
+    const expLastPub = (liveBlobData && liveBlobData.lastPublished && liveBlobData.lastPublished.at) || "";
+    if (!liveBlobData) fail("coverage strip: the blob was not readable, so lastPublished cannot be restated");
     if (strip.openP !== expP.length || strip.firstP !== (expP[0] || "")) fail(`coverage strip: open primary reads ${strip.openP} (first ${strip.firstP}), the live rows say ${expP.length} (first ${expP[0] || "-"}) for ${todayIso} + 60 days`);
     else if (strip.openB !== expB.length || strip.firstB !== (expB[0] || "")) fail(`coverage strip: open backup reads ${strip.openB} (first ${strip.firstB}), the live rows say ${expB.length} (first ${expB[0] || "-"})`);
     else if (strip.fc !== 0) fail(`coverage strip: ${strip.fc} forecast-busy day(s) hold that surgeon as primary (should be 0): ` + strip.text);
@@ -1323,8 +1384,7 @@ try {
   const curHolder = (d, role) => { const c = curDay(d); return role === "primary" ? (c.primary || (c.ext ? "ext:" + c.ext : null)) : (c.backup || null); };
   const inMap = (d) => !!liveByDay[d] || (!!observed[d] && !!(observed[d].primary || observed[d].backup || observed[d].ext));
   const curDays = () => [...new Set([...Object.keys(liveByDay), ...Object.keys(observed)])].filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && inMap(d)).sort();
-  const isoAddDays = (d, n) => utcDay(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + n * 86400000);
-  const mdOf = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`; // the app's fmtMD: M/D without zero padding
+  // (isoAddDays and mdOf are defined with the live rows before Slice B - SM2.)
   // Read the grid cell of every harnessDays day (one showMonth per month touched) - the app's map as it shows it.
   const observeHarnessDays = async () => {
     const days = Object.keys(harnessDays).sort();
@@ -1340,8 +1400,27 @@ try {
   // background schedule_days poll (at most twice - an edit still inside its 800 ms debounce at the first poll is
   // kept as a local change by refreshDays and dropped by the next one), then freeze what the grid shows into
   // `observed`. Returns the days still differing; empty = the app's map equals the live rows on every edited day.
+  const isDaysGet = (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/rest/v1/schedule_days";
+  // Prompt 12 SM2: writes.length at the moment of the latest schedule_days GET response - answers "has the
+  // app read the rows since its last schedule_days write?" for the Import apply premise. refreshDays
+  // re-adopts the live row WHOLESALE (lock flags, source and note included) for every persisted day the
+  // table does not hold that way; the grid shows holders only, so a holders-unchanged write (source /
+  // note) still sitting in the map cannot be observed - this counter says whether a poll has cleared it.
+  let writesAtLastDaysGet = -1, lastDaysGetAt = 0;
+  page.on("response", (r) => { try { if (isDaysGet(r)) { writesAtLastDaysGet = writes.length; lastDaysGetAt = Date.now(); } } catch (e) {} });
+  // SM2 review: the mirror image of settleMapToLive - a check that must see this run's edit BEFORE the
+  // poll drops it (every write is intercepted, so the next refreshDays deletes a persisted row-less day
+  // outright) waits for the app's next GET /rest/v1/schedule_days first, so the edit and its reads start
+  // at the top of a fresh 60-s poll interval instead of racing the timer (finding on the Locum cell /
+  // Totals read: a poll landing inside the ~5 s between the save and the read failed both).
+  const freshPollWindow = async (what) => {
+    const age = lastDaysGetAt ? Math.round((Date.now() - lastDaysGetAt) / 1000) : null;
+    console.log(`     (${what}: the app's last schedule_days poll answered ${age === null ? "at no observed time" : age + " s ago"} - waiting for its next GET /rest/v1/schedule_days so the edit and its reads fit inside one poll interval)`);
+    const got = await page.waitForResponse(isDaysGet, { timeout: 75000 }).then(() => true).catch(() => false);
+    if (!got) console.log(`     (${what}: no GET /rest/v1/schedule_days seen within 75 s - proceeding; a poll may still race the reads)`);
+    await page.waitForTimeout(1500); // the merge + render
+  };
   const settleMapToLive = async (what) => {
-    const isDaysGet = (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/rest/v1/schedule_days";
     let obs = await observeHarnessDays();
     let stale = Object.keys(obs).filter(d => !sameHolders(obs[d], liveHolders(d)));
     for (let round = 1; round <= 2 && stale.length; round++) {
@@ -2400,11 +2479,27 @@ try {
     // ---- (1) the day editor fails CLOSED when eligibility throws ----
     // rules.js is a classic script: `eligibility` is a global the JSX resolves at call
     // time, so the harness can make it throw for one editor open and restore it after.
-    // a Wednesday with no live row and no in-session edit: the first one after the last published day (the editor
-    // pre-fills its select with a held holder, so only a row-less day makes 'no draft' mean 'no pick')
-    const fcLast = Object.keys(liveByDay).sort().pop() || todayIso;
-    let fcDay = isoAddDays(fcLast, 1);
-    while (new Date(fcDay + "T12:00:00Z").getUTCDay() !== 3 || liveByDay[fcDay] || harnessDays[fcDay]) fcDay = isoAddDays(fcDay, 1);
+    // Prompt 12 SM2: the days are chosen from the live rows each run (the schedule is published through the
+    // milestone since 9/23, so no date can be named): fcDay = the first row-less Mon-Fri day on/after today
+    // that this run has not edited; weekendTriples = the first two Fri-Sun triples on/after today with all
+    // three days row-less and untouched (block-member check, then the trade-block check) and none of them
+    // inside a holiday unit of the blob (SM2 review: a Sat in a unit reads 'holiday-unit', not the
+    // 'weekend-block-only' override the check accepts). The scan runs from today to 400 days past the
+    // LAST live row, so a 12-month publish cannot exhaust it (SM2 review).
+    const rowless = (d) => !fixtureHasDay(d) && !liveByDay[d] && !harnessDays[d];
+    const dowUtc = (d) => new Date(d + "T12:00:00Z").getUTCDay(); // 0 = Sun
+    const scanEnd = isoAddDays(lastLiveDay > todayIso ? lastLiveDay : todayIso, 400);
+    const weekendTriples = [];
+    for (let d = todayIso; weekendTriples.length < 2 && d <= scanEnd; d = isoAddDays(d, 1)) {
+      if (dowUtc(d) !== 5) continue;
+      const t = [d, isoAddDays(d, 1), isoAddDays(d, 2)];
+      if (t.every(x => rowless(x) && !holidayUnitDays.has(x))) weekendTriples.push(t);
+    }
+    const tripleDays = new Set(weekendTriples.flat());
+    let fcDay = null;
+    for (let d = todayIso; !fcDay && d <= scanEnd; d = isoAddDays(d, 1)) { if (dowUtc(d) >= 1 && dowUtc(d) <= 5 && rowless(d) && !tripleDays.has(d)) fcDay = d; }
+    if (!fcDay || weekendTriples.length < 2) throw new Error(`no row-less weekday / holiday-free Fri-Sun triples between ${todayIso} and ${scanEnd} (fcDay ${fcDay}, triples ${weekendTriples.length})`);
+    console.log(`     (small items: fail-closed day ${fcDay}, block-member triple ${weekendTriples[0].join("/")}, trade-block triple ${weekendTriples[1].join("/")} - the first row-less weekday and holiday-free Fri-Sun triples on/after today ${todayIso} untouched by this run; scan bounded by ${scanEnd} = last live row ${lastLiveDay} + 400 d; ${holidayUnitDays.size} holiday-unit day(s) in the blob)`);
     await page.evaluate(() => { window.__realEligibility = window.eligibility; window.eligibility = () => { throw new Error("harness: synthetic rules failure"); }; });
     try {
       await showMonth(+fcDay.slice(0, 4), +fcDay.slice(5, 7) - 1);
@@ -2444,28 +2539,28 @@ try {
     await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
 
     // ---- (2) asBlockMember in the day editor: Fierce completes a Fri-Sun block by hand ----
-    // Sat 1/9 and Sun 1/10/2027 -> Fierce primary (each alone is 'weekend-block-only' -> the
-    // harness accepts the override), then Fri 1/8 must list Fierce as ELIGIBLE: the other two
+    // Sat and Sun of the first row-less triple -> Fierce primary (each alone is 'weekend-block-only'
+    // -> the harness accepts the override), then its Fri must list Fierce as ELIGIBLE: the other two
     // block days are his in the saved rows, so the editor asks rules.js as a block member.
-    if (dated("2027-01-07", "day-editor block-member check on 1/8-1/10/2027")) {
-      const blk = ["2027-01-08", "2027-01-09", "2027-01-10"];
+    {
+      const blk = weekendTriples[0];
       const blkHeld = await Promise.all(blk.map(d => cellAttr(d, "data-primary").catch(() => null)));
-      if (blkHeld.some(Boolean)) console.log(`     (1/8-1/10/2027 already hold a primary: ${blkHeld.join(", ")} - the block-member check runs on top of them)`);
+      if (blkHeld.some(Boolean)) fail(`block-member check: the derived row-less triple ${blk.join("/")} already holds a primary in the grid (${blkHeld.join(", ")}) - the row-less derivation is broken`);
       await editDay(blk[1], "primary", "s5"); noteEdit(blk[1], { primary_id: "s5" });
       await editDay(blk[2], "primary", "s5"); noteEdit(blk[2], { primary_id: "s5" });
-      await showMonth(2027, 0);
+      await showMonth(+blk[0].slice(0, 4), +blk[0].slice(5, 7) - 1);
       await page.click(`[data-day="${blk[0]}"]`);
       await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
       const friOpts = await page.$$eval("[data-testid=editor-primary] option", els => els.map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
       const friFierce = friOpts.find(o => o.value === "s5");
-      if (!friFierce) fail("Day editor 1/8/2027: Fierce is not in the Primary dropdown: " + JSON.stringify(friOpts));
-      else if (friFierce.eligible !== "true") fail(`Day editor 1/8/2027: Fierce holds Sat+Sun and must be ELIGIBLE for the Friday as a block member, got '${friFierce.text}' [${friFierce.eligible}]`);
+      if (!friFierce) fail(`Day editor ${blk[0]}: Fierce is not in the Primary dropdown: ` + JSON.stringify(friOpts));
+      else if (friFierce.eligible !== "true") fail(`Day editor ${blk[0]}: Fierce holds Sat+Sun (${blk[1]}, ${blk[2]}) and must be ELIGIBLE for the Friday as a block member, got '${friFierce.text}' [${friFierce.eligible}]`);
       else {
         await page.selectOption("[data-testid=editor-primary]", "s5");
         await page.waitForTimeout(250);
         const friOverride = await page.$("[data-testid=override-confirm]");
-        if (friOverride) fail("Day editor 1/8/2027: picking Fierce (block member) must not open the override confirm");
-        else ok(`Day editor 1/8/2027: Fierce reads eligible as the third day of his Fri-Sun block ('${friFierce.text}'), no override on the pick`);
+        if (friOverride) fail(`Day editor ${blk[0]}: picking Fierce (block member) must not open the override confirm`);
+        else ok(`Day editor ${blk[0]}: Fierce reads eligible as the third day of his Fri-Sun block ${blk[0]}-${blk[2]} ('${friFierce.text}'), no override on the pick`);
       }
       await page.screenshot({ path: path.join(OUT, "day-editor-block-member.png") });
       await page.keyboard.press("Escape");
@@ -2473,27 +2568,27 @@ try {
     }
 
     // ---- (3) asBlockMember in the trade path: Fierce can receive Khan's Fri-Sun block ----
-    // Fri 12/18 - Sun 12/20 -> Khan primary (block style), then the trade card offers the
-    // three days as one weekend-block unit; Fierce must read ELIGIBLE as the counter-party.
-    if (dated("2026-12-17", "trade block-receiver check on 12/18-12/20")) {
-      const wk = ["2026-12-18", "2026-12-19", "2026-12-20"];
+    // Fri-Sun of the second row-less triple -> Khan primary (block style), then the trade card offers
+    // the three days as one weekend-block unit; Fierce must read ELIGIBLE as the counter-party.
+    {
+      const wk = weekendTriples[1];
       for (const d of wk) { await editDay(d, "primary", "s1"); noteEdit(d, { primary_id: "s1" }); }
       await page.click('button[data-tab="timeoff"]');
       await page.waitForSelector("[data-testid=trade-card]", { timeout: 5000 });
       await page.selectOption("[data-testid=trade-from]", "s1");
       await page.waitForTimeout(150);
       const mineVals = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => o.value).filter(Boolean));
-      if (!mineVals.includes("2026-12-18|primary")) fail("Trades block: Khan's picker does not list 2026-12-18|primary after the three edits: " + mineVals.join(", "));
+      if (!mineVals.includes(`${wk[0]}|primary`)) fail(`Trades block: Khan's picker does not list ${wk[0]}|primary after the three edits: ` + mineVals.join(", "));
       else {
-        await page.selectOption("[data-testid=trade-mine-pick]", "2026-12-18|primary");
+        await page.selectOption("[data-testid=trade-mine-pick]", `${wk[0]}|primary`);
         await page.waitForTimeout(200);
         const unitText = await page.$eval("[data-testid=trade-unit]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
         const blockOpts = await readToOpts();
         const fierceOpt = blockOpts.find(o => o.value === "s5");
-        if (!unitText.includes("weekend block")) fail("Trades block: 12/18 primary is not offered as a weekend-block unit: " + JSON.stringify(unitText));
+        if (!unitText.includes("weekend block")) fail(`Trades block: ${wk[0]} primary is not offered as a weekend-block unit: ` + JSON.stringify(unitText));
         else if (!fierceOpt) fail("Trades block: Fierce is not a counter-party option: " + JSON.stringify(blockOpts));
-        else if (fierceOpt.eligible !== "true") fail(`Trades block: Fierce must be ELIGIBLE to receive the whole Fri-Sun block (asBlockMember), got '${fierceOpt.text}' [${fierceOpt.eligible}]`);
-        else ok(`Trades block: Khan's 12/18-12/20 primary is one weekend-block unit and Fierce reads eligible to receive it ('${fierceOpt.text}')`);
+        else if (fierceOpt.eligible !== "true") fail(`Trades block: Fierce must be ELIGIBLE to receive the whole Fri-Sun block ${wk[0]}-${wk[2]} (asBlockMember), got '${fierceOpt.text}' [${fierceOpt.eligible}]`);
+        else ok(`Trades block: Khan's ${wk[0]}-${wk[2]} primary is one weekend-block unit and Fierce reads eligible to receive it ('${fierceOpt.text}')`);
         await page.screenshot({ path: path.join(OUT, "trade-block-receiver.png") });
         await page.selectOption("[data-testid=trade-mine-pick]", "");
       }
@@ -2778,6 +2873,7 @@ try {
     await page.click('button[data-tab="setup"]');
     await page.waitForTimeout(300);
     await openCard("setup_generate");
+    let genRangeStart = null; // SM2: the derived default start, reused as the preview range's start below
     {
       const rowDays = curDays();
       const rowSet = new Set(rowDays);
@@ -2797,6 +2893,7 @@ try {
       const sundayOnOrAfter = (d) => isoAddDays(d, (7 - dowOf(d)) % 7);
       const expFallback = isoAddDays(lastPub, 1) > todayCentral ? isoAddDays(lastPub, 1) : todayCentral; // never a past day (item Q)
       const expStart = firstOpen || expFallback;
+      genRangeStart = expStart;
       const expTeoyEnd = sundayOnOrAfter(expStart.slice(0, 4) + "-12-31");
       const sy = +expStart.slice(0, 4), sm = +expStart.slice(5, 7);
       const idx3 = sm + 2, ey = sy + Math.floor((idx3 - 1) / 12), em = ((idx3 - 1) % 12) + 1; // 1-based month of the 3rd calendar month
@@ -2857,9 +2954,20 @@ try {
       await page.check("[data-testid=gen-respect-locks]");
     }
 
-    // ---- Generate: preview 2026-11-02 .. 2026-11-30, N=10, seed 7 -> diagnostics, no writes ----
-    await page.fill("[data-testid=gen-start]", "2026-11-02");
-    await page.fill("[data-testid=gen-end]", "2026-11-30");
+    // ---- Generate: preview from the app's derived default start (item AB: the first open slot on/after
+    //      today, else the day after the last saved block, clamped to today) through the END OF THAT MONTH,
+    //      N=10, seed 7 -> diagnostics, no writes. Prompt 12 SM2: the range follows the live rows (it was
+    //      11/2-11/30 while November was open; 10/15-10/31 on the 9/23 rows); one calendar month keeps the
+    //      tallies at one month row per surgeon and the calendar preview inside one grid. ----
+    if (!genRangeStart) fail("Generate preview: the presets restatement above yielded no start - the preview range falls back to the app's own default start (input only)");
+    const genStart = genRangeStart || await page.$eval("[data-testid=gen-start]", el => el.value);
+    const genEnd = utcDay(Date.UTC(+genStart.slice(0, 4), +genStart.slice(5, 7), 0)); // day 0 of the next month = the last day of genStart's month
+    const genDays = daysBetween(genStart, genEnd).length;
+    const genMonthLabel = `${["January","February","March","April","May","June","July","August","September","October","November","December"][+genStart.slice(5, 7) - 1]} ${genStart.slice(0, 4)}`;
+    const rxEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    console.log(`     (Generate preview range ${genStart}..${genEnd} = ${genDays} day(s): the derived default start through the end of its month)`);
+    await page.fill("[data-testid=gen-start]", genStart);
+    await page.fill("[data-testid=gen-end]", genEnd);
     await page.fill("[data-testid=gen-n]", "10");
     await page.fill("[data-testid=gen-seed]", "7");
     const beforeGen = writes.length;
@@ -2869,10 +2977,10 @@ try {
     const genForbidden = writesSince(beforeGen).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
     if (genForbidden.length) fail("Generate preview wrote something: " + JSON.stringify(genForbidden.map(w => w.method + " " + w.path))); else ok("Generate preview: no schedule_days / snapshot / availability / time_off write (preview is read-only)");
     const meta = await page.$eval("[data-testid=gen-preview-meta]", el => el.textContent);
-    if (!/11\/2 - 11\/30 \(29 days\), seed 7, best of 10/.test(meta)) fail("Generate preview meta wrong: " + meta); else ok("Generate preview: " + meta.slice(0, 120));
+    if (!new RegExp(rxEscape(`${mdOf(genStart)} - ${mdOf(genEnd)} (${genDays} days), seed 7, best of 10`)).test(meta)) fail(`Generate preview meta wrong (expected '${mdOf(genStart)} - ${mdOf(genEnd)} (${genDays} days), seed 7, best of 10'): ` + meta); else ok("Generate preview: " + meta.slice(0, 120));
     const tallyRange = await page.$$eval("[data-testid=gen-tallies] tr[data-tally-range]", els => els.length);
     const tallyRows = await page.$$eval("[data-testid=gen-tallies] tr[data-tally]", els => els.map(e => e.innerText.replace(/\t/g, " | ")));
-    if (tallyRange !== 6 || tallyRows.length !== 6) fail(`Generate tallies: expected 6 month rows + 6 range rows, got ${tallyRows.length} + ${tallyRange}`); else ok("Generate tallies: 6 surgeons x (2026-11 + range) rows vs cap/target");
+    if (tallyRange !== 6 || tallyRows.length !== 6) fail(`Generate tallies: expected 6 month rows + 6 range rows, got ${tallyRows.length} + ${tallyRange}`); else ok(`Generate tallies: 6 surgeons x (${genStart.slice(0, 7)} + range) rows vs cap/target`);
     tallyRows.forEach(r => console.log("     " + r));
     const unc = Number(await page.$eval("[data-testid=gen-diagnostics]", el => el.getAttribute("data-uncovered-count")));
     const uncRows = await page.$$eval("[data-testid=gen-uncovered] tr[data-uncovered]", els => els.map(e => e.getAttribute("data-uncovered"))).catch(() => []);
@@ -2895,7 +3003,7 @@ try {
     const previewGrid = await page.$$eval('[data-testid=cal-grid] .cal-cell[data-preview="1"]', els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || "", b: e.getAttribute("data-backup") || "", ext: e.getAttribute("data-ext") || "" })));
     const previewCells = previewGrid.map(c => c.day);
     const previewStyled = await page.$eval('[data-testid=cal-grid] .cal-cell[data-preview="1"]', el => getComputedStyle(el).outlineStyle).catch(() => "");
-    if (monthLabel !== "November 2026" || previewCells.length !== 29 || previewCells[0] !== "2026-11-02" || previewStyled !== "dashed") fail(`Calendar preview: month ${monthLabel}, ${previewCells.length} preview cells (${previewCells[0]}..), outline ${previewStyled}`); else ok("Calendar preview: November 2026, 29 cells 11/2..11/30 drawn with the dashed preview outline + banner");
+    if (monthLabel !== genMonthLabel || previewCells.length !== genDays || previewCells[0] !== genStart || previewStyled !== "dashed") fail(`Calendar preview: month ${monthLabel}, ${previewCells.length} preview cells (${previewCells[0]}..), outline ${previewStyled} - expected ${genMonthLabel}, ${genDays} cells from ${genStart}, dashed`); else ok(`Calendar preview: ${genMonthLabel}, ${genDays} cells ${mdOf(genStart)}..${mdOf(genEnd)} drawn with the dashed preview outline + banner`);
     await page.screenshot({ path: path.join(OUT, "generate-preview.png"), fullPage: true });
     ok("screenshot test/ui/out/generate-preview.png");
     // Prompt 11 mobile: at 390px the PREVIEW tag fits its cell and clears the B line and the vacation dots
@@ -3047,9 +3155,18 @@ try {
     if (await page.$("[data-testid=gen-preview]")) fail("Accept & Publish: the preview is still shown after acceptance"); else ok("Accept & Publish: preview cleared");
     await page.click('button[data-tab="calendar"]');
     await page.waitForTimeout(400);
-    const nov3 = await cellAttr("2026-11-03", "data-primary");
-    const nov3prev = await cellAttr("2026-11-03", "data-preview");
-    if (!nov3 || nov3prev === "1") fail(`Accept & Publish: 2026-11-03 should now be a saved assignment (primary '${nov3}', preview '${nov3prev}')`); else ok(`Accept & Publish: 2026-11-03 is a saved assignment (P ${nov3}), no longer a preview`);
+    // SM2: the re-checked day is the first preview cell whose holders the accept CHANGED against the map
+    // (a cell already equal to the live row would read saved even if the accept wrote nothing - SM2 review),
+    // falling back to the first cell with a primary; after the accept it must show BOTH of the preview's
+    // holders and no preview flag. (It was the constant 2026-11-03 while the range was November.)
+    const pubProbe = previewGrid.find(c => expectedDays.has(c.day) && (c.p || c.b)) || previewGrid.find(c => c.p) || null;
+    const pubChanged = !!(pubProbe && expectedDays.has(pubProbe.day));
+    const pubP = pubProbe ? await cellAttr(pubProbe.day, "data-primary").catch(() => null) : null;
+    const pubB = pubProbe ? await cellAttr(pubProbe.day, "data-backup").catch(() => null) : null;
+    const pubPrev = pubProbe ? await cellAttr(pubProbe.day, "data-preview").catch(() => null) : null;
+    if (!pubProbe) fail(`Accept & Publish: none of the ${previewGrid.length} preview cells carried a holder to re-check after the accept`);
+    else if ((pubP || "") !== (pubProbe.p || "") || (pubB || "") !== (pubProbe.b || "") || pubPrev === "1") fail(`Accept & Publish: ${pubProbe.day} should now be a saved assignment with the preview's holders P ${pubProbe.p || "-"} / B ${pubProbe.b || "-"} (cell P '${pubP}' B '${pubB}', preview '${pubPrev}'${pubChanged ? "; the accept changed this day against the map" : ""})`);
+    else ok(`Accept & Publish: ${pubProbe.day} is a saved assignment (P ${pubP || "-"} / B ${pubB || "-"} = the preview's${pubChanged ? ", a day the accept changed: " + expectedSlots.filter(s => s.startsWith(mdOf(pubProbe.day) + " ")).join(", ") : " - no preview cell differed from the map"}), no longer a preview`);
     await page.waitForTimeout(1500); // let the autosave pass settle (no diff -> no extra day writes)
     // Prompt 13 part 4 (WHY IS IT OPEN): the accept stored lastGenerate in state and the
     // autosave's blob leg wrote it - the record the anon-readable blob will carry, observed
@@ -3096,6 +3213,24 @@ try {
     //      (locked, source manual-external, no override confirm), Totals lists him under its own heading ----
     {
       try {
+        // The outside surgeon's day: a row-less weekday AFTER every day this run has edited so far (the
+        // SM2 triples included) - derived, never a named date (SM2 review; it was the constant
+        // 2027-03-01), so the Totals month below holds exactly this one outside-surgeon day.
+        const extDay = (() => {
+          const touched = Object.keys(harnessDays).concat([day || todayIso, todayIso]).sort();
+          const scanEnd = isoAddDays(lastLiveDay > todayIso ? lastLiveDay : todayIso, 400);
+          for (let d = isoAddDays(touched[touched.length - 1], 1); d <= scanEnd; d = isoAddDays(d, 1)) {
+            const dow = new Date(d + "T12:00:00Z").getUTCDay();
+            if (dow >= 1 && dow <= 5 && !fixtureHasDay(d) && !liveByDay[d] && !harnessDays[d] && d !== day) return d;
+          }
+          return null;
+        })();
+        if (!extDay) throw new Error("no row-less weekday after this run's last edited day");
+        // Every write is intercepted: the roster save's blob PATCH and the day's POST never reach the
+        // tables, and the app's next poll (refreshAll) re-adopts the LIVE blob (Locum leaves the roster)
+        // and drops the persisted row-less day. So the WHOLE block - roster save, editor, cell read and
+        // Totals (about 20 s) - starts at the top of a fresh poll interval (SM2 review).
+        await freshPollWindow(`outside surgeon ${extDay}`);
         const rosterCard = await openCard("setup_roster");
         if (!rosterCard) throw new Error("setup_roster card missing");
         const beforeRoster = writes.length;
@@ -3119,9 +3254,7 @@ try {
           if (x1.type !== "external" || x1.code !== "LOC" || x1.name !== "Locum" || x1.note !== "covers when asked" || pool !== 6) fail("Roster: the saved outside surgeon row is wrong: " + JSON.stringify(x1) + " pool=" + pool);
           else ok("Roster: Save -> blob autosave carries { id: x1, type: external, name: Locum, code: LOC, note } beside the six pool rows");
         }
-        // the day editor on an open day well outside the milestone range (nothing else in this run touches spring 2027)
-        const extDay = (() => { const start = Date.UTC(2027, 2, 1); for (let i = 0; i < 120; i++) { const d = utcDay(start + i * 86400000); if (!fixtureHasDay(d) && !liveByDay[d] && d !== day) return d; } return null; })();
-        if (!extDay) throw new Error("no row-less day in spring 2027");
+        // the day editor on the derived outside-surgeon day (see the top of this block)
         const [ey, em] = extDay.split("-");
         await showMonth(Number(ey), Number(em) - 1);
         await page.click(`[data-day="${extDay}"]`);
@@ -3166,7 +3299,11 @@ try {
         else if (inMain) fail("Totals: an outside surgeon must not appear in the pool table");
         else ok(`Totals ${ey}-${em}: 'Outside surgeons' section lists Locum (P 1, total 1) and the pool table does not`);
         await page.locator("[data-testid=totals-external]").screenshot({ path: path.join(OUT, "totals-outside-surgeons.png") }).catch(() => {});
-      } catch (e) { fail("outside surgeons (M): " + errLine(e)); }
+      } catch (e) {
+        fail("outside surgeons (M): " + errLine(e));
+        // an editor left open intercepts every later click - close it so a failure here stays one FAIL (SM2 review)
+        if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+      }
       await page.click('button[data-tab="setup"]').catch(() => {});
       await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 }).catch(() => {});
     }
@@ -3182,26 +3319,41 @@ try {
       const diffText = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
       const applyDisabled = await page.$eval("[data-testid=seed-apply]", el => el.disabled);
       const impWrites = writesSince(before).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
-      // The board scenario's claim (rpc/claim_open_slot, overlaid on every
-      // schedule_days GET as source 'claim' / updated_by s1) is one more
-      // app-edited day inside the seed's range: the importer must report it as
-      // BLOCKED (kept), never overwrite it. Expect exactly that many.
-      const claimedInPlan = Object.keys(claimedDays).filter(d => planDaysAll.has(d)).sort();
-      // ... and every other plan day whose live row is app-owned and differs from the plan (the publish-filled days).
-      // The importer's "+N blocked" counts LINES, one per differing role (P when primary / external cover differ, B when
-      // the backup differs, one "locks/note change" line otherwise) - a day differing in both roles counts twice.
-      const blockedDays = planSdRows.filter(p => liveByDay[p.day] && !seedOwned(liveFor(p.day)) && rowDiffers(liveFor(p.day), p)).map(p => p.day).sort();
-      const blockedLines = (d) => { const l = liveFor(d), p = planSdRows.find(r => r.day === d); let n = 0; if ((l.primary_id || null) !== (p.primary_id || null) || (l.external_cover || null) !== (p.external_cover || null)) n++; if ((l.backup_id || null) !== (p.backup_id || null)) n++; return n || 1; };
-      const nBlocked = blockedDays.reduce((s, d) => s + blockedLines(d), 0);
-      const totalOk = nBlocked ? new RegExp("^Total changes: 0 \\(\\+" + nBlocked + " blocked: app-edited days kept\\)$").test(total.trim()) : /Total changes: 0$/.test(total.trim());
-      const lastLine = diffText.split("\n").slice(-1)[0];
-      const lastOk = nBlocked ? lastLine === "Total changes: 0 (+" + nBlocked + " blocked)" : /No changes - the live tables already match the plan\./.test(lastLine);
-      // the importer names a blocked day as '10/7 B open -> Khan [BLOCKED: live source 'claim' updated_by 's1' v2 - edited in the app, not overwritten]'
-      const blockedNamed = claimedInPlan.every(d => new RegExp("^\\s*" + (+d.slice(5, 7)) + "/" + (+d.slice(8, 10)) + " [PB] .*\\[BLOCKED: live source 'claim' updated_by 's1'", "m").test(diffText));
-      if (!totalOk || !lastOk || !blockedNamed) fail(`Import dry run: expected zero changes against the live rows${nBlocked ? ` (+${nBlocked} blocked line(s) over ${blockedDays.length} app-owned plan day(s) differing from the seed${claimedInPlan.length ? ", the claimed " + claimedInPlan.join(", ") + " among them, named with source 'claim'" : ""})` : ""}: ` + total + " | " + lastLine);
+      // Prompt 12 SM2: the expectation is the harness's own diff of PLAN (the importer's plan for the seed,
+      // computed at the top of this file) against the live rows (the fixture rows in fixture mode),
+      // restating the importer's ownership rule: a plan day whose live row differs (holders, lock flags,
+      // external cover, note) is an UPDATE while the row is still seed-owned (source 'import', updated_by
+      // 'seed') and BLOCKED otherwise - a day the app has edited or published since the import is never
+      // overwritten and never counts as a change. The seed applied tonight leaves zero inserts / updates
+      // (anything else is the orchestrator's pending apply, reported as such); the 9/23 overnight publish
+      // leaves the plan days it rewrote blocked. The app's line reads 'Total changes: 0 (+N blocked ...)'
+      // then, and the 'No changes' sentence only when nothing is blocked.
+      const sameRow = (l, r) => (l.primary_id || null) === (r.primary_id || null) && (l.backup_id || null) === (r.backup_id || null) && !!l.primary_locked === !!r.primary_locked && !!l.backup_locked === !!r.backup_locked && (l.external_cover || null) === (r.external_cover || null) && (l.note || null) === (r.note || null);
+      const seedOwned = (l) => !!l && l.source === "import" && (l.updated_by || "") === "seed";
+      const planByDay = {}; PLAN.scheduleDayRows.forEach(r => { planByDay[r.day] = r; });
+      const planDays = Object.keys(planByDay).sort();
+      const planInserts = planDays.filter(d => !liveByDay[d]);
+      const planUpdates = planDays.filter(d => liveByDay[d] && !sameRow(liveByDay[d], planByDay[d]) && seedOwned(liveByDay[d]));
+      const planBlocked = planDays.filter(d => liveByDay[d] && !sameRow(liveByDay[d], planByDay[d]) && !seedOwned(liveByDay[d]));
+      const planUnchanged = planDays.filter(d => liveByDay[d] && sameRow(liveByDay[d], planByDay[d]));
+      // The importer lists a blocked day as one line per changed slot ('P a -> b', 'B a -> b'; one 'locks/note
+      // change' line when the holders agree), and the panel's '(+N blocked)' counts those LINES; the diff's
+      // schedule_days summary line counts the DAYS. Both are restated.
+      const blockedLinesOf = (d) => { const l = liveByDay[d], r = planByDay[d]; const p = (l.primary_id || null) !== (r.primary_id || null) || (l.external_cover || null) !== (r.external_cover || null); const b = (l.backup_id || null) !== (r.backup_id || null); return Math.max(1, (p ? 1 : 0) + (b ? 1 : 0)); };
+      const planBlockedLines = planBlocked.reduce((n, d) => n + blockedLinesOf(d), 0);
+      const blockedSuffix = planBlockedLines ? ` (+${planBlockedLines} blocked: app-edited days kept)` : "";
+      const expDryTotal = "Total changes: 0" + blockedSuffix;
+      const expDryTail = planBlockedLines ? `Total changes: 0 (+${planBlockedLines} blocked)` : "No changes - the live tables already match the plan.";
+      const expSdLine = `schedule_days: insert ${planInserts.length}, update ${planUpdates.length}, delete 0, unchanged ${planUnchanged.length}${planBlocked.length ? ", BLOCKED " + planBlocked.length : ""}`;
+      const dryLines = diffText.trim().split("\n").map(l => l.trim());
+      const dryTail = dryLines.slice(-1)[0];
+      const drySdLine = dryLines.find(l => l.startsWith("schedule_days: ")) || "(no schedule_days line)";
+      console.log(`     (Import dry run, restated from the plan's ${planDays.length} days vs the ${liveRows.length} ${fixture ? "fixture" : "live"} rows: ${planInserts.length} missing, ${planUpdates.length} seed-owned day(s) differing (would update), ${planUnchanged.length} unchanged, ${planBlocked.length} day(s) differing that the app edited / published since the import = ${planBlockedLines} blocked slot line(s) (never overwritten${planBlocked.length ? ": " + planBlocked.slice(0, 5).join(", ") + (planBlocked.length > 5 ? ", ... " + planBlocked.slice(-1)[0] : "") : ""}))`);
+      if (planInserts.length || planUpdates.length) fail(`Import dry run premise: the live rows do not hold the seed - ${planInserts.length} plan day(s) missing, ${planUpdates.length} seed-owned day(s) differing (${[...planInserts, ...planUpdates].slice(0, 6).join(", ")}) - the orchestrator's pending seed apply, not a harness expectation`);
+      if (total.trim() !== expDryTotal || dryTail !== expDryTail || drySdLine !== expSdLine) fail(`Import dry run: expected '${expDryTotal}', the diff text ending '${expDryTail}' and its schedule_days line '${expSdLine}' (${planBlocked.length} blocked day(s) = ${planBlockedLines} blocked line(s), restated from the live rows), got '${total.trim()}' | '${dryTail}' | '${drySdLine}'`);
       else if (!applyDisabled) fail("Import dry run: Apply must be disabled when there is nothing to apply");
       else if (impWrites.length) fail("Import dry run wrote something: " + JSON.stringify(impWrites.map(w => w.method + " " + w.path)));
-      else ok(`Import seed dry run (docs/silvis-seed.json): 0 changes against the live rows${nBlocked ? ` (+${nBlocked} blocked line(s) over ${blockedDays.length} app-owned plan day(s) kept${claimedInPlan.length ? ", the claimed " + claimedInPlan.join(", ") + " among them" : ""}; recounted from the live rows)` : ""}, Apply disabled, no writes`);
+      else ok(`Import seed dry run (docs/silvis-seed.json): 0 changes against the live rows${planBlocked.length ? ` (+${planBlockedLines} blocked slot lines on ${planBlocked.length} plan days the app published since the import, kept as they are; ${planUnchanged.length} unchanged)` : ""}, Apply disabled, no writes`);
       diffText.split("\n").filter(l => /^(call_schedule_data|schedule_days|availability|time_off)/.test(l)).forEach(l => console.log("     " + l));
       await page.locator("[data-testid=card-setup_import]").screenshot({ path: path.join(OUT, "import-dryrun.png") });
       ok("screenshot test/ui/out/import-dryrun.png");
@@ -3236,36 +3388,68 @@ try {
         await page.waitForTimeout(400);
         const total3 = await page.$eval("[data-testid=seed-total]", el => el.innerText.replace(/\s+/g, " "));
         const diff3 = await page.$eval("[data-testid=seed-diff-text]", el => el.textContent);
-        if (!/Total changes: 2/.test(total3) || !new RegExp("insert s2 available/any " + extra).test(diff3) || !/surgeonRules=update/.test(diff3)) fail(`Import apply dry run (extra ${extra}): expected 2 changes (blob surgeonRules + 1 availability insert): ${total3} | ${diff3.split("\n").filter(l => /insert|surgeonRules/.test(l)).join(" | ")}`);
-        else ok(`Import apply dry run: extra Burchett date ${extra} -> 2 changes (surgeonRules=update, insert s2 available/any ${extra})`);
-        // The Thanksgiving days count as 'kept (app-edited)' only while the in-memory
-        // rows still carry the backups that Accept & Publish generated above. The
-        // harness never persists the mocked CAS writes, so the app's 60-second
-        // background poll may already have re-adopted the live rows (backup null)
-        // - a mock artefact, not a product fact. Expect exactly as many kept days
-        // as still differ from the live rows at this moment.
-        // suSeedDayMerge restated over EVERY plan day (P13R-2 re-baseline): a plan day is KEPT when its live row is
-        // not seed-owned (the publish-filled days, the claimed day), or the grid shows holders that differ from that
-        // live row (this run's edits and generated fills the poll has not re-adopted - read right before Apply), or
-        // it is one of this run's edited days (harnessDays: an edit leaves source 'manual' even with equal holders).
-        // A plan day with no live row at all is an insert, not kept.
+        if (total3.trim() !== "Total changes: 2" + blockedSuffix || !new RegExp("insert s2 available/any " + extra).test(diff3) || !/surgeonRules=update/.test(diff3)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: 2${blockedSuffix}' (blob surgeonRules + 1 availability insert${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules/.test(l)).join(" | ")}`);
+        else ok(`Import apply dry run: extra Burchett date ${extra} -> 2 changes (surgeonRules=update, insert s2 available/any ${extra})${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
+        // Prompt 12 SM2: the result panel's counts are restated from the harness's own data, never from
+        // the app's summary (the pre-SM2 pin hard-coded Prompt 6's 37-row plan and four Thanksgiving days):
+        //   availability / time_off - the plan for seed3 (the seed + the extra date), keyed the way the app
+        //     keys them (person|kind|role|start|end|source, person|start|end), against the live tables (one
+        //     anon read each; the fixture rows in fixture mode): inserted = the plan rows the table lacks
+        //     (exactly the extra date once the seed is applied), skipped = the rest;
+        //   schedule_days - the app writes a plan day only when its LIVE row is still seed-owned (source
+        //     'import', updated_by 'seed') AND the in-memory day still equals that live row; every other
+        //     plan day is 'kept (app-edited)': the days the app published since the import (not seed-owned)
+        //     plus any seed-owned day whose in-session edit / publish the app still holds. The mocked writes
+        //     never reach the table, so the app's background poll (refreshDays) re-adopts the live row -
+        //     wholesale, source and note included - for every persisted day; WHICH of this run's edits are
+        //     still in the map at Apply time is therefore a timer fact, and the premise is OBSERVED the way
+        //     settleMapToLive does it: the grid cell of every plan day is read, and while a cell still
+        //     differs from the live rows, or no schedule_days GET has answered since this run's last
+        //     schedule_days write (a holders-unchanged write changes source / note only, which no cell
+        //     shows), the harness waits for the app's poll (at most twice). Then
+        //       kept     = plan days whose live row is not seed-owned + seed-owned (or row-less) plan days
+        //                  whose cell still differs from the live rows,
+        //       updated  = seed-owned, clean, differing from the plan (0 once the seed is applied),
+        //       inserted = row-less plan days with an empty cell (0 once the seed is applied).
+        const avKey = (r) => [r.person_id, r.kind, r.role || "any", String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10), r.source || ""].join("|");
+        const toKey = (r) => [r.person_id, String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10)].join("|");
+        const anonRows = async (table, select) => { const r = await fetch(`https://${SUPABASE_HOST}/rest/v1/${table}?select=${select}`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } }); if (!r.ok) throw new Error(`${table} anon read: HTTP ${r.status}`); const rows = await r.json(); if (!Array.isArray(rows)) throw new Error(`${table} anon read: body is not an array`); return rows; };
+        const liveAv = fixture ? fixture.availability : await anonRows("availability", "person_id,kind,role,start_date,end_date,source");
+        const liveTo = fixture ? fixture.time_off : await anonRows("time_off", "person_id,start_date,end_date");
+        const plan3 = IMP.importPlan(seed3, { now: PLAN_TS });
+        const haveAv = new Set(liveAv.map(avKey)), haveTo = new Set(liveTo.map(toKey));
+        const expAvIns = plan3.availabilityRows.filter(r => !haveAv.has(avKey(r))), expToIns = plan3.timeOffRows.filter(r => !haveTo.has(toKey(r)));
+        const expAvSkip = plan3.availabilityRows.length - expAvIns.length, expToSkip = plan3.timeOffRows.length - expToIns.length;
+        if (expAvIns.length !== 1 || expAvIns[0].start_date !== extra || expToIns.length) fail(`Import apply premise: the live availability / time_off tables do not hold the seed - ${expAvIns.length} availability row(s) missing (${expAvIns.map(r => r.person_id + " " + r.start_date).join(", ")}; expected only the extra ${extra}), ${expToIns.length} time_off row(s) missing - the orchestrator's pending seed apply`);
+        const planMonths = [...new Set(planDays.map(d => d.slice(0, 7)))];
+        const readPlanCells = async () => { const out = {}; for (const ym of planMonths) { await showMonth(+ym.slice(0, 4), +ym.slice(5, 7) - 1); const cells = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || null, b: e.getAttribute("data-backup") || null, ext: e.getAttribute("data-ext") || null }))); cells.forEach(c => { if (planByDay[c.day]) out[c.day] = c; }); } return out; };
+        const cellDiffers = (c, d) => { const l = liveByDay[d] || {}; return !c || c.p !== (l.primary_id || null) || c.b !== (l.backup_id || null) || c.ext !== (l.external_cover || null); };
+        const lastDaysWrite = writes.map((w, i) => w.path.startsWith("/rest/v1/schedule_days") ? i : -1).filter(i => i >= 0).pop();
         await page.click('button[data-tab="calendar"]');
-        const gridNow = {};
-        for (const ym of [...new Set([...planDaysAll].map(d => d.slice(0, 7)))].sort()) { await showMonth(+ym.slice(0, 4), +ym.slice(5, 7) - 1); (await readCells()).forEach(c => { if (c.day) gridNow[c.day] = c; }); }
-        const keptDays = [...planDaysAll].filter(d => {
-          const c = gridNow[d] || {}, l = liveFor(d);
-          if (!liveByDay[d]) return !!(c.p || c.b || c.ext);
-          const holdersDiffer = (c.p || null) !== (l.primary_id || null) || (c.b || null) !== (l.backup_id || null) || (c.ext || null) !== (l.external_cover || null);
-          return !seedOwned(l) || holdersDiffer || !!harnessDays[d];
-        }).sort();
-        const keptClaimed = Object.keys(claimedDays).filter(d => planDaysAll.has(d)).length;
-        const keptExpected = keptDays.length;
-        // availability: every plan row but the injected extra date already exists live -> skipped = plan rows - 1
-        const avPlanRows = IMPORTER.importPlan(seed3, { now: new Date().toISOString() }).availabilityRows.length;
+        let planCells = await readPlanCells();
+        let dirty = planDays.filter(d => cellDiffers(planCells[d], d));
+        let polled = lastDaysWrite === undefined || writesAtLastDaysGet > lastDaysWrite;
+        for (let round = 1; round <= 2 && (dirty.length || !polled); round++) {
+          console.log(`     (Import apply premise: ${dirty.length} plan-day cell(s) still differ from the live rows${dirty.length ? " (" + dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? ", ..." : "") + ")" : ""}${polled ? "" : "; no schedule_days GET since this run's last schedule_days write (#" + lastDaysWrite + ")"} - waiting for the app's background poll, round ${round}/2)`);
+          const got = await page.waitForResponse(isDaysGet, { timeout: 75000 }).then(() => true).catch(() => false);
+          if (got) polled = true; else console.log("     (Import apply premise: no GET /rest/v1/schedule_days within 75 s)");
+          await page.waitForTimeout(1500); // the merge + render
+          planCells = await readPlanCells();
+          dirty = planDays.filter(d => cellDiffers(planCells[d], d));
+        }
+        const unreadable = planDays.filter(d => !planCells[d]);
+        const keptNotOwned = planDays.filter(d => liveByDay[d] && !seedOwned(liveByDay[d]));
+        const keptDirty = planDays.filter(d => !keptNotOwned.includes(d) && dirty.includes(d));
+        const expKept = keptNotOwned.length + keptDirty.length;
+        const expUpdated = planDays.filter(d => liveByDay[d] && seedOwned(liveByDay[d]) && !dirty.includes(d) && !sameRow(liveByDay[d], planByDay[d])).length;
+        const expInserted = planDays.filter(d => !liveByDay[d] && !dirty.includes(d)).length;
+        const expResult = `availability inserted ${expAvIns.length}, skipped ${expAvSkip}; time_off inserted ${expToIns.length}, skipped ${expToSkip}; schedule_days inserted ${expInserted}, updated ${expUpdated}, kept (app-edited) ${expKept}.`;
+        if (unreadable.length) fail(`Import apply premise: ${unreadable.length} plan day(s) not readable in the grid: ${unreadable.slice(0, 5).join(", ")}`);
+        if (!polled) fail(`Import apply premise: no schedule_days GET answered after this run's last schedule_days write within two waits - the kept count ${expKept} is derived from the cells as observed, but a holders-unchanged in-session write may still sit in the map`);
+        console.log(`     (Import apply, restated over the plan's ${planDays.length} days: ${keptNotOwned.length} not seed-owned live (published / edited in the app since the import), ${keptDirty.length} still carrying this run's edits${keptDirty.length ? " (" + keptDirty.join(", ") + ")" : ""} -> kept ${expKept}, updated ${expUpdated}, inserted ${expInserted}; availability: plan ${plan3.availabilityRows.length} rows, ${expAvIns.length} missing live -> inserted ${expAvIns.length}, skipped ${expAvSkip}; time_off: plan ${plan3.timeOffRows.length} rows -> inserted ${expToIns.length}, skipped ${expToSkip})`);
         await page.click('button[data-tab="setup"]');
         await openCard("setup_import");
         await page.waitForSelector("[data-testid=seed-apply]", { timeout: 5000 });
-        console.log(`     (plan days kept = ${keptExpected}: ${keptDays.length ? keptDays.slice(0, 6).join(", ") + (keptDays.length > 6 ? ", ... (" + keptDays.length + ")" : "") : "none"} - app-owned live rows, grid holders differing from the live row right before Apply, or this run's edited days (${keptClaimed} claimed); availability plan rows ${avPlanRows} -> skipped ${avPlanRows - 1})`);
         const onDialog = (d) => d.accept();
         page.on("dialog", onDialog);
         const beforeApply = writes.length;
@@ -3278,7 +3462,7 @@ try {
         // fix round 2 (safe-4): the PATCH is a compare-and-swap on the stamp seen at dry-run time (?id=eq.main&updated_at=eq.<seen>)
         const aBlob = aseq.findIndex(w => w.method === "PATCH" && /^\/rest\/v1\/call_schedule_data\?id=eq\.main&updated_at=eq\.\d{4}-\d{2}-\d{2}T/.test(w.path));
         const aAv = aseq.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/availability"));
-        const aBad = aseq.filter(w => w.path.startsWith("/rest/v1/schedule_days") || w.path.startsWith("/rest/v1/time_off"));
+        const aBad = aseq.filter(w => ((expInserted + expUpdated) === 0 && w.path.startsWith("/rest/v1/schedule_days")) || (expToIns.length === 0 && w.path.startsWith("/rest/v1/time_off")));
         const avBody = aAv >= 0 ? JSON.parse(aseq[aAv].body || "[]") : [];
         const blobBody = aBlob >= 0 ? JSON.parse(aseq[aBlob].body || "{}") : {};
         const resText = await page.$eval("[data-testid=seed-result]", el => el.innerText.replace(/\s+/g, " "));
@@ -3287,10 +3471,10 @@ try {
         else if (aBlob < 0 || aBlob < aSnap) fail(`Import apply: blob PATCH missing or before the snapshot (snap #${aSnap}, blob #${aBlob})`);
         else if (!(blobBody.data && blobBody.data.surgeonRules && blobBody.data.surgeonRules.s2 && blobBody.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra)) || !blobBody.data.roster || "schedule" in blobBody.data) fail("Import apply: the merged blob is wrong: keys " + Object.keys(blobBody.data || {}).join(","));
         else if (aAv < 0 || aAv < aSnap || avBody.length !== 1 || avBody[0].start_date !== extra || avBody[0].person_id !== "s2" || avBody[0].source !== "seed") fail(`Import apply: availability insert wrong (index ${aAv}, snap ${aSnap}): ` + JSON.stringify(avBody));
-        else if (aBad.length) fail("Import apply: schedule_days / time_off were written although nothing changed there: " + JSON.stringify(aBad.map(w => w.method + " " + w.path)));
-        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !new RegExp("availability inserted 1, skipped " + (avPlanRows - 1) + "\\b").test(resText) || !new RegExp("schedule_days inserted 0, updated 0, kept \\(app-edited\\) " + keptExpected + "\\b").test(resText)) fail(`Import apply: result panel wrong (expected 1 availability insert of ${avPlanRows} plan rows, no schedule_days change, ${keptExpected} day(s) kept = plan days app-owned live, or differing from their live row in the grid right before Apply, or edited this run [${keptDays.slice(0, 8).join(", ")}${keptDays.length > 8 ? ", ..." : ""}]; ${keptClaimed} claimed): ` + resText);
+        else if (aBad.length) fail("Import apply: schedule_days / time_off were written although the restatement expects no change there: " + JSON.stringify(aBad.map(w => w.method + " " + w.path)));
+        else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !resText.includes(expResult)) fail(`Import apply: result panel wrong (expected 'Import applied - blob merged; ${expResult}' - ${expAvIns.length} availability insert of ${plan3.availabilityRows.length} plan rows, ${expToIns.length} time_off insert of ${plan3.timeOffRows.length}, ${expKept} plan day(s) kept = ${keptNotOwned.length} not seed-owned live + ${keptDirty.length} still carrying this run's edits): ` + resText);
         else if (!impAudit) fail("Import apply: no audit_log 'seed.import'");
-        else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the 1 missing row (${extra}); no schedule_days / time_off write; audit seed.import; result: "${resText.slice(0, 120)}"`);
+        else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the 1 missing row (${extra}); ${(expInserted + expUpdated) ? "" : "no schedule_days write, "}${expToIns.length ? "" : "no time_off write; "}audit seed.import; result equals the restatement: "${resText.slice(resText.indexOf("availability inserted"), resText.indexOf("availability inserted") + expResult.length)}"`);
         // Roster autosave after the merge must not regress: the extra date stays in the next blob write.
         await page.waitForTimeout(1200);
         const laterBlob = writesSince(beforeApply, "/rest/v1/call_schedule_data").filter(w => w.method === "POST").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).filter(Boolean).slice(-1)[0];
