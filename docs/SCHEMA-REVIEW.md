@@ -24,6 +24,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
+| `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **prepared, see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. |
 
 Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`.
 
@@ -42,6 +43,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `audit_log` | scheduler/admin | insert: any authenticated user |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
+| `east_vacation_reviews` (prepared 2026-09-23) | authenticated (**no anon policy** — an anon read is a silent `200 + []`) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 
 ## (c) Findings
 
@@ -347,3 +349,100 @@ against the section-7 slice only (section 5's `expect_eq A ...` lines had satisf
 cleanup and the `source` comment; 291 assertions.
 
 **⟶ 9/23 (P13R, the rebase onto the Prompt 12 head) — review note 5 closed.** The generator treats a row whose source is `claim` or `trade` as fixed in both modes exactly like a lock (`generator.GEN_PERSON_FIXED_SOURCES`; every held role of that day, counted in `diagnostics.fixedSlots`, conflicts in `fixedViolations`), so a later Generate never discards a claim; `manual` stays governed by the day editor's lock toggle. No schema change: `claim_open_slot` still writes `source = 'claim'` and no lock flag. Pinned in `test/generator-regression.js` (fixture `claim-fixed-2026-10.json`) and `test/open-shifts.test.js`.
+
+## 2026-09-23 - east_vacation_reviews (Prompt 15 part 2)
+
+**Status: PREPARED, NOT APPLIED** — report-first (guide §4.3). The migration `sql/migrations/2026-09-23-east-vacation-reviews.sql`
+and the byte-identical text in `sql/schema.sql` (revision `d`; `test/schema.test.js` pins the identity, the columns, the
+constraints, the four policies, the absence of an anon policy and the placement) are ready for the orchestrator to apply
+tonight under Faraz's mandate; the observed probe strings go into the placeholders at the end of this section.
+
+**What it is.** Prompt 15 mirrors the person's Davenport vacations into Silvis (part 1: `east_feed` payload
+`data.vacations`), and nothing is mirrored blindly: each range is **unreviewed** (no row), **away** (also off at Silvis) or
+**home** (available at Silvis — no East call, no OR block). This table holds the decision per exact range —
+`person_id text`, `"start" date`, `"end" date`, `decision text check in ('away','home')`, `decided_at timestamptz default
+now()`, `decided_by text`, `unique (person_id, "start", "end")`, plus `id uuid` as the primary key and `check ("end" >= "start")`.
+The ranges themselves are never copied here. `rules.js` derives the consequences from the cached ranges + these rows
+(`ctx.eastVacations`: unreviewed/away = a derived vacation with the existing `time-off:` / `day-before-vacation` codes; home
+= `eastClear`), so a change of mind is one row and no `time_off` row is ever written. **Column names:** the prompt's
+`start` / `end` are kept — `end` is a PostgreSQL reserved word, so the SQL quotes it (`"end"`); over PostgREST the JSON keys
+and query parameters are plain `start` / `end`, the same shape as the feed payload `{ start, end }`. A range Davenport changes
+or removes no longer matches its row (exact `start`+`end`), so the review resets to unreviewed and the app deletes the
+stale row through the normal write path (`helpers.derivedEastVacations` lists it as `changed` / `removed`; audit
+`eastvac.review`, reason reset; the refresh toast says so).
+
+**Blast radius.** A new table, its index and four policies; no existing table, row, policy or function is touched
+(`test/schema.test.js` pins that the migration's statements name no existing table). The table is empty until a review is
+saved from Setup → East feed / the person's Time off view. Nothing in the anon-readable set changes.
+
+**RLS.** `enable row level security`; `east_vacation_reviews_read` = `for select to authenticated using (true)` (read all,
+authenticated only — **no anon policy**: a decision says where a surgeon is on a given day, so the table stays off the
+anon list like `user_profiles`; an anon read is the silent `200 + []`, which `verify-rls.sh` 9a checks for an *empty* body
+while the probe proves rows exist and stay invisible); `_self_insert` / `_self_update` / `_self_delete` = `to authenticated`
+with `person_id = public.silvis_person_id() or public.silvis_is_sched()` (`using` + `with check` on update). No `for all`
+policy. Contact data: none (dates, a decision, roster ids).
+
+**The probe — `sql/probes/east-vacation-reviews-probe.sql` (persists nothing).** Same mechanism as the trade and claim
+probes: one batch, no `BEGIN`/`COMMIT`, last statement raises `PROBE_RESULTS A1=...;END`, so the fixtures (two rows in
+2030-05 with `decided_by = 'probe-eastvac'`, two throwaway `auth.users` `probe-eastvac-<uuid>@example.test` linked to
+`s3`/surgeon and `s1`/scheduler) and everything a case wrote roll back. Cases, expected AFTER the migration:
+
+| case | as | does | expected |
+|---|---|---|---|
+| A1 | anon | reads the table while two fixture rows exist | `rows=0` (RLS: silent, not an error) |
+| A2 | anon | inserts a row | `ERR 42501 new row violates row-level security policy ...` |
+| B | surgeon s3 | inserts his own row, then reads every row | `ok visible=3` (authenticated read-all: s2's row too) |
+| C | surgeon s3 | inserts a row for s2 | `ERR 42501 ...` |
+| D | surgeon s3 | updates s2's row (home → away) | `updated=0 decision=home` (the `using` filter is silent) |
+| E | surgeon s3 | deletes s2's row | `deleted=0` |
+| F | surgeon s3 | updates his own fixture row (away → home) | `updated=1 decision=home` |
+| G | scheduler | updates s2's row and deletes s3's B row | `updated=1 decision=away deleted=1` |
+| H | postgres | `decision = 'maybe'` | `ERR 23514 ...` (check constraint) |
+| I | postgres | a second review of the same exact range | `ERR 23505 ...` (unique) |
+| J | postgres | `"end"` before `"start"` | `ERR 23514 ...` |
+
+BEFORE the migration the setup raises `PROBE_SETUP` (no table) and no sentinel comes back. Errors are recorded as
+`ERR <SQLSTATE> <message>` (`;` and quotes flattened to spaces). Expected string after the migration, up to the
+flattened message texts: `PROBE_RESULTS A1=rows=0;A2=ERR 42501 new row violates row-level security policy for table
+east_vacation_reviews ;B=ok visible=3;C=ERR 42501 new row violates row-level security policy for table  east_vacation_reviews ;
+D=updated=0 decision=home;E=deleted=0;F=updated=1 decision=home;G=updated=1 decision=away deleted=1;H=ERR 23514 new row
+for relation  east_vacation_reviews  violates check constraint  east_vacation_reviews_decision_check ;I=ERR 23505 duplicate
+key value violates unique constraint  east_vacation_reviews_person_id_start_end_key ;J=ERR 23514 new row for relation
+east_vacation_reviews  violates check constraint  east_vacation_reviews_check ;END` (the constraint names are PostgreSQL's
+defaults; `verify-rls.sh` grades the SQLSTATE and the `=`-values, not the message text).
+
+Run it (absolute path; workdir linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`):
+
+    SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh                                                        # before: 9a/9b 404 (named), 9c no sentinel
+    supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-east-vacation-reviews.sql
+    supabase db query --linked --workdir <dir> -f <abs>/sql/probes/east-vacation-reviews-probe.sql        # after: the picture above
+    SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh                                                        # section 9: 9a 200 + [], 9b 401/403, 9c graded + leftover count 0
+
+After EVERY probe run the rollback is observed, never assumed (`verify-rls.sh` 9c does it; by hand after the manual run):
+
+    supabase db query --linked --workdir <dir> -o json "select ((select count(*) from public.east_vacation_reviews where decided_by = 'probe-eastvac') + (select count(*) from auth.users where email like 'probe-eastvac-%@example.test'))::int as leftover"
+
+`leftover` must be 0; otherwise clean up at once (`delete from public.east_vacation_reviews where decided_by =
+'probe-eastvac'; delete from auth.users where email like 'probe-eastvac-%@example.test';` — `user_profiles` rows cascade)
+and report. 9d (a surgeon's REST read) runs only with `SILVIS_SURGEON_JWT` and is read-only.
+
+**Client consequence (parts 2-3 of Prompt 15, the UI part).** The Setup → East feed panel and the person's Time off view
+list every cached range with its state and write these rows with `dbAuthHeaders()` (upsert on `person_id,start,end`;
+`Prefer: resolution=merge-duplicates`), delete stale rows on refresh — **per person**:
+`helpers.derivedEastVacations(rangesOfThatPerson, allReviewRows, personId).stale` (reason `changed` / `removed`), where
+`personId` is the roster id resolved from the East code; the helper consults and lists only that person's rows, so
+passing the whole read-all table is safe and another surgeon's rows are never decided by or deleted through his
+refresh (without a `personId` nothing is stale) — with the audit row `eastvac.review { person_id, start, end, decision }`
+(decision `reset` for a deletion) and name the count in the refresh toast; the app passes `eastVacationRanges` (per
+roster id, from `eastVacations(eastFeedRows, code)`) and `eastVacationReviews` (the rows) to `buildContext`, reads
+`res.eastVacation` / `res.eastClear` for the day-editor gloss and `rules.eastVacationConflicts(ctx)` for the panel's
+conflict list. **Server-side:** `rpc/claim_open_slot` (`CL009 CLAIM_VACATION`), `apply_trade`'s vacation check and the
+`time_off` trigger read `time_off` rows only; a derived East vacation is enforced by the client gate. Extending `CL009`
+to read the `east_feed` vacations + `east_vacation_reviews` is a possible later migration, not part of this one.
+
+**Observed (orchestrator, to be filled in when applied):**
+
+- Migration applied: `<date/time, CLI output summary>`
+- Probe AFTER: `<paste the PROBE_RESULTS ... ;END string verbatim>`
+- Leftover count: `<n>` (must be 0)
+- `verify-rls.sh` section 9: `<9a line, 9b line, RESULT line>`

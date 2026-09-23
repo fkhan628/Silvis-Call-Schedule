@@ -254,6 +254,75 @@ else
   echo "   SKIP 7c-7e (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment; no such user exists until invites go out)"
 fi
 
+echo "== 9. east_vacation_reviews (Prompt 15 part 2: the away/home decision per mirrored East vacation range) =="
+# 9a. anon READ. The table has no anon policy, so an anon GET is a silent HTTP 200 + [] - exactly the
+#     Davenport-lesson shape; the probe (9c) is what proves rows exist and stay invisible. Before the
+#     migration the table is missing and PostgREST answers 404 (accepted, named). A 200 with a non-empty
+#     body means anon can read decisions: FAIL.
+line=$(curl -s -o /tmp/vr9a.json -w 'HTTP %{http_code}' "$URL/rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+body9a=$(tr -d ' \n\r' < /tmp/vr9a.json)
+echo "   9a anon GET: $line  body: $(head -c 160 /tmp/vr9a.json)"
+case "$line" in
+  "HTTP 200") if [ "$body9a" = "[]" ]; then ok "anon read of east_vacation_reviews is a silent empty list (no anon policy)"; else bad "anon read of east_vacation_reviews returned rows: $(head -c 120 /tmp/vr9a.json)"; fi;;
+  "HTTP 404") ok "east_vacation_reviews not created yet (404 - before the migration); apply sql/migrations/2026-09-23-east-vacation-reviews.sql";;
+  *) bad "anon read of east_vacation_reviews: $line (expected 200 + [] after the migration, 404 before)";;
+esac
+# 9b. anon WRITE (nothing can land: no anon insert policy; 404 before the migration)
+line=$(curl -s -o /tmp/vr9b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/east_vacation_reviews" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"person_id":"s9test","start":"2030-05-01","end":"2030-05-02","decision":"home","decided_by":"verify-rls"}')
+echo "   9b anon POST: $line  body: $(head -c 160 /tmp/vr9b.json)"
+case "$line" in "HTTP 401"|"HTTP 403"|"HTTP 404") ok "anon write to east_vacation_reviews blocked ($line)";; *) bad "anon write to east_vacation_reviews: $line (expected 401/403; 404 before the migration)";; esac
+# 9c. the rolled-back probe (sql/probes/east-vacation-reviews-probe.sql): fixtures in 2030-05 (decided_by
+#     'probe-eastvac'), throwaway auth users probe-eastvac-<uuid>@example.test linked to s3 (surgeon) / s1
+#     (scheduler), the same 'PROBE_RESULTS ...;END' sentinel as sections 5 and 7. Expectations are the
+#     AFTER-migration picture; before it the setup raises PROBE_SETUP (no table) and this reports no sentinel.
+#     The rollback is then OBSERVED: a leftover count over the fixture rows and the auth users must be 0.
+if linked; then
+  VPROBE="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/east-vacation-reviews-probe.sql"   # absolute path for the CLI (pwd -W = Windows form under Git Bash)
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$VPROBE" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "east-vacation-reviews probe reported no sentinel-terminated PROBE_RESULTS (table missing - apply the migration first - or a setup error: $(echo "$out" | head -c 400))"
+  else
+    results=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results" | tr ';' '\n' | sed 's/^/   /'
+    case_val()    { echo "$results" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq()   { v=$(case_val "$1"); [ "$v" = "$2" ] && ok "eastvac probe $1: $3" || bad "eastvac probe $1: $3 (got '$v', expected '$2')"; }
+    expect_code() { v=$(case_val "$1"); case "$v" in "ERR $2 "*) ok "eastvac probe $1: $3 ($2)";; *) bad "eastvac probe $1: $3 (got '$v', expected 'ERR $2 ...')";; esac; }
+    expect_eq   A1 "rows=0"                              "anon sees none of the fixture rows (RLS: silent, not an error)"
+    expect_code A2 42501                                 "anon insert is refused by RLS"
+    expect_eq   B  "ok visible=3"                        "a linked surgeon inserts his own review and reads every row (authenticated read-all)"
+    expect_code C  42501                                 "a surgeon cannot review someone else's range"
+    expect_eq   D  "updated=0 decision=home"             "a surgeon's update of someone else's row touches nothing (USING filter, silent)"
+    expect_eq   E  "deleted=0"                           "a surgeon's delete of someone else's row touches nothing"
+    expect_eq   F  "updated=1 decision=home"             "a surgeon updates his own row"
+    expect_eq   G  "updated=1 decision=away deleted=1"   "the scheduler updates and deletes anyone's row"
+    expect_code H  23514                                 "decision outside away/home is refused by the check constraint"
+    expect_code I  23505                                 "a second review of the same exact range is refused by the unique constraint"
+    expect_code J  23514                                 "end before start is refused by the check constraint"
+  fi
+  LEFTOVER9_SQL="select ((select count(*) from public.east_vacation_reviews where decided_by = 'probe-eastvac') + (select count(*) from auth.users where email like 'probe-eastvac-%@example.test'))::int as leftover"
+  r=$(q "$LEFTOVER9_SQL")
+  if [ "$(verdict "$r")" != "accepted" ]; then
+    bad "eastvac probe leftover count could not be read (table missing before the migration is expected): $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then   # ::int, but tolerate a string-typed 0
+    ok "eastvac probe persisted nothing (leftover count 0: east_vacation_reviews probe-eastvac rows / auth.users)"
+  else
+    bad "eastvac probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.east_vacation_reviews where decided_by = 'probe-eastvac';"
+    echo "      delete from auth.users where email like 'probe-eastvac-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 9c (supabase CLI not linked at $WORKDIR)"
+fi
+# 9d. authenticated READ over REST as a linked SURGEON (SILVIS_SURGEON_JWT): a 200 with an array. Read only -
+#     a REST write here would be a real, persisted decision.
+if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
+  line=$(curl -s -o /tmp/vr9d.json -w 'HTTP %{http_code}' "$URL/rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT")
+  echo "   9d surgeon GET: $line  body: $(head -c 160 /tmp/vr9d.json)"
+  if [ "$line" = "HTTP 200" ] && head -c 1 /tmp/vr9d.json | grep -q '\['; then ok "a linked surgeon reads east_vacation_reviews ($line, array)"; else bad "surgeon read of east_vacation_reviews: $line $(head -c 120 /tmp/vr9d.json)"; fi
+else
+  echo "   SKIP 9d (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment; no such user exists until invites go out)"
+fi
+
 echo
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

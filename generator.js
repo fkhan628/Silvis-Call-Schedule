@@ -132,7 +132,8 @@ function genRulesApi() {
       holidayUnits: holidayUnits, holidayUnitCandidates: holidayUnitCandidates, isHolidayDay: isHolidayDay,
       talliesFor: talliesFor, runThrough: rdRunThrough, resolveWeight: resolveWeight, monthlyCapFor: monthlyCapFor, defaultWeights: defaultWeights,
       standingEastDays: standingEastDays,
-      eastConflicts: eastConflicts
+      eastConflicts: eastConflicts,
+      eastVacationConflicts: eastVacationConflicts
     };
   }
   return genRulesCache;
@@ -1367,9 +1368,36 @@ function genDiagnostics(G, best, meta) {
     // a locked / fixed slot may collide (Khan primary locked on an East day, someone
     // else in Fierce's derived slot). rules.eastConflicts is read-only.
     eastConflicts: typeof R.eastConflicts === "function" ? R.eastConflicts(ctx, G.days) : [],
+    // Prompt 15 part 2 (9/23): the derived East vacations inside the range, per surgeon -
+    // the ranges touching it with their review state, the derived vacation days (unreviewed /
+    // away: treated like time off), the 'home' days (eastClear: pattern lifted + primary
+    // bonus) and the feed-busy days inside a home range (the feed won; buildContext warned) -
+    // plus the conflict report over the FINAL schedule (a held slot inside an unreviewed /
+    // away range, or the primary the day before one): generated slots never appear there,
+    // locked / fixed ones may. Diagnostics only; rules.js owns the rule.
+    eastVacations: genEastVacations(G, ctx),
     placedCount: Object.keys(S.placed).length,
     warnings: warnings
   };
+}
+
+// diagnostics.eastVacations (Prompt 15 part 2): { [id]: { ranges, vacationDays, clearDays, feedBusyOnHome, conflicts } }
+// restricted to the range (a range is listed when any of its days is inside; the day lists are
+// clipped), one entry per surgeon with any East vacation data; {} when none.
+function genEastVacations(G, ctx) {
+  var out = {};
+  var ev = ctx.eastVacations || {};
+  var inRange = function (d) { return d >= G.start && d <= G.end; };
+  var conflicts = typeof G.R.eastVacationConflicts === "function" ? G.R.eastVacationConflicts(ctx, ctx.schedule).filter(function (c) { return inRange(c.day); }) : [];
+  Object.keys(ev).forEach(function (id) {
+    var v = ev[id];
+    var ranges = (v.ranges || []).filter(function (r) { return r.end >= G.start && r.start <= G.end; });
+    var vac = (v.vacationDays || []).filter(inRange), clear = (v.clearDays || []).filter(inRange), busy = (v.feedBusyOnHome || []).filter(inRange);
+    var mine = conflicts.filter(function (c) { return c.surgeonId === id; });
+    if (!ranges.length && !vac.length && !clear.length && !busy.length && !mine.length) return;
+    out[id] = { ranges: ranges, vacationDays: vac, clearDays: clear, feedBusyOnHome: busy, conflicts: mine };
+  });
+  return out;
 }
 
 function genSnapshot(G, W) {

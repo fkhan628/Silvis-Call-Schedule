@@ -64,6 +64,44 @@
 //                 it names - { month, roles: ['primary', 'backup'] } restricts
 //                 both, the form the seed writes for a list the office has
 //                 published (Burchett's and Acton's November, T).
+//   eastVacationRanges { [surgeonId]: [{ start, end }] } (Prompt 15 part 2,
+//                 9/23) - the person's Davenport VACATIONS from the east_feed
+//                 cache (east-feed.js eastVacations(rows, code)), keyed by the
+//                 roster id the caller resolves from the East CODE (never a
+//                 Davenport id). Ignored with a warning for an unknown id, an
+//                 outside surgeon or a surgeon whose eastFeed feature is off.
+//   eastVacationReviews  [{ person_id, start, end, decision }] - the
+//                 east_vacation_reviews rows. A range with no row that matches
+//                 it exactly (same person, start and end) is UNREVIEWED; a row
+//                 decides 'away' or 'home' (rdEastReviewState over the rows
+//                 filtered to this person mirrors helpers.js
+//                 reviewStateFor(range, rows, personId); a test pins them equal).
+//                 unreviewed and away -> a DERIVED vacation: every day of the
+//                 range joins P.vacation exactly like a time_off row (both
+//                 roles, the trailing edge for primary; the same hard codes
+//                 'time-off:<date>' / 'day-before-vacation', so every consumer
+//                 already understands them) and the result carries
+//                 res.eastVacation = 'away' | 'unreviewed' for the UI gloss. A
+//                 Silvis time_off day inside the range stands as the Silvis
+//                 vacation (no gloss). home -> NOT a vacation: the day is
+//                 eastClear - read as a dated availability for both roles
+//                 (rowAvail: the weekday-pattern family incl. hardNeverWeekdays
+//                 is lifted, obligations are not), known to East (no
+//                 east-unknown; the forecast is not consulted - a Davenport
+//                 vacation is Davenport's own statement he is off; a forecast
+//                 value at or over the threshold there is a warning) and a
+//                 small PRIMARY-only soft bonus { east-clear, -weights.eastClear }
+//                 (default 2, Setup-editable); res.eastClear = true. On a home
+//                 day the East feed cannot also say busy: if the data disagree
+//                 the feed (published busy day, standing day, busy:true
+//                 override) wins - no east-clear that day, one ctx warning per
+//                 surgeon naming the days. Nothing here writes time_off rows.
+//                 ctx.eastVacations[id] = { ranges, vacationDays, clearDays,
+//                 feedBusyOnHome } is the derived picture for the UI and the
+//                 generator's diagnostics. eastVacationConflicts(ctx, schedule)
+//                 mirrors the time_off trigger for the derived ranges (a held
+//                 day inside an unreviewed/away range, and the day before it
+//                 for primary) - a report, never a block on a published lock.
 //   surgeonRules[id].backupOptOut  true -> hard 'backup-opt-out' on every
 //                 backup slot, holiday units included; never waived, no dated
 //                 row lifts it (Faraz 9/22; nobody has opted out).
@@ -269,7 +307,8 @@ function defaultWeights() {
     patternDaily: 5, patternMismatch: 3, backToBackWeekend: 3, backupAfterPrimary: 1,
     noTargetWeekday: 1, eastUnknown: 1, eastForecastBelowThreshold: 2, smoothingTolerance: 2,
     longRunPerDay: 3, // Prompt 12 A (9/22): per day beyond surgeonRules.<id>.maxConsecutiveAnyRole (= medium)
-    weekendContribution: 3 // Prompt 12 L (9/22): primaryContribution "weekends" - full-block primary bonus / weekend backup penalty (= medium)
+    weekendContribution: 3, // Prompt 12 L (9/22): primaryContribution "weekends" - full-block primary bonus / weekend backup penalty (= medium)
+    eastClear: 2 // Prompt 15 part 2 (9/23): PRIMARY bonus on a 'home' East vacation day (no East call, no OR block); 0 switches it off
   };
 }
 
@@ -498,6 +537,13 @@ function buildContext(input) {
       // published busy day: "MM-DD" -> entry name, plus the validated list for display.
       eastStanding: new Map(),
       eastStandingList: [],
+      // Prompt 15 part 2 (9/23): East vacations - the person's Davenport time off (input
+      // eastVacationRanges, from the east_feed cache) under the review decisions (input
+      // eastVacationReviews). Filled after the time-off loop below.
+      eastVacationDays: Object.create(null), // date -> 'away' | 'unreviewed' (a DERIVED vacation day, not a Silvis time_off day)
+      eastDayBefore: Object.create(null),    // date -> that state when the derived range starts the next day (trailing-edge gloss)
+      eastClear: new Set(),                  // 'home' days: a dated availability for both roles + the east-clear primary bonus
+      eastVacationRanges: [],                // [{ start, end, state }] as derived (display / conflicts)
       derived: Object.create(null), // date -> forced Silvis role
       eastDays: new Set(),          // every day he holds ANY East call (busy days + derived weeks) - display / East-only tallies
       // 9/22 (Prompt 12 K): the days of his East PRIMARY weeks only (derived Silvis
@@ -630,11 +676,66 @@ function buildContext(input) {
     var end = row.end_date || row.start_date;
     rdEachDayInRange(row.start_date, end, function (d) { P.vacation.add(d); });
   });
+
+  // East vacations (Prompt 15 part 2, 9/23): the person's Davenport vacation ranges under
+  // the review decisions. unreviewed / away -> the days join P.vacation like a time_off row
+  // (the trailing edge below follows); home -> eastClear days. A Silvis time_off day inside
+  // a range stands as the Silvis vacation. See the header for the contract.
+  ctx.eastVacations = Object.create(null);
+  var evRanges = input.eastVacationRanges;
+  var evReviews = input.eastVacationReviews;
+  if (evReviews !== undefined && evReviews !== null && !Array.isArray(evReviews)) {
+    ctx.warnings.push("eastVacationReviews is not a list: ignored - every East vacation range reads as unreviewed (pass the east_vacation_reviews rows)");
+    evReviews = [];
+  }
+  evReviews = evReviews || [];
+  if (evRanges !== undefined && evRanges !== null && (typeof evRanges !== "object" || Array.isArray(evRanges))) {
+    ctx.warnings.push("eastVacationRanges is not a { surgeonId: [{ start, end }] } map: ignored");
+    evRanges = null;
+  }
+  Object.keys(evRanges || {}).forEach(function (id) {
+    var list = evRanges[id];
+    var P = ctx.per[id];
+    if (!P) { ctx.warnings.push("eastVacationRanges[" + id + "]: ignored - unknown surgeon id (key the map by the roster id resolved from the East code, never by a Davenport id)"); return; }
+    if (!Array.isArray(list)) { ctx.warnings.push("eastVacationRanges[" + id + "]: ignored - not a list of { start, end } (got " + JSON.stringify(list) + ")"); return; }
+    if (!list.length) return;
+    if (P.external) { ctx.warnings.push("eastVacationRanges[" + id + "]: " + list.length + " range(s) ignored - " + id + " is an outside surgeon (never generated; the East fields do not apply to him)"); return; }
+    if (!P.eastEnabled) { ctx.warnings.push("eastVacationRanges[" + id + "]: " + list.length + " range(s) ignored - this surgeon has no East feature (surgeonRules." + id + ".eastFeed.enabled is not true); East vacations apply to a surgeon with an East code only"); return; }
+    var mine = evReviews.filter(function (r) { return r && r.person_id === id; });
+    var busyOnHome = [], forecastOnHome = [];
+    list.forEach(function (rg, idx) {
+      if (!rg || !rdIsDateStr(rg.start) || !rdIsDateStr(rg.end) || rg.end < rg.start) { ctx.warnings.push("eastVacationRanges[" + id + "][" + idx + "]: ignored - needs { start, end } as 'YYYY-MM-DD' with end >= start (got " + JSON.stringify(rg) + ")"); return; }
+      var state = rdEastReviewState(rg, mine);
+      P.eastVacationRanges.push({ start: rg.start, end: rg.end, state: state });
+      rdEachDayInRange(rg.start, rg.end, function (d) {
+        if (P.vacation.has(d) && !P.eastVacationDays[d]) return; // his Silvis time_off day: the Silvis vacation stands, no East gloss
+        if (state === "home") {
+          if (P.eastVacationDays[d]) return;                    // an away/unreviewed range already claimed the day (overlap): conservative
+          if (P.eastBusy.has(d) || rdStandingName(P, d)) { busyOnHome.push(d); return; } // the feed wins
+          if (P.eastForecast && typeof P.eastForecast[d] === "number" && P.eastForecast[d] >= ctx.forecastThreshold) forecastOnHome.push(d + " (" + P.eastForecast[d].toFixed(2) + ")");
+          P.eastClear.add(d);
+        } else {
+          if (P.eastClear.has(d)) P.eastClear.delete(d);       // overlap with a home range: the vacation wins
+          P.vacation.add(d);
+          P.eastVacationDays[d] = state;
+        }
+      });
+    });
+    if (busyOnHome.length) ctx.warnings.push("eastVacations[" + id + "]: the East feed says busy on " + busyOnHome.join(", ") + " inside a 'home' East vacation range - the feed wins (no east-clear on " + (busyOnHome.length === 1 ? "that day" : "those days") + "); check the Davenport schedule or the override");
+    if (forecastOnHome.length) ctx.warnings.push("eastVacations[" + id + "]: the East forecast is at or over the threshold on " + forecastOnHome.join(", ") + " inside a 'home' East vacation range - the forecast is not consulted there (a Davenport vacation is Davenport's own statement he is off); refresh the forecast if it predates the vacation");
+    var vacDays = Object.keys(P.eastVacationDays).sort(), clearDays = [];
+    P.eastClear.forEach(function (d) { clearDays.push(d); });
+    ctx.eastVacations[id] = { ranges: P.eastVacationRanges.slice(), vacationDays: vacDays, clearDays: clearDays.sort(), feedBusyOnHome: busyOnHome.slice().sort() };
+  });
+
   ctx.allIds.forEach(function (id) {
     var P = ctx.per[id];
     P.vacation.forEach(function (d) {
       var before = rdAddDays(d, -1);
-      if (!P.vacation.has(before)) P.dayBeforeVacation.add(before);
+      if (!P.vacation.has(before)) {
+        P.dayBeforeVacation.add(before);
+        if (P.eastVacationDays[d]) P.eastDayBefore[before] = P.eastVacationDays[d]; // the edge of a DERIVED range (gloss only; the code is the same)
+      }
     });
   });
 
@@ -707,6 +808,26 @@ function rdWeekHasAledo(rules, mondayStr) {
   return false;
 }
 
+function rdIsDateStr(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+
+// The review decision for one East vacation range (Prompt 15 part 2): the first
+// review row of the same person whose start AND end equal the range's decides
+// 'away' | 'home'; no such row (a new, changed or removed range) = 'unreviewed'.
+// The exact-match rule is what makes a refresh reset a changed range: the old
+// row no longer matches anything (helpers.js derivedEastVacations lists it as
+// stale for the app to delete). Mirrors helpers.js reviewStateFor; test/rules.test.js
+// pins the two equal. Rows may spell the dates start/end (the table) or
+// start_date/end_date (a time_off-shaped copy).
+function rdEastReviewState(range, reviews) {
+  for (var k = 0; k < reviews.length; k++) {
+    var r = reviews[k];
+    if (!r) continue;
+    var rs = r.start !== undefined ? r.start : r.start_date, re = r.end !== undefined ? r.end : r.end_date;
+    if (rs === range.start && re === range.end) return r.decision === "away" ? "away" : r.decision === "home" ? "home" : "unreviewed";
+  }
+  return "unreviewed";
+}
+
 // "MM-DD" naming a real month and day (02-29 counts: it exists in leap years).
 function rdValidMonthDay(md) {
   if (typeof md !== "string" || !/^\d{2}-\d{2}$/.test(md)) return false;
@@ -750,6 +871,7 @@ function rdInPublishedCoverage(ctx, info) {
 function rdEastCovered(ctx, P, info) {
   if (P.eastBusy.has(info.s)) return true;
   if (rdStandingName(P, info.s)) return true; // Prompt 12 V: a standing East day is known, feed or no feed
+  if (P.eastClear.has(info.s)) return true;   // Prompt 15 part 2: a 'home' East vacation day is known clear (no East call by Davenport's own statement)
   if (rdInPublishedCoverage(ctx, info)) return true;
   if (P.eastOverrides && P.eastOverrides[info.s] !== undefined) return true;
   return !!(P.eastForecast && P.eastForecast[info.s] != null);
@@ -909,8 +1031,10 @@ function rdStatic(ctx, date, role, id, asBlock) {
   var anyoneMay = !!(hol && HF.anyoneMayCoverUnlessOptedOut !== false && !optedOut);
 
   // Time off (vacations only). Trailing edge: the day before blocks PRIMARY only.
-  if (P.vacation.has(date)) hard.push("time-off:" + date);
-  else if (P.dayBeforeVacation.has(date) && ctx.trailingEdgeRoles.indexOf(role) >= 0) hard.push("day-before-vacation");
+  // Prompt 15 part 2: a DERIVED East vacation day (unreviewed / away range) sits in the
+  // same sets and gets the same codes; res.eastVacation carries its state for the gloss.
+  if (P.vacation.has(date)) { hard.push("time-off:" + date); if (P.eastVacationDays[date]) res.eastVacation = P.eastVacationDays[date]; }
+  else if (P.dayBeforeVacation.has(date) && ctx.trailingEdgeRoles.indexOf(role) >= 0) { hard.push("day-before-vacation"); if (P.eastDayBefore[date]) res.eastVacation = P.eastDayBefore[date]; }
 
   // Dated availability rows (explicit statements - never waived).
   var rec = P.avail[date];
@@ -922,6 +1046,17 @@ function rdStatic(ctx, date, role, id, asBlock) {
     if (rec.avoid) soft.push({ reason: "avoid-row", weight: rec.avoid });
     if (rec.prefer) soft.push({ reason: "prefer-row", weight: rec.prefer });
     rowAvail = !!(rec.avail & mask);
+  }
+  // Prompt 15 part 2 (9/23): a 'home' East vacation day (no East call, no OR block) is a
+  // dated availability for BOTH roles - it lifts exactly what a dated row lifts (the
+  // weekday-pattern family incl. hardNeverWeekdays, the dated whitelists), never an
+  // obligation - and carries a small PRIMARY-only bonus so the generator prefers him
+  // there. A day the feed says busy never reaches P.eastClear (buildContext).
+  var homeDay = P.eastClear.has(date);
+  if (homeDay) {
+    rowAvail = true;
+    res.eastClear = true;
+    if (role === "primary" && W.eastClear) soft.push({ reason: "east-clear", weight: -W.eastClear });
   }
 
   // East feed: busy days / forecast / unknown for the roles East blocks.
@@ -936,7 +1071,8 @@ function rdStatic(ctx, date, role, id, asBlock) {
     var standing = rdStandingName(P, date);
     if (P.eastBusy.has(date) || standing) { hard.push("east-busy"); if (standing) res.eastStanding = standing; }
     else {
-      var fcApplies = !rdInPublishedCoverage(ctx, info) && !(P.eastOverrides && P.eastOverrides[date] === false);
+      // Prompt 15 part 2: never on a 'home' East vacation day (buildContext warned if a value sat there).
+      var fcApplies = !homeDay && !rdInPublishedCoverage(ctx, info) && !(P.eastOverrides && P.eastOverrides[date] === false);
       var prob = (fcApplies && P.eastForecast) ? P.eastForecast[date] : undefined;
       if (typeof prob === "number") {
         if (prob >= ctx.forecastThreshold) hard.push("east-forecast-busy:" + prob.toFixed(2));
@@ -1064,10 +1200,17 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // Import/manual lock holder: the row is a fact. Every violated rule is still
   // collected (as `conflicts`) so the caller can warn, but the result is ok.
   var importHolder = !!(entry && entry[role + "Locked"] && entry[role] === surgeonId);
-  function blockedResult() {
-    var out = importHolder ? { ok: true, hard: [], soft: soft, lockHolder: true, conflicts: hard } : { ok: false, hard: hard, soft: soft };
+  // The static layer's glosses ride on every pool result: the standing East entry's name
+  // (V), the derived East vacation state (Prompt 15: 'away' | 'unreviewed' - the reason
+  // itself stays time-off: / day-before-vacation) and the 'home' flag (eastClear).
+  function glossed(out) {
     if (st.eastStanding) out.eastStanding = st.eastStanding; // Prompt 12 V: the standing East entry's name (the reason itself stays "east-busy")
+    if (st.eastVacation) out.eastVacation = st.eastVacation;
+    if (st.eastClear) out.eastClear = true;
     return out;
+  }
+  function blockedResult() {
+    return glossed(importHolder ? { ok: true, hard: [], soft: soft, lockHolder: true, conflicts: hard } : { ok: false, hard: hard, soft: soft });
   }
   if (hard.length) return blockedResult();
 
@@ -1099,7 +1242,7 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   if (ctx.backupDistinct && entry && entry[other] === surgeonId) hard.push("holds-other-role");
 
   if (hard.length) return blockedResult();
-  if (lockHolder) return { ok: true, hard: hard, soft: soft, lockHolder: true }; // derived lock: caps/consecutive/patterns do not apply
+  if (lockHolder) return glossed({ ok: true, hard: hard, soft: soft, lockHolder: true }); // derived lock: caps/consecutive/patterns do not apply
 
   // --- counting helpers (the evaluated slot counts as held; assume-slots too) ---
   function holdsRole(d, r) {
@@ -1284,8 +1427,8 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     else if (monthPrimary < rules.monthlyTarget) soft.push({ reason: "under-target", weight: W.preferred });
   }
 
-  if (importHolder) return { ok: true, hard: hard, soft: soft, lockHolder: true, conflicts: [] };
-  return { ok: true, hard: hard, soft: soft };
+  if (importHolder) return glossed({ ok: true, hard: hard, soft: soft, lockHolder: true, conflicts: [] });
+  return glossed({ ok: true, hard: hard, soft: soft });
 }
 
 /* ---------------------------------------------------------- weekends */
@@ -1585,6 +1728,35 @@ function eastConflicts(ctx, days) {
   return out;
 }
 
+/* ------------------------------------------------ East vacation conflict report */
+// eastVacationConflicts(ctx, schedule?) -> [{ day, role, surgeonId, state, trailingEdge? }]
+// (Prompt 15 part 2, 9/23). The time_off trigger refuses a vacation over a day the
+// surgeon is published (and the day before it, for primary); a DERIVED East vacation
+// writes no time_off row, so nothing refuses anything - this report mirrors the
+// trigger's test client-side: every held slot of `schedule` (default ctx.schedule)
+// whose holder's derived days (unreviewed / away range) cover the day, plus, with
+// trailingEdge: true, a held PRIMARY the day before such a range starts (the roles
+// in ctx.trailingEdgeRoles). Silvis time_off days are not listed (the trigger
+// already guards them). Read-only, never a block: a published lock stays; the East
+// feed panel lists the rows so the person can decide 'home' or trade. Sorted by day,
+// primary before backup.
+function eastVacationConflicts(ctx, schedule) {
+  var sched = schedule || ctx.schedule || {};
+  var out = [];
+  Object.keys(sched).sort().forEach(function (day) {
+    var e = sched[day];
+    if (!e || !rdIsDateStr(day)) return;
+    ["primary", "backup"].forEach(function (role) {
+      var id = e[role];
+      var P = id ? ctx.per[id] : null;
+      if (!P) return;
+      if (P.eastVacationDays[day]) out.push({ day: day, role: role, surgeonId: id, state: P.eastVacationDays[day] });
+      else if (P.eastDayBefore[day] && ctx.trailingEdgeRoles.indexOf(role) >= 0) out.push({ day: day, role: role, surgeonId: id, state: P.eastDayBefore[day], trailingEdge: true });
+    });
+  });
+  return out;
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     HARD_REASONS: HARD_REASONS,
@@ -1592,6 +1764,7 @@ if (typeof module !== "undefined") {
     buildContext: buildContext,
     eligibility: eligibility,
     eastConflicts: eastConflicts,
+    eastVacationConflicts: eastVacationConflicts,
     weekendUnitPatterns: weekendUnitPatterns,
     holidayUnits: holidayUnits,
     holidayUnitCandidates: holidayUnitCandidates,

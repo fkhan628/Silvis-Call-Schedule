@@ -1956,6 +1956,200 @@ const mHol2 = G.generate(makeCtx({ roster: mRoster, schedule: mHolSched2, rangeS
 ok(mHol2.schedule["2026-12-25"].backup && mHol2.schedule["2026-12-25"].backup !== "x1", "M: Christmas Day backup is filled from the pool beside his hand-written eve: " + JSON.stringify(mHol2.schedule["2026-12-25"]));
 ok(mHol2.schedule["2026-12-24"].primary && mHol2.schedule["2026-12-24"].primary === mHol2.schedule["2026-12-25"].primary, "M: the primary side of that unit is one holder");
 
+/* ------------------------------------------------ Prompt 15 part 2: East vacations (9/23) */
+// Khan's Davenport vacations reach rules.js as eastVacationRanges (from the east_feed cache, keyed by
+// the roster id resolved from his East code) with the east_vacation_reviews rows. unreviewed / away =
+// a DERIVED vacation with the existing codes (time-off:<date> both roles, day-before-vacation primary)
+// plus res.eastVacation for the gloss; home = eastClear (pattern lifted like a dated row, no
+// east-unknown, no forecast, a PRIMARY-only east-clear bonus); the published feed wins over home.
+const H = require("../helpers.js");
+const IDS6 = [KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR];
+const EV_RANGE = { start: "2027-01-12", end: "2027-01-14" }; // Tue 1/12 - Thu 1/14 2027: inside EAST_COVER, no lock, no holiday; Tue/Thu are his OR days
+const EV_RANGES = { [KHAN]: [EV_RANGE] };
+const EV_DAYS = ["2027-01-12", "2027-01-13", "2027-01-14"];
+const awayRow = { person_id: KHAN, start: EV_RANGE.start, end: EV_RANGE.end, decision: "away" };
+const homeRow = { person_id: KHAN, start: EV_RANGE.start, end: EV_RANGE.end, decision: "home" };
+eq([R.rdWeekday("2027-01-12"), R.rdWeekday("2027-01-14"), R.rdWeekday("2027-01-11")], ["Tue", "Thu", "Mon"], "P15 fixture: Tue/Thu range, Monday before");
+blocked(R.eligibility(clean, "2027-01-12", P, KHAN), "hard-never-weekday:Tue", "P15 fixture: without the range the Tuesday is his OR day");
+okElig(R.eligibility(clean, "2027-01-12", B, KHAN), "P15 fixture: backup open on the Tuesday");
+
+step("P15: unreviewed East vacation range = a derived vacation, both roles, trailing edge for primary");
+const evUnrev = makeCtx({ schedule: {}, eastVacationRanges: EV_RANGES });
+eq(evUnrev.warnings, [], "P15: a well-formed range warns about nothing");
+EV_DAYS.forEach(d => {
+  const rp = R.eligibility(evUnrev, d, P, KHAN), rb = R.eligibility(evUnrev, d, B, KHAN);
+  blocked(rp, "time-off:" + d, "P15 unreviewed primary " + d); eq(rp.eastVacation, "unreviewed", "P15 unreviewed: res.eastVacation gloss on primary " + d);
+  blocked(rb, "time-off:" + d, "P15 unreviewed backup " + d); eq(rb.eastVacation, "unreviewed", "P15 unreviewed: res.eastVacation gloss on backup " + d);
+  lacksSoft(rp, "east-clear", "P15 unreviewed: no bonus on a vacation day");
+});
+const evEdge = R.eligibility(evUnrev, "2027-01-11", P, KHAN);
+blocked(evEdge, "day-before-vacation", "P15 unreviewed: the day before blocks primary"); eq(evEdge.eastVacation, "unreviewed", "P15: the trailing edge carries the gloss");
+okElig(R.eligibility(evUnrev, "2027-01-11", B, KHAN), "P15 unreviewed: the day before leaves backup open (trailingEdgeRoles = primary)");
+eq(R.eligibility(evUnrev, "2027-01-11", B, KHAN).eastVacation, undefined, "P15: no gloss where no rule fired");
+eq(evUnrev.eastVacations[KHAN], { ranges: [{ start: EV_RANGE.start, end: EV_RANGE.end, state: "unreviewed" }], vacationDays: EV_DAYS, clearDays: [], feedBusyOnHome: [] }, "P15: ctx.eastVacations[s1] carries the derived picture");
+ok(!R.HARD_REASONS.some(c => /east-vacation|vacation-east/.test(c)), "P15: no new hard code - the derived vacation reuses time-off: / day-before-vacation");
+okElig(R.eligibility(evUnrev, "2027-01-13", P, BURCHETT), "P15: nobody else is touched (Burchett Wed 1/13 = 2nd Wednesday, his day)");
+
+step("P15: away = the same as unreviewed, glossed 'away'");
+const evAway = makeCtx({ schedule: {}, eastVacationRanges: EV_RANGES, eastVacationReviews: [awayRow] });
+eq(evAway.warnings, []);
+EV_DAYS.forEach(d => {
+  const rp = R.eligibility(evAway, d, P, KHAN), rb = R.eligibility(evAway, d, B, KHAN);
+  blocked(rp, "time-off:" + d, "P15 away primary " + d); eq(rp.eastVacation, "away");
+  blocked(rb, "time-off:" + d, "P15 away backup " + d); eq(rb.eastVacation, "away");
+});
+blocked(R.eligibility(evAway, "2027-01-11", P, KHAN), "day-before-vacation", "P15 away: the day before blocks primary");
+eq(R.eligibility(evAway, "2027-01-11", P, KHAN).eastVacation, "away");
+eq(evAway.eastVacations[KHAN].ranges, [{ start: EV_RANGE.start, end: EV_RANGE.end, state: "away" }]);
+EV_DAYS.concat(["2027-01-11"]).forEach(d => [P, B].forEach(role => {
+  const a = R.eligibility(evAway, d, role, KHAN), u = R.eligibility(evUnrev, d, role, KHAN);
+  eq([a.ok, a.hard, a.soft], [u.ok, u.hard, u.soft], "P15: away and unreviewed evaluate identically on " + d + " " + role + " (only the gloss differs)");
+}));
+
+step("P15: home = not a vacation; Tue/Thu lifted, east-clear bonus on PRIMARY only, backup unchanged, no east-unknown");
+const evHome = makeCtx({ schedule: {}, eastVacationRanges: EV_RANGES, eastVacationReviews: [homeRow] });
+eq(evHome.warnings, []);
+const homeTueP = R.eligibility(evHome, "2027-01-12", P, KHAN);
+okElig(homeTueP, "P15 home: his OR Tuesday is open for primary"); lacks(homeTueP.hard, "hard-never-weekday", "P15 home: hard-never-weekday:Tue lifted");
+hasSoft(homeTueP, "east-clear", "P15 home: the primary bonus"); eq(softW(homeTueP, "east-clear"), -2, "P15 home: weights.eastClear default 2, as a bonus (negative)");
+eq(homeTueP.eastClear, true, "P15 home: res.eastClear for the gloss"); eq(homeTueP.eastVacation, undefined, "P15 home: no vacation gloss");
+lacksSoft(homeTueP, "east-unknown", "P15 home: a home day is known clear");
+const homeThuP = R.eligibility(evHome, "2027-01-14", P, KHAN);
+okElig(homeThuP, "P15 home: Thursday too"); hasSoft(homeThuP, "east-clear");
+const homeWedP = R.eligibility(evHome, "2027-01-13", P, KHAN);
+okElig(homeWedP); hasSoft(homeWedP, "east-clear"); hasSoft(homeWedP, "auto-offer-weekday", "P15 home: the ordinary Wednesday softs still apply");
+EV_DAYS.forEach(d => {
+  const hb = R.eligibility(evHome, d, B, KHAN), cb = R.eligibility(clean, d, B, KHAN);
+  okElig(hb, "P15 home backup " + d); lacksSoft(hb, "east-clear", "P15 home: no bonus on backup " + d);
+  eq([hb.ok, hb.hard, hb.soft], [cb.ok, cb.hard, cb.soft], "P15 home: backup evaluates exactly as without the range on " + d);
+  eq(hb.eastClear, true, "P15 home: the flag still marks the day for the UI on backup " + d);
+});
+lacks(R.eligibility(evHome, "2027-01-11", P, KHAN).hard, "day-before-vacation", "P15 home: no trailing edge before a home range");
+eq(evHome.eastVacations[KHAN], { ranges: [{ start: EV_RANGE.start, end: EV_RANGE.end, state: "home" }], vacationDays: [], clearDays: EV_DAYS, feedBusyOnHome: [] });
+// the weight is data: groupRules.weights.eastClear (Setup -> Rules -> weights); 0 switches the bonus off
+const grEC = clone(seed.groupRules); grEC.weights = Object.assign({}, grEC.weights, { eastClear: 5 });
+eq(softW(R.eligibility(makeCtx({ schedule: {}, groupRules: grEC, eastVacationRanges: EV_RANGES, eastVacationReviews: [homeRow] }), "2027-01-12", P, KHAN), "east-clear"), -5, "P15 home: weights.eastClear 5 -> -5");
+const grEC0 = clone(seed.groupRules); grEC0.weights = Object.assign({}, grEC0.weights, { eastClear: 0 });
+const home0 = R.eligibility(makeCtx({ schedule: {}, groupRules: grEC0, eastVacationRanges: EV_RANGES, eastVacationReviews: [homeRow] }), "2027-01-12", P, KHAN);
+okElig(home0, "P15 home: weight 0 keeps the day open"); lacksSoft(home0, "east-clear", "P15 home: weight 0 = no bonus term");
+eq(R.defaultWeights().eastClear, 2, "P15: defaultWeights().eastClear = 2 (the Setup weights editor lists every default key)");
+// outside the published coverage: no east-unknown and the FORECAST is not consulted on a home day (warned)
+const febRange = { start: "2027-02-02", end: "2027-02-04" };
+const evHomeFeb = makeCtx({ schedule: {}, eastVacationRanges: { [KHAN]: [febRange] }, eastVacationReviews: [{ person_id: KHAN, start: febRange.start, end: febRange.end, decision: "home" }], eastForecast: { [KHAN]: { "2027-02-03": 0.7, "2027-02-10": 0.7 } } });
+const febWed = R.eligibility(evHomeFeb, "2027-02-03", P, KHAN);
+okElig(febWed, "P15 home: a forecast-busy value on a home day does not block"); lacks(febWed.hard, "east-forecast-busy"); lacksSoft(febWed, "east-unknown"); hasSoft(febWed, "east-clear");
+blocked(R.eligibility(evHomeFeb, "2027-02-10", P, KHAN), "east-forecast-busy:0.70", "P15 home: the forecast still counts outside the home range");
+eq(evHomeFeb.warnings.filter(w => /forecast is at or over the threshold on 2027-02-03 \(0\.70\) inside a 'home' East vacation range/.test(w)).length, 1, "P15 home: the ignored forecast value is a ctx warning: " + JSON.stringify(evHomeFeb.warnings));
+eq(evHomeFeb.eastVacations[KHAN].clearDays, ["2027-02-02", "2027-02-03", "2027-02-04"]);
+
+step("P15: East busy inside a home range - the feed wins, with a warning naming the day");
+const evHomeBusy = makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: ["2027-01-13"] }, eastVacationRanges: EV_RANGES, eastVacationReviews: [homeRow] });
+const busyWed = R.eligibility(evHomeBusy, "2027-01-13", P, KHAN);
+blocked(busyWed, "east-busy", "P15: the published busy day wins over 'home'"); lacksSoft(busyWed, "east-clear", "P15: no bonus on the disputed day"); eq(busyWed.eastClear, undefined, "P15: not flagged clear");
+okElig(R.eligibility(evHomeBusy, "2027-01-13", B, KHAN), "P15: backup on the busy day as on any East day");
+okElig(R.eligibility(evHomeBusy, "2027-01-12", P, KHAN), "P15: the other home days stay clear"); hasSoft(R.eligibility(evHomeBusy, "2027-01-14", P, KHAN), "east-clear");
+eq(evHomeBusy.warnings.filter(w => /^eastVacations\[s1\]: the East feed says busy on 2027-01-13 inside a 'home' East vacation range - the feed wins/.test(w)).length, 1, "P15: one warning names the day: " + JSON.stringify(evHomeBusy.warnings));
+eq(evHomeBusy.eastVacations[KHAN], { ranges: [{ start: EV_RANGE.start, end: EV_RANGE.end, state: "home" }], vacationDays: [], clearDays: ["2027-01-12", "2027-01-14"], feedBusyOnHome: ["2027-01-13"] });
+// a standing East day (V: Christmas 12-24 / 12-25) inside a home range: the standing day wins the same way
+const xmasRange = { start: "2026-12-23", end: "2026-12-26" };
+const evHomeXmas = makeCtx({ schedule: {}, eastVacationRanges: { [KHAN]: [xmasRange] }, eastVacationReviews: [{ person_id: KHAN, start: xmasRange.start, end: xmasRange.end, decision: "home" }] });
+blocked(R.eligibility(evHomeXmas, "2026-12-24", P, KHAN), "east-busy", "P15: the standing Christmas day wins over 'home'");
+eq(R.eligibility(evHomeXmas, "2026-12-24", P, KHAN).eastStanding, "Christmas", "P15: ...and keeps the V gloss");
+eq(evHomeXmas.eastVacations[KHAN].feedBusyOnHome, ["2026-12-24", "2026-12-25"]); eq(evHomeXmas.eastVacations[KHAN].clearDays, ["2026-12-23", "2026-12-26"]);
+// an east_overrides busy:true inside a home range wins too; busy:false on a home day is simply clear
+const evHomeOv = makeCtx({ schedule: {}, eastOverrides: { [KHAN]: { "2027-01-12": true } }, eastVacationRanges: EV_RANGES, eastVacationReviews: [homeRow] });
+blocked(R.eligibility(evHomeOv, "2027-01-12", P, KHAN), "east-busy", "P15: a busy:true override wins over 'home'"); eq(evHomeOv.eastVacations[KHAN].feedBusyOnHome, ["2027-01-12"]);
+
+step("P15: ranges for a surgeon without an East feature / an unknown id / malformed input are ignored with a warning");
+const actonRange = { start: "2027-01-06", end: "2027-01-07" }; // Wed 1/6 (1st Wed - not his outreach day) + Thu 1/7
+const evActon = makeCtx({ schedule: {}, eastVacationRanges: { [ACTON]: [actonRange] } });
+okElig(R.eligibility(evActon, "2027-01-06", P, ACTON), "P15: Acton has no East code / feature - his range changes nothing");
+lacks(R.eligibility(evActon, "2027-01-05", P, ACTON).hard, "day-before-vacation", "P15: ...and no trailing edge either (1/5 is a Tuesday - his own OR-day rule is the only reason there)");
+okElig(R.eligibility(evActon, "2027-01-05", B, ACTON), "P15: ...backup the day before is open as ever");
+eq(evActon.warnings.filter(w => /^eastVacationRanges\[s3\]: 1 range\(s\) ignored - this surgeon has no East feature \(surgeonRules\.s3\.eastFeed\.enabled is not true\)/.test(w)).length, 1, "P15: one warning says why: " + JSON.stringify(evActon.warnings));
+eq(evActon.eastVacations[ACTON], undefined, "P15: nothing derived for him");
+const evJunk = makeCtx({ schedule: {}, eastVacationRanges: { s99: [EV_RANGE], [KHAN]: [{ start: "2027-01-12" }, { start: "2027-01-20", end: "2027-01-19" }, EV_RANGE] }, eastVacationReviews: "nope" });
+ok(evJunk.warnings.some(w => /^eastVacationRanges\[s99\]: ignored - unknown surgeon id/.test(w)), "P15: unknown id warned");
+ok(evJunk.warnings.some(w => /^eastVacationRanges\[s1\]\[0\]: ignored - needs \{ start, end \}/.test(w)) && evJunk.warnings.some(w => /^eastVacationRanges\[s1\]\[1\]: ignored/.test(w)), "P15: malformed / inverted ranges warned, by index");
+ok(evJunk.warnings.some(w => /^eastVacationReviews is not a list: ignored/.test(w)), "P15: a non-list reviews input warned");
+eq(evJunk.eastVacations[KHAN].ranges, [{ start: EV_RANGE.start, end: EV_RANGE.end, state: "unreviewed" }], "P15: the good range still counts (unreviewed - the reviews input was junk)");
+blocked(R.eligibility(evJunk, "2027-01-13", P, KHAN), "time-off:2027-01-13");
+const evExt = makeCtx({ roster: mRoster, schedule: {}, eastVacationRanges: { x1: [EV_RANGE] } });
+ok(evExt.warnings.some(w => /^eastVacationRanges\[x1\]: 1 range\(s\) ignored - x1 is an outside surgeon/.test(w)), "P15: an outside surgeon's ranges are ignored with a warning");
+
+step("P15: a Silvis time_off day inside an East range stands as the Silvis vacation (no East gloss); a home day before it keeps the trailing edge");
+const evBoth = makeCtx({ schedule: {}, timeOffRows: SA.seedToTimeOffRows(seed).concat([{ person_id: KHAN, start_date: "2027-01-13", end_date: "2027-01-13" }]), eastVacationRanges: EV_RANGES, eastVacationReviews: [homeRow] });
+const bothWed = R.eligibility(evBoth, "2027-01-13", P, KHAN);
+blocked(bothWed, "time-off:2027-01-13", "P15: his own time_off day blocks"); eq(bothWed.eastVacation, undefined, "P15: a Silvis vacation carries no East gloss"); eq(bothWed.eastClear, undefined, "P15: ...and is not 'clear'");
+const bothTue = R.eligibility(evBoth, "2027-01-12", P, KHAN);
+blocked(bothTue, "day-before-vacation", "P15: the home Tuesday is the day before his Silvis vacation - the obligation stands"); eq(bothTue.eastVacation, undefined);
+okElig(R.eligibility(evBoth, "2027-01-12", B, KHAN), "P15: backup on that Tuesday is open");
+okElig(R.eligibility(evBoth, "2027-01-14", P, KHAN), "P15: the home Thursday after it is open for primary"); hasSoft(R.eligibility(evBoth, "2027-01-14", P, KHAN), "east-clear");
+eq(evBoth.eastVacations[KHAN].clearDays, ["2027-01-12", "2027-01-14"], "P15: the Silvis vacation day is not a clear day");
+
+step("P15: eastVacationConflicts mirrors the time_off trigger for derived ranges (report, never a block)");
+const pubSched = {
+  "2027-01-11": { primary: KHAN, backup: null, primaryLocked: false, backupLocked: false },
+  "2027-01-12": { primary: KHAN, backup: BURCHETT, primaryLocked: true, backupLocked: false },
+  "2027-01-13": { primary: ACTON, backup: KHAN, primaryLocked: false, backupLocked: true },
+  "2027-01-15": { primary: KHAN, backup: null, primaryLocked: false, backupLocked: false }
+};
+const evPub = makeCtx({ schedule: pubSched, eastVacationRanges: EV_RANGES, eastVacationReviews: [awayRow] });
+eq(R.eastVacationConflicts(evPub), [
+  { day: "2027-01-11", role: P, surgeonId: KHAN, state: "away", trailingEdge: true },
+  { day: "2027-01-12", role: P, surgeonId: KHAN, state: "away" },
+  { day: "2027-01-13", role: B, surgeonId: KHAN, state: "away" }
+], "P15 conflicts: his held days inside the range and the primary the day before, by day, primary first; 1/15 (after the range) is not listed");
+const lockedRes = R.eligibility(evPub, "2027-01-12", P, KHAN);
+ok(lockedRes.ok && lockedRes.lockHolder, "P15 conflicts: the published lock is never blocked"); has(lockedRes.conflicts, "time-off:2027-01-12", "P15: ...the rule is listed in conflicts"); eq(lockedRes.eastVacation, "away", "P15: ...with the gloss");
+eq(R.eastVacationConflicts(makeCtx({ schedule: pubSched, eastVacationRanges: EV_RANGES, eastVacationReviews: [homeRow] })), [], "P15 conflicts: a home range conflicts with nothing");
+eq(R.eastVacationConflicts(makeCtx({ schedule: pubSched, eastVacationRanges: EV_RANGES })).map(c => c.state), ["unreviewed", "unreviewed", "unreviewed"], "P15 conflicts: an unreviewed range is reported the same way");
+eq(R.eastVacationConflicts(evPub, { "2027-01-14": { primary: null, backup: KHAN }, "2027-01-11": { primary: null, backup: KHAN } }), [{ day: "2027-01-14", role: B, surgeonId: KHAN, state: "away" }], "P15 conflicts: an explicit schedule argument; a backup the day before is no conflict");
+eq(R.eastVacationConflicts(makeCtx({ schedule: { "2026-11-20": { primary: ACTON } } })), [], "P15 conflicts: Silvis time_off days are the trigger's business, not listed here");
+
+step("P15: helpers reviewStateFor / derivedEastVacations are person-scoped, and parity with rules.js");
+eq(H.reviewStateFor(EV_RANGE, [], KHAN).state, "unreviewed");
+eq(H.reviewStateFor(EV_RANGE, [awayRow], KHAN), { state: "away", review: awayRow });
+eq(H.reviewStateFor(EV_RANGE, [homeRow], KHAN).state, "home");
+eq(H.reviewStateFor(EV_RANGE, [Object.assign({}, awayRow, { end: "2027-01-15" })], KHAN).state, "unreviewed", "a changed range no longer matches its row");
+eq(H.reviewStateFor(EV_RANGE, [{ person_id: KHAN, start_date: EV_RANGE.start, end_date: EV_RANGE.end, decision: "home" }], KHAN).state, "home", "time_off-shaped keys are read too");
+const burchettRow = Object.assign({}, homeRow, { person_id: BURCHETT });
+eq(H.reviewStateFor(EV_RANGE, [burchettRow], KHAN).state, "unreviewed", "P15 scope: Burchett's row with Khan's dates never decides Khan's range (personId argument)");
+eq(H.reviewStateFor(Object.assign({ person_id: KHAN }, EV_RANGE), [burchettRow]).state, "unreviewed", "P15 scope: ...nor when the person comes from range.person_id");
+eq(H.reviewStateFor(EV_RANGE, [burchettRow, homeRow], KHAN), { state: "home", review: homeRow }, "P15 scope: a mixed list - his own row is the one found");
+eq(H.reviewStateFor(EV_RANGE, [homeRow]).state, "unreviewed", "P15 scope: no person at all (no argument, no range.person_id) -> nothing matches, unreviewed");
+eq(H.reviewStateFor(Object.assign({ person_id: BURCHETT }, EV_RANGE), [homeRow], KHAN).state, "home", "P15 scope: the argument wins over range.person_id");
+const dv = H.derivedEastVacations([EV_RANGE, febRange, { start: "junk" }], [homeRow, { person_id: KHAN, start: "2027-02-02", end: "2027-02-05", decision: "away" }, { person_id: KHAN, start: "2027-03-01", end: "2027-03-02", decision: "away" }, null], KHAN);
+eq(dv.ranges.map(r => r.start + ".." + r.end + ":" + r.state), ["2027-01-12..2027-01-14:home", "2027-02-02..2027-02-04:unreviewed"], "derivedEastVacations: states per range, junk dropped");
+eq(dv.stale.map(s => s.reason + " " + s.review.start + ".." + s.review.end + (s.range ? " -> " + s.range.start + ".." + s.range.end : "")), ["changed 2027-02-02..2027-02-05 -> 2027-02-02..2027-02-04", "removed 2027-03-01..2027-03-02"], "derivedEastVacations: a moved range's row is 'changed' (with the range it now overlaps), a vanished range's row is 'removed'");
+eq(H.derivedEastVacations([], [], KHAN), { ranges: [], stale: [] });
+eq(H.derivedEastVacations(null, "x", KHAN), { ranges: [], stale: [] }, "junk inputs -> empty");
+// the delete path of a generic feature: the app passes ALL east_vacation_reviews rows (read-all RLS) for ONE
+// person's ranges - the other East surgeons' rows must neither decide his ranges nor be listed stale (the
+// scheduler may delete anyone's row, so a mis-scoped stale list would wipe their reviews on his refresh)
+const mixedRows = [burchettRow, homeRow, { person_id: BURCHETT, start: "2027-03-01", end: "2027-03-02", decision: "away" }, { person_id: KHAN, start: "2027-03-01", end: "2027-03-02", decision: "away" }];
+const dvMixed = H.derivedEastVacations([EV_RANGE], mixedRows, KHAN);
+eq(dvMixed.ranges, [{ start: EV_RANGE.start, end: EV_RANGE.end, state: "home", review: homeRow }], "P15 scope: Khan's range is decided by Khan's row only");
+eq(dvMixed.stale, [{ review: mixedRows[3], reason: "removed", range: null }], "P15 scope: only Khan's vanished row is stale - Burchett's rows never appear in .stale");
+eq(H.derivedEastVacations([EV_RANGE], [burchettRow], KHAN), { ranges: [{ start: EV_RANGE.start, end: EV_RANGE.end, state: "unreviewed", review: null }], stale: [] }, "P15 scope: Burchett's row with Khan's dates leaves Khan's range unreviewed and is not stale");
+eq(H.derivedEastVacations([Object.assign({ person_id: KHAN }, EV_RANGE)], mixedRows), dvMixed, "P15 scope: the person may come from the ranges themselves when they all name one");
+eq(H.derivedEastVacations([EV_RANGE], mixedRows), { ranges: [{ start: EV_RANGE.start, end: EV_RANGE.end, state: "unreviewed", review: null }], stale: [] }, "P15 scope: no person at all -> every range unreviewed, NOTHING stale (never an unscoped delete)");
+eq(H.derivedEastVacations([Object.assign({ person_id: KHAN }, EV_RANGE), Object.assign({ person_id: BURCHETT }, febRange)], mixedRows).stale, [], "P15 scope: ranges of two persons and no argument -> no person resolved, nothing stale");
+[[], [awayRow], [homeRow], [Object.assign({}, awayRow, { end: "2027-01-15" })], [burchettRow], [awayRow, homeRow], [burchettRow, homeRow], mixedRows].forEach((rev, i) => {
+  const c = makeCtx({ schedule: {}, eastVacationRanges: EV_RANGES, eastVacationReviews: rev });
+  eq(c.eastVacations[KHAN].ranges[0].state, H.reviewStateFor(EV_RANGE, rev, KHAN).state, "P15 parity #" + i + ": rules.js and helpers.reviewStateFor(range, ALL rows, personId) agree on the state");
+  eq(c.eastVacations[KHAN].ranges[0].state, H.derivedEastVacations([EV_RANGE], rev, KHAN).ranges[0].state, "P15 parity #" + i + ": ...and derivedEastVacations too");
+});
+
+step("P15: empty inputs = identical behaviour");
+const evBase = makeCtx({ schedule: {} }), evEmpty = makeCtx({ schedule: {}, eastVacationRanges: {}, eastVacationReviews: [] });
+eq(evEmpty.warnings, [], "P15: empty inputs warn about nothing");
+eq(Object.keys(evEmpty.eastVacations), [], "P15: ctx.eastVacations is empty"); eq(Object.keys(evBase.eastVacations), [], "P15: ...also when the inputs are absent");
+["2026-11-02", "2026-11-03", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-26", "2026-12-15", "2026-12-24", "2027-01-12", "2027-02-03"].forEach(d => [P, B].forEach(role => IDS6.forEach(id => {
+  eq(R.eligibility(evEmpty, d, role, id), R.eligibility(evBase, d, role, id), "P15: " + id + " " + role + " " + d + " evaluates identically with and without the empty inputs");
+})));
+eq(R.eastVacationConflicts(makeCtx({})), [], "P15: no conflicts on the seed schedule without East vacation data");
+
 const total = Date.now() - t0;
 const BUDGET_MS = process.env.SILVIS_RULES_BUDGET_MS ? Math.floor(+process.env.SILVIS_RULES_BUDGET_MS) : 5000;
 const budgetNote = "budget " + BUDGET_MS + " ms" + (process.env.SILVIS_RULES_BUDGET_MS ? " via SILVIS_RULES_BUDGET_MS" : "");

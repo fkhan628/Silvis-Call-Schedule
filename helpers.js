@@ -1943,8 +1943,87 @@ function defaultHolidayUnits(year, opts) {
   });
 }
 
+/* ---- East vacation reviews (Prompt 15 part 2, 9/23) ----
+   The person's Davenport vacation ranges (east-feed.js eastVacations(rows, code):
+   [{ start, end }]) meet the east_vacation_reviews rows ({ person_id, start, end,
+   decision 'away' | 'home', decided_at, decided_by }). Nothing is mirrored
+   blindly: a range with no review is UNREVIEWED (treated like away - a Silvis
+   vacation - until the person decides). The match is EXACT and PERSON-SCOPED
+   (the same person - the personId argument, else range.person_id - and the same
+   start and end), which is what makes a refresh reset a review: a range
+   Davenport changed or removed no longer matches its row, so the range reads
+   unreviewed again and the old row is STALE - the app deletes it through the
+   normal write path (audit eastvac.review, reason reset) and says so in the
+   refresh toast. The person scope matters because the app reads ALL
+   east_vacation_reviews rows (read-all RLS) while the feed's ranges
+   (eastVacations(rows, code)) carry no person_id: another surgeon's row must
+   never decide this person's range, and another surgeon's rows are never
+   "stale" for this person's refresh (the scheduler may delete anyone's row, so a
+   mis-scoped stale list would wipe the other East surgeons' reviews). Without a
+   resolvable person nothing matches (every range unreviewed) and nothing is
+   stale. rules.js rdEastReviewState applies the same rule inside buildContext
+   (filtering the rows by person_id first; pinned equal by test/rules.test.js).
+   Pure; never mutates its inputs. */
+function evPersonOf(range, personId) {
+  if (personId !== undefined && personId !== null && personId !== "") return String(personId);
+  return range && range.person_id !== undefined && range.person_id !== null && range.person_id !== "" ? String(range.person_id) : null;
+}
+function evReviewMatches(range, review, personId) {
+  if (!range || !review) return false;
+  var who = evPersonOf(range, personId);
+  if (!who || review.person_id !== who) return false;
+  var rs = review.start !== undefined ? review.start : review.start_date;
+  var re = review.end !== undefined ? review.end : review.end_date;
+  return rs === range.start && re === range.end;
+}
+// reviewStateFor(range, reviews, personId) -> { state: 'unreviewed' | 'away' | 'home', review: row | null }
+//   personId: the roster id whose range this is (falls back to range.person_id; with neither, always unreviewed).
+function reviewStateFor(range, reviews, personId) {
+  var list = Array.isArray(reviews) ? reviews : [];
+  for (var k = 0; k < list.length; k++) {
+    var r = list[k];
+    if (!evReviewMatches(range, r, personId)) continue;
+    return { state: r.decision === "away" ? "away" : r.decision === "home" ? "home" : "unreviewed", review: r };
+  }
+  return { state: "unreviewed", review: null };
+}
+// derivedEastVacations(ranges, reviews, personId) -> { ranges: [{ start, end, state, review }], stale: [{ review, reason, range }] }
+//   personId: the roster id whose ranges these are (the East code resolved to the roster id). Only THAT
+//           person's review rows are consulted or listed; pass all rows and every other surgeon's rows are
+//           simply ignored. Without personId the single person_id every range agrees on is used; with no
+//           person at all every range is unreviewed and stale is [] (nothing is ever deleted unscoped).
+//   ranges: every valid input range (sorted by start) with its state and matching row (null when unreviewed);
+//   stale:  every review row OF THIS PERSON that matches NO range exactly - reason 'changed' when it still
+//           overlaps a current range (that range is the one it overlaps: the dates moved),
+//           'removed' when it overlaps none (the vacation is gone from Davenport). Both are
+//           the rows the refresh deletes; the toast names them by reason.
+//   Malformed ranges (no ISO start/end, end before start) and malformed rows are dropped.
+function derivedEastVacations(ranges, reviews, personId) {
+  var good = (Array.isArray(ranges) ? ranges : []).filter(function (r) { return r && suIsIso(r.start) && suIsIso(r.end) && r.end >= r.start; })
+    .slice().sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : a.end < b.end ? -1 : a.end > b.end ? 1 : 0; });
+  var who = evPersonOf(null, personId);
+  if (!who) {
+    var ids = [];
+    good.forEach(function (r) { var p = evPersonOf(r); if (p && ids.indexOf(p) < 0) ids.push(p); });
+    if (ids.length === 1) who = ids[0];
+  }
+  var rows = who ? (Array.isArray(reviews) ? reviews : []).filter(function (r) { return r && typeof r === "object" && r.person_id === who; }) : [];
+  var out = good.map(function (r) { var s = reviewStateFor(r, rows, who); return { start: r.start, end: r.end, state: s.state, review: s.review }; });
+  var stale = [];
+  rows.forEach(function (r) {
+    var rs = r.start !== undefined ? r.start : r.start_date, re = r.end !== undefined ? r.end : r.end_date;
+    if (!suIsIso(rs) || !suIsIso(re)) return;
+    if (good.some(function (g) { return evReviewMatches(g, r, who); })) return;
+    var overlap = null;
+    good.forEach(function (g) { if (!overlap && g.start <= re && g.end >= rs) overlap = g; });
+    stale.push({ review: r, reason: overlap ? "changed" : "removed", range: overlap ? { start: overlap.start, end: overlap.end } : null });
+  });
+  return { ranges: out, stale: stale };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    reviewStateFor, derivedEastVacations,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

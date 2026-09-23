@@ -17,6 +17,8 @@
 -- on shift_trade_requests; apply_trade() checks roster / vacation / lock / other-role eligibility.
 -- Revision 2026-09-22 c (Prompt 13 part 2, sql/migrations/2026-09-22-claim-open-slot.sql): claim_open_slot()
 -- lets a linked surgeon take an OPEN slot (security definer; nine CL0xx refusals; audit + feed rows).
+-- Revision 2026-09-23 d (Prompt 15 part 2, sql/migrations/2026-09-23-east-vacation-reviews.sql): east_vacation_reviews -
+-- the away/home decision per mirrored Davenport vacation range (authenticated-read; own rows or scheduler write).
 -- ============================================================================
 
 create extension if not exists pgcrypto;
@@ -177,6 +179,31 @@ create table if not exists public.east_forecast (
   data         jsonb not null,
   generated_at timestamptz not null default now()
 );
+
+-- ---------- East vacation reviews (Prompt 15 part 2, 2026-09-23; sql/migrations/2026-09-23-east-vacation-reviews.sql)
+-- One row per REVIEWED Davenport vacation range of a surgeon with an East code (the ranges
+-- themselves live in the east_feed payload, data.vacations, and are never copied here): the
+-- person's decision for that exact range - 'away' (also off at Silvis) or 'home' (available
+-- at Silvis; no East call, no OR block). No row = unreviewed = treated like away by rules.js
+-- (a derived vacation; never a time_off row). A range Davenport changes or removes no longer
+-- matches its row (exact start/end), so the review resets and the app deletes the stale row.
+-- "end" is a reserved word: quoted here, plain start/end over PostgREST ({ "start", "end" }
+-- in JSON, ?start=eq.&end=eq. in the query string), the same shape as the feed payload.
+-- Authenticated-read only (no anon policy): a decision says where a surgeon is on a given
+-- day, so it stays off the anon-readable list like user_profiles. Writes: own rows or the
+-- scheduler/admin. Dates only - never a note or a reason.
+create table if not exists public.east_vacation_reviews (
+  id          uuid primary key default gen_random_uuid(),
+  person_id   text not null,
+  "start"     date not null,
+  "end"       date not null,
+  decision    text not null check (decision in ('away', 'home')),
+  decided_at  timestamptz not null default now(),
+  decided_by  text,
+  check ("end" >= "start"),
+  unique (person_id, "start", "end")
+);
+create index if not exists east_vacation_reviews_person_idx on public.east_vacation_reviews(person_id, "start");
 
 -- ---------- trades (there is NO vacation_requests table — vacations need no approval)
 create table if not exists public.shift_trade_requests (
@@ -611,6 +638,7 @@ alter table public.availability            enable row level security;
 alter table public.east_feed               enable row level security;
 alter table public.east_overrides          enable row level security;
 alter table public.east_forecast           enable row level security;
+alter table public.east_vacation_reviews   enable row level security;
 alter table public.shift_trade_requests    enable row level security;
 alter table public.notifications           enable row level security;
 alter table public.notification_preferences enable row level security;
@@ -661,6 +689,21 @@ create policy east_overrides_read on public.east_overrides for select using (tru
 drop policy if exists east_overrides_write on public.east_overrides;
 create policy east_overrides_write on public.east_overrides for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
+
+-- east_vacation_reviews: authenticated read (NO anon policy - an anon read is a silent 200 + [],
+-- which verify-rls.sh section 9 checks against the probe's fixture rows), writes own rows or scheduler
+drop policy if exists east_vacation_reviews_read on public.east_vacation_reviews;
+create policy east_vacation_reviews_read on public.east_vacation_reviews for select to authenticated using (true);
+drop policy if exists east_vacation_reviews_self_insert on public.east_vacation_reviews;
+create policy east_vacation_reviews_self_insert on public.east_vacation_reviews for insert to authenticated
+  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+drop policy if exists east_vacation_reviews_self_update on public.east_vacation_reviews;
+create policy east_vacation_reviews_self_update on public.east_vacation_reviews for update to authenticated
+  using (person_id = public.silvis_person_id() or public.silvis_is_sched())
+  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+drop policy if exists east_vacation_reviews_self_delete on public.east_vacation_reviews;
+create policy east_vacation_reviews_self_delete on public.east_vacation_reviews for delete to authenticated
+  using (person_id = public.silvis_person_id() or public.silvis_is_sched());
 
 -- user_profiles: authenticated read; self-update of display fields; role/person changes admin-only
 drop policy if exists user_profiles_read on public.user_profiles;

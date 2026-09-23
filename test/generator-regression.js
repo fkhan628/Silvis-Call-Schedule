@@ -22,7 +22,7 @@
 // Coverage and the 10 s budget (Prompt 4: "All runs must finish under 10 s
 // total"): 50 seeds x 4 ranges, then one bestOf 200 Nov-Dec run for the tally
 // table (the UI default), 50 fill-open-only backfill runs over 10/15..11/1 at
-// bestOf 2 (Prompt 12 T), plus eleven short fixture runs (manual lock, backup
+// bestOf 2 (Prompt 12 T), plus sixteen short fixture runs (manual lock, backup
 // opt-out, legacy group key, range edge, derived week overridden - a
 // November-only bestOf 1 run added by the Prompt 12 K fix stage, ~10 ms - the
 // two fill-open-only runs, plain + fill-open-only, Prompt 12 T, and the two
@@ -419,8 +419,13 @@ function runLengths(view, days, id) {
 
 /* ------------------------------------------------------- the checks */
 // deep: also compare diagnostics.tallies[id].range run lengths with runLengths() (every R4 run + the bestOf-200 run).
-function checkRun(out, range, seedNo, deep, extraRows) { // extraRows (W): dated rows a fixture run appended to the seed's
+function checkRun(out, range, seedNo, deep, extraRows, extraVac) { // extraRows (W): dated rows a fixture run appended to the seed's;
+  // extraVac (Prompt 15): { id: Set<day> } - a derived East vacation (unreviewed / away range) restated as a vacation
   CUR.range = range.name; CUR.seed = seedNo; CUR.day = "-";
+  const vacHas = (id, d) => VAC[id].has(d) || !!(extraVac && extraVac[id] && extraVac[id].has(d));
+  const edgeHas = (id, d) => DAY_BEFORE_VAC[id].has(d) || (!!(extraVac && extraVac[id] && extraVac[id].has(addDays(d, 1))) && !vacHas(id, d));
+  // a fixture's dated UNAVAILABLE row for that surgeon, date and role closes the slot to him (the allowed-slot counts below)
+  const rowBlocks = (id, d, role) => (extraRows || []).some((r) => r.person_id === id && r.kind === "unavailable" && d >= r.start_date && d <= (r.end_date || r.start_date) && (!r.role || r.role === "any" || r.role === role));
   const days = daysList(range.start, range.end);
   const months = []; days.forEach((d) => { const m = monthOf(d); if (!months.includes(m)) months.push(m); });
   const view = makeView(out);
@@ -505,8 +510,8 @@ function checkRun(out, range, seedNo, deep, extraRows) { // extraRows (W): dated
       if (!isPlaced(out, d, role)) return;
       const id = e[role];
       // item 4
-      ok(!VAC[id].has(d), CODE[id] + " placed on a vacation day");
-      if (role === P) ok(!DAY_BEFORE_VAC[id].has(d), CODE[id] + " placed PRIMARY the day before a vacation");
+      ok(!vacHas(id, d), CODE[id] + " placed on a vacation day");
+      if (role === P) ok(!edgeHas(id, d), CODE[id] + " placed PRIMARY the day before a vacation");
       // item 5, generic since Prompt 12 W (9/22 evening): surgeonRules.<id>.hardNeverWeekdays blocks the roles the
       // surgeon's hardNeverWeekdaysRoles list names (primary only by default) unless a dated row of his covers that
       // date and role. Before W this was the Khan-only line ok(!["Tue", "Thu"].includes(weekday(d))) - no row lifted it.
@@ -660,13 +665,13 @@ function checkRun(out, range, seedNo, deep, extraRows) { // extraRows (W): dated
     eq(I.members[FIERCE].eastPrimaryDays, fierceEastP, "Fierce members.eastPrimaryDays in " + m);
     // Khan's allowed backup count exactly: since 9/22 backup is open to him on every open in-range backup slot of the
     // month except his vacation days and the days he holds the locked primary (Thanksgiving) - no cap, no East block
-    eq(I.members[KHAN].allowedBackup, mdaysIn.filter((d) => baseOpen(d, B) && !VAC[KHAN].has(d) && baseHolder(d, P) !== KHAN).length, "Khan allowedBackup = open in-range backup slots minus vacations and his locked primaries in " + m);
+    eq(I.members[KHAN].allowedBackup, mdaysIn.filter((d) => baseOpen(d, B) && !vacHas(KHAN, d) && !rowBlocks(KHAN, d, B) && baseHolder(d, P) !== KHAN).length, "Khan allowedBackup = open in-range backup slots minus vacations (derived East ones included), fixture unavailable rows and his locked primaries in " + m);
     // Sarkar (N + J): primaryTarget = window target x the window weeks the range touches (null without one), NO
     // backupTarget, outside the pool; allowedPrimary exactly = the open in-range primary slots inside her windows
     const MS = I.members[SARKAR];
     eq([I.windowTarget[SARKAR], I.windowWeeks[SARKAR]], [SARKAR_TARGET * nW, nW], "Sarkar impliedTargets.windowTarget / windowWeeks in " + m);
     eq([MS.primaryTarget, MS.backupTarget], [nW ? SARKAR_TARGET * nW : null, null], "Sarkar primaryTarget = window target, backupTarget null in " + m + " (got " + JSON.stringify(MS) + ")");
-    eq(MS.allowedPrimary, mdaysIn.filter((d) => SARKAR_WINDOW.has(d) && baseOpen(d, P) && !VAC[SARKAR].has(d)).length, "Sarkar allowedPrimary = open in-range primary slots inside her windows in " + m);
+    eq(MS.allowedPrimary, mdaysIn.filter((d) => SARKAR_WINDOW.has(d) && baseOpen(d, P) && !vacHas(SARKAR, d) && !rowBlocks(SARKAR, d, P)).length, "Sarkar allowedPrimary = open in-range primary slots inside her windows (minus vacations and fixture unavailable rows) in " + m);
     eq(D.tallies[SARKAR].months[m].target, { primary: nW ? SARKAR_TARGET * nW : null, backup: null }, "Sarkar tallies target in " + m);
     // J (fix stage, review finding 1): the flat share is measured on OPEN slots while the deviation counts whole-month
     // days, so in a month with locks the targets can ask for FEWER placements than there are open slots (Khan's 4
@@ -1519,9 +1524,106 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
+// ---- Prompt 15 part 2 (9/23): East vacations ----
+// Khan's Davenport vacations reach the engine as eastVacationRanges + eastVacationReviews (rules.js derives them;
+// this file restates the consequence): an unreviewed / away range is a vacation - no placement inside it in either
+// role, no primary the day before, open slots inside cite time-off:<date> for him; a home range is a dated
+// availability for both roles (his OR-day rule lifted) with a PRIMARY bonus (east-clear, -weights.eastClear) that the
+// generator's soft list shows; empty inputs change nothing, byte for byte. Three Nov-Dec runs at BEST_OF[1] plus one
+// control; diagnostics.eastVacations is the generator's own (diagnostics-only) picture of the same data.
+{
+  const evInput = (ranges, reviews, more) => {
+    const inp = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST }, eastVacationRanges: ranges, eastVacationReviews: reviews });
+    if (more) more(inp);
+    return inp;
+  };
+  const evCtx = (ranges, reviews, label, more) => { const c = R.buildContext(evInput(ranges, reviews, more)); if (c.warnings.length) fail("buildContext warnings (" + label + "): " + JSON.stringify(c.warnings)); return c; };
+  // (a) the pin: empty inputs = byte-identical schedule and diagnostics (apart from the new, empty key)
+  CUR.range = "P15 empty-inputs pin Nov-Dec"; CUR.seed = 1; CUR.day = "-";
+  const outE = GEN.generate(evCtx({}, [], "P15 empty inputs"), RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: BEST_OF[1] });
+  eq(JSON.stringify(outE.schedule), JSON.stringify(a1.schedule), "P15 pin: empty East vacation inputs leave the Nov-Dec schedule byte-identical (seed 1)");
+  const sansEV = (D) => { const c = Object.assign({}, D); delete c.eastVacations; return c; };
+  eq(JSON.stringify(sansEV(outE.diagnostics)), JSON.stringify(sansEV(a1.diagnostics)), "P15 pin: ...and every other diagnostic");
+  ok("eastVacations" in a1.diagnostics, "P15: diagnostics.eastVacations exists on every run");
+  eq(a1.diagnostics.eastVacations, {}, "P15: diagnostics.eastVacations is {} without East vacation data");
+  eq(outE.diagnostics.eastVacations, {}, "P15: ...and with empty inputs");
+  // (b) an AWAY range of three WEEKDAYS (Mon-Thu only, so his weekend blocks - the L quality pin in checkRun - are
+  //     untouched): the FIRST Mon/Tue start in the range whose three days and the day before are ordinary open days
+  //     for him (no lock, holiday, East day or derived week) AND on which the baseline run (a1, seed 1) placed him
+  //     in some role - derived, not hard-coded, so the pin is never vacuous.
+  const ordinary = (d) => !lockedIn(d, P) && !lockedIn(d, B) && !isHoliday(d) && !KHAN_NO_PRIMARY.has(d) && !DERIVED_ROLE[d];
+  const awayStart = daysList(RANGES[1].start, RANGES[1].end).find((d) => ["Mon", "Tue"].includes(weekday(d)) && d > RANGES[1].start && addDays(d, 2) <= RANGES[1].end
+    && [addDays(d, -1), d, addDays(d, 1), addDays(d, 2)].every(ordinary)
+    && [d, addDays(d, 1), addDays(d, 2)].some((x) => a1.schedule[x].primary === KHAN || a1.schedule[x].backup === KHAN));
+  ok(!!awayStart, "P15 fixture: no ordinary Mon-Thu run in Nov-Dec on which the baseline (seed 1) places Khan - the away pin would be vacuous");
+  const AWAY = { start: awayStart, end: addDays(awayStart, 2) }, DAY_BEFORE_AWAY = addDays(awayStart, -1);
+  const awayDays = daysList(AWAY.start, AWAY.end);
+  ok(awayDays.every((d) => !isWeekend(d)), "P15 fixture: the away range " + AWAY.start + ".." + AWAY.end + " stays inside Mon-Thu");
+  const khanBaseline = awayDays.filter((d) => a1.schedule[d].primary === KHAN || a1.schedule[d].backup === KHAN);
+  ok(khanBaseline.length > 0, "P15 fixture: the baseline run places Khan on " + AWAY.start + ".." + AWAY.end + " (" + khanBaseline.join(", ") + ")");
+  const awayRow = { person_id: KHAN, start: AWAY.start, end: AWAY.end, decision: "away" };
+  const outA = GEN.generate(evCtx({ [KHAN]: [AWAY] }, [awayRow], "P15 away"), RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: BEST_OF[1] });
+  CUR.range = "P15 away fixture Nov-Dec";
+  awayDays.forEach((d) => { CUR.day = d; ok(outA.schedule[d].primary !== KHAN && outA.schedule[d].backup !== KHAN, "P15 away: Khan must hold nothing on " + d + " (got " + JSON.stringify(outA.schedule[d]) + ")"); });
+  CUR.day = DAY_BEFORE_AWAY;
+  ok(outA.schedule[DAY_BEFORE_AWAY].primary !== KHAN, "P15 away: not primary the day before the range (trailing edge, " + DAY_BEFORE_AWAY + ")");
+  CUR.day = "-";
+  outA.diagnostics.uncovered.filter((u) => u.day >= AWAY.start && u.day <= AWAY.end).forEach((u) => eq(u.reasons[KHAN], ["time-off:" + u.day], "P15 away: an open slot inside the range cites his derived vacation, nothing else"));
+  eq(outA.diagnostics.eastVacations[KHAN], { ranges: [{ start: AWAY.start, end: AWAY.end, state: "away" }], vacationDays: awayDays, clearDays: [], feedBusyOnHome: [], conflicts: [] }, "P15 away: diagnostics.eastVacations names the range, the derived days and no conflict (generated slots never conflict)");
+  ok(!outA.diagnostics.hardViolations.length && !outA.diagnostics.warnings.some((w) => /generator bug/.test(w)), "P15 away: clean run");
+  checkRun(outA, RANGES[1], 1, false, null, { [KHAN]: new Set(awayDays) }); // restated: the away range is a vacation of his
+  // unreviewed = the same placement, glossed differently
+  const outU = GEN.generate(evCtx({ [KHAN]: [AWAY] }, [], "P15 unreviewed"), RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: BEST_OF[1] });
+  CUR.range = "P15 unreviewed fixture Nov-Dec";
+  eq(JSON.stringify(outU.schedule), JSON.stringify(outA.schedule), "P15: an unreviewed range generates exactly what an away range does");
+  eq(outU.diagnostics.eastVacations[KHAN].ranges, [{ start: AWAY.start, end: AWAY.end, state: "unreviewed" }], "P15: ...glossed unreviewed");
+  // (c) a HOME range Tue 12/15 - Thu 12/17. Like the W fixture, the other four primary candidates carry a
+  //     primary-scoped unavailable row on Tue 12/15 (Fierce's own pattern keeps him off Tuesday primary): the
+  //     control leaves 12/15 primary open with Khan's reason hard-never-weekday:Tue; with the home decision Khan is
+  //     placed primary there and the soft list carries east-clear for that slot.
+  const HOME = { start: "2026-12-15", end: "2026-12-17" }, DAYH = HOME.start;
+  const homeDays = daysList(HOME.start, HOME.end);
+  eq([weekday(DAYH), isHoliday(DAYH), KHAN_NO_PRIMARY.has(DAYH), lockedIn(DAYH, P), lockedIn(DAYH, B), DERIVED_ROLE[DAYH] || null], ["Tue", false, false, false, false, null], "P15 fixture: 12/15 is an ordinary Tuesday for Khan");
+  ok(HARD_NEVER[KHAN].has("Tue") && hardNeverApplies(KHAN, P), "seed: Khan's hardNeverWeekdays forbid Tuesday primary");
+  const rowsH = [BURCHETT, ACTON, PHILIP, SARKAR].map((id) => ({ person_id: id, kind: "unavailable", role: P, start_date: DAYH, end_date: DAYH, note: "harness: P15 home fixture" }));
+  const withRows = (inp) => { inp.availabilityRows = inp.availabilityRows.concat(rowsH); };
+  const outHC = GEN.generate(evCtx({}, [], "P15 home control", withRows), RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: BEST_OF[1] });
+  CUR.range = "P15 home control Nov-Dec"; CUR.day = DAYH;
+  eq(outHC.schedule[DAYH].primary, null, "P15 home control: 12/15 primary is open when nobody's rules allow it");
+  const uHC = outHC.diagnostics.uncovered.find((u) => u.day === DAYH && u.role === P);
+  ok(!!uHC, "P15 home control: 12/15 primary is listed uncovered");
+  eq(uHC.reasons[KHAN], ["hard-never-weekday:Tue"], "P15 home control: Khan's only reason is his OR-day rule");
+  const homeRow = { person_id: KHAN, start: HOME.start, end: HOME.end, decision: "home" };
+  const outH = GEN.generate(evCtx({ [KHAN]: [HOME] }, [homeRow], "P15 home", withRows), RANGES[1].start, RANGES[1].end, { seed: 1, bestOf: BEST_OF[1] });
+  CUR.range = "P15 home fixture Nov-Dec"; CUR.day = DAYH;
+  eq(outH.schedule[DAYH].primary, KHAN, "P15 home: the generator places Khan primary on his home Tuesday (the OR-day rule lifted)");
+  eq(outH.schedule[DAYH].primaryLocked, false, "P15 home: a home day is availability, not a lock");
+  ok(!inUncovered(outH, DAYH, P), "P15 home: 12/15 primary is not open");
+  // the seed does not override weights.eastClear, so the expected weight is the rules.js default (2); parenthesised
+  // so the predicate pins THIS slot's term (a review found the earlier `... || s.weight === -2` matched any -2 anywhere)
+  const eastClearW = seed.groupRules.weights.eastClear == null ? R.defaultWeights().eastClear : seed.groupRules.weights.eastClear;
+  eq(eastClearW, 2, "P15 home: the effective east-clear weight is the default 2 (the seed sets none)");
+  ok(outH.diagnostics.softPenalties.some((s) => s.day === DAYH && s.role === P && s.id === KHAN && s.reason === "east-clear" && s.weight === -eastClearW), "P15 home: the soft list carries east-clear (-" + eastClearW + ") for Khan primary on that slot: " + JSON.stringify(outH.diagnostics.softPenalties.filter((s) => s.day === DAYH)));
+  ok(outH.diagnostics.softByReason["east-clear"] < 0, "P15 home: east-clear sums as a bonus in softByReason");
+  homeDays.forEach((d) => { if (outH.schedule[d].primary === KHAN) ok(outH.diagnostics.softPenalties.some((s) => s.day === d && s.role === P && s.id === KHAN && s.reason === "east-clear"), "P15 home: every home primary of his carries the bonus (" + d + ")"); });
+  ok(!outH.diagnostics.softPenalties.some((s) => s.reason === "east-clear" && (s.role !== P || s.id !== KHAN || d0(s.day))), "P15 home: east-clear never appears on backup, on another surgeon or outside the range");
+  function d0(d) { return !(d >= HOME.start && d <= HOME.end); }
+  ok(!outH.diagnostics.hardViolations.some((v) => v.day === DAYH), "P15 home: no hard violation on 12/15");
+  ok(outH.schedule[DAYH].backup && outH.schedule[DAYH].backup !== KHAN, "P15 home: 12/15 backup is filled by someone else");
+  eq(outH.diagnostics.eastVacations[KHAN], { ranges: [{ start: HOME.start, end: HOME.end, state: "home" }], vacationDays: [], clearDays: homeDays, feedBusyOnHome: [], conflicts: [] }, "P15 home: diagnostics.eastVacations names the clear days");
+  // restated for checkRun: a home day IS a dated availability for both roles (rules doc section 3 Khan), so the
+  // per-slot hardNever pin reads it as a lifting row
+  const homeAsRows = homeDays.map((d) => ({ person_id: KHAN, kind: "available", role: "any", start_date: d, end_date: d }));
+  const liftedBeforeH = W_STATS.liftedByRow;
+  checkRun(outH, RANGES[1], 1, false, rowsH.concat(homeAsRows));
+  ok(W_STATS.liftedByRow > liftedBeforeH, "P15 home: at least one placement was accepted because the home day lifts the OR-day rule");
+  eq(W_STATS.forbiddenNoRow, 0, "P15: still no placement anywhere on a hardNeverWeekdays day without a row or a home day");
+  CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
+}
+
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 11 fixture runs + 40 NB synthetic tally runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 16 fixture runs + 40 NB synthetic tally runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");
