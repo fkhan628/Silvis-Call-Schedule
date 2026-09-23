@@ -111,9 +111,12 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23j";
+    var APP_VERSION = "2026.09.23k";
     (function() {
-      var stored = localStorage.getItem("silvis_app_version");
+      // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
+      // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
+      // its cache nuke like any other bump (a null read would skip it), then retired below.
+      var stored = localStorage.getItem("silvis-app-version") || localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
 
       function nukeAndReload() {
@@ -138,10 +141,12 @@
       }
 
       if (mismatch) {
-        localStorage.setItem("silvis_app_version", APP_VERSION);
+        localStorage.setItem("silvis-app-version", APP_VERSION);
+        localStorage.removeItem("silvis_app_version");
         nukeAndReload();
       } else {
-        localStorage.setItem("silvis_app_version", APP_VERSION);
+        localStorage.setItem("silvis-app-version", APP_VERSION);
+        localStorage.removeItem("silvis_app_version");
         window.__silvisHardReset = nukeAndReload;
       }
     })();
@@ -1087,6 +1092,12 @@ function CallSchedule() {
     if (!newStart || !newEnd) return {
       ok: false
     };
+    if (!isScheduler && personId !== mySurgeon) {
+      showToast("You can only edit your own vacations.", "error");
+      return {
+        ok: false
+      };
+    }
     const conflicts = vacationConflicts(personId, newStart, newEnd);
     if (conflicts.length) {
       showToast(`${nameOf(personId)} is on call ${conflicts.join(", ")} - trade first.`, "error");
@@ -1106,20 +1117,30 @@ function CallSchedule() {
           end_date: newEnd
         })
       });
+      const text = await res.text().catch(() => "");
       if (!res.ok) {
-        const t = await res.text().catch(() => "");
-        console.warn("time_off update error", res.status, t);
-        showToast("Couldn't save that change: " + describeDbError(t), "error");
+        console.warn("time_off update error", res.status, text);
+        showToast("Couldn't save that change: " + describeDbError(text), "error");
         return {
           ok: false
         };
       }
-      const rows = await res.json().catch(() => []);
-      const updated = rows[0] || _objectSpread(_objectSpread({}, old), {}, {
-        start_date: newStart,
-        end_date: newEnd
-      });
-      adoptTimeOffRows(timeOffRows.map(r => r.id === rowId ? updated : r));
+      let rows = [];
+      try {
+        rows = JSON.parse(text);
+      } catch (e) {
+        console.warn("time_off update: 2xx with a non-JSON body (treated as no row updated)", text.slice(0, 160), e);
+        rows = [];
+      }
+      if (!Array.isArray(rows) || rows.length !== 1) {
+        console.warn("time_off update matched no row", rowId);
+        showToast("That vacation was not changed - it may have been removed, or your account may no longer be allowed to edit it (list reloaded).", "error");
+        loadTimeOff(true);
+        return {
+          ok: false
+        };
+      }
+      adoptTimeOffRows(timeOffRows.map(r => r.id === rowId ? rows[0] : r));
       logAudit("timeoff.edit", `Changed vacation for ${nameOf(personId)}: ${old ? old.start_date + "->" + old.end_date : "?"} to ${newStart}->${newEnd}`, {
         person_id: personId,
         row_id: rowId,
@@ -1240,8 +1261,10 @@ function CallSchedule() {
     return Array.isArray(a) ? a[0] || null : null;
   };
   const syncScheduleDays = nextSchedule => {
+    const grant = intentionalScheduleWipeRef.current;
+    intentionalScheduleWipeRef.current = false;
     daySyncBusyRef.current += 1;
-    const run = daySyncChainRef.current.then(() => syncScheduleDaysNow(nextSchedule)).catch(e => {
+    const run = daySyncChainRef.current.then(() => syncScheduleDaysNow(nextSchedule, grant)).catch(e => {
       console.warn("schedule_days sync error", e);
       showToast("Couldn't save schedule changes - check your connection.", "error");
       return {
@@ -1254,7 +1277,7 @@ function CallSchedule() {
     daySyncChainRef.current = run.then(() => undefined, () => undefined);
     return run;
   };
-  const syncScheduleDaysNow = async nextSchedule => {
+  const syncScheduleDaysNow = async (nextSchedule, wipeGranted) => {
     if (!nextSchedule) return {
       ok: false,
       error: "no schedule"
@@ -1262,7 +1285,7 @@ function CallSchedule() {
     const prev = lastSyncRef.current || {};
     const next = nextSchedule;
     const chk = scheduleWipeCheck(prev, next);
-    if (chk.wipe && !intentionalScheduleWipeRef.current) {
+    if (chk.wipe && !wipeGranted) {
       console.warn(`schedule_days wipe BLOCKED: ${chk.removed} of ${chk.baseline} populated primaries would be emptied. Refusing - not an intentional clear.`);
       setSaveError(true);
       setSaveStatus("Wipe blocked - schedule not changed");
@@ -1273,7 +1296,6 @@ function CallSchedule() {
         blocked: true
       };
     }
-    intentionalScheduleWipeRef.current = false;
     const changed = [];
     for (const day of Object.keys(Object.assign({}, prev, next)).sort()) {
       if (!sameAssignment(day, prev[day], next[day])) changed.push(day);
@@ -1887,12 +1909,14 @@ function CallSchedule() {
       return ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code;
     }).map(s => String(s.code).toUpperCase());
     if (!needCodes.length) return;
-    const fc = eastForecastRows.find(r => r && r.data && r.data.fakId);
-    if (fc && needCodes.length === 1 && needCodes[0] === "FAK") {
-      setEastIdByCode({
-        FAK: fc.data.fakId,
+    const fc = eastForecastRows.find(r => r && r.data && r.data.fakId && r.data.code);
+    const fcCode = fc ? String(fc.data.code).toUpperCase() : null;
+    if (fc && needCodes.length === 1 && needCodes[0] === fcCode) {
+      const m = {
         _source: "forecast"
-      });
+      };
+      m[fcCode] = fc.data.fakId;
+      setEastIdByCode(m);
       return;
     }
     if (!eastFeedRows.length || eastIdByCode && eastIdByCode._source === "failed") return;
@@ -4172,12 +4196,19 @@ function CallSchedule() {
     setOfficeContacts(prev => prev.map(c => c.id === id ? _objectSpread(_objectSpread({}, c), patch) : c));
     try {
       const {
+        data,
         error
       } = await db.update("office_contacts", id, patch);
       if (error) {
         console.warn("Office contact update failed:", error);
         setOfficeContacts(before);
         showToast("Couldn't update the contact: " + describeDbError(error), "error");
+        return;
+      }
+      if (!Array.isArray(data) || data.length === 0) {
+        console.warn("Office contact update matched no row:", id);
+        setOfficeContacts(before);
+        showToast("No contact row was updated - your session may not be scheduler any more. Reload and retry.", "error");
         return;
       }
       const c = before.find(x => x.id === id);
@@ -4326,7 +4357,7 @@ function CallSchedule() {
     }
   };
   const triggerDigestTest = async () => {
-    if (!confirm("Manually fire the Saturday digest now? This will send emails if any changes are detected since the last digest snapshot.")) return;
+    if (!confirm("Manually fire the weekly digest now? This will send emails if any changes are detected since the last digest snapshot.")) return;
     setOfficeNotifBusy(true);
     try {
       var _body$sent3;
@@ -4455,7 +4486,9 @@ function CallSchedule() {
     before_restore: "Before restore",
     before_import: "Before JSON import",
     periodic_session: "Periodic (session start)",
-    regenerate: "Before regenerate"
+    generate_publish: "Before Accept & Publish",
+    seed_import: "Before seed import (app)",
+    before_seed_import: "Before seed import (importer)"
   })[r] || r || "manual";
   const applyScheduleViaCAS = async sched => {
     if (Object.keys(scheduleRef.current || {}).length > 0) pushUndo(scheduleRef.current);
@@ -4510,12 +4543,15 @@ function CallSchedule() {
       counts
     };
   };
-  const afterPayloadApplied = (r, what) => {
-    var _c$schedule_days, _c$time_off, _c$availability;
-    adoptBlob(r.blob || {});
-    blobTsRef.current = r.ts;
+  const adoptRestoredBlob = (config, ts) => {
+    adoptBlob(config || {});
+    blobTsRef.current = ts;
     blobLoadedRef.current = true;
     everHadRealDataRef.current = true;
+  };
+  const partialApplyMessage = (r, what) => r.scheduleRestored ? `Setup and schedule restored; the vacation/availability rows did not (${r.error || "unknown error"}) - run the ${what} again to finish.` : `Setup restored; the schedule did not (${r.error || "unknown error"}) - reload, then run the ${what} again.`;
+  const afterPayloadApplied = (r, what) => {
+    var _c$schedule_days, _c$time_off, _c$availability;
     loadSnapshots();
     const c = r.counts || {};
     alert(`${what} complete.\n\nRESTORED: ${(_c$schedule_days = c.schedule_days) !== null && _c$schedule_days !== void 0 ? _c$schedule_days : 0} schedule day(s), ${(_c$time_off = c.time_off) !== null && _c$time_off !== void 0 ? _c$time_off : 0} vacation row(s), ${(_c$availability = c.availability) !== null && _c$availability !== void 0 ? _c$availability : 0} availability row(s), plus roster/rules/settings.\n\nExisting vacation/availability rows not in the backup were left in place (restore never deletes).`);
@@ -4533,15 +4569,32 @@ function CallSchedule() {
     if (!confirm(`Restore the "${snapshotReasonLabel(snap.reason)}" snapshot from ${when}?\n\nThis replaces the CURRENT schedule and setup for everyone with that saved copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so this restore can itself be undone.`)) return;
     setRestoreBusyId(snap.id);
     setSaveStatus("Restoring snapshot");
-    const r = await snapshots.restore(snap.id, applyScheduleViaCAS, applyTablesUpsert);
+    const r = await snapshots.restore(snap.id, applyScheduleViaCAS, applyTablesUpsert, adoptRestoredBlob);
     setRestoreBusyId(null);
-    if (!r.ok) {
+    if (!r.ok && !r.blobRestored) {
       console.warn("Snapshot restore failed:", r.error);
-      showToast("Restore failed: " + (r.error || "unknown error"), "error");
+      showToast("Restore failed (nothing was changed): " + (r.error || "unknown error"), "error");
       setSaveStatus("");
       return;
     }
     noteSnapshotTaken();
+    if (!r.ok) {
+      console.warn("Snapshot restore PARTIAL:", r.error);
+      logAudit("snapshot.restore", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when} - PARTIAL: ${r.scheduleRestored ? "vacation/availability rows" : "schedule"} did not apply`, {
+        snapshot_id: snap.id,
+        reason: snap.reason,
+        created_at: snap.created_at,
+        counts: r.counts,
+        outcome: "partial",
+        blobRestored: true,
+        scheduleRestored: !!r.scheduleRestored,
+        error: String(r.error || "").slice(0, 160)
+      });
+      setSaveStatus("Restore incomplete");
+      loadSnapshots();
+      showToast(partialApplyMessage(r, "restore"), "error");
+      return;
+    }
     logAudit("snapshot.restore", `Restored snapshot "${snapshotReasonLabel(snap.reason)}" from ${when}`, {
       snapshot_id: snap.id,
       reason: snap.reason,
@@ -4572,14 +4625,37 @@ function CallSchedule() {
     }
     if (!confirm(`Import this backup?\n\n${normalized.schedule_days.length} schedule day(s), ${normalized.time_off.length} vacation row(s), ${normalized.availability.length} availability row(s), config keys: ${Object.keys(normalized.config).join(", ") || "(none)"}.\n\nIt replaces the current schedule and setup for everyone (a snapshot is saved first).`)) return;
     setSaveStatus("Importing backup");
-    const r = await snapshots.applyPayload(obj, applyScheduleViaCAS, applyTablesUpsert, "before_import");
-    if (!r.ok) {
+    let r;
+    try {
+      r = await snapshots.applyPayload(obj, applyScheduleViaCAS, applyTablesUpsert, "before_import", adoptRestoredBlob);
+    } catch (e) {
+      r = {
+        ok: false,
+        error: String(e && e.message || e)
+      };
+    }
+    if (!r.ok && !r.blobRestored) {
       console.warn("Import backup failed:", r.error);
-      showToast("Import failed: " + (r.error || "unknown error"), "error");
+      showToast("Import failed (nothing was changed): " + (r.error || "unknown error"), "error");
       setSaveStatus("");
       return;
     }
     noteSnapshotTaken();
+    if (!r.ok) {
+      console.warn("Import backup PARTIAL:", r.error);
+      logAudit("data.import", `Imported JSON backup (${file.name}) - PARTIAL: ${r.scheduleRestored ? "vacation/availability rows" : "schedule"} did not apply`, {
+        counts: r.counts,
+        file: file.name,
+        outcome: "partial",
+        blobRestored: true,
+        scheduleRestored: !!r.scheduleRestored,
+        error: String(r.error || "").slice(0, 160)
+      });
+      setSaveStatus("Import incomplete");
+      loadSnapshots();
+      showToast(partialApplyMessage(r, "import"), "error");
+      return;
+    }
     logAudit("data.import", `Imported JSON backup (${file.name})`, {
       counts: r.counts,
       file: file.name
@@ -4892,7 +4968,7 @@ function CallSchedule() {
     if (isPublicMode) return;
     if (isScheduler) {
       try {
-        localStorage.setItem("silvis_collapse_setup_east", "1");
+        writeCollapseFlag("setup_east", true);
       } catch (e) {
         console.warn("Couldn't persist the East panel state:", e);
       }
@@ -6994,7 +7070,7 @@ function CallSchedule() {
     title: "Office contacts"
   }, React.createElement("p", {
     style: sectionNote
-  }, "Office staff who receive the publish notice and the Saturday change digest. Entered by hand; this table is authenticated-read only (never anon-readable), which is why an address may be typed here and nowhere else in the app."), React.createElement("div", {
+  }, "Office staff who receive the publish notice and the Monday morning change digest. Entered by hand; this table is authenticated-read only (never anon-readable), which is why an address may be typed here and nowhere else in the app."), React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -9685,7 +9761,7 @@ function CallSchedule() {
       fontSize: 12,
       opacity: officeNotifBusy || officeContacts.filter(c => c.active).length === 0 ? 0.5 : 1
     })
-  }, "Test Saturday digest now")), React.createElement("p", {
+  }, "Test the weekly digest now")), React.createElement("p", {
     style: {
       fontSize: 10,
       color: "#a0a8b0",
@@ -10811,6 +10887,14 @@ function MonthPainterSheet({
     })
   }, busy ? "Saving" : `Save${dirtyCount ? ` (${dirtyCount})` : ""}`))));
 }
+function readCollapseFlag(ck) {
+  const v = localStorage.getItem("silvis-collapse-" + ck);
+  return v !== null ? v : localStorage.getItem("silvis_collapse_" + ck);
+}
+function writeCollapseFlag(ck, open) {
+  localStorage.setItem("silvis-collapse-" + ck, open ? "1" : "0");
+  localStorage.removeItem("silvis_collapse_" + ck);
+}
 function Collapsible({
   title,
   ck,
@@ -10823,7 +10907,7 @@ function Collapsible({
 }) {
   const [open, setOpen] = React.useState(() => {
     try {
-      const v = localStorage.getItem("silvis_collapse_" + ck);
+      const v = readCollapseFlag(ck);
       if (v === "1") return true;
       if (v === "0") return false;
     } catch (e) {
@@ -10834,7 +10918,7 @@ function Collapsible({
   const toggle = () => setOpen(o => {
     const n = !o;
     try {
-      localStorage.setItem("silvis_collapse_" + ck, n ? "1" : "0");
+      writeCollapseFlag(ck, n);
     } catch (e) {
       console.warn("Couldn't persist panel collapse state:", e);
     }
@@ -13544,7 +13628,8 @@ function RulesEditor({
     checked: (get("weekdays.allowed", []) || []).indexOf(w) >= 0,
     onChange: v => toggleList("weekdays.allowed", w, v)
   })), React.createElement(SuCheck, {
-    label: "auto-offer those days (soft)",
+    label: "offer those days (soft +1, weights.noTargetWeekday)",
+    title: "Eligible with a soft +1 (auto-offer-weekday): on otherwise equal terms another surgeon takes the day. Set groupRules.weights.noTargetWeekday to 0 for equal footing.",
     checked: get("weekdays.autoOffer", true) !== false,
     onChange: v => set("weekdays.autoOffer", v)
   }))), React.createElement("div", null, React.createElement(SuCheck, {
@@ -14017,10 +14102,6 @@ function RulesEditor({
     label: "holiday units waive weekday rules",
     checked: gget("holidays.ignoreWeekdayRules", true) !== false,
     onChange: v => gset("holidays.ignoreWeekdayRules", v)
-  }), React.createElement(SuCheck, {
-    label: "anyone may cover a holiday unless opted out",
-    checked: gget("holidays.anyoneMayCoverUnlessOptedOut", true) !== false,
-    onChange: v => gset("holidays.anyoneMayCoverUnlessOptedOut", v)
   })), React.createElement("div", {
     style: css.subT
   }, "Weights"), React.createElement("div", {
