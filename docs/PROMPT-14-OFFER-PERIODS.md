@@ -156,7 +156,7 @@ review before pushing.
 | 2 Rules + generator | `969a914` | `rules.buildContext` inputs `offers` / `periods`; per surgeon per period the derived status (mirrors SQL `offer_status()`) and the mode `offer_modes[id]` or `preferred`; **exhaustive** = hard `not-offered` off the offered days/roles, **preferred** = soft `offered` (−`weights.offerBonus` 6) / `outside-offers` (+`weights.outsideOffers` 6); an offer is a dated row (item W: lifts weekday patterns, never an obligation); `whitelist-month` / `outside-available-weeks` not applied to a submitted surgeon inside a period; `generator.js` fills offered units first (`genOfferedUnits` / `genOrder`), the bonus stops at the share (`genOfferTaper`, `weights.offerBonusOverShare` 0), `diagnostics.offers` (`byPerson` offered / placed / unplaced with reasons, `outsideOffers`), open slots "no offer and no rule allows it"; `eligibility(..., { claim: true })`; `sql/migrations/2026-09-23-claim-offer.sql` **prepared, not applied** (after `feat/open-shifts` merges); `test/fixtures/offers-2026-11.json`, `test/offers.test.js`, Prompt 14 P2 blocks in `test/rules.test.js` and `test/generator-regression.js` |
 | 5 First period | `19d4094` | seed `offerPeriods[]` (Nov 2026 – Jan 2027 = 2026-11-02 .. 2027-01-03, `offersCloseAt` 2026-10-02 by hand, `publishBy` 2026-10-05, `rulesOnly` s1 + s6, `offerModes` s2 / s4 exhaustive, s3 / s5 preferred) and `surgeonRules.<id>.offerSources` tags; `importer.importPlan(seed, { offerPeriods: true })` (the CLI's setting; the in-app import stays legacy until part 3) plans the period upsert + the `call_offers` rows (`entered_by scheduler`, `source email-relay`, `note seed: <tag>`, from today in America/Chicago, vacation days skipped, locked days kept as offers) and retires the submitted surgeons' `available` rows and governed months inside the period; `scripts/import-seed.js --offers-json`; snapshots cover both tables (`config.js`); `test/importer.test.js` P5 block, `test/data-layer.test.js` P5 block |
 | 4 Notifications | `db1494b` | `send-notification` categories `offers_reminder` / `offers_closed`; `daily-reminder` mode `offers` (same `x-cron-secret` gate and `dryRun` contract; reminders on the 14- / 3-day marks to `not_started` pool members; from the close on a compare-and-swap flip to `closed`, audit row `period.close` with `actor_id` `cron`, roll call to scheduler / admin accounts; never generates, publishes or writes `call_offers`); `helpers.offerCronPlan` / `offerRollcall` / `offerPoolIds` with the TypeScript mirror between `@offerTimeline-mirror-start/-end`; `edge-functions/README.md` §3 deploy record + §4 `silvis-offers-daily` cron text; `test/offers-timeline.test.js` + `test/fixtures/offer-timeline.json` — **sources only; nothing deployed** |
-| 6 Docs | this note | build guide §17 made to match parts 1 / 2 / 4 / 5 with part 3 marked next wave and the audit actions named; `docs/ONBOARDING.md` surgeon paragraph; rules doc §1 Process row final wording + §8 item 16 (modes to confirm); `CLAUDE.md` one line |
+| 6 Docs | this note | build guide §17 made to match parts 1 / 2 / 4 / 5 with part 3 marked next wave and the audit actions named; `docs/ONBOARDING.md` surgeon paragraph; rules doc §1 Process row final wording + §8 item 20 (modes to confirm); `CLAUDE.md` one line |
 
 **Live vs pending (9/23):** live = the 9/22 schema (`call_offers`, `call_periods`, `offer_status()`, OF001–OF003,
 authenticated-only RLS). Pending, in order: the `offer_modes` column → the seed apply (`node scripts/import-seed.js
@@ -186,22 +186,22 @@ claim-as-offer SQL after `feat/open-shifts` lands → part 3.
    regression on `test/fixtures/offers-2026-11.json`; the live preview regen follows the seed apply and a preview-script
    change (UI wave).
 3. Part 5 "Fierce's stated single days" — none inside the period exists in the seed, so he is `not_started` rather than
-   submitted; his `preferred` mode is recorded for when he paints (rules doc §8 item 16 b).
+   submitted; his `preferred` mode is recorded for when he paints (rules doc §8 item 20 b).
 4. Part 2b "an offer is not a demand" — implemented as the bonus taper at the share (`weights.offerBonusOverShare`, 0),
    measured on Acton offering every November day; caps stay hard.
 5. Part 2c — a claim by a surgeon listed in `rules_only_ids` writes **no** offer row (one row would flip his chosen
    status for the whole period); a surgeon with nothing entered does get the row and becomes submitted (preferred).
 6. Part 1a triggers — OF003 also refuses a **seed re-import** that adds or changes an offer inside the period after
-   the close (the CLI is not the scheduler), hence the 10/2 deadline on every seed-borne answer (item 16).
+   the close (the CLI is not the scheduler), hence the 10/2 deadline on every seed-borne answer (item 20).
 7. Part 5 modes — set as defaults tonight (Burchett / Philip exhaustive; Acton / Fierce preferred; Khan / Sarkar
-   rules-only), to be confirmed; the plain-list-is-`either` consequence for backup is item 16 a.
+   rules-only), to be confirmed; the plain-list-is-`either` consequence for backup is item 20 a.
 8. Part 4a "Remind" button — belongs to part 3; the category exists and the cron sends the scheduled reminders.
 9. Trades onto a non-offered day for an exhaustive surgeon — latent until part 3 passes offers into `ctxInputs`; part 3
    must give the trade path `{ claim: true }` (and `apply_trade()` the offer upsert) or Faraz rules such trades refused.
 10. Late offers after the 10/2 freeze (P6 review, 9/23) — the schema lets the scheduler role enter one (OF003 is skipped
     for `silvis_is_sched()`), but no scheduler entry path exists before part 3: `scripts/import-seed.js` runs as
     postgres (`auth.uid()` null) and is refused, and `index-source.html` writes no offer. Until the Periods section
-    ships the only late path is a scheduler-JWT REST write; the docs (ONBOARDING, rules doc §1 / §8 item 16, guide
+    ships the only late path is a scheduler-JWT REST write; the docs (ONBOARDING, rules doc §1 / §8 item 20, guide
     §17) say so, and the 10/2 close is the only safe window for a changed mode answer.
 
 **Live actions the orchestrator runs (nothing here was executed by the docs lane):** apply

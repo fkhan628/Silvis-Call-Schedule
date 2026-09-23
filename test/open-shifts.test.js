@@ -528,7 +528,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     // every code literal ("time-off:", "inactive") whatever its shape; only the comment's own hard.push("...") placeholder is excluded,
     // and the count is pinned so a new literal (of any spelling) has to be added to HARD_REASONS and here
     const pushed = [...new Set((rulesSrc.match(/hard\.push\("([^"]+)"/g) || []).map(m => /"([^"]+)"/.exec(m)[1]).filter(c => c !== "..."))];
-    assert.strictEqual(pushed.length, 30, "hard.push literal count changed - update HARD_REASONS, the vocabulary comment and this pin: " + pushed.join(", "));
+    assert.strictEqual(pushed.length, 31, "hard.push literal count changed - update HARD_REASONS, the vocabulary comment and this pin: " + pushed.join(", "));
     pushed.forEach(c => assert.ok(R.HARD_REASONS.includes(c), "pushed code not in HARD_REASONS: " + c));
     ["whitelist-month", "outside-available-weeks", "bad-role:"].forEach(c => assert.ok(R.HARD_REASONS.includes(c), "code assigned outside hard.push missing: " + c));
   });

@@ -173,7 +173,7 @@ function openSlotWeekendKinds(weekendUnits) {
    input) -> 'no eligible surgeon'. */
 const OPEN_SLOT_REASON_TABLE = [
   ["vacations", ["time-off", "day-before-vacation"]],
-  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row"]],
+  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row", "not-offered"]],
   ["East feed busy", ["east-busy", "east-forecast-busy"]],
   ["East-derived week", ["derived-lock", "derived-lock-held"]],
   ["caps reached", ["monthly-cap", "backup-cap", "backup-weekend-cap", "max-consecutive", "max-major-holidays"]],

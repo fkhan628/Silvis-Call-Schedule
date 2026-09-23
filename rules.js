@@ -1193,7 +1193,7 @@ var HARD_REASONS = [
   "not-recurring-available", "outside-available-weeks", "outside-window",
   "external-cover", "external-surgeon", "slot-locked:", "derived-lock:", "derived-lock-held:",
   "holds-other-role", "monthly-cap:", "max-consecutive:", "backup-cap:",
-  "backup-weekend-cap:", "max-major-holidays:"
+  "backup-weekend-cap:", "max-major-holidays:", "not-offered"
 ];
 function rdStatic(ctx, date, role, id, asBlock) {
   var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "");
