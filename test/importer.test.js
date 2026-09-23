@@ -66,52 +66,61 @@ ok(plan.infoDeltas.every((l) => /nothing to write/.test(l)), "info deltas say no
 ok(plan.infoDeltas.some((l) => /^10\/12 P Philip -> Fierce/.test(l)), "info delta rendering");
 ok(plan.infoDeltas.some((l) => /^10\/24 P Sarkar -> open \(applied; faraz-2026-09-22-sarkar-two-days\)/.test(l)), "10/24 delta (surgeon null) renders as 'Sarkar -> open': " + plan.infoDeltas.filter((l) => /^10\/24/.test(l)).join(" | "));
 
-/* ------------------------------ Thanksgiving provenance (Prompt 12 B) */
+/* ------------------------------ Thanksgiving provenance (Prompt 12 B; confirmed - Prompt 12 Z, 9/22 late) */
 // The four 11/26-11/29 rows were recorded by Claude Code on 2026-09-22 as a 9/21 evening decision while the daytime
-// record said pending. Until Faraz re-confirms they carry awaitingConfirmation: true and the importer prefixes their
-// schedule_days note with the exact marker the app reads for its "confirm" badge. Every literal is restated here.
-step("B: awaitingConfirmation rows -> 'awaiting confirmation - ' note marker");
+// record said pending; item B flagged them awaitingConfirmation: true and the importer prefixed their schedule_days
+// note with the exact marker the app reads for its "confirm" badge. Faraz confirmed on 9/22 (late evening, Prompt 12 Z):
+// the flag is gone from the seed and the marker leaves the notes on the next import. The marker FEATURE (importer.js
+// untouched) stays covered below on synthetic flagged rows. Every literal is restated here.
+step("B/Z: the Thanksgiving rows carry no awaitingConfirmation flag; the marker feature stays (synthetic rows)");
 const AWAIT_MARKER = "awaiting confirmation - ";
 const B_ROWS = ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"];
-const B_NOTE = "Thanksgiving unit - Khan primary Thu-Sun; recorded by Claude Code on 2026-09-22 as an evening decision; the daytime record said pending; Faraz to re-confirm before publish";
+const B_NOTE = "Thanksgiving unit - Khan primary Thu-Sun; recorded by Claude Code on 2026-09-22 as an evening decision; the daytime record said pending; Faraz to re-confirm before publish";   // item B's wording = the live rows after the 9/22 import; used by the Z block to rebuild the pre-Z live state
+const Z_NOTE = "Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening; confirmed 9/22)";   // Prompt 12 Z
 eq(IMP.IMP_AWAITING_MARKER, AWAIT_MARKER, "B: the importer exports the marker literal (shared with the app's badge)");
-eq(seed.existingAssignments.filter((a) => a.awaitingConfirmation === true).map((a) => a.date), B_ROWS, "B: exactly the four Thanksgiving rows carry awaitingConfirmation: true");
-ok(seed.existingAssignments.filter((a) => B_ROWS.includes(a.date)).every((a) => a.primary === KHAN && a.locked === true && a.source === "faraz-2026-09-21" && a.note === B_NOTE), "B: the four rows keep Khan primary, locked, source faraz-2026-09-21, and the provenance note (no 'CONFIRMED')");
-B_ROWS.forEach((d) => eq(byDay[d].note, AWAIT_MARKER + "seed: faraz-2026-09-21 - " + B_NOTE, "B: " + d + " schedule_days note = marker + 'seed: <source>' + the row note"));
-eq(days.filter((d) => (d.note || "").indexOf(AWAIT_MARKER) === 0).map((d) => d.day), B_ROWS, "B: no other row carries the marker (11/25 included)");
-ok(!days.some((d) => /CONFIRMED/.test(d.note || "")), "B: no schedule_days note says CONFIRMED");
+eq(seed.existingAssignments.filter((a) => a.awaitingConfirmation === true).map((a) => a.date), [], "Z FLIP: no existingAssignments row carries awaitingConfirmation: true (B: the four Thanksgiving rows did)");
+ok(seed.existingAssignments.filter((a) => B_ROWS.includes(a.date)).every((a) => a.primary === KHAN && a.locked === true && a.source === "faraz-2026-09-21" && a.note === Z_NOTE && !("awaitingConfirmation" in a)), "Z FLIP: the four rows keep Khan primary, locked, source faraz-2026-09-21; the note is the confirmed wording and the flag key is gone");
+B_ROWS.forEach((d) => eq(byDay[d].note, "seed: faraz-2026-09-21 - " + Z_NOTE, "Z FLIP: " + d + " schedule_days note = 'seed: <source>' + the row note, no marker (B: marker in front)"));
+eq(days.filter((d) => (d.note || "").indexOf(AWAIT_MARKER) === 0).map((d) => d.day), [], "Z FLIP: no row carries the marker (B: the four did; 11/25 never)");
+ok(!days.some((d) => /CONFIRMED/.test(d.note || "")), "B: no schedule_days note says CONFIRMED in capitals (Z: 'confirmed 9/22' is the rows' own provenance)");
 eq(byDay["2026-11-25"].note, "seed: faraz-2026-09-22-khan-1125 - Khan covers 11/25, 2026 only", "B: 11/25 (Faraz's separate 9/22 decision) is not flagged");
-B_ROWS.forEach((d) => ok(IMP.impSeedSchedule(seed)[d].note.indexOf(AWAIT_MARKER) === 0, "B: the in-memory schedule (fixture / context) carries the marker on " + d));
-eq(plan.stats.scheduleDays.awaitingConfirmation, 4, "B: plan.stats counts the awaiting rows");
-eq(plan.noteScrub.inventory.filter((e) => e.action === "awaiting-confirmation").map((e) => [e.path, e.to, "from" in e]), B_ROWS.map((d) => ["existingAssignments[" + d + "].note", "schedule_days", false]), "B: the dry-run inventory lists the four rows (path only, never the note text)");
-eq(plan.noteScrub.counts.awaitingConfirmation, 4, "B: inventory counts.awaitingConfirmation");
-ok(IMP.importSql(plan).indexOf("'" + AWAIT_MARKER + "seed: faraz-2026-09-21 - " + B_NOTE + "'") >= 0, "B: the SQL writes the marked note as a plain literal");
-ok(/^-- seed generatedOn .*; 73 schedule_days \(4 awaiting confirmation\), /m.test(IMP.importSql(plan)), "B: the SQL header counts the awaiting rows");
-ok(!/CONFIRMED/.test(JSON.stringify(seed.surgeonRules[KHAN])), "B: Khan's seed rules no longer say CONFIRMED");
-ok(/re-confirm before publish/.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.note) && /daytime record said pending/.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.note), "B: s1.holidays2026.thanksgiving.note carries the provenance sentence");
-ok(seed.surgeonRules[KHAN].notes.some((t) => /recorded by Claude Code on 2026-09-22 as an evening decision; the daytime record said pending; Faraz to re-confirm before publish/.test(t)), "B: s1.notes carries the provenance sentence");
+B_ROWS.forEach((d) => ok(IMP.impSeedSchedule(seed)[d].note.indexOf(AWAIT_MARKER) !== 0, "Z FLIP: the in-memory schedule (fixture / context) carries no marker on " + d));
+eq(plan.stats.scheduleDays.awaitingConfirmation, 0, "Z FLIP: plan.stats counts no awaiting rows (B: 4)");
+eq(plan.noteScrub.inventory.filter((e) => e.action === "awaiting-confirmation"), [], "Z FLIP: the dry-run inventory lists no 'awaiting-confirmation' entry (B: the four rows)");
+eq(plan.noteScrub.counts.awaitingConfirmation, 0, "Z FLIP: inventory counts.awaitingConfirmation 0 (B: 4)");
+ok(IMP.importSql(plan).indexOf("'seed: faraz-2026-09-21 - " + Z_NOTE + "'") >= 0, "Z FLIP: the SQL writes the plain note literal without the marker");
+ok(/^-- seed generatedOn .*; 73 schedule_days, /m.test(IMP.importSql(plan)) && !/awaiting confirmation\)/.test(IMP.importSql(plan)), "Z FLIP: the SQL header carries no '(N awaiting confirmation)' suffix (B: '(4 awaiting confirmation)')");
+ok(!/CONFIRMED/.test(JSON.stringify(seed.surgeonRules[KHAN])), "B: Khan's seed rules never say CONFIRMED in capitals (Z: 'confirmed 9/22')");
+ok(/confirmed by Faraz 9\/22/.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.note) && !/pending|re-confirm/i.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.note), "Z FLIP: s1.holidays2026.thanksgiving.note says confirmed 9/22 - no 'pending', no 're-confirm' (B: the provenance sentence)");
+ok(/confirmed by Faraz 9\/22/.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.source) && !/pending|re-confirm|recorded by Claude Code/i.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.source), "Z FLIP: s1.holidays2026.thanksgiving.source says confirmed 9/22 - no caveat (B: 'recorded by Claude Code ... re-confirm before publish')");
+ok(seed.surgeonRules[KHAN].notes.some((t) => /^Thanksgiving 2026:/.test(t) && /confirmed by Faraz 9\/22/.test(t)) && !seed.surgeonRules[KHAN].notes.some((t) => /re-confirm|daytime record said pending/.test(t)), "Z FLIP: s1.notes Thanksgiving line says confirmed 9/22; the provenance caveat is gone from every s1 note (B: carried it)");
 eq(seed.surgeonRules[KHAN].holidays2026.thanksgiving.days, B_ROWS, "B: the s1 holiday block still lists the four days");
 eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.days, B_ROWS, "B: ... and so does the blob (unit unchanged)");
-// review B-3: the holidays.units 2026 Thanksgiving note (seed record only - the importer drops holidays notes) says the
-// same as the four rows it sits beside: no bare 'Faraz 9/21 (evening)' attribution without the provenance caveat.
+// review B-3 / Z: the holidays.units 2026 Thanksgiving note (seed record only - the importer drops holidays notes) says the
+// same as the four rows it sits beside: confirmed 9/22, no caveat.
 {
   const tgUnit = (seed.holidays.units["2026"] || seed.holidays.units[2026]).find((u) => u.name === "Thanksgiving");
   eq(tgUnit.days, B_ROWS, "B: holidays.units 2026 Thanksgiving still spans the four days");
-  ok(/recorded by Claude Code on 2026-09-22 as an evening decision; the daytime record said pending; Faraz to re-confirm before publish/.test(tgUnit.note), "B: holidays.units 2026 Thanksgiving note carries the provenance sentence");
-  ok(!/Faraz 9\/21 \(evening\)/.test(tgUnit.note), "B: ... and no longer attributes the unit to 'Faraz 9/21 (evening)' outright");
-  ok(!("holidays" in plan.blob && JSON.stringify(plan.blob.holidays).indexOf("recorded by Claude Code") >= 0), "B: the unit note stays out of the blob (holidays notes are dropped)");
+  ok(/confirmed by Faraz 9\/22/.test(tgUnit.note) && !/re-confirm|pending|recorded by Claude Code/i.test(tgUnit.note), "Z FLIP: holidays.units 2026 Thanksgiving note says confirmed 9/22 with no provenance caveat (B: carried the caveat)");
+  ok(!("holidays" in plan.blob && JSON.stringify(plan.blob.holidays).indexOf(tgUnit.note) >= 0), "B: the unit note stays out of the blob (holidays notes are dropped)");
 }
-// flag semantics on fixtures: absent / false -> no marker; true without a note -> marker + provenance only; idempotent
+// flag semantics on SYNTHETIC fixtures (Z: the real seed flags nothing; the feature stays available for future
+// provenance flags): false / absent -> no marker; true -> marker + provenance + note; true without a note -> marker +
+// provenance only; counted, inventoried, in the SQL header; idempotent
 {
   const fx = clone(seed);
   const r26 = fx.existingAssignments.find((a) => a.date === "2026-11-26"), r27 = fx.existingAssignments.find((a) => a.date === "2026-11-27"), r28 = fx.existingAssignments.find((a) => a.date === "2026-11-28");
-  r26.awaitingConfirmation = false; delete r27.awaitingConfirmation; delete r28.note;
+  r26.awaitingConfirmation = false; r27.awaitingConfirmation = true; r28.awaitingConfirmation = true; delete r28.note;   // 11/29 untouched: key absent
   const p2 = IMP.importPlan(fx, { now: NOW }), by2 = {}; p2.scheduleDayRows.forEach((d) => { by2[d.day] = d; });
-  eq(by2["2026-11-26"].note, "seed: faraz-2026-09-21 - " + B_NOTE, "B: awaitingConfirmation: false -> no marker (the note itself is kept)");
-  eq(by2["2026-11-27"].note, "seed: faraz-2026-09-21 - " + B_NOTE, "B: key absent -> no marker");
+  eq(by2["2026-11-26"].note, "seed: faraz-2026-09-21 - " + Z_NOTE, "B: awaitingConfirmation: false -> no marker (the note itself is kept)");
+  eq(by2["2026-11-27"].note, AWAIT_MARKER + "seed: faraz-2026-09-21 - " + Z_NOTE, "B: a flagged row -> marker + 'seed: <source>' + its note (the feature is intact after Z)");
   eq(by2["2026-11-28"].note, AWAIT_MARKER + "seed: faraz-2026-09-21", "B: flag without a note -> marker + provenance only");
-  eq(p2.stats.scheduleDays.awaitingConfirmation, 2, "B: fixture count = 11/28 + 11/29");
-  eq(p2.noteScrub.inventory.filter((e) => e.action === "awaiting-confirmation").map((e) => e.path), ["existingAssignments[2026-11-28].note", "existingAssignments[2026-11-29].note"], "B: fixture inventory");
+  eq(by2["2026-11-29"].note, "seed: faraz-2026-09-21 - " + Z_NOTE, "B: key absent -> no marker");
+  eq(p2.stats.scheduleDays.awaitingConfirmation, 2, "B: fixture count = 11/27 + 11/28");
+  eq(p2.noteScrub.inventory.filter((e) => e.action === "awaiting-confirmation").map((e) => [e.path, e.to, "from" in e]), [["existingAssignments[2026-11-27].note", "schedule_days", false], ["existingAssignments[2026-11-28].note", "schedule_days", false]], "B: fixture inventory (path only, never the note text)");
+  eq(p2.noteScrub.counts.awaitingConfirmation, 2, "B: fixture counts.awaitingConfirmation");
+  ok(IMP.importSql(p2).indexOf("'" + AWAIT_MARKER + "seed: faraz-2026-09-21 - " + Z_NOTE + "'") >= 0, "B: the SQL writes a marked note as a plain literal");
+  ok(/^-- seed generatedOn .*; 73 schedule_days \(2 awaiting confirmation\), /m.test(IMP.importSql(p2)), "B: the SQL header counts the flagged fixture rows");
   eq(IMP.importPlan(seed, { now: NOW }).scheduleDayRows, plan.scheduleDayRows, "B: idempotent - a second plan writes the same notes");
 }
 
@@ -693,7 +702,7 @@ ok(inv.filter((e) => e.path.indexOf("holidays.") === 0).every((e) => e.action ==
 eq(inv.filter((e) => e.path.indexOf("holidays.") === 0).length, IMP.impFindKeys(seed.holidays, NOTE_KEY).length, "one drop per holidays note-like key");
 eq(inv.filter((e) => e.path.indexOf("groupRules.") === 0).length, IMP.impFindKeys(seed.groupRules, NOTE_KEY).length, "one drop per groupRules note-like key");
 ok(inv.every((e) => (e.action === "category" && CATS.indexOf(e.to) >= 0) || (e.action === "drop" && e.to === null) || (e.action === "public" && e.to === "time_off") || (e.action === "private-name" && e.to === null) || (e.action === "awaiting-confirmation" && e.to === "schedule_days")), "inventory actions are category/drop, plus 'public' / 'private-name' for time_off notes (item S) and 'awaiting-confirmation' for flagged existingAssignments (item B)");
-ok(inv.some((e) => e.action === "awaiting-confirmation"), "B: the real seed's inventory lists the awaiting rows");
+ok(!inv.some((e) => e.action === "awaiting-confirmation"), "Z FLIP: the real seed's inventory lists no awaiting row (B: the four Thanksgiving rows, until Faraz confirmed on 9/22)");
 ok(!inv.some((e) => e.action === "private-name"), "the real seed has no public note naming a surgeon");
 eq(inv.map((e) => e.path), inv.map((e) => e.path).slice().sort(), "inventory sorted by path");
 eq(plan.noteScrub.counts, { category: inv.filter((e) => e.action === "category").length, drop: inv.filter((e) => e.action === "drop").length, timeOffPublic: inv.filter((e) => e.action === "public").length, awaitingConfirmation: inv.filter((e) => e.action === "awaiting-confirmation").length }, "counts agree with the inventory");
@@ -894,5 +903,68 @@ const sqlKeep = "jsonb_array_elements(coalesce(call_schedule_data.data -> 'roste
 eq((sqlExt.match(/r ->> 'type' = 'external'/g) || []).length, 2, "the SQL keeps the live externals in the SET and in the idempotency WHERE");
 ok(sqlExt.indexOf(sqlKeep) >= 0, "the SQL appends the live externals the seed lacks to the seed roster: " + sqlExt.split("\n").filter((l) => /'\{roster\}'/.test(l)).join(" | ").slice(0, 400));
 ok(/'\{roster\}', '\[\{"id":"s1"/.test(sqlExt), "...after the seed's roster JSON");
+
+// ---- Prompt 12 Z (9/22 late) ----
+// Faraz, 9/22 late evening: "Thanksgiving 11/26-29 is confirmed - clear the flag." Data only (importer.js untouched):
+// the four existingAssignments rows 2026-11-26..29 lose the awaitingConfirmation key and their note reads
+// "Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening; confirmed 9/22)"; s1.notes, s1.holidays2026.thanksgiving
+// (source / note), holidays.units 2026 and answeredQuestions say confirmed 9/22; open question 8 is struck; a
+// _meta.revisions entry. Assignments, locks, sources (faraz-2026-09-21) and the unit's days are unchanged. Every expected
+// value is restated here, never read back from the importer.
+step("Prompt 12 Z: Thanksgiving confirmed - flag gone, notes plain, holders / locks / unit unchanged; expected live diff");
+const Z_SRC = "faraz-2026-09-21";
+const zRows = seed.existingAssignments.filter((a) => a.date >= "2026-11-26" && a.date <= "2026-11-29");
+eq(zRows.map((a) => a.date), B_ROWS, "Z: the four unit rows are still in the seed");
+zRows.forEach((a) => {
+  eq(Object.prototype.hasOwnProperty.call(a, "awaitingConfirmation"), false, "Z: " + a.date + " has no awaitingConfirmation key at all (gone, not false)");
+  eq([a.primary, a.backup, a.locked, a.source, a.note], [KHAN, null, true, Z_SRC, Z_NOTE], "Z: " + a.date + " = Khan primary, backup open, locked, source faraz-2026-09-21, the confirmed note");
+  eq(Object.keys(a), ["date", "primary", "backup", "source", "locked", "note"], "Z: " + a.date + " key order intact (the flag key simply left)");
+  eq([byDay[a.date].primary_id, byDay[a.date].primary_locked, byDay[a.date].backup_id, byDay[a.date].backup_locked, byDay[a.date].external_cover], [KHAN, true, null, false, null], "Z: " + a.date + " planned row = Khan primary locked, backup open");
+});
+ok(!/pending|re-?confirm|recorded by Claude Code|awaiting/i.test(Z_NOTE), "Z: the row note carries no provenance caveat (one standard: the rule, not the history)");
+// what reaches the anon-readable blob: the s1 holiday source (not a note key) as written, no note, no caveat anywhere
+ok(!/pending|re-?confirm|awaiting|recorded by Claude Code/i.test(JSON.stringify(plan.blob.surgeonRules[KHAN])), "Z: the blob's Khan rules carry no 'pending' / 're-confirm' / 'awaiting' / 'recorded by' anywhere");
+eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.source, seed.surgeonRules[KHAN].holidays2026.thanksgiving.source, "Z: holidays2026.thanksgiving.source reaches the blob as written (source is not a note key)");
+eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.source, "Faraz 9/21 (evening); confirmed by Faraz 9/22 (evening)", "Z: ...and it is the plain attribution");
+ok(!("note" in plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving), "Z: its note is engine documentation (unit / consecutive wording) and stays out of the blob");
+ok(!JSON.stringify(plan.blob.surgeonRules[KHAN].notes || []).includes("Thanksgiving"), "Z: the s1.notes Thanksgiving line is dropped as documentation (only category tokens survive in notes[])");
+eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.role, "primary", "Z: the s1 holiday role is unchanged");
+ok(seed.answeredQuestions.some((t) => /^Thanksgiving 2026:/.test(t) && /confirmed by Faraz 9\/22/.test(t)), "Z: answeredQuestions' Thanksgiving line says confirmed by Faraz 9/22");
+ok(seed.openQuestions.some((t) => /^8\. ~~Thanksgiving 11\/26-29 for Khan~~/.test(t) && /confirmed/.test(t)), "Z: open question 8 is struck through with the answer");
+ok(!seed.openQuestions.concat(seed.answeredQuestions).some((t) => /re-confirm/.test(t)), "Z: no 're-confirm' left in either question list");
+ok(seed._meta.revisions.some((t) => /Prompt 12 item Z/.test(t) && /confirmed/.test(t)), "Z: _meta.revisions records the item");
+ok(plan.blob.settings.seedRevisions.some((t) => /Prompt 12 item Z/.test(t)), "Z: ...and it rides into blob.settings.seedRevisions (the settings=update of the dry run)");
+eq((plan.blob.holidays.units["2026"] || plan.blob.holidays.units[2026]).find((u) => u.name === "Thanksgiving").days, B_ROWS, "Z: the blob's 2026 Thanksgiving unit still spans the four days");
+// the expected live diff for the orchestrator (REPORT-FIRST): live = the rows as they stand after the applied 9/22 import
+// of item B's seed (the four notes marked, the B holiday source in the blob, no Z revision). Rebuilt from the seed itself by
+// putting B's state back, so every count is derived, never copied from a dry run.
+{
+  const seedPreZ = clone(seed);
+  seedPreZ.existingAssignments.forEach((a) => { if (B_ROWS.includes(a.date)) { a.awaitingConfirmation = true; a.note = B_NOTE; } });
+  seedPreZ.surgeonRules[KHAN].holidays2026.thanksgiving.source = "recorded by Claude Code on 2026-09-22 as a 9/21 evening decision; the daytime record said pending; Faraz to re-confirm before publish (Prompt 12 B)";
+  seedPreZ._meta.revisions = seedPreZ._meta.revisions.filter((t) => !/Prompt 12 item Z/.test(t));
+  const planPreZ = IMP.importPlan(seedPreZ, { now: NOW });
+  eq(planPreZ.stats.scheduleDays.awaitingConfirmation, 4, "Z: the rebuilt pre-Z state flags the four rows (item B's live rows)");
+  const livePreZ = { blob: clone(planPreZ.blob), availability: clone(planPreZ.availabilityRows), time_off: clone(planPreZ.timeOffRows), schedule_days: clone(planPreZ.scheduleDayRows) };
+  const dZ = IMP.planDiff(plan, livePreZ);
+  eq(dZ.tables.call_schedule_data.keys, { roster: "unchanged", surgeonRules: "update", groupRules: "unchanged", holidays: "unchanged", settings: "update" }, "Z: blob = surgeonRules (the s1 holiday source) + settings (the revision) update; roster, groupRules, holidays unchanged");
+  eq([dZ.tables.schedule_days.insert, dZ.tables.schedule_days.update, dZ.tables.schedule_days.delete, dZ.tables.schedule_days.blocked, dZ.tables.schedule_days.unchanged], [0, 4, 0, 0, 69], "Z: schedule_days update 4 (the unit's notes), 69 unchanged, nothing inserted / deleted / blocked");
+  eq(dZ.changes, ["11/26 locks/note change", "11/27 locks/note change", "11/28 locks/note change", "11/29 locks/note change"], "Z: the four day changes are note-only (no holder line: no P / B arrow)");
+  eq(dZ.tables.schedule_days.byMonth["2026-11"], { insert: 0, update: 4, unchanged: 21, blocked: 0, delete: 0 }, "Z: November = the four updates + 21 unchanged rows");
+  eq([dZ.tables.availability.insert, dZ.tables.availability.update, dZ.tables.availability.delete, dZ.tables.time_off.insert, dZ.tables.time_off.delete], [0, 0, 0, 0, 0], "Z: availability and time_off untouched");
+  eq([dZ.totalChanges, dZ.totalDeletes, dZ.blocked], [6, 0, []], "Z: total changes 6 = 4 rows + 2 blob keys, no deletes, nothing blocked");
+  B_ROWS.forEach((d) => {
+    const l = livePreZ.schedule_days.find((r) => r.day === d), p = byDay[d];
+    const strip = (r) => { const c = clone(r); delete c.note; return c; };
+    eq(strip(p), strip(l), "Z: " + d + " differs from the live row in the note only (holder, locks, source, version, external_cover equal)");
+    eq(l.note, AWAIT_MARKER + "seed: " + Z_SRC + " - " + B_NOTE, "Z: the live " + d + " note = marker + item B's wording");
+    eq(p.note, "seed: " + Z_SRC + " - " + Z_NOTE, "Z: the planned " + d + " note = the confirmed wording, no marker");
+  });
+  // a unit day edited in the app since (say a backup claimed on 11/26) is BLOCKED, never overwritten; the other three update
+  const liveEdited = clone(livePreZ); const e26 = liveEdited.schedule_days.find((r) => r.day === "2026-11-26"); e26.source = "manual"; e26.version = 2;
+  const dE = IMP.planDiff(plan, liveEdited);
+  eq([dE.tables.schedule_days.update, dE.tables.schedule_days.blocked], [3, 1], "Z: an app-edited live 11/26 row is blocked, the other three unit days update");
+  ok(dE.blocked.length === 1 && /^11\/26 locks\/note change \[BLOCKED: live source 'manual'/.test(dE.blocked[0]), "Z: the blocked line names 11/26 and the live source: " + dE.blocked[0]);
+}
 
 console.log("ok " + n + " assertions");

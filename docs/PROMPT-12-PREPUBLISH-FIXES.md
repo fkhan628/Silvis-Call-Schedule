@@ -499,3 +499,116 @@ as 11/10, 11/12, 11/24 (past-tense framing: "In a month where Acton is held to h
 11/13, 11/24 (11/12 opens to Acton; 11/13 is Philip's alone via Acton's max-consecutive 3 against his locked 11/14-16 and Khan's
 East day). Section 8 is outside this item's doc scope and is taken in from the OneDrive copy - the orchestrator's next doc intake
 appends that clause to item 15; section 3 Acton (the Y bullet) already carries the new set.
+
+## Item Z — Thanksgiving confirmed; clear the flag (Faraz, 9/22 late evening; appended by Claude Code)
+
+Faraz, verbatim: *"Thanksgiving 11/26–29 is confirmed — clear the flag."* (the first of his four late-evening instructions after
+"Go on the 17-change import"; the other three are separate items).
+
+Data only — `importer.js` and `index-source.html` untouched: the awaiting-confirmation marker feature of item B (importer prefix,
+`plan.stats` count, dry-run inventory, the app's "confirm" badge) stays available for future provenance flags; the seed simply
+flags nothing any more.
+
+Seed (`docs/silvis-seed.json`, Edit tool, ASCII, LF, valid JSON, key order intact): the four `existingAssignments` rows
+2026-11-26..29 lose the `awaitingConfirmation` key entirely (not `false` — gone) and their note reads
+`"Thanksgiving unit - Khan primary Thu-Sun (Faraz 9/21 evening; confirmed 9/22)"` — the rule and its attribution, no history, no
+caveat (Faraz's one standard for anything that reaches a row or the blob); assignments (Khan primary, backup open), `locked: true`
+and `source: "faraz-2026-09-21"` unchanged. `surgeonRules.s1.notes[1]` → confirmed by Faraz 9/22 evening (dropped by the importer
+as documentation); `s1.holidays2026.thanksgiving.source` → `"Faraz 9/21 (evening); confirmed by Faraz 9/22 (evening)"` — `source`
+is not a note key, so this string reaches the anon-readable blob as written (it is the `surgeonRules=update` of the dry run; it
+passes the denylist and names no reason); `.note` → confirmed (documentation, dropped); the `holidays.units["2026"]` Thanksgiving
+note → confirmed (holidays notes never reach the blob; the four days unchanged); `answeredQuestions` Thanksgiving line → confirmed
+by Faraz 9/22, open question 8 closed; `openQuestions` 8 struck through with the answer; a `_meta.revisions` entry (it rides into
+`blob.settings.seedRevisions` — the `settings=update`). Item B's own revision entry stays as history. `_meta.generatedOn` stays
+2026-09-21 as in every earlier item.
+
+Rules doc (`docs/SILVIS-CALL-RULES.md`): §3 Khan — item B's commit (846188d) had left two Thanksgiving bullets side by side (the
+original 9/21 line and B's caveat line); they are one bullet now: confirmed by Faraz 9/22 (evening), B's flag history in one
+clause, the marker feature retained, open question #8 closed. §5 — the same commit had duplicated the holiday table's body (a
+second block of six rows without a header, carrying B's cell and the pre-item-U 2027 dates); the table is one body again: the
+U / V rows as they were, the Thanksgiving cell "Faraz 9/21, confirmed by Faraz 9/22 evening; Prompt 12 Z", and the New Year's row
+that only the duplicate block had carried. §8 — item 8 struck through with the answer; the "Answered by Faraz on 9/21"
+paragraph's parenthetical reads "confirmed by Faraz 9/22 evening — open question 8, closed". Nothing else in the doc changed
+(July 4 2027 and Thanksgiving 2027 belong to instruction 4's item).
+
+Tests (test-first; each file run against the unchanged seed before the change).
+`test/importer.test.js`: the item-B block is flipped in place (every flipped assertion says "Z FLIP" and what B expected) and the
+flag semantics move to SYNTHETIC rows so the feature stays covered — 11/27 flagged with its note → marker + provenance + note,
+11/28 flagged without a note → marker + provenance only, 11/26 `false` and 11/29 absent → no marker; count 2, inventory paths,
+the SQL header "(2 awaiting confirmation)" and the marked literal, idempotent; the scrub-inventory pin at (5) flipped ("lists no
+awaiting row"). A Z block at the end restates every value: no key at all on the four rows, key order, holder / lock / source /
+note per row and per planned row, the row note free of any caveat, the blob's Khan rules free of "pending" / "re-confirm" /
+"awaiting" / "recorded by", `holidays2026.thanksgiving.source` in the blob = the plain attribution with its note absent, the
+s1.notes Thanksgiving line dropped, answered / open questions, the revision in `blob.settings.seedRevisions`, the blob's unit
+days. It then pins the expected live diff by rebuilding item B's live state from the seed itself (flag + B's note back on the
+four rows, B's holiday source, the Z revision removed): `call_schedule_data` keys `roster=unchanged, surgeonRules=update,
+groupRules=unchanged, holidays=unchanged, settings=update`; `schedule_days` insert 0, update 4, delete 0, blocked 0, unchanged 69;
+`changes` = the four `11/2x locks/note change` lines (no holder arrow); November update 4 / unchanged 21; availability and
+time_off 0; total 6, no deletes, nothing blocked; per day the planned row equals the live row with the note stripped, the live
+note = marker + B's wording, the planned note = the confirmed wording; an app-edited live 11/26 (source manual, v2) is BLOCKED
+while the other three update.
+Fail-before (unchanged seed): `AssertionError [ERR_ASSERTION]: Z FLIP: no existingAssignments row carries awaitingConfirmation:
+true (B: the four Thanksgiving rows did)` — actual `['2026-11-26', '2026-11-27', '2026-11-28', '2026-11-29']`, expected `[]`.
+After: `ok 689 assertions` (was 634).
+`test/ui/smoke.mjs`: the two 11/26 pins flip to "no confirm badge" (grid cell and day editor; the review B-2 badge-geometry check
+leaves with the badge), each failure message naming the item-Z expected drift; the 11/25 pins are unchanged. Against the LIVE
+project the two 11/26 pins FAIL as expected drift until the orchestrator applies this item (the live notes still start with the
+marker from the item-B import); SMOKE_FIXTURE=1 serves the seed through the importer and passes them.
+
+Importer dry run (read-only, `node scripts/import-seed.js --dry-run`, the REPORT-FIRST artefact): `live rows before:
+{"call_schedule_data":1,"schedule_days":73,"availability":48,"time_off":7}`; `call_schedule_data 'main': roster=unchanged,
+surgeonRules=update, groupRules=unchanged, holidays=unchanged, settings=update`; `schedule_days: insert 0, update 4, delete 0,
+unchanged 69` — `2026-11: insert 0, update 4, delete 0, unchanged 21` — `11/26 locks/note change`, `11/27 locks/note change`,
+`11/28 locks/note change`, `11/29 locks/note change`; `availability: insert 0, update 0, delete 0, unchanged 48`; `time_off:
+insert 0, delete 0, unchanged 7`; `Total changes: 6` — exactly the diff the Z block derives. Nothing was applied; the orchestrator
+shows Faraz this diff and applies it with the other late-evening items.
+
+Gates: `npm test` — every file green (`ok 1563`, `ok 83`, data-layer, schema, `ok 689` importer, week-rows, exports, totals,
+`ok 326` holidays) and the generator regression passes all of its assertions (`ok 276927 assertions ...`) but on this shared
+machine it ran over the file's 10 s budget every time (15.0–16.6 s), so the gate line read `FAIL [range - seed - day -]: over
+the 10000 ms budget`. Verified it is the machine, not this item: a read-only `git archive HEAD` copy of the unchanged head, timed
+alternately with the worktree and with a copy carrying only the Z seed, read 9.5 / 10.4 / 11.0 / 14.2 / 15.1 s (head) and
+11.9 / 16.0 s (head code + Z seed) — the seed change is note text the engine never reads, and the spread is the same for both.
+With `SILVIS_GEN_BUDGET_MS=40000` (other agents on the machine; the budget in the file is untouched): `ok 276927 assertions, 50
+seeds x 4 ranges at bestOf 6/5/2/2 (R4 on the even seeds: 25 runs) + 50 fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200
++ 9 fixture runs (15505 ms total; budget 40000 ms via SILVIS_GEN_BUDGET_MS)`. `node build.js`: `OK build complete` (APP_VERSION
+2026.09.22n locally; `index.html` / `version.json` restored with `git checkout --`, never committed).
+Smoke (`PLAYWRIGHT_DIR=<tooling> npm run smoke`, live project, writes intercepted): `SMOKE FAILED: 5 problem(s)` — four are this
+item's expected drift until the orchestrator applies the seed: `FAIL 2026-11-26 grid cell still shows the 'confirm' badge (badges
+["confirm"]) - the live row note still starts with the 'awaiting confirmation - ' marker until the item-Z seed import is applied
+(expected drift)`, `FAIL day editor 2026-11-26: 'confirm' badge still shown (1) - expected drift ...`, `FAIL Import dry run:
+expected zero changes against the live rows: Total changes: 6 | Total changes: 6` and `FAIL Import apply dry run (extra
+2026-12-03): expected 2 changes (blob surgeonRules + 1 availability insert): Total changes: 7 | ... schedule_days: insert 0, update
+4 ...` (6 + the harness's extra row). The fifth, `FAIL Import apply: result panel wrong (expected 1 availability insert of 37 plan
+rows, no schedule_days change, 4 Thanksgiving day(s) kept ...): Import applied - blob merged; availability inserted 1, skipped 48;
+time_off inserted 0, skipped 7; schedule_days inserted 0, updated 0, kept (app-edited) 15.`, is PRE-EXISTING on the head and not
+this item's: the check hard-codes `availability inserted 1, skipped 36` from Prompt 6 (commit 346e7be, a 37-row plan) while the
+head's plan — and the live table — hold 48 availability rows (item Y), and its "kept" count names only the four Thanksgiving days
+while the harness has by then edited 15 days in-session; it fails identically with `SMOKE_FIXTURE=1`, where this item's rows equal
+the fixture rows. Item Z owns only the two 2026-11-26 badge pins, so that stale pin is left for a smoke re-baseline (open question
+below). `SMOKE_FIXTURE=1 npm run smoke` (the seed served through the importer): the four badge pins pass — `ok 2026-11-26 grid cell
+shows no 'confirm' badge (Thanksgiving confirmed by Faraz 9/22, Prompt 12 Z)`, `ok 2026-11-25 grid cell shows no 'confirm'
+badge`, `ok day editor 2026-11-26: no 'confirm' badge (...)`, `ok day editor 2026-11-25: no 'confirm' badge` — and the Import dry
+run reads 0 changes; the run's only FAIL is that same pre-existing Import-apply pin (`SMOKE FAILED: 1 problem(s)`).
+
+Decisions: (1) the row note is exactly the brief's wording — attribution only, no reason, no history; (2)
+`holidays2026.thanksgiving.source` reaches the blob, so it is a plain attribution, not a sentence; (3) the §3 / §5 duplicates left
+by item B's commit are collapsed (one bullet, one table body with the New Year's row kept); (4) the `holidays.units["2026"]`
+Thanksgiving note is updated although the brief did not name it — B's review B-3 made it mirror the rows, and it never reaches the
+blob; (5) the §8 "Answered by Faraz on 9/21" parenthetical is updated as part of item 8; (6) `_meta.generatedOn` untouched;
+(7) the regression's 10 s budget is untouched — the env-var run is reported with the A/B evidence.
+Open: the smoke's Import-apply pin (`skipped 36`, `kept 4`) needs a re-baseline against the head's 48-row plan and the harness's
+in-session edit count — outside item Z's files.
+
+Review (fix stage, 9/22 late): (Z-1, minor, applied) the two 11/26 badge pins no longer label every `confirm` badge as
+"expected drift" - `liveByDay` is built after those pins, so the harness reads the 2026-11-26 row note itself (the fixture row,
+or one read-only anon GET of the live row) and the FAIL message says `expected drift ... (the row note still starts with the
+'awaiting confirmation - ' marker)` only while the marker is present, `REGRESSION: the row note carries no marker (...)` once the
+seed is applied, and `could not be read, so drift vs regression is undetermined` when the read fails; the ok lines are unchanged.
+(Z-2, minor, skipped) re-attaching review B-2's runtime badge-geometry check to a synthetic flagged fixture row is not done: the
+fixture rows are served through `importer.importPlan` from the unchanged `docs/silvis-seed.json`, and the fixture-mode `Import
+seed dry run ... 0 changes against the live rows` pin (plus the app-edited-day counts of the apply run) relies on those rows being
+exactly the seed's - a flagged 2026-11-27 fixture row would read as `schedule_days: update 1` and fail a pin outside item Z's two
+owned pins. The badge rendering stays pinned statically in `test/data-layer.test.js` (13px `?` square via `badge()`, gutter widened
+per badge, the word `confirm` in the day editor) and the marker semantics on synthetic flagged rows in `test/importer.test.js`; a
+runtime geometry check needs its own fixture pass (a flagged clone rendered before the import checks) - a smoke item of its own.

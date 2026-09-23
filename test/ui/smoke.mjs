@@ -892,36 +892,42 @@ try {
   await page.screenshot({ path: path.join(OUT, "calendar-nov-2026.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-nov-2026.png");
 
-  // ---- Prompt 12 B: the four Thanksgiving rows await Faraz's re-confirmation -> "confirm" badge ----
-  // The badge follows the schedule_days note: the importer writes 'awaiting confirmation - seed: ...' on a row
-  // flagged awaitingConfirmation in the seed, and a LOCKED day whose note starts with that marker shows the badge
-  // in the grid cell and beside the padlock in the day editor. 11/25 (Khan's separate 9/22 one-off) is not flagged.
-  // Against the LIVE project these two checks FAIL as expected drift until the item-B seed import is applied
-  // (same as the Import dry run checks); SMOKE_FIXTURE=1 serves the seed through the importer and must pass.
+  // ---- Prompt 12 B / Z: the "confirm" badge follows the schedule_days note; Thanksgiving is confirmed -> no badge ----
+  // The importer writes 'awaiting confirmation - seed: ...' on a row flagged awaitingConfirmation in the seed, and a
+  // LOCKED day whose note starts with that marker shows the badge in the grid cell and beside the padlock in the day
+  // editor. Item B flagged the four Thanksgiving rows 11/26-29; Faraz confirmed them on 9/22 (late evening, Prompt 12 Z),
+  // so the seed flags nothing and NO day shows the badge - 11/26 (the unit) and 11/25 (Khan's separate 9/22 one-off)
+  // alike; the marker feature itself stays in the app (test/data-layer.test.js) for future provenance flags.
+  // Against the LIVE project the two 11/26 checks FAIL as expected drift until the item-Z seed import is applied (the
+  // live notes still carry the marker from the item-B import - same as the Import dry run checks); SMOKE_FIXTURE=1
+  // serves the seed through the importer and must pass.
   const tg26 = novCells.find(c => c.day === "2026-11-26"), tg25 = novCells.find(c => c.day === "2026-11-25");
-  if (!tg26 || !tg26.badges.includes("confirm")) fail("2026-11-26 grid cell shows no 'confirm' badge (badges " + JSON.stringify(tg26 && tg26.badges) + ") - the live row note lacks the 'awaiting confirmation - ' marker until the item-B seed import is applied (expected drift)");
-  else {
-    ok("2026-11-26 grid cell shows the 'confirm' badge (awaiting the scheduler's confirmation)");
-    // review B-2: the badge is a 13px square in the cell's badge gutter (like E / F) and must not be drawn over the
-    // holiday label - the header reserves the gutter, so the label's box ends before the badge starts.
-    const tgGeom = await page.$eval('[data-day="2026-11-26"]', el => {
-      const r = (x) => { if (!x) return null; const q = x.getBoundingClientRect(); return { left: Math.round(q.left), right: Math.round(q.right), width: Math.round(q.width), height: Math.round(q.height) }; };
-      const h = el.querySelector(".cal-hol"), b = el.querySelector("[data-badge=confirm]");
-      return { hol: r(h), holText: h ? h.textContent : null, badge: r(b), badgeText: b ? b.textContent : null };
-    });
-    if (!tgGeom.hol || !tgGeom.badge) fail("2026-11-26 grid cell: holiday label / badge geometry unreadable: " + JSON.stringify(tgGeom));
-    else if (tgGeom.badge.width > 14 || tgGeom.badge.height > 14 || tgGeom.hol.right > tgGeom.badge.left) fail(`2026-11-26 grid cell: the 'confirm' badge (${tgGeom.badge.width}x${tgGeom.badge.height} at left ${tgGeom.badge.left}) overlaps or outgrows the holiday label '${tgGeom.holText}' (right ${tgGeom.hol.right}) - it must be a 13px square in the badge gutter beside E / F`);
-    else ok(`2026-11-26 grid cell: 'confirm' badge is a ${tgGeom.badge.width}x${tgGeom.badge.height} '${tgGeom.badgeText}' square at left ${tgGeom.badge.left}, holiday label '${tgGeom.holText}' ends at ${tgGeom.hol.right} (no overlap)`);
-  }
+  // review Z-1: the "expected drift" caveat is derived from the row the app rendered (fixture row, or one read-only anon
+  // read of the live 2026-11-26 row), never asserted blindly - once the item-Z seed is applied live the note carries no
+  // marker, and a badge on 11/26 is then a REGRESSION of the badge predicate, not drift.
+  const tg26Note = await (async () => {
+    try {
+      if (fixture) { const r = fixture.schedule_days.find(x => x.day === "2026-11-26"); return r ? (r.note || "") : null; }
+      const res = await fetch(`https://${SUPABASE_HOST}/rest/v1/schedule_days?day=eq.2026-11-26&select=note`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+      if (!res.ok) return null;
+      const rows = await res.json();
+      return Array.isArray(rows) && rows.length ? (rows[0].note || "") : null;
+    } catch (e) { return null; }
+  })();
+  const tg26Caveat = tg26Note === null ? " - the 2026-11-26 row note could not be read, so drift vs regression is undetermined"
+    : /^awaiting confirmation - /.test(tg26Note) ? " - expected drift until the item-Z seed import is applied live (the row note still starts with the 'awaiting confirmation - ' marker)"
+    : " - REGRESSION: the row note carries no marker (" + JSON.stringify(tg26Note.slice(0, 80)) + "), so the badge predicate is wrong";
+  // Prompt 12 Z FLIP (was: the badge expected on 11/26 with its 13px-gutter geometry check, item B / review B-2)
+  if (!tg26) fail("2026-11-26 grid cell not found in the November grid");
+  else if (tg26.badges.includes("confirm")) fail("2026-11-26 grid cell still shows the 'confirm' badge (badges " + JSON.stringify(tg26.badges) + ")" + tg26Caveat);
+  else ok("2026-11-26 grid cell shows no 'confirm' badge (Thanksgiving confirmed by Faraz 9/22, Prompt 12 Z)");
   if (tg25 && tg25.badges.includes("confirm")) fail("2026-11-25 (Khan's one-off, not flagged) must not show a 'confirm' badge"); else ok("2026-11-25 grid cell shows no 'confirm' badge");
   await page.click('[data-day="2026-11-26"]');
   await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
-  const edBadge26 = page.locator("[data-testid=day-editor] [data-testid=confirm-badge]");
-  const edBadge26Count = await edBadge26.count();
-  const edBadge26Visible = edBadge26Count > 0 && await edBadge26.first().isVisible();
-  const edBadge26Title = edBadge26Count > 0 ? await edBadge26.first().getAttribute("title") : null;
-  if (!edBadge26Visible || edBadge26Title !== "awaiting the scheduler's confirmation") fail("day editor 2026-11-26: 'confirm' badge missing or wrong (count " + edBadge26Count + ", visible " + edBadge26Visible + ", title " + JSON.stringify(edBadge26Title) + ") - expected drift until the item-B seed import is applied live");
-  else ok("day editor 2026-11-26: 'confirm' badge visible beside the padlock, title 'awaiting the scheduler's confirmation'");
+  const edBadge26Count = await page.locator("[data-testid=day-editor] [data-testid=confirm-badge]").count();
+  // Prompt 12 Z FLIP (was: badge visible beside the padlock with title "awaiting the scheduler's confirmation", item B)
+  if (edBadge26Count) fail("day editor 2026-11-26: 'confirm' badge still shown (" + edBadge26Count + ")" + tg26Caveat);
+  else ok("day editor 2026-11-26: no 'confirm' badge (Thanksgiving confirmed by Faraz 9/22, Prompt 12 Z)");
   await page.keyboard.press("Escape");
   await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
   await page.click('[data-day="2026-11-25"]');
