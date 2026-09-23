@@ -72,7 +72,7 @@ const deny = (who, type, ids, why) => {
   assert.ok(r.length > 0, "refusal is a sentence");
   return r;
 };
-const CATS = ["schedule_published", "manual_edit", "trade_proposed", "trade_accepted", "trade_declined", "trade_applied", "vacation_logged", "shift_reminder", "open_shifts", "shift_claimed", "test"];
+const CATS = ["schedule_published", "manual_edit", "trade_proposed", "trade_accepted", "trade_declined", "trade_applied", "vacation_logged", "shift_reminder", "open_shifts", "shift_claimed", "offers_reminder", "offers_closed", "test"];
 
 check("senderRole: viewer, a missing profile row, an unknown role and an unlinked surgeon are refused; admin, scheduler and a linked surgeon pass", () => {
   if (!senderRole) throw new Error("gate block did not load");
@@ -102,9 +102,13 @@ check("sendGate: a surgeon never broadcasts - targetIds absent is refused for ev
   CATS.forEach((t) => deny(surgeon, t, null, "surgeon broadcast"));
 });
 
-check("sendGate: a surgeon may not send the scheduler's categories (schedule_published, manual_edit, open_shifts, shift_reminder) or an unknown one, even targeted at himself", () => {
+check("sendGate: a surgeon may not send the scheduler's categories (schedule_published, manual_edit, open_shifts, shift_reminder, offers_reminder, offers_closed) or an unknown one, even targeted at himself", () => {
   if (!sendGate) throw new Error("gate block did not load");
-  ["schedule_published", "manual_edit", "open_shifts", "shift_reminder", "made_up"].forEach((t) => { deny(surgeon, t, ["s3"], t); deny(surgeon, t, ["s1"], t); });
+  ["schedule_published", "manual_edit", "open_shifts", "shift_reminder", "offers_reminder", "offers_closed", "made_up"].forEach((t) => { deny(surgeon, t, ["s3"], t); deny(surgeon, t, ["s1"], t); });
+  // Prompt 14 part 4 x the gate: the offers categories name their senders (the Periods Remind button under a
+  // scheduler session; the daily offers cron never passes through this gate) - the refusal says so
+  ["offers_reminder", "offers_closed"].forEach((t) => assert.ok(/scheduler \(Periods -> Remind\) or the daily offers cron only/.test(deny(surgeon, t, ["s3"], t)), t + " refusal names the two senders"));
+  [admin, sched].forEach((who) => ["offers_reminder", "offers_closed"].forEach((t) => { allow(who, t, ["s5"]); allow(who, t, null); }));
 });
 
 check("sendGate: trade_* from a surgeon -> at most two ids and the caller among them (the app sends [from, to])", () => {

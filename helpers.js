@@ -2097,6 +2097,57 @@ function offerTimeline(period, rules) {
   return { start_day: start, end_day: end, length_months: months, offers_close_at: close, publish_by: publish, remind_on: remind.map(n => suAddDays(close, -n)).sort(), presets: Array.isArray(Rz.presets) ? Rz.presets.slice() : OP_PERIOD_DEFAULTS.presets.slice() };
 }
 
+/* ═══ Offer timeline - the daily cron's date maths (Prompt 14 P4, 9/23) ═══
+ * daily-reminder mode 'offers' runs these once a morning (13:00 UTC = 08:00 CDT / 07:00 CST). The SAME maths is
+ * mirrored in plain JavaScript between the '// @offerTimeline-mirror-start' / '-end' markers of
+ * edge-functions/daily-reminder/index.ts; test/offers-timeline.test.js runs both against
+ * test/fixtures/offer-timeline.json. Change the three together. Nothing here reads the clock or the network. */
+// offerPoolIds(roster) -> the ids the timeline speaks to: active roster entries that are not outside surgeons
+// (type 'external' - written in by hand, never asked for offers), in roster order.
+function offerPoolIds(roster) {
+  if (!Array.isArray(roster)) return [];
+  const out = [];
+  roster.forEach(r => { if (r && typeof r === "object" && r.id && r.active !== false && r.type !== "external") out.push(String(r.id)); });
+  return out;
+}
+// offerRollcall(period, offers, ids) -> [{ id, status, offered }] in ids order: status = offerStatus (submitted /
+// rules_only / not_started) and offered = the number of DISTINCT days the person offered inside [start_day, end_day]
+// (end inclusive; a timestamp-shaped day is read by its date; a role_pref never counts twice); [] when the period
+// has no usable dates or ids is not a list. The reminder goes to status not_started; the close summary names all.
+function offerRollcall(period, offers, ids) {
+  const b = opBounds(period);
+  if (!b || !Array.isArray(ids)) return [];
+  const days = Object.create(null);
+  (Array.isArray(offers) ? offers : []).forEach(o => {
+    if (!o || typeof o !== "object" || !o.person_id) return;
+    const d = opDay(o.day);
+    if (!d || d < b.start || d > b.end) return;
+    (days[o.person_id] = days[o.person_id] || new Set()).add(d);
+  });
+  return ids.map(id => ({ id: String(id), status: offerStatus(period, offers, String(id)), offered: days[id] ? days[id].size : 0 }));
+}
+// offerCronPlan(period, today, rules) -> what the daily cron does for one period on `today` (the Central date):
+// { action: 'remind' | 'close' | 'none', reason, days_to_close, offers_close_at, remind_on }.
+//   close  - today >= offers_close_at and the period is still upcoming (reason close:today / close:overdue): the
+//            status flips to closed and the scheduler gets the summary; a 0-day reminder never fires on that day.
+//   remind - today is one of offerTimeline's remind_on days (reason remind:<days before the close>).
+//   none   - otherwise (no-trigger), or for any status other than upcoming (status:<x>); an absent status reads
+//            upcoming (the cron only reads upcoming rows anyway).
+// null for a non-ISO today or a period without usable dates (the cron reports the row and moves on). Who is
+// actually mailed is offerRollcall's answer (not_started only); this only says whether today is a day.
+function offerCronPlan(period, today, rules) {
+  const t = offerTimeline(period, rules);
+  const d = opDay(today);
+  if (!t || !d) return null;
+  const close = t.offers_close_at, daysToClose = suDaysBetween(d, close);
+  const status = period.status === undefined || period.status === null ? "upcoming" : String(period.status);
+  const base = { action: "none", reason: "no-trigger", days_to_close: daysToClose, offers_close_at: close, remind_on: t.remind_on };
+  if (status !== "upcoming") return Object.assign(base, { reason: "status:" + status });
+  if (d >= close) return Object.assign(base, { action: "close", reason: daysToClose === 0 ? "close:today" : "close:overdue" });
+  if (t.remind_on.indexOf(d) >= 0) return Object.assign(base, { action: "remind", reason: "remind:" + daysToClose });
+  return base;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     reviewStateFor, derivedEastVacations,
@@ -2120,5 +2171,6 @@ if (typeof module !== "undefined" && module.exports) {
     buildErCallPanelsHTML, buildErCallPanelsText, buildErCallPanelsDocument, erPanelSpan,
     defaultHolidayUnits, huNthWeekday, HU_ORDER, HU_STANDARD_TIER,
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
+    offerPoolIds, offerRollcall, offerCronPlan,
   };
 }

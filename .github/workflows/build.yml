@@ -44,6 +44,10 @@ on:
       - "test/fixtures/last-generate-diagnostics.json"
       - "test/schema.test.js"
       - "test/offers.test.js"
+      - "test/offers-timeline.test.js"
+      - "test/fixtures/offer-timeline.json"
+      - "edge-functions/daily-reminder/index.ts"
+      - "edge-functions/send-notification/index.ts"
       - "importer.js"
       - "test/generator-regression.js"
       - "test/nov-backups.test.js"
@@ -171,6 +175,11 @@ jobs:
       # parity with rules.buildContext, seed pins, the claim-as-offer migration pins.
       - name: Offer period tests
         run: node test/offers.test.js
+
+      # Offer timeline (Prompt 14 P4): the daily cron's date maths in helpers.js and its plain-JS mirror in
+      # edge-functions/daily-reminder/index.ts against ONE fixture; send-notification / README / guide pins.
+      - name: Offer timeline tests + edge-function mirror
+        run: node test/offers-timeline.test.js
 
       # send-notification's role/party gate (audit RLS-1): the plain-JS gate
       # block is extracted from the function source and run against a table

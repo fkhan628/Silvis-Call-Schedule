@@ -979,6 +979,33 @@ the Central today filter, the vacation skip, the retired rows and months, Octobe
 unknown / exact / blocked diffs, an app-entered offer never deleted, the offers-aware ctx), `test/data-layer.test.js`
 P5 block (snapshot scope).
 
+**Notifications — the timeline runs itself (part 4, built 9/23).** `send-notification` gains the categories
+`offers_reminder` and `offers_closed`: the client composes the words, both honour `schedule_updates_email`, recipients
+are `user_profiles` rows by `person_id` like every other category (the Periods "Remind" button of part 3 sends
+`offers_reminder` with a session to one `not_started` surgeon; never a broadcast). `daily-reminder` gains mode
+`offers` behind the same `x-cron-secret` gate and `dryRun` contract as its other modes, posted once a morning by the
+pg_cron job `silvis-offers-daily` (`0 13 * * *` = 08:00 CDT / 07:00 CST, Vault secret, body `{"mode":"offers"}`;
+`edge-functions/README.md` §4). For every `call_periods` row still `upcoming` it runs the timeline maths: on a
+reminder day (`offers_close_at` − each `groupRules.offerPeriods.remindDaysBeforeClose`, default 14 and 3) it e-mails
+the pool members whose derived status is `not_started` — "your dates for <label> freeze on <date> — paint them in
+the app or choose 'go by my rules'"; from `offers_close_at` on it flips the row to `closed` by compare-and-swap
+(`status = upcoming` → `closed`, so a parallel close or the app's "Close now" wins and no second summary goes out),
+writes the audit row `period.close` (`actor_id` `cron`) and e-mails the scheduler / admin accounts the roll call —
+who submitted how many days, who is rules-only, who never answered (the reminder honours `schedule_updates_email`;
+the roll call is unconditional — an operational notice to whoever runs the period, so a period never closes with
+nobody told; the reminder's footer names the effective offsets, never a literal). It never generates or publishes, never writes
+`call_offers`, and a dry run composes without writing or sending; responses carry person ids and counts, never an
+address. **The date maths lives once:** `helpers.offerCronPlan(period, today, rules)` (remind / close / none with the
+reason and `days_to_close`; close beats a 0-day reminder; any status but `upcoming` is `none`), `offerRollcall(period,
+offers, ids)` (status per `offerStatus` + distinct offered days inside the period) and `offerPoolIds(roster)` (active,
+non-external), built on `offerTimeline`; the edge function carries a plain-JavaScript mirror between the
+`@offerTimeline-mirror-start` / `-end` markers, and `test/offers-timeline.test.js` runs helpers and the extracted
+mirror against the same `test/fixtures/offer-timeline.json` (plus 400 seeded random periods), then pins the
+categories, the gate and dispatch, the read set (periods, offers, blob, `user_profiles`, `notification_preferences` —
+never an anon-readable table for recipients), the CAS + dry-run guards, the README cron statement and this
+paragraph. For the first period (close 2026-10-02) the reminder days are 2026-09-18 (past) and 2026-09-29, and the
+close summary goes out on 2026-10-02 — the cron must be live by 9/29 for Fierce (`not_started`) to be reminded.
+
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 
 *Status 2026-09-23: merged to `main` (branch `feat/east-vacations`, head `19b9efc`) and live on Pages since build `2026.09.23g`

@@ -47,6 +47,28 @@
 // through, source: 'cron' } } that the board's "last announced" reads. dryRun
 // composes, sends nothing and writes nothing. None open -> 200 { open: 0 }.
 //
+// Mode "offers" (Prompt 14 part 4, 2026-09-23) - body { mode: "offers" }, same
+// x-cron-secret gate, same dryRun contract; any other mode value is a 400 and
+// an absent mode (or "reminder") is the hourly reminder above, unchanged. A
+// daily pg_cron job posts it at 13:00 UTC (08:00 CDT / 07:00 CST). For every
+// call_periods row still 'upcoming' it runs the timeline maths mirrored from
+// helpers.js (offerCronPlan / offerRollcall between the @offerTimeline-mirror
+// markers, pinned to test/fixtures/offer-timeline.json by
+// test/offers-timeline.test.js): on a reminder day (offers_close_at minus each
+// groupRules.offerPeriods.remindDaysBeforeClose, default 14 and 3) it e-mails
+// the pool members whose derived status is not_started ("your dates for
+// <label> freeze on <date> - paint them in the app or choose 'go by my
+// rules'"); from offers_close_at on it flips the row to 'closed' (compare-and-
+// swap on status = upcoming), writes the audit row period.close and e-mails the
+// scheduler / admin accounts the roll call (who submitted how many days, who
+// is rules-only, who never answered). Addresses come from user_profiles by
+// person_id with the service role; schedule_updates_email = false opts a
+// surgeon out of the reminder, while the close roll call to the scheduler /
+// admin accounts is unconditional (an operational notice, so a period never
+// closes unseen); statuses are keyed by person_id. It never generates or
+// publishes and never writes call_offers. dryRun composes, sends nothing,
+// writes nothing.
+//
 // Secrets (by NAME): CRON_SECRET, RESEND_API_KEY, NOTIFICATION_FROM_EMAIL
 // (required - no hardcoded fallback sender); SUPABASE_URL and
 // SUPABASE_SERVICE_ROLE_KEY are injected by Supabase.
@@ -490,6 +512,316 @@ async function runOpenShifts(now: { ymd: string; hour: number; weekday: string }
 }
 
 // ---------------------------------------------------------------------------
+// Mode "offers" (Prompt 14 part 4) - the period timeline runs itself
+// ---------------------------------------------------------------------------
+// @offerTimeline-mirror-start
+// MIRROR of helpers.js offerTimeline(period, rules), offerCronPlan(period,
+// today, rules), offerRollcall(period, offers, ids), offerPoolIds(roster) and
+// offerStatus(period, offers, personId) - written as plain JavaScript on
+// purpose (no type annotations, nothing from outside this block):
+// test/offers-timeline.test.js extracts the text between the two markers,
+// evaluates it with new Function and runs it against
+// test/fixtures/offer-timeline.json, expecting results identical to helpers.js
+// (plus 400 seeded random periods). Change helpers.js, this block and the
+// fixture together. Dates are UTC-based here (the runtime has no useful local
+// zone); the caller passes the Central calendar date. One deliberate
+// difference: a Date object is formatted in UTC here, in local time in
+// helpers.js - PostgREST hands this function strings, never Dates.
+const OTM_DEFAULTS = { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [14, 3] }; // = docs/silvis-seed.json groupRules.offerPeriods
+function otmPad2(n) { return String(n).padStart(2, "0"); }
+function otmDate(s) { const p = String(s).split("-").map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])); }
+function otmFmt(d) { return d.getUTCFullYear() + "-" + otmPad2(d.getUTCMonth() + 1) + "-" + otmPad2(d.getUTCDate()); }
+function otmAdd(iso, n) { const d = otmDate(iso); d.setUTCDate(d.getUTCDate() + n); return otmFmt(d); }
+function otmDaysBetween(a, b) { return Math.round((otmDate(b).getTime() - otmDate(a).getTime()) / 86400000); }
+function otmDay(v) {
+  if (v instanceof Date && !isNaN(v.getTime())) return otmFmt(v);
+  const s = typeof v === "string" ? v.slice(0, 10) : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+function otmBounds(p) {
+  if (!p || typeof p !== "object") return null;
+  const a = otmDay(p.start_day !== undefined ? p.start_day : p.start), b = otmDay(p.end_day !== undefined ? p.end_day : p.end);
+  return a && b && b >= a ? { start: a, end: b } : null;
+}
+function otmList(v) {
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { return []; } }
+  return Array.isArray(v) ? v : [];
+}
+function otmStatus(period, offers, personId) {
+  const b = otmBounds(period);
+  if (!b) return null;
+  const rows = Array.isArray(offers) ? offers : [];
+  for (let i = 0; i < rows.length; i++) {
+    const o = rows[i];
+    if (!o || o.person_id !== personId) continue;
+    const d = otmDay(o.day);
+    if (d && d >= b.start && d <= b.end) return "submitted";
+  }
+  return otmList(period.rules_only_ids).indexOf(personId) >= 0 ? "rules_only" : "not_started";
+}
+function otmEndOfPeriod(start, months) {
+  const y = +start.slice(0, 4), m = +start.slice(5, 7);
+  const idx = m + months - 1, yy = y + Math.floor((idx - 1) / 12), mm = ((idx - 1) % 12) + 1;
+  let end = otmFmt(new Date(Date.UTC(yy, mm, 0)));
+  const dow = otmDate(end).getUTCDay(); // 0 = Sun .. 6 = Sat
+  if (dow === 5 || dow === 6) end = otmAdd(end, 7 - dow);
+  return end;
+}
+function otmTimeline(period, rules) {
+  const start = period && typeof period === "object" ? otmDay(period.start_day !== undefined ? period.start_day : period.start) : null;
+  if (!start) return null;
+  const Rz = Object.assign({}, OTM_DEFAULTS, rules && typeof rules === "object" ? rules : {});
+  const num = (v, d) => (typeof v === "number" && isFinite(v) && v > 0 ? v : d);
+  const months = num(period.length_months !== undefined ? period.length_months : period.lengthMonths, num(Rz.lengthMonths, OTM_DEFAULTS.lengthMonths));
+  const closeW = num(Rz.closeWeeksBeforeStart, OTM_DEFAULTS.closeWeeksBeforeStart), pubW = num(Rz.publishWeeksBeforeStart, OTM_DEFAULTS.publishWeeksBeforeStart);
+  const remind = (Array.isArray(Rz.remindDaysBeforeClose) ? Rz.remindDaysBeforeClose : OTM_DEFAULTS.remindDaysBeforeClose).filter((n) => typeof n === "number" && isFinite(n) && n >= 0);
+  const end = otmDay(period.end_day !== undefined ? period.end_day : period.end) || otmEndOfPeriod(start, months);
+  const close = otmDay(period.offers_close_at) || otmAdd(start, -7 * closeW);
+  const publish = otmDay(period.publish_by) || otmAdd(start, -7 * pubW);
+  return { start_day: start, end_day: end, length_months: months, offers_close_at: close, publish_by: publish, remind_on: remind.map((n) => otmAdd(close, -n)).sort(), presets: Array.isArray(Rz.presets) ? Rz.presets.slice() : OTM_DEFAULTS.presets.slice() };
+}
+function otmPoolIds(roster) {
+  if (!Array.isArray(roster)) return [];
+  const out = [];
+  roster.forEach((r) => { if (r && typeof r === "object" && r.id && r.active !== false && r.type !== "external") out.push(String(r.id)); });
+  return out;
+}
+function otmRollcall(period, offers, ids) {
+  const b = otmBounds(period);
+  if (!b || !Array.isArray(ids)) return [];
+  const days = Object.create(null);
+  (Array.isArray(offers) ? offers : []).forEach((o) => {
+    if (!o || typeof o !== "object" || !o.person_id) return;
+    const d = otmDay(o.day);
+    if (!d || d < b.start || d > b.end) return;
+    (days[o.person_id] = days[o.person_id] || new Set()).add(d);
+  });
+  return ids.map((id) => ({ id: String(id), status: otmStatus(period, offers, String(id)), offered: days[id] ? days[id].size : 0 }));
+}
+function otmCronPlan(period, today, rules) {
+  const t = otmTimeline(period, rules);
+  const d = otmDay(today);
+  if (!t || !d) return null;
+  const close = t.offers_close_at, daysToClose = otmDaysBetween(d, close);
+  const status = period.status === undefined || period.status === null ? "upcoming" : String(period.status);
+  const base = { action: "none", reason: "no-trigger", days_to_close: daysToClose, offers_close_at: close, remind_on: t.remind_on };
+  if (status !== "upcoming") return Object.assign(base, { reason: "status:" + status });
+  if (d >= close) return Object.assign(base, { action: "close", reason: daysToClose === 0 ? "close:today" : "close:overdue" });
+  if (t.remind_on.indexOf(d) >= 0) return Object.assign(base, { action: "remind", reason: "remind:" + daysToClose });
+  return base;
+}
+// @offerTimeline-mirror-end
+
+// The blob (call_schedule_data.data), read once: roster (names, the pool) and
+// groupRules.offerPeriods (the reminder offsets; absent -> the mirror's defaults).
+async function loadOffersBlob(): Promise<{ roster: any[]; rules: any }> {
+  const rows = await rest("call_schedule_data?select=data&id=eq.main");
+  const raw = rows?.[0]?.data;
+  const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+  const roster = Array.isArray(data?.roster) ? data.roster : [];
+  const gr = data?.groupRules?.offerPeriods;
+  return { roster, rules: gr && typeof gr === "object" && !Array.isArray(gr) ? gr : null };
+}
+
+// Same frame as send-notification's offers_reminder / offers_closed
+// categories (title, colour, CTA) so the cron's mail and the Periods
+// "Remind" button's mail look alike in the inbox. Wording per the prompt.
+function offersFrame(title: string, color: string, name: string, bodyHtml: string, cta: string, footer: string): string {
+  return `
+    <div style="font-family:'Outfit',Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
+      <div style="background:${color};color:#fff;padding:14px 20px;border-radius:10px 10px 0 0;">
+        <h2 style="margin:0;font-size:18px;">${escHtml(title)}</h2>
+        <p style="margin:6px 0 0;font-size:13px;opacity:0.9;">${escHtml(APP_NAME)}</p>
+      </div>
+      <div style="background:#fff;border:1px solid #e0e4ea;border-top:none;padding:20px;border-radius:0 0 10px 10px;">
+        <p style="font-size:14px;color:#2c3e50;line-height:1.6;margin:0;">
+          Hi <strong>${escHtml(name)}</strong>,<br><br>
+          ${bodyHtml}
+        </p>
+        <a href="${APP_URL}" style="display:inline-block;background:${color};color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;margin-top:16px;">
+          ${escHtml(cta)}
+        </a>
+        <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e4ea;font-size:12px;color:#8a94a0;">
+          ${escHtml(APP_NAME)} - ${escHtml(footer)}
+        </div>
+      </div>
+    </div>`;
+}
+
+function buildOffersReminder(name: string, p: { label: string; start_day: string; end_day: string; offers_close_at: string; days_to_close: number; remind_days: number[] }): { subject: string; html: string } {
+  const closeLabel = fmtDay(p.offers_close_at);
+  const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;
+  const days = p.days_to_close === 1 ? "tomorrow" : `in ${p.days_to_close} days`;
+  // The footer names the effective offsets (groupRules.offerPeriods.remindDaysBeforeClose,
+  // editable in Setup -> Rules) - never a literal, so editing the rule keeps the words right.
+  const offsets = p.remind_days.length ? p.remind_days.join(" and ") : String(p.days_to_close);
+  const footer = `this reminder goes out ${offsets} day${offsets === "1" ? "" : "s"} before a period's freeze to anyone with nothing entered; turn schedule updates off under Settings in the app to stop it.`;
+  const body =
+    `Your dates for <strong>${escHtml(p.label)}</strong> (${escHtml(fmtDay(p.start_day))} to ${escHtml(fmtDay(p.end_day))}) ` +
+    `freeze on <strong>${escHtml(closeLabel)}</strong> (${days}) - paint them in the app or choose 'go by my rules'.<br><br>` +
+    `Nothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone ` +
+    `with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.`;
+  return { subject, html: offersFrame("Offers Reminder", "#13294B", name, body, "Paint my offers", footer) };
+}
+
+function buildOffersClosed(name: string, p: { label: string; start_day: string; end_day: string; offers_close_at: string }, roll: { id: string; status: string; offered: number }[], nameOf: (id: string) => string, periodStatus: string): { subject: string; html: string } {
+  const submitted = roll.filter((r) => r.status === "submitted");
+  const rulesOnly = roll.filter((r) => r.status === "rules_only");
+  const notStarted = roll.filter((r) => r.status === "not_started");
+  const subject = `Offers closed for ${p.label} - ${submitted.length} submitted, ${rulesOnly.length} by rules, ${notStarted.length} never answered`;
+  const li = (rows: { id: string; offered: number }[], suffix: (r: { offered: number }) => string) =>
+    rows.length ? rows.map((r) => `<li>${escHtml(nameOf(r.id))}${suffix(r)}</li>`).join("") : "<li>-</li>";
+  const body =
+    `Offers for <strong>${escHtml(p.label)}</strong> (${escHtml(fmtDay(p.start_day))} to ${escHtml(fmtDay(p.end_day))}) closed on ` +
+    `<strong>${escHtml(fmtDay(p.offers_close_at))}</strong>; the period is now marked <strong>${escHtml(periodStatus)}</strong>.<br><br>` +
+    `<strong>Submitted</strong> (days offered inside the period):<ul style="margin:4px 0 10px;padding-left:20px;">${li(submitted, (r) => ` - ${r.offered} day${r.offered === 1 ? "" : "s"}`)}</ul>` +
+    `<strong>Go by my rules</strong>:<ul style="margin:4px 0 10px;padding-left:20px;">${li(rulesOnly, () => "")}</ul>` +
+    `<strong>Never answered</strong> (scheduled by their standing rules):<ul style="margin:4px 0 10px;padding-left:20px;">${li(notStarted, () => "")}</ul>` +
+    `Nothing was generated or published - open Setup, Generate, Periods when you are ready. A late offer can still be entered by the scheduler.`;
+  return { subject, html: offersFrame("Offers Closed", "#C2410C", name, body, "Open Periods", "the close summary goes to the scheduler and admin accounts on the morning a period's offers freeze.") };
+}
+
+async function runOffers(now: { ymd: string; hour: number; weekday: string }, dryRun: boolean): Promise<Response> {
+  const today = now.ymd;
+  console.log(`[daily-reminder] mode=offers central=${today} ${now.weekday} dryRun=${dryRun}`);
+
+  const [periods, blob] = await Promise.all([
+    rest("call_periods?select=id,label,start_day,end_day,offers_close_at,publish_by,status,rules_only_ids&status=eq.upcoming&order=start_day.asc"),
+    loadOffersBlob(),
+  ]);
+  const list: any[] = Array.isArray(periods) ? periods : [];
+  const names: Record<string, string> = {};
+  for (const r of blob.roster) if (r?.id) names[String(r.id)] = r.name || String(r.id);
+  const nameOf = (id: string) => names[id] || id;
+  const poolIds: string[] = otmPoolIds(blob.roster);
+
+  const results: any[] = [];
+  let reminded = 0, closed = 0, sent = 0, failed = 0, prefOff = 0, noEmail = 0;
+
+  // Plan first (pure maths), so a morning with nothing to do reads nothing else.
+  const plans = list.map((p) => ({ period: p, plan: otmCronPlan(p, today, blob.rules) }));
+  for (const { period, plan } of plans) {
+    if (!plan) results.push({ period: period?.label ?? null, id: period?.id ?? null, action: "skipped", reason: "period row has no usable dates" });
+    else if (plan.action === "none") results.push({ period: period.label, id: period.id, action: "none", reason: plan.reason, days_to_close: plan.days_to_close, offers_close_at: plan.offers_close_at, remind_on: plan.remind_on });
+  }
+  console.log(`[daily-reminder] offers: ${list.length} upcoming period(s): ${plans.map((x) => `${x.period?.label}=${x.plan ? x.plan.reason : "no-dates"}`).join(", ") || "(none)"}`);
+  const due = plans.filter((x) => x.plan && x.plan.action !== "none");
+  if (!due.length) {
+    return json(200, { mode: "offers", dry_run: dryRun, today, periods: list.length, reminded, closed, sent, failed, skipped_pref_off: prefOff, skipped_no_email: noEmail, results });
+  }
+
+  // Recipients, read once with the service role so RLS cannot silently hide a
+  // row: linked accounts (person_id -> email) for the reminder, scheduler /
+  // admin accounts for the close summary, and the schedule_updates_email flag.
+  const [profiles, schedProfiles, prefRows] = await Promise.all([
+    rest("user_profiles?select=person_id,email&person_id=not.is.null"),
+    rest("user_profiles?select=person_id,email,role&role=in.(scheduler,admin)"),
+    rest("notification_preferences?select=person_id,schedule_updates_email"),
+  ]);
+  const prefsById: Record<string, any> = {};
+  for (const p of (Array.isArray(prefRows) ? prefRows : [])) if (p?.person_id) prefsById[String(p.person_id)] = p;
+  const emailById: Record<string, string | null> = {};
+  for (const row of (Array.isArray(profiles) ? profiles : [])) {
+    const pid = String(row.person_id);
+    const email = typeof row.email === "string" && row.email.trim() ? row.email.trim() : null;
+    if (!(pid in emailById) || (!emailById[pid] && email)) emailById[pid] = email;
+  }
+  // Scheduler / admin accounts, keyed by person_id (an unlinked admin account is
+  // keyed by its role - a key, never an address, reaches the response). One
+  // entry per key: a second account for the same key only upgrades a missing
+  // address in place, so the response never shows one key twice.
+  const schedulers: { key: string; pid: string | null; email: string | null }[] = [];
+  for (const row of (Array.isArray(schedProfiles) ? schedProfiles : [])) {
+    const pid = row.person_id ? String(row.person_id) : null;
+    const email = typeof row.email === "string" && row.email.trim() ? row.email.trim() : null;
+    const key = pid || `unlinked-${row.role}`;
+    const cur = schedulers.find((s) => s.key === key);
+    if (cur) { if (!cur.email && email) cur.email = email; continue; }
+    schedulers.push({ key, pid, email });
+  }
+  const optedOut = (pid: string | null) => !!(pid && prefsById[pid] && prefsById[pid].schedule_updates_email === false);
+
+  for (const { period, plan } of due) {
+    const t = otmTimeline(period, blob.rules);
+    // The effective reminder offsets (days before the close, largest first) for the mail's footer.
+    const remindDays: number[] = t.remind_on.map((d: string) => otmDaysBetween(d, t.offers_close_at)).sort((a: number, b: number) => b - a);
+    const offers = await rest(`call_offers?select=person_id,day,role_pref&day=gte.${t.start_day}&day=lte.${t.end_day}`);
+    const roll = otmRollcall(period, Array.isArray(offers) ? offers : [], poolIds);
+    const recipients: { person_id: string; status: string }[] = [];
+    const entry: any = { period: period.label, id: period.id, action: plan.action, reason: plan.reason, days_to_close: plan.days_to_close, offers_close_at: plan.offers_close_at, rollcall: roll, recipients };
+    results.push(entry);
+
+    if (plan.action === "remind") {
+      reminded++;
+      const targets = roll.filter((r) => r.status === "not_started").map((r) => r.id);
+      console.log(`[daily-reminder] offers: ${period.label} reminder day (${plan.reason}) -> not_started: ${targets.join(",") || "(nobody)"}`);
+      for (const pid of targets) {
+        if (optedOut(pid)) { prefOff++; recipients.push({ person_id: pid, status: "skipped_pref_off" }); continue; }
+        const email = emailById[pid] || null;
+        if (!email) { noEmail++; recipients.push({ person_id: pid, status: "skipped_no_email" }); continue; }
+        const { subject, html } = buildOffersReminder(nameOf(pid), { label: period.label, start_day: t.start_day, end_day: t.end_day, offers_close_at: t.offers_close_at, days_to_close: plan.days_to_close, remind_days: remindDays });
+        if (dryRun) { recipients.push({ person_id: pid, status: "dry_run_composed" }); continue; }
+        const r = await sendEmail(email, subject, html, `mode=offers reminder period=${period.id} person=${pid}`);
+        if (r.ok) { sent++; recipients.push({ person_id: pid, status: "sent" }); }
+        else { failed++; recipients.push({ person_id: pid, status: `failed_${r.status}` }); }
+      }
+      continue;
+    }
+
+    // plan.action === "close": flip the row first (compare-and-swap on status),
+    // then the audit row, then the summary. A dry run does none of the writes.
+    let periodStatus = "unchanged_dry_run";
+    entry.audit = "skipped_dry_run";
+    if (!dryRun) {
+      const rows = await rest(`call_periods?id=eq.${period.id}&status=eq.upcoming`, {
+        method: "PATCH", headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ status: "closed", updated_at: new Date().toISOString() }),
+      });
+      if (!Array.isArray(rows) || rows.length === 0) {
+        // Somebody (the app's "Close now", or a parallel run) closed it first.
+        entry.period_status = "already_closed";
+        entry.audit = "skipped_already_closed";
+        console.log(`[daily-reminder] offers: ${period.label} was no longer upcoming at the CAS - nothing sent`);
+        continue;
+      }
+      closed++;
+      periodStatus = "closed";
+      try {
+        await rest("audit_log", {
+          method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            actor_id: "cron", actor_name: "daily-reminder (offers)", action: "period.close",
+            detail: { period_id: period.id, label: period.label, offers_close_at: plan.offers_close_at, today, rollcall: roll },
+          }),
+        });
+        entry.audit = "inserted";
+      } catch (e) {
+        entry.audit = `failed: ${(e as Error).message}`;
+        console.error(`[daily-reminder] offers: audit_log insert failed for ${period.label}: ${(e as Error).message}`);
+      }
+    }
+    entry.period_status = periodStatus;
+    console.log(`[daily-reminder] offers: ${period.label} ${plan.reason} -> ${periodStatus}; summary to ${schedulers.length} scheduler/admin account(s)`);
+    // The roll call is unconditional for the scheduler / admin accounts: it is
+    // an operational notice to whoever runs the period (the row has just been
+    // flipped to closed), not a schedule update, so schedule_updates_email is
+    // not consulted here - a period must never close with nobody told. Only
+    // a missing address skips an account (reported as skipped_no_email).
+    for (const s of schedulers) {
+      if (!s.email) { noEmail++; recipients.push({ person_id: s.key, status: "skipped_no_email" }); continue; }
+      const { subject, html } = buildOffersClosed(s.pid ? nameOf(s.pid) : "scheduler", { label: period.label, start_day: t.start_day, end_day: t.end_day, offers_close_at: t.offers_close_at }, roll, nameOf, dryRun ? "closed (dry run - not written)" : periodStatus);
+      if (dryRun) { recipients.push({ person_id: s.key, status: "dry_run_composed" }); continue; }
+      const r = await sendEmail(s.email, subject, html, `mode=offers closed period=${period.id} to=${s.key}`);
+      if (r.ok) { sent++; recipients.push({ person_id: s.key, status: "sent" }); }
+      else { failed++; recipients.push({ person_id: s.key, status: `failed_${r.status}` }); }
+    }
+  }
+
+  console.log(`[daily-reminder] offers done: periods=${list.length} reminded=${reminded} closed=${closed} sent=${sent} failed=${failed} pref_off=${prefOff} no_email=${noEmail}`);
+  return json(200, { mode: "offers", dry_run: dryRun, today, periods: list.length, reminded, closed, sent, failed, skipped_pref_off: prefOff, skipped_no_email: noEmail, results });
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 serve(async (req) => {
@@ -514,14 +846,16 @@ serve(async (req) => {
     }
     const dryRun: boolean = body?.dryRun === true;
 
-    // Prompt 13 part 5c: mode "open-shifts" (the Monday cron) shares the gate
-    // and the dryRun contract above; everything below this block is the hourly
-    // reminder, unchanged.
+    // Prompt 13 part 5c: mode "open-shifts" (the Monday cron) and Prompt 14
+    // part 4: mode "offers" (the daily period-timeline cron) share the gate
+    // and the dryRun contract above; everything below this block is the
+    // hourly reminder, unchanged.
     const mode = body && body.mode !== undefined ? body.mode : "reminder";
-    if (mode !== "reminder" && mode !== "open-shifts") {
-      return json(400, { error: `mode must be "open-shifts" or omitted (got ${JSON.stringify(mode).slice(0, 40)}); nothing was sent` });
+    if (mode !== "reminder" && mode !== "open-shifts" && mode !== "offers") {
+      return json(400, { error: `mode must be "reminder" (or omitted), "open-shifts" or "offers" (got ${JSON.stringify(mode).slice(0, 40)}); nothing was sent` });
     }
     if (mode === "open-shifts") return await runOpenShifts(centralNow(), dryRun);
+    if (mode === "offers") return await runOffers(centralNow(), dryRun);
 
     const now = centralNow();
     const tomorrow = addDays(now.ymd, 1);

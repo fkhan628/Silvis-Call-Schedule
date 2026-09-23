@@ -137,7 +137,7 @@ Each function carries its own gate instead:
 |---|---|---|
 | calendar-sync | OFF (must stay OFF - calendar apps send no auth header) | none: public read-only feed of anon-readable data |
 | office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
-| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast; a viewer, a missing row or an unlinked surgeon gets 403 |
+| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a missing row or an unlinked surgeon gets 403 |
 | daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
@@ -147,6 +147,25 @@ calendar-sync check in section 5.
 After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
+
+### Deploy record - offers mode (Prompt 14 part 4) - PLACEHOLDER, filled by whoever deploys
+
+| when (UTC) | slug | version before -> after | proof |
+|---|---|---|---|
+| _not yet deployed_ | `send-notification` | _n -> n+1_ | categories `offers_reminder` / `offers_closed` present in the downloaded copy; byte-identical to the repo |
+| _not yet deployed_ | `daily-reminder` | _n -> n+1_ | pg_net dryRun `{"mode":"offers","dryRun":true}` -> 200 body quoted here verbatim; `{"mode":"nope"}` -> 400; the default-mode dryRun unchanged |
+| _not yet created_ | cron job `silvis-offers-daily` | - | `select jobname, schedule, active from cron.job` shows the row; first `cron.job_run_details` status |
+
+Order for this deploy: the repo copy of both functions must already carry the Prompt 13 open-shifts mode
+(that branch's `send-notification` categories `open_shifts` / `shift_claimed` and `daily-reminder` mode
+`open-shifts` are LIVE since 2026-09-22 18:31 UTC, version 3 of each). Deploying a copy without them would
+regress the live functions - deploy only from the merged head that has both.
+
+Prerequisite: the CLI workdir `<cli-workdir>` that the commands above assume did NOT exist
+on this machine on 2026-09-23 (the 9/22 deploys used a session-scratchpad workdir). Run section 0 step 2
+(`New-Item`, `supabase init`, `supabase link`) first - or point every `--workdir` at the directory that is
+already linked to `bzhsroegtagqhutbnsrp` - before the download / backup / copy / deploy sequence; `Copy-Item`
+into a missing `supabase\functions\<slug>` fails, and `deploy` from an unlinked workdir refuses.
 
 ## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
@@ -210,11 +229,34 @@ select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $$
     body := '{"mode":"open-shifts"}'::jsonb);
 $$);
 
-select jobid, jobname, schedule, active from cron.job;                 -- expect three rows after this whole block; today only the first two exist (silvis-open-shifts-weekly is not created yet)
+-- Daily offer-period timeline (Prompt 14 part 4), 13:00 UTC = 08:00 CDT / 07:00 CST, every day.
+-- Reads the secret from Vault (vault.create_secret('<value>', 'silvis_cron_secret') once, in the SQL editor).
+-- The function answers 200 { periods: N, reminded: 0, closed: 0, sent: 0 } on an ordinary morning (nothing to
+-- do for any upcoming period), so the job is safe to leave running; it sends only on a reminder day
+-- (offers_close_at - 14 / - 3, groupRules.offerPeriods.remindDaysBeforeClose) and on the close day.
+select cron.schedule('silvis-offers-daily', '0 13 * * *', $$
+  select net.http_post(
+    url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder',
+    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+      coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+    body := '{"mode":"offers"}'::jsonb);
+$$);
+
+select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; today only the first two exist (silvis-open-shifts-weekly and silvis-offers-daily are not created yet)
 select * from cron.job_run_details order by start_time desc limit 10;  -- after the first run
 ```
 
 Notes
+- The offers job is idempotent by the calendar, not by a marker: it acts on a
+  reminder day or the close day and does nothing otherwise, so re-running it
+  by hand on a reminder day sends the reminder again. The close is a
+  compare-and-swap (`status = upcoming` -> `closed`), so a second run on the
+  close day finds nothing to close and sends no second summary.
+- Opt-out semantics of the offers mode: the reminder honours
+  `schedule_updates_email` (a surgeon who turned schedule updates off is
+  `skipped_pref_off`); the close roll call to the scheduler / admin accounts
+  is unconditional - an operational notice to whoever runs the period, so a
+  period never closes with nobody told (only a missing address skips it).
 - Nothing secret is stored in `cron.job.command`: the command names the Vault
   row, and `vault.decrypted_secrets` is readable only as the postgres role
   (Faraz in the SQL editor), never through the REST API or the anon key. This
@@ -303,6 +345,14 @@ curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Conten
 #   open = the board's list over the rows in the window: the block of rows that starts today (published_through = its end; null when
 #   today has no row), then the open slots of assigned runs after it (e.g. a holiday unit). A day WITHOUT a schedule_days row is never
 #   announced - it is not published and claim_open_slot refuses it. through = the later of published_through and the last listed slot.
+# mode offers dry run (Prompt 14 part 4): reads the upcoming call_periods + their call_offers + the blob, runs the
+# timeline maths for today (Central), composes, sends NOTHING, writes NOTHING (no status flip, no audit row)
+curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"offers","dryRun":true}'
+#   -> {"mode":"offers","dry_run":true,"today":"YYYY-MM-DD","periods":N,"reminded":0|1,"closed":0,"sent":0,"failed":0,"skipped_pref_off":0,"skipped_no_email":0,
+#       "results":[{"period":"Nov 2026 - Jan 2027","id":"<uuid>","action":"none"|"remind"|"close","reason":"no-trigger"|"remind:14"|"remind:3"|"close:today"|"close:overdue",
+#                   "days_to_close":N,"offers_close_at":"YYYY-MM-DD", ...on a remind/close day also "rollcall":[{"id":"s?","status":"submitted"|"rules_only"|"not_started","offered":N}],
+#                   "recipients":[{"person_id":"s?","status":"dry_run_composed"|"skipped_pref_off"|"skipped_no_email"}], and on the close day "period_status":"unchanged_dry_run","audit":"skipped_dry_run"}]}
+#   an ordinary morning: every period "action":"none" and "sent":0; "periods":0 when no row is upcoming.
 # an unknown mode -> 400, nothing read or sent
 curl.exe -s -i -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"nope"}' | Select-Object -First 1
 ```
@@ -315,6 +365,13 @@ whenever `open` is non-zero, and it inserts the `notifications` row the board's
 "last announced" column reads - the Monday cron in section 4 is the intended caller.
 Proof after deploying: one dryRun POST through pg_net from the SQL editor (or the
 curl above) and quote the 200 body.
+A LIVE
+`{"mode":"offers"}` call IS a real send on a reminder day (to every not_started
+pool member with `schedule_updates_email` on) and on the close day (it flips the
+period to `closed`, writes the `period.close` audit row and mails the scheduler /
+admin accounts); on any other day it reads and answers `sent: 0`. Proof after
+deploying: one dryRun POST through pg_net from the SQL editor (or the curl above)
+and quote the 200 body in the deploy record (section 3).
 
 ## 6. Invocations that CAN send real mail - wait for Faraz
 
@@ -335,7 +392,12 @@ curl above) and quote the 200 body.
   slots open (after the office notice) and on demand from the Open shifts board ("Email the
   group now", after a preview). Type `shift_claimed` - to the scheduler(s) + the claimer
   when someone takes an open shift (targetIds, never a broadcast).
-- Creating the third pg_cron job, `silvis-open-shifts-weekly` (section 4) - from then on the Monday open-shifts notice runs unattended.
+- `daily-reminder` live `{"mode":"offers"}` on a reminder day (offers_close_at - 14 / - 3) or on / after
+  the close day of an upcoming period - the not_started pool members, or the scheduler / admin accounts
+  (the daily cron job is the intended caller; on every other day it sends nothing).
+- `send-notification` types `offers_reminder` / `offers_closed` (Prompt 14 part 4) - targeted sends from
+  the Periods section (the "Remind" button with a session); never a broadcast by design.
+- Creating the third and fourth pg_cron jobs, `silvis-open-shifts-weekly` and `silvis-offers-daily` (section 4) - from then on the Monday open-shifts notice and the daily offers timeline run unattended.
 
 Planned first live proofs (Prompt 10 acceptance, run by Faraz): one real office
 email (`publish` with a real period label while `office_contacts` holds only
