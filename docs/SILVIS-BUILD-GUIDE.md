@@ -1086,3 +1086,41 @@ node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL 
   pattern, Philip's seven October backup-cap locks, Acton 11/18 day-before-vacation).
 - Proof: `test/publish.test.js` (synthetic live rows in `test/fixtures/publish-synthetic-2026-10.json`, a synthetic
   ctx from the seed for the preflight, SQL pins, idempotence); CI step "Publish-preview plan tests".
+
+### 19.1 Day edits from the command line (`scripts/day-edit.js`, Prompt 12 item BK, 2026-09-23)
+
+`node scripts/day-edit.js --set <day>:<role>=<id|OPEN|ext:label> [--set …] --by "<name>" [--expect <day>:<role>=<holder>]
+[--lock|--no-lock] [--note …] [--override] [--availability-from-seed] [--dry-run | --apply --workdir <linked dir>]` is the
+app's day editor save (`index-source.html` `saveDayEdit`, the ONLY manual mutation path) run server-side, for the case
+where the scheduler cannot sign in and a published row must move now (first use: Burchett takes backup 10/9, 10/15,
+10/20, 10/22 — `docs/REPORT-BURCHETT-OCTOBER-2026-09-23.md`). It reads the live rows with the anon key, evaluates each
+pick with `rules.eligibility` exactly as `DayEditor` does (the ctx built from the pick-time draft: the edited role
+cleared and unlocked, `source: "manual"`; a Fri–Sun block holder asked as a block member; an outside surgeon with
+`manual: true`), prints hard / soft per edit and refuses a hard failure as the editor's "Override?" warning unless
+`--override` (then the note gets the app's `[override: …]` tag and a `schedule.override` audit row; a check that throws
+is never overridable). The row after is `saveDayEdit`'s: only the edited role's id + lock move (`--lock`, the default,
+locks the pick — the editor itself locks only an outside surgeon automatically; a pool pick needs the "Lock" tick),
+primary/backup must differ, a roster primary clears an external cover, the note is kept unless `--note`, and the whole
+row's `source` becomes `manual` (a claim / trade row keeps its source while a held role keeps its holder). The SQL is
+one `DO $de$` block: snapshot **first** (`reason 'day_edit'` — the editor takes none, it keeps an undo point; a failed
+capture raises, exit 4), then per day `UPDATE … SET <role>_id, <role>_locked, source, note, version = version + 1,
+updated_by = <--by>, updated_at = now() WHERE day = X AND version = <seen> AND <role>_id IS NOT DISTINCT FROM
+<expected holder>` with `GET DIAGNOSTICS` + `RAISE 'DAY_EDIT_CAS_MISMATCH'` (exit 3; `--expect` lets the caller pin the
+holder they saw and is refused before any SQL when it differs), a stamp-count guard, then the app's audit rows
+(`schedule.day_edit` with before / after / overrides, `schedule.lock`, `schedule.override`; `actor_name` = the tag). It
+writes **no `notifications` row and sends no mail**: it prints the `manual_edit` notice the editor would have queued
+(message, recipients) so Faraz can decide. `--apply` re-reads and verifies every planned row (body, version + 1, tag),
+every other row untouched and a fresh plan reading zero rows. **Prefer the app** whenever the scheduler is signed in:
+the editor shows the same eligibility live, the notice goes out in one step, and the autosave keeps everyone's view in
+sync; use the CLI for an authorised edit that cannot wait for a session, and never for a bulk change (that is
+Generate / publish-preview). A multi-day batch is gated as **sequential editor saves** (review 9/23): day *n* is
+evaluated on live + the `after` of every earlier day in the batch, so a hard rule two edits create together (Khan
+Fri–Sun + Mon = max-consecutive) is refused on the day that trips it, as the app would show it. A role locked to
+someone else is re-assigned in one step, but the plan prints `replacing LOCKED holder <name> (<role>)` per such role
+and the audit detail carries `replacedLockedHolders` (the editor needs the Lock untick first). `--apply` without
+`--workdir` and an `--expect` that no `--set` consumes are refused at parse time, before any read; the notice preview
+is signed with a display name (`--by-name`, else the text of `--by` before ` (`), like the app; the exit 3 / 4
+classification reads the RAISE text of the CLI's output whether or not the CLI exits non-zero, and a batch whose rows
+did not move is reported NOT VERIFIED (exit 1) by the re-read — the `DO` block rolled back in every case. Proof:
+`test/day-edit.test.js` (the live October rows as a fixture, before/after pinned, SQL pins, override gating, the
+sequential Khan Fri–Mon batch, verify-after-apply); CI step "Day-edit CLI tests".

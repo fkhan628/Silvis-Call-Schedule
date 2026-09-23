@@ -37,11 +37,11 @@ eq(ext.length, 7, "7 externalCover (Atwell) rows");
 ok(ext.every((d) => d.primary_id === null && d.primary_locked === true && d.external_cover === "Atwell"), "externalCover rows: primary null but locked");
 ok(ext.every((d) => d.backup_id === FIERCE && d.backup_locked === true), "Atwell week: Fierce backup locked");
 const openOctBackups = days.filter((d) => d.backup_id == null && d.day >= "2026-10-01" && d.day <= "2026-11-01");
-eq(openOctBackups.length, 16, "16 open October backups");
+eq(openOctBackups.length, 14, "14 open October backups (16 before BK 9/23: 10/9 and 10/15 backups are Burchett's locked manual edits now)");
 ok(openOctBackups.every((d) => d.backup_locked === false), "open backups are never locked");
 ok(days.filter((d) => d.backup_id == null).every((d) => d.backup_locked === false), "null backup -> never locked (all)");
 eq(byDay["2026-10-15"].primary_id, null); eq(byDay["2026-10-15"].primary_locked, false, "10/15 primary open and unlocked");
-eq(byDay["2026-10-15"].backup_locked, false);
+eq(byDay["2026-10-15"].backup_id, BURCHETT, "BK 9/23: 10/15 backup is Burchett (his 9/23 email; a locked manual edit, mirrored in the seed)"); eq(byDay["2026-10-15"].backup_locked, true, "BK 9/23: ...and locked");
 // 9/22 evening (item S): Sarkar at two days per week, October locks included - 10/24 came off her.
 // Locked-open like 10/15 (a null slot is never locked); the seed's operational note rides in the row note.
 eq(byDay["2026-10-24"].primary_id, null, "10/24 primary open since 9/22 evening (Sarkar at two days per week)");
@@ -211,7 +211,7 @@ eq([...got].sort(), [...expected].sort(), "expanded plan rows == every dated sta
 // independent per-person counts from the seed
 function count(id, kind, role) { return [...expected].filter((k) => k.startsWith([id, kind, role].join("|") + "|")).length; }
 eq(count(BURCHETT, "available", "any"), 7 + 19, "Burchett Oct 7 + Dec 19 dates");
-eq(count(BURCHETT, "backup_only", "any"), 1);
+eq(count(BURCHETT, "backup_only", "any"), 5, "BK 9/23: Burchett backup-only 10/12 (9/17) + 10/9, 10/15, 10/20, 10/22 (burchett-email-2026-09-23)");
 eq(count(BURCHETT, "unavailable", "any"), 9);
 eq(count(ACTON, "available", "primary"), 10, "Acton Oct 10 primary dates (Y FLIP: T's 7 November dates left - his list is preferences, the days live on as locks)"); eq(count(ACTON, "available", "backup"), 3, "Acton Oct 3 backup dates (Y FLIP: T's 3 November dates left)");
 eq(count(BURCHETT, "available", "primary"), 7, "T: Burchett November primary list is role-scoped (7 dates)"); eq(count(BURCHETT, "available", "backup"), 8, "T: Burchett November backup list is role-scoped (8 dates)");
@@ -231,7 +231,7 @@ eq(new Set(keys).size, keys.length, "availability keys unique");
 // stats agree
 eq(plan.stats.availability, plan.availabilityRows.length);
 eq(plan.stats.schedule_days, 73); eq(plan.stats.time_off, 7, "stats.time_off: 3 + Burchett's four 2027 weekends (9/22 evening)");
-eq(plan.stats.scheduleDays.externalCover, 7); eq(plan.stats.scheduleDays.openBackup, 26, "open backups: 16 October + 11/5 (Y) + 11/7, 11/8, 11/20, 11/23, 11/25 + 4 Thanksgiving days"); eq(plan.stats.scheduleDays.openPrimary, 7, "open primaries in the import: 10/15, 10/24 (9/22 evening) and, since T, 11/9, 11/10, 11/12, 11/13, 11/17 (Y FLIP: 11/5 is Acton's now)");
+eq(plan.stats.scheduleDays.externalCover, 7); eq(plan.stats.scheduleDays.openBackup, 24, "open backups: 14 October (16 before BK 9/23: 10/9 and 10/15 are Burchett's) + 11/5 (Y) + 11/7, 11/8, 11/20, 11/23, 11/25 + 4 Thanksgiving days"); eq(plan.stats.scheduleDays.openPrimary, 7, "open primaries in the import: 10/15, 10/24 (9/22 evening) and, since T, 11/9, 11/10, 11/12, 11/13, 11/17 (Y FLIP: 11/5 is Acton's now)");
 
 /* ------------------------------------------------------------ time_off */
 step("time_off rows");

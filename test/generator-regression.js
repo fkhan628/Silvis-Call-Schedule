@@ -355,20 +355,23 @@ function khanOpenWeekends(days) {
 }
 // Expected diagnostics.lockViolations per range, restated from the inputs alone
 // (locks are facts the generator keeps; the conflicts must be REPORTED):
-//   R1  Philip's locked October is 7 primaries + 8 backups. Since 9/22 (Prompt 12 K)
-//       the monthly cap counts PRIMARY days only, so his 7 primaries sit under the
-//       default cap of 8 and no locked Philip PRIMARY breaks a rule; his 8 locked
-//       backups break backup-cap 7 (the explicit backup cap, unchanged). Plus
-//       Fierce's single locked Monday primary 10/12 outside any derived week
-//       (weekday-pattern:Mon - October is not derived).
+//   R1  Philip's locked October is 7 primaries + 7 backups (8 backups until BK 9/23:
+//       10/22's backup is Burchett's locked manual edit, mirrored in the seed). Since
+//       9/22 (Prompt 12 K) the monthly cap counts PRIMARY days only, so his 7 primaries
+//       sit under the default cap of 8 and his 7 locked backups sit AT backup-cap 7
+//       (the explicit backup cap, unchanged) - no locked Philip slot breaks a rule now
+//       (before BK his 8 backups broke backup-cap 7; the expectation below is computed
+//       from the inputs, so it follows the seed). Plus Fierce's single locked Monday
+//       primary 10/12 outside any derived week (weekday-pattern:Mon - October is not
+//       derived).
 //   R2  Khan's import-locked Thanksgiving primaries on the synthetic East-busy days
 //       11/26, 11/27, 11/28 (east-busy); 11/29 is not East-busy.
 //   R3  nothing is locked -> empty.
 function expectedLockViolations(range) {
   const out = [];
   const philipOctP = monthDays("2026-10").filter((d) => holder(INPUT, d, P) === PHILIP).length; // 7: under the primary cap of 8 (K)
-  const philipOctB = monthDays("2026-10").filter((d) => holder(INPUT, d, B) === PHILIP).length; // 8: over his explicit backup cap of 7
-  eq([philipOctP, philipOctB], [7, 8], "seed: Philip's locked October is 7 primaries + 8 backups (fixture drift?)");
+  const philipOctB = monthDays("2026-10").filter((d) => holder(INPUT, d, B) === PHILIP).length; // 7: at his explicit backup cap of 7 (8 until BK 9/23 - 10/22 went to Burchett)
+  eq([philipOctP, philipOctB], [7, 7], "seed: Philip's locked October is 7 primaries + 7 backups (8 backups until BK 9/23: 10/22 is Burchett's) (fixture drift?)");
   Object.keys(INPUT).sort().forEach((d) => {
     if (d < range.start || d > range.end) return;
     ROLES.forEach((role) => {
@@ -966,7 +969,7 @@ eq([p1(), p1(), p1.int(100)], [p2(), p2(), p2.int(100)], "genPrng is determinist
 // held slot - locked or not, externalCover included - is fixed (byte-identical on the output, lock flags untouched),
 // smoothing / repair never move it, and its rule conflicts are facts (diagnostics.fixedViolations, never
 // hardViolations). Restated from the seed: the open slots of the locked import inside 10/15..11/1 - 10/15 + 10/24
-// primary and eleven backups: the eight of the ER-panel author's 9/22 open list (rules doc section 7: 10/15, 10/21, 10/23, 10/24,
+// primary and ten backups (eleven until BK 9/23 took 10/15 backup for Burchett): the eight of the ER-panel author's 9/22 open list (rules doc section 7: 10/15, 10/21, 10/23, 10/24,
 // 10/25, 10/30, 10/31, 11/1) plus 10/16, 10/27, 10/29, Philip primary days her 9/16 document left without a backup
 // (rules doc section 8 item 14) - and the fixed count; per seed (50 x bestOf 2) the full checkRun contract plus the
 // byte-identical held slots and every open slot filled or listed with reasons.
@@ -976,8 +979,9 @@ const heldIn = (d, role) => { const e = INPUT[d]; return !!(e && (e[role] || (ro
 const bfOpen = []; bfDays.forEach((d) => ROLES.forEach((role) => { if (!heldIn(d, role)) bfOpen.push(d + " " + role); }));
 CUR.range = BF.name; CUR.seed = "-"; CUR.day = "-";
 const OFFICE_OPEN_BACKUPS = ["2026-10-15", "2026-10-21", "2026-10-23", "2026-10-24", "2026-10-25", "2026-10-30", "2026-10-31", "2026-11-01"]; // the ER-panel author's 9/22 document (rules doc section 7)
-eq(bfOpen, ["2026-10-15 primary", "2026-10-15 backup", "2026-10-16 backup", "2026-10-21 backup", "2026-10-23 backup", "2026-10-24 primary", "2026-10-24 backup", "2026-10-25 backup", "2026-10-27 backup", "2026-10-29 backup", "2026-10-30 backup", "2026-10-31 backup", "2026-11-01 backup"], "seed: the open slots of the locked October import inside the backfill range (10/15 + 10/24 primary, eleven backups)");
-ok(OFFICE_OPEN_BACKUPS.every((d) => bfOpen.includes(d + " " + B)), "seed: the ER-panel author's eight open October backups are all open in the import");
+eq(bfOpen, ["2026-10-15 primary", "2026-10-16 backup", "2026-10-21 backup", "2026-10-23 backup", "2026-10-24 primary", "2026-10-24 backup", "2026-10-25 backup", "2026-10-27 backup", "2026-10-29 backup", "2026-10-30 backup", "2026-10-31 backup", "2026-11-01 backup"], "seed: the open slots of the locked October import inside the backfill range (10/15 + 10/24 primary, ten backups - eleven until BK 9/23: 10/15 backup is Burchett's locked manual edit, mirrored in the seed)");
+ok(OFFICE_OPEN_BACKUPS.filter((d) => d !== "2026-10-15").every((d) => bfOpen.includes(d + " " + B)), "seed: seven of the ER-panel author's eight open October backups are still open in the import (10/15 backup is Burchett's since BK 9/23)");
+ok(!bfOpen.includes("2026-10-15 backup"), "BK 9/23: 10/15 backup is held (Burchett, locked manual edit mirrored in the seed), not open");
 eq(bfOpen.filter((k) => /backup$/.test(k)).map((k) => k.split(" ")[0]).filter((d) => !OFFICE_OPEN_BACKUPS.includes(d)), ["2026-10-16", "2026-10-27", "2026-10-29"], "seed: the three open backups beyond the ER-panel author's list are 10/16, 10/27, 10/29 (item 14)");
 ["2026-10-16", "2026-10-27", "2026-10-29"].forEach((d) => eq([INPUT[d].primary, INPUT[d].primaryLocked], [PHILIP, true], "seed: " + d + " is a locked Philip primary with its backup open"));
 const bfFixed = bfDays.length * 2 - bfOpen.length;

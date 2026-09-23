@@ -123,6 +123,7 @@ decides the Trauma Director role.
 - ⟶ **9/22 (Prompt 12 A): the 2-day limit is hard on real primary days** — 12/30, 12/31 and 1/1 are three days even though 12/31 + 1/1 is one holiday unit (no opt-in); any-role (primary or backup) soft limit **3**, a growing penalty beyond it.
 - Christmas: prefers to **split it up** (every other day, or 2 on then off).
 - October: available 10/6, 10/10, 10/11, 10/12 (backup only), 10/14, 10/26, 10/28. Not available 10/2–10/4, 10/18, 10/23, 10/24, 10/30, 10/31, 11/1. Takes 10/25 (Sun) with Sarkar on 10/24 (Sat).
+- ⟶ **9/23 (Burchett email, via Faraz 9/23 morning): backup also on 10/9, 10/15, 10/20, 10/22 — dated backup-only rows** (`s2.explicitBackupOnly["2026-10"]`, source `burchett-email-2026-09-23`; the rows' note stays the importer's `seed: Burchett October list`). The four backups moved to him from Khan (10/9, 10/15), Acton (10/20) and Philip (10/22, over his backup cap there) as **locked manual edits** through `scripts/day-edit.js` (guide §19.1); primaries untouched, 10/15 primary stays open (§8 item 1).
 - December (can take primary or backup): 12/1, 12/5, 12/6, 12/9, 12/12, 12/13, 12/14, 12/19, 12/20, 12/23, 12/25, 12/26, 12/27, 12/28, 12/30, 12/31, 1/1, 1/2, 1/3. "I don't need all these dates but am able to do them."
 - ⟶ **9/23 (Faraz): his December list governs BOTH roles** — his 9/17 email offered "the dates I can take primary call (or
   backup)", so `s2.explicitListMonths` carries `{ month: "2026-12", roles: ["primary", "backup"] }` like November (data
