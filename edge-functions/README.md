@@ -29,6 +29,12 @@ with `--no-verify-jwt`; the workdir copy is byte-identical to `edge-functions/se
 `be215d8b856081c4...`; `supabase functions list` reads version 4, previous 3 of 2026-09-22). The role / party gate is
 live: an anon POST answers `HTTP 401 {"error":"authentication required ..."}`. The section 5 JWT checks (viewer 403,
 surgeon broadcast 403, surgeon own-party 200 sent 0) still need real sessions - Faraz runs them; no JWT was handled
+
+**Prompt 14 (2026-09-23 ~18:50 UTC): `send-notification` version 5 and `daily-reminder` version 4 deployed** from main
+`cd8996d` with `--no-verify-jwt` (send-notification: the `offers_reminder` / `offers_closed` categories over the version-4
+role / party gate; daily-reminder: mode `offers` beside `open-shifts`; the workdir copies are byte-identical to the repo files).
+Anon POSTs answer 401 on both. The cron job `silvis-offers-daily` was created the same minute (jobid 3, `0 13 * * *`, the
+Vault secret; `cron.job` now lists three jobs - `silvis-open-shifts-weekly` is still the one not created).
 by the deploy.
 
 **Prompt 15 (East vacations, 2026-09-23): nothing deployed.** No function
@@ -154,7 +160,7 @@ the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 |---|---|---|---|
 | _not yet deployed_ | `send-notification` | _n -> n+1_ | categories `offers_reminder` / `offers_closed` present in the downloaded copy; byte-identical to the repo |
 | _not yet deployed_ | `daily-reminder` | _n -> n+1_ | pg_net dryRun `{"mode":"offers","dryRun":true}` -> 200 body quoted here verbatim; `{"mode":"nope"}` -> 400; the default-mode dryRun unchanged |
-| _not yet created_ | cron job `silvis-offers-daily` | - | `select jobname, schedule, active from cron.job` shows the row; first `cron.job_run_details` status |
+| created 2026-09-23 ~18:55 UTC (jobid 3) | cron job `silvis-offers-daily` | - | `select jobname, schedule, active from cron.job` shows the row; first `cron.job_run_details` status |
 
 Order for this deploy: the repo copy of both functions must already carry the Prompt 13 open-shifts mode
 (that branch's `send-notification` categories `open_shifts` / `shift_claimed` and `daily-reminder` mode
@@ -242,7 +248,7 @@ select cron.schedule('silvis-offers-daily', '0 13 * * *', $$
     body := '{"mode":"offers"}'::jsonb);
 $$);
 
-select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; today only the first two exist (silvis-open-shifts-weekly and silvis-offers-daily are not created yet)
+select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; today three exist (silvis-offers-daily created 9/23) (silvis-open-shifts-weekly and silvis-offers-daily are not created yet)
 select * from cron.job_run_details order by start_time desc limit 10;  -- after the first run
 ```
 
