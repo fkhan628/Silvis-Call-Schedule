@@ -24,10 +24,12 @@ with the Vault secret the same day: `{"mode":"open-shifts","dryRun":true}` ->
 default-mode dryRun still answers as before (200, tomorrow's two on-call people
 `skipped_wrong_hour`). The third (Monday open-shifts) cron job in section 4 is not created yet.
 
-**Audit RLS-1 (2026-09-23): `send-notification` source changed, NOT redeployed yet.** The role/party
-gate (header of `edge-functions/send-notification/index.ts`; `test/edge-functions.test.js`) is in the repo
-only. Deploy by hand from the CLI (section 3; expected version 4), download and byte-compare, run the
-section 5 checks (viewer 403, surgeon broadcast 403), then replace this paragraph with the dated record.
+**Audit RLS-1 (2026-09-23): `send-notification` deployed as version 4** (2026-09-23 ~15:55 UTC, from the linked CLI
+with `--no-verify-jwt`; the workdir copy is byte-identical to `edge-functions/send-notification/index.ts`, sha256
+`be215d8b856081c4...`; `supabase functions list` reads version 4, previous 3 of 2026-09-22). The role / party gate is
+live: an anon POST answers `HTTP 401 {"error":"authentication required ..."}`. The section 5 JWT checks (viewer 403,
+surgeon broadcast 403, surgeon own-party 200 sent 0) still need real sessions - Faraz runs them; no JWT was handled
+by the deploy.
 
 **Prompt 15 (East vacations, 2026-09-23): nothing deployed.** No function
 changed for this prompt and none was redeployed. The feature is the client

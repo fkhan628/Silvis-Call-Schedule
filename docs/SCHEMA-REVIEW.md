@@ -148,6 +148,13 @@ bypass token for the status transition, the audit row, `revoke ... from public, 
 
 **2026-09-23 (audit RLS-6) - `TRADE_PAST`:** `apply_trade` (right after the `accepted` check, before the first row lock) and `trade_update_guard` (the counter-party's pending -> accepted move only; decline and cancel stay open) raise `TRADE_PAST: <day> is before today (<today>) in Central time; past days are changed by the scheduler only` (errcode `P0001`, shown verbatim by the app) for a non-scheduler when the day or the return day is before today in America/Chicago - strict `<`, so today's already-started 07:00 shift stays tradeable, matching `claim_open_slot`'s `CL003`; the scheduler still applies or accepts a past-day trade (a phoned-in swap, Prompt 12 Q); `sql/migrations/2026-09-23-trade-past-guard.sql` carries both bodies byte-identically to `schema.sql`, the 2026-09-22 migration stays frozen as applied (sha256 pins), probe cases **I**-**M** (2020-02 fixtures) and `verify-rls.sh` section 5 prove it, and the live apply record (timestamp + probe output) is to be added here when it is applied.
 
+**Applied 2026-09-23 ~16:00 UTC** through the linked CLI (`sql/migrations/2026-09-23-trade-past-guard.sql`, sha256
+`a994dc8344c5524b...`). Pre-check: 0 pending / accepted trades with a past day. Probe BEFORE (the hole): `I=status=applied`,
+`K=status=accepted`. Probe AFTER, verbatim: `I=ERR TRADE_PAST: 2020-02-03 is before today (2026-09-23) in Central time  past
+days are changed by the scheduler only; J=status=applied 02-05p=s2; K=ERR TRADE_PAST: 2020-02-03 is before today (2026-09-23)
+in Central time  past days are changed by the scheduler only; L=status=accepted; M=status=declined`, A-H unchanged; 2020-02
+leftovers 0; `scripts/verify-rls.sh` 49 PASS / 0 FAIL (sections 1-9, probes I-M graded).
+
 **3. The probe - `sql/probes/trade-guards-probe.sql` (persists nothing).** One multi-statement batch with no
 `BEGIN`/`COMMIT`: with `--linked` the CLI submits the file as one multi-statement request through the Management API,
 which runs it in a single implicit transaction (observed 2026-09-22 on this project: a batch ending in RAISE persists
