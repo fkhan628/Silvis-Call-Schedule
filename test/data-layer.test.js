@@ -227,7 +227,8 @@ check("scheduleMapFromDayRows keys by day through dayRowToAssignment", () => {
 });
 check("snapshots.normalizePayload accepts the daily shape and rejects the rest with reasons", () => {
   const ok = C.snapshots.normalizePayload({ config: { roster: [] }, schedule_days: [{ day: "2026-01-01" }], time_off: [], availability: null });
-  assert.deepEqual(ok, { config: { roster: [] }, schedule_days: [{ day: "2026-01-01" }], time_off: [], availability: [] }); // deepEqual: vm-realm objects
+  // Prompt 14 P5 FLIP (9/23): the normalized payload carries call_offers / call_periods too (empty when the backup predates them)
+  assert.deepEqual(ok, { config: { roster: [] }, schedule_days: [{ day: "2026-01-01" }], time_off: [], availability: [], call_offers: [], call_periods: [] }); // deepEqual: vm-realm objects
   assert.throws(() => C.snapshots.normalizePayload(null), /not an object/);
   assert.throws(() => C.snapshots.normalizePayload({ schedule_days: { a: 1 } }), /array/);
   assert.throws(() => C.snapshots.normalizePayload({ schedule_days: [{ day: "12/1/2026" }] }), /valid day/);
@@ -274,14 +275,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       return resp(200, []);
     });
     const r = await C.snapshots.capture("clear_schedule");
-    check("snapshots.capture: writes { config, schedule_days, time_off, availability } + source_updated_at", () => {
+    check("snapshots.capture: writes { config, schedule_days, time_off, availability, call_offers, call_periods } + source_updated_at", () => {
       assert.strictEqual(r.ok, true);
-      assert.deepEqual(r.counts, { schedule_days: 1, time_off: 1, availability: 0 }); // deepEqual: the object was born in the vm realm
+      // Prompt 14 P5 FLIP (9/23): the snapshot scope gains call_offers + call_periods (Faraz 9/22) - before P5 the counts were the three tables
+      assert.deepEqual(r.counts, { schedule_days: 1, time_off: 1, availability: 0, call_offers: 0, call_periods: 0 }); // deepEqual: the object was born in the vm realm
       const post = calls.find(c => c.method === "POST");
       assert.ok(post && post.url.endsWith("/rest/v1/call_schedule_snapshots"));
       assert.strictEqual(post.body.reason, "clear_schedule");
       assert.strictEqual(post.body.source_updated_at, "2026-09-22T00:00:00Z");
-      assert.deepStrictEqual(Object.keys(post.body.data).sort(), ["availability", "config", "schedule_days", "time_off"]);
+      assert.deepStrictEqual(Object.keys(post.body.data).sort(), ["availability", "call_offers", "call_periods", "config", "schedule_days", "time_off"]); // P5 FLIP: was the four keys
       assert.strictEqual(post.body.data.schedule_days[0].day, "2026-10-12");
       assert.strictEqual(post.body.data.config.roster.length, 6);
     });
@@ -1641,6 +1643,108 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(/unreviewed count is not windowed/.test(guide) && /unreviewed count is not windowed/.test(rulesDoc) && /unreviewed count is not windowed/.test(prompt15), "each place says the unreviewed count is not windowed (the nag already reaches every horizon)");
     });
   }
+
+  // ---- Prompt 14 P5 (9/23) ----
+  // Snapshot scope (Faraz 9/22, guide 4.4 / 17): call_schedule_snapshots.data gains call_offers[] + call_periods[] so a restore
+  // brings the offers back; the wipe guards (payloadLooksWipedDaily) do not consider them. Read with the same identity as the
+  // insert (dbAuthHeaders - both tables are authenticated-read, never anon), a failed read fails the capture like any other.
+  console.log("\n[P5] snapshot scope: call_offers + call_periods");
+  await (async () => {
+    calls.length = 0;
+    setFetch((url, opts) => {
+      if (opts && opts.method === "POST") return resp(201, "");
+      if (url.includes("call_schedule_data")) return resp(200, [{ data: { roster: C.INIT_SURGEONS }, updated_at: "2026-09-23T00:00:00Z" }]);
+      if (url.includes("schedule_days")) return resp(200, [{ day: "2026-11-03", primary_id: "s2", version: 1 }]);
+      if (url.includes("call_offers")) return resp(200, [{ id: "o1", person_id: "s2", day: "2026-11-03", role_pref: "primary", note: "seed: burchett-email-2026-09-17", entered_by: "scheduler", source: "email-relay" }, { id: "o2", person_id: "s3", day: "2026-11-30", role_pref: "either", note: null, entered_by: "s3", source: "app" }]);
+      if (url.includes("call_periods")) return resp(200, [{ id: "p1", label: "Nov 2026 - Jan 2027", start_day: "2026-11-02", end_day: "2027-01-03", status: "upcoming", rules_only_ids: ["s1", "s6"], offer_modes: { s2: "exhaustive" } }]);
+      return resp(200, []);
+    });
+    const r = await C.snapshots.capture("seed_import");
+    check("P5: capture reads call_offers and call_periods with the writer's identity and stores both arrays", () => {
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.deepEqual(r.counts, { schedule_days: 1, time_off: 0, availability: 0, call_offers: 2, call_periods: 1 });
+      const gets = calls.filter(c => c.method === "GET").map(c => c.url);
+      assert.ok(gets.some(u => /\/rest\/v1\/call_offers\?select=\*&order=day\.asc,person_id\.asc&limit=1000&offset=0$/.test(u)), "call_offers read (paged like the others): " + gets.join(" | "));
+      assert.ok(gets.some(u => /\/rest\/v1\/call_periods\?select=\*&order=start_day\.asc&limit=1000&offset=0$/.test(u)), "call_periods read: " + gets.join(" | "));
+      const post = calls.find(c => c.method === "POST");
+      assert.deepStrictEqual(Object.keys(post.body.data).sort(), ["availability", "call_offers", "call_periods", "config", "schedule_days", "time_off"]);
+      assert.strictEqual(post.body.data.call_offers.length, 2);
+      assert.strictEqual(post.body.data.call_offers[1].source, "app", "app-entered offers are in the snapshot too (a restore brings every offer back)");
+      assert.strictEqual(post.body.data.call_periods[0].start_day, "2026-11-02");
+    });
+  })();
+  await (async () => {
+    // a failed call_offers read fails the whole capture (never an empty table)
+    setFetch((url, opts) => url.includes("call_offers") ? resp(500, "down") : resp(200, url.includes("call_schedule_data") ? [{ data: { roster: C.INIT_SURGEONS }, updated_at: null }] : []));
+    const r = await C.snapshots.capture("test");
+    check("P5: a failed call_offers read returns ok:false (a destructive action stays blocked)", () => { assert.strictEqual(r.ok, false); assert.match(r.error, /call_offers read failed: HTTP 500/); });
+  })();
+  await (async () => {
+    // offers alone are worth a snapshot; every table empty and the blob empty still skips
+    calls.length = 0;
+    setFetch((url, opts) => {
+      if (opts && opts.method === "POST") return resp(201, "");
+      if (url.includes("call_offers")) return resp(200, [{ id: "o1", person_id: "s2", day: "2026-11-03", role_pref: "primary" }]);
+      return resp(200, []);
+    });
+    const r = await C.snapshots.capture("test");
+    check("P5: offers alone are enough to snapshot", () => {
+      assert.strictEqual(r.ok, true); assert.strictEqual(calls.filter(c => c.method === "POST").length, 1);
+    });
+    setFetch(() => resp(200, []));
+    const r2 = await C.snapshots.capture("test");
+    check("P5: all six sources empty -> skipped", () => { assert.strictEqual(r2.ok, true); assert.strictEqual(r2.skipped, "empty_or_missing"); });
+  })();
+  check("P5: normalizePayload accepts optional call_offers / call_periods arrays and validates their keys; old backups without them still pass", () => {
+    const withOffers = C.snapshots.normalizePayload({ config: {}, schedule_days: [{ day: "2026-11-03" }], time_off: [], availability: [],
+      call_offers: [{ id: "o1", person_id: "s2", day: "2026-11-03", role_pref: "primary" }], call_periods: [{ id: "p1", start_day: "2026-11-02", end_day: "2027-01-03", label: "x" }] });
+    assert.deepStrictEqual(Object.keys(withOffers).sort(), ["availability", "call_offers", "call_periods", "config", "schedule_days", "time_off"]);
+    assert.strictEqual(withOffers.call_offers.length, 1); assert.strictEqual(withOffers.call_periods.length, 1);
+    const old = C.snapshots.normalizePayload({ config: { roster: [] }, schedule_days: [{ day: "2026-01-01" }], time_off: [], availability: null });
+    assert.deepEqual(old.call_offers, []); assert.deepEqual(old.call_periods, []);
+    assert.throws(() => C.snapshots.normalizePayload({ call_offers: { a: 1 } }), /call_offers must be an array/);
+    assert.throws(() => C.snapshots.normalizePayload({ call_offers: [{ person_id: "s2", day: "2026-11-03" }] }), /call_offers\[0\] is missing person_id\/day\/role_pref/);
+    assert.throws(() => C.snapshots.normalizePayload({ call_offers: [{ person_id: "s2", day: "11/3/2026", role_pref: "primary" }] }), /call_offers\[0\]/);
+    assert.throws(() => C.snapshots.normalizePayload({ call_periods: [{ label: "x" }] }), /call_periods\[0\] is missing start_day\/end_day/);
+  });
+  await (async () => {
+    // applyPayload hands the two arrays to the app's table applier (which upserts them once part 3 wires it; today it ignores unknown keys)
+    calls.length = 0;
+    setFetch((url, opts) => {
+      if (opts && opts.method === "POST") return resp(201, "");
+      if (url.includes("call_schedule_data")) return resp(200, [{ data: { roster: [] }, updated_at: "t0" }]);
+      if (url.includes("schedule_days")) return resp(200, [{ day: "2026-01-01", primary_id: "s1" }]);
+      return resp(200, []);
+    });
+    let given = null;
+    const r = await C.snapshots.applyPayload(
+      { config: { roster: C.INIT_SURGEONS }, schedule_days: [{ day: "2026-10-12", primary_id: "s4", version: 7 }], time_off: [], availability: [],
+        call_offers: [{ id: "o1", person_id: "s2", day: "2026-11-03", role_pref: "primary" }], call_periods: [{ id: "p1", start_day: "2026-11-02", end_day: "2027-01-03" }] },
+      async () => ({ ok: true }), async (t) => { given = t; return { ok: true, counts: {} }; }, "before_restore");
+    // Prompt 14 P5 FLIP (9/23 review): the counts never claim a restore the applier did not do - the payload lengths are
+    // reported as *_in_backup, the applied counts come from the applier alone (call_offers_upserted / call_periods_upserted,
+    // once part 3 wires the upsert), and notApplied names the offer tables an older applier ignored
+    check("P5: applyPayload passes call_offers / call_periods to the table applier and reports them as in-backup, not as applied", () => {
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.deepStrictEqual(Object.keys(given).sort(), ["availability", "call_offers", "call_periods", "time_off"]);
+      assert.strictEqual(given.call_offers.length, 1); assert.strictEqual(given.call_periods.length, 1);
+      assert.strictEqual(r.counts.call_offers_in_backup, 1); assert.strictEqual(r.counts.call_periods_in_backup, 1);
+      assert.ok(!("call_offers" in r.counts) && !("call_periods" in r.counts), "no bare call_offers / call_periods count (the audit row would read it as restored): " + JSON.stringify(r.counts));
+      assert.deepEqual(r.notApplied, ["call_offers", "call_periods"], "an applier that returns no *_upserted count for them did not write them: " + JSON.stringify(r.notApplied)); // deepEqual: the array is born in the sandbox realm
+    });
+    const r2 = await C.snapshots.applyPayload(
+      { config: { roster: C.INIT_SURGEONS }, schedule_days: [{ day: "2026-10-12", primary_id: "s4", version: 7 }], time_off: [], availability: [],
+        call_offers: [{ id: "o1", person_id: "s2", day: "2026-11-03", role_pref: "primary" }], call_periods: [] },
+      async () => ({ ok: true }), async () => ({ ok: true, counts: { time_off_upserted: 0, availability_upserted: 0, call_offers_upserted: 1, call_periods_upserted: 0 } }), "before_restore");
+    check("P5: an applier that reports call_offers_upserted / call_periods_upserted (part 3) -> nothing notApplied; an empty backup table is never notApplied", () => {
+      assert.strictEqual(r2.ok, true, JSON.stringify(r2));
+      assert.strictEqual(r2.counts.call_offers_upserted, 1); assert.strictEqual(r2.counts.call_offers_in_backup, 1); assert.strictEqual(r2.counts.call_periods_in_backup, 0);
+      assert.strictEqual(r2.notApplied, undefined, JSON.stringify(r2.notApplied));
+    });
+  })();
+  check("P5: the wipe guard does not consider offers (a payload with offers and nothing else still looks wiped)", () => {
+    assert.strictEqual(C.payloadLooksWiped({ schedule: {}, vacations: {}, availability: [], call_offers: [{ person_id: "s2", day: "2026-11-03", role_pref: "primary" }] }), true);
+  });
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

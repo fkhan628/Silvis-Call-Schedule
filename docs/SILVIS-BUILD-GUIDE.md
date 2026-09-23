@@ -189,6 +189,13 @@ Davenport's `holidayAssignments`, keyed by year.
 one-shot `intentionalScheduleWipeRef`, snapshot-before-destructive (capture failure **blocks** the action), scheduler
 restore UI in Settings, once-per-session snapshot if newest > 6 h. The two Davenport wipe incidents happened because
 LOAD is permissive and AUTOSAVE is unconditional — keep the same guards.
+**Backup / snapshot scope (Faraz 9/22; Prompt 14 P5, 9/23):** `call_schedule_snapshots.data` = `{ config, schedule_days,
+time_off, availability, call_offers, call_periods }` — the client capture (`config.js snapshots.capture`, read with the
+writer's identity; both offer tables are authenticated-read) and the importer's pre-import snapshot write the same six
+keys, so a restore brings the offers and their periods back; `normalizePayload` accepts a backup without the two keys
+(pre-P5) and hands them to the app's table applier, which upserts them once part 3 wires it. The wipe guards
+(`payloadLooksWipedDaily`, the table-side guards) deliberately do not consider offers: a schedule with no assigned day
+is still a wipe whatever was offered.
 
 **Seed re-import over a published schedule — the CLI and the app agree: app-edited days are kept (IB, 9/23 overnight).**
 A plan day whose live `schedule_days` row the app owns (`source` not `import`, or `updated_by` not `seed` — the shape of
@@ -895,14 +902,82 @@ holder covers every unit day), and `outsideOffers = [{ day, role, id }]`
 `offered` (who offered it) and the note "no offer and no rule allows it" when nobody did. Helpers own the period
 maths (`periodFor`, `offerStatus` mirroring the SQL, `offerTimeline` from `groupRules.offerPeriods`: close = start −
 6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close, end = the last day of the Nth month
-extended to a Sunday like the Generate presets). Every dated list in the seed (Burchett's October/December, Acton's
-October/November, Burchett's November, Philip's weeks, Fierce's single days) is migrated into `call_offers`
-(`source: email-relay`) in part 5 so there is one mechanism, not two; recurring patterns, derived weeks and windows
-stay rules. the ER-panel author's Word document is **retired at go-live** (Faraz 9/22 evening): the app is the source of
-truth; the ER-panel author keeps a viewer account, the weekly office digest and the ER Call Panels export for a paper copy.
-Published assignments remain locks. Proof: `test/rules.test.js` and `test/generator-regression.js` Prompt 14 P2
-blocks (the real November lists as offers, `test/fixtures/offers-2026-11.json`), `test/offers.test.js` (period maths,
-SQL parity, seed and migration pins).
+extended to a Sunday like the Generate presets). the ER-panel author's Word document is **retired at go-live** (Faraz 9/22
+evening): the app is the source of truth; the ER-panel author keeps a viewer account, the weekly office digest and the ER Call Panels
+export for a paper copy. Published assignments remain locks. Proof: `test/rules.test.js` and
+`test/generator-regression.js` Prompt 14 P2 blocks (the real November lists as offers,
+`test/fixtures/offers-2026-11.json`), `test/offers.test.js` (period maths, SQL parity, seed and migration pins).
+
+**The first period, through the importer — one mechanism (part 5, built 9/23).** The dated lists that reach the
+first period do so as `call_offers` rows planned by `importer.js` from `docs/silvis-seed.json`, never by hand. The
+seed carries `offerPeriods[]` — Nov 2026 – Jan 2027 = 2026-11-02 .. 2027-01-03 (the milestone range), `offersCloseAt`
+2026-10-02 set by hand (the computed date is past; Faraz may rename it), `publishBy` 2026-10-05, `status upcoming`,
+`rulesOnly` Khan + Sarkar, `offerModes` Burchett + Philip **exhaustive**, Acton + Fierce **preferred** — and, per surgeon,
+`offerSources` tags on the lists that *are* the offers: Burchett's `explicitAvailable` November (role-keyed, his 9/17
+email) and December (plain, the 9/17 thread), Acton's relayed November days under a new `offeredDays['2026-11']` (not
+`explicitAvailable`, whose key alone would re-govern November — Prompt 12 Y), Philip's `availableWeeks` (his 9/20
+email). Burchett's and Acton's **October** lists are not tagged: October precedes the first period and stays a dated
+availability list. Fierce has no dated single day inside the period in the seed (10/12 is October; his 11/9–11/16
+backup rows are his derived week plus Faraz's 11/16 decision, locks), so he reads *not started* until he paints
+(seed open question 16). `importPlan(seed, { offerPeriods: true })` — **opt-in; the CLI always passes it, the in-app
+Setup import does not until part 3** (it applies availability / time_off / schedule_days only and cannot write
+offers, so a period-aware default there would retire a whitelist without writing the offers) — plans one `call_periods`
+row (upsert by `start_day`; the seed owns label, dates, `rules_only_ids` and its `offer_modes` keys, merged so app-set
+modes for others stay; `status` is written on insert only, the app owns the lifecycle) and the `call_offers` rows: one
+per listed day inside the period **on or after today in America/Chicago** (the trigger refuses a past day, OF001);
+`role_pref` from the list's role, a plain list = `either` (an optional `rolePref` on the tag overrides it); a day
+inside the person's seed vacation is skipped and listed (OF002 would refuse it); a day that is already locked stays an
+offer (Burchett's superseded 11/9, 11/14–16 backups and 11/25 primary, Acton's 11/5 backup — they come back as unplaced
+offers, the record stays honest); `entered_by 'scheduler'`, `source 'email-relay'`, `note 'seed: <tag>'`. That note
+shape plus source and `entered_by` is the seed's ownership mark (as `schedule_days` notes carry `seed: <source>`):
+stale seed-owned offers are deleted set-based for days on/after today only, and an offer entered or relayed **in the
+app** is never updated or deleted (a planned row over the surgeon's own entry reads *blocked* in the diff). For a
+surgeon so *submitted* the importer writes **no `available` row** for a day inside the period and **no
+`explicitListMonths` entry** for a month overlapping it (Burchett's blob entry becomes October only; his statement
+lists stay in the blob as data); `unavailable` / `no_backup` / `backup_only` rows and everything outside the period
+are unchanged, row for row. The per-surgeon status the dry run prints (`surgeon | status | mode | offered days`) is
+derived like SQL `offer_status()` from the whole list, whatever today is. Live consequences of the first apply:
+`call_periods` insert 1, `call_offers` insert 79 (Burchett 34 = 7 P + 8 B + 19 either, Acton 10 = 7 P + 3 B, Philip
+35 = five weeks × 7 either), `availability` delete = Burchett's November / December available rows, blob
+`surgeonRules` update, `schedule_days` / `time_off` unchanged. Two facts about the two tables shape the tooling:
+they are **authenticated-read**, so the CLI never fetches them with the anon key (200 + `[]` would masquerade as an
+empty table — probe I, 9/22): the dry run reads them as *unknown* (every planned row an upsert, counted so the apply
+is never skipped) and `--apply` verifies them from the rows the SQL's own returning select hands back
+(`call_offers_rows` / `call_periods_rows`); and the `call_offers` insert **selects from a VALUES list and proposes
+only rows that would change** (a new `(person_id, day)`, or a seed-owned row whose role / note / source differ) —
+a row-level BEFORE INSERT trigger runs for *every* proposed row before the conflict check, so a plain
+`insert … values … on conflict do update where …` would put all 79 rows through OF001/OF002/OF003 on every run and,
+from `offers_close_at` on, roll the whole import back although nothing changed (the CLI runs as postgres, not as the
+scheduler; 9/23 review). As written, a re-run of identical data proposes nothing and fires no trigger; a re-run that
+*adds or changes* a seed-owned offer inside the period after `offers_close_at` (2026-10-02) is refused by OF003 and
+rolls back loudly — so **the seed's offers must be applied before 2026-10-02**, and late offers are the scheduler's to
+enter in the app. Three consistency refusals guard the seed itself, whether or not the option is on: a surgeon *with*
+a mode in a period may not keep an **untagged** `explicitAvailable` / `offeredDays` / `availableWeeks` list that
+reaches into it (`OFFER_SOURCE_INVALID` — his status would retire the rows and the month while no offer carried the
+days), periods never overlap, and a period label is gated against the note denylist like an offer note (it reaches
+the authenticated-read `call_periods`). A submitted surgeon whose planned rows come to 0 (listed days all past or on
+a vacation) is named in the dry run's warnings: the retirement follows the whole list, but a fresh database would read
+him `not_started` until a row exists.
+A planned offer inside a **live** vacation (`time_off` is anon-readable) is listed and blocks `--apply` (exit 3): the
+whole transaction would roll back on OF002. One consequence for Faraz (seed open question 15): a plain list under
+exhaustive is `either`, so Philip's weeks now limit his **backup** to the listed days too (before the period the weeks
+whitelist governed primary only; Burchett's December list already governs both roles since 9/23 - the object entry -
+so nothing changes for him) — `rolePref: "primary"` on the tag or `preferred` mode restores the old reading, data only; **his answer is time-coupled**: it lands as a seed re-import,
+which after 2026-10-02 is refused by OF003 (above), so it must be settled before the close or entered in-app by the
+scheduler. **Dated caveat (9/23, until part 3 lands):** after the apply the live blob has no November / December
+whitelist for Burchett and none of his 20 `available` rows, while `index-source.html` passes neither `call_offers`
+nor `call_periods` into `buildContext` and imports with the legacy plan — so between the apply and part 3 every
+in-app consumer of `eligibility()` (Generate over Dec – Jan, trade acceptance, the day editor's warning) reads
+Burchett and Philip by their recurring rules only, and an in-app Setup import would re-add the 20 rows and the two
+governed months. The published / locked rows are untouched by the apply either way. Land part 3 in the same go-live,
+or hold in-app Generate / trades over Dec – Jan and the Setup import until it lands; the part 3 lane switches the
+in-app import to `importPlan(seed, { offerPeriods: true })` and refuses Apply when the seed carries periods the plan
+did not convert. `--offers-json <path>` writes the planned `{ periods, offers }`
+for an offers-aware generate run; `importer.impSeedContextInput(seed, { offerPeriods: true })` builds the same world
+for tests. Proof: `test/importer.test.js` Prompt 14 P5 block (the period row, the 79 offers with exact days and roles,
+the Central today filter, the vacation skip, the retired rows and months, October untouched, the SQL shape, the
+unknown / exact / blocked diffs, an app-entered offer never deleted, the offers-aware ctx), `test/data-layer.test.js`
+P5 block (snapshot scope).
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 

@@ -282,12 +282,17 @@ const snapshots = {
   },
   async capture(reason) {
     try {
-      let cfgRows, dayRows, toRows, avRows;
+      let cfgRows, dayRows, toRows, avRows, offerRows, periodRows;
       try {
         cfgRows = await this._readAll("call_schedule_data?id=eq.main&select=data,updated_at", "config");
         dayRows = await this._readAll("schedule_days?select=*&order=day.asc", "schedule_days");
         toRows  = await this._readAll("time_off?select=*&order=start_date.asc,person_id.asc", "time_off");
         avRows  = await this._readAll("availability?select=*&order=start_date.asc,person_id.asc", "availability");
+        // Prompt 14 P5 (Faraz 9/22): the offers and their periods are in scope too, so a restore brings them back.
+        // Both tables are authenticated-read (never anon) - the writer's identity above reads them; a failed read
+        // fails the capture like any other. The wipe guards (payloadLooksWipedDaily) do not consider them.
+        offerRows  = await this._readAll("call_offers?select=*&order=day.asc,person_id.asc", "call_offers");
+        periodRows = await this._readAll("call_periods?select=*&order=start_day.asc", "call_periods");
       } catch (e) {
         console.warn("Snapshot capture: source read failed", e);
         return { ok: false, error: String(e && e.message || e) };
@@ -308,10 +313,10 @@ const snapshots = {
       // Skip ONLY when every table is empty AND the blob is empty - a genuine
       // 200 with nothing worth keeping. A real failure returned above, so an
       // empty DB still doesn't block a legitimate reset.
-      if (dayRows.length === 0 && toRows.length === 0 && avRows.length === 0 && blobEmpty) {
+      if (dayRows.length === 0 && toRows.length === 0 && avRows.length === 0 && offerRows.length === 0 && periodRows.length === 0 && blobEmpty) {
         return { ok: true, skipped: "empty_or_missing" };
       }
-      const data = { config: config || {}, schedule_days: dayRows, time_off: toRows, availability: avRows };
+      const data = { config: config || {}, schedule_days: dayRows, time_off: toRows, availability: avRows, call_offers: offerRows, call_periods: periodRows };
       const ins = await fetch(`${SUPABASE_URL}/rest/v1/call_schedule_snapshots`, {
         method: "POST",
         headers: { ...dbAuthHeaders(), Prefer: "return=minimal" },
@@ -326,7 +331,7 @@ const snapshots = {
         console.warn(`Snapshot capture: insert failed (HTTP ${ins.status})`, body.slice(0, 200));
         return { ok: false, error: `snapshot insert failed: HTTP ${ins.status}` };
       }
-      return { ok: true, counts: { schedule_days: dayRows.length, time_off: toRows.length, availability: avRows.length } };
+      return { ok: true, counts: { schedule_days: dayRows.length, time_off: toRows.length, availability: avRows.length, call_offers: offerRows.length, call_periods: periodRows.length } };
     } catch (e) {
       console.warn("Snapshot capture failed:", e);
       return { ok: false, error: String(e) };
@@ -379,10 +384,14 @@ const snapshots = {
       return v;
     };
     const days = arr("schedule_days"), to = arr("time_off"), av = arr("availability");
+    // Prompt 14 P5: optional (a backup from before the offer periods has neither key and still restores)
+    const offers = arr("call_offers"), periods = arr("call_periods");
     days.forEach((r, i) => { if (!r || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.day || ""))) throw new Error(`schedule_days[${i}] has no valid day`); });
     to.forEach((r, i) => { if (!r || !r.person_id || !r.start_date || !r.end_date) throw new Error(`time_off[${i}] is missing person_id/start_date/end_date`); });
     av.forEach((r, i) => { if (!r || !r.person_id || !r.kind || !r.start_date || !r.end_date) throw new Error(`availability[${i}] is missing person_id/kind/start_date/end_date`); });
-    return { config: cfg || {}, schedule_days: days, time_off: to, availability: av };
+    offers.forEach((r, i) => { if (!r || !r.person_id || !r.day || !r.role_pref) throw new Error(`call_offers[${i}] is missing person_id/day/role_pref`); if (!/^\d{4}-\d{2}-\d{2}/.test(String(r.day))) throw new Error(`call_offers[${i}] has no valid day`); });
+    periods.forEach((r, i) => { if (!r || !r.start_day || !r.end_day) throw new Error(`call_periods[${i}] is missing start_day/end_day`); });
+    return { config: cfg || {}, schedule_days: days, time_off: to, availability: av, call_offers: offers, call_periods: periods };
   },
   // Restore a snapshot: config back into the call_schedule_data blob, the
   // schedule back into schedule_days THROUGH THE APP'S CAS SYNC (applySchedule,
@@ -458,14 +467,27 @@ const snapshots = {
       return { ok: false, error: applied.error || "Schedule apply failed", blobRestored: true, blob: payload.config, schedule, ts, counts };
     }
     let tables;
-    try { tables = await applyTables({ time_off: payload.time_off, availability: payload.availability }); }
+    // P5: call_offers / call_periods ride along to the app's table applier (it upserts them once part 3 wires it;
+    // an older applier destructures time_off / availability only and ignores the two keys)
+    try { tables = await applyTables({ time_off: payload.time_off, availability: payload.availability, call_offers: payload.call_offers, call_periods: payload.call_periods }); }
     catch (e) { tables = { ok: false, error: String(e && e.message || e) }; }
     if (tables && tables.ok === false) {
       return { ok: false, error: tables.error || "Table restore failed", blobRestored: true, scheduleRestored: true, blob: payload.config, schedule, ts, counts: { ...counts, ...(tables.counts || {}) } };
     }
+    // P5 (9/23 review): the offer tables are counted as *_in_backup; whether they were WRITTEN is the applier's to say
+    // (call_offers_upserted / call_periods_upserted, once part 3 wires the upsert) - an applier that returns no such
+    // count for a non-empty table did not write it, and notApplied names it so the audit row never claims a restore
+    const tableCounts = tables && tables.counts ? tables.counts : {};
+    const notApplied = ["call_offers", "call_periods"].filter((k) => payload[k].length > 0 && !(k + "_upserted" in tableCounts));
     return {
       ok: true, blob: payload.config, schedule, ts,
-      counts: { ...counts, ...(tables && tables.counts ? tables.counts : {}) },
+      counts: {
+        ...counts,
+        call_offers_in_backup: payload.call_offers.length,
+        call_periods_in_backup: payload.call_periods.length,
+        ...tableCounts,
+      },
+      ...(notApplied.length ? { notApplied } : {}),
     };
   },
 };

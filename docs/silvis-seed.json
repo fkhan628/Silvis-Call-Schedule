@@ -40,6 +40,7 @@
       "2026-09-23 (Claude Code, Prompt 12 item BK, from Burchett's 9/23 email relayed by Faraz 9/23 morning: he can take BACKUP on 10/9, 10/15, 10/20, 10/22): surgeonRules.s2.explicitBackupOnly['2026-10'] gains the four dates (10/12 stays); the importer writes one backup_only/any availability row per date with the note 'seed: Burchett October list' (a per-month label), so the per-date source burchett-email-2026-09-23 is recorded in s2.explicitBackupOnlyNote, s2.notes and pendingDeltas, never in a row; his primary list, explicitListMonths and every other rule unchanged. existingAssignments 10/9, 10/15, 10/20, 10/22: backup -> s2 (locked; primaries as they are; 10/15 primary stays open) so the seed mirrors the rows AFTER the four LOCKED manual edits made with the new scripts/day-edit.js (the day editor's save path from the command line: snapshot 'day_edit' first, compare-and-swap on day + version + expected holder, audit schedule.day_edit / schedule.lock, the manual_edit notice printed and not sent); the rows' source strings and notes are unchanged so a re-import reads the four days as unchanged, not BLOCKED. pendingDeltas logs the four reassignments (from Khan 10/9 and 10/15 - the 9/23 publish fill -, Acton 10/20, Philip 10/22, who was over his backup cap there). Live order: day-edit --apply BEFORE import-seed --apply - 10/20 and 10/22 were still seed-owned, so an import run first would have written those two backups itself (the dry run reads them as update 2, 10/9 and 10/15 as BLOCKED, until the edits land). Importer consequences after the edits: availability insert 4, blob surgeonRules + settings update, schedule_days unchanged, time_off unchanged.",
       "2026-09-23 (Claude Code, item WF, from Faraz's 9/23 decision after docs/REPORT-NOV-BACKUPS-2026-09-23.md): the water-filled share - a pool member's monthly target per role is the share of ALL the month's slots of the pool (open + locked / held / derived / imported), water-filled across the members' clips and never floored at his locked count, and the deviation term is convex (|count - target| ^ groupRules.weights.deviationConvexity). New data knob groupRules.weights.deviationConvexity = 2 (the generator's code default; 1 restores the flat term). Rules doc section 6, guide section 15, docs/REPORT-WATER-FILL-2026-09-23.md. The published schedule is NOT regenerated. Expected live consequence (importer dry run): blob update - groupRules.weights gains the key - plus the settings stamps; no row changes.",
       "2026-09-23 (Claude Code, audit lane tooling-rules, findings RG-1 / RG-2): two group keys the engine never read are removed - groupRules.holidays.anyoneMayCoverUnlessOptedOut ('anyone not opted out may cover a holiday' is fixed behaviour: the opt-out is surgeonRules.<id>.holidayRules.holidaysOff, the waiver family holidays.ignoreWeekdayRules; the Setup checkbox is gone) and groupRules.eastFeed.unknownIsBusy (an uncovered East day is always clear + the soft east-unknown penalty, as eastFeed.note records). rules.js buildContext warns once per key while a blob still carries it; no rule, lock or row changes. Importer consequence: blob groupRules + settings update only.",
+      "2026-09-23 (Claude Code, Prompt 14 P5 - the first period through the importer, from Faraz's 9/22 evening prompt v2 part 5; listed before the P2 entry because test/offers.test.js pins the last entry as P2's): new top-level offerPeriods[] (Nov 2026 - Jan 2027 = 2026-11-02..2027-01-03, offersCloseAt 2026-10-02 by hand, publishBy 2026-10-05, status upcoming, rulesOnly s1 + s6, offerModes s2 / s4 exhaustive, s3 / s5 preferred, source faraz-2026-09-22-prompt-14); surgeonRules.<id>.offerSources tags on the lists that are the offers (s2 explicitAvailable 2026-11 + 2026-12 -> burchett-email-2026-09-17; s3 new offeredDays['2026-11'] = his relayed 7 primary + 3 backup days -> acton-via-burchett-relay-2026-09-17; s4 availableWeeks -> philip-email-2026-09-20); groupRules.whitelistMonths.rule gains the period sentence. importer.js: importPlan(seed, { offerPeriods: true }) (the CLI's setting; the in-app import keeps the pre-period plan until part 3) plans call_periods (upsert by start_day, status never rewritten, offer_modes merged) and call_offers rows (one per listed day inside the period on or after today in America/Chicago; role_pref from the list's role, a plain list = either; entered_by scheduler, source email-relay, note 'seed: <tag>'; a day inside the person's vacation skipped and listed; locked days kept), writes no available row and no explicitListMonths entry for a submitted surgeon's period days / months, deletes stale seed-owned offers for future days only and never touches app-entered rows; the pre-import snapshot and config.js snapshots.capture gain call_offers + call_periods (the wipe guards do not consider them); the dry run prints the status table (surgeon | status | mode | offered days). Live consequences: call_periods insert 1, call_offers insert 79 (Burchett 34, Acton 10, Philip 35), availability delete = Burchett's November / December available rows, blob surgeonRules update (s2.explicitListMonths = October only), schedule_days / time_off unchanged. Open questions 15 (a plain list under exhaustive limits backup too) and 16 (Fierce has no single day inside the period).",
       "2026-09-23 (Claude Code, Prompt 14 P2 - rules + generator, from Faraz's 9/22 evening prompt v2; review fixes the same night): groupRules.offerPeriods { lengthMonths 3, presets [3, 6], closeWeeksBeforeStart 6, publishWeeksBeforeStart 4, remindDaysBeforeClose [14, 3] } + offerPeriodsNote; groupRules.weights.offerBonus 6 + outsideOffers 6 + offerBonusOverShare 0 (+ note). Engine: rules.js reads ctx.offers (call_offers rows) and ctx.periods (call_periods rows incl. rules_only_ids + offer_modes), derives the per-surgeon per-period status exactly like SQL offer_status() (submitted / rules_only / not_started) and the mode (offer_modes[id], absent = preferred); inside a period a submitted surgeon is offers-governed (exhaustive: hard not-offered off his offered days and roles; preferred: soft offered / outside-offers under his ordinary rules; outside-offers also rides on an exhaustive surgeon's claim result); an offer is folded into the dated-row map as an available row for its role (item W lifts the weekday patterns, obligations never lift); whitelist-month / outside-available-weeks are not applied to a submitted surgeon inside the period; opts.claim skips the exhaustive block (a Prompt 13 claim is an offer made on the spot - sql/migrations/2026-09-23-claim-offer.sql writes the call_offers row, except for a surgeon listed in the period's rules_only_ids, who keeps his rules-only status). generator.js fills offered units first, stops the offered bonus at the surgeon's share (offerBonusOverShare) so an offer is not a demand, and reports diagnostics.offers (byPerson offered / placed / unplaced with reasons - a holiday-unit day names the unit's failing day - and outsideOffers). No list changes here (part 5 converts the dated lists into call_offers rows). Proof: test/rules.test.js and test/generator-regression.js Prompt 14 P2 blocks, test/offers.test.js."
     ]
   },
@@ -279,7 +280,7 @@
     ],
     "availabilityPrecedenceNote": "9/22 evening (Faraz, Prompt 12 W) - own dates beat own patterns: a surgeon's explicit dated available / backup_only row, entered by them or by the scheduler for them (Setup availability list now, the Prompt 14 offers painter later), lifts that surgeon's weekday-pattern rules for that date and role, hardNeverWeekdays included (Khan's Tue/Thu primary, Fierce's Clinton days, Burchett's outreach days, Acton's Tuesdays). It never lifts an obligation: vacations and the trailing edge, East feed busy / forecast-busy days, derived-week locks, availableWindows (moved from the row-liftable tier to the never-lifted gates - a row outside a window does not open the day), backupOptOut, caps, consecutive limits, the other role. A manual/import lock is not a row: a lock holder on a pattern day keeps the lock and rules.js lists the rule in conflicts. availableWeeks and availableWindows are read from surgeonRules directly and are NOT written as available rows. rules.js: rdStatic applies hard-never-weekday:<wd> only when no dated row covers the role that day (the same rowAvail flag the other weekday-pattern rules read); outside-window no longer reads rowAvail.",
     "whitelistMonths": {
-      "rule": "A month is governed by an explicit date list only when it appears in surgeonRules[id].explicitListMonths (completed from the seed's explicitAvailable keys, for every surgeon who has one: Burchett Oct+Nov+Dec, Acton Oct (his November list is preferences since 9/22 evening, Prompt 12 Y), Philip Oct). In a governed month the eligible set for a governed ROLE is exactly the explicit available/backup_only rows minus unavailable rows; in other months (and for a role the entry does not govern) recurring patterns + weekendsAvailable minus unavailable rows. Dates in a list that spill into a neighbouring month are additive there and do not put that month into whitelist mode.",
+      "rule": "A month is governed by an explicit date list only when it appears in surgeonRules[id].explicitListMonths (completed from the seed's explicitAvailable keys, for every surgeon who has one: Burchett Oct+Nov+Dec, Acton Oct (his November list is preferences since 9/22 evening, Prompt 12 Y), Philip Oct). In a governed month the eligible set for a governed ROLE is exactly the explicit available/backup_only rows minus unavailable rows; in other months (and for a role the entry does not govern) recurring patterns + weekendsAvailable minus unavailable rows. Dates in a list that spill into a neighbouring month are additive there and do not put that month into whitelist mode. From the first offer period (Prompt 14 P5, 9/23) a month that overlaps a period is not governed for a surgeon whose tagged list became call_offers rows for that period: the importer writes his offers instead of an explicitListMonths entry for the month, and rules.js reads the offers inside the period (exhaustive or preferred); months outside every period are governed as before.",
       "roleScope": "9/22 (Prompt 12 I + T): rules.js reads the role scope literally. A plain 'YYYY-MM' entry governs PRIMARY only (backup is open to everyone - Burchett's Oct, Acton's Oct); an object entry { month: 'YYYY-MM', roles: [...] } governs exactly the roles it names, so { month: '2026-11', roles: ['primary', 'backup'] } restricts BOTH roles (Burchett's November list: the ER-panel author published it, so he is not placed on a November day he did not offer in either role; Acton's November object entry left with Prompt 12 Y; 9/23: Burchett's December entry is the object form too - his 9/17 list names primary or backup). The importer keeps an explicit entry as written; when it completes a missing month from the explicitAvailable keys it writes the plain (primary-only) form for a plain or two-role list and { month, roles: [role] } for a one-role list - an author who wants backup governed writes the object entry in the seed. Under groupRules.backupPolicy.openToEveryone false a plain entry governs both roles again."
     },
     "offerPeriods": {
@@ -540,6 +541,19 @@
         }
       ],
       "explicitAvailableNote": "10/25 added 2026-09-22: it is in his own October plan (locked primary) but was missing from the list. November (T, 9/22) is role-keyed and governed for BOTH roles via the explicit object entry in explicitListMonths (the ER-panel author published the list); October stays a plain entry = primary only. 9/23 (Faraz): December is an object entry too - his 9/17 list is the dates he can take primary call or backup - so it governs both roles; data only, the published schedule is not regenerated (the three published backups it invalidates, 12/4, 12/10, 12/18, are reassigned by hand in the day editor).",
+      "offerSources": {
+        "explicitAvailable": {
+          "2026-11": {
+            "source": "email-relay",
+            "tag": "burchett-email-2026-09-17"
+          },
+          "2026-12": {
+            "source": "email-relay",
+            "tag": "burchett-email-2026-09-17"
+          }
+        }
+      },
+      "offerSourcesNote": "Prompt 14 P5 (9/23): the tagged lists are the SOURCE of his call_offers rows for a period in which he has an offer mode (offerPeriods[].offerModes): the November role-keyed list (his 9/17 email; the ER-panel author entered it 9/22) as primary / backup offers - the five entries Faraz's amendments superseded included, they come back as unplaced offers - and the December plain list (the 9/17 thread) as 'either' offers (an optional rolePref on a tag overrides the plain-list reading; open question 15). October is not tagged: it stays a dated availability list, before the first period. Inside the period the importer writes no available row and no explicitListMonths entry for him; rules.js governs him by the offers (exhaustive).",
       "timeOff": [
         {
           "start": "2027-01-09",
@@ -671,7 +685,34 @@
       "explicitListMonths": [
         "2026-10"
       ],
-      "explicitAvailableNote": "October is a governed month for PRIMARY (plain entry; since 9/22 backup is open to everyone), which is what makes 10/15 open for nobody (rules doc section 8 item 1). 10/10, 10/11 (the ER-panel author 9/16 Fri-Sun block) and 10/23 (Burchett 9/18 delta) added 2026-09-22: they are locked primaries he holds but were missing from the list. November is deliberately absent here (Y, 9/22 evening): a '2026-11' key would make the importer complete November back into explicitListMonths (groupRules.whitelistMonths.rule), and his November list is preferences - the relayed days are locks in existingAssignments, not rows."
+      "explicitAvailableNote": "October is a governed month for PRIMARY (plain entry; since 9/22 backup is open to everyone), which is what makes 10/15 open for nobody (rules doc section 8 item 1). 10/10, 10/11 (the ER-panel author 9/16 Fri-Sun block) and 10/23 (Burchett 9/18 delta) added 2026-09-22: they are locked primaries he holds but were missing from the list. November is deliberately absent here (Y, 9/22 evening): a '2026-11' key would make the importer complete November back into explicitListMonths (groupRules.whitelistMonths.rule), and his November list is preferences - the relayed days are locks in existingAssignments, not rows.",
+      "offeredDays": {
+        "2026-11": {
+          "primary": [
+            "2026-11-02",
+            "2026-11-04",
+            "2026-11-06",
+            "2026-11-14",
+            "2026-11-15",
+            "2026-11-16",
+            "2026-11-18"
+          ],
+          "backup": [
+            "2026-11-03",
+            "2026-11-05",
+            "2026-11-17"
+          ]
+        }
+      },
+      "offerSources": {
+        "offeredDays": {
+          "2026-11": {
+            "source": "email-relay",
+            "tag": "acton-via-burchett-relay-2026-09-17"
+          }
+        }
+      },
+      "offeredDaysNote": "Prompt 14 P5 (9/23): his relayed November days (Burchett's 9/17 relay; the ER-panel author entered them 9/22; Prompt 12 Y: preferences, not a limit) as the SOURCE of his call_offers rows in preferred mode - kept under offeredDays, not explicitAvailable, because an explicitAvailable['2026-11'] key would make the legacy derivation govern November again (Y). The same days are his locks in existingAssignments (his 11/5 backup entry was superseded by his 11/5 primary: an unplaced offer, holds-other-role). rules.js never reads offeredDays; the importer does."
     },
     "s4": {
       "name": "Philip",
@@ -719,6 +760,13 @@
         "2027-06-28"
       ],
       "availableWeeksNote": "Mondays of weeks he could be primary or backup; does NOT want all of them; 2027-06-07 is a tentative vacation",
+      "offerSources": {
+        "availableWeeks": {
+          "source": "email-relay",
+          "tag": "philip-email-2026-09-20"
+        }
+      },
+      "offerSourcesNote": "Prompt 14 P5 (9/23): his listed weeks (his 9/20 availability email) are the SOURCE of his call_offers rows for a period in which he has a mode (exhaustive): every day Mon-Sun of a listed week inside the period becomes an 'either' offer (his statement: weeks he could be primary or backup); weeks outside the period stay rules (rules.js reads availableWeeks outside any period). Consequence recorded as open question 15: under exhaustive 'either' his backup is limited to his weeks too (the pre-period weeks whitelist restricted primary only).",
       "preferences": {
         "noFullWeek": true,
         "maxMajorHolidays": 1
@@ -1057,6 +1105,28 @@
       ]
     }
   },
+  "offerPeriods": [
+    {
+      "label": "Nov 2026 - Jan 2027",
+      "start": "2026-11-02",
+      "end": "2027-01-03",
+      "offersCloseAt": "2026-10-02",
+      "publishBy": "2026-10-05",
+      "status": "upcoming",
+      "rulesOnly": [
+        "s1",
+        "s6"
+      ],
+      "offerModes": {
+        "s2": "exhaustive",
+        "s4": "exhaustive",
+        "s3": "preferred",
+        "s5": "preferred"
+      },
+      "source": "faraz-2026-09-22-prompt-14",
+      "note": "Prompt 14 part 5 (Faraz 9/22 evening; built 9/23): the first period = the milestone range. offersCloseAt is set by hand (the computed date, start - 6 weeks = 9/21, is past; Faraz's default 10/2, he may rename it), publishBy = start - 4 weeks. Khan (East feed) and Sarkar (windows) go by their rules (rulesOnly). Modes: Burchett's November list was published by the ER-panel author as his days and his December list is a plain date list -> exhaustive; Philip's listed weeks are a whitelist -> exhaustive; Acton's relayed November days are preferences (Prompt 12 Y) -> preferred; Fierce's single days would be extras on top of his pattern -> preferred, but the seed holds no dated single day of his inside this period (10/12 is October; 11/9-11/16 are his derived week plus Faraz's 11/16 decision, locks), so he reads not_started until he paints (open question 16). Mechanism: importer.js importPlan(seed, { offerPeriods: true }) - the CLI's setting - turns every tagged list (surgeonRules.<id>.offerSources) of a surgeon with a mode here into call_offers rows for the listed days inside the period on or after today (America/Chicago), skips a day inside the person's vacation (the DB refuses it, OF002), keeps a locked day as an offer (the record stays honest), and writes no available availability row and no explicitListMonths entry for that surgeon's period days / months; October and every untagged list stay as before. Rows: entered_by scheduler, source email-relay, note 'seed: <tag>' (the seed owns rows with that note; app-entered offers are never touched). call_periods is upserted by start_day; a re-import never rewrites status (the app owns the lifecycle) and merges offer_modes (the seed's keys win)."
+    }
+  ],
   "existingAssignments": [
     {
       "date": "2026-09-14",
@@ -1802,6 +1872,8 @@
     "11. October's sixteen open backups (five before 10/15 - AB - and eleven from 10/15 on, item 14) + 10/24 primary - filled by the 9/23 publish from the committed preview (docs/PUBLISH-2026-09-23.md: the one-run default from the first open slot 10/7; 10/24 primary -> Khan; 10/15 primary stays OPEN, item 1). Review or trade any of them in the app; the fill-open-only path (scripts/preview-generate.js --backfill, Prompt 12 T) remains for a later backfill.",
     "12. Burchett 10/25 - in his own 9/17 plan but not in the ER-panel author's document; confirm it stands now that Sarkar is off 10/24.",
     "13. ~~11/5 (Thu) primary - open for nobody once Acton is locked as its backup~~ - answered 9/22 evening (Prompt 12 Y, Faraz): Acton's 9/17 message gave rules and preferences, never a date list (the November dates came through Burchett's relay), so his November list is preferences, the November whitelist comes off (s3.explicitListMonths = October only; no explicitAvailable['2026-11'] block), his relayed days stay locked, and his recurring rules allow Thu 11/5: primary 11/4-11/6 (a run of 3, his max), locked (source faraz-2026-09-22-acton-1105); 11/5 backup is open to anyone eligible. Burchett's November whitelist stays.",
-    "14. 10/16, 10/27, 10/29 backup - open in the import (the ER-panel author's 9/16 document: Philip primary, no backup) but NOT in the open-backup list of her 9/22 document (10/15, 10/21, 10/23, 10/24, 10/25, 10/30, 10/31, 11/1): does her 9/22 document carry a backup on those three days? If so, send it and it is imported as a lock; meanwhile the October backfill proposes candidates for all eleven open backups."
+    "14. 10/16, 10/27, 10/29 backup - open in the import (the ER-panel author's 9/16 document: Philip primary, no backup) but NOT in the open-backup list of her 9/22 document (10/15, 10/21, 10/23, 10/24, 10/25, 10/30, 10/31, 11/1): does her 9/22 document carry a backup on those three days? If so, send it and it is imported as a lock; meanwhile the October backfill proposes candidates for all eleven open backups.",
+    "15. Prompt 14 P5 (9/23): under exhaustive mode a plain date list becomes 'either' offers, so Philip's listed weeks now limit his BACKUP to the listed days too inside Nov 2026 - Jan 2027 (before the period the weeks whitelist governed primary only, backup open to everyone). Burchett's December list already governs both roles (Faraz 9/23: the object entry in explicitListMonths), so the 'either' reading changes nothing for him. Confirm for Philip, or set rolePref 'primary' on the tag (surgeonRules.s4.offerSources.availableWeeks.rolePref) or switch his mode to preferred - data, no code change.",
+    "16. Prompt 14 P5 (9/23): Fierce's stated single days - the seed holds none inside Nov 2026 - Jan 2027 (10/12 is October; his 11/9-11/16 backup rows are his derived week plus Faraz's 11/16 decision, locks), so he is not_started for the first period until he paints or Faraz relays days for him; offerModes.s5 = preferred is recorded for that moment."
   ]
 }

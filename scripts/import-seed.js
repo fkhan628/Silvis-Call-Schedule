@@ -74,6 +74,28 @@
 // event loop drains (process.exit() right after fetch() trips a libuv assertion
 // on Node 24 / Windows and exits 127).
 //
+// Offer periods (Prompt 14 P5, 9/23): this CLI always builds the plan with
+// { offerPeriods: true } (importer.js header "Offer periods"): the seed's
+// offerPeriods[] become call_periods rows and the tagged lists call_offers rows;
+// the dry run prints the status table (surgeon | status | mode | offered days),
+// the skipped vacation days and the tag warnings. call_offers / call_periods are
+// AUTHENTICATED-read: the anon key gets HTTP 200 + [] from them (RLS, silently -
+// probe I on 9/22), which is indistinguishable from an empty table, so they are
+// NOT fetched here; the diff reads them as 'unknown' (every planned row an
+// upsert) and --apply verifies them from the rows the SQL's own returning select
+// hands back (call_offers_rows / call_periods_rows, run as postgres). A planned
+// offer that falls inside a LIVE vacation (time_off is anon-readable) would make
+// the DB refuse the whole transaction (OF002): it is listed and blocks --apply
+// (exit 3). --offers-json <path> writes { periods, offers } (the planned rows)
+// for an offers-aware generate run (scripts/preview-generate.js input).
+// The call_offers insert proposes only rows that would change (a new key, or a
+// seed-owned row that differs - importer.js impSqlOffers), so a re-run of
+// identical data proposes nothing and fires no trigger; after offers_close_at a
+// re-run that ADDS or CHANGES a seed-owned offer inside the period is refused
+// by the DB (OF003 - the CLI runs as postgres, not as the scheduler) and the
+// whole import rolls back: apply the seed's offers before the close, and let
+// the scheduler enter late offers in the app.
+//
 // No email address or phone number is ever read, printed or written here.
 
 "use strict";
@@ -89,7 +111,7 @@ const IMP = require(path.join(ROOT, "importer.js"));
 /* ------------------------------------------------------------- args */
 
 function parseArgs(argv) {
-  const a = { seed: path.join(ROOT, "docs", "silvis-seed.json"), mode: "dry-run", workdir: process.env.SILVIS_SUPABASE_WORKDIR || null, out: null, overwriteBlob: false, strictBlocked: false };
+  const a = { seed: path.join(ROOT, "docs", "silvis-seed.json"), mode: "dry-run", workdir: process.env.SILVIS_SUPABASE_WORKDIR || null, out: null, overwriteBlob: false, strictBlocked: false, offersJson: null };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === "--dry-run") a.mode = "dry-run";
@@ -99,6 +121,7 @@ function parseArgs(argv) {
     else if (t === "--seed") a.seed = path.resolve(argv[++i]);
     else if (t === "--workdir") a.workdir = argv[++i];
     else if (t === "--out") a.out = path.resolve(argv[++i]);
+    else if (t === "--offers-json") a.offersJson = path.resolve(argv[++i]);
     else if (t === "-h" || t === "--help") { usage(); process.exit(0); }
     else { console.error("unknown argument: " + t); usage(); process.exit(1); }
   }
@@ -107,7 +130,15 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log("usage: node scripts/import-seed.js [--seed docs/silvis-seed.json] [--dry-run | --apply] [--workdir <linked dir>] [--out <sql path>] [--overwrite-blob] [--strict-blocked]");
+  console.log("usage: node scripts/import-seed.js [--seed docs/silvis-seed.json] [--dry-run | --apply] [--workdir <linked dir>] [--out <sql path>] [--overwrite-blob] [--strict-blocked] [--offers-json <path>]");
+  console.log("  --offers-json <path>     also write the planned call_periods + call_offers rows as a generate input (P5)");
+}
+
+// The schedule_days lines of diff.blocked (app-edited / app-filled days); the offer lines (a surgeon's own offer,
+// a live vacation) are judged separately.
+function blockedDayLines(diff) {
+  const offers = new Set(diff.blockedOffers || []);
+  return diff.blocked.filter((l) => !offers.has(l) && !/the surgeon's own offer/.test(l));
 }
 
 /* ------------------------------------------------------------- config */
@@ -154,7 +185,11 @@ async function fetchLive(cfg) {
     blobUpdatedBy: blobRows[0] ? (blobRows[0].updated_by || null) : null,
     availability,
     time_off: timeOff,
-    schedule_days: scheduleDays
+    schedule_days: scheduleDays,
+    // P5: authenticated-read tables - never fetched with the anon key (200 + [] would masquerade as empty);
+    // null = unknown to planDiff; --apply fills them from the SQL's returning rows.
+    call_offers: null,
+    call_periods: null
   };
 }
 
@@ -163,8 +198,22 @@ function counts(live) {
     call_schedule_data: Object.keys(live.blob || {}).length ? 1 : 0,
     schedule_days: live.schedule_days.length,
     availability: live.availability.length,
-    time_off: live.time_off.length
+    time_off: live.time_off.length,
+    call_offers: Array.isArray(live.call_offers) ? live.call_offers.length : "unknown (authenticated-read; not fetched with the anon key)",
+    call_periods: Array.isArray(live.call_periods) ? live.call_periods.length : "unknown (authenticated-read; not fetched with the anon key)"
   };
+}
+
+// P5: the rows the SQL's returning select hands back (run as postgres) become the
+// live view of the two authenticated-read tables for the post-apply verification.
+function jsonish(v) { if (typeof v !== "string") return v; try { return JSON.parse(v); } catch (e) { return v; } }
+function withReturnedOffers(live, row) {
+  const offers = row ? jsonish(row.call_offers_rows) : null;
+  const periods = row ? jsonish(row.call_periods_rows) : null;
+  return Object.assign({}, live, {
+    call_offers: Array.isArray(offers) ? offers : null,
+    call_periods: Array.isArray(periods) ? periods : null
+  });
 }
 
 /* ------------------------------------------------------------- CLI */
@@ -193,6 +242,9 @@ function printStats(plan) {
   console.log("      availability " + s.availability + " " + JSON.stringify(s.availabilityByKindRole));
   Object.keys(s.availabilityByPerson).forEach((id) => console.log("        " + id + " " + JSON.stringify(s.availabilityByPerson[id])));
   console.log("      time_off " + s.time_off + "; call_schedule_data 'main' keys " + Object.keys(plan.blob).join(", "));
+  if (plan.offerPeriods && plan.offerPeriods.enabled) {
+    console.log("      call_periods " + s.call_periods + "; call_offers " + s.call_offers + " " + JSON.stringify(s.offersByPerson) + " (today " + plan.offerPeriods.today + " Central; " + (plan.offerSkips || []).length + " skipped on a vacation)");
+  }
 }
 
 // Dry run only: the rule-note scrub inventory, sorted by path, printed once.
@@ -212,7 +264,7 @@ function printNoteScrub(plan) {
 function keptSummary(diff) {
   const days = (diff && diff.blockedDays) || [];
   if (!days.length) return "";
-  return "kept " + days.length + " app-edited day(s): " + days.join(", ") + " (" + diff.blocked.length + " blocked slot change(s))";
+  return "kept " + days.length + " app-edited day(s): " + days.join(", ") + " (" + blockedDayLines(diff).length + " blocked slot change(s))";
 }
 
 // decideApply(diff, owner, coreWouldChange, args) -> { code, proceed, lines }: what --apply does BEFORE any SQL runs,
@@ -225,9 +277,18 @@ function keptSummary(diff) {
 function decideApply(diff, owner, coreWouldChange, args) {
   const lines = [];
   const blobKeys = (diff.tables && diff.tables.call_schedule_data && diff.tables.call_schedule_data.keys) || {};
-  if (diff.blocked.length && args.strictBlocked) {
-    lines.push("REFUSING TO APPLY (--strict-blocked): " + diff.blocked.length + " schedule_days change(s) on app-edited day(s) (source != 'import' or updated_by != 'seed') differ from the seed:");
-    diff.blocked.forEach((l) => lines.push("  " + l));
+  const blockedDays = blockedDayLines(diff);
+  // P5: a planned offer inside a LIVE vacation is never kept - the DB trigger (OF002) would refuse the row and roll the
+  // whole transaction back, so the run is refused before any SQL, flag or no flag (the seed list or the vacation must change).
+  if (diff.blockedOffers && diff.blockedOffers.length) {
+    lines.push("REFUSING TO APPLY: " + diff.blockedOffers.length + " planned offer(s) lie inside a live vacation (the DB trigger OF002 would refuse the row and the whole transaction):");
+    diff.blockedOffers.forEach((l) => lines.push("  " + l));
+    lines.push("Drop the day from the seed list (or the vacation in the app) and re-run.");
+    return { code: 3, proceed: false, lines };
+  }
+  if (blockedDays.length && args.strictBlocked) {
+    lines.push("REFUSING TO APPLY (--strict-blocked): " + blockedDays.length + " schedule_days change(s) on app-edited day(s) (source != 'import' or updated_by != 'seed') differ from the seed:");
+    blockedDays.forEach((l) => lines.push("  " + l));
     lines.push("Resolve them in the app (or update the seed) and re-run - or re-run without --strict-blocked to keep them and apply everything else, as the app's Apply does.");
     return { code: 3, proceed: false, lines };
   }
@@ -239,12 +300,12 @@ function decideApply(diff, owner, coreWouldChange, args) {
     return { code: 4, proceed: false, lines };
   }
   if (!args.workdir) { lines.push("--apply needs --workdir <linked supabase dir> (or SILVIS_SUPABASE_WORKDIR)"); return { code: 1, proceed: false, lines }; }
-  if (diff.blocked.length) {
+  if (blockedDays.length) {
     lines.push("KEPT (app-edited, not written - as the app's Apply keeps them): " + diff.blockedDays.length + " schedule_days row(s); the SQL carries no statement for them:");
-    diff.blocked.forEach((l) => lines.push("  " + l));
+    blockedDays.forEach((l) => lines.push("  " + l));
   }
   if (diff.totalChanges === 0) {
-    lines.push("nothing to apply - the live tables already match the plan" + (diff.blocked.length ? "; " + keptSummary(diff) : "") + ".");
+    lines.push("nothing to apply - the live tables already match the plan" + (blockedDays.length ? "; " + keptSummary(diff) : "") + ".");
     return { code: 0, proceed: false, lines };
   }
   return { code: 0, proceed: true, lines };
@@ -259,7 +320,8 @@ function verifyOutcome(verify, keptDays, strict) {
   const lines = [];
   const after = verify.blockedDays || [];
   const kept = keptDays || [];
-  const ok = verify.totalChanges === 0 && (!strict || !after.length);
+  const blockedOffers = (verify.blockedOffers || []).length;   // P5: an OF002 block after the apply is never a pass
+  const ok = verify.totalChanges === 0 && !blockedOffers && (!strict || !after.length);
   if (!ok) {
     // strict: the SQL only ever ran with nothing blocked, so a blocked day now APPEARED during the run (a concurrent app
     // edit) - every applied change landed; say so rather than blame the apply. Still a failure: nothing may be kept.
@@ -286,9 +348,9 @@ async function main() {
 
   let plan;
   try {
-    plan = IMP.importPlan(seed, { now: new Date().toISOString() });
+    plan = IMP.importPlan(seed, { now: new Date().toISOString(), offerPeriods: true });   // P5: the CLI always plans the offer periods
   } catch (e) {
-    if (/^(CONTACT_DATA_REFUSED|NOTE_DENYLIST)/.test(e.message)) { console.error("REFUSED: " + e.message); return 2; }
+    if (/^(CONTACT_DATA_REFUSED|NOTE_DENYLIST|OFFER_PERIOD_INVALID|OFFER_SOURCE_INVALID)/.test(e.message)) { console.error("REFUSED: " + e.message); return 2; }
     throw e;
   }
 
@@ -341,8 +403,16 @@ async function main() {
   fs.mkdirSync(path.dirname(args.out), { recursive: true });
   fs.writeFileSync(args.out, sql, "utf8");
   console.log("\nSQL written: " + args.out + " (" + sql.length + " bytes" + (keptDays.length ? "; no schedule_days statement for the " + keptDays.length + " app-edited day(s) listed as BLOCKED" : "") + ")");
+  if (args.offersJson) {
+    // P5: the planned periods + offers as a generate input (rules.buildContext({ ..., periods, offers }))
+    const input = IMP.impOffersInput(plan);
+    fs.mkdirSync(path.dirname(args.offersJson), { recursive: true });
+    fs.writeFileSync(args.offersJson, JSON.stringify(Object.assign({ _meta: { purpose: "Silvis offers input planned from the seed by scripts/import-seed.js (Prompt 14 P5); periods = call_periods rows, offers = call_offers rows; today " + plan.offerPeriods.today + " Central; no contact data" } }, input), null, 1), "utf8");
+    console.log("offers input written: " + args.offersJson + " (" + input.periods.length + " period(s), " + input.offers.length + " offer(s))");
+  }
 
   if (diff.kept && diff.kept.length) console.log("\nNOTE: " + diff.kept.length + " seed-owned live row(s) kept because the plan has no rows for that table (listed above).");
+  if (diff.blockedOffers && diff.blockedOffers.length) console.log("\nNOTE: " + diff.blockedOffers.length + " planned offer(s) fall inside a LIVE vacation - the DB would refuse them (OF002) and roll the whole import back; --apply is refused until the seed list or the vacation changes.");
 
   if (args.mode !== "apply") {
     console.log(diff.totalChanges === 0 && !diff.blocked.length ? "dry-run: nothing to apply." : "dry-run: " + diff.totalChanges + " change(s) would be applied" +
@@ -356,13 +426,27 @@ async function main() {
   if (!decision.proceed) return decision.code;
 
   const rows = runSupabase(path.resolve(args.workdir), args.out);
-  if (rows && rows[0]) console.log("post-commit counts (from the SQL): " + JSON.stringify(rows[0]));
+  const returned = rows && rows[0] ? rows[0] : null;
+  if (returned) {
+    const shown = Object.assign({}, returned); delete shown.call_offers_rows; delete shown.call_periods_rows;
+    console.log("post-commit counts (from the SQL): " + JSON.stringify(shown));
+  }
 
-  const after = await fetchLive(cfg);
+  // P5: the two authenticated-read tables are verified from the rows the SQL returned (never an anon read)
+  const after = withReturnedOffers(await fetchLive(cfg), returned);
   console.log("\nlive rows after: " + JSON.stringify(counts(after)));
+  if (plan.offerPeriods && plan.offerPeriods.enabled && !Array.isArray(after.call_offers)) {
+    console.error("\nNOT VERIFIED: the SQL's returning select did not hand back call_offers_rows - the offers could not be checked (the tables are not anon-readable). Re-run with -o json output intact.");
+    return 1;
+  }
   const verify = IMP.planDiff(plan, after);
   const outcome = verifyOutcome(verify, keptDays, args.strictBlocked);
   outcome.lines.forEach((l, i) => (outcome.ok ? console.log(l) : console.error(i ? l : "\n" + l)));
+  if (outcome.ok && Array.isArray(after.call_offers)) {
+    // P5: the two authenticated-read tables were verified from the SQL's returning rows, never an anon read
+    const t = verify.tables.call_offers || {};
+    console.log("call_offers verified from the SQL's returning rows: unchanged " + t.unchanged + ", kept " + (t.kept || 0) + ", blocked " + (t.blocked || 0) + "; call_periods unchanged " + ((verify.tables.call_periods || {}).unchanged || 0) + ".");
+  }
   return outcome.ok ? 0 : 1;
 }
 
