@@ -1034,7 +1034,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(fn.includes('if (deny) { const msg = `Refused: the vacation note carries a personal word ("${deny[1]}") - keep it operational (e.g. conference) or leave it blank; vacations are readable with the public key.`; showToast(msg, "error"); return { ok: false, error: msg }; }'),
       "the refusal names the matched word (never the whole note), toasts and returns { ok: false } like the other refusals");
     assert.strictEqual(count('db.insert("time_off"'), 1, "one time_off insert path in the app (the seed import posts through fetch and is gated by importer.js IMP_NOTE_DENYLIST)");
-    assert.strictEqual(count("SU_NOTE_DENYLIST"), 4, "SU_NOTE_DENYLIST: the definition, the roster note gate, the vacation note gate and the restore applier");
+    assert.strictEqual(count("SU_NOTE_DENYLIST"), 5, "SU_NOTE_DENYLIST: the definition, the roster note gate, the Time off form's early check (A7 addVac), the vacation note gate in toAdd and the restore applier");
   });
   // B6 review: the second client path that writes time_off notes is the backup-restore applier (whole rows through
   // fetch, on_conflict=id). A backup made before the denylist landed, or edited by hand, must not carry a personal
