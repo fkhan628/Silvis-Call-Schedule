@@ -522,6 +522,13 @@ function CallSchedule() {
   const pendingLinkRef = useRef(null);                     // Prompt 16 B7: the link pair waiting on that account's sign-out - memory only, never storage
   const [userProfile, setUserProfile] = useState(null);  // { id, person_id, display_name, role }
   const [profileLoadFailed, setProfileLoadFailed] = useState(false); // failed != unlinked
+  // Prompt 16 B4: the poll effect closes over reloadTrigger only, so the own-profile re-read looks at the signed-in
+  // account and the profile in state through refs (mirrored after every render; refreshOwnProfile advances the
+  // profile ref itself when it adopts a new row so a second tick inside the same render sees it).
+  const authUserRef = useRef(null);
+  const userProfileRef = useRef(null);
+  useEffect(() => { authUserRef.current = authUser; }, [authUser]);
+  useEffect(() => { userProfileRef.current = userProfile; }, [userProfile]);
   const [biometricAvail, setBiometricAvail] = useState(false);
   const [biometricReason, setBiometricReason] = useState("");
   const [biometricEnrolled, setBiometricEnrolled] = useState(false);
@@ -708,6 +715,33 @@ function CallSchedule() {
     if (!res.ok) throw new Error(`profile read failed: HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 160)}`);
     const rows = await res.json();
     return Array.isArray(rows) ? (rows[0] || null) : null;
+  };
+  // Prompt 16 B4: the 60-second poll re-reads this account's own user_profiles row (inside refreshAll, after
+  // ensureFresh, so the read carries a live token) - a surgeon whose account the admin links or promotes while the
+  // app is open sees Mine, the painter, the alerts and the role gates follow it without a reload. helpers.js
+  // profilePollMerge decides: a new profile only when person_id / role / display_name moved (or a failed mount
+  // read now succeeds - the red banner clears); an unchanged row never reaches setState; a failed read keeps the
+  // current profile with a warning (never a demotion - failure != empty); an empty read keeps it too (the own row
+  // is always readable, so an empty answer is an RLS surprise, not an unlink); nothing is read on a dead session
+  // (the session-expired banner owns that state) or before the mount profile exists; an answer that lands after a
+  // sign-out or an account switch is dropped. The "now linked" toast fires only when the link appeared during this
+  // session - a recovered read (the mount read had failed) may carry a link that predates it, so it applies silently
+  // (review 9/24). Returns { applied, reason } for the test harness; never throws.
+  const refreshOwnProfile = async (fr) => {
+    const uid = authUserRef.current && authUserRef.current.id;
+    const prev = userProfileRef.current;
+    if (!uid || !prev || prev.id !== uid || (fr && fr.expired) || auth.sessionExpired) return { applied: false, reason: "skipped" };
+    let row;
+    try { row = await fetchProfile(uid); }
+    catch (e) { console.warn("Profile poll read failed - keeping the current profile:", e); return { applied: false, reason: "failed" }; }
+    const m = profilePollMerge(prev, row);
+    if (!m.changed) return { applied: false, reason: "unchanged" };
+    if (!authUserRef.current || authUserRef.current.id !== uid || userProfileRef.current !== prev) return { applied: false, reason: "stale" };
+    userProfileRef.current = m.next;
+    setUserProfile(m.next);
+    if (m.recovered) setProfileLoadFailed(false);
+    if (m.linked && !m.recovered) showToast(`Your account is now linked to ${nameOf(m.next.person_id)} - Mine, your alerts and your offers follow it.`);
+    return { applied: true, reason: m.recovered ? "recovered" : (m.linked ? "linked" : "changed") };
   };
   // After any successful sign-in: adopt the user, load the profile (the DB
   // trigger creates the row when the Auth user is invited, so a missing row is
@@ -1710,6 +1744,7 @@ function CallSchedule() {
       const fr = await auth.ensureFresh();
       if (fr && fr.refreshed) resyncPendingRef.current("poll");
       await Promise.allSettled([
+        refreshOwnProfile(fr), // Prompt 16 B4: the own profile row, after the refresh above
         refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(),
         loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),
         loadOffers(true), loadPeriods(true),

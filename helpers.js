@@ -2632,11 +2632,44 @@ function notifVisibleTo(rows, who) {
   return base.filter(n => (n.created_at || "") > cleared);
 }
 
+/* === Own profile on the poll (Prompt 16 B4) === */
+// The 60-second poll re-reads the signed-in account's own user_profiles row so a surgeon whose account the admin
+// links or promotes while the app is open sees Mine, the painter and the role gates follow it without a reload.
+// This decides what that read means for the profile in state, in one place:
+// - only person_id / role / display_name count (null, "" and undefined are one value); an unchanged row answers the
+//   SAME prev object with changed false, so the caller never calls setState for it (React bails out anyway, but the
+//   caller does not even try);
+// - a moved field answers the fresh row (without the failed-read marker) with changed true, the moved fields, and
+//   linked / unlinked for the roster link appearing / going away;
+// - a failed mount read (prev._loadFailed) is replaced by ANY successful read (recovered), even when the three
+//   fields match, so the red "couldn't load your profile" banner clears;
+// - no prev (the mount read is still in flight), an empty read, junk, or a row for another id keeps the profile:
+//   the own row is always readable, so an empty answer is an RLS surprise, never an unlink (failure != empty).
+// Never throws.
+const PROFILE_POLL_KEYS = ["person_id", "role", "display_name"];
+function profilePollMerge(prev, row) {
+  const norm = (v) => (v === undefined || v === null || v === "" ? null : v);
+  if (!prev || typeof prev !== "object") return { next: prev, changed: false, reason: "no-profile" };
+  if (!row || typeof row !== "object" || Array.isArray(row)) return { next: prev, changed: false, reason: "empty" };
+  if (row.id && prev.id && row.id !== prev.id) return { next: prev, changed: false, reason: "other-account" };
+  const recovered = !!prev._loadFailed;
+  const moved = PROFILE_POLL_KEYS.filter(k => norm(prev[k]) !== norm(row[k]));
+  if (!moved.length && !recovered) return { next: prev, changed: false, reason: "unchanged" };
+  const next = { ...row, id: row.id || prev.id };
+  delete next._loadFailed;
+  return {
+    next, changed: true, reason: recovered ? "recovered" : "changed", moved, recovered,
+    linked: !norm(prev.person_id) && !!norm(row.person_id),
+    unlinked: !!norm(prev.person_id) && !norm(row.person_id),
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     reviewStateFor, derivedEastVacations,
     authLinkError, AUTH_LINK_ERROR_MESSAGE,
     notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,
+    profilePollMerge, PROFILE_POLL_KEYS,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

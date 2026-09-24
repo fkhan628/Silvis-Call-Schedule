@@ -3866,6 +3866,162 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- Prompt 16 B4: the poll re-reads the own user_profiles row - a link made while the app is open shows up without a reload ---------------- */
+  console.log("\n[B4] Prompt 16 B4 (the 60-second poll re-reads the own profile after ensureFresh; a new profile only when person_id / role / display_name moved)");
+  {
+    const B4SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const B4count = (s) => B4SRC.split(s).length - 1;
+    const U = "00000000-0000-4000-8000-0000000000b4";
+    const viewerRow = { id: U, person_id: null, role: "viewer", display_name: null, email: "x@example.com", created_at: "2026-09-01T00:00:00Z" };
+    const linkedRow = { ...viewerRow, person_id: "s1", role: "surgeon" };
+    check("B4: helpers.profilePollMerge - an unchanged row answers the SAME object with changed false; a moved person_id / role / display_name answers the fresh row with changed true (linked flags the null -> id move); null / '' / undefined are one value; an empty or foreign read keeps the profile; a failed mount read (_loadFailed) is replaced by any successful read", () => {
+      assert.strictEqual(typeof H.profilePollMerge, "function", "helpers.js exports profilePollMerge");
+      const prev = { id: U, person_id: null, role: "viewer", display_name: null };
+      const same = H.profilePollMerge(prev, { ...viewerRow });
+      assert.strictEqual(same.changed, false, "unchanged");
+      assert.strictEqual(same.next, prev, "the same reference (React bails out of an identical setState)");
+      const sameNorm = H.profilePollMerge({ id: U, person_id: "", role: "viewer", display_name: undefined }, { ...viewerRow, display_name: "" });
+      assert.strictEqual(sameNorm.changed, false, "null / '' / undefined read as one value");
+      const link = H.profilePollMerge(prev, { ...linkedRow });
+      assert.strictEqual(link.changed, true, "person_id null -> s1 is a change");
+      assert.strictEqual(link.linked, true, "linked: the account gained its roster link");
+      assert.deepStrictEqual(link.moved, ["person_id", "role"], "the fields that moved, in the fixed order");
+      assert.strictEqual(link.next.person_id, "s1"); assert.strictEqual(link.next.role, "surgeon"); assert.strictEqual(link.next.id, U);
+      assert.strictEqual("_loadFailed" in link.next, false, "the fresh profile never carries the failed-read marker");
+      const role = H.profilePollMerge({ id: U, person_id: "s1", role: "surgeon", display_name: "Khan" }, { ...linkedRow, role: "scheduler", display_name: "Khan" });
+      assert.strictEqual(role.changed, true); assert.strictEqual(role.linked, false); assert.deepStrictEqual(role.moved, ["role"]);
+      const name = H.profilePollMerge({ id: U, person_id: "s1", role: "surgeon", display_name: null }, { ...linkedRow, display_name: "F. Khan" });
+      assert.strictEqual(name.changed, true); assert.deepStrictEqual(name.moved, ["display_name"]);
+      const unlink = H.profilePollMerge({ id: U, person_id: "s1", role: "surgeon", display_name: null }, { ...viewerRow });
+      assert.strictEqual(unlink.changed, true); assert.strictEqual(unlink.unlinked, true, "the link can also go away");
+      const other = H.profilePollMerge({ id: U, person_id: "s1", role: "scheduler", display_name: null }, { ...linkedRow, id: "someone-else" });
+      assert.strictEqual(other.changed, false, "a row for another account is never adopted");
+      assert.strictEqual(H.profilePollMerge({ id: U, person_id: "s1", role: "scheduler", display_name: null }, null).changed, false, "an empty read keeps the profile (the own row is always readable - an empty answer is an RLS surprise, never an unlink)");
+      assert.strictEqual(H.profilePollMerge(null, { ...linkedRow }).changed, false, "no profile yet (the mount read is in flight) - nothing to merge");
+      assert.strictEqual(H.profilePollMerge({ id: U, person_id: "s1", role: "scheduler", display_name: null }, "junk").changed, false, "junk never throws");
+      const rec = H.profilePollMerge({ id: U, person_id: null, role: "viewer", display_name: null, _loadFailed: true }, { ...viewerRow });
+      assert.strictEqual(rec.changed, true, "a failed mount read replaced by a successful one is a change even when the three fields match (the red banner must clear)");
+      assert.strictEqual(rec.recovered, true); assert.strictEqual("_loadFailed" in rec.next, false);
+    });
+    // behaviour: fetchProfile + refreshOwnProfile lifted out of the component verbatim and run against stub refs / a
+    // stub fetch - each tick is one poll pass after ensureFresh; setUserProfile calls are the re-renders.
+    const lift = () => {
+      const start = B4SRC.indexOf("  const fetchProfile = async (userId) => {");
+      const end = B4SRC.indexOf("  // After any successful sign-in: adopt the user, load the profile", start);
+      if (start < 0 || end < 0) throw new Error("fetchProfile .. refreshOwnProfile block not found in index-source.html");
+      const body = B4SRC.slice(start, end);
+      if (!body.includes("const refreshOwnProfile = async (fr) => {")) throw new Error("refreshOwnProfile is not implemented next to fetchProfile");
+      return body;
+    };
+    const mk = () => {
+      const state = { renders: [], failedSets: [], toasts: [], warns: 0, gets: 0, answer: () => resp(200, [{ ...viewerRow }]) };
+      const authUserRef = { current: { id: U, email: "x@example.com" } };
+      const userProfileRef = { current: { id: U, person_id: null, role: "viewer", display_name: null } };
+      const auth = { sessionExpired: false };
+      const fetch = async (url, opts) => { state.gets++; state.lastUrl = String(url); state.lastAuth = opts && opts.headers && opts.headers.Authorization; return state.answer(); };
+      const params = ["authUserRef", "userProfileRef", "auth", "fetch", "SUPABASE_URL", "dbAuthHeaders", "profilePollMerge", "setUserProfile", "setProfileLoadFailed", "showToast", "nameOf", "console"];
+      const fn = new Function(...params, lift() + "\nreturn refreshOwnProfile;")(
+        authUserRef, userProfileRef, auth, fetch, "https://example.invalid", () => ({ Authorization: "Bearer user-jwt", apikey: "anon" }), H.profilePollMerge,
+        (p) => { state.renders.push(p); userProfileRef.current = p; }, (v) => state.failedSets.push(v), (m) => state.toasts.push(m), (id) => ({ s1: "Khan" }[id] || id), { warn: () => { state.warns++; }, log: () => {} });
+      return { tick: fn, state, authUserRef, userProfileRef, auth };
+    };
+    const b4check = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    await b4check("B4 behaviour: a poll tick whose row now carries person_id s1 flips the profile ONCE (one setUserProfile, one 'linked' toast naming Khan); the next ticks with the same row make the GET but never call setUserProfile; the GET is the own-row read with the user JWT", async () => {
+      const t = mk();
+      const r0 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.strictEqual(r0.applied, false, "tick 0 (unchanged viewer row): " + JSON.stringify(r0));
+      assert.strictEqual(t.state.renders.length, 0, "no setUserProfile for an identical row");
+      assert.ok(/\/rest\/v1\/user_profiles\?id=eq\.00000000-0000-4000-8000-0000000000b4&select=\*$/.test(t.state.lastUrl), "the own-row read: " + t.state.lastUrl);
+      assert.strictEqual(t.state.lastAuth, "Bearer user-jwt", "dbAuthHeaders (the user JWT) on the read");
+      t.state.answer = () => resp(200, [{ ...linkedRow }]);
+      const r1 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual({ applied: r1.applied, reason: r1.reason }, { applied: true, reason: "linked" });
+      assert.strictEqual(t.state.renders.length, 1, "exactly one setUserProfile");
+      assert.strictEqual(t.state.renders[0].person_id, "s1"); assert.strictEqual(t.state.renders[0].role, "surgeon");
+      assert.deepStrictEqual(t.state.toasts, ["Your account is now linked to Khan - Mine, your alerts and your offers follow it."]);
+      const r2 = await t.tick({ ok: true, expired: false, refreshed: true });
+      const r3 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual([r2.applied, r3.applied], [false, false], "unchanged ticks");
+      assert.strictEqual(t.state.gets, 4, "every tick reads (4 GETs)");
+      assert.strictEqual(t.state.renders.length, 1, "still one setUserProfile - no re-render for an unchanged row");
+      assert.strictEqual(t.state.toasts.length, 1, "the link toast fires once");
+      assert.deepStrictEqual(t.state.failedSets, [], "profileLoadFailed untouched when the mount read had succeeded");
+    });
+    await b4check("B4 behaviour: a role move (viewer -> scheduler) re-renders once without the link toast; a display_name move re-renders once; a failed read (HTTP 500) or an empty read ([]) keeps the current profile with a console warning and no setState; an expired session (fr.expired or auth.sessionExpired) makes no read at all", async () => {
+      const t = mk();
+      t.userProfileRef.current = { id: U, person_id: "s1", role: "viewer", display_name: null };
+      t.state.answer = () => resp(200, [{ ...linkedRow, role: "scheduler" }]);
+      const r1 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual({ applied: r1.applied, reason: r1.reason }, { applied: true, reason: "changed" });
+      assert.strictEqual(t.state.renders.length, 1); assert.strictEqual(t.state.renders[0].role, "scheduler"); assert.deepStrictEqual(t.state.toasts, []);
+      t.state.answer = () => resp(200, [{ ...linkedRow, role: "scheduler", display_name: "Dr Khan" }]);
+      const r2 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.strictEqual(r2.applied, true); assert.strictEqual(t.state.renders.length, 2); assert.strictEqual(t.state.renders[1].display_name, "Dr Khan");
+      t.state.answer = () => resp(500, "boom");
+      const r3 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual({ applied: r3.applied, reason: r3.reason }, { applied: false, reason: "failed" });
+      assert.strictEqual(t.state.warns, 1, "one warning for the failed read");
+      t.state.answer = () => resp(200, []);
+      const r4 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual({ applied: r4.applied, reason: r4.reason }, { applied: false, reason: "unchanged" }, "an empty read is not an unlink");
+      assert.strictEqual(t.state.renders.length, 2, "no setState after the failed / empty reads");
+      assert.strictEqual(t.userProfileRef.current.role, "scheduler", "the profile stayed");
+      const gets = t.state.gets;
+      const r5 = await t.tick({ ok: false, expired: true, refreshed: false });
+      t.auth.sessionExpired = true;
+      const r6 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual([r5.reason, r6.reason, t.state.gets], ["skipped", "skipped", gets], "no read on a dead session (the banner owns that state)");
+    });
+    await b4check("B4 behaviour: a failed mount read (the _loadFailed fallback) is replaced by the first successful poll read and profileLoadFailed clears - even when the row still reads viewer / unlinked; a recovered read that comes back LINKED applies the link but never shows the 'now linked' toast (the link may predate the session); a sign-out (authUserRef null) or an account switch while the read is in flight drops the answer; no profile yet (mount read in flight) reads nothing", async () => {
+      const t = mk();
+      t.userProfileRef.current = { id: U, person_id: null, role: "viewer", display_name: null, _loadFailed: true };
+      const r1 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual({ applied: r1.applied, reason: r1.reason }, { applied: true, reason: "recovered" });
+      assert.strictEqual(t.state.renders.length, 1); assert.strictEqual("_loadFailed" in t.state.renders[0], false);
+      assert.deepStrictEqual(t.state.failedSets, [false], "setProfileLoadFailed(false) once");
+      assert.deepStrictEqual(t.state.toasts, [], "no link toast - still unlinked");
+      const r1b = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.strictEqual(r1b.applied, false); assert.strictEqual(t.state.renders.length, 1);
+      // recovered AND linked: the failed mount fallback is unlinked, the first good read carries s1 - the link is applied,
+      // the banner clears, but the toast stays silent (the merge says linked, yet the link may predate this session)
+      t.userProfileRef.current = { id: U, person_id: null, role: "viewer", display_name: null, _loadFailed: true };
+      t.state.answer = () => resp(200, [{ ...linkedRow }]);
+      const r1c = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual({ applied: r1c.applied, reason: r1c.reason }, { applied: true, reason: "recovered" });
+      assert.strictEqual(t.state.renders.length, 2); assert.strictEqual(t.state.renders[1].person_id, "s1", "the link is applied");
+      assert.deepStrictEqual(t.state.failedSets, [false, false], "profileLoadFailed clears again");
+      assert.deepStrictEqual(t.state.toasts, [], "no 'now linked' toast on a recovered read, even when it comes back linked");
+      t.state.answer = () => resp(200, [{ ...viewerRow }]);
+      t.userProfileRef.current = { id: U, person_id: null, role: "viewer", display_name: null };
+      t.state.renders.length = 0; t.state.failedSets.length = 0;
+      // sign-out mid-read
+      t.state.answer = () => { t.authUserRef.current = null; return resp(200, [{ ...linkedRow }]); };
+      const r2 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.deepStrictEqual({ applied: r2.applied, reason: r2.reason }, { applied: false, reason: "stale" });
+      assert.strictEqual(t.state.renders.length, 0, "nothing applied after a sign-out");
+      // account switch mid-read (adoptSignedInUser replaced the profile object)
+      t.authUserRef.current = { id: U };
+      t.state.answer = () => { t.userProfileRef.current = { id: U, person_id: "s2", role: "surgeon", display_name: null }; return resp(200, [{ ...linkedRow }]); };
+      const r3 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.strictEqual(r3.reason, "stale"); assert.strictEqual(t.state.renders.length, 0);
+      // no profile yet
+      t.userProfileRef.current = null; const gets = t.state.gets;
+      const r4 = await t.tick({ ok: true, expired: false, refreshed: false });
+      assert.strictEqual(r4.reason, "skipped"); assert.strictEqual(t.state.gets, gets, "no read before the mount profile exists");
+    });
+    check("B4 pins: authUserRef / userProfileRef mirror the two states; refreshAll runs refreshOwnProfile(fr) inside its Promise.allSettled AFTER ensureFresh (A3's order kept); the poll and the realtime SUBSCRIBED handler both go through refreshAll (one read site); setUserProfile has exactly five call sites (adopt x2, sign-out, the Users card editing the admin's own row, the poll)", () => {
+      assert.strictEqual(B4count("useEffect(() => { authUserRef.current = authUser; }, [authUser]);"), 1, "authUserRef mirror");
+      assert.strictEqual(B4count("useEffect(() => { userProfileRef.current = userProfile; }, [userProfile]);"), 1, "userProfileRef mirror");
+      const ra = B4SRC.indexOf("const refreshAll = async () => {");
+      const raBody = B4SRC.slice(ra, B4SRC.indexOf("    };", ra));
+      const iFresh = raBody.indexOf("const fr = await auth.ensureFresh();"), iSettle = raBody.indexOf("await Promise.allSettled(["), iOwn = raBody.indexOf("refreshOwnProfile(fr),");
+      assert.ok(iFresh > 0 && iSettle > iFresh && iOwn > iSettle, "refreshAll: ensureFresh, then the settled batch that includes refreshOwnProfile(fr): " + raBody);
+      assert.strictEqual(B4count("refreshOwnProfile(fr)"), 1, "one call site (the poll and the SUBSCRIBED handler share refreshAll)");
+      assert.strictEqual(B4count("const pollInterval = setInterval(refreshAll, 60000);"), 1, "the 60-second poll");
+      assert.strictEqual(B4count("setUserProfile("), 5, "setUserProfile call sites: adoptSignedInUser (ok + failed), handleSignOut, the Users card PATCH of the admin's own row, refreshOwnProfile");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });
