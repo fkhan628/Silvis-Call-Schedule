@@ -357,12 +357,13 @@ function CallSchedule() {
 
   // Vacation entry form (Setup card + Time off tab share these)
   const [vacSurgeon, setVacSurgeon] = useState("");
-  const [vacStart, setVacStart] = useState(() => fmt(new Date()));
-  const [vacEnd, setVacEnd] = useState(() => fmt(new Date()));
+  // Prompt 16 B9 (i): every DATE default reads todayCentral() (helpers.js) - one notion of today, the call's own.
+  const [vacStart, setVacStart] = useState(() => todayCentral());
+  const [vacEnd, setVacEnd] = useState(() => todayCentral());
   const [vacNote, setVacNote] = useState("");
   const [editVac, setEditVac] = useState(null); // { sid, idx, start, end }
   // Clear-schedule range (Setup, scheduler)
-  const [clearStart, setClearStart] = useState(() => fmt(new Date()));
+  const [clearStart, setClearStart] = useState(() => todayCentral());
   const [clearEnd, setClearEnd] = useState("");
   // --- Setup view state (Prompt 6 Slice E) ---
   // previewGen: a generator result shown on the calendar with a dashed outline;
@@ -370,6 +371,9 @@ function CallSchedule() {
   const [previewGen, setPreviewGen] = useState(null); // { schedule, diagnostics, start, end, seed, bestOf, respectLocks, ranAt, ms }
   const [genBusy, setGenBusy] = useState(false);
   const [genOpts, setGenOpts] = useState({ start: "", end: "", bestOf: 200, seed: "", respectLocks: true, fillOpenOnly: false });
+  // Prompt 16 B9 (a): set once a worker run failed on this device (importScripts, a clone error, a worker error
+  // event) - Generate then runs inline for the rest of the session and the busy line says so.
+  const [genWorkerBroken, setGenWorkerBroken] = useState(false);
   const [profilesErr, setProfilesErr] = useState("");       // Users card: failed != empty
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [availBusy, setAvailBusy] = useState(false);
@@ -423,6 +427,15 @@ function CallSchedule() {
   // from the DB or build it locally. Once armed, a "wiped" autosave payload is
   // refused.
   const everHadRealDataRef = useRef(false);
+  // Prompt 16 B9 (h): the row count of the last schedule_days read this session ADOPTED. A later read of zero rows
+  // while this is > 0 is a failed read (RLS / a dead token answer 200 + []), not an empty schedule: the map is kept
+  // and the person is told once (daysTripwireWarnedRef) until a read with rows arrives. The factory reset zeroes
+  // it after its own DELETE, so the empty table IT made is not a false alarm.
+  const lastDaysCountRef = useRef(0);
+  const daysTripwireWarnedRef = useRef(false);
+  // Prompt 16 B9 (e): labels of Setup saves (group rules, holiday units) whose "saved" toast waits for the blob
+  // write to return - the autosave's blob leg settles them on every one of its exits (helpers.setupSaveToasts).
+  const blobWaitersRef = useRef([]);
   // allowWipeSaveRef is a one-shot bypass set by deliberate destructive ops
   // (factory reset) so their intended empty write isn't blocked by the guard.
   const allowWipeSaveRef = useRef(false);
@@ -1383,12 +1396,27 @@ function CallSchedule() {
     scheduleRef.current = loadedDays.sched;
     dayVersionsRef.current = loadedDays.vers;
     lastSyncRef.current = JSON.parse(JSON.stringify(loadedDays.sched));
+    lastDaysCountRef.current = loadedDays.count; // Prompt 16 B9 (h): the tripwire's baseline
+    daysTripwireWarnedRef.current = false;
   };
   const sameAssignment = (day, a, b) => JSON.stringify(assignmentToDayRow(day, a || emptyDayAssignment())) === JSON.stringify(assignmentToDayRow(day, b || emptyDayAssignment()));
   // Merge a freshly loaded table into the live map (the background refresh, and - Prompt 16 A3 - every re-run of
   // the data load after a sign-in): adopt only days that differ from what we last persisted AND that we have not
   // edited locally since (an unsaved local edit is the truth; it re-syncs as a CAS write against the fresh version).
   const mergeLoadedDays = (fresh) => {
+    // Prompt 16 B9 (h): zero rows after N > 0 is a failed read, not an empty table (helpers.daysReadTripped) - keep
+    // the map and the persisted base exactly as they are, say so once, and report false so the caller does not
+    // treat the read as a success. A read with rows (or a first empty read) goes on as before.
+    if (daysReadTripped(fresh.count, lastDaysCountRef.current)) {
+      console.warn(`schedule_days read answered 0 rows while ${lastDaysCountRef.current} were on record - treated as a failed read; the schedule this device holds is kept.`);
+      if (!daysTripwireWarnedRef.current) {
+        daysTripwireWarnedRef.current = true;
+        showToast(`The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`, "error");
+      }
+      return false;
+    }
+    lastDaysCountRef.current = fresh.count;
+    daysTripwireWarnedRef.current = false;
     const base = lastSyncRef.current || {};
     const local = scheduleRef.current || {};
     let changedAny = false;
@@ -1406,6 +1434,7 @@ function CallSchedule() {
     }
     dayVersionsRef.current = { ...dayVersionsRef.current, ...fresh.vers };
     if (changedAny) { lastSyncRef.current = base; scheduleRef.current = merged; setSchedule(merged); }
+    return true;
   };
   const writeFailToast = (status, body) => {
     const s = String(body || "");
@@ -1559,6 +1588,14 @@ function CallSchedule() {
       try {
         const fresh = await loadScheduleDays();
         const local = scheduleRef.current || {};
+        // Prompt 16 B9 (h): the same tripwire as the poll - an empty answer over a table that had rows is a failed
+        // read; the local map stays and the person is told, nothing is adopted.
+        if (daysReadTripped(fresh.count, lastDaysCountRef.current)) {
+          console.warn(`conflict reload: schedule_days answered 0 rows while ${lastDaysCountRef.current} were on record - the local schedule is kept.`);
+          showToast("A day was changed by someone else, but the reload came back empty - keeping the schedule this device has. Check your connection, or the schedule was cleared on another device - reload to confirm.", "error");
+          return { ok: false, error: "conflict", conflict: true };
+        }
+        lastDaysCountRef.current = fresh.count;
         const merged = { ...fresh.sched };
         let kept = 0;
         for (const day of Object.keys(local)) {
@@ -1709,11 +1746,13 @@ function CallSchedule() {
     const refreshDays = async () => {
       try {
         const fresh = await loadScheduleDays();
-        loadFailedRef.current = false; // the days read succeeded - the days leg is safe again (the blob leg is gated by blobLoadedRef separately)
         // Adopt only days that differ from what we last persisted AND that we
         // have not edited locally since (an unsaved local edit is the truth) -
-        // mergeLoadedDays, shared with the post-sign-in re-run of the load.
-        mergeLoadedDays(fresh);
+        // mergeLoadedDays, shared with the post-sign-in re-run of the load. It answers false for a tripped read
+        // (Prompt 16 B9 (h): zero rows over a table that had rows) - that read is not a success, so the days leg
+        // is not declared safe by it (the blob leg is gated by blobLoadedRef separately).
+        const adopted = mergeLoadedDays(fresh);
+        if (adopted !== false) loadFailedRef.current = false;
       } catch(e) { console.warn("Background schedule refresh failed:", e); }
     };
     // Authenticated-read tables: skipped (list kept) without a fresh token - see readAuthOnlyTable.
@@ -1963,26 +2002,45 @@ function CallSchedule() {
   }, [loaded, schedule, vacations, availabilityRows, saveTick]);
   // blobLocalRef follows the committed setup state (what adoptBlob merges a foreign blob into).
   useEffect(() => { blobLocalRef.current = { roster: surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate }; }, [surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate]);
+  // Prompt 16 B9 (e): a Setup save whose toast must wait for the write. awaitBlobWrite(label) is called where the
+  // state changes (saveGroupRules, saveHolidays); the blob leg below settles every waiter on each of its exits -
+  // "<label> saved." only once the PATCH returned a row (or the content was already on the row), "<label> NOT
+  // saved - <why>" on every path that wrote nothing. The refs keep the list across the 800 ms debounce and across
+  // a re-armed run (a second change inside the debounce cancels the first timer; the waiter stays until a run ends).
+  // A run takes its waiters the moment its timer fires (takeBlobWaiters, before saveBlobNow) and settles only those:
+  // a save clicked while an earlier PATCH is still awaiting is left for the run its own change re-arms, so
+  // "saved." can never come from a write that did not carry it (B9 review 9/24). The synchronous guards above the
+  // timer settle the whole list - nothing of theirs is in flight.
+  const awaitBlobWrite = (label) => { blobWaitersRef.current.push(label); };
+  const takeBlobWaiters = () => { const l = blobWaitersRef.current; blobWaitersRef.current = []; return l; };
+  const settleWaiters = (labels, ok, why) => {
+    if (!labels || !labels.length) return;
+    setupSaveToasts(labels, ok, why).forEach(t => showToast(t.text, t.tone));
+  };
+  const settleBlobWaiters = (ok, why) => settleWaiters(takeBlobWaiters(), ok, why);
   useEffect(() => {
     if (!loaded) return;
     if (isPublicMode) return;  // Public viewers never write to the DB
-    if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return; // hydration window
+    if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) { settleBlobWaiters(false, "the app is still loading - save again in a moment"); return; } // hydration window
     if (loadFailedRef.current) {
       setSaveError(true);
       setSaveStatus("Not saving - data failed to load");
+      settleBlobWaiters(false, "data failed to load");
       return;
     }
     // Leg 2 - the config blob. Scheduler/admin only (RLS): a member has
     // nothing to write here and would only produce a 403.
-    if (!canWriteBlob) return;
+    if (!canWriteBlob) { settleBlobWaiters(false, "this account cannot write the shared setup"); return; }
     const payload = buildStateBundle();
     pendingSaveRef.current = payload;
     const timer = setTimeout(async () => {
+      const mine = takeBlobWaiters(); // the waiters this run answers for - registered before its timer fired
       // -- Empty-save guard -- (the same predicate as leg 1; the one-shot bypass is consumed there)
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave (blob): refusing to write while the payload looks wiped over real data.");
         setSaveError(true);
         setSaveStatus("Save blocked - empty data not written");
+        settleWaiters(mine, false, "empty data was not written");
         return;
       }
       // Never write the blob from a session that has not READ it: with
@@ -1992,6 +2050,7 @@ function CallSchedule() {
         console.warn("Autosave: the shared setup (call_schedule_data) has not loaded this session - blob write skipped so defaults cannot overwrite it.");
         setSaveError(true);
         setSaveStatus("Setup not saved - shared setup failed to load");
+        settleWaiters(mine, false, "the shared setup did not load this session");
         return;
       }
       try {
@@ -2001,6 +2060,9 @@ function CallSchedule() {
           setSaveStatus("Saved");
           setTimeout(() => setSaveStatus(""), 2000);
         }
+        // Prompt 16 B9 (e): the waiters learn the outcome only now - saved, skipped (the row already holds this
+        // content) and landed-earlier are a save; a CAS-miss reload means the local copy was NOT written.
+        if (r && r.reloaded) settleWaiters(mine, false, "the setup changed on another device and was reloaded - check it and save again"); else settleWaiters(mine, true);
       } catch (e) {
         console.error("Save failed:", e);
         setSaveError(true);
@@ -2015,6 +2077,8 @@ function CallSchedule() {
           : authFail
             ? (auth.sessionExpired ? "Changes aren't saving - your session expired. Sign in again." : "Changes aren't saving - your session couldn't be refreshed; they go out once it is.")
             : "Changes aren't saving - check your connection.", "error");
+        // The waiters' own line comes LAST: the toast is single-slot, so this is the one that stays (B9 review 9/24).
+        settleWaiters(mine, false, denied ? "your account has no permission to write the shared setup" : authFail ? "your session expired - sign in again" : "the write failed - check your connection");
       }
     }, 800);
     return () => clearTimeout(timer);
@@ -2443,18 +2507,20 @@ function CallSchedule() {
     logAudit("rules.edit", `Rules saved for ${nameOf(id)}`, { surgeon_id: id, keys: Object.keys(rules || {}) });
     showToast(`Rules for ${nameOf(id)} saved - eligibility rebuilds now; the blob autosaves.`, "success");
   };
+  // Prompt 16 B9 (e): both used to toast "saved." the moment the state changed, 800 ms and one PATCH before anything
+  // was written. The toast now waits for the blob leg (awaitBlobWrite / settleBlobWaiters above the autosave effect).
   const saveGroupRules = (next) => {
     if (!isScheduler) return;
     setGroupRules(next);
     logAudit("rules.edit", "Group rules saved", { keys: Object.keys(next || {}) });
-    showToast("Group rules saved.", "success");
+    awaitBlobWrite("Group rules");
   };
   const saveHolidays = (next) => {
     if (!isScheduler) return;
     setHolidays(next);
     const years = Object.keys((next && next.units) || {});
     logAudit("holidays.edit", `Holiday units saved for ${years.join(", ") || "no years"}`, { years, counts: years.map(y => y + ":" + ((next.units[y] || []).length)) });
-    showToast("Holiday units saved.", "success");
+    awaitBlobWrite("Holiday units");
   };
   // Users (admin). user_profiles is authenticated-read; the loud read below
   // distinguishes "failed" from "no accounts" (dbAuth.getAllProfiles returns
@@ -2548,7 +2614,7 @@ function CallSchedule() {
     if (!isScheduler) return;
     setEastRefreshing(true);
     try {
-      const fromMon = fmt(monOf(addD(new Date(), -28)));
+      const fromMon = fmt(monOf(addD(parse(todayCentral()), -28)));
       const toMon = fmt(addD(parse(fromMon), 7 * 30));
       // Prompt 15 part 1a (9/23): the same refresh reads the Davenport VACATIONS
       // (time_off, kind vacation only) of every roster surgeon whose East feature
@@ -2798,11 +2864,11 @@ function CallSchedule() {
   const genStart = genFirstOpenDay || (genFallback > genToday ? genFallback : genToday);
   const laterAssignedRanges = useMemo(() => suLaterAssignedRanges(schedule, suAddDays(genStart, -1)), [schedule, genStart]);
   const genPresets = useMemo(() => { try { return rangePresets(suAddDays(genStart, -1)); } catch (e) { console.warn("rangePresets failed", e); return []; } }, [genStart]);
-  // Inline run with a painted busy indicator. TODO(worker): a web worker would
-  // need importScripts of config/helpers/rules/east-feed/generator and a
-  // structured-clone of ctx (Sets are fine, the memo is not needed); for the
-  // milestone ranges (up to ~400 days x 200 candidates) the inline run stays
-  // under the 25 s time budget, so it is not worth the second load path yet.
+  // Prompt 16 B9 (a): the run goes to a Web Worker (generateInWorker, module scope) whenever the device has one, so
+  // a phone's page keeps scrolling and answering taps through the whole best-of-N; a device without workers, or one
+  // whose worker failed once this session (genWorkerBroken), runs inline as before - the inline run still paints
+  // the busy indicator first. GeneratePanel's busy line names the mode that will really run (busyMode).
+  const genWorkerOk = genWorkerSupported() && !genWorkerBroken;
   const runGenerate = async (o) => {
     if (!isScheduler) return;
     const start = o.start, end = o.end;
@@ -2817,12 +2883,21 @@ function CallSchedule() {
     if (ov.verdict === "refuse") { showToast("Not run: the offers and periods were not loaded (" + ov.why + "), so this run would place nobody's offered days first. Sign in again or reload, wait for the load, then generate. Nothing was run.", "error"); return; }
     const offersStale = ov.verdict === "stale" ? ov.why : null;
     setGenBusy(true);
-    await new Promise(r => setTimeout(r, 40)); // let the busy indicator paint before the synchronous run
     try {
-      const built = safeBuildContext({ ...ctxInputs, schedule: scheduleRef.current || schedule, rangeStart: start, rangeEnd: end });
-      if (!built.ctx) throw new Error(built.error || "rules context unavailable");
+      const inputs = { ...ctxInputs, schedule: scheduleRef.current || schedule, rangeStart: start, rangeEnd: end };
+      const runOpts = { seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, timeBudgetMs: 25000 };
       const t0 = Date.now();
-      const res = generate(built.ctx, start, end, { seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, timeBudgetMs: 25000 });
+      let res = null;
+      if (genWorkerOk) {
+        try { res = await generateInWorker(inputs, start, end, runOpts); }
+        catch (e) { console.warn("Generate worker failed - this device runs Generate inline on the page from now on:", e); setGenWorkerBroken(true); res = null; }
+      }
+      if (!res) {
+        await new Promise(r => setTimeout(r, 40)); // let the busy indicator paint before the synchronous run
+        const built = safeBuildContext(inputs);
+        if (!built.ctx) throw new Error(built.error || "rules context unavailable");
+        res = generate(built.ctx, start, end, runOpts);
+      } else if (res.warnings && res.warnings.length) console.warn("rules context warnings (worker):", res.warnings);
       const ms = Date.now() - t0;
       const dg = res.diagnostics || {};
       if (dg.warnings && dg.warnings.length) console.warn("generate warnings:", dg.warnings);
@@ -3132,6 +3207,7 @@ function CallSchedule() {
     }
     // The rows are gone: reflect that locally NOW, whatever step 2 does, so a
     // stale local copy is never re-POSTed as a fresh v1 schedule.
+    lastDaysCountRef.current = 0; // Prompt 16 B9 (h): the table is empty because this reset emptied it - the next empty read is not a tripwire
     setSchedule({});
     scheduleRef.current = {};
     dayVersionsRef.current = {};
@@ -3644,12 +3720,15 @@ function CallSchedule() {
   }, []);
 
   // Browser Notification API (in-app pop-up while the app is open; no push).
+  // Answers true only when new Notification() succeeded (Prompt 16 B9 (d)): on an iPhone the page context has no
+  // usable constructor (it throws) even with permission granted - that is not a sent notification.
   const sendBrowserNotif = useCallback((title, body, tag, forceShow) => {
     try {
-      if (browserNotifPermission !== "granted") return;
-      if (!forceShow && document.hasFocus()) return;
+      if (browserNotifPermission !== "granted") return false;
+      if (!forceShow && document.hasFocus()) return false;
       new Notification(title, { body, tag: tag || "silvis-call-" + Date.now() });
-    } catch(e) { console.warn("Browser notification error:", e); }
+      return true;
+    } catch(e) { console.warn("Browser notification error:", e); return false; }
   }, [browserNotifPermission]);
   const requestBrowserNotifPermission = async () => {
     try {
@@ -3738,14 +3817,15 @@ function CallSchedule() {
 
   // --- Test Notification ---
   const sendTestNotification = useCallback(async () => {
-    sendBrowserNotif("Silvis Call Schedule", "This is a test notification. Browser notifications are working.", "silvis-test", true);
-    setNotifTestSent("Browser notification sent.");
+    // Prompt 16 B9 (d): the line says "sent" only when the pop-up was really shown (helpers.notifTestMessage).
+    const shown = sendBrowserNotif("Silvis Call Schedule", "This is a test notification. Browser notifications are working.", "silvis-test", true);
+    setNotifTestSent(notifTestMessage(shown, browserNotifPermission));
     if (mySurgeon) {
       await sendEmailNotif("test", { message: "This is a test email from Silvis Call Schedule." }, [mySurgeon]);
-      setNotifTestSent("Browser + email test sent (email requires the deployed function).");
+      setNotifTestSent((shown ? "Browser pop-up shown" : "No browser pop-up") + " + email test sent (email requires the deployed function).");
     }
-    setTimeout(() => setNotifTestSent(""), 4000);
-  }, [sendBrowserNotif, sendEmailNotif, mySurgeon]);
+    setTimeout(() => setNotifTestSent(""), 6000);
+  }, [sendBrowserNotif, sendEmailNotif, mySurgeon, browserNotifPermission]);
 
   // --- Office Contact Handlers (office_contacts: name, email, role, active) ---
   const addOfficeContact = async () => {
@@ -3782,8 +3862,13 @@ function CallSchedule() {
     if (!c) return;
     if (!confirm(`Remove ${c.name} from the office distribution list?`)) return;
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/office_contacts?id=eq.${id}`, { method: "DELETE", headers: dbAuthHeaders() });
+      // Prompt 16 B9 (f): ask for the deleted row back - a 2xx with ZERO rows is an RLS-filtered DELETE (nothing
+      // removed; a session that is no longer scheduler), which used to read as success and drop the contact locally.
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/office_contacts?id=eq.${id}`, { method: "DELETE", headers: { ...dbAuthHeaders(), Prefer: "return=representation" } });
       if (!res.ok) { console.warn("Office contact delete failed:", res.status); showToast("Couldn't remove the contact - check your connection and try again.", "error"); return; }
+      let rows = [];
+      try { const text = await res.text(); rows = text ? JSON.parse(text) : []; } catch (e) { console.warn("Office contact delete: 2xx with a non-JSON body (treated as no row removed)", e); rows = []; }
+      if (!Array.isArray(rows) || rows.length === 0) { console.warn("Office contact delete matched no row:", id); showToast("No contact row was removed - your session may not be scheduler any more. Reload and retry.", "error"); return; }
       setOfficeContacts(prev => prev.filter(x => x.id !== id));
       logAudit("office_contact.remove", `Removed office contact ${c.name}`, { id });
     } catch(e) { console.warn("Office contact delete failed:", e); showToast("Couldn't remove the contact - check your connection and try again.", "error"); }
@@ -3896,7 +3981,7 @@ function CallSchedule() {
     // The note standard (guide 3.1): operational only - the same denylist the importer / Setup apply (anon-readable table).
     if (vacNote && SU_NOTE_DENYLIST.test(vacNote)) { showToast("Notes are operational only (the whole group and the shareable page read them) - leave the reason out.", "error"); return; }
     const r = await toAdd(vacSurgeon, vacStart, vacEnd, vacNote);
-    if (r.ok) { setVacStart(fmt(new Date())); setVacEnd(fmt(new Date())); setVacNote(""); showToast("Vacation saved.", "success"); }
+    if (r.ok) { setVacStart(todayCentral()); setVacEnd(todayCentral()); setVacNote(""); showToast("Vacation saved.", "success"); }
   };
   const rmVac = (sid, rowId) => { if (confirm("Remove this vacation?")) toRemove(sid, rowId); };
   const saveEditVac = async () => {
@@ -5060,24 +5145,30 @@ function CallSchedule() {
       )}
       {/* Session-expired banner (Prompt 16 A3): ONE persistent line while auth.sessionExpired; its button opens the
           sign-in card in place (openSignInAgain) - no reload, no biometric.unenroll(), no data dropped. Sits above the
-          two version banners when they show. */}
+          two version banners when they show. Prompt 16 B9 (c): like the version banners it is zIndex 9200 and stays
+          under an open dialog on purpose (day editor / claim sheet 9500, painter sheets 9300): openSignInAgain sets
+          authUser null, which unmounts an open day editor and would drop a dirty draft past its discard confirm - so
+          the person finishes or cancels the dialog first (a save meanwhile fails loudly per A3) and taps Sign in
+          the moment it closes. */}
       {sessionExpired && !!authUser && !isPublicMode && !paintSheet && !offerSheet && (
-        <div role="alert" data-testid="session-expired" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0)),fontSize:12.5,fontWeight:600,fontFamily:font}}>
+        <div role="alert" data-testid="session-expired" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0)),fontSize:12.5,fontWeight:600,fontFamily:font}}>
           <span>Your session expired - sign in again</span>
           <button data-testid="session-expired-signin" onClick={openSignInAgain} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Sign in</button>
         </div>
       )}
       {/* Minimum-version gate (client_versions row 'main') - persistent, reload is user-initiated */}
       {forceUpdate && !paintSheet && !offerSheet && (
-        <div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5,fontWeight:600,fontFamily:font}}>
+        <div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5,fontWeight:600,fontFamily:font}}>
           <span>This app version ({APP_VERSION}) is below the required minimum ({forceUpdate.min_version}). {forceUpdate.message}</span>
           <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Reload now</button>
         </div>
       )}
       {/* Update-available banner (version.json). The three fixed bottom banners stack 44 px apart through css.bottomBanner
-          (Prompt 16 A5): the lowest one pads by the iOS home-indicator inset, the ones above it are lifted by it. */}
+          (Prompt 16 A5): the lowest one pads by the iOS home-indicator inset, the ones above it are lifted by it. All three
+          sit at z 9200 (Prompt 16 B9 c) - UNDER the painter sheets (9300), the day editor and the claim sheet (9500) - so
+          a banner never covers a dialog's sticky Save row or the claim buttons on a phone; the toast stays above (9999). */}
       {updateAvailable && !paintSheet && !offerSheet && (
-        <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
+        <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
           <span>New version available ({updateAvailable})</span>
           <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Tap to reload</button>
           <button aria-label="Dismiss" onClick={()=>{ updateDismissedRef.current = updateAvailable; setUpdateAvailable(null); }} style={{background:"none",border:"none",color:"#8a9aa8",cursor:"pointer",fontSize:14,padding:"2px 6px"}}>x</button>
@@ -5390,7 +5481,7 @@ function CallSchedule() {
             {/* Prompt 14 part 3b: Periods - create from the presets, per-surgeon status, Remind, Close now, Enter for someone, Generate over the period. */}
             <PeriodsSection css={css} periods={periodRows} offers={offerRows} roster={surgeons} groupRules={groupRules} today={todayStr} nameOf={nameOf} notifPrefs={notifPrefs} busy={prdBusy || genBusy} remindState={prdRemind} selfId={mySurgeon} draft={prdDraft} setDraft={setPrdDraft}
               onCreate={createPeriod} onCloseNow={closePeriodNow} onRemind={remindOffers} onEnterFor={enterOffersFor} onGenerate={generatePeriod}/>
-            <GeneratePanel css={css} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} genStart={genStart} genFirstOpenDay={genFirstOpenDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
+            <GeneratePanel css={css} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} busyMode={genWorkerOk ? "worker" : "inline"} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} genStart={genStart} genFirstOpenDay={genFirstOpenDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_import" defaultOpen={false} title="Import seed (docs/silvis-seed.json)">
@@ -6481,7 +6572,7 @@ const tdS = {padding:"7px 8px",fontFamily:"'JetBrains Mono',monospace",color:"#4
 // through the parent's onCommit (one bulk insert, one audit entry). A failed
 // commit wrote NOTHING: the draft stays, the error names every pending entry.
 function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) {
-  const today = new Date();
+  const today = parse(todayCentral());
   const [ym, setYm] = React.useState({ y: today.getFullYear(), m: today.getMonth() });
   const [armedPerson, setArmedPerson] = React.useState(surgeons.length === 1 ? surgeons[0].id : "");
   const [draftEntries, setDraftEntries] = React.useState([]); // [{personId, start, end}]
@@ -7124,6 +7215,45 @@ function safeBuildContext(inputs) {
   catch (e) { console.warn("buildContext failed - eligibility unavailable:", e); return { ctx: null, error: String(e && e.message || e) }; }
 }
 
+// --- Generate off the main thread (Prompt 16 B9 a) ---
+// A classic Web Worker built from a Blob of helpers.genWorkerSource: it importScripts the page's own helpers.js /
+// rules.js / generator.js with the page's ?v (genWorkerUrls), so the worker runs the bytes the page loaded - no
+// second script file to build, version or deploy, and no way for the two to disagree on a rule. buildContext runs
+// inside the worker over the same inputs the page would use (rows and Sets clone; the page's ctx never travels).
+// One worker per run, terminated when it answers. Any failure - no Worker / Blob URL support, importScripts, a
+// clone error, a worker error event, a hung run - rejects, and runGenerate runs inline on the page instead.
+function genWorkerSupported() {
+  return typeof Worker === "function" && typeof Blob === "function" && typeof URL === "function" && typeof URL.createObjectURL === "function" && typeof genWorkerSource === "function";
+}
+const genWorkerUrls = () => GEN_WORKER_MODULES.map(f => new URL(f + "?v=" + APP_VERSION, location.href).href);
+function generateInWorker(inputs, start, end, opts) {
+  return new Promise((resolve, reject) => {
+    const urls = genWorkerUrls();
+    const blobUrl = URL.createObjectURL(new Blob([genWorkerSource(urls)], { type: "text/javascript" }));
+    let worker = null, timer = null, settled = false;
+    const done = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      try { if (worker) worker.terminate(); } catch (e) { console.warn("generate worker: terminate failed", e); }
+      try { URL.revokeObjectURL(blobUrl); } catch (e) { console.warn("generate worker: revokeObjectURL failed", e); }
+      fn(v);
+    };
+    try { worker = new Worker(blobUrl); } catch (e) { done(reject, e); return; }
+    const id = Date.now() + "-" + Math.floor(Math.random() * 1e6);
+    worker.onmessage = (ev) => {
+      const m = (ev && ev.data) || {};
+      if (m.id !== id) return;
+      if (m.ok) done(resolve, { schedule: m.schedule || {}, diagnostics: m.diagnostics || {}, warnings: m.warnings || [] });
+      else done(reject, new Error(m.error || "generate worker failed"));
+    };
+    worker.onerror = (ev) => { done(reject, new Error((ev && ev.message) || "generate worker error")); };
+    // A stuck worker (the generator's own time budget plus a margin) is terminated so the Run button never hangs.
+    timer = setTimeout(() => done(reject, new Error("generate worker timed out")), Math.max(5000, ((opts && opts.timeBudgetMs) || 25000) + 20000));
+    try { worker.postMessage({ id, inputs, start, end, opts }); } catch (e) { done(reject, e); }
+  });
+}
+
 // Human wording for rules.js reason codes. The raw code stays visible in the
 // dropdown label (it matches docs/SILVIS-CALL-RULES.md and the regression
 // test); this adds the plain-English gloss shown beside it.
@@ -7375,6 +7505,31 @@ function DayEditor(props) {
   const extInfo = (name) => name + " is an outside surgeon - written in by hand and locked; the generator never moves it.";
   const norm = (a) => JSON.stringify(assignmentToDayRow(day, a));
   const dirty = norm(draft) !== norm(opened);
+  // Prompt 16 B9 (b): ONE way out. The backdrop, the x, Cancel and Escape all come here; a dirty draft is dropped
+  // only after the person says so (a backdrop tap on a phone used to discard it silently).
+  const requestClose = () => {
+    if (dirty && !confirm("Discard your unsaved changes to this day?")) return;
+    onCancel();
+  };
+  // Prompt 16 B9 (b): focus stays inside the dialog - Tab / Shift+Tab wrap over every focusable element
+  // (helpers.focusTrapNext); the dialog takes focus when it opens (tabIndex -1, unless the caller asked for the
+  // external-cover input) and gives it back to the element that opened it when it closes.
+  const dialogRef = React.useRef(null);
+  const openerRef = React.useRef(null);
+  const dialogKeyDown = (e) => {
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(e.currentTarget.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'));
+    const next = focusTrapNext(e.shiftKey, focusable, document.activeElement);
+    if (next) { e.preventDefault(); try { next.focus(); } catch (err) { console.warn("day editor: focus trap could not move focus", err); } }
+  };
+  React.useEffect(() => {
+    openerRef.current = document.activeElement;
+    if (!focusExternal && dialogRef.current) dialogRef.current.focus();
+    return () => {
+      const back = openerRef.current;
+      if (back && typeof back.focus === "function" && document.contains(back)) { try { back.focus(); } catch (err) { console.warn("day editor: could not return focus", err); } }
+    };
+  }, []); // eslint-disable-line
 
   const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } } }), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
@@ -7485,7 +7640,7 @@ function DayEditor(props) {
   };
   React.useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") { e.preventDefault(); if (pending) setPending(null); else onCancel(); return; }
+      if (e.key === "Escape") { e.preventDefault(); if (pending) setPending(null); else requestClose(); return; }
       const tag = (e.target && e.target.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -7588,13 +7743,13 @@ function DayEditor(props) {
   };
 
   return (
-    <div data-testid="day-editor" onClick={onCancel} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
-      <div role="dialog" aria-modal="true" aria-label={"Day editor " + day} onClick={e => e.stopPropagation()} style={{background:panelBg,color:text,borderRadius:12,padding:"16px 18px",maxWidth:600,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
+    <div data-testid="day-editor" onClick={requestClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
+      <div role="dialog" aria-modal="true" aria-label={"Day editor " + day} ref={dialogRef} tabIndex={-1} onKeyDown={dialogKeyDown} onClick={e => e.stopPropagation()} style={{outline:"none",background:panelBg,color:text,borderRadius:12,padding:"16px 18px",maxWidth:600,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
         <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
           <button type="button" aria-label="Previous day" onClick={() => { if (dirty) setHint("Save or cancel your changes before moving to another day."); else onNav(-1); }} style={{...css.btn(false),minWidth:34,padding:"4px 8px"}}>&lsaquo;</button>
           <h3 data-testid="editor-title" style={{margin:0,fontSize:16,color:text,flex:1,textAlign:"center"}}>{title}</h3>
           <button type="button" aria-label="Next day" onClick={() => { if (dirty) setHint("Save or cancel your changes before moving to another day."); else onNav(1); }} style={{...css.btn(false),minWidth:34,padding:"4px 8px"}}>&rsaquo;</button>
-          <button type="button" aria-label="Close" onClick={onCancel} style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer",padding:"0 4px",marginLeft:4}}>x</button>
+          <button type="button" aria-label="Close" onClick={requestClose} style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer",padding:"0 4px",marginLeft:4}}>x</button>
         </div>
         <div style={{fontSize:12,color:sub,lineHeight:1.6,marginBottom:10}}>
           <div>{hol ? <><span style={{fontWeight:700,color:"#8a6a10"}}>{hol.name}</span> holiday unit ({hol.tier}): {hol.days.map(fmtMD).join(", ")} - one primary and one backup stick through the unit.</> : "Not in a holiday unit."}</div>
@@ -7648,7 +7803,7 @@ function DayEditor(props) {
           )}
           <span style={{flex:1}}/>
           <span style={{fontSize:10,color:sub}}>Esc closes - arrow keys move a day</span>
-          <button type="button" onClick={onCancel} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>{canEdit ? "Cancel" : "Close"}</button>
+          <button type="button" onClick={requestClose} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>{canEdit ? "Cancel" : "Close"}</button>
           {canEdit && <button type="button" data-testid="editor-save" onClick={save} disabled={!dirty || evalBroken} title={evalBroken ? "Eligibility check failed - saving is disabled" : undefined} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:(dirty && !evalBroken)?1:0.5}}>Save</button>}
         </div>
       </div>
@@ -8084,6 +8239,12 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
 function PatternListEditor({ css, label, list, onChange, withWeight, today, hint }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const items = Array.isArray(list) ? list : [];
+  // Prompt 16 B9 (g): the rows are plain pattern objects with no id, and keying them by index made a Remove shift
+  // every row below it (React reused the DOM and the typed text of row i showed on row i-1). helpers.suPatternRowIds
+  // keeps a stable id per row: Remove splices the id list itself, Add lets the reconcile mint one, an outside reset
+  // (a different surgeon's rules) truncates or extends.
+  const idsRef = React.useRef([]);
+  const ids = suPatternRowIds(idsRef.current, items.length); idsRef.current = ids;
   const update = (i, patch) => onChange(items.map((p, j) => j === i ? patch : p));
   const setKind = (i, kind) => {
     const p = items[i]; const n = { weekday: p.weekday || "Mon" };
@@ -8105,10 +8266,10 @@ function PatternListEditor({ css, label, list, onChange, withWeight, today, hint
       <div style={{ ...css.subT, margin: "8px 0 4px" }}>{label} <span style={{ fontWeight: 400, color: "#5B6B82" }}>({items.length})</span>{hint ? <span style={{ fontWeight: 400, color: "#9aa4ae", marginLeft: 6, fontSize: 11 }}>{hint}</span> : null}</div>
       {items.map((p, i) => {
         const kind = suPatternKind(p);
-        const text = texts[i] !== undefined ? texts[i] : suPatternValueText(p);
+        const text = texts[ids[i]] !== undefined ? texts[ids[i]] : suPatternValueText(p);
         const next = suNextMatchingDates(typeof matchesPattern === "function" ? matchesPattern : null, p, today, 8);
         return (
-          <div key={i} data-testid="pattern-row" style={{ border: "1px solid #e8ecf0", borderRadius: 6, padding: "6px 8px", marginBottom: 6, background: "#fafbfc" }}>
+          <div key={ids[i]} data-testid="pattern-row" style={{ border: "1px solid #e8ecf0", borderRadius: 6, padding: "6px 8px", marginBottom: 6, background: "#fafbfc" }}>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
               {kind !== "dates" && <select value={p.weekday || "Mon"} onChange={e => update(i, { ...p, weekday: e.target.value })} style={{ ...inp, width: 70 }}>{SU_WEEKDAYS.map(w => <option key={w} value={w}>{w}</option>)}</select>}
               <select value={kind} onChange={e => setKind(i, e.target.value)} style={{ ...inp, width: 190 }}>
@@ -8118,10 +8279,10 @@ function PatternListEditor({ css, label, list, onChange, withWeight, today, hint
                 <option value="before">the day before the nth Monday</option>
                 <option value="dates">explicit dates</option>
               </select>
-              {kind !== "every" && <input type="text" value={text} placeholder={kind === "dates" ? "2026-11-02, 2026-11-09" : kind === "week" ? "3" : "2,4"} onChange={e => { setTexts(t => ({ ...t, [i]: e.target.value })); setValue(i, e.target.value); }} style={{ ...inp, width: kind === "dates" ? 260 : 70, fontFamily: mono }} />}
+              {kind !== "every" && <input type="text" value={text} placeholder={kind === "dates" ? "2026-11-02, 2026-11-09" : kind === "week" ? "3" : "2,4"} onChange={e => { setTexts(t => ({ ...t, [ids[i]]: e.target.value })); setValue(i, e.target.value); }} style={{ ...inp, width: kind === "dates" ? 260 : 70, fontFamily: mono }} />}
               {withWeight && <select value={p.weight || "medium"} onChange={e => update(i, { ...p, weight: e.target.value })} style={{ ...inp, width: 90 }}>{["low", "medium", "strong"].map(w => <option key={w} value={w}>{w}</option>)}</select>}
               <input type="text" value={p.note || ""} placeholder="operational note (public)" onChange={e => update(i, { ...p, note: e.target.value })} style={{ ...inp, flex: "1 1 160px" }} />
-              <button onClick={() => onChange(items.filter((_, j) => j !== i))} style={css.danger}>Remove</button>
+              <button onClick={() => { idsRef.current = ids.filter((_, j) => j !== i); onChange(items.filter((_, j) => j !== i)); }} style={css.danger}>Remove</button>
             </div>
             <div data-testid="pattern-preview" style={{ fontSize: 11, color: "#5B6B82", marginTop: 4, fontFamily: mono }}>
               <span style={{ fontFamily: font, color: "#5B6B82" }}>{suPatternLabel(p)} - next 8: </span>{next.error ? <span data-testid="pattern-error" style={{ color: "#a83232", fontFamily: font }}>pattern is invalid - the rules engine refused it ({next.error})</span> : next.length ? next.join(", ") : "no matching date in the next two years"}
@@ -8392,7 +8553,7 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const [filter, setFilter] = React.useState("");
   const [form, setForm] = React.useState({ person_id: "", kind: "available", role: "any", start: today, end: today, note: "" });
-  const [paste, setPaste] = React.useState({ person_id: "", kind: "available", role: "any", year: String(new Date().getFullYear()), text: "", note: "" });
+  const [paste, setPaste] = React.useState({ person_id: "", kind: "available", role: "any", year: todayCentral().slice(0, 4), text: "", note: "" });
   const parsed = React.useMemo(() => suParseDateList(paste.text, paste.year), [paste.text, paste.year]);
   const ranges = React.useMemo(() => suCollapseDates(parsed.dates), [parsed]);
   const shown = (rows || []).filter(r => !filter || r.person_id === filter).slice().sort((a, b) => a.start_date < b.start_date ? -1 : a.start_date > b.start_date ? 1 : 0);
@@ -8413,7 +8574,7 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
     const r = await onAdd(pasteRows);
     if (r && r.ok) setPaste(p => ({ ...p, text: "" }));
   };
-  const years = []; for (let y = new Date().getFullYear() - 1; y <= new Date().getFullYear() + 2; y++) years.push(String(y));
+  const years = []; { const yNow = Number(todayCentral().slice(0, 4)); for (let y = yNow - 1; y <= yNow + 2; y++) years.push(String(y)); }
   return (
     <div data-testid="availability-card">
       <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Dated statements the rules engine reads: <em>available</em> rows make a month a whitelist for that surgeon (only listed days are eligible), <em>unavailable</em> always blocks, <em>backup_only</em> blocks primary, <em>no_backup</em> blocks backup, <em>avoid</em>/<em>prefer</em> are soft. Recurring patterns live in Rules, not here. Notes are public (operational wording only).</p>
@@ -9052,7 +9213,7 @@ function PeriodsSection({ css, periods, offers, roster, groupRules, today, nameO
   );
 }
 
-function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onReroll, onAccept, onDiscard, nameOf, roster, rulesImported, lastPublishedDay, genStart, genFirstOpenDay, laterRanges, holidayNames }) {
+function GeneratePanel({ css, presets, opts, setOpts, busy, busyMode, preview, onRun, onReroll, onAccept, onDiscard, nameOf, roster, rulesImported, lastPublishedDay, genStart, genFirstOpenDay, laterRanges, holidayNames }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const p0 = presets && presets[0];
   const start = opts.start || (p0 ? p0.start : "");
@@ -9074,7 +9235,8 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, preview, onRun, onRe
         <SuCheck testid="gen-respect-locks" label="respect locks" title="Off: locked, already-published slots in the range are regenerated too - Accept asks for confirmation before anything is written" checked={opts.respectLocks !== false} onChange={v => setOpts(o => ({ ...o, respectLocks: v }))} />
         <SuCheck testid="gen-fill-open-only" label="Fill open slots only (keep every held day)" title="On: every slot that already has a holder - locked or not - stays exactly as it is and only OPEN slots are filled (the mode the command-line preview used). Off: unlocked held slots inside the range are regenerated - Accept names them before anything is written" checked={opts.fillOpenOnly === true} onChange={v => setOpts(o => ({ ...o, fillOpenOnly: v }))} />
         <button data-testid="gen-run" onClick={() => onRun({ ...opts, start, end })} disabled={busy || !rulesImported} style={{ ...css.btn(true), padding: "6px 16px", marginBottom: 8, opacity: (busy || !rulesImported) ? 0.6 : 1 }}>{busy ? "Generating" : "Run"}</button>
-        {busy && <span data-testid="gen-busy" role="status" style={{ fontSize: 12, color: LIGHT.title, fontWeight: 700, marginBottom: 8 }}>Running best-of-{opts.bestOf} - the page stays responsive between candidates</span>}
+        {/* Prompt 16 B9 (a): the busy line says where the run is - the worker keeps the page usable; the inline run blocks it. */}
+        {busy && <span data-testid="gen-busy" role="status" style={{ fontSize: 12, color: LIGHT.title, fontWeight: 700, marginBottom: 8 }}>{busyMode === "worker" ? `Running best-of-${opts.bestOf} in a background worker - the page stays usable while it runs` : `Running best-of-${opts.bestOf} on this page - it may pause for a few seconds until the run finishes`}</span>}
       </div>
       {preview && (
         <div data-testid="gen-preview" style={{ border: "2px dashed #7a4fbf", borderRadius: 8, padding: "10px 12px", background: "#faf7ff" }}>

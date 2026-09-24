@@ -393,13 +393,23 @@ const VIEWER_FEED = [
 const jwtSub = (req) => { try { const t = (req.headers()["authorization"] || "").replace(/^Bearer /i, ""); return JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")).sub || null; } catch (e) { return null; } };
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json", ".png": "image/png", ".ico": "image/x-icon", ".css": "text/css" };
+// Every served file is read from disk ONCE per run and kept in memory: the per-protocol `git checkout -- index.html`
+// after a build (or a second smoke in the same tree) must not swap the page this server is serving mid-run (B9
+// review 9/24 - it did, and produced phantom pre-A3 failures). servedHits counts requests per path: the Generate
+// worker's importScripts fetch rules.js a second time, which the B9a step reads as proof the worker ran.
+const servedCache = new Map();
+const servedHits = new Map();
 const server = http.createServer((req, res) => {
   const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
   const rel = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
   const file = path.join(ROOT, rel);
-  if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); res.end("not found"); return; }
+  if (!servedCache.has(file)) {
+    if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); res.end("not found"); return; }
+    servedCache.set(file, fs.readFileSync(file));
+  }
+  servedHits.set(rel, (servedHits.get(rel) || 0) + 1);
   res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control": "no-store" });
-  fs.createReadStream(file).pipe(res);
+  res.end(servedCache.get(file));
 });
 await new Promise(r => server.listen(0, "127.0.0.1", r));
 const PORT = server.address().port;
@@ -693,6 +703,7 @@ const representation = (method, url, body) => {
 // the restore scenario replays exactly what the app captured before the reset.
 const snapStore = [];
 let minVersionOverride = null; // Prompt 11: { min_version, message } served for client_versions row 'main'
+let emptyDaysFor = null, emptyDaysServed = 0; // Prompt 16 B9 (h): the page whose NEXT schedule_days GET answers 200 + [] (an RLS-filtered / dead-token read)
 // Prompt 11 (factory reset): once the app's DELETE of every schedule_days row is
 // recorded, the table reads as EMPTY from then on and later CAS POSTs / PATCHes
 // land in this store - what the real table would do - so the restore that
@@ -1024,6 +1035,9 @@ const routeSupabase = async (route, scope) => {
     if (idQ) return json(200, rows.filter(r => r.id === idQ).map(r => /\bdata\b/.test(sel) ? r : meta(r)));
     return json(200, rows.slice(0, Number(url.searchParams.get("limit") || 25)).map(meta));
   }
+  // Prompt 16 B9 (h): one schedule_days GET from the named page answers 200 + [] - exactly what an RLS-filtered or
+  // dead-token read looks like - so the app's tripwire can be seen keeping the map. Other pages' polls are untouched.
+  if (emptyDaysFor && method === "GET" && url.pathname === "/rest/v1/schedule_days" && req.frame().page() === emptyDaysFor) { emptyDaysFor = null; emptyDaysServed++; return json(200, []); }
   if (daysWiped && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
     let rows = Object.values(dayStore).sort((a, b) => a.day < b.day ? -1 : 1);
     const dayQ = (url.searchParams.get("day") || "").replace(/^eq\./, "");
@@ -1198,6 +1212,73 @@ try {
   };
   const readCells = () => page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), b: e.getAttribute("data-backup"), ext: e.getAttribute("data-ext"), open: e.getAttribute("data-open"), text: e.textContent, badges: Array.from(e.querySelectorAll("[data-badge]")).map(x => x.getAttribute("data-badge")) })));
   const cellAttr = (d, attr) => page.$eval(`[data-day="${d}"]`, (el, a) => el.getAttribute(a), attr);
+  // ---- Prompt 16 B9 (b): a dirty day-editor draft is never dropped without asking; Tab stays inside the dialog ----
+  // Opens 10/15 (the page is at 390 px when this runs), checks focus landed inside the dialog and that Tab / Shift+Tab
+  // wrap over its focusables, makes the draft dirty (an eligible primary other than the current one), taps the backdrop
+  // and presses Escape with the confirm DISMISSED (the editor must stay), then Escape with it ACCEPTED (the editor
+  // closes); the cell is unchanged - nothing is written.
+  const B9_FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+  const b9EditorGuard = async (theme) => {
+    const dialogs = []; let answer = false;
+    const onDlg = (d) => { dialogs.push(d.message()); (answer ? d.accept() : d.dismiss()).catch(() => {}); };
+    page.on("dialog", onDlg);
+    try {
+      await showMonth(2026, 9);
+      const before = await cellAttr("2026-10-15", "data-primary");
+      await page.click('[data-day="2026-10-15"]');
+      await page.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+      await page.waitForTimeout(250);
+      const focusIn = await page.evaluate(() => { const d = document.querySelector("[data-testid=day-editor] [role=dialog]"); return !!d && d.contains(document.activeElement); });
+      const n = await page.evaluate((sel) => { const d = document.querySelector("[data-testid=day-editor] [role=dialog]"); const f = Array.from(d.querySelectorAll(sel)); f[f.length - 1].focus(); return f.length; }, B9_FOCUSABLE);
+      await page.keyboard.press("Tab");
+      const afterTab = await page.evaluate((sel) => { const d = document.querySelector("[data-testid=day-editor] [role=dialog]"); const f = Array.from(d.querySelectorAll(sel)); return { inside: d.contains(document.activeElement), first: document.activeElement === f[0], label: document.activeElement.getAttribute("aria-label") || document.activeElement.textContent.trim() }; }, B9_FOCUSABLE);
+      await page.keyboard.press("Shift+Tab");
+      const afterShift = await page.evaluate((sel) => { const d = document.querySelector("[data-testid=day-editor] [role=dialog]"); const f = Array.from(d.querySelectorAll(sel)); return { inside: d.contains(document.activeElement), last: document.activeElement === f[f.length - 1] }; }, B9_FOCUSABLE);
+      if (!focusIn) fail(`B9b (${theme}): focus did not land inside the day editor when it opened`);
+      else if (!afterTab.inside || !afterTab.first || !afterShift.inside || !afterShift.last) fail(`B9b (${theme}): Tab from the last of ${n} focusables should wrap to the first and Shift+Tab back to the last: ${JSON.stringify({ afterTab, afterShift })}`);
+      else ok(`B9b (${theme}): focus lands in the dialog; Tab wraps over its ${n} focusables (last -> '${afterTab.label}' -> last)`);
+      // a dirty draft: an eligible primary other than the current one, else an eligible backup, else a typed note (on
+      // 10/15 every pool member is ineligible for primary - that is why the day is open - and backup may be locked)
+      const daysWritesBefore = writes.filter(w => w.path.startsWith("/rest/v1/schedule_days")).length;
+      const pickIn = (role) => page.$$eval(`[data-testid=editor-${role}] option`, els => { if (!els.length || els[0].closest("select").disabled) return null; const cur = els.find(o => o.selected); const o = els.find(x => x.getAttribute("data-eligible") === "true" && x.value && (!cur || x.value !== cur.value)); return o ? o.value : null; });
+      let how = null;
+      const pP = await pickIn("primary");
+      if (pP) { await page.selectOption("[data-testid=editor-primary]", pP); how = "primary -> " + pP; }
+      else { const pB = await pickIn("backup"); if (pB) { await page.selectOption("[data-testid=editor-backup]", pB); how = "backup -> " + pB; } else { await page.fill("[data-testid=editor-note]", "b9 draft"); how = "a typed note"; } }
+      await page.waitForTimeout(200);
+      if (await page.$("[data-testid=override-confirm]")) { fail(`B9b (${theme}): dirtying the draft (${how}) opened the override confirm`); return; }
+      answer = false;
+      await page.mouse.click(4, 420); // the backdrop: at 390 px the dialog leaves the 14 px padding on each side
+      await page.waitForTimeout(300);
+      const openAfterTap = !!(await page.$("[data-testid=day-editor]"));
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
+      const openAfterEsc = !!(await page.$("[data-testid=day-editor]"));
+      answer = true;
+      await page.keyboard.press("Escape");
+      const closed = await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).then(() => true).catch(() => false);
+      const after = await cellAttr("2026-10-15", "data-primary");
+      await page.waitForTimeout(1200); // past the days leg's 800 ms debounce - a discarded draft must not reach it
+      const daysWrites = writes.filter(w => w.path.startsWith("/rest/v1/schedule_days")).length - daysWritesBefore;
+      const asked = dialogs.filter(m => /Discard your unsaved changes to this day\?/.test(m)).length;
+      if (!openAfterTap || !openAfterEsc) fail(`B9b (${theme}): a dirty draft (${how}) was dropped without a confirm (open after the backdrop tap: ${openAfterTap}, after Escape: ${openAfterEsc}; dialogs: ${JSON.stringify(dialogs)})`);
+      else if (asked !== 3 || dialogs.length !== 3) fail(`B9b (${theme}): expected exactly three 'Discard your unsaved changes to this day?' confirms (tap, Escape, Escape), saw ${JSON.stringify(dialogs)}`);
+      else if (!closed) fail(`B9b (${theme}): the editor did not close once the discard was confirmed`);
+      else if (after !== before || daysWrites !== 0) fail(`B9b (${theme}): a discarded draft must write nothing - 10/15 primary ${before} -> ${after}, ${daysWrites} schedule_days write(s)`);
+      else ok(`B9b (${theme}): the backdrop tap and Escape ask before dropping a dirty draft (${how}; declined twice, the editor stayed; accepted, it closed); 10/15 unchanged (${after || "open"}), no schedule_days write`);
+    } catch (e) { fail(`B9b (${theme}): ` + errLine(e)); }
+    finally {
+      page.off("dialog", onDlg);
+      if (await page.$("[data-testid=day-editor]")) { const acc = (d) => d.accept().catch(() => {}); page.on("dialog", acc); await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); page.off("dialog", acc); }
+    }
+  };
+  // Closes the day editor, accepting the discard confirm a dirty draft now raises (Prompt 16 B9 (b)).
+  const discardEditor = async () => {
+    const acc = (d) => d.accept().catch(() => {});
+    page.on("dialog", acc);
+    try { await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }); }
+    finally { page.off("dialog", acc); }
+  };
   // Edit one role of one day through the day editor (override panel accepted
   // when the rules refuse the pick - the harness reports that it happened).
   const editDay = async (d, role, id) => {
@@ -1748,6 +1829,7 @@ try {
   if (foot.bottom > foot.vh || foot.top < 0 || foot.h < 36) fail(`mobile 390px: the day editor's Save button is off screen or too small (${JSON.stringify(foot)})`); else ok(`mobile 390px: the day editor's Save button is on screen at open (bottom ${foot.bottom} of ${foot.vh}px, ${foot.h}px tall)`);
   await page.keyboard.press("Escape");
   await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+  await b9EditorGuard("light"); // Prompt 16 B9 (b) at 390 px, light theme (the dark pass runs after the dark-mode switch below)
   // (c2) Prompt 16 A5 - iOS safe area. Chromium's Emulation.setSafeAreaInsetsOverride stands in for an iPhone in
   // standalone mode (47 px notch above, 34 px home-indicator band below - env(safe-area-inset-*) then reads them the
   // way iOS does; the harness cannot emulate display-mode). The header must grow by the top inset, the day editor's
@@ -1926,6 +2008,10 @@ try {
   if (dimDots.length) fail("dark mode: vacation dots invisible on their cell: " + JSON.stringify(dimDots.slice(0, 4))); else ok(`dark mode: ${darkProbe.dots.length} vacation dot(s) visible on their cells`);
   await page.screenshot({ path: path.join(OUT, "calendar-oct-dark.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-oct-dark.png");
+  // Prompt 16 B9 (b) at 390 px in the dark theme
+  await page.setViewportSize({ width: 390, height: 844 });
+  await b9EditorGuard("dark");
+  await page.setViewportSize({ width: 1180, height: 900 });
   await page.click('button[data-tab="settings"]');
   await page.click("button:has-text('Light')");
   await showMonth(2026, 9);
@@ -3863,8 +3949,7 @@ try {
         else ok(`Day editor ${blk[0]}: Fierce reads eligible as the third day of his Fri-Sun block ${blk[0]}-${blk[2]} ('${friFierce.text}'), no override on the pick`);
       }
       await page.screenshot({ path: path.join(OUT, "day-editor-block-member.png") });
-      await page.keyboard.press("Escape");
-      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+      await discardEditor(); // the Fierce pick left a dirty draft - since Prompt 16 B9 (b) Escape asks before dropping it
     }
 
     // ---- (3) asBlockMember in the trade path: Fierce can receive Khan's Fri-Sun block ----
@@ -4830,9 +4915,28 @@ try {
     await page.fill("[data-testid=gen-n]", "10");
     await page.fill("[data-testid=gen-seed]", "7");
     const beforeGen = writes.length;
+    // Prompt 16 B9 (a) review fix: the ASSEMBLED worker path, not just its parts - Playwright reports the dedicated
+    // Worker the run creates (a blob: URL), its importScripts fetch rules.js from this server a second time, the busy
+    // line names the worker while it runs, and a "Generate worker failed" warning (the quiet inline fallback) fails
+    // the step here and the whole run at the end.
+    const genWorkers = [];
+    const onWorker = (w) => genWorkers.push(w.url());
+    page.on("worker", onWorker);
+    const rulesHitsBefore = servedHits.get("rules.js") || 0;
+    const warnsBeforeGen = consoleWarns.length;
+    await page.evaluate(() => { window.__b9Busy = []; window.__b9BusyTimer = setInterval(() => { const el = document.querySelector("[data-testid=gen-busy]"); if (el) window.__b9Busy.push(el.textContent); }, 20); });
     await page.click("[data-testid=gen-run]");
     await page.waitForSelector("[data-testid=gen-diagnostics]", { timeout: 90000 });
     await page.waitForTimeout(1200);
+    page.off("worker", onWorker);
+    const busySeen = await page.evaluate(() => { clearInterval(window.__b9BusyTimer); return [...new Set(window.__b9Busy)]; });
+    const rulesHitsByWorker = (servedHits.get("rules.js") || 0) - rulesHitsBefore;
+    const workerFailWarns = consoleWarns.slice(warnsBeforeGen).filter(t => /Generate worker failed/.test(t));
+    if (workerFailWarns.length) fail("B9a Generate in a worker: the worker path failed and the run fell back inline: " + workerFailWarns[0].slice(0, 200));
+    else if (!genWorkers.some(u => /^blob:/.test(u))) fail(`B9a Generate in a worker: no dedicated blob: Worker was created for the run (workers seen: ${JSON.stringify(genWorkers)})`);
+    else if (rulesHitsByWorker < 1) fail(`B9a Generate in a worker: the worker's importScripts did not fetch rules.js from the server (hits during the run: ${rulesHitsByWorker})`);
+    else if (busySeen.length && !busySeen.some(t => /in a background worker - the page stays usable while it runs/.test(t))) fail(`B9a Generate in a worker: the busy line never read 'in a background worker' (seen: ${JSON.stringify(busySeen)})`);
+    else ok(`B9a Generate in a worker: a blob: Worker ran the best-of-10 preview (rules.js fetched ${rulesHitsByWorker}x by its importScripts, no 'Generate worker failed' warning); busy line ${busySeen.length ? JSON.stringify(busySeen.find(t => /background worker/.test(t)).slice(0, 90)) : "not sampled - the run finished inside one 20 ms tick"}`);
     const genForbidden = writesSince(beforeGen).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path) || (w.method === "PATCH" && w.path.startsWith("/rest/v1/call_schedule_data")));
     if (genForbidden.length) fail("Generate preview wrote something: " + JSON.stringify(genForbidden.map(w => w.method + " " + w.path))); else ok("Generate preview: no schedule_days / snapshot / availability / time_off write (preview is read-only)");
     const meta = await page.$eval("[data-testid=gen-preview-meta]", el => el.textContent);
@@ -6146,6 +6250,7 @@ try {
     const NEWER = "2099.01.01";
     const p2 = await context.newPage();
     watchPage(p2, "refresh");
+    const p2Warns = []; p2.on("console", (m) => { if (m.type() === "warning") p2Warns.push(m.text()); }); // Prompt 16 B9 (h): the tripwire's console line
     await p2.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {}); // silenced: poll only
     await p2.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
     await p2.route((url) => /\/version\.json$/.test(url.pathname), (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "cache-control": "no-store" }, body: JSON.stringify({ version: NEWER }) }));
@@ -6172,6 +6277,47 @@ try {
       await p2.waitForTimeout(200);
       if (await p2.locator("div[role=status]:has-text('New version available')").count()) fail("update banner: Dismiss did not hide it"); else ok("update banner: Dismiss hides it for this version (the forced-minimum banner has no dismiss)");
       if (!(await minBanner.count())) fail("forced-refresh banner disappeared on its own - it must persist until the reload");
+      // ---- Prompt 16 B9 (c): at 390 px the fixed banner paints UNDER the day editor - its Save row stays tappable ----
+      await p2.setViewportSize({ width: 390, height: 844 });
+      await p2.click('button[data-tab="calendar"]');
+      await p2.selectOption("[data-testid=cal-month-select]", "9");
+      if ((await p2.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2026") await p2.fill("[data-testid=cal-year-input]", "2026");
+      await p2.waitForSelector('[data-day="2026-10-15"]', { timeout: 5000 });
+      await p2.waitForTimeout(300);
+      await p2.click('[data-day="2026-10-15"]');
+      await p2.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+      await p2.waitForTimeout(250);
+      const zc = await p2.evaluate(() => {
+        const save = document.querySelector("[data-testid=editor-save]"), editor = document.querySelector("[data-testid=day-editor]");
+        const banner = Array.from(document.querySelectorAll("div[role=alert]")).find(d => /below the required minimum/.test(d.textContent));
+        if (!save || !editor || !banner) return { missing: { save: !save, editor: !editor, banner: !banner } };
+        const r = save.getBoundingClientRect(), b = banner.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { hitIsSave: hit === save || save.contains(hit), hitTag: hit ? (hit.getAttribute("data-testid") || hit.tagName + (hit.getAttribute("role") ? "[" + hit.getAttribute("role") + "]" : "")) : "nothing", overlap: r.bottom > b.top && r.top < b.bottom, bannerZ: getComputedStyle(banner).zIndex, editorZ: getComputedStyle(editor).zIndex, save: { top: Math.round(r.top), bottom: Math.round(r.bottom) }, banner: { top: Math.round(b.top), bottom: Math.round(b.bottom) } };
+      });
+      if (zc.missing) fail("B9c: " + JSON.stringify(zc.missing));
+      else if (!zc.hitIsSave || !(Number(zc.bannerZ) < Number(zc.editorZ))) fail(`B9c: at 390 px the minimum-version banner (z ${zc.bannerZ}, ${zc.banner.top}-${zc.banner.bottom}px) must sit under the day editor (z ${zc.editorZ}); the point at the centre of Save (${zc.save.top}-${zc.save.bottom}px) hit '${zc.hitTag}'`);
+      else ok(`B9c: the day editor (z ${zc.editorZ}) paints over the banner (z ${zc.bannerZ}); Save's centre hits Save` + (zc.overlap ? ` although the banner's band (${zc.banner.top}-${zc.banner.bottom}px) crosses it (${zc.save.top}-${zc.save.bottom}px)` : ` (the banner band ${zc.banner.top}-${zc.banner.bottom}px does not cross Save ${zc.save.top}-${zc.save.bottom}px at this height)`));
+      await p2.keyboard.press("Escape");
+      await p2.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+      // ---- Prompt 16 B9 (h): a 200 + [] schedule_days answer on the poll keeps the map and warns once ----
+      const readCellsP2 = () => p2.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => [e.getAttribute("data-day"), e.getAttribute("data-primary"), e.getAttribute("data-backup")]).filter(c => c[1] || c[2]));
+      const cellsBefore = await readCellsP2();
+      const warnsBefore = p2Warns.length;
+      emptyDaysFor = p2;
+      console.log("     (B9h: the refresh page's next schedule_days poll will answer 200 + [] - waiting for it, up to 75 s)");
+      const emptyGot = await p2.waitForResponse(async (r) => { try { return r.request().method() === "GET" && new URL(r.url()).pathname === "/rest/v1/schedule_days" && (await r.text()) === "[]"; } catch (e) { return false; } }, { timeout: 75000 }).then(() => true).catch(() => false);
+      emptyDaysFor = null;
+      await p2.waitForTimeout(1500);
+      const cellsAfter = await readCellsP2();
+      const toastH = await p2.$eval("[data-testid=toast]", el => el.textContent).catch(() => "");
+      const tripWarns = p2Warns.slice(warnsBefore).filter(t => /treated as a failed read/.test(t));
+      if (!emptyGot) fail(`B9h: no schedule_days poll answered [] within 75 s (served ${emptyDaysServed})`);
+      else if (!cellsBefore.length) fail("B9h: no assigned cells on the refresh page's October to keep");
+      else if (JSON.stringify(cellsAfter) !== JSON.stringify(cellsBefore)) fail(`B9h: the empty poll answer blanked the calendar: ${cellsBefore.length} assigned cell(s) before, ${cellsAfter.length} after`);
+      else if (!/came back empty/.test(toastH) || tripWarns.length !== 1) fail(`B9h: expected one 'came back empty' toast and one console warning (toast: "${toastH.slice(0, 120)}", warnings: ${tripWarns.length})`);
+      else ok(`B9h: a 200 + [] schedule_days poll answer kept all ${cellsBefore.length} assigned October cells; toast "${toastH.slice(0, 110)}"; one console warning`);
+      await p2.setViewportSize({ width: 1180, height: 900 });
     } catch (e) { fail("refresh banners: " + errLine(e)); try { await p2.screenshot({ path: path.join(OUT, "failure-refresh.png"), fullPage: true }); } catch (e2) {} }
     minVersionOverride = null;
     await p2.close();
@@ -6607,6 +6753,10 @@ const expected = consoleErrors.filter(t => EXPECTED_CONSOLE_ERRORS.some(x => x.r
 if (expected.length) console.log(`     (${expected.length} expected console error(s) ignored: ${[...new Set(expected)].slice(0, 3).join(" | ")})`);
 if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400, the session scenario's 401s / rejected refresh - expected)`);
 if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ")); else ok("no unexpected console errors");
+// Prompt 16 B9 (a): the worker fallback is quiet by design (console.warn + genWorkerBroken) - the whole-run sweep is
+// where a device that silently dropped to the inline run would show.
+const genWorkerWarns = consoleWarns.filter(t => /Generate worker failed/.test(t));
+if (genWorkerWarns.length) fail("'Generate worker failed' during the run (every later Generate on that page ran inline): " + [...new Set(genWorkerWarns)].map(t => t.slice(0, 200)).join(" | ")); else ok("no 'Generate worker failed' warning during the run (the worker path held on every Generate)");
 
 // Prompt 16 B8 - supply chain + CSP: no request left for a CDN host; React, ReactDOM and supabase-js were fetched
 // from vendor/ with ?v=APP_VERSION; the served page carries the CSP meta with the three inline-script hashes and

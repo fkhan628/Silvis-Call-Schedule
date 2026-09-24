@@ -2664,8 +2664,90 @@ function profilePollMerge(prev, row) {
   };
 }
 
+// ---- Prompt 16 B9 (9/24): small pure pieces the client items are built on ----
+
+// (a) The Generate worker's script. The app builds a classic Web Worker from a Blob of this text - no second script
+// file to version and deploy - and the worker importScripts the page's own helpers.js / rules.js / generator.js
+// (the caller passes the absolute URLs WITH the page's ?v cache-buster, so the worker runs the bytes the page loaded
+// and can never disagree with it on a rule). Classic scripts: their top-level functions are the worker's globals,
+// exactly as on the page. buildContext runs inside the worker - the inputs are rows and Sets (structured clone
+// carries them), the page's ctx (memo caches) is never cloned. One message in, one answer out, never a throw.
+const GEN_WORKER_MODULES = ["helpers.js", "rules.js", "generator.js"];
+function genWorkerSource(moduleUrls) {
+  const urls = (Array.isArray(moduleUrls) ? moduleUrls : []).map(u => JSON.stringify(String(u)));
+  return [
+    "importScripts(" + urls.join(", ") + ");",
+    "self.onmessage = function (ev) {",
+    "  var m = ev.data || {};",
+    "  try {",
+    "    if (!m.inputs || typeof m.inputs !== 'object') throw new Error('generate worker: no inputs in the message');",
+    "    var ctx = buildContext(m.inputs);",
+    "    var res = generate(ctx, m.start, m.end, m.opts || {});",
+    "    self.postMessage({ id: m.id, ok: true, schedule: res.schedule || {}, diagnostics: res.diagnostics || {}, warnings: ctx.warnings || [] });",
+    "  } catch (e) {",
+    "    self.postMessage({ id: m.id, ok: false, error: String(e && e.message || e) });",
+    "  }",
+    "};",
+  ].join("\n");
+}
+
+// (b) Focus trap: where Tab / Shift+Tab should land so focus stays inside a dialog. `focusable` is the dialog's
+// focusable elements in DOM order, `active` the element that has focus. Answers the element to focus, or null
+// when the browser's own move stays inside the dialog.
+function focusTrapNext(shiftKey, focusable, active) {
+  const list = Array.isArray(focusable) ? focusable : [];
+  if (!list.length) return null;
+  const first = list[0], last = list[list.length - 1];
+  if (list.indexOf(active) < 0) return shiftKey ? last : first;
+  if (shiftKey && active === first) return last;
+  if (!shiftKey && active === last) return first;
+  return null;
+}
+
+// (d) The line under "Send test notification": "sent" only when new Notification() really showed one.
+function notifTestMessage(shown, permission) {
+  if (shown) return "Browser notification sent.";
+  if (permission === "denied") return "Browser notifications are blocked in this browser's settings - nothing was shown.";
+  if (permission !== "granted") return "Browser notifications are not allowed yet - tap Allow notifications first.";
+  return "This browser could not show a notification from the page (on an iPhone the app has to be installed to the Home Screen) - nothing was shown.";
+}
+
+// (e) The toasts for Setup saves that wait for the blob write: ONE toast naming every distinct label, in order
+// ("Group rules and Holiday units saved.") - the app's toast is single-slot (a second showToast replaces the
+// first), so one line per settled run is the only way every label is seen (B9 review 9/24).
+function setupSaveToasts(labels, ok, why) {
+  const seen = new Set();
+  const list = (Array.isArray(labels) ? labels : []).map(l => String(l || "").trim()).filter(k => { if (!k || seen.has(k)) return false; seen.add(k); return true; });
+  if (!list.length) return [];
+  let reason = String(why || "").trim() || "the write did not go through";
+  if (!/[.!?]$/.test(reason)) reason += ".";
+  const names = list.length === 1 ? list[0] : list.slice(0, -1).join(", ") + " and " + list[list.length - 1];
+  return [ok ? { text: names + " saved.", tone: "success" } : { text: names + " NOT saved - " + reason, tone: "error" }];
+}
+
+// (g) Stable keys for an editor whose rows are plain objects without ids (the recurring-pattern lists): reconcile
+// a previous id list to `n` rows - same length = the same array (stable keys), longer = fresh unique ids appended,
+// shorter = truncated (an outside reset). The editor splices the list itself when it removes a row.
+let suRowIdSeq = 0;
+function suPatternRowIds(prev, n) {
+  const p = Array.isArray(prev) ? prev : [];
+  const len = Math.max(0, Math.floor(Number(n) || 0));
+  if (p.length === len) return p;
+  if (p.length > len) return p.slice(0, len);
+  const out = p.slice();
+  while (out.length < len) out.push("pr" + (++suRowIdSeq));
+  return out;
+}
+
+// (h) schedule_days tripwire: a read of ZERO rows after a read of N > 0 is a failed read (an RLS-filtered or dead-
+// token answer is HTTP 200 + [], indistinguishable from an empty table), never an empty schedule to adopt.
+function daysReadTripped(count, lastCount) {
+  return Number(count) === 0 && Number(lastCount) > 0;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, setupSaveToasts, suPatternRowIds, daysReadTripped,
     reviewStateFor, derivedEastVacations,
     authLinkError, AUTH_LINK_ERROR_MESSAGE,
     notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,

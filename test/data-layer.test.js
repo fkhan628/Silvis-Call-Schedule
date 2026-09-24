@@ -713,7 +713,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const gate = src.indexOf("payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current", eff);
     const consume = src.indexOf("allowWipeSaveRef.current = false; // consume one-shot bypass", eff);
     const leg1 = src.indexOf("syncScheduleDays(payload.schedule)", eff);
-    const leg2gate = src.indexOf("if (!canWriteBlob) return;", eff);
+    const leg2gate = src.indexOf("if (!canWriteBlob) {", eff); // Prompt 16 B9 (e): the gate settles the Setup-save waiters before it returns
     const blobWrite = src.indexOf('await saveBlobNow(payload, "autosave")', eff);
     assert.ok(eff > 0 && gate > eff && consume > gate && leg1 > consume && leg2gate > leg1 && blobWrite > leg2gate, `eff=${eff} gate=${gate} consume=${consume} leg1=${leg1} leg2gate=${leg2gate} blob=${blobWrite}`);
   });
@@ -1197,7 +1197,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   });
   check("autosave leg 2 and the keepalive blob leg are gated on blobLoadedRef (after the canWriteBlob gate, before the write - A4: saveBlobNow / the CAS PATCH)", () => {
     const eff = src.indexOf("// --- Supabase: Auto-save on changes ---");
-    const leg2gate = src.indexOf("if (!canWriteBlob) return;", eff);
+    const leg2gate = src.indexOf("if (!canWriteBlob) {", eff); // Prompt 16 B9 (e): the gate settles the Setup-save waiters before it returns
     const blobGate = src.indexOf("if (!blobLoadedRef.current) {", eff);
     const blobWrite = src.indexOf('await saveBlobNow(payload, "autosave")', eff);
     assert.ok(eff > 0 && leg2gate > eff && blobGate > leg2gate && blobWrite > blobGate, `eff=${eff} leg2gate=${leg2gate} blobGate=${blobGate} write=${blobWrite}`);
@@ -1741,7 +1741,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('<SuCheck testid="gen-fill-open-only" label="Fill open slots only (keep every held day)"'), "checkbox");
     assert.ok(src.includes("checked={opts.fillOpenOnly === true} onChange={v => setOpts(o => ({ ...o, fillOpenOnly: v }))}"), "checkbox state");
     assert.ok(src.includes('useState({ start: "", end: "", bestOf: 200, seed: "", respectLocks: true, fillOpenOnly: false })'), "default off");
-    assert.ok(src.includes("generate(built.ctx, start, end, { seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, timeBudgetMs: 25000 })"), "generate() receives fillOpenOnly (T's option)");
+    // Prompt 16 B9 (a): the one options object (runOpts) goes to the worker run and to the inline fallback alike.
+    assert.ok(src.includes("const runOpts = { seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, timeBudgetMs: 25000 };") && src.includes("generate(built.ctx, start, end, runOpts)") && src.includes("generateInWorker(inputs, start, end, runOpts)"), "generate() receives fillOpenOnly (T's option) on both paths");
     assert.ok(src.includes("fillOpenOnly: o.fillOpenOnly === true, ranAt:"), "the preview records the mode");
     assert.ok(src.includes("fillOpenOnly: previewGen.fillOpenOnly === true, respectLocks: previewGen.respectLocks"), "re-roll keeps the mode");
     assert.ok(src.includes('{preview.fillOpenOnly ? ", fill open slots only" : ""}'), "the meta line names the mode");
@@ -3289,7 +3290,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(eff > 0 && iDays > eff && iBlob > iDays, "days leg first, then the blob leg");
       const days = src.slice(eff, iDays), blob = src.slice(iDays + daysDeps.length, iBlob);
       for (const [name, part] of [["days", days], ["blob", blob]]) {
-        assert.ok(part.includes("if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return; // hydration window"), name + ": hydration window");
+        assert.ok(/if \(loadedAtRef\.current && Date\.now\(\) - loadedAtRef\.current < 3000\)[^\n]*return;[^\n]*\/\/ hydration window/.test(part), name + ": hydration window"); // B9 (e): the blob leg's line settles the Setup-save waiters before it returns
         assert.ok(part.includes("if (loadFailedRef.current) {"), name + ": loadFailedRef gate");
         assert.ok(part.includes("payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current"), name + ": empty-save guard");
         assert.ok(part.includes("pendingSaveRef.current = payload;"), name + ": arms the pending payload");
@@ -3297,7 +3298,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(days.includes("syncScheduleDays(payload.schedule)") && !blob.includes("syncScheduleDays("), "the days leg syncs the table; the blob leg never does");
       assert.ok(days.includes("allowWipeSaveRef.current = false; // consume one-shot bypass") && !blob.includes("allowWipeSaveRef.current = false"), "the one-shot is consumed once, in the days leg");
       assert.ok(!blob.includes("vacations") && !blob.includes("availabilityRows"), "the blob leg never names the poll-refreshed arrays");
-      const gate = blob.indexOf("if (!canWriteBlob) return;"), loadedGate = blob.indexOf("if (!blobLoadedRef.current) {"), call = blob.indexOf("await saveBlobNow(payload, \"autosave\")");
+      const gate = blob.indexOf("if (!canWriteBlob) {"), loadedGate = blob.indexOf("if (!blobLoadedRef.current) {"), call = blob.indexOf("await saveBlobNow(payload, \"autosave\")"); // B9 (e): the gate settles the waiters, then returns
       assert.ok(gate > 0 && loadedGate > gate && call > loadedGate, `blob leg order: canWriteBlob=${gate} blobLoadedRef=${loadedGate} saveBlobNow=${call}`);
     });
     check("A4 pins: saveBlobNow writes PATCH ?id=eq.main&updated_at=eq.<blobTsRef> (is.null without a stamp) with Prefer return=representation through authFetch, skips when blobSignature equals lastBlobJsonRef, hands zero rows to reloadBlobAfterMiss (adopt + toast 'Setup changed elsewhere - reloaded', never a retry), stamps blobTsRef from the RETURNED row; adoptBlob records blobLocalRef / lastBlobJsonRef through adoptBlobState; no blind upsert of the blob is left in the autosave or the flush (the factory reset's intentional clear is the one upsert)", () => {
@@ -3367,11 +3368,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(A5SRC.includes('<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">'), "black-translucent: the page draws under the status bar, which is why the header pads by the top inset");
     });
     check("A5 pins: the three fixed bottom banners (session-expired above minimum-version above update-available) position through css.bottomBanner spread AFTER their padding shorthand; no literal 44px offset or bottom:0 is left on them; the toast lifts by the bottom inset", () => {
-      assert.ok(A5line('data-testid="session-expired"').includes('style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0)),fontSize:12.5'), "the session-expired banner");
+      assert.ok(A5line('data-testid="session-expired"').includes('style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0)),fontSize:12.5'), "the session-expired banner");
       const fu = A5SRC.slice(A5SRC.indexOf("{forceUpdate && !paintSheet && !offerSheet && ("), A5SRC.indexOf("This app version ({APP_VERSION}) is below the required minimum"));
-      assert.ok(fu.includes('<div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5'), "the minimum-version banner");
+      assert.ok(fu.includes('<div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5'), "the minimum-version banner");
       const ua = A5SRC.slice(A5SRC.indexOf("{updateAvailable && !paintSheet && !offerSheet && ("), A5SRC.indexOf("New version available ({updateAvailable})"));
-      assert.ok(ua.includes('<div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5'), "the update-available banner");
+      assert.ok(ua.includes('<div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5'), "the update-available banner");
       assert.strictEqual(A5count(A5SRC, "css.bottomBanner("), 3, "exactly the three banners");
       for (const gone of ["bottom:updateAvailable?44:0", "bottom:(forceUpdate?44:0)+(updateAvailable?44:0)", "bottom:0,zIndex:9998"]) assert.strictEqual(A5count(A5SRC, gone), 0, "literal offset left: " + gone);
       assert.ok(A5line('data-testid="toast"').includes("...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), "the toast: lifted by the top inset over a painter sheet, by the bottom inset otherwise");
@@ -4019,6 +4020,372 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(B4count("refreshOwnProfile(fr)"), 1, "one call site (the poll and the SUBSCRIBED handler share refreshAll)");
       assert.strictEqual(B4count("const pollInterval = setInterval(refreshAll, 60000);"), 1, "the 60-second poll");
       assert.strictEqual(B4count("setUserProfile("), 5, "setUserProfile call sites: adoptSignedInUser (ok + failed), handleSignOut, the Users card PATCH of the admin's own row, refreshOwnProfile");
+    });
+  }
+
+  // ---------------- [B9] Prompt 16 B9 (nine client items from the 9/23 review, section 3) ----------------
+  {
+    console.log("\n[B9] Prompt 16 B9 (Generate in a worker with an honest busy line; day-editor discard guard + focus trap; banners under the dialogs; notification / saved toasts only after the fact; contact delete checks the row; pattern rows keyed by id; empty schedule read tripwire; todayCentral everywhere)");
+    const B9SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const B9count = (needle, hay) => (hay || B9SRC).split(needle).length - 1;
+    const B9slice = (from, to) => { const i = B9SRC.indexOf(from); assert.ok(i >= 0, "anchor missing: " + from); const j = B9SRC.indexOf(to, i + from.length); assert.ok(j > i, "end anchor missing: " + to); return B9SRC.slice(i, j); };
+    const ref = (v) => ({ current: v });
+
+    // (a) the Generate worker: helpers.genWorkerSource builds the script; run it in a worker-shaped sandbox (self,
+    // importScripts, postMessage - NO window, document or localStorage) over the seed and check the answers.
+    await (async () => {
+      const SA = require(path.join(__dirname, "seed-adapter.js"));
+      const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+      const urls = ["helpers.js", "rules.js", "generator.js"].map(f => "https://example.test/app/" + f + "?v=2026.09.24x");
+      let script = null;
+      check("B9a: genWorkerSource(urls) is a classic-worker script - importScripts of exactly the three page modules in load order (helpers, rules, generator; no config.js, no east-feed.js), an onmessage handler, no window / document / localStorage", () => {
+        assert.strictEqual(typeof H.genWorkerSource, "function", "helpers.genWorkerSource");
+        assert.deepStrictEqual(H.GEN_WORKER_MODULES, ["helpers.js", "rules.js", "generator.js"], "helpers.GEN_WORKER_MODULES");
+        script = H.genWorkerSource(urls);
+        assert.ok(script.includes('importScripts("https://example.test/app/helpers.js?v=2026.09.24x", "https://example.test/app/rules.js?v=2026.09.24x", "https://example.test/app/generator.js?v=2026.09.24x");'), script);
+        assert.ok(script.includes("self.onmessage = function (ev) {"), "onmessage handler");
+        assert.ok(!/\b(window|document|localStorage|config\.js|east-feed\.js)\b/.test(script), "no page-only globals: " + script);
+      });
+      if (!script) return;
+      const posted = [];
+      const sandbox = { console: { warn: () => {}, log: () => {}, error: () => {} }, Date, Math, JSON, Object, Array, Set, Map, Number, String, Boolean, RegExp, Error, TypeError, RangeError, Intl, parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent, setTimeout, clearTimeout };
+      sandbox.self = sandbox;
+      sandbox.postMessage = (m) => posted.push(structuredClone(m)); // a worker's postMessage structured-clones: a function or a memo in the answer would throw here too
+      const loaded = [];
+      const ctxv = vm.createContext(sandbox);
+      sandbox.importScripts = (...us) => us.forEach(u => { const f = u.split("/").pop().split("?")[0]; loaded.push(f); vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), ctxv, { filename: f }); });
+      const input = SA.seedToContextInput(seed, {});
+      check("B9a: the worker script loads the three modules without window / document (their top level touches neither) and the seed inputs survive a structured clone (rows, Sets - no functions)", () => {
+        vm.runInContext(script, ctxv, { filename: "generate-worker.js" });
+        assert.deepStrictEqual(loaded, ["helpers.js", "rules.js", "generator.js"]);
+        assert.strictEqual(typeof ctxv.onmessage, "function", "self.onmessage installed");
+        assert.strictEqual(typeof ctxv.buildContext, "function", "rules.js buildContext is a worker global");
+        assert.strictEqual(typeof ctxv.generate, "function", "generator.js generate is a worker global");
+        structuredClone(input);
+      });
+      check("B9a: a { id, inputs, start, end, opts } message answers { id, ok: true, schedule, diagnostics } for the seed over 10/05-10/18 (buildContext + generate inside the worker; the answer itself clones)", () => {
+        ctxv.onmessage({ data: { id: 7, inputs: structuredClone(input), start: "2026-10-05", end: "2026-10-18", opts: { seed: 11, bestOf: 3, respectLocks: true, fillOpenOnly: false, timeBudgetMs: 8000 } } });
+        assert.strictEqual(posted.length, 1, "one answer");
+        const a = posted[0];
+        assert.strictEqual(a.id, 7); assert.strictEqual(a.ok, true, JSON.stringify(a).slice(0, 300));
+        const days = Object.keys(a.schedule).filter(d => d >= "2026-10-05" && d <= "2026-10-18");
+        assert.strictEqual(days.length, 14, "every day of the range in the answer: " + days.length);
+        // 10/15 primary is OPEN in the seed on purpose (rules doc section 8), so not every primary fills: the contract is
+        // that every empty slot is named in diagnostics.uncovered - never silently left empty.
+        const emptyP = days.filter(d => !a.schedule[d].primary);
+        assert.ok(emptyP.length <= 2, "at most the deliberately open day(s) empty: " + emptyP.join(", "));
+        assert.ok(Array.isArray(a.diagnostics.uncovered), "diagnostics.uncovered is a list");
+        emptyP.forEach(d => assert.ok(JSON.stringify(a.diagnostics.uncovered).includes(d), d + " empty but not in diagnostics.uncovered: " + JSON.stringify(a.diagnostics.uncovered).slice(0, 300)));
+        assert.ok(a.diagnostics && typeof a.diagnostics.candidatesTried === "number" && a.diagnostics.candidatesTried >= 1, "diagnostics.candidatesTried: " + JSON.stringify(a.diagnostics).slice(0, 200));
+        assert.ok(Array.isArray(a.warnings), "ctx warnings array");
+      });
+      check("B9a: a bad message (no inputs) answers { ok: false, error } and never throws out of onmessage (the page falls back to the inline run)", () => {
+        assert.doesNotThrow(() => ctxv.onmessage({ data: { id: 8, inputs: null, start: "2026-10-05", end: "2026-10-06", opts: {} } }));
+        assert.strictEqual(posted.length, 2);
+        assert.strictEqual(posted[1].id, 8); assert.strictEqual(posted[1].ok, false); assert.ok(/inputs/.test(posted[1].error), posted[1].error);
+        assert.doesNotThrow(() => ctxv.onmessage({}));
+        assert.strictEqual(posted[2].ok, false);
+      });
+      check("B9a pins: runGenerate tries generateInWorker first and runs inline only when the worker is unsupported or failed (genWorkerBroken); the worker module list and ?v URLs come from GEN_WORKER_MODULES + APP_VERSION; GeneratePanel's busy line names where the run is (worker: the page stays usable; inline: it may pause) and the old 'stays responsive between candidates' claim is gone", () => {
+        const rg = B9slice("  const runGenerate = async (o) => {", "  const rerollGenerate = () => {");
+        const iW = rg.indexOf("await generateInWorker("), iI = rg.indexOf("generate(built.ctx, start, end,");
+        assert.ok(iW > 0 && iI > iW, "worker first, inline after: " + iW + " / " + iI);
+        assert.ok(rg.includes("setGenWorkerBroken(true)"), "a failed worker run marks the device inline from then on");
+        assert.ok(rg.includes("genWorkerOk"), "the worker path is gated on genWorkerOk");
+        assert.strictEqual(B9count("const genWorkerUrls = () => GEN_WORKER_MODULES.map(f => new URL(f + \"?v=\" + APP_VERSION, location.href).href);"), 1, "the module URLs carry the page's ?v");
+        assert.strictEqual(B9count("URL.createObjectURL(new Blob([genWorkerSource(urls)], { type: \"text/javascript\" }))"), 1, "a Blob-built worker (no second script file)");
+        assert.strictEqual(B9count("const [genWorkerBroken, setGenWorkerBroken] = useState(false);"), 1);
+        assert.strictEqual(B9count("const genWorkerOk = genWorkerSupported() && !genWorkerBroken;"), 1);
+        const gp = B9slice("function GeneratePanel({", "\n}\n");
+        assert.ok(gp.includes("busyMode"), "GeneratePanel takes busyMode");
+        assert.ok(gp.includes('busyMode === "worker"'), "two busy lines");
+        assert.ok(gp.includes("in a background worker - the page stays usable while it runs") && gp.includes("on this page - it may pause for a few seconds until the run finishes"), "the two honest lines: " + gp.slice(gp.indexOf("gen-busy"), gp.indexOf("gen-busy") + 400));
+        assert.strictEqual(B9count("the page stays responsive between candidates"), 0, "the untrue line is gone");
+        assert.strictEqual(B9count('busyMode={genWorkerOk ? "worker" : "inline"}'), 1, "the app passes the mode it will really use");
+      });
+    })();
+
+    // (b) the day editor: a dirty draft is never discarded without asking (backdrop, Escape, the x and Cancel go through
+    // requestClose), Tab cycles inside the dialog, focus lands in it on open and goes back to the opener on close.
+    check("B9b: focusTrapNext - Tab on the last focusable wraps to the first, Shift+Tab on the first wraps to the last, focus outside the dialog comes back in, anything else is left to the browser", () => {
+      const a = {}, b = {}, c = {}, out = {};
+      assert.strictEqual(H.focusTrapNext(false, [a, b, c], c), a);
+      assert.strictEqual(H.focusTrapNext(true, [a, b, c], a), c);
+      assert.strictEqual(H.focusTrapNext(false, [a, b, c], b), null);
+      assert.strictEqual(H.focusTrapNext(true, [a, b, c], b), null);
+      assert.strictEqual(H.focusTrapNext(false, [a, b, c], out), a);
+      assert.strictEqual(H.focusTrapNext(true, [a, b, c], out), c);
+      assert.strictEqual(H.focusTrapNext(false, [], a), null);
+      assert.strictEqual(H.focusTrapNext(false, null, a), null);
+    });
+    check("B9b pins: DayEditor - requestClose asks (confirm) only when dirty and is what the backdrop, the x, Cancel and Escape call; no path closes a dirty editor silently; the dialog traps Tab (dialogKeyDown over every focusable), takes focus on open (tabIndex -1) unless the caller asked for the external-cover input, and returns focus to the opener", () => {
+      const de = B9slice("function DayEditor(props) {", "// ===================== SETUP VIEW COMPONENTS");
+      assert.ok(de.includes("const requestClose = () => {"), "requestClose");
+      const rc = de.slice(de.indexOf("const requestClose = () => {"), de.indexOf("};", de.indexOf("const requestClose = () => {")));
+      assert.ok(rc.includes("if (dirty && !confirm(") && rc.includes("onCancel();"), "asks only when dirty, then onCancel: " + rc);
+      assert.strictEqual(B9count('<div data-testid="day-editor" onClick={requestClose}', de), 1, "backdrop tap goes through requestClose");
+      assert.strictEqual(B9count("onClick={onCancel}", de), 0, "no direct onCancel click left (x and Cancel ask too)");
+      assert.strictEqual(B9count("onClick={requestClose}", de), 3, "backdrop, x, Cancel");
+      assert.ok(de.includes('if (e.key === "Escape") { e.preventDefault(); if (pending) setPending(null); else requestClose(); return; }'), "Escape asks when dirty");
+      assert.ok(de.includes("const dialogKeyDown = (e) => {") && de.includes("focusTrapNext(e.shiftKey, focusable, document.activeElement)"), "the Tab trap uses the helper");
+      assert.ok(de.includes('onKeyDown={dialogKeyDown}') && de.includes("tabIndex={-1}") && de.includes("ref={dialogRef}"), "the dialog element takes the handler, a tabIndex and a ref");
+      assert.ok(de.includes("openerRef.current = document.activeElement"), "the opener is remembered");
+      assert.ok(de.includes("if (!focusExternal && dialogRef.current) dialogRef.current.focus();"), "focus lands in the dialog on open unless the external input was asked for");
+    });
+
+    // (c) the fixed banners paint UNDER every dialog and sheet: z 9200 < painter sheets 9300 < day editor / claim sheet 9500.
+    check("B9c pins: the three fixed bottom banners are zIndex 9200, below the painter sheets (9300), the day editor and the claim sheet (9500) - a banner never covers a sticky Save row or the claim buttons; the toast stays on top (9999)", () => {
+      const banners = ['data-testid="session-expired"', "This app version ({APP_VERSION}) is below the required minimum", "New version available ({updateAvailable})"];
+      banners.forEach(b => { const at = B9SRC.indexOf(b); assert.ok(at > 0, b); const around = B9SRC.slice(B9SRC.lastIndexOf("\n", B9SRC.lastIndexOf("\n", at) - 1), B9SRC.indexOf("\n", at)); assert.ok(/zIndex:9200/.test(around), b + " -> " + around.slice(0, 200)); }); // the anchor's line and the one before it
+      assert.strictEqual(B9count("zIndex:9998"), 0, "no banner left at 9998");
+      assert.strictEqual(B9count("zIndex:9200"), 3, "exactly the three banners");
+      assert.ok(B9SRC.split("\n").find(l => l.includes('data-testid="day-editor" onClick')).includes("zIndex:9500"), "day editor 9500");
+      assert.ok(B9SRC.split("\n").find(l => l.includes('data-testid="claim-sheet"')).includes("zIndex:9500"), "claim sheet 9500");
+      assert.strictEqual(B9count('data-testid="ofp-sheet" style={{ position: "fixed", inset: 0, zIndex: 9300'), 1, "painter sheet 9300");
+      assert.ok(B9SRC.split("\n").find(l => l.includes('data-testid="toast"')).includes("zIndex:9999"), "toast 9999");
+    });
+
+    // (d) "Browser notification sent." only when new Notification() did not throw.
+    await (async () => {
+      const start = B9SRC.indexOf("  const sendBrowserNotif = useCallback((title, body, tag, forceShow) => {");
+      const endMark = "  }, [browserNotifPermission]);";
+      const end = B9SRC.indexOf(endMark, start);
+      assert.ok(start > 0 && end > start, "sendBrowserNotif anchors");
+      const body = B9SRC.slice(start, end + endMark.length);
+      const mk = (permission, NotificationCtor, focused) => new Function("useCallback", "browserNotifPermission", "document", "Notification", "console", body + "\nreturn sendBrowserNotif;")((fn) => fn, permission, { hasFocus: () => !!focused }, NotificationCtor, { warn: () => {} });
+      const shown = [];
+      const Good = function (t, o) { shown.push([t, o && o.body]); };
+      const Throws = function () { throw new TypeError("Illegal constructor"); }; // what an iPhone's Safari page context says
+      check("B9d: sendBrowserNotif answers true only when new Notification() succeeded - false when it throws (iOS), when permission is not granted, and when the app has focus without forceShow", () => {
+        assert.strictEqual(mk("granted", Good, false)("t", "b", "x", true), true);
+        assert.deepStrictEqual(shown, [["t", "b"]]);
+        assert.strictEqual(mk("granted", Throws, false)("t", "b", "x", true), false, "a throwing constructor is not a sent notification");
+        assert.strictEqual(mk("default", Good, false)("t", "b", "x", true), false, "no permission");
+        assert.strictEqual(mk("granted", Good, true)("t", "b", "x", false), false, "focused, not forced");
+        assert.strictEqual(shown.length, 1);
+      });
+      check("B9d: notifTestMessage - the sent line only for a shown notification; otherwise the reason (blocked / not allowed yet / the browser could not show one, e.g. an iPhone without the Home Screen install)", () => {
+        assert.strictEqual(H.notifTestMessage(true, "granted"), "Browser notification sent.");
+        assert.ok(/blocked/i.test(H.notifTestMessage(false, "denied")) && /nothing was shown/i.test(H.notifTestMessage(false, "denied")), H.notifTestMessage(false, "denied"));
+        assert.ok(/not allowed yet/i.test(H.notifTestMessage(false, "default")), H.notifTestMessage(false, "default"));
+        assert.ok(/could not show/i.test(H.notifTestMessage(false, "granted")) && /Home Screen/.test(H.notifTestMessage(false, "granted")), H.notifTestMessage(false, "granted"));
+        assert.ok(!/sent/i.test(H.notifTestMessage(false, "granted")));
+      });
+      check("B9d pins: sendTestNotification reads the boolean and shows notifTestMessage(shown, browserNotifPermission); the unconditional 'Browser notification sent.' is gone; the e-mail line says the pop-up state truthfully", () => {
+        const st = B9slice("  const sendTestNotification = useCallback(async () => {", "  }, [sendBrowserNotif, sendEmailNotif, mySurgeon");
+        assert.ok(st.includes("const shown = sendBrowserNotif("), "reads the answer");
+        assert.ok(st.includes("notifTestMessage(shown, browserNotifPermission)"), "the helper picks the line");
+        assert.strictEqual(B9count('setNotifTestSent("Browser notification sent.")'), 0, "no unconditional sent line");
+        assert.ok(st.includes('(shown ? "Browser pop-up shown" : "No browser pop-up") + " + email test sent'), "the e-mail line carries the pop-up truth: " + st);
+      });
+    })();
+
+    // (e) group rules / holidays: the toast says saved only after the blob write returned.
+    check("B9e: setupSaveToasts - ONE toast naming every distinct label (showToast is single-slot: a second toast replaces the first, so 'Group rules and Holiday units saved.' is one line); 'saved.' as success after a write, 'NOT saved - <why>' as error otherwise; nothing for no waiters", () => {
+      assert.deepStrictEqual(H.setupSaveToasts(["Group rules", "Holiday units", "Group rules"], true), [{ text: "Group rules and Holiday units saved.", tone: "success" }]);
+      assert.deepStrictEqual(H.setupSaveToasts(["Group rules", "Holiday units", "Roster"], false, "no permission"), [{ text: "Group rules, Holiday units and Roster NOT saved - no permission.", tone: "error" }]);
+      assert.deepStrictEqual(H.setupSaveToasts(["Holiday units"], false, "no permission"), [{ text: "Holiday units NOT saved - no permission.", tone: "error" }]);
+      assert.deepStrictEqual(H.setupSaveToasts(["Group rules"], false, "the setup changed elsewhere and was reloaded."), [{ text: "Group rules NOT saved - the setup changed elsewhere and was reloaded.", tone: "error" }]);
+      assert.deepStrictEqual(H.setupSaveToasts(["Group rules"], false), [{ text: "Group rules NOT saved - the write did not go through.", tone: "error" }]);
+      assert.deepStrictEqual(H.setupSaveToasts([], true), []);
+      assert.deepStrictEqual(H.setupSaveToasts(null, true), []);
+    });
+    check("B9e pins: saveGroupRules / saveHolidays register a waiter (awaitBlobWrite) instead of toasting 'saved.' at once; the blob leg settles the waiters on every exit - saved / skipped / landed earlier as saved, a CAS-miss reload, the wiped guard, the not-loaded guard, the load-failed and hydration returns and the catch as NOT saved with the reason", () => {
+      const gr = B9slice("  const saveGroupRules = (next) => {", "  const saveHolidays = (next) => {");
+      const hol = B9slice("  const saveHolidays = (next) => {", "  // Users (admin).");
+      assert.ok(gr.includes('awaitBlobWrite("Group rules")') && !gr.includes('showToast("Group rules saved."'), gr);
+      assert.ok(hol.includes('awaitBlobWrite("Holiday units")') && !hol.includes('showToast("Holiday units saved."'), hol);
+      assert.strictEqual(B9count("const blobWaitersRef = useRef([]);"), 1);
+      assert.strictEqual(B9count("const settleBlobWaiters = (ok, why) => settleWaiters(takeBlobWaiters(), ok, why);"), 1);
+      const leg = B9slice("    // Leg 2 - the config blob.", "  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);");
+      assert.ok(leg.includes('const r = await saveBlobNow(payload, "autosave");'), "the write");
+      const after = leg.slice(leg.indexOf('const r = await saveBlobNow(payload, "autosave");'));
+      assert.ok(after.includes("if (r && r.reloaded) settleWaiters(mine, false, \"the setup changed on another device and was reloaded - check it and save again\"); else settleWaiters(mine, true);"), "settled after the write returns: " + after.slice(0, 400));
+      assert.ok(/catch \(e\) \{[\s\S]*settleWaiters\(mine, false, /.test(after), "the catch settles NOT saved");
+      assert.strictEqual(B9count("settleWaiters(mine, false, \"empty data was not written\")", leg), 1, "the wiped guard");
+      assert.strictEqual(B9count("settleWaiters(mine, false, \"the shared setup did not load this session\")", leg), 1, "the not-loaded guard");
+      const legHead = B9slice("  useEffect(() => {\n    if (!loaded) return;\n    if (isPublicMode) return;  // Public viewers never write to the DB", "    // Leg 2 - the config blob.");
+      assert.ok(legHead.includes('settleBlobWaiters(false, "the app is still loading - save again in a moment")'), "the hydration-window return: " + legHead);
+      assert.ok(legHead.includes('settleBlobWaiters(false, "data failed to load")'), "the load-failed return");
+      assert.ok(leg.includes('if (!canWriteBlob) { settleBlobWaiters(false, "this account cannot write the shared setup"); return; }'), "the role gate");
+    });
+
+    // (f) deleteOfficeContact: DELETE with return=representation; zero rows back = nothing deleted -> error toast, list untouched.
+    await (async () => {
+      const start = B9SRC.indexOf("  const deleteOfficeContact = async (id) => {");
+      const end = B9SRC.indexOf("\n  };\n", start);
+      assert.ok(start > 0 && end > start, "deleteOfficeContact anchors");
+      const body = B9SRC.slice(start, end + 5);
+      const mk = (status, rows) => {
+        const s = { toasts: [], sets: 0, audits: [], req: null };
+        const fetchStub = async (url, init) => { s.req = { url, init }; return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(rows), json: async () => rows }; };
+        const fn = new Function("officeContacts", "confirm", "fetch", "SUPABASE_URL", "dbAuthHeaders", "showToast", "setOfficeContacts", "logAudit", "console", "describeDbError", body + "\nreturn deleteOfficeContact;")(
+          [{ id: "c1", name: "Front desk" }], () => true, fetchStub, "https://x.supabase.co", () => ({ apikey: "k", Authorization: "Bearer t" }), (m, tone) => s.toasts.push({ m, tone }), () => { s.sets++; }, (k, m, meta) => s.audits.push({ k, meta }), { warn: () => {} }, (e) => String(e));
+        return { fn, s };
+      };
+      await (async () => {
+        const { fn, s } = mk(200, []);
+        await fn("c1");
+        check("B9f: a 2xx DELETE that returns ZERO rows (RLS filtered it) is not a deletion - the contact stays, an error toast names it, no audit row; the request asks for the representation with dbAuthHeaders", () => {
+          assert.strictEqual(s.sets, 0, "the list is untouched");
+          assert.strictEqual(s.audits.length, 0, "no audit row");
+          assert.strictEqual(s.toasts.length, 1, "one toast: " + JSON.stringify(s.toasts)); assert.strictEqual(s.toasts[0].tone, "error"); assert.ok(/No contact row was removed/.test(s.toasts[0].m), s.toasts[0].m);
+          assert.strictEqual(s.req.init.method, "DELETE");
+          assert.strictEqual(s.req.init.headers.Prefer, "return=representation", JSON.stringify(s.req.init.headers));
+          assert.strictEqual(s.req.init.headers.Authorization, "Bearer t", "dbAuthHeaders kept");
+        });
+      })();
+      await (async () => {
+        const a = mk(200, [{ id: "c1" }]);
+        await a.fn("c1");
+        const b = mk(403, { message: "denied" });
+        await b.fn("c1");
+        check("B9f: a DELETE that returns the row removes it from the list and audits it; a non-2xx answer is the connection toast and nothing else", () => {
+          assert.strictEqual(a.s.sets, 1); assert.strictEqual(a.s.audits.length, 1); assert.deepStrictEqual(a.s.audits[0].meta, { id: "c1" }); assert.strictEqual(a.s.toasts.length, 0);
+          assert.strictEqual(b.s.sets, 0); assert.strictEqual(b.s.audits.length, 0); assert.strictEqual(b.s.toasts.length, 1); assert.strictEqual(b.s.toasts[0].tone, "error");
+        });
+      })();
+    })();
+
+    // (g) PatternListEditor rows keyed by a stable id, not the index.
+    check("B9g: suPatternRowIds - the same length answers the same array (stable keys), a longer list appends fresh unique ids, a shorter list (an outside reset) truncates; ids never repeat across calls", () => {
+      const a = H.suPatternRowIds([], 2);
+      assert.strictEqual(a.length, 2); assert.notStrictEqual(a[0], a[1]);
+      assert.strictEqual(H.suPatternRowIds(a, 2), a, "same array back");
+      const b = H.suPatternRowIds(a, 3);
+      assert.deepStrictEqual(b.slice(0, 2), a); assert.ok(!a.includes(b[2]));
+      const c = H.suPatternRowIds(b, 1);
+      assert.deepStrictEqual(c, [a[0]]);
+      const d = H.suPatternRowIds(c, 2);
+      assert.ok(!b.includes(d[1]), "a minted id is never one that was used before");
+      assert.deepStrictEqual(H.suPatternRowIds(null, 0), []);
+    });
+    check("B9g pins: PatternListEditor keys each row and its typed text by the row id (Remove splices the id so the rows below keep theirs; Add lets the reconcile mint one); no key={i}", () => {
+      const pl = B9slice("function PatternListEditor({", "// --- Rules editor:");
+      assert.ok(pl.includes("const ids = suPatternRowIds(idsRef.current, items.length); idsRef.current = ids;"), "reconcile per render: " + pl.slice(0, 600));
+      assert.strictEqual(B9count("key={ids[i]}", pl), 1, "row key by id");
+      assert.strictEqual(B9count("key={i}", pl), 0, "no index key");
+      assert.ok(pl.includes("texts[ids[i]] !== undefined ? texts[ids[i]] : suPatternValueText(p)"), "typed text by id");
+      assert.ok(pl.includes("[ids[i]]: e.target.value"), "typed text stored by id");
+      assert.ok(pl.includes("idsRef.current = ids.filter((_, j) => j !== i); onChange(items.filter((_, j) => j !== i));"), "Remove splices the id list first");
+    });
+
+    // (h) schedule_days: 0 rows after N > 0 = a failed read (200 + [] is what RLS / a dead token answer) - keep the map, warn once.
+    check("B9h: daysReadTripped - only an EMPTY read after a non-empty one trips; a first empty table, a shrink to fewer rows and a normal read do not", () => {
+      assert.strictEqual(H.daysReadTripped(0, 120), true);
+      assert.strictEqual(H.daysReadTripped(0, 0), false);
+      assert.strictEqual(H.daysReadTripped(0, undefined), false);
+      assert.strictEqual(H.daysReadTripped(3, 120), false);
+      assert.strictEqual(H.daysReadTripped(120, 120), false);
+      assert.strictEqual(H.daysReadTripped(undefined, 120), false);
+    });
+    await (async () => {
+      const body = B9slice("  const mergeLoadedDays = (fresh) => {", "  const writeFailToast = ");
+      const sameAssignment = (day, a, b) => JSON.stringify(H.assignmentToDayRow(day, a || H.emptyDayAssignment())) === JSON.stringify(H.assignmentToDayRow(day, b || H.emptyDayAssignment()));
+      const mk = (lastCount) => {
+        const s = { sets: [], toasts: [], warns: 0 };
+        const rows = { "2026-11-02": { primary: "s1" }, "2026-11-03": { primary: "s2" }, "2026-11-04": { primary: "s3" } };
+        const lastSyncRef = ref(JSON.parse(JSON.stringify(rows))), scheduleRef = ref(JSON.parse(JSON.stringify(rows)));
+        const lastDaysCountRef = ref(lastCount), warnedRef = ref(false);
+        const fn = new Function("lastSyncRef", "scheduleRef", "sameAssignment", "dayVersionsRef", "setSchedule", "lastDaysCountRef", "daysTripwireWarnedRef", "daysReadTripped", "showToast", "console", body + "\nreturn mergeLoadedDays;")(
+          lastSyncRef, scheduleRef, sameAssignment, ref({ "2026-11-02": 1, "2026-11-03": 1, "2026-11-04": 1 }), (m) => s.sets.push(m), lastDaysCountRef, warnedRef, H.daysReadTripped, (m, tone) => s.toasts.push({ m, tone }), { warn: () => { s.warns++; } });
+        return { fn, s, scheduleRef, lastSyncRef, lastDaysCountRef, warnedRef };
+      };
+      check("B9h: an empty read after 3 rows keeps the map (no setSchedule, lastSyncRef untouched), warns once with a toast, and a second empty read warns in the console only", () => {
+        const t = mk(3);
+        const r1 = t.fn({ sched: {}, vers: {}, count: 0 });
+        assert.strictEqual(r1, false, "reports the read as not adopted");
+        assert.deepStrictEqual(t.s.sets, [], "the map is kept");
+        assert.deepStrictEqual(Object.keys(t.lastSyncRef.current).sort(), ["2026-11-02", "2026-11-03", "2026-11-04"], "the persisted base is kept");
+        assert.strictEqual(t.lastDaysCountRef.current, 3, "the last good count stays");
+        assert.strictEqual(t.s.toasts.length, 1); assert.strictEqual(t.s.toasts[0].tone, "error"); assert.ok(/came back empty/.test(t.s.toasts[0].m) && /3 day/.test(t.s.toasts[0].m), t.s.toasts[0].m);
+        assert.strictEqual(t.warnedRef.current, true);
+        const r2 = t.fn({ sched: {}, vers: {}, count: 0 });
+        assert.strictEqual(r2, false); assert.strictEqual(t.s.toasts.length, 1, "warned once"); assert.strictEqual(t.s.warns, 2, "the console names every tripped read");
+      });
+      check("B9h: a normal read (3 rows, one changed on the server) merges as before and records the count; an empty FIRST read (lastCount 0) adopts the empty table - that is a real empty table, not a failure", () => {
+        const t = mk(3);
+        const r = t.fn({ sched: { "2026-11-02": { primary: "s5" }, "2026-11-03": { primary: "s2" }, "2026-11-04": { primary: "s3" } }, vers: { "2026-11-02": 2, "2026-11-03": 1, "2026-11-04": 1 }, count: 3 });
+        assert.notStrictEqual(r, false);
+        assert.strictEqual(t.s.sets.length, 1); assert.strictEqual(t.s.sets[0]["2026-11-02"].primary, "s5");
+        assert.strictEqual(t.s.toasts.length, 0); assert.strictEqual(t.lastDaysCountRef.current, 3);
+        const u = mk(0);
+        const r0 = u.fn({ sched: {}, vers: {}, count: 0 });
+        assert.notStrictEqual(r0, false); assert.strictEqual(u.s.toasts.length, 0, "no tripwire on a first empty table"); assert.strictEqual(u.s.sets.length, 1, "the rows vanish from the map as before");
+      });
+      check("B9h pins: loadScheduleDays returns count; adoptLoadedDays records it; the poll's refreshDays clears loadFailedRef only for a read that was adopted; the conflict reload keeps the local map on a tripped read; the factory reset zeroes the count after its DELETE (an empty table it made is not a failure)", () => {
+        assert.strictEqual(B9count("const lastDaysCountRef = useRef(0);"), 1);
+        assert.strictEqual(B9count("const daysTripwireWarnedRef = useRef(false);"), 1);
+        const adopt = B9slice("  const adoptLoadedDays = (loadedDays) => {", "  const sameAssignment");
+        assert.ok(adopt.includes("lastDaysCountRef.current = loadedDays.count;") && adopt.includes("daysTripwireWarnedRef.current = false;"), adopt);
+        const rd = B9slice("    const refreshDays = async () => {", "    // Authenticated-read tables");
+        assert.ok(rd.includes("const adopted = mergeLoadedDays(fresh);") && rd.includes("if (adopted !== false) loadFailedRef.current = false;"), rd);
+        assert.ok(!rd.includes("loadFailedRef.current = false; // the days read succeeded"), "the unconditional clear is gone");
+        const cr = B9slice("        const fresh = await loadScheduleDays();\n        const local = scheduleRef.current || {};", "      return { ok: false, error: \"conflict\", conflict: true };");
+        assert.ok(cr.includes("if (daysReadTripped(fresh.count, lastDaysCountRef.current)) {"), "the conflict reload consults the tripwire: " + cr.slice(0, 300));
+        assert.strictEqual(B9count("lastDaysCountRef.current = 0; // Prompt 16 B9 (h): the table is empty because this reset emptied it"), 1);
+      });
+    })();
+
+    // (i) one notion of today: todayCentral() - no device-local date left where a DATE (not a timestamp) is meant.
+    check("B9i pins: no fmt(new Date()) / new Date().getFullYear() / getMonth() / addD(new Date() in index-source.html - vacation and clear-range defaults, the vacation form reset, the pasted-list year, the painter's first month and the East refresh window all read todayCentral(); the only new Date() left are timestamps and the clock", () => {
+      assert.strictEqual(B9count("fmt(new Date())"), 0, "fmt(new Date())");
+      assert.strictEqual(B9count("new Date().getFullYear()"), 0);
+      assert.strictEqual(B9count("new Date().getMonth()"), 0);
+      assert.strictEqual(B9count("addD(new Date()"), 0);
+      assert.strictEqual(B9count("const today = new Date();"), 0);
+      assert.strictEqual(B9count("useState(() => todayCentral())"), 3, "vacStart, vacEnd, clearStart");
+      assert.ok(B9SRC.includes("setVacStart(todayCentral()); setVacEnd(todayCentral());"), "the vacation form reset");
+      assert.strictEqual(B9count("year: todayCentral().slice(0, 4)"), 1, "the pasted-list year");
+      assert.ok(B9SRC.includes("const today = parse(todayCentral());"), "the painter's first month");
+      assert.ok(B9SRC.includes("const fromMon = fmt(monOf(addD(parse(todayCentral()), -28)));"), "the East refresh window");
+      const left = B9SRC.split("\n").filter(l => /new Date\(\)/.test(l) && !/toISOString|Date\.now|getTime\(\)|toLocaleTimeString|generatedAt: new Date\(\)|now = new Date\(\)/.test(l));
+      assert.deepStrictEqual(left.map(l => l.trim().slice(0, 80)), [], "device-local dates left");
+    });
+
+    // ---- B9 review fixes (9/24) ----
+    check("B9e fix: a blob-leg run settles only the waiters that existed when it started (takeBlobWaiters first thing inside the timer, before saveBlobNow - a Setup save clicked while an earlier PATCH is in flight waits for its OWN write) and the catch settles them AFTER the generic toast, so the specific 'NOT saved - <why>' line is the one that stays on the single toast slot", () => {
+      assert.strictEqual(B9count("const takeBlobWaiters = () => { const l = blobWaitersRef.current; blobWaitersRef.current = []; return l; };"), 1, "takeBlobWaiters");
+      assert.strictEqual(B9count("const settleWaiters = (labels, ok, why) => {"), 1, "settleWaiters(labels, ...)");
+      const leg = B9slice("    // Leg 2 - the config blob.", "  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);");
+      const timerAt = leg.indexOf("const timer = setTimeout(async () => {");
+      const mineAt = leg.indexOf("const mine = takeBlobWaiters();");
+      const writeAt = leg.indexOf('const r = await saveBlobNow(payload, "autosave");');
+      assert.ok(timerAt > 0 && mineAt > timerAt && mineAt < writeAt, `the run takes its waiters first thing inside the timer (timer ${timerAt}, mine ${mineAt}, write ${writeAt})`);
+      assert.strictEqual(B9count("settleBlobWaiters(", leg.slice(timerAt)), 0, "nothing inside the timer settles the LIVE list (a waiter registered during the await belongs to the next run)");
+      const catchBody = leg.slice(leg.indexOf("} catch (e) {", writeAt));
+      const genericAt = catchBody.indexOf('if (!(auth.sessionExpired && authFail)) showToast(denied');
+      const settleAt = catchBody.indexOf("settleWaiters(mine, false, denied ?");
+      assert.ok(genericAt > 0 && settleAt > genericAt, `the specific line toasts after the generic one (generic ${genericAt}, settle ${settleAt})`);
+    });
+    check("B9h fix: the two tripwire toasts name the other cause of an empty read - the schedule cleared on another device (its factory reset) - and say reload to confirm; the only local path that DELETEs schedule_days rows is the factory reset (a Clear range writes the days empty, it never removes rows, so it cannot trip this device)", () => {
+      const lines = B9SRC.split("\n").filter(l => /came back empty/.test(l) && /showToast/.test(l));
+      assert.strictEqual(lines.length, 2, "the poll toast and the conflict-reload toast");
+      lines.forEach(l => assert.ok(/cleared on another device - reload to confirm/.test(l), l.trim().slice(0, 240)));
+      const deletes = B9SRC.split("\n").filter(l => /\/rest\/v1\/schedule_days\?/.test(l) && /method: "DELETE"/.test(l));
+      assert.strictEqual(deletes.length, 1, "one schedule_days DELETE (the factory reset)");
+      assert.ok(B9SRC.includes("// Rows are NEVER deleted here; a day dropped from memory is written empty."), "the days leg never deletes");
+    });
+    check("B9c decision: the session-expired banner stays UNDER the dialogs on purpose - its Sign in (openSignInAgain) swaps the app for the sign-in card (setAuthUser(null)), which would unmount an open day editor and drop a dirty draft past the discard confirm; the JSX names the trade-off", () => {
+      const o = B9slice("  const openSignInAgain = () => {", "  // --- Roster helpers ---");
+      assert.ok(o.includes("setAuthUser(null);"), o);
+      const at = B9SRC.indexOf('data-testid="session-expired"');
+      const above = B9SRC.slice(B9SRC.lastIndexOf("{/*", at), at);
+      assert.ok(/stays\s+under an open dialog on purpose/.test(above), above.slice(0, 500));
+      assert.ok(/zIndex:9200/.test(B9SRC.slice(at, B9SRC.indexOf("\n", at))), "still 9200");
+    });
+    check("B9a fix: the smoke drives Generate through the assembled worker path - a Worker is created for the run (page.on('worker')), the busy line reads 'in a background worker' and no 'Generate worker failed' warning is logged in the whole run; the harness serves every file from a cache read once at start-up, so a git restore under a running smoke cannot swap the page it serves", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      assert.ok(smoke.includes('page.on("worker"'), "worker capture");
+      assert.ok(/in a background worker/.test(smoke), "busy-line assertion");
+      assert.ok(/Generate worker failed/.test(smoke), "end-of-run warning check");
+      assert.ok(smoke.includes("const servedCache = new Map();"), "served-file cache");
+      assert.ok(!smoke.includes("fs.createReadStream(file).pipe(res);"), "no per-request disk read of the page");
+    });
+    check("B9a docs: the build guide's B9 paragraph warns that a future CSP must allow worker-src blob: (without it every device silently runs Generate inline) and names the session-expired banner trade-off", () => {
+      const g = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"), "utf8");
+      assert.ok(/worker-src blob:/.test(g), "CSP note");
+      assert.ok(/openSignInAgain/.test(g), "banner trade-off");
     });
   }
 
