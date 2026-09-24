@@ -107,6 +107,7 @@ const { spawnSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 const IMP = require(path.join(ROOT, "importer.js"));
+const PUB = require(path.join(ROOT, "scripts", "publish-preview.js")); // parseCliRows (shared with day-edit.js)
 
 /* ------------------------------------------------------------- args */
 
@@ -228,11 +229,10 @@ function runSupabase(workdir, sqlPath) {
   const cleaned = outText.split(/\r?\n/).filter((l) => !/new version of Supabase CLI|recommend updating regularly/.test(l)).join("\n");
   console.log(cleaned.trim());
   if (r.status !== 0) throw new Error("supabase db query exited with status " + r.status);
-  const m = (r.stdout || "").match(/\{[\s\S]*\}\s*$/);
-  if (m) {
-    try { const j = JSON.parse(m[0]); return j.rows || null; } catch (e) { /* not JSON */ }
-  }
-  return null;
+  // The CLI prints the final select as a bare JSON array in a plain terminal and as a {boundary, rows, warning} wrapper
+  // under an agent session (2026-09-24: Faraz's PowerShell apply ended NOT VERIFIED on the wrapper-only regex that stood
+  // here). publish-preview's parseCliRows reads both, from the end of the output, whatever chatter precedes it.
+  return PUB.parseCliRows(r.stdout || "");
 }
 
 function printStats(plan) {

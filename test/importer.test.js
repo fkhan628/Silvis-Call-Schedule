@@ -1193,6 +1193,12 @@ eq(IMP.impBlobOwner(null), { hasRow: false, importerOwned: false, by: null, at: 
   ok(/t === "--overwrite-blob"/.test(cli) && /overwriteBlob/.test(cli), "RF2: --overwrite-blob is parsed");
   ok(/REFUSING TO APPLY: the shared setup \(call_schedule_data\) was last saved in the app/.test(cli) && /code: 4, proceed: false/.test(cli), "RF2: --apply refuses (exit 4) over an app-written blob without --overwrite-blob (IB restated the pin: the decision moved into decideApply, which returns { code: 4 } instead of 'return 4;')");
   ok(/rows are unaffected by this guard/.test(cli), "RF2: the refusal says the rows are unaffected by the guard");
+  // Part B (2026-09-24): Faraz's PowerShell apply ended "NOT VERIFIED" - the CLI prints the final select as a bare JSON
+  // array in a plain terminal and as a {boundary, rows, warning} wrapper under an agent session; the old regex needed the
+  // wrapper. runSupabase now reads both through publish-preview's parseCliRows (from the END of the output, whatever chatter precedes).
+  ok(cli.indexOf('return PUB.parseCliRows(r.stdout || "");') >= 0, "runSupabase must hand the CLI stdout to PUB.parseCliRows (bare array or {rows} wrapper)");
+  ok(cli.indexOf("match(/\\{[\\s\\S]*\\}\\s*$/)") < 0, "the wrapper-only regex must be gone from runSupabase");
+  ok(cli.indexOf('const PUB = require(path.join(ROOT, "scripts", "publish-preview.js"));') >= 0, "import-seed.js requires publish-preview.js as PUB (the shared CLI-output parser)");
 }
 
 /* ------------------------------------ IB: --apply keeps app-edited days, as the app's Apply does (9/23 overnight) */
