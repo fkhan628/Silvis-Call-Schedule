@@ -2189,9 +2189,15 @@ function CallSchedule() {
     try { return eastConflicts(rulesCtx, Object.keys(schedule || {}).sort()); }
     catch (e) { console.warn("East conflict report failed", e); return []; }
   }, [rulesCtx, schedule]);
+  // The warnings are logged once per distinct set, not on every context rebuild (each poll rebuilds it): a blob that
+  // still carries an ignored key would otherwise flood the console (seen on build 2026.09.23p).
+  const lastRulesWarnRef = useRef("");
   useEffect(() => {
     if (rulesCtxState.error) showToast("Couldn't build the rules context - eligibility checks are unavailable (" + rulesCtxState.error.slice(0, 90) + ").", "error");
-    else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) console.warn("rules context warnings:", rulesCtx.warnings);
+    else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) {
+      const key = rulesCtx.warnings.join(" | ");
+      if (key !== lastRulesWarnRef.current) { lastRulesWarnRef.current = key; console.warn("rules context warnings:", rulesCtx.warnings); }
+    }
   }, [rulesCtxState]);
 
   // --- Day editor save: the ONLY manual schedule mutation path ---

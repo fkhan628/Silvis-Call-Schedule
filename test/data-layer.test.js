@@ -1040,6 +1040,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   // fetch, on_conflict=id). A backup made before the denylist landed, or edited by hand, must not carry a personal
   // note back into the anon-readable table: the note is blanked (the row still restores - never a refusal) and the
   // count rides in the applier's counts, which config.js merges into the restore / import audit row.
+  // Part B assembly (served build 2026.09.23p, console): the rules-context warnings were logged on EVERY context rebuild
+  // (each poll rebuilds it), so a blob still carrying an ignored key flooded the console. Logged once per distinct set.
+  check("Part B: the rules-context warnings are logged once per distinct set (lastRulesWarnRef), not on every rebuild", () => {
+    assert.ok(src.includes('const lastRulesWarnRef = useRef("");'), "no lastRulesWarnRef");
+    assert.ok(src.includes('const key = rulesCtx.warnings.join(" | ");'), "the set is keyed by its joined text");
+    assert.ok(src.includes('if (key !== lastRulesWarnRef.current) { lastRulesWarnRef.current = key; console.warn("rules context warnings:", rulesCtx.warnings); }'), "the warn is gated on a changed key");
+    assert.strictEqual(count('console.warn("rules context warnings:"'), 1, "one log site");
+  });
   check("B6 review: applyTablesUpsert blanks a time_off note that trips the denylist and counts it (time_off_notes_blanked), never refuses the restore", () => {
     const fn = src.slice(src.indexOf("  const applyTablesUpsert = async ({ time_off, availability }) => {"), src.indexOf("  // The blob applier for restore / import: applyPayload calls it the moment"));
     assert.ok(fn.length > 300 && fn.length < 4000, "applyTablesUpsert could not be sliced out");
