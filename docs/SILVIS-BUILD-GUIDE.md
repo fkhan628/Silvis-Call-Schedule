@@ -144,7 +144,7 @@ the imported 9/28–10/4 week; the UI renders the label instead of OPEN and tall
 
 `user_profiles.person_id` links an auth user to a roster id; roles are `admin`, `scheduler`, `surgeon`, `viewer`
 (the office contact is the one `viewer`; administration has no account).
-(the ER-panel author is the one `viewer`; administration has no account) and, since Prompt 16 A7 (2026-09-24), `coordinator`:
+(the office contact is the one `viewer`; administration has no account) and, since Prompt 16 A7 (2026-09-24), `coordinator`:
 an office account with **no roster link** (a check constraint refuses one) that enters and edits any surgeon's
 upcoming vacations, may write dated availability rows for them (DB policy only; no UI yet) and relays their offered
 dates into the painter (`save_offers` / `set_offer_mode` with `p_person` - a roster id only, OS004 / OM007 otherwise;

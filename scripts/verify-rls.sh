@@ -563,7 +563,8 @@ if linked; then
     echo "$results11" | tr ';' '\n' | sed 's/^/   /'
     case_val11()   { echo "$results11" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
     expect_eq11()  { v=$(case_val11 "$1"); [ "$v" = "$2" ] && ok "coordinator probe $1: $3" || bad "coordinator probe $1: $3 (got '$v', expected '$2')"; }
-    expect_err11() { v=$(case_val11 "$1"); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "coordinator probe $1: $4"; else bad "coordinator probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    # expect_err11: the CLI escapes the quotes around identifiers in its error text, so the value is unescaped first
+    expect_err11() { v=$(case_val11 "$1" | sed 's/\\//g'); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "coordinator probe $1: $4"; else bad "coordinator probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
     expect_eq11  C1  "ok created_by=self"                          "a coordinator adds another person's vacation; created_by = the coordinator's profile id"
     expect_eq11  C2  "updated=1"                                   "a coordinator edits that vacation"
     expect_eq11  C3  "deleted=1"                                   "a coordinator deletes that vacation"

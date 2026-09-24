@@ -112,9 +112,9 @@ end $$;
 
 -- C1-C25: as the COORDINATOR
 do $$ declare u text; o text; pub text; n int; own int; leak int; sched int; c int; v text; rid uuid; begin
-  select v into u from probe_ctx where k = 'coord';
-  select v into o from probe_ctx where k = 'open';
-  select v into pub from probe_ctx where k = 'pub';
+  select probe_ctx.v into u from probe_ctx where probe_ctx.k = 'coord';
+  select probe_ctx.v into o from probe_ctx where probe_ctx.k = 'open';
+  select probe_ctx.v into pub from probe_ctx where probe_ctx.k = 'pub';
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
   begin
@@ -243,7 +243,7 @@ end $$;
 
 -- L1-L3: as the LINKED SURGEON (s3) - controls: nothing changed for him
 do $$ declare u text; n int; begin
-  select v into u from probe_ctx where k = 'surgeon';
+  select probe_ctx.v into u from probe_ctx where probe_ctx.k = 'surgeon';
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
   begin
@@ -264,9 +264,9 @@ end $$;
 
 -- A1-A3: as the ADMIN (s1) - the scheduler's relay is unchanged; a coordinator cannot be linked
 do $$ declare a text; c text; pub text; v text; begin
-  select v into a from probe_ctx where k = 'admin';
-  select v into c from probe_ctx where k = 'coord';
-  select v into pub from probe_ctx where k = 'pub';
+  select probe_ctx.v into a from probe_ctx where probe_ctx.k = 'admin';
+  select probe_ctx.v into c from probe_ctx where probe_ctx.k = 'coord';
+  select probe_ctx.v into pub from probe_ctx where probe_ctx.k = 'pub';
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', a, 'role', 'authenticated')::text, true);
   begin
