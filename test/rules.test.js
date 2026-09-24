@@ -2296,6 +2296,35 @@ const act1112 = R.eligibility(oc, "2026-11-12", P, ACTON);
 okElig(act1112, "P2: Acton primary Thu 11/12 - not offered, but his ordinary rules allow a Thursday (preferred mode)");
 eq(act1112.soft.filter(s => s.reason === "outside-offers").map(s => s.weight), [6], "P2: outside-offers penalty +weights.outsideOffers (6)");
 lacksSoft(act1112, "offered", "P2: no bonus on a non-offered day");
+// B10 (9/23, pre-launch review section 5 item 2): the preferred-mode fallback penalty is scoped per MONTH. "submitted" stays
+// period-wide (status, mode, the dated lists switched off), but 'outside-offers' is pushed only in a month where the
+// surgeon offered at least one day: Acton offered November days only, so a December or January day of his carries no
+// penalty and competes on the equal share like a rules-only colleague. Exhaustive semantics are untouched (checked below).
+const act1210 = R.eligibility(oc, "2026-12-17", P, ACTON), act0114 = R.eligibility(oc, "2027-01-02", B, ACTON);
+okElig(act1210, "B10: Acton primary Thu 12/17 - inside the period, a month he offered nothing in - eligible under his rules");
+lacksSoft(act1210, "outside-offers", "B10: no outside-offers penalty in December (he offered no December day)");
+// (January: the test period ends 2027-01-03, so Sat 1/2 backup stands in for a January day - eligibility itself is not pinned there)
+lacksSoft(act0114, "outside-offers", "B10: no outside-offers penalty on Sat 1/2 backup (January - he offered no January day)");
+eq([p14State(oc, "2026-12-17", ACTON).status, p14State(oc, "2027-01-02", ACTON).status], ["submitted", "submitted"], "B10: his status stays submitted period-wide (the month scope is the penalty's alone)");
+hasSoft(act1112, "outside-offers", "B10: November (a month he offered in) keeps the penalty on a non-offered day");
+lacksSoft(R.eligibility(oc, "2026-12-17", B, ACTON), "outside-offers", "B10: backup in December - no penalty either");
+// exhaustive: Burchett (November offers only) is still 'not-offered' (hard) on a December day - "only these days" is period-wide
+blocked(R.eligibility(oc, "2026-12-17", P, BURCHETT), "not-offered", "B10: exhaustive stays period-wide - Burchett is hard not-offered on 12/17");
+const burClaim1210 = R.eligibility(oc, "2026-12-17", P, BURCHETT, { claim: true });
+hasSoft(burClaim1210, "outside-offers", "B10: an exhaustive surgeon's claim result still names a December day as outside his offers (the board's label)");
+// B10 review (9/23): the month scope is read PER PERIOD. A day is painted for one period, so a January offer that lies
+// after this period's end (1/10, inside no period) or inside the NEXT period (1/20) must not switch January on for this
+// period's own January days (1/1 - 1/3); the next period's January non-offered days do carry it.
+const ocJanOut = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(ACTON, "2027-01-10", "either")]) });
+lacksSoft(R.eligibility(ocJanOut, "2027-01-02", B, ACTON), "outside-offers", "B10: an offer after the period's end (1/10) puts no outside-offers on the period's Sat 1/2 (the month scope is per period)");
+eq(p14State(ocJanOut, "2027-01-02", ACTON).status, "submitted", "B10: ...his period status is still submitted (his November offers)");
+hasSoft(R.eligibility(ocJanOut, "2026-11-12", P, ACTON), "outside-offers", "B10: ...and November keeps the penalty");
+const P14_PERIOD2 = { id: "p14-test-2", label: "Jan - Mar 2027", start_day: "2027-01-04", end_day: "2027-03-31", status: "upcoming", rules_only_ids: [], offer_modes: { [ACTON]: "preferred" } };
+const ocSplit = p14Ctx({ periods: [P14_PERIOD, P14_PERIOD2], offers: P14_OFFERS.concat([p14Offer(ACTON, "2027-01-20", "either")]) });
+lacksSoft(R.eligibility(ocSplit, "2027-01-02", B, ACTON), "outside-offers", "B10: a January offer inside the NEXT period leaves this period's Sat 1/2 without the penalty");
+okElig(R.eligibility(ocSplit, "2027-01-21", P, ACTON), "B10: Thu 1/21 (next period, not offered) - eligible under his rules");
+hasSoft(R.eligibility(ocSplit, "2027-01-21", P, ACTON), "outside-offers", "B10: ...and carries the penalty - he offered a January day in THAT period");
+eq([p14State(ocSplit, "2027-01-02", ACTON).key === p14State(ocSplit, "2027-01-21", ACTON).key, p14State(ocSplit, "2027-01-21", ACTON).status], [false, "submitted"], "B10: the two January days lie in different periods; he is submitted in the second by his 1/20 offer");
 lacks(act1112.hard, "not-offered", "P2: preferred never says not-offered");
 blocked(R.eligibility(oc, "2026-11-09", P, ACTON), "recurring-unavailable:Mon", "P2: a non-offered 2nd Monday is still his outreach day (ordinary rules apply, they are not lifted by the mode)");
 blocked(R.eligibility(oc, "2026-11-03", P, ACTON), "hard-never-weekday:Tue", "P2: 11/3 offered as BACKUP only - his Tuesday primary rule stands (an offer lifts the pattern for its own role only)");

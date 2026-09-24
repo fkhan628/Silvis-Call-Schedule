@@ -138,11 +138,15 @@
 //                 'offered' bonus is emitted in BOTH modes (so an offered day
 //                 beats a rules-only candidate whatever hardness he chose; the
 //                 generator tapers it at his share - weights.offerBonusOverShare),
-//                 and 'outside-offers' is pushed on every non-offered day of a
-//                 submitted surgeon in both modes too: in exhaustive mode the
-//                 day is also the hard 'not-offered', so the soft surfaces only
-//                 on a claim result (opts.claim) and names the day as outside
-//                 his offers for the open-shifts board. Every
+//                 and 'outside-offers' is pushed on a non-offered day of a
+//                 submitted surgeon in both modes too - in preferred mode only
+//                 in a calendar MONTH where he offered at least one day OF THAT
+//                 PERIOD (B10, 9/23: a month he did not paint at all reads like a
+//                 rules-only colleague's; status and mode stay period-wide); in exhaustive
+//                 mode the day is also the hard 'not-offered' whatever the
+//                 month, so the soft surfaces only on a claim result
+//                 (opts.claim) and names the day as outside his offers for the
+//                 open-shifts board. Every
 //                 offer is folded into P.avail as a dated available row for
 //                 its role (item W: it lifts the weekday-pattern family incl.
 //                 hardNeverWeekdays for that date and role; obligations never
@@ -971,7 +975,9 @@ function rdBuildOffers(ctx, input) {
     var days = Object.keys(P.offers);
     ctx.periods.forEach(function (per) {
       var submitted = false;
-      for (var i = 0; i < days.length && !submitted; i++) if (days[i] >= per.start && days[i] <= per.end) submitted = true;
+      // B10 (review 9/23): the months he painted in are kept PER PERIOD ('<period key>:YYYY-MM') from the days inside
+      // that period only - an offer after a period's end, or in the next period, never switches a month on for this one.
+      for (var i = 0; i < days.length; i++) if (days[i] >= per.start && days[i] <= per.end) { submitted = true; P.offerMonths[per.key + ":" + days[i].slice(0, 7)] = true; }
       P.offerStatus[per.key] = submitted ? "submitted" : per.rulesOnly.has(id) ? "rules_only" : "not_started";
       P.offerMode[per.key] = per.modes[id] || "preferred";
     });
@@ -1298,7 +1304,12 @@ function rdStatic(ctx, date, role, id, asBlock) {
       if ((P.offers[date] || 0) & mask) { if (W.offerBonus) soft.push({ reason: "offered", weight: -W.offerBonus }); }
       else {
         if (P.offerMode[perKey] === "exhaustive") res.notOffered = true;   // hard unless the caller claims (eligibility)
-        if (W.outsideOffers) soft.push({ reason: "outside-offers", weight: W.outsideOffers }); // both modes: the day is outside his offers
+        // B10 (9/23, pre-launch review section 5 item 2): the soft term is scoped per MONTH in preferred mode - it rides
+        // only in a calendar month where he offered at least one day OF THIS PERIOD (P.offerMonths, keyed per period);
+        // in a month he did not paint at all he competes on the equal share like a rules-only colleague. Status / mode
+        // stay period-wide. Exhaustive is untouched: the day is outside "only these days" whatever the month, so the
+        // label stays for the claim result.
+        if (W.outsideOffers && (P.offerMode[perKey] === "exhaustive" || P.offerMonths[perKey + ":" + date.slice(0, 7)])) soft.push({ reason: "outside-offers", weight: W.outsideOffers });
       }
     }
   }

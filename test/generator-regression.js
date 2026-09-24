@@ -1840,6 +1840,39 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   eq(outEmpty.diagnostics.offers, { periods: [], byPerson: {}, outsideOffers: [] }, "periods: [] -> diagnostics.offers is empty, never absent");
   eq(JSON.stringify(Object.assign({}, outEmpty.diagnostics, { offers: null })), JSON.stringify(Object.assign({}, a1.diagnostics, { offers: null })), "periods: [] -> every other diagnostic is byte-identical too");
   eq(outNo.diagnostics.uncovered.every((u) => u.note === null && Array.isArray(u.offered) && u.offered.length === 0), true, "no period -> an open slot carries note null and offered []");
+  // ---- B10 (9/23, pre-launch review section 5 item 2): the preferred-mode fallback penalty is scoped per MONTH ----
+  // Acton's offers are November days only, yet the period runs to 2027-01-03: before B10 every December and January
+  // slot of his carried +weights.outsideOffers (his status covers the whole period), so a rules-only colleague always
+  // scored better than he did in a month he had not painted. Now the penalty rides only in a month where he offered
+  // at least one day of that period (rules.test pins the per-period key: an offer after the period's end or in the next
+  // period does not switch a month on). Status and mode stay period-wide; exhaustive stays "only these days" over the whole period; the
+  // water-filled share is untouched (the penalty is a score term, never a target) - so in December / January he is
+  // placed to his share like everyone else. diagnostics.offers.outsideOffers still lists every off-list placement
+  // (the publish e-mail names them all - a report, not a penalty).
+  {
+    CUR.range = "B10 per-month outside-offers 2026-12-01..2026-12-31"; CUR.seed = 1; CUR.day = "-";
+    const decDays = daysList("2026-12-01", "2026-12-31");
+    // eligibility: the soft term is absent on every December / January day of his, present on a November non-offered day
+    const decTerm = decDays.filter((d) => ROLES.some((role) => R.eligibility(ctxP, d, role, ACTON).soft.some((s) => s.reason === "outside-offers")));
+    eq(decTerm, [], "B10: no December day of Acton's carries outside-offers (he offered no December day)");
+    const janTerm = daysList("2027-01-01", "2027-01-03").filter((d) => ROLES.some((role) => R.eligibility(ctxP, d, role, ACTON).soft.some((s) => s.reason === "outside-offers")));
+    eq(janTerm, [], "B10: no January day of his carries outside-offers either");
+    ok(R.eligibility(ctxP, "2026-11-12", P, ACTON).soft.some((s) => s.reason === "outside-offers" && s.weight === seed.groupRules.weights.outsideOffers), "B10: Thu 11/12 (November, not offered) still carries +weights.outsideOffers");
+    eq(R.offerState(ctxP, "2026-12-10", ACTON).status, "submitted", "B10: his status is submitted in December all the same (period-wide)");
+    // exhaustive is untouched: Burchett (November offers only) is hard not-offered on every December day in both roles
+    const burOpen = decDays.filter((d) => ROLES.some((role) => !(R.eligibility(ctxP, d, role, BURCHETT).hard || []).includes("not-offered")));
+    eq(burOpen, [], "B10: exhaustive Burchett stays not-offered on every December day / role (only these days, period-wide)");
+    // a December generate: no outside-offers term for anyone in the soft list, Acton's December placements are still reported as off-list
+    const outDec = GEN.generate(ctxP, "2026-12-01", "2026-12-31", { seed: 1, bestOf: 2 });
+    eq(outDec.diagnostics.softPenalties.filter((s) => s.reason === "outside-offers"), [], "B10: a December run carries no outside-offers term in its soft list");
+    const actDecGen = decDays.filter((d) => ROLES.some((role) => outDec.schedule[d][role] === ACTON && !outDec.schedule[d][role + "Locked"]));
+    eq(outDec.diagnostics.offers.outsideOffers.filter((o) => o.id === ACTON).map((o) => o.day).filter((d, i, a) => a.indexOf(d) === i), actDecGen, "B10: diagnostics.offers.outsideOffers still names every December placement of his (the e-mail's list is unchanged): " + actDecGen.length + " day(s)");
+    ok(actDecGen.length > 0, "B10: Acton holds at least one generated December slot (not vacuous)");
+    checkRun(outDec, { name: "B10 Dec", start: "2026-12-01", end: "2026-12-31" }, 1, false, undefined, undefined, undefined, FIXP.offers);
+    // the share: his December target is the same water-filled figure the run reads with no offers at all
+    const outDecNo = GEN.generate(ctx, "2026-12-01", "2026-12-31", { seed: 1, bestOf: 2 });
+    eq(outDec.diagnostics.targets["2026-12"][ACTON], outDecNo.diagnostics.targets["2026-12"][ACTON], "B10: his December water-filled targets are identical with and without the offers input (the penalty never touched the share)");
+  }
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
 

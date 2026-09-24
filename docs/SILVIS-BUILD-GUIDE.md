@@ -1056,8 +1056,11 @@ Inside a period a submitted surgeon is offers-governed: in **exhaustive** mode (
 did not offer is the hard `not-offered` (`either` covers both roles); in **preferred** mode (the default, "my
 preferred days; use my rules to fill gaps") an offered day carries the soft `offered` bonus (`-weights.offerBonus`, 6)
 and any other day is eligible under his ordinary rules with the soft `outside-offers` penalty (`+weights.outsideOffers`,
-6) — both weights Setup-editable like the others (`outside-offers` is also carried on an exhaustive surgeon's claim
-result, where `not-offered` is skipped, so the board can name the day as outside his offers). Every offer is folded into the same dated-row map the availability
+6) — since B10 (9/23, rules doc §6) **only in a calendar month where he offered at least one day of that period** (`P.offerMonths`, keyed per period — an offer after the period's end or in the next period never switches a month on for this one);
+in a month he did not paint at all he competes on the equal share like a rules-only colleague, while his status stays
+submitted period-wide and `diagnostics.offers.outsideOffers` still lists every off-list placement — both weights
+Setup-editable like the others (`outside-offers` is also carried on an exhaustive surgeon's claim result in any month,
+where `not-offered` is skipped, so the board can name the day as outside his offers). Every offer is folded into the same dated-row map the availability
 rows feed, so it is a dated row in item W's sense: it lifts the weekday-pattern family (hardNeverWeekdays included)
 for that date and role and never an obligation — vacations and the trailing edge, East busy / forecast / standing days,
 derived-week locks, windows, backupOptOut, caps, runs, the other role all still apply on an offered day. The dated
