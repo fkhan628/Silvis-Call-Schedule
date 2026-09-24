@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -111,7 +111,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23n";
+    var APP_VERSION = "2026.09.23o";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -202,6 +202,7 @@ function CallSchedule() {
   const [offerRows, setOfferRows] = useState([]);
   const [periodRows, setPeriodRows] = useState([]);
   const [offerSheet, setOfferSheet] = useState(null);
+  const [coordOfferPerson, setCoordOfferPerson] = useState("");
   const [offersLoad, setOffersLoad] = useState({
     offers: "unread",
     periods: "unread",
@@ -307,8 +308,24 @@ function CallSchedule() {
   const lastSyncRef = useRef(null);
   const dayVersionsRef = useRef({});
   const blobTsRef = useRef(null);
+  const lastBlobJsonRef = useRef(null);
+  const blobLocalRef = useRef({
+    roster: INIT_SURGEONS,
+    surgeonRules: undefined,
+    groupRules: undefined,
+    holidays: undefined,
+    settings: {},
+    lastPublished: null,
+    lastGenerate: undefined
+  });
+  const blobSaveChainRef = useRef(Promise.resolve());
+  const blobSaveBusyRef = useRef(0);
   const loadedAtRef = useRef(null);
   const pendingSaveRef = useRef(null);
+  const [saveTick, setSaveTick] = useState(0);
+  const lastAuthUidRef = useRef(null);
+  const switchedUserRef = useRef(false);
+  const resyncPendingRef = useRef(() => {});
   const daySyncChainRef = useRef(Promise.resolve());
   const daySyncBusyRef = useRef(0);
   const daySyncRetryRef = useRef(null);
@@ -352,7 +369,6 @@ function CallSchedule() {
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [authError, setAuthError] = useState("");
-  const [authNotice, setAuthNotice] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [userProfile, setUserProfile] = useState(null);
   const [profileLoadFailed, setProfileLoadFailed] = useState(false);
@@ -377,6 +393,8 @@ function CallSchedule() {
     setIsScheduler((userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "scheduler" || (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin");
   }, [userProfile]);
   const isAdmin = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin";
+  const isCoordinator = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "coordinator";
+  const canEnterForAnyone = isScheduler || isCoordinator;
   const isUnlinked = !!authUser && !!userProfile && !userProfile.person_id;
   const versionBeatRef = useRef("");
   useEffect(() => {
@@ -533,6 +551,13 @@ function CallSchedule() {
   const adoptSignedInUser = async user => {
     setAuthUser(user);
     setProfileLoadFailed(false);
+    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {
+      switchedUserRef.current = true;
+      pendingSaveRef.current = null;
+      showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
+    }
+    if (user) lastAuthUidRef.current = user.id;
+    auth.applyRealtimeAuth();
     try {
       const profile = await fetchProfile(user.id);
       setUserProfile(profile || {
@@ -561,6 +586,16 @@ function CallSchedule() {
     }
     (async () => {
       try {
+        const linkErr = authLinkError(window.location.hash, window.location.search);
+        if (linkErr) {
+          console.warn("auth link error from the mail link:", linkErr.code, linkErr.description);
+          try {
+            window.history.replaceState(null, "", window.location.pathname + linkErr.cleanSearch);
+          } catch (e) {
+            console.warn("could not drop the auth error from the URL", e);
+          }
+          if (!auth.getSession()) setAuthError(linkErr.message);
+        }
         const hash = window.location.hash;
         if (hash && (hash.includes("type=recovery") || hash.includes("type=invite"))) {
           const params = new URLSearchParams(hash.substring(1));
@@ -584,6 +619,7 @@ function CallSchedule() {
         setBiometricEnrolled(bioEnrolled);
         const session = auth.getSession();
         if (bioEnrolled && session) {
+          if (linkErr) showToast(linkErr.message, "error");
           setBiometricPending(true);
           setAuthLoading(false);
           return;
@@ -592,7 +628,10 @@ function CallSchedule() {
           const {
             user
           } = await auth.getUser();
-          if (user) await adoptSignedInUser(user);
+          if (user) {
+            if (linkErr) showToast(linkErr.message, "error");
+            await adoptSignedInUser(user);
+          } else if (linkErr) setAuthError(linkErr.message);
         }
       } catch (e) {
         console.error("Auth check error:", e);
@@ -651,43 +690,20 @@ function CallSchedule() {
   };
   const handleAuthSubmit = async () => {
     setAuthError("");
-    setAuthNotice("");
     setAuthBusy(true);
     try {
-      if (authMode === "signup") {
-        const {
-          user,
-          session,
-          error
-        } = await auth.signUp(authEmail, authPassword);
-        if (error) {
-          setAuthError(error);
-          setAuthBusy(false);
-          return;
-        }
-        if (session && session.access_token && (user || session.user)) {
-          await adoptSignedInUser(user || session.user);
-          setAuthEmail("");
-          setAuthPassword("");
-        } else {
-          setAuthMode("login");
-          setAuthNotice("Account created. Check your email for a confirmation link, then sign in.");
-          setAuthPassword("");
-        }
-      } else {
-        const {
-          user,
-          error
-        } = await auth.signIn(authEmail, authPassword);
-        if (error) {
-          setAuthError(error);
-          setAuthBusy(false);
-          return;
-        }
-        await adoptSignedInUser(user);
-        setAuthEmail("");
-        setAuthPassword("");
+      const {
+        user,
+        error
+      } = await auth.signIn(authEmail, authPassword);
+      if (error) {
+        setAuthError(error);
+        setAuthBusy(false);
+        return;
       }
+      await adoptSignedInUser(user);
+      setAuthEmail("");
+      setAuthPassword("");
     } catch (e) {
       console.warn("Auth submit failed:", e);
       setAuthError(e.message || "Auth error");
@@ -703,6 +719,29 @@ function CallSchedule() {
     setBiometricEnrolled(false);
     setBiometricPending(false);
     setIsScheduler(false);
+  };
+  const [sessionExpired, setSessionExpired] = useState(() => !!auth.sessionExpired);
+  useEffect(() => {
+    if (isPublicMode) return;
+    const off = auth.onSessionChange(kind => {
+      if (kind === "expired") setSessionExpired(true);else if (kind === "restored") setSessionExpired(false);
+    });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") auth.ensureFresh().then(r => {
+        if (r && r.refreshed) resyncPendingRef.current("visibilitychange");
+      });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      off();
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+  const openSignInAgain = () => {
+    setAuthMode("login");
+    setAuthError("Your session expired - sign in again.");
+    setBiometricPending(false);
+    setAuthUser(null);
   };
   const nameOf = id => {
     var _surgeons$find;
@@ -753,11 +792,11 @@ function CallSchedule() {
   const loadAudit = async () => {
     setAuditLoading(true);
     try {
-      const rows = await db.query("audit_log", {
+      const rows = await readAuthOnlyTable("audit_log", {
         order: "created_at.desc",
         limit: 150
       });
-      setAuditEntries(Array.isArray(rows) ? rows : []);
+      if (rows === null) showToast("Couldn't load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");else setAuditEntries(rows);
     } catch (e) {
       console.warn("audit load failed", e);
       showToast("Couldn't load the activity log - check your connection.", "error");
@@ -832,6 +871,9 @@ function CallSchedule() {
       loadClientVersions();
     }
   }, [view]);
+  useEffect(() => {
+    if (view === "settings" && isCoordinator) loadAudit();
+  }, [view, isCoordinator]);
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
   const showToast = (msg, tone) => {
@@ -1071,12 +1113,13 @@ function CallSchedule() {
         note: (note || "").trim() || null
       });
       const actor = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || null;
-      const msg = vacationLoggedMsg(nameOf(personId), start, end, (note || "").trim()) + (actor && actor !== personId ? " - entered by " + nameOf(actor) : "");
+      const enteredBy = actor && actor !== personId ? nameOf(actor) : !actor && isCoordinator ? (userProfile === null || userProfile === void 0 ? void 0 : userProfile.display_name) || "the office" : null;
+      const msg = vacationLoggedMsg(nameOf(personId), start, end, (note || "").trim()) + (enteredBy ? " - entered by " + enteredBy : "");
       addNotification("vacation_logged", "Vacation logged", msg, {
         surgeon_id: personId,
-        entered_by: actor
+        entered_by: actor || (isCoordinator ? (authUser === null || authUser === void 0 ? void 0 : authUser.id) || null : null)
       });
-      (async () => {
+      if (!isCoordinator) (async () => {
         const ids = await schedulerIdsLoud();
         if (ids && ids.length) sendEmailNotif("vacation_logged", {
           message: msg,
@@ -1123,7 +1166,7 @@ function CallSchedule() {
   };
   const toRemove = async (personId, rowId) => {
     const row = timeOffRows.find(r => r.id === rowId);
-    if (!isScheduler && personId !== mySurgeon) {
+    if (!isScheduler && !isCoordinator && personId !== mySurgeon) {
       showToast("You can only remove your own vacations.", "error");
       return {
         ok: false
@@ -1153,8 +1196,15 @@ function CallSchedule() {
     if (!newStart || !newEnd) return {
       ok: false
     };
-    if (!isScheduler && personId !== mySurgeon) {
+    if (!isScheduler && !isCoordinator && personId !== mySurgeon) {
       showToast("You can only edit your own vacations.", "error");
+      return {
+        ok: false
+      };
+    }
+    const old = timeOffRows.find(r => r.id === rowId);
+    if (!isScheduler && old && String(old.start_date).slice(0, 10) <= todayStr) {
+      showToast("That vacation has started or passed - it stays on record. Ask the scheduler if it needs to go.", "error");
       return {
         ok: false
       };
@@ -1166,7 +1216,6 @@ function CallSchedule() {
         ok: false
       };
     }
-    const old = timeOffRows.find(r => r.id === rowId);
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/time_off?id=eq.${encodeURIComponent(rowId)}`, {
         method: "PATCH",
@@ -1258,6 +1307,29 @@ function CallSchedule() {
     lastSyncRef.current = JSON.parse(JSON.stringify(loadedDays.sched));
   };
   const sameAssignment = (day, a, b) => JSON.stringify(assignmentToDayRow(day, a || emptyDayAssignment())) === JSON.stringify(assignmentToDayRow(day, b || emptyDayAssignment()));
+  const mergeLoadedDays = fresh => {
+    const base = lastSyncRef.current || {};
+    const local = scheduleRef.current || {};
+    let changedAny = false;
+    const merged = _objectSpread({}, local);
+    const allDays = Object.keys(Object.assign({}, base, fresh.sched));
+    for (const day of allDays) {
+      const serverChanged = !sameAssignment(day, fresh.sched[day], base[day]);
+      const localChanged = !sameAssignment(day, local[day], base[day]);
+      if (serverChanged && !localChanged) {
+        if (fresh.sched[day]) merged[day] = fresh.sched[day];else delete merged[day];
+        base[day] = fresh.sched[day] ? JSON.parse(JSON.stringify(fresh.sched[day])) : undefined;
+        if (!fresh.sched[day]) delete base[day];
+        changedAny = true;
+      }
+    }
+    dayVersionsRef.current = _objectSpread(_objectSpread({}, dayVersionsRef.current), fresh.vers);
+    if (changedAny) {
+      lastSyncRef.current = base;
+      scheduleRef.current = merged;
+      setSchedule(merged);
+    }
+  };
   const writeFailToast = (status, body) => {
     const s = String(body || "");
     if (/schedule_days_distinct_roles|23514/.test(s)) return "Primary and backup must be different people - change not saved.";
@@ -1266,11 +1338,11 @@ function CallSchedule() {
     return "Couldn't save schedule changes - check your connection.";
   };
   const postDayRow = async (row, by, ts) => {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/schedule_days`, {
+    const r = await authFetch(`${SUPABASE_URL}/rest/v1/schedule_days`, {
       method: "POST",
-      headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+      headers: {
         Prefer: "return=representation"
-      }),
+      },
       body: JSON.stringify(_objectSpread(_objectSpread({}, row), {}, {
         version: 1,
         updated_by: by,
@@ -1290,11 +1362,11 @@ function CallSchedule() {
     };
   };
   const patchDayRow = async (row, ver, by, ts) => {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${row.day}&version=eq.${ver}`, {
+    const r = await authFetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${row.day}&version=eq.${ver}`, {
       method: "PATCH",
-      headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+      headers: {
         Prefer: "return=representation"
-      }),
+      },
       body: JSON.stringify(_objectSpread(_objectSpread({}, row), {}, {
         version: ver + 1,
         updated_by: by,
@@ -1371,7 +1443,8 @@ function CallSchedule() {
     let conflict = false,
       failed = 0,
       failMsg = "",
-      written = 0;
+      written = 0,
+      authFail = 0;
     for (const day of changed) {
       const a = next[day] || emptyDayAssignment();
       const row = assignmentToDayRow(day, a);
@@ -1397,6 +1470,7 @@ function CallSchedule() {
       if (r.error !== undefined) {
         failed++;
         failMsg = writeFailToast(r.status, r.error);
+        if (r.status === 401 || r.status === 403) authFail = r.status;
         console.warn("schedule_days write failed", day, r.status, String(r.error).slice(0, 200));
         continue;
       }
@@ -1409,7 +1483,11 @@ function CallSchedule() {
       written++;
     }
     lastSyncRef.current = persisted;
-    if (failed) {
+    if (failed && authFail) {
+      setSaveError(true);
+      setSaveStatus(authFail === 403 ? "Not saved - no permission" : auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry");
+      if (!(authFail === 401 && auth.sessionExpired)) showToast(failMsg, "error");
+    } else if (failed) {
       setSaveError(true);
       setSaveStatus("Save failed - retrying");
       showToast(failMsg, "error");
@@ -1467,6 +1545,10 @@ function CallSchedule() {
   };
   const adoptBlob = d => {
     if (!d || typeof d !== "object") return;
+    if (d._intentionalClear) return;
+    const next = adoptBlobState(blobLocalRef.current, d);
+    blobLocalRef.current = next;
+    lastBlobJsonRef.current = blobSignature(next);
     if (Array.isArray(d.roster) && d.roster.length) setSurgeons(d.roster);
     if (d.surgeonRules !== undefined) setSurgeonRules(d.surgeonRules);
     if (d.groupRules !== undefined) setGroupRules(d.groupRules);
@@ -1485,8 +1567,14 @@ function CallSchedule() {
         blobLoadedRef.current = true;
         if (row !== null && row !== void 0 && row.data) {
           const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-          if (row.updated_at) blobTsRef.current = row.updated_at;
-          adoptBlob(d);
+          const rerun = !!loadedAtRef.current && !switchedUserRef.current;
+          if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {
+            if (pendingSaveRef.current) setSaveTick(t => t + 1);
+          } else {
+            if (rerun && isScheduler && pendingSaveRef.current) showToast("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.", "error");
+            if (row.updated_at) blobTsRef.current = row.updated_at;
+            adoptBlob(d);
+          }
         }
       } catch (e) {
         console.error("Supabase load error (call_schedule_data):", e);
@@ -1494,7 +1582,10 @@ function CallSchedule() {
       }
       try {
         const loadedDays = await loadScheduleDays();
-        adoptLoadedDays(loadedDays);
+        if (loadedAtRef.current && !switchedUserRef.current) {
+          mergeLoadedDays(loadedDays);
+          syncScheduleDays(scheduleRef.current);
+        } else adoptLoadedDays(loadedDays);
         try {
           const trades = await readAuthOnlyTable("shift_trade_requests", {
             order: "submitted_at.desc",
@@ -1540,7 +1631,8 @@ function CallSchedule() {
       await loadEastTables();
       await loadEastVacationReviews();
       setLoaded(true);
-      loadedAtRef.current = Date.now();
+      if (!loadedAtRef.current) loadedAtRef.current = Date.now();
+      switchedUserRef.current = false;
     })();
     const refreshBlobRow = async () => {
       try {
@@ -1561,27 +1653,7 @@ function CallSchedule() {
       try {
         const fresh = await loadScheduleDays();
         loadFailedRef.current = false;
-        const base = lastSyncRef.current || {};
-        const local = scheduleRef.current || {};
-        let changedAny = false;
-        const merged = _objectSpread({}, local);
-        const allDays = Object.keys(Object.assign({}, base, fresh.sched));
-        for (const day of allDays) {
-          const serverChanged = !sameAssignment(day, fresh.sched[day], base[day]);
-          const localChanged = !sameAssignment(day, local[day], base[day]);
-          if (serverChanged && !localChanged) {
-            if (fresh.sched[day]) merged[day] = fresh.sched[day];else delete merged[day];
-            base[day] = fresh.sched[day] ? JSON.parse(JSON.stringify(fresh.sched[day])) : undefined;
-            if (!fresh.sched[day]) delete base[day];
-            changedAny = true;
-          }
-        }
-        dayVersionsRef.current = _objectSpread(_objectSpread({}, dayVersionsRef.current), fresh.vers);
-        if (changedAny) {
-          lastSyncRef.current = base;
-          scheduleRef.current = merged;
-          setSchedule(merged);
-        }
+        mergeLoadedDays(fresh);
       } catch (e) {
         console.warn("Background schedule refresh failed:", e);
       }
@@ -1626,6 +1698,8 @@ function CallSchedule() {
       }
     };
     const refreshAll = async () => {
+      const fr = await auth.ensureFresh();
+      if (fr && fr.refreshed) resyncPendingRef.current("poll");
       await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
     };
     refreshDaysRef.current = refreshDays;
@@ -1770,6 +1844,116 @@ function CallSchedule() {
     return blobData;
   };
   const canWriteBlob = isScheduler;
+  const reloadBlobAfterMiss = async (source, payload) => {
+    const {
+      data: row
+    } = await supabase.from("call_schedule_data").select("data,updated_at").eq("id", "main").single();
+    if (!row) return {
+      ok: true,
+      missing: true
+    };
+    const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    const wantBlob = payload ? blobFromBundle(payload) : null;
+    const want = wantBlob ? blobSignature(wantBlob) : null;
+    if (want && row.updated_at && blobSignature(d) === want) {
+      blobTsRef.current = row.updated_at;
+      lastBlobJsonRef.current = want;
+      blobLocalRef.current = wantBlob;
+      if (pendingSaveRef.current === payload) pendingSaveRef.current = null;
+      console.warn(`Blob save (${source}): the row already holds this content (our own earlier write landed first) - stamp adopted, nothing to reload.`);
+      return {
+        ok: true,
+        saved: true,
+        landedEarlier: true
+      };
+    }
+    if (row.updated_at) blobTsRef.current = row.updated_at;
+    adoptBlob(d);
+    if (pendingSaveRef.current === payload) pendingSaveRef.current = null;
+    console.warn(`Blob save (${source}): the shared setup changed elsewhere (updated_at moved) - reloaded; the local copy was NOT written over it.`);
+    showToast("Setup changed elsewhere - reloaded", "error");
+    setSaveError(false);
+    setSaveStatus("Setup reloaded");
+    setTimeout(() => setSaveStatus(""), 3000);
+    return {
+      ok: true,
+      reloaded: true
+    };
+  };
+  const saveBlobOnce = async (payload, source) => {
+    const blobData = blobFromBundle(payload);
+    const sig = blobSignature(blobData);
+    if (sig === lastBlobJsonRef.current) {
+      if (pendingSaveRef.current === payload) pendingSaveRef.current = null;
+      return {
+        ok: true,
+        skipped: true
+      };
+    }
+    const ts = new Date().toISOString();
+    const by = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || null;
+    const casQ = blobTsRef.current ? `&updated_at=eq.${encodeURIComponent(blobTsRef.current)}` : "&updated_at=is.null";
+    const res = await authFetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main${casQ}`, {
+      method: "PATCH",
+      headers: {
+        Prefer: "return=representation"
+      },
+      body: JSON.stringify({
+        data: blobData,
+        updated_by: by,
+        updated_at: ts
+      })
+    });
+    const text = await res.text().catch(() => "");
+    if (!res.ok) throw new Error(`blob save failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+    let rows = [];
+    try {
+      rows = text ? JSON.parse(text) : [];
+    } catch (e) {
+      console.warn(`Blob save (${source}): 2xx with a non-JSON body (treated as no row updated)`, text.slice(0, 120));
+      rows = [];
+    }
+    if (!Array.isArray(rows) || rows.length === 0) {
+      const r = await reloadBlobAfterMiss(source, payload);
+      if (!r.missing) return r;
+      const ins = await authFetch(`${SUPABASE_URL}/rest/v1/call_schedule_data`, {
+        method: "POST",
+        headers: {
+          Prefer: "return=representation"
+        },
+        body: JSON.stringify({
+          id: "main",
+          data: blobData,
+          updated_by: by,
+          updated_at: ts
+        })
+      });
+      const insText = await ins.text().catch(() => "");
+      if (!ins.ok) throw new Error(`blob save failed: HTTP ${ins.status} ${insText.slice(0, 200)}`);
+      try {
+        rows = insText ? JSON.parse(insText) : [];
+      } catch (e) {
+        rows = [];
+      }
+      if (!Array.isArray(rows)) rows = [];
+    }
+    blobTsRef.current = rows[0] && rows[0].updated_at || ts;
+    lastBlobJsonRef.current = sig;
+    blobLocalRef.current = blobData;
+    if (pendingSaveRef.current === payload) pendingSaveRef.current = null;
+    return {
+      ok: true,
+      saved: true
+    };
+  };
+  const saveBlobNow = (payload, source) => {
+    blobSaveBusyRef.current += 1;
+    const run = blobSaveChainRef.current.then(() => saveBlobOnce(payload, source)).finally(() => {
+      blobSaveBusyRef.current = Math.max(0, blobSaveBusyRef.current - 1);
+    });
+    blobSaveChainRef.current = run.then(() => undefined, () => undefined);
+    return run;
+  };
   useEffect(() => {
     if (!loaded) return;
     if (isPublicMode) return;
@@ -1782,7 +1966,7 @@ function CallSchedule() {
     const payload = buildStateBundle();
     pendingSaveRef.current = payload;
     if (!payloadLooksWiped(payload)) everHadRealDataRef.current = true;
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave blocked: refusing to write empty payload over real data.");
         setSaveError(true);
@@ -1790,8 +1974,42 @@ function CallSchedule() {
         return;
       }
       allowWipeSaveRef.current = false;
-      syncScheduleDays(payload.schedule);
-      if (!canWriteBlob) return;
+      syncScheduleDays(payload.schedule).then(r => {
+        if (r && r.ok && pendingSaveRef.current === payload) pendingSaveRef.current = null;
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [loaded, schedule, vacations, availabilityRows, saveTick]);
+  useEffect(() => {
+    blobLocalRef.current = {
+      roster: surgeons,
+      surgeonRules,
+      groupRules,
+      holidays,
+      settings,
+      lastPublished,
+      lastGenerate
+    };
+  }, [surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate]);
+  useEffect(() => {
+    if (!loaded) return;
+    if (isPublicMode) return;
+    if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return;
+    if (loadFailedRef.current) {
+      setSaveError(true);
+      setSaveStatus("Not saving - data failed to load");
+      return;
+    }
+    if (!canWriteBlob) return;
+    const payload = buildStateBundle();
+    pendingSaveRef.current = payload;
+    const timer = setTimeout(async () => {
+      if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
+        console.warn("Autosave (blob): refusing to write while the payload looks wiped over real data.");
+        setSaveError(true);
+        setSaveStatus("Save blocked - empty data not written");
+        return;
+      }
       if (!blobLoadedRef.current) {
         console.warn("Autosave: the shared setup (call_schedule_data) has not loaded this session - blob write skipped so defaults cannot overwrite it.");
         setSaveError(true);
@@ -1799,32 +2017,32 @@ function CallSchedule() {
         return;
       }
       try {
-        const ts = new Date().toISOString();
-        const {
-          error: saveErr
-        } = await supabase.from("call_schedule_data").upsert({
-          id: "main",
-          data: blobFromBundle(payload),
-          updated_by: (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || null,
-          updated_at: ts
-        });
-        if (saveErr) throw new Error(`blob save failed: ${String(saveErr).slice(0, 200)}`);
-        blobTsRef.current = ts;
-        pendingSaveRef.current = null;
-        setSaveError(false);
-        setSaveStatus("Saved");
-        setTimeout(() => setSaveStatus(""), 2000);
+        const r = await saveBlobNow(payload, "autosave");
+        if (r && r.saved) {
+          setSaveError(false);
+          setSaveStatus("Saved");
+          setTimeout(() => setSaveStatus(""), 2000);
+        }
       } catch (e) {
         console.error("Save failed:", e);
         setSaveError(true);
         const failMsg = String((e === null || e === void 0 ? void 0 : e.message) || e);
         const denied = /42501|row-level security|\b403\b/i.test(failMsg);
-        setSaveStatus(denied ? "Not saved - no permission" : "Save failed - retrying");
-        showToast(denied ? "Couldn't save the shared setup - your account doesn't have permission. Ask the scheduler." : /401|JWT|expired/i.test(failMsg) ? "Changes aren't saving - your session expired. Reload or sign in again." : "Changes aren't saving - check your connection.", "error");
+        const authFail = /401|JWT|expired/i.test(failMsg);
+        setSaveStatus(denied ? "Not saved - no permission" : authFail ? auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry" : "Save failed - retrying");
+        if (!(auth.sessionExpired && authFail)) showToast(denied ? "Couldn't save the shared setup - your account doesn't have permission. Ask the scheduler." : authFail ? auth.sessionExpired ? "Changes aren't saving - your session expired. Sign in again." : "Changes aren't saving - your session couldn't be refreshed; they go out once it is." : "Changes aren't saving - check your connection.", "error");
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows]);
+  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);
+  resyncPendingRef.current = source => {
+    if (isPublicMode || !loaded || loadFailedRef.current) return;
+    syncScheduleDays(scheduleRef.current);
+    if (pendingSaveRef.current) {
+      console.warn(`Session refreshed (${source}): re-sending the pending save.`);
+      setSaveTick(t => t + 1);
+    }
+  };
   const flushRef = useRef(() => {});
   flushRef.current = source => {
     if (isPublicMode) return;
@@ -1844,15 +2062,11 @@ function CallSchedule() {
       const hdrs = {
         "Content-Type": "application/json",
         "apikey": SUPABASE_ANON_KEY,
-        "Authorization": `Bearer ${token}`,
-        "Prefer": "resolution=merge-duplicates,return=minimal"
+        "Authorization": `Bearer ${token}`
       };
-      const dayHdrs = {
-        "Content-Type": "application/json",
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": `Bearer ${token}`,
+      const dayHdrs = _objectSpread(_objectSpread({}, hdrs), {}, {
         "Prefer": "return=minimal"
-      };
+      });
       try {
         const cur = payload.schedule || {};
         const base = lastSyncRef.current || {};
@@ -1915,27 +2129,56 @@ function CallSchedule() {
         console.warn(`Keepalive flush (${source}): shared setup never loaded - blob leg skipped.`);
         return;
       }
-      fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?on_conflict=id`, {
-        method: "POST",
+      const flushBlob = blobFromBundle(payload);
+      const flushSig = blobSignature(flushBlob);
+      if (flushSig === lastBlobJsonRef.current) return;
+      if (blobSaveBusyRef.current > 0) {
+        console.warn(`Keepalive flush (${source}): blob leg skipped - ${blobSaveBusyRef.current} blob write(s) unresolved own the stamp; the pending setup stays armed.`);
+        pendingSaveRef.current = payload;
+        return;
+      }
+      const flushCas = blobTsRef.current ? `&updated_at=eq.${encodeURIComponent(blobTsRef.current)}` : "&updated_at=is.null";
+      blobSaveBusyRef.current += 1;
+      const flushRun = fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main${flushCas}`, {
+        method: "PATCH",
         keepalive: true,
-        headers: hdrs,
+        headers: _objectSpread(_objectSpread({}, hdrs), {}, {
+          Prefer: "return=representation"
+        }),
         body: JSON.stringify({
-          id: "main",
-          data: blobFromBundle(payload),
+          data: flushBlob,
           updated_by: by,
           updated_at: ts
         })
-      }).then(res => {
-        if (res.ok) {
-          blobTsRef.current = ts;
+      }).then(async res => {
+        if (!res.ok) {
+          console.warn(`Keepalive blob save (${source}) rejected with HTTP ${res.status} - re-armed for the next autosave`);
+          pendingSaveRef.current = payload;
           return;
         }
-        console.warn(`Keepalive blob save (${source}) rejected with HTTP ${res.status} - re-armed for the next autosave`);
-        pendingSaveRef.current = payload;
+        let rows = [];
+        try {
+          rows = await res.json();
+        } catch (e) {
+          rows = [];
+        }
+        if (!Array.isArray(rows) || rows.length === 0) {
+          console.warn(`Keepalive blob save (${source}): the setup moved under this session - reloading, not overwriting`);
+          return reloadBlobAfterMiss(source, payload).catch(e => {
+            console.warn(`Keepalive blob reload (${source}) failed:`, e);
+            pendingSaveRef.current = payload;
+          });
+        }
+        blobTsRef.current = rows[0] && rows[0].updated_at || ts;
+        lastBlobJsonRef.current = flushSig;
+        blobLocalRef.current = flushBlob;
       }).catch(e => {
         console.warn(`Keepalive save failed (${source}):`, e);
         pendingSaveRef.current = payload;
+      }).finally(() => {
+        blobSaveBusyRef.current = Math.max(0, blobSaveBusyRef.current - 1);
       });
+      blobSaveChainRef.current = blobSaveChainRef.current.then(() => flushRun);
     } catch (e) {
       console.warn(`Flush pending save (${source}) error:`, e);
       pendingSaveRef.current = payload;
@@ -2323,6 +2566,12 @@ function CallSchedule() {
         showToast(`Refused: ${nameOf(patch.person_id)} is already linked to another account (${taken.display_name || "unnamed"}).`, "error");
         return false;
       }
+    }
+    const nextRole = patch.role || p.role,
+      nextPerson = patch.person_id !== undefined ? patch.person_id : p.person_id;
+    if (nextRole === "coordinator" && nextPerson) {
+      showToast("Refused: a coordinator (office account) is never linked to a roster id - set the roster link to none first.", "error");
+      return false;
     }
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?id=eq.${encodeURIComponent(p.id)}`, {
@@ -3348,6 +3597,7 @@ function CallSchedule() {
     dayVersionsRef.current = {};
     lastSyncRef.current = {};
     setScheduleHistory([]);
+    const clearTs = new Date().toISOString();
     try {
       const {
         error: blobClearErr
@@ -3356,7 +3606,7 @@ function CallSchedule() {
         data: {
           _intentionalClear: true
         },
-        updated_at: new Date().toISOString()
+        updated_at: clearTs
       });
       if (blobClearErr) throw new Error(`blob clear failed: ${String(blobClearErr).slice(0, 200)}`);
     } catch (e) {
@@ -3377,6 +3627,8 @@ function CallSchedule() {
       snapshot: resetSnap.counts || null
     });
     blobLoadedRef.current = true;
+    blobTsRef.current = clearTs;
+    lastBlobJsonRef.current = null;
     setSurgeons(INIT_SURGEONS);
     setSurgeonRules(undefined);
     setGroupRules(undefined);
@@ -3423,9 +3675,8 @@ function CallSchedule() {
         data
       };
       if (Array.isArray(targetIds)) body.targetIds = targetIds;
-      const res = await fetch(`${EDGE_FN_BASE}/send-notification`, {
+      const res = await authFetch(`${EDGE_FN_BASE}/send-notification`, {
         method: "POST",
-        headers: dbAuthHeaders(),
         body: JSON.stringify(body)
       });
       const result = await res.json().catch(() => null);
@@ -3794,9 +4045,8 @@ function CallSchedule() {
   };
   const applyTradeRpc = async trade => {
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/apply_trade`, {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/apply_trade`, {
         method: "POST",
-        headers: dbAuthHeaders(),
         body: JSON.stringify({
           p_trade_id: trade.id
         })
@@ -4401,9 +4651,8 @@ function CallSchedule() {
     try {
       var _body$sent, _body$sent2;
       const lines = publishChanges.map(c => formatDayChange(c, nameOf));
-      const res = await fetch(`${EDGE_FN_BASE}/office-notifications`, {
+      const res = await authFetch(`${EDGE_FN_BASE}/office-notifications`, {
         method: "POST",
-        headers: dbAuthHeaders(),
         body: JSON.stringify({
           mode: "publish",
           period_label: publishLabel || "",
@@ -4457,9 +4706,8 @@ function CallSchedule() {
     setOfficeNotifBusy(true);
     try {
       var _body$sent3;
-      const res = await fetch(`${EDGE_FN_BASE}/office-notifications`, {
+      const res = await authFetch(`${EDGE_FN_BASE}/office-notifications`, {
         method: "POST",
-        headers: dbAuthHeaders(),
         body: JSON.stringify({
           mode: "digest"
         })
@@ -4482,8 +4730,12 @@ function CallSchedule() {
       showToast("Pick a person and both dates.", "error");
       return;
     }
-    if (!isScheduler && vacSurgeon !== mySurgeon) {
+    if (!isScheduler && !isCoordinator && vacSurgeon !== mySurgeon) {
       showToast("You can only enter your own vacations.", "error");
+      return;
+    }
+    if (vacNote && SU_NOTE_DENYLIST.test(vacNote)) {
+      showToast("Notes are operational only (the whole group and the shareable page read them) - leave the reason out.", "error");
       return;
     }
     const r = await toAdd(vacSurgeon, vacStart, vacEnd, vacNote);
@@ -4582,9 +4834,8 @@ function CallSchedule() {
           day: r.day,
           role_pref: r.role_pref
         }));
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, {
+        const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, {
           method: "POST",
-          headers: _objectSpread({}, dbAuthHeaders()),
           body: JSON.stringify({
             p_person: personId,
             p_rows: rows,
@@ -4602,9 +4853,8 @@ function CallSchedule() {
           };
         }
       } else {
-        const r2 = await fetch(`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, {
+        const r2 = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, {
           method: "POST",
-          headers: _objectSpread({}, dbAuthHeaders()),
           body: JSON.stringify({
             p_period: period.id,
             p_mode: mode,
@@ -5572,9 +5822,8 @@ function CallSchedule() {
   };
   const claimOpenSlotRpc = async (day, role) => {
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/claim_open_slot`, {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/claim_open_slot`, {
         method: "POST",
-        headers: dbAuthHeaders(),
         body: JSON.stringify({
           p_day: day,
           p_role: role
@@ -6121,7 +6370,7 @@ function CallSchedule() {
         fontSize: 10,
         color: "#a0a8b0"
       }
-    }, "past"), allowEdit && r.id && (isScheduler || r.pid === mySurgeon && r.vs > todayStr) && React.createElement("span", {
+    }, "past"), allowEdit && r.id && (isScheduler || (isCoordinator || r.pid === mySurgeon) && r.vs > todayStr) && React.createElement("span", {
       style: {
         marginLeft: "auto",
         display: "flex",
@@ -6344,7 +6593,8 @@ function CallSchedule() {
     css: css,
     dk: dk,
     person: sMap[offerSheet.personId] || null,
-    asScheduler: isScheduler && offerSheet.personId !== mySurgeon,
+    asScheduler: (isScheduler || isCoordinator) && offerSheet.personId !== mySurgeon,
+    relayWord: isCoordinator ? "the office" : "the scheduler",
     isScheduler: isScheduler,
     offers: offerRows,
     periods: periodRows,
@@ -6367,9 +6617,9 @@ function CallSchedule() {
       position: "fixed",
       left: "50%"
     }, paintSheet || offerSheet ? {
-      top: 12
+      top: `calc(12px + ${SAFE_AREA.top})`
     } : {
-      bottom: 24
+      bottom: `calc(24px + ${SAFE_AREA.bottom})`
     }), {}, {
       transform: "translateX(-50%)",
       zIndex: 9999,
@@ -6500,13 +6750,13 @@ function CallSchedule() {
       fontSize: 12,
       opacity: officeNotifBusy || publishChanges.length === 0 ? 0.6 : 1
     })
-  }, officeNotifBusy ? "Sending" : "Send")))), forceUpdate && !paintSheet && !offerSheet && React.createElement("div", {
+  }, officeNotifBusy ? "Sending" : "Send")))), sessionExpired && !!authUser && !isPublicMode && !paintSheet && !offerSheet && React.createElement("div", {
     role: "alert",
-    style: {
+    "data-testid": "session-expired",
+    style: _objectSpread(_objectSpread({
       position: "fixed",
       left: 0,
       right: 0,
-      bottom: updateAvailable ? 44 : 0,
       zIndex: 9998,
       background: "#7a2a2a",
       color: "#fff",
@@ -6515,11 +6765,46 @@ function CallSchedule() {
       justifyContent: "center",
       flexWrap: "wrap",
       gap: 10,
-      padding: "9px 14px",
+      padding: "9px 14px"
+    }, css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0))), {}, {
       fontSize: 12.5,
       fontWeight: 600,
       fontFamily: font
+    })
+  }, React.createElement("span", null, "Your session expired - sign in again"), React.createElement("button", {
+    "data-testid": "session-expired-signin",
+    onClick: openSignInAgain,
+    style: {
+      background: "#2a8a5a",
+      border: "none",
+      color: "#fff",
+      borderRadius: 6,
+      padding: "5px 14px",
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: "pointer",
+      fontFamily: font
     }
+  }, "Sign in")), forceUpdate && !paintSheet && !offerSheet && React.createElement("div", {
+    role: "alert",
+    style: _objectSpread(_objectSpread({
+      position: "fixed",
+      left: 0,
+      right: 0,
+      zIndex: 9998,
+      background: "#7a2a2a",
+      color: "#fff",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      flexWrap: "wrap",
+      gap: 10,
+      padding: "9px 14px"
+    }, css.bottomBanner(updateAvailable ? 1 : 0)), {}, {
+      fontSize: 12.5,
+      fontWeight: 600,
+      fontFamily: font
+    })
   }, React.createElement("span", null, "This app version (", APP_VERSION, ") is below the required minimum (", forceUpdate.min_version, "). ", forceUpdate.message), React.createElement("button", {
     onClick: () => {
       if (window.__silvisHardReset) window.__silvisHardReset();else window.location.reload();
@@ -6538,11 +6823,10 @@ function CallSchedule() {
   }, "Reload now")), updateAvailable && !paintSheet && !offerSheet && React.createElement("div", {
     role: "status",
     "aria-live": "polite",
-    style: {
+    style: _objectSpread(_objectSpread({
       position: "fixed",
       left: 0,
       right: 0,
-      bottom: 0,
       zIndex: 9998,
       background: "#1F2A3A",
       color: "#fff",
@@ -6551,12 +6835,13 @@ function CallSchedule() {
       justifyContent: "center",
       flexWrap: "wrap",
       gap: 10,
-      padding: "9px 14px",
+      padding: "9px 14px"
+    }, css.bottomBanner(0)), {}, {
       fontSize: 12.5,
       fontWeight: 600,
       fontFamily: font,
       boxShadow: "0 -2px 12px rgba(0,0,0,0.25)"
-    }
+    })
   }, React.createElement("span", null, "New version available (", updateAvailable, ")"), React.createElement("button", {
     onClick: () => {
       if (window.__silvisHardReset) window.__silvisHardReset();else window.location.reload();
@@ -6769,7 +7054,7 @@ function CallSchedule() {
       color: "#5B6B82",
       margin: 0
     }
-  }, authMode === "login" ? "Sign in to your account" : authMode === "signup" ? "Create your account" : authMode === "reset" ? "Reset your password" : "Set a new password")), authMode === "newpassword" ? React.createElement("div", {
+  }, authMode === "login" ? "Sign in to your account" : authMode === "reset" ? "Reset your password" : "Set a new password")), authMode === "newpassword" ? React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
@@ -6853,7 +7138,7 @@ function CallSchedule() {
       color: "#5B6B82",
       margin: 0
     }
-  }, "Enter the email address you signed up with. We'll send you a link to reset your password."), React.createElement("input", {
+  }, "Enter the email address your invite was sent to. We'll send you a link to reset your password."), React.createElement("input", {
     type: "email",
     placeholder: "Email address",
     value: resetEmail,
@@ -6902,17 +7187,7 @@ function CallSchedule() {
       flexDirection: "column",
       gap: 10
     }
-  }, authNotice && React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: "#1a6030",
-      padding: "8px 10px",
-      background: "#e8f8e8",
-      borderRadius: 6,
-      border: "1px solid #a0d8a0",
-      lineHeight: 1.5
-    }
-  }, authNotice), React.createElement("input", {
+  }, React.createElement("input", {
     type: "email",
     placeholder: "Email address",
     value: authEmail,
@@ -6934,14 +7209,10 @@ function CallSchedule() {
       padding: "10px 12px",
       fontSize: 14
     })
-  }), authMode === "signup" && React.createElement("p", {
-    style: {
-      fontSize: 11.5,
-      color: "#5B6B82",
-      margin: 0,
-      lineHeight: 1.5
-    }
-  }, "Your account starts unlinked. The scheduler links it to your roster entry afterwards - you don't pick a name here."), errBox(authError), React.createElement("button", {
+  }), authError && React.createElement("div", {
+    "data-testid": "auth-error",
+    role: "alert"
+  }, errBox(authError)), React.createElement("button", {
     onClick: handleAuthSubmit,
     disabled: authBusy,
     style: _objectSpread(_objectSpread({}, css.cta), {}, {
@@ -6951,16 +7222,15 @@ function CallSchedule() {
       fontWeight: 700,
       opacity: authBusy ? 0.6 : 1
     })
-  }, authBusy ? "Please wait" : authMode === "login" ? "Sign in" : "Create account"), React.createElement("div", {
+  }, authBusy ? "Please wait" : "Sign in"), React.createElement("div", {
     style: {
       textAlign: "center",
       marginTop: 4
     }
   }, React.createElement("button", {
     onClick: () => {
-      setAuthMode(m => m === "login" ? "signup" : "login");
+      setAuthMode("reset");
       setAuthError("");
-      setAuthNotice("");
     },
     style: {
       background: "none",
@@ -6971,25 +7241,7 @@ function CallSchedule() {
       fontFamily: font,
       textDecoration: "underline"
     }
-  }, authMode === "login" ? "Don't have an account? Sign up" : "Already have an account? Sign in"), authMode === "login" && React.createElement("div", {
-    style: {
-      marginTop: 8
-    }
-  }, React.createElement("button", {
-    onClick: () => {
-      setAuthMode("reset");
-      setAuthError("");
-    },
-    style: {
-      background: "none",
-      border: "none",
-      color: "#5B6B82",
-      fontSize: 11,
-      cursor: "pointer",
-      fontFamily: font,
-      textDecoration: "underline"
-    }
-  }, "Forgot your password?")))))) : React.createElement(React.Fragment, null, React.createElement("div", {
+  }, "Forgot your password?"))))) : React.createElement(React.Fragment, null, React.createElement("div", {
     "data-testid": "app-header",
     style: _objectSpread(_objectSpread({}, css.hdr), {}, {
       background: dkHdr,
@@ -7292,7 +7544,7 @@ function CallSchedule() {
         display: "inline-block"
       }
     }, "Tap to view"));
-  })), !isPublicMode && isUnlinked && React.createElement("div", {
+  })), !isPublicMode && isUnlinked && !isCoordinator && React.createElement("div", {
     "data-testid": "unlinked-banner",
     style: _objectSpread(_objectSpread({}, css.card), {}, {
       padding: "10px 14px",
@@ -9564,11 +9816,11 @@ function CallSchedule() {
     "data-testid": "timeoff-card"
   }, React.createElement("div", {
     style: css.cardT
-  }, isScheduler ? "Vacations" : "My vacations"), React.createElement("p", {
+  }, canEnterForAnyone ? "Vacations" : "My vacations"), React.createElement("p", {
     style: sectionNote
-  }, "Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record", isScheduler ? " (as the scheduler you can enter or remove anyone's)" : "", ". Notes are operational and visible to the whole group."), !mySurgeon && !isScheduler ? React.createElement("p", {
+  }, isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct)." : React.createElement(React.Fragment, null, "Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record", isScheduler ? " (as the scheduler you can enter or remove anyone's)" : "", "."), " Notes are operational and visible to the whole group."), !mySurgeon && !canEnterForAnyone ? React.createElement("p", {
     style: muted
-  }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement(React.Fragment, null, renderVacationForm(isScheduler ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
+  }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement(React.Fragment, null, renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -9582,7 +9834,45 @@ function CallSchedule() {
     type: "checkbox",
     checked: showPastVacations,
     onChange: e => setShowPastVacations(e.target.checked)
-  }), " Show past"), renderVacationList(isScheduler ? surgeons.map(s => s.id) : [mySurgeon], true))), (isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon)).length > 0 && React.createElement("div", {
+  }), " Show past"), renderVacationList(canEnterForAnyone ? surgeons.map(s => s.id) : [mySurgeon], true))), isCoordinator && React.createElement("div", {
+    style: css.card,
+    "data-testid": "coord-offers-card"
+  }, React.createElement("div", {
+    style: css.cardT
+  }, "Offers - enter for a surgeon"), React.createElement("p", {
+    style: sectionNote
+  }, "Relay a surgeon's offered dates into their painter. The record carries you as the office (entered by your account, source office-relay) and the surgeon's own rules, vacations and the period freeze apply exactly as when they paint themselves. A frozen period stays read-only - ask the scheduler."), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "flex-end"
+    }
+  }, React.createElement("div", null, React.createElement("label", {
+    style: label
+  }, "Surgeon"), React.createElement("select", {
+    "data-testid": "coord-offers-person",
+    value: coordOfferPerson,
+    onChange: e => setCoordOfferPerson(e.target.value),
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: 150
+    })
+  }, React.createElement("option", {
+    value: ""
+  }, "Select"), poolSurgeons.map(s => React.createElement("option", {
+    key: s.id,
+    value: s.id
+  }, s.name)))), React.createElement("button", {
+    "data-testid": "coord-offers-open",
+    disabled: !coordOfferPerson,
+    onClick: () => setOfferSheet({
+      personId: coordOfferPerson
+    }),
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "7px 16px",
+      opacity: coordOfferPerson ? 1 : 0.5
+    })
+  }, coordOfferPerson ? "Enter offers for " + nameOf(coordOfferPerson) : "Enter offers for..."))), (isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon)).length > 0 && React.createElement("div", {
     style: css.card,
     "data-testid": "eastvac-timeoff"
   }, React.createElement("div", {
@@ -9602,6 +9892,7 @@ function CallSchedule() {
     testid: "eastvac-timeoff-list"
   })), (() => {
     const fromId = isScheduler ? tradeFrom || mySurgeon || "" : mySurgeon || "";
+    if (isCoordinator) return null;
     const mine = upcomingDaysOf(fromId, null);
     const theirs = upcomingDaysOf(tradeTo, null);
     const dayOk = suIsIso(tradeDay);
@@ -10045,7 +10336,7 @@ function CallSchedule() {
       padding: "6px 16px",
       fontSize: 12
     })
-  }, "Dark"))), isScheduler && React.createElement(Collapsible, {
+  }, "Dark"))), (isScheduler || isCoordinator) && React.createElement(Collapsible, {
     css: css,
     ck: "settings_audit",
     defaultOpen: false,
@@ -10055,7 +10346,7 @@ function CallSchedule() {
         fontSize: 11,
         color: "#5B6B82"
       }
-    }, "- who changed what")),
+    }, isCoordinator ? "- your entries (vacations, offers)" : "- who changed what")),
     right: React.createElement("button", {
       onClick: e => {
         e.stopPropagation();
@@ -11484,6 +11775,7 @@ function OfferPainterSheet({
   dk,
   person,
   asScheduler,
+  relayWord,
   isScheduler,
   offers,
   periods,
@@ -11926,7 +12218,7 @@ function OfferPainterSheet({
   const monthLabel = MO[ym.m] + " " + ym.y;
   const atCurrentMonth = ym.y === t0.getFullYear() && ym.m === t0.getMonth();
   const periodExpanded = periodOpen && (periodOpenBox || modeDirty);
-  const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : "yourself as " + brushWord(armed)}; tap again with the same brush to clear it.` : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
+  const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.` : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
   if (!person) {
     return React.createElement("div", {
       "data-testid": "ofp-sheet",
@@ -11991,7 +12283,7 @@ function OfferPainterSheet({
       color: muted,
       marginLeft: 6
     }
-  }, "as the scheduler (relayed)")), React.createElement("button", {
+  }, "as ", relayWord || "the scheduler", " (relayed)")), React.createElement("button", {
     "data-testid": "ofp-close",
     onClick: doClose,
     "aria-label": "Close",
@@ -12353,7 +12645,7 @@ function OfferPainterSheet({
     style: _objectSpread(_objectSpread({}, css.mini(rulesOpen)), {}, {
       minHeight: 36
     })
-  }, rulesOpen ? "Hide rules" : "My rules")), pasteOpen && React.createElement("div", {
+  }, rulesOpen ? "Hide rules" : asScheduler ? "Rules" : "My rules")), pasteOpen && React.createElement("div", {
     "data-testid": "ofp-paste",
     style: {
       marginBottom: 8
@@ -13728,6 +14020,7 @@ function DayEditor(props) {
       background: panelBg,
       margin: "0 -18px -16px",
       padding: "8px 18px 12px",
+      paddingBottom: `calc(${SAFE_AREA.bottom} + 12px)`,
       borderTop: "1px solid " + border
     }
   }, !isPublicMode && (canEdit || myRole) && React.createElement("button", {
@@ -14847,7 +15140,7 @@ function UsersCard({
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 110
     })
-  }, ["viewer", "surgeon", "scheduler", "admin"].map(r => React.createElement("option", {
+  }, ["viewer", "surgeon", "coordinator", "scheduler", "admin"].map(r => React.createElement("option", {
     key: r,
     value: r
   }, r)))), React.createElement("td", null, React.createElement("select", {
@@ -14861,7 +15154,7 @@ function UsersCard({
     })
   }, React.createElement("option", {
     value: ""
-  }, "none (viewer)"), (roster || []).map(s => React.createElement("option", {
+  }, "none (viewer / coordinator)"), (roster || []).map(s => React.createElement("option", {
     key: s.id,
     value: s.id
   }, s.id, " ", s.name)))), React.createElement("td", {
