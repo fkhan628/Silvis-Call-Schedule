@@ -15,10 +15,11 @@ afterwards; the editor keeps query history).*
 3. `sql/schema.sql` is applied (Prompt 2). Re-running it is safe.
 4. After approving live mail (`edge-functions/README.md` section 6): the Vault secret `silvis_cron_secret` is already in place;
    paste the `cron.schedule` of README section 4 for `silvis-open-shifts-weekly` and confirm
-   `select jobid, jobname, schedule, active from cron.job` shows three rows — before telling the surgeons about the Monday
-   e-mail (the job is NOT created yet as of 2026-09-23).
+   `select jobid, jobname, schedule, active from cron.job` shows four rows — the three that exist today
+   (`silvis-daily-reminder-hourly`, `silvis-office-digest-weekly`, `silvis-offers-daily`, created 9/23) plus the new one — before
+   telling the surgeons about the Monday e-mail (that job is the one NOT created yet as of 2026-09-23).
 
-## Your own account (first — already done for Faraz per `docs/STATUS-2026-09-23.md`: `admin`, roster `s1`; kept for a rebuild)
+## Your own account (first — already done for Faraz on 9/23 - `admin`, roster `s1`; kept for a rebuild)
 
 1. Public sign-ups are off and the app has no sign-up form (Prompt 16 A2): invite your own address from the dashboard (**Authentication → Users → Invite user**), open the link, set a password.
 2. The database creates your `user_profiles` row automatically as `viewer`.
@@ -66,15 +67,15 @@ say whether the list is **"only these days"** (you are never placed on a day you
 — use my rules to fill gaps"** (the default: your days first, your rules cover what is still open, and your publish
 e-mail names every day you did not list — trade if needed). Vacations, East days, derived weeks, windows and caps still
 apply on an offered day. A day is refused if it is past, on your vacation, or inside a period that has already frozen —
-ask Faraz: the database lets the scheduler enter a late offer (OF003 is skipped for the scheduler role), and once the
-UI wave is live he does that from My schedule (pick the surgeon, "Paint offers for <name>" — the entry is stamped as
-relayed by the scheduler); until then the only late path is a scheduler-JWT REST write, because the seed CLI runs as
-postgres and is refused by OF003 from 2026-10-02. *Until the UI wave is live, Faraz relays e-mailed dates as the
-scheduler (the first period's lists went in that way from the seed); the 14- and 3-day reminder e-mails start once the
-offers cron is live (target 9/29, `edge-functions/README.md` §3 deploy record); and the publish e-mail's off-list line
-arrives with the rest of the UI wave.*
+ask Faraz: the database lets the scheduler enter a late offer (OF003 is skipped for the scheduler role), and he does that
+in the app from Setup → Generate → Periods → "Enter for someone" (the painter opens as that surgeon; the entry is stamped
+as relayed by the scheduler), or the office relays the dates from Time off → "Offers - enter for a surgeon" (Prompt 16
+A7, stamped `office-relay`). *Live since 9/23: the painter, the late-offer paths above, and the 14- and 3-day reminder
+e-mails (`daily-reminder` mode `offers`, cron job `silvis-offers-daily` — `edge-functions/README.md` §3 deploy record); the
+first period was relayed from the seed before the painter existed. Still to come: the publish e-mail's line naming the
+days a surgeon was placed on outside his list.*
 
-**How to paint (the UI wave, branch `feat/offers` — show them on their phone).** Open **Mine** and tap **Paint my
+**How to paint (show them on their phone).** Open **Mine** and tap **Paint my
 offers** (or the **Paint offers** button in the top bar; a reminder e-mail's link `#offers` opens it too). You get one
 row per day for the month; ‹ › move ahead as far as you like. Tap a brush at the top — **Primary**, **Backup**, **Either**
 (happy with either role) or **Clear** — then tap the days; tap a day again with the same brush to take it back. For a

@@ -29,13 +29,13 @@ with `--no-verify-jwt`; the workdir copy is byte-identical to `edge-functions/se
 `be215d8b856081c4...`; `supabase functions list` reads version 4, previous 3 of 2026-09-22). The role / party gate is
 live: an anon POST answers `HTTP 401 {"error":"authentication required ..."}`. The section 5 JWT checks (viewer 403,
 surgeon broadcast 403, surgeon own-party 200 sent 0) still need real sessions - Faraz runs them; no JWT was handled
+by the deploy.
 
 **Prompt 14 (2026-09-23 ~18:50 UTC): `send-notification` version 5 and `daily-reminder` version 4 deployed** from main
 `cd8996d` with `--no-verify-jwt` (send-notification: the `offers_reminder` / `offers_closed` categories over the version-4
 role / party gate; daily-reminder: mode `offers` beside `open-shifts`; the workdir copies are byte-identical to the repo files).
 Anon POSTs answer 401 on both. The cron job `silvis-offers-daily` was created the same minute (jobid 3, `0 13 * * *`, the
 Vault secret; `cron.job` now lists three jobs - `silvis-open-shifts-weekly` is still the one not created).
-by the deploy.
 
 **Prompt 16 A7 (coordinator role, 2026-09-24): `send-notification` redeploy is a comment-only change.** The new
 `user_profiles.role` value `coordinator` (office users who enter the surgeons' vacations and relay offered dates; see
@@ -73,12 +73,13 @@ vacation is never an assignment.
 **Deploy record.** All four functions were deployed 2026-09-22 from the CLI with
 `--no-verify-jwt` (verify_jwt OFF on each: `calendar-sync` answered a live
 unauthenticated GET, the other three answered 401 without their gate - see
-`docs/STATUS-2026-09-22.md`). The function-side secrets `CRON_SECRET`,
+the 9/22 status report, history, `docs/HISTORY.md`). The function-side secrets `CRON_SECRET`,
 `RESEND_API_KEY` and `NOTIFICATION_FROM_EMAIL` were set in the dashboard the
 same day (2026-09-22 12:56 UTC, by Faraz; names only are recorded anywhere).
-The two pg_cron jobs in section 4 exist and read the secret from Supabase
+Three of the four pg_cron jobs in section 4 exist (`silvis-daily-reminder-hourly` and `silvis-office-digest-weekly`
+since 9/22, `silvis-offers-daily` since 9/23; `silvis-open-shifts-weekly` is not created yet) and read the secret from Supabase
 Vault (`silvis_cron_secret`) at run time; both functions answered pg_net
-`dryRun` posts with 200 (`docs/REVIEW-2026-09-22.md` section 6). The version
+`dryRun` posts with 200 (the 9/22 review, section 6 - history, `docs/HISTORY.md`). The version
 numbers quoted above are as of 2026-09-22 18:31 UTC; a `supabase secrets set`
 re-versions all four, so always read `supabase functions list` before a
 redeploy, and keep the download-and-byte-compare convention in section 3 so
@@ -205,12 +206,12 @@ supabase functions deploy office-notifications --workdir $wd --project-ref bzhsr
 supabase functions list --project-ref bzhsroegtagqhutbnsrp                                  # versions +1 each, verify_jwt off
 ```
 
-### Deploy record - offers mode (Prompt 14 part 4) - PLACEHOLDER, filled by whoever deploys
+### Deploy record - offers mode (Prompt 14 part 4) - filled 2026-09-23 (B10 closes the placeholder)
 
 | when (UTC) | slug | version before -> after | proof |
 |---|---|---|---|
-| _not yet deployed_ | `send-notification` | _n -> n+1_ | categories `offers_reminder` / `offers_closed` present in the downloaded copy; byte-identical to the repo |
-| _not yet deployed_ | `daily-reminder` | _n -> n+1_ | pg_net dryRun `{"mode":"offers","dryRun":true}` -> 200 body quoted here verbatim; `{"mode":"nope"}` -> 400; the default-mode dryRun unchanged |
+| 2026-09-23 ~18:50 | `send-notification` | 4 -> 5 | deployed from main `cd8996d` with `--no-verify-jwt`; categories `offers_reminder` / `offers_closed` in the downloaded copy, byte-identical to the repo; anon POST -> 401 |
+| 2026-09-23 ~18:50 | `daily-reminder` | 3 -> 4 | deployed from main `cd8996d` with `--no-verify-jwt`; mode `offers` beside `open-shifts`, byte-identical to the repo; anon POST -> 401. The pg_net dryRun `{"mode":"offers","dryRun":true}` body was not recorded in the repo at deploy time - run it once and paste the 200 body here (`{"mode":"nope"}` -> 400; the default-mode dryRun unchanged) |
 | created 2026-09-23 ~18:55 UTC (jobid 3) | cron job `silvis-offers-daily` | - | `select jobname, schedule, active from cron.job` shows the row; first `cron.job_run_details` status |
 
 Order for this deploy: the repo copy of both functions must already carry the Prompt 13 open-shifts mode
@@ -299,7 +300,7 @@ select cron.schedule('silvis-offers-daily', '0 13 * * *', $$
     body := '{"mode":"offers"}'::jsonb);
 $$);
 
-select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; today three exist (silvis-offers-daily created 9/23) (silvis-open-shifts-weekly and silvis-offers-daily are not created yet)
+select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; today three exist (the hourly reminder and the weekly digest since 9/22, silvis-offers-daily since 9/23) - silvis-open-shifts-weekly is the one not created yet
 select * from cron.job_run_details order by start_time desc limit 10;  -- after the first run
 ```
 

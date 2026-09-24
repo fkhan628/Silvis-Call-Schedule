@@ -490,9 +490,9 @@ policy is touched), mirrored byte for byte into `sql/schema.sql` and pinned by `
   one `drop function if exists public.save_offers(text, jsonb, date[])` removes the never-applied three-argument draft
   so no second overload can exist (a no-op on the live database).
 
-Not applied as of 2026-09-23 (the painter's Save answers `404` `PGRST202` "Could not find the function
-public.save_offers" until it is). Apply and prove (workdir = a directory linked with
-`supabase link --project-ref bzhsroegtagqhutbnsrp`; absolute paths):
+Applied 2026-09-23 ~18:45 UTC (the `observed:` line below; before the apply the painter's Save answered `404` `PGRST202`
+"Could not find the function public.save_offers"). The apply-and-prove commands, kept for a rebuild (workdir = a
+directory linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`; absolute paths):
 
     supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-offer-mode-rpc.sql
     supabase db query --linked --workdir <dir> -f <abs>/sql/probes/offer-rpcs-probe.sql   # expects the A..K-anon + L / M lines in the probe header; everything rolls back

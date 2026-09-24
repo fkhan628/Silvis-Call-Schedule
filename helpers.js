@@ -618,8 +618,9 @@ function adoptBlobState(local, d) {
 /* ═══ TRADE MESSAGE COMPOSERS ═══
    One composition per trade event, shared by in-app and email channels.
    Trades are by DAY + ROLE (shift_trade_requests.day / role / return_day /
-   return_role). TODO(Slice G): the accept path applies the legs to the
-   schedule; the composers below already describe that shape. */
+   return_role). The accept path applies the legs to the schedule through
+   apply_trade() (Slice G, live since 9/22); the composers below describe that
+   shape. */
 function tradeLegsText(req, tense) {
   // tense: "takes" (accepted) | "would take" (proposed) | "would have taken" (declined)
   const gets = slotLabel(req.day, req.role);

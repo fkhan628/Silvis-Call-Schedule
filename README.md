@@ -9,7 +9,10 @@ backup per day) and a per-surgeon rules engine.
 - **Live:** https://fkhan628.github.io/Silvis-Call-Schedule/
 - **Docs:** [CLAUDE.md](CLAUDE.md) (conventions), [docs/SILVIS-BUILD-GUIDE.md](docs/SILVIS-BUILD-GUIDE.md) (architecture),
   [docs/SILVIS-CALL-RULES.md](docs/SILVIS-CALL-RULES.md) (the rules), [docs/silvis-seed.json](docs/silvis-seed.json) (the data),
-  [sql/schema.sql](sql/schema.sql) (Supabase schema + RLS).
+  [sql/schema.sql](sql/schema.sql) (Supabase schema + RLS; every applied migration in [docs/SCHEMA-REVIEW.md](docs/SCHEMA-REVIEW.md)),
+  [docs/ONBOARDING.md](docs/ONBOARDING.md) (inviting users, roles, what to tell a surgeon),
+  [edge-functions/README.md](edge-functions/README.md) (the four functions: secrets by name, deploys, cron jobs, verification),
+  [docs/HISTORY.md](docs/HISTORY.md) (index of the build's history documents, kept in the private folder).
 
 ## Build
 

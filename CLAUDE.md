@@ -64,8 +64,10 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`).
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with
   `[skip ci]`, Pages redeploys.
-- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — rules, east-feed, data-layer,
-  schema, importer, week-rows, exports, totals, holidays, publish, day-edit, open-shifts, ci — then the generator regression, then the build);
+- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 18 suites: rules, east-feed, data-layer,
+  schema, importer, week-rows, exports, totals, holidays, publish, day-edit, open-shifts, offers, offers-timeline, edge-functions,
+  ci, privacy, water-fill — then the generator regression as the 19th, then the build; `test/ci.test.js` keeps the chain, the
+  workflow steps and the paths filter aligned, so trust it over this list);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
   writes `index.html` locally as a byproduct — `git restore index.html` before committing (CI owns it).
@@ -116,7 +118,7 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   touched.
   Don't gold-plate exports or edge functions until the surgeons are on the live app.
 - Pending inputs: who takes Thu 10/15 primary (group discussion — the 9/23 publish left it OPEN), Sarkar's home email,
-  Philip's monthly cap (Khan as backup on ordinary Tue/Thu was answered 9/22: backup is open to everyone) — see
-  `docs/SILVIS-CALL-RULES.md §8`. Treat those as unknowns, not assumptions to bake in. Every default
+  Philip's monthly cap — see `docs/SILVIS-CALL-RULES.md §8`. (Khan as backup on ordinary Tue/Thu is answered, not pending:
+  backup is open to everyone since 9/22.) Treat the open ones as unknowns, not assumptions to bake in. Every default
   taken for an unanswered question is data in `call_schedule_data.data.groupRules` / `surgeonRules` (listed in
-  `docs/ORIENTATION-2026-09-21.md` §3), never a code branch.
+  `docs/SILVIS-CALL-RULES.md` §8 and the seed's `openQuestions`; the 9/21 orientation that first listed them is history, `docs/HISTORY.md`), never a code branch.

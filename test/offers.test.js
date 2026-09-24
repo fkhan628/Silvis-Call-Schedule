@@ -155,7 +155,7 @@ check("the new notes carry rules, no reasons (the importer's own denylist) and n
     assert.ok(!DENY.test(n), "denylist word in: " + n.slice(0, 80));
     assert.ok(!/@|\d{3}[-.]\d{3}[-.]\d{4}/.test(n), "contact-like value");
   });
-  assert.ok(/Prompt 14 P2/.test(seed._meta.revisions[seed._meta.revisions.length - 1]), "the last revision entry is P2's");
+  assert.ok(seed._meta.revisions.some((r) => /Prompt 14 P2/.test(r)), "a revision entry is P2's (B10 9/23 appended later entries; the last one is scanned above)");
   const rawSeed = fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8");
   eq((rawSeed.match(/\\u0027/g) || []).length, 0, "the seed writes apostrophes as a literal ' like its other lines (the \\uXXXX rule is for non-ASCII)");
 });

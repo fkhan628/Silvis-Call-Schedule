@@ -862,20 +862,22 @@ Nothing in Prompt 13 publishes a schedule, and no part of it sends mail on its o
 
 ## 17. Offers — paint the dates you'll cover; the generator fills the gaps (Faraz 9/22 evening; Prompt 14)
 
-*Status 2026-09-23 (overnight review; corrected by the 9/23 audit): the DATA part is live — `call_periods` (incl. the
-`offer_modes` column, confirmed by a column probe 9/23 although the branch delivery note said it was pending), `call_offers`,
-`offer_status()` and the OF001–OF003 triggers, applied from three `feat/offers` files: `sql/migrations/2026-09-22-offers-periods.sql`
-(9/22 15:15), `2026-09-23-offer-modes.sql` and `2026-09-23-claim-offer.sql` (9/23; rolled-back probes A–K and the claim probe
-A–L green per `docs/STATUS-2026-09-23.md` — not re-verifiable by an anon read, the tables being authenticated-read only). Both
-tables were empty at the 9/23 probes; nothing on `main` reads them, and the only writer reachable from `main` is the live
-`claim_open_slot` (the Open shifts board's "Take this shift", `index-source.html` ~3908): a claim by a surgeon who is not
-rules-only for the period upserts one `call_offers` row. The painter RPCs (`2026-09-23-offer-mode-rpc.sql`), the rules/generator
-changes, the painter UI, the seed period and the offers cron are on `feat/offers` — local, unmerged, not deployed (its head at
-review time was `19d4094` "Offers part 5"; trust `git log feat/offers` over this line). Until the merge, `sql/schema.sql` and
-`docs/SCHEMA-REVIEW.md` on `main` lag the live database by those objects — use `feat/offers:sql/schema.sql` for a schema
-review, and add the applied-migration rows to `docs/SCHEMA-REVIEW.md` and the schema table of §4.2 when it merges.
+*Status 2026-09-23 evening (B10; supersedes the overnight status this paragraph used to carry): everything in this
+section is on `main` and live. Schema: `call_periods` (incl. `offer_modes`), `call_offers`, `offer_status()`, OF001–OF003
+(applied 9/22 15:15 and 9/23 07:05Z), the claim-as-offer bodies of `claim_open_slot` / `call_offers_guard` (9/23 07:05Z) and
+the painter RPCs `set_offer_mode` / `save_offers` (`sql/migrations/2026-09-23-offer-mode-rpc.sql`, applied 9/23 ~18:45 UTC —
+`docs/SCHEMA-REVIEW.md` carries each observed probe; `sql/schema.sql` mirrors every applied body). Data: the seed applied
+through the CLI twice on 9/23 — the first period (Nov 2026 – Jan 2027, status `published` since the 9/23 publish) with its 79
+seed-relayed offers and modes, and the second period (Feb 2027 – Apr 2027, freeze 12/21, publish by 1/4). App: the painter
+(part 3a), the Periods section with Remind / Close now / Enter for someone / Generate this period (3b), the day editor's
+offer column and My schedule's offers (3c), the period-aware Setup import dry run (item IP below), and since Prompt 16 A7 the
+office's relay path ("Offers - enter for a surgeon", `source office-relay`). Functions and cron: `send-notification` v5 and
+`daily-reminder` v4 deployed 9/23 ~18:50 UTC, cron job `silvis-offers-daily` (jobid 3, `0 13 * * *`) created the same minute
+(`edge-functions/README.md` §3 deploy record). Still open, as listed at the end of part 3c: the publish e-mail's off-list
+line from `diagnostics.offers.outsideOffers`, the period `generated` / `published` status flips from the app (today the
+seed apply sets them), and the `apply_trade()` offer upsert.*
 **9/23 (item IP):** the in-app Setup import's dry run is now period-aware — `pickSeedFile` plans with `importPlan(seed, { now, offerPeriods: true })` exactly as the CLI does (same Central `today`, the two authenticated-read tables unknown), displays the `call_periods` / `call_offers` legs (`seed-period-legs`) and reads the CLI's totals, while Apply of a period-carrying seed remains the CLI's (`scripts/import-seed.js --apply`); rule (review, same day): once a period is live, `docs/silvis-seed.json` is never applied in-app with its `offerPeriods` removed — the app cannot read `call_periods`, and a period-free plan re-adds the available rows the period retired (the Setup card says so) — and the "legacy plan" statements later in this section describe the state before IP.
-Nothing below is in the live app; read the section as the specification.*
+Everything below is live; the section reads as its specification.*
 
 Silvis is an **offers** problem where Davenport is a rules problem: the schedule has always been assembled from the
 days each surgeon emails in, relayed through whoever is collecting them and retyped by the ER-panel author. From Prompt 14 the
@@ -903,7 +905,7 @@ line goes into `docs/SCHEMA-REVIEW.md` once the orchestrator pastes the probe ou
 part 5, which writes `offer_modes`). Proof: `sql/probes/offers-probe.sql` (rolls itself back) and
 `scripts/verify-rls.sh` section 8; the observed runs are in `docs/SCHEMA-REVIEW.md`.
 
-**Part 3a — the painter (built 9/23 on `feat/offers`, sub-part U3a; the rest of part 3 is below).** `OfferPainterSheet`
+**Part 3a — the painter (built 9/23, sub-part U3a; on `main` and live since the 9/23 merge; the rest of part 3 is below).** `OfferPainterSheet`
 in `index-source.html` is a MODULE-SCOPE component (the Davenport reason: inside the app function it would remount on
 every parent render and lose the draft), mounted once beside the vacation painter, outside the view conditionals. Entry
 points: **My schedule → "Paint my offers"** (the scheduler's person picker turns it into "Paint offers for <name>" — the
@@ -1032,19 +1034,19 @@ now; Enter for Acton opens the relayed painter targeted at the seed period on it
 runs the existing flow over the period with no writes; screenshots `periods-desktop.png`, `periods-390.png`,
 `periods-desktop-dark.png`, `periods-390-dark.png`.
 
-**Still ahead in part 3 (not on `feat/offers` as of 9/23 U3b):** the wiring the engine is waiting for: pass
-`offerRows` / `periodRows` into `ctxInputs` → `buildContext` (`offers`, `periods`) — deliberately NOT done by the
-painter or the Periods sub-part, because the moment offers reach the ctx an exhaustive surgeon's `not-offered` becomes
-live in the day editor, the generator and the trade path, and the trade path must take the claim reading first
-(below); until then "Generate this period" places by the rules, not offers-first. Then: switch the in-app Setup import
-to `importPlan(seed, { offerPeriods: true })` and refuse Apply when the seed carries periods the plan did not convert;
-the day editor's "offered primary / either / backup — rules — not offered" line per candidate; the publish e-mail line
-from `diagnostics.offers.outsideOffers`; and the period's `generated` / `published` status flips (nothing sets them
-yet — proposed: Accept & Publish marks the periods its range covers `published`). (The two RPCs are already mirrored
-byte for byte into `sql/schema.sql`, pinned by `test/schema.test.js` and described in `docs/SCHEMA-REVIEW.md` with an
-`observed:` placeholder the orchestrator fills after the apply.)
+**What part 3b left for later, and where each item stands (B10, 9/23 evening):** the wiring of `offerRows` /
+`periodRows` into `ctxInputs` → `buildContext` (`offers`, `periods`) — done in part 3c below (the painter and the Periods
+sub-part had deliberately not done it, because the moment offers reach the ctx an exhaustive surgeon's `not-offered`
+becomes live in the day editor, the generator and the trade path, and the trade path had to take the claim reading
+first); the in-app Setup import planning with `importPlan(seed, { now, offerPeriods: true })` and refusing Apply for a
+seed that carries periods — done (item IP, top of this section); the day editor's "offered primary / either / backup —
+rules — not offered" line per candidate — done (3c). The two RPCs are mirrored byte for byte into `sql/schema.sql`,
+pinned by `test/schema.test.js` and recorded in `docs/SCHEMA-REVIEW.md` with the observed probe of the 9/23 ~18:45 UTC
+apply. Still open: the publish e-mail line from `diagnostics.offers.outsideOffers`, and the period's `generated` /
+`published` status flips from the app (today the seed apply carries a status; proposed: Accept & Publish marks the
+periods its range covers `published`).
 
-**Part 3c — the wiring, the day editor and My schedule (U3c, 9/23):** `offerRows` / `periodRows` now enter `ctxInputs` as `offers` / `periods` (the one site; `[]` for an anon or token-less reader, so public mode is never offers-governed), which makes "Generate this period" offers-first and an exhaustive surgeon's `not-offered` live in the day editor; the board gate and `tradeEligibility` pass `{ claim: true }` (a claim or a trade acceptance is an offer made on the spot — the hard reason is skipped, the soft `outside-offers` still surfaces; `apply_trade()` does not yet write the offer row — open); the day editor shows, per role block, `Offers (<period label>): <name> - offered primary | backup | either / offered <x> only, not <role> - … / not offered - only these days: ineligible | preferred days: penalty / rules (chose go by my rules | nothing entered)` (`offerCandidateWords`, module scope, from `rules.offerState` on the draft ctx; an eligible dropdown option carries the short tag; `REASON_WORDS` glosses the hard `not-offered`, `softTag` the two soft reasons); My schedule marks each upcoming assignment inside a period the person submitted for `offered` / `offered P|B only` (the other role) / `not offered` and each My-offers pill `(placed)` when the day is already held. Review fixes (9/23): offers-first is only claimed when the two tables were actually read — `offersLoad` records ok / skipped / failed per table and `offersLoadVerdict` (module scope) makes `runGenerate` refuse before the first successful read of both (a token-less scheduler cannot preview a rules-only schedule under offers-first copy) and stamp `previewGen.offersStale` (red warning in the preview header, forced confirm on Accept & Publish) when a later refresh was skipped; the editor's Offers line lists an inactive surgeon only while he holds the draft's slot. Still ahead from the list above: the in-app Setup import switch, the publish e-mail line, the `generated` / `published` status flips, and the `apply_trade()` offer upsert.
+**Part 3c — the wiring, the day editor and My schedule (U3c, 9/23):** `offerRows` / `periodRows` now enter `ctxInputs` as `offers` / `periods` (the one site; `[]` for an anon or token-less reader, so public mode is never offers-governed), which makes "Generate this period" offers-first and an exhaustive surgeon's `not-offered` live in the day editor; the board gate and `tradeEligibility` pass `{ claim: true }` (a claim or a trade acceptance is an offer made on the spot — the hard reason is skipped, the soft `outside-offers` still surfaces; `apply_trade()` does not yet write the offer row — open); the day editor shows, per role block, `Offers (<period label>): <name> - offered primary | backup | either / offered <x> only, not <role> - … / not offered - only these days: ineligible | preferred days: penalty / rules (chose go by my rules | nothing entered)` (`offerCandidateWords`, module scope, from `rules.offerState` on the draft ctx; an eligible dropdown option carries the short tag; `REASON_WORDS` glosses the hard `not-offered`, `softTag` the two soft reasons); My schedule marks each upcoming assignment inside a period the person submitted for `offered` / `offered P|B only` (the other role) / `not offered` and each My-offers pill `(placed)` when the day is already held. Review fixes (9/23): offers-first is only claimed when the two tables were actually read — `offersLoad` records ok / skipped / failed per table and `offersLoadVerdict` (module scope) makes `runGenerate` refuse before the first successful read of both (a token-less scheduler cannot preview a rules-only schedule under offers-first copy) and stamp `previewGen.offersStale` (red warning in the preview header, forced confirm on Accept & Publish) when a later refresh was skipped; the editor's Offers line lists an inactive surgeon only while he holds the draft's slot. Still ahead from the list above (the in-app Setup import switch landed as item IP): the publish e-mail line, the `generated` / `published` status flips, and the `apply_trade()` offer upsert.
 
 **Eligibility is offers-first, at the hardness each surgeon chooses (built in Prompt 14 P2, 9/23):** `rules.buildContext`
 takes two more inputs, `offers` (`call_offers` rows) and `periods` (`call_periods` rows with `rules_only_ids` and
@@ -1213,33 +1215,27 @@ close summary goes out on 2026-10-02 — the cron must be live by 9/29 for Fierc
 mirroring every applied body), the engine (`rules.js`, `generator.js` — offers first on top of the water-filled share,
 `helpers.js`), the importer plan and CLI (`importer.js`, `scripts/import-seed.js`), the two edge-function sources, the
 painter, the Periods section, the day editor's offer column and My schedule's offers (`index-source.html`), the seed's
-`offerPeriods[]` / `offerSources` and every test named above. **Live:** the 9/22 schema (`call_offers`, `call_periods`,
-`offer_status()`, OF001–OF003, authenticated-only RLS), the `offer_modes` column and the claim-as-offer bodies of
-`claim_open_slot` / `call_offers_guard` (both 2026-09-23 07:05Z); both tables are still empty. **Not yet live, in the
-order they must land (the orchestrator's live steps after the merge — the F03 remainder):** (1) the two RPCs —
-`sql/migrations/2026-09-23-offer-mode-rpc.sql` (`set_offer_mode`, `save_offers`) and their probe — the painter's Save
-answers `404 PGRST202` until then; (2) the seed apply — `node scripts/import-seed.js --apply --workdir <linked dir>` —
-one `call_periods` row, 79 `call_offers` rows (Burchett 34, Acton 10, Philip 35), the 20 retired `available` rows and (PD 9/23 afternoon, the second apply: the first period's row updated to `published`, the Feb 2027 – Apr 2027 row inserted — freeze 12/21, publish by 1/4, no rules-only list, no modes — Burchett's 2027-07-22..08-02 `time_off` row, the offers unchanged at 79) and
-the blob's `surgeonRules` / `groupRules` / `settings`, **before 2026-10-02** (OF003 refuses seed-entered offers inside
-the period from the close on); (3) `send-notification` (the offers categories over the v4 role / party gate) and
-`daily-reminder` (mode `offers` beside open-shifts) redeployed from this head, then the `silvis-offers-daily` cron
-(README §3 deploy record + §4) — **by 9/29** for the 3-day reminder. **The in-app Setup import still plans WITHOUT the period** (`importPlan(seed, { now })`, no `offerPeriods`; only the
-CLI passes it): until (2) its dry run reads the pending apply as changes (`Total changes: 3 (+30 blocked)` - the blob's
-`surgeonRules` / `groupRules` / `settings`; the smoke harness pins the pre-apply 0 deliberately and fails until then),
-and AFTER (2) it would read the retired rows as changes again (`surgeonRules`, `settings`, Burchett's 20 `available`
-rows) - which is why the app **refuses Apply** for a seed that carries periods (above): applying would re-insert his
-November / December whitelist and rows and undo part 5; the CLI is the period-aware path until the in-app import passes
-`offerPeriods`, and the smoke's two Import dry-run pins still need the blob half restated from the plan (or the in-app
-import made period-aware) to read 0 again. A snapshot restore in the app writes `time_off` / `availability` back but
-not the offers or periods it captured - it says PARTIAL (§3 backup scope). Until (2) the
-in-app `eligibility()` consumers read Burchett and Philip by their recurring rules (no period row exists yet). The
-**offers-aware preview regeneration** the prompt's part 5 asks for has **not** been run: `scripts/import-seed.js
---offers-json <path>` writes the generate input, but `scripts/preview-generate.js` does not read it yet — a
-preview-script item; until then the Prompt 14 P2 regression on `test/fixtures/offers-2026-11.json` is the proof that
-Burchett's and Acton's November days come out as the ER-panel author published. Open decisions for Faraz: the offer modes of the
-first period (rules doc §8 item 20 — Burchett / Philip exhaustive, Acton / Fierce preferred, Khan / Sarkar
-rules-only, set 9/23 as defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 (his default,
-renameable, data).
+`offerPeriods[]` / `offerSources` and every test named above. **Live (all three of the 9/23 live steps landed the same
+day; B10 restates them):** (1) the two RPCs — `sql/migrations/2026-09-23-offer-mode-rpc.sql` (`set_offer_mode`,
+`save_offers`) and their probe, applied 9/23 ~18:45 UTC (before it the painter's Save answered `404 PGRST202`); (2) the
+seed apply — `node scripts/import-seed.js --apply --workdir <linked dir>` — the first period's `call_periods` row, 79
+`call_offers` rows (Burchett 34, Acton 10, Philip 35), the 20 retired `available` rows and the blob's `surgeonRules` /
+`groupRules` / `settings`, then (PD, 9/23 afternoon) the second apply: the first period's row updated to `published`, the
+Feb 2027 – Apr 2027 row inserted (freeze 12/21, publish by 1/4, no rules-only list, no modes), Burchett's 2027-07-22..08-02
+`time_off` row, the offers unchanged at 79 — all before 2026-10-02 (OF003 refuses seed-entered offers inside a period
+from its close on); (3) `send-notification` v5 (the offers categories over the v4 role / party gate) and
+`daily-reminder` v4 (mode `offers` beside open-shifts) deployed 9/23 ~18:50 UTC, then the `silvis-offers-daily` cron
+(jobid 3; README §3 deploy record + §4) — in time for the second period's 12/7 and 12/18 reminders (the first period is
+`published`, so its 9/29 reminder and 10/2 close mail never fire). The in-app Setup import plans period-aware since item
+IP (top of this section) and refuses Apply for a seed that carries periods; a snapshot restore in the app writes
+`time_off` / `availability` back but not the offers or periods it captured - it says PARTIAL (§3 backup scope). The
+**offers-aware preview regeneration** the prompt's part 5 asks for was **not** run for the first period (it was published
+9/23 from the rules-based preview; `scripts/import-seed.js --offers-json <path>` writes the generate input, but
+`scripts/preview-generate.js` does not read it) — the Prompt 14 P2 regression on `test/fixtures/offers-2026-11.json` is
+the proof that Burchett's and Acton's November days come out as the ER-panel author published, and the app's "Generate
+this period" is the offers-first path for the second period. Decisions recorded for the first period: the offer modes
+(rules doc §8 item 20 — Burchett / Philip exhaustive, Acton / Fierce preferred, Khan / Sarkar rules-only, set 9/23 as
+defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 (data, renameable).
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 
