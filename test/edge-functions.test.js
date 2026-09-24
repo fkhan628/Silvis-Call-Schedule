@@ -263,7 +263,7 @@ const identical = (blocks, tag) => blocks.slice(1).forEach(([n, b]) => assert.st
 
 /* ---- (2) log redaction ---- */
 // A provider error body of the shape Resend answers with (the address is made up; this file never leaves the repo).
-const RESEND_403 = '{"statusCode":403,"name":"validation_error","message":"You can only send testing emails to your own email address (holly.powell@example.org). To send emails to other recipients, verify a domain."}';
+const RESEND_403 = '{"statusCode":403,"name":"validation_error","message":"You can only send testing emails to your own email address (quill.marlow@example.org). To send emails to other recipients, verify a domain."}';
 let redact = null;
 check("B5 (2): all three mail functions carry an identical plain-JS '@logRedact' mirror block defining redactAddresses(text)", () => {
   const blocks = Object.entries(MAIL_FNS).map(([n, s]) => [n, blockOf(s, n, "logRedact")]);
@@ -278,7 +278,7 @@ check("B5 (2): redactAddresses - a Resend error body naming the address logs '<r
   const out = redact(RESEND_403);
   assert.ok(out.indexOf("<redacted>") >= 0, "the token is present: " + out);
   assert.ok(out.indexOf("@") < 0, "no '@' survives: " + out);
-  assert.ok(out.indexOf("holly.powell") < 0 && out.indexOf("example.org") < 0, "neither half of the address survives: " + out);
+  assert.ok(out.indexOf("quill.marlow") < 0 && out.indexOf("example.org") < 0, "neither half of the address survives: " + out);
   assert.strictEqual(redact("HTTP 429 rate limited"), "HTTP 429 rate limited", "no address -> unchanged");
   assert.strictEqual(redact("to a@b.c and d@e.f"), "to <redacted> and <redacted>", "every address, not only the first (the g flag)");
   assert.strictEqual(redact(null), ""); assert.strictEqual(redact(undefined), "");
@@ -288,22 +288,22 @@ check("B5 (2): redactAddresses - a Resend error body naming the address logs '<r
 // Review 2026-09-23 (B5 finding): the provider-error line truncates the body to 160 chars. Redaction must run on the
 // WHOLE body first - a cut that lands inside an address (before or right after the '@') leaves a bare local part that
 // /\S+@\S+/ cannot match. Fixture: the address starts at index 147, so the 160-char cut falls inside its local part.
-const STRADDLE_403 = '{"statusCode":403,"name":"validation_error","message":"You can only send testing emails to the address you verified with the provider, which is (holly.powell.long.local.part@example.org). Verify a domain to send further."}';
+const STRADDLE_403 = '{"statusCode":403,"name":"validation_error","message":"You can only send testing emails to the address you verified with the provider, which is (quill.marlow.long.local.part@example.org). Verify a domain to send further."}';
 check("B5 (2): redaction survives the 160-char log truncation - redact(body).slice(0, 160) keeps no local-part fragment, no '@' and no domain when the address straddles the cut; a cut at every length never leaks; the old slice-then-redact order provably leaked the local part", () => {
   if (!redact) throw new Error("redaction block did not load");
-  const local = "holly.powell.long.local.part@";
+  const local = "quill.marlow.long.local.part@";
   const at = STRADDLE_403.indexOf(local);
   assert.ok(at > 120 && at < 160 && at + local.length > 160, "the fixture's address straddles index 160 (starts at " + at + ")");
   const logged = redact(STRADDLE_403).slice(0, 160);
-  assert.ok(logged.indexOf("holly") < 0 && logged.indexOf("powell") < 0 && logged.indexOf("local.part") < 0, "no local-part fragment survives: " + logged);
+  assert.ok(logged.indexOf("quill") < 0 && logged.indexOf("marlow") < 0 && logged.indexOf("local.part") < 0, "no local-part fragment survives: " + logged);
   assert.ok(logged.indexOf("@") < 0 && logged.indexOf("example.org") < 0, "no '@' / domain survives: " + logged);
   for (let n = 1; n <= STRADDLE_403.length; n++) {
     const l = redact(STRADDLE_403).slice(0, n);
-    assert.ok(l.indexOf("holly") < 0 && l.indexOf("@") < 0 && l.indexOf("example.org") < 0, "a cut at " + n + " leaks: " + l);
+    assert.ok(l.indexOf("quill") < 0 && l.indexOf("@") < 0 && l.indexOf("example.org") < 0, "a cut at " + n + " leaks: " + l);
   }
   // why this test exists: slicing FIRST left the local part in the log line
   const leaked = redact(STRADDLE_403.slice(0, 160));
-  assert.ok(leaked.indexOf("holly.powell") >= 0 && leaked.indexOf("<redacted>") < 0, "the old slice-then-redact order leaked the local part: " + leaked);
+  assert.ok(leaked.indexOf("quill.marlow") >= 0 && leaked.indexOf("<redacted>") < 0, "the old slice-then-redact order leaked the local part: " + leaked);
 });
 check("B5 (2) source pins: no mail function keeps the backslash-less literal 'S+@S+'; sendEmail's provider-error line is redactAddresses(body).slice(0, 160) (redact the whole body, THEN truncate; no slice-then-redact call remains) and its catch line goes through redactAddresses(", () => {
   Object.entries(MAIL_FNS).forEach(([n, s]) => {
@@ -386,7 +386,7 @@ check("B5 (3): the sendGate block also defines isTradeType(type), tradeIdOf(data
   ["isTradeType", "tradeIdOf", "targetCap", "tradePartyCheck"].forEach((k) => assert.strictEqual(typeof api[k], "function", k + " is a function"));
   isTradeType = api.isTradeType; tradeIdOf = api.tradeIdOf; targetCap = api.targetCap; tradePartyCheck = api.tradePartyCheck;
 });
-const UUID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+const UUID = "00000000-0000-4000-8000-0000000000b5"; // a fixture id (the privacy scan reads any other uuid as a session id)
 check("B5 (3): isTradeType - the four trade_* categories only", () => {
   if (!isTradeType) throw new Error("gate block did not load");
   ["trade_proposed", "trade_accepted", "trade_declined", "trade_applied"].forEach((t) => assert.strictEqual(isTradeType(t), true, t));

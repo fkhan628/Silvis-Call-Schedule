@@ -194,7 +194,7 @@ the client.
 | _pending_ | `office-notifications` | (read `supabase functions list`) -> **+1 pending** | the same constant-time compare in `authorize()`; log redaction | `{"mode":"digest","dryRun":true}` with the secret -> 200 as before; a wrong secret -> 401; no secret -> 401 |
 
 ```powershell
-$wd = "<cli-workdir>"
+$wd = "<linked dir>"   # the workdir linked with: supabase link --project-ref bzhsroegtagqhutbnsrp
 supabase functions list --project-ref bzhsroegtagqhutbnsrp
 foreach ($slug in "send-notification","daily-reminder","office-notifications") {
   supabase functions download $slug --workdir $wd --project-ref bzhsroegtagqhutbnsrp     # backup of the live copy first
