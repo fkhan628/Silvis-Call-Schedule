@@ -564,7 +564,7 @@ echo "== 11. coordinator role (Prompt 16 A7): office users - vacations / availab
 # this section reports no sentinel - which IS the before picture.
 # 11a. client gates (read from the source)
 if grep -q 'const isCoordinator = userProfile?.role === "coordinator";' index-source.html && grep -q 'if (view === "settings" && isCoordinator) loadAudit();' index-source.html; then ok "client: isCoordinator is derived from user_profiles.role and the coordinator's Activity log read is its own gated effect (audit_read_coord answers own family rows only)"; else bad "client: the coordinator role flag or its Activity log effect is missing from index-source.html"; fi
-if grep -q '{!isPublicMode && isUnlinked && !isCoordinator && (' index-source.html; then ok "client: the unlinked-account banner is not shown to a coordinator (an office account has no roster link by design)"; else bad "client: the unlinked banner is not gated off for a coordinator"; fi
+if grep -qE '\{!isPublicMode && isUnlinked && !isCoordinator( && !isViewer)? && \(' index-source.html; then ok "client: the unlinked-account banner is not shown to a coordinator (an office account has no roster link by design)"; else bad "client: the unlinked banner is not gated off for a coordinator"; fi
 if grep -q 'created_by: userProfile?.person_id || authUser?.id || null,' index-source.html; then ok "client: time_off.created_by carries the caller's roster id or profile id (a coordinator's profile id)"; else bad "client: time_off.created_by no longer falls back to the profile id"; fi
 # 11b. the rolled-back probe
 if linked; then

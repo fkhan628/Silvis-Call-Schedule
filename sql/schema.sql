@@ -50,7 +50,7 @@
 -- trade_insert_guard() writes the from/to display names from the roster. Residual (outside B6's three functions):
 -- trade_update_guard does not pin from_surgeon_name / to_surgeon_name, so a party's status PATCH may still rewrite the
 -- stored strings - the client renders roster names by id (tradeNamed); the one-liner is queued in docs/SCHEMA-REVIEW.md.
--- Revision 2026-09-24 m (Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql, report-first, NOT yet applied): apply_trade()'s
+-- Revision 2026-09-24 m (Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql, applied 2026-09-24 ~17:21 Central after the probes): apply_trade()'s
 -- audit row carries actor_name (the caller's user_profiles.display_name, else the roster name, else the id) and detail.summary in the client's
 -- trade.accept wording (roster names by id); claim_open_slot()'s audit detail gains the same summary key (its feed title). Nothing else in either body changes.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied

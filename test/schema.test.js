@@ -1439,7 +1439,7 @@ ok(/revoke all on function public\.apply_trade\(uuid\) from public, anon;\ngrant
 });
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-trade-audit-names\.sql/.test(auditMig), "the trade-audit migration header must carry the CLI apply line for the orchestrator");
 ok(/REPORT-FIRST/.test(auditMig) && /Blast radius/.test(auditMig), "the trade-audit migration header must say it is report-first and state the blast radius");
-ok(/-- Revision 2026-09-24 m \(Prompt 16 follow-up 5b, sql\/migrations\/2026-09-24-trade-audit-names\.sql, report-first, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-24 m (trade / claim audit rows; report-first, NOT yet applied - the record step changes it to 'applied <timestamp>' with this pin)");
+ok(/-- Revision 2026-09-24 m \(Prompt 16 follow-up 5b, sql\/migrations\/2026-09-24-trade-audit-names\.sql, applied 2026-09-24[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 m (trade / claim audit rows; report-first, NOT yet applied - the record step changes it to 'applied <timestamp>' with this pin)");
 // B6's bodies (live since 2026-09-23 ~19:27 Central) are superseded by this file - frozen here (audit RLS-2 rule: an applied file is never edited).
 eq(sha5b(functionText(locksMig, "apply_trade")), "cc13b436a10a0e523859a20ad15faecae873ef1c5586142b4f8d0217c04bb47c", "2026-09-24-definer-locks.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-23 (the audit change belongs to 2026-09-24-trade-audit-names.sql);");
 eq(sha5b(functionText(locksMig, "claim_open_slot")), "909db3550c3bb5d37bf633475b1b3fe7ed1f8b95d1746a07f24e6811426c5549", "2026-09-24-definer-locks.sql claim_open_slot() must stay byte-for-byte what was applied live on 2026-09-23 (the audit change belongs to 2026-09-24-trade-audit-names.sql);");
@@ -1513,10 +1513,10 @@ ok(new RegExp("expect_eq\\s+F2\\s+\"" + EXPECT_F2.replace(/[.*+?^${}()|[\]\\]/g,
 ok(new RegExp("expect_eq\\s+B3\\s+\"" + EXPECT_B3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\"").test(s7), "verify-rls.sh section 7 must grade B3 against `" + EXPECT_B3 + "`");
 ok(/action = 'trade\.apply' and detail ->> 'trade_id' like '00000000-0000-4000-8000-0000000000%'/.test(s5), "verify-rls.sh section 5 leftover count must include the trade.apply audit rows of the fixture trades");
 
-step("5b: docs/SCHEMA-REVIEW.md carries the PREPARED item 5b section (before / after, blast radius, probe cases, observed placeholder); guide 4.3 carries its row");
+step("5b: docs/SCHEMA-REVIEW.md carries the APPLIED item 5b section (before / after, blast radius, probe cases, the observed line); guide 4.3 carries its row");
 ok(/## 2026-09-24 - trade \/ claim audit rows carry actor_name \+ summary \(item 5b\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - trade / claim audit rows carry actor_name + summary (item 5b)' section");
 const review5b = review.slice(review.indexOf("## 2026-09-24 - trade / claim audit rows"));
-ok(/\*\*Status: PREPARED - report-first \(not applied\)\.\*\*/.test(review5b), "the item 5b section must read 'Status: PREPARED - report-first (not applied).' until the orchestrator applies it");
+ok(/^\*\*Status: APPLIED 2026-09-24[^*]*\*\*$/.test(((review5b.match(/\*\*Status: [^*]*\*\*/) || [""])[0])), "the item 5b section's status line (its first **Status:**) must read 'Status: APPLIED 2026-09-24 ...' (applied 22:21 UTC after Faraz's go)");
 ok(/2026-09-24-trade-audit-names\.sql[\s\S]*observed: /.test(review5b), "the item 5b section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
 ok(review5b.includes(TRADE_AUDIT_INSERT.replace(/\n  /g, "\n    ")) && review5b.includes(CLAIM_AUDIT_INSERT.replace(/\n  /g, "\n    ")), "the item 5b section must quote both AFTER audit inserts verbatim");
 ok(/insert into public\.audit_log \(actor_id, action, detail\)/.test(review5b) && /jsonb_build_object\('day', p_day, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer\)\)/.test(review5b), "the item 5b section must quote both BEFORE audit inserts");
