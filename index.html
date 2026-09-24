@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-3smoAABW+96iAWg+kLjnCe25rTukcYK8VfIhH3ZIvGk=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-v8QOWddOOgG4xxTXySLLHEsqSYB/qn1d/6RCoSzk364=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-t8QMTKwMWjGqNQLLz6rWykrnddkC25zyv09Ke8dk8gs=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-QoUkQpvWEQ9M++2JhHcCGqob6oco1n8FNk0mge3S5ck=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.24b";
+    var APP_VERSION = "2026.09.24c";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -5666,6 +5666,7 @@ function CallSchedule() {
     return out;
   }, [ctxInputs]);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
+  const eastBadgesVisible = isScheduler && !isPublicMode;
   const glance = useMemo(() => suCoverageGlance(schedule, todayStr, 60, ctxInputs.eastForecast, forecastThreshold), [schedule, todayStr, ctxInputs, forecastThreshold]);
   const eastCoverageEnd = useMemo(() => {
     if (typeof coverageOf !== "function") return null;
@@ -6399,44 +6400,65 @@ function CallSchedule() {
     return w === 0 || w === 5 || w === 6;
   };
   const renderVacationList = (personIds, allowEdit) => {
-    const rows = [];
-    personIds.forEach(pid => (vacations[pid] || []).forEach(([vs, ve, id, note]) => {
-      if (showPastVacations || ve >= todayStr) rows.push({
-        pid,
-        vs,
-        ve,
-        id,
-        note
-      });
-    }));
-    rows.sort((a, b) => a.vs < b.vs ? -1 : a.vs > b.vs ? 1 : 0);
-    if (rows.length === 0) return React.createElement("p", {
+    const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations);
+    if (groups.length === 0) return React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         fontStyle: "italic"
       })
     }, "No ", showPastVacations ? "" : "upcoming ", "vacations.");
+    const withHeader = personIds.length > 1;
+    const lineStyle = {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "4px 10px",
+      background: dk ? "#13294B" : "#f8f9fb",
+      borderRadius: 6,
+      border: `1px solid ${dkCardBorder}`,
+      flexWrap: "wrap"
+    };
     return React.createElement("div", {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: withHeader ? 10 : 4
+      }
+    }, groups.map(g => React.createElement("div", {
+      key: g.pid,
       style: {
         display: "flex",
         flexDirection: "column",
         gap: 4
       }
-    }, rows.map(r => React.createElement("div", {
-      key: r.id || r.pid + r.vs,
+    }, withHeader && React.createElement("div", {
+      "data-testid": "vac-group-" + g.pid,
+      "data-upcoming": g.upcoming,
+      "data-past": g.past,
       style: {
         display: "flex",
         alignItems: "center",
         gap: 8,
-        padding: "6px 10px",
-        background: dk ? "#13294B" : "#f8f9fb",
-        borderRadius: 6,
-        border: `1px solid ${dkCardBorder}`,
-        flexWrap: "wrap"
+        flexWrap: "wrap",
+        padding: "2px 0"
       }
     }, React.createElement(Badge, {
-      id: r.pid,
+      id: g.pid,
       small: true
-    }), editVac && editVac.rowId === r.id ? React.createElement(React.Fragment, null, React.createElement("input", {
+    }), React.createElement("span", {
+      style: muted
+    }, g.upcoming, " upcoming"), showPastVacations && g.past > 0 && React.createElement("span", {
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        color: "#a0a8b0"
+      })
+    }, "+", g.past, " past")), g.rows.map(r => React.createElement("div", {
+      key: r.id || r.pid + r.vs,
+      "data-testid": "vac-line-" + r.pid + "-" + r.vs,
+      "data-start": r.vs,
+      "data-end": r.ve,
+      style: _objectSpread(_objectSpread({}, lineStyle), {}, {
+        marginLeft: withHeader ? 8 : 0
+      })
+    }, editVac && editVac.rowId === r.id ? React.createElement(React.Fragment, null, React.createElement("input", {
       type: "date",
       value: editVac.start,
       onChange: e => setEditVac(v => _objectSpread(_objectSpread({}, v), {}, {
@@ -6471,12 +6493,13 @@ function CallSchedule() {
         fontFamily: mono,
         fontSize: 12,
         color: dkText
-      }
-    }, r.vs, r.ve !== r.vs ? ` to ${r.ve}` : ""), r.note && React.createElement("span", {
+      },
+      title: r.vs + (r.ve !== r.vs ? " to " + r.ve : "")
+    }, vacRangeLabel(r.vs, r.ve, todayStr)), r.note && React.createElement("span", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         fontStyle: "italic"
       })
-    }, r.note), r.ve < todayStr && React.createElement("span", {
+    }, r.note), r.past && React.createElement("span", {
       style: {
         fontSize: 10,
         color: "#a0a8b0"
@@ -6510,7 +6533,7 @@ function CallSchedule() {
         cursor: "pointer",
         fontFamily: font
       }
-    }, "Remove"))))));
+    }, "Remove"))))))));
   };
   const renderVacationForm = personChoices => React.createElement("div", {
     style: {
@@ -7842,6 +7865,7 @@ function CallSchedule() {
     }
   }, React.createElement("input", {
     type: "checkbox",
+    "data-testid": "vac-show-past",
     checked: showPastVacations,
     onChange: e => setShowPastVacations(e.target.checked)
   }), " Show past vacations"), renderVacationList(surgeons.map(s => s.id), true)), React.createElement(Collapsible, {
@@ -8558,8 +8582,8 @@ function CallSchedule() {
       const inMonth = d >= monthStartStr && d <= monthEndStr;
       const isWk = dow === 5 || dow === 6 || dow === 0;
       const hol = rulesCtx ? isHolidayDay(rulesCtx, d) : null;
-      const derived = rulesCtx ? rulesCtx.derivedByDay[d] : null;
-      const fc = forecastByDay[d];
+      const derived = eastBadgesVisible && rulesCtx ? rulesCtx.derivedByDay[d] : null;
+      const fc = eastBadgesVisible ? forecastByDay[d] : null;
       const pH = dayHolder(a, "primary");
       const bH = a ? a.backup : null;
       const openP = slotIsOpen(d, pH, todayStr),
@@ -8748,7 +8772,7 @@ function CallSchedule() {
         alignItems: "center",
         gap: 3
       }
-    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", {
+    }, React.createElement(Padlock, null), " locked slot"), eastBadgesVisible && React.createElement("span", {
       style: {
         display: "inline-flex",
         alignItems: "center",
@@ -8756,7 +8780,7 @@ function CallSchedule() {
       }
     }, React.createElement("span", {
       style: badge(true, T.badge)
-    }, "E"), " East-derived week"), React.createElement("span", {
+    }, "E"), " East-derived week"), eastBadgesVisible && React.createElement("span", {
       style: {
         display: "inline-flex",
         alignItems: "center",
@@ -9930,7 +9954,8 @@ function CallSchedule() {
         style: muted
       }, "and ", mine.length - 40, " more")));
     })()), React.createElement("div", {
-      style: css.card
+      style: css.card,
+      "data-testid": "mine-vacations"
     }, React.createElement("div", {
       style: {
         display: "flex",
@@ -9999,6 +10024,7 @@ function CallSchedule() {
     }
   }, React.createElement("input", {
     type: "checkbox",
+    "data-testid": "vac-show-past",
     checked: showPastVacations,
     onChange: e => setShowPastVacations(e.target.checked)
   }), " Show past"), renderVacationList(canEnterForAnyone ? surgeons.map(s => s.id) : [mySurgeon], true))), isCoordinator && React.createElement("div", {
