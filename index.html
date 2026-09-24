@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-xgxczmTBNl2vdefeR5qd93keVu0sfpbz5QiJZOfiyaY=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-v3gvt6ITn14QakUB7zerKekl8twboRJLvnTZsQz/Gk8=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-l0Cpo6bvnFrrhougTzvBOlVNMMc2fin6PQBCIuFxVkQ=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-Cqn4j9xfhm6N9CsW6ksczMmEYNxG83ZA+emMjly7HGs=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.24h";
+    var APP_VERSION = "2026.09.24i";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -11002,6 +11002,7 @@ function CallSchedule() {
       }
       return React.createElement("div", {
         key: key,
+        "data-cv-row": key,
         style: {
           display: "flex",
           gap: 8,
@@ -11010,6 +11011,7 @@ function CallSchedule() {
           borderBottom: "1px solid " + (dk ? "#243240" : "#eef1f4")
         }
       }, React.createElement("span", {
+        "data-cv-name": "",
         style: {
           flexShrink: 0,
           fontSize: 12,
@@ -11018,12 +11020,14 @@ function CallSchedule() {
           minWidth: 60
         }
       }, name), React.createElement("span", {
+        "data-cv-id": "",
         style: {
           flexShrink: 0,
           fontSize: 10,
           color: "#9aa4ae",
           fontFamily: mono,
-          minWidth: 22
+          minWidth: id ? 22 : 0,
+          display: id ? undefined : "none"
         }
       }, id), React.createElement("div", {
         style: {
@@ -11034,7 +11038,10 @@ function CallSchedule() {
         }
       }, status));
     };
-    return React.createElement(React.Fragment, null, surgeons.map(p => line(p.id, p.name, p.id, byPerson(p.id), (cvProfiles || []).some(pr => pr.person_id === p.id))), extras.map(r => line(r.id, "(unlinked account)", r.id.slice(0, 8), r, true)));
+    return React.createElement(React.Fragment, null, surgeons.map(p => line(p.id, p.name, p.id, byPerson(p.id), (cvProfiles || []).some(pr => pr.person_id === p.id))), extras.map(r => {
+      const lb = cvAccountLabel(r, cvProfiles);
+      return line(r.id, lb.name, lb.id, r, true);
+    }));
   })())), isScheduler && React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
@@ -13784,6 +13791,28 @@ function Padlock({
     stroke: "#5B6B82",
     strokeWidth: "1.3"
   }));
+}
+function cvAccountLabel(row, profiles) {
+  var id = row && row.id != null ? String(row.id) : "";
+  var pr = null;
+  if (Array.isArray(profiles)) {
+    for (var i = 0; i < profiles.length; i++) {
+      if (profiles[i] && profiles[i].id === id) {
+        pr = profiles[i];
+        break;
+      }
+    }
+  }
+  var name = pr && pr.display_name != null ? String(pr.display_name).trim() : "";
+  if (!name) return {
+    name: "(unlinked account)",
+    id: id.slice(0, 8)
+  };
+  var role = pr.role != null ? String(pr.role).trim() : "";
+  return {
+    name: role ? name + " \u2014 " + role : name,
+    id: ""
+  };
 }
 function offerCandidateWords(st, role) {
   if (!st || typeof st !== "object") return null;
