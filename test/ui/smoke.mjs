@@ -3349,7 +3349,7 @@ try {
       const s1 = g.groups.find(x => x.id === "s1");
       const problems = [];
       if (!s1) problems.push("no vac-group-s1 header");
-      else { if (!/^Khan Faraz Khan \d+ upcoming$/.test(s1.text)) problems.push(`Khan's header reads '${s1.text}'`); if (s1.lines !== s1.upcoming) problems.push(`Khan's header says ${s1.upcoming} upcoming but ${s1.lines} line(s) are listed`); if (/past/.test(s1.text)) problems.push("a past count with Show past off"); }
+      else { if (!/^Khan \d+ upcoming$/.test(s1.text)) problems.push(`Khan's header reads '${s1.text}'`); if (s1.lines !== s1.upcoming) problems.push(`Khan's header says ${s1.upcoming} upcoming but ${s1.lines} line(s) are listed`); if (/past/.test(s1.text)) problems.push("a past count with Show past off"); }
       if (ids.join() !== rosterOrder.join()) problems.push("groups out of roster order: " + ids.join(","));
       if (g.groups.some(x => x.lines === 0)) problems.push("a header with no lines: " + g.groups.filter(x => x.lines === 0).map(x => x.id).join(","));
       if (g.groups.some(x => x.foreign)) problems.push("a line under another surgeon's header");

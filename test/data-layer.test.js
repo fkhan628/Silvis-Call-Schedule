@@ -1000,7 +1000,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(body.includes("{allowEdit && r.id && (isScheduler || ((isCoordinator || r.pid === mySurgeon) && r.vs > todayStr)) && ("), "the Edit / Remove permission expression is unchanged");
     assert.ok(body.includes("onClick={()=>setEditVac({ sid: r.pid, rowId: r.id, start: r.vs, end: r.ve })}") && body.includes("onClick={()=>rmVac(r.pid, r.id)}"), "Edit / Remove wired exactly as before");
     assert.strictEqual((body.match(/<Badge id=\{/g) || []).length, 1, "ONE Badge - on the header, not on every line");
-    assert.ok(body.includes("sMap[g.pid].fullName !== sMap[g.pid].name ? <span"), "the full name beside the Badge only when the roster has one that differs from the chip");
+    assert.ok(!body.includes("sMap[g.pid].fullName"), "no full-name span beside the Badge (the Badge chip already carries the roster last name; follow-up 9/24)");
     assert.strictEqual(count('data-testid="vac-show-past"'), 2, "the Show past checkbox is addressable in both cards (Setup, Time off)");
     assert.strictEqual(count('data-testid="mine-vacations"'), 1, "the My schedule card is addressable");
     assert.strictEqual(src.split("renderVacationList(").length - 1, 3, "the three call sites (Setup, My schedule, Time off) share the one renderer");

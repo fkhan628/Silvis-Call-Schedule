@@ -4839,7 +4839,6 @@ function CallSchedule() {
             {withHeader && (
               <div data-testid={"vac-group-" + g.pid} data-upcoming={g.upcoming} data-past={g.past} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"2px 0"}}>
                 <Badge id={g.pid} small/>
-                {sMap[g.pid] && sMap[g.pid].fullName && sMap[g.pid].fullName !== sMap[g.pid].name ? <span style={{fontSize:12,fontWeight:700,color:dkText}}>{sMap[g.pid].fullName}</span> : null}
                 <span style={muted}>{g.upcoming} upcoming</span>
                 {showPastVacations && g.past > 0 && <span style={{...muted,color:"#a0a8b0"}}>+{g.past} past</span>}
               </div>
