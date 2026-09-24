@@ -221,6 +221,15 @@ Proof: `sql/probes/prelaunch-rls-probe.sql` (rolled back; header states every ca
 
 Unchanged for coordinators, proven by the probe: `schedule_days`, `call_schedule_data`, `call_periods`, `shift_trade_requests`, `call_schedule_snapshots`, `office_contacts`, `east_vacation_reviews`, `user_profiles` beyond the own row (and the own role / person_id / email stay pinned). Proof: `sql/probes/coordinator-probe.sql` (rolled back; fixtures in 2030-08 keyed `probe-coord`; BEFORE the migration its setup raises `PROBE_SETUP` — the role check refuses `coordinator`), `scripts/verify-rls.sh` section 11, the record in `docs/SCHEMA-REVIEW.md`.
 
+- **Trade / claim audit rows (Prompt 16 follow-up 5b, `sql/migrations/2026-09-24-trade-audit-names.sql`, prepared 2026-09-24 — report-first, NOT applied; two SECURITY DEFINER functions, no table / policy / trigger / row).** `apply_trade` wrote its `audit_log` row without `actor_name` or `detail.summary`, so the Activity log showed `?` and `trade.apply`; `claim_open_slot` named its actor but had no summary. One row per function:
+
+| change | before | after | client read that depends on it |
+|---|---|---|---|
+| `apply_trade` audit row | `(actor_id, action, detail)` — `actor_name` null, no summary | `actor_name` = the caller's `user_profiles.display_name`, else the roster name for his roster id, else the id; `detail.summary` = "Trade applied: <to> takes <Primary\|Backup> <Dy Mon D> (from <from>, one-way)" / "... (from <from>; <from> takes <Role> <Dy Mon D> in return)" — roster names by id, never the stored name columns; every other detail key kept | Settings → Activity log (`(en.detail && en.detail.summary) \|\| en.action`, actor chip from `actor_name`) |
+| `claim_open_slot` audit row | `actor_name` = roster name, no summary | `detail.summary` = the feed title "<Name> took <M/D> <role>"; `actor_name` unchanged | the same log line |
+
+Proof: trade probe `E3` / `F2` and claim probe `B3` (rolled back; expected strings in their headers), `scripts/verify-rls.sh` sections 5 and 7, the record in `docs/SCHEMA-REVIEW.md` "2026-09-24 - trade / claim audit rows carry actor_name + summary (item 5b)" (status PREPARED until the orchestrator's *observed:* line; applied: _to be filled by the orchestrator_).
+
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
 `payloadLooksWiped` (retarget to: no `schedule_days` rows would be written AND no vacations AND no availability),

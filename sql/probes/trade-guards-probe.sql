@@ -74,6 +74,16 @@
 --   N  surgeon (s2) inserts a trade naming s3, with from_surgeon_name 'Mallory' and to_surgeon_name 'Eve'
 --        BEFORE: the client's strings are stored        -> N=from_name=Mallory to_name=Eve
 --        AFTER : the roster's names by id               -> N=from_name=Burchett to_name=Acton
+-- 2026-09-24 (Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql) - the audit row apply_trade writes.
+--   E3 observation right after E2: the trade.apply audit row E produced (read as postgres by detail ->> 'trade_id'), its
+--      actor_name and detail ->> 'summary'. E is a TWO-WAY trade applied by the surgeon (s2, Burchett - the probe gives him no
+--      display_name, so the roster fallback is what shows). The report flattens ';' to a space, hence the two spaces below.
+--        BEFORE: no actor, no summary                    -> E3=actor=null summary=null
+--        AFTER : roster name + the two-way sentence     -> E3=actor=Burchett summary=Trade applied: Burchett takes Primary Mon Mar 11 (from Acton  Acton takes Backup Wed Mar 13 in return)
+--   F2 observation right after F: the audit row F produced. F is a ONE-WAY trade applied by the SCHEDULER, whose profile row the
+--      fixture gives display_name 'Probe Scheduler' - the display_name branch of the actor lookup.
+--        BEFORE: no actor, no summary                    -> F2=actor=null summary=null
+--        AFTER : display_name + the one-way sentence    -> F2=actor=Probe Scheduler summary=Trade applied: Burchett takes Primary Fri Mar 15 (from Acton, one-way)
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -98,6 +108,9 @@ begin
   end loop;
   update public.user_profiles set person_id = 's2', role = 'surgeon'   where id = surgeon;
   update public.user_profiles set person_id = 's1', role = 'scheduler' where id = sched;
+  -- (5b) the scheduler gets a display_name so F2 exercises the display_name branch of apply_trade's actor lookup; the surgeon
+  -- keeps none (handle_new_auth_user sets no display_name), so E3 shows the roster fallback
+  update public.user_profiles set display_name = 'Probe Scheduler' where id = sched;
   if (select count(*) from public.user_profiles where id in (surgeon, sched)) <> 2 then
     raise exception 'PROBE_SETUP: handle_new_auth_user did not create the profile rows';
   end if;
@@ -256,6 +269,22 @@ begin
   insert into probe_results values ('E2', v);
 end $$;
 
+-- ---------- E3: the audit row E wrote (2026-09-24, follow-up 5b) - actor_name + detail.summary of the two-way trade applied by s2
+do $$
+declare an text; sm text; v text;
+begin
+  begin
+    select a.actor_name, a.detail ->> 'summary' into an, sm
+      from public.audit_log a
+     where a.action = 'trade.apply' and a.detail ->> 'trade_id' = '00000000-0000-4000-8000-00000000000e'
+     order by a.created_at desc limit 1;
+    v := 'actor=' || coalesce(an, 'null') || ' summary=' || coalesce(sm, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('E3', v);
+end $$;
+
 -- ---------- F: locked slot, SCHEDULER applies (lock must clear)
 do $$
 declare
@@ -275,6 +304,22 @@ begin
     v := 'ERR ' || sqlerrm;
   end;
   insert into probe_results values ('F', v);
+end $$;
+
+-- ---------- F2: the audit row F wrote (2026-09-24, follow-up 5b) - the one-way sentence, actor = the scheduler's display_name
+do $$
+declare an text; sm text; v text;
+begin
+  begin
+    select a.actor_name, a.detail ->> 'summary' into an, sm
+      from public.audit_log a
+     where a.action = 'trade.apply' and a.detail ->> 'trade_id' = '00000000-0000-4000-8000-00000000000f'
+     order by a.created_at desc limit 1;
+    v := 'actor=' || coalesce(an, 'null') || ' summary=' || coalesce(sm, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('F2', v);
 end $$;
 
 -- ---------- G: surgeon inserts from = to

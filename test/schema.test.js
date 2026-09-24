@@ -44,6 +44,13 @@
 //     insert, after the id normalisation (probe case N),
 //   - the superseded bodies (9/22 trade_insert_guard, 9/23 trade-past apply_trade, 9/23 claim-offer
 //     claim_open_slot) are frozen by sha256; schema.sql mirrors the three from the 9/24 file.
+// Prompt 16 follow-up 5b (2026-09-24, Faraz - sql/migrations/2026-09-24-trade-audit-names.sql, REPORT-FIRST, not applied):
+//   - apply_trade()'s audit row carries actor_name (the caller's user_profiles.display_name, else the roster name for his
+//     roster id, else the id) and detail.summary in the client's trade.accept wording with ROSTER names by id
+//     ("Trade applied: <to> takes <Role> <Dy Mon D> (from <from>, one-way)" / "... (from <from>; <from> takes ... in return)"),
+//   - claim_open_slot()'s audit detail gains the same summary key (its feed title "<Name> took <M/D> <role>"),
+//   - nothing else in either body moves (the body with the audit change undone equals B6's byte for byte); the file declares
+//     `-- supersedes:` B6; B6's two bodies are frozen by sha256; the probes gain trade E3 / F2 and claim B3.
 //   node test/schema.test.js
 
 "use strict";
@@ -56,7 +63,8 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..");
 const SCHEMA = path.join(ROOT, "sql", "schema.sql");
 const MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-22-trade-guards.sql");
-const LOCKS_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-definer-locks.sql");   // Prompt 16 B6: the newest for the three
+const LOCKS_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-definer-locks.sql");   // Prompt 16 B6: the newest for trade_insert_guard (5b superseded its other two)
+const AUDIT_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-trade-audit-names.sql");   // Prompt 16 follow-up 5b: the newest for apply_trade + claim_open_slot (report-first, not applied)
 const PROBE = path.join(ROOT, "sql", "probes", "trade-guards-probe.sql");
 const VERIFY = path.join(ROOT, "scripts", "verify-rls.sh");
 
@@ -382,8 +390,8 @@ function checkClaim(n, s, locks) {
   eq((fn.match(/version = version \+ 1, source = 'claim', updated_by = me, updated_at = now\(\)/g) || []).length, 2,
     n + ": both role updates must set version + 1, source 'claim', updated_by = caller, updated_at = now();");
   ok(!/_locked = /.test(fn), n + ": a claim must never touch a lock flag");
-  ok(/values \(me, my_name, 'schedule\.claim', jsonb_build_object\('day', p_day, 'role', p_role, 'person', me, 'version', new_ver(, 'offer', wrote_offer)?\)\);/.test(fn),
-    n + ": audit row 'schedule.claim' {day, role, person, version[, offer]} missing");
+  ok(/values \(me, my_name, 'schedule\.claim', jsonb_build_object\(('summary', summary, )?'day', p_day, 'role', p_role, 'person', me, 'version', new_ver(, 'offer', wrote_offer)?\)\);/.test(fn),
+    n + ": audit row 'schedule.claim' {[summary, ]day, role, person, version[, offer]} missing");
   ok(/values \('shift_claimed',\s+my_name \|\| ' took ' \|\| to_char\(p_day, 'FMMM\/FMDD'\) \|\| ' ' \|\| p_role,/.test(fn),
     n + ": notifications row type 'shift_claimed' with title `<Name> took <M/D> <role>` missing");
   ok(/jsonb_build_object\('day', p_day, 'role', p_role, 'surgeon_id', me, 'person_id', me\)\);/.test(fn),
@@ -405,7 +413,7 @@ checkClaim("schema.sql", schema, true);
   ok(/source\s+text,\s+-- import \| generated \| manual \| east-derived \| trade \| claim\b/.test(schema), "schedule_days.source column comment must list the sixth value 'claim' (the function writes it)");
 })();
 
-step("claim migration (9/22) and claim-offer migration (9/23) frozen as applied; schema.sql's claim_open_slot = the definer-locks migration (9/24, the newest)");
+step("claim migration (9/22) and claim-offer migration (9/23) frozen as applied; schema.sql's claim_open_slot = the trade-audit-names migration (9/24 follow-up 5b, the newest)");
 const claimMigration = read(CLAIM_MIGRATION);
 ok(!/\r/.test(claimMigration), "claim migration has CRLF line endings");
 checkClaim("claim migration", claimMigration, false);
@@ -422,10 +430,12 @@ const CLAIM_OFFER_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-c
   const claimOffer = read(CLAIM_OFFER_MIGRATION);
   ok(!/\r/.test(claimOffer), "claim-offer migration has CRLF line endings");
   // Prompt 16 B6: the 9/23 claim-offer body (live since 9/23 07:05Z) is superseded by the 2026-09-24 definer-locks
-  // migration - frozen by sha256 here; schema.sql mirrors the 9/24 body (which keeps every claim-as-offer line below).
+  // migration - frozen by sha256 here. Follow-up 5b (2026-09-24, report-first): the definer-locks body is superseded in turn by
+  // sql/migrations/2026-09-24-trade-audit-names.sql (the audit detail's summary) - frozen by sha256 in the 5b block below;
+  // schema.sql mirrors the 5b body (which keeps every claim-as-offer line below).
   eq(sha(functionText(claimOffer, "claim_open_slot")), "e490227c247bfed5c3e5ae54e22025c3fafb4da9bc672cd1251faa7ef2aee9bf", "2026-09-23-claim-offer.sql: claim_open_slot() body sha256 changed - the applied 9/23 file is frozen; a new body goes in a new migration");
-  const a = functionText(schema, "claim_open_slot"), b = functionText(read(LOCKS_MIGRATION), "claim_open_slot");
-  ok(a && b && a === b, "claim_open_slot(): schema.sql differs from sql/migrations/2026-09-24-definer-locks.sql (the newest migration touching it; keep them identical)");
+  const a = functionText(schema, "claim_open_slot"), b = functionText(read(AUDIT_MIGRATION), "claim_open_slot");
+  ok(a && b && a === b, "claim_open_slot(): schema.sql differs from sql/migrations/2026-09-24-trade-audit-names.sql (the newest migration touching it; keep them identical)");
   ok(/insert into public\.call_offers \(person_id, day, role_pref, note, entered_by, source\)/.test(a) && /set_config\('silvis\.claim_in_progress', 'on', true\)/.test(a), "schema.sql: claim_open_slot must upsert the call_offers row under the silvis.claim_in_progress flag (claim-as-offer)");
   ok(/rules_only_ids \? me/.test(a), "schema.sql: claim_open_slot writes no offer row for a claimer listed in the period's rules_only_ids");
   ok(/'offer', wrote_offer/.test(a), "schema.sql: the schedule.claim audit detail must carry offer true/false");
@@ -1344,7 +1354,9 @@ ok(!/drop function|drop table|create table|alter table|drop policy|create policy
 eq((locksMig.match(/create trigger/g) || []).length, 1, "the definer-locks migration re-creates exactly one trigger (trade_insert_guard_trg);");
 ok(!/trade_update_guard|call_offers_guard|call_offers_delete_guard|time_off_no_call_conflict/.test(locksMig.replace(/--[^\n]*/g, "")), "the definer-locks migration's statements touch none of the A1 lane's guards nor the time_off trigger (comments may name them)");
 ok(/revoke all on function public\.apply_trade\(uuid\) from public, anon;\ngrant execute on function public\.apply_trade\(uuid\) to authenticated;/.test(locksMig) && /revoke all on function public\.claim_open_slot\(date, text\) from public, anon;\ngrant execute on function public\.claim_open_slot\(date, text\) to authenticated;/.test(locksMig), "the definer-locks migration must re-run both revoke / grant pairs (create or replace keeps ACLs, the re-run is belt and braces)");
-["apply_trade", "claim_open_slot", "trade_insert_guard"].forEach((name) => {
+// Follow-up 5b (2026-09-24): apply_trade and claim_open_slot are superseded by sql/migrations/2026-09-24-trade-audit-names.sql
+// (report-first) - their B6 bodies are frozen by sha256 in the 5b block below; trade_insert_guard is still newest here.
+["trade_insert_guard"].forEach((name) => {
   const a = functionText(schema, name), b = functionText(locksMig, name);
   ok(a && b && a === b, name + "(): schema.sql differs from sql/migrations/2026-09-24-definer-locks.sql (keep them identical; the migration is what runs live)");
 });
@@ -1400,5 +1412,124 @@ ok(/lock table public\.time_off in share mode/.test(reviewB6) && /pg_locks/.test
 ok(!/B6 report/.test(reviewB6) && !/xmax/.test(reviewB6), "SCHEMA-REVIEW.md must not point at 'the B6 report' nor describe the xmax reading");
 ok(/trade_update_guard[\s\S]{0,600}from_surgeon_name/.test(reviewB6) && /tradeNamed/.test(reviewB6), "SCHEMA-REVIEW.md must record the UPDATE-path residual (trade_update_guard, the queued one-liner) and the client's tradeNamed change");
 ok(/applyTablesUpsert/.test(reviewB6), "SCHEMA-REVIEW.md must record the backup-restore applier's note blanking (the second time_off note path)");
+
+// ---- Prompt 16 follow-up 5b (2026-09-24): trade / claim audit rows carry actor_name + summary ----
+// Faraz 9/24: apply_trade wrote its audit row as (actor_id, action, detail) - actor_name null, no detail.summary - so
+// Settings > Activity log showed "?" for the actor and the raw action 'trade.apply' for the line (the client renders
+// (en.detail && en.detail.summary) || en.action); claim_open_slot named its actor (my_name) but had no summary either.
+// One migration, two functions, REPORT-FIRST (not applied; the orchestrator applies it after the go). Same-day order against
+// B6 by its `-- supersedes:` line; B6's two bodies are frozen by sha256 here; schema.sql mirrors the 5b file. Pinned below:
+// the file's shape, the byte identity, the header revision m line, the exact audit inserts and the summary format strings,
+// that NOTHING else in either body moved (the body with the audit change undone equals B6's, byte for byte), the probes'
+// new cases (trade E3 / F2, claim B3) with verify-rls.sh's expected strings, the SCHEMA-REVIEW.md record and the guide row.
+step("5b: migration 2026-09-24-trade-audit-names.sql defines apply_trade and claim_open_slot (nothing else), supersedes B6, byte-identical to schema.sql, grants re-run, CLI apply line; B6's two bodies frozen");
+const auditMig = read(AUDIT_MIGRATION);
+const sha5b = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
+ok(!/\r/.test(auditMig), "trade-audit migration has CRLF line endings");
+checkApplyTrade("trade-audit migration", auditMig, true, true);
+checkClaim("trade-audit migration", auditMig, true);
+eq((auditMig.match(/create or replace function/g) || []).length, 2, "the trade-audit migration must define apply_trade and claim_open_slot and nothing else;");
+ok(!/drop function|drop table|create table|alter table|drop policy|create policy|create trigger|drop trigger/.test(auditMig), "the trade-audit migration must not drop, create or alter anything (no trigger either - only the two create or replace + the grants re-run)");
+ok(!/trade_insert_guard|trade_update_guard|call_offers_guard|call_offers_delete_guard|time_off_no_call_conflict|handle_new_auth_user/.test(auditMig.replace(/--[^\n]*/g, "")), "the trade-audit migration's statements touch no other function (comments may name them)");
+ok(/^-- supersedes: sql\/migrations\/2026-09-24-definer-locks\.sql$/m.test(auditMig), "the trade-audit migration must declare `-- supersedes: sql/migrations/2026-09-24-definer-locks.sql` (same day; it re-creates B6's apply_trade / claim_open_slot after B6)");
+ok(/revoke all on function public\.apply_trade\(uuid\) from public, anon;\ngrant execute on function public\.apply_trade\(uuid\) to authenticated;/.test(auditMig) && /revoke all on function public\.claim_open_slot\(date, text\) from public, anon;\ngrant execute on function public\.claim_open_slot\(date, text\) to authenticated;/.test(auditMig), "the trade-audit migration must re-run both revoke / grant pairs");
+["apply_trade", "claim_open_slot"].forEach((name) => {
+  const a = functionText(schema, name), b = functionText(auditMig, name);
+  ok(a && b && a === b, name + "(): schema.sql differs from sql/migrations/2026-09-24-trade-audit-names.sql (keep them identical; the migration is what runs live)");
+});
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-trade-audit-names\.sql/.test(auditMig), "the trade-audit migration header must carry the CLI apply line for the orchestrator");
+ok(/REPORT-FIRST/.test(auditMig) && /Blast radius/.test(auditMig), "the trade-audit migration header must say it is report-first and state the blast radius");
+ok(/-- Revision 2026-09-24 m \(Prompt 16 follow-up 5b, sql\/migrations\/2026-09-24-trade-audit-names\.sql, report-first, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-24 m (trade / claim audit rows; report-first, NOT yet applied - the record step changes it to 'applied <timestamp>' with this pin)");
+// B6's bodies (live since 2026-09-23 ~19:27 Central) are superseded by this file - frozen here (audit RLS-2 rule: an applied file is never edited).
+eq(sha5b(functionText(locksMig, "apply_trade")), "cc13b436a10a0e523859a20ad15faecae873ef1c5586142b4f8d0217c04bb47c", "2026-09-24-definer-locks.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-23 (the audit change belongs to 2026-09-24-trade-audit-names.sql);");
+eq(sha5b(functionText(locksMig, "claim_open_slot")), "909db3550c3bb5d37bf633475b1b3fe7ed1f8b95d1746a07f24e6811426c5549", "2026-09-24-definer-locks.sql claim_open_slot() must stay byte-for-byte what was applied live on 2026-09-23 (the audit change belongs to 2026-09-24-trade-audit-names.sql);");
+
+step("5b: apply_trade's audit insert - actor_name from the caller's profile (display_name, else the roster name, else the id), detail.summary in the trade.accept wording family with roster names, every other key kept; the rest of the body is B6's byte for byte");
+const ACTOR_LOOKUP_1 = "select nullif(p.display_name, '') into my_name from public.user_profiles p where p.id = auth.uid();";
+const ACTOR_LOOKUP_2 = "my_name := coalesce(my_name, nullif((select r ->> 'name' from jsonb_array_elements(roster) r where r ->> 'id' = me limit 1), ''), me);";
+const TRADE_AUDIT_INSERT = "insert into public.audit_log (actor_id, actor_name, action, detail)\n  values (me, my_name, 'trade.apply', jsonb_build_object('summary', summary, 'trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role, 'from', t.from_surgeon_id, 'to', t.to_surgeon_id));";
+const TRADE_SUMMARY = [
+  "summary := 'Trade applied: ' || to_name || ' takes ' || case when t.role = 'primary' then 'Primary' else 'Backup' end",
+  "|| ' ' || to_char(t.day, 'Dy Mon FMDD') || ' (from ' || fr_name",
+  "|| case when t.return_day is null then ', one-way)'",
+  "else '; ' || fr_name || ' takes ' || case when t.return_role = 'primary' then 'Primary' else 'Backup' end",
+  "|| ' ' || to_char(t.return_day, 'Dy Mon FMDD') || ' in return)' end;",
+];
+// undo the 5b change textually: the result must be B6's body (proves the writes, checks, locks, grants and every other line are untouched)
+const undoTrade = (t) => t
+  .replace("  my_name  text;\n  summary  text;\n", "")
+  .replace(/  -- \(2026-09-24, follow-up 5b\)[\s\S]*?\n  insert into public\.audit_log \(actor_id, actor_name, action, detail\)\n  values \(me, my_name, 'trade\.apply', jsonb_build_object\('summary', summary, /, "  insert into public.audit_log (actor_id, action, detail)\n  values (me, 'trade.apply', jsonb_build_object(");
+[["schema.sql", schema], ["trade-audit migration", auditMig]].forEach(([n, s]) => {
+  const fn = functionText(s, "apply_trade");
+  ok(fn.includes(ACTOR_LOOKUP_1), n + ": apply_trade must read the CALLER's display_name: `" + ACTOR_LOOKUP_1 + "`");
+  ok(fn.includes(ACTOR_LOOKUP_2), n + ": apply_trade must fall back to the roster name for the caller's roster id, then the id: `" + ACTOR_LOOKUP_2 + "`");
+  ok(fn.includes(TRADE_AUDIT_INSERT), n + ": apply_trade's audit insert must be exactly `" + TRADE_AUDIT_INSERT.replace(/\n\s*/g, " ") + "` (actor_name + summary first, every other key kept)");
+  ok(!/insert into public\.audit_log \(actor_id, action, detail\)/.test(fn), n + ": the old three-column audit insert (actor_name null) must be gone from apply_trade");
+  TRADE_SUMMARY.forEach((line) => ok(fn.includes(line), n + ": apply_trade's summary must carry `" + line + "` (Trade applied: <to> takes <Primary|Backup> <Dy Mon D> (from <from>, one-way) | (from <from>; <from> takes <Role> <Dy Mon D> in return))"));
+  ok(!/t\.to_surgeon_name|t\.from_surgeon_name/.test(fn), n + ": the summary must use the roster names (to_name / fr_name), never the stored from_surgeon_name / to_surgeon_name (a status PATCH may rewrite them)");
+  ok(/  fr_name  text;\n  my_name  text;\n  summary  text;\nbegin/.test(fn), n + ": apply_trade declares my_name and summary after fr_name");
+  const at = fn.indexOf(TRADE_AUDIT_INSERT);
+  ok(at > fn.indexOf("update public.shift_trade_requests set status = 'applied'") && at < fn.lastIndexOf("return jsonb_build_object('ok', true"), n + ": the audit insert stays the last write of the transaction (after the trade row's status update, before the return)");
+  ok(fn.indexOf(ACTOR_LOOKUP_1) > fn.indexOf("update public.shift_trade_requests set status = 'applied'"), n + ": the actor lookup sits with the audit insert, after every row write (no new statement before the checks or the writes)");
+  eq(undoTrade(fn), functionText(locksMig, "apply_trade"), n + ": with the 5b audit change undone textually, apply_trade must equal B6's applied body byte for byte (the writes, checks, locks and every other line are untouched);");
+});
+
+step("5b: claim_open_slot's audit detail gains summary = the feed title '<Name> took <M/D> <role>' (the short form); actor_name stays my_name; the rest of the body is B6's byte for byte");
+const CLAIM_SUMMARY = "summary := my_name || ' took ' || to_char(p_day, 'FMMM/FMDD') || ' ' || p_role;";
+const CLAIM_AUDIT_INSERT = "insert into public.audit_log (actor_id, actor_name, action, detail)\n  values (me, my_name, 'schedule.claim', jsonb_build_object('summary', summary, 'day', p_day, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer));";
+const undoClaim = (t) => t
+  .replace("  summary   text;\n", "")
+  .replace(/  -- \(2026-09-24, follow-up 5b\)[^\n]*\n  summary := my_name \|\| ' took ' \|\| to_char\(p_day, 'FMMM\/FMDD'\) \|\| ' ' \|\| p_role;\n/, "")
+  .replace("jsonb_build_object('summary', summary, 'day', p_day", "jsonb_build_object('day', p_day");
+[["schema.sql", schema], ["trade-audit migration", auditMig]].forEach(([n, s]) => {
+  const fn = functionText(s, "claim_open_slot");
+  ok(fn.includes(CLAIM_SUMMARY), n + ": claim_open_slot must set `" + CLAIM_SUMMARY + "` (the feed title's expression)");
+  ok(fn.includes(CLAIM_AUDIT_INSERT), n + ": claim_open_slot's audit insert must be exactly `" + CLAIM_AUDIT_INSERT.replace(/\n\s*/g, " ") + "`");
+  ok(fn.indexOf(CLAIM_SUMMARY) < fn.indexOf(CLAIM_AUDIT_INSERT) && fn.indexOf(CLAIM_AUDIT_INSERT) < fn.indexOf("insert into public.notifications"), n + ": summary is set right before the audit row, which still precedes the feed row");
+  ok(!/\(07:00 to 07:00\)/.test(fn.slice(0, fn.indexOf("'schedule.claim'"))), n + ": the audit summary is the short title, not the notification sentence (that stays in the feed row only)");
+  eq(undoClaim(fn), functionText(locksMig, "claim_open_slot"), n + ": with the 5b audit change undone textually, claim_open_slot must equal B6's applied body byte for byte;");
+});
+["2026-09-22-claim-open-slot.sql", "2026-09-23-claim-offer.sql", "2026-09-24-definer-locks.sql"].forEach((f) => ok(!/'summary'/.test(functionText(read(path.join(ROOT, "sql", "migrations", f)), "claim_open_slot")), f + ": the frozen claim_open_slot body must not carry the summary key (it belongs to the 5b file)"));
+
+step("5b: trade probe E3 (after E2, before F) and F2 (after F, before G) read the audit rows apply_trade wrote; claim probe B3 (after B2, before C); the scheduler fixture gets display_name 'Probe Scheduler'; verify-rls.sh grades them and counts trade.apply audit leftovers");
+const EXPECT_E3 = "actor=Burchett summary=Trade applied: Burchett takes Primary Mon Mar 11 (from Acton  Acton takes Backup Wed Mar 13 in return)";
+const EXPECT_F2 = "actor=Probe Scheduler summary=Trade applied: Burchett takes Primary Fri Mar 15 (from Acton, one-way)";
+const EXPECT_B3 = "actor=Acton summary=Acton took 4/7 backup";
+const AUDIT_READ = "select a.actor_name, a.detail ->> 'summary' into an, sm";
+ok(probe.indexOf("values ('E3'") > probe.indexOf("values ('E2'") && probe.indexOf("values ('E3'") < probe.indexOf("values ('F'"), "trade probe E3 must run right after E2 (E's two-way apply committed its subtransaction) and before F");
+ok(probe.indexOf("values ('F2'") > probe.indexOf("values ('F'") && probe.indexOf("values ('F2'") < probe.indexOf("values ('G'"), "trade probe F2 must run right after F (the scheduler's one-way apply) and before G");
+ok(claimProbe.indexOf("values ('B3'") > claimProbe.indexOf("values ('B2'") && claimProbe.indexOf("values ('B3'") < claimProbe.indexOf("values ('C'"), "claim probe B3 must run right after B2 (B's claim committed) and before C");
+eq((probe.match(new RegExp(AUDIT_READ.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length, 2, "trade probe must read actor_name + detail ->> 'summary' twice (E3, F2);");
+ok(claimProbe.includes(AUDIT_READ), "claim probe must read actor_name + detail ->> 'summary' (B3)");
+ok(/a\.action = 'trade\.apply' and a\.detail ->> 'trade_id' = '00000000-0000-4000-8000-00000000000e'/.test(probe) && /a\.action = 'trade\.apply' and a\.detail ->> 'trade_id' = '00000000-0000-4000-8000-00000000000f'/.test(probe), "E3 / F2 must read the rows by the fixture trade ids (E = ...0e, F = ...0f)");
+ok(/a\.action = 'schedule\.claim' and a\.detail ->> 'day' = '2030-04-07'/.test(claimProbe), "B3 must read the schedule.claim row of 2030-04-07 (B's day)");
+ok(/update public\.user_profiles set display_name = 'Probe Scheduler' where id = sched;/.test(probe), "trade probe must give its scheduler display_name 'Probe Scheduler' (F2 exercises the display_name branch; the surgeon keeps none, so E3 shows the roster fallback)");
+ok(!/display_name/.test(claimProbe.replace(/--[^\n]*/g, "")), "claim probe sets no display_name (B3 shows the roster name Acton)");
+ok(probeHdr.includes("E3=actor=null summary=null") && probeHdr.includes("E3=" + EXPECT_E3), "trade probe header must state E3's BEFORE (actor=null summary=null) and AFTER (`" + EXPECT_E3 + "`)");
+ok(probeHdr.includes("F2=actor=null summary=null") && probeHdr.includes("F2=" + EXPECT_F2), "trade probe header must state F2's BEFORE and AFTER (`" + EXPECT_F2 + "`)");
+ok(claimHdr.includes("B3=actor=Acton summary=null") && claimHdr.includes("B3=" + EXPECT_B3), "claim probe header must state B3's BEFORE (actor=Acton summary=null) and AFTER (`" + EXPECT_B3 + "`)");
+ok(new RegExp("expect_eq\\s+E3\\s+\"" + EXPECT_E3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\"").test(s5), "verify-rls.sh section 5 must grade E3 against `" + EXPECT_E3 + "` (';' flattened to a space by the probe's report)");
+ok(new RegExp("expect_eq\\s+F2\\s+\"" + EXPECT_F2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\"").test(s5), "verify-rls.sh section 5 must grade F2 against `" + EXPECT_F2 + "`");
+ok(new RegExp("expect_eq\\s+B3\\s+\"" + EXPECT_B3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\"").test(s7), "verify-rls.sh section 7 must grade B3 against `" + EXPECT_B3 + "`");
+ok(/action = 'trade\.apply' and detail ->> 'trade_id' like '00000000-0000-4000-8000-0000000000%'/.test(s5), "verify-rls.sh section 5 leftover count must include the trade.apply audit rows of the fixture trades");
+
+step("5b: docs/SCHEMA-REVIEW.md carries the PREPARED item 5b section (before / after, blast radius, probe cases, observed placeholder); guide 4.3 carries its row");
+ok(/## 2026-09-24 - trade \/ claim audit rows carry actor_name \+ summary \(item 5b\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - trade / claim audit rows carry actor_name + summary (item 5b)' section");
+const review5b = review.slice(review.indexOf("## 2026-09-24 - trade / claim audit rows"));
+ok(/\*\*Status: PREPARED - report-first \(not applied\)\.\*\*/.test(review5b), "the item 5b section must read 'Status: PREPARED - report-first (not applied).' until the orchestrator applies it");
+ok(/2026-09-24-trade-audit-names\.sql[\s\S]*observed: /.test(review5b), "the item 5b section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
+ok(review5b.includes(TRADE_AUDIT_INSERT.replace(/\n  /g, "\n    ")) && review5b.includes(CLAIM_AUDIT_INSERT.replace(/\n  /g, "\n    ")), "the item 5b section must quote both AFTER audit inserts verbatim");
+ok(/insert into public\.audit_log \(actor_id, action, detail\)/.test(review5b) && /jsonb_build_object\('day', p_day, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer\)\)/.test(review5b), "the item 5b section must quote both BEFORE audit inserts");
+ok(/What could break/.test(review5b) && /Blast radius/.test(review5b) && /edge functions only INSERT audit rows/.test(review5b), "the item 5b section must state what could break and the blast radius (nothing reads detail.summary server-side; the edge functions do not read audit_log)");
+[EXPECT_E3, EXPECT_F2, EXPECT_B3].forEach((e) => ok(review5b.includes(e), "the item 5b section must list the probe expectation `" + e + "`"));
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-trade-audit-names\.sql/.test(review5b), "the item 5b section must carry the CLI apply line");
+ok(/supersedes: sql\/migrations\/2026-09-24-definer-locks\.sql/.test(review5b), "the item 5b section must record the same-day supersedes line");
+const auditRow = review.split("\n").find((l) => /^\| `audit_log` \|/.test(l)) || "";
+ok(/`schedule\.claim`/.test(auditRow) && /`openshifts\.notify`/.test(auditRow) && /actor_name/.test(auditRow) && /detail\.summary/.test(auditRow), "SCHEMA-REVIEW table (a) audit_log row must keep its action list and name actor_name + detail.summary");
+// The two guide pins accept the record step's wording too (report-first, applied 2026-MM-DD / applied: 2026-MM-DD ...), so only the
+// schema.sql revision-m regex and the SCHEMA-REVIEW Status regex move when the orchestrator records the apply.
+ok(/2026-09-24-trade-audit-names\.sql/.test(g43) && /report-first, (NOT applied|applied 2026-)/.test(g43), "guide 4.3 must carry the item 5b migration row (prepared 2026-09-24, report-first, NOT applied - or 'applied 2026-MM-DD' after the record step)");
+ok(/\| `apply_trade` audit row \|/.test(g43) && /\| `claim_open_slot` audit row \|/.test(g43), "guide 4.3's item 5b table must have one row per function (apply_trade / claim_open_slot audit row)");
+ok(/E3/.test(g43) && /F2/.test(g43) && /B3/.test(g43) && /applied: (_to be filled by the orchestrator_|2026-)/.test(g43.slice(g43.indexOf("2026-09-24-trade-audit-names.sql"))), "guide 4.3's item 5b bullet must name the probe cases and the 'applied: _to be filled by the orchestrator_' placeholder (or 'applied: 2026-MM-DD ...' after the record step)");
 
 console.log("schema.test.js: " + N + " assertions passed");

@@ -50,6 +50,9 @@
 -- trade_insert_guard() writes the from/to display names from the roster. Residual (outside B6's three functions):
 -- trade_update_guard does not pin from_surgeon_name / to_surgeon_name, so a party's status PATCH may still rewrite the
 -- stored strings - the client renders roster names by id (tradeNamed); the one-liner is queued in docs/SCHEMA-REVIEW.md.
+-- Revision 2026-09-24 m (Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql, report-first, NOT yet applied): apply_trade()'s
+-- audit row carries actor_name (the caller's user_profiles.display_name, else the roster name, else the id) and detail.summary in the client's
+-- trade.accept wording (roster names by id); claim_open_slot()'s audit detail gains the same summary key (its feed title). Nothing else in either body changes.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -395,6 +398,13 @@ create trigger trade_insert_guard_trg
 -- row, SHARE is not self-conflicting (concurrent applies do not serialise) and every reader holds ACCESS SHARE. The
 -- lock runs as the table owner (security definer) and is held for the rest of the RPC's transaction - milliseconds.
 -- Lock order: trade row (update) -> time_off table (share) -> day rows (update).
+-- 2026-09-24 (Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql): the audit row names its actor and carries a
+-- one-line summary. actor_name = the caller's user_profiles.display_name, else the roster name for the caller's roster id, else the
+-- id (the Activity log showed "?"); detail.summary = "Trade applied: <to> takes <Role> <Dy Mon D> (from <from>, one-way)" for a
+-- one-way trade, "Trade applied: <to> takes <Role> <Dy Mon D> (from <from>; <from> takes <Role> <Dy Mon D> in return)" for a
+-- two-way one - the client's trade.accept wording family, rendered where the log showed the raw action. Both surgeon names are
+-- the roster's by id (to_name / fr_name), never the stored from_surgeon_name / to_surgeon_name (a status PATCH may rewrite
+-- those). Every other key of the detail object, the writes, the checks and the locks are as before.
 create or replace function public.apply_trade(p_trade_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -408,6 +418,8 @@ declare
   roster   jsonb;
   to_name  text;
   fr_name  text;
+  my_name  text;
+  summary  text;
 begin
   select * into t from public.shift_trade_requests where id = p_trade_id for update;
   if not found then raise exception 'TRADE_NOT_FOUND' using errcode = 'P0001'; end if;
@@ -501,8 +513,18 @@ begin
   perform set_config('silvis.apply_trade', '1', true);
   update public.shift_trade_requests set status = 'applied', decided_at = coalesce(decided_at, now()) where id = p_trade_id;
   perform set_config('silvis.apply_trade', '0', true);
-  insert into public.audit_log (actor_id, action, detail)
-  values (me, 'trade.apply', jsonb_build_object('trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role, 'from', t.from_surgeon_id, 'to', t.to_surgeon_id));
+  -- (2026-09-24, follow-up 5b) actor_name: display_name from the caller's own profile row, else the roster name for the caller's
+  -- roster id, else the id; summary: the client's trade.accept wording family with the ROSTER names (to_name / fr_name), role
+  -- words Primary / Backup and dates like "Sat Oct 10" (to_char 'Dy Mon FMDD' - English names regardless of lc_time).
+  select nullif(p.display_name, '') into my_name from public.user_profiles p where p.id = auth.uid();
+  my_name := coalesce(my_name, nullif((select r ->> 'name' from jsonb_array_elements(roster) r where r ->> 'id' = me limit 1), ''), me);
+  summary := 'Trade applied: ' || to_name || ' takes ' || case when t.role = 'primary' then 'Primary' else 'Backup' end
+             || ' ' || to_char(t.day, 'Dy Mon FMDD') || ' (from ' || fr_name
+             || case when t.return_day is null then ', one-way)'
+                     else '; ' || fr_name || ' takes ' || case when t.return_role = 'primary' then 'Primary' else 'Backup' end
+                          || ' ' || to_char(t.return_day, 'Dy Mon FMDD') || ' in return)' end;
+  insert into public.audit_log (actor_id, actor_name, action, detail)
+  values (me, my_name, 'trade.apply', jsonb_build_object('summary', summary, 'trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role, 'from', t.from_surgeon_id, 'to', t.to_surgeon_id));
   return jsonb_build_object('ok', true, 'trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role);
 end $$;
 revoke all on function public.apply_trade(uuid) from public, anon;
@@ -546,6 +568,9 @@ grant execute on function public.apply_trade(uuid) to authenticated;
 -- or the claim waits and CL009 sees the new row - the same write skew apply_trade() closes, same reasoning (every
 -- time_off writer holds ROW EXCLUSIVE, which conflicts with SHARE), same deadlock argument (see apply_trade's header).
 -- Lock order: time_off table (share) -> the day row (update).
+-- 2026-09-24 (Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql): the audit detail gains a summary key -
+-- the feed row's title, "<Name> took <M/D> <role>" - so the Activity log renders a sentence instead of the raw action;
+-- actor_name (the roster name, my_name) is unchanged. Nothing else in the body changes.
 -- ============================================================================
 create or replace function public.claim_open_slot(p_day date, p_role text) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -562,6 +587,7 @@ declare
   vac       text;
   new_ver   integer;
   wrote_offer boolean := false;   -- P2 review: false for a rules_only claimer (no call_offers row)
+  summary   text;
 begin
   if auth.uid() is null or me is null then
     raise exception 'CLAIM_NOT_LINKED: sign in with an account that is linked to a roster entry to take a shift' using errcode = 'CL001';
@@ -662,8 +688,10 @@ begin
    limit 1;
   my_name := coalesce(nullif(my_name, ''), me);
 
+  -- (2026-09-24, follow-up 5b) detail.summary = the feed title below, so the Activity log shows "<Name> took <M/D> <role>".
+  summary := my_name || ' took ' || to_char(p_day, 'FMMM/FMDD') || ' ' || p_role;
   insert into public.audit_log (actor_id, actor_name, action, detail)
-  values (me, my_name, 'schedule.claim', jsonb_build_object('day', p_day, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer));
+  values (me, my_name, 'schedule.claim', jsonb_build_object('summary', summary, 'day', p_day, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer));
 
   -- In-app feed row: the claimer sees it through data.surgeon_id, the scheduler sees everything.
   insert into public.notifications (type, title, message, data)

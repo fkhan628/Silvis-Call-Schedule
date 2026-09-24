@@ -22,7 +22,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. |
-| `audit_log` | Who did what; insert by any authenticated user, read by scheduler/admin. Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`). |
+| `audit_log` | Who did what; insert by any authenticated user, read by scheduler/admin. Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the two SQL functions' rows do so from the prepared item 5b migration on (section at the end - report-first, not yet applied); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
@@ -787,3 +787,104 @@ Observed afterwards: the smoke's four Import dry-run pins closed (441 ok / 0 FAI
 longer logs the dead-key warnings. The importer's own last line read `NOT VERIFIED` on Faraz's run - its post-apply parser
 understood only the CLI's agent-session output shape; fixed the same night (`scripts/import-seed.js` reads both shapes
 through `parseCliRows`, in build 2026.09.23q). No row was skipped: every guarded count matched the plan.
+
+## 2026-09-24 - trade / claim audit rows carry actor_name + summary (item 5b)
+
+**Status: PREPARED - report-first (not applied).** `sql/migrations/2026-09-24-trade-audit-names.sql` replaces two SECURITY DEFINER
+functions on the live project (`apply_trade`, `claim_open_slot`; guide section 4.3), so this section is the report; the orchestrator
+applies the file after Faraz's go and fills the *observed:* line at the end. Source of the finding: Faraz 9/24, item 5b - Settings >
+Activity log showed `?` for the actor and the raw action `trade.apply` for the line of every applied trade (the client renders
+`(en.detail && en.detail.summary) || en.action` and the actor chip from `actor_name`); the claim rows named their actor but showed
+`schedule.claim`. Same-day ordering: the file declares `-- supersedes: sql/migrations/2026-09-24-definer-locks.sql` (B6, applied 9/23
+~19:27 Central); `test/schema.test.js` freezes B6's two bodies by sha256 and mirrors `sql/schema.sql` from this file (header
+revision m, "report-first, NOT yet applied" until the record step). Only the audit insert and the two helper lookups it needs change:
+the day-row writes, the locks (B6 lock order), the checks, the grants and the trigger are byte-for-byte as they were.
+
+**Before / after - the two audit inserts.**
+
+`apply_trade`, before (live since 9/22; unchanged through the 9/23 and 9/24 files):
+
+    insert into public.audit_log (actor_id, action, detail)
+    values (me, 'trade.apply', jsonb_build_object('trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role, 'from', t.from_surgeon_id, 'to', t.to_surgeon_id));
+
+`apply_trade`, after (`my_name text; summary text;` added to the declare block; `roster`, `to_name` and `fr_name` are the values the
+checks already resolved from `call_schedule_data 'main' -> roster[]` by id):
+
+    select nullif(p.display_name, '') into my_name from public.user_profiles p where p.id = auth.uid();
+    my_name := coalesce(my_name, nullif((select r ->> 'name' from jsonb_array_elements(roster) r where r ->> 'id' = me limit 1), ''), me);
+    summary := 'Trade applied: ' || to_name || ' takes ' || case when t.role = 'primary' then 'Primary' else 'Backup' end
+               || ' ' || to_char(t.day, 'Dy Mon FMDD') || ' (from ' || fr_name
+               || case when t.return_day is null then ', one-way)'
+                       else '; ' || fr_name || ' takes ' || case when t.return_role = 'primary' then 'Primary' else 'Backup' end
+                            || ' ' || to_char(t.return_day, 'Dy Mon FMDD') || ' in return)' end;
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (me, my_name, 'trade.apply', jsonb_build_object('summary', summary, 'trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role, 'from', t.from_surgeon_id, 'to', t.to_surgeon_id));
+
+`claim_open_slot`, before (live since 9/23 07:05Z):
+
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (me, my_name, 'schedule.claim', jsonb_build_object('day', p_day, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer));
+
+`claim_open_slot`, after (`summary text;` added to the declare block; the feed title's expression, unchanged where the title is built):
+
+    summary := my_name || ' took ' || to_char(p_day, 'FMMM/FMDD') || ' ' || p_role;
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (me, my_name, 'schedule.claim', jsonb_build_object('summary', summary, 'day', p_day, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer));
+
+- **actor_name (apply_trade).** The caller's own `user_profiles.display_name` (the function runs as the table owner, so the row is
+  read whatever the RLS posture), else the roster name for the caller's roster id, else the id (`me`). An unlinked scheduler / admin
+  with no display name keeps `actor_name` null, as `actor_id` already is for him - no invented name. The client's `logAudit` resolves
+  its actor the same way (`display_name || roster name || "Unknown"`).
+- **summary wording (apply_trade).** The client's `trade.accept` family (`helpers.js tradeLegsText`): "Trade applied: <to name> takes
+  <Primary|Backup> <Dy Mon D> (from <from name>, one-way)" for a one-way trade; "Trade applied: <to name> takes <Role> <Dy Mon D>
+  (from <from name>; <from name> takes <Role> <Dy Mon D> in return)" for a two-way one. Names are the ROSTER last names by id
+  (`to_name` / `fr_name`, already resolved for checks (a)-(d)) - never the stored `from_surgeon_name` / `to_surgeon_name`, which a
+  party's status PATCH may still rewrite (the B6 residual). Dates through `to_char(day, 'Dy Mon FMDD')` ("Sat Oct 10"; `Dy` / `Mon`
+  give English names regardless of `lc_time`). Every other key of the detail object is kept; `summary` is added to it (the source
+  text lists it first, as the client's `{ summary, ...details }` does - `jsonb` keeps no key order, so the stored value and what
+  PostgREST returns are ordered by key, and the client reads by key).
+- **summary (claim_open_slot).** The short form, the feed title it already composes: "<Name> took <M/D> <role>" ("Acton took 4/7
+  backup"). Why not the notification sentence: the Activity log is a one-line list, the same words as the in-app feed row read alike
+  in both places, and "(07:00 to 07:00)" is shift boilerplate the log does not need. `actor_name` stays `my_name`.
+
+**What could break.** Nothing reads `detail.summary` or `actor_name` server-side: no policy, trigger, view or function tests them, and
+the edge functions only INSERT audit rows (`daily-reminder` for the offers reminder) - none reads `audit_log`. The client reads both
+for display only (Settings > Activity log; the coordinator's "your entries" view filters by action family, not by these fields). The
+RPC return shapes, the CL / TRADE_* refusals, the row writes and the lock order are untouched (`test/schema.test.js` re-runs every
+B6 / RLS-6 / D.2 pin against the new file). Existing rows keep their nulls - no backfill. `audit_log.actor_name` and `detail` have no
+constraint beyond `detail jsonb not null`. A roster with no entry for the caller (an id the blob does not know) falls back to the id -
+display data, never a refusal. Blast radius, in one sentence: from the apply on, every applied trade and every claim writes a
+readable Activity log line under the actor's name; nothing else in the database or the app changes.
+
+**The probes (both roll themselves back; `scripts/verify-rls.sh` sections 5 and 7 grade them).** `sql/probes/trade-guards-probe.sql`
+gains `E3` (right after `E2`: the `trade.apply` row E wrote, read as postgres by `detail ->> 'trade_id'` - a TWO-WAY trade applied by
+the surgeon s2, who has no `display_name`, so the roster fallback shows) and `F2` (right after `F`: the row F wrote - a ONE-WAY trade
+applied by the SCHEDULER, whose profile the fixture now gives `display_name = 'Probe Scheduler'`, the display_name branch); its
+leftover count also covers `trade.apply` audit rows keyed on the fixture trade ids. `sql/probes/claim-open-slot-probe.sql` gains
+`B3` (right after `B2`: the `schedule.claim` row B wrote, by `detail ->> 'day' = '2030-04-07'`). The report flattens `;` to a space,
+hence the two spaces inside E3's value. Expected strings:
+
+| case | BEFORE the migration | AFTER |
+|---|---|---|
+| trade `E3` | `actor=null summary=null` | `actor=Burchett summary=Trade applied: Burchett takes Primary Mon Mar 11 (from Acton  Acton takes Backup Wed Mar 13 in return)` |
+| trade `F2` | `actor=null summary=null` | `actor=Probe Scheduler summary=Trade applied: Burchett takes Primary Fri Mar 15 (from Acton, one-way)` |
+| claim `B3` | `actor=Acton summary=null` | `actor=Acton summary=Acton took 4/7 backup` |
+
+Every other case unchanged; leftover counts 0. Pre-check (nothing to migrate; the count is the rows that stay as they are):
+`select count(*) from public.audit_log where action = 'trade.apply' and actor_name is null;`
+
+Apply: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-trade-audit-names.sql` (after the B6 file,
+applied 2026-09-23 ~19:27 Central). Order: trade probe + claim probe BEFORE (the left column) -> the migration, one session -> both
+probes AFTER (the right column) -> `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` (sections 5 and 7 green, leftover 0) -> the
+record step, ONE commit that flips four things and their pins in `test/schema.test.js` together (each pin is loud - `fail()` exits 1):
+(1) paste the AFTER sentinels and the verify-rls lines at *observed:* below and change this section's status line to
+`**Status: APPLIED <timestamp>.**` - pinned by the `Status: PREPARED - report-first \(not applied\)` regex in the 5b docs step, which
+must move with it; (2) change `sql/schema.sql`'s `Revision 2026-09-24 m (... report-first, NOT yet applied)` to `applied <timestamp>`
+- pinned by the `Revision 2026-09-24 m` regex in the 5b migration step, which must move with it; (3) the guide 4.3 row: `report-first,
+NOT applied` -> `report-first, applied 2026-MM-DD` and `applied: _to be filled by the orchestrator_` -> `applied: 2026-MM-DD <how>` -
+its two pins already accept both wordings (`report-first, (NOT applied|applied 2026-)` and `applied: (_to be filled by the
+orchestrator_|2026-)`), so no test edit for the guide; (4) table (a)'s `audit_log` clause above drops "prepared ... not yet applied"
+(not pinned beyond naming `actor_name` + `detail.summary`). Rolling back =
+re-running the two bodies from `sql/migrations/2026-09-24-definer-locks.sql` (the B6 texts; frozen by sha256 in the suite).
+
+observed: _to be filled by the orchestrator after the apply (AFTER sentinels of both probes, leftover 0, verify-rls.sh sections 5 and 7)._

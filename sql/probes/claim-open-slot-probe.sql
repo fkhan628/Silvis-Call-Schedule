@@ -60,6 +60,10 @@
 --      transaction ends (first-class in pg_locks, unlike a row lock). A single batch cannot show a second session
 --      waiting; the wait itself is PostgreSQL's lock-conflict rule (a time_off writer's ROW EXCLUSIVE vs SHARE).
 --        BEFORE that migration: B2=share_locks=0        AFTER: B2=share_locks=1
+--   B3 observation right after B2 (2026-09-24, Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql): the
+--      schedule.claim audit row B wrote (read as postgres by detail ->> 'day'), its actor_name and detail ->> 'summary' - the
+--      summary is the feed title, "<Name> took <M/D> <role>"; actor_name was already the roster name.
+--        BEFORE that migration: B3=actor=Acton summary=null        AFTER: B3=actor=Acton summary=Acton took 4/7 backup
 -- (';' and quotes are flattened out of the values before the raise, hence the two spaces in D and E.)
 -- ============================================================================
 
@@ -167,6 +171,22 @@ begin
     v := 'ERR ' || sqlstate || ' ' || sqlerrm;
   end;
   insert into probe_results values ('B2', v);
+end $$;
+
+-- ---------- B3: the audit row B wrote (2026-09-24, follow-up 5b) - actor_name + detail.summary
+do $$
+declare an text; sm text; v text;
+begin
+  begin
+    select a.actor_name, a.detail ->> 'summary' into an, sm
+      from public.audit_log a
+     where a.action = 'schedule.claim' and a.detail ->> 'day' = '2030-04-07'
+     order by a.created_at desc limit 1;
+    v := 'actor=' || coalesce(an, 'null') || ' summary=' || coalesce(sm, 'null');
+  exception when others then
+    v := 'ERR ' || sqlstate || ' ' || sqlerrm;
+  end;
+  insert into probe_results values ('B3', v);
 end $$;
 
 -- ---------- C: slot already held
