@@ -262,7 +262,6 @@ flush("deploy job pins");
 // runs. The hashes here are the deploy gate; vendor/README.md is the record. Bumping a library = replace the
 // file, re-hash it, update this table and the README row together (the loader names stay).
 const crypto = require("crypto");
-const os = require("os");
 const sha256hex = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 const sha256src = (text) => "'sha256-" + crypto.createHash("sha256").update(text, "utf8").digest("base64") + "'";
 const VENDORED = [
