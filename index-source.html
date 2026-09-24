@@ -2583,19 +2583,11 @@ function CallSchedule() {
       showToast("Override removed.", "success");
     } catch (e) { console.warn("east_overrides delete error", e); showToast("Couldn't remove the override - check your connection.", "error"); }
   };
-  // Prompt 15 part 2, the 'home' -> 'either' offers step: with Prompt 14 present a
-  // home decision offers to paint the range's days as `either` offers in one tap
-  // (a confirm sheet listing the dates; call_offers rows inserted the normal way).
-  // Prompt 14's painter is on another branch tonight, so this is a NO-OP that
-  // names the days in the console and returns pending; the review itself is
-  // saved either way. Never writes anything.
-  // TODO(Prompt 14 UI wave): open the offers painter's confirm sheet for
-  // range.start..range.end (brush 'either') and insert call_offers through its
-  // batch write + audit; keep the review save independent of the offer.
-  const offerEitherForHomeRange = (personId, range) => {
-    console.info("eastvac: " + nameOf(personId) + " marked " + range.start + ".." + range.end + " home - the 'paint these days as either offers' step arrives with Prompt 14's painter (no-op tonight; nothing written)");
-    return { ok: true, offered: 0, pending: "prompt-14" };
-  };
+  // Prompt 15 part 2 had a 'home' -> 'either' offers hook here (a documented no-op
+  // waiting for Prompt 14's painter). Retired in B10 (9/23): a home
+  // decision writes nothing but the review row - the painter (Paint my offers) is where
+  // a surgeon offers days, one place, one write path (commitOffersPaint); the home toast
+  // already says the days are available and preferred as primary.
   // Prompt 15 parts 2-3 (9/23): the ONE write path for East vacation reviews.
   // decision 'away' | 'home' upserts the person's row for the EXACT range
   // (unique person_id,start,end - the primary key is id, so on_conflict names the
@@ -2605,7 +2597,7 @@ function CallSchedule() {
   // own rows or the scheduler (mirrored client-side). One audit eastvac.review
   // per change with the range and the decision ('reset' for a delete). After a
   // successful write the rows are re-read (the picture, the ctx and every list
-  // rebuild from them) and a 'home' decision calls the offers hook.
+  // rebuild from them); nothing else is written (B10: the offers hook is retired).
   const saveEastVacationReview = async (personId, range, decision, opts) => {
     const quiet = !!(opts && opts.quiet);
     if (isPublicMode) return { ok: false, error: "public" };
@@ -2651,7 +2643,6 @@ function CallSchedule() {
       if (!quiet) showToast(decision === "home" ? `${fmtMD(range.start)}-${fmtMD(range.end)}: home - ${nameOf(personId)} is available at Silvis those days (no East call; preferred as primary).`
         : decision === "away" ? `${fmtMD(range.start)}-${fmtMD(range.end)}: away - treated as a Silvis vacation.`
         : `${fmtMD(range.start)}-${fmtMD(range.end)}: back to unreviewed (treated as away until decided).`, "success");
-      if (decision === "home") offerEitherForHomeRange(personId, range);
       return { ok: true, removed };
     } catch (e) {
       console.warn("east_vacation_reviews write error", e);
@@ -8262,7 +8253,7 @@ function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onS
   const counts = suHolidayCounts(schedule, (holidays && holidays.units) || {}, "2026-09-14");
   return (
     <div data-testid="holidays-card">
-      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Each unit gets one primary and one backup who stick through every day of it; a unit pre-empts the weekend it overlaps. Days are editable per year (Faraz: "the days will have to be figured out"). Coverage is read from the saved schedule; edit a day through the day editor.</p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Each unit gets one primary and one backup who stick through every day of it; a unit pre-empts the weekend it overlaps. Days are editable per year (the scheduler settles the exact days each year). Coverage is read from the saved schedule; edit a day through the day editor.</p>
       {!rulesImported && <div style={css.warnBox}>Rules are not imported yet - holiday units arrive with the seed import, or add a year and units here.</div>}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
         <span style={{ fontSize: 11, color: "#5B6B82" }}>Held since 9/14/2026 (units, major/minor):</span>
@@ -8458,7 +8449,7 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
         <EastVacationList css={css} dk={dk} people={eastVac || []} reviewState={eastVacReviewState} onReview={onReviewEastVac} busyKey={eastVacBusyKey} canReview={canReviewEastVac} nameOf={nameOf} today={today} testid="eastvac-list" conflicts={eastVacConflicts || []} onEditDay={onEditDay}/>
       </div>
       <div style={{ border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
-        <div style={{ ...css.subT, margin: "0 0 4px" }}>Overrides (days Faraz knows differ from the feed)</div>
+        <div style={{ ...css.subT, margin: "0 0 4px" }}>Overrides (days the scheduler knows differ from the feed)</div>
         <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="east-overrides">
             <thead><tr><th>Day</th><th>Surgeon</th><th>Busy</th><th>Note</th><th></th></tr></thead>

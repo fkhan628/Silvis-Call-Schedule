@@ -1299,13 +1299,17 @@ possible later migration.
   (RLS no-op), never success. `unreviewed` (a change of mind, or the refresh's reset) → `DELETE ...?person_id=eq.
   &start=eq.&end=eq.` with `return=representation`, the count recorded. Every mutation uses `dbAuthHeaders()`. After a
   successful write the rows are re-read (the picture, the rules ctx and every list rebuild), **one audit row
-  `eastvac.review`** `{ person_id, start, end, decision: 'away' | 'home' | 'reset', reason, removed? }` is logged,
-  and a `home` decision calls `offerEitherForHomeRange(personId, range)`.
-- **The `home` → `either` offers step (Prompt 14).** With the offers painter present a home decision offers to paint
-  the range's days as `either` offers in one tap (a confirm sheet listing the dates; `call_offers` rows inserted the
-  normal way). Prompt 14's painter is on another branch tonight, so the hook is a **documented no-op**
-  (`console.info`, returns `{ ok: true, offered: 0, pending: "prompt-14" }`, `TODO(Prompt 14 UI wave)`); the review itself is saved either
-  way, and nothing in this delivery writes `call_offers` (data-layer pin + smoke).
+  `eastvac.review`** `{ person_id, start, end, decision: 'away' | 'home' | 'reset', reason, removed? }` is logged;
+  nothing else is written.
+- **The `home` → `either` offers step: retired (B10, 9/23).** Prompt 15 had left a hook, `offerEitherForHomeRange`, as
+  a documented no-op (it returned `{ ok: true, offered: 0, pending: "prompt-14" }` and carried a `TODO(Prompt 14 UI wave)`)
+  for the day the painter existed: a home decision would offer to paint the range's days as `either` offers in one tap.
+  The painter exists (§17 part 3a) and is the one place a surgeon offers days, with one write path
+  (`commitOffersPaint` → `save_offers`); a second entry into `call_offers` from the East-vacation review was not worth a
+  second confirm sheet, so the hook and its call were removed. A home decision saves the review row only; the toast says
+  the days are available at Silvis and preferred for primary, and the person paints them in *Paint my offers* if he wants
+  them offered. Data-layer pin: the hook, its `pending: "prompt-14"` shape and the `TODO(Prompt 14 UI wave)` marker are
+  gone from `index-source.html`, and `saveEastVacationReview` writes no `call_offers` row.
 - **Refresh resets.** After *Refresh from Davenport* caches the new lists and **re-reads the cache** (`loadEastTables`
   hands the `east_feed` rows back), for each East person whose code was read:
   `derivedEastVacations(eastVacations(cacheRows, CODE), reviewRows, rosterId).stale` — computed against the **reloaded
@@ -1379,9 +1383,10 @@ possible later migration.
   triples, two `eastvac.review` reset audits (reason `changed` / `removed`, `removed: 1`), names both in the toast and
   keeps the unchanged range's row; screenshots `eastvac-panel.png`, `eastvac-panel-390.png`, `eastvac-panel-dark.png`,
   `eastvac-panel-390-dark.png`, `calendar-eastvac-2027-04.png`, `mine-eastvac.png` — written to **`test/ui/out/`**, which
-  is **gitignored**; nothing was copied into `docs/screenshots/` in this delivery, as of `19b9efc` (part 4 added no binaries — a
-  `docs/screenshots/east-vacations/` copy of the six files is a one-line follow-up). The files of the 2026-09-23 07:15
-  run are on disk (43 / 41 / 44 / 41 / 106 / 137 KB).
+  is **gitignored**; nothing was copied into `docs/screenshots/` in this delivery, as of `19b9efc` (part 4 added no binaries),
+  and since B10 (9/23) the repo carries no screenshot folder at all: the open-shifts set that used to live there showed the
+  local harness URL in the e-mail preview, and the harness cannot render the production origin, so review shots stay in
+  `test/ui/out/` on the machine that ran the smoke. The files of the 2026-09-23 07:15 run were 43 / 41 / 44 / 41 / 106 / 137 KB.
 - **`scripts/verify-rls.sh` section 9** (part 2; before the migration 9a / 9b accept the 404 by name, while 9c — linked
   CLI only — prints two *expected* FAIL lines, "no sentinel-terminated PROBE_RESULTS" and "leftover count could not be
   read (table missing before the migration is expected)", so the RESULT line is red by exactly those two until the

@@ -25,6 +25,8 @@ ANON=$(grep -oE 'SUPABASE_ANON_KEY\s*=\s*"[^"]+"' config.js | head -1 | sed 's/.
 [ -n "$URL" ] && [ -n "$ANON" ] || { echo "FAIL: could not read SUPABASE_URL / SUPABASE_ANON_KEY from config.js"; exit 1; }
 WORKDIR="${SILVIS_WORKDIR:-$HOME/supabase-silvis}"
 pass=0; fail=0
+T=$(mktemp -d "${TMPDIR:-/tmp}/silvis-verify-rls.XXXXXX") || { echo "FAIL: mktemp"; exit 1; }   # every curl body lands here, never a fixed /tmp name (B10 9/23)
+trap 'rm -rf "$T"' EXIT
 ok()   { echo "PASS  $1"; pass=$((pass+1)); }
 bad()  { echo "FAIL  $1"; fail=$((fail+1)); }
 # Linked-CLI helpers (sections 4, 5, 6b). q prints the CLI's JSON (a "rows" key on success) or its
@@ -35,19 +37,19 @@ verdict() { # $1 = output; prints conflict | accepted | error
   if echo "$1" | grep -q ON_CALL_CONFLICT; then echo conflict; elif echo "$1" | grep -q '"rows"'; then echo accepted; else echo error; fi; }
 
 echo "== 1. anon read (schedule_days) =="
-line=$(curl -s -o /tmp/vr1.json -w 'HTTP %{http_code}' "$URL/rest/v1/schedule_days?select=day&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
-echo "   $line  body: $(head -c 120 /tmp/vr1.json)"
+line=$(curl -s -o $T/vr1.json -w 'HTTP %{http_code}' "$URL/rest/v1/schedule_days?select=day&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+echo "   $line  body: $(head -c 120 $T/vr1.json)"
 case "$line" in "HTTP 200") ok "anon read returns 200";; *) bad "anon read: $line";; esac
 
 echo "== 2. anon write blocked (schedule_days) =="
-line=$(curl -s -o /tmp/vr2.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/schedule_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"day":"2030-01-01"}')
-echo "   $line  body: $(head -c 160 /tmp/vr2.json)"
+line=$(curl -s -o $T/vr2.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/schedule_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"day":"2030-01-01"}')
+echo "   $line  body: $(head -c 160 $T/vr2.json)"
 case "$line" in "HTTP 401"|"HTTP 403") ok "anon write blocked ($line)";; *) bad "anon write: $line (expected 401/403)";; esac
 
 echo "== 3. scheduler JWT write (schedule_days) =="
 if [ -n "${SILVIS_JWT:-}" ]; then
-  line=$(curl -s -o /tmp/vr3.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/schedule_days" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"day":"2030-01-01","source":"verify-rls","note":"verify-rls.sh probe"}')
-  echo "   $line  body: $(head -c 160 /tmp/vr3.json)"
+  line=$(curl -s -o $T/vr3.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/schedule_days" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"day":"2030-01-01","source":"verify-rls","note":"verify-rls.sh probe"}')
+  echo "   $line  body: $(head -c 160 $T/vr3.json)"
   case "$line" in "HTTP 201") ok "scheduler JWT write returns 201";; *) bad "scheduler JWT write: $line";; esac
   del=$(curl -s -o /dev/null -w 'HTTP %{http_code}' -X DELETE "$URL/rest/v1/schedule_days?day=eq.2030-01-01" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT")
   echo "   cleanup DELETE: $del"
@@ -137,11 +139,11 @@ fi
 echo "== 6. trade guards over REST (JWT-gated; SILVIS_SURGEON_JWT = a surgeon-role user's access token) =="
 if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
   # 6a. insert with status 'accepted' as a surgeon -> lands as 'pending' (from_surgeon_id = the caller)
-  line=$(curl -s -o /tmp/vr6a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/shift_trade_requests" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"from_surgeon_id":"s9x","to_surgeon_id":"s9test","day":"2030-03-20","role":"primary","status":"accepted","detail":"verify-rls.sh 6a probe"}')
-  st=$(grep -oE '"status":"[a-z]+"' /tmp/vr6a.json | head -1)
-  echo "   $line  $st  body: $(head -c 200 /tmp/vr6a.json)"
+  line=$(curl -s -o $T/vr6a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/shift_trade_requests" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"from_surgeon_id":"s9x","to_surgeon_id":"s9test","day":"2030-03-20","role":"primary","status":"accepted","detail":"verify-rls.sh 6a probe"}')
+  st=$(grep -oE '"status":"[a-z]+"' $T/vr6a.json | head -1)
+  echo "   $line  $st  body: $(head -c 200 $T/vr6a.json)"
   if [ "$line" = "HTTP 201" ] && [ "$st" = '"status":"pending"' ]; then ok "surgeon POST with status 'accepted' lands as 'pending'"; else bad "surgeon POST with status 'accepted': $line $st"; fi
-  tid=$(grep -oE '"id":"[0-9a-f-]{36}"' /tmp/vr6a.json | head -1 | cut -d'"' -f4)
+  tid=$(grep -oE '"id":"[0-9a-f-]{36}"' $T/vr6a.json | head -1 | cut -d'"' -f4)
   if [ -n "$tid" ]; then
     # cleanup: delete the row through the linked CLI (trade_read is `using (true)`, so a leftover row would
     # show in every user's trade list); members have no delete policy, so without the CLI the best the
@@ -167,9 +169,9 @@ if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
       if [ "$(verdict "$r")" != "accepted" ]; then
         bad "6b: fixture setup failed: $(echo "$r" | tr -d '\n' | head -c 200)"
       else
-        line=$(curl -s -o /tmp/vr6b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/apply_trade" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d "{\"p_trade_id\":\"$TID6\"}")
-        echo "   $line  body: $(head -c 200 /tmp/vr6b.json)"
-        if [ "$line" != "HTTP 200" ] && grep -q 'TRADE_INELIGIBLE' /tmp/vr6b.json && grep -q 'vacation' /tmp/vr6b.json; then ok "apply_trade on the receiver's vacation day is refused ($line TRADE_INELIGIBLE)"; else bad "apply_trade on a vacation day: $line $(head -c 120 /tmp/vr6b.json)"; fi
+        line=$(curl -s -o $T/vr6b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/apply_trade" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d "{\"p_trade_id\":\"$TID6\"}")
+        echo "   $line  body: $(head -c 200 $T/vr6b.json)"
+        if [ "$line" != "HTTP 200" ] && grep -q 'TRADE_INELIGIBLE' $T/vr6b.json && grep -q 'vacation' $T/vr6b.json; then ok "apply_trade on the receiver's vacation day is refused ($line TRADE_INELIGIBLE)"; else bad "apply_trade on a vacation day: $line $(head -c 120 $T/vr6b.json)"; fi
       fi
       q "delete from public.shift_trade_requests where id = '$TID6'; delete from public.time_off where person_id = '$pid' and note = 'verify-rls 6b'; delete from public.schedule_days where day = '2030-03-21';" >/dev/null
       echo "   cleanup done"
@@ -185,8 +187,8 @@ echo "== 7. claim_open_slot (Prompt 13 part 2: a linked surgeon takes an OPEN sl
 # 7a. anon may not call it at all - no JWT needed. 404 = the function is not created yet (before the
 #     migration); 401/403 = execute revoked from anon (after). A 400 here would mean anon reached the
 #     body (CLAIM_NOT_LINKED): the revoke is missing. Nothing is written either way.
-line=$(curl -s -o /tmp/vr7a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_day":"2030-04-07","p_role":"backup"}')
-echo "   7a anon rpc: $line  body: $(head -c 160 /tmp/vr7a.json)"
+line=$(curl -s -o $T/vr7a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_day":"2030-04-07","p_role":"backup"}')
+echo "   7a anon rpc: $line  body: $(head -c 160 $T/vr7a.json)"
 case "$line" in "HTTP 401"|"HTTP 403"|"HTTP 404") ok "anon rpc claim_open_slot refused ($line)";; *) bad "anon rpc claim_open_slot: $line (expected 401/403/404)";; esac
 # 7b. the rolled-back probe (sql/probes/claim-open-slot-probe.sql): fixtures in 2030-04 plus a 2020-01-01 lower
 #     bound, throwaway auth users probe-claim-<uuid>@example.test linked to s3 (surgeon) / s1 (scheduler), and
@@ -241,12 +243,12 @@ fi
 # 7c-7e. over REST as a linked SURGEON (SILVIS_SURGEON_JWT). Only refusals are exercised: a successful claim over
 #        REST would be a real, persisted schedule change. 7c and 7d need no fixture and write nothing.
 if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
-  line=$(curl -s -o /tmp/vr7c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2020-01-01","p_role":"backup"}')
-  echo "   7c past day: $line  body: $(head -c 200 /tmp/vr7c.json)"
-  if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_PAST' /tmp/vr7c.json; then ok "surgeon claim of a past day is refused ($line CLAIM_PAST)"; else bad "surgeon claim of a past day: $line $(head -c 120 /tmp/vr7c.json)"; fi
-  line=$(curl -s -o /tmp/vr7d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2030-04-07","p_role":"observer"}')
-  echo "   7d bad role: $line  body: $(head -c 200 /tmp/vr7d.json)"
-  if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_BAD_ROLE' /tmp/vr7d.json; then ok "surgeon claim with an unknown role is refused ($line CLAIM_BAD_ROLE)"; else bad "surgeon claim with an unknown role: $line $(head -c 120 /tmp/vr7d.json)"; fi
+  line=$(curl -s -o $T/vr7c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2020-01-01","p_role":"backup"}')
+  echo "   7c past day: $line  body: $(head -c 200 $T/vr7c.json)"
+  if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_PAST' $T/vr7c.json; then ok "surgeon claim of a past day is refused ($line CLAIM_PAST)"; else bad "surgeon claim of a past day: $line $(head -c 120 $T/vr7c.json)"; fi
+  line=$(curl -s -o $T/vr7d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2030-04-07","p_role":"observer"}')
+  echo "   7d bad role: $line  body: $(head -c 200 $T/vr7d.json)"
+  if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_BAD_ROLE' $T/vr7d.json; then ok "surgeon claim with an unknown role is refused ($line CLAIM_BAD_ROLE)"; else bad "surgeon claim with an unknown role: $line $(head -c 120 $T/vr7d.json)"; fi
   # 7e. a HELD slot (fixture through the CLI: 2030-04-20 backup held by the throwaway 's9test'); deleted afterwards
   #     BY DAY ALONE (nothing real lives on 2030-04-20): if the REST claim ever succeeded - the failure this case
   #     exists to catch - the row's source becomes 'claim' and a source-filtered delete would leave it behind.
@@ -256,9 +258,9 @@ if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
     if [ "$(verdict "$r")" != "accepted" ]; then
       bad "7e: fixture setup failed: $(echo "$r" | tr -d '\n' | head -c 200)"
     else
-      line=$(curl -s -o /tmp/vr7e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2030-04-20","p_role":"backup"}')
-      echo "   7e held slot: $line  body: $(head -c 200 /tmp/vr7e.json)"
-      if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_HELD' /tmp/vr7e.json; then ok "surgeon claim of a held slot is refused ($line CLAIM_HELD)"; else bad "surgeon claim of a held slot: $line $(head -c 120 /tmp/vr7e.json)"; fi
+      line=$(curl -s -o $T/vr7e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_slot" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_day":"2030-04-20","p_role":"backup"}')
+      echo "   7e held slot: $line  body: $(head -c 200 $T/vr7e.json)"
+      if [ "$line" != "HTTP 200" ] && grep -q 'CLAIM_HELD' $T/vr7e.json; then ok "surgeon claim of a held slot is refused ($line CLAIM_HELD)"; else bad "surgeon claim of a held slot: $line $(head -c 120 $T/vr7e.json)"; fi
     fi
     # The cleanup is verified, never assumed: a stray 2030-04-20 row widens the published range (min(day)..max(day))
     # that claim_open_slot and the Open shifts board use, and trips the claim probe's PROBE_SETUP guard.
@@ -281,21 +283,21 @@ echo "== 8. offers + periods (Prompt 14 part 1): anon sees nothing, anon cannot 
 # nothing. The assertion is the exact row count anon can see, asked for with `Prefer: count=exact` and read from the
 # Content-Range header: it must be */0. A 401/403 would also mean "anon cannot read" and is accepted.
 for t in call_offers call_periods; do
-  hdr=$(curl -s -D - -o /tmp/vr8_$t.json "$URL/rest/v1/$t?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
+  hdr=$(curl -s -D - -o $T/vr8_$t.json "$URL/rest/v1/$t?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
   code=$(echo "$hdr" | grep -oE '^HTTP/[0-9.]+ [0-9]+' | head -1 | awk '{print $2}')
   range=$(echo "$hdr" | grep -i '^content-range:' | tr -d '\r' | awk '{print $2}')
-  echo "   anon GET $t -> HTTP $code  Content-Range: ${range:-<none>}  body: $(head -c 120 /tmp/vr8_$t.json)"
+  echo "   anon GET $t -> HTTP $code  Content-Range: ${range:-<none>}  body: $(head -c 120 $T/vr8_$t.json)"
   case "$code" in
     200) if [ "$range" = "*/0" ]; then ok "anon sees 0 rows of $t (200 + [] with count=exact -> Content-Range */0)"; else bad "anon read of $t: 200 with Content-Range '$range' (expected */0 - RLS must hide every row from anon)"; fi;;
     401|403) ok "anon read of $t refused (HTTP $code)";;
     *) bad "anon read of $t: HTTP ${code:-<none>}";;
   esac
 done
-line=$(curl -s -o /tmp/vr8b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_offers" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"person_id":"s9test","day":"2030-06-20","role_pref":"either","entered_by":"s9test","source":"app"}')
-echo "   anon POST call_offers -> $line  body: $(head -c 160 /tmp/vr8b.json)"
+line=$(curl -s -o $T/vr8b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_offers" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"person_id":"s9test","day":"2030-06-20","role_pref":"either","entered_by":"s9test","source":"app"}')
+echo "   anon POST call_offers -> $line  body: $(head -c 160 $T/vr8b.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon insert into call_offers refused ($line)";;
-  *) if grep -q '42501' /tmp/vr8b.json; then ok "anon insert into call_offers refused (42501)"; else bad "anon insert into call_offers: $line (expected 401/403 or 42501)"; fi;;
+  *) if grep -q '42501' $T/vr8b.json; then ok "anon insert into call_offers refused (42501)"; else bad "anon insert into call_offers: $line (expected 401/403 or 42501)"; fi;;
 esac
 if [ -n "${SILVIS_JWT:-}" ]; then
   # 8c. own-row insert as the JWT's roster id (a scheduler passes either way), then DELETE by id and confirm it is gone.
@@ -306,10 +308,10 @@ if [ -n "${SILVIS_JWT:-}" ]; then
   if [ -z "$sub8" ] || [ -z "$pid8" ]; then
     bad "8c: could not resolve the caller's roster id from SILVIS_JWT (sub='$sub8' person_id='$pid8')"
   else
-    line=$(curl -s -o /tmp/vr8c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_offers" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d "{\"person_id\":\"$pid8\",\"day\":\"2030-07-21\",\"role_pref\":\"either\",\"entered_by\":\"$pid8\",\"source\":\"app\",\"note\":\"verify-rls.sh 8c probe\"}")
-    echo "   JWT POST call_offers (own row $pid8, 2030-07-21) -> $line  body: $(head -c 160 /tmp/vr8c.json)"
+    line=$(curl -s -o $T/vr8c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_offers" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d "{\"person_id\":\"$pid8\",\"day\":\"2030-07-21\",\"role_pref\":\"either\",\"entered_by\":\"$pid8\",\"source\":\"app\",\"note\":\"verify-rls.sh 8c probe\"}")
+    echo "   JWT POST call_offers (own row $pid8, 2030-07-21) -> $line  body: $(head -c 160 $T/vr8c.json)"
     case "$line" in "HTTP 201") ok "JWT own-row insert into call_offers returns 201";; *) bad "JWT own-row insert into call_offers: $line";; esac
-    oid=$(grep -oE '"id":"[0-9a-f-]{36}"' /tmp/vr8c.json | head -1 | cut -d'"' -f4)
+    oid=$(grep -oE '"id":"[0-9a-f-]{36}"' $T/vr8c.json | head -1 | cut -d'"' -f4)
     if [ -n "$oid" ]; then
       del=$(curl -s -o /dev/null -w 'HTTP %{http_code}' -X DELETE "$URL/rest/v1/call_offers?id=eq.$oid" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT")
       left=$(curl -s "$URL/rest/v1/call_offers?id=eq.$oid&select=id" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT")
@@ -320,13 +322,13 @@ if [ -n "${SILVIS_JWT:-}" ]; then
     fi
     # 8d. offer_modes over REST (needs sql/migrations/2026-09-23-offer-modes.sql applied): a period with a mode map is
     #     stored and read back; a non-object is refused by the check constraint (23514); the row is deleted by id.
-    line=$(curl -s -o /tmp/vr8d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_periods" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d "{\"label\":\"verify-rls 8d\",\"start_day\":\"2030-08-01\",\"end_day\":\"2030-08-31\",\"offers_close_at\":\"2030-06-20\",\"publish_by\":\"2030-07-04\",\"status\":\"upcoming\",\"created_by\":\"verify-rls\",\"offer_modes\":{\"$pid8\":\"preferred\"}}")
-    echo "   JWT POST call_periods with offer_modes -> $line  body: $(head -c 200 /tmp/vr8d.json)"
-    if [ "$line" = "HTTP 201" ] && grep -q "\"offer_modes\":{\"$pid8\":\"preferred\"}" /tmp/vr8d.json; then ok "offer_modes stored and read back over REST"; elif grep -q '42703' /tmp/vr8d.json; then bad "offer_modes column missing live: apply sql/migrations/2026-09-23-offer-modes.sql first"; else bad "offer_modes insert: $line $(head -c 120 /tmp/vr8d.json)"; fi
-    pid8d=$(grep -oE '"id":"[0-9a-f-]{36}"' /tmp/vr8d.json | head -1 | cut -d'"' -f4)
-    line=$(curl -s -o /tmp/vr8e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_periods" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -d '{"label":"verify-rls 8d bad","start_day":"2030-09-01","end_day":"2030-09-30","offers_close_at":"2030-07-20","publish_by":"2030-08-04","status":"upcoming","created_by":"verify-rls","offer_modes":["s1"]}')
-    echo "   JWT POST call_periods with offer_modes = array -> $line  body: $(head -c 160 /tmp/vr8e.json)"
-    if [ "$line" != "HTTP 201" ] && grep -q '23514' /tmp/vr8e.json; then ok "a non-object offer_modes is refused (23514 call_periods_offer_modes_object)"; else bad "non-object offer_modes: $line $(head -c 120 /tmp/vr8e.json)"; fi
+    line=$(curl -s -o $T/vr8d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_periods" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d "{\"label\":\"verify-rls 8d\",\"start_day\":\"2030-08-01\",\"end_day\":\"2030-08-31\",\"offers_close_at\":\"2030-06-20\",\"publish_by\":\"2030-07-04\",\"status\":\"upcoming\",\"created_by\":\"verify-rls\",\"offer_modes\":{\"$pid8\":\"preferred\"}}")
+    echo "   JWT POST call_periods with offer_modes -> $line  body: $(head -c 200 $T/vr8d.json)"
+    if [ "$line" = "HTTP 201" ] && grep -q "\"offer_modes\":{\"$pid8\":\"preferred\"}" $T/vr8d.json; then ok "offer_modes stored and read back over REST"; elif grep -q '42703' $T/vr8d.json; then bad "offer_modes column missing live: apply sql/migrations/2026-09-23-offer-modes.sql first"; else bad "offer_modes insert: $line $(head -c 120 $T/vr8d.json)"; fi
+    pid8d=$(grep -oE '"id":"[0-9a-f-]{36}"' $T/vr8d.json | head -1 | cut -d'"' -f4)
+    line=$(curl -s -o $T/vr8e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_periods" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT" -H "Content-Type: application/json" -d '{"label":"verify-rls 8d bad","start_day":"2030-09-01","end_day":"2030-09-30","offers_close_at":"2030-07-20","publish_by":"2030-08-04","status":"upcoming","created_by":"verify-rls","offer_modes":["s1"]}')
+    echo "   JWT POST call_periods with offer_modes = array -> $line  body: $(head -c 160 $T/vr8e.json)"
+    if [ "$line" != "HTTP 201" ] && grep -q '23514' $T/vr8e.json; then ok "a non-object offer_modes is refused (23514 call_periods_offer_modes_object)"; else bad "non-object offer_modes: $line $(head -c 120 $T/vr8e.json)"; fi
     for lbl in "verify-rls%208d" "verify-rls%208d%20bad"; do
       del=$(curl -s -o /dev/null -w 'HTTP %{http_code}' -X DELETE "$URL/rest/v1/call_periods?label=eq.$lbl" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_JWT")
       echo "   cleanup DELETE call_periods label=$lbl: $del"
@@ -392,17 +394,17 @@ echo "== 9. east_vacation_reviews (Prompt 15 part 2: the away/home decision per 
 #     Davenport-lesson shape; the probe (9c) is what proves rows exist and stay invisible. Before the
 #     migration the table is missing and PostgREST answers 404 (accepted, named). A 200 with a non-empty
 #     body means anon can read decisions: FAIL.
-line=$(curl -s -o /tmp/vr9a.json -w 'HTTP %{http_code}' "$URL/rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
-body9a=$(tr -d ' \n\r' < /tmp/vr9a.json)
-echo "   9a anon GET: $line  body: $(head -c 160 /tmp/vr9a.json)"
+line=$(curl -s -o $T/vr9a.json -w 'HTTP %{http_code}' "$URL/rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+body9a=$(tr -d ' \n\r' < $T/vr9a.json)
+echo "   9a anon GET: $line  body: $(head -c 160 $T/vr9a.json)"
 case "$line" in
-  "HTTP 200") if [ "$body9a" = "[]" ]; then ok "anon read of east_vacation_reviews is a silent empty list (no anon policy)"; else bad "anon read of east_vacation_reviews returned rows: $(head -c 120 /tmp/vr9a.json)"; fi;;
+  "HTTP 200") if [ "$body9a" = "[]" ]; then ok "anon read of east_vacation_reviews is a silent empty list (no anon policy)"; else bad "anon read of east_vacation_reviews returned rows: $(head -c 120 $T/vr9a.json)"; fi;;
   "HTTP 404") ok "east_vacation_reviews not created yet (404 - before the migration); apply sql/migrations/2026-09-23-east-vacation-reviews.sql";;
   *) bad "anon read of east_vacation_reviews: $line (expected 200 + [] after the migration, 404 before)";;
 esac
 # 9b. anon WRITE (nothing can land: no anon insert policy; 404 before the migration)
-line=$(curl -s -o /tmp/vr9b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/east_vacation_reviews" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"person_id":"s9test","start":"2030-05-01","end":"2030-05-02","decision":"home","decided_by":"verify-rls"}')
-echo "   9b anon POST: $line  body: $(head -c 160 /tmp/vr9b.json)"
+line=$(curl -s -o $T/vr9b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/east_vacation_reviews" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"person_id":"s9test","start":"2030-05-01","end":"2030-05-02","decision":"home","decided_by":"verify-rls"}')
+echo "   9b anon POST: $line  body: $(head -c 160 $T/vr9b.json)"
 case "$line" in "HTTP 401"|"HTTP 403"|"HTTP 404") ok "anon write to east_vacation_reviews blocked ($line)";; *) bad "anon write to east_vacation_reviews: $line (expected 401/403; 404 before the migration)";; esac
 # 9c. the rolled-back probe (sql/probes/east-vacation-reviews-probe.sql): fixtures in 2030-05 (decided_by
 #     'probe-eastvac'), throwaway auth users probe-eastvac-<uuid>@example.test linked to s3 (surgeon) / s1
@@ -449,9 +451,9 @@ fi
 # 9d. authenticated READ over REST as a linked SURGEON (SILVIS_SURGEON_JWT): a 200 with an array. Read only -
 #     a REST write here would be a real, persisted decision.
 if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
-  line=$(curl -s -o /tmp/vr9d.json -w 'HTTP %{http_code}' "$URL/rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT")
-  echo "   9d surgeon GET: $line  body: $(head -c 160 /tmp/vr9d.json)"
-  if [ "$line" = "HTTP 200" ] && head -c 1 /tmp/vr9d.json | grep -q '\['; then ok "a linked surgeon reads east_vacation_reviews ($line, array)"; else bad "surgeon read of east_vacation_reviews: $line $(head -c 120 /tmp/vr9d.json)"; fi
+  line=$(curl -s -o $T/vr9d.json -w 'HTTP %{http_code}' "$URL/rest/v1/east_vacation_reviews?select=person_id,start,end,decision&limit=5" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT")
+  echo "   9d surgeon GET: $line  body: $(head -c 160 $T/vr9d.json)"
+  if [ "$line" = "HTTP 200" ] && head -c 1 $T/vr9d.json | grep -q '\['; then ok "a linked surgeon reads east_vacation_reviews ($line, array)"; else bad "surgeon read of east_vacation_reviews: $line $(head -c 120 $T/vr9d.json)"; fi
 else
   echo "   SKIP 9d (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment; no such user exists until invites go out)"
 fi
@@ -471,11 +473,11 @@ echo "== 10. pre-launch RLS (Prompt 16 A1): profiles / contacts / feed / audit /
 #   edge-functions/*        read user_profiles / office_contacts with the service role (RLS bypassed) - unaffected
 # 10a. anon may not execute offer_status(uuid, text). 401/403 = the grant is revoked (after). A 200 = anon still runs it
 #      (before: it answers "not_started" - anon sees no offers). Nothing is written either way.
-line=$(curl -s -o /tmp/vr10a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/offer_status" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_period":"00000000-0000-0000-0000-000000000000","p_person":"s3"}')
-echo "   10a anon rpc offer_status: $line  body: $(head -c 160 /tmp/vr10a.json)"
+line=$(curl -s -o $T/vr10a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/offer_status" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_period":"00000000-0000-0000-0000-000000000000","p_person":"s3"}')
+echo "   10a anon rpc offer_status: $line  body: $(head -c 160 $T/vr10a.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc offer_status refused ($line - execute revoked from anon)";;
-  "HTTP 200") bad "anon can still execute offer_status ($line, body $(head -c 60 /tmp/vr10a.json)) - apply sql/migrations/2026-09-24-prelaunch-rls.sql";;
+  "HTTP 200") bad "anon can still execute offer_status ($line, body $(head -c 60 $T/vr10a.json)) - apply sql/migrations/2026-09-24-prelaunch-rls.sql";;
   *) bad "anon rpc offer_status: $line (expected 401/403)";;
 esac
 # 10b. the client gates for a) / b), read from the source (a regression here would make the new policies 200 + [] a live read)

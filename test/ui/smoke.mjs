@@ -160,8 +160,8 @@
 //     scrolls in its wrapper with the swipe hint, buttons >= 36 px; dark adds
 //     the navy body and table text >= 3:1). Screenshots openshifts.png,
 //     openshifts-sheet.png, openshifts-email-preview.png, openshifts-390.png,
-//     openshifts-dark.png, openshifts-390-dark.png (part 6 copies the set to
-//     docs/screenshots/open-shifts/ for review without Playwright). Fix round:
+//     openshifts-dark.png, openshifts-390-dark.png (kept in test/ui/out/, gitignored -
+//     B10 9/23: no docs/screenshots copy, the e-mail preview shows the harness URL). Fix round:
 //     the review shots are taken with the toast dismissed (openshifts.png
 //     BEFORE Copy list, the sheet as a viewport shot), the dark 390 probe
 //     fails on a white swipe-hint cover, and the 'ok screenshots' line is
@@ -2145,7 +2145,7 @@ try {
     else ok(`Open shifts 390px (dark): no horizontal page scroll (${m2.pageW}), body ${m2.bodyBg}, the table scrolls inside its wrapper (${m2.wrapScroll} in ${m2.wrapClient}) with the swipe hint painted in the dark card colour, buttons >= 36px`);
     await clearToast();
     await page.screenshot({ path: path.join(OUT, "openshifts-390-dark.png"), fullPage: true });
-    // The 'ok screenshots' line is earned: the sheet and preview shots sit inside conditionals, so check that every one of the six exists, is from THIS run and is under 300 KB (docs/screenshots/open-shifts/ is copied from these files).
+    // The 'ok screenshots' line is earned: the sheet and preview shots sit inside conditionals, so check that every one of the six exists, is from THIS run and is under 300 KB (review shots stay in test/ui/out/ - B10 9/23).
     // (the sheet shot exists only when the claim flow ran - LIVE mode without a claimable slot skips it and says so)
     const SIX = ["openshifts.png", "openshifts-sheet.png", "openshifts-email-preview.png", "openshifts-390.png", "openshifts-dark.png", "openshifts-390-dark.png"].filter(f => f !== "openshifts-sheet.png" || claimExercised);
     if (!claimExercised) console.log("     (openshifts-sheet.png not required: the claim flow did not run)");

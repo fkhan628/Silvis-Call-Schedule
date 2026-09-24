@@ -22,6 +22,7 @@
 // that section is printed first so one run names the whole fix).
 "use strict";
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const cp = require("child_process");
 
@@ -190,7 +191,14 @@ const docsDir = path.join(ROOT, "docs");
 // recursive (review 9/23): a file written inside a docs/ subfolder must trip the guard too
 const walkFiles = (dir, rel) => fs.readdirSync(dir).sort().flatMap(f => { const p = path.join(dir, f), st = fs.statSync(p); return st.isDirectory() ? walkFiles(p, rel + f + "/") : [[rel + f, st.size + ":" + st.mtimeMs]]; });
 const docsSnapshot = () => JSON.stringify(walkFiles(docsDir, ""));
-ok(fs.readdirSync(docsDir).some(f => fs.statSync(path.join(docsDir, f)).isDirectory()) && walkFiles(docsDir, "").some(([r]) => r.indexOf("/") > 0), "the docs/ snapshot walks into subfolders (docs/screenshots/ exists and must appear as nested paths)");
+// B10 (9/23): docs/screenshots/ was dropped (the review shots carried the local harness URL), so docs/ has no subfolder
+// today; the walker still recurses - proven on a temp tree rather than on a folder that must exist.
+{
+  const tmpWalk = fs.mkdtempSync(path.join(os.tmpdir(), "silvis-ci-walk-"));
+  fs.mkdirSync(path.join(tmpWalk, "sub")); fs.writeFileSync(path.join(tmpWalk, "sub", "f.txt"), "x", "utf8"); fs.writeFileSync(path.join(tmpWalk, "top.txt"), "y", "utf8");
+  ok(walkFiles(tmpWalk, "").map(([r]) => r).join(",") === "sub/f.txt,top.txt", "the docs/ snapshot walker recurses into subfolders (nested paths appear as 'sub/f.txt')");
+  fs.rmSync(tmpWalk, { recursive: true, force: true });
+}
 const docsBefore = docsSnapshot();
 const spawnScript = (f, arg) => cp.spawnSync(process.execPath, [path.join(scriptsDir, f), arg], { cwd: ROOT, encoding: "utf8", timeout: 60000, env: Object.assign({}, process.env, { SILVIS_SUPABASE_WORKDIR: "" }) });
 scriptFiles.forEach(f => {

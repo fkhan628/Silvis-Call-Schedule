@@ -1489,11 +1489,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(wb.includes("!isScheduler && personId !== mySurgeon"), "a surgeon reviews his own ranges only; the scheduler anyone's");
     assert.ok(wb.includes("!Array.isArray(rows) || rows.length === 0"), "an empty representation is a failed save (RLS no-op), never success");
   });
-  check("P15: the 'home' -> 'either' offers hook exists as a NO-OP with the Prompt 14 TODO (the painter is on another branch); no call_offers write from this branch", () => {
-    assert.ok(src.includes("const offerEitherForHomeRange = (personId, range) => {"), "hook missing");
-    assert.ok(src.includes("TODO(Prompt 14 UI wave)"), "the TODO marker must name the wave that wires it");
-    assert.ok(src.includes('if (decision === "home") offerEitherForHomeRange(personId, range);'), "a home decision must call the hook");
-    assert.strictEqual(src.includes("/rest/v1/call_offers"), false, "no call_offers write on this branch");
+  check("B10 (9/23): the 'home' -> 'either' offers hook is retired - no offerEitherForHomeRange, no 'pending: prompt-14' shape, no TODO(Prompt 14 UI wave); a home decision writes the review row only (the painter's commitOffersPaint is the one call_offers write path)", () => {
+    assert.strictEqual(src.includes("offerEitherForHomeRange"), false, "the hook (definition or call) is still in the source");
+    assert.strictEqual(src.includes('pending: "prompt-14"'), false, "the no-op's return shape is still in the source");
+    assert.strictEqual(src.includes("TODO(Prompt 14 UI wave)"), false, "the TODO marker is still in the source");
+    const ws = src.indexOf("const saveEastVacationReview = async"), wb = src.slice(ws, src.indexOf("const goToDay = ", ws));
+    assert.ok(ws > 0 && wb.length > 0, "saveEastVacationReview body");
+    assert.strictEqual(wb.includes("call_offers") || wb.includes("save_offers"), false, "saveEastVacationReview must not touch call_offers");
+    assert.strictEqual(src.includes("/rest/v1/call_offers"), false, "no direct REST write to call_offers anywhere (the painter goes through rpc/save_offers)");
   });
   check("P15: the refresh resets changed / removed ranges through derivedEastVacations(...).stale (person-scoped), skips rows the read could not see, and names the resets in the toast + audit", () => {
     const rs = src.indexOf("const refreshEastFeed = async () => {");
@@ -1634,7 +1637,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("P15 docs: guide section 18 states where the smoke screenshots are (test/ui/out/, gitignored), the hook's exact return shape, and documents verify-rls.sh section 9 (9a-9d + the leftover count) and the exact live commands (migration + probe)", () => {
       assert.ok(/test\/ui\/out\//.test(sec18), "the screenshots' location test/ui/out/ is not named");
       assert.ok(/gitignored/.test(sec18), "section 18 must say the screenshot folder is gitignored (nothing was copied into docs/screenshots on this branch)");
-      assert.ok(sec18.includes('{ ok: true, offered: 0, pending: "prompt-14" }'), "the no-op hook's exact return shape");
+      assert.ok(/offers step: retired \(B10, 9\/23\)/.test(sec18) && /offerEitherForHomeRange/.test(sec18) && /commitOffersPaint/.test(sec18), "section 18 must record that the 'home' -> 'either' hook was retired in B10 and name the painter's write path as the one place offers are made");
       ["9a", "9b", "9c", "9d"].forEach(k => assert.ok(new RegExp("\\b" + k + "\\b").test(sec18), "verify-rls section 9 case " + k + " not documented"));
       assert.ok(/leftover/.test(sec18), "the observed-rollback leftover count is not documented");
       assert.ok(sec18.includes("supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-23-east-vacation-reviews.sql"), "the exact migration command");
