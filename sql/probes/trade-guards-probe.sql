@@ -84,6 +84,51 @@
 --      fixture gives display_name 'Probe Scheduler' - the display_name branch of the actor lookup.
 --        BEFORE: no actor, no summary                    -> F2=actor=null summary=null
 --        AFTER : display_name + the one-way sentence    -> F2=actor=Probe Scheduler summary=Trade applied: Burchett takes Primary Fri Mar 15 (from Acton, one-way)
+-- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql) - shift_trade_requests.kind 'trade' | 'give'.
+-- A member 'trade' must now carry a return leg, so the member inserts of A, G, H and N send one (return 2030-03-04 backup) and
+-- keep testing what they tested (their expectations are unchanged). The give fixtures (days 2030-03-25 / 03-27, trade ids
+-- ...030-...034) sit in their own block: before the migration it fails on the missing column and says so (GIVE_SETUP), the
+-- other cases still run. A missing column reads 'ERR column  kind  ... does not exist' (the report flattens the quotes).
+--   GIVE_SETUP the give fixtures (as postgres)
+--        BEFORE: ERR column  kind  of relation  shift_trade_requests  does not exist   AFTER: GIVE_SETUP=ok
+--   O  surgeon (s2) gives his own day (2030-03-27 primary) to s3 - kind 'give', NO return day / role
+--        BEFORE: ERR ... kind ... does not exist        AFTER: O=status=pending from=s2 kind=give return=null
+--   P  surgeon (s2) gives a day he does NOT hold (2030-03-03 primary, held by s3), naming s3 as from_surgeon_id, to s4:
+--      the guard does not refuse it at insert - it forces from to the caller, as for every member row (case H) - so it lands
+--      as HIS give of a day he does not hold, and apply_trade refuses that (P2)
+--        BEFORE: ERR ... kind ... does not exist        AFTER: P=status=pending from=s2 kind=give
+--   P2 surgeon (s2) applies an ACCEPTED give from s2 (fixture ...030) of 2030-03-03 primary, which s3 holds
+--        BEFORE: TRADE_NOT_FOUND (no fixture)           AFTER: P2=ERR TRADE_STALE: 2030-03-03 primary is no longer held by s2
+--   Q  surgeon (s2) inserts a 'trade' (kind omitted = the default) with NO return leg
+--        BEFORE: stored (only the client refused it)    -> Q=status=pending return=null
+--        AFTER : refused                                -> Q=ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead
+--   Q2 surgeon (s2) inserts a 'give' WITH a return leg
+--        BEFORE: ERR ... kind ... does not exist        AFTER: Q2=ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift
+--   Q3 surgeon (s2) inserts a 'trade' with a HALF return leg (return day 2030-03-04, no return role) - both are required
+--        BEFORE: stored                                 -> Q3=status=pending return=2030-03-04 return_role=null
+--        AFTER : refused                                -> Q3=ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead
+--   Q4 surgeon (s2) inserts a 'give' carrying only a return ROLE (no return day)
+--        BEFORE: ERR ... kind ... does not exist        AFTER: Q4=ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift
+--   R  surgeon (s2) sets kind 'trade' on his OWN pending give (fixture ...031)
+--        BEFORE: ERR ... kind ... does not exist        AFTER: R=ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade
+--   S  surgeon (s2) sets kind 'give' on a pending trade between s3 and s4 (fixture ...032) - he is no party: policy
+--      trade_update filters the row out, nothing changes
+--        BEFORE: ERR ... kind ... does not exist        AFTER: S=rows=0 kind=trade
+--   S2 surgeon (s2) sets kind 'trade' on a pending give from s3 TO HIM (fixture ...033) - a party, but not the scheduler
+--        BEFORE: ERR ... kind ... does not exist        AFTER: S2=ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade
+--   S3 the RECEIVER (s2) accepts the pending give from s3 (fixture ...033; S2 left it pending) - the accept transition through
+--      the changed trade_update_guard (T's fixture is inserted already accepted, so T alone does not prove it)
+--        BEFORE: rows=0 status=null (no fixture)        AFTER: S3=rows=1 status=accepted
+--   T  the RECEIVER (s2) applies an ACCEPTED give from s3 (fixture ...034) of 2030-03-25 primary - apply_trade is unchanged
+--        BEFORE: TRADE_NOT_FOUND (no fixture)           AFTER: T=status=applied 03-25p=s2
+--   T2 observation right after T: the trade.apply audit row T wrote (the 5b one-way form; s2 has no display_name)
+--        BEFORE: actor=null summary=null                AFTER: T2=actor=Burchett summary=Trade applied: Burchett takes Primary Mon Mar 25 (from Acton, one-way)
+--   U  the SCHEDULER inserts a one-way 'trade' (kind omitted) - unchanged: allowed
+--        BEFORE and AFTER                               -> U=status=pending from=s3 return=null
+--   U2 the SCHEDULER inserts a 'give' WITH a return leg - the one-way rule holds for every caller
+--        BEFORE: ERR ... kind ... does not exist        AFTER: U2=ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift
+--   U3 the SCHEDULER inserts a 'give' with no return - allowed, the same one-way move labelled as a give
+--        BEFORE: ERR ... kind ... does not exist        AFTER: U3=status=pending from=s3 kind=give
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -155,8 +200,8 @@ begin
   begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
-    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, status, decided_at, detail)
-    values ('s2', 's3', '2030-03-03', 'primary', 'accepted', now(), 'probe A') returning id into tid;
+    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, return_day, return_role, status, decided_at, detail)
+    values ('s2', 's3', '2030-03-03', 'primary', '2030-03-04', 'backup', 'accepted', now(), 'probe A') returning id into tid;
     execute 'reset role';
     perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
     select status, from_surgeon_id, ' decided=' || coalesce(decided_at::text, 'null') into st, fr, v
@@ -331,8 +376,8 @@ begin
   begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
-    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, status, detail)
-    values ('s2', 's2', '2030-03-03', 'primary', 'pending', 'probe G') returning id into tid;
+    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, return_day, return_role, status, detail)
+    values ('s2', 's2', '2030-03-03', 'primary', '2030-03-04', 'backup', 'pending', 'probe G') returning id into tid;
     execute 'reset role';
     perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
     select status into st from public.shift_trade_requests where id = tid;
@@ -352,8 +397,8 @@ begin
   begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
-    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, status, detail)
-    values ('s3', 's4', '2030-03-03', 'primary', 'pending', 'probe H') returning id into tid;
+    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, return_day, return_role, status, detail)
+    values ('s3', 's4', '2030-03-03', 'primary', '2030-03-04', 'backup', 'pending', 'probe H') returning id into tid;
     execute 'reset role';
     perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
     select status, from_surgeon_id into st, fr from public.shift_trade_requests where id = tid;
@@ -474,8 +519,8 @@ begin
   begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
-    insert into public.shift_trade_requests (from_surgeon_id, from_surgeon_name, to_surgeon_id, to_surgeon_name, day, role, status, detail)
-    values ('s2', 'Mallory', 's3', 'Eve', '2030-03-03', 'primary', 'pending', 'probe N') returning id into tid;
+    insert into public.shift_trade_requests (from_surgeon_id, from_surgeon_name, to_surgeon_id, to_surgeon_name, day, role, return_day, return_role, status, detail)
+    values ('s2', 'Mallory', 's3', 'Eve', '2030-03-03', 'primary', '2030-03-04', 'backup', 'pending', 'probe N') returning id into tid;
     execute 'reset role';
     perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
     select from_surgeon_name, to_surgeon_name into fr, tn from public.shift_trade_requests where id = tid;
@@ -484,6 +529,358 @@ begin
     v := 'ERR ' || sqlerrm;
   end;
   insert into probe_results values ('N', v);
+end $$;
+
+-- ---------- GIVE_SETUP (2026-09-24, Prompt 19): the give fixtures, as postgres. Their own block: before the migration the kind
+-- column is missing, this block rolls back and reports it, and every other case still runs.
+do $$
+declare v text;
+begin
+  begin
+    insert into public.schedule_days (day, primary_id, backup_id, primary_locked, backup_locked, source, version)
+    values ('2030-03-25', 's3', null, false, false, 'probe', 1),   -- S2 / T: s3's primary, given to s2
+           ('2030-03-27', 's2', null, false, false, 'probe', 1)    -- O / Q / R / U: s2's own primary
+    on conflict (day) do update set primary_id = excluded.primary_id, backup_id = excluded.backup_id,
+      primary_locked = excluded.primary_locked, backup_locked = excluded.backup_locked, source = excluded.source;
+    insert into public.shift_trade_requests (id, kind, from_surgeon_id, to_surgeon_id, day, role, return_day, return_role, status, detail)
+    values ('00000000-0000-4000-8000-000000000030', 'give',  's2', 's4', '2030-03-03', 'primary', null, null, 'accepted', 'probe P2'),
+           ('00000000-0000-4000-8000-000000000031', 'give',  's2', 's3', '2030-03-27', 'primary', null, null, 'pending',  'probe R'),
+           ('00000000-0000-4000-8000-000000000032', 'trade', 's3', 's4', '2030-03-25', 'primary', '2030-03-26', 'backup', 'pending', 'probe S'),
+           ('00000000-0000-4000-8000-000000000033', 'give',  's3', 's2', '2030-03-25', 'primary', null, null, 'pending',  'probe S2'),
+           ('00000000-0000-4000-8000-000000000034', 'give',  's3', 's2', '2030-03-25', 'primary', null, null, 'accepted', 'probe T');
+    v := 'ok';
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('GIVE_SETUP', v);
+end $$;
+
+-- ---------- O: surgeon gives his own day - kind 'give', no return day / role
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  tid uuid; st text; fr text; kd text; rd text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (kind, from_surgeon_id, to_surgeon_id, day, role, status, detail)
+    values ('give', 's2', 's3', '2030-03-27', 'primary', 'pending', 'probe O') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    execute 'select status, from_surgeon_id, kind, return_day::text from public.shift_trade_requests where id = $1' into st, fr, kd, rd using tid;
+    v := 'status=' || st || ' from=' || fr || ' kind=' || kd || ' return=' || coalesce(rd, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('O', v);
+end $$;
+
+-- ---------- P: surgeon gives a day he does not hold, naming s3 as from - the guard forces from to him (as in H)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  tid uuid; st text; fr text; kd text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (kind, from_surgeon_id, to_surgeon_id, day, role, status, detail)
+    values ('give', 's3', 's4', '2030-03-03', 'primary', 'pending', 'probe P') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    execute 'select status, from_surgeon_id, kind from public.shift_trade_requests where id = $1' into st, fr, kd using tid;
+    v := 'status=' || st || ' from=' || fr || ' kind=' || kd;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('P', v);
+end $$;
+
+-- ---------- P2: surgeon applies an accepted give of a day he does not hold - TRADE_STALE
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    perform public.apply_trade('00000000-0000-4000-8000-000000000030');
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = '00000000-0000-4000-8000-000000000030';
+    v := 'status=' || st;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('P2', v);
+end $$;
+
+-- ---------- Q: surgeon inserts a 'trade' (kind omitted) with no return leg
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  tid uuid; st text; rd text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, status, detail)
+    values ('s2', 's3', '2030-03-27', 'primary', 'pending', 'probe Q') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status, return_day::text into st, rd from public.shift_trade_requests where id = tid;
+    v := 'status=' || st || ' return=' || coalesce(rd, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('Q', v);
+end $$;
+
+-- ---------- Q2: surgeon inserts a 'give' WITH a return leg
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  tid uuid; st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (kind, from_surgeon_id, to_surgeon_id, day, role, return_day, return_role, status, detail)
+    values ('give', 's2', 's3', '2030-03-27', 'primary', '2030-03-04', 'backup', 'pending', 'probe Q2') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = tid;
+    v := 'status=' || st;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('Q2', v);
+end $$;
+
+-- ---------- Q3: surgeon inserts a 'trade' (kind omitted) with a HALF return leg - a return day but no return role
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  tid uuid; st text; rd text; rr text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, return_day, status, detail)
+    values ('s2', 's3', '2030-03-27', 'primary', '2030-03-04', 'pending', 'probe Q3') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status, return_day::text, return_role into st, rd, rr from public.shift_trade_requests where id = tid;
+    v := 'status=' || st || ' return=' || coalesce(rd, 'null') || ' return_role=' || coalesce(rr, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('Q3', v);
+end $$;
+
+-- ---------- Q4: surgeon inserts a 'give' carrying only a return ROLE (no return day)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  tid uuid; st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (kind, from_surgeon_id, to_surgeon_id, day, role, return_role, status, detail)
+    values ('give', 's2', 's3', '2030-03-27', 'primary', 'backup', 'pending', 'probe Q4') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = tid;
+    v := 'status=' || st;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('Q4', v);
+end $$;
+
+-- ---------- R: surgeon changes kind on his OWN pending give
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  n int; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    execute 'update public.shift_trade_requests set kind = ''trade'' where id = ''00000000-0000-4000-8000-000000000031''';
+    get diagnostics n = row_count;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    v := 'rows=' || n;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('R', v);
+end $$;
+
+-- ---------- S: surgeon changes kind on a trade between two other surgeons (no party: RLS filters it out)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  n int; kd text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    execute 'update public.shift_trade_requests set kind = ''give'' where id = ''00000000-0000-4000-8000-000000000032''';
+    get diagnostics n = row_count;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    execute 'select kind from public.shift_trade_requests where id = ''00000000-0000-4000-8000-000000000032''' into kd;
+    v := 'rows=' || n || ' kind=' || coalesce(kd, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('S', v);
+end $$;
+
+-- ---------- S2: surgeon (the RECEIVER - a party) changes kind on another person's pending give
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  n int; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    execute 'update public.shift_trade_requests set kind = ''trade'' where id = ''00000000-0000-4000-8000-000000000033''';
+    get diagnostics n = row_count;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    v := 'rows=' || n;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('S2', v);
+end $$;
+
+-- ---------- S3: the RECEIVER accepts the pending give (...033) - the accept transition through the changed update guard
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  n int; st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    execute 'update public.shift_trade_requests set status = ''accepted'' where id = ''00000000-0000-4000-8000-000000000033''';
+    get diagnostics n = row_count;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    execute 'select status from public.shift_trade_requests where id = ''00000000-0000-4000-8000-000000000033''' into st;
+    v := 'rows=' || n || ' status=' || coalesce(st, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('S3', v);
+end $$;
+
+-- ---------- T: the RECEIVER applies an accepted give (apply_trade unchanged: a party may apply; return_day null = one-way)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  st text; p1 text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    perform public.apply_trade('00000000-0000-4000-8000-000000000034');
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = '00000000-0000-4000-8000-000000000034';
+    select primary_id into p1 from public.schedule_days where day = '2030-03-25';
+    v := 'status=' || st || ' 03-25p=' || coalesce(p1, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('T', v);
+end $$;
+
+-- ---------- T2: the audit row T wrote - the 5b one-way summary, actor = the receiver (roster fallback)
+do $$
+declare an text; sm text; v text;
+begin
+  begin
+    select a.actor_name, a.detail ->> 'summary' into an, sm
+      from public.audit_log a
+     where a.action = 'trade.apply' and a.detail ->> 'trade_id' = '00000000-0000-4000-8000-000000000034'
+     order by a.created_at desc limit 1;
+    v := 'actor=' || coalesce(an, 'null') || ' summary=' || coalesce(sm, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('T2', v);
+end $$;
+
+-- ---------- U: the SCHEDULER inserts a one-way 'trade' (kind omitted) - unchanged, allowed
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'sched');
+  tid uuid; st text; fr text; rd text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (from_surgeon_id, to_surgeon_id, day, role, status, detail)
+    values ('s3', 's2', '2030-03-27', 'backup', 'pending', 'probe U') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status, from_surgeon_id, return_day::text into st, fr, rd from public.shift_trade_requests where id = tid;
+    v := 'status=' || st || ' from=' || fr || ' return=' || coalesce(rd, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('U', v);
+end $$;
+
+-- ---------- U2: the SCHEDULER inserts a 'give' WITH a return leg - refused for every caller
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'sched');
+  tid uuid; st text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (kind, from_surgeon_id, to_surgeon_id, day, role, return_day, return_role, status, detail)
+    values ('give', 's3', 's2', '2030-03-27', 'backup', '2030-03-04', 'backup', 'pending', 'probe U2') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select status into st from public.shift_trade_requests where id = tid;
+    v := 'status=' || st;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('U2', v);
+end $$;
+
+-- ---------- U3: the SCHEDULER inserts a 'give' with no return - allowed (the same one-way move, labelled as a give)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'sched');
+  tid uuid; st text; fr text; kd text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (kind, from_surgeon_id, to_surgeon_id, day, role, status, detail)
+    values ('give', 's3', 's2', '2030-03-27', 'backup', 'pending', 'probe U3') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    execute 'select status, from_surgeon_id, kind from public.shift_trade_requests where id = $1' into st, fr, kd using tid;
+    v := 'status=' || st || ' from=' || fr || ' kind=' || kd;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('U3', v);
 end $$;
 
 -- ---------- report + ROLL BACK EVERYTHING (this raise aborts the batch's transaction)

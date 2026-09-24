@@ -53,6 +53,10 @@
 -- Revision 2026-09-24 m (Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql, applied 2026-09-24 ~17:21 Central after the probes): apply_trade()'s
 -- audit row carries actor_name (the caller's user_profiles.display_name, else the roster name, else the id) and detail.summary in the client's
 -- trade.accept wording (roster names by id); claim_open_slot()'s audit detail gains the same summary key (its feed title). Nothing else in either body changes.
+-- Revision 2026-09-24 n (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql, report-first, NOT yet applied): shift_trade_requests.kind
+-- 'trade' | 'give' (default 'trade'; a give carries no return leg - shift_trade_requests_give_one_way); trade_insert_guard() lets a member
+-- insert a 'give' with no return shift and refuses a member 'trade' without one (TRADE_INELIGIBLE, both); trade_update_guard() adds kind
+-- to the TRADE_IMMUTABLE leg list. apply_trade() is unchanged (the receiver already applies a one-way row as a party).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -274,12 +278,27 @@ create table if not exists public.shift_trade_requests (
 );
 create index if not exists trade_status_idx on public.shift_trade_requests(status, submitted_at desc);
 create index if not exists trade_day_idx    on public.shift_trade_requests(day);
+-- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): what the row is. 'trade' = day for day (a member's
+-- trade carries its return shift - trade_insert_guard; the scheduler may still record a one-way 'trade', as before); 'give' = a
+-- member offers one of his days (or each day of a unit, one row per day) to a named colleague and nothing comes back - never a
+-- return leg, for any caller (the check below; trade_insert_guard raises the readable sentence first). Existing rows read 'trade'.
+-- A give is accepted / declined / cancelled / applied exactly like a trade (apply_trade: a party or the scheduler; return_day null
+-- is its one-way path). kind is a leg: immutable for a non-scheduler after insert (trade_update_guard, TRADE_IMMUTABLE).
+alter table public.shift_trade_requests add column if not exists kind text not null default 'trade';
+alter table public.shift_trade_requests drop constraint if exists shift_trade_requests_kind_check;
+alter table public.shift_trade_requests add constraint shift_trade_requests_kind_check check (kind in ('trade','give'));
+alter table public.shift_trade_requests drop constraint if exists shift_trade_requests_give_one_way;
+alter table public.shift_trade_requests add constraint shift_trade_requests_give_one_way check (kind = 'trade' or (return_day is null and return_role is null));
+comment on column public.shift_trade_requests.kind is '''trade'' (day for day; the default) | ''give'' (one-way, no return leg - Prompt 19, Faraz 2026-09-24)';
 
 -- Non-schedulers may only move a PENDING trade's status: the counter-party to accepted/declined,
 -- the proposer to cancelled. Legs (who/day/role/return) are immutable except for the scheduler.
 -- 2026-09-23 (audit RLS-6): the counter-party may not ACCEPT a trade whose day or return day is
 -- already past in Central time (strict <: today's 07:00 shift stays tradeable) - TRADE_PAST, the
 -- same sentence apply_trade() raises; declining or cancelling a stale trade stays open to them.
+-- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): kind ('trade' | 'give') joins the legs - a
+-- non-scheduler may not change it on any row, his own included (TRADE_IMMUTABLE); on a row he is no party to, policy
+-- trade_update filters the UPDATE out first (0 rows). The status transitions below are unchanged.
 create or replace function public.trade_update_guard() returns trigger
 language plpgsql as $$
 declare
@@ -289,7 +308,8 @@ begin
   if public.silvis_is_sched() then return new; end if;
   if new.from_surgeon_id <> old.from_surgeon_id or new.to_surgeon_id <> old.to_surgeon_id
      or new.day <> old.day or new.role <> old.role
-     or new.return_day is distinct from old.return_day or new.return_role is distinct from old.return_role then
+     or new.return_day is distinct from old.return_day or new.return_role is distinct from old.return_role
+     or new.kind is distinct from old.kind then
     raise exception 'TRADE_IMMUTABLE: only the scheduler may change the legs of a trade' using errcode = 'P0001';
   end if;
   if current_setting('silvis.apply_trade', true) = '1' and old.status = 'accepted' and new.status = 'applied' then
@@ -328,6 +348,12 @@ create trigger trade_update_guard_trg
 -- 2026-09-24 (Prompt 16 B6, review 9/23 section 3): from_surgeon_name / to_surgeon_name are written from the roster
 -- (call_schedule_data 'main' -> roster[] -> name by id) for EVERY insert, after the id normalisation, instead of storing
 -- the client's strings; an unknown id or a missing roster reads as the id (display data, never a refusal).
+-- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): a member (neither scheduler nor server) may insert
+-- a 'give' - one of his days to a named colleague, NO return day and NO return role - and a member 'trade' must carry both
+-- (TRADE_INELIGIBLE: a trade needs a return shift ...); a 'give' with a return leg is refused for every caller (TRADE_INELIGIBLE:
+-- a give is one-way ...). The scheduler / server may still insert a one-way 'trade' (unchanged) and may insert a 'give' - it
+-- means the same one-way move, labelled as a give. from := me, the same-surgeon refusal and the roster names are unchanged: a
+-- member's give on a day he does not hold lands from HIM and apply_trade refuses it later (TRADE_STALE).
 create or replace function public.trade_insert_guard() returns trigger
 language plpgsql as $$
 declare
@@ -343,6 +369,15 @@ begin
     new.status          := 'pending';
     new.submitted_at    := now();
     new.decided_at      := null;
+    -- (2026-09-24, Prompt 19) a member's 'trade' carries its return shift (return_day AND return_role); a one-way row from a
+    -- member is a 'give'. kind null reads as a trade here (the not-null constraint refuses it after the trigger anyway).
+    if new.kind is distinct from 'give' and (new.return_day is null or new.return_role is null) then
+      raise exception 'TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead' using errcode = 'P0001';
+    end if;
+  end if;
+  -- (2026-09-24, Prompt 19) a give is one-way for EVERY caller, the scheduler and the server-side roles included
+  if new.kind = 'give' and (new.return_day is not null or new.return_role is not null) then
+    raise exception 'TRADE_INELIGIBLE: a give is one-way - it carries no return shift' using errcode = 'P0001';
   end if;
   if new.from_surgeon_id = new.to_surgeon_id then
     raise exception 'TRADE_INELIGIBLE: a trade needs two different surgeons' using errcode = 'P0001';

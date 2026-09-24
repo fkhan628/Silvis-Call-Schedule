@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
@@ -121,6 +121,27 @@ if linked; then
     # F2 = F's one-way row applied by the scheduler (display_name 'Probe Scheduler'). Before the migration both read actor=null summary=null.
     expect_eq         E3 "actor=Burchett summary=Trade applied: Burchett takes Primary Mon Mar 11 (from Acton  Acton takes Backup Wed Mar 13 in return)" "apply_trade's audit row names the actor (roster name) and carries the two-way summary"
     expect_eq         F2 "actor=Probe Scheduler summary=Trade applied: Burchett takes Primary Fri Mar 15 (from Acton, one-way)" "apply_trade's audit row takes the caller's display_name and carries the one-way summary"
+    # 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): shift_trade_requests.kind 'trade' | 'give'. Before the migration
+    # GIVE_SETUP and every case naming kind read 'ERR column  kind  ... does not exist', P2 / T read TRADE_NOT_FOUND, T2 actor=null summary=null
+    # and Q status=pending return=null, Q3 status=pending return=2030-03-04 return_role=null and S3 rows=0 status=null (the probe header lists them);
+    # U is the same before and after.
+    expect_eq         GIVE_SETUP "ok"                          "the give fixtures insert (the kind column exists)"
+    expect_eq         O "status=pending from=s2 kind=give return=null" "a member gives his own day with no return leg (kind 'give')"
+    expect_eq         P "status=pending from=s2 kind=give"       "a member's give naming someone else's day lands FROM HIM (from forced, never refused at insert)"
+    expect_eq         P2 "ERR TRADE_STALE: 2030-03-03 primary is no longer held by s2" "apply_trade refuses a give of a day the giver does not hold"
+    expect_eq         Q "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead" "a member 'trade' without a return leg is refused (added in Prompt 19)"
+    expect_eq         Q2 "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift" "a member 'give' with a return leg is refused"
+    expect_eq         Q3 "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead" "a member 'trade' with a half leg (return day, no return role) is refused"
+    expect_eq         Q4 "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift" "a member 'give' carrying only a return role is refused"
+    expect_eq         R "ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade" "a member may not change kind on his own pending row"
+    expect_eq         S "rows=0 kind=trade"                      "a member may not change kind on a row he is no party to (RLS filters it: 0 rows)"
+    expect_eq         S2 "ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade" "the receiver may not change kind on another person's row"
+    expect_eq         S3 "rows=1 status=accepted"                "the receiver still ACCEPTS a pending give through the changed trade_update_guard"
+    expect_eq         T "status=applied 03-25p=s2"               "the RECEIVER applies an accepted give (apply_trade unchanged)"
+    expect_eq         T2 "actor=Burchett summary=Trade applied: Burchett takes Primary Mon Mar 25 (from Acton, one-way)" "the give's audit row reads the 5b one-way form"
+    expect_eq         U "status=pending from=s3 return=null"     "the scheduler may still insert a one-way 'trade' (unchanged)"
+    expect_eq         U2 "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift" "a give with a return leg is refused for the scheduler too"
+    expect_eq         U3 "status=pending from=s3 kind=give"      "the scheduler may insert a give (the same one-way move, labelled)"
   fi
   # Did it roll back? Count every kind of fixture the probe creates (all anon-readable or auth rows).
   LEFTOVER_SQL="select ((select count(*) from public.schedule_days where day between '2030-03-01' and '2030-03-31' and source = 'probe') + (select count(*) from public.schedule_days where day between '2020-02-01' and '2020-02-29' and source = 'probe') + (select count(*) from public.shift_trade_requests where detail like 'probe %') + (select count(*) from public.time_off where note = 'probe') + (select count(*) from auth.users where email like 'probe-%@example.test') + (select count(*) from public.audit_log where action = 'trade.apply' and detail ->> 'trade_id' like '00000000-0000-4000-8000-0000000000%'))::int as leftover"
@@ -141,10 +162,20 @@ else
   echo "   SKIP  (supabase CLI not linked at $WORKDIR)"
 fi
 
+echo "== 5c. PostgREST exposes shift_trade_requests.kind (anon; Prompt 19 give a day - the gate before the client push) =="
+# The trade probe (5) runs SQL directly and never goes through PostgREST's schema cache, which the migration's
+# `notify pgrst, 'reload schema'` refreshes. A client that sends `kind` before PostgREST knows the column fails every
+# insert, so this anon read is the before / after signal: HTTP 400 42703 "column shift_trade_requests.kind does not
+# exist" before sql/migrations/2026-09-24-give-kind.sql, HTTP 200 [] after it (anon reads no trade rows - RLS; limit=0).
+line=$(curl -s -o $T/vr5c.json -w 'HTTP %{http_code}' "$URL/rest/v1/shift_trade_requests?select=kind&limit=0" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+echo "   $line  body: $(head -c 160 $T/vr5c.json)"
+case "$line" in "HTTP 200") ok "PostgREST knows shift_trade_requests.kind (anon select=kind -> 200): the Prompt 19 client may send it";; *) bad "PostgREST does not expose shift_trade_requests.kind yet: $line (expected 200; 400 / 42703 = the give-kind migration is not applied or the schema cache is stale) - do NOT push the Prompt 19 client";; esac
+
 echo "== 6. trade guards over REST (JWT-gated; SILVIS_SURGEON_JWT = a surgeon-role user's access token) =="
 if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
-  # 6a. insert with status 'accepted' as a surgeon -> lands as 'pending' (from_surgeon_id = the caller)
-  line=$(curl -s -o $T/vr6a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/shift_trade_requests" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"from_surgeon_id":"s9x","to_surgeon_id":"s9test","day":"2030-03-20","role":"primary","status":"accepted","detail":"verify-rls.sh 6a probe"}')
+  # 6a. insert with status 'accepted' as a surgeon -> lands as 'pending' (from_surgeon_id = the caller). It carries a return
+  #     leg: since Prompt 19 (sql/migrations/2026-09-24-give-kind.sql) a member 'trade' without one is refused (TRADE_INELIGIBLE).
+  line=$(curl -s -o $T/vr6a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/shift_trade_requests" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"from_surgeon_id":"s9x","to_surgeon_id":"s9test","day":"2030-03-20","role":"primary","return_day":"2030-03-22","return_role":"backup","status":"accepted","detail":"verify-rls.sh 6a probe"}')
   st=$(grep -oE '"status":"[a-z]+"' $T/vr6a.json | head -1)
   echo "   $line  $st  body: $(head -c 200 $T/vr6a.json)"
   if [ "$line" = "HTTP 201" ] && [ "$st" = '"status":"pending"' ]; then ok "surgeon POST with status 'accepted' lands as 'pending'"; else bad "surgeon POST with status 'accepted': $line $st"; fi

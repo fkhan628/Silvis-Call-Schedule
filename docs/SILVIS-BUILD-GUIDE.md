@@ -230,6 +230,17 @@ Unchanged for coordinators, proven by the probe: `schedule_days`, `call_schedule
 
 Proof: trade probe `E3` / `F2` and claim probe `B3` (rolled back; expected strings in their headers), `scripts/verify-rls.sh` sections 5 and 7, the record in `docs/SCHEMA-REVIEW.md` "2026-09-24 - trade / claim audit rows carry actor_name + summary (item 5b)" (status PREPARED until the orchestrator's *observed:* line; applied: 2026-09-24 22:21 UTC by the orchestrator through the linked CLI - probes E3 / F2 / B3 as expected, verify-rls sections 5 and 7 green; the two earlier `trade.apply` rows backfilled (actor Khan + summary)).
 
+- **Give a day (Prompt 19, `sql/migrations/2026-09-24-give-kind.sql`, prepared 2026-09-24 — report-first, NOT applied; one column + two checks on `shift_trade_requests`, two trigger functions, no policy / RPC / row).** A member may give one of his days (or each day of a unit) to a named colleague with nothing coming back; the colleague accepts or declines and `apply_trade` applies it like a one-way trade. One row per change:
+
+| change | before | after | client path that depends on it |
+|---|---|---|---|
+| `shift_trade_requests.kind` | — (every row a trade with an optional return leg) | `text not null default 'trade'`, `'trade'` \| `'give'` (`shift_trade_requests_kind_check`); `shift_trade_requests_give_one_way`: a give never carries a return leg, for any writer; existing rows read `'trade'` | the Prompt 19 client step sends `kind` (never before the apply: PostgREST refuses an unknown column) |
+| `trade_insert_guard` | a member's one-way trade is refused by the client only | a member `'trade'` without return_day AND return_role is refused (`TRADE_INELIGIBLE: a trade needs a return shift ...` — added); a `'give'` with a return leg is refused for every caller (`TRADE_INELIGIBLE: a give is one-way ...`); the scheduler may still record a one-way `'trade'` and may insert a `'give'`; from := me / same-surgeon / roster names unchanged (a member's give of a day he does not hold lands from him and `apply_trade` refuses it, TRADE_STALE) | `submitTradeRequest` — the live build's one-way UNIT TAIL rows (rows 2..n of a whole-unit trade with one return day) are refused until EVERY installed app runs the client step, which sends them as `'give'` (a stale app's announced unit proposal can be accepted and applied as a unit split - the rollout window and its mitigations are in the SCHEMA-REVIEW section) |
+| `trade_update_guard` | TRADE_IMMUTABLE legs: from / to / day / role / return_day / return_role | kind joins the list (a member may not change it, on his own row either; a non-party's UPDATE is filtered by RLS, 0 rows) | none — the client PATCHes status only |
+| `apply_trade` | a party or the scheduler applies; `return_day null` = one-way | unchanged (checked): the receiver applies an accepted give; the 5b summary reads "... (from <from>, one-way)" | accept -> `runApplyTrade` |
+
+Proof: trade probe `GIVE_SETUP` and `O` .. `U3` (rolled back; expected strings in its header), `scripts/verify-rls.sh` section 5 (and 6a now posts a return leg) and section 5c (anon `select=kind` reads HTTP 200 - the gate before the client push), the record in `docs/SCHEMA-REVIEW.md` "2026-09-24 - give a day: shift_trade_requests.kind (Prompt 19)" (status PREPARED until the orchestrator's *observed:* line; applied: _to be filled by the orchestrator_).
+
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
 `payloadLooksWiped` (retarget to: no `schedule_days` rows would be written AND no vacations AND no availability),
