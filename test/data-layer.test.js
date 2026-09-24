@@ -2642,6 +2642,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       flush: src.indexOf("      // Blob leg (Prompt 16 A4): the same content gate and CAS PATCH as saveBlobNow") < 0 ? "" : src.slice(src.indexOf("      // Blob leg (Prompt 16 A4): the same content gate and CAS PATCH as saveBlobNow"), src.indexOf("    } catch (e) {\n      console.warn(`Flush pending save (${source}) error:`, e);")),
     };
     const pgTs = (iso) => String(iso).replace(/Z$/, "+00:00"); // PostgREST renders a timestamptz the app sent as ...Z with +00:00
+    // the sent stamp is new Date().toISOString() at millisecond resolution: two writes inside one ms would collide, so a
+    // check that models two browsers waits for the clock to advance between their writes (real ones are 60 s apart)
+    const nextMs = async () => { const t = Date.now(); while (Date.now() === t) await new Promise((r) => setTimeout(r, 1)); };
     const mkDb = (data, ts) => {
       const db = { row: { id: "main", data: JSON.parse(JSON.stringify(data)), updated_by: "seed", updated_at: ts }, writes: [], gets: 0 };
       db.read = async () => { db.gets++; return { data: db.row ? { data: JSON.parse(JSON.stringify(db.row.data)), updated_at: db.row.updated_at } : null, error: null }; };
@@ -2771,14 +2774,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const A = mkSession(db, "s1", DEFAULTS), B = mkSession(db, "s1", DEFAULTS);
       await A.poll(); await B.poll();
       A.state.settings = { importedAt: "2026-09-23", digest: true };
-      const a1 = await A.fire();
+      const a1 = await A.fire(); await nextMs();
       await B.poll();                    // B adopts A's write
       const b1 = await B.fire();         // B's effect fires on the adopted state
       B.state.holidays = [{ key: "christmas" }];
-      const b2 = await B.fire();
+      const b2 = await B.fire(); await nextMs();
       await A.poll();
-      const a2 = await A.fire();
-      await B.poll(); const b3 = await B.fire(); await A.poll(); const a3 = await A.fire();
+      const a2 = await A.fire(); await nextMs();
+      await B.poll(); const b3 = await B.fire(); await nextMs(); await A.poll(); const a3 = await A.fire();
       const w = db.writes.filter(isBlobWrite);
       assert.strictEqual(w.length, 2, JSON.stringify(w.map(x => x.method + " " + x.url)));
       assert.ok(a1.saved && b1.skipped && b2.saved && a2.skipped && b3.skipped && a3.skipped, JSON.stringify({ a1, b1, b2, a2, b3, a3 }));
