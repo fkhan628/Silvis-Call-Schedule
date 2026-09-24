@@ -64,6 +64,56 @@ function dbReadHeaders() {
   return dbHeaders;
 }
 
+// Prompt 16 A3 (session lifecycle). A tab or PWA kept open past the project's JWT
+// expiry used to have every write fail 401 for the rest of its life: the token
+// was refreshed only inside auth.getUser() (mount, biometric unlock). Two pieces:
+//   - auth.ensureFresh(): refreshes the stored pair when the access token is
+//     within AUTH_REFRESH_AHEAD_MS of its exp (or past it) and a refresh token
+//     exists; called on visibilitychange -> visible, from the 60-second poll and
+//     by authFetch before every listed write. Never throws.
+//   - authFetch(url, init): the send path of db.insert / update / upsert, the
+//     day-row CAS writes, every RPC and the two edge-function POSTs. It runs
+//     ensureFresh first, rebuilds the auth headers AT SEND TIME (a header object a
+//     caller built before the refresh would carry the old token), and on a 401
+//     refreshes ONCE and retries the same request ONCE. When the refresh is
+//     rejected the 401 is returned to the caller unchanged - every write's own
+//     error contract still fires - and auth.sessionExpired flips (once) so the
+//     component shows ONE persistent "sign in again" banner. dbAuthHeaders()
+//     stays the source of truth and still sends an expired token: a dead write
+//     fails loudly, never as anon.
+const AUTH_REFRESH_AHEAD_MS = 5 * 60 * 1000;
+// True when the token's exp is within `aheadMs` of now, already past, or the
+// token cannot be decoded (an undecodable token needs a refresh as much as a
+// dead one). Never throws.
+function jwtExpiresWithin(token, aheadMs) {
+  try {
+    const payload = JSON.parse(atob(String(token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return !(typeof payload.exp === "number" && payload.exp * 1000 > Date.now() + (aheadMs || 0));
+  } catch (e) { return true; }
+}
+// The session headers of the moment plus the caller's extras (Prefer, ...).
+// Authorization / apikey / Content-Type always come from dbAuthHeaders() so a
+// refresh that happened a moment ago is what goes out.
+function withSessionHeaders(extra) {
+  const out = { ...dbAuthHeaders() };
+  Object.entries(extra || {}).forEach(([k, v]) => { if (!/^(authorization|apikey|content-type)$/i.test(k)) out[k] = v; });
+  return out;
+}
+async function authFetch(url, init) {
+  const opts = init || {};
+  await auth.ensureFresh(); // best effort; a failure here still sends the stored token (which then 401s loudly)
+  const send = () => fetch(url, { ...opts, headers: withSessionHeaders(opts.headers) });
+  const res = await send();
+  if (res.status !== 401) return res;
+  // A 401 on a token that looked fresh (revoked, a rotated signing key, a clock
+  // skew): refresh once and retry once. Nothing to retry with when there is no
+  // session, and no second attempt once the session is known to be dead.
+  if (!auth.getSession() || auth.sessionExpired) return res;
+  const r = await auth.ensureFresh({ force: true });
+  if (!r.ok) return res;
+  return await send();
+}
+
 // The `supabase` wrapper is DELIBERATELY MINIMAL — it implements ONLY the two
 // chains the app actually uses:
 //   • supabase.from(t).select(cols).eq(col,val).single()  → { data, error }
@@ -117,8 +167,10 @@ const supabase = {
       in: _notImpl(".select().in()"),
     }),
     upsert: async (row) => {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-        method: "POST", headers: { ...dbAuthHeaders(), Prefer: "resolution=merge-duplicates" },
+      // Write path -> authFetch (Prompt 16 A3): dbAuthHeaders() at send time, a refresh first when the token is
+      // near its exp, one refresh + one retry on a 401.
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+        method: "POST", headers: { Prefer: "resolution=merge-duplicates" },
         body: JSON.stringify(row),
       });
       return { error: res.ok ? null : await res.text() };
@@ -154,8 +206,8 @@ const db = {
     return await res.json();
   },
   async insert(table, row) {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-      method: "POST", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
+    const res = await authFetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+      method: "POST", headers: { Prefer: "return=representation" },
       body: JSON.stringify(row),
     });
     // Read the body as TEXT and check res.ok BEFORE parsing: a non-JSON error
@@ -177,8 +229,8 @@ const db = {
     return { data: res.ok ? (Array.isArray(data) ? data[0] : data) : null, error: res.ok ? null : data };
   },
   async update(table, id, data) {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
-      method: "PATCH", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
+    const res = await authFetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+      method: "PATCH", headers: { Prefer: "return=representation" },
       body: JSON.stringify(data),
     });
     // The matched rows come back too (RLS-7): an RLS-filtered PATCH is HTTP 200
@@ -554,7 +606,28 @@ function getSupabaseRT() {
     if (_supabaseRT) return _supabaseRT;
     const sdk = window._supabaseSDK;
     if (!sdk || typeof sdk.createClient !== "function") return null;
-    _supabaseRT = sdk.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    // Prompt 16 A3: the client used to be created with the anon key only, so the
+    // authenticated-only tables (notifications, trades, offers, periods, reviews) never
+    // streamed. A bare realtime.setAuth(token) is NOT enough with supabase-js 2.x: the
+    // SDK re-pulls the token from its own `accessToken` callback on connect, on every
+    // heartbeat and after each channel join, and without one it falls back to the anon
+    // key (the 9/23 review of A3). So the client is created with the documented
+    // third-party-auth option: it asks the app for the stored token every time it needs
+    // one (null -> the SDK uses the anon key itself), which also means a new pair
+    // stored by auth._saveSession propagates by itself on the next heartbeat. With this
+    // option `client.auth` is a throwing proxy - the app never touches it (channel /
+    // removeChannel only; pinned in test/data-layer.test.js).
+    _supabaseRT = sdk.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      accessToken: async () => { try { const s = auth.getSession(); return (s && s.access_token && jwtIsFresh(s.access_token)) ? s.access_token : null; } catch (e) { return null; } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    // ... and hand it the stored token right away as well (only a fresh one); auth._saveSession
+    // re-applies every new token (sign-in, refresh, the recovery / invite hash) so the
+    // channel gets its access_token frame without waiting for the next heartbeat.
+    try {
+      const s = auth.getSession();
+      if (s && s.access_token && jwtIsFresh(s.access_token)) auth.applyRealtimeAuth(s.access_token);
+    } catch (e) { console.warn("Realtime: could not apply the session token at client creation:", e); }
     return _supabaseRT;
   } catch (e) { console.warn("Realtime client unavailable (poll only):", e); return null; }
 }
@@ -575,7 +648,9 @@ const auth = {
     } catch(e) { console.warn("auth.getSession: session read failed (reads as signed out):", e); return null; }
   },
 
-  // Store session
+  // Store session. Every new pair passes here (password sign-in, a refresh, the
+  // recovery / invite hash), so this is also where the session-expired state is
+  // cleared and the Realtime client learns the new token (Prompt 16 A3).
   _saveSession(data) {
     try {
       if (data?.access_token) {
@@ -583,6 +658,99 @@ const auth = {
         if (data.refresh_token) localStorage.setItem(AUTH_REFRESH_KEY, data.refresh_token);
       }
     } catch(e) { console.warn("Couldn't store session (you may be signed out on reload):", e); }
+    if (data?.access_token) {
+      auth._deadRefresh = null;
+      auth._setExpired(false);
+      auth.applyRealtimeAuth(data.access_token);
+    }
+  },
+
+  // ---- Prompt 16 A3: session lifecycle ----
+  // sessionExpired: the stored pair is known dead (a refresh was rejected, or a
+  // 401 arrived with no refresh token). Read synchronously by the write paths
+  // (no toast beside the banner, no second refresh) and mirrored into the
+  // component through onSessionChange ("expired" / "restored").
+  sessionExpired: false,
+  _expiredToken: null,   // the access token that was current when the flag was raised
+  _deadRefresh: null,    // the refresh token GoTrue rejected - not retried for the same pair
+  _refreshing: null,     // single flight: concurrent writes share one refresh request
+  _listeners: [],
+  onSessionChange(cb) {
+    if (typeof cb !== "function") return () => {};
+    auth._listeners.push(cb);
+    return () => { auth._listeners = auth._listeners.filter(f => f !== cb); };
+  },
+  _emit(kind) {
+    auth._listeners.slice().forEach(cb => { try { cb(kind); } catch (e) { console.warn("auth.onSessionChange listener threw:", e); } });
+  },
+  // Flips the flag and emits ONLY on a transition - a banner that is already up
+  // is never shown a second time, and every failing write after the first is
+  // silent about it.
+  _setExpired(v) {
+    const next = !!v;
+    if (next === auth.sessionExpired) { if (next) { try { auth._expiredToken = (auth.getSession() || {}).access_token || null; } catch (e) {} } return; }
+    auth.sessionExpired = next;
+    try { auth._expiredToken = next ? ((auth.getSession() || {}).access_token || null) : null; } catch (e) { auth._expiredToken = null; }
+    auth._emit(next ? "expired" : "restored");
+  },
+  // Hands the session token to the Realtime client so the authenticated-only
+  // tables stream. `token` defaults to the stored one (biometric unlock signs in
+  // with the token that was already stored - no new pair, so the mount path
+  // calls this without an argument). Never throws. The client's own `accessToken`
+  // callback (getSupabaseRT) is what keeps the token right across heartbeats and
+  // re-joins; this explicit push only makes the change immediate.
+  applyRealtimeAuth(token) {
+    try {
+      const t = token || (auth.getSession() || {}).access_token;
+      if (!t) return false;
+      const rt = (typeof getSupabaseRT === "function") ? getSupabaseRT() : null;
+      if (!rt || !rt.realtime || typeof rt.realtime.setAuth !== "function") return false;
+      const p = rt.realtime.setAuth(t);
+      if (p && typeof p.catch === "function") p.catch(e => console.warn("Realtime setAuth failed (poll still covers the tables):", e));
+      return true;
+    } catch (e) { console.warn("Realtime setAuth failed (poll still covers the tables):", e); return false; }
+  },
+  // ONE refresh request at a time, whoever asks: ensureFresh (the poll, a tab
+  // coming back, every authFetch) and getUser (mount, biometric unlock) all join
+  // the in-flight request instead of POSTing the same refresh token twice - GoTrue
+  // tolerates a reused refresh token only inside its reuse interval; outside it the
+  // whole token family is revoked and the person is signed out (the 9/23 review of
+  // A3). keepOnReject: the shared request never clears the stored pair itself;
+  // each caller decides (ensureFresh flags the session expired and keeps the pair,
+  // getUser clears it so the sign-in card follows).
+  _refreshShared(refreshToken) {
+    if (!auth._refreshing) auth._refreshing = auth._refresh(refreshToken, { keepOnReject: true }).finally(() => { auth._refreshing = null; });
+    return auth._refreshing;
+  },
+  // Refreshes the stored pair when the access token is within
+  // AUTH_REFRESH_AHEAD_MS of its exp (or past it, or undecodable) and a refresh
+  // token exists; { force: true } refreshes regardless of exp (a 401 on a token
+  // that looked fresh). Returns { ok, expired, refreshed, reason } and NEVER
+  // throws. A rejected refresh raises sessionExpired (once) and KEEPS the stored
+  // pair: dbAuthHeaders() goes on sending the dead token so every write fails
+  // loudly (401) instead of degrading to anon, until a sign-in stores a new
+  // pair. A network error is not an expiry. A pair GoTrue already rejected is
+  // not sent again (no chatter from the poll / the writes); a different pair in
+  // storage (a new sign-in) is tried afresh.
+  async ensureFresh(opts) {
+    try {
+      const session = auth.getSession();
+      if (!session || !session.access_token) return { ok: false, expired: false, refreshed: false, reason: "signed_out" };
+      if (auth.sessionExpired && session.access_token !== auth._expiredToken) auth._setExpired(false); // a new pair since the flag
+      const force = !!(opts && opts.force);
+      if (!force && !jwtExpiresWithin(session.access_token, AUTH_REFRESH_AHEAD_MS)) return { ok: true, expired: false, refreshed: false };
+      if (!session.refresh_token) { auth._setExpired(true); return { ok: false, expired: true, refreshed: false, reason: "no_refresh_token" }; }
+      if (auth._deadRefresh === session.refresh_token && auth.sessionExpired) return { ok: false, expired: true, refreshed: false, reason: "refresh_rejected" };
+      const r = await auth._refreshShared(session.refresh_token);
+      if (r && r.session && r.session.access_token) return { ok: true, expired: false, refreshed: true };
+      if (r && r.error === "network") return { ok: false, expired: false, refreshed: false, reason: "network" };
+      auth._deadRefresh = session.refresh_token;
+      auth._setExpired(true);
+      return { ok: false, expired: true, refreshed: false, reason: "refresh_rejected" };
+    } catch (e) {
+      console.warn("auth.ensureFresh failed (the stored token is used as is):", e);
+      return { ok: false, expired: false, refreshed: false, reason: "error" };
+    }
   },
 
   // Clear session
@@ -626,7 +794,11 @@ const auth = {
       // token, not only on 401. (This project returns 403, which the old
       // 401-only check skipped, silently logging users out on every refresh.)
       if (session.refresh_token) {
-        const refreshed = await auth._refresh(session.refresh_token);
+        // Shared single flight with ensureFresh (Prompt 16 A3): at a cold open with an
+        // expired stored token this path and the first refreshAll would otherwise POST
+        // the same refresh token twice. A rejection comes back as { rejected: true }
+        // (the pair still stored) and is cleared below, as before.
+        const refreshed = await auth._refreshShared(session.refresh_token);
         if (refreshed?.user) return refreshed;
         // The refresh could not be attempted (network) - the session is kept
         // and the caller sees error:"network", exactly like the first call.
@@ -643,8 +815,11 @@ const auth = {
     }
   },
 
-  // Refresh token
-  async _refresh(refreshToken) {
+  // Refresh token. opts.keepOnReject (ensureFresh, Prompt 16 A3): a rejected
+  // refresh leaves the stored pair in place - the caller flags the session as
+  // expired and every write keeps failing loudly with the dead token; getUser
+  // (mount / biometric unlock) keeps clearing it, so the sign-in card follows.
+  async _refresh(refreshToken, opts) {
     try {
       const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
         method: "POST",
@@ -652,6 +827,10 @@ const auth = {
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!res.ok) {
+        if (opts && opts.keepOnReject) {
+          console.warn(`auth._refresh: refresh token rejected (HTTP ${res.status}) - the stored session is kept and marked expired (sign in again)`);
+          return { user: null, rejected: true, status: res.status };
+        }
         console.warn(`auth._refresh: refresh token rejected (HTTP ${res.status}) - clearing the stored session`);
         auth._clearSession();
         return { user: null };

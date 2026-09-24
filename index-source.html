@@ -392,8 +392,16 @@ function CallSchedule() {
   // blobTsRef: call_schedule_data.updated_at of the last blob read/write -
   // the self-echo check for the background refresh.
   const blobTsRef = useRef(null);
-  const loadedAtRef = useRef(null); // timestamp when initial load completed - prevents auto-save race
+  const loadedAtRef = useRef(null); // timestamp when the FIRST load completed - prevents the auto-save race (set once; a re-run of the load after a sign-in does not re-open the hydration window)
   const pendingSaveRef = useRef(null); // payload queued for debounced save; flushed immediately on page hide/unload
+  // Prompt 16 A3 (session lifecycle): saveTick re-fires the autosave effect without a content change - after the
+  // in-place sign-in (an edit made while the session was expired) and after a proactive refresh succeeds; the two
+  // refs tell a re-sign-in of the SAME account (merge, keep the unsaved edit) from a DIFFERENT account (adopt the
+  // tables wholesale, drop it); resyncPendingRef is the ref bridge the []-deps handlers call.
+  const [saveTick, setSaveTick] = useState(0);
+  const lastAuthUidRef = useRef(null);
+  const switchedUserRef = useRef(false);
+  const resyncPendingRef = useRef(() => {});
   const daySyncChainRef = useRef(Promise.resolve()); // serializes syncScheduleDays runs
   const daySyncBusyRef = useRef(0); // RF2 b: syncScheduleDays runs enqueued or in flight; the keepalive flush skips its schedule_days leg while > 0
   const daySyncRetryRef = useRef(null); // auto-retry timer after a failed day write
@@ -663,6 +671,19 @@ function CallSchedule() {
   const adoptSignedInUser = async (user) => {
     setAuthUser(user);
     setProfileLoadFailed(false);
+    // Prompt 16 A3 (review): a DIFFERENT account signing in on the in-place card must not inherit the previous
+    // account's unsaved edit (it would be written under the new JWT - or 403 on every pass for a viewer): the
+    // data-load re-run then adopts the tables wholesale instead of merging, and the armed payload is dropped.
+    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {
+      switchedUserRef.current = true;
+      pendingSaveRef.current = null;
+      showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
+    }
+    if (user) lastAuthUidRef.current = user.id;
+    // Prompt 16 A3: every sign-in path ends here (password, biometric unlock, the stored session at mount, the
+    // recovery / invite hash after the password is set) - hand the session token to the Realtime client so the
+    // authenticated-only tables (notifications, trades, offers, periods, reviews) stream instead of waiting on the poll.
+    auth.applyRealtimeAuth();
     try {
       const profile = await fetchProfile(user.id);
       setUserProfile(profile || { id: user.id, person_id: null, role: "viewer", display_name: null });
@@ -806,6 +827,27 @@ function CallSchedule() {
     setAuthUser(null); setUserProfile(null); setProfileLoadFailed(false);
     setBiometricEnrolled(false); setBiometricPending(false);
     setIsScheduler(false);
+  };
+
+  // --- Session lifecycle (Prompt 16 A3) ---
+  // auth.sessionExpired flips (once) when a refresh is rejected - a tab or PWA kept open past the session's life.
+  // The component mirrors it into ONE persistent banner; its button opens the sign-in card IN PLACE: no reload,
+  // no biometric.unenroll(), the loaded data and any unsaved edit stay in the component's state and re-sync after
+  // the sign-in (adoptSignedInUser -> reloadTrigger -> mergeLoadedDays + syncScheduleDays). A tab coming back to
+  // the foreground refreshes the token first (the 60-second poll does the same in refreshAll).
+  const [sessionExpired, setSessionExpired] = useState(() => !!auth.sessionExpired);
+  useEffect(() => {
+    if (isPublicMode) return;
+    const off = auth.onSessionChange((kind) => { if (kind === "expired") setSessionExpired(true); else if (kind === "restored") setSessionExpired(false); });
+    // A granted refresh re-sends what a 401 left behind (a write whose refresh hit a network error has no banner
+    // and no timer - the 9/23 review of A3); resyncPendingRef is a no-op when nothing is pending.
+    const onVisible = () => { if (document.visibilityState === "visible") auth.ensureFresh().then(r => { if (r && r.refreshed) resyncPendingRef.current("visibilitychange"); }); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { off(); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+  const openSignInAgain = () => {
+    setAuthMode("login"); setAuthError("Your session expired - sign in again."); setBiometricPending(false);
+    setAuthUser(null); // the card renders in place of the app; everything else (profile, schedule, pending edits) stays
   };
 
   // --- Roster helpers ---
@@ -1207,6 +1249,28 @@ function CallSchedule() {
     lastSyncRef.current = JSON.parse(JSON.stringify(loadedDays.sched));
   };
   const sameAssignment = (day, a, b) => JSON.stringify(assignmentToDayRow(day, a || emptyDayAssignment())) === JSON.stringify(assignmentToDayRow(day, b || emptyDayAssignment()));
+  // Merge a freshly loaded table into the live map (the background refresh, and - Prompt 16 A3 - every re-run of
+  // the data load after a sign-in): adopt only days that differ from what we last persisted AND that we have not
+  // edited locally since (an unsaved local edit is the truth; it re-syncs as a CAS write against the fresh version).
+  const mergeLoadedDays = (fresh) => {
+    const base = lastSyncRef.current || {};
+    const local = scheduleRef.current || {};
+    let changedAny = false;
+    const merged = { ...local };
+    const allDays = Object.keys(Object.assign({}, base, fresh.sched));
+    for (const day of allDays) {
+      const serverChanged = !sameAssignment(day, fresh.sched[day], base[day]);
+      const localChanged = !sameAssignment(day, local[day], base[day]);
+      if (serverChanged && !localChanged) {
+        if (fresh.sched[day]) merged[day] = fresh.sched[day]; else delete merged[day];
+        base[day] = fresh.sched[day] ? JSON.parse(JSON.stringify(fresh.sched[day])) : undefined;
+        if (!fresh.sched[day]) delete base[day];
+        changedAny = true;
+      }
+    }
+    dayVersionsRef.current = { ...dayVersionsRef.current, ...fresh.vers };
+    if (changedAny) { lastSyncRef.current = base; scheduleRef.current = merged; setSchedule(merged); }
+  };
   const writeFailToast = (status, body) => {
     const s = String(body || "");
     if (/schedule_days_distinct_roles|23514/.test(s)) return "Primary and backup must be different people - change not saved.";
@@ -1214,9 +1278,11 @@ function CallSchedule() {
     if (status === 401 || /JWT|expired/i.test(s)) return "Couldn't save the schedule - your session expired. Sign in again.";
     return "Couldn't save schedule changes - check your connection.";
   };
+  // Both day writes go out through authFetch (Prompt 16 A3): dbAuthHeaders() at send time, a refresh first when
+  // the token is near its exp, one refresh + one retry on a 401 - the CAS shape (version filter, version+1) is unchanged.
   const postDayRow = async (row, by, ts) => {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/schedule_days`, {
-      method: "POST", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
+    const r = await authFetch(`${SUPABASE_URL}/rest/v1/schedule_days`, {
+      method: "POST", headers: { Prefer: "return=representation" },
       body: JSON.stringify({ ...row, version: 1, updated_by: by, updated_at: ts }),
     });
     if (r.status === 409) return { duplicate: true };
@@ -1225,8 +1291,8 @@ function CallSchedule() {
     return { version: (a[0] && a[0].version) || 1 };
   };
   const patchDayRow = async (row, ver, by, ts) => {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${row.day}&version=eq.${ver}`, {
-      method: "PATCH", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
+    const r = await authFetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${row.day}&version=eq.${ver}`, {
+      method: "PATCH", headers: { Prefer: "return=representation" },
       body: JSON.stringify({ ...row, version: ver + 1, updated_by: by, updated_at: ts }),
     });
     if (!r.ok) return { error: await r.text().catch(() => ""), status: r.status };
@@ -1289,7 +1355,7 @@ function CallSchedule() {
     const ts = new Date().toISOString();
     const by = userProfile?.person_id || authUser?.id || null;
     const persisted = JSON.parse(JSON.stringify(prev));
-    let conflict = false, failed = 0, failMsg = "", written = 0;
+    let conflict = false, failed = 0, failMsg = "", written = 0, authFail = 0;
     for (const day of changed) {
       const a = next[day] || emptyDayAssignment();
       const row = assignmentToDayRow(day, a);
@@ -1313,6 +1379,7 @@ function CallSchedule() {
       }
       if (r.error !== undefined) {
         failed++; failMsg = writeFailToast(r.status, r.error);
+        if (r.status === 401 || r.status === 403) authFail = r.status;
         console.warn("schedule_days write failed", day, r.status, String(r.error).slice(0, 200));
         continue; // this day stays un-advanced in lastSyncRef -> retried next pass
       }
@@ -1322,7 +1389,18 @@ function CallSchedule() {
       written++;
     }
     lastSyncRef.current = persisted;
-    if (failed) {
+    if (failed && authFail) {
+      // Prompt 16 A3: a 401 (dead session - authFetch already tried one refresh) or a 403 (no permission) does NOT
+      // get the 5-second retry: the same write would fail the same way every five seconds and toast each time
+      // (the 9/23 review's B). The status stays red and the pending days stay in the map; after a sign-in the
+      // data-load re-run merges the table and re-syncs them (mergeLoadedDays + syncScheduleDays). The toast is
+      // skipped while the session-expired banner carries the same message - the two never stack.
+      setSaveError(true);
+      // "sign in again" only when the session is known dead; a 401 whose refresh hit a network error is re-sent
+      // by the next granted refresh (resyncPendingRef) - no sign-in needed (the 9/23 review of A3).
+      setSaveStatus(authFail === 403 ? "Not saved - no permission" : auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry");
+      if (!(authFail === 401 && auth.sessionExpired)) showToast(failMsg, "error");
+    } else if (failed) {
       setSaveError(true);
       setSaveStatus("Save failed - retrying");
       showToast(failMsg, "error");
@@ -1398,8 +1476,18 @@ function CallSchedule() {
         blobLoadedRef.current = true;
         if (row?.data) {
           const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-          if (row.updated_at) blobTsRef.current = row.updated_at; // prevent auto-save from re-saving unchanged data
-          adoptBlob(d);
+          const rerun = !!loadedAtRef.current && !switchedUserRef.current; // a sign-in of the same account after the session expired (Prompt 16 A3)
+          if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {
+            // The row has not moved since our last read (the same rule refreshBlobRow uses): the local state - a
+            // Setup edit made while the session was expired, whose upsert 401ed - stays the truth, and the autosave
+            // re-fires so it lands now (the 9/23 review of A3: adopting here silently dropped that edit, then wrote
+            // the server's values back).
+            if (pendingSaveRef.current) setSaveTick(t => t + 1);
+          } else {
+            if (rerun && isScheduler && pendingSaveRef.current) showToast("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.", "error");
+            if (row.updated_at) blobTsRef.current = row.updated_at; // prevent auto-save from re-saving unchanged data
+            adoptBlob(d);
+          }
         }
       } catch (e) {
         console.error("Supabase load error (call_schedule_data):", e);
@@ -1410,7 +1498,10 @@ function CallSchedule() {
         // catch arms loadFailedRef, which suppresses autosave until a read
         // succeeds).
         const loadedDays = await loadScheduleDays();
-        adoptLoadedDays(loadedDays);
+        // First load: adopt the table. A re-run (reloadTrigger - a sign-in of the SAME account after the session
+        // expired, Prompt 16 A3): MERGE like the background refresh so an edit made while expired survives, then
+        // re-sync it (a no-op when nothing is pending). A different account adopts the table wholesale.
+        if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);
 
         // Independent secondary loads: each in its own try so one failure
         // cannot abort the others (and cannot arm loadFailedRef).
@@ -1444,7 +1535,10 @@ function CallSchedule() {
       await loadEastTables();
       await loadEastVacationReviews();
       setLoaded(true);
-      loadedAtRef.current = Date.now();
+      // The hydration window opens once, after the FIRST load; a re-run after a sign-in keeps the state that is
+      // already hydrated, and a new edit made right after the card closes must sync like any other (9/23 review).
+      if (!loadedAtRef.current) loadedAtRef.current = Date.now();
+      switchedUserRef.current = false;
     })();
 
     // --- Realtime subscriptions (preferred) with safety-net poll ---
@@ -1464,24 +1558,9 @@ function CallSchedule() {
         const fresh = await loadScheduleDays();
         loadFailedRef.current = false; // the days read succeeded - the days leg is safe again (the blob leg is gated by blobLoadedRef separately)
         // Adopt only days that differ from what we last persisted AND that we
-        // have not edited locally since (an unsaved local edit is the truth).
-        const base = lastSyncRef.current || {};
-        const local = scheduleRef.current || {};
-        let changedAny = false;
-        const merged = { ...local };
-        const allDays = Object.keys(Object.assign({}, base, fresh.sched));
-        for (const day of allDays) {
-          const serverChanged = !sameAssignment(day, fresh.sched[day], base[day]);
-          const localChanged = !sameAssignment(day, local[day], base[day]);
-          if (serverChanged && !localChanged) {
-            if (fresh.sched[day]) merged[day] = fresh.sched[day]; else delete merged[day];
-            base[day] = fresh.sched[day] ? JSON.parse(JSON.stringify(fresh.sched[day])) : undefined;
-            if (!fresh.sched[day]) delete base[day];
-            changedAny = true;
-          }
-        }
-        dayVersionsRef.current = { ...dayVersionsRef.current, ...fresh.vers };
-        if (changedAny) { lastSyncRef.current = base; scheduleRef.current = merged; setSchedule(merged); }
+        // have not edited locally since (an unsaved local edit is the truth) -
+        // mergeLoadedDays, shared with the post-sign-in re-run of the load.
+        mergeLoadedDays(fresh);
       } catch(e) { console.warn("Background schedule refresh failed:", e); }
     };
     // Authenticated-read tables: skipped (list kept) without a fresh token - see readAuthOnlyTable.
@@ -1506,6 +1585,11 @@ function CallSchedule() {
       } catch(e) { console.warn("Background min-version refresh failed:", e); }
     };
     const refreshAll = async () => {
+      // Prompt 16 A3: the 60-second poll keeps the session alive - a refresh here (only when the token is inside
+      // its last five minutes) means the authenticated-only reads below and the next write carry a live token;
+      // when it did refresh, anything a 401 left behind is re-sent (no-op when nothing is pending).
+      const fr = await auth.ensureFresh();
+      if (fr && fr.refreshed) resyncPendingRef.current("poll");
       await Promise.allSettled([
         refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(),
         loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),
@@ -1659,16 +1743,28 @@ function CallSchedule() {
         setSaveError(true);
         const failMsg = String(e?.message || e);
         const denied = /42501|row-level security|\b403\b/i.test(failMsg);
-        setSaveStatus(denied ? "Not saved - no permission" : "Save failed - retrying");
-        showToast(denied
+        const authFail = /401|JWT|expired/i.test(failMsg);
+        setSaveStatus(denied ? "Not saved - no permission" : authFail ? (auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry") : "Save failed - retrying");
+        // Prompt 16 A3: while the session-expired banner is up it carries this message - no toast beside it; a 401
+        // without the banner (the refresh hit a network error) is re-sent by the next granted refresh
+        if (!(auth.sessionExpired && authFail)) showToast(denied
           ? "Couldn't save the shared setup - your account doesn't have permission. Ask the scheduler."
-          : /401|JWT|expired/i.test(failMsg)
-            ? "Changes aren't saving - your session expired. Reload or sign in again."
+          : authFail
+            ? (auth.sessionExpired ? "Changes aren't saving - your session expired. Sign in again." : "Changes aren't saving - your session couldn't be refreshed; they go out once it is.")
             : "Changes aren't saving - check your connection.", "error");
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows]);
+  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows, saveTick]);
+  // Prompt 16 A3 (review): re-send what a 401 left behind once the session is live again - after a granted proactive
+  // refresh (poll / visibility). The days go through syncScheduleDays (a no-op when nothing is pending); an armed
+  // payload re-fires the autosave effect (saveTick), whose blob leg gates itself on canWriteBlob / blobLoadedRef.
+  // Ref bridge: the callers live in []-deps effects (conventions item 1).
+  resyncPendingRef.current = (source) => {
+    if (isPublicMode || !loaded || loadFailedRef.current) return;
+    syncScheduleDays(scheduleRef.current);
+    if (pendingSaveRef.current) { console.warn(`Session refreshed (${source}): re-sending the pending save.`); setSaveTick(t => t + 1); }
+  };
 
   // --- Flush pending save when app is backgrounded or closing ---
   // The auto-save above has an 800ms debounce; an edit made right before
@@ -2810,9 +2906,8 @@ function CallSchedule() {
     try {
       const body = { type, data };
       if (Array.isArray(targetIds)) body.targetIds = targetIds;
-      const res = await fetch(`${EDGE_FN_BASE}/send-notification`, {
-        method: "POST",
-        headers: dbAuthHeaders(), // a dead token must 401 loudly, never degrade to anon
+      const res = await authFetch(`${EDGE_FN_BASE}/send-notification`, {
+        method: "POST", // authFetch: dbAuthHeaders() at send time (a dead token still 401s loudly, never anon), refresh first, one retry on 401
         body: JSON.stringify(body),
       });
       const result = await res.json().catch(() => null);
@@ -3055,7 +3150,7 @@ function CallSchedule() {
   // distinct-roles check, ...) are returned verbatim for the UI.
   const applyTradeRpc = async (trade) => {
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/apply_trade`, { method: "POST", headers: dbAuthHeaders(), body: JSON.stringify({ p_trade_id: trade.id }) });
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/apply_trade`, { method: "POST", body: JSON.stringify({ p_trade_id: trade.id }) });
       const text = await res.text().catch(() => "");
       if (!res.ok) return { ok: false, error: describeDbError(text) || `HTTP ${res.status}` };
       let body = null; try { body = text ? JSON.parse(text) : null; } catch (e) { console.warn("apply_trade: 2xx with a non-JSON body", text.slice(0, 160), e); body = null; }
@@ -3428,9 +3523,8 @@ function CallSchedule() {
     setOfficeNotifBusy(true);
     try {
       const lines = publishChanges.map(c => formatDayChange(c, nameOf));
-      const res = await fetch(`${EDGE_FN_BASE}/office-notifications`, {
-        method: "POST",
-        headers: dbAuthHeaders(), // scheduler JWT
+      const res = await authFetch(`${EDGE_FN_BASE}/office-notifications`, {
+        method: "POST", // scheduler JWT through authFetch (Prompt 16 A3)
         body: JSON.stringify({
           mode: "publish",
           period_label: publishLabel || "",
@@ -3466,7 +3560,7 @@ function CallSchedule() {
     if (!confirm("Manually fire the weekly digest now? This will send emails if any changes are detected since the last digest snapshot.")) return;
     setOfficeNotifBusy(true);
     try {
-      const res = await fetch(`${EDGE_FN_BASE}/office-notifications`, { method: "POST", headers: dbAuthHeaders(), body: JSON.stringify({ mode: "digest" }) });
+      const res = await authFetch(`${EDGE_FN_BASE}/office-notifications`, { method: "POST", body: JSON.stringify({ mode: "digest" }) });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { showToast(res.status === 404 ? "office-notifications is not deployed yet (Prompt 10)." : "Digest failed: " + JSON.stringify(body).slice(0, 200), "error"); return; }
       alert(`Digest run: ${body.sent ?? 0} email(s) sent.\nAffected surgeons: ${(body.affected_surgeons || []).join(", ") || "(none)"}`);
@@ -3534,14 +3628,14 @@ function CallSchedule() {
       if (diff.count === 0 && !withMode) return { ok: true, nothing: true }; // nothing to write: no request, no audit row
       if (diff.count > 0) {
         const rows = diff.insert.concat(diff.update).map(r => ({ day: r.day, role_pref: r.role_pref }));
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: "POST", headers: { ...dbAuthHeaders() }, body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null }) });
+        const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: "POST", body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null }) });
         if (!res.ok) {
           const t = await res.text().catch(() => "");
           console.warn("Paint offers: save_offers failed", res.status, t.slice(0, 300));
           return { ok: false, error: describeDbError(t) };
         }
       } else {
-        const r2 = await fetch(`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, { method: "POST", headers: { ...dbAuthHeaders() }, body: JSON.stringify({ p_period: period.id, p_mode: mode, p_person: personId }) });
+        const r2 = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, { method: "POST", body: JSON.stringify({ p_period: period.id, p_mode: mode, p_person: personId }) });
         if (!r2.ok) {
           const t2 = await r2.text().catch(() => "");
           console.warn("Paint offers: set_offer_mode failed", r2.status, t2.slice(0, 300));
@@ -4195,7 +4289,7 @@ function CallSchedule() {
   // passes them through verbatim).
   const claimOpenSlotRpc = async (day, role) => {
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/claim_open_slot`, { method: "POST", headers: dbAuthHeaders(), body: JSON.stringify({ p_day: day, p_role: role }) });
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/claim_open_slot`, { method: "POST", body: JSON.stringify({ p_day: day, p_role: role }) });
       const text = await res.text().catch(() => "");
       if (!res.ok) return { ok: false, error: describeDbError(text) || `HTTP ${res.status}` };
       let body = null; try { body = text ? JSON.parse(text) : null; } catch (e) { console.warn("claim_open_slot: 2xx with a non-JSON body", text.slice(0, 160), e); body = null; }
@@ -4614,6 +4708,15 @@ function CallSchedule() {
               <button data-testid="publish-send" onClick={triggerPublishNotify} disabled={officeNotifBusy || publishChanges.length === 0} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:(officeNotifBusy || publishChanges.length === 0)?0.6:1}}>{officeNotifBusy?"Sending":"Send"}</button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Session-expired banner (Prompt 16 A3): ONE persistent line while auth.sessionExpired; its button opens the
+          sign-in card in place (openSignInAgain) - no reload, no biometric.unenroll(), no data dropped. Sits above the
+          two version banners when they show. */}
+      {sessionExpired && !!authUser && !isPublicMode && !paintSheet && !offerSheet && (
+        <div role="alert" data-testid="session-expired" style={{position:"fixed",left:0,right:0,bottom:(forceUpdate?44:0)+(updateAvailable?44:0),zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",fontSize:12.5,fontWeight:600,fontFamily:font}}>
+          <span>Your session expired - sign in again</span>
+          <button data-testid="session-expired-signin" onClick={openSignInAgain} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Sign in</button>
         </div>
       )}
       {/* Minimum-version gate (client_versions row 'main') - persistent, reload is user-initiated */}

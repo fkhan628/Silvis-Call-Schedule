@@ -335,7 +335,10 @@ let forcedOffer400 = false;     // Prompt 14 part 3a: the browser's own "400" li
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
 let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH open for N ms so a CAS sync run is provably in flight
 let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_by } stamped onto every call_schedule_data GET row
+let expiredWrites401 = false;   // Prompt 16 A3: every non-GET under /rest/v1 or /functions/v1 whose bearer JWT is past its exp answers 401 PGRST301 (the real PostgREST answer); the browser's own 401 / 400 console lines are expected while armed
+let authRefreshGrant = null;    // Prompt 16 A3: an access token the token endpoint hands out for grant_type=refresh_token; null = the refresh is rejected (400 invalid_grant)
 let blobWriteTs = null;         // rebase follow-up 9/23 (review, major): updated_at of the app's LAST call_schedule_data write, served on every later blob GET (what the real column reads) so the 60 s poll's refreshBlobRow short-circuits instead of re-adopting the harness-untouched blob over a Setup edit
+let sessBlobWriteTs = null;     // Prompt 16 A3: the same stamp for the session scenario's OWN BrowserContext (routeSupabase scope "session") - the main page's poll autosave must not move the row under the session page's re-run (its Setup-edit sub-step reads updated_at equality)
 // Davenport (East) project mock - fetchEastWeeks reads schedule_weeks + the
 // roster blob from this host with its public key; the harness answers both so
 // a Refresh never leaves the machine and the upsert payload is deterministic.
@@ -358,6 +361,14 @@ const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(
 const FAKE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
 // The same session, expired an hour ago (datalayer-001: an authenticated-only read must be SKIPPED, not degraded to anon).
 const EXPIRED_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) - 3600 })}.c2ln`;
+// Prompt 16 A3 (session scenario): the pair a password sign-in hands out, and the one a GRANTED refresh hands out
+// (distinct jti so the bearer of each write says which path produced it). The token endpoint mock records every
+// call in authCalls (grant type only - never a password) and rejects a refresh unless authRefreshGrant is armed.
+const mkJwt = (expOffsetSec, tag) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + expOffsetSec, jti: tag })}.c2ln`;
+const NEW_JWT = mkJwt(3600, "a3-signin");
+const NEW2_JWT = mkJwt(3600, "a3-refresh");
+const bearerExpired = (h) => { try { const t = String(h || "").replace(/^Bearer /, ""); const p = JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); return typeof p.exp === "number" && p.exp * 1000 < Date.now(); } catch (e) { return false; } };
+const authCalls = [];
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json", ".png": "image/png", ".ico": "image/x-icon", ".css": "text/css" };
 const server = http.createServer((req, res) => {
@@ -566,8 +577,9 @@ await context.addInitScript(({ token, version }) => {
   } catch (e) {}
 }, { token: FAKE_JWT, version: APP_VERSION });
 await context.route(cdnMatcher, routeCdn);
-// Davenport (East) project: answered from the canned week + roster blob above (GET only, like the app).
-await context.route((url) => url.hostname === EAST_HOST, async (route) => {
+// Davenport (East) project: answered from the canned week + roster blob above (GET only, like the app). A named
+// handler: the A3 session scenario runs in a second BrowserContext that needs the same answers.
+const routeEast = async (route) => {
   const url = new URL(route.request().url());
   const json = (body) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
   if (route.request().method() !== "GET") return route.fulfill({ status: 405, contentType: "application/json", body: "[]" });
@@ -577,7 +589,8 @@ await context.route((url) => url.hostname === EAST_HOST, async (route) => {
   // harness overlays on the cache, so a Refresh keeps every review (nothing changed, nothing removed).
   if (url.pathname.startsWith("/rest/v1/time_off")) return json(eastVacFeed.map((r, i) => ({ id: "dav-timeoff-" + (i + 1), person_id: "s6", kind: "vacation", start_date: r.start, end_date: r.end })));
   return json([]);
-});
+};
+await context.route((url) => url.hostname === EAST_HOST, routeEast);
 const page = await context.newPage();
 
 const pageErrors = [];
@@ -595,6 +608,7 @@ const watchPage = (pg, tag) => {
       if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
       else if (forcedOffer400 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); forcedOffer400 = false; } // the forced OF002 answer of rpc/save_offers (offer painter)
       else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
+      else if (expiredWrites401 && /status of (401|400)|Save failed: Error: blob save failed: .*JWT expired/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // Prompt 16 A3: the 401s of the expired-bearer writes, the 400 of the rejected refresh and the blob leg's own console.error for that 401 - all forced by the harness
       else consoleErrors.push(msg.text());
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -752,13 +766,37 @@ const offerModeRpc = (b, json) => {
   if (r.code) return json(400, { message: r.message, code: r.code, details: null, hint: null });
   return json(200, { ok: true, period_id: offerPeriod.id, label: offerPeriod.label, person_id: who, mode: b.p_mode, rules_only_ids: offerPeriod.rules_only_ids, offer_modes: offerPeriod.offer_modes, by: "s1" });
 };
-const routeSupabase = async (route) => {
+const routeSupabase = async (route, scope) => {
+  // scope: "session" when installed by the A3 session scenario's context (its blob stamp is kept apart); Playwright
+  // passes the Request as the second argument when the handler is registered bare, which reads as the main scope.
+  const sessionScope = scope === "session";
   const req = route.request();
   const url = new URL(req.url());
   const method = req.method();
   const json = (status, body) => route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
   if (url.pathname.startsWith("/auth/v1/user") && method === "GET") {
     return json(200, { id: FAKE_UID, email: FAKE_EMAIL, aud: "authenticated", role: "authenticated" });
+  }
+  // Prompt 16 A3: the GoTrue token endpoint. grant_type=password answers the sign-in pair (NEW_JWT); grant_type=
+  // refresh_token answers the granted pair (authRefreshGrant) or the real rejection shape (400 invalid_grant). Only
+  // the grant type and the refresh token are recorded - never a password.
+  if (url.pathname.startsWith("/auth/v1/token") && method === "POST") {
+    const grant = url.searchParams.get("grant_type") || "";
+    let b = {}; try { b = JSON.parse(req.postData() || "{}"); } catch (e) { b = {}; }
+    authCalls.push({ grant, refresh: grant === "refresh_token" ? (b.refresh_token || null) : undefined, at: Date.now() });
+    const user = { id: FAKE_UID, email: FAKE_EMAIL, aud: "authenticated", role: "authenticated" };
+    if (grant === "password") return json(200, { access_token: NEW_JWT, refresh_token: "fake-refresh-2", token_type: "bearer", expires_in: 3600, user });
+    if (grant === "refresh_token") {
+      if (authRefreshGrant) return json(200, { access_token: authRefreshGrant, refresh_token: "fake-refresh-3", token_type: "bearer", expires_in: 3600, user });
+      return json(400, { error: "invalid_grant", error_description: "Invalid Refresh Token: Refresh Token Not Found" });
+    }
+    return json(400, { error: "unsupported_grant_type" });
+  }
+  // Prompt 16 A3: while armed, a write carrying an expired bearer is answered like PostgREST answers it (401 PGRST301) -
+  // recorded with forced401 so the scenario can count the writes that were refused.
+  if (expiredWrites401 && method !== "GET" && method !== "OPTIONS" && (url.pathname.startsWith("/rest/v1/") || url.pathname.startsWith("/functions/v1/")) && bearerExpired(req.headers()["authorization"])) {
+    writes.push({ method, path: url.pathname + url.search, body: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? "(snapshot body omitted)" : (req.postData() || ""), prefer: req.headers()["prefer"] || "", auth: req.headers()["authorization"] || "", at: Date.now(), forced401: true });
+    return json(401, { code: "PGRST301", message: "JWT expired", details: null, hint: null });
   }
   if (url.pathname.startsWith("/rest/v1/user_profiles")) {
     if (method === "GET") return json(200, [FAKE_PROFILE]);
@@ -916,9 +954,9 @@ const routeSupabase = async (route) => {
     // the Totals / Fairness reads that followed were a coin toss (1 run in 3). The DATA column stays the fixture's
     // / the live one's on purpose: the Import pins and the seed-ownership rule read that picture.
     if ((method === "POST" || method === "PATCH") && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
-      try { const b = JSON.parse(body || "{}"); const r = Array.isArray(b) ? b[0] : b; if (r && typeof r.updated_at === "string") blobWriteTs = r.updated_at; } catch (e) {}
+      try { const b = JSON.parse(body || "{}"); const r = Array.isArray(b) ? b[0] : b; if (r && typeof r.updated_at === "string") { if (sessionScope) sessBlobWriteTs = r.updated_at; else blobWriteTs = r.updated_at; } } catch (e) {}
     }
-    writes.push({ method, path: url.pathname + url.search, body: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? "(snapshot body omitted)" : body, prefer: req.headers()["prefer"] || "", snapshotReason: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? (() => { try { return JSON.parse(body).reason; } catch (e) { return null; } })() : undefined });
+    writes.push({ method, path: url.pathname + url.search, body: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? "(snapshot body omitted)" : body, prefer: req.headers()["prefer"] || "", auth: req.headers()["authorization"] || "", at: Date.now(), snapshotReason: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? (() => { try { return JSON.parse(body).reason; } catch (e) { return null; } })() : undefined });
     return json(method === "POST" ? 201 : 200, representation(method, url, body));
   }
   // Snapshot list / read from the store (authenticated-only table: anon would answer []).
@@ -944,13 +982,14 @@ const routeSupabase = async (route) => {
   // setup that "changed since the dry run".
   // ... and (rebase follow-up 9/23) the app's own last write stamp rides on every blob GET after a write; the
   // deliberate foreign stamp above still wins when it is armed.
-  if ((blobReadOverride || blobWriteTs) && method === "GET" && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
+  const scopedBlobTs = sessionScope ? sessBlobWriteTs : blobWriteTs;
+  if ((blobReadOverride || scopedBlobTs) && method === "GET" && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
     let rows = fixtureAnswer(url);
     if (!rows) {
       const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
       rows = await res.json().catch(() => []);
     }
-    const stampRow = (r) => (r && typeof r === "object") ? { ...r, ...(blobWriteTs ? { updated_at: blobWriteTs } : {}), ...(blobReadOverride || {}) } : r;
+    const stampRow = (r) => (r && typeof r === "object") ? { ...r, ...(scopedBlobTs ? { updated_at: scopedBlobTs } : {}), ...(blobReadOverride || {}) } : r;
     return json(200, Array.isArray(rows) ? rows.map(stampRow) : stampRow(rows));
   }
   // Prompt 13 part 3: a claimed day reads back with the claimer, version + 1 (what the function's UPDATE leaves).
@@ -5063,6 +5102,183 @@ try {
     } catch (e) { fail("A2 expired link: " + errLine(e)); try { await signin.screenshot({ path: path.join(OUT, "failure-signin-expired-link.png"), fullPage: true }); } catch (e2) {} }
   }
   await signin.close();
+  // (f) Prompt 16 A3: session lifecycle. A page whose stored token expired an hour ago (the tab-left-open picture;
+  // /auth/v1/user still answers 200, like a session the server has not re-checked) with the refresh REJECTED (400)
+  // and every write carrying an expired bearer answered 401: the first write path (the client_versions heartbeat)
+  // tries ONE refresh and raises the banner; a day-editor save then fails 401 with NO 5-second retry loop and NO
+  // toast beside the banner (toasts counted through a MutationObserver); the banner's button opens the sign-in
+  // card in place, the dead pair still stored; a password sign-in (the harness hands out NEW_JWT) re-syncs the
+  // pending edit as the same POST v1 with the new bearer. Then the proactive path: the token is expired again but
+  // the refresh is GRANTED - the next save refreshes first and goes out with the refreshed bearer, no 401, no banner.
+  // Its OWN BrowserContext (the 9/23 review, major): the main page keeps running its 60-second poll, and with a
+  // shared origin storage it would read the expired pair too and add refresh attempts the counters below would
+  // attribute to this page. Own localStorage, own routes (Supabase with scope "session" so the blob stamp is
+  // kept apart from the main page's autosave), the CDN cache and the East mock shared by handler.
+  if (day) {
+    const sessCtx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+    await sessCtx.addInitScript(({ token, version }) => { try { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: EXPIRED_JWT, version: APP_VERSION });
+    await sessCtx.route(cdnMatcher, routeCdn);
+    await sessCtx.route((url) => url.hostname === EAST_HOST, routeEast);
+    const sess = await sessCtx.newPage();
+    watchPage(sess, "session");
+    await sess.route((url) => url.hostname === SUPABASE_HOST, (route) => routeSupabase(route, "session"));
+    await sess.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    const sCell = (attr) => sess.$eval(`[data-day="${day}"]`, (el, a) => el.getAttribute(a), attr);
+    const sEdit = async (role, id) => {
+      const [y, m] = day.split("-");
+      await sess.selectOption("[data-testid=cal-month-select]", String(Number(m) - 1));
+      if ((await sess.$eval("[data-testid=cal-year-input]", el => el.value)) !== y) await sess.fill("[data-testid=cal-year-input]", y);
+      await sess.waitForSelector(`[data-day="${day}"]`, { timeout: 5000 });
+      await sess.click(`[data-day="${day}"]`);
+      await sess.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      await sess.selectOption(`[data-testid=editor-${role}]`, id);
+      const ov = await sess.$("[data-testid=override-confirm]");
+      if (ov) await sess.click("[data-testid=override-accept]");
+      await sess.click("[data-testid=editor-save]");
+      await sess.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+    };
+    const sDays = (from) => writes.slice(from).filter(w => w.path.startsWith("/rest/v1/schedule_days"));
+    const sRefreshes = (from) => authCalls.slice(from).filter(a => a.grant === "refresh_token");
+    const sToasts = () => sess.evaluate(() => (window.__toastLog || []).slice());
+    const banners = () => sess.locator("[data-testid=session-expired]").count();
+    const isSaveToast = (t) => /session expired|Couldn't save|aren't saving/i.test(t);
+    expiredWrites401 = true; authRefreshGrant = null;
+    const a0 = authCalls.length;
+    try {
+      await sess.goto(BASE, { waitUntil: "domcontentloaded" });
+      await sess.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
+      await sess.waitForSelector("text=Synced", { timeout: 30000 });
+      await sess.evaluate(() => { window.__toastLog = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt && txt !== last) window.__toastLog.push(txt); last = txt; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
+      await sess.waitForTimeout(3500); // past the autosave hydration window; the heartbeat's refresh attempt has happened
+      // (1) the first write path already found the session dead: one refresh attempt, the banner once
+      const bannerAtLoad = await banners();
+      const r0 = sRefreshes(a0);
+      if (bannerAtLoad !== 1) fail(`A3 session: expected the ONE session-expired banner once the first write path (the heartbeat) found the session dead, got ${bannerAtLoad}`);
+      else if (r0.length !== 1 || r0[0].refresh !== "fake-refresh") fail(`A3 session: expected exactly one refresh attempt (grant_type=refresh_token with the stored refresh token) at load, got ${JSON.stringify(r0)}`);
+      else ok("A3 session: stored token expired + refresh rejected (400) -> the first write path tries ONE refresh and the banner 'Your session expired - sign in again' shows once");
+      // (2) a day-editor save while expired: 401, no retry, no toast beside the banner, the edit stays in the cell
+      const w1 = writes.length, a1 = authCalls.length, tEdit = (await sToasts()).length;
+      await sEdit("primary", "s2");
+      await sess.waitForTimeout(2500);
+      const d1 = sDays(w1);
+      const bodyText1 = await sess.evaluate(() => document.body.innerText);
+      if (d1.length !== 1 || !d1[0].forced401 || d1[0].method !== "POST") fail("A3 session (expired save): expected exactly one schedule_days POST answered 401, got " + JSON.stringify(d1.map(w => `${w.method} ${w.path} 401=${!!w.forced401}`)));
+      else if ((await sCell("data-primary")) !== "s2") fail("A3 session (expired save): the cell lost the edit (data-primary = " + (await sCell("data-primary")) + ")");
+      else if (!/Save failed - sign in again/i.test(bodyText1)) fail("A3 session (expired save): the header status does not say 'Save failed - sign in again'"); // innerText carries the header's CSS uppercase
+      else ok(`A3 session (expired save): ${day} P -> Burchett -> ONE schedule_days POST answered 401; the cell keeps the edit; status 'Save failed - sign in again'`);
+      const tAfter = await sToasts();
+      await sess.waitForTimeout(12000); // more than two retry periods
+      const d2 = sDays(w1), r2 = sRefreshes(a1), tLater = await sToasts(), b2 = await banners();
+      const saveToasts = tLater.slice(tEdit).filter(isSaveToast);
+      if (d2.length !== 1) fail(`A3 session (no loop): ${d2.length} schedule_days writes 12 s after the 401 - the 5-second retry re-armed: ` + JSON.stringify(d2.map(w => w.method + " " + w.path)));
+      else if (r2.length !== 0) fail(`A3 session (no loop): ${r2.length} further refresh attempt(s) for the same dead pair`);
+      else if (saveToasts.length) fail("A3 session (no loop): a save-error toast showed beside the banner: " + JSON.stringify(saveToasts));
+      else if (tLater.length !== tAfter.length) fail("A3 session (no loop): toasts kept coming after the save settled: " + JSON.stringify(tLater.slice(tAfter.length)));
+      else if (b2 !== 1) fail(`A3 session (no loop): ${b2} banner(s) after 12 s (never stacked, never dropped)`);
+      else ok("A3 session (no loop): 12 s later still ONE write, no further refresh, no save-error toast (toasts counted), ONE banner");
+      await sess.screenshot({ path: path.join(OUT, "session-expired.png"), fullPage: true });
+      ok("screenshot test/ui/out/session-expired.png");
+      // (2b) a Setup edit while expired (the 9/23 review, major - the blob leg): Rules -> Acton -> max consecutive
+      // days -> Save. The audit insert and the blob upsert both 401 (forced); the value must stay in the editor and
+      // land after the sign-in instead of being replaced by the server's blob (the re-run's leg A used to adoptBlob
+      // wholesale, then the autosave wrote the server's values back).
+      const wSetup = writes.length;
+      const blobWrites = (from) => writes.slice(from).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path) && w.method !== "GET");
+      const blobMax = (w) => { try { return JSON.parse(w.body).data.surgeonRules.s3.maxConsecutiveDays; } catch (e) { return undefined; } };
+      await sess.click('button[data-tab="setup"]');
+      await sess.waitForSelector("[data-testid=card-setup_rules]", { timeout: 5000 });
+      if ((await sess.getAttribute("[data-testid=card-setup_rules]", "data-open")) !== "1") { await sess.click("[data-testid=card-toggle-setup_rules]"); await sess.waitForTimeout(200); }
+      await sess.click("[data-testid=rules-pick-s3]");
+      const sMaxInput = sess.locator("[data-testid=rules-editor] input[type=number][max='14']").first();
+      const maxBefore = await sMaxInput.inputValue();
+      const maxNew = maxBefore === "4" ? "5" : "4";
+      await sMaxInput.fill(maxNew);
+      await sess.click("[data-testid=rules-save]");
+      await waitFor(() => blobWrites(wSetup).length > 0, 5000);
+      await sess.waitForTimeout(500);
+      const bExp = blobWrites(wSetup);
+      if (!bExp.length || bExp.some(w => !w.forced401) || String(blobMax(bExp[bExp.length - 1])) !== maxNew) fail("A3 session (setup edit while expired): expected the blob upsert(s) after Save to be answered 401 and to carry surgeonRules.s3.maxConsecutiveDays " + maxNew + ", got " + JSON.stringify(bExp.map(w => `${w.method} 401=${!!w.forced401} max=${blobMax(w)}`)));
+      else if ((await sMaxInput.inputValue()) !== maxNew) fail("A3 session (setup edit while expired): the editor lost the value (" + (await sMaxInput.inputValue()) + ")");
+      else if ((await banners()) !== 1) fail("A3 session (setup edit while expired): banner count " + (await banners()));
+      else ok(`A3 session (setup edit while expired): Rules Acton max consecutive ${maxBefore || "(blank)"} -> ${maxNew} -> Save: ${bExp.length} blob upsert(s) answered 401, the value stays in the editor, ONE banner`);
+      // back to the calendar before the sign-in (the view state survives the card; step 3 reads the day cell there)
+      await sess.click('button[data-tab="calendar"]');
+      await sess.waitForSelector(`[data-day="${day}"]`, { timeout: 5000 });
+      // (3) the banner's button -> the sign-in card in place -> password sign-in -> the pending edit lands
+      await sess.click("[data-testid=session-expired-signin]");
+      await sess.waitForSelector("text=Sign in to your account", { timeout: 10000 });
+      const cardMsg = await sess.$eval("[data-testid=auth-error]", el => el.textContent.trim()).catch(() => "");
+      const storedTok = await sess.evaluate(() => localStorage.getItem("silvis-auth-token"));
+      if (!/session expired/i.test(cardMsg)) fail("A3 session (card): the sign-in card does not say why: '" + cardMsg + "'"); else ok("A3 session (card): the banner's button opens the sign-in card in place - '" + cardMsg + "'");
+      if (storedTok !== EXPIRED_JWT) fail("A3 session (card): the stored session was cleared or replaced before the sign-in (the dead pair must stay so a write fails loudly, never as anon)"); else ok("A3 session (card): the stored (dead) pair stays until the sign-in - no signOut, no unenroll, no reload");
+      await sess.fill('input[type="email"]', FAKE_EMAIL);
+      await sess.fill('input[type="password"]', "harness-only-password");
+      const w3 = writes.length, a3 = authCalls.length, t3Base = (await sToasts()).length;
+      await sess.click("button:has-text('Sign in')");
+      await sess.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 20000 });
+      await waitFor(() => sDays(w3).length > 0, 15000);
+      await sess.waitForTimeout(1500);
+      const d3 = sDays(w3), pw = authCalls.slice(a3).filter(a => a.grant === "password");
+      const b3 = (() => { try { return JSON.parse((d3[0] || {}).body || "{}"); } catch (e) { return {}; } })();
+      const banner3 = await banners();
+      const t3 = (await sToasts()).slice(t3Base).filter(isSaveToast);
+      if (pw.length !== 1) fail(`A3 session (re-auth): expected one grant_type=password sign-in, got ${pw.length}`);
+      else if (d3.length !== 1 || d3[0].forced401 || d3[0].method !== "POST" || b3.day !== day || b3.primary_id !== "s2" || b3.version !== 1) fail("A3 session (re-auth): the pending edit did not land as ONE POST v1 after the sign-in: " + JSON.stringify(d3.map(w => `${w.method} ${w.path} 401=${!!w.forced401} body=${String(w.body).slice(0, 120)}`)));
+      else if (d3[0].auth !== "Bearer " + NEW_JWT) fail("A3 session (re-auth): the landed write did not carry the NEW bearer from the sign-in");
+      else if ((await sCell("data-primary")) !== "s2") fail("A3 session (re-auth): the cell lost the edit across the sign-in");
+      else if (banner3 !== 0) fail(`A3 session (re-auth): the banner is still up after the sign-in (${banner3})`);
+      else if (t3.length) fail("A3 session (re-auth): a session toast after the sign-in: " + JSON.stringify(t3));
+      else ok(`A3 session (re-auth): password sign-in -> the edit made while expired lands as POST v1 ${day} P Burchett with the new bearer (the re-run of the load merged, then re-synced); banner gone; no toast`);
+      // (3b) ... and the Setup edit made while expired lands too: the re-run's blob read finds the row unchanged
+      // (updated_at equality, the session scope's own stamp), keeps the local state and re-fires the autosave; every
+      // blob write after the sign-in carries the new value (the count is the autosave's, not pinned) and the editor
+      // (remounted after the card) still shows it.
+      await waitFor(() => blobWrites(w3).some(w => !w.forced401), 15000);
+      await sess.waitForTimeout(1200);
+      const b3b = blobWrites(w3);
+      await sess.click('button[data-tab="setup"]');
+      await sess.waitForSelector("[data-testid=card-setup_rules]", { timeout: 5000 });
+      if ((await sess.getAttribute("[data-testid=card-setup_rules]", "data-open")) !== "1") { await sess.click("[data-testid=card-toggle-setup_rules]"); await sess.waitForTimeout(200); }
+      await sess.click("[data-testid=rules-pick-s3]");
+      const maxAfter = await sMaxInput.inputValue().catch(() => null);
+      if (!b3b.length || b3b.some(w => w.forced401) || b3b.some(w => String(blobMax(w)) !== maxNew)) fail("A3 session (re-auth, setup): expected every call_schedule_data write after the sign-in to succeed and to carry surgeonRules.s3.maxConsecutiveDays " + maxNew + ", got " + JSON.stringify(b3b.map(w => `${w.method} 401=${!!w.forced401} max=${blobMax(w)} bearer=${w.auth === "Bearer " + NEW_JWT ? "new" : "other"}`)));
+      else if (b3b.some(w => w.auth !== "Bearer " + NEW_JWT)) fail("A3 session (re-auth, setup): a blob write did not carry the NEW bearer");
+      else if (maxAfter !== maxNew) fail(`A3 session (re-auth, setup): the editor shows ${maxAfter} after the sign-in, not the ${maxNew} saved while expired (the re-run adopted the server's blob over the local edit)`);
+      else ok(`A3 session (re-auth, setup): the Setup edit made while expired lands - ${b3b.length} call_schedule_data write(s) after the sign-in, every one with maxConsecutiveDays ${maxNew} and the new bearer; the editor still shows ${maxNew}`);
+      // restore the harness value in the editor (the live blob is never written - the mock answers the upserts) and
+      // let that autosave land before the next step re-expires the token
+      const wRestore = writes.length;
+      await sMaxInput.fill(maxBefore);
+      if (await sess.$eval("[data-testid=rules-save]", el => !el.disabled)) { await sess.click("[data-testid=rules-save]"); await waitFor(() => blobWrites(wRestore).some(w => !w.forced401), 8000); }
+      await sess.click('button[data-tab="calendar"]');
+      // (4) the proactive refresh: expired again, the refresh GRANTED -> the next save refreshes first, no 401.
+      // Wait for a marker, not a duration (the 9/23 review): the header back at Synced / Saved with no failure
+      // (the re-run's sync and the restore above have settled). The re-run no longer re-opens the autosave's
+      // 3-second hydration window (loadedAtRef is set on the first load only), so the edit that follows syncs
+      // like any other.
+      const settled = await waitFor(async () => { const t = await sess.evaluate(() => document.body.innerText); return /\b(Synced|Saved)\b/i.test(t) && !/Save failed|Syncing|Saving|Loading/i.test(t); }, 20000, 250);
+      if (!settled) fail("A3 session (re-auth): the header never settled to Synced / Saved after the sign-in");
+      authRefreshGrant = NEW2_JWT;
+      await sess.evaluate((t) => localStorage.setItem("silvis-auth-token", t), EXPIRED_JWT);
+      const w4 = writes.length, a4 = authCalls.length;
+      await sEdit("backup", "s3");
+      await waitFor(() => sDays(w4).length > 0, 10000);
+      await sess.waitForTimeout(1500);
+      const d4 = sDays(w4), r4 = sRefreshes(a4);
+      const b4 = (() => { try { return JSON.parse((d4[0] || {}).body || "{}"); } catch (e) { return {}; } })();
+      const storedAfter = await sess.evaluate(() => localStorage.getItem("silvis-auth-token"));
+      if (r4.length !== 1 || r4[0].refresh !== "fake-refresh-2") fail(`A3 session (refresh before write): expected ONE granted refresh with the sign-in's refresh token before the save, got ${JSON.stringify(r4)}`);
+      else if (d4.length !== 1 || d4[0].forced401 || d4[0].method !== "PATCH" || b4.backup_id !== "s3" || b4.version !== 2) fail("A3 session (refresh before write): expected ONE CAS PATCH (version 2) carrying backup s3 with no 401: " + JSON.stringify(d4.map(w => `${w.method} ${w.path} 401=${!!w.forced401} body=${String(w.body).slice(0, 120)}`)));
+      else if (d4[0].auth !== "Bearer " + NEW2_JWT) fail("A3 session (refresh before write): the write did not carry the refreshed bearer");
+      else if (d4[0].at < r4[0].at) fail("A3 session (refresh before write): the write went out BEFORE the refresh");
+      else if ((await banners()) !== 0) fail("A3 session (refresh before write): the banner showed although the refresh was granted");
+      else if (storedAfter !== NEW2_JWT) fail("A3 session (refresh before write): the refreshed token was not stored");
+      else ok(`A3 session (refresh before write): token expired again + refresh granted -> refresh first, then PATCH ?day=eq.${day}&version=eq.1 (B -> Acton, v2) with the refreshed bearer; no 401, no banner`);
+    } catch (e) { fail("A3 session: " + errLine(e)); try { await sess.screenshot({ path: path.join(OUT, "failure-session.png"), fullPage: true }); } catch (e2) {} }
+    expiredWrites401 = false; authRefreshGrant = null;
+    await sess.close();
+    await sessCtx.close();
+  } else console.log("     (A3 session scenario skipped: no row-less edit day)");
   // (d) a signed-in month view per theme on the main page: navy header, orange today ring, id-keyed pill colours, dark page.
   const monthProbe = () => page.evaluate(() => {
     const h1 = document.querySelector("h1");
@@ -5388,7 +5604,7 @@ if (pageErrors.length) fail("pageerrors: " + pageErrors.join(" | ")); else ok("n
 const unexpected = consoleErrors.filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 const expected = consoleErrors.filter(t => EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 if (expected.length) console.log(`     (${expected.length} expected console error(s) ignored: ${[...new Set(expected)].slice(0, 3).join(" | ")})`);
-if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400 - expected)`);
+if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400, the session scenario's 401s / rejected refresh - expected)`);
 if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ")); else ok("no unexpected console errors");
 
 console.log(`\ncdn cache: ${cdnHits} hit(s), ${cdnMisses} miss(es) (${path.relative(ROOT, CDN_CACHE)})`);

@@ -604,12 +604,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const state = { toasts: [], patched: [] };
       const intentionalScheduleWipeRef = ref(false);
       const lastSyncRef = ref({ "2026-11-02": { primary: "s1" }, "2026-11-03": { primary: "s2" }, "2026-11-04": { primary: "s3" }, "2026-11-05": { primary: "s4" } });
-      const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console"];
+      const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth"];
       const fns = new Function(...params, body + "\nreturn { syncScheduleDays, syncScheduleDaysNow };")(
         intentionalScheduleWipeRef, ref(0), ref(Promise.resolve()), lastSyncRef, ref({ "2026-11-02": 1, "2026-11-03": 1, "2026-11-04": 1, "2026-11-05": 1 }), ref(lastSyncRef.current),
         H.scheduleWipeCheck, sameAssignment, H.assignmentToDayRow, H.emptyDayAssignment,
         async () => ({ version: 1 }), async (row, ver) => { state.patched.push(row.day); return { version: ver + 1 }; }, async () => null,
-        () => {}, () => {}, (m) => state.toasts.push(m), () => {}, async () => ({ sched: {}, vers: {} }), () => {}, null, null, () => "write failed", () => 0, { warn: () => {} });
+        () => {}, () => {}, (m) => state.toasts.push(m), () => {}, async () => ({ sched: {}, vers: {} }), () => {}, null, null, () => "write failed", () => 0, { warn: () => {} }, { sessionExpired: false });
       return { ...fns, state, intentionalScheduleWipeRef, lastSyncRef };
     };
     const wipe = { "2026-11-02": {}, "2026-11-03": {}, "2026-11-04": {}, "2026-11-05": {} };
@@ -778,7 +778,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const acc = src.slice(src.indexOf("const acceptMerged = async"), src.indexOf("// --- Seed import"));
     const okAt = acc.indexOf("if (r && r.ok) {"), setAt = acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString(), lastGenerate));"); // P13R (e): the previous record travels too
     assert.ok(okAt > 0 && setAt > okAt && setAt < acc.indexOf("} else if (r && r.blocked)"), "acceptMerged stores the record only in the r.ok branch (a blocked / failed write leaves the old reasons)");
-    assert.ok(src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows]);"), "autosave dependencies include lastGenerate");
+    assert.ok(src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows, saveTick]);"), "autosave dependencies include lastGenerate (and A3's saveTick)");
     assert.ok(src.includes("setLastPublished(null); setLastGenerate(undefined);"), "the state reset clears lastGenerate together with lastPublished");
     assert.strictEqual(count("setLastGenerate("), 3, "adoptBlob + acceptMerged + the state reset only - nothing else writes the record");
   });
@@ -1929,12 +1929,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("{offerSheet && !isPublicMode && (\n        <OfferPainterSheet"), "the sheet is not mounted beside the vacation painter (outside the view conditionals)");
       assert.strictEqual((src.match(/<OfferPainterSheet\b/g) || []).length, 1, "exactly one mount");
     });
-    check("U3a pins: one Save = ONE rpc/save_offers request (rows + period + mode together) through dbAuthHeaders + ONE audit row offers.save; a mode-only save = ONE rpc/set_offer_mode; nothing to write = no request and no audit; no direct call_offers / call_periods write", () => {
-      assert.ok(src.includes("`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: \"POST\", headers: { ...dbAuthHeaders()"), "save_offers must be one POST with dbAuthHeaders");
+    check("U3a pins: one Save = ONE rpc/save_offers request (rows + period + mode together) through authFetch (dbAuthHeaders at send time, Prompt 16 A3) + ONE audit row offers.save; a mode-only save = ONE rpc/set_offer_mode; nothing to write = no request and no audit; no direct call_offers / call_periods write", () => {
+      assert.ok(src.includes("`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: \"POST\", body: JSON.stringify("), "save_offers must be one POST through authFetch");
       assert.strictEqual((src.match(/rest\/v1\/rpc\/save_offers/g) || []).length, 1, "save_offers is called from exactly one place");
       assert.ok(src.includes("body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null })"), "the rows request must carry the period + mode when the same Save changed the toggle (one commit or nothing - the 9/23 review's finding 3)");
-      assert.ok(src.includes("`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, { method: \"POST\", headers: { ...dbAuthHeaders()"), "set_offer_mode must be one POST with dbAuthHeaders");
-      assert.ok(/if \(diff\.count > 0\) \{[\s\S]*?\} else \{\s*const r2 = await fetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/rpc\/set_offer_mode`/.test(src), "set_offer_mode is the MODE-ONLY path (the else of diff.count > 0), never a second request after the rows");
+      assert.ok(src.includes("`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, { method: \"POST\", body: JSON.stringify("), "set_offer_mode must be one POST through authFetch");
+      assert.ok(/if \(diff\.count > 0\) \{[\s\S]*?\} else \{\s*const r2 = await authFetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/rpc\/set_offer_mode`/.test(src), "set_offer_mode is the MODE-ONLY path (the else of diff.count > 0), never a second request after the rows");
       assert.ok(src.includes("if (diff.count === 0 && !withMode) return { ok: true, nothing: true };"), "nothing to write must return before any request or audit row (finding 10)");
       assert.ok(src.includes("if (diff.count === 0 && !mode) { setBusy(false); setDraft({}); setModeDraft(null); setPendingStart(null); setSavedNote(\"Already saved - nothing to write\");"), "the sheet's Save must drop an equalised draft without calling onCommit");
       assert.strictEqual(src.includes("modeError"), false, "no partial 'rows saved, mode not' state may remain (the combined Save is atomic)");
@@ -2233,6 +2233,267 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(count("showToast(linkErr.message"), 2, "two toast sites (biometric wait, live session), none at mount");
       assert.strictEqual(count("setAuthError(linkErr.message)"), 2, "two card sites (signed out, dead session)");
       assert.strictEqual(count('data-testid="auth-error"'), 1, "the card error testid");
+    });
+  }
+
+  /* ---------------- H. Prompt 16 A3: session lifecycle - ensureFresh / authFetch / sessionExpired ---------------- */
+  console.log("\n[A3] Prompt 16 A3 (session lifecycle: refresh before writes, one 401 retry, the expired banner)");
+  {
+    const b64u = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+    const jwt = (expInSec, tag) => `${b64u({ alg: "HS256", typ: "JWT" })}.${b64u({ sub: "u1", role: "authenticated", exp: Math.floor(Date.now() / 1000) + expInSec, jti: tag })}.sig`;
+    const FRESH = jwt(3600, "fresh"), SOON = jwt(60, "soon"), DEAD = jwt(-3600, "dead"), NEW1 = jwt(3600, "new1"), NEW2 = jwt(3600, "new2"), NEW3 = jwt(3600, "new3"), NEW4 = jwt(3600, "new4");
+    const store = sandbox.localStorage;
+    const setSession = (tok, ref) => { store._m = {}; if (tok) store.setItem("silvis-auth-token", tok); if (ref) store.setItem("silvis-auth-refresh", ref); };
+    const bearerOf = (opts) => String((opts && opts.headers && (opts.headers.Authorization || opts.headers.authorization)) || "").replace(/^Bearer /, "");
+    const tokenBody = (tok, ref) => ({ access_token: tok, refresh_token: ref, token_type: "bearer", expires_in: 3600, user: { id: "u1" } });
+    const rtAuth = [], events = [], a3calls = [];
+    let A3 = null;
+    // fetch stub: records { url, method, bearer, body }; `answer(call)` decides the response, and may throw for a network error
+    let answer = () => resp(200, []);
+    sandbox.__fetch = async (url, opts) => { const c = { url: String(url), method: (opts && opts.method) || "GET", bearer: bearerOf(opts), body: opts && opts.body ? JSON.parse(opts.body) : null }; a3calls.push(c); return answer(c); };
+    const isRefresh = (c) => c.method === "POST" && c.url.includes("/auth/v1/token?grant_type=refresh_token");
+    const need = () => { if (!A3) throw new Error("the A3 sandbox exports are missing (auth.ensureFresh / authFetch not implemented)"); };
+    const acheck = async (name, fn) => { try { need(); await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    let rtCreate = null; // { url, key, opts } of the createClient call
+    check("A3: config.js exposes auth.ensureFresh / auth.onSessionChange / auth.applyRealtimeAuth / auth.sessionExpired and authFetch; getSupabaseRT hands the FRESH stored token to realtime.setAuth when it creates the client", () => {
+      sandbox._supabaseSDK = { createClient: (url, key, opts) => { rtCreate = { url, key, opts }; return { realtime: { setAuth: (t) => { rtAuth.push(t); return Promise.resolve(); } } }; } };
+      setSession(FRESH, "r0");
+      A3 = vm.runInContext("({ auth, db, authFetch, supabase, getSupabaseRT, dbAuthHeaders })", sandbox);
+      assert.strictEqual(typeof A3.auth.ensureFresh, "function", "auth.ensureFresh");
+      assert.strictEqual(typeof A3.auth.onSessionChange, "function", "auth.onSessionChange");
+      assert.strictEqual(typeof A3.auth.applyRealtimeAuth, "function", "auth.applyRealtimeAuth");
+      assert.strictEqual(A3.auth.sessionExpired, false, "sessionExpired starts false");
+      assert.strictEqual(typeof A3.authFetch, "function", "authFetch");
+      assert.ok(A3.getSupabaseRT(), "the realtime client is created once the SDK is present");
+      assert.deepStrictEqual(rtAuth, [FRESH], "realtime.setAuth(<stored fresh token>) at client creation");
+      A3.auth.onSessionChange((k) => events.push(k));
+    });
+    // The 9/23 review of A3: supabase-js 2.x re-pulls the Realtime token from the client's `accessToken` callback on
+    // connect / heartbeat / channel join and falls back to the anon key without one - a bare realtime.setAuth() is
+    // overwritten on the next heartbeat. The client must be created with that callback, answering the stored token
+    // while it is fresh and null (-> anon, the SDK's own fallback) once it is not.
+    await acheck("A3 realtime: createClient carries the third-party-auth `accessToken` callback - it answers the stored FRESH token, null for an expired / missing one - and neither config.js nor the app ever touches the client's (throwing) `.auth`", async () => {
+      assert.ok(rtCreate && rtCreate.opts && typeof rtCreate.opts.accessToken === "function", "createClient(url, key, { accessToken: async () => ... })");
+      assert.ok(rtCreate.opts.auth && rtCreate.opts.auth.persistSession === false && rtCreate.opts.auth.autoRefreshToken === false, "the SDK's own auth stays off (no persisted session, no SDK refresh): " + JSON.stringify(rtCreate.opts.auth));
+      setSession(FRESH, "r0");
+      assert.strictEqual(await rtCreate.opts.accessToken(), FRESH, "fresh stored token -> the token");
+      setSession(DEAD, "r0");
+      assert.strictEqual(await rtCreate.opts.accessToken(), null, "expired stored token -> null (anon)");
+      setSession(null, null);
+      assert.strictEqual(await rtCreate.opts.accessToken(), null, "no session -> null");
+      setSession(FRESH, "r0");
+      const cfg = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
+      assert.strictEqual((cfg.match(/_supabaseRT\.auth\b|getSupabaseRT\(\)\.auth\b|\brt\.auth\b/g) || []).length, 0, "config.js never reads the realtime client's .auth");
+      assert.strictEqual((src.match(/rtClient\.auth\b|getSupabaseRT\(\)\.auth\b|_supabaseRT\.auth\b/g) || []).length, 0, "index-source.html never reads the realtime client's .auth");
+      assert.ok(cfg.includes("accessToken: async () => { try { const s = auth.getSession(); return (s && s.access_token && jwtIsFresh(s.access_token)) ? s.access_token : null; } catch (e) { return null; } },"), "the callback reads the stored session through auth.getSession() + jwtIsFresh");
+    });
+    await acheck("A3 ensureFresh: a token with an hour left is fresh - no request, { ok: true, expired: false, refreshed: false }", async () => {
+      setSession(FRESH, "r0"); a3calls.length = 0;
+      const r = await A3.auth.ensureFresh();
+      assert.deepStrictEqual({ ok: r.ok, expired: r.expired, refreshed: r.refreshed }, { ok: true, expired: false, refreshed: false });
+      assert.strictEqual(a3calls.length, 0, "no fetch");
+    });
+    await acheck("A3 ensureFresh: a token that expires within the refresh window (60 s left) is refreshed through auth/v1/token?grant_type=refresh_token; the new pair is stored, dbAuthHeaders() carries it, realtime.setAuth gets it, { ok: true, refreshed: true }", async () => {
+      setSession(SOON, "r1"); a3calls.length = 0; rtAuth.length = 0;
+      answer = (c) => isRefresh(c) ? resp(200, tokenBody(NEW1, "r2")) : resp(500, "unexpected");
+      const r = await A3.auth.ensureFresh();
+      assert.deepStrictEqual({ ok: r.ok, expired: r.expired, refreshed: r.refreshed }, { ok: true, expired: false, refreshed: true });
+      assert.strictEqual(a3calls.length, 1, "exactly one request");
+      assert.ok(isRefresh(a3calls[0]) && a3calls[0].body.refresh_token === "r1", "POST grant_type=refresh_token with the stored refresh token");
+      assert.strictEqual(store.getItem("silvis-auth-token"), NEW1, "the new access token is stored");
+      assert.strictEqual(store.getItem("silvis-auth-refresh"), "r2", "the new refresh token is stored");
+      assert.strictEqual(A3.dbAuthHeaders().Authorization, "Bearer " + NEW1, "dbAuthHeaders reads the new token");
+      assert.deepStrictEqual(rtAuth, [NEW1], "realtime.setAuth(new token) after the refresh");
+      assert.strictEqual(A3.auth.sessionExpired, false);
+    });
+    await acheck("A3 ensureFresh: a rejected refresh (HTTP 400) sets sessionExpired ONCE (one 'expired' event), keeps the dead token in storage so a write still fails loudly, and a second call makes NO further request", async () => {
+      setSession(DEAD, "r3"); a3calls.length = 0; events.length = 0;
+      answer = (c) => isRefresh(c) ? resp(400, { error: "invalid_grant", error_description: "Invalid Refresh Token: Refresh Token Not Found" }) : resp(500, "unexpected");
+      const r = await A3.auth.ensureFresh();
+      assert.deepStrictEqual({ ok: r.ok, expired: r.expired }, { ok: false, expired: true });
+      assert.strictEqual(A3.auth.sessionExpired, true, "sessionExpired set");
+      assert.deepStrictEqual(events, ["expired"], "one 'expired' event");
+      assert.strictEqual(store.getItem("silvis-auth-token"), DEAD, "the dead token stays (dbAuthHeaders keeps sending it - a dead write 401s loudly, never anon)");
+      assert.strictEqual(a3calls.filter(isRefresh).length, 1);
+      const r2 = await A3.auth.ensureFresh();
+      assert.deepStrictEqual({ ok: r2.ok, expired: r2.expired }, { ok: false, expired: true });
+      assert.strictEqual(a3calls.filter(isRefresh).length, 1, "the same dead pair is not retried");
+      assert.deepStrictEqual(events, ["expired"], "still one event");
+    });
+    await acheck("A3 ensureFresh: a NETWORK error during the refresh is not an expiry - { ok: false, expired: false }, sessionExpired false, session kept", async () => {
+      setSession(SOON, "r4"); a3calls.length = 0; events.length = 0;
+      answer = (c) => { if (isRefresh(c)) throw new TypeError("Failed to fetch"); return resp(500, "unexpected"); };
+      const r = await A3.auth.ensureFresh();
+      assert.deepStrictEqual({ ok: r.ok, expired: r.expired }, { ok: false, expired: false });
+      assert.strictEqual(A3.auth.sessionExpired, false, "a new pair in storage cleared the earlier flag, and a network error does not raise it");
+      assert.strictEqual(store.getItem("silvis-auth-token"), SOON, "session kept");
+      assert.ok(events.includes("restored") && !events.includes("expired"), "events: " + JSON.stringify(events));
+    });
+    await acheck("A3 authFetch (db.insert): a 401 on a fresh-looking token -> ONE refresh + ONE retry of the same request with the new bearer; the caller sees the 2xx result", async () => {
+      setSession(FRESH, "r5"); a3calls.length = 0; rtAuth.length = 0; events.length = 0;
+      answer = (c) => {
+        if (isRefresh(c)) return resp(200, tokenBody(NEW2, "r6"));
+        if (c.url.endsWith("/rest/v1/notifications") && c.method === "POST") return c.bearer === NEW2 ? resp(201, [{ id: 7, message: "hi" }]) : resp(401, { code: "PGRST301", message: "JWT expired" });
+        return resp(500, "unexpected");
+      };
+      const r = await A3.db.insert("notifications", { message: "hi" });
+      assert.strictEqual(r.error, null, "the retry's 201 is the result: " + JSON.stringify(r));
+      assert.strictEqual(r.data && r.data.id, 7);
+      assert.deepStrictEqual(a3calls.map(c => (isRefresh(c) ? "refresh" : c.method + " " + c.bearer.slice(-8))), ["POST " + FRESH.slice(-8), "refresh", "POST " + NEW2.slice(-8)], "insert(401) -> refresh -> insert once more with the new token");
+      assert.strictEqual(a3calls[2].body.message, "hi", "the retry carries the same body");
+      assert.deepStrictEqual(rtAuth, [NEW2], "realtime.setAuth after the refresh");
+      assert.strictEqual(A3.auth.sessionExpired, false);
+    });
+    await acheck("A3 authFetch (db.insert): a 401 whose refresh is rejected -> the 401 is returned to the caller (error carries status 401), sessionExpired set once, and a second write neither refreshes again nor retries", async () => {
+      setSession(FRESH, "r7"); a3calls.length = 0; events.length = 0;
+      answer = (c) => isRefresh(c) ? resp(400, { error: "invalid_grant" }) : resp(401, { code: "PGRST301", message: "JWT expired" });
+      const r = await A3.db.insert("notifications", { message: "x" });
+      assert.strictEqual(r.data, null);
+      assert.strictEqual(r.error && r.error.message, "JWT expired");
+      assert.deepStrictEqual(a3calls.map(c => (isRefresh(c) ? "refresh" : c.method)), ["POST", "refresh"], "one write, one refresh, NO retry after a rejected refresh");
+      assert.strictEqual(A3.auth.sessionExpired, true);
+      assert.deepStrictEqual(events, ["expired"], "flagged once");
+      a3calls.length = 0;
+      const r2 = await A3.db.update("notifications", 1, { read: true });
+      assert.ok(r2.error, "the second write fails loudly too");
+      assert.deepStrictEqual(a3calls.map(c => (isRefresh(c) ? "refresh" : c.method)), ["PATCH"], "no further refresh attempt, no retry");
+      assert.deepStrictEqual(events, ["expired"], "still one event");
+    });
+    await acheck("A3 authFetch (supabase.upsert): the refresh runs BEFORE the write when the stored token is inside the window - the request goes out with the new bearer and no 401 happens", async () => {
+      setSession(SOON, "r8"); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(200, tokenBody(NEW3, "r9")) : (c.bearer === NEW3 ? resp(201, []) : resp(401, { message: "JWT expired" }));
+      const r = await A3.supabase.from("call_schedule_data").upsert({ id: "main" });
+      assert.strictEqual(r.error, null, JSON.stringify(r));
+      assert.deepStrictEqual(a3calls.map(c => (isRefresh(c) ? "refresh" : c.method + " " + c.bearer.slice(-8))), ["refresh", "POST " + NEW3.slice(-8)], "refresh first, then the write with the new token");
+    });
+    await acheck("A3 sign-in: auth.signIn stores the pair, clears sessionExpired ('restored' event) and hands the token to realtime.setAuth (the recovery / invite hash path goes through the same _saveSession)", async () => {
+      A3.auth.sessionExpired = true; a3calls.length = 0; rtAuth.length = 0; events.length = 0;
+      answer = (c) => c.url.includes("/auth/v1/token?grant_type=password") ? resp(200, tokenBody(NEW4, "r10")) : resp(500, "unexpected");
+      const r = await A3.auth.signIn("someone@example.com", "pw");
+      assert.strictEqual(r.error, null);
+      assert.strictEqual(store.getItem("silvis-auth-token"), NEW4);
+      assert.deepStrictEqual(rtAuth, [NEW4], "realtime.setAuth after sign-in");
+      assert.strictEqual(A3.auth.sessionExpired, false);
+      assert.deepStrictEqual(events, ["restored"]);
+      rtAuth.length = 0;
+      A3.auth.applyRealtimeAuth();
+      assert.deepStrictEqual(rtAuth, [NEW4], "applyRealtimeAuth() re-applies the stored token (biometric unlock: no new pair, the same token)");
+    });
+    // The 9/23 review of A3 (minor): getUser (mount / biometric unlock) and ensureFresh (the first refreshAll fires
+    // within a second of the mount) started together must share ONE refresh request - two POSTs of the same refresh
+    // token outside GoTrue's reuse interval revoke the token family.
+    await acheck("A3 single flight: auth.getUser() (user GET answers 403) and auth.ensureFresh() started together make ONE grant_type=refresh_token request; both see the new pair; a rejected shared refresh still clears the session for getUser", async () => {
+      const NEW5 = jwt(3600, "new5");
+      setSession(DEAD, "r11"); a3calls.length = 0; events.length = 0;
+      answer = (c) => {
+        if (isRefresh(c)) return new Promise(r => setTimeout(() => r(resp(200, tokenBody(NEW5, "r12"))), 30)); // in flight long enough for the second caller to join
+        if (c.url.includes("/auth/v1/user")) return resp(403, { message: "invalid claim" });
+        return resp(500, "unexpected");
+      };
+      const [gu, ef] = await Promise.all([A3.auth.getUser(), A3.auth.ensureFresh()]);
+      assert.strictEqual(a3calls.filter(isRefresh).length, 1, "exactly one refresh request: " + JSON.stringify(a3calls.map(c => c.method + " " + c.url.split("/auth/v1/")[1])));
+      assert.ok(gu && gu.user && gu.user.id === "u1", "getUser resolved the refreshed user: " + JSON.stringify(gu));
+      assert.deepStrictEqual({ ok: ef.ok, refreshed: ef.refreshed }, { ok: true, refreshed: true });
+      assert.strictEqual(store.getItem("silvis-auth-token"), NEW5, "the new pair is stored once");
+      assert.strictEqual(A3.auth.sessionExpired, false);
+      // the shared request with keepOnReject: getUser keeps its clear-on-reject contract (the sign-in card follows)
+      setSession(DEAD, "r13"); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(400, { error: "invalid_grant" }) : c.url.includes("/auth/v1/user") ? resp(403, {}) : resp(500, "unexpected");
+      const gu2 = await A3.auth.getUser();
+      assert.ok(gu2 && gu2.user === null && !gu2.error, "getUser reports no user and no network error after the rejected shared refresh: " + JSON.stringify(gu2));
+      assert.strictEqual(store.getItem("silvis-auth-token"), null, "getUser cleared the dead pair");
+      assert.strictEqual(a3calls.filter(isRefresh).length, 1);
+      setSession(FRESH, "r0"); A3.auth._setExpired(false);
+    });
+    // syncScheduleDaysNow lifted out of the component (the app-safety-2 harness): a 401 / 403 must NOT arm the
+    // 5-second retry; the toast is skipped for a 401 while the banner is up; a 500 keeps the retry + toast.
+    await (async () => {
+      const start = src.indexOf("  const syncScheduleDays = (nextSchedule) => {");
+      const end = src.indexOf("  const scheduleDaySyncRetry = () => {", start);
+      const body = src.slice(start, end);
+      const ref = (v) => ({ current: v });
+      const sameAssignment = (day, a, b) => JSON.stringify(H.assignmentToDayRow(day, a || H.emptyDayAssignment())) === JSON.stringify(H.assignmentToDayRow(day, b || H.emptyDayAssignment()));
+      const run = async (status, sessionExpired) => {
+        const state = { toasts: [], statuses: [], retries: 0 };
+        const lastSyncRef = ref({ "2026-11-02": { primary: "s1" } });
+        const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth"];
+        const fns = new Function(...params, body + "\nreturn { syncScheduleDays, syncScheduleDaysNow };")(
+          ref(false), ref(0), ref(Promise.resolve()), lastSyncRef, ref({ "2026-11-02": 1 }), ref(lastSyncRef.current),
+          H.scheduleWipeCheck, sameAssignment, H.assignmentToDayRow, H.emptyDayAssignment,
+          async () => ({ version: 1 }), async () => ({ error: status === 401 ? "JWT expired" : status === 403 ? "row-level security" : "boom", status }), async () => null,
+          () => {}, (s) => state.statuses.push(s), (m) => state.toasts.push(m), () => { state.retries++; }, async () => ({ sched: {}, vers: {} }), () => {}, null, null, (st) => "write failed " + st, () => 0, { warn: () => {} }, { sessionExpired });
+        const r = await fns.syncScheduleDays({ "2026-11-02": { primary: "s3" } });
+        return { r, state };
+      };
+      const e401 = await run(401, true), e401noBanner = await run(401, false), e403 = await run(403, false), e500 = await run(500, false);
+      check("A3 syncScheduleDaysNow: a 401 does NOT arm the 5-second retry; with the session-expired banner up the save-error toast is skipped (never stacked); saveStatus says sign in again; the run reports the failure", () => {
+        assert.strictEqual(e401.state.retries, 0, "retry armed on 401");
+        assert.deepStrictEqual(e401.state.toasts, [], "toast shown beside the banner");
+        assert.ok(e401.state.statuses.includes("Save failed - sign in again"), JSON.stringify(e401.state.statuses));
+        assert.strictEqual(e401.r.ok, false);
+      });
+      check("A3 syncScheduleDaysNow: a 401 without the banner (the refresh hit a network error) toasts once, still does not re-arm and says 'will retry' - NOT 'sign in again' (no sign-in is needed; the next granted refresh re-sends it); a 403 toasts once, no retry; a 500 keeps the retry + toast", () => {
+        assert.strictEqual(e401noBanner.state.retries, 0); assert.deepStrictEqual(e401noBanner.state.toasts, ["write failed 401"]);
+        assert.ok(e401noBanner.state.statuses.includes("Save failed - will retry") && !e401noBanner.state.statuses.some(s => /sign in again/i.test(s)), JSON.stringify(e401noBanner.state.statuses));
+        assert.strictEqual(e403.state.retries, 0); assert.deepStrictEqual(e403.state.toasts, ["write failed 403"]); assert.ok(e403.state.statuses.includes("Not saved - no permission"), JSON.stringify(e403.state.statuses));
+        assert.strictEqual(e500.state.retries, 1); assert.deepStrictEqual(e500.state.toasts, ["write failed 500"]); assert.ok(e500.state.statuses.includes("Save failed - retrying"));
+      });
+    })();
+    check("A3 pins: every listed write path goes through authFetch - postDayRow / patchDayRow, the four RPCs (claim_open_slot, apply_trade, save_offers, set_offer_mode), the send-notification and office-notifications POSTs; no bare fetch of rest/v1/rpc or of an edge-function POST remains; db.insert / update / upsert in config.js use it", () => {
+      assert.strictEqual(count("authFetch(`${SUPABASE_URL}/rest/v1/schedule_days`, {"), 1, "postDayRow");
+      assert.strictEqual(count("authFetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${row.day}&version=eq.${ver}`, {"), 1, "patchDayRow");
+      ["claim_open_slot", "apply_trade", "save_offers", "set_offer_mode"].forEach(fn => assert.strictEqual(count("authFetch(`${SUPABASE_URL}/rest/v1/rpc/" + fn + "`"), 1, fn));
+      assert.strictEqual(count("fetch(`${SUPABASE_URL}/rest/v1/rpc/"), 0, "a bare fetch of an RPC remains");
+      assert.strictEqual(count("authFetch(`${EDGE_FN_BASE}/send-notification`"), 1, "send-notification");
+      assert.strictEqual(count("authFetch(`${EDGE_FN_BASE}/office-notifications`"), 2, "office-notifications (publish + digest)");
+      assert.strictEqual(count("fetch(`${EDGE_FN_BASE}/"), 0, "a bare fetch of an edge function remains");
+      const cfg = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
+      assert.strictEqual((cfg.match(/await authFetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/\$\{table\}/g) || []).length, 3, "db.insert, db.update and the upsert of the supabase wrapper send through authFetch");
+    });
+    check("A3 pins: ensureFresh runs on visibilitychange -> visible and at the top of the 60-second poll's refreshAll; adoptSignedInUser applies the token to realtime; the banner renders once (data-testid session-expired) and its button opens the sign-in card without biometric.unenroll() / reload; the re-run of the data load MERGES the table like refreshDays and re-syncs the pending days", () => {
+      assert.strictEqual(count('if (document.visibilityState === "visible") auth.ensureFresh().then(r => { if (r && r.refreshed) resyncPendingRef.current("visibilitychange"); });'), 1, "the visibility handler (refresh, then re-send what a 401 left behind when it did refresh)");
+      const ra = src.indexOf("const refreshAll = async () => {");
+      const raHead = src.slice(ra, src.indexOf("await Promise.allSettled([", ra));
+      assert.ok(ra > 0 && raHead.includes("const fr = await auth.ensureFresh();\n      if (fr && fr.refreshed) resyncPendingRef.current(\"poll\");"), "refreshAll must refresh the session before its reads and re-send the pending save after a granted refresh");
+      // the re-send bridge: days through syncScheduleDays (no-op when nothing is pending), an armed payload through one more autosave run
+      const rp = src.slice(src.indexOf("resyncPendingRef.current = (source) => {"), src.indexOf("// --- Flush pending save when app is backgrounded or closing ---"));
+      assert.ok(rp.includes("if (isPublicMode || !loaded || loadFailedRef.current) return;") && rp.includes("syncScheduleDays(scheduleRef.current);") && rp.includes("if (pendingSaveRef.current) {") && rp.includes("setSaveTick(t => t + 1);"), "resyncPendingRef: " + rp.slice(0, 400));
+      assert.ok(src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows, saveTick]);"), "saveTick is an autosave dependency");
+      const adopt = src.slice(src.indexOf("const adoptSignedInUser = async (user) => {"), src.indexOf("// --- Auth: Check session on mount ---"));
+      assert.ok(adopt.includes("auth.applyRealtimeAuth();"), "adoptSignedInUser -> realtime.setAuth (password, biometric unlock and the stored session all pass here)");
+      assert.strictEqual(count('data-testid="session-expired"'), 1, "one banner");
+      assert.strictEqual(count('data-testid="session-expired-signin"'), 1, "one button");
+      const os = src.indexOf("const openSignInAgain = () => {");
+      assert.ok(os > 0, "openSignInAgain missing");
+      const handler = src.slice(os, src.indexOf("};", os));
+      assert.ok(!handler.includes("biometric.unenroll") && !handler.includes("reload") && !handler.includes("auth.signOut") && !handler.includes("setSchedule"), "the banner's button must not unenroll, reload, sign out or drop data: " + handler);
+      assert.ok(handler.includes("setAuthUser(null)") && handler.includes('setAuthMode("login")'), "it shows the sign-in card in place");
+      assert.strictEqual(count("auth.onSessionChange("), 1, "the component subscribes to the session events once");
+      assert.ok(src.includes("if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);"), "a re-run of the data load (after a re-auth of the same account) merges and re-syncs instead of adopting the table wholesale; a different account adopts");
+      // the blob leg of the re-run (9/23 review, major): the row unchanged since our last read -> keep the local state and re-fire the autosave; moved -> adopt and say so
+      const legA = src.slice(src.indexOf("// Leg A - the config blob."), src.indexOf("// Leg B - the schedule itself"));
+      assert.ok(legA.includes("const rerun = !!loadedAtRef.current && !switchedUserRef.current;"), "leg A knows a re-run of the same account");
+      assert.ok(legA.includes("if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {") && legA.includes("if (pendingSaveRef.current) setSaveTick(t => t + 1);"), "unchanged row on a re-run -> no adoptBlob, the armed payload re-fires");
+      const iSkip = legA.indexOf("if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {"), iAdopt = legA.indexOf("adoptBlob(d);");
+      assert.ok(iSkip > 0 && iAdopt > iSkip && legA.slice(iSkip, iAdopt).includes("} else {"), "adoptBlob sits in the else branch only");
+      assert.ok(legA.includes("if (rerun && isScheduler && pendingSaveRef.current) showToast("), "a moved row over an armed payload is announced");
+      // the hydration window opens once; the switched-account flag is consumed at the end of the load
+      assert.ok(src.includes("if (!loadedAtRef.current) loadedAtRef.current = Date.now();\n      switchedUserRef.current = false;"), "loadedAtRef is set on the FIRST load only (a re-run does not re-open the 3-s autosave window) and the switch flag is cleared");
+      assert.strictEqual(count("loadedAtRef.current = Date.now()"), 1, "one place sets loadedAtRef");
+      // a different account on the in-place card drops the previous account's pending edit
+      const adoptFn = src.slice(src.indexOf("const adoptSignedInUser = async (user) => {"), src.indexOf("// --- Auth: Check session on mount ---"));
+      assert.ok(adoptFn.includes("if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {") && adoptFn.includes("switchedUserRef.current = true;") && adoptFn.includes("pendingSaveRef.current = null;") && adoptFn.includes("if (user) lastAuthUidRef.current = user.id;"), "adoptSignedInUser: " + adoptFn.slice(0, 600));
+      const rd = src.slice(src.indexOf("const refreshDays = async () => {"), src.indexOf("const refreshTradeReqs = async () => {"));
+      assert.ok(rd.includes("mergeLoadedDays(fresh);"), "refreshDays uses the shared merge");
+      const sync = src.slice(src.indexOf("const syncScheduleDaysNow = async (nextSchedule, wipeGranted) => {"), src.indexOf("const scheduleDaySyncRetry = () => {"));
+      assert.ok(sync.includes("if (r.status === 401 || r.status === 403) authFail = r.status;"), "the auth failure is tracked per write");
+      const iAuthBranch = sync.indexOf("if (failed && authFail) {");
+      assert.ok(iAuthBranch > 0 && iAuthBranch < sync.indexOf("scheduleDaySyncRetry();"), "the auth-failure branch (no retry) must come before the retry branch");
+      assert.ok(sync.includes("if (!(authFail === 401 && auth.sessionExpired)) showToast(failMsg, \"error\");"), "the 401 toast is skipped beside the banner");
+      assert.strictEqual((sync.match(/scheduleDaySyncRetry\(\);/g) || []).length, 1, "one retry site, in the non-auth branch");
+      const blob = src.slice(src.indexOf("// --- Supabase: Auto-save on changes ---"), src.indexOf("// --- Flush pending save when app is backgrounded or closing ---"));
+      assert.ok(blob.includes("const authFail = /401|JWT|expired/i.test(failMsg);") && blob.includes("if (!(auth.sessionExpired && authFail)) showToast("), "the blob leg's session-expired toast is skipped while the banner is up");
+      assert.ok(blob.includes('authFail ? (auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry") : "Save failed - retrying"'), "the blob leg says 'sign in again' only when the session is known dead");
     });
   }
 

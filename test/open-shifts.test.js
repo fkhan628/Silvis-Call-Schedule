@@ -355,11 +355,11 @@ check("obLastAnnounced(notifications, day, role): newest 'open_shifts' row whose
     assert.ok(/data-testid="claim-sheet"/.test(appSrc), "the confirm sheet carries data-testid claim-sheet");
     assert.ok(/openSlotsLine\(/.test(appSrc), "Copy list uses openSlotsLine");
   });
-  check("index-source.html: the claim goes to POST rest/v1/rpc/claim_open_slot { p_day, p_role } with dbAuthHeaders() and the server message is shown verbatim (describeDbError passes CLAIM_* through)", () => {
-    const calls = appSrc.split("\n").filter(l => /fetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/rpc\/claim_open_slot`/.test(l));
-    assert.strictEqual(calls.length, 1, "exactly one fetch of rest/v1/rpc/claim_open_slot");
+  check("index-source.html: the claim goes to POST rest/v1/rpc/claim_open_slot { p_day, p_role } through authFetch (dbAuthHeaders at send time + ensureFresh + one 401 retry, Prompt 16 A3) and the server message is shown verbatim (describeDbError passes CLAIM_* through)", () => {
+    const calls = appSrc.split("\n").filter(l => /authFetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/rpc\/claim_open_slot`/.test(l));
+    assert.strictEqual(calls.length, 1, "exactly one authFetch of rest/v1/rpc/claim_open_slot");
     const line = calls[0];
-    assert.ok(/method: "POST"/.test(line) && /headers: dbAuthHeaders\(\)/.test(line) && /JSON\.stringify\(\{ p_day: day, p_role: role \}\)/.test(line), "POST with dbAuthHeaders() and { p_day, p_role }: " + line.trim());
+    assert.ok(/method: "POST"/.test(line) && !/dbAuthHeaders\(\)/.test(line) && /JSON\.stringify\(\{ p_day: day, p_role: role \}\)/.test(line), "POST through authFetch with { p_day, p_role }: " + line.trim());
     const own = appSrc.split("\n").find(l => /const OWN = \//.test(l));
     assert.ok(own && /CLAIM_\[A-Z_\]\+/.test(own), "describeDbError's OWN regex includes CLAIM_[A-Z_]+: " + (own || "").trim());
     const rx2 = appSrc.split("\n").find(l => /const m = \/\(ON_CALL_CONFLICT\|TRADE_\[A-Z_\]\+/.test(l));
@@ -693,7 +693,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(okAt > 0 && setAt > okAt && setAt < acc.indexOf("} else if (r && r.blocked)"), "setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, ...)) sits inside the r.ok branch");
     assert.ok(acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString(), lastGenerate))") > 0, "P13R (e): the previous record is passed so a sub-range run keeps earlier reasons outside its range");
     assert.ok(appSrc.indexOf('data-testid="openshifts-lastgen"') > 0 && appSrc.indexOf("lastGenerate.mode === ") > 0 && appSrc.indexOf("lastGenerate.fixedSlots") > 0, "P13R (e): the board shows the last-generated line from the record mode and fixedSlots");
-    assert.ok(/\}, \[loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows\]\);/.test(appSrc), "the autosave effect lists lastGenerate in its dependencies");
+    assert.ok(/\}, \[loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows, saveTick\]\);/.test(appSrc), "the autosave effect lists lastGenerate in its dependencies (saveTick is Prompt 16 A3's re-fire counter)");
     assert.ok(/lastGenerate\.weekendKinds/.test(appSrc), "boardWeekendKinds reads the persisted weekendKinds map");
     assert.ok(/\{ \.\.\.openSlotWeekendKinds\(fromLast\), \.\.\.openSlotWeekendKinds\(fromPreview\) \}/.test(appSrc), "the preview still overlays the persisted kinds");
     // design (b): the board's reasons come from lastGenerate with a live-preview fallback, rendered through the same openSlotReason
