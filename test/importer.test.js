@@ -1369,15 +1369,16 @@ const P5_NOW = NOW; // 2026-09-22T03:00Z = 2026-09-21 in America/Chicago: every 
 const p5 = IMP.importPlan(seed, { now: P5_NOW, offerPeriods: true });
 const PER = seed.offerPeriods[0];
 const inPer = (d) => d >= PER.start && d <= PER.end;
-eq(seed.offerPeriods.length, 2, "P5 / PD: the seed carries two periods - the milestone period (published 9/23) and Feb - Apr 2027");
+eq(seed.offerPeriods.length, 3, "P5 / PD / 9-24: the seed carries three periods - the milestone period (published 9/23), Jan 2027 (Faraz created it 9/24) and Feb - Apr 2027 (end Sunday 5/2 since 9/24)");
 eq([PER.label, PER.start, PER.end, PER.offersCloseAt, PER.publishBy, PER.status, PER.rulesOnly, PER.offerModes, PER.source],
   ["Nov 2026 - Jan 2027", "2026-11-02", "2027-01-03", "2026-10-02", "2026-10-05", "published", ["s1", "s6"], { s2: "exhaustive", s4: "exhaustive", s3: "preferred", s5: "preferred" }, "faraz-2026-09-22-prompt-14"],
   "P5: the period as Faraz set it (offersCloseAt 10/2 by hand, Khan + Sarkar rules-only, Burchett + Philip exhaustive, Acton + Fierce preferred); status published since 9/23 (PD)");
 // (1) the call_periods rows
 eq(p5.periodRows, [
   { label: "Nov 2026 - Jan 2027", start_day: "2026-11-02", end_day: "2027-01-03", offers_close_at: "2026-10-02", publish_by: "2026-10-05", status: "published", rules_only_ids: ["s1", "s6"], offer_modes: { s2: "exhaustive", s4: "exhaustive", s3: "preferred", s5: "preferred" }, created_by: "seed" },
-  { label: "Feb 2027 - Apr 2027", start_day: "2027-02-01", end_day: "2027-04-30", offers_close_at: "2026-12-21", publish_by: "2027-01-04", status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "seed" }
-], "P5 / PD: two call_periods rows, upsert key start_day, created_by seed; the second = the UI's 3-month preset from 2027-02-01 with Faraz's end 4/30 (label prdLabelFor, rules_only_ids [] and offer_modes {} exactly as createPeriod writes them)");
+  { label: "Jan 2027", start_day: "2027-01-04", end_day: "2027-01-31", offers_close_at: "2026-11-23", publish_by: "2026-12-07", status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "seed" },
+  { label: "Feb 2027 - Apr 2027", start_day: "2027-02-01", end_day: "2027-05-02", offers_close_at: "2026-12-21", publish_by: "2027-01-04", status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "seed" }
+], "P5 / PD / 9-24: three call_periods rows in start order, upsert key start_day, created_by seed; Jan 2027 = the row Faraz created in Setup > Periods 9/24 (1/4 - 1/31, close 11/23, publish by 12/7), Feb - Apr 2027 = the 3-month preset from 2027-02-01 with the end Faraz moved to Sunday 2027-05-02 on 9/24 (label as the seed states it, rules_only_ids [] and offer_modes {} exactly as createPeriod writes them)");
 // (2) the offers, derived from the seed's lists: Burchett Nov 7 P + 8 B (role-keyed) + Dec 19 plain -> 'either' (incl. 1/1-1/3, inside
 //     the period); Acton's relayed Nov list 7 P + 3 B (s3.offeredDays); Philip's weeks inside the period x 7 days -> 'either'
 const s2Nov = seed.surgeonRules[BURCHETT].explicitAvailable["2026-11"], s2Dec = seed.surgeonRules[BURCHETT].explicitAvailable["2026-12"];
@@ -1411,9 +1412,10 @@ ok(!p5.offerRows.some((o) => o.day <= "2026-11-01"), "P5: nothing from October /
 ok(p5.offerRows.every((o) => /^seed: [a-z0-9-]+$/.test(o.note)), "P5: every note is 'seed: <tag>' - operational provenance, no reason, no contact data");
 eq(p5.offerSkips, [], "P5: the real seed skips nothing (no listed day falls on a vacation)");
 // (3) the status table the dry run prints (surgeon | status | mode | offered days), derived like SQL offer_status()
-eq(p5.offerStatus.length, 2);
+eq(p5.offerStatus.length, 3);
 eq(p5.offerStatus[0].label, "Nov 2026 - Jan 2027");
-eq(p5.offerStatus[1].label, "Feb 2027 - Apr 2027");
+eq(p5.offerStatus[1].label, "Jan 2027");
+eq(p5.offerStatus[2].label, "Feb 2027 - Apr 2027");
 eq(p5.offerStatus[0].byPerson, {
   s1: { status: "rules_only", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 },
   s2: { status: "submitted", mode: "exhaustive", offered: 34, primary: 7, backup: 8, either: 19 },
@@ -1468,7 +1470,7 @@ eq(p5.blob.surgeonRules[BURCHETT].explicitAvailable, stripNoteKeys(seed.surgeonR
   ok(typeof p5.blob.settings.seedCoreHash === "string" && p5.blob.settings.seedCoreHash !== plan.blob.settings.seedCoreHash && p5.blob.settings.seedCoreHash === IMP.impCoreHash(p5.blob), "P5 x RF2: the offers plan carries its own seedCoreHash (the retired explicitListMonths change the seed-owned surgeonRules), computed over the plan's blob");
 }
 eq([p5.timeOffRows, p5.scheduleDayRows], [plan.timeOffRows, plan.scheduleDayRows], "P5: time_off and schedule_days plans are byte-identical to the legacy plan (the locks stay locks)");
-eq(p5.stats.call_offers, 79); eq(p5.stats.call_periods, 2);
+eq(p5.stats.call_offers, 79); eq(p5.stats.call_periods, 3);
 // (7) the offers-aware ctx from the plan: statuses / modes as the DB would derive them; Burchett's November whitelist is now 'not-offered';
 //     rules-only and not-started surgeons are byte-identical to the legacy ctx on every period day and role
 {
@@ -1497,7 +1499,7 @@ eq(p5.stats.call_offers, 79); eq(p5.stats.call_periods, 2);
   eq(R.buildContext(SA.seedToContextInput(seed)).periods, [], "P5: the legacy adapter still builds a period-free ctx (rules.test.js / the regression are unchanged)");
 }
 // (8) legacy callers: no option -> no offers, the pre-period plan; the plan says the seed carries a period it did not plan
-ok(!("offerRows" in plan) && !("periodRows" in plan) && plan.offerPeriods && plan.offerPeriods.enabled === false && plan.offerPeriods.seedPeriods === 2, "P5: importPlan(seed, { now }) plans no offers and says the seed carries 2 periods it did not plan (the in-app import's legacy plan - the app refuses Apply for such a seed)");
+ok(!("offerRows" in plan) && !("periodRows" in plan) && plan.offerPeriods && plan.offerPeriods.enabled === false && plan.offerPeriods.seedPeriods === 3, "P5: importPlan(seed, { now }) plans no offers and says the seed carries 3 periods it did not plan (the in-app import's legacy plan - the app refuses Apply for such a seed)");
 eq(SA.seedToSurgeonRules(seed)[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, { month: "2026-12", roles: ["primary", "backup"] }], "P5: the legacy adapter still derives Burchett's three months, December in the object form since 9/23 (rules.test.js pins them)");
 // (9) SQL: snapshot scope, the period upsert, the guarded offers insert, the ownership-guarded delete (future days only), the order
 const sql5 = IMP.importSql(p5);
@@ -1520,8 +1522,8 @@ eq(IMP.importSql(IMP.importPlan(seed, { now: P5_NOW, offerPeriods: true })), sql
 {
   const base = { blob: clone(p5.blob), availability: clone(p5.availabilityRows), time_off: clone(p5.timeOffRows), schedule_days: clone(p5.scheduleDayRows) };
   const dU = IMP.planDiff(p5, base);
-  eq([dU.tables.call_offers.upsert, dU.tables.call_offers.unknown, dU.tables.call_periods.upsert, dU.tables.call_periods.unknown], [79, true, 2, true], "P5: without live rows the two tables read as unknown and every planned row counts as an upsert");
-  eq(dU.totalChanges, 81, "P5: 79 + 2 counted (the apply must not be skipped as 'nothing to do')");
+  eq([dU.tables.call_offers.upsert, dU.tables.call_offers.unknown, dU.tables.call_periods.upsert, dU.tables.call_periods.unknown], [79, true, 3, true], "P5 / 9-24: without live rows the two tables read as unknown and every planned row counts as an upsert (three periods since 9/24)");
+  eq(dU.totalChanges, 82, "P5 / 9-24: 79 + 3 counted (the apply must not be skipped as 'nothing to do')");
   ok(/call_offers: plan 79 row\(s\) - live rows not readable with the anon key/.test(dU.text), "P5: the dry run says why it cannot diff: " + dU.lines.filter((l) => /^call_offers/.test(l)).join(" | "));
   ok(dU.lines.some((l) => /^offers status \(Nov 2026 - Jan 2027\):/.test(l)) && dU.lines.some((l) => /Burchett \| submitted \| exhaustive \| 34 \(7 P, 8 B, 19 either\)/.test(l)) && dU.lines.some((l) => /Khan \| rules_only \| - \| 0/.test(l)) && dU.lines.some((l) => /Fierce \| not_started \| - \| 0/.test(l)), "P5: the status table is in the dry-run text: " + dU.lines.filter((l) => /\|/.test(l)).join(" | "));
   const appRow = { person_id: ACTON, day: "2026-11-30", role_pref: "either", note: null, entered_by: ACTON, source: "app" };
@@ -1531,7 +1533,7 @@ eq(IMP.importSql(IMP.importPlan(seed, { now: P5_NOW, offerPeriods: true })), sql
   const liveK = Object.assign({}, base, { call_offers: clone(p5.offerRows).concat([appRow, relayInApp, staleSeed, pastSeed]), call_periods: p5.periodRows.map((r, i) => Object.assign({ id: "11111111-1111-1111-1111-11111111111" + (i + 1), created_at: "x" }, clone(r))) });
   const dK = IMP.planDiff(p5, liveK);
   eq([dK.tables.call_offers.insert, dK.tables.call_offers.update, dK.tables.call_offers.unchanged, dK.tables.call_offers.delete, dK.tables.call_offers.kept, dK.tables.call_offers.blocked], [0, 0, 79, 1, 3, 0], "P5: exact diff - 79 unchanged, the stale seed-owned 12/29 deleted, the app row / the in-app relay / the past seed row kept");
-  eq([dK.tables.call_periods.insert, dK.tables.call_periods.update, dK.tables.call_periods.unchanged], [0, 0, 2], "P5: the two period rows are unchanged (id / created_at ignored)");
+  eq([dK.tables.call_periods.insert, dK.tables.call_periods.update, dK.tables.call_periods.unchanged], [0, 0, 3], "P5 / 9-24: the three period rows are unchanged (id / created_at ignored)");
   eq(dK.totalChanges, 1); eq(dK.totalDeletes, 1);
   ok(dK.tables.call_offers.rows.some((l) => /^delete Burchett 2026-12-29 either \(seed-owned, no longer in the seed\)/.test(l)), "P5: the delete line: " + dK.tables.call_offers.rows.join(" | "));
   ok(dK.kept.some((l) => /^call_offers Acton 2026-11-30 either \[KEPT: entered in the app\]/.test(l)) && dK.kept.some((l) => /^call_offers Philip 2026-11-05 backup \[KEPT: entered in the app\]/.test(l)) && dK.kept.some((l) => /^call_offers Burchett 2026-09-15 primary \[KEPT: before today\]/.test(l)), "P5: kept rows named with why: " + dK.kept.join(" | "));
@@ -1547,7 +1549,7 @@ eq(IMP.importSql(IMP.importPlan(seed, { now: P5_NOW, offerPeriods: true })), sql
   // a period whose dates / modes changed in the seed -> update; a different start_day -> insert (a second period)
   const livePer = Object.assign({}, liveK, { call_periods: [Object.assign({}, liveK.call_periods[0], { offer_modes: { s2: "preferred" } })] });
   eq(IMP.planDiff(p5, livePer).tables.call_periods.update, 1, "P5: a mode change -> period update");
-  eq(IMP.planDiff(p5, Object.assign({}, liveK, { call_periods: [] })).tables.call_periods.insert, 2, "P5: no live period -> insert (both)");
+  eq(IMP.planDiff(p5, Object.assign({}, liveK, { call_periods: [] })).tables.call_periods.insert, 3, "P5: no live period -> insert (all three)");
   // live vacations (anon-readable) that would make OF002 refuse a planned offer are reported and block the apply
   const liveVac = Object.assign({}, liveK, { time_off: liveK.time_off.concat([{ person_id: ACTON, start_date: "2026-11-16", end_date: "2026-11-17", note: "vacation", created_by: ACTON }]) });
   const dV = IMP.planDiff(p5, liveVac);
@@ -1555,7 +1557,7 @@ eq(IMP.importSql(IMP.importPlan(seed, { now: P5_NOW, offerPeriods: true })), sql
   ok(dV.blocked.length >= 2 && dV.tables.call_offers.blocked === 2, "P5: ...and counted as blocked");
   // the legacy plan against a live that carries offers: no offers table, one line saying the seed's period was not planned
   const dL = IMP.planDiff(plan, liveK);
-  ok(!("call_offers" in dL.tables) && dL.lines.some((l) => /^offer periods: the seed carries 2 period\(s\) that this plan did NOT convert/.test(l)), "P5: legacy plan -> no offers diff, one warning line: " + dL.lines.filter((l) => /^offer periods/.test(l)).join(" | "));
+  ok(!("call_offers" in dL.tables) && dL.lines.some((l) => /^offer periods: the seed carries 3 period\(s\) that this plan did NOT convert/.test(l)), "P5: legacy plan -> no offers diff, one warning line: " + dL.lines.filter((l) => /^offer periods/.test(l)).join(" | "));
 }
 // (11) the offers input for a generate run (scripts / the orchestrator's preview) is the plan's own rows
 eq(IMP.impOffersInput(p5), { periods: p5.periodRows, offers: p5.offerRows }, "P5: impOffersInput(plan) = { periods, offers }");
@@ -1624,14 +1626,14 @@ ok(/Prompt 14 P5/.test(seed.groupRules.whitelistMonths.rule), "P5: groupRules.wh
     eq(p.blob.surgeonRules[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, { month: "2026-12", roles: ["primary", "backup"] }], "P5 fix b: no mode -> no refusal, the legacy months stay governed (December in the object form since 9/23)");
     ok(p.availabilityRows.some((r) => r.person_id === BURCHETT && r.kind === "available" && inPer(r.start_date)), "P5 fix b: ...and his available rows stay");
     // an untagged list entirely outside the period is fine (October lists)
-    eq(p5.offerWarnings, ["surgeonRules.s4.offerSources.availableWeeks: tagged but s4 has no offerModes entry for Feb 2027 - Apr 2027 - not converted (the list stays a dated availability list / a rule there)"], "P5 fix b / PD: the real seed - every list inside the FIRST period is tagged and converted; the one warning is Philip's weeks reaching into Feb - Apr 2027, where he has no mode (they stay rules there - seed open question 17)");
+    eq(p5.offerWarnings, ["surgeonRules.s4.offerSources.availableWeeks: tagged but s4 has no offerModes entry for Jan 2027 - not converted (the list stays a dated availability list / a rule there)", "surgeonRules.s4.offerSources.availableWeeks: tagged but s4 has no offerModes entry for Feb 2027 - Apr 2027 - not converted (the list stays a dated availability list / a rule there)"], "P5 fix b / PD / 9-24: the real seed - every list inside the FIRST period is tagged and converted; the two warnings are Philip's weeks reaching into Jan 2027 (1/11, 1/25) and into Feb - Apr 2027, where he has no mode (they stay rules there - rules doc section 8 item 5)");
   }
   // c) overlapping periods; label denylist
-  refusesP5("OFFER_PERIOD_INVALID: offerPeriods[2] - Dec 2026 - Feb 2027 2026-12-07..2027-02-28 overlaps offerPeriods[0] Nov 2026 - Jan 2027 2026-11-02..2027-01-03", (fx) => { fx.offerPeriods.push(Object.assign({}, clone(fx.offerPeriods[0]), { label: "Dec 2026 - Feb 2027", start: "2026-12-07", end: "2027-02-28", offersCloseAt: "2026-10-26", publishBy: "2026-11-09" })); }, "P5 fix c: a third period overlapping the first");
-  refusesP5("OFFER_PERIOD_INVALID: offerPeriods[2] - Apr - Jun 2027 2027-04-30..2027-06-30 overlaps offerPeriods[1] Feb 2027 - Apr 2027 2027-02-01..2027-04-30", (fx) => { fx.offerPeriods.push(Object.assign({}, clone(fx.offerPeriods[1]), { label: "Apr - Jun 2027", start: "2027-04-30", end: "2027-06-30", offersCloseAt: "2027-03-19", publishBy: "2027-04-02" })); }, "PD: a third period overlapping the second by one day (the seed's Feb - Apr ends 4/30)");
+  refusesP5("OFFER_PERIOD_INVALID: offerPeriods[3] - Dec 2026 - Feb 2027 2026-12-07..2027-02-28 overlaps offerPeriods[0] Nov 2026 - Jan 2027 2026-11-02..2027-01-03", (fx) => { fx.offerPeriods.push(Object.assign({}, clone(fx.offerPeriods[0]), { label: "Dec 2026 - Feb 2027", start: "2026-12-07", end: "2027-02-28", offersCloseAt: "2026-10-26", publishBy: "2026-11-09" })); }, "P5 fix c: a fourth period overlapping the first (index 3 since the seed carries three)");
+  refusesP5("OFFER_PERIOD_INVALID: offerPeriods[3] - May - Jun 2027 2027-05-02..2027-06-30 overlaps offerPeriods[2] Feb 2027 - Apr 2027 2027-02-01..2027-05-02", (fx) => { fx.offerPeriods.push(Object.assign({}, clone(fx.offerPeriods[2]), { label: "May - Jun 2027", start: "2027-05-02", end: "2027-06-30", offersCloseAt: "2027-03-21", publishBy: "2027-04-04" })); }, "PD / 9-24: a fourth period overlapping the third by one day (the seed's Feb - Apr ends Sunday 5/2 since 9/24)");
   {
-    const fx = clone(seed); fx.offerPeriods.push(Object.assign({}, clone(fx.offerPeriods[1]), { label: "May - Jul 2027", start: "2027-05-01", end: "2027-07-31", offersCloseAt: "2027-03-20", publishBy: "2027-04-03" }));
-    eq(IMP.impSeedPeriods(fx).length, 3, "P5 fix c: a period that starts the day after the last one ends is accepted");
+    const fx = clone(seed); fx.offerPeriods.push(Object.assign({}, clone(fx.offerPeriods[2]), { label: "May - Jul 2027", start: "2027-05-03", end: "2027-08-01", offersCloseAt: "2027-03-22", publishBy: "2027-04-05" }));
+    eq(IMP.impSeedPeriods(fx).length, 4, "P5 fix c: a period that starts the day after the last one ends (Mon 5/3/2027) is accepted");
   }
   refusesP5("NOTE_DENYLIST: offerPeriods[0].label (\"school\")", (fx) => { fx.offerPeriods[0].label = "Nov 2026 - Jan 2027 school term"; }, "P5 fix c: a denylist word in a period label (it reaches the authenticated-read call_periods table)");
   // d) submitted with 0 planned rows
@@ -1645,19 +1647,21 @@ ok(/Prompt 14 P5/.test(seed.groupRules.whitelistMonths.rule), "P5: groupRules.wh
 
 // ---- Prompt 14 PD (9/23 afternoon) ----
 // The schedule for the first period went out 9/23, so docs/silvis-seed.json offerPeriods[0].status is 'published' and
-// the second period (Feb 2027 - Apr 2027; Faraz: freeze 12/21, publish by 1/4, from the 3-month preset) follows it;
+// the Feb 2027 - Apr 2027 period (Faraz: freeze 12/21, publish by 1/4, from the 3-month preset; since 9/24 it ends Sunday
+// 5/2 and the Jan 2027 row Faraz created in Setup > Periods - 1/4 - 1/31, freeze 11/23, publish by 12/7 - sits between) follows it;
 // Burchett's 2027-07-22..08-02 vacation joins s2.timeOff. The call_periods upsert must carry the seed's status
 // FORWARD: before this fix the SQL wrote status on insert only, so a re-import of the published seed would have left
 // the live row 'upcoming' and daily-reminder (mode offers) would have reminded on 9/29 and closed + mailed the
 // scheduler on 10/2 for a period whose schedule is already out. The advance is one-way (upcoming < closed <
 // generated < published): a seed 'upcoming' never reopens a period the cron or the app closed.
-step("Prompt 14 PD: the period status rides the upsert (advance only), the second period plans no offer, Burchett's July vacation is one row");
+step("Prompt 14 PD: the period status rides the upsert (advance only), the later periods (Jan 2027, Feb - Apr 2027) plan no offer, Burchett's July vacation is one row");
 {
   const basePD = { blob: clone(p5.blob), availability: clone(p5.availabilityRows), time_off: clone(p5.timeOffRows), schedule_days: clone(p5.scheduleDayRows) };
   const sqlPD = IMP.importSql(p5);
   const perSql = sqlPD.slice(sqlPD.indexOf("-- 6. call_periods"), sqlPD.indexOf("-- 7. call_offers"));
   ok(perSql.indexOf("('Nov 2026 - Jan 2027', '2026-11-02'::date, '2027-01-03'::date, '2026-10-02'::date, '2026-10-05'::date, 'published', '[\"s1\",\"s6\"]'::jsonb, '{\"s2\":\"exhaustive\",\"s4\":\"exhaustive\",\"s3\":\"preferred\",\"s5\":\"preferred\"}'::jsonb, 'seed'),") >= 0, "PD: the first period's VALUES row carries status 'published': " + perSql.split("\n").filter((l) => /^  \('/.test(l)).join(" | "));
-  ok(perSql.indexOf("('Feb 2027 - Apr 2027', '2027-02-01'::date, '2027-04-30'::date, '2026-12-21'::date, '2027-01-04'::date, 'upcoming', '[]'::jsonb, '{}'::jsonb, 'seed')") >= 0, "PD: the second period's VALUES row (rules_only_ids [], offer_modes {})");
+  ok(perSql.indexOf("('Jan 2027', '2027-01-04'::date, '2027-01-31'::date, '2026-11-23'::date, '2026-12-07'::date, 'upcoming', '[]'::jsonb, '{}'::jsonb, 'seed'),") >= 0, "9-24: the Jan 2027 VALUES row (rules_only_ids [], offer_modes {}): " + perSql.split("\n").filter((l) => /^  \('/.test(l)).join(" | "));
+  ok(perSql.indexOf("('Feb 2027 - Apr 2027', '2027-02-01'::date, '2027-05-02'::date, '2026-12-21'::date, '2027-01-04'::date, 'upcoming', '[]'::jsonb, '{}'::jsonb, 'seed')") >= 0, "PD / 9-24: the Feb - Apr 2027 VALUES row ends 2027-05-02 (rules_only_ids [], offer_modes {})");
   const rank = "array_position(array['upcoming','closed','generated','published'], ";
   ok(perSql.indexOf("  status          = case when " + rank + "excluded.status) > " + rank + "call_periods.status) then excluded.status else call_periods.status end,") >= 0, "PD: ON CONFLICT advances status (upcoming < closed < generated < published) and never moves it back: " + perSql.split("\n").filter((l) => /status/.test(l)).join(" | "));
   ok(perSql.indexOf("status is written on insert only") < 0 && /the seed's status advances the live one/.test(perSql), "PD: the SQL comment says what the statement does");
@@ -1666,23 +1670,24 @@ step("Prompt 14 PD: the period status rides the upsert (advance only), the secon
   // planDiff with live rows: 'upcoming' live + 'published' seed -> ONE update naming the advance; 'closed' live + 'upcoming' seed -> unchanged
   const livePer = (over) => p5.periodRows.map((r, i) => Object.assign({ id: "22222222-2222-2222-2222-22222222222" + (i + 1), created_at: "x" }, clone(r), over[i] || {}));
   const dAdv = IMP.planDiff(p5, Object.assign({}, basePD, { call_offers: clone(p5.offerRows), call_periods: livePer([{ status: "upcoming" }]) }));
-  eq([dAdv.tables.call_periods.insert, dAdv.tables.call_periods.update, dAdv.tables.call_periods.unchanged, dAdv.totalChanges], [0, 1, 1, 1], "PD: the live first period still 'upcoming' (the 9/23 apply) reads as ONE update - the status advance - and nothing else");
+  eq([dAdv.tables.call_periods.insert, dAdv.tables.call_periods.update, dAdv.tables.call_periods.unchanged, dAdv.totalChanges], [0, 1, 2, 1], "PD: the live first period still 'upcoming' (the 9/23 apply) reads as ONE update - the status advance - and nothing else (Jan 2027 and Feb - Apr 2027 unchanged)");
   eq(dAdv.tables.call_periods.rows, ["update Nov 2026 - Jan 2027 2026-11-02..2027-01-03 (close 2026-10-02, publish by 2026-10-05, status upcoming -> published)"], "PD: the update line names the status change");
-  const dBack = IMP.planDiff(p5, Object.assign({}, basePD, { call_offers: clone(p5.offerRows), call_periods: livePer([{}, { status: "closed" }]) }));
-  eq([dBack.tables.call_periods.update, dBack.tables.call_periods.unchanged, dBack.totalChanges], [0, 2, 0], "PD: a live second period the cron already closed is NOT moved back to the seed's 'upcoming' (unchanged; the SQL's case expression agrees)");
+  const dBack = IMP.planDiff(p5, Object.assign({}, basePD, { call_offers: clone(p5.offerRows), call_periods: livePer([{}, {}, { status: "closed" }]) }));
+  eq([dBack.tables.call_periods.update, dBack.tables.call_periods.unchanged, dBack.totalChanges], [0, 3, 0], "PD: a live Feb - Apr 2027 row the cron already closed is NOT moved back to the seed's 'upcoming' (unchanged; the SQL's case expression agrees)");
   const dMiss = IMP.planDiff(p5, Object.assign({}, basePD, { call_offers: clone(p5.offerRows), call_periods: livePer([{ status: "upcoming" }]).slice(0, 1) }));
-  eq([dMiss.tables.call_periods.insert, dMiss.tables.call_periods.update, dMiss.tables.call_periods.unchanged], [1, 1, 0], "PD: against today's live table (one row, upcoming): update the first, insert the second");
-  ok(dMiss.tables.call_periods.rows.indexOf("insert Feb 2027 - Apr 2027 2027-02-01..2027-04-30 (close 2026-12-21, publish by 2027-01-04, status upcoming)") >= 0, "PD: the insert line names the status: " + dMiss.tables.call_periods.rows.join(" | "));
+  eq([dMiss.tables.call_periods.insert, dMiss.tables.call_periods.update, dMiss.tables.call_periods.unchanged], [2, 1, 0], "PD / 9-24: against a live table holding the first row alone (upcoming): update the first, insert Jan 2027 and Feb - Apr 2027");
+  ok(dMiss.tables.call_periods.rows.indexOf("insert Jan 2027 2027-01-04..2027-01-31 (close 2026-11-23, publish by 2026-12-07, status upcoming)") >= 0 && dMiss.tables.call_periods.rows.indexOf("insert Feb 2027 - Apr 2027 2027-02-01..2027-05-02 (close 2026-12-21, publish by 2027-01-04, status upcoming)") >= 0, "PD / 9-24: the insert lines name the dates (Feb - Apr to 5/2) and the status: " + dMiss.tables.call_periods.rows.join(" | "));
   // the anon dry run (live rows unknown): every planned period is listed with its status
   const dUn = IMP.planDiff(p5, basePD);
-  eq(dUn.lines.filter((l) => /^  upsert /.test(l)), ["  upsert Nov 2026 - Jan 2027 2026-11-02..2027-01-03 (close 2026-10-02, publish by 2026-10-05, status published)", "  upsert Feb 2027 - Apr 2027 2027-02-01..2027-04-30 (close 2026-12-21, publish by 2027-01-04, status upcoming)"], "PD: the anon dry run names each planned period with its status under the 'call_periods: plan 2 row(s)' line");
-  ok(dUn.lines.some((l) => /^call_periods: plan 2 row\(s\) - live rows not readable with the anon key/.test(l)), "PD: the plan line is unchanged in shape");
-  // the second period: nobody has a mode there -> no offer, no retired row, no governed-month change; everyone not_started
+  eq(dUn.lines.filter((l) => /^  upsert /.test(l)), ["  upsert Nov 2026 - Jan 2027 2026-11-02..2027-01-03 (close 2026-10-02, publish by 2026-10-05, status published)", "  upsert Jan 2027 2027-01-04..2027-01-31 (close 2026-11-23, publish by 2026-12-07, status upcoming)", "  upsert Feb 2027 - Apr 2027 2027-02-01..2027-05-02 (close 2026-12-21, publish by 2027-01-04, status upcoming)"], "PD / 9-24: the anon dry run names each planned period with its status under the 'call_periods: plan 3 row(s)' line");
+  ok(dUn.lines.some((l) => /^call_periods: plan 3 row\(s\) - live rows not readable with the anon key/.test(l)), "PD / 9-24: the plan line is unchanged in shape (three rows since 9/24)");
+  // the later periods (Jan 2027, Feb - Apr 2027): nobody has a mode there -> no offer, no retired row, no governed-month change; everyone not_started
   eq(p5.offerRows.filter((o) => o.day >= "2027-01-04").length, 0, "PD: no call_offers row after the first period (Philip's 2027 weeks stay rules - no offerModes in Feb - Apr)");
-  eq(p5.blob.surgeonRules[PHILIP].availableWeeks.filter((w) => w >= "2027-02-01" && w <= "2027-04-30"), ["2027-02-08", "2027-02-22", "2027-03-08", "2027-03-22", "2027-03-29", "2027-04-12", "2027-04-26"], "PD: Philip's Feb - Apr weeks stay in the blob's availableWeeks (rules.js reads them as his weeks whitelist outside a submitted status; they were never availability rows - the period-aware and legacy plans both carry 0 s4 rows after 1/3)");
+  eq(p5.blob.surgeonRules[PHILIP].availableWeeks.filter((w) => w >= "2027-02-01" && w <= "2027-05-02"), ["2027-02-08", "2027-02-22", "2027-03-08", "2027-03-22", "2027-03-29", "2027-04-12", "2027-04-26"], "PD: Philip's Feb - Apr weeks stay in the blob's availableWeeks (rules.js reads them as his weeks whitelist outside a submitted status; they were never availability rows - the period-aware and legacy plans both carry 0 s4 rows after 1/3)");
   eq(p5.availabilityRows.filter((r) => r.person_id === PHILIP && r.start_date >= "2027-01-04"), plan.availabilityRows.filter((r) => r.person_id === PHILIP && r.start_date >= "2027-01-04"), "PD: ...and his 2027 availability rows are identical in both plans (none)");
-  eq(p5.offerStatus[1].byPerson, { s1: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s2: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s3: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s4: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s5: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s6: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 } }, "PD: everyone not_started for Feb - Apr 2027 (the preset writes rules_only_ids [] - Khan / Sarkar rules-only was a first-period decision; they are reminded 12/7 and 12/18 unless they paint or choose their rules)");
-  eq(p5.offerWarnings.length, 1, "PD: the second period raises exactly the Philip-weeks warning pinned above (his 2027 weeks stay rules until he has a mode there)");
+  eq(p5.offerStatus[1].byPerson, { s1: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s2: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s3: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s4: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s5: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 }, s6: { status: "not_started", mode: "preferred", offered: 0, primary: 0, backup: 0, either: 0 } }, "PD / 9-24: everyone not_started for Jan 2027 (offerStatus[1] - the row Faraz created 9/24 carries rules_only_ids []; Khan / Sarkar rules-only was a first-period decision; they are reminded 11/9 and 11/20 unless they paint or choose their rules)");
+  eq(p5.offerStatus[2].byPerson, p5.offerStatus[1].byPerson, "PD: ...and the same six not_started rows for Feb - Apr 2027 (offerStatus[2]; reminded 12/7 and 12/18)");
+  eq(p5.offerWarnings.length, 2, "PD / 9-24: the two later periods raise exactly the two Philip-weeks warnings pinned above (his 2027 weeks stay rules until he has a mode there)");
   // Burchett's vacation
   eq(p5.timeOffRows.filter((t) => t.person_id === BURCHETT && t.start_date === "2027-07-22"), [{ person_id: BURCHETT, start_date: "2027-07-22", end_date: "2027-08-02", note: "off (stated 9/23)", created_by: "seed" }], "PD: Burchett 2027-07-22..08-02 -> one time_off row with the public note (both roles blocked; 7/21 blocks primary per dayBeforeRules)");
   ok(!p5.scheduleDayRows.some((d) => d.day >= "2027-07-21" && d.day <= "2027-08-02"), "PD: no schedule_days row in the range - the time_off trigger has nothing to refuse");

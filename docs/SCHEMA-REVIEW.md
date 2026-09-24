@@ -669,7 +669,10 @@ not. Two hardenings, either one a separate prepared item (this file is pinned to
 (1) dashboard - check whether this project's Auth settings let self-service email updates be disabled; (2) a follow-up migration
 changing `handle_new_auth_user`'s on-conflict to keep the existing address when the row is linked (`set email = case when
 user_profiles.person_id is null then excluded.email else user_profiles.email end`; the admin corrects via Setup -> Users), with its
-own probe and pin update. Faraz picks; until then the residual stands as accepted.
+own probe and pin update. Faraz picks; until then the residual stands as accepted. **CLOSED 2026-09-24 (Faraz): handled in the
+Supabase dashboard - Auth > *Secure email change* is ON (a change is confirmed from both the old and the new mailbox before
+`auth.users.email` moves, so a stolen session alone cannot re-point the address); hardening (2), the `handle_new_auth_user`
+on-conflict follow-up migration, is NOT planned. The analysis above stays as the record.**
 
 **The probe - `sql/probes/prelaunch-rls-probe.sql` (persists nothing).** Same mechanism as the earlier probes: one batch, no
 `BEGIN`/`COMMIT`, temp table granted to `authenticated` and `anon`, last statement raises `PROBE_RESULTS ...;END`. Fixtures in

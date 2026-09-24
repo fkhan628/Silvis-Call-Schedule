@@ -196,7 +196,7 @@ Davenport's `holidayAssignments`, keyed by year.
 | change | before | after | client read that depends on it |
 |---|---|---|---|
 | `user_profiles_read` | every authenticated user reads every row | own row, or the caller is scheduler/admin, or the row's role is admin/scheduler | `fetchProfile` (own row), `schedulerIdsLoud` (scheduler/admin rows); the whole-table reads run only for scheduler / admin |
-| `user_profiles_self_update` | pins `role`, `person_id` | also pins `email` on the REST path (display_name stays self-editable; corrections via `user_profiles_admin`, admin only). Residual, accepted for now: GoTrue's self-service email change (`PUT /auth/v1/user`, confirmed at the new mailbox) still re-syncs `user_profiles.email` through `handle_new_auth_user` (security definer) — hardening is a separate decision (SCHEMA-REVIEW, A1 "What could break") | none — the client has no self-update path |
+| `user_profiles_self_update` | pins `role`, `person_id` | also pins `email` on the REST path (display_name stays self-editable; corrections via `user_profiles_admin`, admin only). Residual, accepted (closed 9/24): GoTrue's self-service email change (`PUT /auth/v1/user`, confirmed at the new mailbox) still re-syncs `user_profiles.email` through `handle_new_auth_user` (security definer) — decided 9/24: *Secure email change* is ON in the Supabase dashboard (both mailboxes confirm), no `handle_new_auth_user` migration planned (SCHEMA-REVIEW, A1 "What could break") | none — the client has no self-update path |
 | `contacts_read` | every authenticated user | scheduler/admin only | the office-contacts effect is `isScheduler`-gated |
 | `notif_insert` | any authenticated user | scheduler/admin or a caller linked to a roster entry | `addNotification` — reached only from linked-person / scheduler actions |
 | `audit_insert` | any authenticated user | scheduler/admin, or a linked caller with `actor_id` = their own roster id | `logAudit` writes `actor_id = userProfile.person_id` |
@@ -878,7 +878,7 @@ section is on `main` and live. Schema: `call_periods` (incl. `offer_modes`), `ca
 the painter RPCs `set_offer_mode` / `save_offers` (`sql/migrations/2026-09-23-offer-mode-rpc.sql`, applied 9/23 ~18:45 UTC —
 `docs/SCHEMA-REVIEW.md` carries each observed probe; `sql/schema.sql` mirrors every applied body). Data: the seed applied
 through the CLI twice on 9/23 — the first period (Nov 2026 – Jan 2027, status `published` since the 9/23 publish) with its 79
-seed-relayed offers and modes, and the second period (Feb 2027 – Apr 2027, freeze 12/21, publish by 1/4). App: the painter
+seed-relayed offers and modes, and the Feb 2027 – Apr 2027 period (freeze 12/21, publish by 1/4; 9/24: Faraz moved its end from Fri 4/30 to Sun 5/2 by SQL — audit `period.update` — so the last weekend unit stays whole, and created **Jan 2027** — 1/4 – 1/31, freeze 11/23, publish by 12/7 — in Setup → Periods to fill the gap after 1/3; the seed's `offerPeriods[]` carries all three so a re-apply matches the live table). App: the painter
 (part 3a), the Periods section with Remind / Close now / Enter for someone / Generate this period (3b), the day editor's
 offer column and My schedule's offers (3c), the period-aware Setup import dry run (item IP below), and since Prompt 16 A7 the
 office's relay path ("Offers - enter for a surgeon", `source office-relay`). Functions and cron: `send-notification` v5 and
@@ -1234,11 +1234,11 @@ day; B10 restates them):** (1) the two RPCs — `sql/migrations/2026-09-23-offer
 seed apply — `node scripts/import-seed.js --apply --workdir <linked dir>` — the first period's `call_periods` row, 79
 `call_offers` rows (Burchett 34, Acton 10, Philip 35), the 20 retired `available` rows and the blob's `surgeonRules` /
 `groupRules` / `settings`, then (PD, 9/23 afternoon) the second apply: the first period's row updated to `published`, the
-Feb 2027 – Apr 2027 row inserted (freeze 12/21, publish by 1/4, no rules-only list, no modes), Burchett's 2027-07-22..08-02
+Feb 2027 – Apr 2027 row inserted (freeze 12/21, publish by 1/4, no rules-only list, no modes; its end 4/30 → Sun 5/2 since Faraz's 9/24 SQL update, and the Jan 2027 row he created the same morning sits before it — both in the seed), Burchett's 2027-07-22..08-02
 `time_off` row, the offers unchanged at 79 — all before 2026-10-02 (OF003 refuses seed-entered offers inside a period
 from its close on); (3) `send-notification` v5 (the offers categories over the v4 role / party gate) and
 `daily-reminder` v4 (mode `offers` beside open-shifts) deployed 9/23 ~18:50 UTC, then the `silvis-offers-daily` cron
-(jobid 3; README §3 deploy record + §4) — in time for the second period's 12/7 and 12/18 reminders (the first period is
+(jobid 3; README §3 deploy record + §4) — in time for Jan 2027's 11/9 and 11/20 reminders (freeze 11/23) and Feb – Apr 2027's 12/7 and 12/18 (the first period is
 `published`, so its 9/29 reminder and 10/2 close mail never fire). The in-app Setup import plans period-aware since item
 IP (top of this section) and refuses Apply for a seed that carries periods; a snapshot restore in the app writes
 `time_off` / `availability` back but not the offers or periods it captured - it says PARTIAL (§3 backup scope). The
@@ -1246,7 +1246,7 @@ IP (top of this section) and refuses Apply for a seed that carries periods; a sn
 9/23 from the rules-based preview; `scripts/import-seed.js --offers-json <path>` writes the generate input, but
 `scripts/preview-generate.js` does not read it) — the Prompt 14 P2 regression on `test/fixtures/offers-2026-11.json` is
 the proof that Burchett's and Acton's November days come out as the ER-panel author published, and the app's "Generate
-this period" is the offers-first path for the second period. Decisions recorded for the first period: the offer modes
+this period" is the offers-first path for every period after the published one (Jan 2027, then Feb – Apr 2027). Decisions recorded for the first period: the offer modes
 (rules doc §8 item 20 — Burchett / Philip exhaustive, Acton / Fierce preferred, Khan / Sarkar rules-only, set 9/23 as
 defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 (data, renameable).
 
