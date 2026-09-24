@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-uFx+L6pCFWMAydu5p0KqU6t3/WuST1g+4LYg3qdtjwA=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-Xl1nl4WRkcVF5P2nCR4iO8QlSKIlJoQvzuLno2TGLu0=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-es7FP3BiJ10bip5WuPb+J2ErURGvC59DiMSQY57n/qw=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-lcnJB8uXWf8jE9V31La2lKctFwF5aWa2P5kLlujWtTw=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23p";
+    var APP_VERSION = "2026.09.23q";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -2363,8 +2363,15 @@ function CallSchedule() {
       return [];
     }
   }, [rulesCtx, schedule]);
+  const lastRulesWarnRef = useRef("");
   useEffect(() => {
-    if (rulesCtxState.error) showToast("Couldn't build the rules context - eligibility checks are unavailable (" + rulesCtxState.error.slice(0, 90) + ").", "error");else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) console.warn("rules context warnings:", rulesCtx.warnings);
+    if (rulesCtxState.error) showToast("Couldn't build the rules context - eligibility checks are unavailable (" + rulesCtxState.error.slice(0, 90) + ").", "error");else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) {
+      const key = rulesCtx.warnings.join(" | ");
+      if (key !== lastRulesWarnRef.current) {
+        lastRulesWarnRef.current = key;
+        console.warn("rules context warnings:", rulesCtx.warnings);
+      }
+    }
   }, [rulesCtxState]);
   const saveDayEdit = (day, next, meta) => {
     if (!isScheduler || isPublicMode) {
