@@ -46,7 +46,7 @@ workdir copy stays byte-identical to the repo file (record the version number he
 `send-notification` for a coordinator's vacation entry (the `vacation_logged` e-mail to the scheduler is skipped; the
 in-app feed row and the audit row are still written) - a coordinator's session would only collect 403s.
 
-**Prompt 16 B5 (security minors, 2026-09-23): nothing deployed yet.** Three functions change in the
+**Prompt 16 B5 (security minors, 2026-09-23): all three deployed 2026-09-24 03:20-03:21 UTC (send-notification v6, daily-reminder v5, office-notifications v3; record in section 3).** Three functions changed in the
 repo (constant-time `x-cron-secret` compare in `daily-reminder` and `office-notifications`, the
 `/\S+@\S+/g` log redaction in all three mail functions (applied to the WHOLE provider body before the
 160-character log truncation, so a cut inside an address cannot leave a local part behind), and in
@@ -178,7 +178,7 @@ After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 
-### Deploy record - Prompt 16 B5 (security minors, review 2026-09-23 section 3) - PENDING, filled by whoever deploys
+### Deploy record - Prompt 16 B5 (security minors, review 2026-09-23 section 3) - filled 2026-09-24 03:23 UTC by the orchestrator
 
 Three functions change; `calendar-sync` is untouched and is NOT redeployed. Read `supabase functions list`
 first (a `secrets set` re-versions all four), back each function up with `download` before overwriting,
@@ -189,9 +189,9 @@ the client.
 
 | when (UTC) | slug | version before -> after | what changed | proof (section 5, no mail can result) |
 |---|---|---|---|---|
-| _pending_ | `send-notification` | v5 -> **v6 pending** | mail-config 500s below the role gate; `targetIds` capped at roster size + 1 (400); `trade_*` needs `data.trade_id` and the row's two parties must be exactly `targetIds` (400 / 403); `/\S+@\S+/g` log redaction | anon POST -> 401 (never a 500 naming a secret); scheduler JWT `trade_proposed` without `trade_id` -> 400; with a uuid that names no row -> 403; 9 ids -> 400; the v5 checks unchanged |
-| _pending_ | `daily-reminder` | v4 -> **v5 pending** | constant-time (timing-safe) `x-cron-secret` compare; log redaction | `{"dryRun":true}` with the secret -> 200 as before; `{"mode":"offers","dryRun":true}` -> 200 as before; a wrong secret -> 401; no secret -> 401 |
-| _pending_ | `office-notifications` | (read `supabase functions list`) -> **+1 pending** | the same constant-time compare in `authorize()`; log redaction | `{"mode":"digest","dryRun":true}` with the secret -> 200 as before; a wrong secret -> 401; no secret -> 401 |
+| 2026-09-24 03:21:26 | `send-notification` | v5 -> **v6 (deployed 2026-09-24 03:21:26 UTC)** | mail-config 500s below the role gate; `targetIds` capped at roster size + 1 (400); `trade_*` needs `data.trade_id` and the row's two parties must be exactly `targetIds` (400 / 403); `/\S+@\S+/g` log redaction | observed 03:23 UTC: anon POST -> 401. Still to observe from a scheduler session (the harness has none): `trade_proposed` without `trade_id` -> 400; a uuid that names no row -> 403; 9 ids -> 400; the v5 checks unchanged |
+| 2026-09-24 03:20:24 | `daily-reminder` | v4 -> **v5 (deployed 2026-09-24 03:20:24 UTC)** | constant-time (timing-safe) `x-cron-secret` compare; log redaction | observed 03:23 UTC: no secret -> 401, a wrong secret -> 401. The with-secret 200 is observed on the next hourly cron run (cron.job_run_details, silvis-daily-reminder-hourly) - the CLI session holds no secret |
+| 2026-09-24 03:20:47 | `office-notifications` | v2 -> **v3 (deployed 2026-09-24 03:20:47 UTC)** | the same constant-time compare in `authorize()`; log redaction | observed 03:23 UTC: no secret -> 401. The with-secret 200 is observed on the next weekly digest run (cron.job_run_details, silvis-office-digest-weekly) |
 
 ```powershell
 $wd = "<linked dir>"   # the workdir linked with: supabase link --project-ref bzhsroegtagqhutbnsrp

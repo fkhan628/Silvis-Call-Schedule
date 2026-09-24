@@ -475,9 +475,9 @@ check("B5: edge-functions/README.md - section 5 lists the new refusals with thei
   assert.ok(/cap/.test(s5) && /roster size \+ 1/.test(s5), "section 5: the cap (roster size + 1) -> 400");
   assert.ok(/configuration/.test(s5), "section 5 says an unauthenticated caller sees 401 before any configuration check");
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
-  assert.ok(/v6 pending/.test(s3), "section 3: 'v6 pending' for send-notification");
-  assert.ok(/daily-reminder[^\n]*v5 pending|v5 pending[^\n]*daily-reminder/.test(s3), "section 3: daily-reminder v5 pending");
-  assert.ok(/office-notifications[^\n]*pending/.test(s3), "section 3: office-notifications pending");
+  assert.ok(/send-notification[^\n]*v6 \(deployed 2026-09-24 03:21/.test(s3), "section 3: send-notification v6 deployed 2026-09-24 03:21 UTC");
+  assert.ok(/daily-reminder[^\n]*v5 \(deployed 2026-09-24 03:20/.test(s3), "section 3: daily-reminder v5 deployed 2026-09-24 03:20 UTC");
+  assert.ok(/office-notifications[^\n]*v3 \(deployed 2026-09-24 03:20/.test(s3), "section 3: office-notifications v3 deployed 2026-09-24 03:20 UTC");
   assert.ok(/Prompt 16/.test(s3) && /constant-time|timing-safe/.test(s3), "section 3 names the B5 change");
   const dr = readme.slice(readme.indexOf("### daily-reminder"), readme.indexOf("## 6."));
   assert.ok(/wrong secret|wrong x-cron-secret|wrong value/i.test(dr) && /401/.test(dr), "section 5 daily-reminder: a wrong secret -> 401 (the same 401 as no secret)");
