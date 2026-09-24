@@ -1108,6 +1108,25 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes("style={confirmBadgeStyle}>confirm</span>"), "the day editor keeps the word 'confirm'");
   });
 
+  // Item E (Faraz 9/24: "not important for the Silvis guys to know"): the month grid's E (East-derived week) and F / f
+  // (East forecast at / above threshold, 20% or more) badges, their two legend lines and the "East-derived: ..." hover bit
+  // render only for the scheduler in signed-in mode. One flag gates the cell's derived / forecast lookups, so the E and
+  // F badges, the hover bit and nBadges (the holiday-label gutter) follow it together; surgeons, coordinators, viewers
+  // and ?public=1 get a clean grid. Display only - the day editor and Setup > East feed keep their own East information.
+  check("Item E (9/24): E and F / f badges, their legend lines and the East-derived hover bit render only when isScheduler && !isPublicMode", () => {
+    assert.strictEqual(count("const eastBadgesVisible = isScheduler && !isPublicMode;"), 1, "exactly one eastBadgesVisible flag (isScheduler && !isPublicMode)");
+    assert.ok(src.includes("const derived = eastBadgesVisible && rulesCtx ? rulesCtx.derivedByDay[d] : null;"), "the cell's derived-week lookup is gated by the flag (E badge, hover bit and nBadges follow)");
+    assert.ok(src.includes("const fc = eastBadgesVisible ? forecastByDay[d] : null;"), "the cell's forecast lookup is gated by the flag (F / f badge and nBadges follow)");
+    assert.strictEqual(count('{derived && <span data-badge="E" title={"East-derived week: " + derivedWho}'), 1, "the E badge still keys off the (gated) derived lookup");
+    assert.strictEqual(count('{fc && fc.p >= 0.2 && <span data-badge={fc.p >= forecastThreshold ? "F" : "f"}'), 1, "the F / f badge still keys off the (gated) forecast lookup");
+    assert.ok(src.includes('if (derivedWho) titleBits.push("East-derived: " + derivedWho);'), "the hover bit still keys off derivedWho (empty when the flag is off)");
+    assert.ok(src.includes("const nBadges = (derived ? 1 : 0) + (fc && fc.p >= 0.2 ? 1 : 0) + (awaitingConfirmation(a) ? 1 : 0);"), "nBadges counts the gated derived / fc, so the holiday-label gutter is right for both audiences");
+    assert.ok(src.includes('{eastBadgesVisible && <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, T.badge)}>E</span> East-derived week</span>}'), "the legend's E line is gated");
+    assert.ok(src.includes('{eastBadgesVisible && <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#8a5a10")}>F</span> East forecast at or above {Math.round(forecastThreshold * 100)}%, <span style={badge(false, "#8a5a10")}>F</span> 20% or more</span>}'), "the legend's F line is gated");
+    assert.strictEqual(count("rulesCtx.derivedByDay[d]"), 1, "the grid is the flag's only derivedByDay reader (the day editor and Setup > East feed take their East information from rulesCtx / the feed card as before)");
+    assert.strictEqual(count("eastBadgesVisible"), 5, "the flag is declared once and read four times (derived, fc, two legend lines) - nothing in rules, the feed, the forecast or the generator reads it");
+  });
+
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
   console.log("\n[M] outside surgeons pins");
   check("M: the day editor's per-role select carries an 'Outside surgeons' optgroup (data-testid editor-<role>-externals)", () => {

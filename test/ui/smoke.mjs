@@ -1590,6 +1590,60 @@ try {
   await page.screenshot({ path: path.join(OUT, "calendar-nov-2026.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-nov-2026.png");
 
+  // ---- Item E (Faraz 9/24): the East badges are the scheduler's business only ----
+  // The scheduler (this page, role admin) keeps the E / F badges (asserted just above) and both legend lines; a
+  // surgeon (a second page routed as role surgeon, roster s2) gets a clean grid on the same month - no
+  // [data-badge="E"] / "F" / "f" in the grid, no "East-derived:" hover bit, no "East-derived" / "East forecast"
+  // legend line - at 390 px in both themes. Dark runs first so the shared localStorage ends light again. The
+  // confirm badge and the vacation dots are not East information and stay for everyone; the day editor and
+  // Setup > East feed are untouched (display only).
+  {
+    const legendSched = await page.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " "));
+    if (!/East-derived week/.test(legendSched) || !/East forecast at or above/.test(legendSched)) fail("Item E (scheduler, 1180): the legend lost its E / F lines: " + legendSched.slice(0, 220));
+    else ok(`Item E (scheduler, 1180): November 2026 keeps the E / F badges (E on ${eDays.length}, F/f on ${fDays.length} day(s)) and the legend's 'East-derived week' / 'East forecast' lines`);
+    const SURG_UID = "00000000-0000-4000-8000-00000000e0e0";
+    const SURG_PROFILE = { id: SURG_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z" };
+    const SURG_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: SURG_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const sp = await context.newPage();
+    watchPage(sp, "surgeon");
+    await sp.setViewportSize({ width: 390, height: 844 });
+    await sp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, SURG_JWT);
+    await sp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await sp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(SURG_PROFILE));
+    sp.on("dialog", (d) => d.accept());
+    try {
+      await loadWithRetry(sp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (item E)");
+      await sp.waitForSelector("text=Synced", { timeout: 30000 });
+      await sp.waitForTimeout(800);
+      const tabsS = await sp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
+      if (tabsS.includes("setup")) fail("Item E (surgeon): the mocked surgeon page shows a Setup tab - it is being treated as the scheduler, so the clean-grid checks below prove nothing: " + tabsS.join(","));
+      for (const theme of ["dark", "light"]) {
+        await sp.click('button[data-tab="settings"]');
+        await sp.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
+        await sp.click('button[data-tab="calendar"]');
+        await sp.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
+        await sp.selectOption("[data-testid=cal-month-select]", "10");
+        if ((await sp.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2026") await sp.fill("[data-testid=cal-year-input]", "2026");
+        await sp.waitForFunction(() => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === "November 2026"; }, null, { timeout: 10000 });
+        await sp.waitForTimeout(300);
+        const themeOn = await sp.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode") === "true" ? "dark" : "light"; } catch (e) { return "?"; } });
+        const cellsS = await sp.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), ext: e.getAttribute("data-ext"), title: e.getAttribute("title") || "", badges: Array.from(e.querySelectorAll("[data-badge]")).map(x => x.getAttribute("data-badge")) })));
+        const eastCells = cellsS.filter(c => c.badges.some(b => b === "E" || b === "F" || b === "f"));
+        const hoverCells = cellsS.filter(c => /East-derived:/.test(c.title));
+        const legendS = await sp.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " "));
+        const filledS = cellsS.filter(c => c.p || c.ext).length;
+        if (themeOn !== theme) fail(`Item E (surgeon, 390 ${theme}): the theme toggle did not take (silvis-dark-mode reads ${themeOn})`);
+        else if (!cellsS.length || !filledS) fail(`Item E (surgeon, 390 ${theme}): November 2026 never loaded for the surgeon page (${cellsS.length} cells, ${filledS} filled) - a clean grid must not be an empty one`);
+        else if (eastCells.length || hoverCells.length) fail(`Item E (surgeon, 390 ${theme}): November 2026 still shows East information to a surgeon - badges on ${eastCells.map(c => c.day + ":" + c.badges.join("")).slice(0, 6).join(", ")}; 'East-derived:' hover on ${hoverCells.length} day(s)`);
+        else if (/East-derived/.test(legendS) || /East forecast/.test(legendS)) fail(`Item E (surgeon, 390 ${theme}): the legend still carries the East lines: ${legendS.slice(0, 220)}`);
+        else ok(`Item E (surgeon, 390 ${theme}): November 2026 grid has no E / F / f badge and no 'East-derived:' hover bit (${cellsS.length} cells, ${filledS} filled; the scheduler sees E on ${eDays.length} / F on ${fDays.length} day(s)) and the legend has no 'East-derived' / 'East forecast' line`);
+        await sp.screenshot({ path: path.join(OUT, `calendar-nov-2026-surgeon-390-${theme}.png`), fullPage: true });
+      }
+      ok("screenshots test/ui/out/calendar-nov-2026-surgeon-390-dark.png / -light.png");
+    } catch (e) { fail("Item E (surgeon): the surgeon page check threw: " + String(e && e.message || e).split("\n")[0]); }
+    await sp.close();
+  }
+
   // ---- Prompt 12 B / Z: the "confirm" badge follows the schedule_days note; Thanksgiving is confirmed -> no badge ----
   // The importer writes 'awaiting confirmation - seed: ...' on a row flagged awaitingConfirmation in the seed, and a
   // LOCKED day whose note starts with that marker shows the badge in the grid cell and beside the padlock in the day
@@ -1718,6 +1772,31 @@ try {
   const pickBad = picks.filter(p => p.right > 390 || p.left < 0 || p.w < 200);
   if (picks.length !== 3 || pickBad.length) fail("mobile 390px: trade selects off screen or narrower than 200px: " + JSON.stringify(picks)); else ok("mobile 390px: the three trade selects span the row and stay on screen (" + picks.map(p => p.w + "px").join(", ") + ")");
   await page.click('button[data-tab="calendar"]');
+  // ---- Item E (scheduler, 390 dark): symmetry with the surgeon pass above ----
+  // The scheduler keeps the E / F badges, the "East-derived:" hover bit and both legend lines at 390 px in the dark
+  // theme too (the gate is a boolean - isScheduler && !isPublicMode - with no viewport or theme dependence; this pins
+  // it where the surgeon side is checked). Counts must match the 1180 px pass on the same month. Light is restored
+  // before the viewport goes back to 1180 so the theme flow below is unchanged.
+  {
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Dark')");
+    await showMonth(2026, 10);
+    const themeSched = await page.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode") === "true" ? "dark" : "light"; } catch (e) { return "?"; } });
+    const nov390 = await readCells();
+    const e390 = nov390.filter(c => c.badges.includes("E")).map(c => c.day);
+    const f390 = nov390.filter(c => c.badges.some(b => b === "F" || b === "f")).map(c => c.day);
+    const hover390 = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.filter(e => /East-derived:/.test(e.getAttribute("title") || "")).length);
+    const legend390 = await page.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " "));
+    if (themeSched !== "dark") fail(`Item E (scheduler, 390 dark): the Dark toggle did not take (silvis-dark-mode reads ${themeSched})`);
+    else if (!e390.length || e390.length !== eDays.length || f390.length !== fDays.length || hover390 !== e390.length) fail(`Item E (scheduler, 390 dark): November 2026 lost East information at 390 px - E on ${e390.length} (1180: ${eDays.length}), F/f on ${f390.length} (1180: ${fDays.length}), 'East-derived:' hover on ${hover390} day(s)`);
+    else if (!/East-derived week/.test(legend390) || !/East forecast at or above/.test(legend390)) fail("Item E (scheduler, 390 dark): the legend lost its E / F lines: " + legend390.slice(0, 220));
+    else ok(`Item E (scheduler, 390 dark): November 2026 keeps the E / F badges (E on ${e390.length}, F/f on ${f390.length} day(s), 'East-derived:' hover on ${hover390}) and the legend's 'East-derived week' / 'East forecast' lines`);
+    await page.screenshot({ path: path.join(OUT, "calendar-nov-2026-390-dark.png"), fullPage: true });
+    ok("screenshot test/ui/out/calendar-nov-2026-390-dark.png");
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Light')");
+    await page.click('button[data-tab="calendar"]');
+  }
   await page.setViewportSize({ width: 1180, height: 900 });
 
   // ---- vis-002: the year field accepts typed input ----
@@ -5816,6 +5895,19 @@ try {
     else ok(`?public=1: schedule loaded - ${filled.length} of ${pubCells.length} visible cells carry an assignment (e.g. ${filled[0].day} P ${filled[0].p || filled[0].ext})`);
     const pubBanner = await pub.$eval("[data-testid=today-banner]", el => el.textContent).catch(() => "");
     if (/loading/i.test(pubBanner)) fail("?public=1: today banner still shows the loading placeholder: " + pubBanner); else ok("?public=1: today banner shows real holders: " + pubBanner.replace(/\s+/g, " ").slice(0, 90));
+    // Item E (Faraz 9/24): the public link gets the clean grid too - November 2026 (the scheduler's E / F month above)
+    // carries no E / F / f badge, no "East-derived:" hover bit and no East legend line.
+    await pub.selectOption("[data-testid=cal-month-select]", "10");
+    if ((await pub.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2026") await pub.fill("[data-testid=cal-year-input]", "2026");
+    await pub.waitForFunction(() => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === "November 2026"; }, null, { timeout: 10000 });
+    await pub.waitForTimeout(300);
+    const pubNov = await pub.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), title: e.getAttribute("title") || "", badges: Array.from(e.querySelectorAll("[data-badge]")).map(x => x.getAttribute("data-badge")) })));
+    const pubEast = pubNov.filter(c => c.badges.some(b => b === "E" || b === "F" || b === "f") || /East-derived:/.test(c.title));
+    const pubLegend = await pub.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+    if (!pubNov.length) fail("Item E (?public=1): November 2026 did not render on the public page");
+    else if (pubEast.length) fail(`Item E (?public=1): November 2026 still shows East information on the public link: ${pubEast.map(c => c.day + ":" + c.badges.join("") + (/East-derived:/.test(c.title) ? "+hover" : "")).slice(0, 6).join(", ")}`);
+    else if (/East-derived/.test(pubLegend) || /East forecast/.test(pubLegend)) fail("Item E (?public=1): the legend still carries the East lines: " + pubLegend.slice(0, 220));
+    else ok(`Item E (?public=1): November 2026 grid has no E / F / f badge or 'East-derived:' hover bit (${pubNov.length} cells) and the legend has no East line`);
   } catch (e) { fail("?public=1 did not render the calendar: " + String(e && e.message || e).split("\n")[0]); }
   await pub.screenshot({ path: path.join(OUT, "public.png"), fullPage: true });
   if (pubErrors.length) fail("public page errors: " + pubErrors.join(" | "));

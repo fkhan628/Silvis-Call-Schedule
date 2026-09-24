@@ -4303,6 +4303,11 @@ function CallSchedule() {
     return out;
   }, [ctxInputs]);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
+  // Item E (Faraz 9/24): the East badges are the scheduler's business only - the month grid's E (East-derived week)
+  // and F / f (forecast) badges, their legend lines and the "East-derived: ..." hover bit render only for the
+  // scheduler in signed-in mode; surgeons, coordinators, viewers and ?public=1 get a clean grid. Display only: rules,
+  // the feed, the forecast, the generator, the day editor and Setup > East feed are unchanged.
+  const eastBadgesVisible = isScheduler && !isPublicMode;
   // Coverage at a glance (Prompt 11): the next 60 days from today - open
   // primary / backup days, forecast-busy days that still hold that surgeon as
   // primary (should be 0), the East feed's coverage end, the last publish and
@@ -5485,8 +5490,10 @@ function CallSchedule() {
                 const inMonth = d >= monthStartStr && d <= monthEndStr;
                 const isWk = dow === 5 || dow === 6 || dow === 0;
                 const hol = rulesCtx ? isHolidayDay(rulesCtx, d) : null;
-                const derived = rulesCtx ? rulesCtx.derivedByDay[d] : null;
-                const fc = forecastByDay[d];
+                // Item E: derived / fc are null for everyone but the signed-in scheduler, so the E and F badges, the
+                // "East-derived: ..." hover bit and nBadges (the holiday-label gutter) follow the one flag together.
+                const derived = eastBadgesVisible && rulesCtx ? rulesCtx.derivedByDay[d] : null;
+                const fc = eastBadgesVisible ? forecastByDay[d] : null;
                 const pH = dayHolder(a, "primary"); const bH = a ? a.backup : null;
                 const openP = slotIsOpen(d, pH, todayStr), openB = slotIsOpen(d, bH, todayStr); // past unassigned days are blank, not OPEN
                 const inFilter = calSurgeonFilters.length === 0 || (a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup)));
@@ -5540,8 +5547,8 @@ function CallSchedule() {
               <span><span style={{color:T.open,fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>
               <span><span style={{fontStyle:"italic"}}>Atwell</span> = external cover</span>
               <span style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot</span>
-              <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, T.badge)}>E</span> East-derived week</span>
-              <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#8a5a10")}>F</span> East forecast at or above {Math.round(forecastThreshold * 100)}%, <span style={badge(false, "#8a5a10")}>F</span> 20% or more</span>
+              {eastBadgesVisible && <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, T.badge)}>E</span> East-derived week</span>}
+              {eastBadgesVisible && <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#8a5a10")}>F</span> East forecast at or above {Math.round(forecastThreshold * 100)}%, <span style={badge(false, "#8a5a10")}>F</span> 20% or more</span>}
               <span>Fri-Sun tinted = weekend unit</span>
               <span>gold = holiday unit</span>
               <span>dots = vacations</span>
