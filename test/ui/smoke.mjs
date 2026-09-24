@@ -294,12 +294,11 @@ const CDN_CACHE = path.join(OUT, "cdn-cache");
 
 // Playwright lives outside the repo (it is not a devDependency: CI's npm
 // install must stay small and the deploy job never runs a browser). Search
-// order: explicit env, the repo's own node_modules (npm i -D --no-save
-// playwright), then the documented tooling dir.
+// order: explicit env (PLAYWRIGHT_DIR), then the repo's own node_modules (npm i -D --no-save
+// playwright).
 const PW_CANDIDATES = [
   process.env.PLAYWRIGHT_DIR,
   path.join(ROOT, "node_modules"),
-  "<playwright-dir>",
 ].filter(Boolean);
 const PW_DIR = PW_CANDIDATES.find(d => fs.existsSync(path.join(d, "playwright", "package.json")));
 if (!PW_DIR) {

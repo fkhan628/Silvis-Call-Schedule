@@ -50,7 +50,7 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
    configured repo-locally. The Davenport reference clone lives beside it at `..\davenport-ref` (read-only, fresh clone
    of `fkhan628/Call-Schedule-App`; `..\Call-Schedule-App` is Faraz's own Davenport working clone — never edit either
    from here).
-2. **OneDrive folder** `<the OneDrive folder>` — non-repo material (the ER-panel author's Word docs,
+2. **OneDrive folder** (outside the repo; its path is machine-specific) — non-repo material (the ER-panel author's Word docs,
    email exports, backups), the private `silvis-contacts.md`, and the source copies of `CLAUDE.md`, `docs/` and `sql/`
    (identical to the repo's — both contact-free). Never edit app files there.
 3. **Supabase** — schema in `sql/schema.sql` plus the hand-applied files in `sql/migrations/` (each recorded in

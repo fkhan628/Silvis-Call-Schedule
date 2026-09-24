@@ -1007,7 +1007,7 @@ BUILDS and TESTS the tool; it was never run with `--apply` here.
   11/2..1/3 (89 days), gate (a) passes, backfill open = 10/15 primary, 9 known locked facts, a plan over an empty live set
   renders.
   Fail-before, verbatim (the module did not exist): `Error: Cannot find module
-  '<your projects folder>\Silvis-p12-w6\scripts\publish-preview.js'`. First implementation: five assertions I had written
+  '<a worktree of your clone>\scripts\publish-preview.js'`. First implementation: five assertions I had written
   wrong were corrected against the tool's (specified) behaviour — `final open slots` (10/11 P stays Burchett: the clear was
   refused), the force flag (`refused` = `["2026-10-11"]`, an import clear is never forced), the snapshot-shape line filter
   (it also matched the audit line), gate (a) on the fixture (`the milestone leaves 2 slot(s) open: 2026-10-13 primary,
@@ -1030,7 +1030,7 @@ BUILDS and TESTS the tool; it was never run with `--apply` here.
 
 Live actions for the orchestrator (in this order; both from the worktree, never from the main clone):
 ```
-cd <your projects folder>\Silvis-p12-w6
+cd <a worktree of your clone>
 node scripts/publish-preview.js --dry-run
 node scripts/publish-preview.js --apply --workdir <linked supabase dir>
 ```

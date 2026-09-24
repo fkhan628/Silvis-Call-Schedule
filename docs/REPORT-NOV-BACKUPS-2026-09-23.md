@@ -178,7 +178,7 @@ Starting state: the published live rows with **every held slot locked** except t
 
 ## g. Files, commands, and what was not done
 
-Repo (worktree `<your projects folder>\Silvis-review`, branch `fix/nov-backup-tally`, on the deployed head 875bbcd): new `test/nov-backups.test.js`, `test/generator-regression.js` (the NB block + summary line), new `docs/REPORT-NOV-BACKUPS-2026-09-23.md` (this file). No engine, seed, guide or rules-doc file touched; `index.html` / `version.json` restored after the build.
+Repo (worktree `<a worktree of your clone>`, branch `fix/nov-backup-tally`, on the deployed head 875bbcd): new `test/nov-backups.test.js`, `test/generator-regression.js` (the NB block + summary line), new `docs/REPORT-NOV-BACKUPS-2026-09-23.md` (this file). No engine, seed, guide or rules-doc file touched; `index.html` / `version.json` restored after the build.
 
 Scratch (`...\scratchpad\nb\`): `fetch-live.js` (anon GET of the seven tables -> `live.json`), `nb-ctx.js` (input rebuild, publish-log revert, blob-vs-seed check), `nb-instrument.js` (in-memory patched copy of generator.js: per-candidate score-term logging, `opts.onBest`, `opts.waterFill`), `nb-replay.js` (-> `replay-output.txt`, `replay-best-log.json`, `replay-result.json`), `nb-rebalance.js` (-> `rebalance-output.txt`, `rebalance-result.json`), `npm-test-output.txt`; review scratch `review1/rv-rebalance.js` (the tie and the seed table; re-run -> `fix-rebalance-rerun.txt`), `review2/r2-replay.js` (live blob vs plain entry; re-run -> `fix-replay-rerun.txt`), `review2/mutant.js`; Fix stage `fix/run-draft.js` (the test's `run()` against the real generator or a mutant, every failure listed -> `fix/mutant-*.txt`).
 

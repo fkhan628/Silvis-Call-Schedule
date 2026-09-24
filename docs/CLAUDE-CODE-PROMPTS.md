@@ -1,7 +1,7 @@
 # Claude Code Prompts — Silvis Surgical Care Call Schedule
 
 *Paste these into Claude Code one at a time, in order. Each prompt is self-contained, states what "done" looks like,
-and ends with a stop so you can review. Start Claude Code in `<your home folder>\projects` for Prompt 0A (it creates the
+and ends with a stop so you can review. Start Claude Code in `<your projects folder>` for Prompt 0A (it creates the
 repo folder); every later prompt runs inside `<your clone>`. The handoff files
 (`CLAUDE.md`, `docs\*`, `sql\schema.sql`) are read from your OneDrive folder
 `<the OneDrive folder>` — Prompt 0A copies them in.*
