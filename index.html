@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-t8QMTKwMWjGqNQLLz6rWykrnddkC25zyv09Ke8dk8gs=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-QoUkQpvWEQ9M++2JhHcCGqob6oco1n8FNk0mge3S5ck=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-X/2fIc615WxD0/SWweXzRNBxh0BVo3fS/oPTb7iiEMY=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-AogyuaXYM6rrADVQ0cuFHDnQopjTl5qOSeap35zfXsI=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.24c";
+    var APP_VERSION = "2026.09.24d";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -426,6 +426,7 @@ function CallSchedule() {
   const isCoordinator = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "coordinator";
   const canEnterForAnyone = isScheduler || isCoordinator;
   const isUnlinked = !!authUser && !!userProfile && !userProfile.person_id;
+  const isViewer = !!userProfile && userProfile.role === "viewer" && !userProfile.person_id && !profileLoadFailed;
   const versionBeatRef = useRef("");
   useEffect(() => {
     if (!authUser || !authUser.id || !userProfile || versionBeatRef.current === authUser.id) return;
@@ -554,17 +555,12 @@ function CallSchedule() {
       setVacSurgeon(prev => prev || mySurgeon);
     }
   }, [mySurgeon]);
-  const myNotifications = useMemo(() => {
-    const base = isScheduler || !mySurgeon ? notifications : notifications.filter(n => {
-      var _n$data, _n$data2, _n$data3;
-      if (n.type === "schedule_published" || n.type === "schedule_changed" || n.type === "manual_edit") return true;
-      if (n.type === "open_shifts") return true;
-      if (((_n$data = n.data) === null || _n$data === void 0 ? void 0 : _n$data.surgeon_id) === mySurgeon) return true;
-      if (((_n$data2 = n.data) === null || _n$data2 === void 0 ? void 0 : _n$data2.from_surgeon_id) === mySurgeon || ((_n$data3 = n.data) === null || _n$data3 === void 0 ? void 0 : _n$data3.to_surgeon_id) === mySurgeon) return true;
-      return false;
-    });
-    return base.filter(n => n.created_at > notifClearedBefore);
-  }, [notifications, isScheduler, mySurgeon, notifClearedBefore]);
+  const myNotifications = useMemo(() => notifVisibleTo(notifications, {
+    isScheduler,
+    isViewer,
+    mySurgeon,
+    clearedBefore: notifClearedBefore
+  }), [notifications, isScheduler, isViewer, mySurgeon, notifClearedBefore]);
   const myUnreadCount = useMemo(() => myNotifications.filter(n => n.created_at > notifLastSeen).length, [myNotifications, notifLastSeen]);
   const myTradeRequests = useMemo(() => {
     if (isScheduler || !mySurgeon) return tradeRequests;
@@ -7495,7 +7491,7 @@ function CallSchedule() {
   }, "Connecting"))))), !isPublicMode && React.createElement("div", {
     style: css.nav
   }, (() => {
-    const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["openshifts", "Open shifts"], ["myschedule", "Mine"], ["timeoff", "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
+    const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["openshifts", "Open shifts"], ["myschedule", "Mine"], ["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
     let tabs = allTabs;
     if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
     if (!mySurgeon) tabs = tabs.filter(([k]) => k !== "myschedule");
@@ -7599,6 +7595,7 @@ function CallSchedule() {
       position: "relative"
     }
   }, !isPublicMode && showNotifs && React.createElement("div", {
+    "data-testid": "notif-panel",
     style: {
       position: "absolute",
       top: 0,
@@ -7680,6 +7677,8 @@ function CallSchedule() {
     const targetTab = tabMap[n.type] || null;
     return React.createElement("div", {
       key: n.id,
+      "data-testid": "notif-row",
+      "data-type": n.type,
       onClick: () => {
         if (targetTab) {
           setView(targetTab);
@@ -7727,7 +7726,7 @@ function CallSchedule() {
         display: "inline-block"
       }
     }, "Tap to view"));
-  })), !isPublicMode && isUnlinked && !isCoordinator && React.createElement("div", {
+  })), !isPublicMode && isUnlinked && !isCoordinator && !isViewer && React.createElement("div", {
     "data-testid": "unlinked-banner",
     style: _objectSpread(_objectSpread({}, css.card), {}, {
       padding: "10px 14px",
@@ -10008,11 +10007,14 @@ function CallSchedule() {
     "data-testid": "timeoff-card"
   }, React.createElement("div", {
     style: css.cardT
-  }, canEnterForAnyone ? "Vacations" : "My vacations"), React.createElement("p", {
+  }, canEnterForAnyone || isViewer ? "Vacations" : "My vacations"), isViewer ? React.createElement("p", {
+    style: sectionNote,
+    "data-testid": "viewer-timeoff-note"
+  }, "The surgeons enter their own vacations here (the office coordinator can enter one for them); this account reads them. An entry is refused over a day the surgeon is already published, so the list below never contradicts the calendar. Notes are operational and visible to the whole group.") : React.createElement("p", {
     style: sectionNote
-  }, isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct)." : React.createElement(React.Fragment, null, "Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record", isScheduler ? " (as the scheduler you can enter or remove anyone's)" : "", "."), " Notes are operational and visible to the whole group."), !mySurgeon && !canEnterForAnyone ? React.createElement("p", {
+  }, isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct)." : React.createElement(React.Fragment, null, "Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record", isScheduler ? " (as the scheduler you can enter or remove anyone's)" : "", "."), " Notes are operational and visible to the whole group."), !mySurgeon && !canEnterForAnyone && !isViewer ? React.createElement("p", {
     style: muted
-  }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement(React.Fragment, null, renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
+  }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement(React.Fragment, null, !isViewer && renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -10027,7 +10029,7 @@ function CallSchedule() {
     "data-testid": "vac-show-past",
     checked: showPastVacations,
     onChange: e => setShowPastVacations(e.target.checked)
-  }), " Show past"), renderVacationList(canEnterForAnyone ? surgeons.map(s => s.id) : [mySurgeon], true))), isCoordinator && React.createElement("div", {
+  }), " Show past"), renderVacationList(canEnterForAnyone || isViewer ? surgeons.map(s => s.id) : [mySurgeon], !isViewer))), isCoordinator && React.createElement("div", {
     style: css.card,
     "data-testid": "coord-offers-card"
   }, React.createElement("div", {
@@ -10085,7 +10087,7 @@ function CallSchedule() {
     testid: "eastvac-timeoff-list"
   })), (() => {
     const fromId = isScheduler ? tradeFrom || mySurgeon || "" : mySurgeon || "";
-    if (isCoordinator) return null;
+    if (isCoordinator || isViewer) return null;
     const mine = upcomingDaysOf(fromId, null);
     const theirs = upcomingDaysOf(tradeTo, null);
     const dayOk = suIsIso(tradeDay);
@@ -11053,7 +11055,7 @@ function CallSchedule() {
     style: {
       color: T.title
     }
-  }, mySurgeon ? nameOf(mySurgeon) : (userProfile === null || userProfile === void 0 ? void 0 : userProfile.display_name) || "unlinked account"), React.createElement("span", {
+  }, mySurgeon ? nameOf(mySurgeon) : (userProfile === null || userProfile === void 0 ? void 0 : userProfile.display_name) || (isViewer ? "a read-only account" : "unlinked account")), React.createElement("span", {
     style: _objectSpread(_objectSpread({}, muted), {}, {
       marginLeft: 6
     })
@@ -11196,7 +11198,7 @@ function CallSchedule() {
     style: css.cardT
   }, "Live calendar sync"), React.createElement("p", {
     style: sectionNote
-  }, "Subscribe to ", isScheduler ? "these URLs" : "your personal URL", " in Google Calendar, Outlook or Apple Calendar. The calendar auto-updates when the schedule changes. In Google Calendar: Other calendars (+), From URL, paste the link."), mySurgeon && (() => {
+  }, "Subscribe to ", isScheduler ? "these URLs" : isViewer ? "the full-schedule feed" : "your personal URL", " in Google Calendar, Outlook or Apple Calendar. The calendar auto-updates when the schedule changes. In Google Calendar: Other calendars (+), From URL, paste the link."), mySurgeon && (() => {
     const myUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(mySurgeon)}`;
     return React.createElement("div", {
       style: {
@@ -11234,7 +11236,7 @@ function CallSchedule() {
         whiteSpace: "nowrap"
       })
     }, copiedUrl === "my" ? "Copied" : "Copy")));
-  })(), isScheduler && React.createElement(React.Fragment, null, React.createElement("div", {
+  })(), (isScheduler || isViewer) && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       marginBottom: 10
     }
@@ -11252,6 +11254,7 @@ function CallSchedule() {
       alignItems: "center"
     }
   }, React.createElement("input", {
+    "data-testid": "calsync-full",
     readOnly: true,
     value: `${EDGE_FN_BASE}/calendar-sync`,
     style: _objectSpread(_objectSpread({}, css.inp), {}, {
@@ -11263,13 +11266,14 @@ function CallSchedule() {
     }),
     onClick: e => e.target.select()
   }), React.createElement("button", {
+    "data-testid": "calsync-full-copy",
     onClick: () => copyText(`${EDGE_FN_BASE}/calendar-sync`, "full"),
     style: _objectSpread(_objectSpread({}, css.btn(copiedUrl === "full")), {}, {
       padding: "4px 10px",
       fontSize: 10,
       whiteSpace: "nowrap"
     })
-  }, copiedUrl === "full" ? "Copied" : "Copy"))), React.createElement("div", {
+  }, copiedUrl === "full" ? "Copied" : "Copy")))), isScheduler && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       fontSize: 11,
       fontWeight: 600,
