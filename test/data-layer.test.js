@@ -1824,12 +1824,21 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(evb.includes('data-testid={"eastvac-set-" + st}'), "segmented control buttons carry eastvac-set-<state>");
     assert.ok(evb.includes('["unreviewed", "away", "home"]'), "three states, in that order");
   });
-  check("P15: the office digest and the ER export are untouched (assignments, not availability)", () => {
+  check("P15 (re-stated for Item D, 2026-09-24): the ER export and the daily reminder are untouched by East vacations (assignments, not availability); the office digest reads east_vacation_reviews ONLY inside its Item D 'at Davenport this week' section (decision away, rendered as 'away (Davenport vacation)' beside the change list) - never in the baseline / diff path, never as a schedule assignment", () => {
     const h = readRoot("helpers.js");
     const er = h.slice(h.indexOf("function erPanelRows("), h.indexOf("function buildErCallPanelsDocument(") + 1200);
     assert.ok(er.length > 0 && !/eastVac|east_vacation|eastClear/.test(er), "the ER Call Panels builders mention East vacations");
     const digest = readRoot(path.join("edge-functions", "office-notifications", "index.ts"));
-    assert.strictEqual(/east_vacation|eastVac/.test(digest), false, "the office digest reads East vacations");
+    const eastSection = digest.slice(digest.indexOf("async function buildEastSection("), digest.indexOf("// Mail client"));
+    assert.ok(eastSection.length > 0 && /east_vacation_reviews\?select=person_id,start,end,decision&person_id=eq\./.test(eastSection) && /decision=eq\.away/.test(eastSection), "the digest's East section reads the away reviews by roster id");
+    // comments stripped AFTER the two regions are cut out of the same text (the markers are comment lines)
+    const cutSection = digest.replace(eastSection, "");
+    const eastBlock = cutSection.slice(cutSection.indexOf("// @eastCalendar-mirror-start"), cutSection.indexOf("// @eastCalendar-mirror-end"));
+    assert.ok(eastBlock.length > 0, "the shared @eastCalendar block is present");
+    const outside = cutSection.replace(eastBlock, "").replace(/\/\/[^\n]*/g, "");
+    assert.strictEqual(/east_vacation|eastVac/.test(outside), false, "outside buildEastSection and the shared @eastCalendar block the office digest reads no East vacation (baseline, diff, publish and rendering paths untouched)");
+    const diffPath = digest.slice(digest.indexOf("async function buildCurrent("), digest.indexOf("// Rendering"));
+    assert.strictEqual(/east_vacation|eastVac|east_feed/.test(diffPath), false, "the baseline / diff path (buildCurrent, readBaseline, writeState, diffSnapshots) reads neither table");
     const daily = readRoot(path.join("edge-functions", "daily-reminder", "index.ts"));
     assert.strictEqual(/east_vacation|eastVac/.test(daily), false, "the daily reminder reads East vacations");
   });

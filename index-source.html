@@ -6355,6 +6355,23 @@ function CallSchedule() {
               </div>
             </>}
             {isScheduler && <>
+              {/* Item D (2026-09-24): the combined Silvis + Davenport feed (calendar-sync ?surgeon=<CODE>&east=1) of every
+                  surgeon whose East feature reads busy days (eastVacationPerson - today Khan), for office staff at either
+                  site. Scheduler only; the URL is the same public feed URL with one flag - no contact data, no token. */}
+              {surgeons.filter(s => eastVacationPerson(s, surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed)).map(s => {
+                const combinedUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}&east=1`;
+                const key = "combined-" + s.id;
+                return (
+                  <div key={key} data-testid={"combined-sync-" + s.id} style={{marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>{s.name} {"\u2013"} combined Silvis + Davenport (where {s.name} is, every day):</div>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                      <input readOnly data-testid="combined-sync-url" value={combinedUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
+                      <button data-testid="copy-combined-sync-url" onClick={()=>copyText(combinedUrl, key)} style={{...css.btn(copiedUrl===key),padding:"8px 14px",fontSize:11,minHeight:36,whiteSpace:"nowrap"}}>{copiedUrl===key ? "Copied" : "Copy"}</button>
+                    </div>
+                    <div data-testid="combined-sync-note" style={{fontSize:11,color:"#5B6B82",marginTop:4,lineHeight:1.5}}>{"for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself"} ({s.name}'s Silvis shifts plus one all-day entry per Davenport day: night, service week, weekend, holiday or day call, and "away" for a Davenport vacation reviewed as away).</div>
+                  </div>
+                );
+              })}
               <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Per surgeon (matched on code):</div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
                 {surgeons.map(s => (

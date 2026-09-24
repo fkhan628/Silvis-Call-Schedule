@@ -483,6 +483,236 @@ check("B5: edge-functions/README.md - section 5 lists the new refusals with thei
   assert.ok(/wrong secret|wrong x-cron-secret|wrong value/i.test(dr) && /401/.test(dr), "section 5 daily-reminder: a wrong secret -> 401 (the same 401 as no secret)");
 });
 
+/* =====================================================================
+   Item D (2026-09-24) - Khan's combined calendar (calendar-sync ?surgeon=<CODE>&east=1) and the office
+   digest's "<Name> at Davenport this week" section. Two plain-JS mirror blocks, extracted and evaluated
+   like the B5 ones: '@eastCalendar' (identical in calendar-sync AND office-notifications; its
+   eastBusyDays is pinned against east-feed.js deriveKhanBusyDays - the app's own derivation) and
+   '@icsCore' (calendar-sync only: the whole event / .ics shaping, so a real feed is built here from
+   fixture rows - two Silvis days + two east_feed days - with no network and no Deno).
+   ===================================================================== */
+const csSrc = read("edge-functions/calendar-sync/index.ts");
+const ef = require("../east-feed.js");
+const EAST_FNS = { "calendar-sync": csSrc, "office-notifications": onSrc };
+const DAV_FAK = "s6"; // the DAVENPORT id in these fixtures (FAK is s6 there; the functions resolve it by code)
+let eastApi = null;
+check("Item D: calendar-sync and office-notifications carry an identical plain-JS '@eastCalendar' mirror block defining eastBusyDays, eastEntries, eastDigestLines, eastFeedPerson, eastVacationRanges, eastAwayRanges and the reason labels", () => {
+  const blocks = Object.entries(EAST_FNS).map(([n, s]) => [n, blockOf(s, n, "eastCalendar")]);
+  blocks.forEach(([n, b]) => plainJs(b, n));
+  identical(blocks, "eastCalendar");
+  const api = new Function(blocks[0][1] + "\nreturn { eastBusyDays, eastEntries, eastDigestLines, eastFeedPerson, eastVacationRanges, eastAwayRanges, eastMergeRanges, EAST_REASON_LABEL, EAST_REASON_ORDER };")();
+  ["eastBusyDays", "eastEntries", "eastDigestLines", "eastFeedPerson", "eastVacationRanges", "eastAwayRanges", "eastMergeRanges"].forEach((k) => assert.strictEqual(typeof api[k], "function", k + " is a function"));
+  assert.deepStrictEqual(api.EAST_REASON_LABEL, { "holiday": "Davenport holiday", "override": "Davenport day call", "service-week": "Davenport service week", "night": "Davenport night", "weekend": "Davenport weekend" }, "the five reason labels (override -> 'Davenport day call': the day-call slot a dayCallOverrides entry hands him for one day)");
+  assert.deepStrictEqual(api.EAST_REASON_ORDER, ["holiday", "override", "service-week", "night", "weekend"], "title / UID precedence");
+  eastApi = api;
+});
+// The east-feed.test.js fixture family: an old row with an override TO FAK, a FAK service week with a Wednesday
+// override to someone else, Thu night + weekend (Fri + Sun), a Thanksgiving holiday unit, an isBackup week with a
+// FAK night, an isFierceBackup week, holiday-24h-held-by-others weeks (override and night on the held days), Labor
+// Day inside a FAK service week, a forecast row and a malformed row.
+const EAST_WEEKS = [
+  { weekMonday: "2026-10-26", data: { dayCall: "s2", nights: { mon: "s1", tue: "s3", wed: "s4", thu: "s5", wknd: "s7" }, off: "s6", dayCallOverrides: { "2026-10-28": "s6" } } },
+  { weekMonday: "2026-11-02", data: { dayCall: "s6", nights: { mon: "s1", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" }, off: "s7", isBackup: false, isFierceBackup: false, holidayCoverage: null, dayCallOverrides: { "2026-11-04": "s2" } } },
+  { weekMonday: "2026-11-09", data: { dayCall: "s2", nights: { mon: "s1", tue: "s3", wed: "s4", thu: "s6", wknd: "s6" }, off: "s7", isBackup: false, isFierceBackup: false, holidayCoverage: null } },
+  { weekMonday: "2026-11-23", data: { dayCall: "s1", nights: { mon: "s2", tue: "s3", wed: "s4", thu: "s5", wknd: "s7" }, off: "s6", holidayCoverage: { "2026-11-26": { surgeonId: "s6", role: "holiday_24h", name: "Thanksgiving", type: "major" }, "2026-11-27": { surgeonId: "s1", role: "holiday_24h" } } } },
+  { weekMonday: "2026-12-14", data: { dayCall: "s3", nights: { mon: "s6", tue: "s1", wed: "s2", thu: "s4", wknd: "s5" }, off: "s7", isBackup: true, isFierceBackup: false, holidayCoverage: null } },
+  { weekMonday: "2026-12-21", data: { dayCall: "s3", nights: { mon: "s1", tue: "s6", wed: "s2", thu: "s4", wknd: "s5" }, off: "s7", isBackup: false, isFierceBackup: true, holidayCoverage: null } },
+  { weekMonday: "2026-12-28", data: { dayCall: "s6", nights: { mon: "s1", tue: "s2", wed: "s3", thu: "s6", wknd: "s6" }, off: "s7", holidayCoverage: { "2026-12-31": { surgeonId: "s5", role: "holiday_24h" }, "2027-01-01": { surgeonId: "s6", role: "holiday_24h" }, "2027-01-02": { surgeonId: "s5", role: "holiday_24h" } }, dayCallOverrides: { "2026-12-31": "s6" } } },
+  { weekMonday: "2026-09-07", data: { dayCall: "s6", nights: { mon: "s3", tue: "s5", wed: "s7", thu: "s1", wknd: "s4" }, holidayCoverage: { "2026-09-07": { surgeonId: "s3", role: "holiday_24h" } } } },
+  { weekMonday: "2026-12-07", data: { isForecast: true, runs: 100, fakBusyProbabilityByDay: { "2026-12-08": 0.9 } } },
+  { weekMonday: "bad", data: { dayCall: "s6" } },
+  null,
+];
+check("Item D mirror identity: eastBusyDays(weeks, id) returns the SAME busy set and the SAME per-day reasons as east-feed.js deriveKhanBusyDays over the fixture family (override / service-week / night / weekend / holiday / backup-week, holiday-24h precedence, forecast and malformed rows skipped); east_feed-shaped rows (week_monday) derive the same", () => {
+  if (!eastApi) throw new Error("east block did not load");
+  const mine = eastApi.eastBusyDays(EAST_WEEKS, DAV_FAK);
+  const theirs = ef.deriveKhanBusyDays(EAST_WEEKS, DAV_FAK);
+  assert.deepStrictEqual([...mine.busy].sort(), [...theirs.busy].sort(), "busy dates");
+  assert.deepStrictEqual(mine.reasons, theirs.reasons, "reasons per date");
+  assert.ok(mine.busy.size >= 12, "the fixture exercises a real spread (" + mine.busy.size + " busy days)");
+  assert.deepStrictEqual(mine.reasons["2026-12-14"], ["night", "backup-week"], "an East backup week's shift is derived (and flagged) like the app does");
+  assert.deepStrictEqual(mine.reasons["2026-12-31"], undefined, "an override to FAK on a day another surgeon holds as a 24h holiday derives nothing (holiday precedence)");
+  const feedShaped = EAST_WEEKS.filter(Boolean).map((w) => ({ week_monday: w.weekMonday, data: w.data }));
+  assert.deepStrictEqual(eastApi.eastBusyDays(feedShaped, DAV_FAK).reasons, theirs.reasons, "east_feed rows ({ week_monday, data }) derive the same");
+  assert.strictEqual(eastApi.eastBusyDays(EAST_WEEKS, null).busy.size, 0, "no id -> nothing (the caller treats it as unresolved, never as free)");
+});
+check("Item D: eastFeedPerson is the app's eastVacationPerson predicate - enabled + a busy-day role + a code + not external; Fierce's derived-weeks feature and an outside surgeon are outside it", () => {
+  if (!eastApi) throw new Error("east block did not load");
+  const p = eastApi.eastFeedPerson;
+  assert.strictEqual(p({ id: "s1", code: "FAK" }, { enabled: true, eastBlocksPrimary: true, eastBlocksBackup: false }), true, "Khan");
+  assert.strictEqual(p({ id: "s5", code: "NF" }, { enabled: true }), false, "Fierce (derived weeks, no busy-day role)");
+  assert.strictEqual(p({ id: "s2", code: "MAB" }, undefined), false, "no East feature");
+  assert.strictEqual(p({ id: "x1", code: "LOC", type: "external" }, { enabled: true, eastBlocksPrimary: true }), false, "an outside surgeon");
+  assert.strictEqual(p({ id: "s1", code: "" }, { enabled: true, eastBlocksPrimary: true }), false, "no code");
+  assert.ok(/function eastVacationPerson\(s, ef\) \{\s*return !!\(s && ef && ef\.enabled && \(ef\.eastBlocksPrimary \|\| ef\.eastBlocksBackup\) && s\.code && s\.type !== "external"\);/.test(appSrc), "index-source.html's eastVacationPerson still reads the same way (the two predicates must not drift)");
+});
+// ICS fixture: two Silvis days for s1 (primary 10/5, backup 10/6 - CDT, 07:00 Central = 12:00Z) and one cached
+// Davenport week with two FAK days (Tue 10/13 night, Thu 10/15 a day-call override TO him). Synthetic 2030 ranges for the
+// away case (the same convention as the east_vacation_reviews probe).
+const SILVIS_ROWS = [
+  { day: "2026-10-05", primary_id: "s1", backup_id: "s2", external_cover: null, note: null },
+  { day: "2026-10-06", primary_id: "s3", backup_id: "s1", external_cover: null, note: null },
+];
+const ICS_ROSTER = { byId: { s1: { id: "s1", name: "Khan", code: "FAK" }, s2: { id: "s2", name: "Burchett", code: "MAB" }, s3: { id: "s3", name: "Acton", code: "BDA" } } };
+const ICS_WEEK = [{ weekMonday: "2026-10-12", data: { dayCall: "s2", nights: { mon: "s1", tue: "s6", wed: "s3", thu: "s4", wknd: "s5" }, off: "s7", dayCallOverrides: { "2026-10-15": "s6" } } }];
+let icsApi = null;
+check("Item D: calendar-sync carries a plain-JS '@icsCore' mirror block defining buildEvents, eastIcsEvents, generateICS, icsDate, esc and fold (the whole event / .ics shaping)", () => {
+  const b = blockOf(csSrc, "calendar-sync", "icsCore");
+  plainJs(b, "calendar-sync icsCore");
+  const api = new Function(b + "\nreturn { buildEvents, eastIcsEvents, generateICS, icsDate, esc, fold, addDays, UID_DOMAIN };")();
+  ["buildEvents", "eastIcsEvents", "generateICS", "icsDate", "esc", "fold", "addDays"].forEach((k) => assert.strictEqual(typeof api[k], "function", k + " is a function"));
+  assert.strictEqual(api.UID_DOMAIN, "silvis-call");
+  assert.strictEqual(api.icsDate(2026, 10, 5, 7, 0), "20261005T120000Z", "07:00 CDT -> 12:00Z (the DST-aware conversion is intact)");
+  assert.strictEqual(api.icsDate(2026, 12, 5, 7, 0), "20261205T130000Z", "07:00 CST -> 13:00Z");
+  icsApi = api;
+});
+const unfold = (ics) => ics.replace(/\r\n[ \t]/g, "");
+check("Item D ics: two Silvis days + two east_feed days -> four VEVENTs: the Silvis pair timed 07:00 Central with UIDs silvis-<day>-<role>@silvis-call, the Davenport pair ALL-DAY (DTSTART;VALUE=DATE the day, DTEND;VALUE=DATE the next day) titled 'Khan <en dash> Davenport night' / 'Khan <en dash> Davenport day call' with UIDs east-FAK-<day>-<reason>@silvis-call; a second build yields the same UIDs; a LOWER-precedence reason added later keeps the UID, a higher one (a holiday assigned onto the day) renames it", () => {
+  if (!icsApi || !eastApi) throw new Error("blocks did not load");
+  const build = (weeks) => {
+    const silvis = icsApi.buildEvents(SILVIS_ROWS, ICS_ROSTER, "s1");
+    const entries = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks, reviews: [], from: "2026-10-01", to: "2026-12-31" });
+    const east = icsApi.eastIcsEvents(entries, "FAK");
+    return { silvis, east, ics: icsApi.generateICS(silvis.concat(east), "Silvis + Davenport - Khan") };
+  };
+  const one = build(ICS_WEEK);
+  assert.strictEqual(one.silvis.length, 2, "two Silvis events for s1 (his primary day and his backup day)");
+  assert.strictEqual(one.east.length, 2, "two Davenport events");
+  const ics = unfold(one.ics);
+  assert.ok(/^BEGIN:VCALENDAR\r\n/.test(one.ics), "starts with BEGIN:VCALENDAR");
+  assert.strictEqual((ics.match(/BEGIN:VEVENT/g) || []).length, 4, "four VEVENTs");
+  assert.ok(ics.indexOf("UID:silvis-2026-10-05-primary@silvis-call\r\nDTSTAMP:") >= 0 && ics.indexOf("\r\nDTSTART:20261005T120000Z\r\nDTEND:20261006T120000Z\r\nSUMMARY:Silvis Primary Call\r\n") >= 0, "the Silvis primary day is a timed event, 07:00 to 07:00 Central");
+  assert.ok(ics.indexOf("UID:silvis-2026-10-06-backup@silvis-call") >= 0 && ics.indexOf("SUMMARY:Silvis Backup Call\r\n") >= 0, "the Silvis backup day");
+  assert.ok(ics.indexOf("UID:east-FAK-2026-10-13-night@silvis-call") >= 0, "the night's UID");
+  assert.ok(ics.indexOf("\r\nDTSTART;VALUE=DATE:20261013\r\nDTEND;VALUE=DATE:20261014\r\nSUMMARY:Khan \u2013 Davenport night\r\n") >= 0, "the night is an all-day event ending the next day, titled with an en dash");
+  assert.ok(ics.indexOf("UID:east-FAK-2026-10-15-override@silvis-call") >= 0 && ics.indexOf("\r\nDTSTART;VALUE=DATE:20261015\r\nDTEND;VALUE=DATE:20261016\r\nSUMMARY:Khan \u2013 Davenport day call\r\n") >= 0, "the override is 'Davenport day call'");
+  assert.ok(/DESCRIPTION:Davenport \(East\) call: Davenport night\\nSource: /.test(ics), "the description names the reason (newline escaped per RFC 5545)");
+  assert.ok(ics.indexOf("X-WR-CALNAME:Silvis + Davenport - Khan") >= 0, "the calendar name");
+  assert.ok(!/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(ics.replace(/@silvis-call/g, "")), "no e-mail address anywhere in the feed (UIDs are not addresses)");
+  const two = build(ICS_WEEK);
+  assert.deepStrictEqual(two.east.map((e) => e.uid), one.east.map((e) => e.uid), "stable East UIDs across builds");
+  assert.deepStrictEqual(two.silvis.map((e) => e.uid), one.silvis.map((e) => e.uid), "stable Silvis UIDs across builds");
+  const later = build([{ weekMonday: "2026-10-12", data: { ...ICS_WEEK[0].data, nights: { ...ICS_WEEK[0].data.nights, thu: "s6" } } }]);
+  assert.deepStrictEqual(later.east.map((e) => e.uid), one.east.map((e) => e.uid), "a Thursday night added later on the override day keeps the UID (override precedes night) - the event updates in place");
+  assert.ok(/Davenport day call, Davenport night/.test(later.east[1].desc), "the second reason lands in the description");
+  const higher = build([{ weekMonday: "2026-10-12", data: { ...ICS_WEEK[0].data, holidayCoverage: { "2026-10-15": { surgeonId: "s6" } } } }]);
+  assert.deepStrictEqual(higher.east.map((e) => e.uid), ["east-FAK-2026-10-13-night@silvis-call", "east-FAK-2026-10-15-holiday@silvis-call"], "a HIGHER-precedence reason added later (a holiday onto the override day) renames the UID - a subscription handles that as delete + add (documented in the block header)");
+  assert.strictEqual(higher.east[1].summary, "Khan " + String.fromCharCode(0x2013) + " Davenport holiday", "and the title follows the precedence");
+  const windowed = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks: ICS_WEEK, reviews: [], from: "2026-10-14", to: "2026-10-31" });
+  assert.deepStrictEqual(windowed.busy.map((e) => e.day), ["2026-10-15"], "the feed window clips the East days");
+  assert.strictEqual(eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: null, weeks: ICS_WEEK, reviews: [] }).busy.length, 0, "an unresolved id derives nothing (the handler answers 502 instead of a feed)");
+});
+check("Item D ics: an East vacation range reviewed as away -> one all-day event 'Khan <en dash> away (Davenport vacation)' over the whole range (DTEND the day after), UID east-FAK-away-<start>-<end>@silvis-call; a 'home' review, an unreviewed range, another person's review or a review whose range is no longer in the feed -> no event", () => {
+  if (!icsApi || !eastApi) throw new Error("blocks did not load");
+  const weeks = [{ weekMonday: "2030-05-06", data: { dayCall: "s2", nights: {}, vacations: [{ code: "FAK", start: "2030-05-13", end: "2030-05-15" }, { code: "FAK", start: "2030-05-20", end: "2030-05-22" }, { code: "FAK", start: "2030-06-03", end: "2030-06-04" }, { code: "MAB", start: "2030-05-13", end: "2030-05-15" }] } }];
+  const reviews = [
+    { person_id: "s1", start: "2030-05-13", end: "2030-05-15", decision: "away" },
+    { person_id: "s1", start: "2030-05-20", end: "2030-05-22", decision: "home" },
+    { person_id: "s2", start: "2030-05-13", end: "2030-05-15", decision: "away" },
+    { person_id: "s1", start: "2030-07-01", end: "2030-07-03", decision: "away" },   // no longer in the feed
+  ];
+  const entries = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks, reviews, from: "2030-05-01", to: "2030-12-31" });
+  assert.deepStrictEqual(entries.away.map((a) => [a.start, a.end, a.endExclusive, a.title]), [["2030-05-13", "2030-05-15", "2030-05-16", "Khan \u2013 away (Davenport vacation)"]], "exactly the away range");
+  const ev = icsApi.eastIcsEvents(entries, "FAK");
+  assert.strictEqual(ev.length, 1);
+  assert.strictEqual(ev[0].uid, "east-FAK-away-2030-05-13-2030-05-15@silvis-call");
+  const ics = unfold(icsApi.generateICS(ev, "t"));
+  assert.ok(ics.indexOf("\r\nDTSTART;VALUE=DATE:20300513\r\nDTEND;VALUE=DATE:20300516\r\nSUMMARY:Khan \u2013 away (Davenport vacation)\r\n") >= 0, "all-day over the whole range");
+  assert.deepStrictEqual(eastApi.eastVacationRanges(weeks, "fak"), [{ start: "2030-05-13", end: "2030-05-15" }, { start: "2030-05-20", end: "2030-05-22" }, { start: "2030-06-03", end: "2030-06-04" }], "the code is matched case-insensitively and the ranges merged like east-feed.js eastVacations");
+  assert.deepStrictEqual(eastApi.eastVacationRanges(weeks, "FAK"), ef.eastVacations(weeks.map((w) => ({ week_monday: w.weekMonday, data: w.data })), "FAK"), "mirror identity with east-feed.js eastVacations");
+  const outside = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks, reviews, from: "2030-05-16", to: "2030-12-31" });
+  assert.strictEqual(outside.away.length, 0, "a range that ends before the window is left out");
+});
+check("Item D digest: eastDigestLines collapses consecutive same-reason days into one line and speaks the events' words - 'Mon Oct 12 <en dash> Sat Oct 17: Davenport service week', 'Tue Oct 13: Davenport night', 'Wed Nov 25 <en dash> Sun Nov 29: away (Davenport vacation)'; nothing when there is nothing", () => {
+  if (!eastApi) throw new Error("east block did not load");
+  const weeks = [
+    { weekMonday: "2026-10-12", data: { dayCall: "s6", nights: { mon: "s1", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" } } },
+    { weekMonday: "2026-10-19", data: { dayCall: "s2", nights: { mon: "s1", tue: "s6", wed: "s3", thu: "s4", wknd: "s6" } } },
+    { weekMonday: "2026-11-23", data: { dayCall: "s2", nights: {}, vacations: [{ code: "FAK", start: "2026-11-25", end: "2026-11-29" }] } },
+  ];
+  const reviews = [{ person_id: "s1", start: "2026-11-25", end: "2026-11-29", decision: "away" }];
+  const e = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks, reviews, from: "2026-10-12", to: "2026-11-30" });
+  assert.deepStrictEqual(eastApi.eastDigestLines(e), [
+    "Mon Oct 12 \u2013 Sat Oct 17: Davenport service week",
+    "Tue Oct 20: Davenport night",
+    "Fri Oct 23: Davenport weekend",
+    "Sun Oct 25: Davenport weekend",
+    "Wed Nov 25 \u2013 Sun Nov 29: away (Davenport vacation)",
+  ]);
+  const quiet = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks, reviews, from: "2026-12-01", to: "2026-12-14" });
+  assert.deepStrictEqual(eastApi.eastDigestLines(quiet), [], "a fortnight with nothing -> no lines (the digest renders no section)");
+  assert.deepStrictEqual(eastApi.eastDigestLines({ busy: [], away: [] }), []);
+});
+check("Item D source pins - calendar-sync: east=1 is read beside surgeon; the East branch runs only for ONE resolved surgeon that passes eastFeedPerson(<entry>, surgeonRules[id].eastFeed) (else the feed is exactly today's); it reads east_feed + east_vacation_reviews (decision away, by the ROSTER id, service role required) + resolveEastId (east_forecast data->>code first, then the Davenport roster by code, never a literal id); an unresolved id is a thrown 502, not a feed; the unauthenticated 200 + BEGIN:VCALENDAR contract and the 404 / 405 stay", () => {
+  const h = csSrc.slice(csSrc.indexOf("Deno.serve(async (req) =>"));
+  assert.ok(/url\.searchParams\.get\("east"\)/.test(h), "the east param is read");
+  assert.ok(/eastWanted && who && onlyId && eastFeedPerson\(who, \(roster\.surgeonRules\[onlyId\] \|\| \{\}\)\.eastFeed\)/.test(h), "the branch is gated on one resolved surgeon + the predicate over surgeonRules[id].eastFeed");
+  assert.ok(/SUPABASE_SERVICE_ROLE_KEY/.test(h.slice(h.indexOf("eastWanted && who"))), "the service role is required for the reviews read");
+  assert.ok(/if [(]!Deno[.]env[.]get[(]"SUPABASE_SERVICE_ROLE_KEY"[)][)] [{][^}]*return json[(]500, [{] error: "east=1 needs the service role/.test(h), "a missing service role is a direct 500 (a misconfiguration, like the top-of-handler check), not a 502 through the catch");
+  const csResolve = csSrc.slice(csSrc.indexOf("async function resolveEastId("), csSrc.indexOf("// @icsCore-mirror-start"));
+  assert.ok(/fetch[(]`[$][{]EAST_PROJECT_URL[}][/]rest[/]v1[/]call_schedule_data[?]id=eq[.]main&select=data`, [{][^]*?signal: AbortSignal[.]timeout[(]8000[)]/.test(csResolve), "the cross-project Davenport roster GET carries an 8 s timeout (a hung Davenport is a 502, never a stalled feed)");
+  assert.ok(/east_feed\?select=week_monday,data&order=week_monday\.asc/.test(h), "east_feed read");
+  assert.ok(/east_vacation_reviews\?select=person_id,start,end,decision&person_id=eq\.\$\{encodeURIComponent\(onlyId\)\}&decision=eq\.away/.test(h), "reviews read by the roster id, away only");
+  assert.ok(/if \(!eastId\) throw new HttpError\(502,/.test(h), "an unresolved East id throws 502 (the catch answers JSON, never a feed)");
+  assert.ok(/events = events\.concat\(eastEvents\)/.test(h) && /title = `Silvis \+ Davenport - \$\{who\.name\}`/.test(h), "the East events are appended and the calendar renamed");
+  const r = csSrc.slice(csSrc.indexOf("async function resolveEastId("), csSrc.indexOf("// @icsCore-mirror-start"));
+  assert.ok(/east_forecast\?select=data&data->>code=eq\./.test(r), "resolveEastId reads the east_forecast row by data.code first");
+  assert.ok(/EAST_PROJECT_URL\}\/rest\/v1\/call_schedule_data\?id=eq\.main&select=data/.test(r) && /s\.name\.toUpperCase\(\) === want/.test(r), "then the Davenport roster blob by code");
+  assert.ok(!/["']s6["']/.test(csSrc.replace(/\/\/[^\n]*/g, "")), "no literal Davenport id in the function");
+  assert.ok(/return json\(404, \{ error: `surgeon "\$\{surgeonParam\}" not found/.test(h), "404 kept");
+  assert.ok(/json\(405, \{ error: "method not allowed - this feed is GET only" \}/.test(csSrc), "405 kept");
+  assert.ok(/"Content-Type": "text\/calendar; charset=utf-8"/.test(h) && /status: 200/.test(h), "200 text/calendar kept");
+  assert.ok(/answer EXACTLY like today's feed/.test(csSrc) && /502 JSON and NOT a feed/.test(csSrc), "the header documents the two choices (east=1 without a single East surgeon is ignored; an unresolvable id is a 502, not a feed)");
+  assert.ok(!/\bmethod: "(POST|PATCH|PUT|DELETE)"/.test(csSrc), "calendar-sync still performs no write");
+});
+check("Item D source pins - office-notifications: the digest composes buildEastSection(roster, today) on every digest path (dryRun included) and answers `east` { people, lines, html, errors }; the dryRun sample and the live mail carry the section + the combined-feed footer (calendar-sync?surgeon=<CODE>&east=1); the send trigger is still the diff; a failed East read is one 'could not be read' line, never a thrown digest; the East branch performs no write", () => {
+  const h = onSrc.slice(onSrc.indexOf("serve(async (req) =>"));
+  const dg = h.slice(h.indexOf('if (mode === "digest") {'), h.indexOf('if (mode === "publish") {'));
+  assert.ok(/const east = await buildEastSection\(roster, today\);/.test(dg), "composed once at the top of the digest branch");
+  assert.ok((dg.match(/east: eastOut/g) || []).length >= 5, "every digest response carries east (found " + (dg.match(/east: eastOut/g) || []).length + ")");
+  assert.ok(/renderDigestEmail\("\(contact name\)", changesHtml, east\.html, east\.footerHtml\)/.test(dg), "the dryRun sample renders the section + footer");
+  assert.ok(/sample_east_section: renderDigestEmail\("\(contact name\)", "", east\.html, east\.footerHtml\)\.html/.test(dg), "a quiet-week dryRun still returns the rendered section");
+  assert.ok(/renderDigestEmail\(c\.name, changesHtml, east\.html, east\.footerHtml\)/.test(dg), "the live mail carries the section + footer");
+  assert.ok(/if \(!diff\.anyChange\) \{/.test(dg) && dg.indexOf("if (!diff.anyChange) {") < dg.indexOf("const contacts = await loadContacts()"), "the send trigger is still the diff (no mail on a quiet week)");
+  const b = onSrc.slice(onSrc.indexOf("async function buildEastSection("), onSrc.indexOf("// Mail client"));
+  assert.ok(/at Davenport this week<\/p>/.test(b), "the section heading '<Name> at Davenport this week'");
+  assert.ok(/eastDigestLines\(eastEntries\(\{ lastName: p\.name, code, rosterId: String\(p\.id\), eastId, weeks, reviews/.test(b), "lines from the shared block (the events' words)");
+  assert.ok(/could not be read this week/.test(b) && /out\.errors\.push/.test(b), "a failed read renders one line and is listed in errors");
+  assert.ok(/if \(!lines\.length && !failed\) continue;/.test(b) && /if \(blocks\.length\) out\.html = /.test(b), "nothing when there is nothing");
+  assert.ok(/calendar-sync\?surgeon=\$\{encodeURIComponent\(String\(code\)\.toUpperCase\(\)\)\}&east=1/.test(onSrc), "the combined-feed URL");
+  assert.ok(/paste it into Outlook as an internet calendar; it updates itself/.test(b), "the footer wording");
+  assert.ok(/east_vacation_reviews\?select=person_id,start,end,decision&person_id=eq\.\$\{encodeURIComponent\(String\(p\.id\)\)\}&decision=eq\.away/.test(b), "reviews by the roster id, away only, service role");
+  // the resolver, start to its closing brace (the earlier end marker "// Item D: the" precedes the function, which made the slice empty)
+  const onResolveStart = onSrc.indexOf("async function resolveEastId(");
+  const onResolve = onSrc.slice(onResolveStart, onSrc.indexOf(String.fromCharCode(10) + "}" + String.fromCharCode(10), onResolveStart) + 3);
+  assert.ok(/AbortSignal/.test(onResolve) && /return hit && hit[.]id/.test(onResolve), "the resolver slice is the whole function, not empty");
+  assert.ok(!/\bmethod: "(POST|PATCH|PUT|DELETE)"/.test(b + onResolve), "the East branch performs no write");
+  assert.ok(/const EAST_DIGEST_DAYS = 14;/.test(onSrc), "a 14-day window");
+  assert.ok(/fetch[(]`[$][{]EAST_PROJECT_URL[}][/]rest[/]v1[/]call_schedule_data[?]id=eq[.]main&select=data`, [{][^]*?signal: AbortSignal[.]timeout[(]8000[)]/.test(onResolve), "the cron digest's Davenport roster GET carries an 8 s timeout (a hung Davenport degrades to the 'could not be read' line, never a stalled digest)");
+  assert.ok(/footerHtml: string = ""\): string \{/.test(onSrc) && /\$\{footerHtml\}/.test(onSrc), "shell() takes the footer");
+  assert.ok(!/["']s6["']/.test(onSrc.replace(/\/\/[^\n]*/g, "")), "no literal Davenport id in the function");
+});
+check("Item D: index-source.html Settings (scheduler) shows the combined link for every eastVacationPerson with a Copy button and the office note (en dash / em dash as JS escapes, ASCII source); edge-functions/README.md section 5 lists the east=1 checks and section 3 carries the pending Item D deploy rows (calendar-sync v2 -> v3, office-notifications v3 -> v4); docs/SILVIS-BUILD-GUIDE.md names the combined feed", () => {
+  const settings = appSrc.slice(appSrc.indexOf("Live calendar sync"), appSrc.indexOf("Requires the calendar-sync edge function"));
+  assert.ok(/surgeons\.filter\(s => eastVacationPerson\(s, surgeonRules && surgeonRules\[s\.id\] && surgeonRules\[s\.id\]\.eastFeed\)\)\.map\(/.test(settings), "one combined row per East person, by the app's own predicate");
+  assert.ok(/calendar-sync\?surgeon=\$\{s\.code\}&east=1/.test(settings), "the combined URL");
+  assert.ok(/data-testid="combined-sync-url"/.test(settings) && /data-testid="copy-combined-sync-url"/.test(settings) && /data-testid="combined-sync-note"/.test(settings), "the box, the Copy button and the note carry test ids");
+  assert.ok(settings.indexOf('{"for office staff at either site \\u2014 paste it into Outlook as an internet calendar; it updates itself"}') >= 0, "the note, with the em dash as a JS escape");
+  assert.ok(/\{"\\u2013"\}/.test(settings), "the en dash as a JS escape");
+  assert.ok(/minHeight:36/.test(settings), "the Copy button is a phone tap target");
+  assert.ok(!/[^\x00-\x7F]/.test(appSrc), "index-source.html stays ASCII");
+  assert.ok(settings.indexOf("{isScheduler && <>") >= 0 && settings.indexOf("{isScheduler && <>") < settings.indexOf("combined-sync-url"), "scheduler only");
+  const s5 = readme.slice(readme.indexOf("### calendar-sync"), readme.indexOf("### office-notifications"));
+  assert.ok(/surgeon=FAK&east=1/.test(s5) && /VALUE=DATE/.test(s5) && /Davenport/.test(s5), "section 5: the east=1 check (all-day Davenport events)");
+  assert.ok(/surgeon=NF&east=1|east=1"[^\n]*same as|exactly like/.test(s5), "section 5: east=1 outside the predicate answers like today");
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  assert.ok(/Item D/.test(s3) && /calendar-sync[^\n]*v2 -> v3/.test(s3) && /office-notifications[^\n]*v3 -> v4/.test(s3) && /pending/i.test(s3), "section 3: the pending Item D rows");
+  const s5on = readme.slice(readme.indexOf("### office-notifications"), readme.indexOf("### send-notification"));
+  assert.ok(/"east"/.test(s5on) || /east:/.test(s5on), "section 5: the digest dryRun answers `east`");
+  const guide = read("docs/SILVIS-BUILD-GUIDE.md");
+  assert.ok(/east=1/.test(guide) && /combined/.test(guide), "the build guide names the combined feed");
+});
+
 (async () => {
   for (const [name, fn] of ASYNC) {
     try { await fn(); passed++; console.log("ok   " + name); }

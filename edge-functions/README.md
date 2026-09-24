@@ -6,7 +6,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 
 | slug | source | caller | can it send mail? |
 |---|---|---|---|
-| `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET) | never |
+| `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET); since Item D (2026-09-24) also `?surgeon=<CODE>&east=1`, the combined Silvis + Davenport feed for office staff (all-day Davenport events from `east_feed` + `east_vacation_reviews`, read with the service role) | never |
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23) | yes - any non-empty send the gate lets through |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (planned, section 4 - not created yet) with body `{"mode":"open-shifts"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open |
@@ -178,6 +178,30 @@ After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 
+### Deploy record - Item D (Khan's combined calendar + the digest's Davenport line, 2026-09-24) - PENDING: the orchestrator deploys after the client push and fills the times
+
+Two functions change; `send-notification` and `daily-reminder` are untouched and are NOT redeployed. No schema, no RLS,
+no new table, no write from either function. Read `supabase functions list` first, back each function up with
+`download` before overwriting, byte-compare after. Order: the client build (the Settings link) may go first or last -
+neither side depends on the other (the link is the public feed URL with one flag; an older function ignores `east=1`).
+
+| when (UTC) | slug | version before -> after | what changed | proof (section 5, no mail can result) |
+|---|---|---|---|---|
+| pending | `calendar-sync` | v2 -> v3 (pending) | `?surgeon=<CODE>&east=1`: all-day Davenport events (`@eastCalendar` + `@icsCore` plain-JS blocks) for a surgeon whose East feature reads busy days; the Davenport id resolved by code (`east_forecast` row, else the Davenport roster GET, capped at 8 s); an unresolvable id -> 502 JSON, never a feed without the East events; a missing service role -> 500 JSON | unauthenticated GET `?surgeon=FAK&east=1` -> 200, `X-WR-CALNAME:Silvis + Davenport - Khan`, at least one `DTSTART;VALUE=DATE:` + `SUMMARY:Khan - Davenport ...` (the real line has an en dash, U+2013, between the name and the words; this README stays ASCII) beside the `Silvis Primary Call` events; the plain GET and `?surgeon=FAK` byte-shape as before (200, `BEGIN:VCALENDAR`); `?surgeon=NF&east=1` == `?surgeon=NF`; `?east=1` alone == the group feed; `?surgeon=ZZZ&east=1` -> 404 |
+| pending | `office-notifications` | v3 -> v4 (pending) | the digest's "<Name> at Davenport this week" section (next 14 days, the same words as the events) + the combined-feed link in the footer; `east` in every digest response; the send trigger unchanged | `{"mode":"digest","dryRun":true}` with the secret -> 200 with `"east":{"people":[{"name":"Khan","code":"FAK","lines":[...]}],"lines":N,"html":"...","errors":[]}` and, on a quiet week, `sample_east_section` (or `sample` when there are changes) containing `at Davenport this week` and `calendar-sync?surgeon=FAK&east=1`; no secret -> 401 as before |
+
+```powershell
+$wd = "<linked dir>"   # the workdir linked with: supabase link --project-ref bzhsroegtagqhutbnsrp
+supabase functions list --project-ref bzhsroegtagqhutbnsrp
+foreach ($slug in "calendar-sync","office-notifications") {
+  supabase functions download $slug --workdir $wd --project-ref bzhsroegtagqhutbnsrp     # backup of the live copy first
+}
+# copy the two repo files over $wd\supabase\functions\<slug>\index.ts, then:
+supabase functions deploy calendar-sync        --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
+supabase functions deploy office-notifications --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
+supabase functions list --project-ref bzhsroegtagqhutbnsrp                                  # versions +1 each, verify_jwt off
+```
+
 ### Deploy record - Prompt 16 B5 (security minors, review 2026-09-23 section 3) - filled 2026-09-24 03:23 UTC by the orchestrator
 
 Three functions change; `calendar-sync` is untouched and is NOT redeployed. Read `supabase functions list`
@@ -343,10 +367,28 @@ curl.exe -s -i "$URL/calendar-sync"              | Select-Object -First 12   # 2
 curl.exe -s   "$URL/calendar-sync?surgeon=FAK"   | Select-Object -First 20   # X-WR-CALNAME:Silvis Call - Khan, SUMMARY:Silvis Primary Call
 curl.exe -s -i "$URL/calendar-sync?surgeon=ZZZ"  | Select-Object -First 3    # 404 JSON error
 curl.exe -s -i -X POST "$URL/calendar-sync"      | Select-Object -First 3    # 405
+# Item D (2026-09-24): the combined Silvis + Davenport feed - the same feed plus ALL-DAY Davenport events
+curl.exe -s "$URL/calendar-sync?surgeon=FAK&east=1" | Select-String "X-WR-CALNAME|VALUE=DATE|SUMMARY:Khan" | Select-Object -First 12
+#   -> X-WR-CALNAME:Silvis + Davenport - Khan; DTSTART;VALUE=DATE:YYYYMMDD / DTEND;VALUE=DATE:<next day>;
+#      SUMMARY:Khan - Davenport night | service week | weekend | holiday | day call (a one-day day-call override),
+#      SUMMARY:Khan - away (Davenport vacation) for an East vacation range reviewed as away; UIDs east-FAK-<date>-<reason>@silvis-call
+#      (the dash in every SUMMARY line is an en dash, U+2013 - bytes E2 80 93; this README stays ASCII, so do not byte-compare it)
+curl.exe -s "$URL/calendar-sync?surgeon=NF&east=1"  | Select-Object -First 8    # exactly like ?surgeon=NF (her East feature derives weeks, no busy-day role: the flag is ignored)
+curl.exe -s "$URL/calendar-sync?east=1"             | Select-Object -First 8    # exactly like the group feed (east=1 needs a single surgeon)
+curl.exe -s -i "$URL/calendar-sync?surgeon=ZZZ&east=1" | Select-Object -First 3 # 404 as without the flag
 ```
 Expect one VEVENT per filled role per day inside today-60 .. today+400. Spot-check
 a date in CDT: `DTSTART:...T120000Z` for 07:00 Central; in CST `T130000Z`.
 If the first call returns 401 the dashboard toggle re-enabled Verify JWT - turn it off.
+`?surgeon=FAK&east=1` answering `502 {"error":"East id for FAK unresolved ..."}` means neither an `east_forecast` row
+(`data.code` + `data.fakId`) nor the Davenport roster blob could name the code - the feed is withheld on purpose
+(a subscription replaces its event set on refresh, so a 200 without the Davenport events would delete them from
+the office calendar); a 502 naming `east_feed` or `east_vacation_reviews` is that read failing; a 502 naming the Davenport
+roster read (HTTP status or an 8 s timeout) is the cross-project fallback failing; `500 {"error":"east=1 needs the service
+role ..."}` is the injected `SUPABASE_SERVICE_ROLE_KEY` missing (a misconfiguration - the plain feed still answers 200). All
+are function-log lines. Note: the combined feed is an unauthenticated URL; it makes the away / not-away decision of each East
+vacation range (`east_vacation_reviews`, an authenticated-read table) visible to anyone holding the link - dates and last
+name only, no reason, exactly what the office calendar needs; the plain `?surgeon=<CODE>` feed exposes nothing new.
 
 ### office-notifications
 ```powershell
@@ -360,6 +402,11 @@ curl.exe -s -X POST "$URL/office-notifications" -H "x-cron-secret: $SECRET" -H "
 # digest dry run: composes, sends nothing, writes nothing
 curl.exe -s -X POST "$URL/office-notifications" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"digest","dryRun":true}'
 #   -> {"dryRun":true,"would_send":<active contacts>,"sent":0,...} plus a rendered "sample" when there are changes
+#   Item D (2026-09-24): every digest answer also carries "east":{"people":[{"name":"Khan","code":"FAK","lines":["Mon Oct 5 - Sat Oct 10: Davenport service week",...]}],"lines":N,"html":"<div ...>","errors":[]}
+#   (the "<Name> at Davenport this week" section, next 14 days from east_feed + east_vacation_reviews; "errors" names a failed
+#   read - the mail then carries one "could not be read" line); on a quiet week the dryRun adds "sample_east_section" (the
+#   rendered mail body with the section + the combined-feed footer link calendar-sync?surgeon=FAK&east=1) so it can be proven
+#   without a diff. The send trigger is unchanged: a live digest still goes out only when the schedule / vacation diff is non-empty.
 # publish is refused on the cron path (must be a scheduler session)
 curl.exe -s -i -X POST "$URL/office-notifications" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"publish"}' | Select-Object -First 1   # 403
 # a WRONG secret -> the same 401 as no secret (Prompt 16 B5: constant-time compare - a near miss costs what a miss costs; nothing read, nothing sent)

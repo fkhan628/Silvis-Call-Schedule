@@ -2881,6 +2881,59 @@ try {
     ok("screenshot test/ui/out/mine.png");
   } catch (e) { fail("My schedule harness exception: " + errLine(e)); }
 
+  // ---- Item D (2026-09-24): Settings (scheduler) shows Khan's combined Silvis + Davenport feed link with Copy at 390 px, light + dark ----
+  // The link is calendar-sync?surgeon=FAK&east=1 (the same public feed URL with one flag), in a read-only box beside a
+  // Copy button that is a phone tap target (>= 36 px) and reads 'Copied' after writing the URL to the clipboard
+  // (navigator.clipboard.writeText mocked to record, delegated to the real one); the office note names Outlook.
+  try {
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await page.click('button[data-tab="settings"]');
+    await page.waitForSelector("[data-testid=combined-sync-url]", { timeout: 8000 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(300);
+    const probeCombined = () => page.evaluate(() => {
+      const inp = document.querySelector("[data-testid=combined-sync-url]");
+      const btn = document.querySelector("[data-testid=copy-combined-sync-url]");
+      const note = document.querySelector("[data-testid=combined-sync-note]");
+      const rb = btn ? btn.getBoundingClientRect() : null, ri = inp ? inp.getBoundingClientRect() : null;
+      return { url: inp ? inp.value : null, visible: !!(inp && inp.offsetParent && btn && btn.offsetParent && note && note.offsetParent), btnText: btn ? btn.textContent.trim() : null,
+        btnH: rb ? Math.round(rb.height) : 0, btnRight: rb ? Math.round(rb.right) : 0, inpRight: ri ? Math.round(ri.right) : 0, note: note ? note.textContent : "",
+        pageW: document.documentElement.scrollWidth, bodyBg: getComputedStyle(document.body).backgroundColor };
+    });
+    const EXPECT_COMBINED = /^https:\/\/bzhsroegtagqhutbnsrp\.supabase\.co\/functions\/v1\/calendar-sync\?surgeon=FAK&east=1$/;
+    const NOTE_TEXT = "for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself";
+    const c1 = await probeCombined();
+    if (!c1.visible) fail("Settings 390px: the combined feed box / Copy / note is not rendered for the scheduler: " + JSON.stringify(c1));
+    else if (!EXPECT_COMBINED.test(c1.url || "")) fail("Settings 390px: the combined feed URL is not calendar-sync?surgeon=FAK&east=1: " + c1.url);
+    else if (c1.pageW > 392 || c1.btnRight > 390 || c1.inpRight > 390) fail(`Settings 390px: the combined feed row overflows the phone (page ${c1.pageW}, box right ${c1.inpRight}, button right ${c1.btnRight})`);
+    else if (c1.btnH < 36) fail(`Settings 390px: the combined feed Copy button is shorter than 36 px (${c1.btnH})`);
+    else if (c1.note.indexOf(NOTE_TEXT) < 0) fail("Settings 390px: the office note is missing or reworded: " + c1.note.slice(0, 160));
+    else if (!noAddress(c1.note + c1.url)) fail("Settings 390px: the combined feed card carries an email address");
+    else {
+      await page.evaluate(() => { window.__cmbClip = []; const real = navigator.clipboard.writeText.bind(navigator.clipboard); navigator.clipboard.writeText = async (t) => { window.__cmbClip.push(t); try { await real(t); } catch (e) {} }; });
+      await page.click("[data-testid=copy-combined-sync-url]");
+      await page.waitForTimeout(250);
+      const c2 = await probeCombined();
+      const clip = await page.evaluate(() => window.__cmbClip || []);
+      if (c2.btnText !== "Copied" || clip.length !== 1 || clip[0] !== c1.url) fail(`Settings 390px: Copy did not write the combined URL (button '${c2.btnText}', clipboard ${JSON.stringify(clip)})`);
+      else ok(`Settings 390px (scheduler, light): Khan's combined Silvis + Davenport feed link ${c1.url.replace(/^https:\/\/[^/]+/, "")} in a read-only box, Copy ${c1.btnH}px -> 'Copied' with the URL on the clipboard, the office note present, no overflow (page ${c1.pageW})`);
+      // (no toast to clear: copyText toasts only when the clipboard is blocked)
+      await page.screenshot({ path: path.join(OUT, "settings-combined-390.png"), fullPage: false });
+      // dark: the same card stays rendered and the URL unchanged on the dark body
+      await page.setViewportSize({ width: 1180, height: 900 });
+      await page.click("button:has-text('Dark')");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(300);
+      const c3 = await probeCombined();
+      if (!c3.visible || c3.url !== c1.url || !/rgb\(11, 26, 51\)/.test(c3.bodyBg) || c3.pageW > 392) fail("Settings 390px (dark): the combined feed card is not rendered as in light mode / the body is not dark navy: " + JSON.stringify({ visible: c3.visible, url: c3.url, bodyBg: c3.bodyBg, pageW: c3.pageW }));
+      else ok(`Settings 390px (scheduler, dark): the combined feed link + Copy render on the dark body ${c3.bodyBg}, no overflow (page ${c3.pageW})`);
+      await page.screenshot({ path: path.join(OUT, "settings-combined-390-dark.png"), fullPage: false });
+      await page.setViewportSize({ width: 1180, height: 900 });
+      await page.click("button:has-text('Light')");
+    }
+  } catch (e) { fail("Settings combined feed link (Item D): " + errLine(e)); }
+  await page.setViewportSize({ width: 1180, height: 900 });
+
   // ---- Prompt 14 part 3a: the offer painter (My schedule -> Paint my offers; nav action; both themes) ----
   // 390 px, light: the current month greys every past row ('past', disabled, >= 52 px; screenshot with a reason);
   // the first month ahead with six paintable rows: arm Primary (gradient, white text; screenshot), tap a day, tap

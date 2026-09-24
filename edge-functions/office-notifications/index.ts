@@ -33,6 +33,21 @@
 //     WITHOUT sending and WITHOUT touching the baseline. dryRun must be a
 //     boolean and is only valid with mode=digest - anything else is a 400,
 //     never a silent live run.
+//     Item D (2026-09-24): every digest (live and dryRun) also composes a short
+//     "<Name> at Davenport this week" section - the next EAST_DIGEST_DAYS days
+//     of Davenport call for every roster surgeon whose East feature reads busy
+//     days (today Khan), from the Silvis east_feed cache + east_vacation_reviews
+//     (the same words as the combined calendar's events: "Davenport service
+//     week" / "night" / "weekend" / "holiday" / "day call", "away (Davenport
+//     vacation)"); nothing when there is nothing. The footer carries the
+//     combined-feed link (calendar-sync?surgeon=<CODE>&east=1). The response
+//     (dryRun included, with or without schedule changes) carries `east`:
+//     { people: [{ name, code, lines }], lines: N, html, errors: [] } so the
+//     section can be proven live without a send. The send trigger is
+//     UNCHANGED: a digest still goes out only when the schedule / vacation diff
+//     is non-empty; the East section rides along. A failed East read renders
+//     one "could not be read" line and is listed in east.errors - never a
+//     silent "no Davenport call".
 //
 //   { mode: "rebaseline" }
 //     Rewrites the baseline from the current sources and sends NOTHING. Safe
@@ -84,6 +99,15 @@ const STATE_ID = "digest_snapshot";
 const WINDOW_DAYS = 400;          // digest compares today .. today + WINDOW_DAYS (Central)
 const MAX_RENDERED_DAYS = 300;    // change-list cap per email; the rest is summarised
 const MAX_CLIENT_CHANGES = 2000;  // publish-mode change list cap
+const EAST_DIGEST_DAYS = 14;      // Item D: the "at Davenport this week" section covers today .. today + 13 (Central)
+
+// The Davenport (DSG) project, read-only, for ONE read: its roster blob, to
+// resolve a roster CODE to a Davenport id when no east_forecast row of this
+// project carries it (Item D; the same fallback as calendar-sync). The anon
+// key is PUBLIC BY DESIGN (it ships in the Davenport PWA and in this repo's
+// east-feed.js); GET only, never a write.
+const EAST_PROJECT_URL = "https://xqongyahdnkozqunpwmu.supabase.co";
+const EAST_PROJECT_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhxb25neWFoZG5rb3pxdW5wd211Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU3Nzg2NDksImV4cCI6MjA5MTM1NDY0OX0.a2p_twcuDAfI_ju-oGzut_NCPNzKjBEbkhVsMGXYyww";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -166,8 +190,10 @@ function fmtDateRange(start: string, end: string): string {
   return `${MONTHS[sm - 1]} ${sd} - ${MONTHS[em - 1]} ${ed}`;
 }
 
-interface RosterEntry { id: string; name: string; code: string }
-interface Roster { ids: Set<string>; nameById: Record<string, string> }
+interface RosterEntry { id: string; name: string; code: string; type?: string }
+// eastPeople (Item D): the roster entries whose East feature reads busy days
+// (eastFeedPerson over data.surgeonRules) - names, ids and codes only.
+interface Roster { ids: Set<string>; nameById: Record<string, string>; eastPeople: RosterEntry[] }
 
 async function loadRoster(): Promise<Roster> {
   const rows = await rest("call_schedule_data?select=data&id=eq.main");
@@ -176,7 +202,9 @@ async function loadRoster(): Promise<Roster> {
   const list: RosterEntry[] = Array.isArray(data?.roster) ? data.roster : [];
   const nameById: Record<string, string> = {};
   for (const r of list) if (r?.id) nameById[String(r.id)] = r.name || String(r.id);
-  return { ids: new Set(Object.keys(nameById)), nameById };
+  const surgeonRules = (data?.surgeonRules && typeof data.surgeonRules === "object") ? data.surgeonRules : {};
+  const eastPeople = list.filter((r) => r?.id && eastFeedPerson(r, surgeonRules[String(r.id)] && surgeonRules[String(r.id)].eastFeed));
+  return { ids: new Set(Object.keys(nameById)), nameById, eastPeople };
 }
 
 function escHtml(s: unknown): string {
@@ -228,6 +256,293 @@ async function cronSecretMatches(given, expected) {
   return bytesEqualConstantTime(g, e);
 }
 // @cronSecret-mirror-end
+
+// ---------------------------------------------------------------------------
+// East (Davenport) calendar derivation - Item D, 2026-09-24. Plain JavaScript
+// between the markers: test/edge-functions.test.js extracts this block from
+// calendar-sync AND office-notifications, checks the two copies are
+// byte-identical, evaluates it with new Function and pins eastBusyDays against
+// east-feed.js deriveKhanBusyDays over the same fixture weeks (the app's own
+// derivation; guide section 7). Inputs are the Silvis caches only: east_feed
+// rows ({ week_monday | weekMonday, data }: raw Davenport schedule_weeks
+// payloads, ids are DAVENPORT ids) and east_vacation_reviews rows. Dates only,
+// names only - no contact data reaches an event or a digest line.
+// Wording (the event titles and the digest lines share it):
+//   service-week -> "Davenport service week"   night -> "Davenport night"
+//   weekend      -> "Davenport weekend"        holiday -> "Davenport holiday"
+//   override     -> "Davenport day call": a dayCallOverrides entry hands the
+//                   day-call (Svc) slot to him for ONE day. The app has no
+//                   Davenport-side legend term for it (its "East call
+//                   (override)" line is the Silvis east_overrides busy:true
+//                   flag - a different thing), so the event names the slot
+//                   the override reassigns.
+//   away         -> "away (Davenport vacation)" for an East vacation range the
+//                   scheduler / the person reviewed as away.
+// One all-day event per busy day: when a day carries several reasons the first
+// in EAST_REASON_ORDER names it and its UID (a LOWER-precedence reason added
+// later never moves the event; a higher one - e.g. a holiday assigned onto a
+// service-week day - renames the UID, which a subscription handles as delete +
+// add); the others go in the description. A shift inside an East backup
+// week (isBackup) is still a Davenport shift and is shown - the calendar says
+// where he is, so eastFeed.eastBackupCountsAsBusy (a Silvis eligibility
+// switch) is not consulted here.
+// ---------------------------------------------------------------------------
+// @eastCalendar-mirror-start
+const EAST_REASON_ORDER = ["holiday", "override", "service-week", "night", "weekend"];
+const EAST_REASON_LABEL = {
+  "holiday": "Davenport holiday",
+  "override": "Davenport day call",
+  "service-week": "Davenport service week",
+  "night": "Davenport night",
+  "weekend": "Davenport weekend",
+};
+const EAST_AWAY_LABEL = "away (Davenport vacation)";
+const EAST_DASH = "\u2013";
+function eastPad2(n) { return (n < 10 ? "0" : "") + n; }
+function eastIsDateStr(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+function eastAddDays(s, n) {
+  const p = String(s).split("-").map(Number);
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + n));
+  return d.getUTCFullYear() + "-" + eastPad2(d.getUTCMonth() + 1) + "-" + eastPad2(d.getUTCDate());
+}
+function eastDayOffsets(mondayStr) { const out = []; for (let i = 0; i < 7; i++) out.push(eastAddDays(mondayStr, i)); return out; }
+function eastIsForecastRow(w) { return !!(w && w.data && w.data.isForecast === true); }
+function eastMondayOf(w) { return w ? (w.weekMonday || w.week_monday) : null; }
+// "2026-11-02" -> "Mon Nov 2" (UTC arithmetic on a date string; no zone involved)
+function eastFmtDay(ymd) {
+  if (!eastIsDateStr(ymd)) return String(ymd);
+  const p = ymd.split("-").map(Number);
+  const dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dt.getUTCDay()] + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][p[1] - 1] + " " + p[2];
+}
+// The app's predicate for "a surgeon with an East code" (index-source.html
+// eastVacationPerson): the East feature is on and reads busy days for at least
+// one role, the roster entry has a code and is not an outside surgeon. Fierce's
+// feature (derived weeks, no busy-day role) is outside it on purpose.
+function eastFeedPerson(s, ef) {
+  return !!(s && ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code && s.type !== "external");
+}
+// Mirror of east-feed.js deriveKhanBusyDays(weeks, eastId) with its default
+// options: -> { busy: Set<date>, reasons: { date: [reason, ...] } }.
+// Rules: dayCall === eastId -> Mon..Sat 'service-week', honouring dayCallOverrides
+// (an override TO him -> 'override'; to someone else -> no service-week reason
+// on that date); nights.mon..thu -> 'night'; nights.wknd -> Fri + Sun 'weekend'
+// (Saturday day is the service week's); holidayCoverage[d].surgeonId === eastId
+// -> 'holiday'. A holiday 24h held by SOMEONE ELSE clears every other reason on
+// that date. 'backup-week' is appended to every busy day of an isBackup week.
+// Forecast rows (data.isForecast) and malformed rows derive nothing.
+function eastBusyDays(weeks, eastId) {
+  const busy = new Set();
+  const reasons = {};
+  const add = (date, why) => { (reasons[date] = reasons[date] || []).push(why); busy.add(date); };
+  if (!eastId) return { busy, reasons };
+  (weeks || []).forEach((w) => {
+    const monday = eastMondayOf(w);
+    if (!w || !eastIsDateStr(monday) || eastIsForecastRow(w)) return;
+    const d = w.data || {};
+    const days = eastDayOffsets(monday); // 0=Mon .. 6=Sun
+    const nights = d.nights || {};
+    const ov = d.dayCallOverrides || {};
+    const hc = d.holidayCoverage || {};
+    const heldByOther = (date) => { const c = hc[date]; return !!(c && c.surgeonId && c.surgeonId !== eastId); };
+    const weekBusy = {};
+    const push = (date, why) => {
+      if (why !== "holiday" && heldByOther(date)) return;
+      (weekBusy[date] = weekBusy[date] || []).push(why);
+    };
+    for (let i = 0; i <= 5; i++) {
+      const ds = days[i];
+      const overridden = Object.prototype.hasOwnProperty.call(ov, ds) && ov[ds] != null && ov[ds] !== "";
+      if (overridden) {
+        if (ov[ds] === eastId) push(ds, "override");
+      } else if (d.dayCall === eastId) {
+        push(ds, "service-week");
+      }
+    }
+    [["mon", 0], ["tue", 1], ["wed", 2], ["thu", 3]].forEach((pair) => { if (nights[pair[0]] === eastId) push(days[pair[1]], "night"); });
+    if (nights.wknd === eastId) { push(days[4], "weekend"); push(days[6], "weekend"); }
+    Object.keys(hc).forEach((ds) => {
+      if (hc[ds] && hc[ds].surgeonId === eastId && days.indexOf(ds) >= 0) push(ds, "holiday");
+    });
+    const isBackupWeek = d.isBackup === true;
+    Object.keys(weekBusy).forEach((ds) => {
+      if (isBackupWeek) weekBusy[ds].push("backup-week");
+      weekBusy[ds].forEach((r) => add(ds, r));
+    });
+  });
+  return { busy, reasons };
+}
+// Mirror of east-feed.js eastMergeRanges: sorted, overlapping AND adjacent
+// ranges merged, malformed / inverted ones dropped.
+function eastMergeRanges(ranges) {
+  const rs = (ranges || []).filter((r) => r && eastIsDateStr(r.start) && eastIsDateStr(r.end) && r.start <= r.end)
+    .map((r) => ({ start: r.start, end: r.end }))
+    .sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : a.end < b.end ? -1 : a.end > b.end ? 1 : 0);
+  const out = [];
+  rs.forEach((r) => {
+    const last = out[out.length - 1];
+    if (last && r.start <= eastAddDays(last.end, 1)) { if (r.end > last.end) last.end = r.end; }
+    else out.push({ start: r.start, end: r.end });
+  });
+  return out;
+}
+// Mirror of east-feed.js eastVacations(rows, code): the person's Davenport
+// vacation ranges from the east_feed payloads (data.vacations: [{ code, start,
+// end }]), merged across every cached week. Forecast rows contribute nothing.
+function eastVacationRanges(rows, code) {
+  const want = String(code || "").toUpperCase();
+  if (!want) return [];
+  const all = [];
+  (rows || []).forEach((r) => {
+    if (!r || !r.data || eastIsForecastRow(r) || !Array.isArray(r.data.vacations)) return;
+    r.data.vacations.forEach((v) => { if (v && String(v.code || "").toUpperCase() === want) all.push({ start: v.start, end: v.end }); });
+  });
+  return eastMergeRanges(all);
+}
+// The ranges reviewed as away: an east_vacation_reviews row of this roster id
+// with decision 'away' whose start and end equal a merged feed range (the
+// review key; rules.js matches start and end exactly - a review of a range
+// Davenport has since changed names nothing).
+function eastAwayRanges(ranges, reviews, rosterId) {
+  const out = [];
+  (ranges || []).forEach((r) => {
+    const hit = (reviews || []).some((v) => v && String(v.person_id) === String(rosterId) && v.decision === "away"
+      && String(v.start || "").slice(0, 10) === r.start && String(v.end || "").slice(0, 10) === r.end);
+    if (hit) out.push({ start: r.start, end: r.end });
+  });
+  return out;
+}
+// eastEntries({ lastName, code, rosterId, eastId, weeks, reviews, from, to })
+//   -> { busy: [{ kind:'busy', day, end, reason, reasons, backupWeek, title, detail }],
+//        away: [{ kind:'away', start, end, endExclusive, title }] }
+// busy: one entry per Davenport busy day inside [from, to] (inclusive; a
+// missing bound is open); end = the next day (an all-day DTEND is exclusive).
+// away: every away range that overlaps the window, whole (not clipped).
+function eastEntries(o) {
+  const name = String((o && o.lastName) || "").trim() || String((o && o.code) || "");
+  const from = o && eastIsDateStr(o.from) ? o.from : null;
+  const to = o && eastIsDateStr(o.to) ? o.to : null;
+  const inWindow = (d) => (!from || d >= from) && (!to || d <= to);
+  const derived = eastBusyDays(o && o.weeks, o && o.eastId);
+  const busy = Object.keys(derived.reasons).sort().filter(inWindow).map((day) => {
+    const list = derived.reasons[day];
+    const ordered = EAST_REASON_ORDER.filter((r) => list.indexOf(r) >= 0);
+    const reason = ordered[0] || list[0];
+    const backupWeek = list.indexOf("backup-week") >= 0;
+    const label = EAST_REASON_LABEL[reason] || "Davenport call";
+    return {
+      kind: "busy", day, end: eastAddDays(day, 1), reason, reasons: ordered, backupWeek,
+      title: name + " " + EAST_DASH + " " + label,
+      detail: ordered.map((r) => EAST_REASON_LABEL[r] || r).join(", ") + (backupWeek ? " (East backup week)" : ""),
+    };
+  });
+  const ranges = eastVacationRanges(o && o.weeks, o && o.code);
+  const away = eastAwayRanges(ranges, o && o.reviews, o && o.rosterId)
+    .filter((r) => (!to || r.start <= to) && (!from || r.end >= from))
+    .map((r) => ({ kind: "away", start: r.start, end: r.end, endExclusive: eastAddDays(r.end, 1), title: name + " " + EAST_DASH + " " + EAST_AWAY_LABEL }));
+  return { busy, away };
+}
+// eastDigestLines(entries) -> ["Mon Oct 12 - Sat Oct 17: Davenport service week", ...]
+// Consecutive busy days with the same reason collapse into one line; away
+// ranges follow in date order. The words are the event titles' (after the
+// name). Empty when there is nothing - the digest then renders no section.
+function eastDigestLines(entries) {
+  const runs = [];
+  ((entries && entries.busy) || []).forEach((e) => {
+    const last = runs[runs.length - 1];
+    if (last && last.reason === e.reason && eastAddDays(last.end, 1) === e.day) last.end = e.day;
+    else runs.push({ start: e.day, end: e.day, reason: e.reason, label: EAST_REASON_LABEL[e.reason] || "Davenport call" });
+  });
+  const items = runs.map((r) => ({ start: r.start, text: (r.start === r.end ? eastFmtDay(r.start) : eastFmtDay(r.start) + " " + EAST_DASH + " " + eastFmtDay(r.end)) + ": " + r.label }))
+    .concat(((entries && entries.away) || []).map((a) => ({ start: a.start, text: (a.start === a.end ? eastFmtDay(a.start) : eastFmtDay(a.start) + " " + EAST_DASH + " " + eastFmtDay(a.end)) + ": " + EAST_AWAY_LABEL })));
+  return items.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0).map((i) => i.text);
+}
+// @eastCalendar-mirror-end
+
+// Resolve a roster CODE to the surgeon's DAVENPORT id (FAK is s6 there; never
+// hard-code it) - the same two-step read as calendar-sync: an east_forecast
+// row of this project (data.code + data.fakId), else the Davenport roster
+// blob, read-only with its public anon key. null when neither knows the code;
+// a transport / HTTP failure throws.
+async function resolveEastId(code: string): Promise<string | null> {
+  const want = String(code || "").toUpperCase();
+  if (!want) return null;
+  const fc = await rest(`east_forecast?select=data&data->>code=eq.${encodeURIComponent(want)}&order=week_monday.desc&limit=1`);
+  const d = Array.isArray(fc) && fc[0] ? fc[0].data : null;
+  if (d && d.isForecast === true && d.fakId) return String(d.fakId);
+  // 8 s cap: a hung Davenport endpoint must degrade (a thrown error, handled by
+  // the caller), never stall the run until the function's wall clock expires.
+  const res = await fetch(`${EAST_PROJECT_URL}/rest/v1/call_schedule_data?id=eq.main&select=data`, {
+    headers: { apikey: EAST_PROJECT_ANON_KEY, Authorization: `Bearer ${EAST_PROJECT_ANON_KEY}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new HttpError(res.status, `Davenport roster read failed: HTTP ${res.status} (East id for ${want} unresolved)`);
+  const rows = await res.json().catch(() => null);
+  let blob = Array.isArray(rows) && rows[0] ? rows[0].data : null;
+  if (typeof blob === "string") { try { blob = JSON.parse(blob); } catch (_e) { blob = null; } }
+  const hit = (blob && Array.isArray(blob.surgeons) ? blob.surgeons : []).find((s: any) => s && typeof s.name === "string" && s.name.toUpperCase() === want);
+  return hit && hit.id ? String(hit.id) : null;
+}
+
+// Item D: the "<Name> at Davenport this week" section for every East person -
+// today .. today + EAST_DIGEST_DAYS - 1 from east_feed + east_vacation_reviews
+// (service role: the reviews are authenticated-read). Per person: the lines
+// (eastDigestLines - the events' words), or ONE "could not be read" line when
+// the id / the caches could not be read (error text in `errors`, never in the
+// mail). html is "" when nobody has anything (no section at all).
+interface EastSection { html: string; lines: number; people: { name: string; code: string; lines: string[] }[]; errors: string[]; footerHtml: string }
+
+function combinedFeedUrl(code: string): string {
+  return `${SUPABASE_URL}/functions/v1/calendar-sync?surgeon=${encodeURIComponent(String(code).toUpperCase())}&east=1`;
+}
+
+async function buildEastSection(roster: Roster, today: string): Promise<EastSection> {
+  const out: EastSection = { html: "", lines: 0, people: [], errors: [], footerHtml: "" };
+  if (!roster.eastPeople.length) return out;
+  const from = today, to = addDays(today, EAST_DIGEST_DAYS - 1);
+  let weeks: any[] | null = null;
+  try {
+    const feedRows = await rest("east_feed?select=week_monday,data&order=week_monday.asc");
+    weeks = (Array.isArray(feedRows) ? feedRows : []).map((r: any) => ({ weekMonday: String(r.week_monday).slice(0, 10), data: typeof r.data === "string" ? JSON.parse(r.data) : (r.data || {}) }));
+  } catch (e) {
+    out.errors.push(`east_feed: ${(e as Error).message}`);
+  }
+  const blocks: string[] = [];
+  for (const p of roster.eastPeople) {
+    const name = escHtml(p.name || p.id);
+    const code = String(p.code).toUpperCase();
+    let lines: string[] = [];
+    let failed = false;
+    if (weeks) {
+      try {
+        const [eastId, reviews] = await Promise.all([
+          resolveEastId(code),
+          rest(`east_vacation_reviews?select=person_id,start,end,decision&person_id=eq.${encodeURIComponent(String(p.id))}&decision=eq.away`),
+        ]);
+        if (!eastId) throw new Error(`East id for ${code} unresolved (no east_forecast row names it and the Davenport roster has no ${code})`);
+        lines = eastDigestLines(eastEntries({ lastName: p.name, code, rosterId: String(p.id), eastId, weeks, reviews: Array.isArray(reviews) ? reviews : [], from, to }));
+      } catch (e) {
+        failed = true;
+        out.errors.push(`${code}: ${(e as Error).message}`);
+      }
+    } else failed = true;
+    out.people.push({ name: p.name, code, lines });
+    out.lines += lines.length;
+    if (!lines.length && !failed) continue;
+    let html = `<p style="margin:0 0 6px;font-size:13px;font-weight:600;color:#2c3e50;">${name} at Davenport this week</p>`;
+    html += `<ul style="margin:0 0 4px;padding-left:18px;font-size:13px;color:#3a4a58;line-height:1.6;">`;
+    if (failed) html += `<li style="color:#a05010;">${name}'s Davenport days could not be read this week - check the East feed in the app</li>`;
+    for (const l of lines) html += `<li>${escHtml(l)}</li>`;
+    html += `</ul><p style="margin:0 0 8px;font-size:11px;color:#7a8a98;">Next ${EAST_DIGEST_DAYS} days, from the Davenport schedule as cached in the app.</p>`;
+    blocks.push(html);
+  }
+  if (blocks.length) out.html = `<div style="margin-top:14px;padding:12px 14px;background:#f4f6f8;border-radius:8px;border-left:3px solid #7a5a90;">${blocks.join("")}</div>`;
+  out.footerHtml = roster.eastPeople.map((p) => {
+    const u = combinedFeedUrl(p.code);
+    return `<p style="margin:8px 0 0;font-size:12px;color:#7a8a98;line-height:1.5;">${escHtml(p.name || p.id)}'s combined calendar (Silvis + Davenport): <a href="${u}" style="color:#1a6fa8;word-break:break-all;">${u}</a> - paste it into Outlook as an internet calendar; it updates itself.</p>`;
+  }).join("");
+  return out;
+}
 
 // Mail client. Logs counts/keys only - never the address.
 async function sendEmail(to: string, subject: string, html: string, logKey: string): Promise<{ ok: boolean; status: number }> {
@@ -527,7 +842,8 @@ function renderClientChangesHtml(list: any[], roster: Roster): { html: string; r
   return { html: wrapChanges(html), rendered, dropped };
 }
 
-function shell(headline: string, sub: string, name: string, intro: string, changesHtml: string, cta: string): string {
+// footerHtml (Item D): extra lines under the "copy this link" paragraph - the digest's combined-feed link(s).
+function shell(headline: string, sub: string, name: string, intro: string, changesHtml: string, cta: string, footerHtml: string = ""): string {
   return `
     <div style="font-family:'Outfit',Arial,sans-serif;max-width:560px;margin:0 auto;padding:20px;">
       <div style="background:linear-gradient(135deg,#1a6fa8,#2488c8);color:#fff;padding:14px 20px;border-radius:10px 10px 0 0;">
@@ -546,6 +862,7 @@ function shell(headline: string, sub: string, name: string, intro: string, chang
         <p style="margin:10px 0 0;font-size:12px;color:#7a8a98;line-height:1.5;">
           Or copy this link: <a href="${PUBLIC_URL}" style="color:#1a6fa8;word-break:break-all;">${PUBLIC_URL}</a>
         </p>
+        ${footerHtml}
         <div style="margin-top:20px;padding-top:14px;border-top:1px solid #e0e4ea;font-size:11px;color:#8a94a0;">
           You are receiving this because you are on the Silvis Surgical Care office distribution list. Reply to this email to be removed.
         </div>
@@ -553,10 +870,12 @@ function shell(headline: string, sub: string, name: string, intro: string, chang
     </div>`;
 }
 
-function renderDigestEmail(name: string, changesHtml: string): { subject: string; html: string } {
+// eastHtml / footerHtml (Item D): the "<Name> at Davenport this week" section under the change list, and the
+// combined-feed link(s) in the footer - both "" when the roster has no East person.
+function renderDigestEmail(name: string, changesHtml: string, eastHtml: string = "", footerHtml: string = ""): { subject: string; html: string } {
   return {
     subject: `${APP_NAME} - Weekly Update`,
-    html: shell(APP_NAME, "Weekly update", name, "The Silvis trauma / acute-care call schedule was updated this week. The changes since the last notice:", changesHtml, "View Current Schedule"),
+    html: shell(APP_NAME, "Weekly update", name, "The Silvis trauma / acute-care call schedule was updated this week. The changes since the last notice:", changesHtml + eastHtml, "View Current Schedule", footerHtml),
   };
 }
 
@@ -673,13 +992,19 @@ serve(async (req) => {
     // --- DIGEST ---
     if (mode === "digest") {
       const state = await readBaseline();
+      // Item D: the Davenport section is composed on EVERY digest path (dryRun
+      // included, with or without a diff) so the response can prove it; a
+      // failed read is one line in the mail + east.errors, never a thrown digest.
+      const east = await buildEastSection(roster, today);
+      const eastOut = { people: east.people, lines: east.lines, html: east.html, errors: east.errors };
+      console.log(`[digest] east: people=${east.people.length} lines=${east.lines} errors=${east.errors.length}`);
       let baseline = state?.snapshot;
       const usable = baseline && typeof baseline === "object" && baseline.days && typeof baseline.days === "object";
       if (!usable) {
         console.warn("[digest] no usable baseline - first run: rebaseline without mail");
-        if (dryRun) return json(200, { mode, dryRun: true, message: "no usable baseline; a live run would rebaseline without mail", would_send: 0, sent: 0, ...summary });
+        if (dryRun) return json(200, { mode, dryRun: true, message: "no usable baseline; a live run would rebaseline without mail", would_send: 0, sent: 0, east: eastOut, ...summary });
         const ok = await writeState({ snapshot: current, last_digest_at: new Date().toISOString() });
-        return json(ok ? 200 : 502, { mode, first_run: true, rebaselined: true, snapshot_updated: ok, sent: 0, ...summary });
+        return json(ok ? 200 : 502, { mode, first_run: true, rebaselined: true, snapshot_updated: ok, sent: 0, east: eastOut, ...summary });
       }
       const vacValid = baseline.vacSource === "time_off";
       if (!vacValid) {
@@ -692,11 +1017,13 @@ serve(async (req) => {
       console.log(`[digest] day_changes=${diff.dayChanges.length} vacation_changes=${diff.vacationChanges.length} affected=${diff.affectedIds.join(",") || "(none)"} dropped=${diff.excluded.day_changes_dropped} unresolvable=${diff.excluded.unresolvable_ids.length}`);
 
       if (!diff.anyChange) {
-        if (dryRun) return json(200, { mode, dryRun: true, message: "No changes since last digest", would_send: 0, sent: 0, excluded: diff.excluded, ...summary });
+        // The send trigger is the diff alone (unchanged by Item D): the sample below shows what the East section
+        // WOULD read so it can be proven on a quiet week too.
+        if (dryRun) return json(200, { mode, dryRun: true, message: "No changes since last digest", would_send: 0, sent: 0, east: eastOut, sample_east_section: renderDigestEmail("(contact name)", "", east.html, east.footerHtml).html, excluded: diff.excluded, ...summary });
         // Quiet week: still write the current snapshot (rolls the window
         // forward and heals an unstamped baseline).
         const ok = await writeState({ snapshot: current, last_digest_at: new Date().toISOString() });
-        return json(200, { mode, message: "No changes since last digest", sent: 0, rebaselined: !vacValid, snapshot_updated: ok, excluded: diff.excluded, ...summary });
+        return json(200, { mode, message: "No changes since last digest", sent: 0, rebaselined: !vacValid, snapshot_updated: ok, east: eastOut, excluded: diff.excluded, ...summary });
       }
 
       const contacts = await loadContacts();
@@ -707,10 +1034,11 @@ serve(async (req) => {
         total_day_changes: diff.dayChanges.length,
         total_vacation_changes: diff.vacationChanges.length,
         excluded: diff.excluded,
+        east: eastOut,
       };
 
       if (dryRun) {
-        const sample = renderDigestEmail("(contact name)", changesHtml);
+        const sample = renderDigestEmail("(contact name)", changesHtml, east.html, east.footerHtml);
         return json(200, { mode, dryRun: true, would_send: contacts.length, sent: 0, sample, ...counts, ...summary });
       }
       if (contacts.length === 0) {
@@ -718,7 +1046,7 @@ serve(async (req) => {
         return json(200, { mode, message: "No active office contacts - baseline left unchanged", sent: 0, ...counts, ...summary });
       }
 
-      const out = await broadcast(contacts, (c) => renderDigestEmail(c.name, changesHtml), "digest");
+      const out = await broadcast(contacts, (c) => renderDigestEmail(c.name, changesHtml, east.html, east.footerHtml), "digest");
       // A failed write here means the next digest re-reports the same changes - say so.
       const ok = await writeState({ snapshot: current, last_digest_at: new Date().toISOString() });
       return json(200, { mode, ...counts, rebaselined: !vacValid, snapshot_updated: ok, sent: out.sent, failed: out.failed, results: out.results, ...summary });
