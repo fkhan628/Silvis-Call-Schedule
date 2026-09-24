@@ -1081,10 +1081,10 @@ ok(/rest\/v1\/user_profiles\?select=person_id,role&role=in\.\(scheduler,admin\)&
 ok(/rest\/v1\/user_profiles\?id=eq\.\$\{encodeURIComponent\(userId\)\}&select=\*/.test(client), "fetchProfile reads the own row only");
 ok(/actor_id: userProfile\?\.person_id \|\| authUser\?\.id \|\| null,/.test(client), "logAudit writes actor_id = the caller's person_id (audit_insert requires it for a non-scheduler)");
 
-step("P16 A1: docs - SCHEMA-REVIEW.md PREPARED block with the before / after table + 'observed:' placeholder; guide 4.3 table, one row per change");
+step("P16 A1: docs - SCHEMA-REVIEW.md APPLIED block with the before / after table + the 'observed:' line; guide 4.3 table, one row per change");
 const plReview = review.slice(review.indexOf("## 2026-09-24 - pre-launch RLS (Prompt 16 A1)"));
 ok(plReview.length > 0 && plReview.length < review.length, "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - pre-launch RLS (Prompt 16 A1)' section");
-ok(/PREPARED/.test(plReview.slice(0, 200)), "the A1 section must be marked PREPARED (not applied)");
+ok(/APPLIED/.test(plReview.slice(0, 200)) && !/PREPARED/.test(plReview.slice(0, 200)), "the A1 section must be marked APPLIED (live since 2026-09-23 ~18:35 Central; the observed line holds the probe strings)");
 ok(/observed: applied 2026-09-23[^\r\n]{0,600}PROBE_RESULTS A1=own=1/.test(plReview), "the A1 section must carry the observed line (applied + the AFTER probe string)");
 Object.keys(PRELAUNCH_POLICIES).forEach((p) => ok(new RegExp("^\\| `" + p + "`", "m").test(plReview), "the A1 before / after table lacks a row for " + p));
 ["call_offers_guard", "call_offers_delete_guard", "offer_status"].forEach((p) => ok(new RegExp("^\\| `" + p + "`", "m").test(plReview), "the A1 before / after table lacks a row for " + p));
@@ -1195,7 +1195,7 @@ ok(schema.indexOf(COORD_HELPER) > schema.indexOf("create or replace function pub
 ok(/role\s+text not null default 'viewer' check \(role in \('admin','scheduler','surgeon','viewer','coordinator'\)\),/.test(schema), "schema.sql's user_profiles inline role check must list coordinator (a from-scratch schema)");
 ok(/source\s+text not null default 'app' check \(source in \('app','email-relay','import','office-relay'\)\),/.test(schema), "schema.sql's call_offers inline source check must list office-relay");
 ok(schema.indexOf("alter table public.user_profiles add constraint user_profiles_coordinator_unlinked") < schema.indexOf("create or replace function public.handle_new_auth_user()"), "the user_profiles constraint re-creation sits right after the table (like schedule_days_distinct_roles)");
-ok(/-- Revision 2026-09-24 k \(Prompt 16 A7, sql\/migrations\/2026-09-24-coordinator-role\.sql, report-first, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-24 k (the coordinator role, not yet applied)");
+ok(/-- Revision 2026-09-24 k \(Prompt 16 A7, sql\/migrations\/2026-09-24-coordinator-role\.sql, applied 2026-09-23[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 k (the coordinator role, not yet applied)");
 ok(policyText(schema, "audit_read") === "create policy audit_read on public.audit_log for select to authenticated using (public.silvis_is_sched());", "audit_read (scheduler / admin, every row) is unchanged");
 ok(/create policy availability_write_coord/.test(schema.slice(schema.indexOf("-- time_off: anon-readable"), schema.indexOf("-- east_overrides: read all"))), "availability_write_coord is declared in the time_off / availability block (after the generated availability_write_sched)");
 

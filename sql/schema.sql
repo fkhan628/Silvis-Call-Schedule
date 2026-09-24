@@ -38,7 +38,7 @@
 -- notif_insert + audit_insert = scheduler/admin or a linked person (the audit row's actor_id = the caller's roster id);
 -- notif_delete_sched; user_profiles_self_update pins email; OF004 OFFER_IMMUTABLE (a non-scheduler UPDATE may not move an
 -- offer's day / person); both call_offers guards freeze by status as well as by date; offer_status() revoked from anon.
--- Revision 2026-09-24 k (Prompt 16 A7, sql/migrations/2026-09-24-coordinator-role.sql, report-first, NOT yet applied): the COORDINATOR
+-- Revision 2026-09-24 k (Prompt 16 A7, sql/migrations/2026-09-24-coordinator-role.sql, applied 2026-09-23 ~19:42 Central after the probe): the COORDINATOR
 -- role (office users, never linked to a roster id): silvis_is_coord(); time_off writes + a new availability policy for any person;
 -- call_offers policies admit a coordinator only under the transaction-local silvis.office_relay flag that save_offers sets;
 -- save_offers / set_offer_mode relay for another person (entered_by = the coordinator's profile id, source 'office-relay';

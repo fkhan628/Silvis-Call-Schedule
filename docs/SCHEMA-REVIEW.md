@@ -613,9 +613,9 @@ to read the `east_feed` vacations + `east_vacation_reviews` is a possible later 
 
 ## 2026-09-24 - pre-launch RLS (Prompt 16 A1)
 
-**Status: PREPARED — not applied.** Report-first (guide §4.3): `sql/migrations/2026-09-24-prelaunch-rls.sql` changes row-level
-security on the live project. This section is the report; the orchestrator applies the file only after Faraz's go, then fills the
-*observed* line at the end. Source of the before-state: the live `pg_policies` dump of 2026-09-23 ~17:10 (read-only); source of the
+**Status: APPLIED — 2026-09-23 ~18:35 Central by the orchestrator through the linked CLI, under Faraz's standing mandate of 9/23.**
+Report-first (guide §4.3): `sql/migrations/2026-09-24-prelaunch-rls.sql` changes row-level security on the live project. This
+section was the report; the file ran after the BEFORE probe and the *observed* line at the end carries the AFTER probe. Source of the before-state: the live `pg_policies` dump of 2026-09-23 ~17:10 (read-only); source of the
 finding: the 2026-09-23 pre-launch review, item A (security, blocking) and the periods report's "freeze by status" decision.
 
 **Before / after, per policy.** Every text below is byte-identical in the migration and in `sql/schema.sql` (`test/schema.test.js`
