@@ -672,6 +672,47 @@ eq(ctxDead.warnings.filter(w => /unknownIsBusy/.test(w)).length, 1, "RG-2: exact
 ok(/holidaysOff/.test(ctxDead.warnings.find(w => /anyoneMayCoverUnlessOptedOut/.test(w))) && /east-unknown/.test(ctxDead.warnings.find(w => /unknownIsBusy/.test(w))), "each warning names the behaviour that IS in force");
 ok(!Object.prototype.hasOwnProperty.call(seed.groupRules.holidays, "anyoneMayCoverUnlessOptedOut") && !Object.prototype.hasOwnProperty.call(seed.groupRules.eastFeed || {}, "unknownIsBusy"), "the shipped seed carries neither key");
 eq(clean.warnings.filter(w => /anyoneMayCoverUnlessOptedOut|unknownIsBusy/.test(w)), [], "...and raises neither warning");
+
+// B10 (9/23, pre-launch review section 4): the keys the seed dropped as read-by-nothing warn ONCE while an older blob
+// still carries them (the same contract as RG-1 / RG-2) and change nothing. One warning per group key; one per
+// surgeon listing every dead key of his. splitPartner and outsideDerivedWeeks.canBePrimary are NOT in the list: the
+// Setup panel still writes them, so a warning would nag the scheduler for using a field the app offers.
+step("B10: the dropped inert keys warn once per key (group) / once per surgeon (surgeon keys) and change nothing");
+const B10_GROUP = clone(seed.groupRules);
+B10_GROUP.generationHorizons = Object.assign({}, B10_GROUP.generationHorizons, { presets: [{ months: 3 }, { months: 6 }] });
+B10_GROUP.eastFeed = Object.assign({}, B10_GROUP.eastFeed, { forecast: Object.assign({}, (B10_GROUP.eastFeed || {}).forecast, { penaltyBelowThreshold: "eastForecastBelowThreshold" }) });
+B10_GROUP.locks = Object.assign({}, B10_GROUP.locks, { nullSlotIsNeverLocked: true });
+const B10_SR = clone(seed.surgeonRules);
+B10_SR[KHAN].weekendsInPool = true;
+B10_SR[KHAN].holidays2026 = { thanksgiving: { days: ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"], role: "primary" } };
+B10_SR[BURCHETT].holidayPreference = "Split Christmas";
+B10_SR[ACTON].holidayRules = Object.assign({}, B10_SR[ACTON].holidayRules, { christmasOrNewYearOk: true, alternatingDaysOk: true });
+B10_SR[PHILIP].preferences = Object.assign({}, B10_SR[PHILIP].preferences, { noFullWeek: true });
+B10_SR[FIERCE].eastFeed = Object.assign({}, B10_SR[FIERCE].eastFeed, { liveVerifiedDavenportPrimaryWeeks: ["2026-11-09"], liveVerifiedDavenportBackupWeeks: ["2026-10-12"], liveVerifiedOn: "2026-09-21", liveVerifiedThrough: "2026-11-15" });
+const ctxB10 = makeCtx({ schedule: {}, groupRules: B10_GROUP, surgeonRules: B10_SR });
+const b10Warn = (re) => ctxB10.warnings.filter(w => re.test(w));
+eq(b10Warn(/groupRules\.generationHorizons\.presets/).length, 1, "B10: one warning names generationHorizons.presets: " + JSON.stringify(ctxB10.warnings));
+eq(b10Warn(/groupRules\.eastFeed\.forecast\.penaltyBelowThreshold/).length, 1, "B10: one warning names eastFeed.forecast.penaltyBelowThreshold");
+eq(b10Warn(/groupRules\.locks\.nullSlotIsNeverLocked/).length, 1, "B10: one warning names locks.nullSlotIsNeverLocked");
+[[KHAN, /weekendsInPool/, /holidays2026/], [BURCHETT, /holidayPreference/], [ACTON, /holidayRules\.christmasOrNewYearOk/, /holidayRules\.alternatingDaysOk/], [PHILIP, /preferences\.noFullWeek/], [FIERCE, /eastFeed\.liveVerifiedDavenportPrimaryWeeks/, /eastFeed\.liveVerifiedDavenportBackupWeeks/, /eastFeed\.liveVerifiedOn/, /eastFeed\.liveVerifiedThrough/]].forEach(([id, ...res]) => {
+  const mine = b10Warn(new RegExp("^surgeonRules\\." + id + ": ignored key"));
+  eq(mine.length, 1, "B10: exactly one dead-key warning for " + id + ": " + JSON.stringify(mine));
+  res.forEach(re => ok(re.test(mine[0] || ""), "B10: the " + id + " warning names " + re.source));
+});
+eq(b10Warn(/ignored key/).filter(w => /splitPartner|canBePrimary/.test(w)), [], "B10: splitPartner / canBePrimary (Setup-written) never warn");
+// nothing changes: every eligibility over November is byte-identical with and without the dead keys
+{
+  const ctxCleanB10 = makeCtx({ schedule: {} });
+  let same = 0, total = 0;
+  for (let d = new Date(Date.UTC(2026, 10, 1)); d <= new Date(Date.UTC(2026, 10, 30)); d.setUTCDate(d.getUTCDate() + 1)) {
+    const ds = d.toISOString().slice(0, 10);
+    [KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].forEach(id => [P, B].forEach(role => { total++; if (JSON.stringify(R.eligibility(ctxB10, ds, role, id)) === JSON.stringify(R.eligibility(ctxCleanB10, ds, role, id))) same++; }));
+  }
+  eq(same, total, "B10: the dead keys change no eligibility (" + total + " checks over November)");
+}
+ok(!("weekendsInPool" in seed.surgeonRules[KHAN]) && !("holidays2026" in seed.surgeonRules[KHAN]) && !("holidayPreference" in seed.surgeonRules[BURCHETT]) && !("splitPartner" in seed.surgeonRules[BURCHETT]) && !("splitPartner" in seed.surgeonRules[ACTON]) && !("christmasOrNewYearOk" in seed.surgeonRules[ACTON].holidayRules) && !("alternatingDaysOk" in seed.surgeonRules[ACTON].holidayRules) && !("noFullWeek" in (seed.surgeonRules[PHILIP].preferences || {})) && !("canBePrimary" in seed.surgeonRules[FIERCE].outsideDerivedWeeks) && !Object.keys(seed.surgeonRules[FIERCE].eastFeed).some(k => /^liveVerified/.test(k)) && !("presets" in seed.groupRules.generationHorizons) && !("penaltyBelowThreshold" in seed.groupRules.eastFeed.forecast) && !("nullSlotIsNeverLocked" in seed.groupRules.locks), "B10: the shipped seed carries none of the dropped keys");
+eq(clean.warnings.filter(w => /ignored key/.test(w)), [], "B10: ...and the shipped seed raises no dead-key warning");
+eq([seed.surgeonRules[SARKAR].poolMember, seed.groupRules.weights.eastClear, R.defaultWeights().eastClear], [true, 2, 2], "B10: s6.poolMember stays true (false would switch her window-week target off - the generator gates it on the same flag; the seed note says so); weights.eastClear = 2 is in the seed and equals the engine default");
 // holiday-unit days (Thanksgiving, Christmas Eve/Day, New Year) and an East day outside the coverage (2027-02-03,
 // EAST_COVER ends 1/31) evaluate identically with both keys set to their non-default values
 ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29", "2026-12-24", "2026-12-25", "2026-12-31", "2027-01-01", "2027-02-03"].forEach(d => [P, B].forEach(role => [KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].forEach(id => {

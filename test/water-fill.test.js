@@ -49,8 +49,12 @@ function run(h) {
   // The pre-publish blob still carried the two group keys the engine never read (dropped from the seed by audit
   // RG-1 / RG-2, 9/23; rules.js warns once per key while a blob carries them). The fixture stays the exact
   // snapshot, so exactly those two notices are expected here - and nothing else.
-  const isDeadKeyW = (w) => /groupRules.holidays.anyoneMayCoverUnlessOptedOut|groupRules.eastFeed.unknownIsBusy/.test(w);
-  eq(ctxW.warnings.filter(isDeadKeyW).length, 2, "buildContext warnings (WF fixture): the two dead-key notices the pre-publish blob earns (RG-1 anyoneMayCoverUnlessOptedOut, RG-2 unknownIsBusy)");
+  // B10 (9/23) dropped eleven more read-by-nothing keys from the seed (rules.js warns per group key and once per surgeon):
+  // the fixture blob carries them all, so it earns 3 group notices (generationHorizons.presets, eastFeed.forecast.penaltyBelowThreshold,
+  // locks.nullSlotIsNeverLocked) + 5 surgeon notices (s1 weekendsInPool + holidays2026, s2 holidayPreference, s3 the two holidayRules
+  // keys, s4 preferences.noFullWeek, s5 the four liveVerified* keys) on top of RG-1 / RG-2 = 10.
+  const isDeadKeyW = (w) => /groupRules.holidays.anyoneMayCoverUnlessOptedOut|groupRules.eastFeed.unknownIsBusy|groupRules\.(generationHorizons\.presets|eastFeed\.forecast\.penaltyBelowThreshold|locks\.nullSlotIsNeverLocked) is not read|^surgeonRules\.s[1-5]: ignored key/.test(w);
+  eq(ctxW.warnings.filter(isDeadKeyW).length, 10, "buildContext warnings (WF fixture): the dead-key notices the pre-publish blob earns (RG-1, RG-2 + B10's 3 group + 5 surgeon notices): " + JSON.stringify(ctxW.warnings.filter(isDeadKeyW)));
   eq(ctxW.warnings.filter((w) => !isDeadKeyW(w)), [], "buildContext warnings (WF fixture)");
   const tw0 = Date.now();
   const outM = GEN.generate(ctxW, MS.start, MS.end, { seed: FXW._meta.seed, bestOf: FXW._meta.bestOf, respectLocks: true });

@@ -531,6 +531,17 @@ function buildContext(input) {
   if (groupRules.eastFeed && Object.prototype.hasOwnProperty.call(groupRules.eastFeed, "unknownIsBusy")) {
     ctx.warnings.push("groupRules.eastFeed.unknownIsBusy is not read by the engine (audit RG-2, 9/23): an uncovered East day is always clear with the soft east-unknown penalty (weights.eastUnknown) - remove the key from the blob");
   }
+  // B10 (9/23, pre-launch review section 4): three more group keys the engine never read left the seed; an older blob
+  // that still carries one warns once, like RG-1 / RG-2, and nothing changes.
+  if (groupRules.generationHorizons && Object.prototype.hasOwnProperty.call(groupRules.generationHorizons, "presets")) {
+    ctx.warnings.push("groupRules.generationHorizons.presets is not read by the engine (B10, 9/23): the 3 / 6 / 9 / 12-month presets are the app's own (Generate) - remove the key from the blob");
+  }
+  if (groupRules.eastFeed && groupRules.eastFeed.forecast && Object.prototype.hasOwnProperty.call(groupRules.eastFeed.forecast, "penaltyBelowThreshold")) {
+    ctx.warnings.push("groupRules.eastFeed.forecast.penaltyBelowThreshold is not read by the engine (B10, 9/23): the below-threshold forecast penalty is always weights.eastForecastBelowThreshold - remove the key from the blob");
+  }
+  if (groupRules.locks && Object.prototype.hasOwnProperty.call(groupRules.locks, "nullSlotIsNeverLocked")) {
+    ctx.warnings.push("groupRules.locks.nullSlotIsNeverLocked is not read by the engine (B10, 9/23): an empty slot is never locked - fixed importer behaviour, not a switch - remove the key from the blob");
+  }
 
   if (input.eastFeedCoverage && input.eastFeedCoverage.from && input.eastFeedCoverage.to) {
     ctx.eastCoverage = { from: input.eastFeedCoverage.from, to: input.eastFeedCoverage.to,
@@ -637,8 +648,27 @@ function buildContext(input) {
       // ('submitted' | 'rules_only' | 'not_started') and mode ('exhaustive' | 'preferred') - rdBuildOffers.
       offers: Object.create(null),
       offerStatus: Object.create(null),
-      offerMode: Object.create(null)
+      offerMode: Object.create(null),
+      offerMonths: Object.create(null) // B10: "<period key>:YYYY-MM" -> true for every month he offered at least one day in, per period (the fallback penalty's scope)
     };
+    // B10 (9/23, pre-launch review section 4): per-surgeon keys the engine never read left the seed; an older blob
+    // that still carries any of them earns ONE warning per surgeon naming them (like RG-1 / RG-2) and nothing changes.
+    // splitPartner and outsideDerivedWeeks.canBePrimary are deliberately not listed: the Setup panel still writes them.
+    (function () {
+      var dead = [];
+      ["weekendsInPool", "holidays2026", "holidayPreference"].forEach(function (k) { if (Object.prototype.hasOwnProperty.call(rules, k)) dead.push(k); });
+      if (rules.holidayRules && typeof rules.holidayRules === "object") ["christmasOrNewYearOk", "alternatingDaysOk"].forEach(function (k) { if (Object.prototype.hasOwnProperty.call(rules.holidayRules, k)) dead.push("holidayRules." + k); });
+      if (rules.preferences && typeof rules.preferences === "object" && Object.prototype.hasOwnProperty.call(rules.preferences, "noFullWeek")) dead.push("preferences.noFullWeek");
+      if (rules.eastFeed && typeof rules.eastFeed === "object") Object.keys(rules.eastFeed).forEach(function (k) { if (/^liveVerified/.test(k)) dead.push("eastFeed." + k); });
+      if (dead.length) {
+        // the gloss names only what the keys found stand for (review 9/23: one generic sentence for every surgeon read as noise)
+        var gloss = [];
+        if (dead.indexOf("preferences.noFullWeek") >= 0) gloss.push("a full-week aversion is maxConsecutiveAnyRole");
+        if (dead.indexOf("holidays2026") >= 0) gloss.push("the Thanksgiving unit is its locked rows + holidays.units");
+        if (dead.some(function (k) { return k.indexOf("eastFeed.liveVerified") === 0; })) gloss.push("derived weeks come from the East feed at run time");
+        ctx.warnings.push("surgeonRules." + id + ": ignored key" + (dead.length === 1 ? "" : "s") + " " + dead.join(", ") + " - not read by the engine (B10, 9/23" + (gloss.length ? "; " + gloss.join(", ") : "") + ") - remove from the blob");
+      }
+    })();
     if (rules.primaryContribution !== undefined && rules.primaryContribution !== null && rules.primaryContribution !== "" && P.contribution === null) {
       ctx.warnings.push("surgeonRules." + id + ".primaryContribution = " + JSON.stringify(rules.primaryContribution) + " is not a value the engine knows (Prompt 12 L: only \"weekends\"): ignored - no contribution term for this surgeon");
     }

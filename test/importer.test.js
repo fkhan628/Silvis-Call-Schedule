@@ -91,11 +91,14 @@ eq(plan.noteScrub.counts.awaitingConfirmation, 0, "Z FLIP: inventory counts.awai
 ok(IMP.importSql(plan).indexOf("'seed: faraz-2026-09-21 - " + Z_NOTE + "'") >= 0, "Z FLIP: the SQL writes the plain note literal without the marker");
 ok(/^-- seed generatedOn .*; 73 schedule_days, /m.test(IMP.importSql(plan)) && !/awaiting confirmation\)/.test(IMP.importSql(plan)), "Z FLIP: the SQL header carries no '(N awaiting confirmation)' suffix (B: '(4 awaiting confirmation)')");
 ok(!/CONFIRMED/.test(JSON.stringify(seed.surgeonRules[KHAN])), "B: Khan's seed rules never say CONFIRMED in capitals (Z: 'confirmed 9/22')");
-ok(/confirmed by Faraz 9\/22/.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.note) && !/pending|re-confirm/i.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.note), "Z FLIP: s1.holidays2026.thanksgiving.note says confirmed 9/22 - no 'pending', no 're-confirm' (B: the provenance sentence)");
-ok(/confirmed by Faraz 9\/22/.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.source) && !/pending|re-confirm|recorded by Claude Code/i.test(seed.surgeonRules[KHAN].holidays2026.thanksgiving.source), "Z FLIP: s1.holidays2026.thanksgiving.source says confirmed 9/22 - no caveat (B: 'recorded by Claude Code ... re-confirm before publish')");
+// B10 (9/23): s1.holidays2026 was read by nothing (the unit lives in the four locked rows and holidays.units) and left the
+// seed; the confirmed-provenance pins that read it now read the four rows' source + note (the Z block below) and the
+// s1 notes line, and the blob is pinned to carry no holidays2026 key at all.
+ok(!("holidays2026" in seed.surgeonRules[KHAN]), "B10: the seed carries no s1.holidays2026 (dropped as read-by-nothing)");
+ok(!("holidays2026" in plan.blob.surgeonRules[KHAN]), "B10: ...and neither does the planned blob");
 ok(seed.surgeonRules[KHAN].notes.some((t) => /^Thanksgiving 2026:/.test(t) && /confirmed by Faraz 9\/22/.test(t)) && !seed.surgeonRules[KHAN].notes.some((t) => /re-confirm|daytime record said pending/.test(t)), "Z FLIP: s1.notes Thanksgiving line says confirmed 9/22; the provenance caveat is gone from every s1 note (B: carried it)");
-eq(seed.surgeonRules[KHAN].holidays2026.thanksgiving.days, B_ROWS, "B: the s1 holiday block still lists the four days");
-eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.days, B_ROWS, "B: ... and so does the blob (unit unchanged)");
+eq(seed.existingAssignments.filter((a) => B_ROWS.includes(a.date)).map((a) => a.date), B_ROWS, "B: the four unit rows are in the seed (the unit's record since B10)");
+eq((seed.holidays.units["2026"] || seed.holidays.units[2026]).find((u) => u.name === "Thanksgiving").days, B_ROWS, "B: holidays.units 2026 Thanksgiving spans the four days");
 // review B-3 / Z: the holidays.units 2026 Thanksgiving note (seed record only - the importer drops holidays notes) says the
 // same as the four rows it sits beside: confirmed 9/22, no caveat.
 {
@@ -394,7 +397,7 @@ step("SQL idempotency shape");
 ok(/^[\x00-\x7f]*$/.test(sql), "SQL is 7-bit ASCII (non-ASCII escaped inside jsonb AND in text columns)");
 // a text column carrying non-ASCII (the 10/24 note's em dash) is emitted as an E'' literal with \uXXXX; ASCII strings stay plain '...'
 ok(sql.indexOf("'seed: faraz-2026-09-22-sarkar-two-days - open (9/22)'") >= 0, "10/24 note -> a plain '' literal (ASCII since 9/23; found: " + JSON.stringify((sql.match(/E?'seed: faraz-2026-09-22-sarkar[^']*'/) || [])[0]) + ")");
-ok(sql.indexOf("'seed: office-er-call-panels-2026-09-16'") >= 0 && !/E'seed: holly/.test(sql), "ASCII notes keep the plain '...' literal");
+ok(sql.indexOf("'seed: office-er-call-panels-2026-09-16'") >= 0 && !/E'seed: office/.test(sql), "ASCII notes keep the plain '...' literal");
 // the non-ASCII test is stateless: consecutive non-ASCII notes, an ASCII one between them and a repeat all classify the same way
 const fxNA = clone(seed);
 fxNA.existingAssignments.filter((a) => ["2026-10-19", "2026-10-20", "2026-10-21"].indexOf(a.date) >= 0).forEach((a, i) => { a.note = i === 1 ? "plain" : "caf" + String.fromCharCode(233) + " " + i; });
@@ -931,11 +934,11 @@ zRows.forEach((a) => {
 ok(!/pending|re-?confirm|recorded by Claude Code|awaiting/i.test(Z_NOTE), "Z: the row note carries no provenance caveat (one standard: the rule, not the history)");
 // what reaches the anon-readable blob: the s1 holiday source (not a note key) as written, no note, no caveat anywhere
 ok(!/pending|re-?confirm|awaiting|recorded by Claude Code/i.test(JSON.stringify(plan.blob.surgeonRules[KHAN])), "Z: the blob's Khan rules carry no 'pending' / 're-confirm' / 'awaiting' / 'recorded by' anywhere");
-eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.source, seed.surgeonRules[KHAN].holidays2026.thanksgiving.source, "Z: holidays2026.thanksgiving.source reaches the blob as written (source is not a note key)");
-eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.source, "Faraz 9/21 (evening); confirmed by Faraz 9/22 (evening)", "Z: ...and it is the plain attribution");
-ok(!("note" in plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving), "Z: its note is engine documentation (unit / consecutive wording) and stays out of the blob");
+// B10 (9/23): the s1.holidays2026 block left the seed (read by nothing); the blob carries no such key, and the unit's
+// record is the four rows (source faraz-2026-09-21, the confirmed note) + holidays.units 2026 - pinned above and below.
+ok(!("holidays2026" in plan.blob.surgeonRules[KHAN]), "Z/B10: the blob's Khan rules carry no holidays2026 key");
 ok(!JSON.stringify(plan.blob.surgeonRules[KHAN].notes || []).includes("Thanksgiving"), "Z: the s1.notes Thanksgiving line is dropped (AA: every notes[] key is dropped; F kept category tokens)");
-eq(plan.blob.surgeonRules[KHAN].holidays2026.thanksgiving.role, "primary", "Z: the s1 holiday role is unchanged");
+ok(zRows.every((a) => a.source === Z_SRC && a.note === Z_NOTE && a.primary === KHAN && a.locked === true), "Z/B10: the four rows are the unit's record - Khan primary, locked, source faraz-2026-09-21, the confirmed note");
 ok(seed.answeredQuestions.some((t) => /^Thanksgiving 2026:/.test(t) && /confirmed by Faraz 9\/22/.test(t)), "Z: answeredQuestions' Thanksgiving line says confirmed by Faraz 9/22");
 ok(seed.openQuestions.some((t) => /^8\. ~~Thanksgiving 11\/26-29 for Khan~~/.test(t) && /confirmed/.test(t)), "Z: open question 8 is struck through with the answer");
 ok(!seed.openQuestions.concat(seed.answeredQuestions).some((t) => /re-confirm/.test(t)), "Z: no 're-confirm' left in either question list");
@@ -948,7 +951,8 @@ eq((plan.blob.holidays.units["2026"] || plan.blob.holidays.units[2026]).find((u)
 {
   const seedPreZ = clone(seed);
   seedPreZ.existingAssignments.forEach((a) => { if (B_ROWS.includes(a.date)) { a.awaitingConfirmation = true; a.note = B_NOTE; } });
-  seedPreZ.surgeonRules[KHAN].holidays2026.thanksgiving.source = "recorded by Claude Code on 2026-09-22 as a 9/21 evening decision; the daytime record said pending; Faraz to re-confirm before publish (Prompt 12 B)";
+  // the item-B blob carried the s1.holidays2026 block with the caveated source (B10 dropped the block from the seed): put it back as it stood
+  seedPreZ.surgeonRules[KHAN].holidays2026 = { thanksgiving: { days: B_ROWS.slice(), role: "primary", source: "recorded by Claude Code on 2026-09-22 as a 9/21 evening decision; the daytime record said pending; Faraz to re-confirm before publish (Prompt 12 B)" } };
   seedPreZ._meta.revisions = seedPreZ._meta.revisions.filter((t) => !/Prompt 12 item Z/.test(t));
   const planPreZ = IMP.importPlan(seedPreZ, { now: NOW });
   eq(planPreZ.stats.scheduleDays.awaitingConfirmation, 4, "Z: the rebuilt pre-Z state flags the four rows (item B's live rows)");

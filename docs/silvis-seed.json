@@ -42,7 +42,8 @@
       "2026-09-23 (Claude Code, audit lane tooling-rules, findings RG-1 / RG-2): two group keys the engine never read are removed - groupRules.holidays.anyoneMayCoverUnlessOptedOut ('anyone not opted out may cover a holiday' is fixed behaviour: the opt-out is surgeonRules.<id>.holidayRules.holidaysOff, the waiver family holidays.ignoreWeekdayRules; the Setup checkbox is gone) and groupRules.eastFeed.unknownIsBusy (an uncovered East day is always clear + the soft east-unknown penalty, as eastFeed.note records). rules.js buildContext warns once per key while a blob still carries it; no rule, lock or row changes. Importer consequence: blob groupRules + settings update only.",
       "2026-09-23 (Claude Code, Prompt 14 P5 - the first period through the importer, from Faraz's 9/22 evening prompt v2 part 5; listed before the P2 entry because test/offers.test.js pins the last entry as P2's): new top-level offerPeriods[] (Nov 2026 - Jan 2027 = 2026-11-02..2027-01-03, offersCloseAt 2026-10-02 by hand, publishBy 2026-10-05, status upcoming, rulesOnly s1 + s6, offerModes s2 / s4 exhaustive, s3 / s5 preferred, source faraz-2026-09-22-prompt-14); surgeonRules.<id>.offerSources tags on the lists that are the offers (s2 explicitAvailable 2026-11 + 2026-12 -> burchett-email-2026-09-17; s3 new offeredDays['2026-11'] = his relayed 7 primary + 3 backup days -> acton-via-burchett-relay-2026-09-17; s4 availableWeeks -> philip-email-2026-09-20); groupRules.whitelistMonths.rule gains the period sentence. importer.js: importPlan(seed, { offerPeriods: true }) (the CLI's setting; the in-app import keeps the pre-period plan until part 3) plans call_periods (upsert by start_day, status never rewritten, offer_modes merged) and call_offers rows (one per listed day inside the period on or after today in America/Chicago; role_pref from the list's role, a plain list = either; entered_by scheduler, source email-relay, note 'seed: <tag>'; a day inside the person's vacation skipped and listed; locked days kept), writes no available row and no explicitListMonths entry for a submitted surgeon's period days / months, deletes stale seed-owned offers for future days only and never touches app-entered rows; the pre-import snapshot and config.js snapshots.capture gain call_offers + call_periods (the wipe guards do not consider them); the dry run prints the status table (surgeon | status | mode | offered days). Live consequences: call_periods insert 1, call_offers insert 79 (Burchett 34, Acton 10, Philip 35), availability delete = Burchett's November / December available rows, blob surgeonRules update (s2.explicitListMonths = October only), schedule_days / time_off unchanged. Open questions 15 (a plain list under exhaustive limits backup too) and 16 (Fierce has no single day inside the period).",
       "2026-09-23 afternoon (Claude Code, Prompt 14 item PD, from Faraz's 9/23 follow-ups; listed before the P2 entry, which test/offers.test.js pins as the last): (a) offerPeriods[0] Nov 2026 - Jan 2027 status 'published' - its schedule went out 9/23 (docs/PUBLISH-2026-09-23.md), so no freeze reminder (9/29) and no close mail (10/2): daily-reminder mode offers reads status=eq.upcoming rows only and otmCronPlan answers none / status:published, helpers.offerPeriodOpen shows it read-only in the painter, and importer.js impSqlPeriods now carries the status through the upsert as a one-way advance (upcoming < closed < generated < published; a seed status behind the live one never moves it back - the app and the cron own the forward steps; before this the SQL wrote status on insert only). (b) offerPeriods[1] Feb 2027 - Apr 2027 = the row the Periods section's 3-month preset creates from 2027-02-01 (offers close 2026-12-21, publish by 2027-01-04 - Faraz's dates, equal to the preset's arithmetic; end 2027-04-30 as Faraz stated it, where the preset would extend to Sunday 5/2 - open question 17; status upcoming, rulesOnly [] and offerModes {} as createPeriod writes them), so helpers.offerNextPeriod and the 12/7 + 12/18 reminders point at it; no tagged list reaches into it, so no call_offers row is planned and everyone reads not_started. (c) s2.timeOff gains 2027-07-22..2027-08-02 (public note 'off (stated 9/23)', source burchett-via-faraz-2026-09-23): one time_off insert, both roles, 7/21 blocks primary; no schedule exists there, nothing for the trigger to refuse. (d) existingAssignments 2026-10-24 note = 'open (9/22)' (Faraz: no person or reason in an anon-readable note; the live row is reworded the same way with scripts/day-edit.js). Expected live consequence (importer dry run): call_periods update 1 (status upcoming -> published) + insert 1, call_offers unchanged (79), time_off insert 1, blob surgeonRules (s2.timeOff dates) + settings stamps; schedule_days unchanged (10/24 is app-published, kept).",
-      "2026-09-23 (Claude Code, Prompt 14 P2 - rules + generator, from Faraz's 9/22 evening prompt v2; review fixes the same night): groupRules.offerPeriods { lengthMonths 3, presets [3, 6], closeWeeksBeforeStart 6, publishWeeksBeforeStart 4, remindDaysBeforeClose [14, 3] } + offerPeriodsNote; groupRules.weights.offerBonus 6 + outsideOffers 6 + offerBonusOverShare 0 (+ note). Engine: rules.js reads ctx.offers (call_offers rows) and ctx.periods (call_periods rows incl. rules_only_ids + offer_modes), derives the per-surgeon per-period status exactly like SQL offer_status() (submitted / rules_only / not_started) and the mode (offer_modes[id], absent = preferred); inside a period a submitted surgeon is offers-governed (exhaustive: hard not-offered off his offered days and roles; preferred: soft offered / outside-offers under his ordinary rules; outside-offers also rides on an exhaustive surgeon's claim result); an offer is folded into the dated-row map as an available row for its role (item W lifts the weekday patterns, obligations never lift); whitelist-month / outside-available-weeks are not applied to a submitted surgeon inside the period; opts.claim skips the exhaustive block (a Prompt 13 claim is an offer made on the spot - sql/migrations/2026-09-23-claim-offer.sql writes the call_offers row, except for a surgeon listed in the period's rules_only_ids, who keeps his rules-only status). generator.js fills offered units first, stops the offered bonus at the surgeon's share (offerBonusOverShare) so an offer is not a demand, and reports diagnostics.offers (byPerson offered / placed / unplaced with reasons - a holiday-unit day names the unit's failing day - and outsideOffers). No list changes here (part 5 converts the dated lists into call_offers rows). Proof: test/rules.test.js and test/generator-regression.js Prompt 14 P2 blocks, test/offers.test.js."
+      "2026-09-23 (Claude Code, Prompt 14 P2 - rules + generator, from Faraz's 9/22 evening prompt v2; review fixes the same night): groupRules.offerPeriods { lengthMonths 3, presets [3, 6], closeWeeksBeforeStart 6, publishWeeksBeforeStart 4, remindDaysBeforeClose [14, 3] } + offerPeriodsNote; groupRules.weights.offerBonus 6 + outsideOffers 6 + offerBonusOverShare 0 (+ note). Engine: rules.js reads ctx.offers (call_offers rows) and ctx.periods (call_periods rows incl. rules_only_ids + offer_modes), derives the per-surgeon per-period status exactly like SQL offer_status() (submitted / rules_only / not_started) and the mode (offer_modes[id], absent = preferred); inside a period a submitted surgeon is offers-governed (exhaustive: hard not-offered off his offered days and roles; preferred: soft offered / outside-offers under his ordinary rules; outside-offers also rides on an exhaustive surgeon's claim result); an offer is folded into the dated-row map as an available row for its role (item W lifts the weekday patterns, obligations never lift); whitelist-month / outside-available-weeks are not applied to a submitted surgeon inside the period; opts.claim skips the exhaustive block (a Prompt 13 claim is an offer made on the spot - sql/migrations/2026-09-23-claim-offer.sql writes the call_offers row, except for a surgeon listed in the period's rules_only_ids, who keeps his rules-only status). generator.js fills offered units first, stops the offered bonus at the surgeon's share (offerBonusOverShare) so an offer is not a demand, and reports diagnostics.offers (byPerson offered / placed / unplaced with reasons - a holiday-unit day names the unit's failing day - and outsideOffers). No list changes here (part 5 converts the dated lists into call_offers rows). Proof: test/rules.test.js and test/generator-regression.js Prompt 14 P2 blocks, test/offers.test.js.",
+      "2026-09-23 evening (Claude Code, Prompt 16 B10 - seed hygiene, from the 2026-09-23 pre-launch review section 4; no rule change): surgeonRules.s6.poolMember stays TRUE (the review suggested false because her windows already exclude her from the equal-share pool, but generator.js gates her window-week target on the same flag - false would drop her soft target of two per window week, caught by the regression pin impliedTargets.windowTarget; a poolMemberNote records it); groupRules.weights.eastClear 2 added explicitly (= the engine default). Keys read by nothing dropped (rules.js warns once per key while a blob still carries them, like RG-1 / RG-2): s1.weekendsInPool, s1.holidays2026 (the Thanksgiving unit lives in the four locked existingAssignments rows and holidays.units), s2.holidayPreference, s2/s3.splitPartner (a Setup display field only), s3.holidayRules.christmasOrNewYearOk / alternatingDaysOk, s4.preferences.noFullWeek (implemented as maxConsecutiveAnyRole 4 since Prompt 12 A), s5.outsideDerivedWeeks.canBePrimary, the four s5.eastFeed.liveVerified* snapshot keys, groupRules.generationHorizons.presets (the presets are the app's), groupRules.eastFeed.forecast.penaltyBelowThreshold (the weight is weights.eastForecastBelowThreshold), groupRules.locks.nullSlotIsNeverLocked (importer behaviour, not a switch). The ER-panel source slug of the 57 existingAssignments rows is a role slug now (office-er-call-panels-2026-09-16 / -22; the live schedule_days notes 'seed: <slug> ...' are updated by hand with the same replace). openQuestions: item 6 (10/24) is answered - published to Khan 9/23; item 1 reads accordingly."
     ]
   },
   "site": {
@@ -186,20 +187,6 @@
         "end": "2027-01-03",
         "note": "through end of 2026 plus the New Year's weekend"
       },
-      "presets": [
-        {
-          "months": 3
-        },
-        {
-          "months": 6
-        },
-        {
-          "months": 9
-        },
-        {
-          "months": 12
-        }
-      ],
       "note": "After the first round, the 3/6/9/12-month presets start at the first open slot on or after today (Prompt 12 AB, 9/22 late; locks are never touched) - no longer from the last published day"
     },
     "holidayPolicy": "Same holiday set as Davenport (3 major + 3 minor) as UNITS with one primary + one backup sticking through each unit \u2014 see holidays.rules.",
@@ -262,6 +249,7 @@
       "noTargetWeekday": 1,
       "eastUnknown": 1,
       "eastForecastBelowThreshold": 2,
+      "eastClear": 2,
       "smoothingTolerance": 2,
       "longRunPerDay": 3,
       "weekendContribution": 3,
@@ -269,7 +257,7 @@
       "offerBonus": 6,
       "outsideOffers": 6,
       "offerBonusOverShare": 0,
-      "note": "Soft-penalty weights read by rules.js eligibility() and the generator score; string weights in surgeonRules (low/medium/strong/preferred) map through this table. longRunPerDay (= medium) is the penalty per day by which an any-role run exceeds the surgeon's maxConsecutiveAnyRole (9/22, Prompt 12 A). weekendContribution (= medium; 9/22, Prompt 12 L) is the term for a surgeon whose primaryContribution is \"weekends\" (Khan): his full Fri+Sat+Sun PRIMARY block earns it as a bonus (soft weekend-primary per day in the score; once per block in the weekend-unit choice) and any weekend BACKUP day of his costs it (soft weekend-backup per day; once per surgeon per pattern in the unit choice), so when East allows he is the weekend primary and someone else backs him up; 0 switches the term off. Holiday units are not weekend units: neither term applies on a holiday-unit day and the block bonus needs a whole Fri+Sat+Sun no unit pre-empts. offerBonus / outsideOffers (= strong, 6 each; Prompt 14 P2, 9/23; 0 switches the term off): inside an offer period a submitted surgeon's offered day earns the soft offered bonus in either mode and any other day of his carries the soft outside-offers penalty - visible in preferred mode, where the day stays eligible under his ordinary rules, and on an exhaustive surgeon's claim result (exhaustive mode otherwise blocks that day with the hard not-offered); the generator fills offered units first, so an offered day beats a rules-only candidate for the same slot. offerBonusOverShare (9/23 review; 0 = the bonus stops at the share, 6 = the untapered reading): in the generator the offered bonus counts only while a placement still brings the surgeon towards his target for that role and month; at or over it the term reads -offerBonusOverShare, so a surgeon who offers more than his share is placed to his share (within smoothingTolerance) and the rest goes to the colleagues below theirs - an offer is not a demand; caps and runs are hard either way."
+      "note": "Soft-penalty weights read by rules.js eligibility() and the generator score; string weights in surgeonRules (low/medium/strong/preferred) map through this table. longRunPerDay (= medium) is the penalty per day by which an any-role run exceeds the surgeon's maxConsecutiveAnyRole (9/22, Prompt 12 A). weekendContribution (= medium; 9/22, Prompt 12 L) is the term for a surgeon whose primaryContribution is \"weekends\" (Khan): his full Fri+Sat+Sun PRIMARY block earns it as a bonus (soft weekend-primary per day in the score; once per block in the weekend-unit choice) and any weekend BACKUP day of his costs it (soft weekend-backup per day; once per surgeon per pattern in the unit choice), so when East allows he is the weekend primary and someone else backs him up; 0 switches the term off. Holiday units are not weekend units: neither term applies on a holiday-unit day and the block bonus needs a whole Fri+Sat+Sun no unit pre-empts. offerBonus / outsideOffers (= strong, 6 each; Prompt 14 P2, 9/23; 0 switches the term off): inside an offer period a submitted surgeon's offered day earns the soft offered bonus in either mode and any other day of his carries the soft outside-offers penalty - visible in preferred mode, where the day stays eligible under his ordinary rules, and on an exhaustive surgeon's claim result (exhaustive mode otherwise blocks that day with the hard not-offered); the generator fills offered units first, so an offered day beats a rules-only candidate for the same slot. offerBonusOverShare (9/23 review; 0 = the bonus stops at the share, 6 = the untapered reading): in the generator the offered bonus counts only while a placement still brings the surgeon towards his target for that role and month; at or over it the term reads -offerBonusOverShare, so a surgeon who offers more than his share is placed to his share (within smoothingTolerance) and the rest goes to the colleagues below theirs - an offer is not a demand; caps and runs are hard either way. eastClear (B10 9/23, explicit; = the engine default) is the PRIMARY-only bonus on a 'home' East-vacation day (east-clear, -eastClear)."
     },
     "availabilityPrecedence": [
       "time_off (+ trailing edge: the day before a vacation blocks PRIMARY)",
@@ -308,7 +296,6 @@
       "note": "Both day-before rules (vacation trailing edge; Philip's day-before-Aledo) apply to PRIMARY only. Matches the group's own hand schedule (Philip was backup 10/14 before his 10/15 day and backup 10/22 before Aledo Friday 10/23) and the DB trigger, which checks start_date - 1 for primary only. 9/22 (Faraz, Prompt 12 H): under the open-backup rule both day-before rules stay PRIMARY-only - a standby backup the day before a vacation or an Aledo day is acceptable. trailingEdgeRoles and aledoDayBeforeRoles are the data levers (no dedicated Setup field: editable in Setup via the group rules Edit-as-JSON editor); widening them to both roles would also need the DB trigger widened."
     },
     "locks": {
-      "nullSlotIsNeverLocked": true,
       "note": "Importer: primaryLocked = locked && (primary != null || externalCover != null); backupLocked = locked && backup != null. 10/15, 10/24 (open since 9/22 evening) and the 16 open October backups stay fillable and show in diagnostics.uncovered with per-surgeon reasons (the 9/23 publish filled all of them but 10/15 primary, unlocked); import/manual locks always beat East-derived locks (with a warning)."
     },
     "eastFeed": {
@@ -316,7 +303,6 @@
         "enabled": true,
         "runs": 200,
         "busyThreshold": 0.5,
-        "penaltyBelowThreshold": "eastForecastBelowThreshold",
         "note": "Faraz 9/21 (evening): the Davenport schedule for the next period is not out until the end of 2026. Until it is published, east-feed.js runs the Davenport generator N times over the next period with the live Davenport inputs (config blob, time off, published weeks, read the way the live East feed reads them) and derives per-day probabilities that FAK is on East call. Probability >= busyThreshold is treated as East-busy for Silvis PRIMARY (backup allowed, as on real East days); below it a soft penalty applies; such days carry a 'forecast' badge. Prompt 12 C (9/22): precedence is published > override > forecast - inside the published East coverage the forecast is never consulted (published rows win), an east_overrides busy:false clears a forecast-busy day, and refreshing the East feed deletes the east_forecast rows for weeks that are now published (count in the east.refresh audit row); the East feed card and diagnostics.eastConflicts list the Silvis days the new East data makes ineligible. runs 200 requested; the JSON (docs/east-forecast-latest.json) records the executed count as runs beside requestedRuns; scripts/east-forecast.js reads this value as its --runs default. Reality check (small items 9/22): the committed docs/east-forecast-latest.json of 2026-09-22 05:51 UTC was produced BEFORE the script honoured this key and carries runs 100 with no requestedRuns; the next run of the script (a live Davenport read, run by Faraz) writes requestedRuns 200 and the executed count."
       },
       "note": "When the feed (published or forecast) does not cover a day, Khan is treated as clear with a low soft penalty (weights.eastUnknown) and the day is listed in diagnostics; never silently busy, never silently free without a listing. The former key unknownIsBusy was removed (audit RG-2, 9/23): the engine never read it, and rules.js warns if a blob still carries it."
@@ -336,7 +322,6 @@
       "holidayUnitCountsAsOneDay": true,
       "holidayUnitCountsAsOneDayNote": "9/22 (Prompt 12 A): opted in - his 4-day Thanksgiving unit counts as one day against his maxConsecutiveDays 3 and maxConsecutiveAnyRole 4; the other five count real days.",
       "primaryContribution": "weekends",
-      "weekendsInPool": true,
       "weekdays": {
         "allowed": [
           "Mon",
@@ -380,20 +365,7 @@
       "hardNeverWeekdaysRoles": [
         "primary"
       ],
-      "hardNeverWeekdaysNote": "9/22 (Faraz): Tue/Thu block PRIMARY only - backup any day, OR days included. Not applied on holiday-unit days (groupRules.holidays). [\"primary\"] is also the engine default when this key is absent or empty (an empty list never means 'no role'); list both roles to close backup again. 9/22 evening (Faraz, Prompt 12 W): Tue/Thu block PRIMARY by default - his East OR days are not every Tue/Thu, so a dated row of his (Setup availability list now, the offers painter from Prompt 14) lifts it for that date; nothing else lifts it (not a manual lock, which keeps the lock with hard-never-weekday in conflicts; never East busy days, vacations or derived locks - those are obligations). Tue/Thu are his OR days - the reason stays in this Note key and in docs/SILVIS-CALL-RULES.md section 3 only (9/22 late, Prompt 12 AA: the former hardNeverWeekdaysReason key is gone; no reason of any kind, not even a category token, reaches the anon-readable blob).",
-      "holidays2026": {
-        "thanksgiving": {
-          "days": [
-            "2026-11-26",
-            "2026-11-27",
-            "2026-11-28",
-            "2026-11-29"
-          ],
-          "role": "primary",
-          "source": "Faraz 9/21 (evening); confirmed by Faraz 9/22 (evening)",
-          "note": "One 4-day unit; locked rows in existingAssignments (source faraz-2026-09-21), confirmed by Faraz 9/22 evening (Prompt 12 Z; the item-B awaitingConfirmation flag is cleared); counts as one day for his consecutive limits via holidayUnitCountsAsOneDay (9/22, Prompt 12 A)."
-        }
-      }
+      "hardNeverWeekdaysNote": "9/22 (Faraz): Tue/Thu block PRIMARY only - backup any day, OR days included. Not applied on holiday-unit days (groupRules.holidays). [\"primary\"] is also the engine default when this key is absent or empty (an empty list never means 'no role'); list both roles to close backup again. 9/22 evening (Faraz, Prompt 12 W): Tue/Thu block PRIMARY by default - his East OR days are not every Tue/Thu, so a dated row of his (Setup availability list now, the offers painter from Prompt 14) lifts it for that date; nothing else lifts it (not a manual lock, which keeps the lock with hard-never-weekday in conflicts; never East busy days, vacations or derived locks - those are obligations). Tue/Thu are his OR days - the reason stays in this Note key and in docs/SILVIS-CALL-RULES.md section 3 only (9/22 late, Prompt 12 AA: the former hardNeverWeekdaysReason key is gone; no reason of any kind, not even a category token, reaches the anon-readable blob)."
     },
     "s2": {
       "name": "Burchett",
@@ -430,7 +402,6 @@
         "note": "Backup any weekend incl. Fridays when not primary (Oct statement)"
       },
       "weekendStyle": "split",
-      "splitPartner": "s3",
       "maxConsecutiveDays": 2,
       "maxConsecutiveAnyRole": 3,
       "holidayUnitCountsAsOneDay": false,
@@ -439,7 +410,6 @@
         "preferred": 7
       },
       "monthlyCapNote": "9/22 (Prompt 12 K): 8 PRIMARY days per month, hard; 7 preferred (soft). Backup days do not count toward either number (his 'total primary+backup <= 7-8' note predates the 9/22 rule).",
-      "holidayPreference": "Split Christmas: every other day, or 2 on then off",
       "explicitAvailable": {
         "2026-10": [
           "2026-10-06",
@@ -650,15 +620,12 @@
       "holidayRules": {
         "neverThanksgiving": true,
         "neverThanksgivingNote": "off (stated 9/17)",
-        "christmasOrNewYearOk": true,
-        "alternatingDaysOk": true,
         "holidaysOff": [
           "Thanksgiving"
         ],
         "holidaysOffNote": "Generalises neverThanksgiving; consulted on holiday-unit days where the weekday rules are waived."
       },
       "weekendStyle": "split",
-      "splitPartner": "s2",
       "maxConsecutiveDays": 3,
       "maxConsecutiveAnyRole": 4,
       "holidayUnitCountsAsOneDay": false,
@@ -776,7 +743,6 @@
       },
       "offerSourcesNote": "Prompt 14 P5 (9/23): his listed weeks (his 9/20 availability email) are the SOURCE of his call_offers rows for a period in which he has a mode (exhaustive): every day Mon-Sun of a listed week inside the period becomes an 'either' offer (his statement: weeks he could be primary or backup); weeks outside the period stay rules (rules.js reads availableWeeks outside any period). Consequence recorded as open question 15: under exhaustive 'either' his backup is limited to his weeks too (the pre-period weeks whitelist restricted primary only).",
       "preferences": {
-        "noFullWeek": true,
         "maxMajorHolidays": 1
       },
       "backupCap": {
@@ -842,7 +808,6 @@
       "backupNote": "9/22: backup any day - Clinton Tue/Thu and a standalone Friday, Saturday or Sunday included (weekdayPattern backup:true everywhere); the primary pattern is unchanged.",
       "availabilityMode": "derived-from-east-plus-weekday-pattern",
       "outsideDerivedWeeks": {
-        "canBePrimary": true,
         "weekdayPattern": {
           "Mon": {
             "where": "East (Davenport)",
@@ -897,16 +862,7 @@
       "eastFeed": {
         "enabled": true,
         "rule": "Davenport week flagged isBackup (Fierce PRIMARY at East) \u2192 Fierce is Silvis BACKUP every day Mon\u2013Sun. Davenport week flagged isFierceBackup (Fierce BACKUP at East) \u2192 Fierce is Silvis PRIMARY every day Mon\u2013Sun (24/7).",
-        "liveVerifiedDavenportPrimaryWeeks": [
-          "2026-09-28",
-          "2026-11-09"
-        ],
-        "liveVerifiedDavenportBackupWeeks": [
-          "2026-10-12"
-        ],
-        "liveVerifiedOn": "2026-09-21",
-        "liveVerifiedThrough": "2026-11-15",
-        "seedNote": "Read from the Davenport project's anon-readable schedule_weeks on 2026-09-21 (published through the week of 11/9). Later weeks appear once Faraz generates the next Davenport period \u2014 the East feed must re-fetch, never rely on this list. Cross-check: the ER-panel author's doc has Fierce as Silvis backup 9/28\u201310/4 (East primary week \u2713); Burchett's 9/18 email has Fierce primary 10/12 (East backup week \u2713).",
+        "seedNote": "The derived weeks come from the Davenport project's anon-readable schedule_weeks through the East feed at run time (east-feed.js), never from a list in this seed: later weeks appear once the next Davenport period is generated - re-fetch, never rely on a copy. (B10 9/23: the liveVerified* snapshot keys of 9/21 were read by nothing and are gone.)",
         "statedWeeks": {
           "eastPrimary": [
             "2026-11-09"
@@ -936,6 +892,7 @@
     "s6": {
       "name": "Sarkar",
       "poolMember": true,
+      "poolMemberNote": "B10 (9/23): stays TRUE on purpose. The pre-launch review suggested false because her windows already keep her out of the equal-share pool - but generator.js gates the window-week target on the same flag (poolMember === false = no targets of any kind), so false would silently drop her soft target of two days per window week (test/generator-regression.js pins impliedTargets.windowTarget). poolMember means eligible for a target (a share for a pool member, a window target for a windows surgeon), not membership of the share pool.",
       "backupOptOut": false,
       "backupNote": "9/22: backup on her remaining window days is allowed (not targeted); the windows govern both roles.",
       "availabilityMode": "whitelist-windows",

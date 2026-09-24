@@ -301,6 +301,12 @@ eq([KHAN, SARKAR].every((id) => "monthlyTarget" in SR[id] && SR[id].monthlyTarge
 // type "external" (the windows surgeon is outside the pool; her window primaries come off the pool's slots).
 const POOL = IDS.filter((id) => SR[id].poolMember !== false && !(Array.isArray(SR[id].availableWindows) && SR[id].availableWindows.length) && (seed.roster.find((r) => r.id === id) || {}).type !== "external");
 eq(POOL.slice().sort(), [KHAN, BURCHETT, ACTON, PHILIP, FIERCE].sort(), "seed: the equal-share pool is s1-s5 (Sarkar outside it)");
+// B10 (9/23): the pre-launch review suggested s6.poolMember false (her windows already keep her out of the share pool).
+// Tried and reverted: generator.js gates the WINDOW-WEEK target on the same flag (poolMember === false = no target of any
+// kind), so false dropped her soft target of two per window week - the impliedTargets.windowTarget pins below went
+// [null, null]. The flag stays true and the seed's poolMemberNote says why; this pin keeps the reading explicit.
+ok(SR[SARKAR].poolMember !== false, "B10: s6.poolMember must not be false - false switches her window-week target off (generator gate), it does not merely restate the pool exclusion");
+eq(IDS.filter((id) => SR[id].poolMember !== false && !(Array.isArray(SR[id].availableWindows) && SR[id].availableWindows.length) && (seed.roster.find((r) => r.id === id) || {}).type !== "external").slice().sort(), POOL.slice().sort(), "B10: with poolMember true for her, the windows alone keep Sarkar out of the share pool");
 eq(SR[PHILIP].backupCap.perMonthDays, 7, "seed: Philip backupCap.perMonthDays = 7 (clips his backup target)");
 const SCORE_PARTS = ["uncoveredPrimary", "uncoveredBackup", "hardViolations", "softSum", "primaryDeviation", "backupDeviation", "weekendSpread", "holidaySpread"];
 // WF (Faraz 9/23): the exponent of the deviation term - data in the seed, pinned to the generator's code default

@@ -123,6 +123,20 @@ report("A6c hospital staff names (roles only in a public repo)", tokenHits([
   "cf1e4b613986781992ff99a7c1b120e412a007cf5a0b1f64b677b510c4c44d47", "5b7e5cc8c743e78355d8f20081fce3f2b1d6e6b6d5935b40536a58a95c694989",
   "3392364c4b70a24cf7037515b1d6589a34bc21331e2874a74306cf7edfb835cc", "0467fa7edd5a90263f16dd4dd1e4f4ab42eae98971d502ab2f8715aaa405f8e8",
 ], "staff name"));
+// B10 (9/23): the lower-case form is scanned too since the ER-panel source slug became a role slug
+// (office-er-call-panels-<date>; the live notes are updated by hand with the same replace). Two lower-case
+// digests are on file (the slug's former tokens); every token of every file is compared lower-cased against them.
+report("A6c hospital staff names, lower case (slugs, notes, ids)", tokenHits([
+  "276b38da40a0f91d22d21753df65b89c4418aad3fc7f08f4249eef84148b7643", "300c38dc2890012c22f94f23796b5f36e915644b75346725debfcc0f08b203a4",
+], "staff name (lower case)", t => t.toLowerCase()));
+// and a shape pin on the seed's source slugs: a role or a roster last name, never a person outside the roster
+{
+  const seedForSlugs = JSON.parse(texts["docs/silvis-seed.json"]);
+  const SLUG_OK = /^(office-er-call-panels-\d{4}-\d{2}-\d{2}|burchett-(email|via-faraz)-\d{4}-\d{2}-\d{2}|faraz-\d{4}-\d{2}-\d{2}(-[a-z0-9-]+)?|fierce-\d{4}-\d{2}-\d{2}-[a-z-]+|email-relay|Faraz \d+\/\d+.*|Fierce via Faraz \d+\/\d+)$/;
+  const badSlugs = (seedForSlugs.existingAssignments || []).map(a => a.source).filter((s, i, a) => a.indexOf(s) === i).filter(s => !SLUG_OK.test(String(s)));
+  ok(badSlugs.length === 0, "seed existingAssignments[].source must be a role slug or a roster-name slug; unexpected: " + JSON.stringify(badSlugs));
+  ok((seedForSlugs.existingAssignments || []).some(a => /^office-er-call-panels-2026-09-(16|22)$/.test(a.source)), "the ER-panel rows carry the role slug office-er-call-panels-<date>");
+}
 
 // roster fullName = first + last (or empty), never a middle initial or a title:
 // the seed, config.js's INIT roster (six entries) and every fullName literal
