@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-X/2fIc615WxD0/SWweXzRNBxh0BVo3fS/oPTb7iiEMY=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-AogyuaXYM6rrADVQ0cuFHDnQopjTl5qOSeap35zfXsI=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-YyiLtBhxA1b78gIh/ziMwRFBCTjVx9bb+kuBEWCOkNs=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-ZVMB/9/iWSjJIsBh6/Bkdhv49PImoaKonLVm1IUMw2A=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.24d";
+    var APP_VERSION = "2026.09.24e";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -2534,10 +2534,15 @@ function CallSchedule() {
     }
     return true;
   };
-  const proposeTradeForDay = (day, role) => {
+  const proposeTradeForDay = (day, role, pick) => {
     setTradeDay(day);
     setTradeRole(role === "backup" ? "backup" : "primary");
-    if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);
+    if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);else if (isScheduler && pick && pick.from && poolSurgeons.some(s => s.id === pick.from)) setTradeFrom(pick.from);
+    if (pick && pick.to) {
+      setTradeTo(pick.to);
+      setTradeReturnDay(pick.returnDay || "");
+      if (pick.returnRole) setTradeReturnRole(pick.returnRole);
+    }
     setEditorDay(null);
     setView("timeoff");
   };
@@ -3919,6 +3924,35 @@ function CallSchedule() {
       name: "weekend block",
       days
     } : null;
+  };
+  const tradeAvoidWindow = (day, fromId) => vacConflict && vacConflict.personId === fromId && suIsIso(vacConflict.start) && suIsIso(vacConflict.end) && (vacConflict.items || []).some(i => i.day === day) ? {
+    start: vacConflict.start,
+    end: vacConflict.end
+  } : null;
+  const tradeSuggestionsFor = (day, role, fromId) => {
+    if (!rulesCtx || !suIsIso(day) || !fromId) return [];
+    const unit = tradeUnitOf(day, role, fromId);
+    const whole = !!unit && tradeWholeUnit;
+    return suggestTradePartners(rulesCtx, schedule, day, role, fromId, {
+      today: todayStr,
+      pool: poolSurgeons.map(s => s.id),
+      nameOf,
+      offerDays: whole ? unit.days : [day],
+      twoWay: !isScheduler,
+      floors: TOTALS_YTD_FLOORS,
+      eligibility: (days, r, cand) => days.length > 1 ? tradeEligibilityOver(days, r, cand) : tradeEligibility(days[0], r, cand),
+      unitOf: tradeUnitOf,
+      avoidReturnDays: tradeAvoidWindow(day, fromId)
+    });
+  };
+  const tradePickOf = (fromId, sug) => sug ? {
+    from: fromId,
+    to: sug.id,
+    name: sug.name,
+    returnDay: sug.returnDay,
+    returnRole: sug.returnRole
+  } : {
+    from: fromId
   };
   const unitText = u => `${u.name} unit ${fmtMD(u.days[0])}-${fmtMD(u.days[u.days.length - 1])} (${u.days.length} days)`;
   const tradeUnitStamp = (u, i) => `[unit ${u.kind} ${u.days[0]} ${u.days.length}: ${unitText(u)}, day ${i + 1} of ${u.days.length}]`;
@@ -6602,32 +6636,37 @@ function CallSchedule() {
       alignItems: "center",
       flexWrap: "wrap"
     })
-  }, React.createElement("span", null, React.createElement("strong", null, "Refused:"), " ", nameOf(vacConflict.personId), " is published on ", vacConflict.items.length, " day(s) in ", fmtMD(vacConflict.start), " - ", fmtMD(vacConflict.end), " - trade those shifts first:"), vacConflict.items.map(c => React.createElement("span", {
-    key: c.day + c.role,
-    style: {
-      display: "inline-flex",
-      gap: 3,
-      alignItems: "center"
-    }
-  }, isScheduler && React.createElement("button", {
-    "data-testid": "vac-conflict-day",
-    onClick: () => goToDay(c.day),
-    title: "Open the day editor for " + c.day,
-    style: css.mini(false)
-  }, fmtMD(c.day), " ", c.role, " - go to day"), !isScheduler && React.createElement("span", {
-    "data-testid": "vac-conflict-item",
-    style: {
-      fontWeight: 600
-    }
-  }, fmtMD(c.day), " ", c.role), React.createElement("button", {
-    "data-testid": "vac-conflict-trade",
-    onClick: () => proposeTradeForDay(c.day, c.role),
-    title: "Propose a trade for " + slotLabel(c.day, c.role),
-    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
-      color: "#6030a0",
-      borderColor: "#c0a8e0"
-    })
-  }, "propose a trade"))), React.createElement("button", {
+  }, React.createElement("span", null, React.createElement("strong", null, "Refused:"), " ", nameOf(vacConflict.personId), " is published on ", vacConflict.items.length, " day(s) in ", fmtMD(vacConflict.start), " - ", fmtMD(vacConflict.end), " - trade those shifts first:"), vacConflict.items.map(c => {
+    const sug = tradeSuggestionsFor(c.day, c.role, vacConflict.personId)[0] || null;
+    return React.createElement("span", {
+      key: c.day + c.role,
+      style: {
+        display: "inline-flex",
+        gap: 3,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }
+    }, isScheduler && React.createElement("button", {
+      "data-testid": "vac-conflict-day",
+      onClick: () => goToDay(c.day),
+      title: "Open the day editor for " + c.day,
+      style: css.mini(false)
+    }, fmtMD(c.day), " ", c.role, " - go to day"), !isScheduler && React.createElement("span", {
+      "data-testid": "vac-conflict-item",
+      style: {
+        fontWeight: 600
+      }
+    }, fmtMD(c.day), " ", c.role), React.createElement("button", {
+      "data-testid": "vac-conflict-trade",
+      "data-suggested": sug ? sug.id : undefined,
+      onClick: () => proposeTradeForDay(c.day, c.role, tradePickOf(vacConflict.personId, sug)),
+      title: "Propose a trade for " + slotLabel(c.day, c.role) + (sug ? " - suggested: " + sug.name + " (" + sug.reason + ")" : ""),
+      style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+        color: "#6030a0",
+        borderColor: "#c0a8e0"
+      })
+    }, "propose a trade", sug ? " - suggested: " + sug.name : ""));
+  }), React.createElement("button", {
     onClick: () => setVacConflict(null),
     "aria-label": "Dismiss",
     style: {
@@ -9109,6 +9148,10 @@ function CallSchedule() {
     onCancel: () => setEditorDay(null),
     onNav: editorNav,
     onTrade: proposeTradeForDay,
+    suggestTrade: (d, r) => {
+      const from = schedule[d] ? schedule[d][r] : null;
+      return from && poolSurgeons.some(s => s.id === from) ? tradePickOf(from, tradeSuggestionsFor(d, r, from)[0] || null) : null;
+    },
     css: css,
     dk: dk
   }), view === "openshifts" && !isPublicMode && (() => {
@@ -10347,7 +10390,50 @@ function CallSchedule() {
         color: "#8a3030",
         fontWeight: 600
       }
-    }, isScheduler ? "Unchecked: this single day would split the unit - you will be asked to confirm." : "A single day of a unit cannot be traded - tick the box to trade the whole unit.")), React.createElement("div", {
+    }, isScheduler ? "Unchecked: this single day would split the unit - you will be asked to confirm." : "A single day of a unit cannot be traded - tick the box to trade the whole unit.")), (() => {
+      if (!dayOk || holder !== fromId || !rulesCtx) return null;
+      const sugg = tradeSuggestionsFor(tradeDay, tradeRole, fromId);
+      if (!sugg.length) return null;
+      return React.createElement("div", {
+        "data-testid": "trade-suggested",
+        "data-count": sugg.length,
+        style: {
+          flex: "1 1 100%",
+          maxWidth: "100%",
+          display: "flex",
+          gap: 6,
+          alignItems: "center",
+          flexWrap: "wrap"
+        }
+      }, React.createElement("span", {
+        style: _objectSpread(_objectSpread({}, label), {}, {
+          marginBottom: 0,
+          display: "inline-block"
+        })
+      }, "Suggested"), sugg.map(x => React.createElement("button", {
+        key: x.id,
+        type: "button",
+        "data-testid": "trade-suggest-chip",
+        "data-id": x.id,
+        "data-return-day": x.returnDay || undefined,
+        "data-return-role": x.returnRole || undefined,
+        title: `${x.name}: ${x.reason}${x.softCount ? " - allowed with " + x.softCount + " note" + (x.softCount > 1 ? "s" : "") : ""}; ${tradeRole} total ${fmtMD(x.window.from)}-${fmtMD(x.window.to)}: ${x.total}. Tap to fill Trade with${x.returnDay ? " and the return day" : ""}.`,
+        onClick: () => {
+          setTradeTo(x.id);
+          setTradeReturnDay(x.returnDay || "");
+          if (x.returnRole) setTradeReturnRole(x.returnRole);
+        },
+        style: _objectSpread(_objectSpread(_objectSpread({}, css.mini(tradeTo === x.id)), tradeTo === x.id ? {} : {
+          color: "#6030a0",
+          borderColor: "#c0a8e0"
+        }), {}, {
+          whiteSpace: "normal",
+          textAlign: "left",
+          maxWidth: "100%",
+          lineHeight: 1.3
+        })
+      }, x.name, " - ", x.reason)));
+    })(), React.createElement("div", {
       className: "trade-pick-wrap"
     }, React.createElement("label", {
       style: label
@@ -10500,9 +10586,7 @@ function CallSchedule() {
     nameOf: nameOf,
     Badge: Badge,
     showToast: showToast,
-    ytdFloors: {
-      "2026": "2026-09-14"
-    },
+    ytdFloors: TOTALS_YTD_FLOORS,
     loaded: loaded
   }), view === "settings" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
     style: css.card
@@ -11273,7 +11357,59 @@ function CallSchedule() {
       fontSize: 10,
       whiteSpace: "nowrap"
     })
-  }, copiedUrl === "full" ? "Copied" : "Copy")))), isScheduler && React.createElement(React.Fragment, null, React.createElement("div", {
+  }, copiedUrl === "full" ? "Copied" : "Copy")))), isScheduler && React.createElement(React.Fragment, null, surgeons.filter(s => eastVacationPerson(s, surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed)).map(s => {
+    const combinedUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}&east=1`;
+    const key = "combined-" + s.id;
+    return React.createElement("div", {
+      key: key,
+      "data-testid": "combined-sync-" + s.id,
+      style: {
+        marginBottom: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 600,
+        color: "#5B6B82",
+        marginBottom: 4
+      }
+    }, s.name, " ", "\u2013", " combined Silvis + Davenport (where ", s.name, " is, every day):"), React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        alignItems: "center"
+      }
+    }, React.createElement("input", {
+      readOnly: true,
+      "data-testid": "combined-sync-url",
+      value: combinedUrl,
+      style: _objectSpread(_objectSpread({}, css.inp), {}, {
+        width: "100%",
+        maxWidth: 420,
+        fontSize: 10,
+        fontFamily: mono,
+        padding: "4px 8px"
+      }),
+      onClick: e => e.target.select()
+    }), React.createElement("button", {
+      "data-testid": "copy-combined-sync-url",
+      onClick: () => copyText(combinedUrl, key),
+      style: _objectSpread(_objectSpread({}, css.btn(copiedUrl === key)), {}, {
+        padding: "8px 14px",
+        fontSize: 11,
+        minHeight: 36,
+        whiteSpace: "nowrap"
+      })
+    }, copiedUrl === key ? "Copied" : "Copy")), React.createElement("div", {
+      "data-testid": "combined-sync-note",
+      style: {
+        fontSize: 11,
+        color: "#5B6B82",
+        marginTop: 4,
+        lineHeight: 1.5
+      }
+    }, "for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself", " (", s.name, "'s Silvis shifts plus one all-day entry per Davenport day: night, service week, weekend, holiday or day call, and \"away\" for a Davenport vacation reviewed as away)."));
+  }), React.createElement("div", {
     style: {
       fontSize: 11,
       fontWeight: 600,
@@ -13548,6 +13684,7 @@ function DayEditor(props) {
     onCancel,
     onNav,
     onTrade,
+    suggestTrade,
     css,
     dk,
     focusExternal
@@ -13823,6 +13960,8 @@ function DayEditor(props) {
     return pill(v);
   };
   const myRole = mySurgeon && entry ? entry.primary === mySurgeon ? "primary" : entry.backup === mySurgeon ? "backup" : null : null;
+  const tradeLinkRole = myRole || (entry && entry.primary ? "primary" : "backup");
+  const tradePick = typeof suggestTrade === "function" && !isPublicMode && (canEdit || myRole) ? suggestTrade(day, tradeLinkRole) : null;
   const optionLabel = (o, role) => {
     if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");
     const tag = offerTagFor(o.id, role);
@@ -14258,7 +14397,8 @@ function DayEditor(props) {
   }, !isPublicMode && (canEdit || myRole) && React.createElement("button", {
     type: "button",
     "data-testid": "editor-trade",
-    onClick: () => onTrade(day, myRole || (entry && entry.primary ? "primary" : "backup")),
+    "data-suggested": tradePick && tradePick.to ? tradePick.to : undefined,
+    onClick: () => onTrade(day, tradeLinkRole, tradePick || undefined),
     style: {
       background: "none",
       border: "none",
@@ -14267,9 +14407,10 @@ function DayEditor(props) {
       cursor: "pointer",
       fontFamily: font,
       textDecoration: "underline",
-      padding: 0
+      padding: 0,
+      textAlign: "left"
     }
-  }, "Propose a trade for this day"), React.createElement("span", {
+  }, "Propose a trade for this day", tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""), React.createElement("span", {
     style: {
       flex: 1
     }
@@ -14364,6 +14505,9 @@ function suPatternLabel(p) {
   return "every " + p.weekday;
 }
 const TOTALS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const TOTALS_YTD_FLOORS = {
+  "2026": "2026-09-14"
+};
 function TotalsCard({
   css,
   dk,
