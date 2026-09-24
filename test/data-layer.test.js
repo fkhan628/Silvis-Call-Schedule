@@ -999,6 +999,46 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(typeof H.ttOutsideSurgeons, "function");
     assert.ok(src.includes('data-testid="totals-external"') && src.includes('data-testid={"totals-ext-row-" + r.id}'), "Totals lacks the Outside surgeons section / rows");
   });
+  // Prompt 16 B6 (review 9/23 section 3): the vacation note reaches the anon-readable time_off table, so toAdd runs the
+  // roster note's denylist (SU_NOTE_DENYLIST) before the insert. Client-side only: no note column has a server-side
+  // denylist trigger (the day-editor and availability notes carry none at all - out of B6's scope).
+  check("B6: the vacation note gets the roster note's denylist - toAdd refuses before the on-call scan and the time_off insert, the toast names the matched word only", () => {
+    const fn = src.slice(src.indexOf("  const toAdd = async (personId, start, end, note) => {"), src.indexOf("  const deleteTimeOffRow = async (rowId) => {"));
+    assert.ok(fn.length > 400 && fn.length < 6000, "toAdd could not be sliced out");
+    const deny = fn.indexOf('const deny = String(note || "").match(SU_NOTE_DENYLIST);');
+    assert.ok(deny > 0, "toAdd has no `const deny = String(note || \"\").match(SU_NOTE_DENYLIST);`");
+    assert.ok(deny < fn.indexOf("vacationConflictItems("), "the note is refused before the on-call conflict scan");
+    assert.ok(deny < fn.indexOf('db.insert("time_off"'), "the note is refused before the insert");
+    assert.ok(fn.includes('if (deny) { const msg = `Refused: the vacation note carries a personal word ("${deny[1]}") - keep it operational (e.g. conference) or leave it blank; vacations are readable with the public key.`; showToast(msg, "error"); return { ok: false, error: msg }; }'),
+      "the refusal names the matched word (never the whole note), toasts and returns { ok: false } like the other refusals");
+    assert.strictEqual(count('db.insert("time_off"'), 1, "one time_off insert path in the app (the seed import posts through fetch and is gated by importer.js IMP_NOTE_DENYLIST)");
+    assert.strictEqual(count("SU_NOTE_DENYLIST"), 4, "SU_NOTE_DENYLIST: the definition, the roster note gate, the vacation note gate and the restore applier");
+  });
+  // B6 review: the second client path that writes time_off notes is the backup-restore applier (whole rows through
+  // fetch, on_conflict=id). A backup made before the denylist landed, or edited by hand, must not carry a personal
+  // note back into the anon-readable table: the note is blanked (the row still restores - never a refusal) and the
+  // count rides in the applier's counts, which config.js merges into the restore / import audit row.
+  check("B6 review: applyTablesUpsert blanks a time_off note that trips the denylist and counts it (time_off_notes_blanked), never refuses the restore", () => {
+    const fn = src.slice(src.indexOf("  const applyTablesUpsert = async ({ time_off, availability }) => {"), src.indexOf("  // The blob applier for restore / import: applyPayload calls it the moment"));
+    assert.ok(fn.length > 300 && fn.length < 4000, "applyTablesUpsert could not be sliced out");
+    assert.ok(fn.includes("const blanked = Array.isArray(time_off) ? time_off.filter(r => r && r.note && SU_NOTE_DENYLIST.test(r.note)) : [];"), "the applier does not scan the time_off notes with SU_NOTE_DENYLIST");
+    assert.ok(fn.includes('if (blanked.length) time_off = time_off.map(r => blanked.includes(r) ? { ...r, note: "" } : r);'), "a tripping note must be blanked, the row kept");
+    assert.ok(fn.includes("counts.time_off_notes_blanked = blanked.length;"), "the blanked count must ride in counts (config.js merges tables.counts into the audit row)");
+    assert.ok(fn.indexOf("counts.time_off_notes_blanked") < fn.indexOf("for (const [table, rows] of"), "the scan runs before the upsert loop");
+    assert.ok(!/return \{ ok: false[^}]*note/.test(fn), "a personal note must never fail the restore");
+  });
+  // B6 review: trade_insert_guard now writes the roster names on INSERT, but trade_update_guard does not pin the two
+  // name columns, so a party's status PATCH can still rewrite them. The client therefore treats the stored strings as
+  // write-only: tradeNamed resolves both names from the roster by id, unconditionally, and the accept / decline /
+  // cancel flows re-resolve the PATCH-returned row before it feeds the feed message, the audit line and the e-mail.
+  check("B6 review: tradeNamed resolves both display names from the roster by id (never the stored strings); accept / decline / cancel re-resolve the PATCH-returned row", () => {
+    assert.ok(src.includes("const tradeNamed = (r) => ({ ...r, from_surgeon_name: nameOf(r.from_surgeon_id), to_surgeon_name: nameOf(r.to_surgeon_id) });"), "tradeNamed must resolve from the roster by id unconditionally");
+    assert.ok(!src.includes("r.from_surgeon_name || nameOf") && !src.includes("r.to_surgeon_name || nameOf"), "tradeNamed must not prefer the stored name over the roster's");
+    for (const st of ["accepted", "declined", "cancelled"]) {
+      assert.ok(src.includes('const row = tradeNamed({ ...g, ...p.row, status: "' + st + '" });'), "the " + st + " flow must wrap the merged PATCH row in tradeNamed (p.row carries the stored names)");
+    }
+    assert.strictEqual(count("const row = { ...g, ...p.row, status:"), 0, "no status flow may adopt the PATCH-returned names unresolved");
+  });
   check("M: the manual-external literal never appears in the generator or the rules engine (the app writes it; the engine reads roster type only)", () => {
     const g = fs.readFileSync(path.join(ROOT, "generator.js"), "utf8"), r = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8");
     assert.ok(!g.includes('"manual-external"') && !r.includes('"manual-external"'));

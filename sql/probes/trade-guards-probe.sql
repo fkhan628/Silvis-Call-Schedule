@@ -62,6 +62,18 @@
 --        BEFORE and AFTER: accepted                 -> L=status=accepted
 --   M  PENDING trade on 2020-02-05 (past); s2 declines it
 --        BEFORE and AFTER: declined (only ACCEPT is gated) -> M=status=declined
+-- 2026-09-24 (Prompt 16 B6, sql/migrations/2026-09-24-definer-locks.sql) - the time_off table lock and the roster names.
+--   E2 observation right after E (the first case whose inner block COMMITS - a refused case like B rolls its
+--      subtransaction back, and a relation lock taken inside it is released with it): does this backend hold a granted
+--      ShareLock on public.time_off in pg_locks? `lock table ... in share mode` is a relation lock, first-class in
+--      pg_locks, held until the batch's transaction ends. A single batch cannot show a second session waiting; the
+--      wait itself is PostgreSQL's lock-conflict rule (a time_off writer's ROW EXCLUSIVE vs SHARE), and the statement's
+--      position (before the day-row locks and the vacation check) is pinned by test/schema.test.js.
+--        BEFORE: no table lock                          -> E2=share_locks=0
+--        AFTER : SHARE held since E                     -> E2=share_locks=1
+--   N  surgeon (s2) inserts a trade naming s3, with from_surgeon_name 'Mallory' and to_surgeon_name 'Eve'
+--        BEFORE: the client's strings are stored        -> N=from_name=Mallory to_name=Eve
+--        AFTER : the roster's names by id               -> N=from_name=Burchett to_name=Acton
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -226,6 +238,24 @@ begin
   insert into probe_results values ('E', v);
 end $$;
 
+-- ---------- E2: the lock E took and still holds - a granted ShareLock on public.time_off in pg_locks for this backend
+-- (E's inner block committed, so the relation lock stays until the batch's transaction ends; the one B took was released
+-- with B's aborted subtransaction, which is why the observation sits here and not after B)
+do $$
+declare n int; v text;
+begin
+  begin
+    select count(*) into n
+      from pg_locks
+     where locktype = 'relation' and relation = 'public.time_off'::regclass
+       and pid = pg_backend_pid() and mode = 'ShareLock' and granted;
+    v := 'share_locks=' || n::text;
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('E2', v);
+end $$;
+
 -- ---------- F: locked slot, SCHEDULER applies (lock must clear)
 do $$
 declare
@@ -388,6 +418,27 @@ begin
     v := 'ERR ' || sqlerrm;
   end;
   insert into probe_results values ('M', v);
+end $$;
+
+-- ---------- N: surgeon inserts a trade with client-chosen display names (the trigger must write the roster's)
+do $$
+declare
+  uid text := (select v from probe_ctx where k = 'surgeon');
+  tid uuid; fr text; tn text; v text;
+begin
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
+    insert into public.shift_trade_requests (from_surgeon_id, from_surgeon_name, to_surgeon_id, to_surgeon_name, day, role, status, detail)
+    values ('s2', 'Mallory', 's3', 'Eve', '2030-03-03', 'primary', 'pending', 'probe N') returning id into tid;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null again
+    select from_surgeon_name, to_surgeon_name into fr, tn from public.shift_trade_requests where id = tid;
+    v := 'from_name=' || coalesce(fr, 'null') || ' to_name=' || coalesce(tn, 'null');
+  exception when others then
+    v := 'ERR ' || sqlerrm;
+  end;
+  insert into probe_results values ('N', v);
 end $$;
 
 -- ---------- report + ROLL BACK EVERYTHING (this raise aborts the batch's transaction)

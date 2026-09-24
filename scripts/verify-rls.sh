@@ -111,6 +111,9 @@ if linked; then
     expect_past       K "2020-02-03"                             "surgeon accepting a pending trade on a past day is refused (trade_update_guard)"
     expect_eq         L "status=accepted"                        "scheduler accepts the same past-day trade"
     expect_eq         M "status=declined"                        "surgeon may still decline a past-day trade (only accept is gated)"
+    # 2026-09-24 (Prompt 16 B6, sql/migrations/2026-09-24-definer-locks.sql): the time_off table lock (SHARE, seen in pg_locks after E committed) and the roster names.
+    expect_eq         E2 "share_locks=1"                         "apply_trade holds SHARE on time_off (pg_locks, this backend) after E applied - a vacation inserted or edited concurrently waits (before the migration: share_locks=0)"
+    expect_eq         N "from_name=Burchett to_name=Acton"       "trade_insert_guard writes the display names from the roster (the client sent Mallory / Eve; before the migration: from_name=Mallory to_name=Eve)"
   fi
   # Did it roll back? Count every kind of fixture the probe creates (all anon-readable or auth rows).
   LEFTOVER_SQL="select ((select count(*) from public.schedule_days where day between '2030-03-01' and '2030-03-31' and source = 'probe') + (select count(*) from public.schedule_days where day between '2020-02-01' and '2020-02-29' and source = 'probe') + (select count(*) from public.shift_trade_requests where detail like 'probe %') + (select count(*) from public.time_off where note = 'probe') + (select count(*) from auth.users where email like 'probe-%@example.test'))::int as leftover"
@@ -203,6 +206,8 @@ if linked; then
     expect_code() { v=$(case_val "$1"); case "$v" in "ERR $2 $3"*) ok "claim probe $1: $4 ($2 $3)";; *) bad "claim probe $1: $4 (got '$v', expected 'ERR $2 $3 ...')";; esac; }
     expect_code A  42501 "permission denied for function claim_open_slot" "anon (role anon, no jwt sub) cannot execute the function"
     expect_eq   B  "ok version=2 backup=s3 source=claim audit=1 notif=Acton took 4/7 backup" "linked surgeon claims an open unlocked backup: version 2, source claim, audit row, feed row titled '<Name> took 4/7 backup'"
+    # 2026-09-24 (Prompt 16 B6, sql/migrations/2026-09-24-definer-locks.sql): the time_off table lock (SHARE, seen in pg_locks after B committed).
+    expect_eq   B2 "share_locks=1" "claim_open_slot holds SHARE on time_off (pg_locks, this backend) after B claimed - a vacation inserted or edited concurrently waits (before the migration: share_locks=0)"
     expect_code C  CL005 CLAIM_HELD          "held slot is refused"
     expect_code D  CL007 CLAIM_LOCKED        "locked slot is refused"
     expect_code E  CL003 CLAIM_PAST          "past day (2020-01-01, inside the range) is refused - PAST is checked before RANGE"

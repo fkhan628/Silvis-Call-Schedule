@@ -1155,6 +1155,12 @@ function CallSchedule() {
   const toAdd = async (personId, start, end, note) => {
     if (!personId || !start || !end) return { ok: false, error: "missing fields" };
     if (end < start) { showToast("End date is before the start date.", "error"); return { ok: false, error: "range" }; }
+    // Prompt 16 B6 (review 9/23 section 3): the same denylist as the Setup roster note - time_off is readable with the
+    // public key, so a personal reason must not reach it. Client-side only: no note column has a server-side denylist
+    // trigger; the seed import path is gated by importer.js IMP_NOTE_DENYLIST, the backup-restore applier
+    // (applyTablesUpsert) blanks such a note instead of refusing the restore.
+    const deny = String(note || "").match(SU_NOTE_DENYLIST);
+    if (deny) { const msg = `Refused: the vacation note carries a personal word ("${deny[1]}") - keep it operational (e.g. conference) or leave it blank; vacations are readable with the public key.`; showToast(msg, "error"); return { ok: false, error: msg }; }
     const conflictItems = vacationConflictItems(personId, start, end);
     const conflicts = conflictItems.map(c => `${fmtMD(c.day)} (${c.role})`);
     if (conflicts.length) {
@@ -3211,7 +3217,10 @@ function CallSchedule() {
     return Object.keys(schedule).sort().filter(d => d >= todayStr && (!limit || d <= limit) && schedule[d] && (schedule[d].primary === pid || schedule[d].backup === pid))
       .map(d => { const a = schedule[d]; const role = a.primary === pid ? "primary" : "backup"; return { day: d, role, other: role === "primary" ? dayHolder(a, "backup") : dayHolder(a, "primary"), locked: role === "primary" ? a.primaryLocked : a.backupLocked, a }; });
   };
-  const tradeNamed = (r) => ({ ...r, from_surgeon_name: r.from_surgeon_name || nameOf(r.from_surgeon_id), to_surgeon_name: r.to_surgeon_name || nameOf(r.to_surgeon_id) });
+  // Prompt 16 B6 review: the stored from/to names are write-only display data - trade_insert_guard writes the roster's on
+  // insert, but a party's status PATCH can still rewrite them (trade_update_guard does not pin those columns yet), so the
+  // app never renders them: both names are resolved from the roster by id, unconditionally.
+  const tradeNamed = (r) => ({ ...r, from_surgeon_name: nameOf(r.from_surgeon_id), to_surgeon_name: nameOf(r.to_surgeon_id) });
 
   // --- Propose ---
   const submitTradeRequest = async () => {
@@ -3403,7 +3412,7 @@ function CallSchedule() {
           if (!accepted.length) return;
           break;
         }
-        const row = { ...g, ...p.row, status: "accepted" };
+        const row = tradeNamed({ ...g, ...p.row, status: "accepted" });   // p.row carries the stored names - re-resolve
         accepted.push(row);
         setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
       }
@@ -3443,7 +3452,7 @@ function CallSchedule() {
       for (const g of group) {
         const p = await patchTradeStatus(g, "declined");
         if (!p.ok) { showToast(`Couldn't decline the trade${done.length ? ` (${done.length} of ${group.length} unit days were declined)` : ""}: ` + p.error, "error"); if (refreshTradesRef.current) refreshTradesRef.current(); if (!done.length) return; break; }
-        const row = { ...g, ...p.row, status: "declined" };
+        const row = tradeNamed({ ...g, ...p.row, status: "declined" });
         done.push(row);
         setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
       }
@@ -3468,7 +3477,7 @@ function CallSchedule() {
       for (const g of group) {
         const p = await patchTradeStatus(g, "cancelled");
         if (!p.ok) { showToast(`Couldn't cancel the trade${done.length ? ` (${done.length} of ${group.length} unit days were cancelled)` : ""}: ` + p.error, "error"); if (refreshTradesRef.current) refreshTradesRef.current(); if (!done.length) return; break; }
-        const row = { ...g, ...p.row, status: "cancelled" };
+        const row = tradeNamed({ ...g, ...p.row, status: "cancelled" });
         done.push(row);
         setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
       }
@@ -3973,6 +3982,12 @@ function CallSchedule() {
   // whole backup would fail - it needs a today-forward (Central) filter and on_conflict=person_id,day first.
   const applyTablesUpsert = async ({ time_off, availability }) => {
     const counts = {};
+    // Prompt 16 B6 review: a backup made before the vacation-note denylist landed (or edited by hand) must not carry a
+    // personal note back into the anon-readable time_off table. The note is blanked, the row still restores (never a
+    // refusal), and the count rides in counts (config.js merges it into the restore / import audit row).
+    const blanked = Array.isArray(time_off) ? time_off.filter(r => r && r.note && SU_NOTE_DENYLIST.test(r.note)) : [];
+    if (blanked.length) time_off = time_off.map(r => blanked.includes(r) ? { ...r, note: "" } : r);
+    counts.time_off_notes_blanked = blanked.length;
     for (const [table, rows] of [["time_off", time_off], ["availability", availability]]) {
       if (!Array.isArray(rows) || rows.length === 0) { counts[table + "_upserted"] = 0; continue; }
       const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=id`, {

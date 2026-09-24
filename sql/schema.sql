@@ -43,6 +43,13 @@
 -- call_offers policies admit a coordinator only under the transaction-local silvis.office_relay flag that save_offers sets;
 -- save_offers / set_offer_mode relay for another person (entered_by = the coordinator's profile id, source 'office-relay';
 -- a roster id only: OS004 / OM007); notif_insert / audit_insert gain the coordinator clause (actor_id = auth.uid()::text); audit_read_coord = own family rows.
+-- Revision 2026-09-24 l (Prompt 16 B6, sql/migrations/2026-09-24-definer-locks.sql, NOT yet applied): apply_trade() and
+-- claim_open_slot() take `lock table public.time_off in share mode` before the day-row locks and the vacation checks (every
+-- time_off writer holds ROW EXCLUSIVE, so a vacation inserted or edited concurrently waits for the swap and its trigger then
+-- sees it, or the function waits and its check sees the new row; no cycle - a time_off writer never waits on a day row);
+-- trade_insert_guard() writes the from/to display names from the roster. Residual (outside B6's three functions):
+-- trade_update_guard does not pin from_surgeon_name / to_surgeon_name, so a party's status PATCH may still rewrite the
+-- stored strings - the client renders roster names by id (tradeNamed); the one-liner is queued in docs/SCHEMA-REVIEW.md.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -315,11 +322,15 @@ create trigger trade_update_guard_trg
 -- path reaches it, but any future SECURITY DEFINER function owned by postgres that inserts a trade
 -- row would inherit it silently. Keep trade inserts out of security-definer code (or re-check
 -- silvis_is_sched() there). test/schema.test.js pins the exact role list.
+-- 2026-09-24 (Prompt 16 B6, review 9/23 section 3): from_surgeon_name / to_surgeon_name are written from the roster
+-- (call_schedule_data 'main' -> roster[] -> name by id) for EVERY insert, after the id normalisation, instead of storing
+-- the client's strings; an unknown id or a missing roster reads as the id (display data, never a refusal).
 create or replace function public.trade_insert_guard() returns trigger
 language plpgsql as $$
 declare
   me     text    := public.silvis_person_id();
   server boolean := auth.uid() is null and current_user in ('postgres', 'supabase_admin', 'service_role');
+  roster jsonb;
 begin
   if not (public.silvis_is_sched() or server) then
     if me is null then
@@ -333,6 +344,13 @@ begin
   if new.from_surgeon_id = new.to_surgeon_id then
     raise exception 'TRADE_INELIGIBLE: a trade needs two different surgeons' using errcode = 'P0001';
   end if;
+  -- (2026-09-24, Prompt 16 B6) the display names come from the roster, never from the client: call_schedule_data 'main'
+  -- -> roster[] -> name (last name) by id, looked up AFTER from_surgeon_id is final. An id the roster does not know, or a
+  -- missing / malformed roster, reads as the id itself - a name is display data, never a reason to refuse the insert.
+  select d.data -> 'roster' into roster from public.call_schedule_data d where d.id = 'main';
+  if roster is null or jsonb_typeof(roster) <> 'array' then roster := '[]'::jsonb; end if;
+  new.from_surgeon_name := coalesce(nullif((select r ->> 'name' from jsonb_array_elements(roster) r where r ->> 'id' = new.from_surgeon_id limit 1), ''), new.from_surgeon_id);
+  new.to_surgeon_name   := coalesce(nullif((select r ->> 'name' from jsonb_array_elements(roster) r where r ->> 'id' = new.to_surgeon_id limit 1), ''), new.to_surgeon_id);
   return new;
 end $$;
 drop trigger if exists trade_insert_guard_trg on public.shift_trade_requests;
@@ -364,6 +382,19 @@ create trigger trade_insert_guard_trg
 -- 2026-09-23 (audit RLS-6): right after the 'accepted' check and before the first row lock, a caller
 -- who is not the scheduler is refused with TRADE_PAST when the day or the return day is before today
 -- in America/Chicago (strict <, like claim_open_slot's CL003) - past days are the scheduler's to change.
+-- 2026-09-24 (Prompt 16 B6, review 9/23 section 3): right after the TRADE_PAST refusal and BEFORE the day rows are
+-- locked, the function takes `lock table public.time_off in share mode`. The race it closes: a vacation of a receiver
+-- inserted or edited onto the day while the trade is applied - the time_off BEFORE trigger reads schedule_days without
+-- locking, so under read committed both checks could pass (write skew). Every time_off writer holds ROW EXCLUSIVE on
+-- the relation from statement start (before its trigger runs), and ROW EXCLUSIVE conflicts with SHARE: the vacation
+-- write waits for this transaction and its trigger then sees the swap (ON_CALL_CONFLICT); in the other order this
+-- function waits for the vacation and check (b), a fresh snapshot per statement, sees the new or moved range. A
+-- row-level FOR SHARE would miss a row inserted concurrently (no predicate locks under read committed); the table lock
+-- covers both sides. No cycle: a time_off writer never waits on a trade row or a day row (its trigger only READS
+-- schedule_days; no function in this schema writes time_off), this function takes the time_off lock before any day
+-- row, SHARE is not self-conflicting (concurrent applies do not serialise) and every reader holds ACCESS SHARE. The
+-- lock runs as the table owner (security definer) and is held for the rest of the RPC's transaction - milliseconds.
+-- Lock order: trade row (update) -> time_off table (share) -> day rows (update).
 create or replace function public.apply_trade(p_trade_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -391,6 +422,11 @@ begin
     raise exception 'TRADE_PAST: % is before today (%) in Central time; past days are changed by the scheduler only',
       case when t.day < today_c then t.day else t.return_day end, today_c using errcode = 'P0001';
   end if;
+  -- (2026-09-24, Prompt 16 B6) SHARE on time_off before the day rows are locked and before the vacation check (b): a
+  -- vacation of either receiver inserted or edited concurrently waits for this transaction (its trigger then sees the
+  -- swap), or this function waits and (b) sees it - see the header. Lock order: trade row (update) -> time_off table
+  -- (share) -> day rows (update).
+  lock table public.time_off in share mode;
   select * into d1 from public.schedule_days where day = t.day for update;
   holder := case when t.role = 'primary' then d1.primary_id else d1.backup_id end;
   if not found or holder is distinct from t.from_surgeon_id then
@@ -503,6 +539,13 @@ grant execute on function public.apply_trade(uuid) to authenticated;
 --   CL008 CLAIM_OTHER_ROLE      caller already holds the other role that day
 --   CL009 CLAIM_VACATION        a time_off row of the caller overlaps the day
 --                               (or the next day when p_role = 'primary')
+--
+-- 2026-09-24 (Prompt 16 B6, review 9/23 section 3): after the four row-less refusals (CL001-CL004) and BEFORE the
+-- day row is locked, the function takes `lock table public.time_off in share mode`, so a vacation of the caller
+-- inserted or edited onto the day while the claim runs waits for this transaction (its trigger then sees the claim),
+-- or the claim waits and CL009 sees the new row - the same write skew apply_trade() closes, same reasoning (every
+-- time_off writer holds ROW EXCLUSIVE, which conflicts with SHARE), same deadlock argument (see apply_trade's header).
+-- Lock order: time_off table (share) -> the day row (update).
 -- ============================================================================
 create or replace function public.claim_open_slot(p_day date, p_role text) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -535,6 +578,11 @@ begin
   if lo is null or p_day < lo or p_day > hi then
     raise exception 'CLAIM_OUTSIDE_RANGE: % is outside the published schedule (% to %)', p_day, coalesce(lo::text, '-'), coalesce(hi::text, '-') using errcode = 'CL004';
   end if;
+
+  -- (2026-09-24, Prompt 16 B6) SHARE on time_off before the day row is locked and before the vacation check (CL009): a
+  -- vacation of the caller inserted or edited concurrently waits for this transaction, or this function waits and CL009
+  -- sees it - see the header. Lock order: time_off table (share) -> the day row (update).
+  lock table public.time_off in share mode;
 
   -- Lock the day's row; a day inside the range with no row gets one (source 'claim').
   select * into d from public.schedule_days where day = p_day for update;

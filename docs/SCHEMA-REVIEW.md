@@ -718,3 +718,53 @@ yet applied)` line + its pin, since that migration was applied 2026-09-23 ~18:45
 `node test/schema.test.js` (the `observed: ` pin only requires the prefix; the PREPARED pin must be updated to APPLIED).
 
 observed: applied 2026-09-23 ~18:35 Central by the orchestrator through the linked CLI (migration sha256 24a799ec73c4950d...). Probe BEFORE (the holes): `PROBE_RESULTS A1=own=1 sees_surgeon=1 sees_stranger=1;A2=contacts=1;A3=ok deleted=0;A4=ok;A5=updated=1;A6=updated=1;A7=ok rows=1;L1=own=1 leak=1 sched_ok=t;L10=ERR 42501 new row violates row-level security policy for table "call_offers";L11=updated=1;L12=ok rows=1;L13=deleted=1;L14=ok rows=1;L15=ERR OM005 MODE_FROZEN: offers for probe prelaunch published closed on 2030-06-20 - ask the scheduler;L2=contacts=1;L3=ok;L4=ok;L5=inserted (NO refusal);L6=updated=1;L7=updated=1;L8=deleted=0;L9=updated=1;N1=status=not_started;S1=own=1 leak=1 sched_ok=t;S2=contacts=1;S3=inserted (NO refusal);S4=inserted (NO refusal);END`. Probe AFTER: `PROBE_RESULTS A1=own=1 sees_surgeon=1 sees_stranger=1;A2=contacts=1;A3=ok deleted=3;A4=ok;A5=updated=1;A6=updated=1;A7=ok rows=1;L1=own=1 leak=0 sched_ok=t;L10=ERR OF004 OFFER_IMMUTABLE: an offer keeps its day and person (s3 2030-07-06) - clear it and offer the other day instead;L11=updated=1;L12=ERR OF003 OFFER_FROZEN: offers for probe prelaunch published closed on 2030-06-20 - ask the scheduler;L13=ERR OF003 OFFER_FROZEN: offers for probe prelaunch published closed on 2030-06-20 - ask the scheduler;L14=ok rows=1;L15=ERR OM005 MODE_FROZEN: offers for probe prelaunch published closed on 2030-06-20 - ask the scheduler;L2=contacts=0;L3=ok;L4=ok;L5=ERR 42501 new row violates row-level security policy for table "audit_log";L6=ERR 42501 new row violates row-level security policy for table "user_profiles";L7=updated=1;L8=deleted=0;L9=ERR OF004 OFFER_IMMUTABLE: an offer keeps its day and person (s3 2030-07-05) - clear it and offer the other day instead;N1=ERR 42501 permission denied for function offer_status;S1=own=1 leak=0 sched_ok=t;S2=contacts=0;S3=ERR 42501 new row violates row-level security policy for table "notifications";S4=ERR 42501 new row violates row-level security policy for table "audit_log";END`. Leftover count 0 before and after. Policies re-read: user_profiles_read = (id = auth.uid()) OR silvis_is_sched() OR role in (admin, scheduler); user_profiles_self_update with-check pins role, person_id and email; contacts_read = silvis_is_sched(); notif_insert = silvis_is_sched() OR silvis_person_id() is not null; notif_delete_sched = silvis_is_sched(); audit_insert = silvis_is_sched() OR (silvis_person_id() is not null AND actor_id = silvis_person_id()); offer_status EXECUTE now authenticated / postgres / service_role only (anon rpc -> HTTP 401 42501). verify-rls.sh after the migration: 99 PASS / 0 FAIL once the grader strips the CLI-escaped quotes (before that fix 95 / 4 - the four were the escaped-quote artefact, every value correct).
+
+## 2026-09-24 - definer locks + roster names (Prompt 16 B6; `sql/migrations/2026-09-24-definer-locks.sql`)
+
+**Status: NOT yet applied** - the orchestrator applies after Faraz's go (report-first, guide section 4.3). Review 2026-09-23
+section 3, security minors: `apply_trade` and `claim_open_slot` did not lock `time_off` (write skew with a simultaneous vacation
+change), and `trade_insert_guard` stored the client's `from_surgeon_name` / `to_surgeon_name`. One migration, three functions
+(create or replace, idempotent), the `trade_insert_guard_trg` trigger re-created, both RPC revoke / grant pairs re-run; no table,
+policy or row is touched. Bodies byte-identical to `sql/schema.sql` (`test/schema.test.js` pins them and freezes the superseded
+9/22 `trade_insert_guard`, 9/23 trade-past `apply_trade` and 9/23 claim-offer `claim_open_slot` by sha256).
+
+- **Table lock.** Both functions run `lock table public.time_off in share mode;` after the past-day / row-less refusals and
+  BEFORE the `schedule_days` row locks and the vacation checks. Lock order: `apply_trade` trade row (update) -> time_off table
+  (share) -> day rows (update); `claim_open_slot` time_off table (share) -> the day row (update). Why a table lock and not a
+  row lock: the common race is a vacation INSERTED while the trade or claim is decided (the app's `toAdd`), and no row lock
+  can cover a row that does not exist yet; every INSERT / UPDATE / DELETE on `time_off` holds ROW EXCLUSIVE on the relation
+  from statement start (before its trigger runs), and ROW EXCLUSIVE conflicts with SHARE. So the vacation write waits until
+  the apply / claim commits and its trigger then sees the committed swap (`ON_CALL_CONFLICT`), or - the other order - the
+  function waits until the vacation commits and check (b) / CL009, a fresh snapshot per statement, sees the new or moved
+  range. Deadlock-free: a `time_off` writer holds its table + tuple locks and only READS `schedule_days` (ACCESS SHARE; no
+  function in the schema writes `time_off`), so it never waits on anything these functions hold; the functions take the
+  `time_off` lock before any day row; SHARE is not self-conflicting (concurrent applies / claims do not serialise); every
+  reader holds ACCESS SHARE. The lock is held for the rest of the RPC's transaction (milliseconds); a vacation save landing
+  in that window waits, then its own trigger decides. The trigger-side change an earlier draft proposed
+  (`time_off_no_call_conflict` reading `schedule_days ... FOR SHARE`) is NOT needed with the table lock.
+- **Roster names.** `trade_insert_guard` sets both display names from `call_schedule_data 'main' -> roster[]` by id for every
+  insert, after the id normalisation; an unknown id or a missing / malformed roster reads as the id (never a refusal).
+  **Residual (outside B6's three functions):** `trade_update_guard` does not pin the two name columns and policy `trade_update`
+  has no WITH CHECK, so a party's status PATCH may still carry `from_surgeon_name` / `to_surgeon_name`. Client side (this
+  commit): `tradeNamed` in `index-source.html` resolves both names from the roster by id unconditionally, and the accept /
+  decline / cancel flows re-resolve the PATCH-returned row before it feeds the feed message, the audit line and the e-mail -
+  the stored strings are write-only display data. Queued for whoever owns `trade_update_guard` (a migration of its own, probe
+  case: a member accepts with names 'Mallory' / 'Eve' -> names unchanged; `schema.test.js` pin), before the status logic:
+  `if not public.silvis_is_sched() then new.from_surgeon_name := old.from_surgeon_name; new.to_surgeon_name := old.to_surgeon_name; end if;`
+- **Vacation note denylist** is client-side only: `toAdd` refuses a note that trips the roster note's `SU_NOTE_DENYLIST` (the
+  toast names the matched word only), and the backup-restore applier `applyTablesUpsert` blanks such a note instead of
+  refusing the restore (count `time_off_notes_blanked` in the audit row's counts). No note column (`schedule_days.note`,
+  `availability.note`, `call_offers.note`, `time_off.note`, the roster note) has a server-side denylist trigger; one migration
+  for all of them is a later option.
+
+Apply: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-definer-locks.sql` (after the 9/23
+trade-past migration, applied ~16:00 UTC). Probes (both roll themselves back; `scripts/verify-rls.sh` sections 5 and 7 grade
+them): trade probe `E2` = `share_locks=0` before -> `share_locks=1` after (a relation lock is first-class in `pg_locks`: mode
+`ShareLock`, this backend's pid, granted; read right after E because E's inner block COMMITS - a lock taken inside the refused B
+is released with B's subtransaction), `N` = `from_name=Mallory to_name=Eve` before -> `from_name=Burchett to_name=Acton` after;
+claim probe `B2` = `share_locks=0` before -> `share_locks=1` after (B commits); every other case unchanged; leftover counts 0.
+A single batch cannot show a second session waiting - that is PostgreSQL's lock-conflict rule; the statement and its position
+are pinned by `test/schema.test.js`. Pre-check (nothing to migrate): `select count(*) from public.shift_trade_requests where
+status in ('pending', 'accepted');`.
+
+observed: (placeholder - the orchestrator fills in the apply time, the before / after `PROBE_RESULTS` lines for E2 / N / B2 and the leftover counts)

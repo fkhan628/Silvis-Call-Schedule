@@ -54,6 +54,12 @@
 --   J  4/25 (after max(day) = 4/17) backup               -> J=ERR CL004 CLAIM_OUTSIDE_RANGE: 2030-04-25 is outside the published schedule (2020-01-01 to 2030-04-17)
 --   K  4/9 (inside the range, NO row) backup             -> K=ok version=2 backup=s3 source=claim
 --   L  the scheduler updates 4/3 primary directly (day-editor path, RLS write policy) -> L=ok rows=1 primary=s4
+--   B2 observation right after B (2026-09-24, Prompt 16 B6, sql/migrations/2026-09-24-definer-locks.sql): does this
+--      backend hold a granted ShareLock on public.time_off in pg_locks? claim_open_slot takes `lock table ... in share
+--      mode` before the day row and CL009; B's inner block committed, so the relation lock stays until the batch's
+--      transaction ends (first-class in pg_locks, unlike a row lock). A single batch cannot show a second session
+--      waiting; the wait itself is PostgreSQL's lock-conflict rule (a time_off writer's ROW EXCLUSIVE vs SHARE).
+--        BEFORE that migration: B2=share_locks=0        AFTER: B2=share_locks=1
 -- (';' and quotes are flattened out of the values before the raise, hence the two spaces in D and E.)
 -- ============================================================================
 
@@ -144,6 +150,23 @@ begin
     v := 'ERR ' || sqlstate || ' ' || sqlerrm;
   end;
   insert into probe_results values ('B', v);
+end $$;
+
+-- ---------- B2: the lock B took and still holds - a granted ShareLock on public.time_off in pg_locks for this backend
+-- (B's inner block committed, so the relation lock stays until the batch's transaction ends)
+do $$
+declare n int; v text;
+begin
+  begin
+    select count(*) into n
+      from pg_locks
+     where locktype = 'relation' and relation = 'public.time_off'::regclass
+       and pid = pg_backend_pid() and mode = 'ShareLock' and granted;
+    v := 'share_locks=' || n::text;
+  exception when others then
+    v := 'ERR ' || sqlstate || ' ' || sqlerrm;
+  end;
+  insert into probe_results values ('B2', v);
 end $$;
 
 -- ---------- C: slot already held

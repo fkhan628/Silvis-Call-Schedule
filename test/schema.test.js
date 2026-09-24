@@ -33,6 +33,17 @@
 //   sql/migrations/, may name an unmerged migration only while that file does not exist (fail
 //   closed once it lands), and every function a migration CREATE OR REPLACEs must be mirrored
 //   in schema.sql byte-identically from the NEWEST migration touching it.
+// Prompt 16 B6 (2026-09-24, review 9/23 section 3 - sql/migrations/2026-09-24-definer-locks.sql):
+//   - apply_trade() and claim_open_slot() take `lock table public.time_off in share mode` BEFORE the
+//     schedule_days row locks and before the vacation checks: every INSERT / UPDATE / DELETE on time_off
+//     holds ROW EXCLUSIVE, which conflicts with SHARE, so a vacation written concurrently (inserted OR
+//     edited) waits for the swap and its trigger then sees it, or the function waits and its own check
+//     sees the new row (lock order documented in both headers; the probes observe the relation lock in
+//     pg_locks after a case whose subtransaction committed - trade E2, claim B2),
+//   - trade_insert_guard() writes from_surgeon_name / to_surgeon_name from the roster for every
+//     insert, after the id normalisation (probe case N),
+//   - the superseded bodies (9/22 trade_insert_guard, 9/23 trade-past apply_trade, 9/23 claim-offer
+//     claim_open_slot) are frozen by sha256; schema.sql mirrors the three from the 9/24 file.
 //   node test/schema.test.js
 
 "use strict";
@@ -45,6 +56,7 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..");
 const SCHEMA = path.join(ROOT, "sql", "schema.sql");
 const MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-22-trade-guards.sql");
+const LOCKS_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-definer-locks.sql");   // Prompt 16 B6: the newest for the three
 const PROBE = path.join(ROOT, "sql", "probes", "trade-guards-probe.sql");
 const VERIFY = path.join(ROOT, "scripts", "verify-rls.sh");
 
@@ -74,7 +86,9 @@ const schema = read(SCHEMA);
 ok(!/\r/.test(schema), "schema.sql has CRLF line endings");
 
 /* ------------------------------------------------- trade_insert_guard() */
-function checkInsertGuard(n, s) {
+// `names` = true for schema.sql and the 2026-09-24 definer-locks migration (roster names); false for the
+// 2026-09-22 migration, frozen as applied.
+function checkInsertGuard(n, s, names) {
   const fn = functionText(s, "trade_insert_guard");
   ok(fn, n + ": no `create or replace function public.trade_insert_guard()` ... `end $$;` block");
   ok(/returns trigger/.test(fn), n + ": trade_insert_guard must return trigger");
@@ -89,12 +103,32 @@ function checkInsertGuard(n, s) {
   ok(/server boolean := auth\.uid\(\) is null and current_user in \('postgres', 'supabase_admin', 'service_role'\);/.test(fn),
     n + ": server-side bypass must stay exactly `auth.uid() is null and current_user in ('postgres', 'supabase_admin', 'service_role')`");
   ok(/if not \(public\.silvis_is_sched\(\) or server\) then/.test(fn), n + ": normalisation must apply to everyone who is neither scheduler nor server");
+  // Prompt 16 B6 (review 9/23 section 3): the display names come from the roster, never from the client - for EVERY
+  // insert (no scheduler / server branch), looked up AFTER from_surgeon_id is final; an unknown id or a missing /
+  // malformed roster degrades to the id (a name is display data, never a reason to refuse the insert).
+  const ROSTER_READ = "select d.data -> 'roster' into roster from public.call_schedule_data d where d.id = 'main';";
+  if (names) {
+    const rosterAt = fn.indexOf(ROSTER_READ);
+    const norm = fn.indexOf("new.from_surgeon_id := me;");
+    const same = fn.indexOf("TRADE_INELIGIBLE: a trade needs two different surgeons");
+    const fr = fn.indexOf("new.from_surgeon_name := coalesce(nullif((select r ->> 'name' from jsonb_array_elements(roster) r where r ->> 'id' = new.from_surgeon_id limit 1), ''), new.from_surgeon_id);");
+    const to = fn.indexOf("new.to_surgeon_name   := coalesce(nullif((select r ->> 'name' from jsonb_array_elements(roster) r where r ->> 'id' = new.to_surgeon_id limit 1), ''), new.to_surgeon_id);");
+    ok(/\n  roster jsonb;\n/.test(fn), n + ": trade_insert_guard must declare `roster jsonb`");
+    ok(rosterAt > 0, n + ": trade_insert_guard must read the roster with `" + ROSTER_READ + "`");
+    ok(rosterAt > norm && rosterAt > same, n + ": the roster lookup must come AFTER the from_surgeon_id normalisation and the from = to check (the name follows the FINAL id)");
+    ok(fn.indexOf("if roster is null or jsonb_typeof(roster) <> 'array' then roster := '[]'::jsonb; end if;") > rosterAt, n + ": a missing or malformed roster must degrade to '[]' (the names fall back to the ids), never fail the insert");
+    ok(fr > rosterAt && to > fr && to < fn.lastIndexOf("return new;"), n + ": from_surgeon_name then to_surgeon_name must be set from the roster (coalesce(nullif(name, ''), id)) before `return new`");
+    eq((fn.match(/surgeon_name\s*:=/g) || []).length, 2, n + ": exactly two name assignments (from, to), outside every branch;");
+    ok(!/if .*surgeon_name|surgeon_name.*then/.test(fn), n + ": the name assignments must not be conditional on the caller");
+  } else {
+    ok(!/surgeon_name/.test(fn), n + ": is frozen as applied on 2026-09-22 - the roster names belong to sql/migrations/2026-09-24-definer-locks.sql");
+  }
   ok(/drop trigger if exists trade_insert_guard_trg on public\.shift_trade_requests;/.test(s), n + ": trigger drop-if-exists missing (idempotency)");
   ok(/create trigger trade_insert_guard_trg\s+before insert on public\.shift_trade_requests\s+for each row execute function public\.trade_insert_guard\(\);/.test(s),
     n + ": `create trigger trade_insert_guard_trg before insert on public.shift_trade_requests for each row execute function public.trade_insert_guard();` missing");
 }
 step("trade_insert_guard() + BEFORE INSERT trigger in schema.sql");
-checkInsertGuard("schema.sql", schema);
+checkInsertGuard("schema.sql", schema, true);
 
 /* --------------------------------------------------------- apply_trade() */
 const CHECKS = [
@@ -107,13 +141,31 @@ const CHECKS = [
 // TRADE_PAST (audit RLS-6): one message in both functions, so the client shows one sentence.
 const PAST_MSG = "TRADE_PAST: % is before today (%) in Central time; past days are changed by the scheduler only";
 const TODAY_C = /today_c\s+date\s+:= \(now\(\) at time zone 'America\/Chicago'\)::date;/;
-// `past` = true for schema.sql and the 2026-09-23 migration; false for the 2026-09-22 migration, frozen as applied.
-function checkApplyTrade(n, s, past) {
+// `past` = true for schema.sql and the 2026-09-23 / 2026-09-24 migrations; false for the 2026-09-22 migration, frozen as applied.
+// `locks` (Prompt 16 B6) = true for schema.sql and the 2026-09-24 definer-locks migration; false for the two frozen files.
+// The table lock (review of B6): a row-level FOR SHARE cannot cover a vacation row INSERTED concurrently (no predicate
+// locks under read committed), so both functions take SHARE on the relation instead - every INSERT / UPDATE / DELETE on
+// time_off holds ROW EXCLUSIVE, which conflicts with SHARE; a time_off writer's trigger reads schedule_days without
+// locking, so it never waits on anything these functions hold (no cycle); SHARE is not self-conflicting (concurrent
+// applies / claims do not serialise). The definer function runs as the table owner, so the privilege check passes.
+const LOCK_TABLE = "lock table public.time_off in share mode;";
+function checkApplyTrade(n, s, past, locks) {
   const fn = functionText(s, "apply_trade");
   ok(fn, n + ": no `create or replace function public.apply_trade(p_trade_id uuid)` block");
   ok(/security definer set search_path = public/.test(fn), n + ": apply_trade must stay security definer with search_path = public");
   const firstWrite = fn.indexOf("update public.schedule_days");
   ok(firstWrite > 0, n + ": apply_trade has no `update public.schedule_days`");
+  if (locks) {
+    const l1 = fn.indexOf(LOCK_TABLE), d1 = fn.indexOf("select * into d1 from public.schedule_days");
+    ok(l1 > 0, n + ": apply_trade must take `" + LOCK_TABLE + "` (SHARE conflicts with every time_off writer's ROW EXCLUSIVE: a vacation inserted or edited concurrently waits for the swap, or the function waits and its check sees the new row)");
+    ok(l1 > fn.indexOf("TRADE_PAST"), n + ": the table lock comes AFTER the past-day refusal (a refused apply locks nothing)");
+    ok(d1 > 0 && l1 < d1, n + ": the table lock comes BEFORE the first schedule_days row lock (lock order: trade row -> time_off table (share) -> day rows (update); a time_off writer never waits on a day row, so no cycle)");
+    ok(l1 < fn.indexOf("is on vacation on"), n + ": the table lock comes BEFORE the vacation check (b)");
+    eq((fn.match(/lock table/g) || []).length, 1, n + ": exactly one `lock table` statement in apply_trade (unconditional: one relation lock covers both receivers);");
+    ok(!/for share/.test(fn), n + ": no row-level `for share` in apply_trade (it could not cover a concurrently INSERTED row; the table lock replaced it)");
+  } else {
+    ok(!/lock table|for share/.test(fn), n + ": is frozen as applied - the time_off table lock belongs to sql/migrations/2026-09-24-definer-locks.sql");
+  }
   if (past) {
     ok(TODAY_C.test(fn), n + ": apply_trade must compute today_c in America/Chicago (like claim_open_slot)");
     const cond = "if not sched and (t.day < today_c or (t.return_day is not null and t.return_day < today_c)) then";
@@ -154,7 +206,7 @@ function checkApplyTrade(n, s, past) {
   ok(/grant execute on function public\.apply_trade\(uuid\) to authenticated;/.test(s), n + ": grant on apply_trade missing");
 }
 step("apply_trade() eligibility checks, in order, before the first schedule_days write (schema.sql)");
-checkApplyTrade("schema.sql", schema, true);
+checkApplyTrade("schema.sql", schema, true, true);
 
 /* ---------------------------------------- trade_update_guard() (RLS-6) */
 function checkUpdateGuard(n, s) {
@@ -189,32 +241,39 @@ checkUpdateGuard("schema.sql", schema);
 step("2026-09-22 migration file defines the same objects (apply_trade as applied, without TRADE_PAST)");
 const migration = read(MIGRATION);
 ok(!/\r/.test(migration), "migration has CRLF line endings");
-checkInsertGuard("migration", migration);
-checkApplyTrade("migration", migration, false);
+checkInsertGuard("migration", migration, false);
+checkApplyTrade("migration", migration, false, false);
 
-step("2026-09-22 migration: trade_insert_guard byte-identical to schema.sql; both bodies frozen as applied live (sha256)");
+step("2026-09-22 migration: both bodies frozen as applied live (sha256); schema.sql's trade_insert_guard = the 2026-09-24 definer-locks migration (the newest touching it)");
 (function frozen() {
-  const a = functionText(schema, "trade_insert_guard"), b = functionText(migration, "trade_insert_guard");
-  ok(a && b && a === b, "trade_insert_guard(): migration text differs from schema.sql (keep them identical; the migration is what ran live)");
   const sha = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
   eq(sha(functionText(migration, "apply_trade")), "d9ec012b9265b8a7fe4f6db7242165e181709d58f824bdf72a793a7c9d908737",
     "2026-09-22-trade-guards.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-22 (a change belongs in a NEW migration);");
-  eq(sha(b), "b2b5e23fe401765241523846131265825bdcca18bcfb41f1d328d54729357a5b",
-    "2026-09-22-trade-guards.sql trade_insert_guard() must stay byte-for-byte what was applied live on 2026-09-22;");
+  eq(sha(functionText(migration, "trade_insert_guard")), "b2b5e23fe401765241523846131265825bdcca18bcfb41f1d328d54729357a5b",
+    "2026-09-22-trade-guards.sql trade_insert_guard() must stay byte-for-byte what was applied live on 2026-09-22 (the roster names went into the 2026-09-24 migration);");
+  const a = functionText(schema, "trade_insert_guard"), b = functionText(read(LOCKS_MIGRATION), "trade_insert_guard");
+  ok(a && b && a === b, "trade_insert_guard(): schema.sql differs from sql/migrations/2026-09-24-definer-locks.sql (the newest migration touching it; keep them identical)");
 })();
 
 const PAST_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-trade-past-guard.sql");
-step("2026-09-23 trade-past-guard migration: apply_trade + trade_update_guard, byte-identical to schema.sql, trigger re-created, grants re-run");
+step("2026-09-23 trade-past-guard migration: apply_trade (frozen as applied) + trade_update_guard (byte-identical to schema.sql), trigger re-created, grants re-run");
 const pastMigration = read(PAST_MIGRATION);
 ok(!/\r/.test(pastMigration), "trade-past migration has CRLF line endings");
-checkApplyTrade("trade-past migration", pastMigration, true);
+checkApplyTrade("trade-past migration", pastMigration, true, false);
 checkUpdateGuard("trade-past migration", pastMigration);
 eq((pastMigration.match(/create or replace function/g) || []).length, 2, "the trade-past migration must define apply_trade and trade_update_guard and nothing else;");
 ok(!/drop function|drop table|create table|drop policy|create policy/.test(pastMigration), "the trade-past migration must not drop or create anything besides the trigger re-create");
-["apply_trade", "trade_update_guard"].forEach((name) => {
-  const a = functionText(schema, name), b = functionText(pastMigration, name);
-  ok(a && b && a === b, name + "(): trade-past migration text differs from schema.sql (keep them identical; the migration is what runs live)");
-});
+// Applied 2026-09-23 ~16:00 UTC (docs/SCHEMA-REVIEW.md). Its apply_trade is superseded by the 2026-09-24 definer-locks
+// migration, so both bodies are frozen by sha256 here; trade_update_guard is still newest in THIS file and schema.sql mirrors it.
+(function pastFrozen() {
+  const sha = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
+  eq(sha(functionText(pastMigration, "apply_trade")), "ba433b008cbb6e8ff9cbd750a5f37fab65a7edfeb9f200375eb1de9754648ae6",
+    "2026-09-23-trade-past-guard.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-23 (the share locks went into the 2026-09-24 migration);");
+  eq(sha(functionText(pastMigration, "trade_update_guard")), "61964f85e58847427e8dc69517051aebe99d022900f9893f14784d0db2697045",
+    "2026-09-23-trade-past-guard.sql trade_update_guard() must stay byte-for-byte what was applied live on 2026-09-23 (a change belongs in a NEW migration);");
+  const a = functionText(schema, "trade_update_guard"), b = functionText(pastMigration, "trade_update_guard");
+  ok(a && b && a === b, "trade_update_guard(): trade-past migration text differs from schema.sql (keep them identical; the migration is what runs live)");
+})();
 ok(/-- Revision 2026-09-23 e \(audit RLS-6, sql\/migrations\/2026-09-23-trade-past-guard\.sql\)/.test(schema), "schema.sql header must record revision e (TRADE_PAST)");
 
 /* ------------------------------------------------------------- probe */
@@ -278,9 +337,20 @@ const CLAIM_CODES = [
   ["CL008", "CLAIM_OTHER_ROLE"],
   ["CL009", "CLAIM_VACATION"],
 ];
-function checkClaim(n, s) {
+// `locks` (Prompt 16 B6) = true for schema.sql and the 2026-09-24 definer-locks migration; false for the frozen 9/22 file.
+function checkClaim(n, s, locks) {
   const fn = functionText(s, "claim_open_slot");
   ok(fn, n + ": no `create or replace function public.claim_open_slot(p_day date, p_role text)` ... `end $$;` block");
+  if (locks) {
+    const at = fn.indexOf(LOCK_TABLE);
+    ok(at > 0, n + ": claim_open_slot must take `" + LOCK_TABLE + "` (same reasoning as apply_trade: a concurrent vacation insert or edit waits, or the claim waits and CL009 sees the new row)");
+    ok(at > fn.indexOf("CLAIM_OUTSIDE_RANGE"), n + ": the table lock comes AFTER the four row-less refusals (CL001-CL004 lock nothing)");
+    ok(at < fn.indexOf("select * into d from public.schedule_days where day = p_day for update;"), n + ": the table lock comes BEFORE the day row is locked (lock order: time_off table (share) -> the day row (update); a time_off writer never waits on a day row, so no cycle)");
+    eq((fn.match(/lock table/g) || []).length, 1, n + ": exactly one `lock table` statement in claim_open_slot;");
+    ok(!/for share/.test(fn), n + ": no row-level `for share` in claim_open_slot (the table lock replaced it)");
+  } else {
+    ok(!/lock table|for share/.test(fn), n + ": is frozen as applied - the time_off table lock belongs to sql/migrations/2026-09-24-definer-locks.sql");
+  }
   ok(/^create or replace function public\.claim_open_slot\(p_day date, p_role text\) returns jsonb\nlanguage plpgsql security definer set search_path = public as \$\$/.test(fn),
     n + ": claim_open_slot must be `returns jsonb`, `language plpgsql security definer set search_path = public`");
   const rowInsert = fn.indexOf("insert into public.schedule_days");
@@ -324,7 +394,7 @@ function checkClaim(n, s) {
   ok(/grant execute on function public\.claim_open_slot\(date, text\) to authenticated;/.test(s), n + ": grant on claim_open_slot missing");
 }
 step("claim_open_slot() in schema.sql: placement, nine refusals in order, writes, audit + feed rows, grants");
-checkClaim("schema.sql", schema);
+checkClaim("schema.sql", schema, true);
 (function placement() {
   const afterTrade = schema.indexOf("grant execute on function public.apply_trade(uuid) to authenticated;");
   const claimAt = schema.indexOf("create or replace function public.claim_open_slot(");
@@ -335,10 +405,10 @@ checkClaim("schema.sql", schema);
   ok(/source\s+text,\s+-- import \| generated \| manual \| east-derived \| trade \| claim\b/.test(schema), "schedule_days.source column comment must list the sixth value 'claim' (the function writes it)");
 })();
 
-step("claim migration (9/22) frozen as applied; schema.sql's claim_open_slot = the claim-offer migration (9/23, the newest)");
+step("claim migration (9/22) and claim-offer migration (9/23) frozen as applied; schema.sql's claim_open_slot = the definer-locks migration (9/24, the newest)");
 const claimMigration = read(CLAIM_MIGRATION);
 ok(!/\r/.test(claimMigration), "claim migration has CRLF line endings");
-checkClaim("claim migration", claimMigration);
+checkClaim("claim migration", claimMigration, false);
 eq((claimMigration.match(/create or replace function/g) || []).length, 1, "the claim migration must define claim_open_slot and nothing else;");
 ok(!/drop function/.test(claimMigration), "the claim migration must not drop anything");
 // The 9/22 file is what ran live on 9/22 - frozen by sha256 (audit RLS-2 rule: an applied file is never edited).
@@ -351,8 +421,11 @@ const CLAIM_OFFER_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-c
   eq(sha(base), "88ae39e5b2d14ec956a012532aeda897636f8efb49d472456d1b1ec0d987dd1b", "2026-09-22-claim-open-slot.sql: claim_open_slot() body sha256 changed - the applied 9/22 file is frozen; a new body goes in a new migration");
   const claimOffer = read(CLAIM_OFFER_MIGRATION);
   ok(!/\r/.test(claimOffer), "claim-offer migration has CRLF line endings");
-  const a = functionText(schema, "claim_open_slot"), b = functionText(claimOffer, "claim_open_slot");
-  ok(a && b && a === b, "claim_open_slot(): schema.sql differs from sql/migrations/2026-09-23-claim-offer.sql (the newest migration touching it, live since 9/23 07:05Z; keep them identical)");
+  // Prompt 16 B6: the 9/23 claim-offer body (live since 9/23 07:05Z) is superseded by the 2026-09-24 definer-locks
+  // migration - frozen by sha256 here; schema.sql mirrors the 9/24 body (which keeps every claim-as-offer line below).
+  eq(sha(functionText(claimOffer, "claim_open_slot")), "e490227c247bfed5c3e5ae54e22025c3fafb4da9bc672cd1251faa7ef2aee9bf", "2026-09-23-claim-offer.sql: claim_open_slot() body sha256 changed - the applied 9/23 file is frozen; a new body goes in a new migration");
+  const a = functionText(schema, "claim_open_slot"), b = functionText(read(LOCKS_MIGRATION), "claim_open_slot");
+  ok(a && b && a === b, "claim_open_slot(): schema.sql differs from sql/migrations/2026-09-24-definer-locks.sql (the newest migration touching it; keep them identical)");
   ok(/insert into public\.call_offers \(person_id, day, role_pref, note, entered_by, source\)/.test(a) && /set_config\('silvis\.claim_in_progress', 'on', true\)/.test(a), "schema.sql: claim_open_slot must upsert the call_offers row under the silvis.claim_in_progress flag (claim-as-offer)");
   ok(/rules_only_ids \? me/.test(a), "schema.sql: claim_open_slot writes no offer row for a claimer listed in the period's rules_only_ids");
   ok(/'offer', wrote_offer/.test(a), "schema.sql: the schedule.claim audit detail must carry offer true/false");
@@ -1254,5 +1327,77 @@ const efReadme = fs.readFileSync(path.join(ROOT, "edge-functions", "README.md"),
 const snRow = efReadme.split("\n").find((l) => /^\| send-notification \| OFF \|/.test(l)) || "";
 ok(/coordinator/.test(snRow), "edge-functions/README.md: the send-notification gate row must name the coordinator refusal (403 like a viewer)");
 ok(/Prompt 16 A7/.test(efReadme) && /coordinator/.test(efReadme.split("Prompt 16 A7")[1] || ""), "edge-functions/README.md must carry the Prompt 16 A7 paragraph (coordinator = viewer to send-notification)");
+// ---- Prompt 16 B6 (2026-09-24): definer locks + roster names ----
+// Review 2026-09-23 section 3 (security minors): apply_trade / claim_open_slot did not lock time_off rows (write skew
+// with a simultaneous vacation edit); trade_insert_guard stored the client's from/to names. One migration, three
+// functions, each already pinned above with locks / names = true; here: the file's shape, the header's lock-order
+// sentences, the probes' new cases, verify-rls.sh's grading and the SCHEMA-REVIEW.md record.
+step("B6: migration 2026-09-24-definer-locks.sql defines apply_trade, claim_open_slot and trade_insert_guard (nothing else), byte-identical to schema.sql, trigger re-created, grants re-run");
+const locksMig = read(LOCKS_MIGRATION);
+ok(!/\r/.test(locksMig), "definer-locks migration has CRLF line endings");
+checkInsertGuard("definer-locks migration", locksMig, true);
+checkApplyTrade("definer-locks migration", locksMig, true, true);
+checkClaim("definer-locks migration", locksMig, true);
+eq((locksMig.match(/create or replace function/g) || []).length, 3, "the definer-locks migration must define apply_trade, claim_open_slot and trade_insert_guard and nothing else;");
+ok(!/drop function|drop table|create table|alter table|drop policy|create policy/.test(locksMig), "the definer-locks migration must not drop, create or alter anything besides the trigger re-create");
+eq((locksMig.match(/create trigger/g) || []).length, 1, "the definer-locks migration re-creates exactly one trigger (trade_insert_guard_trg);");
+ok(!/trade_update_guard|call_offers_guard|call_offers_delete_guard|time_off_no_call_conflict/.test(locksMig.replace(/--[^\n]*/g, "")), "the definer-locks migration's statements touch none of the A1 lane's guards nor the time_off trigger (comments may name them)");
+ok(/revoke all on function public\.apply_trade\(uuid\) from public, anon;\ngrant execute on function public\.apply_trade\(uuid\) to authenticated;/.test(locksMig) && /revoke all on function public\.claim_open_slot\(date, text\) from public, anon;\ngrant execute on function public\.claim_open_slot\(date, text\) to authenticated;/.test(locksMig), "the definer-locks migration must re-run both revoke / grant pairs (create or replace keeps ACLs, the re-run is belt and braces)");
+["apply_trade", "claim_open_slot", "trade_insert_guard"].forEach((name) => {
+  const a = functionText(schema, name), b = functionText(locksMig, name);
+  ok(a && b && a === b, name + "(): schema.sql differs from sql/migrations/2026-09-24-definer-locks.sql (keep them identical; the migration is what runs live)");
+});
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-definer-locks\.sql/.test(locksMig), "the definer-locks migration header must carry the CLI apply line for the orchestrator");
+ok(/-- Revision 2026-09-24 l \(Prompt 16 B6, sql\/migrations\/2026-09-24-definer-locks\.sql, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-24 l (definer locks + roster names, not yet applied)");
+const ORDER_TRADE = "Lock order: trade row (update) -> time_off table (share) -> day rows (update)";
+const ORDER_CLAIM = "Lock order: time_off table (share) -> the day row (update)";
+[["schema.sql", schema], ["definer-locks migration", locksMig]].forEach(([n, s]) => {
+  const applyAt = s.indexOf("create or replace function public.apply_trade("), claimAt = s.indexOf("create or replace function public.claim_open_slot(");
+  ok(s.lastIndexOf(ORDER_TRADE, applyAt) > 0 && applyAt - s.lastIndexOf(ORDER_TRADE, applyAt) < 6000, n + ": apply_trade's header must document `" + ORDER_TRADE + "`");
+  ok(s.lastIndexOf(ORDER_CLAIM, claimAt) > applyAt && claimAt - s.lastIndexOf(ORDER_CLAIM, claimAt) < 6000, n + ": claim_open_slot's header must document `" + ORDER_CLAIM + "`");
+  const applyHdr = s.slice(Math.max(0, s.lastIndexOf(ORDER_TRADE, applyAt) - 3000), applyAt);
+  ok(/ROW EXCLUSIVE/.test(applyHdr) && /inserted or edited/i.test(applyHdr), n + ": apply_trade's header must explain the table lock (every time_off writer holds ROW EXCLUSIVE, which conflicts with SHARE, so a vacation inserted or edited concurrently is covered)");
+  ok(!/does NOT close/.test(applyHdr) && !/B6 report/.test(s), n + ": the INSERT side is closed by the table lock - nothing may record it as open or point at 'the B6 report' (an ephemeral artefact; the repo docs carry the reasoning)");
+  ok(!/receivers' time_off rows \(share\)|caller's time_off rows \(share\)/.test(s), n + ": the old row-lock order sentences must be gone (they described the FOR SHARE version)");
+  // Residual the migration does not close (trade_update_guard is not one of B6's three functions): a party's status
+  // PATCH may still carry from_surgeon_name / to_surgeon_name. Both files must say so where a reader looks.
+  const residual = /Residual[\s\S]{0,300}trade_update_guard[\s\S]{0,400}from_surgeon_name/;
+  ok(residual.test(s.slice(0, s.indexOf("create or replace function public.trade_insert_guard("))), n + ": the header must state the UPDATE-path residual plainly (trade_update_guard does not pin the two name columns; the client renders roster names by id; the one-liner is queued in docs/SCHEMA-REVIEW.md)");
+});
+
+step("B6: trade probe cases E2 (the time_off SHARE lock seen in pg_locks after E committed) and N (roster names); claim probe case B2 (after B); verify-rls.sh grades them");
+const probeHdr = probe.slice(0, probe.indexOf("create temp table probe_results"));
+const claimHdr = claimProbe.slice(0, claimProbe.indexOf("create temp table probe_results"));
+// A relation lock is first-class in pg_locks (unlike a row lock), but a lock taken inside an ABORTED subtransaction is
+// released at its rollback - so the observation follows a case whose inner block committed: trade E (status=applied),
+// claim B (ok). Trade B (refused) would read 0 both before and after; that is why the old B2 is gone from the trade probe.
+const LOCK_OBS = "from pg_locks\n     where locktype = 'relation' and relation = 'public.time_off'::regclass\n       and pid = pg_backend_pid() and mode = 'ShareLock' and granted;";
+["'E2'", "'N'"].forEach((k) => ok(probe.indexOf("values (" + k) >= 0, "trade probe lacks case " + k));
+ok(claimProbe.indexOf("values ('B2'") >= 0, "claim probe lacks case 'B2'");
+ok(!/values \('B2'/.test(probe), "trade probe must not carry a B2 any more (after the refused B a relation lock is already released - the observation moved to E2)");
+ok(!/xmax/.test(probe) && !/xmax/.test(claimProbe), "the xmax observation is gone from both probes (it rested on heap internals; the relation lock is read from pg_locks)");
+ok(probe.includes(LOCK_OBS) && claimProbe.includes(LOCK_OBS), "both probes must observe the lock through pg_locks: `" + LOCK_OBS.replace(/\n\s*/g, " ") + "` (this backend's granted ShareLock on time_off)");
+ok(!/2030-03-21/.test(probe), "trade probe: the 3/21-3/22 fixture row existed only for the xmax reading - it must be gone");
+ok(/'Mallory'/.test(probe) && /'Eve'/.test(probe), "case N must send client-chosen names (Mallory / Eve) that the trigger must replace");
+ok(/'probe N'/.test(probe), "case N's row must carry detail 'probe N' (the leftover count keys on `detail like 'probe %'`)");
+ok(/from_name=Burchett to_name=Acton/.test(probeHdr) && /from_name=Mallory to_name=Eve/.test(probeHdr), "trade probe header must state N's BEFORE (Mallory / Eve kept) and AFTER (roster names Burchett / Acton)");
+ok(/E2=share_locks=1/.test(probeHdr) && /E2=share_locks=0/.test(probeHdr), "trade probe header must state E2's BEFORE (share_locks=0) and AFTER (share_locks=1)");
+ok(/B2=share_locks=1/.test(claimHdr) && /B2=share_locks=0/.test(claimHdr), "claim probe header must state B2's BEFORE (share_locks=0) and AFTER (share_locks=1)");
+ok(probe.indexOf("values ('E2'") > probe.indexOf("values ('E'") && probe.indexOf("values ('E2'") < probe.indexOf("values ('F'"), "trade probe E2 must run right after E (the first apply whose subtransaction COMMITS; an aborted one, like B, releases the relation lock) and before F");
+ok(claimProbe.indexOf("values ('B2'") > claimProbe.indexOf("values ('B'") && claimProbe.indexOf("values ('B2'") < claimProbe.indexOf("values ('C'"), "claim probe B2 must run right after B (the first claim as s3, which commits its subtransaction) and before C");
+["E2", "N"].forEach((k) => ok(new RegExp("expect_eq\\s+" + k + "\\s").test(s5), "verify-rls.sh section 5 does not grade probe case " + k));
+ok(!/expect_eq\s+B2\s/.test(s5), "verify-rls.sh section 5 must not grade a trade probe B2 any more");
+ok(/expect_eq\s+B2\s/.test(s7), "verify-rls.sh section 7 does not grade claim probe case B2");
+ok(/expect_eq\s+E2\s+"share_locks=1"/.test(s5) && /expect_eq\s+N\s+"from_name=Burchett to_name=Acton"/.test(s5) && /expect_eq\s+B2\s+"share_locks=1"/.test(s7), "verify-rls.sh must expect the AFTER strings (share_locks=1; from_name=Burchett to_name=Acton)");
+ok(!/locked=2 of=2/.test(s5 + s7), "verify-rls.sh must not expect the old xmax strings (locked=2 of=2) any more");
+
+step("B6: docs/SCHEMA-REVIEW.md carries the definer-locks section with an 'observed:' placeholder for the orchestrator");
+ok(/## 2026-09-24 - definer locks \+ roster names \(Prompt 16 B6; `sql\/migrations\/2026-09-24-definer-locks\.sql`\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - definer locks + roster names' section");
+const reviewB6 = review.slice(review.indexOf("## 2026-09-24 - definer locks"));
+ok(/definer-locks[\s\S]*observed: /.test(reviewB6), "SCHEMA-REVIEW.md's definer-locks section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
+ok(/lock table public\.time_off in share mode/.test(reviewB6) && /pg_locks/.test(reviewB6) && /share_locks=1/.test(reviewB6), "SCHEMA-REVIEW.md's definer-locks section must describe the table lock and the pg_locks observation (share_locks=1)");
+ok(!/B6 report/.test(reviewB6) && !/xmax/.test(reviewB6), "SCHEMA-REVIEW.md must not point at 'the B6 report' nor describe the xmax reading");
+ok(/trade_update_guard[\s\S]{0,600}from_surgeon_name/.test(reviewB6) && /tradeNamed/.test(reviewB6), "SCHEMA-REVIEW.md must record the UPDATE-path residual (trade_update_guard, the queued one-liner) and the client's tradeNamed change");
+ok(/applyTablesUpsert/.test(reviewB6), "SCHEMA-REVIEW.md must record the backup-restore applier's note blanking (the second time_off note path)");
 
 console.log("schema.test.js: " + N + " assertions passed");
