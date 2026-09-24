@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+mjhS+KpmYkpdrYuhxdjhc50K2ZD/oL2z7cLybXUmtY=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-VNA3zcyQqQ+QQDHMB1PQV+Pp4mYpdj4cnHw2VQdT4DQ=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-3smoAABW+96iAWg+kLjnCe25rTukcYK8VfIhH3ZIvGk=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-v8QOWddOOgG4xxTXySLLHEsqSYB/qn1d/6RCoSzk364=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.24a";
+    var APP_VERSION = "2026.09.24b";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -397,6 +397,9 @@ function CallSchedule() {
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [linkSetup, setLinkSetup] = useState(null);
+  const [linkConflict, setLinkConflict] = useState(null);
+  const pendingLinkRef = useRef(null);
   const [userProfile, setUserProfile] = useState(null);
   const [profileLoadFailed, setProfileLoadFailed] = useState(false);
   const [biometricAvail, setBiometricAvail] = useState(false);
@@ -629,14 +632,15 @@ function CallSchedule() {
           const accessToken = params.get("access_token");
           const refreshToken = params.get("refresh_token");
           if (accessToken) {
-            auth._saveSession({
+            window.history.replaceState(null, "", window.location.pathname + window.location.search);
+            const r = await adoptLinkSession({
               access_token: accessToken,
               refresh_token: refreshToken
             });
-            window.history.replaceState(null, "", window.location.pathname + window.location.search);
-            setAuthMode("newpassword");
-            setAuthLoading(false);
-            return;
+            if (!(r && r.kept && r.status === "dead")) {
+              setAuthLoading(false);
+              return;
+            }
           }
         }
         const bioResult = await biometric.isAvailable();
@@ -746,6 +750,68 @@ function CallSchedule() {
     setBiometricEnrolled(false);
     setBiometricPending(false);
     setIsScheduler(false);
+  };
+  const adoptLinkSession = async pair => {
+    setAuthError("");
+    let r;
+    try {
+      r = await auth.adoptLinkSession(pair);
+    } catch (e) {
+      console.warn("recovery / invite link: adopt failed:", e);
+      r = {
+        status: "dead"
+      };
+    }
+    if (r.status === "conflict") {
+      pendingLinkRef.current = pair;
+      setLinkConflict({
+        signedIn: r.signedIn || {},
+        linkEmail: r.linkEmail || null,
+        unverified: !!r.unverified
+      });
+      setAuthMode("linkconflict");
+      return r;
+    }
+    pendingLinkRef.current = null;
+    setLinkConflict(null);
+    if (r.status === "ok") {
+      setLinkSetup({
+        email: r.email || null,
+        unverified: !!r.unverified
+      });
+      setAuthMode("newpassword");
+    } else if (r.status === "dead" && r.kept) {
+      setLinkSetup(null);
+      showToast(AUTH_LINK_ERROR_MESSAGE, "error");
+    } else {
+      setLinkSetup(null);
+      setAuthMode("login");
+      setAuthError(AUTH_LINK_ERROR_MESSAGE);
+    }
+    return r;
+  };
+  const signOutForLink = async () => {
+    const pair = pendingLinkRef.current;
+    if (!pair) {
+      setAuthMode("login");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      await auth.signOut();
+      biometric.unenroll();
+      await adoptLinkSession(pair);
+    } catch (e) {
+      console.warn("sign out for the link failed:", e);
+      setAuthError(e.message || "Sign out failed");
+    }
+    setAuthBusy(false);
+  };
+  const keepSessionIgnoreLink = () => {
+    pendingLinkRef.current = null;
+    setLinkConflict(null);
+    window.location.reload();
   };
   const [sessionExpired, setSessionExpired] = useState(() => !!auth.sessionExpired);
   useEffect(() => {
@@ -6595,12 +6661,16 @@ function CallSchedule() {
         setAuthError(r.error);
       } else {
         setAuthMode("login");
+        setLinkSetup(null);
         setAuthError("");
         setNewPassword("");
         setNewPasswordConfirm("");
         alert("Password updated. Please sign in with your new password.");
         auth.signOut();
       }
+    }).catch(e => {
+      setAuthBusy(false);
+      setAuthError(e && e.message || "Update failed");
     });
   };
   const submitReset = () => {
@@ -7099,19 +7169,21 @@ function CallSchedule() {
       color: "#5B6B82",
       margin: 0
     }
-  }, authMode === "login" ? "Sign in to your account" : authMode === "reset" ? "Reset your password" : "Set a new password")), authMode === "newpassword" ? React.createElement("div", {
+  }, authMode === "login" ? "Sign in to your account" : authMode === "reset" ? "Reset your password" : authMode === "linkconflict" ? "Already signed in on this device" : "Set a new password")), authMode === "newpassword" ? React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
       gap: 10
     }
   }, React.createElement("p", {
+    "data-testid": "link-account",
     style: {
       fontSize: 13,
       color: T.text,
-      margin: 0
+      margin: 0,
+      lineHeight: 1.5
     }
-  }, "Enter your new password below."), React.createElement("input", {
+  }, "Setting a password for ", React.createElement("strong", null, linkSetup && linkSetup.email || "this account"), linkSetup && linkSetup.unverified ? " (not re-checked - no connection)" : "", ". Enter your new password below."), React.createElement("input", {
     type: "password",
     placeholder: "New password",
     value: newPassword,
@@ -7144,7 +7216,49 @@ function CallSchedule() {
       fontWeight: 700,
       opacity: authBusy ? 0.6 : 1
     })
-  }, authBusy ? "Updating" : "Update password")) : authMode === "reset" ? React.createElement("div", {
+  }, authBusy ? "Updating" : "Update password")) : authMode === "linkconflict" ? React.createElement("div", {
+    "data-testid": "link-conflict",
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 10
+    }
+  }, React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: T.text,
+      margin: 0,
+      lineHeight: 1.5
+    }
+  }, "This device is signed in as ", React.createElement("strong", null, linkConflict && linkConflict.signedIn && linkConflict.signedIn.email || "another account"), linkConflict && linkConflict.unverified ? " (not re-checked - no connection)" : "", ". The link you opened sets a password for ", React.createElement("strong", null, linkConflict && linkConflict.linkEmail || "a different account"), ". Sign out first to continue with the link, or keep the current session and ignore it."), errBox(authError), React.createElement("button", {
+    "data-testid": "link-signout",
+    onClick: signOutForLink,
+    disabled: authBusy,
+    style: _objectSpread(_objectSpread({}, css.cta), {}, {
+      width: "100%",
+      padding: "11px 16px",
+      fontSize: 14,
+      fontWeight: 700,
+      opacity: authBusy ? 0.6 : 1
+    })
+  }, authBusy ? "Signing out" : "Sign out and continue"), React.createElement("div", {
+    style: {
+      textAlign: "center",
+      marginTop: 4
+    }
+  }, React.createElement("button", {
+    onClick: keepSessionIgnoreLink,
+    disabled: authBusy,
+    style: {
+      background: "none",
+      border: "none",
+      color: T.accentText,
+      fontSize: 12,
+      cursor: "pointer",
+      fontFamily: font,
+      textDecoration: "underline"
+    }
+  }, "Keep me signed in"))) : authMode === "reset" ? React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
