@@ -1465,7 +1465,52 @@ try {
   const row928 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
   if (!/9\/28-10\/4 Atwell/.test(row928) || !/9\/28-10\/4 Fierce/.test(row928)) fail("week row 9/28 lacks '9/28-10/4 Atwell' / '9/28-10/4 Fierce': " + row928); else ok("week row 9/28: '9/28-10/4 Atwell' (primary) and '9/28-10/4 Fierce' (backup) collapsed");
   const row1005 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-10-05"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
-  if (!/10\/9-10\/11 Acton/.test(row1005)) fail("week row 10/5 lacks '10/9-10/11 Acton': " + row1005); else ok("week row 10/5: same-surgeon run collapsed to '10/9-10/11 Acton'");
+  // Live-drift fix (9/24): the week-row entries are DERIVED from the live rows, never pinned to who held a day on
+  // the import (the 10/10 trade broke '10/9-10/11 Acton'). expectWeekCols restates buildWeekRows' collapse rule
+  // (helpers.js): per role column, walk Mon..Sun; primary = roster id, else the external cover, else OPEN; backup =
+  // roster id or OPEN; an OPEN day before today has no entry; consecutive days with the SAME holder (same kind, id
+  // and name; never OPEN) collapse into one 'M/D-M/D Name' entry. The rendered columns must equal it entry for entry.
+  const rosterNameOf = (id) => ((((liveBlobData && liveBlobData.roster) || []).find(r => r && r.id === id)) || {}).name || id;
+  const expectWeekCols = (monday) => {
+    const days = daysBetween(monday, isoAddDays(monday, 6));
+    const col = (role) => {
+      const out = [];
+      days.forEach(d => {
+        const r = liveByDay[d];
+        const h = role === "primary"
+          ? (r && r.primary_id ? { kind: "surgeon", id: r.primary_id, name: rosterNameOf(r.primary_id) } : r && r.external_cover ? { kind: "external", id: null, name: String(r.external_cover) } : { kind: "open", id: null, name: "OPEN" })
+          : (r && r.backup_id ? { kind: "surgeon", id: r.backup_id, name: rosterNameOf(r.backup_id) } : { kind: "open", id: null, name: "OPEN" });
+        if (h.kind === "open" && d < todayIso) return;
+        const last = out[out.length - 1];
+        if (last && isoAddDays(last.end, 1) === d && last.kind !== "open" && last.kind === h.kind && last.id === h.id && last.name === h.name) { last.end = d; return; }
+        out.push({ ...h, start: d, end: d });
+      });
+      return out.map(e => ({ text: (e.start === e.end ? mdOf(e.start) : mdOf(e.start) + "-" + mdOf(e.end)) + " " + e.name, multi: e.start !== e.end }));
+    };
+    return { primary: col("primary"), backup: col("backup") };
+  };
+  const readWeekCols = (monday) => page.$eval(`[data-testid=week-rows] tr[data-week="${monday}"]`, tr => { const tds = tr.querySelectorAll("td"); const col = (td) => td ? Array.from(td.querySelectorAll("[data-kind]")).map(e => e.textContent.trim()) : null; return { primary: col(tds[1]), backup: col(tds[2]) }; }).catch(() => null);
+  const checkWeekRow = async (monday) => {
+    const exp = expectWeekCols(monday), got = await readWeekCols(monday);
+    const expP = exp.primary.map(e => e.text), expB = exp.backup.map(e => e.text);
+    const runs = exp.primary.concat(exp.backup).filter(e => e.multi).map(e => e.text);
+    if (!got || !got.primary || !got.backup) { fail(`week row ${mdOf(monday)}: no rendered row tr[data-week="${monday}"]`); return runs; }
+    if (got.primary.join(" / ") !== expP.join(" / ") || got.backup.join(" / ") !== expB.join(" / ")) fail(`week row ${mdOf(monday)}: rendered TRAUMA [${got.primary.join(" / ")}] / BACKUP [${got.backup.join(" / ")}] differ from the live rows' collapsed runs [${expP.join(" / ")}] / [${expB.join(" / ")}]`);
+    else ok(`week row ${mdOf(monday)}: TRAUMA [${expP.join(" / ")}], BACKUP [${expB.join(" / ")}] - equal the live rows collapsed by the same-surgeon rule${runs.length ? " (multi-day run(s): " + runs.join(", ") + ")" : " (no multi-day run this week)"}`);
+    return runs;
+  };
+  {
+    const runs1005 = await checkWeekRow("2026-10-05");
+    // The collapse must still be exercised: when the week of 10/5 has no multi-day run, the first other week the
+    // week-rows table renders (its tr[data-week] Mondays, read from the page) whose live rows hold one is checked the
+    // same way; none anywhere = FAIL.
+    if (!runs1005.length) {
+      const mondays = (await page.$$eval("[data-testid=week-rows] tr[data-week]", trs => trs.map(tr => tr.getAttribute("data-week")))).filter(m => m !== "2026-10-05");
+      const alt = mondays.find(m => { const e = expectWeekCols(m); return e.primary.concat(e.backup).some(x => x.multi); });
+      if (!alt) fail(`week rows: no rendered week (${mondays.map(mdOf).join(", ") || "none"}) has a multi-day same-surgeon run in the live rows - the collapse is not exercised`);
+      else { const altRuns = await checkWeekRow(alt); if (altRuns.length) ok(`week rows: same-surgeon collapse exercised on the week of ${mdOf(alt)} (${altRuns.join(", ")}) - the week of 10/5 has none in the live rows`); }
+    }
+  }
   // Prompt 12 SM2: the week row's OPEN entries are derived from the live rows, never pinned to a date -
   // an unassigned slot on/after today (Central) is one 'M/D OPEN' entry per open role (buildWeekRows
   // never collapses OPEN days), a past open slot produces no entry (item Q). On the 9/22 import this
@@ -1903,19 +1948,21 @@ try {
   if (picks.length !== 3 || pickBad.length) fail("mobile 390px: trade selects off screen or narrower than 200px: " + JSON.stringify(picks)); else ok("mobile 390px: the three trade selects span the row and stay on screen (" + picks.map(p => p.w + "px").join(", ") + ")");
   // (e) Item C (Faraz 9/23 evening): the Suggested row at 390 px - picking one of Khan's upcoming days shows up to three
   //     ranked "Name - reason" chips INSIDE the trade card (no page scroll), and one tap fills Trade with (the harness
-  //     user is the scheduler, so the ranking is one-way: the top chip reads "lowest <role> total, N" and no return day
-  //     is filled). The card is left clean (From back to Khan, Trade with empty) for the desktop Trades scenario.
+  //     user is the scheduler, so the ranking is one-way: the chips equal helpers.suggestTradePartners' answer over the
+  //     app's own ctx, each reads "Name - [lowest ]<role> total[,] N", and no return day is filled). The card is left clean (From back to Khan, Trade with empty) for the desktop Trades scenario.
   let itemCPick = null; // "<day>|<role>" of Khan's that produced chips - the desktop editor-link step below reuses it
   try {
     const mineVals = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => o.value).filter(Boolean));
     let sugPick = null;
+    // Live-drift fix (9/24): a unit day (holiday / weekend block - the card ranks the whole unit through
+    // tradeEligibilityOver) is skipped, so the expectation below restates only the single-day call.
     for (const v of mineVals.slice(0, 10)) {
       await page.selectOption("[data-testid=trade-mine-pick]", v);
       await page.waitForTimeout(150);
-      if (await page.$("[data-testid=trade-suggest-chip]")) { sugPick = v; break; }
+      if (await page.$("[data-testid=trade-suggest-chip]") && !(await page.$("[data-testid=trade-unit]"))) { sugPick = v; break; }
     }
     itemCPick = sugPick;
-    if (!sugPick) fail("Item C 390px: no Suggested chip for any of Khan's first upcoming days (" + mineVals.slice(0, 10).join(", ") + ")");
+    if (!sugPick) fail("Item C 390px: no Suggested chip on a non-unit day among Khan's first upcoming days (" + mineVals.slice(0, 10).join(", ") + ")");
     else {
       const geo = await page.$eval("[data-testid=trade-card]", card => {
         const c = card.getBoundingClientRect(), row = card.querySelector("[data-testid=trade-suggested]").getBoundingClientRect();
@@ -1923,11 +1970,50 @@ try {
         return { cardLeft: Math.round(c.left), cardRight: Math.round(c.right), rowRight: Math.round(row.right), chips, pageW: document.documentElement.scrollWidth };
       });
       const outside = geo.chips.filter(ch => ch.left < geo.cardLeft || ch.right > geo.cardRight || ch.right > 390 || !ch.fits || ch.h < 36);
-      const role = sugPick.split("|")[1];
+      const [sugDay, role] = sugPick.split("|");
+      // Live-drift fix (9/24): the expected chips are helpers.suggestTradePartners' own answer for the SAME inputs the
+      // card uses (index-source.html tradeSuggestionsFor, the scheduler's one-way call on a non-unit day): the app's
+      // current rules context (read from the App component's rulesCtxState memo on the committed React tree - the ctx
+      // the harness-served rows built), its schedule map (ctx.schedule is that object), today (todayCentral), the pool
+      // (roster minus external / inactive, roster order), nameOf, TOTALS_YTD_FLOORS and the card's tradeEligibility
+      // (the rules.js chokepoint with ignoreLocks + claim). The wording is the helper's - a chip reads 'lowest <role>
+      // total, N' when its total is the lowest among the eligible, else '<role> total N'; fewer soft flags rank first,
+      // so the top chip need not be the lowest.
+      const expSug = await page.evaluate(({ day, role }) => {
+        const rootEl = document.getElementById("root");
+        const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+        if (!ck) return { error: "no React container key on #root" };
+        const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+        let ctx = null, n = 0; const stack = [current];
+        while (stack.length && !ctx && n++ < 500000) {
+          const f = stack.pop(); if (!f) continue;
+          if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+          if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+        }
+        if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+        if (typeof suggestTradePartners !== "function" || typeof eligibility !== "function" || typeof todayCentral !== "function") return { error: "helpers.suggestTradePartners / rules.eligibility / todayCentral are not page globals" };
+        const floors = typeof TOTALS_YTD_FLOORS !== "undefined" ? TOTALS_YTD_FLOORS : undefined;
+        if (!floors) return { error: "TOTALS_YTD_FLOORS is not reachable from the page scope" };
+        const fromEl = document.querySelector("[data-testid=trade-from]"), fromId = fromEl ? fromEl.value : "s1";
+        const roster = ctx.roster || [];
+        const nameOf = (id) => ((roster.find(s => s.id === id) || {}).name) || id || "?";
+        const res = suggestTradePartners(ctx, ctx.schedule, day, role, fromId, {
+          today: todayCentral(), pool: roster.filter(s => s && s.type !== "external" && s.active !== false).map(s => s.id), nameOf, offerDays: [day], twoWay: false, floors,
+          eligibility: (days, r, cand) => { try { return eligibility(ctx, days[0], r, cand, { ignoreLocks: true, claim: true }); } catch (e) { return { ok: false, hard: ["rules-unavailable"], soft: [], unknown: true }; } },
+        });
+        return { fromId, chips: res.map(x => ({ id: x.id, text: x.name + " - " + x.reason, ret: x.returnDay || "", lowest: !!x.lowestTotal, total: x.total })) };
+      }, { day: sugDay, role });
+      const chipFmt = new RegExp("^\\S+ - (lowest " + role + " total, \\d+|" + role + " total \\d+)$");
+      const gotSig = geo.chips.map(ch => ch.id + "|" + ch.text + "|" + ch.ret).join(" ; ");
+      const expSig = expSug.chips ? expSug.chips.map(ch => ch.id + "|" + ch.text + "|" + ch.ret).join(" ; ") : "";
       if (!geo.chips.length || geo.chips.length > 3) fail(`Item C 390px: expected 1-3 Suggested chips, got ${geo.chips.length}`);
       else if (outside.length || geo.rowRight > geo.cardRight || geo.pageW > 392) fail("Item C 390px: a Suggested chip leaves the card, is clipped, or is under 36px tall (card " + geo.cardLeft + "-" + geo.cardRight + ", page " + geo.pageW + "): " + JSON.stringify(outside.length ? outside : geo));
-      else if (!new RegExp("^\\S+ - lowest " + role + " total, \\d+").test(geo.chips[0].text)) fail(`Item C 390px: the top chip should read 'Name - lowest ${role} total, N' for the scheduler's one-way ranking, got '${geo.chips[0].text}'`);
+      else if (expSug.error) fail(`Item C 390px: could not restate helpers.suggestTradePartners for ${sugPick}: ${expSug.error}`);
+      else if (expSug.fromId !== "s1") fail(`Item C 390px: the card's From is '${expSug.fromId}', expected Khan (s1)`);
+      else if (gotSig !== expSig) fail(`Item C 390px: the Suggested chips for Khan's ${sugPick} differ from helpers.suggestTradePartners over the app's ctx: rendered [${gotSig}], helper [${expSig}]`);
+      else if (!geo.chips.every(ch => chipFmt.test(ch.text) && !ch.ret)) fail(`Item C 390px: a chip is not in the one-way 'Name - reason' form ('Name - lowest ${role} total, N' / 'Name - ${role} total N', no return day): ${JSON.stringify(geo.chips.map(ch => ch.text + (ch.ret ? " ret " + ch.ret : "")))}`);
       else {
+        ok(`Item C 390px: the ${geo.chips.length} Suggested chip(s) for Khan's ${sugPick} equal helpers.suggestTradePartners' ranking over the app's own ctx (${geo.chips.map(ch => "'" + ch.text + "'").join(", ")}; top pick ${expSug.chips[0].lowest ? "has" : "does not have"} the lowest ${role} total), one-way 'Name - reason' form, no return day`);
         await page.click("[data-testid=trade-suggest-chip]");
         await page.waitForTimeout(150);
         const toV = await page.$eval("[data-testid=trade-to]", el => el.value), retV = await page.$eval("[data-testid=trade-return-day]", el => el.value);
@@ -4192,6 +4278,35 @@ try {
 
     // ---- Vacations: the client pre-check refuses with the conflicting dates and a 'go to day' link ----
     {
+      // Live-drift fix (9/24): the surgeon and the day are DERIVED from the harness's picture of the map (live rows +
+      // this run's edits), never pinned (the 10/10 trade broke 'Acton 10/10'). The expected items restate the app's
+      // pre-check (index-source.html vacationConflictItems, which mirrors the DB trigger): the day BEFORE the range when
+      // the surgeon is PRIMARY there (the 07:00 handoff falls on the first vacation day), then every range day he holds
+      // (primary, else backup), in date order. The pick is the first day D after today, outside every day this run
+      // edited or claimed, where a roster surgeon X holds D AND is primary on D-1 - so the trailing-edge rule is always
+      // exercised; none in the published schedule = FAIL. D-1 and D are OBSERVED in the grid before the entry (the
+      // pre-check reads the app's map), like Item SM.
+      const touchedVac = (d) => !!harnessDays[d] || !!claimedDays[d];
+      let vacX = null, vacD = null;
+      for (const d of curDays()) {
+        if (d <= todayIso || touchedVac(d) || touchedVac(isoAddDays(d, -1))) continue;
+        const c = curDay(d), prevP = curDay(isoAddDays(d, -1)).primary;
+        const x = [c.primary, c.backup].find(id => id && /^s\d+$/.test(id) && id === prevP);
+        if (x) { vacX = x; vacD = d; break; }
+      }
+      const vacItemsE = [];
+      if (!vacD) fail(`Vacation conflict: no day after today ${todayIso} (outside this run's edits) where a surgeon holds the day and is primary the day before - the trailing-edge pre-check cannot be exercised`);
+      else {
+        const prev = isoAddDays(vacD, -1), obs = {};
+        for (const d of [prev, vacD]) { await showMonth(+d.slice(0, 4), +d.slice(5, 7) - 1); obs[d] = { primary: (await cellAttr(d, "data-primary").catch(() => "")) || null, backup: (await cellAttr(d, "data-backup").catch(() => "")) || null }; }
+        if (obs[prev].primary === vacX) vacItemsE.push({ day: prev, role: "primary" });
+        if (obs[vacD].primary === vacX || obs[vacD].backup === vacX) vacItemsE.push({ day: vacD, role: obs[vacD].primary === vacX ? "primary" : "backup" });
+        const drift = [prev, vacD].filter(d => obs[d].primary !== curDay(d).primary || obs[d].backup !== curDay(d).backup);
+        if (drift.length) console.log(`     (vacation conflict: the grid differs from the live rows on ${drift.join(", ")} - the expected items follow the grid)`);
+        console.log(`     (vacation conflict fixture: ${rosterNameOf(vacX)} (${vacX}) on ${vacD} - primary on ${prev} per the ${drift.length ? "grid" : "live rows"}; expected items ${vacItemsE.map(i => mdOf(i.day) + " " + i.role).join(", ")})`);
+        await page.click('button[data-tab="setup"]');
+        await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
+      }
       await openCard("setup_vacations");
       const before = writes.length;
       const form = page.locator("[data-testid=card-setup_vacations]");
@@ -4200,27 +4315,42 @@ try {
       const sgIds = setupGroups.map(x => x.id);
       if (!setupGroups.length || setupGroups.some(x => !x.lines) || sgIds.join() !== sgIds.slice().sort((a, b) => +a.slice(1) - +b.slice(1)).join()) fail("Item B Setup > Vacations: expected per-surgeon groups in roster order, each with lines: " + JSON.stringify(setupGroups));
       else ok(`Item B Setup > Vacations: ${setupGroups.length} per-surgeon group(s) in roster order (${sgIds.join(", ")}), each with its lines`);
-      await form.locator("select").first().selectOption("s3");
-      const dateInputs = form.locator("input[type=date]");
-      await dateInputs.nth(0).fill("2026-10-10");
-      await dateInputs.nth(1).fill("2026-10-10");
-      await form.locator("button:has-text('Add vacation')").click();
-      await page.waitForSelector("[data-testid=vac-conflict]", { timeout: 5000 });
-      const conflictText = await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "));
-      const toPosts = writesSince(before, "/rest/v1/time_off");
-      if (toPosts.length) fail("Vacation conflict: a time_off write was sent although the client pre-check refused: " + JSON.stringify(toPosts.map(w => w.method + " " + w.path)));
-      else if (!/Acton is published on/.test(conflictText) || !/10\/10 primary - go to day/.test(conflictText)) fail("Vacation conflict panel wrong: " + conflictText);
-      else ok("Vacation pre-check: Acton 10/10 refused with the conflicting date and a 'go to day' link, no time_off write");
-      // Two conflicts are expected: 10/9 (trailing edge - Acton is PRIMARY the day before) and 10/10 itself.
-      const conflictDays = await page.$$eval("[data-testid=vac-conflict-day]", els => els.map(e => e.textContent.trim()));
-      if (conflictDays.length !== 2 || !conflictDays[0].startsWith("10/9 primary") || !conflictDays[1].startsWith("10/10 primary")) fail("Vacation conflict: expected the trailing-edge 10/9 primary and 10/10 primary links: " + JSON.stringify(conflictDays)); else ok("Vacation conflict: lists the trailing-edge day too (10/9 primary, 10/10 primary)");
-      await page.click("[data-testid=vac-conflict-day]:has-text('10/10')");
-      await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
-      const edT = await page.$eval("[data-testid=editor-title]", el => el.textContent);
-      if (!/October 10, 2026/.test(edT)) fail("'go to day' did not open the day editor on 10/10: " + edT); else ok("'go to day' opens the calendar day editor on Sat October 10, 2026");
-      await page.keyboard.press("Escape");
-      await page.click('button[data-tab="setup"]');
-      await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
+      const vacDIdx = vacItemsE.findIndex(i => i.day === vacD);
+      if (vacD && (vacItemsE.length !== 2 || vacDIdx !== 1)) fail(`Vacation conflict: the grid no longer shows ${vacX} primary on ${isoAddDays(vacD, -1)} and on ${vacD} (items ${JSON.stringify(vacItemsE)}) - the trailing-edge case is not set up`);
+      else if (vacD) {
+        const nameX = rosterNameOf(vacX);
+        await form.locator("select").first().selectOption(vacX);
+        const dateInputs = form.locator("input[type=date]");
+        await dateInputs.nth(0).fill(vacD);
+        await dateInputs.nth(1).fill(vacD);
+        await form.locator("button:has-text('Add vacation')").click();
+        await page.waitForSelector("[data-testid=vac-conflict]", { timeout: 5000 });
+        const conflictText = await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "));
+        const toPosts = writesSince(before, "/rest/v1/time_off");
+        const expLinks = vacItemsE.map(i => `${mdOf(i.day)} ${i.role} - go to day`);
+        const headWant = `${nameX} is published on ${vacItemsE.length} day(s) in ${mdOf(vacD)} - ${mdOf(vacD)}`;
+        if (toPosts.length) fail("Vacation conflict: a time_off write was sent although the client pre-check refused: " + JSON.stringify(toPosts.map(w => w.method + " " + w.path)));
+        else if (!conflictText.includes(headWant) || !expLinks.every(l => conflictText.includes(l))) fail(`Vacation conflict panel wrong (want '${headWant}' and ${expLinks.map(l => "'" + l + "'").join(", ")}): ` + conflictText);
+        else ok(`Vacation pre-check: ${nameX} ${mdOf(vacD)} refused ('${headWant}') with a 'go to day' link per conflict, no time_off write`);
+        // The trailing-edge day (X is PRIMARY the day before) and D itself, in date order, exactly.
+        const conflictDays = await page.$$eval("[data-testid=vac-conflict-day]", els => els.map(e => e.textContent.trim()));
+        const linksOk = conflictDays.join(" | ") === expLinks.join(" | ");
+        if (!linksOk) fail(`Vacation conflict: expected exactly the trailing-edge and range links [${expLinks.join(" | ")}], got ${JSON.stringify(conflictDays)}`); else ok(`Vacation conflict: lists the trailing-edge day too (${expLinks.map(l => l.replace(/ - go to day$/, "")).join(", ")})`);
+        // The 'go to day' click runs only on the expected link list - a missing link must FAIL above, not hang the
+        // click for 30 s and abort the rest of Slice E (the 9/24 cascade).
+        if (!linksOk) console.log(`     (skipped the 'go to day' click on ${mdOf(vacD)}: the link list is wrong - FAILed above)`);
+        else {
+          await page.locator("[data-testid=vac-conflict-day]").nth(vacDIdx).click();
+          await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+          const edT = await page.$eval("[data-testid=editor-title]", el => el.textContent);
+          const vt = new Date(vacD + "T12:00:00Z");
+          const wantT = `${["January","February","March","April","May","June","July","August","September","October","November","December"][vt.getUTCMonth()]} ${vt.getUTCDate()}, ${vt.getUTCFullYear()}`;
+          if (!edT.includes(wantT)) fail(`'go to day' did not open the day editor on ${vacD} (want '${wantT}'): ` + edT); else ok(`'go to day' on ${mdOf(vacD)} opens the calendar day editor on ${edT.trim()}`);
+          await page.keyboard.press("Escape");
+        }
+        await page.click('button[data-tab="setup"]');
+        await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
+      }
     }
 
     // ---- Holidays: 2026 units with live coverage ----
