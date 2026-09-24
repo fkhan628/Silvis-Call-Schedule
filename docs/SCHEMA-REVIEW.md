@@ -768,3 +768,19 @@ are pinned by `test/schema.test.js`. Pre-check (nothing to migrate): `select cou
 status in ('pending', 'accepted');`.
 
 observed: applied 2026-09-23 ~19:27 Central by the orchestrator through the linked CLI (`supabase db query --linked -f sql/migrations/2026-09-24-definer-locks.sql`, empty result set, no error). Trade probe AFTER: `A=status=pending from=s2 decided=null; B..D=ERR TRADE_INELIGIBLE (vacation / already holds / locked); E=status=applied 03-11p=s2 03-13b=s3; E2=share_locks=1; F=status=applied locked=false; G=ERR TRADE_INELIGIBLE: a trade needs two different surgeons; ...` - every case as expected, the time_off SHARE lock visible in pg_locks. Claim probe AFTER: `A=ERR 42501 permission denied; B=ok version=2 backup=s3 source=claim audit=1; B2=share_locks=1; C=ERR CL005 CLAIM_HELD; D=ERR CL007 CLAIM_LOCKED; E=ERR CL003 CLAIM_PAST; ...` - as expected. verify-rls.sh afterwards: 70 passed, 0 failed (136 / 0 on the full run at 21:50 the same evening). Rollback of both probes observed (leftover 0). Evidence files stay in the orchestrator's scratch folder; the live catalog re-read at 21:45 shows `lock table public.time_off in share mode` in both apply_trade and claim_open_slot.
+
+## 2026-09-24 - launch-night data changes (Prompt 16 step 2: note rename + blob-only seed apply)
+
+**Status: APPLIED.** Two production writes under Faraz's launch-day authorization of 2026-09-23 (item 2). Neither touched a
+schedule assignment, a lock, a version, an offer or a period; nothing was regenerated or republished. Both took a
+`call_schedule_snapshots` row first (a failed capture blocks the write, as always).
+
+| step | when (UTC) | by | snapshot | what changed | before -> after (observed) |
+|---|---|---|---|---|---|
+| (b) note rename | 2026-09-24 03:11 | the orchestrator through the linked CLI, one `do $$` block (`scratch: p16/live/note-rename.sql`: expected-count guard, snapshot, UPDATE, count check, audit row) | `2fcecfeb-eef6-45fe-9333-8a316be5cc9f` ("before the ER-panel source slug rename in schedule_days.note") | `schedule_days.note`: the ER-panel source slug that carried a staff member's name -> `office-er-call-panels-<date>` (B10 8b; the seed, the importer pins and the preview fixture carry the same slug since build 2026.09.23p) | rows with the old slug 57 -> 0; rows with the new slug 0 -> 57; `schedule_days` 112 -> 112; `version` / `updated_by` untouched (e.g. 2026-09-14 v1 seed, 2026-10-15 v3 day-edit); audit row `schedule.note_rename` (rows 57, the snapshot id) |
+| (a) seed apply | 2026-09-24 03:33 | Faraz, `node scripts/import-seed.js --apply --workdir <linked dir>` from the main clone at the Part B1 build | `before_seed_import` (row 22) | `call_schedule_data 'main'`: `surgeonRules` / `groupRules` / `settings` per the B10 seed hygiene - the inert keys dropped (`groupRules.generationHorizons.presets`, `eastFeed.forecast.penaltyBelowThreshold`, `locks.nullSlotIsNeverLocked`, the per-surgeon dead keys), `weights.eastClear` explicit (2), `settings.importedAt` / `seedCoreHash` restamped | plan after the rename: `schedule_days: insert 0, update 0, unchanged 44, BLOCKED 29`, `Total changes: 84 (+30 blocked)` (blob + the idempotent offer / period upserts); after: blob `updated_at` 03:33:22Z by seed, `call_offers` 79 -> 79, `call_periods` 2 -> 2 (Nov 2026 - Jan 2027 published, Feb - Apr 2027 upcoming), `time_off` 8, `availability` 32, `schedule_days` 112 |
+
+Observed afterwards: the smoke's four Import dry-run pins closed (441 ok / 0 FAIL on the Part B tree); the served app no
+longer logs the dead-key warnings. The importer's own last line read `NOT VERIFIED` on Faraz's run - its post-apply parser
+understood only the CLI's agent-session output shape; fixed the same night (`scripts/import-seed.js` reads both shapes
+through `parseCliRows`, in build 2026.09.23q). No row was skipped: every guarded count matched the plan.
