@@ -558,6 +558,13 @@ function CallSchedule() {
   // Signed in, profile loaded, but not linked to a roster entry (viewers, and
   // every freshly invited account until the scheduler links it in Setup -> Users).
   const isUnlinked = !!authUser && !!userProfile && !userProfile.person_id;
+  // Prompt 16 B3: the read-only account - role viewer with no roster link (the office viewer, and every invited account
+  // until the admin links AND promotes it in Setup -> Users). No roster link is expected, so the "not linked" banner
+  // never shows; no trade card (and the Time off card says its own one sentence); the calendar-sync card offers the
+  // public full-schedule feed; the Alerts feed carries schedule_published and open_shifts only (helpers.notifVisibleTo).
+  // A failed profile read is NOT a viewer: its fallback profile also reads role viewer, but profileLoadFailed keeps the
+  // red "couldn't load your profile" banner and every feature gate as it was.
+  const isViewer = !!userProfile && userProfile.role === "viewer" && !userProfile.person_id && !profileLoadFailed;
 
   // --- Client version heartbeat (client_versions table) ---
   // Record this client's build + last-open so the scheduler can see who is on a
@@ -681,18 +688,11 @@ function CallSchedule() {
   }, [mySurgeon]);
 
   // --- Person-specific filtering (non-schedulers see only their own data) ---
-  const myNotifications = useMemo(() => {
-    const base = (isScheduler || !mySurgeon)
-      ? notifications
-      : notifications.filter(n => {
-          if (n.type === "schedule_published" || n.type === "schedule_changed" || n.type === "manual_edit") return true;
-          if (n.type === "open_shifts") return true; // the open-shifts notice is for everyone (Prompt 13); shift_claimed reaches the claimer through data.surgeon_id below
-          if (n.data?.surgeon_id === mySurgeon) return true;
-          if (n.data?.from_surgeon_id === mySurgeon || n.data?.to_surgeon_id === mySurgeon) return true;
-          return false;
-        });
-    return base.filter(n => n.created_at > notifClearedBefore);
-  }, [notifications, isScheduler, mySurgeon, notifClearedBefore]);
+  // helpers.notifVisibleTo (Prompt 16 B3): the scheduler reads everything; a linked surgeon the group-wide types
+  // (publish, change, manual edit, open shifts - the open-shifts notice is for everyone, Prompt 13; shift_claimed
+  // reaches the claimer through data.surgeon_id) plus the rows that name them; a viewer schedule_published and
+  // open_shifts only; the per-device Clear watermark applies to all.
+  const myNotifications = useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, notifClearedBefore]);
   const myUnreadCount = useMemo(() => myNotifications.filter(n => n.created_at > notifLastSeen).length, [myNotifications, notifLastSeen]);
   const myTradeRequests = useMemo(() => {
     if (isScheduler || !mySurgeon) return tradeRequests;
@@ -5192,7 +5192,8 @@ function CallSchedule() {
         </div>
         {!isPublicMode && <div style={css.nav}>
           {(() => {
-            const allTabs = [["setup","Setup"],["calendar","Calendar"],["openshifts","Open shifts"],["myschedule","Mine"],["timeoff","Time off & Trades"],["totals","Totals"],["settings","Settings"]];
+            // Prompt 16 B3: the office (A7) and a viewer get no trade card (the trades section returns null for both), so their tab reads "Time off".
+            const allTabs = [["setup","Setup"],["calendar","Calendar"],["openshifts","Open shifts"],["myschedule","Mine"],["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"],["totals","Totals"],["settings","Settings"]];
             let tabs = allTabs;
             if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
             if (!mySurgeon) tabs = tabs.filter(([k]) => k !== "myschedule");
@@ -5229,7 +5230,7 @@ function CallSchedule() {
 
         {/* --- Notification Panel --- */}
         {!isPublicMode && showNotifs && (
-          <div style={{position:"absolute",top:0,right:14,width:340,maxHeight:400,overflowY:"auto",background:"#fff",border:"1px solid #dce2e8",borderRadius:10,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",zIndex:100,padding:12}}>
+          <div data-testid="notif-panel" style={{position:"absolute",top:0,right:14,width:340,maxHeight:400,overflowY:"auto",background:"#fff",border:"1px solid #dce2e8",borderRadius:10,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",zIndex:100,padding:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               <span style={{fontSize:14,fontWeight:700,color:"#1F2A3A"}}>Notifications</span>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
@@ -5245,7 +5246,7 @@ function CallSchedule() {
               const tabMap = {schedule_published:"calendar",schedule_changed:"calendar",manual_edit:"calendar",trade_submitted:"timeoff",trade_proposed:"timeoff",trade_accepted:"timeoff",trade_declined:"timeoff",trade_cancelled:"timeoff",trade_applied:"timeoff",vacation_logged:"timeoff",shift_reminder:"myschedule",open_shifts:"openshifts",shift_claimed:"calendar"};
               const targetTab = tabMap[n.type] || null;
               return (
-              <div key={n.id} onClick={()=>{if(targetTab){setView(targetTab);setShowNotifs(false);markNotifsSeen();}}}
+              <div key={n.id} data-testid="notif-row" data-type={n.type} onClick={()=>{if(targetTab){setView(targetTab);setShowNotifs(false);markNotifsSeen();}}}
                 style={{padding:"8px 10px",marginBottom:6,borderRadius:6,cursor:targetTab?"pointer":"default",background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <span style={{fontSize:12,fontWeight:600,color:"#1F2A3A"}}>{n.title}</span>
@@ -5259,8 +5260,9 @@ function CallSchedule() {
           </div>
         )}
 
-        {/* Unlinked-account banner (neutral; the scheduler links accounts in Setup -> Users, Slice E) */}
-        {!isPublicMode && isUnlinked && !isCoordinator && (
+        {/* Unlinked-account banner (neutral; the scheduler links accounts in Setup -> Users, Slice E). Never for the office
+            (A7) or a viewer (B3: no roster link is expected); a failed profile read keeps its red form (isViewer is false then). */}
+        {!isPublicMode && isUnlinked && !isCoordinator && !isViewer && (
           <div data-testid="unlinked-banner" style={{...css.card,padding:"10px 14px",background:profileLoadFailed?"#fce8e8":"#eef3f8",border:`1px solid ${profileLoadFailed?"#e8c0c0":"#c0d4e8"}`,fontSize:12.5,color:profileLoadFailed?"#8a3030":"#2c4a68",lineHeight:1.5}}>
             {profileLoadFailed
               ? "Couldn't load your account profile - some features are hidden until it loads. Reload the app; if this persists, tell the scheduler."
@@ -5880,15 +5882,21 @@ function CallSchedule() {
         {/* ================ TIME OFF & TRADES (Prompt 6 Slice G) ================ */}
         {view==="timeoff" && !isPublicMode && <>
           <div style={css.card} data-testid="timeoff-card">
-            <div style={css.cardT}>{canEnterForAnyone ? "Vacations" : "My vacations"}</div>
-            <p style={sectionNote}>{isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct)." : <>Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record{isScheduler ? " (as the scheduler you can enter or remove anyone's)" : ""}.</>} Notes are operational and visible to the whole group.</p>
-            {!mySurgeon && !canEnterForAnyone ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
+            <div style={css.cardT}>{canEnterForAnyone || isViewer ? "Vacations" : "My vacations"}</div>
+            {/* Prompt 16 B3: a viewer reads the group's vacations (time_off is readable by every signed-in account) with ONE
+                sentence of its own - not the "not linked" one, and not twice (the trade card below does not render for it). */}
+            {isViewer ? (
+              <p style={sectionNote} data-testid="viewer-timeoff-note">The surgeons enter their own vacations here (the office coordinator can enter one for them); this account reads them. An entry is refused over a day the surgeon is already published, so the list below never contradicts the calendar. Notes are operational and visible to the whole group.</p>
+            ) : (
+              <p style={sectionNote}>{isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct)." : <>Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record{isScheduler ? " (as the scheduler you can enter or remove anyone's)" : ""}.</>} Notes are operational and visible to the whole group.</p>
+            )}
+            {!mySurgeon && !canEnterForAnyone && !isViewer ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
               <>
-                {renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
+                {!isViewer && renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
                 <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
                   <input type="checkbox" data-testid="vac-show-past" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past
                 </label>
-                {renderVacationList(canEnterForAnyone ? surgeons.map(s => s.id) : [mySurgeon], true)}
+                {renderVacationList(canEnterForAnyone || isViewer ? surgeons.map(s => s.id) : [mySurgeon], !isViewer)}
               </>
             )}
           </div>
@@ -5922,7 +5930,7 @@ function CallSchedule() {
 
           {(() => {
             const fromId = isScheduler ? (tradeFrom || mySurgeon || "") : (mySurgeon || "");
-            if (isCoordinator) return null; // Prompt 16 A7: the office proposes no trades (no roster link; the insert guard refuses it anyway)
+            if (isCoordinator || isViewer) return null; // Prompt 16 A7 / B3: the office and a viewer propose no trades (no roster link; the insert guard refuses it anyway) - no card, no request list
             const mine = upcomingDaysOf(fromId, null);
             const theirs = upcomingDaysOf(tradeTo, null);
             const dayOk = suIsIso(tradeDay);
@@ -6220,7 +6228,7 @@ function CallSchedule() {
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:12}}>
               <div>
                 <p style={{fontSize:13,color:dkText,margin:"0 0 2px"}}>
-                  Signed in as <strong style={{color:T.title}}>{mySurgeon ? nameOf(mySurgeon) : (userProfile?.display_name || "unlinked account")}</strong>
+                  Signed in as <strong style={{color:T.title}}>{mySurgeon ? nameOf(mySurgeon) : (userProfile?.display_name || (isViewer ? "a read-only account" : "unlinked account"))}</strong>
                   <span style={{...muted,marginLeft:6}}>({userProfile?.role || "viewer"})</span>
                 </p>
                 <p style={{fontSize:11,color:"#5B6B82",margin:0}}>{authUser?.email}</p>
@@ -6263,7 +6271,7 @@ function CallSchedule() {
 
           <div style={css.card}>
             <div style={css.cardT}>Live calendar sync</div>
-            <p style={sectionNote}>Subscribe to {isScheduler ? "these URLs" : "your personal URL"} in Google Calendar, Outlook or Apple Calendar. The calendar auto-updates when the schedule changes. In Google Calendar: Other calendars (+), From URL, paste the link.</p>
+            <p style={sectionNote}>Subscribe to {isScheduler ? "these URLs" : isViewer ? "the full-schedule feed" : "your personal URL"} in Google Calendar, Outlook or Apple Calendar. The calendar auto-updates when the schedule changes. In Google Calendar: Other calendars (+), From URL, paste the link.</p>
             {mySurgeon && (() => {
               const myUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(mySurgeon)}`;
               return (
@@ -6276,14 +6284,18 @@ function CallSchedule() {
                 </div>
               );
             })()}
-            {isScheduler && <>
+            {/* Prompt 16 B3: the public full-schedule feed (the same URL the shareable page uses) is the scheduler's AND the
+                viewer's - a viewer has no personal URL, so without this the card was empty for the office viewer. */}
+            {(isScheduler || isViewer) && <>
               <div style={{marginBottom:10}}>
                 <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Full schedule:</div>
                 <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                  <input readOnly value={`${EDGE_FN_BASE}/calendar-sync`} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
-                  <button onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync`, "full")} style={{...css.btn(copiedUrl==="full"),padding:"4px 10px",fontSize:10,whiteSpace:"nowrap"}}>{copiedUrl==="full" ? "Copied" : "Copy"}</button>
+                  <input data-testid="calsync-full" readOnly value={`${EDGE_FN_BASE}/calendar-sync`} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
+                  <button data-testid="calsync-full-copy" onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync`, "full")} style={{...css.btn(copiedUrl==="full"),padding:"4px 10px",fontSize:10,whiteSpace:"nowrap"}}>{copiedUrl==="full" ? "Copied" : "Copy"}</button>
                 </div>
               </div>
+            </>}
+            {isScheduler && <>
               <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Per surgeon (matched on code):</div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
                 {surgeons.map(s => (

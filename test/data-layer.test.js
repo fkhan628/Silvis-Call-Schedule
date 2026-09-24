@@ -2699,14 +2699,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes('  const isAdmin = userProfile?.role === "admin";\n'), "isAdmin anchor");
       assert.ok(src.includes('  const isCoordinator = userProfile?.role === "coordinator";'), "isCoordinator const");
       assert.ok(src.includes("  const canEnterForAnyone = isScheduler || isCoordinator;"), "canEnterForAnyone const");
-      assert.ok(src.includes("{!isPublicMode && isUnlinked && !isCoordinator && ("), "the unlinked banner is not shown to a coordinator (no roster link by design)");
-      assert.ok(src.includes('<div style={css.cardT}>{canEnterForAnyone ? "Vacations" : "My vacations"}</div>'), "the Time off card title reads Vacations for the office");
-      assert.ok(src.includes("{!mySurgeon && !canEnterForAnyone ? <p style={muted}>Your account is not linked to a roster entry yet"), "the not-linked line is skipped for the office");
-      assert.ok(src.includes("{renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}"), "the person picker offers every active surgeon to the office");
-      assert.ok(src.includes("{renderVacationList(canEnterForAnyone ? surgeons.map(s => s.id) : [mySurgeon], true)}"), "the list shows everyone's vacations to the office");
+      // (B3 widened these same lines for the viewer: the anchors below are the post-B3 forms; the A7 behaviour is unchanged)
+      assert.ok(src.includes("{!isPublicMode && isUnlinked && !isCoordinator && !isViewer && ("), "the unlinked banner is not shown to a coordinator (no roster link by design)");
+      assert.ok(src.includes('<div style={css.cardT}>{canEnterForAnyone || isViewer ? "Vacations" : "My vacations"}</div>'), "the Time off card title reads Vacations for the office");
+      assert.ok(src.includes("{!mySurgeon && !canEnterForAnyone && !isViewer ? <p style={muted}>Your account is not linked to a roster entry yet"), "the not-linked line is skipped for the office");
+      assert.ok(src.includes("{!isViewer && renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}"), "the person picker offers every active surgeon to the office");
+      assert.ok(src.includes("{renderVacationList(canEnterForAnyone || isViewer ? surgeons.map(s => s.id) : [mySurgeon], !isViewer)}"), "the list shows everyone's vacations to the office (editable: allowEdit is true for every non-viewer)");
       assert.ok(src.includes("(isScheduler || ((isCoordinator || r.pid === mySurgeon) && r.vs > todayStr)) && ("), "Edit / Remove render for the office on UPCOMING rows only (review: toRemove refuses a started / past one for every non-scheduler, so the button must not offer it)");
       const tradeIife = src.slice(src.indexOf('const fromId = isScheduler ? (tradeFrom || mySurgeon || "") : (mySurgeon || "");'), src.indexOf('const fromId = isScheduler ? (tradeFrom || mySurgeon || "") : (mySurgeon || "");') + 400);
-      assert.ok(/if \(isCoordinator\) return null; \/\/ Prompt 16 A7/.test(tradeIife), "the trades section returns null for a coordinator (no trade card)");
+      assert.ok(/if \(isCoordinator \|\| isViewer\) return null; \/\/ Prompt 16 A7 \/ B3/.test(tradeIife), "the trades section returns null for a coordinator (no trade card)");
       assert.ok(src.includes("{(isScheduler || isCoordinator) && (\n            <Collapsible css={css} ck=\"settings_audit\""), "the Activity log card renders for the office too");
       assert.ok(src.includes('{isCoordinator ? "- your entries (vacations, offers)" : "- who changed what"}'), "the log title says whose entries the office sees");
       assert.ok(src.includes('    if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }\n  }, [view]);'), "A1's scheduler effect is untouched (verify-rls 10b pins it)");
@@ -3541,6 +3542,57 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const iUp = CFG.indexOf("async updatePassword(newPassword) {");
       const up = CFG.slice(iUp, iUp + 1500);
       assert.ok(iUp > 0 && /try \{[\s\S]*?fetch\(/.test(up) && up.includes('return { error: "No connection - try again" };'), "updatePassword: the fetch is inside try/catch and a throw answers 'No connection - try again'");
+    });
+  }
+
+  /* ---------------- P16 B3. the viewer role (read-only account) - the Alerts filter + client gating pins ---------------- */
+  console.log("\n[B3] Prompt 16 B3 (viewer: no 'not linked' banner, no trade card, the public full-schedule feed, an Alerts feed of schedule_published + open_shifts only)");
+  {
+    const B3SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const B3count = (s) => B3SRC.split(s).length - 1;
+    const feed = [
+      { id: "n1", type: "schedule_published", title: "Published", message: "m", data: {}, created_at: "2026-09-20T10:00:00Z" },
+      { id: "n2", type: "open_shifts", title: "Open shifts", message: "m", data: {}, created_at: "2026-09-21T10:00:00Z" },
+      { id: "n3", type: "trade_proposed", title: "Trade", message: "m", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-22T10:00:00Z" },
+      { id: "n4", type: "vacation_logged", title: "Vacation", message: "m", data: { surgeon_id: "s3" }, created_at: "2026-09-23T10:00:00Z" },
+      { id: "n5", type: "schedule_changed", title: "Changed", message: "m", data: {}, created_at: "2026-09-23T11:00:00Z" },
+      { id: "n6", type: "shift_reminder", title: "Reminder", message: "m", data: { surgeon_id: "s2" }, created_at: "2026-09-23T12:00:00Z" },
+    ];
+    const ids = (rows) => rows.map(n => n.id);
+    check("B3: helpers.notifVisibleTo - a viewer reads schedule_published and open_shifts only; the scheduler and an account with a role but no roster link read everything; a linked surgeon reads the group-wide types plus the rows that name them; the per-device Clear watermark applies to every role", () => {
+      assert.strictEqual(typeof H.notifVisibleTo, "function", "helpers.js exports notifVisibleTo");
+      assert.deepStrictEqual(H.NOTIF_VIEWER_TYPES, ["schedule_published", "open_shifts"], "the viewer's two types are one exported list");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { isViewer: true })), ["n1", "n2"], "viewer: the publish notice and the open-shifts notice, nothing else");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { isViewer: true, isScheduler: true, mySurgeon: "s1" })), ["n1", "n2"], "isViewer wins over the other flags (a viewer is never a scheduler; belt and braces)");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { isScheduler: true, mySurgeon: "s1" })), ["n1", "n2", "n3", "n4", "n5", "n6"], "scheduler: everything");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { mySurgeon: "" })), ["n1", "n2", "n3", "n4", "n5", "n6"], "a role with no roster link yet (not a viewer): everything, as before B3");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { mySurgeon: "s3" })), ["n1", "n2", "n3", "n4", "n5"], "linked surgeon s3: the four group-wide types + the trade that names him + his vacation; not s2's reminder");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { mySurgeon: "s2" })), ["n1", "n2", "n3", "n5", "n6"], "linked surgeon s2: group-wide + the trade he proposed + his reminder; not s3's vacation");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { isViewer: true, clearedBefore: "2026-09-20T12:00:00Z" })), ["n2"], "viewer + a Clear watermark: only the rows after it");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { isScheduler: true, clearedBefore: "2026-09-23T10:30:00Z" })), ["n5", "n6"], "scheduler + a Clear watermark");
+      assert.deepStrictEqual(H.notifVisibleTo(null, { isViewer: true }), [], "a non-array feed reads as empty (never throws)");
+      assert.deepStrictEqual(ids(H.notifVisibleTo([feed[0], null, feed[1]], { isViewer: true })), ["n1", "n2"], "a null row is skipped");
+    });
+    check("B3 pins: isViewer is derived from user_profiles.role beside isCoordinator (role viewer, no roster link, and never a failed profile read); the unlinked banner, the Time off card, the trades section, the calendar-sync card, the Account line and the Alerts filter branch on it", () => {
+      assert.strictEqual(B3count('  const isViewer = !!userProfile && userProfile.role === "viewer" && !userProfile.person_id && !profileLoadFailed;\n'), 1, "the isViewer const (a failed profile read keeps its own red banner and is never branded a viewer)");
+      assert.ok(B3SRC.indexOf("const isViewer = ") > B3SRC.indexOf("const isUnlinked = "), "declared after isUnlinked, before the first render");
+      assert.strictEqual(B3count("{!isPublicMode && isUnlinked && !isCoordinator && !isViewer && ("), 1, "the unlinked-account banner never renders for a viewer (a failed profile read still does: profileLoadFailed keeps isViewer false)");
+      assert.strictEqual(B3count("useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, notifClearedBefore]);"), 1, "myNotifications is the helper with isViewer in its inputs and its deps");
+      assert.strictEqual(B3count("if (isCoordinator || isViewer) return null; // Prompt 16 A7 / B3"), 1, "the trades section (the card and the request list) returns null for a viewer as for the office");
+      assert.strictEqual(B3count('{!mySurgeon && !canEnterForAnyone && !isViewer ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : ('), 1, "the Time off card's 'not linked' sentence is not shown to a viewer");
+      assert.strictEqual(B3count("{!isViewer && renderVacationForm("), 1, "no vacation form for a viewer");
+      assert.strictEqual(B3count("{renderVacationList(canEnterForAnyone || isViewer ? surgeons.map(s => s.id) : [mySurgeon], !isViewer)}"), 1, "a viewer reads the whole group's vacation list read-only (allowEdit false)");
+      assert.strictEqual(B3count('data-testid="viewer-timeoff-note"'), 1, "the viewer's own Time off sentence (one, instead of the 'not linked' one twice)");
+      assert.strictEqual(B3count("{(isScheduler || isViewer) && <>"), 1, "the calendar-sync card's full-schedule block renders for a viewer");
+      assert.strictEqual(B3count('data-testid="calsync-full"'), 1, "the full-schedule feed input carries a test id");
+      assert.strictEqual(B3count('{isScheduler ? "these URLs" : isViewer ? "the full-schedule feed" : "your personal URL"}'), 1, "the card's sentence names the full-schedule feed for a viewer");
+      assert.strictEqual(B3count('(userProfile?.display_name || (isViewer ? "a read-only account" : "unlinked account"))'), 1, "the Account line does not call a viewer 'unlinked'");
+      assert.strictEqual(B3count('["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"]'), 1, "the nav tab reads 'Time off' for a viewer or the office - the trades section returns null for both, so the label must not promise trades");
+      // The per-surgeon pills stay the scheduler's: the block that maps surgeons to calendar-sync?surgeon= pills is inside an isScheduler-only guard.
+      const calCard = B3SRC.slice(B3SRC.indexOf("<div style={css.cardT}>Live calendar sync</div>"), B3SRC.indexOf("Requires the calendar-sync edge function"));
+      assert.ok(calCard.includes("{isScheduler && <>") && calCard.indexOf("{isScheduler && <>") < calCard.indexOf("Per surgeon (matched on code)"), "the per-surgeon pills stay behind isScheduler");
+      assert.ok(calCard.indexOf("{(isScheduler || isViewer) && <>") < calCard.indexOf("Full schedule:") && calCard.indexOf("Full schedule:") < calCard.indexOf("{isScheduler && <>"), "the full-schedule block is the shared one, before the per-surgeon block");
+      assert.ok(calCard.includes("{mySurgeon && (() => {"), "the personal URL block still keys on the roster link (a viewer has none, so no empty 'My calendar' block)");
     });
   }
 

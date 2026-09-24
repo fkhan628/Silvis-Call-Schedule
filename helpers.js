@@ -2514,10 +2514,42 @@ function authLinkError(hash, search) {
   return { message: AUTH_LINK_ERROR_MESSAGE, code: hit.code, description: hit.description, from: fromHash ? "hash" : "query", cleanSearch };
 }
 
+/* ═══ Alerts feed by role (Prompt 16 B3) ═══ */
+// The notifications table is one shared feed; what an account reads of it is decided here, in one place.
+// - the scheduler reads everything;
+// - a linked surgeon reads the group-wide types (publish, change, manual edit, open shifts) plus every row that names
+//   them (data.surgeon_id, data.from_surgeon_id, data.to_surgeon_id);
+// - a VIEWER (role viewer with no roster link: the office viewer, and every invited account until the admin links and
+//   promotes it) reads schedule_published and open_shifts only - nothing about trades, vacations or reminders;
+// - an account with another role but no roster link yet reads everything (unchanged from before B3).
+// clearedBefore is the per-device Clear watermark (the feed is shared; Clear is local). Never throws.
+const NOTIF_VIEWER_TYPES = ["schedule_published", "open_shifts"];
+const NOTIF_GROUP_TYPES = ["schedule_published", "schedule_changed", "manual_edit", "open_shifts"];
+function notifVisibleTo(rows, who) {
+  const list = (Array.isArray(rows) ? rows : []).filter(n => n && typeof n === "object");
+  const w = who || {};
+  const cleared = w.clearedBefore || "";
+  let base;
+  if (w.isViewer) base = list.filter(n => NOTIF_VIEWER_TYPES.includes(n.type));
+  else if (w.isScheduler || !w.mySurgeon) base = list;
+  else {
+    const me = w.mySurgeon;
+    base = list.filter(n => {
+      if (NOTIF_GROUP_TYPES.includes(n.type)) return true;
+      const d = n.data || {};
+      if (d.surgeon_id === me) return true;
+      if (d.from_surgeon_id === me || d.to_surgeon_id === me) return true;
+      return false;
+    });
+  }
+  return base.filter(n => (n.created_at || "") > cleared);
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     reviewStateFor, derivedEastVacations,
     authLinkError, AUTH_LINK_ERROR_MESSAGE,
+    notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

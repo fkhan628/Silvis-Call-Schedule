@@ -376,6 +376,19 @@ const NEW2_JWT = mkJwt(3600, "a3-refresh");
 const bearerExpired = (h) => { try { const t = String(h || "").replace(/^Bearer /, ""); const p = JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); return typeof p.exp === "number" && p.exp * 1000 < Date.now(); } catch (e) { return false; } };
 const authCalls = [];
 const COORD_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: COORD_UID, role: "authenticated", email: "office@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+// Prompt 16 B3: a third mocked session - the VIEWER (read-only account: role viewer, NO person_id, no display name, so
+// the Account line falls back to "a read-only account"). Its page routes through routeSupabaseAs(VIEWER_PROFILE, extra)
+// where `extra` answers the notifications GET with a four-type feed (newest first, as PostgREST orders it), so the
+// role filter is provable: the viewer must see the open_shifts and schedule_published rows and neither of the others.
+const VIEWER_UID = "00000000-0000-4000-8000-0000000000e1";
+const VIEWER_PROFILE = { id: VIEWER_UID, person_id: null, role: "viewer", display_name: null, email: null, created_at: "2026-09-24T00:00:00Z", authEmail: "viewer@example.com" };
+const VIEWER_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: VIEWER_UID, role: "authenticated", email: "viewer@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const VIEWER_FEED = [
+  { id: "vf-4", type: "vacation_logged", title: "Vacation logged (harness)", message: "a vacation was logged", data: { surgeon_id: "s3" }, created_at: "2026-09-23T12:00:00Z" },
+  { id: "vf-3", type: "trade_proposed", title: "Trade proposed (harness)", message: "a trade was proposed", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-23T11:00:00Z" },
+  { id: "vf-2", type: "open_shifts", title: "Open shifts (harness)", message: "open slots in the next 30 days", data: {}, created_at: "2026-09-23T10:00:00Z" },
+  { id: "vf-1", type: "schedule_published", title: "Schedule published (harness)", message: "the schedule was published", data: {}, created_at: "2026-09-23T09:00:00Z" },
+];
 // The caller's JWT sub (what auth.uid() reads server-side) - the rpc mocks decide entered_by / source from it.
 const jwtSub = (req) => { try { const t = (req.headers()["authorization"] || "").replace(/^Bearer /i, ""); return JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")).sub || null; } catch (e) { return null; } };
 
@@ -796,12 +809,17 @@ const offerModeRpc = (b, json) => {
 };
 // Prompt 16 A7: the same route for ANOTHER session - the auth user and the own profile row come from `profile`, every
 // other request goes through routeSupabase unchanged (the shared stores, the recorded writes).
-const routeSupabaseAs = (profile) => async (route) => {
+// B3: an optional `extra({ route, req, url, json })` runs before the shared route and answers `true` when it fulfilled
+// the request (the viewer session serves its own notifications feed that way); `profile.authEmail` is the auth user's
+// address for that session (never part of the profile row the app reads).
+const routeSupabaseAs = (profile, extra) => async (route) => {
   const req = route.request();
   const url = new URL(req.url());
   const json = (status, body) => route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
-  if (url.pathname.startsWith("/auth/v1/user") && req.method() === "GET") return json(200, { id: profile.id, email: "office@example.com", aud: "authenticated", role: "authenticated" });
-  if (url.pathname.startsWith("/rest/v1/user_profiles") && req.method() === "GET") return json(200, [profile]);
+  const { authEmail, ...row } = profile;
+  if (url.pathname.startsWith("/auth/v1/user") && req.method() === "GET") return json(200, { id: profile.id, email: authEmail || "office@example.com", aud: "authenticated", role: "authenticated" });
+  if (url.pathname.startsWith("/rest/v1/user_profiles") && req.method() === "GET") return json(200, [row]);
+  if (extra && await extra({ route, req, url, json })) return;
   return routeSupabase(route);
 };
 const routeSupabase = async (route, scope) => {
@@ -6274,6 +6292,100 @@ try {
       ok("screenshot test/ui/out/coordinator.png");
     } catch (e) { fail("coordinator session: " + errLine(e)); try { await pc.screenshot({ path: path.join(OUT, "failure-coordinator.png"), fullPage: true }); } catch (e2) {} }
     await pc.close();
+  }
+
+  // ====================== Prompt 16 B3: the VIEWER (read-only) session ======================
+  // A third page signed in as VIEWER_PROFILE (role viewer, no roster link - the office viewer, and every invited account
+  // until the admin links and promotes it). Its notifications GET answers VIEWER_FEED (four types). 390 px in BOTH themes
+  // (the theme flag is stored before the app boots, then the page is reloaded): no unlinked banner and no Setup / Mine /
+  // Paint offers; Time off & Trades = one 'Vacations' card with the viewer's own sentence, no vacation form, no trade
+  // card, the 'not linked' sentence nowhere on the page; Settings -> Live calendar sync = the public full-schedule URL
+  // with no 'My calendar' and no per-surgeon block, the Account line reads 'a read-only account'; the Alerts badge
+  // reads 2 and the panel lists exactly the open_shifts and schedule_published rows; no horizontal page scroll.
+  // Screenshots viewer-390-light.png / viewer-390-dark.png.
+  {
+    const pv = await context.newPage();
+    watchPage(pv, "viewer");
+    await pv.setViewportSize({ width: 390, height: 844 });
+    await pv.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, VIEWER_JWT);
+    await pv.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await pv.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE, async ({ url, req, json }) => {
+      if (!url.pathname.startsWith("/rest/v1/notifications") || req.method() !== "GET") return false;
+      const typeEq = url.searchParams.get("type"); // the board's last-announced read asks ?type=eq.open_shifts
+      const rows = typeEq && typeEq.startsWith("eq.") ? VIEWER_FEED.filter(n => n.type === typeEq.slice(3)) : VIEWER_FEED;
+      await json(200, rows);
+      return true;
+    }));
+    pv.on("dialog", (d) => d.accept());
+    const NOT_LINKED = "not linked to a roster entry";
+    const expectedFull = `https://${SUPABASE_HOST}/functions/v1/calendar-sync`;
+    const bodyTextV = () => pv.evaluate(() => document.body.innerText || "");
+    try {
+      for (const theme of ["light", "dark"]) {
+        // The theme flag, and a fresh Alerts state: the per-device seen / cleared markers live in the origin's storage
+        // (shared by every page of this context), and the light pass's Alerts tap marks the feed seen - without this
+        // reset the dark pass would read no badge.
+        await pv.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); localStorage.removeItem("silvis-notif-seen"); localStorage.removeItem("silvis-notif-cleared"); } catch (e) {} }, theme === "dark");
+        await loadWithRetry(pv, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "viewer page (" + theme + ")");
+        await pv.waitForSelector("text=Synced", { timeout: 30000 });
+        await pv.waitForTimeout(1200);
+        // (a) the shell: no unlinked banner, no Setup / Mine / Paint offers, Time off and Settings present
+        const tabs = await pv.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
+        const banner = await pv.$("[data-testid=unlinked-banner]");
+        const paintNav = await pv.$("[data-testid=nav-paint-offers]");
+        if (banner) fail(`viewer (${theme}): the unlinked-account banner is shown to the viewer (no roster link is expected for the role)`);
+        else if (tabs.includes("setup") || tabs.includes("myschedule") || paintNav || !tabs.includes("timeoff") || !tabs.includes("settings")) fail(`viewer (${theme}): nav wrong - expected no Setup / Mine / Paint offers and the Time off + Settings tabs, got ${tabs.join(",")}${paintNav ? " + Paint offers" : ""}`);
+        else ok(`viewer (${theme}): no unlinked banner; nav = ${tabs.join(", ")} (no Setup, no Mine, no Paint offers)`);
+        // The tab reads "Time off" (no "& Trades") - the trades section returns null for the role, so the label must not promise it.
+        const timeoffLabel = await pv.$eval("button[data-tab=timeoff]", el => (el.textContent || "").trim());
+        if (!/^Time off$/.test(timeoffLabel)) fail(`viewer (${theme}): the Time off tab should read 'Time off' (no trade card behind it), got '${timeoffLabel}'`);
+        else ok(`viewer (${theme}): the tab reads 'Time off' (no '& Trades')`);
+        // (b) Time off & Trades: one 'Vacations' card with the viewer's sentence, no form, no trade card, no 'not linked' anywhere
+        await pv.click('button[data-tab="timeoff"]');
+        await pv.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
+        const card = pv.locator("[data-testid=timeoff-card]");
+        const title = await card.locator("div").first().innerText();
+        const note = await pv.$("[data-testid=viewer-timeoff-note]");
+        const formInputs = await card.locator("input[type=date]").count();
+        const tradeCard = await pv.$("[data-testid=trade-card]");
+        const toBody = await bodyTextV();
+        const notLinkedHits = toBody.split(NOT_LINKED).length - 1;
+        if (!/^Vacations/i.test(title) || !note || formInputs !== 0) fail(`viewer (${theme}): Time off should be one 'Vacations' card with the viewer's sentence and no vacation form: title='${title}' note=${!!note} dateInputs=${formInputs}`);
+        else if (tradeCard) fail(`viewer (${theme}): the trade card rendered for a viewer`);
+        else if (notLinkedHits) fail(`viewer (${theme}): the 'not linked' sentence appears ${notLinkedHits}x on Time off & Trades`);
+        else ok(`viewer (${theme}): Time off = 'Vacations' with the viewer's one sentence, no vacation form, no trade card, the 'not linked' sentence nowhere on the page`);
+        // (c) Settings -> Live calendar sync: the public full-schedule feed, no personal / per-surgeon block; the Account line
+        await pv.click('button[data-tab="settings"]');
+        await pv.waitForSelector("[data-testid=calsync-full]", { timeout: 8000 });
+        const full = await pv.$eval("[data-testid=calsync-full]", el => el.value);
+        const sBody = await bodyTextV();
+        const myCal = /My calendar:/.test(sBody), perSurgeon = /Per surgeon \(matched on code\)/.test(sBody);
+        if (full !== expectedFull) fail(`viewer (${theme}): the full-schedule feed input should hold ${expectedFull}, got ${full}`);
+        else if (myCal || perSurgeon) fail(`viewer (${theme}): the calendar-sync card shows the personal (${myCal}) / per-surgeon (${perSurgeon}) block to a viewer`);
+        else if (!/Subscribe to the full-schedule feed/.test(sBody)) fail(`viewer (${theme}): the calendar-sync sentence does not name the full-schedule feed`);
+        else if (/unlinked account/.test(sBody) || !/Signed in as a read-only account/.test(sBody)) fail(`viewer (${theme}): the Account line should read 'Signed in as a read-only account', not 'unlinked account'`);
+        else if (sBody.split(NOT_LINKED).length - 1) fail(`viewer (${theme}): the 'not linked' sentence appears on Settings`);
+        else ok(`viewer (${theme}): Live calendar sync = the public full-schedule URL only (${full.replace("https://" + SUPABASE_HOST, "<project>")}); Account line 'a read-only account'`);
+        // (d) Alerts: the badge counts the two visible rows; the panel lists exactly open_shifts + schedule_published (newest first)
+        const badge = await pv.$eval('button[aria-label="Notifications"]', el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
+        await pv.click('button[aria-label="Notifications"]');
+        await pv.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
+        const rows = await pv.$$eval("[data-testid=notif-row]", els => els.map(e => e.getAttribute("data-type")));
+        const panelText = await pv.$eval("[data-testid=notif-panel]", el => el.innerText || "");
+        if (badge !== "2") fail(`viewer (${theme}): the Alerts badge should read 2 (the two visible rows of the four served), got '${badge}'`);
+        else if (rows.join(",") !== "open_shifts,schedule_published") fail(`viewer (${theme}): the Alerts panel should list exactly open_shifts, schedule_published (feed order), got [${rows.join(",")}]`);
+        else if (/Trade proposed|Vacation logged/.test(panelText)) fail(`viewer (${theme}): the Alerts panel shows a trade / vacation row to a viewer`);
+        else ok(`viewer (${theme}): Alerts badge 2; panel = open_shifts + schedule_published only (trade_proposed and vacation_logged filtered out)`);
+        await pv.click('button[aria-label="Close notifications"]');
+        await pv.waitForTimeout(200);
+        // (e) 390 px hygiene + the review shot
+        const scrollW = await pv.evaluate(() => document.documentElement.scrollWidth);
+        if (scrollW > 390) fail(`viewer (${theme}): horizontal page scroll at 390 px (scrollWidth ${scrollW})`); else ok(`viewer (${theme}): no horizontal page scroll at 390 px`);
+        await pv.screenshot({ path: path.join(OUT, `viewer-390-${theme}.png`), fullPage: true });
+        ok(`screenshot test/ui/out/viewer-390-${theme}.png`);
+      }
+    } catch (e) { fail("viewer session: " + errLine(e)); try { await pv.screenshot({ path: path.join(OUT, "failure-viewer.png"), fullPage: true }); } catch (e2) {} }
+    await pv.close();
   }
 } catch (e) {
   fail("harness exception: " + (e && e.stack || e));

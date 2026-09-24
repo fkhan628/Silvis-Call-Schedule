@@ -376,10 +376,13 @@ check("obLastAnnounced(notifications, day, role): newest 'open_shifts' row whose
     assert.ok(/refreshDaysRef\.current\(\)/.test(body), "runClaim refetches schedule_days");
   });
   check("index-source.html: the feed shows open_shifts to everyone; tabMap routes open_shifts -> openshifts and shift_claimed -> calendar", () => {
-    const i = appSrc.indexOf("const myNotifications = useMemo");
-    const j = appSrc.indexOf("}, [notifications, isScheduler, mySurgeon, notifClearedBefore]);", i);
-    assert.ok(i > 0 && j > i, "myNotifications memo located");
-    assert.ok(/n\.type === "open_shifts"/.test(appSrc.slice(i, j)), "open_shifts passes the member filter");
+    // Prompt 16 B3 moved the role filter into helpers.notifVisibleTo (one pure function for every role): the memo is
+    // the helper call, and the open-shifts rule is checked on the helper itself - a linked member and a viewer both read it.
+    const memo = appSrc.split("\n").find(l => /const myNotifications = useMemo\(/.test(l)) || "";
+    assert.ok(/notifVisibleTo\(notifications, \{ isScheduler, isViewer, mySurgeon, clearedBefore: notifClearedBefore \}\)/.test(memo), "myNotifications memo is the helpers.notifVisibleTo call: " + memo.trim());
+    const feed = [{ id: "o", type: "open_shifts", data: {}, created_at: "2026-09-23T10:00:00Z" }, { id: "t", type: "trade_proposed", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-23T11:00:00Z" }];
+    assert.deepStrictEqual(H.notifVisibleTo(feed, { mySurgeon: "s4" }).map(n => n.id), ["o"], "open_shifts passes the member filter (a member the trade does not name)");
+    assert.deepStrictEqual(H.notifVisibleTo(feed, { isViewer: true }).map(n => n.id), ["o"], "open_shifts passes the viewer filter too");
     const tabMap = appSrc.split("\n").find(l => /const tabMap = \{/.test(l));
     assert.ok(tabMap && /open_shifts:"openshifts"/.test(tabMap) && /shift_claimed:"calendar"/.test(tabMap), "tabMap has open_shifts -> openshifts and shift_claimed -> calendar: " + (tabMap || "").trim());
   });
