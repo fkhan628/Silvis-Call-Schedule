@@ -1091,9 +1091,9 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   const guide = readDoc("docs", "SILVIS-BUILD-GUIDE.md") || "";
   const readme = readDoc("edge-functions", "README.md") || "";
   const onboarding = readDoc("docs", "ONBOARDING.md") || "";
-  const status = readDoc("docs", "STATUS-2026-09-22.md") || "";
   const schemaReview = readDoc("docs", "SCHEMA-REVIEW.md") || "";
-  const prompt13 = readDoc("docs", "PROMPT-13-OPEN-SHIFTS.md");
+  // B10 (9/23): docs/STATUS-2026-09-22.md and docs/PROMPT-13-OPEN-SHIFTS.md moved to the private folder (docs/HISTORY.md);
+  // the surviving sources of truth are guide section 16 (the cron SQL, 16.4) and SCHEMA-REVIEW (the audit-action list).
   const HEADS = ["### 16.1 The single definition", "### 16.2 The claim boundary", "### 16.3 The three notification paths", "### 16.4 The cron job", "### 16.5 What is NOT automatic"];
   const sub = (n) => { const i = guide.indexOf("\n" + HEADS[n - 1]); const j = n < HEADS.length ? guide.indexOf("\n" + HEADS[n]) : -1; assert.ok(i > 0, "sub-heading " + HEADS[n - 1]); return guide.slice(i, j > 0 ? j : undefined); };
 
@@ -1152,26 +1152,16 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(/#16213e/.test(rule) && /background-image/.test(rule) && /!important/.test(rule), "the dark rule repaints the covers in the dark card colour #16213e: " + rule.slice(0, 160));
     assert.ok(!/#fff|255,\s*255,\s*255/.test(rule), "no white left in the dark .table-wrap rule");
   });
-  check("the audit-action lists carry schedule.claim (written by the SQL function) and openshifts.notify (client): docs/STATUS-2026-09-22.md section 6 and docs/SCHEMA-REVIEW.md (a) audit_log", () => {
-    const i6 = status.indexOf("\n## 6."), i7 = status.indexOf("\n## 7.");
-    assert.ok(i6 > 0 && i7 > i6, "STATUS sections 6 and 7");
-    const s6 = status.slice(i6, i7);
-    assert.ok(/`schedule\.claim`/.test(s6) && /`openshifts\.notify`/.test(s6), "STATUS section 6");
-    assert.ok(/SQL function/.test(s6), "STATUS says the SQL function writes schedule.claim");
+  check("the audit-action list carries schedule.claim (written by the SQL function) and openshifts.notify (client): docs/SCHEMA-REVIEW.md (a) audit_log (B10: the STATUS-2026-09-22 section-6 pin retired with the file)", () => {
     const row = (schemaReview.split("\n").find(l => /^\| `audit_log` \|/.test(l)) || "");
     assert.ok(/`schedule\.claim`/.test(row) && /`openshifts\.notify`/.test(row), "SCHEMA-REVIEW table (a) audit_log row lists both: " + row.slice(0, 160));
   });
-  check("docs/PROMPT-13-OPEN-SHIFTS.md is on file: the title, the six numbered parts in order, the cron job", () => {
-    assert.ok(prompt13, "docs/PROMPT-13-OPEN-SHIFTS.md exists");
-    assert.ok(/^# Prompt 13 /.test(prompt13), "title");
-    let last = -1;
-    for (let n = 1; n <= 6; n++) { const m = new RegExp("\\n" + n + "\\. [A-Z]").exec(prompt13); assert.ok(m && m.index > last, "part " + n + " in order"); last = m.index; }
-    assert.ok(prompt13.indexOf("cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $") > 0, "the cron job");
-  });
-  check("no address-shaped string in the part 6 docs outside the @example.test / @example.com fixtures (guide, README, ONBOARDING, STATUS, SCHEMA-REVIEW, PROMPT-13)", () => {
+  // B10 (9/23): the "docs/PROMPT-13-OPEN-SHIFTS.md is on file" pin is dropped - the prompt text is history (private folder);
+  // its one live fact, the cron SQL, is pinned above in guide 16.4.
+  check("no address-shaped string in the part 6 docs outside the @example.test / @example.com fixtures (guide, README, ONBOARDING, SCHEMA-REVIEW)", () => {
     const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g;
     const hits = [];
-    [["guide", guide], ["README", readme], ["ONBOARDING", onboarding], ["STATUS", status], ["SCHEMA-REVIEW", schemaReview], ["PROMPT-13", prompt13 || ""]].forEach(([n, t]) => {
+    [["guide", guide], ["README", readme], ["ONBOARDING", onboarding], ["SCHEMA-REVIEW", schemaReview]].forEach(([n, t]) => {
       (t.match(EMAIL) || []).forEach(m => { if (!/@example\.(test|com)$/.test(m)) hits.push(n + ": " + m.replace(/[A-Za-z0-9]/g, "x")); });
     });
     assert.deepStrictEqual(hits, [], "address-shaped strings (masked)");

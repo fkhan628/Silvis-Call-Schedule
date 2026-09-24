@@ -394,7 +394,10 @@ step("G: idempotence - planning against the post-apply state yields zero rows");
 /* ------------------------------------------------------------------ H */
 step("H: the real preview file - shape, no overlap, preview checks");
 {
-  const real = JSON.parse(fs.readFileSync(path.join(REPO, "docs", "PREVIEW-2026-11-02-to-2027-01-03.json"), "utf8"));
+  // B10 (9/23): the 9/23 preview left docs/ with the other history files (private folder, docs/HISTORY.md); the copy
+  // under test/fixtures/ (the ER-panel source slug renamed to office-er-call-panels-<date>, otherwise identical) is this
+  // step's input - a regression fixture, not a publish record (docs/PUBLISH-2026-09-23.md is).
+  const real = JSON.parse(fs.readFileSync(path.join(REPO, "test", "fixtures", "publish-preview-2026-09-23.json"), "utf8"));
   const d = PUB.buildDesired(real);
   eq(d.conflicts, [], "no milestone/backfill overlap");
   ok(d.ranges.length >= 1 && d.days.length > 0 && d.ranges.every(r => /^\d{4}-\d{2}-\d{2}$/.test(r.start)), "ranges and days parse");

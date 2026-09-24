@@ -3,7 +3,7 @@
 // 2026-09-23 overnight; Faraz 9/22 evening: "You can go ahead and deploy,
 // publish and move forward without my go - just ensure it is accurate").
 //
-//   node scripts/publish-preview.js [--preview docs/PREVIEW-2026-11-02-to-2027-01-03.json]
+//   node scripts/publish-preview.js --preview <preview json from scripts/preview-generate.js>
 //                                   [--dry-run | --apply --workdir <linked supabase dir>]
 //                                   [--out <sql path>] [--report <md path>] [--force-app-edited]
 //
@@ -125,7 +125,10 @@ const SNAPSHOT_REASON = "generate_publish";          // index-source.html: snaps
 const AUDIT_ACTION = "schedule.generate_accept";     // index-source.html: logAudit("schedule.generate_accept", ...)
 const AUTH_NOTE = "published from the command line on Faraz's authorisation of 2026-09-22 evening";
 const ROLES = ["primary", "backup"];
-const DEFAULT_PREVIEW = path.join(ROOT, "docs", "PREVIEW-2026-11-02-to-2027-01-03.json");
+// B10 (9/23): no default preview file any more - the 9/23 preview left docs/ with the history files (private folder,
+// docs/HISTORY.md; test/fixtures/publish-preview-2026-09-23.json is a copy with the ER-panel source slug renamed to office-er-call-panels-<date>, otherwise identical, for test/publish.test.js).
+// --preview <file> is required; a run without it prints the usage and exits 1 before any read.
+const DEFAULT_PREVIEW = null;
 
 // The default --apply report (audit T4, 9/23): a NEW dated file under docs/, never an existing one. The former default
 // was the tracked record of the real 9/23 publish (docs/PUBLISH-2026-09-23.md), which a refused re-run overwrote.
@@ -766,7 +769,8 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log("usage: node scripts/publish-preview.js [--preview docs/PREVIEW-....json] [--dry-run | --apply --workdir <linked dir>] [--out <sql path>] [--report <md path>] [--force-app-edited]\n" +
+  console.log("usage: node scripts/publish-preview.js --preview <preview json written by scripts/preview-generate.js> [--dry-run | --apply --workdir <linked dir>] [--out <sql path>] [--report <md path>] [--force-app-edited]\n" +
+    "  --preview is required (since B10, 9/23: the 9/23 preview record lives in the private folder - docs/HISTORY.md).\n" +
     "  --report defaults to a NEW dated docs/PUBLISH-<YYYY-MM-DD>-<hhmm>.md (UTC) for an --apply that sends the batch; a dry run,\n" +
     "  a refused --apply and a nothing-to-apply run write to the scratch path. Never point --report at an existing publish record.");
 }
@@ -812,6 +816,7 @@ function parseCliRows(stdout) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (!args.preview) { console.error("--preview <file> is required (B10, 9/23: there is no default preview file any more - see docs/HISTORY.md)"); usage(); process.exit(1); }
   const preview = JSON.parse(fs.readFileSync(args.preview, "utf8"));
   const previewFile = path.relative(ROOT, args.preview).replace(/\\/g, "/");
   const cfg = readConfig();

@@ -1,5 +1,5 @@
 // Silvis generator regression harness (guide section 12, scoped per
-// docs/ORIENTATION-2026-09-21.md section 3 item 18).
+// the 2026-09-21 orientation, section 3 item 18 - a history document kept in the private folder, docs/HISTORY.md).
 //
 // Builds ctx from docs/silvis-seed.json exactly the way the app will
 // (test/seed-adapter.js -> rules.buildContext) plus the synthetic East feed of

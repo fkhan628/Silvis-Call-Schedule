@@ -114,7 +114,7 @@ Result at the time of writing is recorded in the Prompt 2 update.
 
 ## 2026-09-22 - trade guards (Prompt 12 D)
 
-*Answers REVIEW-2026-09-22 section 3 D. Report-first: the definitions live in `sql/schema.sql` and, byte-identically,
+*Answers the 9/22 review, section 3 D (history, `docs/HISTORY.md`). Report-first: the definitions live in `sql/schema.sql` and, byte-identically,
 in `sql/migrations/2026-09-22-trade-guards.sql`; the migration is what the scheduler runs against the live project.
 `test/schema.test.js` (in `npm test` and CI) pins both files, the check order and the absence of contact data in `sql/`.*
 
@@ -371,7 +371,7 @@ the linked CLI from the scratchpad copy; the repo carries that file byte-for-byt
 `sql/migrations/2026-09-22-offers-periods.sql` (body sha256 `d2deac095ad18e2f245286eb6011ea49b0a3d89964ba5334e682978889c16458`;
 the file's last line is a trailer comment saying so, and `test/schema.test.js` hashes the body without it) and the same
 DDL merged into `sql/schema.sql` (tables, `offer_status()`, the two guard functions, triggers, RLS - function, policy and
-trigger texts pinned identical). Design: `docs/PROMPT-14-OFFER-PERIODS.md` part 1 and `docs/SILVIS-BUILD-GUIDE.md` section 17.*
+trigger texts pinned identical). Design: the Prompt 14 document, part 1 (history, `docs/HISTORY.md`) and `docs/SILVIS-BUILD-GUIDE.md` section 17.*
 
 **What it adds.** `call_periods` (`label`, `start_day`, `end_day`, `offers_close_at` <= `start_day`, `publish_by`,
 `status` upcoming / closed / generated / published, `rules_only_ids` jsonb array, unique `start_day`) and `call_offers`

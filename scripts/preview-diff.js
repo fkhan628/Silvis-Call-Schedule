@@ -7,7 +7,7 @@
 //   before/after, and the after-run's share-vs-allowed table when the
 //   diagnostics carry it (diagnostics.impliedTargets, item J).
 //
-//   node scripts/preview-diff.js <before.json> <after.json> [--out docs/PREVIEW-DIFF-<date>.md] [--roster docs/silvis-seed.json]
+//   node scripts/preview-diff.js <before.json> <after.json> [--out <md path, outside docs/>] [--roster docs/silvis-seed.json]
 //   -h / --help prints the usage (exit 0); an unknown flag or a flag without its value is refused (exit 2).
 //
 // Pure file I/O: nothing here touches the network or the database.

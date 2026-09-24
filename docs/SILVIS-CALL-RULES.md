@@ -138,7 +138,7 @@ decides the Trauma Director role.
   of 4, no penalty but at the limit; Fierce is the cheaper pick, soft 6 vs Khan's 9); **12/10 → Khan or Acton**
   (Philip at cap, Fierce holds the derived primary, Sarkar outside her window); **12/18 → Acton, Fierce or Sarkar** (Khan
   holds primary, Philip at cap). Faraz reassigns them in the day editor; the rest of December is untouched. Full eligibility table for the three slots, every roster id:
-  `docs/REPORT-BURCHETT-DECEMBER-2026-09-23.md`.
+  the December report (history, `docs/HISTORY.md`).
 - ⟶ **November (Burchett 9/17 "November Silvis Trauma Call days"; the ER-panel author entered them on 9/22): primary Tue 11/3,
   Sat 11/7, Sun 11/8, Wed 11/11, Fri 11/20, Mon 11/23, Wed 11/25; backup Mon 11/2, Wed 11/4, Fri 11/6, Mon 11/9,
   Sat 11/14, Sun 11/15, Mon 11/16, Wed 11/18.** ⟶ 9/22 evening: backup 11/9, 11/14, 11/15 and 11/16 go to Fierce instead (his derived week, Faraz's call), and **Khan takes Wed 11/25 primary from Burchett this year** — a one-off for 2026, locked, not a rule and not part of the Thanksgiving unit (which stays Thu 11/26 – Sun 11/29); his other entries stand. These match his recurring pattern exactly (1st Tue, 2nd/4th Mon and Wed,
@@ -335,7 +335,7 @@ as the Davenport holiday pools.
 (and rolling 12 months): **primary shifts** and **backup shifts**. The generator drives both spreads down across the
 pool, within each person's availability:
 
-- **Water-filled share by default (Faraz 9/23, after `docs/REPORT-NOV-BACKUPS-2026-09-23.md`).** Every active pool member
+- **Water-filled share by default (Faraz 9/23, after the November-backups report - history, `docs/HISTORY.md`).** Every active pool member
   (Khan, Burchett, Acton, Philip, Fierce) gets an implied target per role = his share of **all** the month's slots of the
   pool for that role — the open ones **and** the ones already fixed (imports, manual locks, Fierce's derived weeks, claims,
   published days outside the range) — water-filled across the members' clips (a member whose cap / East-day clip is below
@@ -511,7 +511,7 @@ days, the vacation approval workflow, split/weighted shift accounting, compensat
 counts and fairness, a running yearly tally. Carried over — office notifications, calendar sync, refresh, data management
 and every safety feature. Holidays are the same DSG set, as primary + backup units.
 
-**Answered by Faraz on 9/21 (evening, in chat with Claude Code):** Thanksgiving 2026 = Khan primary Thu 11/26 – Sun 11/29 as one unit (confirmed by Faraz 9/22 evening — open question 8, closed); the day rules do not apply on holidays and anyone may be backup unless opted out; the Davenport schedule is not out until year end, so Silvis includes Khan and avoids his most likely East days via a forecast; Fierce East primary week 11/9, East backup weeks 10/12 and 12/7; port the bones and safety features, adjust whatever will not work for Silvis. The defaults taken for every remaining ambiguity (lock semantics for open slots, whitelist months, precedence, consecutive counting, caps, weights, Fierce cap arithmetic, Sarkar minimum, day-before rules primary-only) are listed in `docs/ORIENTATION-2026-09-21.md` §3 and written into `silvis-seed.json` (`groupRules.*`).
+**Answered by Faraz on 9/21 (evening, in chat with Claude Code):** Thanksgiving 2026 = Khan primary Thu 11/26 – Sun 11/29 as one unit (confirmed by Faraz 9/22 evening — open question 8, closed); the day rules do not apply on holidays and anyone may be backup unless opted out; the Davenport schedule is not out until year end, so Silvis includes Khan and avoids his most likely East days via a forecast; Fierce East primary week 11/9, East backup weeks 10/12 and 12/7; port the bones and safety features, adjust whatever will not work for Silvis. The defaults taken for every remaining ambiguity (lock semantics for open slots, whitelist months, precedence, consecutive counting, caps, weights, Fierce cap arithmetic, Sarkar minimum, day-before rules primary-only) are listed in the 9/21 orientation (history, `docs/HISTORY.md`) §3 and written into `silvis-seed.json` (`groupRules.*`).
 
 **Answered by Faraz on 9/22 (in Cowork):** backup is open to everyone every day unless a surgeon explicitly opts out;
 everyone as equal as possible; monthly caps count primary only (backup days do not count toward the 8); Khan's main
@@ -545,10 +545,10 @@ unit is outside them, so he cannot hold the Sat–Mon unit as primary; the list 
 **Answered by Faraz on 9/23 (morning):** Burchett's December list governs **both roles** — his 9/17 email gives the dates as the
 ones he can take primary call or backup — so the seed's December entry becomes an object entry naming both roles (§3, Burchett);
 the three published December backups off his list (12/4, 12/10, 12/18) are reassigned by hand in the day editor, nothing is
-regenerated (`docs/REPORT-BURCHETT-DECEMBER-2026-09-23.md`). Item 16 below: TRIM. **Also 9/23 (after
-`docs/REPORT-NOV-BACKUPS-2026-09-23.md`): the water-filled share is adopted** — the open spec decision the 9/22 J review left
+regenerated (the December report - history, `docs/HISTORY.md`). Item 16 below: TRIM. **Also 9/23 (after
+the November-backups report - history, `docs/HISTORY.md`): the water-filled share is adopted** — the open spec decision the 9/22 J review left
 (§6): fixed days count against the share, never a locked floor, convex deviation, both roles; the published schedule is not
-regenerated (`docs/REPORT-WATER-FILL-2026-09-23.md`).
+regenerated (the water-fill report - history, `docs/HISTORY.md`).
 
 **Still open:**
 

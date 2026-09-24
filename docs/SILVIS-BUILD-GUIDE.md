@@ -1,7 +1,7 @@
 # Silvis Surgical Care Call Schedule — Build Guide for Claude Code
 
 *Read this first, then `SILVIS-CALL-RULES.md` (the rules), then `silvis-seed.json` (the data). The prompt
-sequence in `CLAUDE-CODE-PROMPTS.md` walks through the build phase by phase; `CLAUDE.md` is the file that goes
+sequence that built the app and the other working papers are history (`HISTORY.md` indexes them; the files live in the private folder); `CLAUDE.md` is the file that goes
 in the new repo's root so Claude Code reads it automatically.*
 
 ---
@@ -523,7 +523,7 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   for every pool member; no neutral/zero terms; primary spread then backup spread in the score; smoothing moves backup
   days too. Sarkar is outside the equal-share pool; her soft target is 2 primary days per window week instead (the clinic manager
   9/22 evening; supersedes the daytime 3–4; Prompt 12 N revised).
-- **Water-filled share + convex deviation (Faraz 9/23, item WF, after `docs/REPORT-NOV-BACKUPS-2026-09-23.md`)** —
+- **Water-filled share + convex deviation (Faraz 9/23, item WF, after the November-backups report - history, `docs/HISTORY.md`)** —
   supersedes §6's "flat share" paragraph. *Model* (`generator.js genTargets` / `genWaterFill` / `genDevCost`): per role and
   calendar month the pool's slots = the open in-range slots (primary: after Sarkar's reserved window primaries) **plus every
   day of the month a pool member already holds** (import, manual, derived, claimed, published outside the range); they are
@@ -644,7 +644,7 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   re-import removes the paragraphs from the live blob.
 - **Publishing from the command line (Faraz 9/22 evening: "go ahead and deploy, publish and move forward without my
   go"; Prompt 12 PUB, 9/23 overnight)**: `scripts/publish-preview.js` publishes the regenerated preview
-  (`docs/PREVIEW-2026-11-02-to-2027-01-03.json`, milestone + October backfill) server-side, mirroring Accept & Publish
+  (the 9/23 milestone + October backfill preview - since B10 in the private folder, `docs/HISTORY.md`; its copy is `test/fixtures/publish-preview-2026-09-23.json`) server-side, mirroring Accept & Publish
   step for step — snapshot `generate_publish` first, compare-and-swap writes on the version the dry run saw, one
   `schedule.generate_accept` audit row — as ONE atomic DO block through the linked CLI. Dry run by default (anon
   reads; prints the plan, writes the SQL and a report to the scratch path); `--apply --workdir <linked dir>` runs it
@@ -661,7 +661,7 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
 `2026.09.23b` (origin/main `0d78493`) carries it; `claim_open_slot` and both edge functions are deployed (commit `d6df687`).
 The Prompt 12 review branch this note was written on predates that merge; the section reads as built.*
 
-After generation some slots may stay open. Prompt 13 (`docs/PROMPT-13-OPEN-SHIFTS.md`) gives the group one list of
+After generation some slots may stay open. Prompt 13 (its prompt text is history, `docs/HISTORY.md`) gives the group one list of
 them, lets any surgeon take one, and tells everyone while any remain. Five things to know, in order: what "open"
 means (16.1), where the claim is checked (16.2), how the group hears about it (16.3), the cron job (16.4), and what a
 `git push` does NOT do (16.5).
@@ -1467,7 +1467,7 @@ node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL 
    [--preview docs/PREVIEW-<start>-to-<end>.json] [--out <sql>] [--report <md>] [--force-app-edited]
 ```
 
-*9/23 (audit T1 / T4): the committed `docs/PREVIEW-2026-11-02-to-2027-01-03.{md,json}` and `docs/PUBLISH-2026-09-23.md` are the record of the 9/23 publish and are never regenerated or overwritten in place — `preview-generate.js` writes to the OS temp dir unless `--out` names a file (a new range gets a new file name), and `publish-preview.js` writes a dry run's, a refused apply's or a nothing-to-apply run's report to the scratch path and a real apply's report to a new dated `docs/PUBLISH-<YYYY-MM-DD>-<hhmm>.md` (UTC) unless `--report` names one; every script under `scripts/` answers `--help` and refuses an unknown flag without running anything (`test/ci.test.js` section 6).*
+*9/23 (audit T1 / T4): the 9/23 preview (`PREVIEW-2026-11-02-to-2027-01-03.{md,json}`, since B10 in the private folder - `docs/HISTORY.md`; the JSON's copy is `test/fixtures/publish-preview-2026-09-23.json`) and the committed `docs/PUBLISH-2026-09-23.md` are the record of the 9/23 publish and are never regenerated or overwritten in place — `preview-generate.js` writes to the OS temp dir unless `--out` names a file (a new range gets a new file name), and `publish-preview.js` writes a dry run's, a refused apply's or a nothing-to-apply run's report to the scratch path and a real apply's report to a new dated `docs/PUBLISH-<YYYY-MM-DD>-<hhmm>.md` (UTC) unless `--report` names one; every script under `scripts/` answers `--help` and refuses an unknown flag without running anything (`test/ci.test.js` section 6).*
 
 *9/23 (item IP): `scripts/import-seed.js --apply` remains the only apply path for a seed that carries offer periods — the in-app Setup import now plans period-aware like the CLI for its dry run (same `offerPeriods: true`, same Central `today`, `call_offers` / `call_periods` passed as unknown), displays the period / offer legs and refuses Apply for such a seed.*
 
@@ -1536,7 +1536,7 @@ node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL 
 [--lock|--no-lock] [--note …] [--override] [--availability-from-seed] [--dry-run | --apply --workdir <linked dir>]` is the
 app's day editor save (`index-source.html` `saveDayEdit`, the ONLY manual mutation path) run server-side, for the case
 where the scheduler cannot sign in and a published row must move now (first use: Burchett takes backup 10/9, 10/15,
-10/20, 10/22 — `docs/REPORT-BURCHETT-OCTOBER-2026-09-23.md`). It reads the live rows with the anon key, evaluates each
+10/20, 10/22 — the report is history, `docs/HISTORY.md`). It reads the live rows with the anon key, evaluates each
 pick with `rules.eligibility` exactly as `DayEditor` does (the ctx built from the pick-time draft: the edited role
 cleared and unlocked, `source: "manual"`; a Fri–Sun block holder asked as a block member; an outside surgeon with
 `manual: true`), prints hard / soft per edit and refuses a hard failure as the editor's "Override?" warning unless

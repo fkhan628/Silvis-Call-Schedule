@@ -2,7 +2,7 @@
 
 Four Deno edge functions for the Silvis Supabase project `bzhsroegtagqhutbnsrp`,
 retargeted from the Davenport (DSG) functions on 2026-09-22
-(see `docs/EDGE-FUNCTIONS-REVIEW.md` for the review and what changed).
+(the 9/22 review of what changed in each is history, `docs/HISTORY.md`).
 
 | slug | source | caller | can it send mail? |
 |---|---|---|---|

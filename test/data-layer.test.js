@@ -1622,7 +1622,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const rulesDoc = readDoc("docs", "SILVIS-CALL-RULES.md") || "";
     const onboarding = readDoc("docs", "ONBOARDING.md") || "";
     const efReadme = readDoc("edge-functions", "README.md") || "";
-    const prompt15 = readDoc("docs", "PROMPT-15-EAST-VACATIONS.md") || "";
+    // B10 (9/23): docs/PROMPT-15-EAST-VACATIONS.md moved to the private folder (docs/HISTORY.md); its delivery note's live
+    // facts survive in guide section 18 (18.5 Live steps and open questions) and the rules doc, which the pins below read.
     const sec18 = (() => { const i = guide.indexOf("\n## 18. East vacations"); const j = guide.indexOf("\n## 19.", i + 1); return i > 0 ? guide.slice(i, j > 0 ? j : undefined) : ""; })();
     check("P15 docs: guide section 18 carries the sub-headings 18.1 The pipeline .. 18.5 Live steps and open questions, in order, before section 19", () => {
       assert.ok(sec18.length > 0, "'## 18. East vacations' heading missing (or section 19 does not follow)");
@@ -1676,18 +1677,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(/east_vacation_reviews/.test(para), "must name the one live step that exists instead (the east_vacation_reviews migration)");
       assert.ok(/assignments, not availability/.test(para), "must say why the digest / reminder / calendar are unchanged");
     });
-    check("P15 docs: PROMPT-15-EAST-VACATIONS.md carries the delivery note with the live steps, the open questions and the untouched Davenport clone", () => {
-      const i = prompt15.indexOf("\n## Delivery note");
-      assert.ok(i > 0, "'## Delivery note' heading missing");
-      const note = prompt15.slice(i);
-      assert.ok(/### Live steps/.test(note) && /### Open questions/.test(note), "the note needs 'Live steps' and 'Open questions' sub-headings");
-      assert.ok(note.includes("sql/migrations/2026-09-23-east-vacation-reviews.sql") && note.includes("sql/probes/east-vacation-reviews-probe.sql") && /verify-rls\.sh/.test(note), "the live steps name the migration, the probe and verify-rls.sh");
-      assert.ok(/Davenport clone|davenport-ref/.test(note) && /README/.test(note) && /not touched|untouched|NOT touched/.test(note), "states that the Davenport clone's README was not touched (path 1a, no Copy button)");
-    });
+    // B10 (9/23): the "PROMPT-15-EAST-VACATIONS.md carries the delivery note" pin is dropped with the file; the live steps it
+    // named (the migration, the probe, verify-rls.sh section 9) are pinned on guide 18.5 above.
     check("P15 docs: no address-shaped string in the Prompt 15 docs outside the @example.test / @example.com fixtures", () => {
       const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g;
       const hits = [];
-      [["guide", guide], ["rules", rulesDoc], ["ONBOARDING", onboarding], ["README", efReadme], ["PROMPT-15", prompt15]].forEach(([n, t]) => {
+      [["guide", guide], ["rules", rulesDoc], ["ONBOARDING", onboarding], ["README", efReadme]].forEach(([n, t]) => {
         (t.match(EMAIL) || []).forEach(m => { if (!/@example\.(test|com)$/.test(m)) hits.push(n + ": " + m.replace(/[A-Za-z0-9]/g, "x")); });
       });
       assert.deepStrictEqual(hits, [], "address-shaped strings (masked)");
@@ -1697,12 +1692,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // windowed (unreviewedUpcoming counts every range ending today or later; only the open-slot glance uses 60 days),
     // so the 60-day question is about the hard block alone, never "the strip's own window".
     check("P15 docs: the post-deploy note counts Davenport rows (the toast names the merged count), never '16 ranges'; the 60-day question names the strip's open-slot window and says the unreviewed nag is not windowed", () => {
-      const all = guide + "\n" + rulesDoc + "\n" + prompt15;
+      const all = guide + "\n" + rulesDoc; // B10: the PROMPT-15 copy of the note left with the file; the guide and the rules doc remain
       assert.ok(!/16 FAK ranges|the 16 ranges arrive|16 ranges arrive|(^|[^\/\d])16 (Davenport )?(time_off )?rows/m.test(all), "no doc may promise '16 ranges' or quote the row count - the toast names the merged count and adjacent rows merge");
-      assert.ok(/merged count/.test(guide) && /merged count/.test(rulesDoc) && /merged count/.test(prompt15), "each of the three notes says the toast names the merged count");
+      assert.ok(/merged count/.test(guide) && /merged count/.test(rulesDoc), "each of the two notes says the toast names the merged count");
       assert.ok(!/strip's own window/.test(all) && !/soft \+ nag|plus the nag beyond/.test(all), "the 60-day question must not call 60 days the strip's own window or move the nag");
-      assert.ok(/open-slot window/.test(guide) && /open-slot window/.test(rulesDoc) && /open-slot window/.test(prompt15), "each place names the strip's open-slot window");
-      assert.ok(/unreviewed count is not windowed/.test(guide) && /unreviewed count is not windowed/.test(rulesDoc) && /unreviewed count is not windowed/.test(prompt15), "each place says the unreviewed count is not windowed (the nag already reaches every horizon)");
+      assert.ok(/open-slot window/.test(guide) && /open-slot window/.test(rulesDoc), "each place names the strip's open-slot window");
+      assert.ok(/unreviewed count is not windowed/.test(guide) && /unreviewed count is not windowed/.test(rulesDoc), "each place says the unreviewed count is not windowed (the nag already reaches every horizon)");
     });
   }
 

@@ -2,7 +2,7 @@
 
 *Created 2026-09-21. This file lives at the repo root so Claude Code reads it automatically. It holds conventions
 and build rules only; the rules of the schedule itself are in `docs/SILVIS-CALL-RULES.md`, the architecture in
-`docs/SILVIS-BUILD-GUIDE.md`, the data in `docs/silvis-seed.json`, and the build sequence in `docs/CLAUDE-CODE-PROMPTS.md`.*
+`docs/SILVIS-BUILD-GUIDE.md`, the data in `docs/silvis-seed.json`, and the index of the build's history documents (prompts, reviews, status reports - kept in the private folder) in `docs/HISTORY.md`.*
 
 Daily primary + backup trauma / acute-care surgery call schedule generator (React PWA) for the six-surgeon
 **Silvis Surgical Care** group at MercyOne Genesis Medical Center – Silvis. Sibling of the Davenport app
@@ -52,7 +52,7 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
    from here).
 2. **OneDrive folder** (outside the repo; its path is machine-specific) — non-repo material (the office's Word docs,
    email exports, backups), the private `silvis-contacts.md`, and the source copies of `CLAUDE.md`, `docs/` and `sql/`
-   (identical to the repo's — both contact-free). Never edit app files there.
+   (refreshed from the repo after each merge, never the other way round — both contact-free; the history docs moved out of the repo on 9/23 live in its `docs/history/`, see `docs/HISTORY.md`). Never edit app files there.
 3. **Supabase** — schema in `sql/schema.sql` plus the hand-applied files in `sql/migrations/` (each recorded in
    `docs/SCHEMA-REVIEW.md`; applied by hand in the SQL editor or through the linked CLI). Edge-function sources live in the repo
    under `edge-functions/<slug>/index.ts` but are deployed by hand with the Supabase CLI (`--no-verify-jwt`), exactly

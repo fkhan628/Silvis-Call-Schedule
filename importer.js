@@ -90,7 +90,7 @@
 //   pendingDeltas[]                       -> informational only (already applied in existingAssignments)
 //   site, _meta.sources/assumptions, answeredQuestions, openQuestions, a pool row's roster[].note -> not imported
 //
-// Offer periods (Prompt 14 P5, 9/23 - one mechanism; docs/PROMPT-14-OFFER-PERIODS.md part 5). OPT-IN:
+// Offer periods (Prompt 14 P5, 9/23 - one mechanism; the Prompt 14 document, part 5 - history, docs/HISTORY.md). OPT-IN:
 // importPlan(seed, { offerPeriods: true }) - the CLI's setting. Without it the plan is the pre-period plan
 // above (the in-app Setup import applies availability / time_off / schedule_days only and cannot write offers
 // until part 3, so a period-aware default there would retire a whitelist without writing the offers).

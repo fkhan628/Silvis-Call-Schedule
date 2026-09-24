@@ -95,7 +95,7 @@
 // 15): every pool member carries TWO monthly targets, one per role; counts, unit
 // scoring, pending forced slots, smoothing and the score are all per role
 // (genTargets, genMonthCount(role), genTargetDelta(role), genSmooth, genEvaluate).
-// WF (Faraz 9/23, after docs/REPORT-NOV-BACKUPS-2026-09-23.md) - the WATER-FILLED
+// WF (Faraz 9/23, after the November-backups report - history, docs/HISTORY.md) - the WATER-FILLED
 // SHARE with a CONVEX deviation, both roles: the share is computed over ALL the
 // month's slots of the pool (open + locked / held / derived / imported), water-
 // filled across the members' clips (a member whose clip is below the level takes
