@@ -1789,6 +1789,44 @@ try {
   const picks = await page.$$eval("[data-testid=trade-mine-pick], [data-testid=trade-to], [data-testid=trade-theirs-pick]", els => els.map(e => { const r = e.getBoundingClientRect(); return { id: e.getAttribute("data-testid"), left: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width) }; }));
   const pickBad = picks.filter(p => p.right > 390 || p.left < 0 || p.w < 200);
   if (picks.length !== 3 || pickBad.length) fail("mobile 390px: trade selects off screen or narrower than 200px: " + JSON.stringify(picks)); else ok("mobile 390px: the three trade selects span the row and stay on screen (" + picks.map(p => p.w + "px").join(", ") + ")");
+  // (e) Item C (Faraz 9/23 evening): the Suggested row at 390 px - picking one of Khan's upcoming days shows up to three
+  //     ranked "Name - reason" chips INSIDE the trade card (no page scroll), and one tap fills Trade with (the harness
+  //     user is the scheduler, so the ranking is one-way: the top chip reads "lowest <role> total, N" and no return day
+  //     is filled). The card is left clean (From back to Khan, Trade with empty) for the desktop Trades scenario.
+  let itemCPick = null; // "<day>|<role>" of Khan's that produced chips - the desktop editor-link step below reuses it
+  try {
+    const mineVals = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => o.value).filter(Boolean));
+    let sugPick = null;
+    for (const v of mineVals.slice(0, 10)) {
+      await page.selectOption("[data-testid=trade-mine-pick]", v);
+      await page.waitForTimeout(150);
+      if (await page.$("[data-testid=trade-suggest-chip]")) { sugPick = v; break; }
+    }
+    itemCPick = sugPick;
+    if (!sugPick) fail("Item C 390px: no Suggested chip for any of Khan's first upcoming days (" + mineVals.slice(0, 10).join(", ") + ")");
+    else {
+      const geo = await page.$eval("[data-testid=trade-card]", card => {
+        const c = card.getBoundingClientRect(), row = card.querySelector("[data-testid=trade-suggested]").getBoundingClientRect();
+        const chips = Array.from(card.querySelectorAll("[data-testid=trade-suggest-chip]")).map(b => { const r = b.getBoundingClientRect(); return { id: b.getAttribute("data-id"), ret: b.getAttribute("data-return-day") || "", text: b.textContent.replace(/\s+/g, " ").trim(), left: Math.round(r.left), right: Math.round(r.right), h: Math.round(r.height), fits: b.scrollWidth <= b.clientWidth + 1 }; });
+        return { cardLeft: Math.round(c.left), cardRight: Math.round(c.right), rowRight: Math.round(row.right), chips, pageW: document.documentElement.scrollWidth };
+      });
+      const outside = geo.chips.filter(ch => ch.left < geo.cardLeft || ch.right > geo.cardRight || ch.right > 390 || !ch.fits || ch.h < 36);
+      const role = sugPick.split("|")[1];
+      if (!geo.chips.length || geo.chips.length > 3) fail(`Item C 390px: expected 1-3 Suggested chips, got ${geo.chips.length}`);
+      else if (outside.length || geo.rowRight > geo.cardRight || geo.pageW > 392) fail("Item C 390px: a Suggested chip leaves the card, is clipped, or is under 36px tall (card " + geo.cardLeft + "-" + geo.cardRight + ", page " + geo.pageW + "): " + JSON.stringify(outside.length ? outside : geo));
+      else if (!new RegExp("^\\S+ - lowest " + role + " total, \\d+").test(geo.chips[0].text)) fail(`Item C 390px: the top chip should read 'Name - lowest ${role} total, N' for the scheduler's one-way ranking, got '${geo.chips[0].text}'`);
+      else {
+        await page.click("[data-testid=trade-suggest-chip]");
+        await page.waitForTimeout(150);
+        const toV = await page.$eval("[data-testid=trade-to]", el => el.value), retV = await page.$eval("[data-testid=trade-return-day]", el => el.value);
+        if (toV !== geo.chips[0].id) fail(`Item C 390px: tapping the top chip (${geo.chips[0].id}) did not fill Trade with (value '${toV}')`);
+        else if (retV !== geo.chips[0].ret) fail(`Item C 390px: the return day after the tap is '${retV}', the chip carried '${geo.chips[0].ret}'`);
+        else ok(`Item C 390px: ${geo.chips.length} Suggested chip(s) for Khan's ${sugPick} render inside the trade card (${geo.chips.map(ch => "'" + ch.text + "' " + ch.left + "-" + ch.right + "px").join("; ")}) and a tap on the first fills Trade with = ${toV}${retV ? " and the return day " + retV : " (no return day - one-way)"}`);
+      }
+      await page.selectOption("[data-testid=trade-to]", "");
+      await page.fill("[data-testid=trade-return-day]", "");
+    }
+  } catch (e) { fail("Item C 390px: " + String(e && e.message || e).split("\n")[0]); }
   await page.click('button[data-tab="calendar"]');
   // ---- Item E (scheduler, 390 dark): symmetry with the surgeon pass above ----
   // The scheduler keeps the E / F badges, the "East-derived:" hover bit and both legend lines at 390 px in the dark
@@ -1816,6 +1854,31 @@ try {
     await page.click('button[data-tab="calendar"]');
   }
   await page.setViewportSize({ width: 1180, height: 900 });
+
+  // (f) Item C (review 9/24), desktop: the day editor's "Propose a trade for this day" link on the day Khan holds names the
+  //     top suggested counter-party (data-suggested) and its click lands on the card with From Khan, that day + role,
+  //     Trade with = the top chip and no return day (one-way), the editor closed. Card left clean afterwards.
+  if (itemCPick) {
+    try {
+      const [cDay, cRole] = itemCPick.split("|");
+      await showMonth(+cDay.slice(0, 4), +cDay.slice(5, 7) - 1);
+      await page.click(`[data-day="${cDay}"]`);
+      await page.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+      await page.waitForTimeout(200);
+      const link = await page.$eval("[data-testid=editor-trade]", el => ({ text: el.textContent.replace(/\s+/g, " ").trim(), suggested: el.getAttribute("data-suggested") || "" }));
+      await page.click("[data-testid=editor-trade]");
+      await page.waitForTimeout(400);
+      const st = await page.evaluate(() => { const v = (t) => { const e = document.querySelector(`[data-testid=${t}]`); return e ? e.value : null; }; const chip = document.querySelector("[data-testid=trade-suggest-chip]"); return { to: v("trade-to"), day: v("trade-day"), role: v("trade-role"), from: v("trade-from"), ret: v("trade-return-day"), editorOpen: !!document.querySelector("[data-testid=day-editor]"), topChip: chip ? chip.getAttribute("data-id") : null }; });
+      if (!link.suggested) fail(`Item C editor link: no data-suggested on ${cDay} although the card suggested someone for the same slot at 390 px ('${link.text}')`);
+      else if (!/ - suggested: \S+$/.test(link.text)) fail(`Item C editor link: text '${link.text}' lacks ' - suggested: <Name>'`);
+      else if (st.to !== link.suggested || st.day !== cDay || st.role !== cRole || st.from !== "s1" || st.editorOpen || st.topChip !== link.suggested || st.ret) fail("Item C editor link: the click did not pre-fill the card as expected: " + JSON.stringify({ link, st, cDay, cRole }));
+      else ok(`Item C editor link on ${cDay}: '${link.text}' -> the card shows From ${st.from}, day ${st.day}, role ${st.role}, Trade with ${st.to} (= the top chip ${st.topChip}), return day '' (one-way), editor closed`);
+      await page.selectOption("[data-testid=trade-to]", "").catch(() => {});
+      await page.fill("[data-testid=trade-return-day]", "").catch(() => {});
+      if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+      await page.click('button[data-tab="calendar"]');
+    } catch (e) { fail("Item C editor link: " + errLine(e)); }
+  } else console.log("     (Item C editor link: skipped - the 390 px step found no suggested day of Khan's)");
 
   // ---- vis-002: the year field accepts typed input ----
   await showMonth(2026, 9);
@@ -3317,11 +3380,18 @@ try {
       else if (!tradeShortcut) fail("Time off refusal: no 'propose a trade' shortcut beside the conflicting date");
       else ok(`Time off: Khan ${vacDay} refused client-side - panel lists ${vacItems.map(i => "'" + mdOf(i.day) + " " + i.role + "'").join(" + ")} (${vacItems.length} day(s), derived from the grid over the live rows) with a 'propose a trade' shortcut, NO time_off / audit / notification write`);
       // the shortcut lands on the trade form with the FIRST conflict item's day preselected
+      // Item C (Faraz 9/23 evening): the shortcut also names the top suggested counter-party and pre-fills Trade with.
+      const shortcut = await page.$eval("[data-testid=vac-conflict-trade]", el => ({ text: el.textContent.replace(/\s+/g, " ").trim(), suggested: el.getAttribute("data-suggested") || "" }));
       await page.click("[data-testid=vac-conflict-trade]");
       await page.waitForTimeout(300);
       const preDay = await page.$eval("[data-testid=trade-day]", el => el.value).catch(() => "");
       if (preDay !== vacFirst.day) fail(`Time off refusal: 'propose a trade' did not preselect the first conflict item ${vacFirst.day} (${vacFirst.role}, derived from the grid for the range ${vacDay}) in the trade form (got '${preDay}')`); else ok(`Time off refusal: 'propose a trade' preselects ${vacFirst.day} (${vacFirst.role} - the first conflict item for the range ${vacDay}) in the trade form`);
+      const preTo = await page.$eval("[data-testid=trade-to]", el => el.value).catch(() => "");
+      if (!shortcut.suggested) console.log(`     (Item C: no suggested counter-party for ${vacFirst.day} ${vacFirst.role} - the shortcut reads '${shortcut.text}'; nobody in the pool is eligible, so nothing to pre-fill)`);
+      else if (!/ - suggested: \S+$/.test(shortcut.text) || preTo !== shortcut.suggested) fail(`Item C: the vacation-conflict shortcut '${shortcut.text}' (data-suggested ${shortcut.suggested}) should read 'propose a trade - suggested: <Name>' and pre-fill Trade with (got '${preTo}')`);
+      else ok(`Item C: the vacation-conflict shortcut reads '${shortcut.text}' and pre-fills Trade with = ${preTo} for ${vacFirst.day} ${vacFirst.role}`);
       await page.fill("[data-testid=trade-day]", "");
+      await page.selectOption("[data-testid=trade-to]", "").catch(() => {});
     }
     // clean range: two days with no schedule rows at all
     const before2 = writes.length;

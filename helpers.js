@@ -771,6 +771,93 @@ function slotLabel(dayStr, role) {
   return `${md}${role ? " - " + role : ""}`;
 }
 
+/* === Item C (Faraz 9/23 evening): suggested trade partners ===
+   suggestTradePartners(ctx, schedule, day, role, fromId, opts) -> up to opts.max (3) ranked entries
+     { id, name, reason, softCount, total, lowestTotal, window: { from, to }, returnDay, returnRole, returnDays }
+   PURE ranking for the "Propose a shift trade" card. The eligibility check is INJECTED so the card
+   passes the very check it already runs (tradeEligibility / tradeEligibilityOver - the rules.js
+   chokepoint) and this stays DOM- and rules-free:
+     opts.eligibility(days, role, candidateId) -> { ok, hard, soft, unknown }   (required; missing = [])
+     opts.unitOf(day, role, holderId)          -> { kind, name, days } | null    (the card's tradeUnitOf)
+     opts.today, opts.pool [ids], opts.nameOf, opts.offerDays (the given days - the whole unit when
+     "Trade the whole unit" is on), opts.twoWay (a member's proposal), opts.floors ({ year: iso } -
+     the Totals card's year-to-date floor), opts.max,
+     opts.avoidReturnDays ({ start, end } or (day) -> bool): days that must NOT come back as a return
+     day - the vacation range that was just refused (review 9/24; the time_off row was never written,
+     so the rules cannot know it); a unit is skipped when ANY of its days falls inside,
+     opts.horizonDays (OPT-IN cap on the return-day scan; by default every published day from today on
+     is scanned - the card's own return picker is unbounded too).
+   Ranking: (a) hard-eligible for the given day(s) only - an unknown or thrown check = not shown;
+   (b) fewer soft flags first; (c) then the lowest running total in `role` for the day's year
+   (ttTotalsFor over Jan 1 / the year's floor .. Dec 31 - the Totals numbers; `window` says which);
+   (d) two-way only: people holding an upcoming day the proposer is eligible to take back (the
+   EARLIEST workable one is the return day; a unit day of theirs only as the whole unit pairing day
+   for day with the given unit, never a split) rank before people with none, who still appear
+   ("no return day found") but last. Ties keep the pool (roster) order. Reason text is ONE short
+   clause ("lowest primary total, 9" / "primary total 11" / "can give back Tue 10/20 P"); the
+   soft-note count stays on softCount for the chip's tooltip. */
+function tradeDayShort(day, role) { return TT_DOW[parse(day).getDay()] + " " + fmtMD(day) + " " + (role === "primary" ? "P" : "B"); } // "Tue 10/20 P" (TT_DOW is assigned at load, below)
+function suggestTradePartners(ctx, schedule, day, role, fromId, opts) {
+  var o = opts || {};
+  if (!ctx || !schedule || !suIsIso(day) || !fromId || (role !== "primary" && role !== "backup") || typeof o.eligibility !== "function") return [];
+  var pool = (o.pool || []).filter(function (id) { return id && id !== fromId; });
+  var offerDays = (o.offerDays && o.offerDays.length ? o.offerDays : [day]).slice().sort();
+  var whole = offerDays.length > 1;
+  var today = suIsIso(o.today) ? o.today : day;
+  var year = day.slice(0, 4);
+  var from = year + "-01-01", to = year + "-12-31";
+  var floor = o.floors && o.floors[year];
+  if (suIsIso(floor) && floor > from) from = floor;
+  var unitOf = typeof o.unitOf === "function" ? o.unitOf : function () { return null; };
+  var nameOf = typeof o.nameOf === "function" ? o.nameOf : function (id) { return id; };
+  var limit = typeof o.horizonDays === "number" ? suAddDays(today, o.horizonDays) : null; // opt-in cap; default = the whole published schedule
+  var upcoming = Object.keys(schedule).filter(function (d) { return suIsIso(d) && d >= today && (!limit || d <= limit) && schedule[d]; }).sort();
+  var av = o.avoidReturnDays;
+  var avoid = typeof av === "function" ? function (d) { try { return !!av(d); } catch (e) { return false; } }
+    : av && suIsIso(av.start) && suIsIso(av.end) ? function (d) { return d >= av.start && d <= av.end; }
+    : function () { return false; };
+  var UNKNOWN = { ok: false, hard: ["rules-unavailable"], soft: [], unknown: true };
+  var safe = function (days, r, id) { try { return o.eligibility(days, r, id) || UNKNOWN; } catch (e) { return UNKNOWN; } };
+  // (d) the earliest upcoming day `pid` holds (either role) that the proposer may take back - never one inside the avoid window.
+  var returnFor = function (pid) {
+    for (var i = 0; i < upcoming.length; i++) {
+      var d = upcoming[i], e = schedule[d];
+      for (var k = 0; k < 2; k++) {
+        var rr = k === 0 ? "primary" : "backup";
+        if (e[rr] !== pid) continue;
+        var u = unitOf(d, rr, pid), retDays = [d];
+        if (u) {
+          if (!(whole && u.days && u.days.length === offerDays.length)) continue; // a unit day comes back only as the whole unit, day for day
+          retDays = u.days.slice().sort();
+          if (retDays[0] !== d) continue; // the unit is offered once, from its first day
+        }
+        if (retDays.some(avoid)) continue; // inside the refused vacation range (any day of a unit)
+        var res = safe(retDays, rr, fromId);
+        if (res.ok && !res.unknown) return { day: retDays[0], role: rr, days: retDays };
+      }
+    }
+    return null;
+  };
+  var out = [];
+  pool.forEach(function (pid, idx) {
+    var e = safe(offerDays, role, pid);
+    if (!e.ok || e.unknown) return; // (a) ineligible people never appear
+    var t = ttTotalsFor(schedule, pid, from, to, {});
+    var ret = o.twoWay ? returnFor(pid) : null;
+    out.push({ id: pid, name: nameOf(pid), softCount: (e.soft || []).length, total: t[role] || 0, window: { from: from, to: to }, returnDay: ret ? ret.day : null, returnRole: ret ? ret.role : null, returnDays: ret ? ret.days : [], noReturn: o.twoWay && !ret ? 1 : 0, idx: idx });
+  });
+  out.sort(function (a, b) { return (a.noReturn - b.noReturn) || (a.softCount - b.softCount) || (a.total - b.total) || (a.idx - b.idx); });
+  var lowest = out.length ? Math.min.apply(null, out.map(function (x) { return x.total; })) : 0;
+  var top = out.slice(0, typeof o.max === "number" ? o.max : 3);
+  top.forEach(function (x) {
+    x.lowestTotal = x.total === lowest;
+    if (o.twoWay) x.reason = x.returnDay ? "can give back " + tradeDayShort(x.returnDay, x.returnRole) + (x.returnDays.length > 1 ? " (" + x.returnDays.length + "-day unit)" : "") : "no return day found";
+    else x.reason = x.lowestTotal ? "lowest " + role + " total, " + x.total : role + " total " + x.total; // one clause - the note count lives in the tooltip
+    delete x.noReturn; delete x.idx;
+  });
+  return top;
+}
+
 /* === WEEK ROWS - the ER-panel author's ER Call Panels layout (Prompt 6 Slice C) ===
    buildWeekRows(schedule, roster, rangeStart, rangeEnd, opts) -> rows
      rows:  [{ monday, sunday, label: "9/28 - 10/4", days: [...], primary: [entry], backup: [entry] }]
@@ -2563,7 +2650,7 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
-    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel,
+    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
     ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,
     buildWeekRows, exportColorsFor,

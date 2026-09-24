@@ -2330,10 +2330,15 @@ function CallSchedule() {
   // "Propose a trade for this day": switch to Time off & Trades with the day
   // (and the role the viewer holds, else primary) preselected. Slice G wires
   // the rest of the form.
-  const proposeTradeForDay = (day, role) => {
+  // Item C (Faraz 9/23 evening): `pick` = { from, to, returnDay, returnRole } pre-fills the card - the top suggested
+  // counter-party (and the return day when one was found) from the vacation-conflict box or the day editor's link.
+  // The scheduler's From follows the holder the suggestion was made for; a member always proposes for himself.
+  const proposeTradeForDay = (day, role, pick) => {
     setTradeDay(day);
     setTradeRole(role === "backup" ? "backup" : "primary");
     if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);
+    else if (isScheduler && pick && pick.from && poolSurgeons.some(s => s.id === pick.from)) setTradeFrom(pick.from); // a pool member only - never an outside surgeon written in by hand (review 9/24)
+    if (pick && pick.to) { setTradeTo(pick.to); setTradeReturnDay(pick.returnDay || ""); if (pick.returnRole) setTradeReturnRole(pick.returnRole); }
     setEditorDay(null);
     setView("timeoff");
   };
@@ -3265,6 +3270,30 @@ function CallSchedule() {
     if (days.some(d => rulesCtx.holidayByDay[d])) return null; // a holiday unit takes precedence over the weekend it overlaps (s5)
     return days.every(holds) ? { kind: "weekend-block", name: "weekend block", days } : null;
   };
+  // Item C (Faraz 9/23 evening): the suggested counter-parties for `fromId` giving `day`/`role` away - the pure
+  // helpers.suggestTradePartners ranking (hard-eligible only, fewer soft flags, lowest running total in the role for
+  // the year, then - for a member's two-way proposal - a workable return day) over the card's OWN checks:
+  // tradeEligibility / tradeEligibilityOver (the rules.js chokepoint, locks ignored, claim flag) and tradeUnitOf.
+  // Unit-aware: when the given day is a unit day and "Trade the whole unit" is on, the whole unit is ranked and a
+  // return unit must pair day for day. The scheduler's one-way proposals skip the return-day ranking. No rules
+  // context = no suggestions (the card's warning stands).
+  // Review 9/24: when `fromId` is the person whose vacation was just refused and `day` is one of the refused slots, no
+  // return day may fall inside that range - the time_off row was never written, so the rules cannot know it. The box
+  // and the card (arriving from the box) share the window through tradeSuggestionsFor, so their chips agree.
+  const tradeAvoidWindow = (day, fromId) => vacConflict && vacConflict.personId === fromId && suIsIso(vacConflict.start) && suIsIso(vacConflict.end) && (vacConflict.items || []).some(i => i.day === day) ? { start: vacConflict.start, end: vacConflict.end } : null;
+  const tradeSuggestionsFor = (day, role, fromId) => {
+    if (!rulesCtx || !suIsIso(day) || !fromId) return [];
+    const unit = tradeUnitOf(day, role, fromId);
+    const whole = !!unit && tradeWholeUnit;
+    return suggestTradePartners(rulesCtx, schedule, day, role, fromId, {
+      today: todayStr, pool: poolSurgeons.map(s => s.id), nameOf, offerDays: whole ? unit.days : [day], twoWay: !isScheduler, floors: TOTALS_YTD_FLOORS,
+      eligibility: (days, r, cand) => days.length > 1 ? tradeEligibilityOver(days, r, cand) : tradeEligibility(days[0], r, cand),
+      unitOf: tradeUnitOf,
+      avoidReturnDays: tradeAvoidWindow(day, fromId),
+    });
+  };
+  // The pre-fill handed to proposeTradeForDay from a suggestion (null suggestion = just the holder as From).
+  const tradePickOf = (fromId, sug) => sug ? { from: fromId, to: sug.id, name: sug.name, returnDay: sug.returnDay, returnRole: sug.returnRole } : { from: fromId };
   const unitText = (u) => `${u.name} unit ${fmtMD(u.days[0])}-${fmtMD(u.days[u.days.length - 1])} (${u.days.length} days)`;
   // Unit stamp written into detail, e.g. "[unit holiday 2026-11-26 4: Thanksgiving unit 11/26-11/29 (4 days), day 1 of 4]".
   const tradeUnitStamp = (u, i) => `[unit ${u.kind} ${u.days[0]} ${u.days.length}: ${unitText(u)}, day ${i + 1} of ${u.days.length}]`;
@@ -4888,13 +4917,17 @@ function CallSchedule() {
       {vacConflict && vacConflict.items && vacConflict.items.length > 0 && (
         <div data-testid="vac-conflict" role="alert" style={{...css.errBox,flex:"1 1 100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
           <span><strong>Refused:</strong> {nameOf(vacConflict.personId)} is published on {vacConflict.items.length} day(s) in {fmtMD(vacConflict.start)} - {fmtMD(vacConflict.end)} - trade those shifts first:</span>
-          {vacConflict.items.map(c => (
-            <span key={c.day + c.role} style={{display:"inline-flex",gap:3,alignItems:"center"}}>
+          {vacConflict.items.map(c => {
+            // Item C: the top suggested counter-party for this slot (the holder is the person whose vacation was refused); the tap pre-fills the card
+            const sug = tradeSuggestionsFor(c.day, c.role, vacConflict.personId)[0] || null;
+            return (
+            <span key={c.day + c.role} style={{display:"inline-flex",gap:3,alignItems:"center",flexWrap:"wrap"}}>
               {isScheduler && <button data-testid="vac-conflict-day" onClick={()=>goToDay(c.day)} title={"Open the day editor for " + c.day} style={css.mini(false)}>{fmtMD(c.day)} {c.role} - go to day</button>}
               {!isScheduler && <span data-testid="vac-conflict-item" style={{fontWeight:600}}>{fmtMD(c.day)} {c.role}</span>}
-              <button data-testid="vac-conflict-trade" onClick={()=>proposeTradeForDay(c.day, c.role)} title={"Propose a trade for " + slotLabel(c.day, c.role)} style={{...css.mini(false),color:"#6030a0",borderColor:"#c0a8e0"}}>propose a trade</button>
+              <button data-testid="vac-conflict-trade" data-suggested={sug ? sug.id : undefined} onClick={()=>proposeTradeForDay(c.day, c.role, tradePickOf(vacConflict.personId, sug))} title={"Propose a trade for " + slotLabel(c.day, c.role) + (sug ? " - suggested: " + sug.name + " (" + sug.reason + ")" : "")} style={{...css.mini(false),color:"#6030a0",borderColor:"#c0a8e0"}}>propose a trade{sug ? " - suggested: " + sug.name : ""}</button>
             </span>
-          ))}
+            );
+          })}
           <button onClick={()=>setVacConflict(null)} aria-label="Dismiss" style={{background:"none",border:"none",color:"#8a3030",cursor:"pointer",fontSize:14}}>x</button>
         </div>
       )}
@@ -5629,6 +5662,12 @@ function CallSchedule() {
             vacationNames={vacNamesOn(editorDay)} focusExternal={editorFocus === "external"}
             onSave={(next, meta) => { if (saveDayEdit(editorDay, next, meta)) setEditorDay(null); }}
             onCancel={() => setEditorDay(null)} onNav={editorNav} onTrade={proposeTradeForDay}
+            suggestTrade={(d, r) => {
+              // Item C: the top suggested counter-party for the holder of `r` on `d` (the viewer's own role, else the day's primary);
+              // nothing when the holder is not a pool member (an outside surgeon written in by hand cannot be From - review 9/24)
+              const from = schedule[d] ? schedule[d][r] : null;
+              return from && poolSurgeons.some(s => s.id === from) ? tradePickOf(from, tradeSuggestionsFor(d, r, from)[0] || null) : null;
+            }}
             css={css} dk={dk}/>
         )}
 
@@ -6011,6 +6050,26 @@ function CallSchedule() {
                       <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontWeight:600}}><input type="checkbox" data-testid="trade-whole-unit" checked={tradeWholeUnit} onChange={e=>setTradeWholeUnit(e.target.checked)}/> Trade the whole unit</label>
                       {!tradeWholeUnit && <span data-testid="trade-unit-split" style={{color:"#8a3030",fontWeight:600}}>{isScheduler ? "Unchecked: this single day would split the unit - you will be asked to confirm." : "A single day of a unit cannot be traded - tick the box to trade the whole unit."}</span>}
                     </div>}
+                    {/* Item C (Faraz 9/23 evening): up to three suggested counter-parties, ranked (helpers.suggestTradePartners over the
+                        card's own checks); one tap fills Trade with and, when one was found, the return day. Chips wrap inside the card. */}
+                    {(() => {
+                      if (!dayOk || holder !== fromId || !rulesCtx) return null;
+                      const sugg = tradeSuggestionsFor(tradeDay, tradeRole, fromId);
+                      if (!sugg.length) return null;
+                      return (
+                        <div data-testid="trade-suggested" data-count={sugg.length} style={{flex:"1 1 100%",maxWidth:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                          <span style={{...label,marginBottom:0,display:"inline-block"}}>Suggested</span>
+                          {sugg.map(x => (
+                            <button key={x.id} type="button" data-testid="trade-suggest-chip" data-id={x.id} data-return-day={x.returnDay || undefined} data-return-role={x.returnRole || undefined}
+                              title={`${x.name}: ${x.reason}${x.softCount ? " - allowed with " + x.softCount + " note" + (x.softCount > 1 ? "s" : "") : ""}; ${tradeRole} total ${fmtMD(x.window.from)}-${fmtMD(x.window.to)}: ${x.total}. Tap to fill Trade with${x.returnDay ? " and the return day" : ""}.`}
+                              onClick={()=>{ setTradeTo(x.id); setTradeReturnDay(x.returnDay || ""); if (x.returnRole) setTradeReturnRole(x.returnRole); }}
+                              style={{...css.mini(tradeTo === x.id),...(tradeTo === x.id ? {} : {color:"#6030a0",borderColor:"#c0a8e0"}),whiteSpace:"normal",textAlign:"left",maxWidth:"100%",lineHeight:1.3}}>
+                              {x.name} - {x.reason}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
                     <div className="trade-pick-wrap"><label style={label}>Trade with</label>
                       <select data-testid="trade-to" className="trade-pick" value={tradeTo} onChange={e=>{ setTradeTo(e.target.value); setTradeReturnDay(""); }} style={{...inp,width:230,maxWidth:"100%"}}>
                         <option value="">Select</option>
@@ -6053,7 +6112,7 @@ function CallSchedule() {
 
         {/* ================ TOTALS (Prompt 6 Slice F) - counts only, never $ ================ */}
         {view==="totals" && !isPublicMode && (
-          <TotalsCard css={css} dk={dk} roster={surgeons} schedule={schedule} ctx={rulesCtx} surgeonRules={surgeonRules} preview={previewGen} today={todayStr} nameOf={nameOf} Badge={Badge} showToast={showToast} ytdFloors={{ "2026": "2026-09-14" }} loaded={loaded}/>
+          <TotalsCard css={css} dk={dk} roster={surgeons} schedule={schedule} ctx={rulesCtx} surgeonRules={surgeonRules} preview={previewGen} today={todayStr} nameOf={nameOf} Badge={Badge} showToast={showToast} ytdFloors={TOTALS_YTD_FLOORS} loaded={loaded}/>
         )}
 
         {/* ================ SETTINGS ================ */}
@@ -7247,7 +7306,7 @@ function offersLoadVerdict(st) {
 // the read-only detail. Esc closes; Left/Right arrows move a day when the
 // draft is clean and focus is not in a field.
 function DayEditor(props) {
-  const { day, entry, roster, ctxInputs, ctxError, canEdit, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, css, dk, focusExternal } = props;
+  const { day, entry, roster, ctxInputs, ctxError, canEdit, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, suggestTrade, css, dk, focusExternal } = props;
   // focusExternal (optional): the Open shifts board's 'Outside cover' opened
   // this editor - put the caret in the external-cover input (the write still
   // goes through Save below).
@@ -7404,6 +7463,10 @@ function DayEditor(props) {
     return pill(v);
   };
   const myRole = mySurgeon && entry ? (entry.primary === mySurgeon ? "primary" : entry.backup === mySurgeon ? "backup" : null) : null;
+  // Item C: the "Propose a trade for this day" link names the top suggested counter-party for the link's role (the
+  // viewer's own role, else the day's primary) and hands the pick to onTrade, which pre-fills the card.
+  const tradeLinkRole = myRole || (entry && entry.primary ? "primary" : "backup");
+  const tradePick = typeof suggestTrade === "function" && !isPublicMode && (canEdit || myRole) ? suggestTrade(day, tradeLinkRole) : null;
   const optionLabel = (o, role) => {
     if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");
     // U3c: the offer tag ("offered primary", "not offered", "rules") stands in for the soft offered / outside-offers
@@ -7530,7 +7593,7 @@ function DayEditor(props) {
             it pads by the iOS home-indicator inset like the painter sheets' footers (Prompt 16 A5). */}
         <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",paddingBottom:`calc(${SAFE_AREA.bottom} + 12px)`,borderTop:"1px solid " + border}}>
           {!isPublicMode && (canEdit || myRole) && (
-            <button type="button" data-testid="editor-trade" onClick={() => onTrade(day, myRole || (entry && entry.primary ? "primary" : "backup"))} style={{background:"none",border:"none",color:THEME[dk ? "dark" : "light"].accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0}}>Propose a trade for this day</button>
+            <button type="button" data-testid="editor-trade" data-suggested={tradePick && tradePick.to ? tradePick.to : undefined} onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)} style={{background:"none",border:"none",color:THEME[dk ? "dark" : "light"].accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0,textAlign:"left"}}>Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}</button>
           )}
           <span style={{flex:1}}/>
           <span style={{fontSize:10,color:sub}}>Esc closes - arrow keys move a day</span>
@@ -7613,6 +7676,9 @@ function suPatternLabel(p) {
 // monthlyTarget, else the implied target from the last generator preview's
 // diagnostics when it covers the range, else '-'.
 const TOTALS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// The year-to-date floor per year (the published schedule starts 2026-09-14): the Totals card's YTD range and the
+// Item C trade suggestions' running yearly tally both read it.
+const TOTALS_YTD_FLOORS = { "2026": "2026-09-14" };
 function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, loaded }) {
   const T = THEME[dk ? "dark" : "light"];
   const now = parse(today);

@@ -1005,6 +1005,173 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count('data-testid="mine-vacations"'), 1, "the My schedule card is addressable");
     assert.strictEqual(src.split("renderVacationList(").length - 1, 3, "the three call sites (Setup, My schedule, Time off) share the one renderer");
   });
+  // Item C (Faraz 9/23 evening): the "Suggested" trade partners of the Propose a shift trade card - a PURE ranking
+  // (helpers.suggestTradePartners) over an INJECTED eligibility check (the card passes its own tradeEligibility /
+  // tradeEligibilityOver) and an injected unitOf (the card's tradeUnitOf), so the fixture below needs no rules context.
+  {
+    // Oct 2026 fixture: s1 gives days away; s2..s6 are the pool. Primary totals for the year: s2 = 3, s3 = 1, s4 = 5, s5 = 2.
+    const sched = {
+      "2026-10-05": { primary: "s1", backup: "s3" },
+      "2026-10-06": { primary: "s2", backup: "s1" },
+      "2026-10-07": { primary: "s2", backup: "s4" },
+      "2026-10-08": { primary: "s4", backup: "s2" },
+      "2026-10-09": { primary: "s5", backup: "s3" },   // Fri
+      "2026-10-10": { primary: "s5", backup: "s3" },   // Sat
+      "2026-10-11": { primary: "s3", backup: "s2" },   // Sun
+      "2026-10-12": { primary: "s4", backup: "s5" },
+      "2026-10-13": { primary: "s2", backup: "s4" },
+      "2026-10-16": { primary: "s1", backup: "s2" },   // Fri  } s1's Fri-Sun block
+      "2026-10-17": { primary: "s1", backup: "s2" },   // Sat  }
+      "2026-10-18": { primary: "s1", backup: "s2" },   // Sun  }
+      "2026-10-23": { primary: "s4", backup: "s1" },   // Fri  } s4's Fri-Sun block (primary)
+      "2026-10-24": { primary: "s4", backup: "s1" },   // Sat  }
+      "2026-10-25": { primary: "s4", backup: "s1" },   // Sun  }
+    };
+    const calls = [];
+    // The stubbed check: s5 can never take anything (hard), s6 is unknown (rules missing), s2 carries one soft note on
+    // every slot, s1 (taking a day back) is refused on 10/06 backup and on any Saturday.
+    const elig = (days, role, cand) => {
+      calls.push({ days: days.slice(), role, cand });
+      if (cand === "s5") return { ok: false, hard: ["time-off:" + days[0]], soft: [] };
+      if (cand === "s6") return { ok: false, hard: ["rules-unavailable"], soft: [], unknown: true };
+      if (cand === "s1" && days.some(d => d === "2026-10-06" || H.parse(d).getDay() === 6)) return { ok: false, hard: ["max-consecutive"], soft: [] };
+      return { ok: true, hard: [], soft: cand === "s2" ? [{ reason: "outside-offers", weight: 1 }] : [] };
+    };
+    const blockOf = (d) => { const dow = H.parse(d).getDay(); if (dow !== 5 && dow !== 6 && dow !== 0) return null; const fri = H.fmt(H.addD(H.parse(d), dow === 5 ? 0 : dow === 6 ? -1 : -2)); return [fri, H.suAddDays(fri, 1), H.suAddDays(fri, 2)]; };
+    // A block-style holder's full Fri-Sun in one role is a unit (the card's tradeUnitOf shape); s1 and s4 are block-style here.
+    const unitOf = (day, role, holder) => { if (holder !== "s1" && holder !== "s4") return null; const b = blockOf(day); return b && b.every(x => sched[x] && sched[x][role] === holder) ? { kind: "weekend-block", name: "weekend block", days: b } : null; };
+    const base = { today: "2026-10-01", pool: ["s2", "s3", "s4", "s5", "s6"], nameOf, eligibility: elig, unitOf, floors: { "2026": "2026-09-14" } };
+    check("Item C: suggestTradePartners (one-way) lists only the hard-eligible (unknown = not shown), ranks fewer soft flags first then the lowest running total in the role for the year, at most three, with a 'lowest primary total, N' / 'primary total N' reason", () => {
+      calls.length = 0;
+      const out = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, twoWay: false });
+      assert.deepStrictEqual(out.map(x => x.id), ["s3", "s4", "s2"], "s3 (total 1) before s4 (total 5); s2 (total 3) carries a soft note so he ranks last; s5 hard-ineligible and s6 unknown never appear");
+      assert.deepStrictEqual(out.map(x => x.total), [1, 5, 3]);
+      assert.deepStrictEqual(out.map(x => x.softCount), [0, 0, 1]);
+      assert.strictEqual(out[0].reason, "lowest primary total, 1");
+      assert.strictEqual(out[1].reason, "primary total 5");
+      assert.strictEqual(out[2].reason, "primary total 3", "one short clause - the soft-note count stays on softCount (the chip's tooltip), never in the reason");
+      assert.deepStrictEqual(out[0].window, { from: "2026-09-14", to: "2026-12-31" }, "the tally window (the year's floor .. Dec 31) rides along for the tooltip");
+      assert.strictEqual(out[0].name, "Acton");
+      assert.deepStrictEqual([out[0].returnDay, out[0].returnRole], [null, null], "a one-way ranking suggests no return day");
+      assert.ok(calls.every(c => c.cand !== "s1"), "one-way: the proposer's return eligibility is never checked (d is skipped)");
+      // backup role: the backup totals rank (s4 = 2 backup days, s3 = 3, s2 = 5)
+      const b = H.suggestTradePartners({}, sched, "2026-10-06", "backup", "s1", { ...base, twoWay: false });
+      assert.deepStrictEqual(b.map(x => x.id + ":" + x.total), ["s4:2", "s3:3", "s2:5"]);
+      assert.strictEqual(b[0].reason, "lowest backup total, 2");
+      // the cap: a pool of four eligible people still yields three chips
+      const many = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, twoWay: false, pool: ["s2", "s3", "s4", "s7"], eligibility: () => ({ ok: true, hard: [], soft: [] }) });
+      assert.strictEqual(many.length, 3);
+      // no rules context / no check injected / a bad day = no suggestions, never a throw
+      assert.deepStrictEqual(H.suggestTradePartners(null, sched, "2026-10-05", "primary", "s1", base), []);
+      assert.deepStrictEqual(H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, eligibility: null }), []);
+      assert.deepStrictEqual(H.suggestTradePartners({}, sched, "garbage", "primary", "s1", base), []);
+      assert.deepStrictEqual(H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, pool: ["s5", "s6"] }), [], "nobody eligible = no row");
+      const throwing = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, eligibility: () => { throw new Error("boom"); } });
+      assert.deepStrictEqual(throwing, [], "a throwing check counts as unknown - nobody is suggested");
+    });
+    check("Item C: a two-way (member) ranking prefers people holding an upcoming day the proposer may take back - the EARLIEST workable one is the chip's return day - and ranks 'no return day found' last; a unit day of theirs comes back only as a whole unit pairing day for day", () => {
+      calls.length = 0;
+      const out = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, twoWay: true });
+      assert.deepStrictEqual(out.map(x => x.id), ["s3", "s4", "s2"]);
+      // s3's earliest upcoming day is 10/05 backup (the same day s1 gives) - the injected check decides, and it allows it here
+      assert.deepStrictEqual([out[0].returnDay, out[0].returnRole], ["2026-10-05", "backup"]);
+      assert.strictEqual(out[0].reason, "can give back Mon 10/5 B");
+      // s2: 10/06 primary is refused for s1 (the stub), so his 10/07 primary is the earliest workable return
+      assert.deepStrictEqual([out[2].returnDay, out[2].returnRole, out[2].reason], ["2026-10-07", "primary", "can give back Wed 10/7 P"]);
+      // s4: 10/07 backup is his earliest day
+      assert.deepStrictEqual([out[1].returnDay, out[1].returnRole], ["2026-10-07", "backup"]);
+      // someone with no workable return day ranks LAST even with the lowest total: s3 refused on every day of his
+      const noRet = (days, role, cand) => cand === "s1" && ["2026-10-05", "2026-10-09", "2026-10-10", "2026-10-11"].some(d => days.indexOf(d) >= 0) ? { ok: false, hard: ["blocked"], soft: [] } : elig(days, role, cand);
+      const o2 = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, twoWay: true, eligibility: noRet });
+      assert.deepStrictEqual(o2.map(x => x.id), ["s4", "s2", "s3"], "s3 drops to the end");
+      assert.deepStrictEqual([o2[2].returnDay, o2[2].reason], [null, "no return day found"]);
+      // an OPT-IN horizon: nothing after today + horizonDays is offered back (the default scans the whole schedule - below)
+      const near = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, twoWay: true, today: "2026-10-01", horizonDays: 3 });
+      assert.strictEqual(near.find(x => x.id === "s4").returnDay, null, "s4's first day (10/07) lies past a 3-day horizon");
+      // unit-aware (e): s1 gives his whole Fri-Sun block 10/16-18 - the check runs over the three days, and a unit day of
+      // s4's (his 10/23-25 primary block) comes back only as the whole block, day for day; s4's single 10/07 backup is earlier and plain, so it wins
+      calls.length = 0;
+      const unitDays = ["2026-10-16", "2026-10-17", "2026-10-18"];
+      const unitOut = H.suggestTradePartners({}, sched, "2026-10-16", "primary", "s1", { ...base, twoWay: true, offerDays: unitDays });
+      assert.ok(calls.some(c => c.cand === "s3" && c.days.join(",") === unitDays.join(",") && c.role === "primary"), "the give-away check covers the whole unit");
+      const s4u = unitOut.find(x => x.id === "s4");
+      assert.deepStrictEqual([s4u.returnDay, s4u.returnDays], ["2026-10-07", ["2026-10-07"]], "the earliest plain day wins over the later block");
+      // with s4's plain days refused, the block is the return unit - all three days, paired
+      const s4Plain = (d) => d.length === 1 && sched[d[0]] && (sched[d[0]].primary === "s4" || sched[d[0]].backup === "s4");
+      const u2 = H.suggestTradePartners({}, sched, "2026-10-16", "primary", "s1", { ...base, twoWay: true, offerDays: unitDays, eligibility: (d, r, c) => c === "s1" && d.length === 3 ? { ok: true, hard: [], soft: [] } : (c === "s1" && s4Plain(d) ? { ok: false, hard: ["blocked"], soft: [] } : elig(d, r, c)) });
+      const s4b = u2.find(x => x.id === "s4");
+      assert.deepStrictEqual([s4b.returnDay, s4b.returnRole, s4b.returnDays, s4b.reason], ["2026-10-23", "primary", ["2026-10-23", "2026-10-24", "2026-10-25"], "can give back Fri 10/23 P (3-day unit)"]);
+      // a SINGLE given day never takes a unit day of theirs back (that would split their unit)
+      const single = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, twoWay: true, eligibility: (d, r, c) => c === "s1" && s4Plain(d) ? { ok: false, hard: ["blocked"], soft: [] } : elig(d, r, c) });
+      assert.strictEqual(single.find(x => x.id === "s4").returnDay, null, "s4's only remaining days are his 10/23-25 block - not offered against a single day");
+    });
+    // Review (9/24): the vacation-conflict box's suggestion must never hand back a return day INSIDE the vacation range
+    // that was just refused (the time_off row was never written, so the rules cannot know it) - opts.avoidReturnDays
+    // ({ start, end } or a predicate) skips those days (a unit when ANY of its days falls inside); and the return-day
+    // scan covers the whole published schedule by default (no 120-day horizon - the card's own return picker is unbounded).
+    check("Item C (review): avoidReturnDays skips a return day or unit inside the refused vacation window (the next workable day is offered, someone left with nothing reads 'no return day found' and ranks last) and the default scan covers the whole published schedule, not 120 days", () => {
+      // s1 (refused 10/05-10/07 off) gives 10/05 primary: s3's 10/05 B and s2's 10/07 P / s4's 10/07 B lie inside the window
+      const win = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, twoWay: true, avoidReturnDays: { start: "2026-10-05", end: "2026-10-07" } });
+      assert.deepStrictEqual(win.map(x => x.id), ["s3", "s4", "s2"], "the ranking itself is unchanged - everyone still has a workable day");
+      assert.deepStrictEqual(win.map(x => x.returnDay + " " + x.returnRole), ["2026-10-09 backup", "2026-10-08 primary", "2026-10-08 backup"], "the earliest day OUTSIDE the window: s3 10/09 B (not 10/05), s4 10/08 P (not 10/07 B), s2 10/08 B (10/06 refused by the stub, 10/07 inside the window)");
+      assert.strictEqual(win[0].reason, "can give back Fri 10/9 B");
+      // a predicate form; a window swallowing every October day of a partner leaves 'no return day found' - and he ranks last
+      const far = { ...sched, "2027-02-10": { primary: "s3", backup: "s2" } };            // 132 days past today - beyond the old 120-day horizon
+      const oct = H.suggestTradePartners({}, far, "2026-10-05", "primary", "s1", { ...base, twoWay: true, avoidReturnDays: (d) => d <= "2026-10-31" });
+      assert.deepStrictEqual(oct.map(x => x.id), ["s3", "s2", "s4"], "s4 (nothing left to give back) drops to the end although his total ranks him second");
+      assert.deepStrictEqual([oct[0].returnDay, oct[0].returnRole, oct[0].reason], ["2027-02-10", "primary", "can give back Wed 2/10 P"], "the default scan reaches the whole published schedule");
+      assert.deepStrictEqual([oct[1].returnDay, oct[1].returnRole], ["2027-02-10", "backup"]);
+      assert.deepStrictEqual([oct[2].returnDay, oct[2].reason], [null, "no return day found"]);
+      // a return UNIT is skipped when any one of its days falls inside the window: s1 gives his 10/16-18 block, s4's plain
+      // days are refused, and the window covers 10/24 alone - the 10/23-25 block is no longer offered back
+      const unitDays = ["2026-10-16", "2026-10-17", "2026-10-18"];
+      const s4Plain = (d) => d.length === 1 && sched[d[0]] && (sched[d[0]].primary === "s4" || sched[d[0]].backup === "s4");
+      const blockElig = (d, r, c) => c === "s1" && d.length === 3 ? { ok: true, hard: [], soft: [] } : (c === "s1" && s4Plain(d) ? { ok: false, hard: ["blocked"], soft: [] } : elig(d, r, c));
+      const withBlock = H.suggestTradePartners({}, sched, "2026-10-16", "primary", "s1", { ...base, twoWay: true, offerDays: unitDays, eligibility: blockElig });
+      assert.strictEqual(withBlock.find(x => x.id === "s4").returnDay, "2026-10-23", "control: without a window the block comes back");
+      const noBlock = H.suggestTradePartners({}, sched, "2026-10-16", "primary", "s1", { ...base, twoWay: true, offerDays: unitDays, eligibility: blockElig, avoidReturnDays: { start: "2026-10-24", end: "2026-10-24" } });
+      assert.deepStrictEqual([noBlock.find(x => x.id === "s4").returnDay, noBlock.find(x => x.id === "s4").reason], [null, "no return day found"]);
+      // the window never touches a one-way ranking or the give-away check itself
+      const oneWay = H.suggestTradePartners({}, sched, "2026-10-05", "primary", "s1", { ...base, twoWay: false, avoidReturnDays: { start: "2026-10-01", end: "2026-12-31" } });
+      assert.deepStrictEqual(oneWay.map(x => x.id), ["s3", "s4", "s2"]);
+    });
+    check("Item C pins: the card renders tradeSuggestionsFor (the pure helper over tradeEligibility / tradeEligibilityOver / tradeUnitOf, two-way for members) as trade-suggest-chip buttons that fill Trade with and the return day; the vacation-conflict box and the day editor's link pre-fill the card with the top suggestion", () => {
+      const tf = src.indexOf("const tradeSuggestionsFor = (day, role, fromId) => {");
+      assert.ok(tf > 0, "tradeSuggestionsFor at App scope");
+      const tfBody = src.slice(tf, src.indexOf("const unitText = ", tf));
+      assert.ok(tfBody.length > 0 && tfBody.length < 3000, "tradeSuggestionsFor precedes unitText");
+      assert.ok(tfBody.includes("if (!rulesCtx || !suIsIso(day) || !fromId) return [];"), "no rules context = no suggestions");
+      assert.ok(tfBody.includes("return suggestTradePartners(rulesCtx, schedule, day, role, fromId, {"), "the pure helper does the ranking");
+      assert.ok(tfBody.includes("twoWay: !isScheduler"), "members get the two-way ranking; the scheduler's one-way proposals skip it");
+      assert.ok(tfBody.includes("eligibility: (days, r, cand) => days.length > 1 ? tradeEligibilityOver(days, r, cand) : tradeEligibility(days[0], r, cand)"), "the card's own check is injected");
+      assert.ok(tfBody.includes("unitOf: tradeUnitOf"), "the card's unit finder is injected");
+      assert.ok(tfBody.includes("const whole = !!unit && tradeWholeUnit;") && tfBody.includes("offerDays: whole ? unit.days : [day]"), "unit-aware: the whole unit is ranked when the box is ticked");
+      assert.ok(tfBody.includes("floors: TOTALS_YTD_FLOORS") && src.includes("ytdFloors={TOTALS_YTD_FLOORS}"), "the year tally uses the Totals card's floor");
+      const card = src.slice(src.indexOf('<div style={css.cardT}>Propose a shift trade</div>'), src.indexOf('data-testid="trades-pending"'));
+      assert.ok(card.includes('data-testid="trade-suggested"') && card.includes('data-testid="trade-suggest-chip"'), "the Suggested row and its chips");
+      assert.ok(card.indexOf('data-testid="trade-suggested"') < card.indexOf('data-testid="trade-to"'), "the row sits above Trade with");
+      assert.ok(card.includes("setTradeTo(x.id); setTradeReturnDay(x.returnDay || \"\"); if (x.returnRole) setTradeReturnRole(x.returnRole);"), "one tap fills Trade with and the return day");
+      assert.ok(card.includes("{x.name} - {x.reason}"), "each chip reads 'Name - reason'");
+      const vac = src.slice(src.indexOf('data-testid="vac-conflict"'), src.indexOf("const authBox = "));
+      assert.ok(vac.includes('data-testid="vac-conflict-trade"') && vac.includes('propose a trade{sug ? " - suggested: " + sug.name : ""}'), "the vacation-conflict button names the top suggestion");
+      assert.ok(vac.includes("proposeTradeForDay(c.day, c.role, tradePickOf(vacConflict.personId, sug))"), "and pre-fills the card through proposeTradeForDay");
+      const pt = src.slice(src.indexOf("const proposeTradeForDay = (day, role, pick) => {"), src.indexOf("// --- Clear schedule"));
+      assert.ok(pt.includes("if (pick && pick.to) { setTradeTo(pick.to); setTradeReturnDay(pick.returnDay || \"\"); if (pick.returnRole) setTradeReturnRole(pick.returnRole); }"), "proposeTradeForDay pre-fills the counter-party and the return day");
+      assert.ok(pt.includes("else if (isScheduler && pick && pick.from && poolSurgeons.some(s => s.id === pick.from)) setTradeFrom(pick.from);"), "the scheduler's From follows the holder the suggestion was made for - only a pool member (an outside surgeon written in by hand never becomes From)");
+      // review (9/24): the refused-vacation window - the box and the card share it through tradeSuggestionsFor
+      assert.ok(tfBody.includes("avoidReturnDays: tradeAvoidWindow(day, fromId)"), "no return day inside the vacation range that was just refused");
+      const aw = src.slice(src.indexOf("const tradeAvoidWindow = (day, fromId) =>"), tf);
+      assert.ok(aw.length > 0 && aw.length < 900 && aw.includes("vacConflict.personId === fromId") && aw.includes("(vacConflict.items || []).some(i => i.day === day)") && aw.includes("{ start: vacConflict.start, end: vacConflict.end }"), "the window is the refused range, only for the refused person's own conflicting slots");
+      assert.ok(src.includes("onTrade={proposeTradeForDay}") && src.includes("suggestTrade={(d, r) => {"), "the day editor gets the suggestion callback");
+      const st = src.slice(src.indexOf("suggestTrade={(d, r) => {"), src.indexOf("css={css} dk={dk}/>", src.indexOf("suggestTrade={(d, r) => {")));
+      assert.ok(st.includes("return from && poolSurgeons.some(s => s.id === from) ? tradePickOf(from, tradeSuggestionsFor(d, r, from)[0] || null) : null;"), "the editor suggests nothing (and moves no From) when the holder is not a pool member");
+      const ed = src.slice(src.indexOf("function DayEditor(props) {"), src.indexOf('data-testid="editor-footer"'));
+      assert.ok(ed.includes("const tradePick = typeof suggestTrade === \"function\" && !isPublicMode && (canEdit || myRole) ? suggestTrade(day, tradeLinkRole) : null;"), "the editor computes the top suggestion for the link's role");
+      const et = src.indexOf('data-testid="editor-trade"');
+      const link = src.slice(et, src.indexOf("Propose a trade for this day", et) + 140);
+      assert.ok(link.includes("onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)}") && link.includes('Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}'), "the link names the suggestion and passes it on");
+    });
+  }
   // RLS-7: the two PATCH handlers that used to trust a 2xx alone now behave like patchTradeStatus - a 200 with zero
   // rows (an RLS-filtered write) adopts nothing locally and logs no audit row.
   check("RLS-7: toEdit and updateOfficeContact treat a 2xx with zero rows as 'not changed' (no local adopt, no audit row, no fabricated row)", () => {
