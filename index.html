@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-YyiLtBhxA1b78gIh/ziMwRFBCTjVx9bb+kuBEWCOkNs=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-ZVMB/9/iWSjJIsBh6/Bkdhv49PImoaKonLVm1IUMw2A=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-bDf228swmx2pa+KmZqBp1IYSS/0owgZZGX2GHrLVTTE=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-QaFy9VdhXXHp1btUqcn6TvJNfqs6gjYR7+ucDJwILmU=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.24e";
+    var APP_VERSION = "2026.09.24f";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -6837,12 +6837,12 @@ function CallSchedule() {
     style: {
       margin: "0 0 8px",
       fontSize: 16,
-      color: "#1F2A3A"
+      color: T.text
     }
   }, "Publish schedule changes"), React.createElement("p", {
     style: {
       fontSize: 13,
-      color: "#5B6B82",
+      color: T.muted,
       margin: "0 0 12px",
       lineHeight: 1.5
     }
@@ -6850,7 +6850,7 @@ function CallSchedule() {
     style: {
       maxHeight: 260,
       overflowY: "auto",
-      border: "1px solid #DCE3EC",
+      border: "1px solid " + T.border,
       borderRadius: 6,
       padding: "8px 10px",
       marginBottom: 12
@@ -6874,7 +6874,7 @@ function CallSchedule() {
     style: {
       fontSize: 12,
       fontFamily: mono,
-      color: "#3a4a58",
+      color: T.text,
       lineHeight: 1.5
     }
   }, l.replace(" -> ", " \u2192 ")))))), React.createElement("label", {
@@ -6890,18 +6890,11 @@ function CallSchedule() {
   }), React.createElement("p", {
     style: {
       fontSize: 11.5,
-      color: "#7a8a98",
+      color: T.muted,
       margin: "0 0 10px",
       lineHeight: 1.5
     }
-  }, "The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept & Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open."), React.createElement("p", {
-    style: {
-      fontSize: 11.5,
-      color: "#5B6B82",
-      margin: "0 0 10px",
-      lineHeight: 1.5
-    }
-  }, "The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that)."), React.createElement("div", {
+  }, "The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept & Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open."), React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "flex-end",
@@ -9216,7 +9209,7 @@ function CallSchedule() {
     }, "Open shifts"), React.createElement("span", {
       style: {
         fontSize: 11,
-        color: "#7a8a98"
+        color: T.muted
       }
     }, !loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`)), React.createElement("p", {
       style: sectionNote
@@ -9231,7 +9224,7 @@ function CallSchedule() {
     }, React.createElement("span", {
       style: {
         fontSize: 10,
-        color: "#7a8a98",
+        color: T.muted,
         fontWeight: 700,
         textTransform: "uppercase",
         letterSpacing: 0.5
@@ -9253,7 +9246,7 @@ function CallSchedule() {
     }, "Backup only")), React.createElement("label", {
       style: {
         fontSize: 12,
-        color: "#5a6a78",
+        color: T.muted,
         display: "inline-flex",
         alignItems: "center",
         gap: 5,
@@ -9311,11 +9304,15 @@ function CallSchedule() {
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Role"), React.createElement("th", null, "Unit"), React.createElement("th", null, "Why"), React.createElement("th", null, "Eligible now"), React.createElement("th", null, "Last announced"), canAct && React.createElement("th", null, "Action"))), React.createElement("tbody", null, rows.length === 0 && React.createElement("tr", null, React.createElement("td", {
       colSpan: canAct ? 7 : 6,
       style: {
-        color: "#1a8040",
         fontWeight: 600,
         padding: "12px 8px"
       }
-    }, !loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered.")), rows.map(s => {
+    }, React.createElement("span", {
+      "data-testid": "openshifts-empty",
+      style: {
+        color: T.success
+      }
+    }, !loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered."))), rows.map(s => {
       const key = openSlotKey(s.day, s.role);
       const elig = boardElig[key] || null;
       const eligible = elig ? elig.filter(o => o.ok) : [];
@@ -9335,7 +9332,7 @@ function CallSchedule() {
       }, DAY_HDR[parse(s.day).getDay()], " ", fmtMD(s.day), s.day === todayStr ? React.createElement("span", {
         style: {
           fontSize: 10,
-          color: "#7a8a98",
+          color: T.muted,
           marginLeft: 4,
           fontWeight: 400
         }
@@ -9345,7 +9342,7 @@ function CallSchedule() {
         }
       }, React.createElement("span", {
         style: {
-          color: "#c04040",
+          color: T.open,
           fontWeight: 800,
           fontSize: 10,
           letterSpacing: 0.5
@@ -9367,7 +9364,7 @@ function CallSchedule() {
         }
       }, !rulesCtx ? "-" : eligible.length ? eligible.map(chip) : React.createElement("span", {
         style: {
-          color: "#c04040",
+          color: T.open,
           fontStyle: "italic"
         }
       }, "nobody under the current rules")), React.createElement("td", {
@@ -9435,7 +9432,7 @@ function CallSchedule() {
       "data-through": boardTail.through,
       style: {
         fontSize: 11,
-        color: "#7a8a98",
+        color: T.muted,
         marginTop: 8,
         lineHeight: 1.5
       }
@@ -9445,7 +9442,7 @@ function CallSchedule() {
       "data-fixed": lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : "",
       style: {
         fontSize: 11,
-        color: "#7a8a98",
+        color: T.muted,
         marginTop: 4,
         lineHeight: 1.5
       }
@@ -9522,7 +9519,7 @@ function CallSchedule() {
     }, "No rule warnings for you on this day."), React.createElement("p", {
       style: {
         fontSize: 12,
-        color: "#5a6a78",
+        color: T.muted,
         margin: "10px 0 0",
         lineHeight: 1.5
       }
@@ -9589,7 +9586,7 @@ function CallSchedule() {
     }, "Email the group about ", obNotice.count, " open shift", obNotice.count === 1 ? "" : "s", "?"), React.createElement("p", {
       style: {
         fontSize: 12.5,
-        color: "#5a6a78",
+        color: T.muted,
         margin: "0 0 10px",
         lineHeight: 1.5
       }
@@ -9608,7 +9605,7 @@ function CallSchedule() {
         fontWeight: 700,
         textTransform: "uppercase",
         letterSpacing: 0.6,
-        color: "#7a8a98",
+        color: T.muted,
         marginBottom: 4
       }
     }, "Preview"), React.createElement("div", {
@@ -10972,7 +10969,7 @@ function CallSchedule() {
   }, React.createElement("span", null, "Notification settings"), React.createElement("span", {
     style: {
       fontSize: 12,
-      color: "#5B6B82"
+      color: T.muted
     }
   }, openSettingsCards.notifSettings ? "-" : "+")), openSettingsCards.notifSettings && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
@@ -11013,13 +11010,14 @@ function CallSchedule() {
       }
     }, [["schedule_updates_email", "Schedule published / changes affecting me"], ["trade_updates_email", "Trade proposed / accepted / declined"], ["shift_reminders_email", "Shift reminders"]].map(([key, text]) => React.createElement("label", {
       key: key,
+      "data-testid": "notif-pref",
       style: {
         display: "flex",
         alignItems: "center",
         gap: 8,
         cursor: "pointer",
         fontSize: 12,
-        color: "#3a4a58"
+        color: T.text
       }
     }, React.createElement("input", {
       type: "checkbox",
@@ -11035,9 +11033,10 @@ function CallSchedule() {
         marginTop: 4
       }
     }, React.createElement("span", {
+      "data-testid": "notif-hour-label",
       style: {
         fontSize: 12,
-        color: "#3a4a58",
+        color: T.text,
         minWidth: 160
       }
     }, "Reminder hour (Central):"), React.createElement("select", {
@@ -11063,7 +11062,7 @@ function CallSchedule() {
     })), notifPrefsSaving && React.createElement("span", {
       style: {
         fontSize: 10,
-        color: "#1a8040"
+        color: T.success
       }
     }, "Saving")));
   })()), React.createElement("div", {
@@ -11113,7 +11112,7 @@ function CallSchedule() {
   }, "Send test notification"), notifTestSent && React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#1a8040",
+      color: T.success,
       fontWeight: 600
     }
   }, notifTestSent))))), React.createElement("div", {
@@ -11557,29 +11556,24 @@ function CallSchedule() {
   }, React.createElement("span", null, "Restore from snapshot"), React.createElement("span", {
     style: {
       fontSize: 12,
-      color: "#5B6B82"
+      color: T.muted
     }
   }, openSettingsCards.restoreSnap ? "-" : "+")), openSettingsCards.restoreSnap && React.createElement(React.Fragment, null, React.createElement("p", {
     style: sectionNote
   }, "Snapshots are saved automatically before destructive actions and periodically. Restoring replaces the current schedule and setup for everyone with the selected copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so a restore can itself be undone."), snapshotsLoading && React.createElement("div", {
     style: {
       fontSize: 12,
-      color: "#5B6B82"
+      color: T.muted
     }
   }, "Loading snapshots"), !snapshotsLoading && snapshotLoadFailed && React.createElement("div", {
-    style: {
-      fontSize: 12,
-      fontWeight: 600,
-      color: "#a02020",
-      background: "#fce8e8",
-      border: "1px solid #e0a8a8",
-      borderRadius: 6,
-      padding: "6px 10px"
-    }
+    style: _objectSpread(_objectSpread({}, css.errBox), {}, {
+      fontWeight: 600
+    })
   }, "Couldn't load your backups - this does NOT mean none exist. Tap Refresh; if it keeps failing, reload the app (your session may have expired)."), !snapshotsLoading && !snapshotLoadFailed && (!snapshotList || snapshotList.length === 0) && React.createElement("div", {
+    "data-testid": "snapshot-empty",
     style: {
       fontSize: 12,
-      color: "#5B6B82"
+      color: T.muted
     }
   }, "No snapshots yet."), !snapshotsLoading && snapshotList && snapshotList.map(sn => React.createElement("div", {
     key: sn.id,
@@ -11591,7 +11585,7 @@ function CallSchedule() {
       alignItems: "center",
       gap: 8,
       padding: "7px 0",
-      borderBottom: "1px solid #f0f2f4"
+      borderBottom: "1px solid " + T.border
     }
   }, React.createElement("div", {
     style: {
@@ -11602,12 +11596,12 @@ function CallSchedule() {
     style: {
       fontSize: 12,
       fontWeight: 600,
-      color: "#3a4a58"
+      color: T.text
     }
   }, snapshotReasonLabel(sn.reason)), React.createElement("div", {
     style: {
       fontSize: 10,
-      color: "#8a94a0",
+      color: T.muted,
       fontFamily: mono
     }
   }, new Date(sn.created_at).toLocaleString(undefined, {
@@ -15161,16 +15155,8 @@ function SuCheck({
 }) {
   return React.createElement("label", {
     title: title || "",
-    style: {
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 5,
-      fontSize: 12,
-      color: "#3a4a58",
-      marginRight: 12,
-      marginBottom: 6,
-      cursor: "pointer"
-    }
+    "data-sucheck": "",
+    style: css.suCheck
   }, React.createElement("input", {
     type: "checkbox",
     "data-testid": testid || undefined,
