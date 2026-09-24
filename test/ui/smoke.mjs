@@ -3247,6 +3247,52 @@ try {
     else if (notifs.length !== 1 || !vacNotif) fail(`Time off clean range: expected exactly one notification (vacation_logged), got ${notifs.length}: ` + JSON.stringify(notifs.map(n => n.type)));
     else if (vacNotif.message !== "Khan logged vacation 3/2-3/3 (harness range)") fail("Time off clean range: composed message wrong: " + vacNotif.message);
     else ok("Time off clean range: one POST /rest/v1/time_off { s1, 2027-03-02..03 } + one audit timeoff.add + one notification vacation_logged \"" + vacNotif.message + "\"");
+    // ---- Item B (Faraz 9/23 evening): the list is grouped per surgeon in roster order - a vac-group-<id> header
+    //      (Badge, full name, N upcoming) with that person's compact "Mon D-D" lines under it; the range just added
+    //      reads "Mar 2-3 (2027) harness range" (en dash) with its Edit / Remove controls, under Khan's header. ----
+    try {
+      await page.waitForSelector("[data-testid=timeoff-card] [data-testid=vac-line-s1-2027-03-02]", { timeout: 5000 });
+      const readGroups = (sel) => page.$eval(sel, card => {
+        const idOf = (el) => el.getAttribute("data-testid").replace(/^vac-group-/, "");
+        const groups = Array.from(card.querySelectorAll("[data-testid^=vac-group-]")).map(h => {
+          const lines = Array.from(h.parentElement.querySelectorAll("[data-testid^=vac-line-]"));
+          return { id: idOf(h), upcoming: +h.getAttribute("data-upcoming"), past: +h.getAttribute("data-past"), text: h.innerText.replace(/\s+/g, " ").trim(), lines: lines.length,
+            foreign: lines.filter(l => !l.getAttribute("data-testid").startsWith("vac-line-" + idOf(h) + "-")).length,
+            sorted: lines.map(l => l.getAttribute("data-start")).every((d, i, a) => i === 0 || a[i - 1] <= d) };
+        });
+        const line = card.querySelector("[data-testid=vac-line-s1-2027-03-02]");
+        return { groups, orphans: Array.from(card.querySelectorAll("[data-testid^=vac-line-]")).filter(l => !l.parentElement.querySelector("[data-testid^=vac-group-]")).length,
+          lineText: line ? line.innerText.replace(/\s+/g, " ").trim() : null, lineInS1: !!(line && line.parentElement.querySelector("[data-testid=vac-group-s1]")),
+          lineButtons: line ? Array.from(line.querySelectorAll("button")).map(b => b.textContent.trim()) : [] };
+      });
+      const g = await readGroups("[data-testid=timeoff-card]");
+      const ids = g.groups.map(x => x.id), rosterOrder = ids.slice().sort((a, b) => +a.slice(1) - +b.slice(1));
+      const s1 = g.groups.find(x => x.id === "s1");
+      const problems = [];
+      if (!s1) problems.push("no vac-group-s1 header");
+      else { if (!/^Khan Faraz Khan \d+ upcoming$/.test(s1.text)) problems.push(`Khan's header reads '${s1.text}'`); if (s1.lines !== s1.upcoming) problems.push(`Khan's header says ${s1.upcoming} upcoming but ${s1.lines} line(s) are listed`); if (/past/.test(s1.text)) problems.push("a past count with Show past off"); }
+      if (ids.join() !== rosterOrder.join()) problems.push("groups out of roster order: " + ids.join(","));
+      if (g.groups.some(x => x.lines === 0)) problems.push("a header with no lines: " + g.groups.filter(x => x.lines === 0).map(x => x.id).join(","));
+      if (g.groups.some(x => x.foreign)) problems.push("a line under another surgeon's header");
+      if (g.groups.some(x => !x.sorted)) problems.push("lines not in date order under " + g.groups.filter(x => !x.sorted).map(x => x.id).join(","));
+      if (g.orphans) problems.push(g.orphans + " line(s) outside any group");
+      if (!g.lineInS1) problems.push("the 2027-03-02 line is not under vac-group-s1");
+      if (g.lineText !== "Mar 2\u20133 (2027) harness range Edit Remove") problems.push(`the new line reads '${g.lineText}'`);
+      if (g.lineButtons.join() !== "Edit,Remove") problems.push("the new line's controls: " + JSON.stringify(g.lineButtons));
+      if (problems.length) fail("Item B grouped vacations (Time off): " + problems.join("; "));
+      else ok(`Item B grouped vacations (Time off): ${g.groups.length} group(s) in roster order (${ids.join(", ")}), Khan's header '${s1.text}', the new line reads 'Mar 2\u20133 (2027) harness range' with Edit / Remove under vac-group-s1, every line under its own header, none orphaned`);
+      // Show past: every header gains "+M past" exactly when M > 0 and lists upcoming + past lines; off again afterwards.
+      await page.click("[data-testid=timeoff-card] [data-testid=vac-show-past]");
+      await page.waitForTimeout(150);
+      const gp = await readGroups("[data-testid=timeoff-card]");
+      const bad = gp.groups.filter(x => x.lines !== x.upcoming + x.past || (x.past > 0) !== new RegExp("\\+" + x.past + " past$").test(x.text));
+      await page.click("[data-testid=timeoff-card] [data-testid=vac-show-past]");
+      await page.waitForTimeout(150);
+      const gOff = await readGroups("[data-testid=timeoff-card]");
+      if (bad.length) fail("Item B Show past (Time off): headers and lines disagree: " + JSON.stringify(bad.map(x => ({ id: x.id, text: x.text, lines: x.lines }))));
+      else if (gOff.groups.map(x => x.id + ":" + x.lines).join() !== g.groups.map(x => x.id + ":" + x.lines).join()) fail("Item B Show past (Time off): the list did not return to the upcoming-only picture: " + gOff.groups.map(x => x.id + ":" + x.lines).join(","));
+      else ok(`Item B Show past (Time off): ${gp.groups.length} group(s) with ${gp.groups.reduce((n, x) => n + x.past, 0)} past range(s) in all - '+M past' shown exactly where M > 0, lines = upcoming + past, upcoming-only again after unticking`);
+    } catch (e) { fail("Item B grouped vacations (Time off) exception: " + errLine(e)); }
     if (!writesSince(before2).every(w => noAddress(w.body))) fail("Time off: a write body carries an email address");
     await page.screenshot({ path: path.join(OUT, "timeoff.png"), fullPage: true });
     ok("screenshot test/ui/out/timeoff.png");
@@ -3814,6 +3860,11 @@ try {
       await openCard("setup_vacations");
       const before = writes.length;
       const form = page.locator("[data-testid=card-setup_vacations]");
+      // Item B: the Setup card renders the same grouped list (a header per surgeon with upcoming ranges, in roster order).
+      const setupGroups = await form.evaluate(card => Array.from(card.querySelectorAll("[data-testid^=vac-group-]")).map(h => ({ id: h.getAttribute("data-testid").slice(10), lines: h.parentElement.querySelectorAll("[data-testid^=vac-line-]").length })));
+      const sgIds = setupGroups.map(x => x.id);
+      if (!setupGroups.length || setupGroups.some(x => !x.lines) || sgIds.join() !== sgIds.slice().sort((a, b) => +a.slice(1) - +b.slice(1)).join()) fail("Item B Setup > Vacations: expected per-surgeon groups in roster order, each with lines: " + JSON.stringify(setupGroups));
+      else ok(`Item B Setup > Vacations: ${setupGroups.length} per-surgeon group(s) in roster order (${sgIds.join(", ")}), each with its lines`);
       await form.locator("select").first().selectOption("s3");
       const dateInputs = form.locator("input[type=date]");
       await dateInputs.nth(0).fill("2026-10-10");
@@ -4072,6 +4123,16 @@ try {
       await page.waitForSelector("[data-testid=mine-eastvac]", { timeout: 8000 });
       const mineRs = await readRanges("[data-testid=mine-eastvac-list]");
       if (!listOk(mineRs)) fail("My schedule: the East vacation list should show the 3 ranges with their decisions: " + JSON.stringify(mineRs.map(x => x.start + " " + x.state))); else ok("My schedule: own East (Davenport) vacations listed with decisions - " + mineRs.map(x => x.start + " " + x.state).join(", "));
+      // Item B: the one-person view (My schedule > My vacations) lists just the compact lines - no per-surgeon header - and
+      // the list agrees with the card title "My vacations (N upcoming)". (Not tied to the range added in the Time off step:
+      // the harness answers the poll's time_off read with the fixture rows, so that row may already be gone here.) Read from
+      // textContent: css.cardT is text-transform uppercase, so innerText hands back MY VACATIONS (N UPCOMING).
+      const mineVac = await page.$eval("[data-testid=mine-vacations]", el => ({ headers: el.querySelectorAll("[data-testid^=vac-group-]").length, lines: Array.from(el.querySelectorAll("[data-testid^=vac-line-]")).map(l => l.getAttribute("data-testid")), title: (el.textContent.match(/My vacations \((\d+) upcoming\)/) || [])[1] || null, empty: /No upcoming vacations\./.test(el.textContent) })).catch(() => null);
+      if (!mineVac) fail("Item B My schedule: the My vacations card (mine-vacations) is missing");
+      else if (mineVac.headers) fail(`Item B My schedule: the one-person view renders ${mineVac.headers} per-surgeon header(s)`);
+      else if (mineVac.title === null || +mineVac.title !== mineVac.lines.length || mineVac.empty !== (mineVac.lines.length === 0) || mineVac.lines.some(t => !t.startsWith("vac-line-s1-"))) fail(`Item B My schedule: the title says ${mineVac.title} upcoming but ${mineVac.lines.length} line(s) are listed (${mineVac.lines.join(", ")}); 'No upcoming vacations' shown: ${mineVac.empty}`);
+      else if (mineVac.lines.length === 0) ok(`Item B My schedule: My vacations (0 upcoming) shows 'No upcoming vacations.' for Khan - the fixture holds no upcoming s1 range and the Time off step's add is gone on the poll, so the one-person header absence is NOT exercised on a rendered page here (proven by the data-layer pin 'withHeader = personIds.length > 1')`);
+      else ok(`Item B My schedule: My vacations (${mineVac.title} upcoming) lists ${mineVac.lines.length} compact line(s) for Khan and no per-surgeon header`);
       await page.screenshot({ path: path.join(OUT, "mine-eastvac.png"), fullPage: true });
       ok("screenshot test/ui/out/mine-eastvac.png");
       await page.click('button[data-tab="timeoff"]');
@@ -6052,11 +6113,14 @@ try {
       if (!writesSince(b1).every(w => noAddress(w.body))) fail("coordinator: a write body carries an email address");
       // Remove the row just added: Edit / Remove render for the office; the DELETE goes by id and is audited as the office
       const b2 = writes.length;
+      // Item B: the row is the compact line under Acton's group header (vac-line-<id>-<start>), reading "Mar 16-17 (2027) office entry".
+      const newLine = card.locator("[data-testid=vac-line-s3-2027-03-16]");
+      const newLineText = (await newLine.count()) ? (await newLine.innerText()).replace(/\s+/g, " ").trim() : "";
+      const newLineUnderS3 = (await newLine.count()) ? await newLine.evaluate(el => !!el.parentElement.querySelector("[data-testid=vac-group-s3]")) : false;
+      if (!/^Mar 16\u201317 \(2027\) office entry/.test(newLineText) || !newLineUnderS3) fail("coordinator (Item B): the new row should read 'Mar 16-17 (2027) office entry' under Acton's group header: '" + newLineText + "' (under vac-group-s3: " + newLineUnderS3 + ")");
+      else ok("coordinator (Item B): the new row reads 'Mar 16\u201317 (2027) office entry' under Acton's group header");
       let removeBtn = null;
-      for (const h of await card.locator("button:has-text('Remove')").elementHandles()) {
-        const rowText = await h.evaluate(el => (el.parentElement && el.parentElement.parentElement ? el.parentElement.parentElement.innerText : "") || "");
-        if (/2027-03-16 to 2027-03-17/.test(rowText)) { removeBtn = h; break; }
-      }
+      for (const h of await newLine.locator("button:has-text('Remove')").elementHandles()) { removeBtn = h; break; }
       if (!removeBtn) fail("coordinator: the new row (2027-03-16 to 2027-03-17) shows no Remove button for the office");
       else {
         await removeBtn.click();

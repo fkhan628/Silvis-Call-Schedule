@@ -63,6 +63,43 @@ function fmtMD(dayStr) {
   return `${Number(m[2])}/${Number(m[3])}`;
 }
 
+// Item B (Faraz 9/23 evening): the compact vacation label of the grouped lists -
+// "Nov 19-22" (en dash), a single day as one date ("Nov 19"), a cross-month
+// range naming both months ("Nov 30-Dec 2"), and a year suffix only when the
+// range leaves the current year: "Jan 9-10 (2027)", "Dec 30-Jan 2 (2026-2027)".
+// Pure; an unparsable date falls back to the raw strings (never throws).
+const VAC_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function vacRangeLabel(start, end, todayStr) {
+  const rx = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const a = rx.exec(String(start || "")), e = end ? rx.exec(String(end)) : a;
+  if (!a || !e) return end && end !== start ? String(start || "?") + "\u2013" + String(end) : String(start || "?");
+  const ay = +a[1], am = +a[2] - 1, ad = +a[3], ey = +e[1], em = +e[2] - 1, ed = +e[3];
+  const ty = /^\d{4}/.test(String(todayStr || "")) ? +String(todayStr).slice(0, 4) : new Date().getFullYear();
+  let text = VAC_MON[am] + " " + ad;
+  if (ey !== ay || em !== am) text += "\u2013" + VAC_MON[em] + " " + ed;
+  else if (ed !== ad) text += "\u2013" + ed;
+  if (ay !== ty || ey !== ty) text += " (" + (ay === ey ? ay : ay + "\u2013" + ey) + ")";
+  return text;
+}
+
+// Item B: one group per person, in the ORDER GIVEN (the callers pass the roster
+// order), from the in-memory vacations map { id: [[start, end, rowId, note], ...] }.
+// Each group = { pid, upcoming, past, rows }: rows sorted by start, each
+// { pid, vs, ve, id, note, past }; past rows (end < today) are counted on the
+// group and listed only with showPast. A person with nothing to show is omitted.
+function groupVacationRows(vacations, personIds, todayStr, showPast) {
+  const out = [];
+  (personIds || []).forEach(pid => {
+    const list = (vacations && vacations[pid]) || [];
+    const rows = list.map(([vs, ve, id, note]) => ({ pid, vs, ve, id, note, past: ve < todayStr }))
+      .sort((x, y) => x.vs < y.vs ? -1 : x.vs > y.vs ? 1 : 0);
+    const upcoming = rows.filter(r => !r.past).length, past = rows.length - upcoming;
+    const shown = showPast ? rows : rows.filter(r => !r.past);
+    if (shown.length) out.push({ pid, upcoming, past, rows: shown });
+  });
+  return out;
+}
+
 // Today's date as "YYYY-MM-DD" in America/Chicago - the same expression
 // bump-version.js uses. The call is in Silvis, so the app has ONE notion of
 // today (Central) for the today ring, the coverage strip and the OPEN logic,
@@ -2485,6 +2522,7 @@ if (typeof module !== "undefined" && module.exports) {
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
+    vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
     openSlotReason, lastGenerateFromDiagnostics,

@@ -940,6 +940,71 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(/buildPrintableCalendarHTML\(\{[^}]*weekStartsOn[^}]*\}\)/.test(src), "the printable gets the setting");
     assert.ok(src.includes("monOf("), "monOf is still in use (week rows, East weeks) - Item A never touches it");
   });
+  // Item B (Faraz 9/23 evening): the vacation lists are grouped per surgeon - one block per roster entry in roster
+  // order (a header with the Badge, "N upcoming" and, with Show past on, "+M past"), the ranges underneath as compact
+  // "Nov 19-22" lines. Two pure helpers carry the behaviour so the grouping and the label are testable here.
+  check("Item B: vacRangeLabel renders 'Nov 19-22' (en dash), a single day as one date, cross-month 'Nov 30-Dec 2', and a year suffix only when the range leaves this year", () => {
+    const today = "2026-09-24";
+    assert.strictEqual(H.vacRangeLabel("2026-11-19", "2026-11-22", today), "Nov 19\u201322");
+    assert.strictEqual(H.vacRangeLabel("2026-11-25", "2026-11-29", today), "Nov 25\u201329");
+    assert.strictEqual(H.vacRangeLabel("2027-01-09", "2027-01-10", today), "Jan 9\u201310 (2027)");
+    assert.strictEqual(H.vacRangeLabel("2026-11-19", "2026-11-19", today), "Nov 19", "a single day is one date");
+    assert.strictEqual(H.vacRangeLabel("2027-03-02", "2027-03-02", today), "Mar 2 (2027)", "a single day next year carries the year");
+    assert.strictEqual(H.vacRangeLabel("2026-11-30", "2026-12-02", today), "Nov 30\u2013Dec 2", "a cross-month range names both months");
+    assert.strictEqual(H.vacRangeLabel("2026-12-30", "2027-01-02", today), "Dec 30\u2013Jan 2 (2026\u20132027)", "a range across New Year names both years");
+    assert.strictEqual(H.vacRangeLabel("2025-08-04", "2025-08-08", today), "Aug 4\u20138 (2025)", "a past year is named too");
+    assert.strictEqual(H.vacRangeLabel("2026-11-19", "", today), "Nov 19", "a missing end reads as the start day");
+    assert.strictEqual(H.vacRangeLabel("garbage", "2026-11-22", today), "garbage\u20132026-11-22", "an unparsable date falls back to the raw strings, never throws");
+    // Review fix (9/24): the four en dashes of the label are written as the \u2013 escape in helpers.js, like every
+    // en dash in index-source.html - a runtime string literal never carries a raw non-ASCII byte a text round-trip could
+    // mojibake into a user-visible label.
+    const hsrc = fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8");
+    const fnBody = hsrc.slice(hsrc.indexOf("function vacRangeLabel("), hsrc.indexOf("function groupVacationRows("));
+    assert.ok(fnBody.length > 0, "vacRangeLabel precedes groupVacationRows in helpers.js");
+    assert.strictEqual((fnBody.match(/[^\x00-\x7F]/g) || []).length, 0, "vacRangeLabel's source is ASCII-only (en dashes as \\u2013)");
+    assert.strictEqual((fnBody.match(/\\u2013/g) || []).length, 4, "the four en dashes (fallback, cross-month, same-month, two-year suffix) are \\u2013 escapes");
+  });
+  check("Item B: groupVacationRows returns one group per person in the ORDER GIVEN (roster order, not date order), rows sorted by start inside a group, past ranges counted on the header and listed only with showPast; people with nothing to show are omitted", () => {
+    const vac = {
+      s1: [["2026-11-19", "2026-11-22", "b", "conference"], ["2026-05-01", "2026-05-03", "a", null], ["2027-01-09", "2027-01-10", "c", null]],
+      s2: [],
+      s3: [["2026-04-01", "2026-04-01", "d", null]],
+    };
+    const today = "2026-09-24";
+    const up = H.groupVacationRows(vac, ["s1", "s2", "s3", "s4"], today, false);
+    assert.deepStrictEqual(up.map(g => g.pid), ["s1"], "s2 (no rows), s3 (past only) and s4 (unknown) are omitted");
+    assert.strictEqual(up[0].upcoming, 2); assert.strictEqual(up[0].past, 1);
+    assert.deepStrictEqual(up[0].rows.map(r => [r.vs, r.ve, r.id, r.note, r.past]), [["2026-11-19", "2026-11-22", "b", "conference", false], ["2027-01-09", "2027-01-10", "c", null, false]], "sorted by start, past rows hidden");
+    assert.strictEqual(up[0].rows[0].pid, "s1", "every row carries its person id for the Edit / Remove handlers");
+    const all = H.groupVacationRows(vac, ["s3", "s1"], today, true);
+    assert.deepStrictEqual(all.map(g => g.pid), ["s3", "s1"], "the order given wins over the dates (s3's range is the earliest)");
+    assert.deepStrictEqual(all[1].rows.map(r => r.vs + (r.past ? " past" : "")), ["2026-05-01 past", "2026-11-19", "2027-01-09"], "with showPast the past row is listed first, flagged");
+    assert.deepStrictEqual([all[0].upcoming, all[0].past, all[1].upcoming, all[1].past], [0, 1, 2, 1]);
+    assert.deepStrictEqual(H.groupVacationRows({}, ["s1"], today, true), [], "no vacations at all = no groups (the caller renders the 'No vacations' line)");
+    assert.deepStrictEqual(H.groupVacationRows(null, ["s1"], today, false), [], "a missing map never throws");
+  });
+  check("Item B pins: renderVacationList renders groupVacationRows(vacations, personIds, todayStr, showPastVacations) - a vac-group-<id> header (Badge, name, N upcoming, +M past) only when more than one person is listed, vac-line-<id>-<start> lines labelled by vacRangeLabel with the note in italics and the 'past' tag, and the Edit / Remove permission expression unchanged", () => {
+    const rv = src.indexOf("const renderVacationList = (personIds, allowEdit) => {");
+    const body = src.slice(rv, src.indexOf("const renderVacationForm = ", rv));
+    assert.ok(rv > 0 && body.length > 0, "renderVacationList body");
+    assert.ok(body.includes("const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations);"), "the grouping is the pure helper");
+    assert.ok(body.includes('data-testid={"vac-group-" + g.pid}'), "the header carries vac-group-<id>");
+    assert.ok(body.includes("const withHeader = personIds.length > 1;"), "a single person's own view shows just the lines");
+    assert.ok(body.includes("{withHeader && (") , "the header is conditional");
+    assert.ok(body.includes("{g.upcoming} upcoming") && body.includes("{showPastVacations && g.past > 0 && "), "N upcoming, and +M past only with Show past on");
+    assert.ok(body.includes('data-testid={"vac-line-" + r.pid + "-" + r.vs}'), "every range line carries vac-line-<id>-<start>");
+    assert.ok(body.includes("{vacRangeLabel(r.vs, r.ve, todayStr)}"), "the compact label");
+    assert.strictEqual(body.includes("{r.vs}{r.ve !== r.vs ? ` to ${r.ve}` : \"\"}"), false, "the old ISO 'start to end' text is gone");
+    assert.ok(body.includes("{r.note && <span style={{...muted,fontStyle:\"italic\"}}>{r.note}</span>}"), "the note stays in italics after the range");
+    assert.ok(body.includes("{r.past && <span style={{fontSize:10,color:\"#a0a8b0\"}}>past</span>}"), "the past tag as today");
+    assert.ok(body.includes("{allowEdit && r.id && (isScheduler || ((isCoordinator || r.pid === mySurgeon) && r.vs > todayStr)) && ("), "the Edit / Remove permission expression is unchanged");
+    assert.ok(body.includes("onClick={()=>setEditVac({ sid: r.pid, rowId: r.id, start: r.vs, end: r.ve })}") && body.includes("onClick={()=>rmVac(r.pid, r.id)}"), "Edit / Remove wired exactly as before");
+    assert.strictEqual((body.match(/<Badge id=\{/g) || []).length, 1, "ONE Badge - on the header, not on every line");
+    assert.ok(body.includes("sMap[g.pid].fullName !== sMap[g.pid].name ? <span"), "the full name beside the Badge only when the roster has one that differs from the chip");
+    assert.strictEqual(count('data-testid="vac-show-past"'), 2, "the Show past checkbox is addressable in both cards (Setup, Time off)");
+    assert.strictEqual(count('data-testid="mine-vacations"'), 1, "the My schedule card is addressable");
+    assert.strictEqual(src.split("renderVacationList(").length - 1, 3, "the three call sites (Setup, My schedule, Time off) share the one renderer");
+  });
   // RLS-7: the two PATCH handlers that used to trust a 2xx alone now behave like patchTradeStatus - a 200 with zero
   // rows (an RLS-filtered write) adopts nothing locally and logs no audit row.
   check("RLS-7: toEdit and updateOfficeContact treat a 2xx with zero rows as 'not changed' (no local adopt, no audit row, no fabricated row)", () => {

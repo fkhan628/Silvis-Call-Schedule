@@ -4818,36 +4818,51 @@ function CallSchedule() {
   const dowShort = (d) => DAY_HDR[parse(d).getDay()];
   const isWeekendDay = (d) => { const w = parse(d).getDay(); return w === 0 || w === 5 || w === 6; };
 
+  // Item B (Faraz 9/23 evening): one block per surgeon in roster order (helpers.js groupVacationRows) - a header
+  // with the Badge, the name, "N upcoming" and, with Show past on, "+M past" - then that person's ranges as compact
+  // "Nov 19-22" lines (helpers.js vacRangeLabel; the operational note in italics after it, the 'past' tag as before),
+  // each keeping its Edit / Remove controls and permissions. A single person's own view shows just the lines.
   const renderVacationList = (personIds, allowEdit) => {
-    const rows = [];
-    personIds.forEach(pid => (vacations[pid] || []).forEach(([vs, ve, id, note]) => { if (showPastVacations || ve >= todayStr) rows.push({ pid, vs, ve, id, note }); }));
-    rows.sort((a, b) => a.vs < b.vs ? -1 : a.vs > b.vs ? 1 : 0);
-    if (rows.length === 0) return <p style={{...muted,fontStyle:"italic"}}>No {showPastVacations ? "" : "upcoming "}vacations.</p>;
+    const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations);
+    if (groups.length === 0) return <p style={{...muted,fontStyle:"italic"}}>No {showPastVacations ? "" : "upcoming "}vacations.</p>;
+    const withHeader = personIds.length > 1;
+    const lineStyle = {display:"flex",alignItems:"center",gap:8,padding:"4px 10px",background:dk?"#13294B":"#f8f9fb",borderRadius:6,border:`1px solid ${dkCardBorder}`,flexWrap:"wrap"};
     return (
-      <div style={{display:"flex",flexDirection:"column",gap:4}}>
-        {rows.map(r => (
-          <div key={r.id || r.pid + r.vs} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:dk?"#13294B":"#f8f9fb",borderRadius:6,border:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
-            <Badge id={r.pid} small/>
-            {editVac && editVac.rowId === r.id ? (
-              <>
-                <input type="date" value={editVac.start} onChange={e=>setEditVac(v=>({...v,start:e.target.value}))} style={{...inp,width:140}}/>
-                <input type="date" value={editVac.end} onChange={e=>setEditVac(v=>({...v,end:e.target.value}))} style={{...inp,width:140}}/>
-                <button onClick={saveEditVac} style={{...css.btn(true),padding:"4px 10px",fontSize:11}}>Save</button>
-                <button onClick={()=>setEditVac(null)} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>Cancel</button>
-              </>
-            ) : (
-              <>
-                <span style={{fontFamily:mono,fontSize:12,color:dkText}}>{r.vs}{r.ve !== r.vs ? ` to ${r.ve}` : ""}</span>
-                {r.note && <span style={{...muted,fontStyle:"italic"}}>{r.note}</span>}
-                {r.ve < todayStr && <span style={{fontSize:10,color:"#a0a8b0"}}>past</span>}
-                {allowEdit && r.id && (isScheduler || ((isCoordinator || r.pid === mySurgeon) && r.vs > todayStr)) && (
-                  <span style={{marginLeft:"auto",display:"flex",gap:4}}>
-                    <button onClick={()=>setEditVac({ sid: r.pid, rowId: r.id, start: r.vs, end: r.ve })} style={{...css.btn(false),padding:"3px 8px",fontSize:10}}>Edit</button>
-                    <button onClick={()=>rmVac(r.pid, r.id)} style={{background:"none",border:"1px solid #e8c0c0",color:"#904040",borderRadius:5,padding:"3px 8px",fontSize:10,cursor:"pointer",fontFamily:font}}>Remove</button>
-                  </span>
-                )}
-              </>
+      <div style={{display:"flex",flexDirection:"column",gap:withHeader ? 10 : 4}}>
+        {groups.map(g => (
+          <div key={g.pid} style={{display:"flex",flexDirection:"column",gap:4}}>
+            {withHeader && (
+              <div data-testid={"vac-group-" + g.pid} data-upcoming={g.upcoming} data-past={g.past} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"2px 0"}}>
+                <Badge id={g.pid} small/>
+                {sMap[g.pid] && sMap[g.pid].fullName && sMap[g.pid].fullName !== sMap[g.pid].name ? <span style={{fontSize:12,fontWeight:700,color:dkText}}>{sMap[g.pid].fullName}</span> : null}
+                <span style={muted}>{g.upcoming} upcoming</span>
+                {showPastVacations && g.past > 0 && <span style={{...muted,color:"#a0a8b0"}}>+{g.past} past</span>}
+              </div>
             )}
+            {g.rows.map(r => (
+              <div key={r.id || r.pid + r.vs} data-testid={"vac-line-" + r.pid + "-" + r.vs} data-start={r.vs} data-end={r.ve} style={{...lineStyle,marginLeft:withHeader ? 8 : 0}}>
+                {editVac && editVac.rowId === r.id ? (
+                  <>
+                    <input type="date" value={editVac.start} onChange={e=>setEditVac(v=>({...v,start:e.target.value}))} style={{...inp,width:140}}/>
+                    <input type="date" value={editVac.end} onChange={e=>setEditVac(v=>({...v,end:e.target.value}))} style={{...inp,width:140}}/>
+                    <button onClick={saveEditVac} style={{...css.btn(true),padding:"4px 10px",fontSize:11}}>Save</button>
+                    <button onClick={()=>setEditVac(null)} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <span style={{fontFamily:mono,fontSize:12,color:dkText}} title={r.vs + (r.ve !== r.vs ? " to " + r.ve : "")}>{vacRangeLabel(r.vs, r.ve, todayStr)}</span>
+                    {r.note && <span style={{...muted,fontStyle:"italic"}}>{r.note}</span>}
+                    {r.past && <span style={{fontSize:10,color:"#a0a8b0"}}>past</span>}
+                    {allowEdit && r.id && (isScheduler || ((isCoordinator || r.pid === mySurgeon) && r.vs > todayStr)) && (
+                      <span style={{marginLeft:"auto",display:"flex",gap:4}}>
+                        <button onClick={()=>setEditVac({ sid: r.pid, rowId: r.id, start: r.vs, end: r.ve })} style={{...css.btn(false),padding:"3px 8px",fontSize:10}}>Edit</button>
+                        <button onClick={()=>rmVac(r.pid, r.id)} style={{background:"none",border:"1px solid #e8c0c0",color:"#904040",borderRadius:5,padding:"3px 8px",fontSize:10,cursor:"pointer",fontFamily:font}}>Remove</button>
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
           </div>
         ))}
       </div>
@@ -5282,7 +5297,7 @@ function CallSchedule() {
             <p style={sectionNote}>Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is.</p>
             {renderVacationForm(poolSurgeons)}
             <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
-              <input type="checkbox" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past vacations
+              <input type="checkbox" data-testid="vac-show-past" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past vacations
             </label>
             {renderVacationList(surgeons.map(s => s.id), true)}
           </Collapsible>
@@ -5836,7 +5851,7 @@ function CallSchedule() {
                 </>;
               })()}
             </div>
-            <div style={css.card}>
+            <div style={css.card} data-testid="mine-vacations">
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
                 <div style={{...css.cardT,margin:0}}>My vacations ({pidVacs} upcoming)</div>
                 <button onClick={()=>setView("timeoff")} style={{...css.mini(false),marginLeft:"auto"}}>Enter a vacation</button>
@@ -5865,7 +5880,7 @@ function CallSchedule() {
               <>
                 {renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
                 <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
-                  <input type="checkbox" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past
+                  <input type="checkbox" data-testid="vac-show-past" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past
                 </label>
                 {renderVacationList(canEnterForAnyone ? surgeons.map(s => s.id) : [mySurgeon], true)}
               </>
