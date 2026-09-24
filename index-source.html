@@ -391,8 +391,16 @@ function CallSchedule() {
   // per-day compare-and-swap writes.
   const dayVersionsRef = useRef({});
   // blobTsRef: call_schedule_data.updated_at of the last blob read/write -
-  // the self-echo check for the background refresh.
+  // the self-echo check for the background refresh AND (Prompt 16 A4) the
+  // compare-and-swap stamp of the next blob write: PATCH ?id=eq.main&updated_at=eq.<blobTsRef>.
   const blobTsRef = useRef(null);
+  // lastBlobJsonRef (A4): helpers.js blobSignature of the blob this session last adopted or wrote - the blob leg's
+  // content gate (an equal signature is not written). blobLocalRef: the committed setup state (the seven blob
+  // keys) so adoptBlob can record what a foreign blob turns the local state into (adoptBlobState, same rules).
+  const lastBlobJsonRef = useRef(null);
+  const blobLocalRef = useRef({ roster: INIT_SURGEONS, surgeonRules: undefined, groupRules: undefined, holidays: undefined, settings: {}, lastPublished: null, lastGenerate: undefined });
+  const blobSaveChainRef = useRef(Promise.resolve()); // A4: serializes blob writes so a second Setup edit PATCHes over the stamp the first one left
+  const blobSaveBusyRef = useRef(0);                  // A4: blob writes enqueued or in flight; the keepalive flush skips its blob leg while > 0
   const loadedAtRef = useRef(null); // timestamp when the FIRST load completed - prevents the auto-save race (set once; a re-run of the load after a sign-in does not re-open the hydration window)
   const pendingSaveRef = useRef(null); // payload queued for debounced save; flushed immediately on page hide/unload
   // Prompt 16 A3 (session lifecycle): saveTick re-fires the autosave effect without a content change - after the
@@ -1471,6 +1479,17 @@ function CallSchedule() {
   // restore). Weekly-model keys are ignored on purpose.
   const adoptBlob = (d) => {
     if (!d || typeof d !== "object") return;
+    // The factory reset's clear marker carries nothing to adopt and must not record a signature: the defaults the
+    // reset installed locally are written over the marker by the follow-up autosave, and the echo of the clear
+    // (realtime or the poll, inside the 800 ms debounce) would otherwise record the defaults' own signature and
+    // make that autosave skip - the row would keep the marker (review of 9/23).
+    if (d._intentionalClear) return;
+    // A4: record what the local setup becomes (helpers.js adoptBlobState mirrors the setters below) and its
+    // signature, so the blob leg that fires on the adopted state finds nothing to write - the adoption of another
+    // session's write must never turn into a write of our own (the ping-pong of the 9/23 review, item C).
+    const next = adoptBlobState(blobLocalRef.current, d);
+    blobLocalRef.current = next;
+    lastBlobJsonRef.current = blobSignature(next);
     if (Array.isArray(d.roster) && d.roster.length) setSurgeons(d.roster);
     if (d.surgeonRules !== undefined) setSurgeonRules(d.surgeonRules);
     if (d.groupRules !== undefined) setGroupRules(d.groupRules);
@@ -1709,7 +1728,97 @@ function CallSchedule() {
   // Mirrors the RLS predicate on call_schedule_data (silvis_is_sched()).
   const canWriteBlob = isScheduler;
 
+  // --- The blob leg (Prompt 16 A4) ---
+  // The shared setup (call_schedule_data 'main') is written ONLY when its content changed and ONLY over the row
+  // this session last saw: a content gate (helpers.js blobSignature against lastBlobJsonRef, recorded by adoptBlob
+  // and after every 2xx) and a compare-and-swap PATCH on updated_at, with Prefer: return=representation so a miss
+  // is visible (PostgREST answers 200 + zero rows). Before this the blob was upserted on every autosave run: the
+  // 60-second poll re-created the vacation / availability arrays, both were dependencies of the one autosave
+  // effect, so a scheduler's tab rewrote the setup every minute with a fresh stamp, two scheduler sessions
+  // re-triggered each other on every adoption, and a stale copy could overwrite a Setup edit made elsewhere (the
+  // 9/23 review, item C). Zero rows back = the row moved: reload and adopt the newer copy, tell the scheduler, and
+  // never retry the write over it. Writes are serialized (blobSaveChainRef) so a second Setup edit PATCHes over
+  // the stamp the first one left instead of losing the race to it. An HTTP failure THROWS - the effect's catch
+  // classifies it (401 / 403 / other) exactly as before. Lifted into test/data-layer.test.js (section A4) with a
+  // fake row - keep the markers and the parameter list there in step.
+  const reloadBlobAfterMiss = async (source, payload) => {
+    const { data: row } = await supabase.from("call_schedule_data").select("data,updated_at").eq("id", "main").single(); // throws on HTTP failure (never reads as "row missing")
+    if (!row) return { ok: true, missing: true };
+    const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    // A miss whose row already holds this payload's content is our own earlier write of the same edit (the
+    // keepalive flush and the debounced run, whichever landed first - review of 9/23): adopt its stamp and the
+    // signature and report a save - no reload, no "changed elsewhere" for a change nobody else made.
+    const wantBlob = payload ? blobFromBundle(payload) : null;
+    const want = wantBlob ? blobSignature(wantBlob) : null;
+    if (want && row.updated_at && blobSignature(d) === want) {
+      blobTsRef.current = row.updated_at;
+      lastBlobJsonRef.current = want;
+      blobLocalRef.current = wantBlob;
+      if (pendingSaveRef.current === payload) pendingSaveRef.current = null;
+      console.warn(`Blob save (${source}): the row already holds this content (our own earlier write landed first) - stamp adopted, nothing to reload.`);
+      return { ok: true, saved: true, landedEarlier: true };
+    }
+    if (row.updated_at) blobTsRef.current = row.updated_at;
+    adoptBlob(d);
+    if (pendingSaveRef.current === payload) pendingSaveRef.current = null; // not written - the newer row is the truth now
+    console.warn(`Blob save (${source}): the shared setup changed elsewhere (updated_at moved) - reloaded; the local copy was NOT written over it.`);
+    showToast("Setup changed elsewhere - reloaded", "error");
+    setSaveError(false);
+    setSaveStatus("Setup reloaded");
+    setTimeout(() => setSaveStatus(""), 3000);
+    return { ok: true, reloaded: true };
+  };
+  const saveBlobOnce = async (payload, source) => {
+    const blobData = blobFromBundle(payload);
+    const sig = blobSignature(blobData);
+    if (sig === lastBlobJsonRef.current) {
+      if (pendingSaveRef.current === payload) pendingSaveRef.current = null; // nothing to write - the payload is not pending
+      return { ok: true, skipped: true };
+    }
+    const ts = new Date().toISOString();
+    const by = userProfile?.person_id || null;
+    const casQ = blobTsRef.current ? `&updated_at=eq.${encodeURIComponent(blobTsRef.current)}` : "&updated_at=is.null";
+    const res = await authFetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main${casQ}`, {
+      method: "PATCH", headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ data: blobData, updated_by: by, updated_at: ts }),
+    });
+    const text = await res.text().catch(() => "");
+    if (!res.ok) throw new Error(`blob save failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+    let rows = [];
+    try { rows = text ? JSON.parse(text) : []; } catch (e) { console.warn(`Blob save (${source}): 2xx with a non-JSON body (treated as no row updated)`, text.slice(0, 120)); rows = []; }
+    if (!Array.isArray(rows) || rows.length === 0) {
+      const r = await reloadBlobAfterMiss(source, payload);
+      if (!r.missing) return r;
+      // No 'main' row at all (a project before its first seed): insert it. A row that appeared meanwhile 409s
+      // through the throw below and the next run PATCHes over its stamp.
+      const ins = await authFetch(`${SUPABASE_URL}/rest/v1/call_schedule_data`, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ id: "main", data: blobData, updated_by: by, updated_at: ts }) });
+      const insText = await ins.text().catch(() => "");
+      if (!ins.ok) throw new Error(`blob save failed: HTTP ${ins.status} ${insText.slice(0, 200)}`);
+      try { rows = insText ? JSON.parse(insText) : []; } catch (e) { rows = []; }
+      if (!Array.isArray(rows)) rows = [];
+    }
+    // The returned row's stamp, not the string we sent: PostgREST renders the timestamptz its own way (+00:00,
+    // microseconds) and the poll's equality check and the next CAS must match what a later GET reads.
+    blobTsRef.current = (rows[0] && rows[0].updated_at) || ts;
+    lastBlobJsonRef.current = sig;
+    blobLocalRef.current = blobData;
+    if (pendingSaveRef.current === payload) pendingSaveRef.current = null; // Save committed - clear pending
+    return { ok: true, saved: true };
+  };
+  const saveBlobNow = (payload, source) => {
+    blobSaveBusyRef.current += 1;
+    const run = blobSaveChainRef.current.then(() => saveBlobOnce(payload, source)).finally(() => { blobSaveBusyRef.current = Math.max(0, blobSaveBusyRef.current - 1); });
+    blobSaveChainRef.current = run.then(() => undefined, () => undefined);
+    return run;
+  };
+
   // --- Supabase: Auto-save on changes ---
+  // TWO effects since Prompt 16 A4 - one per leg, each keyed on the state it writes (conventions 3a: neither leg
+  // sits in the other's failure path, and now neither fires on the other's state). Leg 1, schedule_days (CAS),
+  // every session and role, keyed on the operational state as before. Leg 2, the config blob, scheduler only,
+  // keyed on the setup state ALONE: the 60-second poll's re-created vacation / availability arrays no longer
+  // reach it, and its content gate + CAS live in saveBlobNow above. Both keep the hydration window, the
+  // loadFailedRef gate and the empty-save guard; the one-shot wipe bypass is consumed by leg 1 only.
   useEffect(() => {
     if (!loaded) return;
     if (isPublicMode) return;  // Public viewers never write to the DB
@@ -1723,7 +1832,7 @@ function CallSchedule() {
     pendingSaveRef.current = payload;
     // Arm the guard as soon as we hold real data locally.
     if (!payloadLooksWiped(payload)) everHadRealDataRef.current = true;
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       // -- Empty-save guard --
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave blocked: refusing to write empty payload over real data.");
@@ -1732,15 +1841,38 @@ function CallSchedule() {
         return;
       }
       allowWipeSaveRef.current = false; // consume one-shot bypass
-      // -- The two legs are INDEPENDENT (conventions 3a) --
-      // Leg 1 - schedule_days (CAS). Every session, every role, FIRST and
-      // unconditionally. Its own error handling is loud.
-      syncScheduleDays(payload.schedule);
-      // Leg 2 - the config blob. Scheduler/admin only (RLS): a member has
-      // nothing to write here and would only produce a 403 every 60s.
-      if (!canWriteBlob) return;
+      // Leg 1 - schedule_days (CAS). Its own error handling is loud. A run that landed releases the payload it
+      // was armed with (a later payload stays armed for its own leg; the keepalive flush reads it).
+      syncScheduleDays(payload.schedule).then((r) => { if (r && r.ok && pendingSaveRef.current === payload) pendingSaveRef.current = null; });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [loaded, schedule, vacations, availabilityRows, saveTick]);
+  // blobLocalRef follows the committed setup state (what adoptBlob merges a foreign blob into).
+  useEffect(() => { blobLocalRef.current = { roster: surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate }; }, [surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate]);
+  useEffect(() => {
+    if (!loaded) return;
+    if (isPublicMode) return;  // Public viewers never write to the DB
+    if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return; // hydration window
+    if (loadFailedRef.current) {
+      setSaveError(true);
+      setSaveStatus("Not saving - data failed to load");
+      return;
+    }
+    // Leg 2 - the config blob. Scheduler/admin only (RLS): a member has
+    // nothing to write here and would only produce a 403.
+    if (!canWriteBlob) return;
+    const payload = buildStateBundle();
+    pendingSaveRef.current = payload;
+    const timer = setTimeout(async () => {
+      // -- Empty-save guard -- (the same predicate as leg 1; the one-shot bypass is consumed there)
+      if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
+        console.warn("Autosave (blob): refusing to write while the payload looks wiped over real data.");
+        setSaveError(true);
+        setSaveStatus("Save blocked - empty data not written");
+        return;
+      }
       // Never write the blob from a session that has not READ it: with
-      // surgeonRules / groupRules / holidays undefined locally, this upsert
+      // surgeonRules / groupRules / holidays undefined locally, the write
       // would replace the real jsonb with defaults (finding safety-2).
       if (!blobLoadedRef.current) {
         console.warn("Autosave: the shared setup (call_schedule_data) has not loaded this session - blob write skipped so defaults cannot overwrite it.");
@@ -1749,16 +1881,12 @@ function CallSchedule() {
         return;
       }
       try {
-        const ts = new Date().toISOString();
-        const { error: saveErr } = await supabase
-          .from("call_schedule_data")
-          .upsert({ id: "main", data: blobFromBundle(payload), updated_by: userProfile?.person_id || null, updated_at: ts });
-        if (saveErr) throw new Error(`blob save failed: ${String(saveErr).slice(0, 200)}`);
-        blobTsRef.current = ts;
-        pendingSaveRef.current = null; // Save committed - clear pending
-        setSaveError(false);
-        setSaveStatus("Saved");
-        setTimeout(() => setSaveStatus(""), 2000);
+        const r = await saveBlobNow(payload, "autosave");
+        if (r && r.saved) {
+          setSaveError(false);
+          setSaveStatus("Saved");
+          setTimeout(() => setSaveStatus(""), 2000);
+        }
       } catch (e) {
         console.error("Save failed:", e);
         setSaveError(true);
@@ -1776,7 +1904,7 @@ function CallSchedule() {
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows, saveTick]);
+  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);
   // Prompt 16 A3 (review): re-send what a 401 left behind once the session is live again - after a granted proactive
   // refresh (poll / visibility). The days go through syncScheduleDays (a no-op when nothing is pending); an armed
   // payload re-fires the autosave effect (saveTick), whose blob leg gates itself on canWriteBlob / blobLoadedRef.
@@ -1816,9 +1944,9 @@ function CallSchedule() {
       const token = session?.access_token || SUPABASE_ANON_KEY;
       const ts = new Date().toISOString();
       const by = userProfile?.person_id || null;
-      const hdrs = { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}`, "Prefer": "resolution=merge-duplicates,return=minimal" };
+      const hdrs = { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}` };
       // schedule_days leg: per-day CAS writes, no upsert (see the comment above).
-      const dayHdrs = { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}`, "Prefer": "return=minimal" };
+      const dayHdrs = { ...hdrs, "Prefer": "return=minimal" };
       try {
         const cur = payload.schedule || {};
         const base = lastSyncRef.current || {};
@@ -1863,19 +1991,36 @@ function CallSchedule() {
       } catch (e) { console.warn("Unload flush (schedule_days) failed:", e); pendingSaveRef.current = payload; }
       if (!canWriteBlob) return;
       if (!blobLoadedRef.current) { console.warn(`Keepalive flush (${source}): shared setup never loaded - blob leg skipped.`); return; }
-      fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?on_conflict=id`, {
-        method: "POST", keepalive: true, headers: hdrs,
-        body: JSON.stringify({ id: "main", data: blobFromBundle(payload), updated_by: by, updated_at: ts }),
-      }).then((res) => {
-        // Stamp the blob timestamp ONLY on a 2xx: a 401/403/5xx used to be
-        // counted as saved and never retried (Prompt 11 hardening).
-        if (res.ok) { blobTsRef.current = ts; return; }
-        console.warn(`Keepalive blob save (${source}) rejected with HTTP ${res.status} - re-armed for the next autosave`);
-        pendingSaveRef.current = payload;
+      // Blob leg (Prompt 16 A4): the same content gate and CAS PATCH as saveBlobNow, with keepalive so it survives
+      // the page going away. An unchanged blob is not sent at all (every phone lock used to re-stamp the row and
+      // wake every other session's poll); a write already in flight owns the stamp, so the leg is skipped - the
+      // payload stays armed and the chained run lands it; zero rows back = the row moved -> reload, never overwrite.
+      // The flush's own PATCH joins the write chain in turn (counted in blobSaveBusyRef, appended to
+      // blobSaveChainRef): the debounced run of the SAME edit, whose timer may fire before this response arrives,
+      // waits for it and then skips on the signature instead of sending a second PATCH over the same stamp - the
+      // loser of that race used to miss the CAS and toast "changed elsewhere" for the session's own write.
+      const flushBlob = blobFromBundle(payload);
+      const flushSig = blobSignature(flushBlob);
+      if (flushSig === lastBlobJsonRef.current) return;
+      if (blobSaveBusyRef.current > 0) { console.warn(`Keepalive flush (${source}): blob leg skipped - ${blobSaveBusyRef.current} blob write(s) unresolved own the stamp; the pending setup stays armed.`); pendingSaveRef.current = payload; return; }
+      const flushCas = blobTsRef.current ? `&updated_at=eq.${encodeURIComponent(blobTsRef.current)}` : "&updated_at=is.null";
+      blobSaveBusyRef.current += 1;
+      const flushRun = fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main${flushCas}`, {
+        method: "PATCH", keepalive: true, headers: { ...hdrs, Prefer: "return=representation" },
+        body: JSON.stringify({ data: flushBlob, updated_by: by, updated_at: ts }),
+      }).then(async (res) => {
+        // Stamp the blob timestamp ONLY on a 2xx WITH a row: a 401/403/5xx used to be
+        // counted as saved and never retried (Prompt 11 hardening); a CAS miss is not a save either.
+        if (!res.ok) { console.warn(`Keepalive blob save (${source}) rejected with HTTP ${res.status} - re-armed for the next autosave`); pendingSaveRef.current = payload; return; }
+        let rows = [];
+        try { rows = await res.json(); } catch (e) { rows = []; }
+        if (!Array.isArray(rows) || rows.length === 0) { console.warn(`Keepalive blob save (${source}): the setup moved under this session - reloading, not overwriting`); return reloadBlobAfterMiss(source, payload).catch((e) => { console.warn(`Keepalive blob reload (${source}) failed:`, e); pendingSaveRef.current = payload; }); }
+        blobTsRef.current = (rows[0] && rows[0].updated_at) || ts; lastBlobJsonRef.current = flushSig; blobLocalRef.current = flushBlob;
       }).catch(e => {
         console.warn(`Keepalive save failed (${source}):`, e);
         pendingSaveRef.current = payload;
-      });
+      }).finally(() => { blobSaveBusyRef.current = Math.max(0, blobSaveBusyRef.current - 1); });
+      blobSaveChainRef.current = blobSaveChainRef.current.then(() => flushRun);
     } catch (e) {
       console.warn(`Flush pending save (${source}) error:`, e);
       pendingSaveRef.current = payload;
@@ -2880,8 +3025,9 @@ function CallSchedule() {
     // schedule deleted (recoverable from the snapshot), roster/rules intact
     // and still matching local state. Say exactly that; the guard refs stay
     // as armed above because the schedule is now legitimately empty.
+    const clearTs = new Date().toISOString();
     try {
-      const { error: blobClearErr } = await supabase.from("call_schedule_data").upsert({ id: "main", data: { _intentionalClear: true }, updated_at: new Date().toISOString() });
+      const { error: blobClearErr } = await supabase.from("call_schedule_data").upsert({ id: "main", data: { _intentionalClear: true }, updated_at: clearTs });
       if (blobClearErr) throw new Error(`blob clear failed: ${String(blobClearErr).slice(0, 200)}`);
     } catch(e) {
       console.error("Factory reset: config blob reset failed after the schedule was deleted:", e);
@@ -2892,6 +3038,12 @@ function CallSchedule() {
     }
     logAudit("data.reset", "FACTORY RESET - deleted every schedule_days row and reset the config blob", { outcome: "ok", snapshot: resetSnap.counts || null });
     blobLoadedRef.current = true; // we wrote the blob ourselves; local defaults below ARE its content
+    // A4: our own write - the follow-up autosave's CAS matches this stamp (PostgREST compares instants, so the sent
+    // ...Z string matches the row's +00:00 rendering); the string forms differ, so the echo of the clear may re-read it
+    // and move the stamp to the row's rendering - adoptBlob ignores the marker and records no signature, and the
+    // autosave below still writes the defaults over it (test/data-layer.test.js, section A4).
+    blobTsRef.current = clearTs;
+    lastBlobJsonRef.current = null;   // A4: nothing adopted matches the defaults below - the next autosave writes them over the clear marker
     setSurgeons(INIT_SURGEONS);
     setSurgeonRules(undefined); setGroupRules(undefined); setHolidays(undefined); setSettings({}); setLastPublished(null); setLastGenerate(undefined);
     setSaveStatus("Reset complete");

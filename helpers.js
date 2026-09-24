@@ -579,6 +579,42 @@ function payloadLooksWipedDaily(p) {
   return !anyDay && noVac && noAvail;
 }
 
+// ---- The config blob (call_schedule_data 'main') - Prompt 16 A4 ----
+// The seven keys the app persists in the blob, in the state bundle's order. Everything else the row may carry
+// (a retired key, an importer stamp outside settings) is neither compared nor written by the autosave.
+const BLOB_KEYS = ["roster", "surgeonRules", "groupRules", "holidays", "settings", "lastPublished", "lastGenerate"];
+// JSON with object keys sorted at every depth: jsonb stores keys in its own order, so a row read back never
+// stringifies byte-equal to what was sent even when nothing changed. undefined values drop like JSON.stringify.
+function canonicalJson(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return "[" + v.map(x => (x === undefined ? "null" : canonicalJson(x))).join(",") + "]";
+  const keys = Object.keys(v).filter(k => v[k] !== undefined).sort();
+  return "{" + keys.map(k => JSON.stringify(k) + ":" + canonicalJson(v[k])).join(",") + "}";
+}
+// The autosave's content gate: the blob's seven keys, canonical, with a null top-level value read as absent
+// (the local default for lastPublished is null where a row that never published has no key at all).
+function blobSignature(blob) {
+  const d = (blob && typeof blob === "object") ? blob : {};
+  const pick = {};
+  BLOB_KEYS.forEach(k => { if (d[k] !== undefined && d[k] !== null) pick[k] = d[k]; });
+  return canonicalJson(pick);
+}
+// What the component's adoptBlob turns the local setup state into, field by field, with the same rules: a roster
+// only when it is a non-empty array, settings only when an object, lastPublished / lastGenerate / rules / holidays
+// whenever the key is present (null included), everything else kept. A bad blob changes nothing.
+function adoptBlobState(local, d) {
+  const next = { ...(local || {}) };
+  if (!d || typeof d !== "object") return next;
+  if (Array.isArray(d.roster) && d.roster.length) next.roster = d.roster;
+  if (d.surgeonRules !== undefined) next.surgeonRules = d.surgeonRules;
+  if (d.groupRules !== undefined) next.groupRules = d.groupRules;
+  if (d.holidays !== undefined) next.holidays = d.holidays;
+  if (d.settings && typeof d.settings === "object") next.settings = d.settings;
+  if (d.lastPublished !== undefined) next.lastPublished = d.lastPublished;
+  if (d.lastGenerate !== undefined) next.lastGenerate = d.lastGenerate;
+  return next;
+}
+
 /* ═══ TRADE MESSAGE COMPOSERS ═══
    One composition per trade event, shared by in-app and email channels.
    Trades are by DAY + ROLE (shift_trade_requests.day / role / return_day /
@@ -2360,6 +2396,7 @@ if (typeof module !== "undefined" && module.exports) {
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
+    BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
     ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,

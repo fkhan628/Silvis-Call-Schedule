@@ -2128,13 +2128,12 @@ try {
     if (!auditWrite) fail("no audit_log 'schedule.day_edit' row after the editor save");
     else if (!auditWrite.detail || !auditWrite.detail.before || !auditWrite.detail.after || auditWrite.detail.after.primary_id !== "s2") fail("audit schedule.day_edit lacks before/after rows: " + JSON.stringify(auditWrite.detail));
     else ok("audit_log schedule.day_edit carries before/after rows (after.primary_id s2)");
-    const blobWrite = writes.slice(beforeWrites).find(w => w.path.startsWith("/rest/v1/call_schedule_data"));
-    if (!blobWrite) fail("scheduler autosave leg 2 (config blob) did not run"); else {
-      const b = JSON.parse(blobWrite.body || "{}");
-      const d = b.data || {};
-      if ("schedule" in d || "vacations" in d || "availability" in d) fail("blob write carries operational keys: " + Object.keys(d).join(","));
-      else ok("blob autosave carries config keys only: " + Object.keys(d).join(", "));
-    }
+    // Prompt 16 A4: the blob leg is keyed on the setup state alone - a day edit writes schedule_days and NOTHING to
+    // call_schedule_data (the blob used to be upserted on every autosave run). The Rules / Roster steps below prove
+    // the setup write (a CAS PATCH) and its config-keys-only shape.
+    const dayEditBlobWrites = writes.slice(beforeWrites).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
+    if (dayEditBlobWrites.length) fail("A4: a day edit wrote call_schedule_data (the blob leg fired on operational state): " + JSON.stringify(dayEditBlobWrites.map(w => w.method + " " + w.path)));
+    else ok("A4: the day edit wrote schedule_days only - no call_schedule_data write (the blob leg is keyed on the setup state, not the schedule)");
   }
   await page.screenshot({ path: path.join(OUT, "calendar-after-edit.png"), fullPage: true });
 
@@ -2169,16 +2168,18 @@ try {
     const raceWarn = consoleWarns.find(t => /changed in the table \(v1\) while a local edit is unsaved/.test(t));
     if (raceWarn) ok("realtime race: console.warn names the kept local edit (not silent)"); else fail("realtime race: no console.warn about the kept local edit");
     // (c) the echo of THAT patch (v2, {s2,s3}) with nothing pending -> adopted,
-    //     no schedule_days write (the days leg finds no diff). NOTE: the blob
-    //     leg still upserts on ANY state change - that is the autosave contract
-    //     (leg 2 writes the whole blob whenever the effect fires), not a
-    //     realtime fault, so only schedule_days writes are counted here.
+    //     no schedule_days write (the days leg finds no diff) and - Prompt 16 A4 -
+    //     no call_schedule_data write either: the blob leg is keyed on the setup
+    //     state, so an adopted schedule row never re-writes the shared setup.
     const beforeEcho = writes.length;
     rtSendDayRow(dayRow(day, { primary_id: "s2", backup_id: "s3", version: 2, updated_by: "s1" }));
     await page.waitForTimeout(1500);
     const echoDayWrites = writes.slice(beforeEcho).filter(w => w.path.startsWith("/rest/v1/schedule_days"));
     if (echoDayWrites.length) fail("realtime: a clean echo triggered a schedule_days write: " + JSON.stringify(echoDayWrites.map(w => w.method + " " + w.path)));
     else ok("realtime: the clean echo (v2) produced no schedule_days write");
+    const echoBlobWrites = writes.slice(beforeEcho).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
+    if (echoBlobWrites.length) fail("A4: a realtime schedule_days echo triggered a call_schedule_data write: " + JSON.stringify(echoBlobWrites.map(w => w.method + " " + w.path)));
+    else ok("A4: the clean echo produced no call_schedule_data write either (the blob leg is not keyed on the schedule)");
 
     // (d) wire-1: the keepalive flush on background must keep the CAS
     //     contract. A foreign row at v3 arrives for `third`; a local edit on
@@ -2236,14 +2237,14 @@ try {
         });
         await page.waitForTimeout(400);
         const flushDays = sinceBusy(beforeFlush2, "/rest/v1/schedule_days");
-        const flushBlob = sinceBusy(beforeFlush2).filter(w => w.method === "POST" && /call_schedule_data\?on_conflict=id/.test(w.path));
+        const flushBlob = sinceBusy(beforeFlush2).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path)); // A4: the flush's blob leg is a CAS PATCH sent only when the setup changed - nothing changed it here (the Rules step proves the sent case)
         const skipWarn = consoleWarns.slice(warnsBefore).find(t => /schedule_days leg skipped/.test(t));
         if (!started) fail(`RF2 keepalive-busy: the ${fourth} edit produced no schedule_days write within 4 s`);
         else if (!heldWrites.every(w => w.delayedMs)) fail("RF2 keepalive-busy: the harness did not hold the first write open: " + JSON.stringify(heldWrites.map(w => w.method + " " + w.path)));
         else if (flushDays.length) fail(`RF2 keepalive-busy: the flush sent ${flushDays.length} schedule_days write(s) while a sync run was in flight: ` + JSON.stringify(flushDays.map(w => w.method + " " + w.path)));
         else if (!skipWarn) fail("RF2 keepalive-busy: no console.warn saying the schedule_days leg was skipped (warns since: " + JSON.stringify(consoleWarns.slice(warnsBefore).slice(0, 4)) + ")");
-        else if (!flushBlob.length) fail("RF2 keepalive-busy: the blob leg did not run (no keepalive call_schedule_data POST after the flush)");
-        else ok(`RF2 keepalive-busy: flush while the ${fourth} CAS write is held open -> zero schedule_days writes, blob leg sent, warn "${skipWarn.slice(0, 100)}"`);
+        else if (flushBlob.length) fail("RF2 keepalive-busy / A4: the flush wrote call_schedule_data although the setup is unchanged (the blob leg's content gate): " + JSON.stringify(flushBlob.map(w => w.method + " " + w.path)));
+        else ok(`RF2 keepalive-busy: flush while the ${fourth} CAS write is held open -> zero schedule_days writes, no call_schedule_data write (A4: unchanged setup is not re-sent; the days skip never returns before the blob leg - pinned in data-layer), warn "${skipWarn.slice(0, 100)}"`);
         // the skipped edit lands afterwards through the serialized sync (the debounced autosave queued behind the held run)
         const landedFifth = () => sinceBusy(beforeFlush2, "/rest/v1/schedule_days").some(w => { try { const b = JSON.parse(w.body || "{}"); return (b.day === fifth || new RegExp("day=eq\\." + fifth).test(w.path)) && b.backup_id === "s3"; } catch (e) { return false; } });
         const landed = await waitFor(landedFifth, 12000);
@@ -3469,7 +3470,7 @@ try {
     // lost once the East-id resolution went async (audit 9/23). Wait for the write that carries the new value;
     // the failure names the last write seen.
     const pcWant = pcNew || undefined;
-    const pcPosts = () => writesSince(beforePc, "/rest/v1/call_schedule_data").filter(w => w.method === "POST");
+    const pcPosts = () => writesSince(beforePc, "/rest/v1/call_schedule_data").filter(w => w.method === "PATCH"); // Prompt 16 A4: the blob write is the CAS PATCH ?id=eq.main&updated_at=eq.<seen> (no upsert)
     const pcOf = (w) => { try { return JSON.parse(w.body).data.surgeonRules.s1.primaryContribution; } catch (e) { return "(unparsed)"; } };
     const pcHit = await waitFor(() => pcPosts().some(w => pcOf(w) === pcWant), 6000, 100);
     const pcBlob = pcPosts().pop() || null;
@@ -3578,6 +3579,37 @@ try {
       // meantime) - then there is nothing to restore.
       if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) { await page.click("[data-testid=rules-save]"); await page.waitForTimeout(1200); }
       else console.log("     (Rules: maxConsecutiveDays already back at 3 - the blob refreshed in between; nothing to restore)");
+      // Prompt 16 A4: the keepalive flush's blob leg. A Setup edit hidden inside the 800 ms debounce goes out at once
+      // as the SAME compare-and-swap PATCH the autosave uses - ?id=eq.main&updated_at=eq.<the stamp of the last blob
+      // write this page saw>, Prefer return=representation, keepalive - never the old blind upsert (?on_conflict=id);
+      // the stamp in the URL is the one the previous write left (CAS chaining across writes).
+      {
+        const stampBefore = blobWriteTs;
+        const beforeKa = writes.length;
+        await maxInput.fill("4");
+        if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) await page.click("[data-testid=rules-save]");
+        const hideAt = Date.now();
+        await page.evaluate(() => {
+          Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+          document.dispatchEvent(new Event("visibilitychange"));
+          delete document.hidden;
+        });
+        await page.waitForTimeout(400);
+        const kaBlob = writes.slice(beforeKa).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path) && typeof w.at === "number" && w.at >= hideAt && w.at < hideAt + 600);
+        const kaCas = kaBlob.find(w => w.method === "PATCH" && /^\/rest\/v1\/call_schedule_data\?id=eq\.main&updated_at=(eq\.[^&]+|is\.null)$/.test(w.path));
+        const kaMax = (w) => { try { return JSON.parse(w.body).data.surgeonRules.s3.maxConsecutiveDays; } catch (e) { return undefined; } };
+        const kaStamp = kaCas && /updated_at=eq\./.test(kaCas.path) ? decodeURIComponent(kaCas.path.replace(/^.*updated_at=eq\./, "")) : null;
+        const kaUpsert = writes.slice(beforeKa).find(w => /call_schedule_data\?on_conflict=id/.test(w.path) || (/call_schedule_data/.test(w.path) && /merge-duplicates/.test(w.prefer || "")));
+        if (kaUpsert) fail("A4 keepalive: the flush sent a blind upsert of call_schedule_data: " + kaUpsert.method + " " + kaUpsert.path + " prefer=" + kaUpsert.prefer);
+        else if (!kaCas) fail("A4 keepalive: no CAS PATCH ?id=eq.main&updated_at=eq.<stamp> of call_schedule_data within 400 ms of hiding the tab (writes since the edit: " + JSON.stringify(writes.slice(beforeKa).map(w => w.method + " " + w.path)) + ")");
+        else if (!/return=representation/.test(kaCas.prefer || "")) fail("A4 keepalive: the CAS PATCH lacks Prefer return=representation (a miss would be invisible): " + kaCas.prefer);
+        else if (kaMax(kaCas) !== 4) fail("A4 keepalive: the flushed blob does not carry surgeonRules.s3.maxConsecutiveDays 4: " + JSON.stringify(kaMax(kaCas)));
+        else if (stampBefore && kaStamp !== stampBefore) fail(`A4 keepalive: the CAS stamp in the URL (${kaStamp}) is not the stamp the previous blob write left (${stampBefore})`);
+        else ok(`A4 keepalive: a Rules edit hidden inside the debounce -> PATCH ?id=eq.main&updated_at=eq.${kaStamp} (Prefer return=representation, keepalive, maxConsecutiveDays 4)${stampBefore ? " - the stamp of the previous blob write" : ""}; no on_conflict upsert`);
+        await page.waitForTimeout(1200); // the debounced run finds the signature already written and skips
+        await maxInput.fill("3");
+        if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) { await page.click("[data-testid=rules-save]"); await page.waitForTimeout(1200); }
+      }
     }
 
     // ---- Availability: paste a date list -> collapsed ranges -> insert missing rows ----
@@ -3761,12 +3793,11 @@ try {
       await page.click(`${row1} [data-testid=eastvac-set-home]`);
       await waitFor(async () => (await page.getAttribute(row1, "data-state")) === "home", 8000);
       await page.waitForTimeout(300);
-      // the app's 800 ms blob autosave (an unchanged re-save of call_schedule_data) may land inside this window - it is
-      // the same "unrelated background write" the preview step tolerates and says nothing about this hook. Why it shows
-      // up here since the Prompt 14 rebase (9/23 review): a timing shift, not an offers write path - refreshAll now also
-      // awaits loadOffers / loadPeriods, which moves the re-save into this 300 ms window; the autosave effect's deps
-      // (index-source.html: loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate,
-      // schedule, vacations, availabilityRows) carry no offerRows / periodRows, so no offers state can trigger it
+      // a blob write of call_schedule_data landing inside this window is tolerated (the same "unrelated background
+      // write" the preview step tolerates) and says nothing about this hook: since Prompt 16 A4 the blob leg fires on
+      // the setup state alone (index-source.html: loaded, surgeons, surgeonRules, groupRules, holidays, settings,
+      // lastPublished, lastGenerate, saveTick - no offerRows / periodRows, no schedule / vacations / availabilityRows)
+      // and writes only when the content changed, so one here could only be an earlier Setup step's write landing late
       const homeWrites = writesSince(before3).filter(w => !/\/rest\/v1\/(audit_log|call_schedule_data)\b/.test(w.path));
       const homeBlobWrites = writesSince(before3).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
       if (homeBlobWrites.length) console.log("     (unrelated background write(s) during the home step: " + homeBlobWrites.map(w => w.method + " " + w.path).join(", ") + ")");
@@ -4993,10 +5024,17 @@ try {
         else if (!impAudit) fail("Import apply: no audit_log 'seed.import'");
         else ok(`Import apply: snapshot 'seed_import' (#${aSnap}) -> blob PATCH ?id=eq.main (#${aBlob}, merged over the live blob) -> availability POST (#${aAv}) with exactly the ${expAvIns.length} missing row(s) (${extra}${expAvIns.length > 1 ? " + the " + (expAvIns.length - 1) + " rows the period retired - what a period-free seed re-adds" : ""}); ${(expInserted + expUpdated) ? "" : "no schedule_days write, "}${expToIns.length ? "" : "no time_off write; "}audit seed.import; result equals the restatement: "${resText.slice(resText.indexOf("availability inserted"), resText.indexOf("availability inserted") + expResult.length)}"`);
 
-        // Roster autosave after the merge must not regress: the extra date stays in the next blob write.
+        // Prompt 16 A4: after adoptBlob(merged) the autosave that fires on the adopted state must write NOTHING - the
+        // adoption recorded the merged blob's signature (the no-write-after-adoption rule), so the import's own merge
+        // PATCH (#aBlob) is the only call_schedule_data write in the window. Should one appear anyway it must at least
+        // carry the merged keys (the pre-A4 pin filtered POSTs the autosave no longer sends and passed vacuously).
         await page.waitForTimeout(1200);
-        const laterBlob = writesSince(beforeApply, "/rest/v1/call_schedule_data").filter(w => w.method === "POST").map(w => { try { return JSON.parse(w.body); } catch (e) { return null; } }).filter(Boolean).slice(-1)[0];
-        if (laterBlob && !(laterBlob.data && laterBlob.data.surgeonRules && laterBlob.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra))) fail("Import apply: the autosave after the merge dropped the merged blob keys (adoptBlob did not take)"); else ok("Import apply: the autosave that follows carries the merged blob (adoptBlob took)");
+        const laterBlobWrites = writesSince(beforeApply, "/rest/v1/call_schedule_data").filter(w => (w.method === "PATCH" || w.method === "POST") && !(aBlob >= 0 && w === aseq[aBlob]));
+        const hasExtra = (b) => !!(b && b.data && b.data.surgeonRules && b.data.surgeonRules.s2 && b.data.surgeonRules.s2.explicitAvailable && Array.isArray(b.data.surgeonRules.s2.explicitAvailable["2026-12"]) && b.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra));
+        const laterBad = laterBlobWrites.map(bodyOf).find(b => !hasExtra(b));
+        if (laterBad) fail("Import apply: a call_schedule_data write after the merge dropped the merged blob keys (adoptBlob did not take): keys " + Object.keys((laterBad && laterBad.data) || {}).join(","));
+        else if (laterBlobWrites.length) fail(`Import apply (A4): ${laterBlobWrites.length} call_schedule_data write(s) followed the merge PATCH within 1200 ms although adoptBlob(merged) recorded its signature - the autosave re-wrote an adopted blob: ` + JSON.stringify(laterBlobWrites.map(w => w.method + " " + w.path)));
+        else ok("Import apply (A4): no call_schedule_data write follows the merge PATCH within 1200 ms - adoptBlob(merged) recorded the signature and the autosave that fires on the adopted state skips (the no-write-after-adoption rule)");
         // fix round 2 (safe-4): (1) the dry run warns when the live blob was last saved in the
         // app (updated_by not 'seed') and names the keys Apply would replace; (2) Apply re-reads
         // the stamp first and refuses - zero writes, no snapshot - when it moved since the dry run.

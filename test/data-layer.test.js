@@ -665,18 +665,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const restore = src.indexOf("allowWipeSaveRef.current = false;\n      everHadRealDataRef.current = true;", grant);
     assert.ok(restore > grant, "the reset failure path must restore both refs");
   });
-  check("autosave: the empty-save gate precedes the consume, leg 1 (days) runs before the blob gate", () => {
+  check("autosave: the empty-save gate precedes the consume, leg 1 (days) runs before the blob leg's gate (A4: the blob leg is its own effect after the days effect; its write is saveBlobNow)", () => {
     const eff = src.indexOf("// --- Supabase: Auto-save on changes ---");
     const gate = src.indexOf("payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current", eff);
     const consume = src.indexOf("allowWipeSaveRef.current = false; // consume one-shot bypass", eff);
-    const leg1 = src.indexOf("syncScheduleDays(payload.schedule);", eff);
+    const leg1 = src.indexOf("syncScheduleDays(payload.schedule)", eff);
     const leg2gate = src.indexOf("if (!canWriteBlob) return;", eff);
-    const blobUpsert = src.indexOf('.from("call_schedule_data")', eff);
-    assert.ok(eff > 0 && gate > eff && consume > gate && leg1 > consume && leg2gate > leg1 && blobUpsert > leg2gate, `eff=${eff} gate=${gate} consume=${consume} leg1=${leg1} leg2gate=${leg2gate} blob=${blobUpsert}`);
+    const blobWrite = src.indexOf('await saveBlobNow(payload, "autosave")', eff);
+    assert.ok(eff > 0 && gate > eff && consume > gate && leg1 > consume && leg2gate > leg1 && blobWrite > leg2gate, `eff=${eff} gate=${gate} consume=${consume} leg1=${leg1} leg2gate=${leg2gate} blob=${blobWrite}`);
   });
   check("blob writes strip schedule / vacations / availability (state-bundle contract)", () => {
     assert.ok(src.includes("delete blobData.schedule; delete blobData.vacations; delete blobData.availability;"));
-    assert.strictEqual(count("blobFromBundle("), 3, "autosave + keepalive flush + JSON export");
+    assert.strictEqual(count("blobFromBundle("), 4, "autosave + keepalive flush + JSON export + the miss re-read's own-content check (reloadBlobAfterMiss, A4 review)");
   });
   check("schedule_days CAS literals present: POST v1, PATCH ?day&version, return=representation, 409 retry, conflict reload", () => {
     assert.ok(src.includes("/rest/v1/schedule_days?select=*&order=day.asc"));
@@ -778,7 +778,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const acc = src.slice(src.indexOf("const acceptMerged = async"), src.indexOf("// --- Seed import"));
     const okAt = acc.indexOf("if (r && r.ok) {"), setAt = acc.indexOf("setLastGenerate(lastGenerateFromDiagnostics(pv.diagnostics, new Date().toISOString(), lastGenerate));"); // P13R (e): the previous record travels too
     assert.ok(okAt > 0 && setAt > okAt && setAt < acc.indexOf("} else if (r && r.blocked)"), "acceptMerged stores the record only in the r.ok branch (a blocked / failed write leaves the old reasons)");
-    assert.ok(src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows, saveTick]);"), "autosave dependencies include lastGenerate (and A3's saveTick)");
+    assert.ok(src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);"), "the blob leg's dependencies include lastGenerate (and A3's saveTick) - A4: the blob leg is its own effect");
     assert.ok(src.includes("setLastPublished(null); setLastGenerate(undefined);"), "the state reset clears lastGenerate together with lastPublished");
     assert.strictEqual(count("setLastGenerate("), 3, "adoptBlob + acceptMerged + the state reset only - nothing else writes the record");
   });
@@ -900,19 +900,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count("Test the weekly digest now"), 1);
     assert.strictEqual(count("Manually fire the weekly digest now?"), 1);
   });
-  check("autosave leg 2 and the keepalive blob leg are gated on blobLoadedRef (after the canWriteBlob gate, before the upsert)", () => {
+  check("autosave leg 2 and the keepalive blob leg are gated on blobLoadedRef (after the canWriteBlob gate, before the write - A4: saveBlobNow / the CAS PATCH)", () => {
     const eff = src.indexOf("// --- Supabase: Auto-save on changes ---");
     const leg2gate = src.indexOf("if (!canWriteBlob) return;", eff);
     const blobGate = src.indexOf("if (!blobLoadedRef.current) {", eff);
-    const blobUpsert = src.indexOf('.from("call_schedule_data")', eff);
-    assert.ok(eff > 0 && leg2gate > eff && blobGate > leg2gate && blobUpsert > blobGate, `eff=${eff} leg2gate=${leg2gate} blobGate=${blobGate} upsert=${blobUpsert}`);
-    const leg1 = src.indexOf("syncScheduleDays(payload.schedule);", eff);
+    const blobWrite = src.indexOf('await saveBlobNow(payload, "autosave")', eff);
+    assert.ok(eff > 0 && leg2gate > eff && blobGate > leg2gate && blobWrite > blobGate, `eff=${eff} leg2gate=${leg2gate} blobGate=${blobGate} write=${blobWrite}`);
+    const leg1 = src.indexOf("syncScheduleDays(payload.schedule)", eff);
     assert.ok(leg1 < blobGate, "leg 1 (days) is not behind the blob gate (conventions 3a)");
     const flush = src.indexOf("flushRef.current = (source) => {");
     const flushGate = src.indexOf("if (!blobLoadedRef.current) {", flush);
-    const flushBlob = src.indexOf("call_schedule_data?on_conflict=id", flush);
+    const flushBlob = src.indexOf("call_schedule_data?id=eq.main${flushCas}", flush);
     const flushDays = src.indexOf("schedule_days?on_conflict=day", flush);
-    assert.ok(flush > 0 && flushGate > flush && flushGate < flushBlob && flushDays < flushGate, "flush: days leg first, then the blobLoadedRef gate, then the blob POST");
+    assert.ok(flush > 0 && flushGate > flush && flushGate < flushBlob && flushDays < flushGate, "flush: days leg first, then the blobLoadedRef gate, then the blob PATCH");
   });
   check("realtime onDayChange merges through mergeRealtimeDay and never overwrites schedule[day] unconditionally", () => {
     const fn = src.indexOf("const onDayChange = (payload) => {");
@@ -1366,7 +1366,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(!fl.includes("} else if (daySyncBusyRef.current > 0) {"), "RF2 review fix: the busy skip is no longer unconditional on the flush source (fail-before: skipped on pagehide / beforeunload too)");
     const guard = fl.indexOf('} else if (daySyncBusyRef.current > 0 && source === "visibilitychange") {');
     const loop = fl.indexOf("for (const day of Object.keys(Object.assign({}, base, cur)))");
-    const blobLeg = fl.indexOf("call_schedule_data?on_conflict=id");
+    const blobLeg = fl.indexOf("call_schedule_data?id=eq.main${flushCas}"); // A4: the keepalive blob leg is the CAS PATCH
     assert.ok(guard > 0 && loop > guard && blobLeg > loop, `guard=${guard} loop=${loop} blob=${blobLeg}`);
     const guardBlock = fl.slice(guard, fl.indexOf("} else {", guard));
     assert.ok(guardBlock.includes("pendingSaveRef.current = payload;"), "the skip re-arms the pending payload for the next sync");
@@ -2458,7 +2458,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // the re-send bridge: days through syncScheduleDays (no-op when nothing is pending), an armed payload through one more autosave run
       const rp = src.slice(src.indexOf("resyncPendingRef.current = (source) => {"), src.indexOf("// --- Flush pending save when app is backgrounded or closing ---"));
       assert.ok(rp.includes("if (isPublicMode || !loaded || loadFailedRef.current) return;") && rp.includes("syncScheduleDays(scheduleRef.current);") && rp.includes("if (pendingSaveRef.current) {") && rp.includes("setSaveTick(t => t + 1);"), "resyncPendingRef: " + rp.slice(0, 400));
-      assert.ok(src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows, saveTick]);"), "saveTick is an autosave dependency");
+      assert.ok(src.includes("}, [loaded, schedule, vacations, availabilityRows, saveTick]);") && src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);"), "saveTick is a dependency of both autosave legs (A4 split)");
       const adopt = src.slice(src.indexOf("const adoptSignedInUser = async (user) => {"), src.indexOf("// --- Auth: Check session on mount ---"));
       assert.ok(adopt.includes("auth.applyRealtimeAuth();"), "adoptSignedInUser -> realtime.setAuth (password, biometric unlock and the stored session all pass here)");
       assert.strictEqual(count('data-testid="session-expired"'), 1, "one banner");
@@ -2601,6 +2601,369 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(deny, "SU_NOTE_DENYLIST literal");
       const rx = new Function("return " + deny[1] + ";")();
       assert.ok(rx.test("family trip") && !rx.test("conference"), "the denylist catches a personal reason and lets an operational note through");
+    });
+  }
+
+  /* ---------------- I. Prompt 16 A4: blob autosave - split legs, content gate, CAS PATCH, reload on a lost race ---------------- */
+  console.log("\n[A4] Prompt 16 A4 (blob autosave: two legs, content gate, PATCH ?id=eq.main&updated_at=eq.<seen>, reload on zero rows)");
+  {
+    const needH = (n) => { if (typeof H[n] !== "function") throw new Error("helpers." + n + " is missing"); };
+    check("A4 helpers: blobSignature is key-order independent (jsonb reorders keys at every depth), restricted to the seven blob keys, and reads a null top-level key as absent (the local default is null where the row has no key)", () => {
+      needH("blobSignature");
+      const a = { roster: [{ id: "s1", name: "Khan" }], surgeonRules: { s1: { a: 1, b: { x: 1, y: 2 } } }, settings: { k: 1 }, lastPublished: null };
+      const b = { lastPublished: undefined, settings: { k: 1 }, surgeonRules: { s1: { b: { y: 2, x: 1 }, a: 1 } }, roster: [{ name: "Khan", id: "s1" }], importedAt: "x" };
+      assert.strictEqual(H.blobSignature(a), H.blobSignature(b));
+      assert.notStrictEqual(H.blobSignature(a), H.blobSignature({ ...a, settings: { k: 2 } }));
+      assert.notStrictEqual(H.blobSignature(a), H.blobSignature({ ...a, roster: [{ id: "s1", name: "Khan" }, { id: "s2" }] }), "array order counts");
+      assert.notStrictEqual(H.blobSignature(a), H.blobSignature({ ...a, lastGenerate: { at: "t" } }));
+      assert.strictEqual(H.blobSignature(null), H.blobSignature({}));
+      assert.deepStrictEqual(H.BLOB_KEYS, ["roster", "surgeonRules", "groupRules", "holidays", "settings", "lastPublished", "lastGenerate"]);
+    });
+    check("A4 helpers: adoptBlobState mirrors adoptBlob field by field - an empty / non-array roster and a non-object settings are ignored, an absent key keeps the local value, lastPublished null is adopted, a bad blob leaves local untouched, a new object comes back", () => {
+      needH("adoptBlobState");
+      const local = { roster: [{ id: "s1" }], surgeonRules: { s1: {} }, groupRules: { g: 1 }, holidays: ["x"], settings: { a: 1 }, lastPublished: { at: "t" }, lastGenerate: { at: "g" } };
+      const next = H.adoptBlobState(local, { roster: [], settings: "no", holidays: ["y"], lastPublished: null });
+      assert.deepStrictEqual(next, { ...local, holidays: ["y"], lastPublished: null });
+      assert.notStrictEqual(next, local);
+      assert.deepStrictEqual(H.adoptBlobState(local, null), local);
+      assert.deepStrictEqual(H.adoptBlobState(local, "x"), local);
+      assert.deepStrictEqual(H.adoptBlobState(local, { roster: [{ id: "s9" }], surgeonRules: { s9: {} }, groupRules: {}, settings: {}, lastGenerate: undefined }), { ...local, roster: [{ id: "s9" }], surgeonRules: { s9: {} }, groupRules: {}, settings: {} });
+    });
+
+    // The blob leg lifted out of the component (the A3 harness pattern): adoptBlob, the poll's refreshBlobRow and
+    // saveBlobNow / reloadBlobAfterMiss run against a fake PostgREST row with the real CAS semantics (a PATCH whose
+    // updated_at filter misses answers 200 + []; a 2xx renders the timestamptz the way PostgREST does, +00:00).
+    const A4SRC = {
+      adopt: src.slice(src.indexOf("  const adoptBlob = (d) => {"), src.indexOf("  // --- Supabase: Load on mount + real-time sync ---")),
+      refresh: src.slice(src.indexOf("    const refreshBlobRow = async () => {"), src.indexOf("    const refreshDays = async () => {")),
+      save: src.indexOf("  // --- The blob leg (Prompt 16 A4) ---") < 0 ? "" : src.slice(src.indexOf("  // --- The blob leg (Prompt 16 A4) ---"), src.indexOf("  // --- Supabase: Auto-save on changes ---")),
+      // the keepalive flush's blob leg (from its comment to the flush's outer catch) - runs as a function body: its
+      // top-level returns end the leg exactly as they do inside flushRef.current
+      flush: src.indexOf("      // Blob leg (Prompt 16 A4): the same content gate and CAS PATCH as saveBlobNow") < 0 ? "" : src.slice(src.indexOf("      // Blob leg (Prompt 16 A4): the same content gate and CAS PATCH as saveBlobNow"), src.indexOf("    } catch (e) {\n      console.warn(`Flush pending save (${source}) error:`, e);")),
+    };
+    const pgTs = (iso) => String(iso).replace(/Z$/, "+00:00"); // PostgREST renders a timestamptz the app sent as ...Z with +00:00
+    const mkDb = (data, ts) => {
+      const db = { row: { id: "main", data: JSON.parse(JSON.stringify(data)), updated_by: "seed", updated_at: ts }, writes: [], gets: 0 };
+      db.read = async () => { db.gets++; return { data: db.row ? { data: JSON.parse(JSON.stringify(db.row.data)), updated_at: db.row.updated_at } : null, error: null }; };
+      db.fetch = async (url, init) => {
+        const u = String(url), method = (init && init.method) || "GET", body = init && init.body ? JSON.parse(init.body) : null;
+        const h = (init && init.headers) || {};
+        const prefer = h.Prefer || h.prefer || "";
+        if (method === "GET") { db.gets++; return resp(200, db.row ? [{ data: db.row.data, updated_at: db.row.updated_at }] : []); }
+        db.writes.push({ url: u, method, body, prefer });
+        if (method === "PATCH") {
+          const m = u.match(/[?&]updated_at=(eq\.([^&]+)|is\.null)/);
+          const want = m ? (m[1] === "is.null" ? null : decodeURIComponent(m[2])) : undefined;
+          if (!u.includes("id=eq.main") || !db.row || (want !== undefined && want !== db.row.updated_at)) return resp(200, []);
+          db.row = { ...db.row, data: body.data, updated_by: body.updated_by, updated_at: pgTs(body.updated_at) };
+          return resp(200, [{ ...db.row }]);
+        }
+        if (method === "POST") {
+          if (db.row) return resp(409, { code: "23505", message: "duplicate key" });
+          db.row = { id: "main", data: body.data, updated_by: body.updated_by, updated_at: pgTs(body.updated_at) };
+          return resp(201, [{ ...db.row }]);
+        }
+        return resp(405, "");
+      };
+      return db;
+    };
+    const blobFromBundle = (bundle) => { const b = { ...bundle }; delete b.schedule; delete b.vacations; delete b.availability; return b; };
+    const mkSession = (db, who, local) => {
+      const ref = (v) => ({ current: v });
+      const s = { state: JSON.parse(JSON.stringify(local)), toasts: [], statuses: [], warns: [] };
+      const refs = { blobTsRef: ref(null), lastBlobJsonRef: ref(null), blobLocalRef: ref(null), blobLoadedRef: ref(false), pendingSaveRef: ref(null), blobSaveChainRef: ref(Promise.resolve()), blobSaveBusyRef: ref(0) };
+      s.bundle = () => ({ roster: s.state.roster, surgeonRules: s.state.surgeonRules, groupRules: s.state.groupRules, holidays: s.state.holidays, settings: s.state.settings, lastPublished: s.state.lastPublished, lastGenerate: s.state.lastGenerate, schedule: { "2026-11-02": { primary: "s1" } }, vacations: {}, availability: [] });
+      refs.blobLocalRef.current = blobFromBundle(s.bundle());
+      const set = (k) => (v) => { s.state[k] = v; };
+      const supabaseStub = { from: () => ({ select: () => ({ eq: () => ({ single: db.read }) }) }) };
+      const params = ["setSurgeons", "setSurgeonRules", "setGroupRules", "setHolidays", "setSettings", "setLastPublished", "setLastGenerate", "blobLocalRef", "lastBlobJsonRef", "adoptBlobState", "blobSignature", "supabase", "blobLoadedRef", "blobTsRef", "pendingSaveRef", "blobSaveChainRef", "blobSaveBusyRef", "blobFromBundle", "authFetch", "SUPABASE_URL", "userProfile", "showToast", "setSaveError", "setSaveStatus", "setTimeout", "console"];
+      const body = A4SRC.adopt + "\n" + A4SRC.refresh + "\n" + A4SRC.save + "\nreturn { adoptBlob, refreshBlobRow, saveBlobNow, reloadBlobAfterMiss };";
+      const consoleStub = { warn: (...a) => s.warns.push(a.join(" ")), error: (...a) => s.warns.push(a.join(" ")), log: () => {} };
+      const fns = new Function(...params, body)(
+        set("roster"), set("surgeonRules"), set("groupRules"), set("holidays"), set("settings"), set("lastPublished"), set("lastGenerate"),
+        refs.blobLocalRef, refs.lastBlobJsonRef, H.adoptBlobState, H.blobSignature, supabaseStub, refs.blobLoadedRef, refs.blobTsRef, refs.pendingSaveRef, refs.blobSaveChainRef, refs.blobSaveBusyRef,
+        blobFromBundle, (u, i) => db.fetch(u, i), "https://x.supabase.co", { person_id: who }, (m) => s.toasts.push(m), () => {}, (st) => s.statuses.push(st), () => 0,
+        consoleStub);
+      s.refs = refs; s.fns = fns;
+      // the keepalive flush's blob leg for one armed payload (the tab hidden inside the debounce); fetchImpl stands in
+      // for the page's fetch so a test can hold the PATCH's response
+      const flushParams = ["source", "payload", "hdrs", "ts", "by", "fetch", "SUPABASE_URL", "blobFromBundle", "blobSignature", "lastBlobJsonRef", "blobSaveBusyRef", "blobSaveChainRef", "blobTsRef", "blobLocalRef", "pendingSaveRef", "reloadBlobAfterMiss", "console"];
+      s.flush = (source, payload, fetchImpl) => {
+        if (!A4SRC.flush) throw new Error("the keepalive flush's blob leg ('// Blob leg (Prompt 16 A4)' .. the flush's outer catch) is not in index-source.html");
+        return new Function(...flushParams, A4SRC.flush)(source, payload, { "Content-Type": "application/json" }, new Date().toISOString(), who, fetchImpl || ((u, i) => db.fetch(u, i)), "https://x.supabase.co", blobFromBundle, H.blobSignature, refs.lastBlobJsonRef, refs.blobSaveBusyRef, refs.blobSaveChainRef, refs.blobTsRef, refs.blobLocalRef, refs.pendingSaveRef, fns.reloadBlobAfterMiss, consoleStub);
+      };
+      // the effect's run: the render has kept blobLocalRef at the current setup state, the payload is armed, the leg runs
+      s.fire = async () => { refs.blobLocalRef.current = blobFromBundle(s.bundle()); const payload = s.bundle(); refs.pendingSaveRef.current = payload; return await fns.saveBlobNow(payload, "autosave"); };
+      // one 60-second tick: refreshBlobRow, then the render that follows any adoption
+      s.poll = async () => { await fns.refreshBlobRow(); refs.blobLocalRef.current = blobFromBundle(s.bundle()); };
+      return s;
+    };
+    const LOCAL0 = { roster: [{ id: "s1", name: "Khan", code: "FAK" }, { id: "s3", name: "Acton", code: "BDA" }], surgeonRules: { s3: { maxConsecutiveDays: 3 } }, groupRules: { minRest: 1 }, holidays: [{ key: "thanksgiving" }], settings: { importedAt: "2026-09-23" } };
+    const DEFAULTS = { roster: [{ id: "s0" }], surgeonRules: undefined, groupRules: undefined, holidays: undefined, settings: {}, lastPublished: null, lastGenerate: undefined };
+    const T0 = "2026-09-23T21:26:53.975927+00:00";
+    const isBlobWrite = (w) => /call_schedule_data/.test(w.url) && (w.method === "PATCH" || w.method === "POST");
+    const lifted = () => { if (!A4SRC.save || !A4SRC.adopt || !A4SRC.refresh) throw new Error("the A4 blob-leg block ('// --- The blob leg (Prompt 16 A4) ---' .. the autosave effect) is not in index-source.html"); };
+    const acheck4 = async (name, fn) => { try { lifted(); await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+
+    await acheck4("A4: two 60-second polls over an unchanged row write NOTHING - zero PATCH / POST of call_schedule_data across the mount read, two ticks and three effect runs; the leg reports skipped (signature equal to the adopted blob), blobTsRef holds the row's stamp and the pending payload is cleared; then ONE Setup change writes exactly once - PATCH ?id=eq.main&updated_at=eq.<last seen>, Prefer return=representation, { data (the seven keys, no schedule / vacations / availability), updated_by, updated_at } - and the returned row's stamp becomes blobTsRef", async () => {
+      const db = mkDb(LOCAL0, T0);
+      db.row.data = { surgeonRules: LOCAL0.surgeonRules, settings: LOCAL0.settings, roster: LOCAL0.roster, holidays: LOCAL0.holidays, groupRules: LOCAL0.groupRules }; // jsonb key order
+      const s = mkSession(db, "s1", DEFAULTS);
+      await s.poll();                       // the mount read adopts the row
+      const r1 = await s.fire();            // where the old effect fired after the poll re-created the arrays
+      await s.poll(); await s.poll();       // two ticks, the row untouched
+      const r2 = await s.fire(); const r3 = await s.fire();
+      assert.strictEqual(db.writes.filter(isBlobWrite).length, 0, JSON.stringify(db.writes));
+      assert.ok(r1 && r1.skipped && r2 && r2.skipped && r3 && r3.skipped, JSON.stringify([r1, r2, r3]));
+      assert.strictEqual(s.refs.blobTsRef.current, T0);
+      assert.strictEqual(s.refs.lastBlobJsonRef.current, H.blobSignature(blobFromBundle(s.bundle())));
+      assert.strictEqual(s.refs.pendingSaveRef.current, null, "an unchanged blob clears the pending payload");
+      assert.deepStrictEqual(s.state.surgeonRules, LOCAL0.surgeonRules);
+      // a Setup change
+      s.state.surgeonRules = { s3: { maxConsecutiveDays: 4 } };
+      const r4 = await s.fire();
+      const w = db.writes.filter(isBlobWrite);
+      assert.strictEqual(w.length, 1, "exactly one write: " + JSON.stringify(w));
+      assert.strictEqual(w[0].method, "PATCH");
+      assert.strictEqual(w[0].url, "https://x.supabase.co/rest/v1/call_schedule_data?id=eq.main&updated_at=eq." + encodeURIComponent(T0));
+      assert.match(w[0].prefer, /return=representation/);
+      assert.deepStrictEqual(Object.keys(w[0].body).sort(), ["data", "updated_at", "updated_by"]);
+      assert.deepStrictEqual(Object.keys(w[0].body.data).sort(), ["groupRules", "holidays", "lastPublished", "roster", "settings", "surgeonRules"], "the seven keys minus the undefined lastGenerate - no schedule / vacations / availability");
+      assert.strictEqual(w[0].body.updated_by, "s1");
+      assert.ok(r4 && r4.saved, JSON.stringify(r4));
+      assert.strictEqual(s.refs.blobTsRef.current, db.row.updated_at, "blobTsRef = the returned row's stamp");
+      assert.notStrictEqual(s.refs.blobTsRef.current, w[0].body.updated_at, "the row's rendering (+00:00), not the sent ISO string - the poll's equality check must hold against a later GET");
+      assert.strictEqual(s.refs.lastBlobJsonRef.current, H.blobSignature(blobFromBundle(s.bundle())));
+      assert.strictEqual(s.refs.pendingSaveRef.current, null);
+      const r5 = await s.fire(); await s.poll(); const r6 = await s.fire();
+      assert.strictEqual(db.writes.filter(isBlobWrite).length, 1, "the 2xx, its poll echo and two more runs add no write");
+      assert.ok(r5.skipped && r6.skipped, JSON.stringify([r5, r6]));
+      assert.strictEqual(s.state.surgeonRules.s3.maxConsecutiveDays, 4, "the poll's echo did not replace the state");
+      assert.deepStrictEqual(s.toasts, []);
+    });
+    await acheck4("A4: a zero-row answer (the row moved under us) reloads the blob - one GET, the newer copy adopted, toast 'Setup changed elsewhere - reloaded', blobTsRef = the newer stamp - and does NOT retry the write; the row is not overwritten and the next run writes nothing", async () => {
+      const db = mkDb(LOCAL0, T0);
+      const s = mkSession(db, "s1", DEFAULTS);
+      await s.poll();
+      const T9 = "2026-09-23T22:00:00.123456+00:00";
+      db.row = { ...db.row, data: { ...db.row.data, holidays: [{ key: "christmas" }] }, updated_at: T9, updated_by: "s2" };
+      const getsBefore = db.gets;
+      s.state.settings = { importedAt: "2026-09-23", digest: true };
+      const r = await s.fire();
+      const w = db.writes.filter(isBlobWrite);
+      assert.strictEqual(w.length, 1, JSON.stringify(w));
+      assert.strictEqual(w[0].url, "https://x.supabase.co/rest/v1/call_schedule_data?id=eq.main&updated_at=eq." + encodeURIComponent(T0));
+      assert.ok(r && r.reloaded && !r.saved, JSON.stringify(r));
+      assert.strictEqual(db.gets - getsBefore, 1, "one reload read");
+      assert.deepStrictEqual(s.state.holidays, [{ key: "christmas" }], "the newer copy is adopted");
+      assert.deepStrictEqual(s.state.settings, { importedAt: "2026-09-23" }, "the server's copy replaced the local edit - nothing overwrote the newer row");
+      assert.deepStrictEqual(s.toasts, ["Setup changed elsewhere - reloaded"]);
+      assert.strictEqual(s.refs.blobTsRef.current, T9);
+      assert.deepStrictEqual(db.row.data.holidays, [{ key: "christmas" }]);
+      assert.strictEqual(db.row.updated_by, "s2", "the row was not overwritten");
+      assert.strictEqual(s.refs.pendingSaveRef.current, null);
+      const r2 = await s.fire();
+      assert.strictEqual(db.writes.filter(isBlobWrite).length, 1, "no write follows the reload");
+      assert.ok(r2 && r2.skipped, JSON.stringify(r2));
+    });
+    await acheck4("A4: two sessions adopting each other's blob do not ping-pong - A's Setup write, B adopts (no write), B's Setup write on the new stamp, A adopts (no write), two more ticks each: exactly two PATCHes in total, both end on the same stamp and signature, no toast", async () => {
+      const db = mkDb(LOCAL0, T0);
+      const A = mkSession(db, "s1", DEFAULTS), B = mkSession(db, "s1", DEFAULTS);
+      await A.poll(); await B.poll();
+      A.state.settings = { importedAt: "2026-09-23", digest: true };
+      const a1 = await A.fire();
+      await B.poll();                    // B adopts A's write
+      const b1 = await B.fire();         // B's effect fires on the adopted state
+      B.state.holidays = [{ key: "christmas" }];
+      const b2 = await B.fire();
+      await A.poll();
+      const a2 = await A.fire();
+      await B.poll(); const b3 = await B.fire(); await A.poll(); const a3 = await A.fire();
+      const w = db.writes.filter(isBlobWrite);
+      assert.strictEqual(w.length, 2, JSON.stringify(w.map(x => x.method + " " + x.url)));
+      assert.ok(a1.saved && b1.skipped && b2.saved && a2.skipped && b3.skipped && a3.skipped, JSON.stringify({ a1, b1, b2, a2, b3, a3 }));
+      assert.strictEqual(w[1].url, "https://x.supabase.co/rest/v1/call_schedule_data?id=eq.main&updated_at=eq." + encodeURIComponent(pgTs(w[0].body.updated_at)), "B's CAS carries the stamp A's write left");
+      assert.strictEqual(A.refs.blobTsRef.current, B.refs.blobTsRef.current);
+      assert.strictEqual(A.refs.lastBlobJsonRef.current, B.refs.lastBlobJsonRef.current);
+      assert.deepStrictEqual(A.state.holidays, [{ key: "christmas" }]);
+      assert.deepStrictEqual(B.state.settings, { importedAt: "2026-09-23", digest: true });
+      assert.deepStrictEqual(A.toasts.concat(B.toasts), []);
+    });
+    await acheck4("A4: no 'main' row at all - the PATCH (updated_at=is.null, no stamp seen) matches nothing, the reload finds no row, and ONE POST inserts it with Prefer return=representation; stamp and signature come from the inserted row; no toast", async () => {
+      const db = mkDb(LOCAL0, T0); db.row = null;
+      const s = mkSession(db, "s1", DEFAULTS);
+      await s.poll(); // a missing row is a successful read (blobLoadedRef true), nothing adopted
+      assert.strictEqual(s.refs.blobLoadedRef.current, true);
+      const r = await s.fire();
+      const w = db.writes.filter(isBlobWrite);
+      assert.deepStrictEqual(w.map(x => x.method), ["PATCH", "POST"], JSON.stringify(w));
+      assert.match(w[0].url, /call_schedule_data\?id=eq\.main&updated_at=is\.null$/);
+      assert.strictEqual(w[1].url, "https://x.supabase.co/rest/v1/call_schedule_data");
+      assert.match(w[1].prefer, /return=representation/);
+      assert.strictEqual(w[1].body.id, "main");
+      assert.ok(r && r.saved, JSON.stringify(r));
+      assert.strictEqual(s.refs.blobTsRef.current, db.row.updated_at);
+      assert.strictEqual(s.refs.lastBlobJsonRef.current, H.blobSignature(blobFromBundle(s.bundle())));
+      assert.deepStrictEqual(s.toasts, []);
+      const r2 = await s.fire();
+      assert.ok(r2 && r2.skipped); assert.strictEqual(db.writes.filter(isBlobWrite).length, 2);
+    });
+    await acheck4("A4: an HTTP failure of the PATCH throws 'blob save failed: HTTP <status> ...' (the effect's catch classifies it - 401 / 403 / other) and leaves stamp, signature and the pending payload alone so the next run retries", async () => {
+      const db = mkDb(LOCAL0, T0);
+      const s = mkSession(db, "s1", DEFAULTS);
+      await s.poll();
+      const realFetch = db.fetch;
+      s.state.holidays = [{ key: "christmas" }];
+      const sig0 = s.refs.lastBlobJsonRef.current;
+      db.fetch = async (u, i) => { if (i && i.method === "PATCH") { db.writes.push({ url: String(u), method: "PATCH", body: JSON.parse(i.body), prefer: "" }); return resp(401, JSON.stringify({ code: "PGRST301", message: "JWT expired" })); } return realFetch(u, i); }; // a 401 changes no row
+      let err = null;
+      try { await s.fire(); } catch (e) { err = e; }
+      assert.ok(err && /blob save failed: HTTP 401/.test(err.message) && /JWT expired/.test(err.message), String(err && err.message));
+      assert.strictEqual(s.refs.blobTsRef.current, T0);
+      assert.strictEqual(s.refs.lastBlobJsonRef.current, sig0);
+      assert.ok(s.refs.pendingSaveRef.current, "the payload stays armed");
+      assert.deepStrictEqual(s.toasts, [], "the effect's catch owns the toast");
+      db.fetch = realFetch;
+      const r = await s.fire();
+      assert.ok(r && r.saved, "the next run lands it: " + JSON.stringify(r));
+    });
+    await acheck4("A4 (review): a CAS miss whose reloaded row already holds this payload's content (our own keepalive flush of the same edit landed first) is a SILENT save - no toast, no 'Setup reloaded' status, blobTsRef = the row's stamp, the signature recorded, the pending payload released, no second PATCH; the next run skips", async () => {
+      const db = mkDb(LOCAL0, T0);
+      const s = mkSession(db, "s1", DEFAULTS);
+      await s.poll();
+      s.state.holidays = [{ key: "christmas" }];
+      const payload = s.bundle();
+      // the keepalive flush of this same edit landed first: the row holds the payload under a new stamp
+      await db.fetch("https://x.supabase.co/rest/v1/call_schedule_data?id=eq.main&updated_at=eq." + encodeURIComponent(T0), { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ data: blobFromBundle(payload), updated_by: "s1", updated_at: "2026-09-23T22:10:00.000Z" }) });
+      assert.notStrictEqual(db.row.updated_at, T0);
+      const getsBefore = db.gets;
+      const r = await s.fire();               // the debounced run: its PATCH carries T0 and misses
+      const w = db.writes.filter(isBlobWrite);
+      assert.strictEqual(w.length, 2, "the flush's PATCH and the one miss - never a third: " + JSON.stringify(w.map(x => x.method + " " + x.url)));
+      assert.strictEqual(db.gets - getsBefore, 1, "one re-read");
+      assert.ok(r && r.ok && r.saved && !r.reloaded, "a silent save, not a reload: " + JSON.stringify(r));
+      assert.deepStrictEqual(s.toasts, [], "no 'changed elsewhere' toast for our own content");
+      assert.deepStrictEqual(s.statuses, [], "no 'Setup reloaded' status");
+      assert.strictEqual(s.refs.blobTsRef.current, db.row.updated_at, "the row's stamp is adopted");
+      assert.strictEqual(s.refs.lastBlobJsonRef.current, H.blobSignature(blobFromBundle(s.bundle())));
+      assert.strictEqual(s.refs.pendingSaveRef.current, null);
+      assert.deepStrictEqual(s.state.holidays, [{ key: "christmas" }]);
+      const r2 = await s.fire();
+      assert.ok(r2 && r2.skipped, JSON.stringify(r2)); assert.strictEqual(db.writes.filter(isBlobWrite).length, 2, "no write follows");
+    });
+    await acheck4("A4 (review): the keepalive flush and the debounced run of the SAME Setup edit do not race - the flush's CAS PATCH joins the write chain (blobSaveBusyRef / blobSaveChainRef), so a saveBlobNow that fires while the flush's response is still in flight waits for it and then skips on the signature: exactly ONE PATCH, no toast, no 'Setup reloaded', stamp = the flushed row's", async () => {
+      const db = mkDb(LOCAL0, T0);
+      const s = mkSession(db, "s1", DEFAULTS);
+      await s.poll();
+      s.state.holidays = [{ key: "christmas" }];
+      const payload = s.bundle(); s.refs.blobLocalRef.current = blobFromBundle(payload); s.refs.pendingSaveRef.current = payload;
+      let release; const gate = new Promise(res => { release = res; });
+      const slowFetch = async (u, i) => { if (i && i.method === "PATCH") await gate; return db.fetch(u, i); }; // a real network: the response outlives the debounce
+      s.flush("visibilitychange", payload, slowFetch);   // the tab hidden inside the 800 ms debounce
+      assert.strictEqual(s.refs.blobSaveBusyRef.current, 1, "the flush's write is counted while in flight");
+      const debounced = s.fns.saveBlobNow(payload, "autosave"); // the timer fires before the flush's response
+      await new Promise(res => setTimeout(res, 20));
+      assert.strictEqual(db.writes.filter(isBlobWrite).length, 0, "the debounced run waits behind the flush - nothing has reached the row yet: " + JSON.stringify(db.writes.map(x => x.method + " " + x.url)));
+      release();
+      const r = await debounced;
+      await new Promise(res => setTimeout(res, 20));
+      const w = db.writes.filter(isBlobWrite);
+      assert.strictEqual(w.length, 1, "exactly one PATCH: " + JSON.stringify(w.map(x => x.method + " " + x.url)));
+      assert.strictEqual(w[0].url, "https://x.supabase.co/rest/v1/call_schedule_data?id=eq.main&updated_at=eq." + encodeURIComponent(T0));
+      assert.ok(r && r.skipped, "the debounced run skipped on the signature the flush recorded: " + JSON.stringify(r));
+      assert.deepStrictEqual(s.toasts, []); assert.deepStrictEqual(s.statuses, []);
+      assert.strictEqual(s.refs.blobTsRef.current, db.row.updated_at);
+      assert.strictEqual(s.refs.lastBlobJsonRef.current, H.blobSignature(blobFromBundle(payload)));
+      assert.strictEqual(s.refs.blobSaveBusyRef.current, 0, "the count is released");
+      assert.deepStrictEqual(db.row.data.holidays, [{ key: "christmas" }]);
+      const r2 = await s.fire(); assert.ok(r2 && r2.skipped); assert.strictEqual(db.writes.filter(isBlobWrite).length, 1);
+    });
+    await acheck4("A4 (review): factory reset with the clear's echo inside the debounce - the poll (or realtime) re-reads { _intentionalClear: true } under the row's own rendering of the stamp, adoptBlob ignores the marker and records NO signature, and the follow-up autosave still writes the defaults over the marker as ONE CAS PATCH carrying the stamp the echo left (the row never keeps the marker); no toast", async () => {
+      const db = mkDb(LOCAL0, T0);
+      const s = mkSession(db, "s1", DEFAULTS);
+      await s.poll();
+      // the reset: the clear upsert, then the ref lines and the default state ('Step 2 - reset the config blob')
+      const clearTs = "2026-09-24T01:10:22.107Z";
+      db.row = { id: "main", data: { _intentionalClear: true }, updated_by: "s1", updated_at: pgTs(clearTs) };
+      s.refs.blobLoadedRef.current = true; s.refs.blobTsRef.current = clearTs; s.refs.lastBlobJsonRef.current = null;
+      s.state = { roster: [{ id: "s1", name: "Khan", code: "FAK" }], surgeonRules: undefined, groupRules: undefined, holidays: undefined, settings: {}, lastPublished: null, lastGenerate: undefined };
+      s.refs.blobLocalRef.current = blobFromBundle(s.bundle()); // the render after the reset's setters
+      await s.poll();                 // the echo lands first: the row's rendering differs from the sent string -> re-read
+      assert.strictEqual(s.refs.blobTsRef.current, pgTs(clearTs), "the poll moved the stamp to the row's rendering");
+      assert.strictEqual(s.refs.lastBlobJsonRef.current, null, "the marker recorded no signature");
+      assert.deepStrictEqual(s.state.roster, [{ id: "s1", name: "Khan", code: "FAK" }], "nothing adopted from the marker");
+      const r = await s.fire();
+      const w = db.writes.filter(isBlobWrite);
+      assert.strictEqual(w.length, 1, "one PATCH carrying the defaults: " + JSON.stringify(w.map(x => x.method + " " + x.url)));
+      assert.strictEqual(w[0].url, "https://x.supabase.co/rest/v1/call_schedule_data?id=eq.main&updated_at=eq." + encodeURIComponent(pgTs(clearTs)), "the CAS carries the stamp the echo left");
+      assert.ok(r && r.saved, JSON.stringify(r));
+      assert.deepStrictEqual(Object.keys(db.row.data).sort(), ["lastPublished", "roster", "settings"], "the defaults replaced the marker (undefined keys drop out of the JSON)");
+      assert.ok(!("_intentionalClear" in db.row.data), "the marker is gone");
+      assert.deepStrictEqual(s.toasts, []);
+      await s.poll(); const r2 = await s.fire();
+      assert.ok(r2 && r2.skipped, JSON.stringify(r2)); assert.strictEqual(db.writes.filter(isBlobWrite).length, 1);
+    });
+
+    check("A4 pins: the autosave is TWO effects - the days leg keyed on [loaded, schedule, vacations, availabilityRows, saveTick], the blob leg keyed on [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick] (no schedule / vacations / availabilityRows: the poll's re-created arrays never re-fire it); the old single dependency list is gone; each leg keeps the hydration window, the loadFailedRef gate and the empty-save guard; the one-shot allowWipeSaveRef is consumed in the days leg only", () => {
+      const daysDeps = "}, [loaded, schedule, vacations, availabilityRows, saveTick]);";
+      const blobDeps = "}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);";
+      assert.strictEqual(count(daysDeps), 1, "days-leg dependencies");
+      assert.strictEqual(count(blobDeps), 1, "blob-leg dependencies");
+      assert.strictEqual(count("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, schedule, vacations, availabilityRows, saveTick]);"), 0, "the single-effect dependency list");
+      const eff = src.indexOf("// --- Supabase: Auto-save on changes ---");
+      const iDays = src.indexOf(daysDeps, eff), iBlob = src.indexOf(blobDeps, eff);
+      assert.ok(eff > 0 && iDays > eff && iBlob > iDays, "days leg first, then the blob leg");
+      const days = src.slice(eff, iDays), blob = src.slice(iDays + daysDeps.length, iBlob);
+      for (const [name, part] of [["days", days], ["blob", blob]]) {
+        assert.ok(part.includes("if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return; // hydration window"), name + ": hydration window");
+        assert.ok(part.includes("if (loadFailedRef.current) {"), name + ": loadFailedRef gate");
+        assert.ok(part.includes("payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current"), name + ": empty-save guard");
+        assert.ok(part.includes("pendingSaveRef.current = payload;"), name + ": arms the pending payload");
+      }
+      assert.ok(days.includes("syncScheduleDays(payload.schedule)") && !blob.includes("syncScheduleDays("), "the days leg syncs the table; the blob leg never does");
+      assert.ok(days.includes("allowWipeSaveRef.current = false; // consume one-shot bypass") && !blob.includes("allowWipeSaveRef.current = false"), "the one-shot is consumed once, in the days leg");
+      assert.ok(!blob.includes("vacations") && !blob.includes("availabilityRows"), "the blob leg never names the poll-refreshed arrays");
+      const gate = blob.indexOf("if (!canWriteBlob) return;"), loadedGate = blob.indexOf("if (!blobLoadedRef.current) {"), call = blob.indexOf("await saveBlobNow(payload, \"autosave\")");
+      assert.ok(gate > 0 && loadedGate > gate && call > loadedGate, `blob leg order: canWriteBlob=${gate} blobLoadedRef=${loadedGate} saveBlobNow=${call}`);
+    });
+    check("A4 pins: saveBlobNow writes PATCH ?id=eq.main&updated_at=eq.<blobTsRef> (is.null without a stamp) with Prefer return=representation through authFetch, skips when blobSignature equals lastBlobJsonRef, hands zero rows to reloadBlobAfterMiss (adopt + toast 'Setup changed elsewhere - reloaded', never a retry), stamps blobTsRef from the RETURNED row; adoptBlob records blobLocalRef / lastBlobJsonRef through adoptBlobState; no blind upsert of the blob is left in the autosave or the flush (the factory reset's intentional clear is the one upsert)", () => {
+      const leg = A4SRC.save;
+      assert.ok(leg.length > 0, "the block is missing");
+      assert.ok(leg.includes("const saveBlobOnce = async (payload, source) => {") && leg.includes("const reloadBlobAfterMiss = async (source, payload) => {"), "both functions");
+      assert.ok(leg.includes("const saveBlobNow = (payload, source) => {") && leg.includes("const run = blobSaveChainRef.current.then(() => saveBlobOnce(payload, source)).finally(() => { blobSaveBusyRef.current = Math.max(0, blobSaveBusyRef.current - 1); });") && leg.includes("blobSaveBusyRef.current += 1;"), "writes are serialized and counted (a second Setup edit PATCHes over the stamp the first one left)");
+      assert.ok(leg.includes("const sig = blobSignature(blobData);") && leg.includes("if (sig === lastBlobJsonRef.current) {"), "the content gate");
+      assert.ok(leg.includes("blobTsRef.current ? `&updated_at=eq.${encodeURIComponent(blobTsRef.current)}` : \"&updated_at=is.null\""), "the CAS filter");
+      assert.ok(leg.includes("authFetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main${casQ}`, {") && leg.includes('method: "PATCH", headers: { Prefer: "return=representation" }'), "the PATCH through authFetch");
+      assert.ok(leg.includes("throw new Error(`blob save failed: HTTP ${res.status} ${text.slice(0, 200)}`);"), "an HTTP failure throws for the effect's catch");
+      assert.ok(leg.includes("if (!Array.isArray(rows) || rows.length === 0) {\n      const r = await reloadBlobAfterMiss(source, payload);\n      if (!r.missing) return r;"), "zero rows -> reload, no retry of the PATCH (the insert below runs only when no row exists at all)");
+      assert.strictEqual((leg.match(/method: "PATCH"/g) || []).length, 1, "one PATCH site - never re-sent after a miss");
+      assert.ok(leg.includes("blobTsRef.current = (rows[0] && rows[0].updated_at) || ts;") && leg.includes("lastBlobJsonRef.current = sig;"), "the 2xx stamps the returned updated_at and the signature");
+      assert.ok(leg.includes('showToast("Setup changed elsewhere - reloaded", "error");'), "the reload toast");
+      assert.ok(leg.includes("const wantBlob = payload ? blobFromBundle(payload) : null;") && leg.includes("const want = wantBlob ? blobSignature(wantBlob) : null;") && leg.includes("if (want && row.updated_at && blobSignature(d) === want) {") && leg.indexOf("if (want && row.updated_at && blobSignature(d) === want) {") < leg.indexOf("adoptBlob(d);"), "a miss whose row already holds the payload is a silent save (our own earlier write) - checked before the adoption and the toast");
+      assert.ok(leg.includes("return { ok: true, saved: true, landedEarlier: true };"), "the silent save reports saved");
+      assert.ok(!/\.upsert\(/.test(leg) && !leg.includes("on_conflict=id"), "no upsert in the leg");
+      const adopt = A4SRC.adopt;
+      assert.ok(adopt.includes("const next = adoptBlobState(blobLocalRef.current, d);") && adopt.includes("blobLocalRef.current = next;") && adopt.includes("lastBlobJsonRef.current = blobSignature(next);"), "adoptBlob records what the local state becomes");
+      assert.ok(adopt.includes("if (d._intentionalClear) return;") && adopt.indexOf("if (d._intentionalClear) return;") < adopt.indexOf("const next = adoptBlobState(blobLocalRef.current, d);"), "the factory reset's clear marker is ignored BEFORE the signature is recorded (the echo of the clear must not make the defaults look written)");
+      assert.ok(adopt.includes("if (d.lastGenerate !== undefined) setLastGenerate(d.lastGenerate);"), "the field-by-field setters stay");
+      assert.strictEqual(count("call_schedule_data?on_conflict=id"), 0, "the keepalive blob upsert is gone");
+      assert.strictEqual(count('.from("call_schedule_data").upsert('), 1, "the factory reset's clear is the only upsert of the blob");
+      assert.strictEqual(count('.upsert({ id: "main", data: blobFromBundle('), 0, "the autosave upsert is gone");
+      assert.ok(src.includes("const lastBlobJsonRef = useRef(null);") && src.includes("const blobLocalRef = useRef("), "the two refs");
+    });
+    check("A4 pins: the keepalive flush's blob leg skips an unchanged blob and otherwise sends the same CAS PATCH with keepalive (zero rows -> reloadBlobAfterMiss, a rejected response re-arms the payload); the factory reset stamps blobTsRef with its clear's updated_at and forgets the signature so the follow-up autosave's CAS matches", () => {
+      const fl = src.slice(src.indexOf("flushRef.current = (source) => {"), src.indexOf("const onVisibilityChange = () => {"));
+      assert.ok(fl.includes("const flushSig = blobSignature(flushBlob);") && fl.includes("if (flushSig === lastBlobJsonRef.current) return;"), "the flush's content gate");
+      assert.ok(fl.includes("fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main${flushCas}`, {") && fl.includes('method: "PATCH", keepalive: true, headers: { ...hdrs, Prefer: "return=representation" }'), "the keepalive CAS PATCH");
+      assert.ok(fl.includes("if (!Array.isArray(rows) || rows.length === 0) { console.warn(`Keepalive blob save (${source}): the setup moved under this session - reloading, not overwriting`); return reloadBlobAfterMiss(source, payload).catch("), "zero rows -> reload (awaited by the chain), never a second write");
+      assert.ok(fl.includes("blobSaveBusyRef.current += 1;") && fl.includes("const flushRun = fetch(`${SUPABASE_URL}/rest/v1/call_schedule_data?id=eq.main${flushCas}`, {") && fl.includes(".finally(() => { blobSaveBusyRef.current = Math.max(0, blobSaveBusyRef.current - 1); });") && fl.includes("blobSaveChainRef.current = blobSaveChainRef.current.then(() => flushRun);"), "the flush's PATCH joins the write chain: counted while in flight and appended to blobSaveChainRef, so the debounced run of the same edit waits and skips instead of racing it");
+      assert.ok(fl.includes("blobTsRef.current = (rows[0] && rows[0].updated_at) || ts; lastBlobJsonRef.current = flushSig;"), "a 2xx stamps the returned updated_at");
+      assert.ok(fl.includes("if (blobSaveBusyRef.current > 0) {") && fl.slice(fl.indexOf("if (blobSaveBusyRef.current > 0) {")).split("\n")[0].includes("pendingSaveRef.current = payload; return; }"), "a blob write in flight owns the stamp: the flush skips its blob leg and keeps the payload armed");
+      assert.ok(!fl.includes("resolution=merge-duplicates"), "no merge-duplicates upsert header left in the flush");
+      assert.ok(fl.indexOf("if (!blobLoadedRef.current) {") < fl.indexOf("const flushSig = blobSignature(flushBlob);"), "the blobLoadedRef gate precedes the leg");
+      const reset = src.slice(src.indexOf("// Step 2 - reset the config blob."), src.indexOf("// --- In-app notifications ---"));
+      assert.ok(reset.includes("const clearTs = new Date().toISOString();") && reset.includes('.upsert({ id: "main", data: { _intentionalClear: true }, updated_at: clearTs })') && reset.includes("blobTsRef.current = clearTs;") && reset.includes("lastBlobJsonRef.current = null;"), "the reset stamps the ref and forgets the signature");
+      assert.ok(!reset.includes("the poll does not treat it as foreign") && reset.includes("the echo of the clear may re-read it"), "the reset's comment says what happens: the CAS matches (instants), the echo may re-read the marker, adoptBlob ignores it");
     });
   }
 
