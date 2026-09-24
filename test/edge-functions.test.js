@@ -706,7 +706,7 @@ check("Item D: index-source.html Settings (scheduler) shows the combined link fo
   assert.ok(/surgeon=FAK&east=1/.test(s5) && /VALUE=DATE/.test(s5) && /Davenport/.test(s5), "section 5: the east=1 check (all-day Davenport events)");
   assert.ok(/surgeon=NF&east=1|east=1"[^\n]*same as|exactly like/.test(s5), "section 5: east=1 outside the predicate answers like today");
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
-  assert.ok(/Item D/.test(s3) && /calendar-sync[^\n]*v2 -> v3/.test(s3) && /office-notifications[^\n]*v3 -> v4/.test(s3) && /pending/i.test(s3), "section 3: the pending Item D rows");
+  assert.ok(/Item D/.test(s3) && /calendar-sync[^\n]*v2 -> v3/.test(s3) && /office-notifications[^\n]*v3 -> v4/.test(s3) && /calendar-sync[^\n]*v3 \(deployed 2026-09-24 07:52/.test(s3) && /office-notifications[^\n]*v4 \(deployed 2026-09-24 07:52/.test(s3) && !/v3 \(pending\)|v4 \(pending\)/.test(s3), "section 3: the Item D rows record the deploys (v3 / v4, 2026-09-24 07:52 UTC)");
   const s5on = readme.slice(readme.indexOf("### office-notifications"), readme.indexOf("### send-notification"));
   assert.ok(/"east"/.test(s5on) || /east:/.test(s5on), "section 5: the digest dryRun answers `east`");
   const guide = read("docs/SILVIS-BUILD-GUIDE.md");
