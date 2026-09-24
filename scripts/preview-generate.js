@@ -181,7 +181,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
 
   // calendar as week rows over the merged schedule (locks + generated)
   const merged = Object.assign({}, schedule, sched);
-  L.push("## Calendar (week rows, the ER-panel author's layout)"); L.push("");
+  L.push("## Calendar (week rows, ER-panel layout)"); L.push("");
   if (typeof H.buildWeekRows === "function") {
     const rows = H.buildWeekRows(merged, roster, START, END, {});
     L.push("| MON/SUN DATES | TRAUMA | TRAUMA BACKUP |"); L.push("|---|---|---|");

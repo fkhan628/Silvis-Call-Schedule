@@ -387,7 +387,7 @@ function toEastFeedRows(weeks) {
 // ---- East vacations (Prompt 15 part 1a, 9/23) ----
 // Davenport keeps vacations in its own time_off table (id, person_id, kind,
 // start_date, end_date; inclusive dates; kind 'vacation' | 'nocall'). Verified
-// [removed]. The Silvis cache is per week, so a
+// through the same feed path as schedule_weeks (probed 2026-09-22). The Silvis cache is per week, so a
 // person's ranges are written into the payload of every cached week they
 // touch (whole, not clipped) as data.vacations: [{ code, start, end }] and a
 // refresh replaces them cleanly. Ranges that touch NO cached week - Davenport

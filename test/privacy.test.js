@@ -109,6 +109,76 @@ report("A6b machine paths / session id", scan(A6B));
 // the developer's Windows user name, case-insensitively, as a whole token
 report("A6b developer user name", tokenHits(["53ada671a653da48d791f65003e83c8f10326bbca9c7f6058640ae549aecfa0a"], "developer user name", t => t.toLowerCase()));
 
+// >>> A6c
+// ---- A6c: no staff name, roster middle initial, email subject, other-project
+// vacation-table disclosure or personal vacation range ------------------------
+// Staff names: exact-case tokens (Capitalised and UPPER forms). A lower-case
+// token is not scanned: the seed's source keys are importer-pinned slugs that
+// live in published rows too (renaming one is a live-row change, Faraz's call).
+report("A6c hospital staff names (roles only in a public repo)", tokenHits([
+  "7bb046abb261ff52b4b87ba1f3ceb6c3a081f7b437f91d014cd9f2f209e6fc1f", "e5b2c8579c2537d753272ac52e08e2f894d7a0439e7254e2fc5c005134c65244",
+  "ea6688791b5f619bb7381f57698173f20d50eb5b7df822d3c3415518db498310", "ed2a5e35556edb9d4694aa3080888ba901c96cc1795180b0226172f1a477e452",
+  "c56f22c62e3a708d3f32cb2b958ec7571828378e37134471bb6beee5bf808af9", "ee51b60bfb90830271253d8fae0c6f3cd9d5e2489859bf09bbed9ed391b9c774",
+  "907e45b5d832fcd8ca18c056b91079a9c3a95eb2f7bd3e5bc1bdd438f9380802", "4623b559615faa4fa44a6412f0184a84f3c2aaf3c89cbae196b1f959b6793b68",
+  "cf1e4b613986781992ff99a7c1b120e412a007cf5a0b1f64b677b510c4c44d47", "5b7e5cc8c743e78355d8f20081fce3f2b1d6e6b6d5935b40536a58a95c694989",
+  "3392364c4b70a24cf7037515b1d6589a34bc21331e2874a74306cf7edfb835cc", "0467fa7edd5a90263f16dd4dd1e4f4ab42eae98971d502ab2f8715aaa405f8e8",
+], "staff name"));
+
+// roster fullName = first + last (or empty), never a middle initial or a title:
+// the seed, config.js's INIT roster (six entries) and every fullName literal
+const seed = JSON.parse(texts["docs/silvis-seed.json"]);
+ok(Array.isArray(seed.roster) && seed.roster.length >= 6, "seed roster present");
+const plainName = fn => !/\./.test(fn) && fn.trim().split(/\s+/).filter(Boolean).length <= 2;
+seed.roster.forEach(r => ok(plainName(String(r.fullName || "")), "seed roster " + r.id + " fullName must be first + last (or empty), got " + JSON.stringify(r.fullName)));
+const cfgNames = (texts["config.js"].match(/fullName:"([^"]*)"/g) || []).map(m => m.slice(10, -1));
+ok(cfgNames.length === 6, "config.js INIT roster carries six fullName literals, found " + cfgNames.length);
+cfgNames.forEach(fn => ok(plainName(fn), "config.js INIT roster fullName must be first + last (or empty), got " + JSON.stringify(fn)));
+report("A6c fullName with a middle initial or title", scan([{ label: "fullName literal with an initial / title", re: /fullName["']?\s*[:=]\s*["'][^"']*\b[A-Z][a-z]?\.\s/ }]));
+
+// _meta.sources: neutral source keys with a role-level description, never an email-thread subject
+(seed._meta && seed._meta.sources || []).forEach((s, i) => ok(!/^Email/.test(s) && !/'[^']{3,}'/.test(s), "seed _meta.sources[" + i + "] must be a neutral source key, not an email subject: " + s));
+
+// Another project's vacation table is not this repo's to describe: no sentence
+// may pair the Davenport project with its time_off / vacations and a STATEMENT
+// about who can read it (the READ words below). A statement about one of
+// Silvis's OWN tables (east_feed, ...) in the same sentence is design
+// documentation and passes; so does "reads X with the public key" (the East
+// feed's documented read path). Sentence-based, so a wrapped passage is caught
+// too; a run-on over 600 chars is split by line.
+const READ = /anon-?readable|readable (by|with|to)\b|\b(is|are|was|were) readable|anyone (holding|with)|\bexpos(e|es|ed|ure)\b/ig;
+const OWN_TABLE = /\b(east_feed|schedule_days|call_schedule_data|availability|client_versions|call_schedule_snapshots|east_forecast|silvis)\b/i;
+function readabilityStatement(s) {
+  READ.lastIndex = 0;
+  let m;
+  while ((m = READ.exec(s))) { if (!OWN_TABLE.test(s.slice(Math.max(0, m.index - 40), m.index))) return true; }
+  return false;
+}
+function sentenceHits(test, label) {
+  const hits = [];
+  const boundary = /\.\s+|\n\s*\n|\|/g;
+  for (const f of files) {
+    const text = texts[f];
+    let start = 0, m;
+    const segs = [];
+    while ((m = boundary.exec(text))) { segs.push([start, text.slice(start, m.index)]); start = m.index + m[0].length; }
+    segs.push([start, text.slice(start)]);
+    for (const [at, s] of segs) {
+      const parts = s.length > 600 ? s.split("\n").map((l, i, arr) => [at + arr.slice(0, i).join("\n").length + (i ? 1 : 0), l]) : [[at, s]];
+      for (const [a, p] of parts) if (test(p)) hits.push(f + ":" + (text.slice(0, a).split("\n").length) + "  <" + label + ">");
+    }
+  }
+  return hits;
+}
+report("A6c other project's vacation-table disclosure", sentenceHits(s => /\bdavenport\b|\bDSG\b/i.test(s) && /\b(time[ _-]?off|vacations?)\b/i.test(s) && readabilityStatement(s), "davenport vacation table + readability statement"));
+
+// personal vacation ranges from the East mirror: a doc / fixture line that
+// names the Davenport / East side, a numeric date range, a vacation word AND a
+// personal marker (his / your / FAK / Khan's). Docs say "your Davenport ranges";
+// tests and fixtures use synthetic ranges; a UI example without a person passes.
+const RANGE = /(\b\d{1,2}\/\d{1,2}\s*(–|-|to)\s*\d{1,2}\/\d{1,2}\b|\b20\d\d-\d\d-\d\d\s*(\.\.|–|-|to)\s*\d)/;
+const PERSONAL_EAST = /^(?=[^]*(davenport|east vacation|east mirror|east feed))(?=[^]*\b(vacations?|away|home)\b)(?=[^]*(\b(his|your|FAK('s)?|Khan's)( own)?( Davenport| East)? (vacations?|ranges?)\b|\b(person's|his|your) own East vacation))/i;
+report("A6c personal East vacation ranges", scan([{ label: "personal range on the East side", re: RANGE, also: PERSONAL_EAST }], { files: f => /\.(md|json)$/.test(f) }));
+// <<< A6c
 
 // ---- summary ----------------------------------------------------------------
 if (failures.length) {

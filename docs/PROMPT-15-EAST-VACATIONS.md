@@ -16,13 +16,13 @@ passing tests, report-first for anything that touches RLS on EITHER project, sto
 1. READ THE DAVENPORT TIME OFF — find out first, then build the path that exists
    The Davenport app keeps vacations in its own `time_off` table (columns id, person_id, kind, start_date, end_date;
    FAK is person_id s6 THERE — match on the roster code via the Davenport blob, never on id, as east-feed.js already
-   does for schedule_weeks). Probe with the Davenport PUBLIC anon key whether `time_off` is readable (a 200 with rows,
+   does for schedule_weeks). Probe whether the East feed can read `time_off` the way it reads `schedule_weeks` (a 200 with rows,
    or a 200 with [] — RLS-blocked reads are silent, so compare against a row you can see in the Davenport app).
    a. If readable: extend east-feed.js to fetch FAK's rows (kind = vacation only; no-call days are a Davenport concept
       and stay there) for the cached range, into a new `east_feed` payload key `vacations: [{start, end}]`. Fetch
       failure keeps the cache and warns, exactly like the weeks.
-   b. If NOT readable: do NOT add a public read policy to the Davenport project (it would expose every Davenport
-      surgeon's vacations to anyone with the anon key). Instead add a paste box in the Silvis East feed panel —
+   b. If NOT readable: do NOT add a public read policy to the Davenport project (that project's read posture is not
+      ours to widen). Instead add a paste box in the Silvis East feed panel —
       "paste your Davenport vacations" — accepting the Davenport app's export text (add a one-line "Copy my
       vacations" button to the Davenport app in a separate, tiny PR there: writes "YYYY-MM-DD – YYYY-MM-DD" lines
       to the clipboard; Faraz owns both apps). Same downstream behaviour either way. Report which path you took and
@@ -64,26 +64,15 @@ passing tests, report-first for anything that touches RLS on EITHER project, sto
 
 ## Part 1 — path taken and the observed probe (2026-09-23, branch `feat/east-vacations`)
 
-**Path 1a.** The Davenport project's `time_off` table is read through the East feed's existing read path, so east-feed.js reads it
-directly; there is no paste box and no change to the Davenport app. The probe note, copied verbatim from
-`scratchpad/p15/davenport-timeoff-probe.txt`:
+**Path 1a.** east-feed.js reads the Davenport `time_off` table the way it already reads `schedule_weeks`, so there
+is no paste box and no change to the Davenport app. The probe (2026-09-22, read-only, the East feed's own read path)
+confirmed the columns `id, person_id, kind, start_date, end_date` and the `kind` values `vacation` / `nocall`; its raw
+output stays in the private session notes, not in this repo. Path 1b (paste box + Copy button) not needed.
 
-```
-Prompt 15 part 1 probe - observed 2026-09-22 ~22:58 local by Claude Code (read-only, Davenport PUBLIC anon key from east-feed.js):
-  GET https://xqongyahdnkozqunpwmu.supabase.co/rest/v1/time_off?select=id,person_id,kind,start_date,end_date&limit=5  -> [removed]
-      [removed]
-  GET .../time_off?select=count (Prefer: count=exact)  -> 206, [removed]
-  GET .../schedule_weeks?select=week_monday&order=week_monday.desc&limit=1 -> 200 (control: the read the East feed already does; latest week 2026-11-09)
-Conclusion: [removed] -> Prompt 15 path 1a (fetch FAK's vacation rows by roster CODE via the
-Davenport blob, kind = vacation only, into east_feed payload key vacations: [{start, end}]). Path 1b (paste box + Copy button) not needed.
-Side observation for Faraz (Davenport side, not changed from here): [removed]
-holding that app's public anon key.
-```
-
-Second read-only look while building (2026-09-23, same key, `eastGetJson`): the Davenport roster resolves code FAK to
-`s6`; [removed]. His ranges lie
-mostly **beyond** Davenport's last published week (2026-11-09): [range] (his Silvis Thanksgiving unit — the
-"home" case the prompt describes), [range], then 2027. That is why a range touching no cached week rides on the
+Second read-only look while building (2026-09-23, `eastGetJson`): the Davenport roster resolves code FAK to
+`s6`; his `vacation` rows from 2026-08 on lie
+mostly **beyond** Davenport's last published week (2026-11-09) — one of them coincides with his Silvis Thanksgiving unit (the
+"home" case the prompt describes). That is why a range touching no cached week rides on the
 latest cached week before it (see guide §7) instead of being dropped.
 
 What part 1 built (E1): `fetchEastWeeks(from, to, { vacationCodes })` → `vacations: { CODE: [{ start, end }] }` (kind
@@ -97,7 +86,7 @@ as before, and names the vacations leg in the toast and the `east.refresh` audit
 **Review fixes (E1, same day).** (1) The per-week split and the ride-on host rule now run over the *whole* cache
 (`planVacationCache`), and every cached row outside the 28-day refresh window whose list changed is upserted too
 (own payload, own `fetched_at`) — the reviewer showed that with Davenport published only through 2026-11-09, Khan's
-the three ranges all ride on the 11/09 row, which leaves the window on 2026-12-14; after that a
+later ranges all ride on the 11/09 row, which leaves the window on 2026-12-14; after that a
 cancelled or shortened range would have survived in the cache (and a refresh that fetched 0 weeks never touched the
 host). Ranges the read cannot see (`end < from`) are kept as cached. (2) The `time_off` read has its own horizon,
 `opts.vacationsTo` (default: the weeks window's Sunday + 365 days), instead of ending with the published weeks.
@@ -136,8 +125,8 @@ docs pins (part 4). Part 4 changed no app file, so the smoke was not re-run for 
    `0`; record the lines and turn the SCHEMA-REVIEW status from PREPARED to APPLIED. **Done:** status APPLIED, the probe string,
    the four policies, `relrowsecurity` true, leftover `0` and the anon `200` + `[]` recorded; the after-run's 9b / RESULT lines remain to be pasted.
 5. No edge-function deploy, no cron change, no Davenport change, no data written to either project.
-6. Faraz after the deploy: *Refresh from Davenport* (his 16 Davenport rows; fewer ranges where adjacent rows merge —
-   the toast names the merged count), then [range] → **home**, [range] as he decides.
+6. Faraz after the deploy: *Refresh from Davenport* (his Davenport rows; fewer ranges where adjacent rows merge —
+   the toast names the merged count), then **home** on the range over his Silvis Thanksgiving unit, the rest as he decides.
 
 ### Open questions (see guide §18.5 for the full text)
 

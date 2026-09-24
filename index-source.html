@@ -4408,7 +4408,7 @@ function CallSchedule() {
   const erFrom = erRange ? erRange.from : monthStartStr;
   const erTo = erRange ? erRange.to : monthEndStr;
   const erRangeOk = /^\d{4}-\d{2}-\d{2}$/.test(erFrom) && /^\d{4}-\d{2}-\d{2}$/.test(erTo) && erFrom <= erTo;
-  // the ER-panel author's rows are whole Mon-Sun weeks, so a mid-week From/To is widened to
+  // The ER-panel author's rows are whole Mon-Sun weeks, so a mid-week From/To is widened to
   // the surrounding Monday/Sunday (helpers.js erPanelSpan); the note under the
   // buttons says so and the download is named for the span it really covers.
   const erSpan = erRangeOk ? erPanelSpan(erFrom, erTo) : { from: erFrom, to: erTo, widened: false };
@@ -5148,7 +5148,7 @@ function CallSchedule() {
           </div>
 
           <Collapsible css={css} ck="cal_weekrows" defaultOpen={true} title="Week rows (ER Call Panels layout)">
-            <p style={sectionNote}>the ER-panel author's layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too.</p>
+            <p style={sectionNote}>ER-panel layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too.</p>
             <div className="table-wrap" style={{overflowX:"auto"}}>
               <table className="week-rows" data-testid="week-rows" style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead><tr><th style={thS}>MON/SUN DATES</th><th style={thS}>TRAUMA</th><th style={thS}>TRAUMA BACKUP</th></tr></thead>
@@ -5189,7 +5189,7 @@ function CallSchedule() {
                 <p style={{...muted,marginTop:6,lineHeight:1.5}}>The read-only page is one self-contained file (month grids plus the week rows) that opens in any browser with no sign-in - attach it to an email or drop it on a shared drive. Copy puts the same page on the clipboard. The printable view opens in a new tab; use the browser's print dialog to print or save as PDF.</p>
               </div>
               <div style={{...css.toolBlock,borderBottom:"none",marginBottom:0,paddingBottom:0}}>
-                <div style={{...css.toolTitle,color:dkText}}>ER Call Panels (the ER-panel author's layout)</div>
+                <div style={{...css.toolTitle,color:dkText}}>ER Call Panels (ER-panel layout)</div>
                 <p style={sectionNote}>One row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Copy for Word pastes as a table into the ER-panel author's document.</p>
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginBottom:8}}>
                   <label style={{fontSize:12,color:dkSubtext,display:"flex",alignItems:"center",gap:4}}>From <input data-testid="er-from" aria-label="From" type="date" value={erFrom} onChange={e=>setErRange({from:e.target.value,to:erTo})} style={{...inp,fontSize:12,padding:"4px 6px"}}/></label>

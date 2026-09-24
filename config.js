@@ -540,7 +540,7 @@ const INIT_SURGEONS = [
   { id:"s3", name:"Acton", code:"BDA", fullName:"Benjamin Acton", active:true, roles:["surgeon"] },
   { id:"s4", name:"Philip", code:"AFP", fullName:"Andrew Philip", active:true, roles:["surgeon"] },
   { id:"s5", name:"Fierce", code:"NF", fullName:"Nathan Fierce", active:true, roles:["surgeon"] },
-  { id:"s6", name:"Sarkar", code:"SRK", fullName:"Dr. Sarkar (first name TBD)", active:true, roles:["surgeon"] },
+  { id:"s6", name:"Sarkar", code:"SRK", fullName:"", active:true, roles:["surgeon"] },
 ];
 
 // Lazily-created Supabase JS client for Realtime only (the REST wrapper above

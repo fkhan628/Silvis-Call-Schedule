@@ -274,7 +274,7 @@ than ~2 months on refresh (Davenport moved to a fixed floor for exactly this rea
 - **D3 Group feed summaries carry the name** (`Silvis Primary Call - Khan`); per-surgeon feeds
   are the plain `Silvis Primary Call`.
 - **D4 office `test` mode mails only the calling scheduler** (never contacts); publish/digest
-  are the only paths to the ER-panel author's inbox.
+  are the only paths to the office inbox.
 - **D5 Broadcast recipients for send-notification = every `user_profiles` row with a
   `person_id`** (surgeons); viewers with no `person_id` never receive surgeon notifications.
 - **D6 `vacation_logged` is gated by `schedule_updates_email`** (there is no vacation flag in

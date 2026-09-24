@@ -131,7 +131,7 @@ review before pushing.
    Acton's November list, Philip's available weeks, Fierce's stated single days; mark Khan rules_only (East feed) and
    Sarkar rules_only (windows; her two days are a soft target, not offers). Offer modes for this first period as
    Faraz sets them after asking (default 'preferred'; Burchett is the likely 'exhaustive'); the November whitelist
-   months from item T are replaced by these modes — one mechanism. The locked the ER-panel author entries stay locks. Show
+   months from item T are replaced by these modes — one mechanism. The locked ER-panel entries stay locks. Show
    the resulting status table in the report; then regenerate the preview through the offers-aware path and diff it
    against the previous one — the November days Burchett and Acton offered must come out exactly as the ER-panel author published.
 

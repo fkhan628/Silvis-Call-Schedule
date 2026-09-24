@@ -1592,7 +1592,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(khan.length > 0, "Khan section not found");
       assert.ok(/East vacations, away \/ home \(Prompt 15\)/.test(khan), "the 9/22 evening East vacations entry");
       assert.ok(!/after the UI part lands/.test(khan), "the part-2 placeholder 'after the UI part lands' must be gone (the UI landed 9/23)");
-      assert.ok(/Refresh from Davenport/.test(khan) && /home/.test(khan), "the first-action note (Refresh from Davenport, then the home decision)");
+      assert.ok(/Refresh from Davenport/.test(khan) && /\*\*home\*\* on the range over his Silvis Thanksgiving unit/.test(khan), "the first-action note (Refresh from Davenport, then the home decision on the Thanksgiving-unit range - no personal dates in the public doc)");
       const s8 = rulesDoc.slice(rulesDoc.indexOf("\n## 8. Answered"));
       assert.ok(/^\d+\. \*\*East vacations/m.test(s8), "section 8 needs a numbered '**East vacations' item");
       assert.ok(/60 days/.test(s8), "the item must raise the 60-day question (should an unreviewed range block the generator only inside the next 60 days?)");
@@ -1630,13 +1630,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       });
       assert.deepStrictEqual(hits, [], "address-shaped strings (masked)");
     });
-    // Review round (E4): the observed figure is 16 Davenport time_off ROWS; eastMergeRanges merges adjacent rows and the
-    // toast counts the merged lists, so the docs never promise "16 ranges". And the strip's unreviewed count is not
+    // Review round (E4): the observed figure is a count of Davenport time_off ROWS; eastMergeRanges merges adjacent rows and the
+    // toast counts the merged lists, so the docs never promise "N ranges". And the strip's unreviewed count is not
     // windowed (unreviewedUpcoming counts every range ending today or later; only the open-slot glance uses 60 days),
     // so the 60-day question is about the hard block alone, never "the strip's own window".
     check("P15 docs: the post-deploy note counts Davenport rows (the toast names the merged count), never '16 ranges'; the 60-day question names the strip's open-slot window and says the unreviewed nag is not windowed", () => {
       const all = guide + "\n" + rulesDoc + "\n" + prompt15;
-      assert.ok(!/16 FAK ranges|the 16 ranges arrive|16 ranges arrive/.test(all), "no doc may promise '16 ranges' - the observed figure is 16 rows and adjacent rows merge");
+      assert.ok(!/16 FAK ranges|the 16 ranges arrive|16 ranges arrive|(^|[^\/\d])16 (Davenport )?(time_off )?rows/m.test(all), "no doc may promise '16 ranges' or quote the row count - the toast names the merged count and adjacent rows merge");
       assert.ok(/merged count/.test(guide) && /merged count/.test(rulesDoc) && /merged count/.test(prompt15), "each of the three notes says the toast names the merged count");
       assert.ok(!/strip's own window/.test(all) && !/soft \+ nag|plus the nag beyond/.test(all), "the 60-day question must not call 60 days the strip's own window or move the nag");
       assert.ok(/open-slot window/.test(guide) && /open-slot window/.test(rulesDoc) && /open-slot window/.test(prompt15), "each place names the strip's open-slot window");

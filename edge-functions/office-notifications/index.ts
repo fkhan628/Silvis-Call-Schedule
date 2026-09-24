@@ -3,7 +3,7 @@
 // ===================================================================
 // Retargeted from the Davenport (DSG) office-notifications v10 on 2026-09-22.
 //
-// Recipients are the ACTIVE rows of office_contacts (the ER-panel author first). The
+// Recipients are the ACTIVE rows of office_contacts (the office contact first). The
 // table is authenticated-read for the app and read here with the service
 // role. There is no `departments` column at Silvis, so every active contact
 // receives every notice (Davenport's SURGEON_DEPTS / department filtering is

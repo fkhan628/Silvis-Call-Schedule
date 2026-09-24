@@ -58,13 +58,13 @@
     "supabaseProjectRef": "bzhsroegtagqhutbnsrp",
     "scheduleAdmin": "s1",
     "traumaCoordinator": {
-      "name": "the ER-panel author, RN, TNS",
+      "name": "see the private contacts file (trauma quality coordinator, RN, TNS)",
       "role": "Maintains the ER Call Panels Word document",
       "account": "viewer (read-only) \u2014 Faraz 9/21",
       "contact": "see the private contacts file (OneDrive only)"
     },
     "adminContact": {
-      "name": "administration",
+      "name": "see the private contacts file (administration)",
       "role": "Administration; relays Sarkar availability",
       "account": "none"
     }
@@ -930,7 +930,7 @@
         "Must be on site at Silvis whenever he is primary (Faraz 9/21)",
         "Week he is East primary \u2192 Silvis backup; week he is Silvis primary \u2192 East backup (his own words; matches the derivation rule)",
         "9/22 (Faraz, Prompt 12 K): his 14/month is PRIMARY days - Silvis primary days plus his East primary week (7); his Silvis backup week (East primary) and any other backup day never count",
-        "9/22 (Fierce via Faraz, Prompt 12 T): takes BACKUP 11/9-11/16 - his derived East-primary week 11/9-11/15 (his rule: East primary = Silvis backup, Silvis primary = East backup; Faraz 9/22 final word: the original plan stands and the rule follows moving forward) plus Mon 11/16 (Faraz's explicit decision 9/22, not an inference) - entered as explicit locked rows (source fierce-2026-09-22-backup-week) that confirm the derived week; the ER-panel author's Burchett backup entries on 11/9, 11/14, 11/15, 11/16 are superseded. Import side: his derived-week rule is authoritative - a the ER-panel author/email entry that collides with one of his derived weeks is not imported as a lock (dropped with a pendingDelta note). General rule (rules.js / generator.js): an explicit published, import, manual or claimed row beats a derived-week lock; the generator lists such days in diagnostics.derivedYields with one warning per derived week, and days where the explicit holder IS the derived surgeon in diagnostics.derivedConfirmed"
+        "9/22 (Fierce via Faraz, Prompt 12 T): takes BACKUP 11/9-11/16 - his derived East-primary week 11/9-11/15 (his rule: East primary = Silvis backup, Silvis primary = East backup; Faraz 9/22 final word: the original plan stands and the rule follows moving forward) plus Mon 11/16 (Faraz's explicit decision 9/22, not an inference) - entered as explicit locked rows (source fierce-2026-09-22-backup-week) that confirm the derived week; the ER-panel author's Burchett backup entries on 11/9, 11/14, 11/15, 11/16 are superseded. Import side: his derived-week rule is authoritative - an ER-panel/email entry that collides with one of his derived weeks is not imported as a lock (dropped with a pendingDelta note). General rule (rules.js / generator.js): an explicit published, import, manual or claimed row beats a derived-week lock; the generator lists such days in diagnostics.derivedYields with one warning per derived week, and days where the explicit holder IS the derived surgeon in diagnostics.derivedConfirmed"
       ]
     },
     "s6": {
@@ -957,11 +957,11 @@
           "end": "2027-01-15"
         }
       ],
-      "availableWindowsNote": "the clinic manager 9/22 evening: the windows run Mon-Fri (Oct 19-23, Nov 16-20, Dec 14-18, Jan 11-15); the earlier lists via administration / Burchett 9/17 carried Saturdays (Oct 24, Nov 21, Jan 16). Supersedes the Mon-Sat wording in notes[0]; 10/24 came off her in existingAssignments the same evening. Prompt 12 W (Faraz 9/22 evening): the windows are an obligation, not a pattern - a dated available row outside a window does NOT open the day for either role (before W it did; edit the window in Setup -> Rules instead), and a row inside a window changes nothing. rules.js outside-window never reads a dated row now.",
+      "availableWindowsNote": "The clinic manager 9/22 evening: the windows run Mon-Fri (Oct 19-23, Nov 16-20, Dec 14-18, Jan 11-15); the earlier lists via the administrator / Burchett 9/17 carried Saturdays (Oct 24, Nov 21, Jan 16). Supersedes the Mon-Sat wording in notes[0]; 10/24 came off her in existingAssignments the same evening. Prompt 12 W (Faraz 9/22 evening): the windows are an obligation, not a pattern - a dated available row outside a window does NOT open the day for either role (before W it did; edit the window in Setup -> Rules instead), and a row inside a window changes nothing. rules.js outside-window never reads a dated row now.",
       "daysPerWindowWeek": {
         "target": 2,
         "countsBackup": false,
-        "note": "the clinic manager 9/22 evening: 2 primary days per window week to start; SOFT (Faraz 9/22 evening: none of her rules are hard and fast yet) - a week at 1 or 3 is a diagnostics warning. Primary days count only (countsBackup false). No hard min/max: an older blob's min/max keys are ignored by rules.js with one warning."
+        "note": "The clinic manager 9/22 evening: 2 primary days per window week to start; SOFT (Faraz 9/22 evening: none of her rules are hard and fast yet) - a week at 1 or 3 is a diagnostics warning. Primary days count only (countsBackup false). No hard min/max: an older blob's min/max keys are ignored by rules.js with one warning."
       },
       "weekendStyle": "daily",
       "preferAlternateDays": true,
@@ -1748,7 +1748,7 @@
       "replaces": "s6",
       "source": "faraz-2026-09-22-sarkar-two-days",
       "status": "applied",
-      "note": "the clinic manager's 9/22 email: Sarkar at two days per week for Oct 19-23; Faraz 9/22 evening: October locks included, so 10/24 comes off Sarkar (primary set to null and locked, as 10/15 is; the row note names the constraint, never the slot status). 9/23 (Faraz, item PD): the note is 'open (9/22)' - no person and no reason in an anon-readable note; the live row is reworded the same way with scripts/day-edit.js"
+      "note": "The clinic manager's 9/22 email: Sarkar at two days per week for Oct 19-23; Faraz 9/22 evening: October locks included, so 10/24 comes off Sarkar (primary set to null and locked, as 10/15 is; the row note names the constraint, never the slot status). 9/23 (Faraz, item PD): the note is 'open (9/22)' - no person and no reason in an anon-readable note; the live row is reworded the same way with scripts/day-edit.js"
     },
     {
       "date": "2026-11-25",
@@ -1757,7 +1757,7 @@
       "replaces": "s2",
       "source": "faraz-2026-09-22-khan-1125",
       "status": "applied",
-      "note": "the ER-panel author's document listed Burchett; Faraz 9/22: Khan covers 11/25, 2026 only - a one-off, not a rule (not part of the Thanksgiving unit; the entry is superseded, not imported; 11/25 backup stays open; Burchett's November list keeps 11/25 as his statement)"
+      "note": "The ER-panel author's document listed Burchett; Faraz 9/22: Khan covers 11/25, 2026 only - a one-off, not a rule (not part of the Thanksgiving unit; the entry is superseded, not imported; 11/25 backup stays open; Burchett's November list keeps 11/25 as his statement)"
     },
     {
       "date": "2026-11-09",
@@ -1856,7 +1856,7 @@
     "Sarkar: 3\u20134 days per window week; Saturday OK; never Friday or Sunday; no target (Faraz 9/21).",
     "Khan: may be Silvis BACKUP on an East call day; Mon/Wed auto-offered whenever East is clear; never Tue/Thu (Faraz 9/21).",
     "Fierce: in the pool outside his derived weeks under his weekday pattern; up to 14 call days/month; ideal = East week \u2192 Silvis week \u2192 ~10 days off (Fierce via Faraz 9/21).",
-    "the ER-panel author: read-only (viewer) account (Faraz 9/21). administration: no account.",
+    "The office contact: read-only (viewer) account (Faraz 9/21). Administration: no account.",
     "Fierce: must be on site at Silvis when on call \u2192 Monday is backup-only; weekends are Fri+Sat+Sun blocks; his '10 days off' is a stated preference, not a rule (Faraz 9/21).",
     "Acton: no specific monthly cap; Khan: no cap (Faraz 9/21).",
     "Scope (Faraz 9/21): drop APP info/call/vacation, Fierce separate backup weeks, no-call days, vacation approvals; keep trades; holidays = same DSG set with primary+backup per unit sticking through eve+day; vacations self-entered and logged, blocked over on-call days (trade first); stats = shift counts/fairness, 1 shift per 24h, running yearly tally; generate through end of year, then 3/6/9/12-month presets; carry over office notifications, calendar sync, refresh, data management and all safety features.",
@@ -1868,12 +1868,12 @@
     "Fierce East weeks: East primary week of 11/9; East backup weeks of 10/12 and 12/7 (Faraz 9/21 evening).",
     "Porting stance: not a verbatim translation - use the bones and safety features and adjust whatever will not work for Silvis (Faraz 9/21 evening).",
     "Backup (Faraz 9/22): open to everyone every day - outreach / OR / Clinton / Aledo days restrict primary only - unless a surgeon explicitly opts out (surgeonRules.<id>.backupOptOut; nobody has).",
-    "Sarkar windows (the clinic manager, 9/22 evening, after meeting her): Oct 19-23, Nov 16-20, Dec 14-18, Jan 11-15 - Mon-Fri (s6.availableWindows); the Saturdays in the earlier administration / Burchett 9/17 lists are no longer stated.",
+    "Sarkar windows (the clinic manager, 9/22 evening, after meeting her): Oct 19-23, Nov 16-20, Dec 14-18, Jan 11-15 - Mon-Fri (s6.availableWindows); the Saturdays in the earlier the administrator / Burchett 9/17 lists are no longer stated.",
     "Sarkar day count (the clinic manager 9/22 evening): starts with 2 primary days per window week, open to more after she sees how call goes - supersedes the 9/22 daytime '3-4'. Faraz 9/22 evening: none of her rules are hard and fast yet (she will adjust once she is here) - the 2 is a SOFT target, only her windows are hard (item N owns daysPerWindowWeek).",
     "October locks (Faraz 9/22 evening): the two-days figure applies to October too - Sarkar keeps 10/20 and 10/22 and comes off Sat 10/24, which is now the second open primary of the import (locked-open like 10/15; existingAssignments source faraz-2026-09-22-sarkar-two-days; pendingDeltas applied).",
     "Burchett 2027 weekends (Burchett email 9/22 evening; Faraz: 'can essentially be considered vacations'): Sat 1/9-Sun 1/10, Sat 1/16-Sun 1/17, Fri 2/12-Sun 2/14, Fri 4/9-Sun 4/11 - s2.timeOff (source burchett-email-2026-09-22, public note 'unavailable (stated 9/22)'); both roles blocked, the day before blocks primary, like any vacation. Outside the milestone range.",
     "Burchett 2027 vacation (Faraz 9/23, item PD): Thu 7/22 - Mon 8/2, 2027 - s2.timeOff (source burchett-via-faraz-2026-09-23, public note 'off (stated 9/23)'); both roles blocked, 7/21 blocks primary, like any vacation. No schedule exists for July 2027, so the time_off trigger has nothing to refuse; the July 4th unit (7/3-7/5) is clear of it.",
-    "November locks (the ER-panel author's 9/22 document; Prompt 12 T): Burchett's and Acton's November days are imported as locked assignments (rules doc section 7) and both lists govern November for BOTH roles (explicitListMonths object entries). Faraz 9/22, amendment A (final ~15:40): Khan takes 11/25 from Burchett for 2026 only - a locked one-off (source faraz-2026-09-22-khan-1125, row note 'Khan covers 11/25, 2026 only'), not a rule and not part of the Thanksgiving unit, which stays Thu 11/26 - Sun 11/29 (no eve at Silvis); the ER-panel author's Burchett 11/25 entry is superseded (pendingDeltas); 11/25 backup open. Amendment B (Faraz's final word ~15:25: 'the original Fierce plan should stand - that rule of his will follow moving forward; primary at East for Fierce = Silvis backup, Silvis primary = East backup'): Fierce takes BACKUP 11/9-11/16 as explicit locked rows - 11/9-11/15 are his derived week (same-holder locks that confirm it), Mon 11/16 is Faraz's explicit decision (~15:35: 'that was my decision, not an inference') - and the ER-panel author's Burchett backup entries 11/9, 11/14, 11/15, 11/16 are superseded. On the import side his derived-week rule is authoritative: a the ER-panel author/email entry that collides with a derived week of his is dropped with a pendingDelta and never imported as a lock. This answers open question 10 (rules doc section 8): the whole week is Fierce's, the ER-panel author's document changes on those four days.",
+    "November locks (the ER-panel author's 9/22 document; Prompt 12 T): Burchett's and Acton's November days are imported as locked assignments (rules doc section 7) and both lists govern November for BOTH roles (explicitListMonths object entries). Faraz 9/22, amendment A (final ~15:40): Khan takes 11/25 from Burchett for 2026 only - a locked one-off (source faraz-2026-09-22-khan-1125, row note 'Khan covers 11/25, 2026 only'), not a rule and not part of the Thanksgiving unit, which stays Thu 11/26 - Sun 11/29 (no eve at Silvis); the ER-panel author's Burchett 11/25 entry is superseded (pendingDeltas); 11/25 backup open. Amendment B (Faraz's final word ~15:25: 'the original Fierce plan should stand - that rule of his will follow moving forward; primary at East for Fierce = Silvis backup, Silvis primary = East backup'): Fierce takes BACKUP 11/9-11/16 as explicit locked rows - 11/9-11/15 are his derived week (same-holder locks that confirm it), Mon 11/16 is Faraz's explicit decision (~15:35: 'that was my decision, not an inference') - and the ER-panel author's Burchett backup entries 11/9, 11/14, 11/15, 11/16 are superseded. On the import side his derived-week rule is authoritative: an ER-panel/email entry that collides with a derived week of his is dropped with a pendingDelta and never imported as a lock. This answers open question 10 (rules doc section 8): the whole week is Fierce's, the ER-panel author's document changes on those four days.",
     "Derived-week yield rule (Prompt 12 T, general): an explicit published / import / manual / claimed row beats a derived-week lock; the generator keeps the explicit row, lists the day in diagnostics.derivedYields and warns once per derived week naming the days; a day whose explicit holder IS the derived surgeon is listed in diagnostics.derivedConfirmed (November 11/9-11/15: Fierce, nothing yields).",
     "October backfill (Prompt 12 T): the open October slots of the locked import inside 10/15-11/1 (10/24 primary; backups 10/15, 10/21, 10/23, 10/24, 10/25, 10/30, 10/31, 11/1 = the eight in the ER-panel author's 9/22 document, plus 10/16, 10/27, 10/29 whose backup is open in the import - Philip primary days from her 9/16 document, open question 14; 10/15 primary stays open for nobody) are filled by generator.generate(..., { fillOpenOnly: true }) - every held slot, locked or not, is fixed and never rewritten - run by scripts/preview-generate.js --backfill 2026-10-15..2026-11-01 as a separate section of the milestone preview; nothing is published by the script.",
     "2027 holiday units (Faraz 9/22 late, Prompt 12 AC): Thanksgiving Thu 11/25 - Sun 11/28 (same shape as 2026); July 4, 2027 is a Sunday observed Monday 7/5, so the unit is Sat 7/3 - Mon 7/5 under the Monday-absorbs-the-weekend rule. Data only (holidays.units 2027), editable in Setup; the builder defaults (helpers.defaultHolidayUnits) follow the same shapes for Add year. Open question 3 closed.",

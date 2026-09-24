@@ -42,7 +42,7 @@ afterwards; the editor keeps query history).*
    never open the email. You can link them right away.
 3. **Setup → Users** (in the app: the card titled "Users (accounts, roles, roster links)", visible only when your role is
    admin): pick the new user, set **roster id** (s1–s6) and **role** (`surgeon` for the five
-   surgeons, `viewer` for the ER-panel author, `scheduler` for anyone who should publish). Setup → Users is the normal path; if the
+   surgeons, `viewer` for the office contact, `scheduler` for anyone who should publish). Setup → Users is the normal path; if the
    app is unreachable, the same thing in SQL:
 
    ```sql
@@ -123,7 +123,7 @@ away, filled green = home), the day editor names the state, and the coverage str
 they are decided.
 
 Roles: `admin` (everything, including user links and roles), `scheduler` (generate, publish, edit, import, snapshots),
-`surgeon` (own vacations, propose/accept trades, own preferences), `viewer` (read-only — the ER-panel author).
+`surgeon` (own vacations, propose/accept trades, own preferences), `viewer` (read-only — the office contact).
 
 ## Removing or changing someone
 
@@ -135,4 +135,4 @@ Roles: `admin` (everything, including user links and roles), `scheduler` (genera
 
 - No address in the repo, the seed, the docs, `config.js`, tests, or any anon-readable table.
 - The client never writes an email anywhere; `user_profiles.email` is maintained by the database from Supabase Auth.
-- Office recipients (the ER-panel author) are entered by hand in **Setup → Office contacts** (authenticated-read table).
+- Office recipients (the office contact) are entered by hand in **Setup → Office contacts** (authenticated-read table).

@@ -322,7 +322,7 @@ curl.exe -s -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H 
 #   -> {"sent":0,"failed":0,"skipped_no_email":0,"skipped_pref_off":0,"results":[]}
 # legacy payload -> 400
 curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"test","recipients":[]}' | Select-Object -First 1
-# role/party gate (2026-09-23, audit RLS-1; $VIEWER_JWT = the ER-panel author's session token, $SURGEON_JWT = a surgeon-role session token, e.g. s3's):
+# role/party gate (2026-09-23, audit RLS-1; $VIEWER_JWT = the viewer's session token, $SURGEON_JWT = a surgeon-role session token, e.g. s3's):
 # viewer -> 403 before the body is read (nothing resolved, nothing sent)
 curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $VIEWER_JWT" -H "Content-Type: application/json" -d '{"type":"test","targetIds":[]}' | Select-Object -First 1
 # surgeon broadcast (targetIds absent) -> 403; the same for manual_edit / open_shifts
@@ -407,7 +407,7 @@ and quote the 200 body in the deploy record (section 3).
 
 Planned first live proofs (Prompt 10 acceptance, run by Faraz): one real office
 email (`publish` with a real period label while `office_contacts` holds only
-Faraz's own test contact, then add the ER-panel author) and one real reminder (set
+Faraz's own test contact, then add the office contact) and one real reminder (set
 `reminder_hour_central` for `s1` to the next hour, wait for the cron tick or
 invoke live once with the secret).
 

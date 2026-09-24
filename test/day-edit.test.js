@@ -48,7 +48,7 @@ const roster = seed.roster;
 const nameOf = (id) => { const r = roster.find(x => x.id === id); return r ? r.name : (id == null ? "OPEN" : id); };
 
 const PUB_TAG = "publish-preview (Faraz, 2026-09-23 overnight)";
-const OFFICE_SRC ="seed: office-er-call-panels-2026-09-16";
+const OFFICE_SRC = "seed: office-er-call-panels-2026-09-16";
 const BY = "Faraz (day-edit CLI, 2026-09-23)";
 // The LIVE rows 2026-10-07..2026-10-25 as read with the anon key on 2026-09-23 07:15 (the four edit days and their neighbours).
 function row(day, p, pl, b, bl, source, version, by, note) {

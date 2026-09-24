@@ -161,7 +161,7 @@ eq(plan.infoDeltas.filter((l) => /^11\/25 P Burchett -> Khan \(applied; faraz-20
   // the seed's pendingDeltas rows themselves (source, status and the wording Faraz asked for; the importer renders only the heads)
   const pd = (d, role) => seed.pendingDeltas.find((x) => x.date === d && x.role === role);
   eq([pd("2026-11-25", "primary").surgeon, pd("2026-11-25", "primary").replaces, pd("2026-11-25", "primary").source, pd("2026-11-25", "primary").status], [KHAN, BURCHETT, KHAN_SRC, "applied"], "T: 11/25 delta = Khan replaces Burchett, applied, Faraz's 9/22 source");
-  ok(pd("2026-11-25", "primary").note.indexOf("the ER-panel author's document listed Burchett; Faraz 9/22: Khan covers 11/25, 2026 only - a one-off, not a rule") === 0, "T: 11/25 delta note opens with Faraz's wording: " + pd("2026-11-25", "primary").note);
+  ok(pd("2026-11-25", "primary").note.indexOf("The ER-panel author's document listed Burchett; Faraz 9/22: Khan covers 11/25, 2026 only - a one-off, not a rule") === 0, "T: 11/25 delta note opens with Faraz's wording: " + pd("2026-11-25", "primary").note);
   ["2026-11-09", "2026-11-14", "2026-11-15", "2026-11-16"].forEach((d) => { const x = pd(d, "backup"); eq([x.surgeon, x.replaces, x.source, x.status], [FIERCE, BURCHETT, FIERCE_SRC, "applied"], "T: " + d + " backup delta = Fierce replaces Burchett"); ok(x.note.indexOf("Fierce's derived-week rule is authoritative (Faraz 9/22)") === 0, "T: " + d + " delta note names the rule: " + x.note); });
   eq(seed.existingAssignments.find((a) => a.date === "2026-11-25").note, "Khan covers 11/25, 2026 only", "T: the 11/25 row note is exactly Faraz's wording");
   ok(!JSON.stringify(seed.surgeonRules[KHAN]).match(/11-25|"2026-11"/), "T: no Khan RULE was added for 11/25 (a one-off lives only in existingAssignments)");
@@ -834,7 +834,7 @@ eq(days.filter((d) => d.day >= "2026-11-02" && d.day <= "2026-11-25" && d.backup
   eq([pd("primary").surgeon, pd("primary").replaces, pd("primary").source, pd("primary").status], [ACTON, null, Y_SRC, "applied"], "Y: 11/5 P open -> Acton (applied)");
   eq(plan.infoDeltas.filter((l) => l.indexOf("11/5 B Acton -> open (applied; " + Y_SRC + ")") === 0).length, 1, "Y: the importer renders the backup delta: " + plan.infoDeltas.filter((l) => /^11\/5 /.test(l)).join(" | "));
   eq(plan.infoDeltas.filter((l) => l.indexOf("11/5 P open -> Acton (applied; " + Y_SRC + ")") === 0).length, 1, "Y: ...and the primary delta");
-  ok(!/family|hunt|reason|Burchett/i.test(pd("backup").note + " " + pd("primary").note + " " + byDay["2026-11-05"].note), "Y: no personal reason and no other surgeon's name in the 11/5 wording that reaches a row");
+  ok(!DENY.test(pd("backup").note + " " + pd("primary").note + " " + byDay["2026-11-05"].note) && !/reason|Burchett/i.test(pd("backup").note + " " + pd("primary").note + " " + byDay["2026-11-05"].note), "Y: no denylist word, no personal reason and no other surgeon's name in the 11/5 wording that reaches a row");
 }
 // the expected live diff for the orchestrator (REPORT-FIRST): live = the rows as they stand after T (11/5 = B Acton, the s3
 // November availability rows, the blob with his November list). Rebuilt here from the seed itself by putting T's state back,
@@ -1047,7 +1047,7 @@ eq(IMP.impScrubRuleNotes(clone(plan.blob.surgeonRules), clone(plan.blob.groupRul
 // token / reason word (the plain status word 'unavailable' / 'vacation' is not a reason)
 const aaPublic = plan.timeOffRows.map((t) => t.note).filter((x) => x !== "vacation (seed)");
 eq(aaPublic, ["unavailable (stated 9/22)", "unavailable (stated 9/22)", "unavailable (stated 9/22)", "unavailable (stated 9/22)", "off (stated 9/23)"], "AA: the public time_off notes as stated by the surgeon (dates and a stated-on stamp, never a reason)");
-ok(aaPublic.every((x) => !DENY.test(x) && !AA_WORDS.test(x) && !/\b(clinic|Aledo|Clinton|DeWitt|Jackson County|hunting|birthday|wife|husband)\b/i.test(x)), "AA: no public time_off note carries a denylist word, a former token or a reason word");
+ok(aaPublic.every((x) => !DENY.test(x) && !AA_WORDS.test(x) && !/\b(clinic|Aledo|Clinton|DeWitt|Jackson County|birthday|wife|husband)\b/i.test(x)), "AA: no public time_off note carries a denylist word, a former token or a reason word");
 // (9) the CLI's printed scrub summary names no category; NOTE_UNCLASSIFIED is no longer a refusal it expects
 {
   const cli = require("fs").readFileSync(path.join(__dirname, "..", "scripts", "import-seed.js"), "utf8");
