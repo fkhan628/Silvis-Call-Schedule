@@ -2,6 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- Content-Security-Policy (Prompt 16 B8). Scripts: this origin + a hash list - build.js replaces the
+       hash token below with the sha256 of the three inline scripts it emits; the last hash is the
+       printable popup's toolbar script (helpers.js buildPrintableCalendarHTML - the popup inherits this
+       policy; re-hash it if that script changes, test/ci.test.js checks both). Styles: inline (JSX style
+       props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
+       Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
+       because a <meta> policy cannot carry it (browsers ignore it and warn). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-uFx+L6pCFWMAydu5p0KqU6t3/WuST1g+4LYg3qdtjwA=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-Xl1nl4WRkcVF5P2nCR4iO8QlSKIlJoQvzuLno2TGLu0=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -94,24 +102,15 @@
       .trade-pick-wrap { flex: 1 1 100%; }
     }
   </style>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script type="module">
-    // Load the Supabase JS SDK as an ES module. Exposes createClient under
-    // window._supabaseSDK so our non-module scripts below can use it (Realtime
-    // only - every read/write goes through the REST wrapper in config.js),
-    // without polluting the global scope with a `supabase` identifier that
-    // would collide with our const supabase REST wrapper.
-    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
-    window._supabaseSDK = { createClient };
-    window.dispatchEvent(new CustomEvent("supabase-sdk-ready"));
-  </script>
+  <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
+       ?v=APP_VERSION loader at the top of <body>; no script comes from a CDN. config.js captures the
+       supabase-js UMD's global for Realtime (getSupabaseRT). -->
   <script>
     // --- Auto-update: bump this version string each deploy ---
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23o";
+    var APP_VERSION = "2026.09.23p";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -155,9 +154,11 @@
 <body>
   <div id="root"></div>
   <script>
-    // Cache-bust uses APP_VERSION (defined at the top of this file).
+    // Cache-bust uses APP_VERSION (defined at the top of this file). The vendored
+    // libraries come first (React before ReactDOM; supabase.js before config.js,
+    // which captures its global) - vendor/README.md records versions and hashes.
     var _v = APP_VERSION;
-    ['config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js'].forEach(function(f) {
+    ['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js'].forEach(function(f) {
       document.write('<script src="'+f+'?v='+_v+'"><\/script>');
     });
   </script>
@@ -1066,6 +1067,15 @@ function CallSchedule() {
       return {
         ok: false,
         error: "range"
+      };
+    }
+    const deny = String(note || "").match(SU_NOTE_DENYLIST);
+    if (deny) {
+      const msg = `Refused: the vacation note carries a personal word ("${deny[1]}") - keep it operational (e.g. conference) or leave it blank; vacations are readable with the public key.`;
+      showToast(msg, "error");
+      return {
+        ok: false,
+        error: msg
       };
     }
     const conflictItems = vacationConflictItems(personId, start, end);
@@ -2947,14 +2957,6 @@ function CallSchedule() {
       showToast("Couldn't remove the override - check your connection.", "error");
     }
   };
-  const offerEitherForHomeRange = (personId, range) => {
-    console.info("eastvac: " + nameOf(personId) + " marked " + range.start + ".." + range.end + " home - the 'paint these days as either offers' step arrives with Prompt 14's painter (no-op tonight; nothing written)");
-    return {
-      ok: true,
-      offered: 0,
-      pending: "prompt-14"
-    };
-  };
   const saveEastVacationReview = async (personId, range, decision, opts) => {
     const quiet = !!(opts && opts.quiet);
     if (isPublicMode) return {
@@ -3055,7 +3057,6 @@ function CallSchedule() {
         removed
       } : {}));
       if (!quiet) showToast(decision === "home" ? `${fmtMD(range.start)}-${fmtMD(range.end)}: home - ${nameOf(personId)} is available at Silvis those days (no East call; preferred as primary).` : decision === "away" ? `${fmtMD(range.start)}-${fmtMD(range.end)}: away - treated as a Silvis vacation.` : `${fmtMD(range.start)}-${fmtMD(range.end)}: back to unreviewed (treated as away until decided).`, "success");
-      if (decision === "home") offerEitherForHomeRange(personId, range);
       return {
         ok: true,
         removed
@@ -3857,8 +3858,8 @@ function CallSchedule() {
     });
   };
   const tradeNamed = r => _objectSpread(_objectSpread({}, r), {}, {
-    from_surgeon_name: r.from_surgeon_name || nameOf(r.from_surgeon_id),
-    to_surgeon_name: r.to_surgeon_name || nameOf(r.to_surgeon_id)
+    from_surgeon_name: nameOf(r.from_surgeon_id),
+    to_surgeon_name: nameOf(r.to_surgeon_id)
   });
   const submitTradeRequest = async () => {
     if (isPublicMode) return;
@@ -3991,7 +3992,8 @@ function CallSchedule() {
       });
       sendEmailNotif("trade_proposed", {
         message: msg,
-        subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole))
+        subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)),
+        trade_id: first.id
       }, [fromId, tradeTo]);
       setTradeDay("");
       setTradeReturnDay("");
@@ -4114,7 +4116,8 @@ function CallSchedule() {
     });
     sendEmailNotif("trade_applied", {
       message: msg,
-      subject: "Shift trade applied - " + slotLabel(t.day, t.role)
+      subject: "Shift trade applied - " + slotLabel(t.day, t.role),
+      trade_id: t.id
     }, [t.from_surgeon_id, t.to_surgeon_id]);
     showToast("Trade applied to the schedule.", "success");
     return true;
@@ -4167,9 +4170,9 @@ function CallSchedule() {
           if (!accepted.length) return;
           break;
         }
-        const row = _objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
+        const row = tradeNamed(_objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
           status: "accepted"
-        });
+        }));
         accepted.push(row);
         setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
       }
@@ -4215,7 +4218,8 @@ function CallSchedule() {
         });
         sendEmailNotif("trade_applied", {
           message: amsg,
-          subject: "Shift trade applied - " + (tag ? tag.text : slotLabel(first.day, first.role))
+          subject: "Shift trade applied - " + (tag ? tag.text : slotLabel(first.day, first.role)),
+          trade_id: first.id
         }, [first.from_surgeon_id, first.to_surgeon_id]);
         showToast(`Trade applied to the schedule (${accepted.length} days).`, "success");
       }
@@ -4257,9 +4261,9 @@ function CallSchedule() {
           if (!done.length) return;
           break;
         }
-        const row = _objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
+        const row = tradeNamed(_objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
           status: "declined"
-        });
+        }));
         done.push(row);
         setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
       }
@@ -4283,7 +4287,8 @@ function CallSchedule() {
       });
       sendEmailNotif("trade_declined", {
         message: msg,
-        subject: "Shift trade declined - " + (tag ? tag.text : slotLabel(first.day, first.role))
+        subject: "Shift trade declined - " + (tag ? tag.text : slotLabel(first.day, first.role)),
+        trade_id: first.id
       }, [first.from_surgeon_id, first.to_surgeon_id]);
       showToast(done.length > 1 ? `Trade declined (${done.length} days).` : "Trade declined.", "info");
     } catch (e) {
@@ -4313,9 +4318,9 @@ function CallSchedule() {
           if (!done.length) return;
           break;
         }
-        const row = _objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
+        const row = tradeNamed(_objectSpread(_objectSpread(_objectSpread({}, g), p.row), {}, {
           status: "cancelled"
-        });
+        }));
         done.push(row);
         setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
       }
@@ -5174,6 +5179,11 @@ function CallSchedule() {
     availability
   }) => {
     const counts = {};
+    const blanked = Array.isArray(time_off) ? time_off.filter(r => r && r.note && SU_NOTE_DENYLIST.test(r.note)) : [];
+    if (blanked.length) time_off = time_off.map(r => blanked.includes(r) ? _objectSpread(_objectSpread({}, r), {}, {
+      note: ""
+    }) : r);
+    counts.time_off_notes_blanked = blanked.length;
     for (const [table, rows] of [["time_off", time_off], ["availability", availability]]) {
       if (!Array.isArray(rows) || rows.length === 0) {
         counts[table + "_upserted"] = 0;
@@ -16788,7 +16798,7 @@ function HolidaysCard({
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "Each unit gets one primary and one backup who stick through every day of it; a unit pre-empts the weekend it overlaps. Days are editable per year (Faraz: \"the days will have to be figured out\"). Coverage is read from the saved schedule; edit a day through the day editor."), !rulesImported && React.createElement("div", {
+  }, "Each unit gets one primary and one backup who stick through every day of it; a unit pre-empts the weekend it overlaps. Days are editable per year (the scheduler settles the exact days each year). Coverage is read from the saved schedule; edit a day through the day editor."), !rulesImported && React.createElement("div", {
     style: css.warnBox
   }, "Rules are not imported yet - holiday units arrive with the seed import, or add a year and units here."), React.createElement("div", {
     style: {
@@ -17435,7 +17445,7 @@ function EastFeedCard({
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
       margin: "0 0 4px"
     })
-  }, "Overrides (days Faraz knows differ from the feed)"), React.createElement("div", {
+  }, "Overrides (days the scheduler knows differ from the feed)"), React.createElement("div", {
     className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
