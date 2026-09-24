@@ -144,6 +144,15 @@ the imported 9/28–10/4 week; the UI renders the label instead of OPEN and tall
 
 `user_profiles.person_id` links an auth user to a roster id; roles are `admin`, `scheduler`, `surgeon`, `viewer`
 (the office contact is the one `viewer`; administration has no account).
+(the ER-panel author is the one `viewer`; administration has no account) and, since Prompt 16 A7 (2026-09-24), `coordinator`:
+an office account with **no roster link** (a check constraint refuses one) that enters and edits any surgeon's
+upcoming vacations, may write dated availability rows for them (DB policy only; no UI yet) and relays their offered
+dates into the painter (`save_offers` / `set_offer_mode` with `p_person` - a roster id only, OS004 / OM007 otherwise;
+`entered_by` = its profile id, `source 'office-relay'`), and reads
+its own Activity log entries — with no scheduler power anywhere else. To every guard that asks `silvis_is_sched()` a
+coordinator is a non-scheduler (offer freeze, OF004, the time_off on-call trigger, the trade guards). `send-notification`
+refuses the role like a viewer. Client: `isCoordinator` sees the viewer's views plus Time off with a person picker and
+the "Offers - enter for a surgeon" card; no Setup, no Generate, the day tap opens the read-only detail.
 
 ## 4. Data model (Supabase)
 
@@ -196,6 +205,21 @@ Davenport's `holidayAssignments`, keyed by year.
 | `offer_status` | executable by PUBLIC / anon | authenticated + service_role only | none — the client derives status in `helpers.offerRollcall` |
 
 Proof: `sql/probes/prelaunch-rls-probe.sql` (rolled back; header states every case before and after), `scripts/verify-rls.sh` section 10, the record in `docs/SCHEMA-REVIEW.md` "2026-09-24 - pre-launch RLS".
+
+- **Coordinator role (Prompt 16 A7, `sql/migrations/2026-09-24-coordinator-role.sql`, prepared 2026-09-24 — report-first, runs AFTER A1; applied: _to be filled by the orchestrator_).** `user_profiles.role` gains `coordinator` (office users, never linked to a roster id: `user_profiles_coordinator_unlinked`); `silvis_is_coord()` beside `silvis_is_sched()`. One row per change:
+
+| change | before | after | client path that depends on it |
+|---|---|---|---|
+| `silvis_is_coord` | — | new security-definer helper: own row's role = `coordinator` (default EXECUTE, like the sibling) | every clause below |
+| `time_off_self_insert` / `_update` / `_delete` | own rows or scheduler/admin | also any row for a coordinator; the on-call trigger is untouched (a coordinator's range over a published day is refused like anyone's) | Time off → person picker (`isScheduler \|\| isCoordinator`); `created_by` = the coordinator's profile id |
+| `availability_write_coord` | scheduler/admin only (`availability_write_sched`) | a coordinator may insert / update / delete any row | none yet (Setup is scheduler-only; the door for the office's future entry path, probed) |
+| `call_offers_insert` / `_update` / `_delete` | own rows or scheduler/admin | also a coordinator **while `silvis.office_relay` is on** — the transaction-local flag only `save_offers` sets; a direct REST write by a coordinator never sees it and stays refused (insert 42501, update / delete 0 rows) | the painter's Save (`rpc/save_offers` with `p_person`) |
+| `save_offers` / `set_offer_mode` | a non-scheduler may only speak for `silvis_person_id()` (OS001 / OS002, OM001 / OM002) | a coordinator may relay for another person **on the roster** (`call_schedule_data 'main'`; `OS004 OFFERS_UNKNOWN_PERSON` / `OM007 MODE_UNKNOWN_PERSON` otherwise - `call_offers.person_id` has no foreign key; the scheduler's relay is not checked); `entered_by` = its profile id, `source 'office-relay'` (the scheduler's relay keeps `scheduler` / `email-relay`); the freeze (OF003 by close date and status, OM005) applies to it as to a surgeon; `call_offers.source` check gains `office-relay` | "Offers - enter for a surgeon" (Time off view) opens the painter as the office (relayed) |
+| `notif_insert` | scheduler/admin or a linked person | also a coordinator | `addNotification` on a coordinator's vacation entry (feed row; the e-mail send is skipped — the function answers 403) |
+| `audit_insert` | scheduler/admin, or a linked caller with `actor_id` = own roster id | also a coordinator with `actor_id` = `auth.uid()::text` — what `logAudit` already writes for an unlinked account (`person_id \|\| authUser.id`) | every coordinator write goes through `logAudit` |
+| `audit_read_coord` | no read for a non-scheduler | a coordinator reads its **own** rows in the `timeoff.` / `offers.` / `availability.` families | Settings → Activity log ("your entries") for a coordinator; `audit_read` (scheduler/admin) unchanged |
+
+Unchanged for coordinators, proven by the probe: `schedule_days`, `call_schedule_data`, `call_periods`, `shift_trade_requests`, `call_schedule_snapshots`, `office_contacts`, `east_vacation_reviews`, `user_profiles` beyond the own row (and the own role / person_id / email stay pinned). Proof: `sql/probes/coordinator-probe.sql` (rolled back; fixtures in 2030-08 keyed `probe-coord`; BEFORE the migration its setup raises `PROBE_SETUP` — the role check refuses `coordinator`), `scripts/verify-rls.sh` section 11, the record in `docs/SCHEMA-REVIEW.md`.
 
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 

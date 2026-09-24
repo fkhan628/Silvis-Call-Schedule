@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 7a, 8, 9a-9b) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
@@ -538,6 +538,86 @@ if linked; then
   fi
 else
   echo "   SKIP 10c (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 11. coordinator role (Prompt 16 A7): office users - vacations / availability / offers relay, no scheduler power =="
+# sql/migrations/2026-09-24-coordinator-role.sql (report-first; applied by the orchestrator after A1). Nothing here writes
+# over REST. 11a checks the client gates the new role reads on (the Activity log read for a coordinator is
+# audit_read_coord: own rows in the timeoff. / offers. / availability. families - a wider read would be a silent 200 + []).
+# 11b runs sql/probes/coordinator-probe.sql: three throwaway users (coordinator / surgeon s3 / admin s1), fixtures in
+# 2030-08 keyed 'probe-coord', acts as each of them, ends with RAISE 'PROBE_RESULTS ...;END' so everything rolls back.
+# Expectations are the AFTER-migration picture; BEFORE it the fixture setup raises PROBE_SETUP (no coordinator role) and
+# this section reports no sentinel - which IS the before picture.
+# 11a. client gates (read from the source)
+if grep -q 'const isCoordinator = userProfile?.role === "coordinator";' index-source.html && grep -q 'if (view === "settings" && isCoordinator) loadAudit();' index-source.html; then ok "client: isCoordinator is derived from user_profiles.role and the coordinator's Activity log read is its own gated effect (audit_read_coord answers own family rows only)"; else bad "client: the coordinator role flag or its Activity log effect is missing from index-source.html"; fi
+if grep -q '{!isPublicMode && isUnlinked && !isCoordinator && (' index-source.html; then ok "client: the unlinked-account banner is not shown to a coordinator (an office account has no roster link by design)"; else bad "client: the unlinked banner is not gated off for a coordinator"; fi
+if grep -q 'created_by: userProfile?.person_id || authUser?.id || null,' index-source.html; then ok "client: time_off.created_by carries the caller's roster id or profile id (a coordinator's profile id)"; else bad "client: time_off.created_by no longer falls back to the profile id"; fi
+# 11b. the rolled-back probe
+if linked; then
+  PROBE11="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/coordinator-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE11" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    if echo "$out" | grep -q 'PROBE_SETUP: the role check refuses coordinator'; then bad "coordinator probe: the role check still refuses 'coordinator' - sql/migrations/2026-09-24-coordinator-role.sql is not applied (the BEFORE picture)"; else bad "coordinator probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"; fi
+  else
+    results11=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results11" | tr ';' '\n' | sed 's/^/   /'
+    case_val11()   { echo "$results11" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq11()  { v=$(case_val11 "$1"); [ "$v" = "$2" ] && ok "coordinator probe $1: $3" || bad "coordinator probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err11() { v=$(case_val11 "$1"); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "coordinator probe $1: $4"; else bad "coordinator probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    expect_eq11  C1  "ok created_by=self"                          "a coordinator adds another person's vacation; created_by = the coordinator's profile id"
+    expect_eq11  C2  "updated=1"                                   "a coordinator edits that vacation"
+    expect_eq11  C3  "deleted=1"                                   "a coordinator deletes that vacation"
+    expect_err11 C4  P0001 "ON_CALL_CONFLICT"                      "a coordinator's vacation over a published on-call day is refused by the trigger (untouched)"
+    expect_eq11  C5  "ok"                                          "a coordinator writes an availability row for another person"
+    expect_eq11  C6  "ok entered_by=self source=office-relay"      "save_offers for another person: entered_by = the coordinator's id, source office-relay"
+    expect_err11 C7  42501 'row-level security policy for table "call_offers"' "a direct insert into call_offers by a coordinator is refused (RLS: the relay flag exists only inside save_offers)"
+    expect_eq11  C8  "ok mode=preferred"                           "set_offer_mode relay in an upcoming period"
+    expect_err11 C9  OM005 "MODE_FROZEN"                           "set_offer_mode relay in a published period is refused (a coordinator is not a scheduler)"
+    expect_err11 C10 OF003 "closed on 2030-07-20"                  "save_offers into a published period is refused (freeze by status, close date still ahead)"
+    expect_eq11  C11 "updated=0"                                   "a coordinator's schedule_days update touches nothing (no policy: silent)"
+    expect_eq11  C12 "updated=0"                                   "a coordinator's call_schedule_data update touches nothing"
+    expect_err11 C13 42501 'row-level security policy for table "call_periods"' "a coordinator cannot insert a period"
+    expect_err11 C14 P0001 "TRADE_FORBIDDEN"                       "a coordinator cannot propose a trade (the insert guard: no roster link)"
+    expect_eq11  C15 "updated=1"                                   "a coordinator changes its own display_name"
+    expect_err11 C16 42501 'row-level security policy for table "user_profiles"' "a coordinator cannot change its own role (pinned by A1's self-update policy)"
+    expect_eq11  C17 "own=1 leak=0 sched_ok=t"                     "a coordinator reads own row + scheduler/admin rows, no surgeon row"
+    expect_eq11  C18 "ok"                                          "a coordinator writes audit rows as itself (actor_id = its profile id)"
+    expect_err11 C19 42501 'row-level security policy for table "audit_log"' "a coordinator cannot write an audit row as a surgeon"
+    expect_eq11  C20 "ok"                                          "a coordinator inserts a notification (the vacation-logged feed row)"
+    expect_eq11  C21 "own_family=1 others=0 own_other=0"           "a coordinator reads only its own timeoff./offers./availability. audit rows (audit_read_coord)"
+    expect_eq11  C22 "updated=0"                                   "a coordinator's direct UPDATE of an offer touches nothing"
+    expect_eq11  C23 "deleted=0"                                   "a coordinator's direct DELETE of an offer touches nothing"
+    expect_err11 C24 42501 'row-level security policy for table "call_schedule_snapshots"' "a coordinator cannot write a snapshot"
+    expect_eq11  C25 "contacts=0"                                  "a coordinator reads no office contact"
+    expect_err11 C26 OS004 "OFFERS_UNKNOWN_PERSON"                 "save_offers relay for an id that is not on the roster is refused (the office relays for a roster surgeon only; no FK on call_offers.person_id)"
+    expect_err11 C27 OM007 "MODE_UNKNOWN_PERSON"                   "set_offer_mode relay for an id that is not on the roster is refused"
+    expect_eq11  L1  "ok"                                          "a surgeon still enters his own vacation"
+    expect_eq11  L2  "ok rows=1"                                   "a surgeon still inserts his own offer directly (RLS unchanged for surgeons)"
+    expect_eq11  L3  "visible=0"                                   "a surgeon still reads no audit row"
+    expect_eq11  A1  "ok entered_by=scheduler source=email-relay"  "the scheduler's relay keeps entered_by scheduler / source email-relay"
+    expect_eq11  A2  "ok"                                          "the scheduler sets a mode on a published period (never frozen)"
+    expect_err11 A3  23514 "user_profiles_coordinator_unlinked"    "the admin cannot link a coordinator to a roster id (check constraint)"
+  fi
+  LEFTOVER11_SQL="select ((select count(*) from public.schedule_days where day between '2030-08-01' and '2030-08-31' and source = 'probe-coord') + (select count(*) from public.time_off where note = 'probe-coord') + (select count(*) from public.availability where note = 'probe-coord') + (select count(*) from public.call_offers where note = 'probe-coord') + (select count(*) from public.call_periods where label like 'probe coord%') + (select count(*) from public.audit_log where action = 'probe.coord' or detail ->> 'probe' = 'probe-coord') + (select count(*) from public.notifications where title = 'probe-coord') + (select count(*) from public.call_schedule_snapshots where reason = 'probe-coord') + (select count(*) from auth.users where email like 'probe-coord-%@example.test'))::int as leftover"
+  r=$(q "$LEFTOVER11_SQL")
+  if ! echo "$r" | grep -q '"leftover"'; then
+    bad "coordinator probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "coordinator probe persisted nothing (leftover count 0: schedule_days 2030-08 / time_off / availability / call_offers / call_periods / audit_log / notifications / snapshots / auth.users)"
+  else
+    bad "coordinator probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.call_offers where note = 'probe-coord';"
+    echo "      delete from public.call_periods where label like 'probe coord%';"
+    echo "      delete from public.time_off where note = 'probe-coord';"
+    echo "      delete from public.availability where note = 'probe-coord';"
+    echo "      delete from public.schedule_days where day between '2030-08-01' and '2030-08-31' and source = 'probe-coord';"
+    echo "      delete from public.audit_log where action = 'probe.coord' or detail ->> 'probe' = 'probe-coord';"
+    echo "      delete from public.notifications where title = 'probe-coord';"
+    echo "      delete from public.call_schedule_snapshots where reason = 'probe-coord';"
+    echo "      delete from auth.users where email like 'probe-coord-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 11b (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo

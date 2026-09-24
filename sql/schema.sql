@@ -38,6 +38,11 @@
 -- notif_insert + audit_insert = scheduler/admin or a linked person (the audit row's actor_id = the caller's roster id);
 -- notif_delete_sched; user_profiles_self_update pins email; OF004 OFFER_IMMUTABLE (a non-scheduler UPDATE may not move an
 -- offer's day / person); both call_offers guards freeze by status as well as by date; offer_status() revoked from anon.
+-- Revision 2026-09-24 k (Prompt 16 A7, sql/migrations/2026-09-24-coordinator-role.sql, report-first, NOT yet applied): the COORDINATOR
+-- role (office users, never linked to a roster id): silvis_is_coord(); time_off writes + a new availability policy for any person;
+-- call_offers policies admit a coordinator only under the transaction-local silvis.office_relay flag that save_offers sets;
+-- save_offers / set_offer_mode relay for another person (entered_by = the coordinator's profile id, source 'office-relay';
+-- a roster id only: OS004 / OM007); notif_insert / audit_insert gain the coordinator clause (actor_id = auth.uid()::text); audit_read_coord = own family rows.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -48,12 +53,20 @@ create extension if not exists pgcrypto;
 create table if not exists public.user_profiles (
   id            uuid primary key references auth.users(id) on delete cascade,
   person_id     text,                      -- roster id (s1..s6) or null for viewers
-  role          text not null default 'viewer' check (role in ('admin','scheduler','surgeon','viewer')),
+  role          text not null default 'viewer' check (role in ('admin','scheduler','surgeon','viewer','coordinator')),   -- coordinator: Prompt 16 A7 (office users)
   email         text,
   display_name  text,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
+-- Prompt 16 A7: the role list on an EXISTING table (the inline check above applies to a from-scratch schema only), and
+-- a coordinator is never a roster entry (the audit / notification clauses identify it by auth.uid(), never by a roster id).
+alter table public.user_profiles drop constraint if exists user_profiles_role_check;
+alter table public.user_profiles add constraint user_profiles_role_check
+  check (role in ('admin','scheduler','surgeon','viewer','coordinator'));
+alter table public.user_profiles drop constraint if exists user_profiles_coordinator_unlinked;
+alter table public.user_profiles add constraint user_profiles_coordinator_unlinked
+  check (role <> 'coordinator' or person_id is null);   -- an office account is never a roster entry
 
 -- Profile rows are created by the database when an auth user is created/invited (and the
 -- email is kept in sync), so Setup -> Users can link a person who has never opened the app.
@@ -85,6 +98,13 @@ $$;
 create or replace function public.silvis_is_sched() returns boolean
 language sql stable security definer set search_path = public as $$
   select public.silvis_role() in ('admin','scheduler');
+$$;
+
+-- Prompt 16 A7: the office role (vacations / availability / offer relay for any surgeon; no scheduler power). Every guard
+-- that asks silvis_is_sched() treats a coordinator as a non-scheduler. Grants as for the sibling (the default EXECUTE).
+create or replace function public.silvis_is_coord() returns boolean
+language sql stable security definer set search_path = public as $$
+  select public.silvis_role() = 'coordinator';
 $$;
 
 -- ---------- roster + rules + settings blob (single row id='main')
@@ -655,12 +675,16 @@ create table if not exists public.call_offers (
   day         date not null,
   role_pref   text not null check (role_pref in ('primary','backup','either')),
   note        text,                                             -- operational only (scrubbed on import; checked at entry)
-  entered_by  text not null,                                    -- the roster id, or 'scheduler' when relaying an email
-  source      text not null default 'app' check (source in ('app','email-relay','import')),
+  entered_by  text not null,                                    -- the roster id, 'scheduler' when relaying an email, or a coordinator's profile id (office-relay)
+  source      text not null default 'app' check (source in ('app','email-relay','import','office-relay')),   -- office-relay: Prompt 16 A7 (a coordinator through save_offers)
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
   unique (person_id, day)
 );
+-- Prompt 16 A7: the source list on an EXISTING table (the inline check above applies to a from-scratch schema only).
+alter table public.call_offers drop constraint if exists call_offers_source_check;
+alter table public.call_offers add constraint call_offers_source_check
+  check (source in ('app','email-relay','import','office-relay'));
 create index if not exists call_offers_day_idx on public.call_offers(day);
 create index if not exists call_offers_person_idx on public.call_offers(person_id, day);
 
@@ -765,26 +789,37 @@ create trigger call_offers_delete_guard_trg
 --   migration's, byte for byte (test/schema.test.js pins the identity).
 -- Tokens: OM001 MODE_NOT_LINKED, OM002 MODE_NOT_YOURS, OM003 MODE_BAD_MODE, OM004 MODE_NO_PERIOD, OM005 MODE_FROZEN,
 --   OM006 MODE_HAS_OFFERS; OS001 OFFERS_NOT_LINKED, OS002 OFFERS_NOT_YOURS, OS003 OFFERS_BAD_ROW.
+-- Prompt 16 A7 (sql/migrations/2026-09-24-coordinator-role.sql - the newest migration touching both): a coordinator (office
+--   account, no roster link) may relay for another person in both functions - OS001 / OM001 and OS002 / OM002 admit it;
+--   save_offers stamps entered_by = its profile id, source 'office-relay', and turns the transaction-local flag
+--   silvis.office_relay on around its delete / upsert so the call_offers policies admit the rows (security invoker kept);
+--   the freeze (OF003 / OM005) applies to it as to a surgeon.
 -- ============================================================================
 create or replace function public.set_offer_mode(p_period uuid, p_mode text, p_person text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   me       text := public.silvis_person_id();
   sched    boolean := public.silvis_is_sched();
+  coord    boolean := public.silvis_is_coord();
   who      text;
   today_c  date := (now() at time zone 'America/Chicago')::date;
   p        public.call_periods%rowtype;
   n_offers integer;
 begin
-  if auth.uid() is null or (me is null and not sched) then
+  if auth.uid() is null or (me is null and not sched and not coord) then
     raise exception 'MODE_NOT_LINKED: sign in with an account that is linked to a roster entry' using errcode = 'OM001';
   end if;
   who := coalesce(nullif(btrim(p_person), ''), me);
   if who is null then
     raise exception 'MODE_NOT_LINKED: name the person (your account is not linked to a roster entry)' using errcode = 'OM001';
   end if;
-  if who <> coalesce(me, '') and not sched then
-    raise exception 'MODE_NOT_YOURS: only the scheduler can set another surgeon''s mode' using errcode = 'OM002';
+  if who <> coalesce(me, '') and not sched and not coord then
+    raise exception 'MODE_NOT_YOURS: only the scheduler or the office can set another surgeon''s mode' using errcode = 'OM002';
+  end if;
+  -- The office relays for a roster id only (review of Prompt 16 A7): call_offers.person_id has no foreign key, so a
+  -- hand-made call could otherwise leave offer_modes keys for nobody. The scheduler's relay is unchanged.
+  if coord and not exists (select 1 from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who) then
+    raise exception 'MODE_UNKNOWN_PERSON: % is not a roster id - the office relays for a roster surgeon only', who using errcode = 'OM007';
   end if;
   if p_mode is null or p_mode not in ('exhaustive', 'preferred', 'rules_only') then
     raise exception 'MODE_BAD_MODE: mode must be exhaustive, preferred or rules_only (got %)', coalesce(p_mode, 'null') using errcode = 'OM003';
@@ -820,18 +855,19 @@ begin
 
   select * into p from public.call_periods where id = p_period;
   return jsonb_build_object('ok', true, 'period_id', p.id, 'label', p.label, 'person_id', who, 'mode', p_mode,
-                            'rules_only_ids', p.rules_only_ids, 'offer_modes', p.offer_modes, 'by', coalesce(me, 'scheduler'));
+                            'rules_only_ids', p.rules_only_ids, 'offer_modes', p.offer_modes, 'by', coalesce(me, case when sched then 'scheduler' else auth.uid()::text end));
 end $$;
 revoke all on function public.set_offer_mode(uuid, text, text) from public;
 revoke all on function public.set_offer_mode(uuid, text, text) from anon;
 grant execute on function public.set_offer_mode(uuid, text, text) to authenticated;
-comment on function public.set_offer_mode(uuid, text, text) is 'Prompt 14 part 3a: one person''s offer mode on one period (exhaustive / preferred -> offer_modes[person], off rules_only_ids; rules_only -> on rules_only_ids, key dropped; refused with offers inside the period). Security definer because surgeons cannot write call_periods; a non-scheduler may only set their own, and only before offers_close_at.';
+comment on function public.set_offer_mode(uuid, text, text) is 'Prompt 14 part 3a (+ Prompt 16 A7): one person''s offer mode on one period (exhaustive / preferred -> offer_modes[person], off rules_only_ids; rules_only -> on rules_only_ids, key dropped; refused with offers inside the period). Security definer because surgeons cannot write call_periods; a non-scheduler may only set their own - or, as a coordinator, another ROSTER person''s (OM007 otherwise) - and only before the freeze.';
 
 create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[], p_period uuid default null, p_mode text default null) returns jsonb
 language plpgsql security invoker set search_path = public as $$
 declare
   me        text := public.silvis_person_id();
   sched     boolean := public.silvis_is_sched();
+  coord     boolean := public.silvis_is_coord();
   who       text := nullif(btrim(p_person), '');
   v_by      text;
   v_src     text;
@@ -839,15 +875,20 @@ declare
   n_del     integer := 0;
   bad       text;
 begin
-  if auth.uid() is null or (me is null and not sched) then
+  if auth.uid() is null or (me is null and not sched and not coord) then
     raise exception 'OFFERS_NOT_LINKED: sign in with an account that is linked to a roster entry to save offers' using errcode = 'OS001';
   end if;
   who := coalesce(who, me);
   if who is null then
     raise exception 'OFFERS_NOT_LINKED: name the person (your account is not linked to a roster entry)' using errcode = 'OS001';
   end if;
-  if who <> coalesce(me, '') and not sched then
-    raise exception 'OFFERS_NOT_YOURS: only the scheduler can save another surgeon''s offers' using errcode = 'OS002';
+  if who <> coalesce(me, '') and not sched and not coord then
+    raise exception 'OFFERS_NOT_YOURS: only the scheduler or the office can save another surgeon''s offers' using errcode = 'OS002';
+  end if;
+  -- The office relays for a roster id only (review of Prompt 16 A7): call_offers.person_id has no foreign key, so a
+  -- hand-made call could otherwise leave orphan offer rows. The scheduler's relay is unchanged. Checked before any write.
+  if coord and not exists (select 1 from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who) then
+    raise exception 'OFFERS_UNKNOWN_PERSON: % is not a roster id - the office relays for a roster surgeon only', who using errcode = 'OS004';
   end if;
   if p_rows is not null and jsonb_typeof(p_rows) <> 'array' then
     raise exception 'OFFERS_BAD_ROW: rows must be a JSON array' using errcode = 'OS003';
@@ -861,7 +902,11 @@ begin
   end if;
 
   -- Who entered it is a fact of the call, never a client field.
-  if me is not null and who = me then v_by := me; v_src := 'app'; else v_by := 'scheduler'; v_src := 'email-relay'; end if;
+  if me is not null and who = me then v_by := me; v_src := 'app'; elsif sched then v_by := 'scheduler'; v_src := 'email-relay'; else v_by := auth.uid()::text; v_src := 'office-relay'; end if;
+
+  -- A coordinator's rows pass the call_offers policies only inside this call (Prompt 16 A7): the transaction-local
+  -- flag is what the policies' coordinator clause reads; it never exists outside save_offers.
+  if coord then perform set_config('silvis.office_relay', 'on', true); end if;
 
   -- The deletes first, then the upserts (order is immaterial inside one transaction; the delete guard OF003 and the
   -- RLS delete policy apply per row). A day in both lists ends up upserted.
@@ -875,6 +920,7 @@ begin
   on conflict (person_id, day) do update
     set role_pref = excluded.role_pref, note = coalesce(excluded.note, call_offers.note), entered_by = excluded.entered_by, source = excluded.source, updated_at = now();
   get diagnostics n_up = row_count;
+  if coord then perform set_config('silvis.office_relay', '', true); end if;
 
   -- The mode, when the same Save changed it: inside this transaction, so a refused mode (OM001-OM006, checked by
   -- set_offer_mode itself) rolls the rows above back too - days + mode are one commit or nothing.
@@ -887,7 +933,7 @@ end $$;
 revoke all on function public.save_offers(text, jsonb, date[], uuid, text) from public;
 revoke all on function public.save_offers(text, jsonb, date[], uuid, text) from anon;
 grant execute on function public.save_offers(text, jsonb, date[], uuid, text) to authenticated;
-comment on function public.save_offers(text, jsonb, date[], uuid, text) is 'Prompt 14 part 3a: the offer painter''s one Save - upserts + deletes (+ the period mode through set_offer_mode when p_mode is given) in ONE transaction as the caller (security invoker: RLS + OF001/OF002/OF003 apply per row; nothing bypassed). entered_by / source come from the caller identity; a row sent without a note keeps its note. The client writes the audit row offers.save after ok.';
+comment on function public.save_offers(text, jsonb, date[], uuid, text) is 'Prompt 14 part 3a (+ Prompt 16 A7): the offer painter''s one Save - upserts + deletes (+ the period mode through set_offer_mode when p_mode is given) in ONE transaction as the caller (security invoker: RLS + OF001/OF002/OF003 apply per row; nothing bypassed - a coordinator''s rows pass the policies through the transaction-local silvis.office_relay flag this function sets). entered_by / source come from the caller identity (own id / app; scheduler / email-relay; the coordinator''s profile id / office-relay - for a roster id only, OS004 otherwise); a row sent without a note keeps its note. The client writes the audit row offers.save after ok.';
 
 -- ---------- notifications, prefs, audit, snapshots, versions, contacts
 create table if not exists public.notifications (
@@ -1011,19 +1057,25 @@ drop policy if exists client_versions_heartbeat_update on public.client_versions
 create policy client_versions_heartbeat_update on public.client_versions for update to authenticated
   using (id = auth.uid()::text) with check (id = auth.uid()::text);
 
--- time_off: anon-readable (generator + shareable page), self-service writes for the surgeon's OWN rows, scheduler for all
+-- time_off: anon-readable (generator + shareable page), self-service writes for the surgeon's OWN rows, scheduler for all,
+-- and (Prompt 16 A7) a coordinator for any row - the on-call trigger above refuses a coordinator's range like anyone's
 drop policy if exists time_off_read_all on public.time_off;
 create policy time_off_read_all on public.time_off for select using (true);
 drop policy if exists time_off_self_insert on public.time_off;
 create policy time_off_self_insert on public.time_off for insert to authenticated
-  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+  with check (person_id = public.silvis_person_id() or public.silvis_is_sched() or public.silvis_is_coord());
 drop policy if exists time_off_self_update on public.time_off;
 create policy time_off_self_update on public.time_off for update to authenticated
-  using (person_id = public.silvis_person_id() or public.silvis_is_sched())
-  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+  using (person_id = public.silvis_person_id() or public.silvis_is_sched() or public.silvis_is_coord())
+  with check (person_id = public.silvis_person_id() or public.silvis_is_sched() or public.silvis_is_coord());
 drop policy if exists time_off_self_delete on public.time_off;
 create policy time_off_self_delete on public.time_off for delete to authenticated
-  using (person_id = public.silvis_person_id() or public.silvis_is_sched());
+  using (person_id = public.silvis_person_id() or public.silvis_is_sched() or public.silvis_is_coord());
+-- availability (Prompt 16 A7): beside the generated availability_write_sched, a coordinator may insert / update / delete any
+-- row (dated statements the office relays for a surgeon; no client UI writes them outside Setup yet - the door is probed).
+drop policy if exists availability_write_coord on public.availability;
+create policy availability_write_coord on public.availability for all to authenticated
+  using (public.silvis_is_coord()) with check (public.silvis_is_coord());
 
 -- east_overrides: read all, write scheduler
 drop policy if exists east_overrides_read on public.east_overrides;
@@ -1080,20 +1132,22 @@ create policy trade_update on public.shift_trade_requests for update to authenti
 
 -- call_offers (2026-09-22, Prompt 14 part 1): every signed-in user reads (the group has always seen each other's offers
 -- on the email chain; it is also how a surgeon sees who else offered a day); a surgeon writes only rows whose person_id
--- is their own roster id; scheduler/admin any row (relaying an email: entered_by 'scheduler', source 'email-relay').
+-- is their own roster id; scheduler/admin any row (relaying an email: entered_by 'scheduler', source 'email-relay');
+-- (Prompt 16 A7) a coordinator ONLY while the transaction-local silvis.office_relay flag is on, which save_offers alone
+-- sets - a direct REST write by a coordinator never sees it (insert 42501, update / delete 0 rows).
 -- Never anon: not in the read_all loop above.
 drop policy if exists call_offers_read on public.call_offers;
 create policy call_offers_read on public.call_offers for select to authenticated using (true);
 drop policy if exists call_offers_insert on public.call_offers;
 create policy call_offers_insert on public.call_offers for insert to authenticated
-  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+  with check (person_id = public.silvis_person_id() or public.silvis_is_sched() or (public.silvis_is_coord() and coalesce(current_setting('silvis.office_relay', true), '') = 'on'));
 drop policy if exists call_offers_update on public.call_offers;
 create policy call_offers_update on public.call_offers for update to authenticated
-  using (person_id = public.silvis_person_id() or public.silvis_is_sched())
-  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+  using (person_id = public.silvis_person_id() or public.silvis_is_sched() or (public.silvis_is_coord() and coalesce(current_setting('silvis.office_relay', true), '') = 'on'))
+  with check (person_id = public.silvis_person_id() or public.silvis_is_sched() or (public.silvis_is_coord() and coalesce(current_setting('silvis.office_relay', true), '') = 'on'));
 drop policy if exists call_offers_delete on public.call_offers;
 create policy call_offers_delete on public.call_offers for delete to authenticated
-  using (person_id = public.silvis_person_id() or public.silvis_is_sched());
+  using (person_id = public.silvis_person_id() or public.silvis_is_sched() or (public.silvis_is_coord() and coalesce(current_setting('silvis.office_relay', true), '') = 'on'));
 
 -- call_periods: every signed-in user reads; scheduler/admin write.
 drop policy if exists call_periods_read on public.call_periods;
@@ -1102,13 +1156,14 @@ drop policy if exists call_periods_write on public.call_periods;
 create policy call_periods_write on public.call_periods for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
 
--- notifications: authenticated read; insert by a scheduler / admin or a caller linked to a roster entry (Prompt 16 A1:
--- an unlinked account writes nothing into the group's feed); delete by scheduler / admin only (spam removal; no UI yet).
+-- notifications: authenticated read; insert by a scheduler / admin, a caller linked to a roster entry (Prompt 16 A1:
+-- an unlinked account writes nothing into the group's feed) or a coordinator (Prompt 16 A7: the vacation-logged feed row);
+-- delete by scheduler / admin only (spam removal; no UI yet).
 drop policy if exists notif_read on public.notifications;
 create policy notif_read on public.notifications for select to authenticated using (true);
 drop policy if exists notif_insert on public.notifications;
 create policy notif_insert on public.notifications for insert to authenticated
-  with check (public.silvis_is_sched() or public.silvis_person_id() is not null);
+  with check (public.silvis_is_sched() or public.silvis_person_id() is not null or public.silvis_is_coord());
 drop policy if exists notif_delete_sched on public.notifications;
 create policy notif_delete_sched on public.notifications for delete to authenticated using (public.silvis_is_sched());
 
@@ -1118,13 +1173,18 @@ create policy prefs_own on public.notification_preferences for all to authentica
   using (person_id = public.silvis_person_id() or public.silvis_is_sched())
   with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
 
--- audit_log: insert by a scheduler / admin, or by a linked person writing as themself (actor_id = their roster id - what
--- the client's logAudit sends; Prompt 16 A1); read by scheduler/admin
+-- audit_log: insert by a scheduler / admin, by a linked person writing as themself (actor_id = their roster id - what
+-- the client's logAudit sends; Prompt 16 A1) or by a coordinator writing as itself (actor_id = auth.uid()::text - logAudit's
+-- fallback for an account without a roster link; Prompt 16 A7); read by scheduler/admin (every row) and by a coordinator
+-- (audit_read_coord: its own rows in the timeoff. / offers. / availability. families - the Settings Activity log for the office)
 drop policy if exists audit_insert on public.audit_log;
 create policy audit_insert on public.audit_log for insert to authenticated
-  with check (public.silvis_is_sched() or (public.silvis_person_id() is not null and actor_id = public.silvis_person_id()));
+  with check (public.silvis_is_sched() or (public.silvis_person_id() is not null and actor_id = public.silvis_person_id()) or (public.silvis_is_coord() and actor_id = auth.uid()::text));
 drop policy if exists audit_read on public.audit_log;
 create policy audit_read on public.audit_log for select to authenticated using (public.silvis_is_sched());
+drop policy if exists audit_read_coord on public.audit_log;
+create policy audit_read_coord on public.audit_log for select to authenticated
+  using (public.silvis_is_coord() and actor_id = auth.uid()::text and (action like 'timeoff.%' or action like 'offers.%' or action like 'availability.%'));
 
 -- snapshots: scheduler/admin only
 drop policy if exists snap_sched on public.call_schedule_snapshots;

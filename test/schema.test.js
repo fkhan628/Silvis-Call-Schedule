@@ -622,7 +622,8 @@ function checkOffersDDL(n, s) {
   ok(/check \(jsonb_typeof\(rules_only_ids\) = 'array'\)/.test(s), n + ": call_periods.rules_only_ids must be checked as a jsonb array");
   ok(/check \(offers_close_at <= start_day\)/.test(s), n + ": call_periods must check offers_close_at <= start_day");
   ok(/role_pref\s+text not null check \(role_pref in \('primary','backup','either'\)\)/.test(s), n + ": call_offers.role_pref check list");
-  ok(/source\s+text not null default 'app' check \(source in \('app','email-relay','import'\)\)/.test(s), n + ": call_offers.source check list");
+  // Prompt 16 A7 adds 'office-relay' (schema.sql's inline check + the constraint re-creation); the applied 2026-09-22 file keeps the original list
+  ok((n === "schema.sql" ? /source\s+text not null default 'app' check \(source in \('app','email-relay','import','office-relay'\)\)/ : /source\s+text not null default 'app' check \(source in \('app','email-relay','import'\)\)/).test(s), n + ": call_offers.source check list");
   ok(/unique \(person_id, day\)/.test(s), n + ": call_offers needs unique (person_id, day)");
   // the three refusals, each with its stable token AND its errcode (the client matches on both)
   ok(/raise exception 'OFFER_PAST: % is before today \(%\) in Central time', new\.day, today_c using errcode = 'OF001';/.test(s), n + ": OFFER_PAST / OF001");
@@ -652,9 +653,12 @@ function checkOffersDDL(n, s) {
   });
   ok(/create policy call_offers_read on public\.call_offers for select to authenticated using \(true\);/.test(s), n + ": call_offers_read = every signed-in user, never anon");
   ok(/create policy call_periods_read on public\.call_periods for select to authenticated using \(true\);/.test(s), n + ": call_periods_read = every signed-in user, never anon");
-  ok(/create policy call_offers_insert on public\.call_offers for insert to authenticated\s+with check \(person_id = public\.silvis_person_id\(\) or public\.silvis_is_sched\(\)\);/.test(s), n + ": call_offers_insert = own row or scheduler");
-  ok(/create policy call_offers_update on public\.call_offers for update to authenticated\s+using \(person_id = public\.silvis_person_id\(\) or public\.silvis_is_sched\(\)\)\s+with check \(person_id = public\.silvis_person_id\(\) or public\.silvis_is_sched\(\)\);/.test(s), n + ": call_offers_update = own row or scheduler, using AND with check");
-  ok(/create policy call_offers_delete on public\.call_offers for delete to authenticated\s+using \(person_id = public\.silvis_person_id\(\) or public\.silvis_is_sched\(\)\);/.test(s), n + ": call_offers_delete = own row or scheduler");
+  // Prompt 16 A7: schema.sql's three write policies carry the coordinator clause (exact texts pinned in the A7 block below);
+  // the applied 2026-09-22 file keeps "own row or scheduler"
+  const ownOrSched = n === "schema.sql" ? "person_id = public\\.silvis_person_id\\(\\) or public\\.silvis_is_sched\\(\\) or \\(public\\.silvis_is_coord\\(\\) and coalesce\\(current_setting\\('silvis\\.office_relay', true\\), ''\\) = 'on'\\)" : "person_id = public\\.silvis_person_id\\(\\) or public\\.silvis_is_sched\\(\\)";
+  ok(new RegExp("create policy call_offers_insert on public\\.call_offers for insert to authenticated\\s+with check \\(" + ownOrSched + "\\);").test(s), n + ": call_offers_insert = own row or scheduler" + (n === "schema.sql" ? " (or a coordinator under the office-relay flag)" : ""));
+  ok(new RegExp("create policy call_offers_update on public\\.call_offers for update to authenticated\\s+using \\(" + ownOrSched + "\\)\\s+with check \\(" + ownOrSched + "\\);").test(s), n + ": call_offers_update = own row or scheduler, using AND with check");
+  ok(new RegExp("create policy call_offers_delete on public\\.call_offers for delete to authenticated\\s+using \\(" + ownOrSched + "\\);").test(s), n + ": call_offers_delete = own row or scheduler");
   ok(/create policy call_periods_write on public\.call_periods for all to authenticated\s+using \(public\.silvis_is_sched\(\)\) with check \(public\.silvis_is_sched\(\)\);/.test(s), n + ": call_periods_write = scheduler/admin only");
 }
 function checkOfferModes(n, s) {
@@ -706,7 +710,8 @@ const PRELAUNCH_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-pre
   ok(base && /OF001/.test(base) && /OF002/.test(base) && /OF003/.test(base), "offers migration: the 9/22 call_offers_guard raises OF001 / OF002 / OF003");
 })();
 ok(sqlFunctionText(schema, "offer_status") === sqlFunctionText(offersMig, "offer_status"), "offer_status(): migration text differs from schema.sql");
-OFFER_POLICIES.forEach((p) => ok(policyText(schema, p) === policyText(offersMig, p), "policy " + p + ": migration text differs from schema.sql"));
+// the three call_offers write policies were re-created by Prompt 16 A7 (the coordinator clause): schema.sql mirrors that file (A7 block below)
+OFFER_POLICIES.filter((p) => !/^call_offers_(insert|update|delete)$/.test(p)).forEach((p) => ok(policyText(schema, p) === policyText(offersMig, p), "policy " + p + ": migration text differs from schema.sql"));
 ["call_offers_guard_trg", "call_offers_delete_guard_trg"].forEach((t) => ok(triggerText(schema, t) === triggerText(offersMig, t), "trigger " + t + ": migration text differs from schema.sql"));
 
 step("P14 P1: migration 2026-09-23-offer-modes.sql (applied live 2026-09-23 07:05Z)");
@@ -777,9 +782,15 @@ const RPC_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-offer-mod
 const RPC_PROBE = path.join(ROOT, "sql", "probes", "offer-rpcs-probe.sql");
 const MODE_CODES = [["OM001", "MODE_NOT_LINKED"], ["OM002", "MODE_NOT_YOURS"], ["OM003", "MODE_BAD_MODE"], ["OM004", "MODE_NO_PERIOD"], ["OM005", "MODE_FROZEN"], ["OM006", "MODE_HAS_OFFERS"]];
 const SAVE_CODES = [["OS001", "OFFERS_NOT_LINKED"], ["OS002", "OFFERS_NOT_YOURS"], ["OS003", "OFFERS_BAD_ROW"]];
+// Prompt 16 A7 review: a coordinator's relay is refused for an id that is not on the roster (OM007 / OS004, checked right after
+// OM002 / OS002 and before any write); the scheduler's relay stays as it was (the check is gated on `coord`).
+const MODE_CODES_COORD = [MODE_CODES[0], MODE_CODES[1], ["OM007", "MODE_UNKNOWN_PERSON"], ...MODE_CODES.slice(2)];
+const SAVE_CODES_COORD = [SAVE_CODES[0], SAVE_CODES[1], ["OS004", "OFFERS_UNKNOWN_PERSON"], ...SAVE_CODES.slice(2)];
+const COORD_ROSTER_CHECK = "not exists (select 1 from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who)";
 // one raise carries the token (message prefix; '' = an escaped quote inside it) and the errcode
 const raiseRe = (token, code) => new RegExp("raise exception '" + token + ": (?:[^']|'')*'[^;]*using errcode = '" + code + "';");
-function checkOfferRpcs(n, s) {
+function checkOfferRpcs(n, s, coord) {
+  // coord = the Prompt 16 A7 texts (a coordinator may relay for another person; the 2026-09-23 rpc migration keeps the older texts)
   const mode = functionText(s, "set_offer_mode");
   ok(mode, n + ": no `create or replace function public.set_offer_mode(p_period uuid, p_mode text, p_person text default null)` ... `end $$;` block");
   if (mode) {
@@ -788,18 +799,21 @@ function checkOfferRpcs(n, s) {
     const firstUpdate = mode.indexOf("update public.call_periods");
     ok(firstUpdate > 0, n + ": set_offer_mode has no `update public.call_periods`");
     let last = -1;
-    MODE_CODES.forEach(([code, token]) => {
+    const modeCodes = coord ? MODE_CODES_COORD : MODE_CODES;
+    modeCodes.forEach(([code, token]) => {
       const m = mode.match(raiseRe(token, code));
       ok(m, n + ": set_offer_mode lacks `raise exception '" + token + ": ...' using errcode = '" + code + "'`");
       const at = m ? mode.indexOf(m[0]) : -1;
-      ok(at > last, n + ": " + token + " (" + code + ") is out of order (expected " + MODE_CODES.map((c) => c[0]).join(" -> ") + ")");
+      ok(at > last, n + ": " + token + " (" + code + ") is out of order (expected " + modeCodes.map((c) => c[0]).join(" -> ") + ")");
       ok(at < firstUpdate, n + ": " + token + " must be checked BEFORE the first call_periods update");
       last = at;
     });
-    eq((mode.match(/using errcode = 'OM0/g) || []).length, 7, n + ": seven OM0xx raises expected (OM001 twice: anon / unlinked, and no person named);");
-    ok(/auth\.uid\(\) is null or \(me is null and not sched\)/.test(mode), n + ": OM001 must fire for anon (auth.uid() null) and for an unlinked non-scheduler");
+    eq((mode.match(/using errcode = 'OM0/g) || []).length, coord ? 8 : 7, n + ": " + (coord ? "eight" : "seven") + " OM0xx raises expected (OM001 twice: anon / unlinked, and no person named" + (coord ? "; OM007 the roster check for a coordinator" : "") + ");");
+    ok(coord ? mode.indexOf("  if coord and " + COORD_ROSTER_CHECK + " then\n    raise exception 'MODE_UNKNOWN_PERSON: % is not a roster id - the office relays for a roster surgeon only', who using errcode = 'OM007';\n  end if;") > 0 : !/UNKNOWN_PERSON|OM007/.test(mode),
+      n + (coord ? ": OM007 - a coordinator may relay only for an id on the roster in call_schedule_data 'main' (gated on coord: the scheduler's relay is unchanged)" : ": the applied 2026-09-23 text carries no OM007"));
+    ok((coord ? /auth\.uid\(\) is null or \(me is null and not sched and not coord\)/ : /auth\.uid\(\) is null or \(me is null and not sched\)/).test(mode), n + ": OM001 must fire for anon (auth.uid() null) and for an unlinked non-scheduler" + (coord ? " who is not a coordinator" : ""));
     ok(/who := coalesce\(nullif\(btrim\(p_person\), ''\), me\);/.test(mode), n + ": the person defaults to the caller's own roster id (p_person is the scheduler's relay path)");
-    ok(/if who <> coalesce\(me, ''\) and not sched then/.test(mode), n + ": OM002 - a non-scheduler may only speak for silvis_person_id()");
+    ok((coord ? /if who <> coalesce\(me, ''\) and not sched and not coord then/ : /if who <> coalesce\(me, ''\) and not sched then/).test(mode), n + ": OM002 - a non-scheduler may only speak for silvis_person_id()" + (coord ? " (a coordinator for anyone)" : ""));
     ok(/today_c\s+date := \(now\(\) at time zone 'America\/Chicago'\)::date;/.test(mode), n + ": 'today' must be the Central date");
     ok(/select \* into p from public\.call_periods where id = p_period for update;/.test(mode), n + ": the period row must be locked (`for update`)");
     ok(/if not sched and \(p\.status <> 'upcoming' or p\.offers_close_at <= today_c\) then/.test(mode), n + ": OM005 - the freeze exempts the scheduler, like OF003");
@@ -811,7 +825,7 @@ function checkOfferRpcs(n, s) {
     eq((mode.match(/updated_at\s+= now\(\)/g) || []).length, 2, n + ": both branches must stamp updated_at;");
     ok(!/\b(label|start_day|end_day|offers_close_at|publish_by|status)\s+= /.test(mode), n + ": set_offer_mode must never write a period column other than rules_only_ids / offer_modes / updated_at");
     ok(!/(insert into|update|delete from) public\.call_offers/.test(mode), n + ": set_offer_mode must not write call_offers (it only counts them)");
-    ok(/return jsonb_build_object\('ok', true, 'period_id', p\.id, 'label', p\.label, 'person_id', who, 'mode', p_mode,\s+'rules_only_ids', p\.rules_only_ids, 'offer_modes', p\.offer_modes, 'by', coalesce\(me, 'scheduler'\)\);/.test(mode),
+    ok((coord ? /return jsonb_build_object\('ok', true, 'period_id', p\.id, 'label', p\.label, 'person_id', who, 'mode', p_mode,\s+'rules_only_ids', p\.rules_only_ids, 'offer_modes', p\.offer_modes, 'by', coalesce\(me, case when sched then 'scheduler' else auth\.uid\(\)::text end\)\);/ : /return jsonb_build_object\('ok', true, 'period_id', p\.id, 'label', p\.label, 'person_id', who, 'mode', p_mode,\s+'rules_only_ids', p\.rules_only_ids, 'offer_modes', p\.offer_modes, 'by', coalesce\(me, 'scheduler'\)\);/).test(mode),
       n + ": return shape must be {ok, period_id, label, person_id, mode, rules_only_ids, offer_modes, by}");
     ok(!/audit_log|notifications/.test(mode), n + ": set_offer_mode writes no audit / feed row (the client's offers.save is the one audit row)");
   }
@@ -828,19 +842,22 @@ function checkOfferRpcs(n, s) {
     const insertAt = save.indexOf("insert into public.call_offers");
     ok(firstWrite > 0 && insertAt > firstWrite, n + ": save_offers must delete (p_clear) then upsert (p_rows) inside the one transaction");
     let last = -1;
-    SAVE_CODES.forEach(([code, token]) => {
+    const saveCodes = coord ? SAVE_CODES_COORD : SAVE_CODES;
+    saveCodes.forEach(([code, token]) => {
       const m = save.match(raiseRe(token, code));
       ok(m, n + ": save_offers lacks `raise exception '" + token + ": ...' using errcode = '" + code + "'`");
       const at = m ? save.indexOf(m[0]) : -1;
-      ok(at > last, n + ": " + token + " (" + code + ") is out of order (expected " + SAVE_CODES.map((c) => c[0]).join(" -> ") + ")");
+      ok(at > last, n + ": " + token + " (" + code + ") is out of order (expected " + saveCodes.map((c) => c[0]).join(" -> ") + ")");
       ok(at < firstWrite, n + ": " + token + " must be checked BEFORE the first call_offers write (fail closed: a bad batch writes nothing)");
       last = at;
     });
-    eq((save.match(/using errcode = 'OS0/g) || []).length, 5, n + ": five OS0xx raises expected (OS001 x2, OS002, OS003 x2: not an array / a bad row);");
+    eq((save.match(/using errcode = 'OS0/g) || []).length, coord ? 6 : 5, n + ": " + (coord ? "six" : "five") + " OS0xx raises expected (OS001 x2, OS002, OS003 x2: not an array / a bad row" + (coord ? "; OS004 the roster check for a coordinator" : "") + ");");
+    ok(coord ? save.indexOf("  if coord and " + COORD_ROSTER_CHECK + " then\n    raise exception 'OFFERS_UNKNOWN_PERSON: % is not a roster id - the office relays for a roster surgeon only', who using errcode = 'OS004';\n  end if;") > 0 && save.indexOf("OS004") < firstWrite : !/UNKNOWN_PERSON|OS004/.test(save),
+      n + (coord ? ": OS004 - a coordinator may save offers only for an id on the roster in call_schedule_data 'main', checked before any write (gated on coord: the scheduler's relay is unchanged)" : ": the applied 2026-09-23 text carries no OS004"));
     ok(save.indexOf("where r->>'day' !~ '^\\d{4}-\\d{2}-\\d{2}$' or r->>'role_pref' is null or r->>'role_pref' not in ('primary', 'backup', 'either');") > 0 && save.indexOf("where r->>'day' !~") < firstWrite,
       n + ": every row's day (YYYY-MM-DD) and role_pref (primary / backup / either) must be validated BEFORE any write");
-    ok(/if me is not null and who = me then v_by := me; v_src := 'app'; else v_by := 'scheduler'; v_src := 'email-relay'; end if;/.test(save),
-      n + ": entered_by / source must be derived from the caller (own id / 'app', else 'scheduler' / 'email-relay')");
+    ok((coord ? /if me is not null and who = me then v_by := me; v_src := 'app'; elsif sched then v_by := 'scheduler'; v_src := 'email-relay'; else v_by := auth\.uid\(\)::text; v_src := 'office-relay'; end if;/ : /if me is not null and who = me then v_by := me; v_src := 'app'; else v_by := 'scheduler'; v_src := 'email-relay'; end if;/).test(save),
+      n + ": entered_by / source must be derived from the caller (own id / 'app', else 'scheduler' / 'email-relay'" + (coord ? ", else the coordinator's profile id / 'office-relay'" : "") + ")");
     ok(/select who, \(r->>'day'\)::date, r->>'role_pref', nullif\(btrim\(r->>'note'\), ''\), v_by, v_src/.test(save), n + ": the insert must take entered_by / source from v_by / v_src, never from the row");
     ok(!/r->>'entered_by'|r->>'source'|r->>'person_id'/.test(save), n + ": save_offers must never read entered_by / source / person_id from the client rows");
     ok(/delete from public\.call_offers where person_id = who and day = any\(p_clear\);/.test(save), n + ": the clears must be scoped to the person and the named days");
@@ -858,7 +875,7 @@ function checkOfferRpcs(n, s) {
   ok(!/save_offers\(text, jsonb, date\[\]\)\s+(from|to)\b/.test(s), n + ": no grant / revoke may still name the three-argument save_offers (it does not exist)");
 }
 step("P14 P3a: schema.sql carries set_offer_mode() + save_offers() (placement after the call_offers guards, header revision line)");
-checkOfferRpcs("schema.sql", schema);
+checkOfferRpcs("schema.sql", schema, true);   // Prompt 16 A7: schema.sql mirrors the coordinator migration's texts
 (function placement() {
   const guardTrg = schema.indexOf("for each row execute function public.call_offers_delete_guard();");
   const modeAt = schema.indexOf("create or replace function public.set_offer_mode(");
@@ -872,7 +889,7 @@ ok(/-- Revision 2026-09-23 i \(Prompt 14 part 3a, sql\/migrations\/2026-09-23-of
 step("P14 P3a: migration 2026-09-23-offer-mode-rpc.sql defines the two functions and nothing else, byte-identical to schema.sql");
 const rpcMig = read(RPC_MIGRATION);
 ok(!/\r/.test(rpcMig), "offer-mode-rpc migration has CRLF line endings");
-checkOfferRpcs("rpc migration", rpcMig);
+checkOfferRpcs("rpc migration", rpcMig, false);
 eq((rpcMig.match(/create or replace function/g) || []).length, 2, "the rpc migration must define set_offer_mode and save_offers and nothing else;");
 ok(!/drop table|create table|alter table|create policy|drop policy|create trigger/.test(rpcMig), "the rpc migration must be additive (no table / policy / trigger changes)");
 // the ONE drop allowed: save_offers' earlier three-argument draft (never applied live) - so no second overload can
@@ -880,9 +897,11 @@ ok(!/drop table|create table|alter table|create policy|drop policy|create trigge
 eq((rpcMig.match(/drop function/g) || []).length, 1, "the rpc migration may drop exactly one function (the never-applied three-argument save_offers);");
 ok(/^drop function if exists public\.save_offers\(text, jsonb, date\[\]\);\ncreate or replace function public\.save_offers\(/m.test(rpcMig), "the drop must be `drop function if exists public.save_offers(text, jsonb, date[]);` right before the create");
 ok(!/drop function/.test(schema.slice(schema.indexOf("create or replace function public.set_offer_mode("), schema.indexOf("create table if not exists public.notifications ("))), "schema.sql's offers-RPC section carries no drop (a from-scratch schema has nothing to drop)");
+// Prompt 16 A7 (2026-09-24-coordinator-role.sql) redefines both RPCs: schema.sql mirrors THAT file (the newest-migration pin
+// above enforces it); the 2026-09-23 file stays frozen as applied live 9/23 and is self-consistent (checkOfferRpcs above).
 ["set_offer_mode", "save_offers"].forEach((name) => {
-  const a = functionText(schema, name), b = functionText(rpcMig, name);
-  ok(a && b && a === b, name + "(): migration text differs from schema.sql (keep them identical; the migration is what runs live)");
+  const a = functionText(rpcMig, name);
+  ok(a && a.indexOf("coord") < 0, name + "(): the 2026-09-23 rpc migration must stay the applied (pre-coordinator) text");
 });
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-23-offer-mode-rpc\.sql/.test(rpcMig), "the rpc migration header must carry the CLI apply line for the orchestrator");
 
@@ -941,10 +960,13 @@ const OF004_LINE = "if tg_op = 'UPDATE' and not public.silvis_is_sched() and (ne
 const OF004_RAISE = "raise exception 'OFFER_IMMUTABLE: an offer keeps its day and person (% %) - clear it and offer the other day instead', old.person_id, old.day using errcode = 'OF004';";
 const OFFER_STATUS_GRANTS = "revoke execute on function public.offer_status(uuid, text) from public;\nrevoke execute on function public.offer_status(uuid, text) from anon;\ngrant execute on function public.offer_status(uuid, text) to authenticated;\ngrant execute on function public.offer_status(uuid, text) to service_role;";
 const PRELAUNCH_CASES = ["S1", "S2", "S3", "S4", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10", "L11", "L12", "L13", "L14", "L15", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "N1"];
-function checkPrelaunchPolicies(n, s) {
+// Prompt 16 A7 re-creates notif_insert + audit_insert with the coordinator clause: schema.sql mirrors the A7 texts for those
+// two (pinned in the A7 block below); the A1 migration file keeps its own texts.
+const PRELAUNCH_SUPERSEDED_BY_A7 = ["notif_insert", "audit_insert"];
+function checkPrelaunchPolicies(n, s, superseded) {
   Object.keys(PRELAUNCH_POLICIES).forEach((p) => {
     ok(s.indexOf("drop policy if exists " + p + " on public." + PRELAUNCH_TABLE_OF[p] + ";") >= 0, n + ": `drop policy if exists " + p + " on public." + PRELAUNCH_TABLE_OF[p] + ";` missing (idempotency)");
-    ok(s.indexOf(PRELAUNCH_POLICIES[p]) >= 0, n + ": policy " + p + " must read exactly:\n" + PRELAUNCH_POLICIES[p]);
+    if (!(superseded || []).includes(p)) ok(s.indexOf(PRELAUNCH_POLICIES[p]) >= 0, n + ": policy " + p + " must read exactly:\n" + PRELAUNCH_POLICIES[p]);
     eq((s.match(new RegExp("create policy " + p + " on public\\.", "g")) || []).length, 1, n + ": policy " + p + " must be created exactly once;");
   });
   ok(!/create policy [a-z_]+ on public\.(user_profiles|office_contacts|notifications|audit_log) for [a-z]+ using \(true\)/.test(s), n + ": no role-less (anon) policy on user_profiles / office_contacts / notifications / audit_log");
@@ -987,9 +1009,9 @@ ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-0
 ok(/REPORT-FIRST|report-first/.test(prelaunchMig), "the prelaunch migration header must say it is report-first (RLS on the live database)");
 
 step("P16 A1: schema.sql mirrors the six policies, both guards and the grants byte for byte; user_profiles_admin stays admin-only");
-checkPrelaunchPolicies("schema.sql", schema);
+checkPrelaunchPolicies("schema.sql", schema, PRELAUNCH_SUPERSEDED_BY_A7);
 checkPrelaunchGuards("schema.sql", schema);
-Object.keys(PRELAUNCH_POLICIES).forEach((p) => ok(policyText(schema, p) === policyText(prelaunchMig, p), "policy " + p + ": schema.sql differs from the prelaunch migration"));
+Object.keys(PRELAUNCH_POLICIES).filter((p) => !PRELAUNCH_SUPERSEDED_BY_A7.includes(p)).forEach((p) => ok(policyText(schema, p) === policyText(prelaunchMig, p), "policy " + p + ": schema.sql differs from the prelaunch migration"));
 ["call_offers_guard", "call_offers_delete_guard"].forEach((name) => ok(functionText(schema, name) === functionText(prelaunchMig, name), name + "(): schema.sql differs from the prelaunch migration"));
 ok(schema.indexOf(OFFER_STATUS_GRANTS) >= 0, "schema.sql must carry the offer_status grants right after its definition");
 ok(schema.indexOf(OFFER_STATUS_GRANTS) > schema.indexOf("create or replace function public.offer_status(") && schema.indexOf(OFFER_STATUS_GRANTS) < schema.indexOf("create or replace function public.call_offers_guard("), "the offer_status grants sit between offer_status() and call_offers_guard()");
@@ -1084,5 +1106,153 @@ ok(/to anon and to public|to public and to anon/.test(plReview), "the rollback r
 ok(/Revision 2026-09-24 j/.test(plReview) && /test\/schema\.test\.js/.test(plReview) && /Revision 2026-09-23 i/.test(plReview), "the record step must name the schema.sql header revision j (and the stale revision i) 'NOT yet applied' wording + its test pin as part of the apply record");
 ok(!/directory of the six|home addresses|self-made account =/.test(prelaunchMig + plReview + g43), "no review phrasing in the repo: state the policy fact (every signed-in account could read every profile row, email included)");
 ok(!/set_config\('request\.jwt\.claims', '', true\)/.test(plProbe) && /set_config\('request\.jwt\.claims', '\{"role":"anon"\}', true\)/.test(plProbe), "prelaunch probe N1 must set request.jwt.claims to '{\"role\":\"anon\"}' (auth.uid() can parse it), not ''");
+
+// ---- Prompt 16 A7 (2026-09-24) - the coordinator role (office users) ----
+// sql/migrations/2026-09-24-coordinator-role.sql (report-first; the orchestrator applies it AFTER A1): user_profiles.role
+// gains 'coordinator' (+ the unlinked check), silvis_is_coord() beside silvis_is_sched(), the time_off write policies and a
+// new availability policy admit a coordinator for any person_id, the call_offers policies admit a coordinator only under
+// the transaction-local silvis.office_relay flag that save_offers sets (direct REST writes stay refused), save_offers /
+// set_offer_mode accept a coordinator relaying for another person (entered_by = its profile id, source 'office-relay'),
+// notif_insert / audit_insert gain the coordinator clause (actor_id = auth.uid()::text), audit_read_coord lets it read
+// its own vacation / offer / availability rows. schema.sql mirrors every text; sql/probes/coordinator-probe.sql rolls
+// itself back (fixtures in 2030-08 keyed 'probe-coord'); scripts/verify-rls.sh section 11 grades it.
+const COORD_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-coordinator-role.sql");
+const COORD_PROBE = path.join(ROOT, "sql", "probes", "coordinator-probe.sql");
+const COORD_CLAUSE = "(public.silvis_is_coord() and coalesce(current_setting('silvis.office_relay', true), '') = 'on')";
+const COORD_POLICIES = {
+  time_off_self_insert: "create policy time_off_self_insert on public.time_off for insert to authenticated\n  with check (person_id = public.silvis_person_id() or public.silvis_is_sched() or public.silvis_is_coord());",
+  time_off_self_update: "create policy time_off_self_update on public.time_off for update to authenticated\n  using (person_id = public.silvis_person_id() or public.silvis_is_sched() or public.silvis_is_coord())\n  with check (person_id = public.silvis_person_id() or public.silvis_is_sched() or public.silvis_is_coord());",
+  time_off_self_delete: "create policy time_off_self_delete on public.time_off for delete to authenticated\n  using (person_id = public.silvis_person_id() or public.silvis_is_sched() or public.silvis_is_coord());",
+  availability_write_coord: "create policy availability_write_coord on public.availability for all to authenticated\n  using (public.silvis_is_coord()) with check (public.silvis_is_coord());",
+  call_offers_insert: "create policy call_offers_insert on public.call_offers for insert to authenticated\n  with check (person_id = public.silvis_person_id() or public.silvis_is_sched() or " + COORD_CLAUSE + ");",
+  call_offers_update: "create policy call_offers_update on public.call_offers for update to authenticated\n  using (person_id = public.silvis_person_id() or public.silvis_is_sched() or " + COORD_CLAUSE + ")\n  with check (person_id = public.silvis_person_id() or public.silvis_is_sched() or " + COORD_CLAUSE + ");",
+  call_offers_delete: "create policy call_offers_delete on public.call_offers for delete to authenticated\n  using (person_id = public.silvis_person_id() or public.silvis_is_sched() or " + COORD_CLAUSE + ");",
+  notif_insert: "create policy notif_insert on public.notifications for insert to authenticated\n  with check (public.silvis_is_sched() or public.silvis_person_id() is not null or public.silvis_is_coord());",
+  audit_insert: "create policy audit_insert on public.audit_log for insert to authenticated\n  with check (public.silvis_is_sched() or (public.silvis_person_id() is not null and actor_id = public.silvis_person_id()) or (public.silvis_is_coord() and actor_id = auth.uid()::text));",
+  audit_read_coord: "create policy audit_read_coord on public.audit_log for select to authenticated\n  using (public.silvis_is_coord() and actor_id = auth.uid()::text and (action like 'timeoff.%' or action like 'offers.%' or action like 'availability.%'));",
+};
+const COORD_TABLE_OF = { time_off_self_insert: "time_off", time_off_self_update: "time_off", time_off_self_delete: "time_off", availability_write_coord: "availability", call_offers_insert: "call_offers", call_offers_update: "call_offers", call_offers_delete: "call_offers", notif_insert: "notifications", audit_insert: "audit_log", audit_read_coord: "audit_log" };
+const COORD_DDL = [
+  "alter table public.user_profiles drop constraint if exists user_profiles_role_check;",
+  "alter table public.user_profiles add constraint user_profiles_role_check\n  check (role in ('admin','scheduler','surgeon','viewer','coordinator'));",
+  "alter table public.user_profiles drop constraint if exists user_profiles_coordinator_unlinked;",
+  "alter table public.user_profiles add constraint user_profiles_coordinator_unlinked\n  check (role <> 'coordinator' or person_id is null);",
+  "alter table public.call_offers drop constraint if exists call_offers_source_check;",
+  "alter table public.call_offers add constraint call_offers_source_check\n  check (source in ('app','email-relay','import','office-relay'));",
+];
+const COORD_HELPER = "create or replace function public.silvis_is_coord() returns boolean\nlanguage sql stable security definer set search_path = public as $$\n  select public.silvis_role() = 'coordinator';\n$$;";
+const COORD_FLAG_ON = "if coord then perform set_config('silvis.office_relay', 'on', true); end if;";
+const COORD_FLAG_OFF = "if coord then perform set_config('silvis.office_relay', '', true); end if;";
+const COORD_CASES = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23", "C24", "C25", "C26", "C27", "L1", "L2", "L3", "A1", "A2", "A3"];
+function checkCoordPolicies(n, s) {
+  Object.keys(COORD_POLICIES).forEach((p) => {
+    ok(s.indexOf("drop policy if exists " + p + " on public." + COORD_TABLE_OF[p] + ";") >= 0, n + ": `drop policy if exists " + p + " on public." + COORD_TABLE_OF[p] + ";` missing (idempotency)");
+    ok(s.indexOf(COORD_POLICIES[p]) >= 0, n + ": policy " + p + " must read exactly:\n" + COORD_POLICIES[p]);
+    eq((s.match(new RegExp("create policy " + p + " on public\\.", "g")) || []).length, 1, n + ": policy " + p + " must be created exactly once;");
+  });
+  COORD_DDL.forEach((d) => ok(s.indexOf(d) >= 0, n + ": missing DDL line:\n" + d));
+  ok(s.indexOf(COORD_HELPER) >= 0, n + ": silvis_is_coord() must read exactly (the sibling of silvis_is_sched):\n" + COORD_HELPER);
+  ["user_profiles_read", "user_profiles_self_update", "user_profiles_admin", "contacts_read", "contacts_write", "notif_delete_sched", "audit_read", "snap_sched", "call_periods_write", "trade_insert", "trade_update", "east_vacation_reviews_self_insert", "east_overrides_write"].forEach((p) => {
+    const t = policyText(s, p);
+    if (t) ok(t.indexOf("silvis_is_coord") < 0, n + ": policy " + p + " must not name silvis_is_coord (unchanged for coordinators)");
+  });
+  ok(!/create policy [a-z_]+ on public\.(schedule_days|call_schedule_data|call_periods|shift_trade_requests|call_schedule_snapshots|office_contacts|east_vacation_reviews|east_overrides|east_feed|east_forecast)\b[^;]*silvis_is_coord/.test(s), n + ": no policy may admit a coordinator to schedule_days / call_schedule_data / call_periods / shift_trade_requests / snapshots / office_contacts / east tables");
+  const save = functionText(s, "save_offers");
+  ok(save && save.indexOf(COORD_FLAG_ON) > 0 && save.indexOf(COORD_FLAG_OFF) > save.indexOf(COORD_FLAG_ON), n + ": save_offers must set the office-relay flag (`" + COORD_FLAG_ON + "`) and clear it afterwards");
+  if (save) {
+    const on = save.indexOf(COORD_FLAG_ON), off = save.indexOf(COORD_FLAG_OFF), del = save.indexOf("delete from public.call_offers"), ins = save.indexOf("insert into public.call_offers"), mode = save.indexOf("perform public.set_offer_mode(");
+    ok(on < del && del < ins && ins < off && off < mode, n + ": the flag must be on before the delete, still on through the upsert, and off before set_offer_mode");
+    ok(on > save.lastIndexOf("using errcode = 'OS003'"), n + ": the flag is set only after every OS0xx check passed (a refused batch never turns it on)");
+    ok(/coord\s+boolean := public\.silvis_is_coord\(\);/.test(save), n + ": save_offers declares coord := silvis_is_coord()");
+    ok(!/security definer/.test(save), n + ": save_offers stays security invoker (RLS applies per row; the flag is what admits a coordinator's rows)");
+  }
+  const mode = functionText(s, "set_offer_mode");
+  ok(mode && /coord\s+boolean := public\.silvis_is_coord\(\);/.test(mode), n + ": set_offer_mode declares coord := silvis_is_coord()");
+  ok(mode && /if not sched and \(p\.status <> 'upcoming' or p\.offers_close_at <= today_c\) then/.test(mode), n + ": OM005 keeps freezing every non-scheduler - a coordinator included");
+  ok(!/silvis\.office_relay/.test(mode || ""), n + ": set_offer_mode never touches the office-relay flag (it writes call_periods as definer, not call_offers)");
+}
+step("P16 A7: the coordinator migration file - the role check, the helper, ten policies, the two RPCs, nothing else");
+const coordMig = read(COORD_MIGRATION);
+ok(!/\r/.test(coordMig), "coordinator migration has CRLF line endings");
+checkCoordPolicies("coordinator migration", coordMig);
+checkOfferRpcs("coordinator migration", coordMig, true);
+eq((coordMig.match(/^create policy /gm) || []).length, 10, "the coordinator migration must create exactly ten policies;");
+eq((coordMig.match(/^drop policy if exists /gm) || []).length, 10, "the coordinator migration must drop-if-exists exactly ten policies;");
+eq((coordMig.match(/create or replace function/g) || []).length, 3, "the coordinator migration must create silvis_is_coord, set_offer_mode and save_offers and nothing else;");
+ok(!/create table|drop table|drop function|create trigger|drop trigger/.test(coordMig), "the coordinator migration must not create / drop a table, drop a function or touch a trigger");
+ok(!/call_offers_guard|call_offers_delete_guard|time_off_no_call_conflict|claim_open_slot\(|apply_trade\(/.test(coordMig.replace(/--[^\n]*/g, "")), "the coordinator migration must not redefine the guards, the time_off trigger, claim_open_slot or apply_trade (a coordinator is a non-scheduler to all of them)");
+ok(/^-- supersedes: sql\/migrations\/2026-09-24-prelaunch-rls\.sql$/m.test(coordMig), "the coordinator migration must declare `-- supersedes: sql/migrations/2026-09-24-prelaunch-rls.sql` (same day; it re-creates notif_insert / audit_insert after A1)");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-coordinator-role\.sql/.test(coordMig), "the coordinator migration header must carry the CLI apply line for the orchestrator");
+ok(/REPORT-FIRST|report-first/.test(coordMig), "the coordinator migration header must say it is report-first (RLS on the live database)");
+ok(!/directory of the six|home addresses/.test(coordMig), "no review phrasing in the migration");
+
+step("P16 A7: schema.sql mirrors the coordinator migration byte for byte (policies, DDL, helper, both RPCs), the inline checks read the new lists, the header records revision k");
+checkCoordPolicies("schema.sql", schema);
+Object.keys(COORD_POLICIES).forEach((p) => ok(policyText(schema, p) === policyText(coordMig, p), "policy " + p + ": schema.sql differs from the coordinator migration"));
+["set_offer_mode", "save_offers"].forEach((name) => ok(functionText(schema, name) === functionText(coordMig, name), name + "(): schema.sql differs from the coordinator migration (the newest migration touching it)"));
+ok(sqlFunctionText(schema, "silvis_is_coord") === sqlFunctionText(coordMig, "silvis_is_coord"), "silvis_is_coord(): schema.sql differs from the coordinator migration");
+ok(schema.indexOf(COORD_HELPER) > schema.indexOf("create or replace function public.silvis_is_sched()") && schema.indexOf(COORD_HELPER) < schema.indexOf("create table if not exists public.call_schedule_data ("), "silvis_is_coord() sits right after silvis_is_sched() in schema.sql");
+ok(/role\s+text not null default 'viewer' check \(role in \('admin','scheduler','surgeon','viewer','coordinator'\)\),/.test(schema), "schema.sql's user_profiles inline role check must list coordinator (a from-scratch schema)");
+ok(/source\s+text not null default 'app' check \(source in \('app','email-relay','import','office-relay'\)\),/.test(schema), "schema.sql's call_offers inline source check must list office-relay");
+ok(schema.indexOf("alter table public.user_profiles add constraint user_profiles_coordinator_unlinked") < schema.indexOf("create or replace function public.handle_new_auth_user()"), "the user_profiles constraint re-creation sits right after the table (like schedule_days_distinct_roles)");
+ok(/-- Revision 2026-09-24 k \(Prompt 16 A7, sql\/migrations\/2026-09-24-coordinator-role\.sql, report-first, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-24 k (the coordinator role, not yet applied)");
+ok(policyText(schema, "audit_read") === "create policy audit_read on public.audit_log for select to authenticated using (public.silvis_is_sched());", "audit_read (scheduler / admin, every row) is unchanged");
+ok(/create policy availability_write_coord/.test(schema.slice(schema.indexOf("-- time_off: anon-readable"), schema.indexOf("-- east_overrides: read all"))), "availability_write_coord is declared in the time_off / availability block (after the generated availability_write_sched)");
+
+step("P16 A7: the probe is self-rolling-back, acts as a coordinator / a linked surgeon / an admin, covers C1..A3 with the BEFORE picture in its header");
+const coProbe = read(COORD_PROBE);
+ok(!/\r/.test(coProbe), "coordinator probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(coProbe), "coordinator probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(coProbe), "coordinator probe must collect into a temp table probe_results");
+ok(/grant insert, select on probe_results to authenticated;/.test(coProbe), "coordinator probe must grant the temp table to authenticated");
+const coLastDo = coProbe.lastIndexOf("do $$");
+ok(coLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(coProbe.slice(coLastDo)), "coordinator probe's last DO block must raise 'PROBE_RESULTS %;END' so the batch rolls back");
+COORD_CASES.forEach((k) => ok(coProbe.indexOf("values ('" + k + "'") >= 0, "coordinator probe lacks case " + k));
+ok(coProbe.indexOf("'2030-08-") > 0, "coordinator probe fixtures must live in 2030-08");
+["'2030-05-", "'2030-04-", "'2030-03-"].forEach((d) => ok(coProbe.indexOf(d) < 0, "coordinator probe must not touch another probe's fixture month (" + d + ")"));
+eq((coProbe.match(/'2030-0[67]-\d\d'/g) || []).sort().filter((v, i, a) => a.indexOf(v) === i), ["'2030-06-01'", "'2030-06-15'", "'2030-06-20'", "'2030-07-04'", "'2030-07-20'"], "coordinator probe: date literals outside 2030-08 must be exactly the two offers_close_at values, the two publish_by values and the rogue period's dates (C13);");
+ok(/'probe-coord-' \|\| [a-z]+ \|\| '@example\.test'/.test(coProbe), "coordinator probe's throwaway auth users must be probe-coord-<uuid>@example.test (the leftover count keys on it)");
+ok(/set role = 'coordinator', display_name = 'probe office' where id = coord;/.test(coProbe) && /exception when check_violation then/.test(coProbe) && /PROBE_SETUP: the role check refuses coordinator/.test(coProbe), "the coordinator fixture must be made through the role check, naming the refusal as the BEFORE picture (PROBE_SETUP)");
+ok(/set person_id = 's3', role = 'surgeon'/.test(coProbe) && /set person_id = 's1', role = 'admin'/.test(coProbe), "coordinator probe must link its throwaway surgeon to s3 and its admin to s1");
+ok(/insert into public\.schedule_days \(day, primary_id, backup_id, source, note\) values \('2030-08-10', 's3', null, 'probe-coord', 'probe-coord'\);/.test(coProbe), "the published-day fixture (C4: the trigger) must be 2030-08-10 primary s3 source 'probe-coord'");
+ok(/'probe coord open', '2030-08-01', '2030-08-15', '2030-06-20'/.test(coProbe) && /'probe coord published', '2030-08-16', '2030-08-31', '2030-07-20'/.test(coProbe) && /set status = 'published' where label = 'probe coord published'/.test(coProbe), "coordinator probe periods: 'probe coord open' (8/1-8/15, close 2030-06-20) and 'probe coord published' (8/16-8/31, close 2030-07-20 in the future, flipped to published after its fixture offer)");
+ok(/created_by = auth\.uid\(\)::text then 'self'/.test(coProbe) && /entered_by = auth\.uid\(\)::text then 'self'/.test(coProbe), "C1 / C6 must compare created_by / entered_by against auth.uid()::text (the coordinator's profile id)");
+ok(/'ERR ' \|\| sqlstate \|\| ' ' \|\| replace\(sqlerrm, ';', ','\)/.test(coProbe), "coordinator probe must record the SQLSTATE with each error (42501 / P0001 / OF003 / OM005 / 23514 are graded)");
+ok(/get diagnostics n = row_count;/.test(coProbe), "coordinator probe must observe UPDATE / DELETE row counts (RLS filters silently: C11 / C12 / C22 / C23)");
+ok(/action like 'timeoff\.%'/.test(coordMig) && /'timeoff\.add', '\{"probe":"probe-coord"\}'::jsonb/.test(coProbe), "C21 must measure audit_read_coord with a family row (timeoff.add) beside a non-family row (probe.coord)");
+ok(!/simple-protocol/.test(coProbe), "coordinator probe header must not claim a simple-protocol connection");
+ok(!/set local role anon/.test(coProbe), "coordinator probe has no anon case (nothing anon changed in A7)");
+["ok created_by=self", "ok entered_by=self source=office-relay", "own_family=1 others=0 own_other=0", "user_profiles_coordinator_unlinked", "TRADE_FORBIDDEN", "closed on 2030-07-20", "OS004 OFFERS_UNKNOWN_PERSON: zz is not a roster id", "OM007 MODE_UNKNOWN_PERSON: zz is not a roster id"].forEach((s) => ok(coProbe.slice(0, coProbe.indexOf("create temp table")).indexOf(s) > 0, "coordinator probe header must state the AFTER string `" + s + "`"));
+ok(/save_offers\('zz', /.test(coProbe) && /set_offer_mode\(o::uuid, 'preferred', 'zz'\)/.test(coProbe), "C26 / C27 must relay for 'zz' (not a roster id) through save_offers and set_offer_mode as the coordinator");
+
+step("P16 A7: verify-rls.sh section 11 - the client gates, the probe graded case by case, leftovers counted, nothing written over REST");
+ok(/^echo "== 11\. /m.test(vr), "verify-rls.sh has no section 11");
+const s11 = vr.slice(vr.indexOf('echo "== 11. '));
+ok(s11.length > 0 && s11.length < vr.length, "verify-rls.sh section 11 could not be sliced out");
+ok(/coordinator-probe\.sql/.test(s11), "section 11 must run sql/probes/coordinator-probe.sql through the linked CLI");
+COORD_CASES.forEach((k) => ok(new RegExp("expect_(eq|err)11\\s+" + k + "\\s").test(s11), "section 11 does not grade probe case " + k));
+["ok created_by=self", "ok entered_by=self source=office-relay", "ok entered_by=scheduler source=email-relay", "own_family=1 others=0 own_other=0", "own=1 leak=0 sched_ok=t", "ON_CALL_CONFLICT", "TRADE_FORBIDDEN", "MODE_FROZEN", "closed on 2030-07-20", "42501", "23514", "user_profiles_coordinator_unlinked", "updated=0", "deleted=0", "contacts=0", "visible=0", "OFFERS_UNKNOWN_PERSON", "MODE_UNKNOWN_PERSON"].forEach((c) => ok(s11.indexOf(c) > 0, "section 11 must expect " + c));
+ok(/source = 'probe-coord'/.test(s11) && /note = 'probe-coord'/.test(s11) && /label like 'probe coord%'/.test(s11) && /action = 'probe\.coord' or detail ->> 'probe' = 'probe-coord'/.test(s11) && /title = 'probe-coord'/.test(s11) && /reason = 'probe-coord'/.test(s11) && /email like 'probe-coord-%@example\.test'/.test(s11),
+  "section 11 must count leftovers over schedule_days / time_off / availability / call_offers / call_periods / audit_log / notifications / snapshots / auth.users and fail on non-zero");
+ok(/LEFT ROWS BEHIND/.test(s11), "section 11 must report leftovers as a failure with the cleanup statements");
+ok(/PROBE_SETUP: the role check refuses coordinator/.test(s11), "section 11 must name the BEFORE picture (the setup's PROBE_SETUP) as 'not applied'");
+const s11write = s11.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+ok(!/-X (POST|PATCH|DELETE|PUT)/.test(s11write) && !/curl /.test(s11write), "section 11 must write nothing over REST (no curl at all)");
+ok(/const isCoordinator = userProfile\?\.role === "coordinator";/.test(s11) && /isUnlinked && !isCoordinator/.test(s11), "section 11a must check the client's isCoordinator flag and the banner gate");
+
+step("P16 A7: docs - ONBOARDING role table, guide roles line + 4.3 rows, edge README gate row");
+const onboarding = fs.readFileSync(path.join(ROOT, "docs", "ONBOARDING.md"), "utf8");
+ok(/^\| `coordinator` \(office users, Prompt 16 A7\) \|/m.test(onboarding) && /^\| `viewer` \|/m.test(onboarding) && /^\| `scheduler` \|/m.test(onboarding), "ONBOARDING.md must carry a role table with a `coordinator` row (beside viewer / scheduler)");
+const coordRow = onboarding.split("\n").find((l) => /^\| `coordinator`/.test(l)) || "";
+ok(/vacation/i.test(coordRow) && /offer/i.test(coordRow) && /Setup, Generate, the day editor/.test(coordRow), "the ONBOARDING coordinator row must say what it can do (vacations, offers) and what it cannot (Setup, Generate, the day editor, ...)");
+ok(/`coordinator`/.test(guide.slice(guide.indexOf("## 3. Identity model"), guide.indexOf("## 4. Data model"))), "guide section 3 must list the coordinator role");
+ok(/Prompt 16 A7/.test(g43) && /coordinator-role/.test(g43), "guide 4.3 must name Prompt 16 A7 and the migration file");
+["time_off_self_insert", "availability_write_coord", "call_offers_insert", "save_offers", "notif_insert", "audit_insert", "audit_read_coord", "silvis_is_coord"].forEach((p) => ok(new RegExp("^\\| `" + p + "`", "m").test(g43), "guide 4.3's coordinator table lacks a row for " + p));
+ok(/OS004/.test(g43) && /OM007/.test(g43), "guide 4.3's save_offers / set_offer_mode row must name the roster check (OS004 / OM007: the office relays for a roster id only)");
+ok(/DB policy only; no UI yet/.test(guide.slice(guide.indexOf("## 3. Identity model"), guide.indexOf("## 4. Data model"))), "guide section 3 must say the coordinator's availability write is a DB policy only (no UI yet) - the three documents agree");
+const efReadme = fs.readFileSync(path.join(ROOT, "edge-functions", "README.md"), "utf8");
+const snRow = efReadme.split("\n").find((l) => /^\| send-notification \| OFF \|/.test(l)) || "";
+ok(/coordinator/.test(snRow), "edge-functions/README.md: the send-notification gate row must name the coordinator refusal (403 like a viewer)");
+ok(/Prompt 16 A7/.test(efReadme) && /coordinator/.test(efReadme.split("Prompt 16 A7")[1] || ""), "edge-functions/README.md must carry the Prompt 16 A7 paragraph (coordinator = viewer to send-notification)");
 
 console.log("schema.test.js: " + N + " assertions passed");
