@@ -64,6 +64,7 @@ const sched = { role: "scheduler", personId: "s1" };
 const surgeon = { role: "surgeon", personId: "s3" };
 const unlinked = { role: "surgeon", personId: null };
 const viewer = { role: "viewer", personId: null };
+const coordinator = { role: "coordinator", personId: null };   // Prompt 16 A7: the office account - treated like a viewer here
 const norow = { role: null, personId: null };
 const allow = (who, type, ids) => assert.strictEqual(sendGate(who, type, ids, SCHED), null, JSON.stringify({ who, type, ids }) + " must be allowed");
 const deny = (who, type, ids, why) => {
@@ -95,6 +96,18 @@ check("sendGate: admin and scheduler may send every category, targeted or broadc
 check("sendGate: a viewer / no row / unlinked surgeon is refused for every category even with targetIds", () => {
   if (!sendGate) throw new Error("gate block did not load");
   CATS.forEach((t) => { deny(viewer, t, ["s1"], "viewer"); deny(norow, t, ["s1"], "no row"); deny(unlinked, t, ["s1"], "unlinked"); deny(viewer, t, null, "viewer broadcast"); });
+});
+
+check("P16 A7: a coordinator is refused like a viewer - senderRole names the role, sendGate 403 on every category (targeted, broadcast, vacation_logged to the scheduler included); the source and the README say so", () => {
+  if (!sendGate || !senderRole) throw new Error("gate block did not load");
+  const r = senderRole(coordinator);
+  assert.strictEqual(typeof r, "string", "coordinator refused by the role check");
+  assert.ok(/role coordinator may not send notifications/.test(r), "the refusal names the role: " + r);
+  CATS.forEach((t) => { deny(coordinator, t, ["s1"], "coordinator targeted"); deny(coordinator, t, null, "coordinator broadcast"); });
+  deny(coordinator, "vacation_logged", SCHED, "coordinator vacation_logged to the scheduler");
+  assert.ok(/coordinator \(Prompt 16 A7/.test(snSrc), "send-notification/index.ts names the coordinator role beside viewer in the senderRole comment");
+  const gateRow = readme.split("\n").find((l) => /^\| send-notification \| OFF \|/.test(l)) || "";
+  assert.ok(/coordinator/.test(gateRow), "README gate row names the coordinator refusal: " + gateRow.slice(0, 120));
 });
 
 check("sendGate: a surgeon never broadcasts - targetIds absent is refused for every category", () => {

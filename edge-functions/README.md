@@ -37,6 +37,15 @@ Anon POSTs answer 401 on both. The cron job `silvis-offers-daily` was created th
 Vault secret; `cron.job` now lists three jobs - `silvis-open-shifts-weekly` is still the one not created).
 by the deploy.
 
+**Prompt 16 A7 (coordinator role, 2026-09-24): `send-notification` redeploy is a comment-only change.** The new
+`user_profiles.role` value `coordinator` (office users who enter the surgeons' vacations and relay offered dates; see
+`sql/migrations/2026-09-24-coordinator-role.sql`) is refused by `senderRole()` exactly like `viewer` - the function
+admits admin / scheduler / a linked surgeon only, so no logic changed; the source gained a comment naming the role and
+`test/edge-functions.test.js` pins the 403 on every category. The orchestrator redeploys with `--no-verify-jwt` so the
+workdir copy stays byte-identical to the repo file (record the version number here). The client does not call
+`send-notification` for a coordinator's vacation entry (the `vacation_logged` e-mail to the scheduler is skipped; the
+in-app feed row and the audit row are still written) - a coordinator's session would only collect 403s.
+
 **Prompt 15 (East vacations, 2026-09-23): nothing deployed.** No function
 changed for this prompt and none was redeployed. The feature is the client
 (the East feed refresh reads Davenport's `time_off`, the review controls, the
@@ -143,7 +152,7 @@ Each function carries its own gate instead:
 |---|---|---|
 | calendar-sync | OFF (must stay OFF - calendar apps send no auth header) | none: public read-only feed of anon-readable data |
 | office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
-| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a missing row or an unlinked surgeon gets 403 |
+| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403 |
 | daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"

@@ -124,6 +124,18 @@ they are decided.
 
 Roles: `admin` (everything, including user links and roles), `scheduler` (generate, publish, edit, import, snapshots),
 `surgeon` (own vacations, propose/accept trades, own preferences), `viewer` (read-only — the office contact).
+Roles (`user_profiles.role`, set in Setup → Users by the admin):
+
+| role | can | cannot |
+|---|---|---|
+| `admin` | everything, including user links and roles | — |
+| `scheduler` | generate, publish, edit days, import, snapshots, Periods, enter vacations / offers for anyone (relayed as the scheduler) | change accounts (admin only) |
+| `surgeon` | own vacations, paint own offers, propose / accept trades, claim open shifts, own e-mail preferences | anything for another surgeon |
+| `coordinator` (office users, Prompt 16 A7) | see the schedule read-only (calendar, open shifts, totals, alerts), enter / edit / remove **any surgeon's upcoming vacation** (Time off → person picker; the on-call refusal applies exactly as for the surgeon; a started or past vacation stays on record - the scheduler corrects it), relay **any surgeon's offered dates** into the painter (Time off → "Offers - enter for a surgeon"; saved as `entered_by` the office account, `source office-relay`; frozen periods stay frozen), read its **own** Activity log entries | Setup, Generate, the day editor, trades, Mine, publishing, accounts, snapshots, e-mail sends (the notification function answers 403); it is never linked to a roster id |
+| `viewer` | read-only — the ER-panel author | every write |
+
+A coordinator account is created like any other (invite from the dashboard), then given the role in Setup → Users with
+**no roster link**; the database refuses a linked coordinator (`user_profiles_coordinator_unlinked`).
 
 ## Removing or changing someone
 

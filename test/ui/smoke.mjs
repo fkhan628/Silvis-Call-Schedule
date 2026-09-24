@@ -330,6 +330,11 @@ const FAKE_EMAIL = "scheduler@example.com";
 // null on purpose: the Users card displays user_profiles.email and this run
 // must never put an address on screen or in a screenshot.
 const FAKE_PROFILE = { id: FAKE_UID, person_id: "s1", role: "admin", display_name: "Khan", email: null, created_at: "2026-09-22T00:00:00Z" };
+// Prompt 16 A7: a second mocked session - the COORDINATOR (office account: role coordinator, NO person_id). Its page
+// routes through routeSupabaseAs(COORD_PROFILE) below (own profile + own auth user, everything else the shared route),
+// and the rpc/save_offers mock reads the caller's JWT sub to stamp entered_by / source like the SQL function does.
+const COORD_UID = "00000000-0000-4000-8000-00000000c0c0";
+const COORD_PROFILE = { id: COORD_UID, person_id: null, role: "coordinator", display_name: "Office (harness)", email: null, created_at: "2026-09-24T00:00:00Z" };
 let failSnapshotInsert = false; // Slice E harness switch (see the Supabase route)
 let forcedOffer400 = false;     // Prompt 14 part 3a: the browser's own "400" line for the save_offers refusal the harness forced (OF002) - consumed once
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
@@ -369,6 +374,9 @@ const NEW_JWT = mkJwt(3600, "a3-signin");
 const NEW2_JWT = mkJwt(3600, "a3-refresh");
 const bearerExpired = (h) => { try { const t = String(h || "").replace(/^Bearer /, ""); const p = JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); return typeof p.exp === "number" && p.exp * 1000 < Date.now(); } catch (e) { return false; } };
 const authCalls = [];
+const COORD_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: COORD_UID, role: "authenticated", email: "office@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+// The caller's JWT sub (what auth.uid() reads server-side) - the rpc mocks decide entered_by / source from it.
+const jwtSub = (req) => { try { const t = (req.headers()["authorization"] || "").replace(/^Bearer /i, ""); return JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")).sub || null; } catch (e) { return null; } };
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json", ".png": "image/png", ".ico": "image/x-icon", ".css": "text/css" };
 const server = http.createServer((req, res) => {
@@ -739,9 +747,10 @@ const applyOfferMode = (who, periodId, mode) => {
   offerPeriod.updated_at = new Date().toISOString();
   return { ok: true };
 };
-const offerRpc = (b, json) => {
+const offerRpc = (b, json, sub) => {
   const err = (code, message) => json(400, { message, code, details: null, hint: null });
   const who = String(b.p_person || "s1");
+  const asOffice = sub === COORD_UID; // Prompt 16 A7: a coordinator relaying -> entered_by = its profile id, source office-relay
   if (failSaveOffers) { failSaveOffers = false; forcedOffer400 = true; return err("OF002", `OFFER_ON_VACATION: ${((b.p_rows || [])[0] || {}).day || "?"} is inside a vacation of ${who}`); }
   const rows = Array.isArray(b.p_rows) ? b.p_rows : [];
   const bad = rows.filter(r => !/^\d{4}-\d{2}-\d{2}$/.test(String(r && r.day)) || !["primary", "backup", "either"].includes(r && r.role_pref));
@@ -752,7 +761,7 @@ const offerRpc = (b, json) => {
   const clear = new Set(Array.isArray(b.p_clear) ? b.p_clear : []);
   let deleted = 0;
   for (let i = offerStore.length - 1; i >= 0; i--) if (offerStore[i].person_id === who && clear.has(offerStore[i].day)) { offerStore.splice(i, 1); deleted++; }
-  const by = who === "s1" ? "s1" : "scheduler", src = who === "s1" ? "app" : "email-relay";
+  const by = asOffice ? COORD_UID : who === "s1" ? "s1" : "scheduler", src = asOffice ? "office-relay" : who === "s1" ? "app" : "email-relay";
   rows.forEach(r => {
     const cur = offerStore.find(o => o.person_id === who && o.day === r.day);
     if (cur) Object.assign(cur, { role_pref: r.role_pref, note: r.note || cur.note || null, entered_by: by, source: src, updated_at: new Date().toISOString() }); // coalesce(excluded.note, call_offers.note)
@@ -765,6 +774,16 @@ const offerModeRpc = (b, json) => {
   const r = applyOfferMode(who, b.p_period, b.p_mode);
   if (r.code) return json(400, { message: r.message, code: r.code, details: null, hint: null });
   return json(200, { ok: true, period_id: offerPeriod.id, label: offerPeriod.label, person_id: who, mode: b.p_mode, rules_only_ids: offerPeriod.rules_only_ids, offer_modes: offerPeriod.offer_modes, by: "s1" });
+};
+// Prompt 16 A7: the same route for ANOTHER session - the auth user and the own profile row come from `profile`, every
+// other request goes through routeSupabase unchanged (the shared stores, the recorded writes).
+const routeSupabaseAs = (profile) => async (route) => {
+  const req = route.request();
+  const url = new URL(req.url());
+  const json = (status, body) => route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+  if (url.pathname.startsWith("/auth/v1/user") && req.method() === "GET") return json(200, { id: profile.id, email: "office@example.com", aud: "authenticated", role: "authenticated" });
+  if (url.pathname.startsWith("/rest/v1/user_profiles") && req.method() === "GET") return json(200, [profile]);
+  return routeSupabase(route);
 };
 const routeSupabase = async (route, scope) => {
   // scope: "session" when installed by the A3 session scenario's context (its blob stamp is kept apart); Playwright
@@ -915,7 +934,7 @@ const routeSupabase = async (route, scope) => {
     const body = req.postData() || "";
     writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
     let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
-    return url.pathname.endsWith("save_offers") ? offerRpc(b, json) : offerModeRpc(b, json);
+    return url.pathname.endsWith("save_offers") ? offerRpc(b, json, jwtSub(req)) : offerModeRpc(b, json);
   }
   if (method === "POST" || method === "PATCH" || method === "DELETE" || method === "PUT") {
     const body = req.postData() || "";
@@ -2666,7 +2685,12 @@ try {
       await page.click("[data-testid=ofp-save]");
       await page.waitForSelector("[data-testid=ofp-error]", { timeout: 5000 });
       await page.waitForTimeout(500);
-      const failWrites = writesSince(beforeFail);
+      // The app's 800 ms blob autosave (an unchanged re-save of call_schedule_data) may land inside this window and the
+      // real-save window below - the same unrelated background write the East-vacations home step tolerates and logs
+      // (its deps carry no offerRows / periodRows, so no offers state can trigger it); seen in 1 of 3 runs on 9/23-24.
+      const failBlobWrites = writesSince(beforeFail).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
+      if (failBlobWrites.length) console.log("     (unrelated background write(s) during the forced-failure step: " + failBlobWrites.map(w => w.method + " " + w.path).join(", ") + ")");
+      const failWrites = writesSince(beforeFail).filter(w => !/\/rest\/v1\/call_schedule_data\b/.test(w.path));
       const errText = await page.$eval("[data-testid=ofp-error]", el => el.innerText.replace(/\s+/g, " "));
       const draftsAfterFail = await page.$$eval("[data-testid=ofp-day][data-state=draft]", els => els.length);
       const statusAfterFail = await page.$eval("[data-testid=ofp-status]", el => el.innerText.trim());
@@ -2683,7 +2707,9 @@ try {
       const saves = writesSince(before, "/rest/v1/rpc/save_offers");
       const modes = writesSince(before, "/rest/v1/rpc/set_offer_mode");
       const audits = writesSince(before, "/rest/v1/audit_log").map(bodyOf).filter(b => b && b.action === "offers.save");
-      const otherWrites = writesSince(before).filter(w => !/rpc\/(save_offers|set_offer_mode)$|\/rest\/v1\/audit_log/.test(w.path));
+      const saveBlobWrites = writesSince(before).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
+      if (saveBlobWrites.length) console.log("     (unrelated background write(s) during the Save step: " + saveBlobWrites.map(w => w.method + " " + w.path).join(", ") + ")");
+      const otherWrites = writesSince(before).filter(w => !/rpc\/(save_offers|set_offer_mode)$|\/rest\/v1\/(audit_log|call_schedule_data)\b/.test(w.path));
       const saveBody = saves[0] ? bodyOf(saves[0]) : null;
       const wantRows = Object.keys(expected).sort().map(d => ({ day: d, role_pref: expected[d] }));
       if (saves.length !== 1 || !saveBody || saveBody.p_person !== "s1" || JSON.stringify(saveBody.p_rows) !== JSON.stringify(wantRows) || JSON.stringify(saveBody.p_clear) !== "[]" || saveBody.p_period !== offerPeriod.id || saveBody.p_mode !== "exhaustive") fail("Offer painter: expected exactly ONE rpc/save_offers { p_person s1, p_rows = the draft in day order, p_clear [], p_period, p_mode exhaustive }: " + JSON.stringify(saves.map(w => w.body)).slice(0, 600));
@@ -5593,6 +5619,158 @@ try {
     } catch (e) { fail("data management: " + errLine(e)); try { await p3.screenshot({ path: path.join(OUT, "failure-data.png"), fullPage: true }); } catch (e2) {} }
     failSnapshotInsert = false;
     await p3.close();
+  }
+
+  // ====================== Prompt 16 A7: the COORDINATOR (office) session ======================
+  // A second page signed in as COORD_PROFILE (role coordinator, no roster link). The picture: the viewer's views plus
+  // Time off with a person picker (add for anyone, created_by = the profile id, the note denylist, Remove), the
+  // "Offers - enter for a surgeon" card (the painter as the office; save_offers with p_person; the mock stamps
+  // entered_by = the profile id / source office-relay from the JWT sub), the Activity log in Settings; no Setup, no
+  // Generate, no Mine, no Paint offers, no trade card; the day tap opens the read-only detail (no Save button).
+  {
+    const pc = await context.newPage();
+    watchPage(pc, "coordinator");
+    await pc.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, COORD_JWT);
+    await pc.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await pc.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(COORD_PROFILE));
+    pc.on("dialog", (d) => d.accept());
+    const auditGets = [];
+    pc.on("request", (r) => { if (r.method() === "GET" && /\/rest\/v1\/audit_log\?/.test(r.url())) auditGets.push(r.url()); });
+    const bodyTextC = () => pc.evaluate(() => document.body.innerText || "");
+    try {
+      await loadWithRetry(pc, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "coordinator page");
+      await pc.waitForSelector("text=Synced", { timeout: 30000 });
+      await pc.waitForTimeout(1200);
+      // (a) the shell: no unlinked banner, no Setup / Mine / Paint offers, Time off present, no Generate panel anywhere
+      const tabs = await pc.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
+      const banner = await pc.$("[data-testid=unlinked-banner]");
+      const paintNav = await pc.$("[data-testid=nav-paint-offers]");
+      if (banner) fail("coordinator: the unlinked-account banner is shown to the office account (it has no roster link by design)");
+      else if (tabs.includes("setup") || tabs.includes("myschedule") || !tabs.includes("timeoff") || !tabs.includes("calendar") || paintNav) fail("coordinator: nav wrong - expected no Setup / Mine / Paint offers and a Time off tab, got " + tabs.join(",") + (paintNav ? " + Paint offers" : ""));
+      else ok("coordinator: no unlinked banner; nav = " + tabs.join(", ") + " (no Setup, no Mine, no Paint offers)");
+      if (await pc.$("[data-testid=gen-start]")) fail("coordinator: a Generate panel rendered"); else ok("coordinator: no Generate panel");
+      // (b) the day tap opens the read-only detail: no Save, a Close button
+      await pc.click(".cal-cell[data-day]");
+      await pc.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      const saveBtn = await pc.$("[data-testid=editor-save]");
+      const closeBtn = await pc.$("[data-testid=editor-footer] button:has-text('Close')");
+      const externalInput = await pc.$("[data-testid=editor-external]");
+      if (saveBtn || externalInput || !closeBtn) fail(`coordinator: the day tap must open the read-only detail (no Save, no outside-cover input, a Close button): save=${!!saveBtn} external=${!!externalInput} close=${!!closeBtn}`);
+      else ok("coordinator: day tap = read-only detail (no editor-save, no editor-external, Close)");
+      await closeBtn.click();
+      await pc.waitForTimeout(200);
+      // (c) Time off: the person picker offers every surgeon; no trade card; the note denylist; the clean add for s3
+      await pc.click('button[data-tab="timeoff"]');
+      await pc.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
+      const card = pc.locator("[data-testid=timeoff-card]");
+      const sel = card.locator("select").first();
+      const picker = await sel.evaluate(el => ({ disabled: el.disabled, options: Array.from(el.options).map(o => o.value).filter(Boolean) }));
+      const title = await card.locator("div").first().innerText();
+      // (innerText is upper-cased by the card title's text-transform: the two title reads below are case-insensitive)
+      if (picker.disabled || picker.options.length !== 6 || !/^Vacations/i.test(title)) fail("coordinator: the Time off person picker should be enabled with the six surgeons under the title 'Vacations': " + JSON.stringify({ ...picker, title }));
+      else ok("coordinator: Time off = 'Vacations' with an enabled person picker (" + picker.options.join(",") + ")");
+      // review: the copy speaks to the office (not "your own vacations")
+      const vacNote = await card.locator("p").first().innerText();
+      if (!/^Enter a surgeon's vacation/.test(vacNote) || /your own vacations|if you are already published/.test(vacNote)) fail("coordinator: the Time off note must speak to the office ('Enter a surgeon's vacation ...'), got: " + vacNote.slice(0, 140));
+      else ok("coordinator: the Time off note reads 'Enter a surgeon's vacation ...' (no 'your own')");
+      if (await pc.$("[data-testid=trade-card]")) fail("coordinator: the trade card rendered (the office proposes no trades)"); else ok("coordinator: no trade card");
+      if (!(await pc.$("[data-testid=coord-offers-card]"))) fail("coordinator: the 'Offers - enter for a surgeon' card is missing"); else ok("coordinator: the 'Offers - enter for a surgeon' card renders");
+      const dates = card.locator("input[type=date]");
+      await sel.selectOption("s3");
+      await dates.nth(0).fill("2027-03-16");
+      await dates.nth(1).fill("2027-03-17");
+      const b0 = writes.length;
+      await pc.fill("[data-testid=vac-note]", "family trip");
+      await pc.click("[data-testid=vac-add]");
+      await pc.waitForTimeout(700);
+      const deniedWrites = writesSince(b0).filter(w => /\/rest\/v1\/(time_off|audit_log|notifications)/.test(w.path));
+      const deniedToast = await bodyTextC();
+      if (deniedWrites.length || !/operational only/.test(deniedToast)) fail("coordinator: a note on the denylist ('family trip') must be refused with the operational-only toast and no write: writes=" + deniedWrites.length + " toast=" + /operational only/.test(deniedToast));
+      else ok("coordinator: the note denylist refuses 'family trip' (toast, no time_off / audit / notification write)");
+      const b1 = writes.length;
+      await pc.fill("[data-testid=vac-note]", "office entry");
+      await pc.click("[data-testid=vac-add]");
+      await waitFor(() => writesSince(b1, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "timeoff.add"), 8000);
+      await pc.waitForTimeout(800);
+      const toPost = writesSince(b1, "/rest/v1/time_off").filter(w => w.method === "POST");
+      const toBody = toPost[0] ? bodyOf(toPost[0]) : null;
+      const toAudit = auditSince(b1, "timeoff.add");
+      const toNotif = writesSince(b1, "/rest/v1/notifications").map(bodyOf).find(n => n && n.type === "vacation_logged");
+      const mails = writesSince(b1).filter(w => /send-notification/.test(w.path));
+      if (toPost.length !== 1 || !toBody || toBody.person_id !== "s3" || toBody.start_date !== "2027-03-16" || toBody.end_date !== "2027-03-17" || toBody.note !== "office entry" || toBody.created_by !== COORD_UID) fail("coordinator: expected ONE POST /rest/v1/time_off { s3, 2027-03-16..17, note, created_by = the coordinator's profile id }: " + JSON.stringify(toPost.map(w => w.body)));
+      else if (!toAudit || toAudit.actor_id !== COORD_UID || toAudit.actor_name !== COORD_PROFILE.display_name || !toAudit.detail || toAudit.detail.person_id !== "s3") fail("coordinator: the audit timeoff.add must carry actor_id = the profile id and actor_name = the display name: " + JSON.stringify(toAudit));
+      else if (!toNotif || !/Acton logged vacation 3\/16-3\/17 \(office entry\) - entered by Office \(harness\)/.test(toNotif.message) || !toNotif.data || toNotif.data.entered_by !== COORD_UID || toNotif.data.surgeon_id !== "s3") fail("coordinator: the vacation_logged feed row must name the office and carry entered_by = the profile id: " + JSON.stringify(toNotif));
+      else if (mails.length) fail("coordinator: a send-notification call went out (the function answers 403 for the role; nothing should be attempted): " + JSON.stringify(mails.map(w => w.path)));
+      else ok(`coordinator: vacation for s3 = POST time_off { created_by ${COORD_UID.slice(-4)} } + audit timeoff.add { actor_id = profile id, actor_name '${toAudit.actor_name}' } + feed "${toNotif.message}"; no e-mail attempted`);
+      if (!writesSince(b1).every(w => noAddress(w.body))) fail("coordinator: a write body carries an email address");
+      // Remove the row just added: Edit / Remove render for the office; the DELETE goes by id and is audited as the office
+      const b2 = writes.length;
+      let removeBtn = null;
+      for (const h of await card.locator("button:has-text('Remove')").elementHandles()) {
+        const rowText = await h.evaluate(el => (el.parentElement && el.parentElement.parentElement ? el.parentElement.parentElement.innerText : "") || "");
+        if (/2027-03-16 to 2027-03-17/.test(rowText)) { removeBtn = h; break; }
+      }
+      if (!removeBtn) fail("coordinator: the new row (2027-03-16 to 2027-03-17) shows no Remove button for the office");
+      else {
+        await removeBtn.click();
+        await waitFor(() => writesSince(b2, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "timeoff.remove"), 8000);
+        await pc.waitForTimeout(400);
+        const del = writesSince(b2, "/rest/v1/time_off").find(w => w.method === "DELETE");
+        const rmAudit = auditSince(b2, "timeoff.remove");
+        if (!del || !/^\/rest\/v1\/time_off\?id=eq\./.test(del.path)) fail("coordinator: Remove must DELETE /rest/v1/time_off?id=eq.<id>: " + JSON.stringify(writesSince(b2).map(w => w.method + " " + w.path)));
+        else if (!rmAudit || rmAudit.actor_id !== COORD_UID || rmAudit.detail.person_id !== "s3") fail("coordinator: the audit timeoff.remove must carry actor_id = the profile id: " + JSON.stringify(rmAudit));
+        else ok("coordinator: Remove = DELETE time_off?id=eq.<id> + audit timeoff.remove as the office");
+      }
+      // (d) the offers relay: pick s3, the painter opens as the office, one free day painted, Save -> save_offers p_person s3
+      await pc.selectOption("[data-testid=coord-offers-person]", "s3");
+      await pc.click("[data-testid=coord-offers-open]");
+      await pc.waitForSelector("[data-testid=ofp-sheet][data-person=s3]", { timeout: 8000 });
+      const head = await pc.$eval("[data-testid=ofp-sheet]", el => el.innerText.slice(0, 300).replace(/\s+/g, " "));
+      if (!/Paint offers for Acton/.test(head) || !/as the office \(relayed\)/.test(head)) fail("coordinator: the painter header should read 'Paint offers for Acton ... as the office (relayed)': " + head.slice(0, 120));
+      else ok("coordinator: the painter opens for Acton 'as the office (relayed)'");
+      // review: the tap hint names the relayed surgeon, never "yourself"
+      const relayHint = await pc.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " "));
+      if (!/Tap a day to offer Acton as /.test(relayHint) || /yourself/.test(relayHint)) fail("coordinator: the painter's tap hint must name Acton (not 'yourself') while relaying: " + relayHint.slice(0, 120));
+      else ok("coordinator: the tap hint reads 'Tap a day to offer Acton as ...'");
+      let freeDay = null;
+      for (let k = 0; k < 6 && !freeDay; k++) {
+        freeDay = await pc.$$eval("[data-testid=ofp-day][data-state=free]", els => { const e = els.find(x => !x.getAttribute("data-why")); return e ? e.getAttribute("data-day") : null; });
+        if (!freeDay) { await pc.click("[data-testid=ofp-next]"); await pc.waitForTimeout(200); }
+      }
+      if (!freeDay) fail("coordinator: no paintable day for s3 within six months");
+      else {
+        const b3 = writes.length;
+        await pc.click(`[data-testid=ofp-day][data-day="${freeDay}"]`);
+        await pc.waitForTimeout(150);
+        await pc.click("[data-testid=ofp-save]");
+        await waitFor(() => writesSince(b3, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
+        await pc.waitForTimeout(500);
+        const saves = writesSince(b3, "/rest/v1/rpc/save_offers");
+        const sb = saves[0] ? bodyOf(saves[0]) : null;
+        const oAudit = auditSince(b3, "offers.save");
+        const stored = offerStore.find(o => o.person_id === "s3" && o.day === freeDay);
+        const direct = writesSince(b3).filter(w => /\/rest\/v1\/call_offers/.test(w.path));
+        if (saves.length !== 1 || !sb || sb.p_person !== "s3" || !Array.isArray(sb.p_rows) || sb.p_rows.length !== 1 || sb.p_rows[0].day !== freeDay || sb.p_rows[0].role_pref !== "either") fail("coordinator: expected ONE rpc/save_offers { p_person s3, one row " + freeDay + " either }: " + JSON.stringify(saves.map(w => w.body)));
+        else if (direct.length) fail("coordinator: a direct call_offers write went out (the office writes only through save_offers): " + JSON.stringify(direct.map(w => w.method + " " + w.path)));
+        else if (!stored || stored.source !== "office-relay" || stored.entered_by !== COORD_UID) fail("coordinator: the stored offer should read source office-relay / entered_by = the profile id (what save_offers stamps for a coordinator): " + JSON.stringify(stored));
+        else if (!oAudit || oAudit.actor_id !== COORD_UID || oAudit.actor_name !== COORD_PROFILE.display_name || oAudit.detail.person_id !== "s3") fail("coordinator: the audit offers.save must carry actor_id = the profile id: " + JSON.stringify(oAudit));
+        else ok(`coordinator: offers relay for s3 = ONE rpc/save_offers { p_person s3, ${freeDay} either } -> row source office-relay / entered_by = profile id; audit offers.save as the office; no direct call_offers write`);
+      }
+      await pc.click("[data-testid=ofp-close]");
+      await pc.waitForTimeout(300);
+      // (e) Settings: the Activity log card (own entries) + its audit_log read; no export / snapshots / client versions
+      await pc.click('button[data-tab="settings"]');
+      await pc.waitForTimeout(1000);
+      const auditCard = await pc.$("[data-testid=card-settings_audit]");
+      const exportBtn = await pc.$("[data-testid=export-backup]");
+      const cvCard = await pc.$("[data-testid=card-settings_client_versions]");
+      const logTitle = auditCard ? (await auditCard.innerText()).replace(/\s+/g, " ").slice(0, 80) : "";
+      if (!auditCard || exportBtn || cvCard || !auditGets.length || !/your entries/i.test(logTitle)) fail(`coordinator: Settings should show the Activity log ('your entries') with one audit_log read and nothing of the scheduler's (export / client versions): card=${!!auditCard} export=${!!exportBtn} cv=${!!cvCard} reads=${auditGets.length} title='${logTitle}'`);
+      else ok(`coordinator: Settings = Activity log '${logTitle.slice(0, 50)}' (audit_log read ${auditGets.length}x); no export, no client versions`);
+      await pc.screenshot({ path: path.join(OUT, "coordinator.png"), fullPage: true });
+      ok("screenshot test/ui/out/coordinator.png");
+    } catch (e) { fail("coordinator session: " + errLine(e)); try { await pc.screenshot({ path: path.join(OUT, "failure-coordinator.png"), fullPage: true }); } catch (e2) {} }
+    await pc.close();
   }
 } catch (e) {
   fail("harness exception: " + (e && e.stack || e));

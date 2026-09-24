@@ -2497,6 +2497,113 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- P16 A7. the coordinator role (office users) - client gating pins + behaviour ---------------- */
+  console.log("\n[P16 A7] coordinator role - client");
+  {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    check("A7: isCoordinator is derived from user_profiles.role beside isAdmin; canEnterForAnyone = scheduler or coordinator; the unlinked banner, the Time off card, the trade card and the Settings log read them", () => {
+      assert.ok(src.includes('  const isAdmin = userProfile?.role === "admin";\n'), "isAdmin anchor");
+      assert.ok(src.includes('  const isCoordinator = userProfile?.role === "coordinator";'), "isCoordinator const");
+      assert.ok(src.includes("  const canEnterForAnyone = isScheduler || isCoordinator;"), "canEnterForAnyone const");
+      assert.ok(src.includes("{!isPublicMode && isUnlinked && !isCoordinator && ("), "the unlinked banner is not shown to a coordinator (no roster link by design)");
+      assert.ok(src.includes('<div style={css.cardT}>{canEnterForAnyone ? "Vacations" : "My vacations"}</div>'), "the Time off card title reads Vacations for the office");
+      assert.ok(src.includes("{!mySurgeon && !canEnterForAnyone ? <p style={muted}>Your account is not linked to a roster entry yet"), "the not-linked line is skipped for the office");
+      assert.ok(src.includes("{renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}"), "the person picker offers every active surgeon to the office");
+      assert.ok(src.includes("{renderVacationList(canEnterForAnyone ? surgeons.map(s => s.id) : [mySurgeon], true)}"), "the list shows everyone's vacations to the office");
+      assert.ok(src.includes("(isScheduler || ((isCoordinator || r.pid === mySurgeon) && r.vs > todayStr)) && ("), "Edit / Remove render for the office on UPCOMING rows only (review: toRemove refuses a started / past one for every non-scheduler, so the button must not offer it)");
+      const tradeIife = src.slice(src.indexOf('const fromId = isScheduler ? (tradeFrom || mySurgeon || "") : (mySurgeon || "");'), src.indexOf('const fromId = isScheduler ? (tradeFrom || mySurgeon || "") : (mySurgeon || "");') + 400);
+      assert.ok(/if \(isCoordinator\) return null; \/\/ Prompt 16 A7/.test(tradeIife), "the trades section returns null for a coordinator (no trade card)");
+      assert.ok(src.includes("{(isScheduler || isCoordinator) && (\n            <Collapsible css={css} ck=\"settings_audit\""), "the Activity log card renders for the office too");
+      assert.ok(src.includes('{isCoordinator ? "- your entries (vacations, offers)" : "- who changed what"}'), "the log title says whose entries the office sees");
+      assert.ok(src.includes('    if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }\n  }, [view]);'), "A1's scheduler effect is untouched (verify-rls 10b pins it)");
+      assert.ok(src.includes('    if (view === "settings" && isCoordinator) loadAudit();\n  }, [view, isCoordinator]);'), "the coordinator's own effect loads the audit log only (no snapshots, no client versions)");
+      assert.ok(!/if \(view === "settings" && isCoordinator\) \{[^}]*loadSnapshots/.test(src), "no snapshot load for a coordinator");
+    });
+    check("A7: the vacation write paths - addVac / toRemove / toEdit admit the office for anyone, addVac refuses a note on the SU_NOTE_DENYLIST, created_by stays person_id || profile id, the office entry's feed row names the office and no e-mail is attempted", () => {
+      assert.ok(src.includes('    if (!isScheduler && !isCoordinator && vacSurgeon !== mySurgeon) { showToast("You can only enter your own vacations.", "error"); return; }'), "addVac gate");
+      assert.ok(src.includes('    if (vacNote && SU_NOTE_DENYLIST.test(vacNote)) { showToast("Notes are operational only (the whole group and the shareable page read them) - leave the reason out.", "error"); return; }'), "addVac denylist");
+      assert.strictEqual((src.match(/if \(!isScheduler && !isCoordinator && personId !== mySurgeon\)/g) || []).length, 2, "toRemove + toEdit gates");
+      assert.ok(src.includes("        created_by: userProfile?.person_id || authUser?.id || null,"), "created_by = roster id, else the profile id (a coordinator's)");
+      const toAdd = src.slice(src.indexOf("  const toAdd = async (personId, start, end, note) => {"), src.indexOf("  const deleteTimeOffRow = async (rowId) => {"));
+      assert.ok(toAdd.includes('const enteredBy = actor && actor !== personId ? nameOf(actor) : (!actor && isCoordinator ? (userProfile?.display_name || "the office") : null);'), "the feed message names the office (display name) when a coordinator enters it");
+      assert.ok(toAdd.includes('addNotification("vacation_logged", "Vacation logged", msg, { surgeon_id: personId, entered_by: actor || (isCoordinator ? (authUser?.id || null) : null) });'), "the feed row's entered_by carries the coordinator's profile id");
+      assert.ok(toAdd.includes("      if (!isCoordinator) (async () => {\n        const ids = await schedulerIdsLoud();"), "the vacation_logged e-mail is skipped for a coordinator (send-notification answers 403 for the role)");
+      assert.ok(toAdd.indexOf('logAudit("timeoff.add"') > 0 && toAdd.indexOf('logAudit("timeoff.add"') < toAdd.indexOf("if (!isCoordinator)"), "the audit row is written before the e-mail decision");
+    });
+    check("A7: the offers relay - the Time off view's 'Offers - enter for a surgeon' card (coordinator only) opens the painter for the picked surgeon; the sheet is relayed as the office; the commit still sends p_person and the function decides entered_by / source", () => {
+      assert.ok(src.includes('  const [coordOfferPerson, setCoordOfferPerson] = useState("");'), "the picker state");
+      assert.ok(src.includes('{isCoordinator && (\n            <div style={css.card} data-testid="coord-offers-card">'), "the card renders for a coordinator only");
+      assert.ok(src.includes('<select data-testid="coord-offers-person" value={coordOfferPerson} onChange={e=>setCoordOfferPerson(e.target.value)}'), "the person select");
+      assert.ok(src.includes('<button data-testid="coord-offers-open" disabled={!coordOfferPerson} onClick={()=>setOfferSheet({ personId: coordOfferPerson })}'), "the open button hands the picked surgeon to the one offerSheet state");
+      assert.ok(src.includes("          asScheduler={(isScheduler || isCoordinator) && offerSheet.personId !== mySurgeon}\n          relayWord={isCoordinator ? \"the office\" : \"the scheduler\"}\n          isScheduler={isScheduler}"), "the sheet is opened as a relay for the office, with isScheduler=false (frozen periods stay frozen)");
+      assert.ok(src.includes("function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler,"), "the sheet takes relayWord");
+      assert.ok(src.includes('as {relayWord || "the scheduler"} (relayed)'), "the header names the relay");
+      assert.ok(src.includes("body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null })"), "commitOffersPaint is unchanged: p_person, nothing about entered_by / source");
+      assert.ok(!/entered_by:\s*(authUser|userProfile)/.test(src.slice(src.indexOf("const commitOffersPaint"), src.indexOf("const commitOffersPaint") + 3000)), "the client never stamps entered_by on an offer");
+    });
+    check("A7: Setup -> Users offers the coordinator role and refuses a linked coordinator; the roster-link placeholder names both unlinked roles", () => {
+      assert.ok(src.includes('{["viewer", "surgeon", "coordinator", "scheduler", "admin"].map(r => <option key={r} value={r}>{r}</option>)}'), "the role select lists coordinator");
+      assert.ok(src.includes('<option value="">none (viewer / coordinator)</option>'), "the roster-link placeholder");
+      const sup = src.slice(src.indexOf("  const saveUserProfile = async (p, patch) => {"), src.indexOf("  const saveUserProfile = async (p, patch) => {") + 2200);
+      assert.ok(sup.includes("const nextRole = patch.role || p.role, nextPerson = patch.person_id !== undefined ? patch.person_id : p.person_id;"), "the next role / link are computed from the patch over the row");
+      assert.ok(sup.includes('if (nextRole === "coordinator" && nextPerson) { showToast("Refused: a coordinator (office account) is never linked to a roster id - set the roster link to none first.", "error"); return false; }'), "a linked coordinator is refused client-side (the DB check constraint refuses it too)");
+      assert.ok(sup.indexOf("nextRole === \"coordinator\"") < sup.indexOf("method: \"PATCH\""), "the refusal runs before the PATCH");
+    });
+    check("A7 behaviour: logAudit's actor fields for a coordinator session = actor_id the profile id, actor_name the display name (what audit_insert's coordinator clause requires); a linked surgeon keeps roster id + name", () => {
+      const m = src.match(/actor_id: (userProfile\?\.person_id \|\| authUser\?\.id \|\| null),\n\s+actor_name: (userProfile\?\.display_name \|\| surgeons\.find\(s => s\.id === userProfile\?\.person_id\)\?\.name \|\| "Unknown"),/);
+      assert.ok(m, "logAudit's two actor lines");
+      const actor = new Function("userProfile", "authUser", "surgeons", "return { actor_id: " + m[1] + ", actor_name: " + m[2] + " };");
+      const surgeons = [{ id: "s3", name: "Acton" }];
+      assert.deepStrictEqual(actor({ id: "c0c0", person_id: null, role: "coordinator", display_name: "Office" }, { id: "c0c0" }, surgeons), { actor_id: "c0c0", actor_name: "Office" });
+      assert.deepStrictEqual(actor({ id: "c0c0", person_id: null, role: "coordinator", display_name: null }, { id: "c0c0" }, surgeons), { actor_id: "c0c0", actor_name: "Unknown" });
+      assert.deepStrictEqual(actor({ id: "u3", person_id: "s3", role: "surgeon", display_name: null }, { id: "u3" }, surgeons), { actor_id: "s3", actor_name: "Acton" });
+    });
+    check("A7 review: a coordinator's Edit / Remove are offered for upcoming vacations only (the render gate evaluated), toEdit refuses a started / past row for every non-scheduler like toRemove, and ONBOARDING says 'upcoming'", () => {
+      const gate = src.match(/\{allowEdit && r\.id && (\(isScheduler \|\| \(\(isCoordinator \|\| r\.pid === mySurgeon\) && r\.vs > todayStr\)\)) && \(/);
+      assert.ok(gate, "the Edit / Remove render gate");
+      const shows = new Function("isScheduler", "isCoordinator", "r", "mySurgeon", "todayStr", "return " + gate[1] + ";");
+      const today = "2026-09-24";
+      assert.strictEqual(shows(false, true, { pid: "s3", vs: "2026-10-01" }, "", today), true, "office: upcoming row -> buttons");
+      assert.strictEqual(shows(false, true, { pid: "s3", vs: "2026-09-24" }, "", today), false, "office: a row starting today -> no buttons (toRemove would refuse it)");
+      assert.strictEqual(shows(false, true, { pid: "s3", vs: "2026-09-01" }, "", today), false, "office: past row -> no buttons");
+      assert.strictEqual(shows(true, false, { pid: "s3", vs: "2026-09-01" }, "s1", today), true, "scheduler: every row");
+      assert.strictEqual(shows(false, false, { pid: "s2", vs: "2026-10-01" }, "s2", today), true, "surgeon: own upcoming row");
+      assert.strictEqual(shows(false, false, { pid: "s2", vs: "2026-10-01" }, "s3", today), false, "surgeon: someone else's row -> nothing");
+      const toEdit = src.slice(src.indexOf("  const toEdit = async (personId, rowId, newStart, newEnd) => {"), src.indexOf("  // SCHEDULE STORAGE: schedule_days is the sole source."));
+      assert.ok(toEdit.includes('    if (!isScheduler && !isCoordinator && personId !== mySurgeon) { showToast("You can only edit your own vacations.", "error"); return { ok: false }; }\n    const old = timeOffRows.find(r => r.id === rowId);\n    if (!isScheduler && old && String(old.start_date).slice(0, 10) <= todayStr) { showToast("That vacation has started or passed - it stays on record. Ask the scheduler if it needs to go.", "error"); return { ok: false }; }'), "toEdit refuses a started / past row for a non-scheduler (the same rule and toast as toRemove), before the conflict check and the PATCH");
+      assert.strictEqual((toEdit.match(/const old = timeOffRows\.find\(r => r\.id === rowId\);/g) || []).length, 1, "old is looked up once");
+      assert.ok(toEdit.indexOf("String(old.start_date)") < toEdit.indexOf('method: "PATCH"'), "the past guard runs before the PATCH");
+      const onboarding = fs.readFileSync(path.join(ROOT, "docs", "ONBOARDING.md"), "utf8");
+      const row = onboarding.split("\n").find(l => /^\| `coordinator`/.test(l)) || "";
+      assert.ok(/\*\*any surgeon's upcoming vacation\*\*/.test(row) && /started or past/.test(row), "the ONBOARDING coordinator row says upcoming vacations (a started or past one is the scheduler's to correct): " + row.slice(0, 200));
+    });
+    check("A7 review: the Activity log read goes through readAuthOnlyTable (null = not read -> a visible toast, the list kept; never a silent 200 + [] from the anon fallback) for the scheduler and the coordinator alike", () => {
+      const la = src.slice(src.indexOf("  const loadAudit = async () => {"), src.indexOf("  const fmtAuditTime = (iso) => {"));
+      assert.ok(la.includes('const rows = await readAuthOnlyTable("audit_log", { order: "created_at.desc", limit: 150 });'), "audit_log is read through readAuthOnlyTable");
+      assert.ok(!/db\.query\("audit_log"/.test(la), "no db.query on audit_log (dbReadHeaders falls back to anon: audit_read / audit_read_coord are 'to authenticated', so the read would be 200 + [])");
+      assert.ok(la.includes('if (rows === null) showToast("Couldn\'t load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");\n      else setAuditEntries(rows);'), "null = not read -> toast, the current entries kept; an array is adopted");
+    });
+    check("A7 review: the Time off copy speaks to the office (not 'your own vacations'), and the painter's tap hint / rules toggle name the relayed surgeon instead of 'yourself' / 'My rules' when relaying", () => {
+      assert.ok(src.includes("<p style={sectionNote}>{isCoordinator ? \"Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct).\" : <>Enter your own vacations - no approval, the group is notified."), "the coordinator's Time off note");
+      assert.ok(src.includes("A vacation that has started stays on record{isScheduler ? \" (as the scheduler you can enter or remove anyone's)\" : \"\"}.</>} Notes are operational and visible to the whole group.</p>"), "the surgeon / scheduler note is unchanged");
+      assert.ok(src.includes('const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.`'), "the tap hint names the relayed surgeon");
+      assert.ok(src.includes('{rulesOpen ? "Hide rules" : asScheduler ? "Rules" : "My rules"}'), "the rules toggle reads Rules when relaying");
+    });
+    check("A7 behaviour: the vacation-form gate admits the office for any surgeon and keeps refusing a surgeon for someone else (the addVac condition evaluated)", () => {
+      const cond = src.match(/if \((!isScheduler && !isCoordinator && vacSurgeon !== mySurgeon)\) \{ showToast\("You can only enter your own vacations\."/);
+      assert.ok(cond, "the addVac condition");
+      const refused = new Function("isScheduler", "isCoordinator", "vacSurgeon", "mySurgeon", "return " + cond[1] + ";");
+      assert.strictEqual(refused(false, true, "s3", ""), false, "a coordinator entering for s3 is not refused");
+      assert.strictEqual(refused(false, false, "s3", "s2"), true, "a surgeon entering for someone else is refused");
+      assert.strictEqual(refused(false, false, "s2", "s2"), false, "a surgeon entering for himself is not refused");
+      assert.strictEqual(refused(true, false, "s3", "s1"), false, "the scheduler for anyone");
+      const deny = src.match(/const SU_NOTE_DENYLIST = (\/[^\n]+\/i);/);
+      assert.ok(deny, "SU_NOTE_DENYLIST literal");
+      const rx = new Function("return " + deny[1] + ";")();
+      assert.ok(rx.test("family trip") && !rx.test("conference"), "the denylist catches a personal reason and lets an operational note through");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

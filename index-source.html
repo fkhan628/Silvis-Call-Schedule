@@ -274,6 +274,7 @@ function CallSchedule() {
   const [offerRows, setOfferRows] = useState([]);
   const [periodRows, setPeriodRows] = useState([]);
   const [offerSheet, setOfferSheet] = useState(null);
+  const [coordOfferPerson, setCoordOfferPerson] = useState(""); // Prompt 16 A7: the office's "Offers - enter for a surgeon" pick
   // U3c review (9/23): whether the two tables were actually READ this session. readAuthOnlyTable answers null
   // (not []) without a fresh token, so offerRows / periodRows stay [] while nothing was read - and a Generate
   // over that would place nobody's offers first while the Periods copy promises it. loadOffers / loadPeriods
@@ -511,6 +512,11 @@ function CallSchedule() {
     setIsScheduler(userProfile?.role === "scheduler" || userProfile?.role === "admin");
   }, [userProfile]);
   const isAdmin = userProfile?.role === "admin";
+  // Prompt 16 A7: the office role - enters / edits any surgeon's vacations and relays their offered dates into the
+  // painter (save_offers / set_offer_mode with p_person; the function stamps entered_by = this account's profile id,
+  // source 'office-relay'); no Setup, no Generate, no day editor, no trades. Never linked to a roster entry (DB check).
+  const isCoordinator = userProfile?.role === "coordinator";
+  const canEnterForAnyone = isScheduler || isCoordinator;
   // Signed in, profile loaded, but not linked to a roster entry (viewers, and
   // every freshly invited account until the scheduler links it in Setup -> Users).
   const isUnlinked = !!authUser && !!userProfile && !userProfile.person_id;
@@ -883,11 +889,15 @@ function CallSchedule() {
   // through a first-render closure would attribute every audit to "Unknown".
   const auditRef = useRef({ logAudit, nameOf });
   auditRef.current = { logAudit, nameOf };
+  // audit_log is authenticated-read only (audit_read: scheduler / admin; audit_read_coord: a coordinator's own rows), so
+  // the read goes through readAuthOnlyTable: without a fresh session token it answers null ("not read") and the current
+  // entries stay - db.query's anon fallback would answer 200 + [] and show "No activity recorded yet" for a failed read.
   const loadAudit = async () => {
     setAuditLoading(true);
     try {
-      const rows = await db.query("audit_log", { order: "created_at.desc", limit: 150 });
-      setAuditEntries(Array.isArray(rows) ? rows : []);
+      const rows = await readAuthOnlyTable("audit_log", { order: "created_at.desc", limit: 150 });
+      if (rows === null) showToast("Couldn't load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");
+      else setAuditEntries(rows);
     } catch (e) { console.warn("audit load failed", e); showToast("Couldn't load the activity log - check your connection.", "error"); }
     setAuditLoading(false);
   };
@@ -946,6 +956,12 @@ function CallSchedule() {
   useEffect(() => {
     if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }
   }, [view]);
+  // Prompt 16 A7: a coordinator's Activity log = its own vacation / offer / availability rows (RLS audit_read_coord);
+  // nothing else of the scheduler's Settings loads for it (no snapshots, no client versions - those reads would be a
+  // silent 200 + [] under RLS).
+  useEffect(() => {
+    if (view === "settings" && isCoordinator) loadAudit();
+  }, [view, isCoordinator]);
 
   // --- Toast (non-blocking notifications) ---
   const [toast, setToast] = useState(null); // { msg, tone } | null
@@ -1155,9 +1171,13 @@ function CallSchedule() {
       // In-app note for the scheduler(s) + the composed email text (send-notification
       // renders data.message and rejects a payload without it).
       const actor = userProfile?.person_id || null;
-      const msg = vacationLoggedMsg(nameOf(personId), start, end, (note || "").trim()) + (actor && actor !== personId ? " - entered by " + nameOf(actor) : "");
-      addNotification("vacation_logged", "Vacation logged", msg, { surgeon_id: personId, entered_by: actor });
-      (async () => {
+      // Prompt 16 A7: an office entry names the office (display name) - a coordinator has no roster id.
+      const enteredBy = actor && actor !== personId ? nameOf(actor) : (!actor && isCoordinator ? (userProfile?.display_name || "the office") : null);
+      const msg = vacationLoggedMsg(nameOf(personId), start, end, (note || "").trim()) + (enteredBy ? " - entered by " + enteredBy : "");
+      addNotification("vacation_logged", "Vacation logged", msg, { surgeon_id: personId, entered_by: actor || (isCoordinator ? (authUser?.id || null) : null) });
+      // A coordinator's session never mails (send-notification answers 403 for the role): the feed row above and the
+      // audit row carry the entry; the scheduler reads it in Alerts.
+      if (!isCoordinator) (async () => {
         const ids = await schedulerIdsLoud();
         if (ids && ids.length) sendEmailNotif("vacation_logged", { message: msg, subject: "Vacation logged - " + nameOf(personId) }, ids.filter(id => id !== personId));
       })();
@@ -1184,7 +1204,7 @@ function CallSchedule() {
     const row = timeOffRows.find(r => r.id === rowId);
     // Self-service covers FUTURE vacations only; a past or started one is a
     // record (the scheduler can still remove it).
-    if (!isScheduler && personId !== mySurgeon) { showToast("You can only remove your own vacations.", "error"); return { ok: false }; }
+    if (!isScheduler && !isCoordinator && personId !== mySurgeon) { showToast("You can only remove your own vacations.", "error"); return { ok: false }; }
     if (!isScheduler && row && String(row.start_date).slice(0, 10) <= todayStr) { showToast("That vacation has started or passed - it stays on record. Ask the scheduler if it needs to go.", "error"); return { ok: false }; }
     const r = await deleteTimeOffRow(rowId);
     if (!r.ok) return r;
@@ -1197,10 +1217,11 @@ function CallSchedule() {
   };
   const toEdit = async (personId, rowId, newStart, newEnd) => {
     if (!newStart || !newEnd) return { ok: false };
-    if (!isScheduler && personId !== mySurgeon) { showToast("You can only edit your own vacations.", "error"); return { ok: false }; }
+    if (!isScheduler && !isCoordinator && personId !== mySurgeon) { showToast("You can only edit your own vacations.", "error"); return { ok: false }; }
+    const old = timeOffRows.find(r => r.id === rowId);
+    if (!isScheduler && old && String(old.start_date).slice(0, 10) <= todayStr) { showToast("That vacation has started or passed - it stays on record. Ask the scheduler if it needs to go.", "error"); return { ok: false }; }
     const conflicts = vacationConflicts(personId, newStart, newEnd);
     if (conflicts.length) { showToast(`${nameOf(personId)} is on call ${conflicts.join(", ")} - trade first.`, "error"); return { ok: false }; }
-    const old = timeOffRows.find(r => r.id === rowId);
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/time_off?id=eq.${encodeURIComponent(rowId)}`, {
         method: "PATCH", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
@@ -2192,6 +2213,9 @@ function CallSchedule() {
       const taken = allProfiles.find(x => x.id !== p.id && x.person_id === patch.person_id);
       if (taken) { showToast(`Refused: ${nameOf(patch.person_id)} is already linked to another account (${taken.display_name || "unnamed"}).`, "error"); return false; }
     }
+    // Prompt 16 A7: a coordinator (office account) is never a roster entry - the DB refuses it too (user_profiles_coordinator_unlinked).
+    const nextRole = patch.role || p.role, nextPerson = patch.person_id !== undefined ? patch.person_id : p.person_id;
+    if (nextRole === "coordinator" && nextPerson) { showToast("Refused: a coordinator (office account) is never linked to a roster id - set the roster link to none first.", "error"); return false; }
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?id=eq.${encodeURIComponent(p.id)}`, {
         method: "PATCH", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
@@ -3571,7 +3595,9 @@ function CallSchedule() {
   // --- Vacation form handlers ---
   const addVac = async () => {
     if(!vacSurgeon||!vacStart||!vacEnd) { showToast("Pick a person and both dates.", "error"); return; }
-    if (!isScheduler && vacSurgeon !== mySurgeon) { showToast("You can only enter your own vacations.", "error"); return; }
+    if (!isScheduler && !isCoordinator && vacSurgeon !== mySurgeon) { showToast("You can only enter your own vacations.", "error"); return; }
+    // The note standard (guide 3.1): operational only - the same denylist the importer / Setup apply (anon-readable table).
+    if (vacNote && SU_NOTE_DENYLIST.test(vacNote)) { showToast("Notes are operational only (the whole group and the shareable page read them) - leave the reason out.", "error"); return; }
     const r = await toAdd(vacSurgeon, vacStart, vacEnd, vacNote);
     if (r.ok) { setVacStart(fmt(new Date())); setVacEnd(fmt(new Date())); setVacNote(""); showToast("Vacation saved.", "success"); }
   };
@@ -4579,7 +4605,7 @@ function CallSchedule() {
                 <span style={{fontFamily:mono,fontSize:12,color:dkText}}>{r.vs}{r.ve !== r.vs ? ` to ${r.ve}` : ""}</span>
                 {r.note && <span style={{...muted,fontStyle:"italic"}}>{r.note}</span>}
                 {r.ve < todayStr && <span style={{fontSize:10,color:"#a0a8b0"}}>past</span>}
-                {allowEdit && r.id && (isScheduler || (r.pid === mySurgeon && r.vs > todayStr)) && (
+                {allowEdit && r.id && (isScheduler || ((isCoordinator || r.pid === mySurgeon) && r.vs > todayStr)) && (
                   <span style={{marginLeft:"auto",display:"flex",gap:4}}>
                     <button onClick={()=>setEditVac({ sid: r.pid, rowId: r.id, start: r.vs, end: r.ve })} style={{...css.btn(false),padding:"3px 8px",fontSize:10}}>Edit</button>
                     <button onClick={()=>rmVac(r.pid, r.id)} style={{background:"none",border:"1px solid #e8c0c0",color:"#904040",borderRadius:5,padding:"3px 8px",fontSize:10,cursor:"pointer",fontFamily:font}}>Remove</button>
@@ -4662,7 +4688,8 @@ function CallSchedule() {
         <OfferPainterSheet
           css={css} dk={dk}
           person={sMap[offerSheet.personId] || null}
-          asScheduler={isScheduler && offerSheet.personId !== mySurgeon}
+          asScheduler={(isScheduler || isCoordinator) && offerSheet.personId !== mySurgeon}
+          relayWord={isCoordinator ? "the office" : "the scheduler"}
           isScheduler={isScheduler}
           offers={offerRows} periods={periodRows}
           schedule={schedule}
@@ -4961,7 +4988,7 @@ function CallSchedule() {
         )}
 
         {/* Unlinked-account banner (neutral; the scheduler links accounts in Setup -> Users, Slice E) */}
-        {!isPublicMode && isUnlinked && (
+        {!isPublicMode && isUnlinked && !isCoordinator && (
           <div data-testid="unlinked-banner" style={{...css.card,padding:"10px 14px",background:profileLoadFailed?"#fce8e8":"#eef3f8",border:`1px solid ${profileLoadFailed?"#e8c0c0":"#c0d4e8"}`,fontSize:12.5,color:profileLoadFailed?"#8a3030":"#2c4a68",lineHeight:1.5}}>
             {profileLoadFailed
               ? "Couldn't load your account profile - some features are hidden until it loads. Reload the app; if this persists, tell the scheduler."
@@ -5573,18 +5600,37 @@ function CallSchedule() {
         {/* ================ TIME OFF & TRADES (Prompt 6 Slice G) ================ */}
         {view==="timeoff" && !isPublicMode && <>
           <div style={css.card} data-testid="timeoff-card">
-            <div style={css.cardT}>{isScheduler ? "Vacations" : "My vacations"}</div>
-            <p style={sectionNote}>Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record{isScheduler ? " (as the scheduler you can enter or remove anyone's)" : ""}. Notes are operational and visible to the whole group.</p>
-            {!mySurgeon && !isScheduler ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
+            <div style={css.cardT}>{canEnterForAnyone ? "Vacations" : "My vacations"}</div>
+            <p style={sectionNote}>{isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct)." : <>Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record{isScheduler ? " (as the scheduler you can enter or remove anyone's)" : ""}.</>} Notes are operational and visible to the whole group.</p>
+            {!mySurgeon && !canEnterForAnyone ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
               <>
-                {renderVacationForm(isScheduler ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
+                {renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
                 <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
                   <input type="checkbox" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past
                 </label>
-                {renderVacationList(isScheduler ? surgeons.map(s => s.id) : [mySurgeon], true)}
+                {renderVacationList(canEnterForAnyone ? surgeons.map(s => s.id) : [mySurgeon], true)}
               </>
             )}
           </div>
+          {/* Prompt 16 A7: the office relays a surgeon's offered dates (an e-mail, a call) into the painter - the sheet saves
+              through save_offers / set_offer_mode with p_person; the function stamps entered_by = this account, source
+              'office-relay'; the surgeon's rules, vacations and the period's freeze apply exactly as when they paint themselves. */}
+          {isCoordinator && (
+            <div style={css.card} data-testid="coord-offers-card">
+              <div style={css.cardT}>Offers - enter for a surgeon</div>
+              <p style={sectionNote}>Relay a surgeon's offered dates into their painter. The record carries you as the office (entered by your account, source office-relay) and the surgeon's own rules, vacations and the period freeze apply exactly as when they paint themselves. A frozen period stays read-only - ask the scheduler.</p>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+                <div>
+                  <label style={label}>Surgeon</label>
+                  <select data-testid="coord-offers-person" value={coordOfferPerson} onChange={e=>setCoordOfferPerson(e.target.value)} style={{...inp,width:150}}>
+                    <option value="">Select</option>
+                    {poolSurgeons.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+                <button data-testid="coord-offers-open" disabled={!coordOfferPerson} onClick={()=>setOfferSheet({ personId: coordOfferPerson })} style={{...css.btn(true),padding:"7px 16px",opacity:coordOfferPerson?1:0.5}}>{coordOfferPerson ? "Enter offers for " + nameOf(coordOfferPerson) : "Enter offers for..."}</button>
+              </div>
+            </div>
+          )}
           {/* Prompt 15 part 3: the East (Davenport) vacations of the person with the East code - his own view (the scheduler sees every East person) */}
           {(isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon)).length > 0 && (
             <div style={css.card} data-testid="eastvac-timeoff">
@@ -5596,6 +5642,7 @@ function CallSchedule() {
 
           {(() => {
             const fromId = isScheduler ? (tradeFrom || mySurgeon || "") : (mySurgeon || "");
+            if (isCoordinator) return null; // Prompt 16 A7: the office proposes no trades (no roster link; the insert guard refuses it anyway)
             const mine = upcomingDaysOf(fromId, null);
             const theirs = upcomingDaysOf(tradeTo, null);
             const dayOk = suIsIso(tradeDay);
@@ -5732,9 +5779,9 @@ function CallSchedule() {
             </div>
           </div>
 
-          {isScheduler && (
+          {(isScheduler || isCoordinator) && (
             <Collapsible css={css} ck="settings_audit" defaultOpen={false}
-              title={<>Activity log <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>- who changed what</span></>}
+              title={<>Activity log <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>{isCoordinator ? "- your entries (vacations, offers)" : "- who changed what"}</span></>}
               right={<button onClick={(e)=>{e.stopPropagation(); loadAudit();}} title="Refresh" style={{background:"none",border:"1px solid #d0d8e0",borderRadius:6,color:"#5B6B82",cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:font}}>Refresh</button>}>
               {auditLoading ? (
                 <div style={{fontSize:12,color:"#8a94a0",padding:"6px 0"}}>Loading</div>
@@ -6240,7 +6287,7 @@ function writeCollapseFlag(ck, open) {
 //    ("offers for <label> closed <date> - ask the scheduler", no toggle). The box is one summary line by default
 //    ("Change" expands the mode buttons) so the day list keeps the phone's height. They go through the same
 //    onCommit (mode-only save allowed).
-function OfferPainterSheet({ css, dk, person, asScheduler, isScheduler, offers, periods, schedule, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose }) {
+function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose }) {
   const T = THEME[dk ? "dark" : "light"];
   const pid = person ? person.id : "";
   const t0 = parse(today);
@@ -6466,7 +6513,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, isScheduler, offers, 
   const monthLabel = MO[ym.m] + " " + ym.y;
   const atCurrentMonth = ym.y === t0.getFullYear() && ym.m === t0.getMonth(); // navigation is from the current month forward: < stops here
   const periodExpanded = periodOpen && (periodOpenBox || modeDirty); // one line by default; "Change" or a dirty mode opens the box
-  const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : "yourself as " + brushWord(armed)}; tap again with the same brush to clear it.`
+  const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.`
     : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
 
   if (!person) {
@@ -6482,7 +6529,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, isScheduler, offers, 
       {/* Header - safe-area padded for the installed PWA */}
       <div style={{ background: panelBg, borderBottom: `1px solid ${border}`, padding: "8px 12px 8px", paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: text }}>{asScheduler ? "Paint offers for " + person.name : "Paint my offers"}{asScheduler && <span style={{ fontSize: 10.5, fontWeight: 600, color: muted, marginLeft: 6 }}>as the scheduler (relayed)</span>}</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: text }}>{asScheduler ? "Paint offers for " + person.name : "Paint my offers"}{asScheduler && <span style={{ fontSize: 10.5, fontWeight: 600, color: muted, marginLeft: 6 }}>as {relayWord || "the scheduler"} (relayed)</span>}</div>
           <button data-testid="ofp-close" onClick={doClose} aria-label="Close" style={{ background: "none", border: "none", color: muted, fontSize: 22, cursor: "pointer", padding: "6px 10px", minWidth: 44, minHeight: 44 }}>x</button>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
@@ -6561,7 +6608,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, isScheduler, offers, 
           )}
           {period && periodOpen && <button data-testid="ofp-period-toggle" data-on={periodExpanded ? "1" : "0"} onClick={() => setPeriodOpenBox(v => !v)} style={{ ...css.mini(periodExpanded), minHeight: 36 }}>{periodExpanded ? "Done" : "Change"}</button>}
           <button data-testid="ofp-paste-toggle" onClick={() => setPasteOpen(v => !v)} style={{ ...css.mini(pasteOpen), minHeight: 36 }}>{pasteOpen ? "Hide paste" : "Paste dates"}</button>
-          {period && <button data-testid="ofp-rules-toggle" onClick={() => setRulesOpen(v => !v)} style={{ ...css.mini(rulesOpen), minHeight: 36 }}>{rulesOpen ? "Hide rules" : "My rules"}</button>}
+          {period && <button data-testid="ofp-rules-toggle" onClick={() => setRulesOpen(v => !v)} style={{ ...css.mini(rulesOpen), minHeight: 36 }}>{rulesOpen ? "Hide rules" : asScheduler ? "Rules" : "My rules"}</button>}
         </div>
         {pasteOpen && (
           <div data-testid="ofp-paste" style={{ marginBottom: 8 }}>
@@ -7594,12 +7641,12 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
                   <td><input type="text" value={names[p.id] !== undefined ? names[p.id] : (p.display_name || "")} onChange={e => setNames(n => ({ ...n, [p.id]: e.target.value }))} onBlur={() => commitName(p)} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={{ ...inp, width: 130 }} /></td>
                   <td>
                     <select data-testid={"user-role-" + p.id} value={p.role || "viewer"} onChange={e => onSave(p, { role: e.target.value })} style={{ ...inp, width: 110 }}>
-                      {["viewer", "surgeon", "scheduler", "admin"].map(r => <option key={r} value={r}>{r}</option>)}
+                      {["viewer", "surgeon", "coordinator", "scheduler", "admin"].map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </td>
                   <td>
                     <select data-testid={"user-link-" + p.id} value={p.person_id || ""} onChange={e => onSave(p, { person_id: e.target.value || null })} style={{ ...inp, width: 150 }}>
-                      <option value="">none (viewer)</option>
+                      <option value="">none (viewer / coordinator)</option>
                       {(roster || []).map(s => <option key={s.id} value={s.id}>{s.id} {s.name}</option>)}
                     </select>
                   </td>

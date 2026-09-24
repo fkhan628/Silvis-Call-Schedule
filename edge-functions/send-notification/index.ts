@@ -221,7 +221,7 @@ const TYPE_ALIASES: Record<string, string> = {
 function senderRole(caller) {
   const role = caller && caller.role;
   if (role === "admin" || role === "scheduler") return null;   // the scheduler sends every category
-  if (role !== "surgeon") return "role " + (role || "none") + " may not send notifications";   // viewer, no row, unknown
+  if (role !== "surgeon") return "role " + (role || "none") + " may not send notifications";   // viewer, coordinator (Prompt 16 A7: the office relays vacations / offers but never mails through the group sender), no row, unknown
   if (!(caller.personId !== null && caller.personId !== undefined && String(caller.personId) !== "")) {
     return "this account is not linked to a roster entry - nothing to send on its behalf";
   }
