@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-bDf228swmx2pa+KmZqBp1IYSS/0owgZZGX2GHrLVTTE=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-QaFy9VdhXXHp1btUqcn6TvJNfqs6gjYR7+ucDJwILmU=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-ngh1jKfL5DW4C8sOtEP5mHlZxWfTrPqKRUOyWQLKKP8=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-v3gvt6ITn14QakUB7zerKekl8twboRJLvnTZsQz/Gk8=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.24f";
+    var APP_VERSION = "2026.09.24g";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -274,11 +274,11 @@ function CallSchedule() {
     }
   }, [weekStartsOn]);
   const [vacSurgeon, setVacSurgeon] = useState("");
-  const [vacStart, setVacStart] = useState(() => fmt(new Date()));
-  const [vacEnd, setVacEnd] = useState(() => fmt(new Date()));
+  const [vacStart, setVacStart] = useState(() => todayCentral());
+  const [vacEnd, setVacEnd] = useState(() => todayCentral());
   const [vacNote, setVacNote] = useState("");
   const [editVac, setEditVac] = useState(null);
-  const [clearStart, setClearStart] = useState(() => fmt(new Date()));
+  const [clearStart, setClearStart] = useState(() => todayCentral());
   const [clearEnd, setClearEnd] = useState("");
   const [previewGen, setPreviewGen] = useState(null);
   const [genBusy, setGenBusy] = useState(false);
@@ -290,6 +290,7 @@ function CallSchedule() {
     respectLocks: true,
     fillOpenOnly: false
   });
+  const [genWorkerBroken, setGenWorkerBroken] = useState(false);
   const [profilesErr, setProfilesErr] = useState("");
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [availBusy, setAvailBusy] = useState(false);
@@ -336,6 +337,9 @@ function CallSchedule() {
   const daySyncBusyRef = useRef(0);
   const daySyncRetryRef = useRef(null);
   const everHadRealDataRef = useRef(false);
+  const lastDaysCountRef = useRef(0);
+  const daysTripwireWarnedRef = useRef(false);
+  const blobWaitersRef = useRef([]);
   const allowWipeSaveRef = useRef(false);
   const loadFailedRef = useRef(false);
   const blobLoadedRef = useRef(false);
@@ -402,6 +406,14 @@ function CallSchedule() {
   const pendingLinkRef = useRef(null);
   const [userProfile, setUserProfile] = useState(null);
   const [profileLoadFailed, setProfileLoadFailed] = useState(false);
+  const authUserRef = useRef(null);
+  const userProfileRef = useRef(null);
+  useEffect(() => {
+    authUserRef.current = authUser;
+  }, [authUser]);
+  useEffect(() => {
+    userProfileRef.current = userProfile;
+  }, [userProfile]);
   const [biometricAvail, setBiometricAvail] = useState(false);
   const [biometricReason, setBiometricReason] = useState("");
   const [biometricEnrolled, setBiometricEnrolled] = useState(false);
@@ -573,6 +585,41 @@ function CallSchedule() {
     if (!res.ok) throw new Error(`profile read failed: HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 160)}`);
     const rows = await res.json();
     return Array.isArray(rows) ? rows[0] || null : null;
+  };
+  const refreshOwnProfile = async fr => {
+    const uid = authUserRef.current && authUserRef.current.id;
+    const prev = userProfileRef.current;
+    if (!uid || !prev || prev.id !== uid || fr && fr.expired || auth.sessionExpired) return {
+      applied: false,
+      reason: "skipped"
+    };
+    let row;
+    try {
+      row = await fetchProfile(uid);
+    } catch (e) {
+      console.warn("Profile poll read failed - keeping the current profile:", e);
+      return {
+        applied: false,
+        reason: "failed"
+      };
+    }
+    const m = profilePollMerge(prev, row);
+    if (!m.changed) return {
+      applied: false,
+      reason: "unchanged"
+    };
+    if (!authUserRef.current || authUserRef.current.id !== uid || userProfileRef.current !== prev) return {
+      applied: false,
+      reason: "stale"
+    };
+    userProfileRef.current = m.next;
+    setUserProfile(m.next);
+    if (m.recovered) setProfileLoadFailed(false);
+    if (m.linked && !m.recovered) showToast(`Your account is now linked to ${nameOf(m.next.person_id)} - Mine, your alerts and your offers follow it.`);
+    return {
+      applied: true,
+      reason: m.recovered ? "recovered" : m.linked ? "linked" : "changed"
+    };
   };
   const adoptSignedInUser = async user => {
     setAuthUser(user);
@@ -1403,9 +1450,21 @@ function CallSchedule() {
     scheduleRef.current = loadedDays.sched;
     dayVersionsRef.current = loadedDays.vers;
     lastSyncRef.current = JSON.parse(JSON.stringify(loadedDays.sched));
+    lastDaysCountRef.current = loadedDays.count;
+    daysTripwireWarnedRef.current = false;
   };
   const sameAssignment = (day, a, b) => JSON.stringify(assignmentToDayRow(day, a || emptyDayAssignment())) === JSON.stringify(assignmentToDayRow(day, b || emptyDayAssignment()));
   const mergeLoadedDays = fresh => {
+    if (daysReadTripped(fresh.count, lastDaysCountRef.current)) {
+      console.warn(`schedule_days read answered 0 rows while ${lastDaysCountRef.current} were on record - treated as a failed read; the schedule this device holds is kept.`);
+      if (!daysTripwireWarnedRef.current) {
+        daysTripwireWarnedRef.current = true;
+        showToast(`The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`, "error");
+      }
+      return false;
+    }
+    lastDaysCountRef.current = fresh.count;
+    daysTripwireWarnedRef.current = false;
     const base = lastSyncRef.current || {};
     const local = scheduleRef.current || {};
     let changedAny = false;
@@ -1427,6 +1486,7 @@ function CallSchedule() {
       scheduleRef.current = merged;
       setSchedule(merged);
     }
+    return true;
   };
   const writeFailToast = (status, body) => {
     const s = String(body || "");
@@ -1603,6 +1663,16 @@ function CallSchedule() {
       try {
         const fresh = await loadScheduleDays();
         const local = scheduleRef.current || {};
+        if (daysReadTripped(fresh.count, lastDaysCountRef.current)) {
+          console.warn(`conflict reload: schedule_days answered 0 rows while ${lastDaysCountRef.current} were on record - the local schedule is kept.`);
+          showToast("A day was changed by someone else, but the reload came back empty - keeping the schedule this device has. Check your connection, or the schedule was cleared on another device - reload to confirm.", "error");
+          return {
+            ok: false,
+            error: "conflict",
+            conflict: true
+          };
+        }
+        lastDaysCountRef.current = fresh.count;
         const merged = _objectSpread({}, fresh.sched);
         let kept = 0;
         for (const day of Object.keys(local)) {
@@ -1754,8 +1824,8 @@ function CallSchedule() {
     const refreshDays = async () => {
       try {
         const fresh = await loadScheduleDays();
-        loadFailedRef.current = false;
-        mergeLoadedDays(fresh);
+        const adopted = mergeLoadedDays(fresh);
+        if (adopted !== false) loadFailedRef.current = false;
       } catch (e) {
         console.warn("Background schedule refresh failed:", e);
       }
@@ -1802,7 +1872,7 @@ function CallSchedule() {
     const refreshAll = async () => {
       const fr = await auth.ensureFresh();
       if (fr && fr.refreshed) resyncPendingRef.current("poll");
-      await Promise.allSettled([refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
+      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
     };
     refreshDaysRef.current = refreshDays;
     refreshTradesRef.current = refreshTradeReqs;
@@ -2093,29 +2163,52 @@ function CallSchedule() {
       lastGenerate
     };
   }, [surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate]);
+  const awaitBlobWrite = label => {
+    blobWaitersRef.current.push(label);
+  };
+  const takeBlobWaiters = () => {
+    const l = blobWaitersRef.current;
+    blobWaitersRef.current = [];
+    return l;
+  };
+  const settleWaiters = (labels, ok, why) => {
+    if (!labels || !labels.length) return;
+    setupSaveToasts(labels, ok, why).forEach(t => showToast(t.text, t.tone));
+  };
+  const settleBlobWaiters = (ok, why) => settleWaiters(takeBlobWaiters(), ok, why);
   useEffect(() => {
     if (!loaded) return;
     if (isPublicMode) return;
-    if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return;
+    if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) {
+      settleBlobWaiters(false, "the app is still loading - save again in a moment");
+      return;
+    }
     if (loadFailedRef.current) {
       setSaveError(true);
       setSaveStatus("Not saving - data failed to load");
+      settleBlobWaiters(false, "data failed to load");
       return;
     }
-    if (!canWriteBlob) return;
+    if (!canWriteBlob) {
+      settleBlobWaiters(false, "this account cannot write the shared setup");
+      return;
+    }
     const payload = buildStateBundle();
     pendingSaveRef.current = payload;
     const timer = setTimeout(async () => {
+      const mine = takeBlobWaiters();
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave (blob): refusing to write while the payload looks wiped over real data.");
         setSaveError(true);
         setSaveStatus("Save blocked - empty data not written");
+        settleWaiters(mine, false, "empty data was not written");
         return;
       }
       if (!blobLoadedRef.current) {
         console.warn("Autosave: the shared setup (call_schedule_data) has not loaded this session - blob write skipped so defaults cannot overwrite it.");
         setSaveError(true);
         setSaveStatus("Setup not saved - shared setup failed to load");
+        settleWaiters(mine, false, "the shared setup did not load this session");
         return;
       }
       try {
@@ -2125,6 +2218,7 @@ function CallSchedule() {
           setSaveStatus("Saved");
           setTimeout(() => setSaveStatus(""), 2000);
         }
+        if (r && r.reloaded) settleWaiters(mine, false, "the setup changed on another device and was reloaded - check it and save again");else settleWaiters(mine, true);
       } catch (e) {
         console.error("Save failed:", e);
         setSaveError(true);
@@ -2133,6 +2227,7 @@ function CallSchedule() {
         const authFail = /401|JWT|expired/i.test(failMsg);
         setSaveStatus(denied ? "Not saved - no permission" : authFail ? auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry" : "Save failed - retrying");
         if (!(auth.sessionExpired && authFail)) showToast(denied ? "Couldn't save the shared setup - your account doesn't have permission. Ask the scheduler." : authFail ? auth.sessionExpired ? "Changes aren't saving - your session expired. Sign in again." : "Changes aren't saving - your session couldn't be refreshed; they go out once it is." : "Changes aren't saving - check your connection.", "error");
+        settleWaiters(mine, false, denied ? "your account has no permission to write the shared setup" : authFail ? "your session expired - sign in again" : "the write failed - check your connection");
       }
     }, 800);
     return () => clearTimeout(timer);
@@ -2636,7 +2731,7 @@ function CallSchedule() {
     logAudit("rules.edit", "Group rules saved", {
       keys: Object.keys(next || {})
     });
-    showToast("Group rules saved.", "success");
+    awaitBlobWrite("Group rules");
   };
   const saveHolidays = next => {
     if (!isScheduler) return;
@@ -2646,7 +2741,7 @@ function CallSchedule() {
       years,
       counts: years.map(y => y + ":" + (next.units[y] || []).length)
     });
-    showToast("Holiday units saved.", "success");
+    awaitBlobWrite("Holiday units");
   };
   const loadAllProfilesLoud = async () => {
     setProfilesLoading(true);
@@ -2853,7 +2948,7 @@ function CallSchedule() {
     if (!isScheduler) return;
     setEastRefreshing(true);
     try {
-      const fromMon = fmt(monOf(addD(new Date(), -28)));
+      const fromMon = fmt(monOf(addD(parse(todayCentral()), -28)));
       const toMon = fmt(addD(parse(fromMon), 7 * 30));
       const vacationCodes = surgeons.filter(s => {
         const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
@@ -3200,6 +3295,7 @@ function CallSchedule() {
       return [];
     }
   }, [genStart]);
+  const genWorkerOk = genWorkerSupported() && !genWorkerBroken;
   const runGenerate = async o => {
     if (!isScheduler) return;
     const start = o.start,
@@ -3226,22 +3322,36 @@ function CallSchedule() {
     }
     const offersStale = ov.verdict === "stale" ? ov.why : null;
     setGenBusy(true);
-    await new Promise(r => setTimeout(r, 40));
     try {
-      const built = safeBuildContext(_objectSpread(_objectSpread({}, ctxInputs), {}, {
+      const inputs = _objectSpread(_objectSpread({}, ctxInputs), {}, {
         schedule: scheduleRef.current || schedule,
         rangeStart: start,
         rangeEnd: end
-      }));
-      if (!built.ctx) throw new Error(built.error || "rules context unavailable");
-      const t0 = Date.now();
-      const res = generate(built.ctx, start, end, {
+      });
+      const runOpts = {
         seed,
         bestOf,
         respectLocks: o.respectLocks !== false,
         fillOpenOnly: o.fillOpenOnly === true,
         timeBudgetMs: 25000
-      });
+      };
+      const t0 = Date.now();
+      let res = null;
+      if (genWorkerOk) {
+        try {
+          res = await generateInWorker(inputs, start, end, runOpts);
+        } catch (e) {
+          console.warn("Generate worker failed - this device runs Generate inline on the page from now on:", e);
+          setGenWorkerBroken(true);
+          res = null;
+        }
+      }
+      if (!res) {
+        await new Promise(r => setTimeout(r, 40));
+        const built = safeBuildContext(inputs);
+        if (!built.ctx) throw new Error(built.error || "rules context unavailable");
+        res = generate(built.ctx, start, end, runOpts);
+      } else if (res.warnings && res.warnings.length) console.warn("rules context warnings (worker):", res.warnings);
       const ms = Date.now() - t0;
       const dg = res.diagnostics || {};
       if (dg.warnings && dg.warnings.length) console.warn("generate warnings:", dg.warnings);
@@ -3699,6 +3809,7 @@ function CallSchedule() {
       setTimeout(() => setSaveStatus(""), 2000);
       return;
     }
+    lastDaysCountRef.current = 0;
     setSchedule({});
     scheduleRef.current = {};
     dayVersionsRef.current = {};
@@ -4508,14 +4619,16 @@ function CallSchedule() {
   }, []);
   const sendBrowserNotif = useCallback((title, body, tag, forceShow) => {
     try {
-      if (browserNotifPermission !== "granted") return;
-      if (!forceShow && document.hasFocus()) return;
+      if (browserNotifPermission !== "granted") return false;
+      if (!forceShow && document.hasFocus()) return false;
       new Notification(title, {
         body,
         tag: tag || "silvis-call-" + Date.now()
       });
+      return true;
     } catch (e) {
       console.warn("Browser notification error:", e);
+      return false;
     }
   }, [browserNotifPermission]);
   const requestBrowserNotifPermission = async () => {
@@ -4627,16 +4740,16 @@ function CallSchedule() {
     lastNotifCountRef.current = notifications.length;
   }, [loaded, notifications, sendBrowserNotif]);
   const sendTestNotification = useCallback(async () => {
-    sendBrowserNotif("Silvis Call Schedule", "This is a test notification. Browser notifications are working.", "silvis-test", true);
-    setNotifTestSent("Browser notification sent.");
+    const shown = sendBrowserNotif("Silvis Call Schedule", "This is a test notification. Browser notifications are working.", "silvis-test", true);
+    setNotifTestSent(notifTestMessage(shown, browserNotifPermission));
     if (mySurgeon) {
       await sendEmailNotif("test", {
         message: "This is a test email from Silvis Call Schedule."
       }, [mySurgeon]);
-      setNotifTestSent("Browser + email test sent (email requires the deployed function).");
+      setNotifTestSent((shown ? "Browser pop-up shown" : "No browser pop-up") + " + email test sent (email requires the deployed function).");
     }
-    setTimeout(() => setNotifTestSent(""), 4000);
-  }, [sendBrowserNotif, sendEmailNotif, mySurgeon]);
+    setTimeout(() => setNotifTestSent(""), 6000);
+  }, [sendBrowserNotif, sendEmailNotif, mySurgeon, browserNotifPermission]);
   const addOfficeContact = async () => {
     const name = (newOfficeName || "").trim();
     const email = (newOfficeEmail || "").trim();
@@ -4717,11 +4830,26 @@ function CallSchedule() {
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/office_contacts?id=eq.${id}`, {
         method: "DELETE",
-        headers: dbAuthHeaders()
+        headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+          Prefer: "return=representation"
+        })
       });
       if (!res.ok) {
         console.warn("Office contact delete failed:", res.status);
         showToast("Couldn't remove the contact - check your connection and try again.", "error");
+        return;
+      }
+      let rows = [];
+      try {
+        const text = await res.text();
+        rows = text ? JSON.parse(text) : [];
+      } catch (e) {
+        console.warn("Office contact delete: 2xx with a non-JSON body (treated as no row removed)", e);
+        rows = [];
+      }
+      if (!Array.isArray(rows) || rows.length === 0) {
+        console.warn("Office contact delete matched no row:", id);
+        showToast("No contact row was removed - your session may not be scheduler any more. Reload and retry.", "error");
         return;
       }
       setOfficeContacts(prev => prev.filter(x => x.id !== id));
@@ -4880,8 +5008,8 @@ function CallSchedule() {
     }
     const r = await toAdd(vacSurgeon, vacStart, vacEnd, vacNote);
     if (r.ok) {
-      setVacStart(fmt(new Date()));
-      setVacEnd(fmt(new Date()));
+      setVacStart(todayCentral());
+      setVacEnd(todayCentral());
       setVacNote("");
       showToast("Vacation saved.", "success");
     }
@@ -6923,7 +7051,7 @@ function CallSchedule() {
       position: "fixed",
       left: 0,
       right: 0,
-      zIndex: 9998,
+      zIndex: 9200,
       background: "#7a2a2a",
       color: "#fff",
       display: "flex",
@@ -6957,7 +7085,7 @@ function CallSchedule() {
       position: "fixed",
       left: 0,
       right: 0,
-      zIndex: 9998,
+      zIndex: 9200,
       background: "#7a2a2a",
       color: "#fff",
       display: "flex",
@@ -6993,7 +7121,7 @@ function CallSchedule() {
       position: "fixed",
       left: 0,
       right: 0,
-      zIndex: 9998,
+      zIndex: 9200,
       background: "#1F2A3A",
       color: "#fff",
       display: "flex",
@@ -7977,6 +8105,7 @@ function CallSchedule() {
     opts: genOpts,
     setOpts: setGenOpts,
     busy: genBusy,
+    busyMode: genWorkerOk ? "worker" : "inline",
     preview: previewGen,
     onRun: runGenerate,
     onReroll: rerollGenerate,
@@ -11663,7 +11792,7 @@ function MonthPainterSheet({
   onCommit,
   onClose
 }) {
-  const today = new Date();
+  const today = parse(todayCentral());
   const [ym, setYm] = React.useState({
     y: today.getFullYear(),
     m: today.getMonth()
@@ -13313,6 +13442,68 @@ function safeBuildContext(inputs) {
     };
   }
 }
+function genWorkerSupported() {
+  return typeof Worker === "function" && typeof Blob === "function" && typeof URL === "function" && typeof URL.createObjectURL === "function" && typeof genWorkerSource === "function";
+}
+const genWorkerUrls = () => GEN_WORKER_MODULES.map(f => new URL(f + "?v=" + APP_VERSION, location.href).href);
+function generateInWorker(inputs, start, end, opts) {
+  return new Promise((resolve, reject) => {
+    const urls = genWorkerUrls();
+    const blobUrl = URL.createObjectURL(new Blob([genWorkerSource(urls)], {
+      type: "text/javascript"
+    }));
+    let worker = null,
+      timer = null,
+      settled = false;
+    const done = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      try {
+        if (worker) worker.terminate();
+      } catch (e) {
+        console.warn("generate worker: terminate failed", e);
+      }
+      try {
+        URL.revokeObjectURL(blobUrl);
+      } catch (e) {
+        console.warn("generate worker: revokeObjectURL failed", e);
+      }
+      fn(v);
+    };
+    try {
+      worker = new Worker(blobUrl);
+    } catch (e) {
+      done(reject, e);
+      return;
+    }
+    const id = Date.now() + "-" + Math.floor(Math.random() * 1e6);
+    worker.onmessage = ev => {
+      const m = ev && ev.data || {};
+      if (m.id !== id) return;
+      if (m.ok) done(resolve, {
+        schedule: m.schedule || {},
+        diagnostics: m.diagnostics || {},
+        warnings: m.warnings || []
+      });else done(reject, new Error(m.error || "generate worker failed"));
+    };
+    worker.onerror = ev => {
+      done(reject, new Error(ev && ev.message || "generate worker error"));
+    };
+    timer = setTimeout(() => done(reject, new Error("generate worker timed out")), Math.max(5000, (opts && opts.timeBudgetMs || 25000) + 20000));
+    try {
+      worker.postMessage({
+        id,
+        inputs,
+        start,
+        end,
+        opts
+      });
+    } catch (e) {
+      done(reject, e);
+    }
+  });
+}
 const REASON_WORDS = {
   "external-cover": "primary is covered externally",
   "inactive": "inactive on the roster",
@@ -13704,6 +13895,39 @@ function DayEditor(props) {
   const extInfo = name => name + " is an outside surgeon - written in by hand and locked; the generator never moves it.";
   const norm = a => JSON.stringify(assignmentToDayRow(day, a));
   const dirty = norm(draft) !== norm(opened);
+  const requestClose = () => {
+    if (dirty && !confirm("Discard your unsaved changes to this day?")) return;
+    onCancel();
+  };
+  const dialogRef = React.useRef(null);
+  const openerRef = React.useRef(null);
+  const dialogKeyDown = e => {
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(e.currentTarget.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'));
+    const next = focusTrapNext(e.shiftKey, focusable, document.activeElement);
+    if (next) {
+      e.preventDefault();
+      try {
+        next.focus();
+      } catch (err) {
+        console.warn("day editor: focus trap could not move focus", err);
+      }
+    }
+  };
+  React.useEffect(() => {
+    openerRef.current = document.activeElement;
+    if (!focusExternal && dialogRef.current) dialogRef.current.focus();
+    return () => {
+      const back = openerRef.current;
+      if (back && typeof back.focus === "function" && document.contains(back)) {
+        try {
+          back.focus();
+        } catch (err) {
+          console.warn("day editor: could not return focus", err);
+        }
+      }
+    };
+  }, []);
   const draftState = React.useMemo(() => safeBuildContext(_objectSpread(_objectSpread({}, ctxInputs), {}, {
     schedule: _objectSpread(_objectSpread({}, ctxInputs.schedule), {}, {
       [day]: _objectSpread(_objectSpread({}, draft), {}, {
@@ -13886,7 +14110,7 @@ function DayEditor(props) {
     const onKey = e => {
       if (e.key === "Escape") {
         e.preventDefault();
-        if (pending) setPending(null);else onCancel();
+        if (pending) setPending(null);else requestClose();
         return;
       }
       const tag = (e.target && e.target.tagName || "").toLowerCase();
@@ -14131,7 +14355,7 @@ function DayEditor(props) {
   };
   return React.createElement("div", {
     "data-testid": "day-editor",
-    onClick: onCancel,
+    onClick: requestClose,
     style: {
       position: "fixed",
       inset: 0,
@@ -14146,8 +14370,12 @@ function DayEditor(props) {
     role: "dialog",
     "aria-modal": "true",
     "aria-label": "Day editor " + day,
+    ref: dialogRef,
+    tabIndex: -1,
+    onKeyDown: dialogKeyDown,
     onClick: e => e.stopPropagation(),
     style: {
+      outline: "none",
       background: panelBg,
       color: text,
       borderRadius: 12,
@@ -14198,7 +14426,7 @@ function DayEditor(props) {
   }, "›"), React.createElement("button", {
     type: "button",
     "aria-label": "Close",
-    onClick: onCancel,
+    onClick: requestClose,
     style: {
       background: "none",
       border: "none",
@@ -14415,7 +14643,7 @@ function DayEditor(props) {
     }
   }, "Esc closes - arrow keys move a day"), React.createElement("button", {
     type: "button",
-    onClick: onCancel,
+    onClick: requestClose,
     style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
       padding: "7px 14px",
       fontSize: 12
@@ -15541,6 +15769,9 @@ function PatternListEditor({
     fontSize: 12
   });
   const items = Array.isArray(list) ? list : [];
+  const idsRef = React.useRef([]);
+  const ids = suPatternRowIds(idsRef.current, items.length);
+  idsRef.current = ids;
   const update = (i, patch) => onChange(items.map((p, j) => j === i ? patch : p));
   const setKind = (i, kind) => {
     const p = items[i];
@@ -15587,10 +15818,10 @@ function PatternListEditor({
     }
   }, hint) : null), items.map((p, i) => {
     const kind = suPatternKind(p);
-    const text = texts[i] !== undefined ? texts[i] : suPatternValueText(p);
+    const text = texts[ids[i]] !== undefined ? texts[ids[i]] : suPatternValueText(p);
     const next = suNextMatchingDates(typeof matchesPattern === "function" ? matchesPattern : null, p, today, 8);
     return React.createElement("div", {
-      key: i,
+      key: ids[i],
       "data-testid": "pattern-row",
       style: {
         border: "1px solid #e8ecf0",
@@ -15639,7 +15870,7 @@ function PatternListEditor({
       placeholder: kind === "dates" ? "2026-11-02, 2026-11-09" : kind === "week" ? "3" : "2,4",
       onChange: e => {
         setTexts(t => _objectSpread(_objectSpread({}, t), {}, {
-          [i]: e.target.value
+          [ids[i]]: e.target.value
         }));
         setValue(i, e.target.value);
       },
@@ -15669,7 +15900,10 @@ function PatternListEditor({
         flex: "1 1 160px"
       })
     }), React.createElement("button", {
-      onClick: () => onChange(items.filter((_, j) => j !== i)),
+      onClick: () => {
+        idsRef.current = ids.filter((_, j) => j !== i);
+        onChange(items.filter((_, j) => j !== i));
+      },
       style: css.danger
     }, "Remove")), React.createElement("div", {
       "data-testid": "pattern-preview",
@@ -16690,7 +16924,7 @@ function AvailabilityCard({
     person_id: "",
     kind: "available",
     role: "any",
-    year: String(new Date().getFullYear()),
+    year: todayCentral().slice(0, 4),
     text: "",
     note: ""
   });
@@ -16735,7 +16969,10 @@ function AvailabilityCard({
     }));
   };
   const years = [];
-  for (let y = new Date().getFullYear() - 1; y <= new Date().getFullYear() + 2; y++) years.push(String(y));
+  {
+    const yNow = Number(todayCentral().slice(0, 4));
+    for (let y = yNow - 1; y <= yNow + 2; y++) years.push(String(y));
+  }
   return React.createElement("div", {
     "data-testid": "availability-card"
   }, React.createElement("p", {
@@ -18807,6 +19044,7 @@ function GeneratePanel({
   opts,
   setOpts,
   busy,
+  busyMode,
   preview,
   onRun,
   onReroll,
@@ -18957,7 +19195,7 @@ function GeneratePanel({
       fontWeight: 700,
       marginBottom: 8
     }
-  }, "Running best-of-", opts.bestOf, " - the page stays responsive between candidates")), preview && React.createElement("div", {
+  }, busyMode === "worker" ? `Running best-of-${opts.bestOf} in a background worker - the page stays usable while it runs` : `Running best-of-${opts.bestOf} on this page - it may pause for a few seconds until the run finishes`)), preview && React.createElement("div", {
     "data-testid": "gen-preview",
     style: {
       border: "2px dashed #7a4fbf",
