@@ -39,6 +39,10 @@ afterwards; the editor keeps query history).*
    if they open an invite or reset link that has expired or was already used the app says so in one line ("This invite or
    reset link has expired or was already used - ask the scheduler for a new invite, or use Forgot your password") — send a
    fresh invite from the same dashboard page, or, once they have a password, they use **Forgot your password?** on the card.
+   If they open the link on a device where someone else is still signed in (a shared office computer), the app does not
+   replace that session: the card names the signed-in account and the link's, and the link's account is set up only after
+   **Sign out and continue** (or they choose **Keep me signed in** and the link is ignored).
+
 2. The moment the invite is created, the database creates their `user_profiles` row (`viewer`, unlinked) — even if they
    never open the email. You can link them right away.
 3. **Setup → Users** (in the app: the card titled "Users (accounts, roles, roster links)", visible only when your role is

@@ -342,6 +342,7 @@ let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH 
 let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_by } stamped onto every call_schedule_data GET row
 let expiredWrites401 = false;   // Prompt 16 A3: every non-GET under /rest/v1 or /functions/v1 whose bearer JWT is past its exp answers 401 PGRST301 (the real PostgREST answer); the browser's own 401 / 400 console lines are expected while armed
 let authRefreshGrant = null;    // Prompt 16 A3: an access token the token endpoint hands out for grant_type=refresh_token; null = the refresh is rejected (400 invalid_grant)
+let b7DeadLinkStatusLines = 0;  // Prompt 16 B7 (review): the browser's own 401 / 400 lines for the dead link's probe and its refresh - armed per answer by the B7 route, consumed one line each, reset per theme
 let blobWriteTs = null;         // rebase follow-up 9/23 (review, major): updated_at of the app's LAST call_schedule_data write, served on every later blob GET (what the real column reads) so the 60 s poll's refreshBlobRow short-circuits instead of re-adopting the harness-untouched blob over a Setup edit
 let sessBlobWriteTs = null;     // Prompt 16 A3: the same stamp for the session scenario's OWN BrowserContext (routeSupabase scope "session") - the main page's poll autosave must not move the row under the session page's re-run (its Setup-edit sub-step reads updated_at equality)
 // Davenport (East) project mock - fetchEastWeeks reads schedule_weeks + the
@@ -633,6 +634,7 @@ const watchPage = (pg, tag) => {
       else if (forcedOffer400 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); forcedOffer400 = false; } // the forced OF002 answer of rpc/save_offers (offer painter)
       else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
       else if (expiredWrites401 && /status of (401|400)|Save failed: Error: blob save failed: .*JWT expired/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // Prompt 16 A3: the 401s of the expired-bearer writes, the 400 of the rejected refresh and the blob leg's own console.error for that 401 - all forced by the harness
+      else if (b7DeadLinkStatusLines > 0 && /status of (401|400)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); b7DeadLinkStatusLines--; } // Prompt 16 B7: the dead link's probe (401) and its refresh (400), answered by the B7 route
       else consoleErrors.push(msg.text());
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -5341,6 +5343,125 @@ try {
     } catch (e) { fail("A2 expired link: " + errLine(e)); try { await signin.screenshot({ path: path.join(OUT, "failure-signin-expired-link.png"), fullPage: true }); } catch (e2) {} }
   }
   await signin.close();
+  // (e2) Prompt 16 B7: a recovery / invite hash opened on a device where a session already exists. Own
+  // BrowserContext per theme at 390 x 844 with the fixture session (FAKE_JWT) stored: first the SAME account's link
+  // (sub = FAKE_UID) opens the set-password card at once, naming the account, and its pair replaces the stored one;
+  // then the same account's link whose token is DEAD (B7_DEAD: /auth/v1/user 401, its refresh 400) is probed first
+  // and leaves the live session alone - the app comes up signed in with the expired-link toast (the review of B7);
+  // then ANOTHER account's link (sub = B7_LINK_UID) is refused - the card names the signed-in account and the link's,
+  // the stored pair is untouched and no logout goes out - until "Sign out and continue", which POSTs /auth/v1/logout
+  // with the OLD bearer (answered here, never live) and only then stores the link pair and names the link's account.
+  // Light also takes "Keep me signed in": the page reloads without the hash and comes up signed in as before.
+  // /auth/v1/user answers by bearer; everything else goes through routeSupabase in the "session" scope.
+  {
+    const B7_LINK_UID = "00000000-0000-4000-8000-0000000000b7";
+    const B7_LINK_EMAIL = "invitee@example.com";
+    const b7jwt = (sub, email, tag) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub, role: "authenticated", email, exp: Math.floor(Date.now() / 1000) + 3600, jti: tag })}.c2ln`;
+    const B7_SAME = b7jwt(FAKE_UID, FAKE_EMAIL, "b7-same"), B7_OTHER = b7jwt(B7_LINK_UID, B7_LINK_EMAIL, "b7-other"), B7_DEAD = b7jwt(FAKE_UID, FAKE_EMAIL, "b7-dead");
+    const linkHash = (t, r) => `#access_token=${t}&refresh_token=${r}&type=recovery`;
+    const tokName = (t) => t === B7_SAME ? "same-link" : t === B7_OTHER ? "OTHER-link" : t === B7_DEAD ? "DEAD-link" : t === FAKE_JWT ? "fixture" : t == null ? "none" : "?";
+    for (const theme of ["light", "dark"]) {
+      const b7Ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      // the pair is seeded ONCE per context (an init script runs on every navigation - re-seeding would hide whether the
+      // stored pair really persisted or changed across the steps); the version and theme keys are set every time
+      await b7Ctx.addInitScript(({ token, version, dk }) => { try { if (!localStorage.getItem("silvis-b7-seeded")) { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-b7-seeded", "1"); } localStorage.setItem("silvis-app-version", version); localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); } catch (e) {} }, { token: FAKE_JWT, version: APP_VERSION, dk: theme === "dark" });
+      await b7Ctx.route(cdnMatcher, routeCdn);
+      await b7Ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+      const b7 = await b7Ctx.newPage();
+      watchPage(b7, "b7-" + theme);
+      const logouts = [];
+      await b7.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+        try {
+          const req = route.request(); const url = new URL(req.url());
+          const json = (status, body) => route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+          const bearer = String(req.headers()["authorization"] || "").replace(/^Bearer /, "");
+          if (url.pathname.startsWith("/auth/v1/user") && req.method() === "GET") {
+            if (bearer === B7_DEAD) { b7DeadLinkStatusLines++; return await json(401, { message: "invalid JWT: token is expired" }); } // the dead link's probe
+            return await json(200, bearer === B7_OTHER ? { id: B7_LINK_UID, email: B7_LINK_EMAIL, aud: "authenticated", role: "authenticated" } : { id: FAKE_UID, email: FAKE_EMAIL, aud: "authenticated", role: "authenticated" });
+          }
+          if (url.pathname.startsWith("/auth/v1/token") && req.method() === "POST" && /b7-dead-refresh/.test(req.postData() || "")) { b7DeadLinkStatusLines++; return await json(400, { error: "invalid_grant", error_description: "Invalid Refresh Token: Refresh Token Not Found" }); } // the dead link's refresh token
+          // GoTrue answers a logout 204 with no body; the app checks res.ok only. Answered as 200 + "{}" here because Chromium
+          // reports a routed request fulfilled with an EMPTY body as requestfailed net::ERR_ABORTED (fetch still resolves ok) -
+          // measured with a standalone probe (Playwright 1.63) - and that would land in the failed-requests trailer as noise.
+          if (url.pathname.startsWith("/auth/v1/logout")) { logouts.push(bearer); return await json(200, {}); }
+          return await routeSupabase(route, "session");
+        } catch (e) {
+          // a route still in flight when the page navigated away (the "keep" reload's data load) or the context closed has
+          // nothing left to answer (run 1 died on that as an unhandled rejection); anything else is a harness defect and is named
+          const m = String((e && e.message) || e);
+          if (!/closed|disposed|navigat|already handled|aborted|net::ERR/i.test(m)) fail(`B7 ${theme} route (${route.request().method()} ${new URL(route.request().url()).pathname}): ` + errLine(e));
+        }
+      });
+      await b7.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      const state = () => b7.evaluate(() => {
+        let token = null, refresh = null; try { token = localStorage.getItem("silvis-auth-token"); refresh = localStorage.getItem("silvis-auth-refresh"); } catch (e) {}
+        const acct = document.querySelector("[data-testid=link-account]"), conf = document.querySelector("[data-testid=link-conflict]");
+        return { token, refresh, hash: location.hash, account: acct ? acct.textContent.trim() : "", conflict: conf ? conf.textContent.replace(/\s+/g, " ").trim() : "", body: getComputedStyle(document.body).backgroundColor, scrollW: document.documentElement.scrollWidth };
+      });
+      try {
+        // the same account's link
+        await b7.goto(BASE + linkHash(B7_SAME, "b7-same-refresh"), { waitUntil: "domcontentloaded" });
+        await b7.waitForSelector("[data-testid=link-account]", { timeout: 20000 });
+        const s = await state();
+        if (!s.account.includes("Setting a password for " + FAKE_EMAIL)) fail(`B7 ${theme} same account: the card does not name the account: '${s.account}'`); else ok(`B7 ${theme} same account: the set-password card opens at once - '${s.account.slice(0, 48)}'`);
+        if (s.token !== B7_SAME || s.refresh !== "b7-same-refresh") fail(`B7 ${theme} same account: the link pair was not stored (token ${tokName(s.token)}, refresh ${s.refresh})`); else ok(`B7 ${theme} same account: the link pair replaced the same account's stored pair`);
+        if (s.hash !== "") fail(`B7 ${theme}: the hash is still in the URL: ${s.hash.slice(0, 40)}`); else ok(`B7 ${theme}: the hash left the URL before the pair was adopted`);
+        // the same account's link whose token is dead (expired / already used): probed BEFORE anything is stored, so the
+        // live session stays - the ordinary mount follows and the expired-link message is a toast over the signed-in app
+        await b7.goto("about:blank");
+        await b7.goto(BASE + linkHash(B7_DEAD, "b7-dead-refresh"), { waitUntil: "domcontentloaded" });
+        await b7.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!(t && /expired or was already used/.test(t.textContent || "")); }, undefined, { timeout: 20000 });
+        await b7.waitForSelector("[data-testid=app-header]", { timeout: 30000 });
+        await b7.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+        const z = await state();
+        if (z.token !== B7_SAME || z.refresh !== "b7-same-refresh") fail(`B7 ${theme} dead same-account link: the live pair changed (token ${tokName(z.token)}, refresh ${z.refresh})`); else ok(`B7 ${theme} dead same-account link: probed first - the live pair stays, the app comes up signed in with the expired-link toast`);
+        if (z.account || z.conflict) fail(`B7 ${theme} dead same-account link: a card opened instead: '${(z.account || z.conflict).slice(0, 60)}'`);
+        if (z.hash !== "") fail(`B7 ${theme} dead same-account link: the hash is still in the URL: ${z.hash.slice(0, 40)}`);
+        if (logouts.length) fail(`B7 ${theme} dead same-account link: a logout went out (${logouts.length})`);
+        // another account's link, while that session is stored
+        await b7.goto("about:blank");
+        await b7.goto(BASE + linkHash(B7_OTHER, "b7-other-refresh"), { waitUntil: "domcontentloaded" });
+        await b7.waitForSelector("[data-testid=link-conflict]", { timeout: 20000 });
+        const c = await state();
+        if (!c.conflict.includes(FAKE_EMAIL) || !c.conflict.includes(B7_LINK_EMAIL)) fail(`B7 ${theme} other account: the conflict card must name both accounts: '${c.conflict}'`); else ok(`B7 ${theme} other account: the card names the signed-in account (${FAKE_EMAIL}) and the link's (${B7_LINK_EMAIL})`);
+        if (c.token !== B7_SAME || c.refresh !== "b7-same-refresh") fail(`B7 ${theme} other account: the stored pair changed before the sign-out (token ${tokName(c.token)}, refresh ${c.refresh})`); else ok(`B7 ${theme} other account: the stored pair is untouched (nothing stored until the sign-out)`);
+        if (logouts.length) fail(`B7 ${theme} other account: a logout went out before the button was pressed`);
+        const wantBody = theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)";
+        if (c.body !== wantBody) fail(`B7 ${theme}: page background is ${c.body}, expected ${wantBody}`);
+        if (c.scrollW > 392) fail(`B7 ${theme} 390px: the page scrolls horizontally (scrollWidth ${c.scrollW})`);
+        const btn = await b7.$("[data-testid=link-signout]");
+        if (!btn) fail(`B7 ${theme} other account: no Sign out button on the conflict card`);
+        else {
+          const bb = await btn.boundingBox();
+          if (!bb || bb.height < 36 || bb.x + bb.width > 390) fail(`B7 ${theme}: the Sign out button is off screen or under 36px: ${JSON.stringify(bb)}`);
+          await b7.screenshot({ path: path.join(OUT, `recovery-conflict-390-${theme}.png`), fullPage: false });
+          ok(`screenshot test/ui/out/recovery-conflict-390-${theme}.png`);
+          if (theme === "light") {
+            await b7.click("text=Keep me signed in");
+            await b7.waitForSelector("[data-testid=app-header]", { timeout: 30000 });
+            await b7.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {}); // let the mount's data load finish before the next navigation
+            const k = await state();
+            if (k.token !== B7_SAME || logouts.length) fail(`B7 light 'Keep me signed in': the stored pair changed (${tokName(k.token)}) or a logout went out (${logouts.length})`); else ok("B7 light 'Keep me signed in': the app comes back signed in as before (no hash, the pair untouched, no logout)");
+            await b7.goto("about:blank");
+            await b7.goto(BASE + linkHash(B7_OTHER, "b7-other-refresh"), { waitUntil: "domcontentloaded" });
+            await b7.waitForSelector("[data-testid=link-conflict]", { timeout: 20000 });
+          }
+          await b7.click("[data-testid=link-signout]");
+          await b7.waitForSelector("[data-testid=link-account]", { timeout: 20000 });
+          const d = await state();
+          if (logouts.length !== 1 || logouts[0] !== B7_SAME) fail(`B7 ${theme} sign out: expected one POST /auth/v1/logout with the OLD bearer, got ${logouts.length} (${logouts.map(tokName).join(",")})`); else ok(`B7 ${theme} sign out: one POST /auth/v1/logout with the old session's bearer`);
+          if (!d.account.includes("Setting a password for " + B7_LINK_EMAIL)) fail(`B7 ${theme} sign out: the card does not name the link's account: '${d.account}'`); else ok(`B7 ${theme} sign out: then the set-password card - '${d.account.slice(0, 46)}'`);
+          if (d.token !== B7_OTHER || d.refresh !== "b7-other-refresh") fail(`B7 ${theme} sign out: the stored pair is not the link's (token ${tokName(d.token)}, refresh ${d.refresh})`); else ok(`B7 ${theme} sign out: the link pair is stored only now`);
+          await b7.screenshot({ path: path.join(OUT, `recovery-setpassword-390-${theme}.png`), fullPage: false });
+          ok(`screenshot test/ui/out/recovery-setpassword-390-${theme}.png`);
+        }
+      } catch (e) { fail(`B7 ${theme}: ` + errLine(e)); try { await b7.screenshot({ path: path.join(OUT, `failure-b7-${theme}.png`), fullPage: true }); } catch (e2) {} }
+      b7DeadLinkStatusLines = 0;
+      await b7.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
+      await b7Ctx.close();
+    }
+  }
+
   // (f) Prompt 16 A3: session lifecycle. A page whose stored token expired an hour ago (the tab-left-open picture;
   // /auth/v1/user still answers 200, like a session the server has not re-checked) with the refresh REJECTED (400)
   // and every write carrying an expired bearer answered 401: the first write path (the client_versions heartbeat)

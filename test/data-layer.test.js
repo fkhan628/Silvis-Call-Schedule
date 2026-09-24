@@ -3230,6 +3230,236 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- Prompt 16 B7: the recovery / invite hash - auth.adoptLinkSession ---------------- */
+  console.log("\n[B7] Prompt 16 B7 (recovery / invite hash: the pair is adopted for this device's own account or for nobody; a different account's session is never replaced without a sign-out)");
+  {
+    const b64u = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+    const tok = (sub, email, tag) => `${b64u({ alg: "HS256", typ: "JWT" })}.${b64u({ sub, email, role: "authenticated", exp: Math.floor(Date.now() / 1000) + 3600, jti: tag })}.sig`;
+    const U1 = "00000000-0000-4000-8000-0000000000a1", U2 = "00000000-0000-4000-8000-0000000000a2"; // the zero-prefixed fixture shape (test/privacy.test.js A6b)
+    const E1 = "one@example.com", E2 = "two@example.com";
+    const STORED = tok(U1, E1, "stored"), LINK = tok(U2, E2, "link"), LINK_SAME = tok(U1, E1, "link-same"), LINK_ROT = tok(U1, E1, "link-rotated");
+    const store = sandbox.localStorage;
+    const setSession = (t, r) => { store._m = {}; if (t) store.setItem("silvis-auth-token", t); if (r) store.setItem("silvis-auth-refresh", r); };
+    const stored = () => ({ token: store.getItem("silvis-auth-token"), refresh: store.getItem("silvis-auth-refresh") });
+    let B7 = null;
+    const need = () => { if (!B7 || typeof B7.auth.adoptLinkSession !== "function") throw new Error("auth.adoptLinkSession is not implemented in config.js"); };
+    const bcheck = async (name, fn) => { try { need(); await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    check("B7: config.js exposes auth.adoptLinkSession and jwtClaims (the payload's sub / email / exp; null for junk, never throws)", () => {
+      B7 = vm.runInContext("({ auth, jwtClaims: (typeof jwtClaims === 'function' ? jwtClaims : null) })", sandbox);
+      assert.strictEqual(typeof B7.auth.adoptLinkSession, "function", "auth.adoptLinkSession");
+      assert.strictEqual(typeof B7.jwtClaims, "function", "jwtClaims");
+      const c = B7.jwtClaims(LINK);
+      assert.strictEqual(c.sub, U2); assert.strictEqual(c.email, E2); assert.strictEqual(typeof c.exp, "number");
+      assert.strictEqual(B7.jwtClaims("not-a-jwt"), null); assert.strictEqual(B7.jwtClaims(null), null); assert.strictEqual(B7.jwtClaims("a.###.b"), null);
+    });
+    // getUser stub (the task's contract): answers by the token in storage at the moment of the call - the real one
+    // reads auth.getSession() - and records that token; mode[token] = "dead" (cleared, like the real one) | "network".
+    const realGetUser = B7 && B7.auth.getUser, realSave = B7 && B7.auth._saveSession;
+    const users = { [STORED]: { id: U1, email: E1 }, [LINK]: { id: U2, email: E2 }, [LINK_SAME]: { id: U1, email: E1 }, [LINK_ROT]: { id: U1, email: E1 } };
+    let calls = [], saves = 0, mode = {}, fetches = [], probe = {}, grants = {};
+    const reset = () => { calls = []; saves = 0; mode = {}; fetches = []; probe = {}; grants = {}; };
+    const tokTag = (t) => t === LINK_SAME ? "link-same" : t === STORED ? "stored" : t === LINK ? "link" : t === LINK_ROT ? "link-rotated" : t ? "?" : "";
+    // what went out over fetch, as "METHOD /auth/v1/<x> [bearer=<tag>] [refresh=<token>]"
+    const seen = () => fetches.map(f => f.method + " " + f.url.replace(/^.*(\/auth\/v1\/[a-z]+).*$/, "$1") + (f.bearer ? " bearer=" + tokTag(f.bearer) : "") + (f.body && f.body.refresh_token ? " refresh=" + f.body.refresh_token : ""));
+    if (B7) {
+      B7.auth.getUser = async () => { const s = B7.auth.getSession(); const t = s && s.access_token; calls.push(t); if (!t) return { user: null }; if (mode[t] === "network") return { user: null, error: "network" }; if (mode[t] === "dead" || !users[t]) { B7.auth._clearSession(); return { user: null }; } return { user: users[t] }; };
+      B7.auth._saveSession = (d) => { saves++; return realSave.call(B7.auth, d); };
+    }
+    // fetch stub: the logout, and (the review of B7) the probe of a link pair while the SAME account is live on the
+    // device - GET /auth/v1/user answered by bearer (probe[token] = "dead" -> 401, "network" -> throws), the refresh
+    // POST by the refresh token (grants[refresh] = the rotated pair, else 400 invalid_grant); every call is recorded.
+    const bearerOfB7 = (opts) => String((opts && opts.headers && (opts.headers.Authorization || opts.headers.authorization)) || "").replace(/^Bearer /, "");
+    sandbox.__fetch = async (url, opts) => {
+      const u = String(url), method = (opts && opts.method) || "GET", bearer = bearerOfB7(opts);
+      let body = null; try { body = opts && opts.body ? JSON.parse(opts.body) : null; } catch (e) { body = null; }
+      fetches.push({ url: u, method, bearer, body });
+      if (u.includes("/auth/v1/logout")) return resp(204, "");
+      if (u.includes("/auth/v1/user") && method === "GET") {
+        if (probe[bearer] === "network") throw new TypeError("Failed to fetch");
+        if (probe[bearer] === "dead" || !users[bearer]) return resp(401, { message: "invalid JWT: token is expired" });
+        return resp(200, users[bearer]);
+      }
+      if (u.includes("/auth/v1/token?grant_type=refresh_token")) {
+        const g = body && grants[body.refresh_token];
+        return g ? resp(200, { access_token: g.access_token, refresh_token: g.refresh_token, token_type: "bearer", expires_in: 3600, user: users[g.access_token] || null })
+                 : resp(400, { error: "invalid_grant", error_description: "Invalid Refresh Token: Refresh Token Not Found" });
+      }
+      return resp(500, "unexpected fetch in B7: " + u);
+    };
+    await bcheck("B7 no session: the link pair is stored, getUser runs ONCE (after the store, on the new token) and the result names the account - { status: 'ok', user, email }", async () => {
+      setSession(null, null); reset();
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK, refresh_token: "link-r" });
+      assert.strictEqual(r.status, "ok", JSON.stringify(r));
+      assert.strictEqual(r.email, E2);
+      assert.deepStrictEqual({ ...r.user }, { id: U2, email: E2 });
+      assert.deepStrictEqual(stored(), { token: LINK, refresh: "link-r" });
+      assert.deepStrictEqual(calls, [LINK], "one getUser call, on the stored link token");
+      assert.strictEqual(saves, 1, "one _saveSession");
+      assert.deepStrictEqual(seen(), [], "nobody signed in: no probe, nothing over fetch");
+    });
+    await bcheck("B7 same user: a stored session of the SAME account is replaced by the link pair (getUser before, on the stored token; after, on the new one)", async () => {
+      setSession(STORED, "r1"); reset();
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: "link-r2" });
+      assert.strictEqual(r.status, "ok", JSON.stringify(r));
+      assert.strictEqual(r.email, E1);
+      assert.deepStrictEqual(stored(), { token: LINK_SAME, refresh: "link-r2" });
+      assert.deepStrictEqual(calls, [STORED, LINK_SAME]);
+      assert.strictEqual(saves, 1);
+      assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same"], "the link pair is probed once, with the link bearer, BEFORE it replaces the live pair");
+    });
+    await bcheck("B7 same account live + dead link: the link pair is probed BEFORE anything is stored (GET /auth/v1/user with the link bearer -> 401, the refresh POST with the link's refresh token -> 400) - { status: 'dead', kept: true }, the live pair untouched, _saveSession never called, getUser once on the stored token, no expired flag", async () => {
+      setSession(STORED, "r1"); reset(); probe[LINK_SAME] = "dead";
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: "link-r2" });
+      assert.strictEqual(r.status, "dead", JSON.stringify(r));
+      assert.strictEqual(r.kept, true, "kept: the caller goes on to the ordinary session path");
+      assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" }, "the live pair is untouched");
+      assert.deepStrictEqual(calls, [STORED]);
+      assert.strictEqual(saves, 0, "_saveSession not called");
+      assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same", "POST /auth/v1/token refresh=link-r2"]);
+      assert.strictEqual(B7.auth.sessionExpired, false, "a dead LINK never raises the session-expired banner");
+      reset(); probe[LINK_SAME] = "dead";
+      const r2 = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: null });
+      assert.strictEqual(r2.status, "dead"); assert.strictEqual(r2.kept, true);
+      assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same"], "no refresh token: the GET alone decides");
+      assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" });
+    });
+    await bcheck("B7 same account live + an expired link access token with a good refresh token: the probe's refresh POST rotates the pair (nothing stored before the answer) and the ROTATED pair is what gets stored - { status: 'ok' } (getUser after, on the rotated token)", async () => {
+      setSession(STORED, "r1"); reset(); probe[LINK_SAME] = "dead"; grants["link-r2"] = { access_token: LINK_ROT, refresh_token: "link-r3" };
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: "link-r2" });
+      assert.strictEqual(r.status, "ok", JSON.stringify(r));
+      assert.strictEqual(r.email, E1);
+      assert.deepStrictEqual(stored(), { token: LINK_ROT, refresh: "link-r3" }, "the rotated pair is stored");
+      assert.deepStrictEqual(calls, [STORED, LINK_ROT]);
+      assert.strictEqual(saves, 1);
+      assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same", "POST /auth/v1/token refresh=link-r2"]);
+    });
+    await bcheck("B7 same account live + the probe on network: the live pair is kept and the card opens for it - { status: 'ok', kept: true, user: the signed-in user } - nothing stored, no _saveSession, no second getUser", async () => {
+      setSession(STORED, "r1"); reset(); probe[LINK_SAME] = "network";
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: "link-r2" });
+      assert.strictEqual(r.status, "ok", JSON.stringify(r));
+      assert.strictEqual(r.kept, true); assert.strictEqual(r.email, E1); assert.strictEqual(r.unverified, false);
+      assert.deepStrictEqual({ ...r.user }, { id: U1, email: E1 });
+      assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" }, "the live pair is kept");
+      assert.strictEqual(saves, 0);
+      assert.deepStrictEqual(calls, [STORED]);
+      assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same"]);
+    });
+    await bcheck("B7 different user: { status: 'conflict', signedIn: { id, email }, linkEmail } - NOTHING stored (the stored pair untouched, _saveSession never called, one getUser call on the stored token, no expired flag)", async () => {
+      setSession(STORED, "r1"); reset();
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK, refresh_token: "link-r" });
+      assert.strictEqual(r.status, "conflict", JSON.stringify(r));
+      assert.deepStrictEqual({ ...r.signedIn }, { id: U1, email: E1 }); // a host-realm copy: the object was made inside the vm context
+      assert.strictEqual(r.linkEmail, E2);
+      assert.strictEqual(r.unverified, false);
+      assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" }, "the stored pair is untouched");
+      assert.deepStrictEqual(calls, [STORED]);
+      assert.strictEqual(saves, 0, "_saveSession not called");
+      assert.strictEqual(B7.auth.sessionExpired, false);
+      assert.deepStrictEqual(seen(), [], "a different account: refused on getUser alone, the link pair is never probed");
+    });
+    await bcheck("B7 different user, then the explicit sign-out: auth.signOut() clears the pair (POST /auth/v1/logout), a second adoptLinkSession of the SAME link pair stores it - { status: 'ok' } for the link's account", async () => {
+      setSession(STORED, "r1"); reset();
+      const first = await B7.auth.adoptLinkSession({ access_token: LINK, refresh_token: "link-r" });
+      assert.strictEqual(first.status, "conflict");
+      await B7.auth.signOut();
+      assert.deepStrictEqual(stored(), { token: null, refresh: null }, "signed out");
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK, refresh_token: "link-r" });
+      assert.strictEqual(r.status, "ok", JSON.stringify(r));
+      assert.strictEqual(r.email, E2);
+      assert.deepStrictEqual(stored(), { token: LINK, refresh: "link-r" });
+      assert.deepStrictEqual(calls, [STORED, LINK]);
+      assert.strictEqual(saves, 1);
+    });
+    await bcheck("B7 dead stored session: getUser finds no user for the stored pair (cleared, as the real one does) - nobody is signed in, the link pair is stored", async () => {
+      setSession(STORED, "r1"); reset(); mode[STORED] = "dead";
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK, refresh_token: "link-r" });
+      assert.strictEqual(r.status, "ok", JSON.stringify(r));
+      assert.deepStrictEqual(stored(), { token: LINK, refresh: "link-r" });
+      assert.deepStrictEqual(calls, [STORED, LINK]);
+    });
+    await bcheck("B7 network while re-checking the stored session: the two tokens' sub claims decide - a different sub is a conflict (unverified: true, the e-mail from the stored token's claim, nothing stored); the same sub proceeds", async () => {
+      setSession(STORED, "r1"); reset(); mode[STORED] = "network";
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK, refresh_token: "link-r" });
+      assert.strictEqual(r.status, "conflict", JSON.stringify(r));
+      assert.strictEqual(r.unverified, true);
+      assert.deepStrictEqual({ ...r.signedIn }, { id: U1, email: E1 }); // a host-realm copy: the object was made inside the vm context
+      assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" });
+      assert.strictEqual(saves, 0);
+      reset(); mode[STORED] = "network";
+      const r2 = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: "link-r2" });
+      assert.strictEqual(r2.status, "ok", JSON.stringify(r2));
+      assert.deepStrictEqual(stored(), { token: LINK_SAME, refresh: "link-r2" });
+    });
+    await bcheck("B7 dead link token: getUser rejects the freshly stored pair - { status: 'dead' }, nothing left in storage (the card then shows the expired-link message)", async () => {
+      setSession(null, null); reset(); mode[LINK] = "dead";
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK, refresh_token: "link-r" });
+      assert.strictEqual(r.status, "dead", JSON.stringify(r));
+      assert.deepStrictEqual(stored(), { token: null, refresh: null });
+    });
+    await bcheck("B7 network after the store: the pair stays stored and the card still opens with the e-mail from the token - { status: 'ok', user: null, unverified: true }", async () => {
+      setSession(null, null); reset(); mode[LINK] = "network";
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK, refresh_token: "link-r" });
+      assert.strictEqual(r.status, "ok", JSON.stringify(r));
+      assert.strictEqual(r.user, null); assert.strictEqual(r.email, E2); assert.strictEqual(r.unverified, true);
+      assert.deepStrictEqual(stored(), { token: LINK, refresh: "link-r" });
+    });
+    await bcheck("B7 junk: a pair without a decodable access token is { status: 'invalid' } - nothing stored, no getUser, no _saveSession", async () => {
+      setSession(STORED, "r1"); reset();
+      const r = await B7.auth.adoptLinkSession({ access_token: "nope", refresh_token: "x" });
+      assert.strictEqual(r.status, "invalid");
+      assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" });
+      assert.deepStrictEqual(calls, []); assert.strictEqual(saves, 0);
+      assert.strictEqual((await B7.auth.adoptLinkSession(null)).status, "invalid");
+    });
+    await bcheck("B7 updatePassword offline: a THROWN fetch resolves to { error: 'No connection - try again' } instead of rejecting (the card's busy state ends with a message, not a stuck button); a non-JSON error body still resolves to an error", async () => {
+      setSession(STORED, "r1"); reset();
+      sandbox.__fetch = async () => { throw new TypeError("Failed to fetch"); };
+      const r = await B7.auth.updatePassword("placeholder-pw-1");
+      assert.deepStrictEqual({ ...r }, { error: "No connection - try again" });
+      sandbox.__fetch = async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError("Unexpected token <"); }, text: async () => "<html>bad gateway</html>" });
+      const r2 = await B7.auth.updatePassword("placeholder-pw-1");
+      assert.ok(r2 && typeof r2.error === "string" && r2.error.length > 0, "an error string for a non-JSON body: " + JSON.stringify(r2));
+    });
+    if (B7) { B7.auth.getUser = realGetUser; B7.auth._saveSession = realSave; }
+    const B7SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const B7count = (needle) => B7SRC.split(needle).length - 1;
+    check("B7 pins: the mount effect's hash branch drops the hash from the URL, then hands the pair to adoptLinkSession (config.js decides) - the app never calls auth._saveSession itself; the pending pair lives in pendingLinkRef (memory), never in storage; the card says 'Setting a password for' the account; the conflict card carries the Sign out button", () => {
+      const start = B7SRC.indexOf("  // --- Auth: Check session on mount ---");
+      assert.ok(start > 0, "mount effect not found");
+      const eff = B7SRC.slice(start, start + 4000);
+      const iHash = eff.indexOf('if (hash && (hash.includes("type=recovery") || hash.includes("type=invite"))) {');
+      const iClean = eff.indexOf('window.history.replaceState(null, "", window.location.pathname + window.location.search);');
+      const iAdopt = eff.indexOf("await adoptLinkSession({ access_token: accessToken, refresh_token: refreshToken });");
+      assert.ok(iHash > 0 && iClean > iHash && iAdopt > iClean, "hash branch -> replaceState -> adoptLinkSession, in that order");
+      assert.strictEqual(B7count("auth._saveSession("), 0, "the app never stores a pair itself");
+      assert.strictEqual(B7count("auth.adoptLinkSession("), 1, "one call site (the component's adoptLinkSession)");
+      assert.strictEqual(B7count('setAuthMode("newpassword")'), 1, "the set-password card is opened in one place (the ok branch)");
+      assert.strictEqual(B7count("const pendingLinkRef = useRef(null);"), 1, "the pending pair is a ref");
+      assert.strictEqual(B7count("pendingLinkRef.current = pair;"), 1, "set once, on a conflict");
+      assert.strictEqual(B7count('localStorage.setItem("silvis-auth'), 0, "no token write to storage from the app");
+      assert.strictEqual(B7count("Setting a password for "), 1, "the card names the account");
+      assert.strictEqual(B7count('data-testid="link-account"'), 1, "the card's account line");
+      assert.strictEqual(B7count('data-testid="link-conflict"'), 1, "the conflict card");
+      assert.strictEqual(B7count('data-testid="link-signout"'), 1, "its Sign out button");
+      assert.ok(B7SRC.includes('authMode==="linkconflict"'), "the linkconflict card mode");
+      assert.ok(B7SRC.includes("setAuthError(AUTH_LINK_ERROR_MESSAGE)"), "a dead link token shows the A2 expired-link message");
+    });
+    check("B7 pins (review): a dead link over this device's own live session is KEPT - the mount effect reads the verdict and falls through to the ordinary session path, the wrapper shows the expired-link toast (no card); submitNewPassword ends the busy state when updatePassword rejects; config.js probes the link pair (_probeLinkPair) and updatePassword catches a thrown fetch", () => {
+      const start = B7SRC.indexOf("  // --- Auth: Check session on mount ---");
+      const eff = B7SRC.slice(start, start + 4000);
+      assert.ok(eff.includes("const r = await adoptLinkSession({ access_token: accessToken, refresh_token: refreshToken });"), "the mount effect reads the verdict");
+      assert.ok(eff.includes('if (!(r && r.kept && r.status === "dead")) { setAuthLoading(false); return; }'), "kept + dead: no early return - the ordinary session path follows");
+      assert.strictEqual(B7count('else if (r.status === "dead" && r.kept) {'), 1, "the wrapper's kept branch");
+      assert.strictEqual(B7count('showToast(AUTH_LINK_ERROR_MESSAGE, "error")'), 1, "the expired-link toast over the signed-in app (once)");
+      assert.ok(/auth\.updatePassword\(newPassword\)\.then\(r=>\{[\s\S]{0,700}?\}\)\.catch\(e=>\{setAuthBusy\(false\);setAuthError\(/.test(B7SRC), "submitNewPassword: .catch ends the busy state with a message");
+      const CFG = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
+      assert.ok(CFG.includes("async _probeLinkPair(accessToken, refreshToken) {"), "config.js: the probe helper");
+      const iUp = CFG.indexOf("async updatePassword(newPassword) {");
+      const up = CFG.slice(iUp, iUp + 1500);
+      assert.ok(iUp > 0 && /try \{[\s\S]*?fetch\(/.test(up) && up.includes('return { error: "No connection - try again" };'), "updatePassword: the fetch is inside try/catch and a throw answers 'No connection - try again'");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

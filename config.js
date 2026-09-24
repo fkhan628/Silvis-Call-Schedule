@@ -113,6 +113,15 @@ function jwtExpiresWithin(token, aheadMs) {
     return !(typeof payload.exp === "number" && payload.exp * 1000 > Date.now() + (aheadMs || 0));
   } catch (e) { return true; }
 }
+// The decoded payload of a JWT ({ sub, email, exp, ... }) or null when the token
+// is not decodable. Never throws. Prompt 16 B7: the pair a recovery / invite link
+// carries is matched against the stored session by `sub` BEFORE anything is stored.
+function jwtClaims(token) {
+  try {
+    const payload = JSON.parse(atob(String(token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return payload && typeof payload === "object" ? payload : null;
+  } catch (e) { return null; }
+}
 // The session headers of the moment plus the caller's extras (Prefer, ...).
 // Authorization / apikey / Content-Type always come from dbAuthHeaders() so a
 // refresh that happened a moment ago is what goes out.
@@ -920,16 +929,110 @@ const auth = {
   async updatePassword(newPassword) {
     const session = auth.getSession();
     if (!session?.access_token) return { error: "No active session" };
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      method: "PUT",
-      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ password: newPassword }),
-    });
-    if (!res.ok) {
-      const data = await res.json();
-      return { error: data.msg || data.error_description || data.message || "Update failed" };
+    // A THROWN fetch (offline, a blip) resolves to an error object like getUser / _refresh do - the set-password card
+    // ends its busy state with a message instead of an unhandled rejection and a stuck button (the review of B7).
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        method: "PUT",
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ password: newPassword }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { error: data.msg || data.error_description || data.message || `Update failed (HTTP ${res.status})` };
+      }
+      return { error: null };
+    } catch (e) {
+      console.warn("auth.updatePassword: network error:", e);
+      return { error: "No connection - try again" };
     }
-    return { error: null };
+  },
+
+  // ---- Prompt 16 B7: the recovery / invite hash ----
+  // Adopts the pair a mail link carried (#access_token=...&type=recovery|invite)
+  // ONLY when it belongs to the account already signed in on this device, or when
+  // nobody is (a stored pair that turns out dead counts as nobody). A DIFFERENT
+  // account's live session is never replaced under it: nothing is stored, and the
+  // caller shows who is signed in with a Sign out button, then calls this again
+  // after auth.signOut(). The stored session is re-checked through auth.getUser()
+  // (which may refresh it, and clears it when it is dead); the link's account is
+  // its token's `sub` claim - the same id GoTrue answers as user.id. Returns, and
+  // never throws:
+  //   { status: "ok", user, email, unverified }
+  //       stored; getUser() then ran on the new token - `user` is its answer (null,
+  //       unverified true, on a network error: the e-mail then comes from the token's
+  //       claim, and the password PUT fails loudly if the token is dead after all)
+  //   { status: "conflict", signedIn: { id, email }, linkEmail, unverified }
+  //       nothing stored; unverified true when the stored session could not be
+  //       re-checked (network) and the two tokens' sub claims decided
+  //   { status: "dead" }      the link token was rejected (expired / already used) -
+  //       nothing left in storage; the caller shows the expired-link message.
+  //       With kept: true the SAME account's live session was on the device and is
+  //       untouched (the pair was probed first, see _probeLinkPair) - the caller goes
+  //       on to the ordinary session path and shows the message as a toast
+  //   { status: "invalid" }   no decodable access token in the pair
+  // ok also carries kept: true when the same account's live session stays because the
+  // probe hit a network error: the card opens for that account and the password PUT goes
+  // out with the live session (the same account) - nothing is replaced on a guess.
+  async adoptLinkSession(pair) {
+    let accessToken = pair && typeof pair.access_token === "string" ? pair.access_token : null;
+    const claims = accessToken ? jwtClaims(accessToken) : null;
+    if (!claims || !claims.sub) return { status: "invalid" };
+    const linkEmail = typeof claims.email === "string" ? claims.email : null;
+    let refreshToken = pair.refresh_token || null;
+    try {
+      const prev = auth.getSession();
+      if (prev && prev.access_token) {
+        const cur = await auth.getUser();
+        if (cur && cur.user) {
+          if (cur.user.id !== claims.sub) return { status: "conflict", signedIn: { id: cur.user.id, email: cur.user.email || null }, linkEmail, unverified: false };
+          // the SAME account is live on this device: the link pair is checked BEFORE it replaces anything (the review
+          // of B7) - a dead link (expired / already used) leaves the live session in place instead of ending it
+          const probe = await auth._probeLinkPair(accessToken, refreshToken);
+          if (probe.dead) return { status: "dead", kept: true };
+          if (probe.error === "network") return { status: "ok", user: cur.user, email: cur.user.email || linkEmail, unverified: false, kept: true };
+          accessToken = probe.pair.access_token; refreshToken = probe.pair.refresh_token; // a rotated pair when the probe had to refresh
+        } else if (cur && cur.error === "network") {
+          // could not re-check the stored session: never replace it on a guess - the sub claims decide
+          const prevClaims = jwtClaims(prev.access_token);
+          if (!prevClaims || prevClaims.sub !== claims.sub) return { status: "conflict", signedIn: { id: (prevClaims && prevClaims.sub) || null, email: (prevClaims && typeof prevClaims.email === "string") ? prevClaims.email : null }, linkEmail, unverified: true };
+        }
+        // else: the stored pair was dead and getUser cleared it - nobody is signed in
+      }
+      if (!refreshToken) { try { localStorage.removeItem(AUTH_REFRESH_KEY); } catch (e) {} } // a pair without a refresh token must not inherit a stale one
+      auth._saveSession({ access_token: accessToken, refresh_token: refreshToken });
+      const me = await auth.getUser();
+      if (me && me.user) return { status: "ok", user: me.user, email: me.user.email || linkEmail, unverified: false };
+      if (me && me.error === "network") return { status: "ok", user: null, email: linkEmail, unverified: true };
+      // rejected: getUser cleared the pair - make sure nothing of the link is left behind
+      try { const s = auth.getSession(); if (s && s.access_token === accessToken) auth._clearSession(); } catch (e) {}
+      return { status: "dead" };
+    } catch (e) {
+      console.warn("auth.adoptLinkSession failed:", e);
+      return { status: "dead" };
+    }
+  },
+  // Checks a link pair against GoTrue WITHOUT touching storage or the session flags: GET /auth/v1/user with the link's
+  // bearer and, when that is rejected and the pair carries a refresh token, ONE refresh POST with it (the rotated pair
+  // is then the one to store - the old refresh token is consumed). Never throws:
+  //   { user, pair } | { dead: true, status } | { error: "network" }
+  async _probeLinkPair(accessToken, refreshToken) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` } });
+      if (res.ok) return { user: await res.json(), pair: { access_token: accessToken, refresh_token: refreshToken } };
+      if (!refreshToken) return { dead: true, status: res.status };
+      const r2 = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!r2.ok) return { dead: true, status: r2.status };
+      const data = await r2.json();
+      if (!data || typeof data.access_token !== "string") return { dead: true, status: r2.status };
+      return { user: data.user || null, pair: { access_token: data.access_token, refresh_token: data.refresh_token || null } };
+    } catch (e) {
+      return { error: "network" };
+    }
   },
 
   // Get auth headers for DB queries (user-level RLS)

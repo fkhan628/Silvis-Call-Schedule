@@ -510,13 +510,16 @@ function CallSchedule() {
   const [authLoading, setAuthLoading] = useState(true);  // checking session on mount
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
-  const [authMode, setAuthMode] = useState("login");     // "login" | "reset" | "newpassword"
+  const [authMode, setAuthMode] = useState("login");     // "login" | "reset" | "newpassword" | "linkconflict" (Prompt 16 B7)
   const [resetEmail, setResetEmail] = useState("");
   const [resetSent, setResetSent] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [linkSetup, setLinkSetup] = useState(null);       // Prompt 16 B7: { email, unverified } - the account a recovery / invite link sets a password for
+  const [linkConflict, setLinkConflict] = useState(null); // Prompt 16 B7: { signedIn: { id, email }, linkEmail, unverified } - another account is signed in on this device
+  const pendingLinkRef = useRef(null);                     // Prompt 16 B7: the link pair waiting on that account's sign-out - memory only, never storage
   const [userProfile, setUserProfile] = useState(null);  // { id, person_id, display_name, role }
   const [profileLoadFailed, setProfileLoadFailed] = useState(false); // failed != unlinked
   const [biometricAvail, setBiometricAvail] = useState(false);
@@ -764,11 +767,13 @@ function CallSchedule() {
           const accessToken = params.get("access_token");
           const refreshToken = params.get("refresh_token");
           if (accessToken) {
-            auth._saveSession({ access_token: accessToken, refresh_token: refreshToken });
+            // Prompt 16 B7: the hash leaves the URL first (a reload must never replay the tokens), then the pair
+            // is handed to adoptLinkSession - stored only for this device's own account or for nobody; a
+            // different account's session stays and the card asks for an explicit sign-out (config.js decides).
             window.history.replaceState(null, "", window.location.pathname + window.location.search);
-            setAuthMode("newpassword");
-            setAuthLoading(false);
-            return;
+            const r = await adoptLinkSession({ access_token: accessToken, refresh_token: refreshToken });
+            if (!(r && r.kept && r.status === "dead")) { setAuthLoading(false); return; }
+            // a dead link over this device's own live session (kept): the ordinary session path below signs the person in
           }
         }
 
@@ -869,6 +874,41 @@ function CallSchedule() {
     setBiometricEnrolled(false); setBiometricPending(false);
     setIsScheduler(false);
   };
+
+  // Prompt 16 B7: the pair from a recovery / invite hash. config.js auth.adoptLinkSession stores it only for this
+  // device's own account or when nobody is signed in; for a DIFFERENT account's live session it stores nothing and
+  // the card shows who is signed in with a Sign out button - the pair waits in pendingLinkRef (memory only, never
+  // storage) until that sign-out. A rejected link token shows the A2 expired-link message on the sign-in card.
+  const adoptLinkSession = async (pair) => {
+    setAuthError("");
+    let r;
+    try { r = await auth.adoptLinkSession(pair); } catch (e) { console.warn("recovery / invite link: adopt failed:", e); r = { status: "dead" }; }
+    if (r.status === "conflict") {
+      pendingLinkRef.current = pair;
+      setLinkConflict({ signedIn: r.signedIn || {}, linkEmail: r.linkEmail || null, unverified: !!r.unverified });
+      setAuthMode("linkconflict");
+      return r;
+    }
+    pendingLinkRef.current = null;
+    setLinkConflict(null);
+    if (r.status === "ok") { setLinkSetup({ email: r.email || null, unverified: !!r.unverified }); setAuthMode("newpassword"); }
+    else if (r.status === "dead" && r.kept) { setLinkSetup(null); showToast(AUTH_LINK_ERROR_MESSAGE, "error"); } // the live session stays (probed first): no card - the mount effect goes on to sign the person in
+    else { setLinkSetup(null); setAuthMode("login"); setAuthError(AUTH_LINK_ERROR_MESSAGE); }
+    return r;
+  };
+  // "Sign out and continue": the signed-in account's session ends (server-side logout, biometric enrollment dropped,
+  // like handleSignOut) and only then is the waiting pair adopted.
+  const signOutForLink = async () => {
+    const pair = pendingLinkRef.current;
+    if (!pair) { setAuthMode("login"); return; }
+    setAuthBusy(true); setAuthError("");
+    try { await auth.signOut(); biometric.unenroll(); await adoptLinkSession(pair); }
+    catch (e) { console.warn("sign out for the link failed:", e); setAuthError(e.message || "Sign out failed"); }
+    setAuthBusy(false);
+  };
+  // "Keep me signed in": the waiting pair is dropped (it was never stored) and the page reloads - the hash already
+  // left the URL, so the reload is the ordinary mount with the stored session.
+  const keepSessionIgnoreLink = () => { pendingLinkRef.current = null; setLinkConflict(null); window.location.reload(); };
 
   // --- Session lifecycle (Prompt 16 A3) ---
   // auth.sessionExpired flips (once) when a refresh is rejected - a tab or PWA kept open past the session's life.
@@ -4855,8 +4895,8 @@ function CallSchedule() {
     auth.updatePassword(newPassword).then(r=>{
       setAuthBusy(false);
       if(r.error){setAuthError(r.error);}
-      else{setAuthMode("login");setAuthError("");setNewPassword("");setNewPasswordConfirm("");alert("Password updated. Please sign in with your new password.");auth.signOut();}
-    });
+      else{setAuthMode("login");setLinkSetup(null);setAuthError("");setNewPassword("");setNewPasswordConfirm("");alert("Password updated. Please sign in with your new password.");auth.signOut();}
+    }).catch(e=>{setAuthBusy(false);setAuthError((e&&e.message)||"Update failed");}); // never a stuck "Updating" button (the review of B7)
   };
   const submitReset = () => {
     if(!resetEmail){setAuthError("Please enter your email");return;}
@@ -5036,12 +5076,14 @@ function CallSchedule() {
             </div>
             <h2 style={{fontSize:18,fontWeight:700,color:dkText,margin:"0 0 4px"}}>Silvis Call Schedule</h2>
             <p style={{fontSize:12,color:"#5B6B82",margin:0}}>
-              {authMode==="login" ? "Sign in to your account" : authMode==="reset" ? "Reset your password" : "Set a new password"}
+              {authMode==="login" ? "Sign in to your account" : authMode==="reset" ? "Reset your password" : authMode==="linkconflict" ? "Already signed in on this device" : "Set a new password"}
             </p>
           </div>
           {authMode==="newpassword" ? (
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
-              <p style={{fontSize:13,color:T.text,margin:0}}>Enter your new password below.</p>
+              <p data-testid="link-account" style={{fontSize:13,color:T.text,margin:0,lineHeight:1.5}}>
+                Setting a password for <strong>{(linkSetup && linkSetup.email) || "this account"}</strong>{linkSetup && linkSetup.unverified ? " (not re-checked - no connection)" : ""}. Enter your new password below.
+              </p>
               <input type="password" placeholder="New password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               <input type="password" placeholder="Confirm new password" value={newPasswordConfirm} onChange={e=>setNewPasswordConfirm(e.target.value)}
                 onKeyDown={e=>{if(e.key==="Enter") submitNewPassword();}} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
@@ -5049,6 +5091,21 @@ function CallSchedule() {
               <button onClick={submitNewPassword} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>
                 {authBusy ? "Updating" : "Update password"}
               </button>
+            </div>
+          ) : authMode==="linkconflict" ? (
+            <div data-testid="link-conflict" style={{display:"flex",flexDirection:"column",gap:10}}>
+              <p style={{fontSize:13,color:T.text,margin:0,lineHeight:1.5}}>
+                This device is signed in as <strong>{(linkConflict && linkConflict.signedIn && linkConflict.signedIn.email) || "another account"}</strong>{linkConflict && linkConflict.unverified ? " (not re-checked - no connection)" : ""}.
+                The link you opened sets a password for <strong>{(linkConflict && linkConflict.linkEmail) || "a different account"}</strong>.
+                Sign out first to continue with the link, or keep the current session and ignore it.
+              </p>
+              {errBox(authError)}
+              <button data-testid="link-signout" onClick={signOutForLink} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>
+                {authBusy ? "Signing out" : "Sign out and continue"}
+              </button>
+              <div style={{textAlign:"center",marginTop:4}}>
+                <button onClick={keepSessionIgnoreLink} disabled={authBusy} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Keep me signed in</button>
+              </div>
             </div>
           ) : authMode==="reset" ? (
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
