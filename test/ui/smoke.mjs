@@ -703,6 +703,7 @@ const representation = (method, url, body) => {
 // the restore scenario replays exactly what the app captured before the reset.
 const snapStore = [];
 let minVersionOverride = null; // Prompt 11: { min_version, message } served for client_versions row 'main'
+let cvExtrasFixture = false;   // Item 5a (9/24): the Client versions listing carries a heartbeat row for the office + viewer accounts and user_profiles carries all three mocked profiles
 let emptyDaysFor = null, emptyDaysServed = 0; // Prompt 16 B9 (h): the page whose NEXT schedule_days GET answers 200 + [] (an RLS-filtered / dead-token read)
 // Prompt 11 (factory reset): once the app's DELETE of every schedule_days row is
 // recorded, the table reads as EMPTY from then on and later CAS POSTs / PATCHes
@@ -866,7 +867,7 @@ const routeSupabase = async (route, scope) => {
     return json(401, { code: "PGRST301", message: "JWT expired", details: null, hint: null });
   }
   if (url.pathname.startsWith("/rest/v1/user_profiles")) {
-    if (method === "GET") return json(200, [FAKE_PROFILE]);
+    if (method === "GET") { const { authEmail, ...viewerRow } = VIEWER_PROFILE; return json(200, cvExtrasFixture ? [FAKE_PROFILE, COORD_PROFILE, viewerRow] : [FAKE_PROFILE]); }
     const body = req.postData() || "";
     writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
     // A PATCH with Prefer: return=representation answers the merged row, like
@@ -1047,6 +1048,8 @@ const routeSupabase = async (route, scope) => {
   }
   // Forced minimum version (refresh-banner scenario): row 'main' of client_versions.
   if (minVersionOverride && method === "GET" && url.pathname.startsWith("/rest/v1/client_versions") && /id=eq\.main/.test(url.search)) return json(200, [{ id: "main", ...minVersionOverride }]);
+  // Item 5a: the scheduler's full listing (never the 'main' row read) carries two heartbeat rows without a person_id.
+  if (cvExtrasFixture && method === "GET" && url.pathname === "/rest/v1/client_versions" && !/id=eq\.main/.test(url.search)) return json(200, [{ id: COORD_UID, person_id: null, app_version: APP_VERSION, user_agent: "harness", seen_at: "2026-09-24T12:00:00Z" }, { id: VIEWER_UID, person_id: null, app_version: APP_VERSION, user_agent: "harness", seen_at: "2026-09-24T11:00:00Z" }]);
   // Harness switch (fix round 2, safe-4): stamp a foreign updated_at / updated_by
   // onto the blob row so the import's dry run and its pre-apply re-read see a
   // setup that "changed since the dry run".
@@ -1192,6 +1195,33 @@ try {
   }
   await page.screenshot({ path: path.join(OUT, "settings-open.png"), fullPage: true });
   ok("settings cards expanded without error");
+
+  // Item 5a (Faraz 9/24): in the Client versions card an account with no person_id shows its user_profiles
+  // display_name and role ("Office (harness) - coordinator") with an EMPTY id column; a profile without a display_name
+  // keeps "(unlinked account)" + the id8; a linked roster row is untouched. While cvExtrasFixture is armed the route
+  // serves a heartbeat row for the office and the viewer accounts and all three profiles; the card's Refresh reloads
+  // both, then the switch is dropped and a second Refresh restores the run's one-profile picture (loadClientVersions
+  // also feeds allProfiles).
+  {
+    cvExtrasFixture = true;
+    try {
+      if ((await page.$("[data-testid=card-settings_client_versions][data-open='0']"))) { await page.click("[data-testid=card-toggle-settings_client_versions]"); await page.waitForTimeout(200); }
+      await page.click("[data-testid=card-settings_client_versions] button:has-text(\"Refresh\")");
+      await page.waitForSelector(`[data-cv-row="${COORD_UID}"]`, { timeout: 8000 });
+      const rowOf = (id) => page.$eval(`[data-cv-row="${id}"]`, el => ({ name: el.querySelector("[data-cv-name]").textContent, id: el.querySelector("[data-cv-id]").textContent, idShown: getComputedStyle(el.querySelector("[data-cv-id]")).display !== "none", text: el.textContent.replace(/\s+/g, " ").trim() }));
+      const co = await rowOf(COORD_UID), vi = await rowOf(VIEWER_UID), s1 = await rowOf("s1");
+      if (co.name !== "Office (harness) \u2014 coordinator" || co.id !== "" || co.idShown || co.text.includes(COORD_UID.slice(0, 8))) fail("Item 5a: the named unlinked account must read '<display_name> \u2014 <role>' with no id8 and a hidden id column: " + JSON.stringify(co));
+      else ok(`Item 5a: Client versions names the unlinked office account '${co.name}' (no id8, id column hidden; status '${co.text.slice(co.name.length).trim().slice(0, 40)}')`);
+      if (vi.name !== "(unlinked account)" || vi.id !== VIEWER_UID.slice(0, 8) || !vi.idShown) fail("Item 5a: a profile with no display_name must keep '(unlinked account)' + the visible id8: " + JSON.stringify(vi));
+      else ok(`Item 5a: a no-name account keeps '(unlinked account)' + id8 ${vi.id}`);
+      if (s1.name !== "Khan" || s1.id !== "s1") fail("Item 5a: the linked roster row changed: " + JSON.stringify(s1));
+      else ok("Item 5a: the linked roster row still reads 'Khan s1'");
+      await page.screenshot({ path: path.join(OUT, "client-versions-5a.png"), fullPage: true });
+    } catch (e) { fail("Item 5a: " + String(e && e.message || e).split("\n")[0]); }
+    cvExtrasFixture = false;
+    await page.click("[data-testid=card-settings_client_versions] button:has-text(\"Refresh\")");
+    await page.waitForSelector(`[data-cv-row="${COORD_UID}"]`, { state: "detached", timeout: 8000 }).then(() => ok("Item 5a: the fixture rows cleared after the switch was dropped (one-profile picture restored)"), () => fail("Item 5a: the fixture rows did not clear after the switch was dropped"));
+  }
 
   // Heartbeat write happened (client_versions upsert keyed by the auth uid).
   const beat = writes.find(w => w.path.startsWith("/rest/v1/client_versions"));

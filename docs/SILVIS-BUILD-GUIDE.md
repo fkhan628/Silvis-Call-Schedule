@@ -878,7 +878,7 @@ section is on `main` and live. Schema: `call_periods` (incl. `offer_modes`), `ca
 the painter RPCs `set_offer_mode` / `save_offers` (`sql/migrations/2026-09-23-offer-mode-rpc.sql`, applied 9/23 ~18:45 UTC —
 `docs/SCHEMA-REVIEW.md` carries each observed probe; `sql/schema.sql` mirrors every applied body). Data: the seed applied
 through the CLI twice on 9/23 — the first period (Nov 2026 – Jan 2027, status `published` since the 9/23 publish) with its 79
-seed-relayed offers and modes, and the Feb 2027 – Apr 2027 period (freeze 12/21, publish by 1/4; 9/24: Faraz moved its end from Fri 4/30 to Sun 5/2 by SQL — audit `period.update` — so the last weekend unit stays whole, and created **Jan 2027** — 1/4 – 1/31, freeze 11/23, publish by 12/7 — in Setup → Periods to fill the gap after 1/3; the seed's `offerPeriods[]` carries all three so a re-apply matches the live table). App: the painter
+seed-relayed offers and modes, and the Feb 2027 – Apr 2027 period (freeze 12/21, publish by 1/4; 9/24: Faraz moved its end from Fri 4/30 to Sun 5/2 by SQL — audit `period.update` — so the last weekend unit stays whole, and created **Jan 2027** — 1/4 – 1/31, freeze 11/23, publish by 12/7 — by SQL 9/24 (with an `audit_log` row) to fill the gap after 1/3; the seed's `offerPeriods[]` carries all three so a re-apply matches the live table). App: the painter
 (part 3a), the Periods section with Remind / Close now / Enter for someone / Generate this period (3b), the day editor's
 offer column and My schedule's offers (3c), the period-aware Setup import dry run (item IP below), and since Prompt 16 A7 the
 office's relay path ("Offers - enter for a surgeon", `source office-relay`). Functions and cron: `send-notification` v5 and

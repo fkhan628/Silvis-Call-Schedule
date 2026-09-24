@@ -4389,6 +4389,35 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- Item 5a (Faraz 9/24). Settings > Client versions: an unlinked account is named from user_profiles ---------------- */
+  console.log("\n[Item 5a] Client versions - unlinked accounts named from user_profiles");
+  {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    // cvAccountLabel lives at MODULE scope as plain JS (like offerCandidateWords): the test lifts its source and runs it.
+    const calSrc = (() => { const a = src.indexOf("\nfunction cvAccountLabel("); if (a < 0) return null; const b = src.indexOf("\n}\n", a); return src.slice(a, b + 3); })();
+    check("Item 5a: cvAccountLabel(row, profiles) names a client_versions row with no roster link from its user_profiles row - '<display_name> \\u2014 <role>' and an EMPTY id column; '(unlinked account)' + the id8 only when the profile has no display_name (blank counts as none), no profile matches, or the cross-reference failed (profiles null)", () => {
+      assert.ok(calSrc, "no module-scope cvAccountLabel in index-source.html");
+      const fn = new Function(calSrc + "\nreturn cvAccountLabel;")();
+      const uid = "00000000-0000-4000-8000-0000000000aa";
+      const profiles = [{ id: uid, person_id: null, role: "coordinator", display_name: "Office Contact" }, { id: "other", person_id: "s2", role: "surgeon", display_name: "Burchett" }];
+      assert.deepStrictEqual(fn({ id: uid, person_id: null }, profiles), { name: "Office Contact \u2014 coordinator", id: "" }, "the named case");
+      assert.deepStrictEqual(fn({ id: uid }, [{ id: uid, role: "viewer", display_name: "  " }]), { name: "(unlinked account)", id: "00000000" }, "a blank display_name is no name");
+      assert.deepStrictEqual(fn({ id: uid }, [{ id: uid, role: "viewer", display_name: null }]), { name: "(unlinked account)", id: "00000000" }, "display_name null");
+      assert.deepStrictEqual(fn({ id: uid }, [{ id: uid, role: null, display_name: "Office Contact" }]), { name: "Office Contact", id: "" }, "no role: the name alone");
+      assert.deepStrictEqual(fn({ id: uid }, null), { name: "(unlinked account)", id: "00000000" }, "profiles failed to load (cvProfiles null)");
+      assert.deepStrictEqual(fn({ id: uid }, []), { name: "(unlinked account)", id: "00000000" }, "no profile for the id");
+      assert.deepStrictEqual(fn(null, profiles), { name: "(unlinked account)", id: "" }, "junk row never throws");
+      assert.ok(!/[^\x00-\x7f]/.test(calSrc), "the helper is ASCII (the em dash is the \\u2014 escape)");
+    });
+    check("Item 5a pins: the card's extras rows (no person_id, or one outside the roster) render through cvAccountLabel(r, cvProfiles) - the unconditional line(r.id, \"(unlinked account)\", r.id.slice(0, 8), ...) is gone; the roster rows keep line(p.id, p.name, p.id, ...); each row carries data-cv-row / data-cv-name / data-cv-id for the smoke", () => {
+      assert.ok(src.includes("{extras.map(r => { const lb = cvAccountLabel(r, cvProfiles); return line(r.id, lb.name, lb.id, r, true); })}"), "extras rows through cvAccountLabel");
+      assert.strictEqual((src.match(/"\(unlinked account\)"/g) || []).length, 1, "the '(unlinked account)' literal lives in cvAccountLabel only");
+      assert.ok(src.includes("{surgeons.map(p => line(p.id, p.name, p.id, byPerson(p.id), (cvProfiles || []).some(pr => pr.person_id === p.id)))}"), "linked roster rows unchanged");
+      assert.ok(src.includes("data-cv-row={key}") && src.includes("data-cv-name") && src.includes("data-cv-id"), "row attributes for the smoke");
+      assert.ok(src.includes('<span data-cv-id="" style={{flexShrink:0,fontSize:10,color:"#9aa4ae",fontFamily:mono,minWidth:id?22:0,display:id?undefined:"none"}}>{id}</span>'), "a named account's EMPTY id column takes no width (display none, minWidth 0) so no hole opens between the name and the status chips; a real id8 keeps minWidth 22");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

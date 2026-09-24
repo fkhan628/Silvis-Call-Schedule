@@ -1378,7 +1378,7 @@ eq(p5.periodRows, [
   { label: "Nov 2026 - Jan 2027", start_day: "2026-11-02", end_day: "2027-01-03", offers_close_at: "2026-10-02", publish_by: "2026-10-05", status: "published", rules_only_ids: ["s1", "s6"], offer_modes: { s2: "exhaustive", s4: "exhaustive", s3: "preferred", s5: "preferred" }, created_by: "seed" },
   { label: "Jan 2027", start_day: "2027-01-04", end_day: "2027-01-31", offers_close_at: "2026-11-23", publish_by: "2026-12-07", status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "seed" },
   { label: "Feb 2027 - Apr 2027", start_day: "2027-02-01", end_day: "2027-05-02", offers_close_at: "2026-12-21", publish_by: "2027-01-04", status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "seed" }
-], "P5 / PD / 9-24: three call_periods rows in start order, upsert key start_day, created_by seed; Jan 2027 = the row Faraz created in Setup > Periods 9/24 (1/4 - 1/31, close 11/23, publish by 12/7), Feb - Apr 2027 = the 3-month preset from 2027-02-01 with the end Faraz moved to Sunday 2027-05-02 on 9/24 (label as the seed states it, rules_only_ids [] and offer_modes {} exactly as createPeriod writes them)");
+], "P5 / PD / 9-24: three call_periods rows in start order, upsert key start_day, created_by seed; Jan 2027 = the row Faraz created by SQL 9/24, with an audit_log row (1/4 - 1/31, close 11/23, publish by 12/7), Feb - Apr 2027 = the 3-month preset from 2027-02-01 with the end Faraz moved to Sunday 2027-05-02 on 9/24 (label as the seed states it, rules_only_ids [] and offer_modes {} exactly as createPeriod writes them)");
 // (2) the offers, derived from the seed's lists: Burchett Nov 7 P + 8 B (role-keyed) + Dec 19 plain -> 'either' (incl. 1/1-1/3, inside
 //     the period); Acton's relayed Nov list 7 P + 3 B (s3.offeredDays); Philip's weeks inside the period x 7 days -> 'either'
 const s2Nov = seed.surgeonRules[BURCHETT].explicitAvailable["2026-11"], s2Dec = seed.surgeonRules[BURCHETT].explicitAvailable["2026-12"];
@@ -1648,7 +1648,7 @@ ok(/Prompt 14 P5/.test(seed.groupRules.whitelistMonths.rule), "P5: groupRules.wh
 // ---- Prompt 14 PD (9/23 afternoon) ----
 // The schedule for the first period went out 9/23, so docs/silvis-seed.json offerPeriods[0].status is 'published' and
 // the Feb 2027 - Apr 2027 period (Faraz: freeze 12/21, publish by 1/4, from the 3-month preset; since 9/24 it ends Sunday
-// 5/2 and the Jan 2027 row Faraz created in Setup > Periods - 1/4 - 1/31, freeze 11/23, publish by 12/7 - sits between) follows it;
+// 5/2 and the Jan 2027 row Faraz created by SQL 9/24 - 1/4 - 1/31, freeze 11/23, publish by 12/7 - sits between) follows it;
 // Burchett's 2027-07-22..08-02 vacation joins s2.timeOff. The call_periods upsert must carry the seed's status
 // FORWARD: before this fix the SQL wrote status on insert only, so a re-import of the published seed would have left
 // the live row 'upcoming' and daily-reminder (mode offers) would have reminded on 9/29 and closed + mailed the

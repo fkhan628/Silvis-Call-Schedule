@@ -6327,16 +6327,18 @@ function CallSchedule() {
                         status = <span style={{fontSize:11,color:"#8a94a0"}}>no heartbeat recorded</span>;
                       }
                       return (
-                        <div key={key} style={{display:"flex",gap:8,alignItems:"center",padding:"7px 2px",borderBottom:"1px solid "+(dk?"#243240":"#eef1f4")}}>
-                          <span style={{flexShrink:0,fontSize:12,fontWeight:600,color:dk?"#c8d2dc":"#1F2A3A",minWidth:60}}>{name}</span>
-                          <span style={{flexShrink:0,fontSize:10,color:"#9aa4ae",fontFamily:mono,minWidth:22}}>{id}</span>
+                        <div key={key} data-cv-row={key} style={{display:"flex",gap:8,alignItems:"center",padding:"7px 2px",borderBottom:"1px solid "+(dk?"#243240":"#eef1f4")}}>
+                          <span data-cv-name="" style={{flexShrink:0,fontSize:12,fontWeight:600,color:dk?"#c8d2dc":"#1F2A3A",minWidth:60}}>{name}</span>
+                          <span data-cv-id="" style={{flexShrink:0,fontSize:10,color:"#9aa4ae",fontFamily:mono,minWidth:id?22:0,display:id?undefined:"none"}}>{id}</span>
                           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>{status}</div>
                         </div>
                       );
                     };
+                    // An account outside the roster (no person_id, or one the roster does not carry) is named from
+                    // its user_profiles row (Item 5a, 9/24) - the id8 survives only when the profile has no name.
                     return <>
                       {surgeons.map(p => line(p.id, p.name, p.id, byPerson(p.id), (cvProfiles || []).some(pr => pr.person_id === p.id)))}
-                      {extras.map(r => line(r.id, "(unlinked account)", r.id.slice(0, 8), r, true))}
+                      {extras.map(r => { const lb = cvAccountLabel(r, cvProfiles); return line(r.id, lb.name, lb.id, r, true); })}
                     </>;
                   })()}
                 </div>
@@ -7426,6 +7428,24 @@ function Padlock({ title, size, className }) {
       <path d="M3 4.7V3a2 2 0 0 1 4 0v1.7" fill="none" stroke="#5B6B82" strokeWidth="1.3"/>
     </svg>
   );
+}
+
+// --- Client versions: the label of an account with no roster link (Item 5a, Faraz 9/24) ---
+// cvAccountLabel(row, profiles) -> { name, id } for a client_versions row whose
+// person_id is empty or outside the roster: the account's user_profiles
+// display_name and role ("Office Contact \u2014 coordinator") and an EMPTY id column;
+// (unlinked account) + the id's first 8 characters only when no profile with a
+// display_name matches (none, a blank name, or profiles null = the cross-reference
+// failed this load). Plain JS at module scope (no JSX, no DOM):
+// test/data-layer.test.js runs it.
+function cvAccountLabel(row, profiles) {
+  var id = row && row.id != null ? String(row.id) : "";
+  var pr = null;
+  if (Array.isArray(profiles)) { for (var i = 0; i < profiles.length; i++) { if (profiles[i] && profiles[i].id === id) { pr = profiles[i]; break; } } }
+  var name = pr && pr.display_name != null ? String(pr.display_name).trim() : "";
+  if (!name) return { name: "(unlinked account)", id: id.slice(0, 8) };
+  var role = pr.role != null ? String(pr.role).trim() : "";
+  return { name: role ? name + " \u2014 " + role : name, id: "" };
 }
 
 // --- Offer standing in words (Prompt 14 part 3c, U3c 9/23) ---
