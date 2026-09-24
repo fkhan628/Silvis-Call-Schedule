@@ -1348,7 +1348,7 @@ ok(/revoke all on function public\.apply_trade\(uuid\) from public, anon;\ngrant
   ok(a && b && a === b, name + "(): schema.sql differs from sql/migrations/2026-09-24-definer-locks.sql (keep them identical; the migration is what runs live)");
 });
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-definer-locks\.sql/.test(locksMig), "the definer-locks migration header must carry the CLI apply line for the orchestrator");
-ok(/-- Revision 2026-09-24 l \(Prompt 16 B6, sql\/migrations\/2026-09-24-definer-locks\.sql, NOT yet applied\)/.test(schema), "schema.sql header must record revision 2026-09-24 l (definer locks + roster names, not yet applied)");
+ok(/-- Revision 2026-09-24 l \(Prompt 16 B6, sql\/migrations\/2026-09-24-definer-locks\.sql, applied 2026-09-23[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 l (definer locks + roster names, not yet applied)");
 const ORDER_TRADE = "Lock order: trade row (update) -> time_off table (share) -> day rows (update)";
 const ORDER_CLAIM = "Lock order: time_off table (share) -> the day row (update)";
 [["schema.sql", schema], ["definer-locks migration", locksMig]].forEach(([n, s]) => {
@@ -1391,7 +1391,7 @@ ok(/expect_eq\s+B2\s/.test(s7), "verify-rls.sh section 7 does not grade claim pr
 ok(/expect_eq\s+E2\s+"share_locks=1"/.test(s5) && /expect_eq\s+N\s+"from_name=Burchett to_name=Acton"/.test(s5) && /expect_eq\s+B2\s+"share_locks=1"/.test(s7), "verify-rls.sh must expect the AFTER strings (share_locks=1; from_name=Burchett to_name=Acton)");
 ok(!/locked=2 of=2/.test(s5 + s7), "verify-rls.sh must not expect the old xmax strings (locked=2 of=2) any more");
 
-step("B6: docs/SCHEMA-REVIEW.md carries the definer-locks section with an 'observed:' placeholder for the orchestrator");
+step("B6: docs/SCHEMA-REVIEW.md carries the definer-locks section with its 'observed:' line (filled 2026-09-23)");
 ok(/## 2026-09-24 - definer locks \+ roster names \(Prompt 16 B6; `sql\/migrations\/2026-09-24-definer-locks\.sql`\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - definer locks + roster names' section");
 const reviewB6 = review.slice(review.indexOf("## 2026-09-24 - definer locks"));
 ok(/definer-locks[\s\S]*observed: /.test(reviewB6), "SCHEMA-REVIEW.md's definer-locks section must carry an 'observed:' line (placeholder until the orchestrator fills it)");

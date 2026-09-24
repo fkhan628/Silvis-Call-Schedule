@@ -721,7 +721,7 @@ observed: applied 2026-09-23 ~18:35 Central by the orchestrator through the link
 
 ## 2026-09-24 - definer locks + roster names (Prompt 16 B6; `sql/migrations/2026-09-24-definer-locks.sql`)
 
-**Status: NOT yet applied** - the orchestrator applies after Faraz's go (report-first, guide section 4.3). Review 2026-09-23
+**Status: APPLIED - 2026-09-23 ~19:27 Central by the orchestrator through the linked CLI, under Faraz's standing mandate of 9/23** (report-first, guide section 4.3; the *observed* line at the end of this section). Review 2026-09-23
 section 3, security minors: `apply_trade` and `claim_open_slot` did not lock `time_off` (write skew with a simultaneous vacation
 change), and `trade_insert_guard` stored the client's `from_surgeon_name` / `to_surgeon_name`. One migration, three functions
 (create or replace, idempotent), the `trade_insert_guard_trg` trigger re-created, both RPC revoke / grant pairs re-run; no table,
@@ -767,4 +767,4 @@ A single batch cannot show a second session waiting - that is PostgreSQL's lock-
 are pinned by `test/schema.test.js`. Pre-check (nothing to migrate): `select count(*) from public.shift_trade_requests where
 status in ('pending', 'accepted');`.
 
-observed: (placeholder - the orchestrator fills in the apply time, the before / after `PROBE_RESULTS` lines for E2 / N / B2 and the leftover counts)
+observed: applied 2026-09-23 ~19:27 Central by the orchestrator through the linked CLI (`supabase db query --linked -f sql/migrations/2026-09-24-definer-locks.sql`, empty result set, no error). Trade probe AFTER: `A=status=pending from=s2 decided=null; B..D=ERR TRADE_INELIGIBLE (vacation / already holds / locked); E=status=applied 03-11p=s2 03-13b=s3; E2=share_locks=1; F=status=applied locked=false; G=ERR TRADE_INELIGIBLE: a trade needs two different surgeons; ...` - every case as expected, the time_off SHARE lock visible in pg_locks. Claim probe AFTER: `A=ERR 42501 permission denied; B=ok version=2 backup=s3 source=claim audit=1; B2=share_locks=1; C=ERR CL005 CLAIM_HELD; D=ERR CL007 CLAIM_LOCKED; E=ERR CL003 CLAIM_PAST; ...` - as expected. verify-rls.sh afterwards: 70 passed, 0 failed (136 / 0 on the full run at 21:50 the same evening). Rollback of both probes observed (leftover 0). Evidence files stay in the orchestrator's scratch folder; the live catalog re-read at 21:45 shows `lock table public.time_off in share mode` in both apply_trade and claim_open_slot.

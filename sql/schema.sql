@@ -43,7 +43,7 @@
 -- call_offers policies admit a coordinator only under the transaction-local silvis.office_relay flag that save_offers sets;
 -- save_offers / set_offer_mode relay for another person (entered_by = the coordinator's profile id, source 'office-relay';
 -- a roster id only: OS004 / OM007); notif_insert / audit_insert gain the coordinator clause (actor_id = auth.uid()::text); audit_read_coord = own family rows.
--- Revision 2026-09-24 l (Prompt 16 B6, sql/migrations/2026-09-24-definer-locks.sql, NOT yet applied): apply_trade() and
+-- Revision 2026-09-24 l (Prompt 16 B6, sql/migrations/2026-09-24-definer-locks.sql, applied 2026-09-23 ~19:27 Central after the probes): apply_trade() and
 -- claim_open_slot() take `lock table public.time_off in share mode` before the day-row locks and the vacation checks (every
 -- time_off writer holds ROW EXCLUSIVE, so a vacation inserted or edited concurrently waits for the swap and its trigger then
 -- sees it, or the function waits and its check sees the new row; no cycle - a time_off writer never waits on a day row);
