@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-YcuuP3L8cGiUbTlaCA4rGgmgW/932GzSWNUbv0MeXpI=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-IQpqWDptz/6yKHGDdYb69O1WzAeVG0PapXkyKGtKCXs=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+mjhS+KpmYkpdrYuhxdjhc50K2ZD/oL2z7cLybXUmtY=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-VNA3zcyQqQ+QQDHMB1PQV+Pp4mYpdj4cnHw2VQdT4DQ=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23r";
+    var APP_VERSION = "2026.09.24a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -258,6 +258,21 @@ function CallSchedule() {
       console.warn("Couldn't persist dark-mode setting:", e);
     }
   }, [darkMode]);
+  const [weekStartsOn, setWeekStartsOn] = useState(() => {
+    try {
+      return normalizeWeekStart(localStorage.getItem("silvis-week-start"));
+    } catch (e) {
+      console.warn("Couldn't read the week-start setting (Sunday used):", e);
+      return "sun";
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("silvis-week-start", weekStartsOn);
+    } catch (e) {
+      console.warn("Couldn't persist week-start setting:", e);
+    }
+  }, [weekStartsOn]);
   const [vacSurgeon, setVacSurgeon] = useState("");
   const [vacStart, setVacStart] = useState(() => fmt(new Date()));
   const [vacEnd, setVacEnd] = useState(() => fmt(new Date()));
@@ -5534,13 +5549,7 @@ function CallSchedule() {
   };
   const monthStartStr = fmt(new Date(calYear, calMonth, 1));
   const monthEndStr = fmt(new Date(calYear, calMonth + 1, 0));
-  const gridDays = useMemo(() => {
-    const first = new Date(calYear, calMonth, 1);
-    const last = new Date(calYear, calMonth + 1, 0);
-    const out = [];
-    for (let d = monOf(first); d <= last || out.length % 7 !== 0; d = addD(d, 1)) out.push(fmt(d));
-    return out;
-  }, [calYear, calMonth]);
+  const gridDays = useMemo(() => monthGridDays(calYear, calMonth, weekStartsOn), [calYear, calMonth, weekStartsOn]);
   const prevMonth = () => {
     if (calMonth === 0) {
       setCalMonth(11);
@@ -6169,7 +6178,8 @@ function CallSchedule() {
     vacations,
     generatedAt: new Date(),
     appUrl: location.origin + location.pathname,
-    today: todayStr
+    today: todayStr,
+    weekStartsOn
   });
   const downloadSharePage = () => {
     try {
@@ -6202,7 +6212,8 @@ function CallSchedule() {
         roster: surgeons,
         holidays,
         vacations,
-        today: todayStr
+        today: todayStr,
+        weekStartsOn
       });
       const w = window.open("", "_blank");
       if (!w) {
@@ -8399,25 +8410,32 @@ function CallSchedule() {
       })
     }, "Rules not imported yet: East and holiday badges appear once Setup imports the seed (Slice E)."), React.createElement("div", {
       className: "cal-grid",
-      "data-testid": "cal-grid"
-    }, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((h, i) => React.createElement("div", {
-      key: h,
-      className: "cal-hdr",
-      style: {
-        color: i >= 4 ? dk ? T.muted : T.title : dkSubtext,
-        background: i >= 4 ? dk ? "#0F2140" : "#eef3f8" : "transparent",
-        borderRadius: i === 4 ? "6px 0 0 6px" : i === 6 ? "0 6px 6px 0" : 0
-      }
-    }, h, i === 4 ? React.createElement("span", {
-      className: "cal-wk-label",
-      style: {
-        fontWeight: 500,
-        letterSpacing: 0,
-        textTransform: "none",
-        marginLeft: 4,
-        fontSize: 9
-      }
-    }, "weekend unit") : null)), gridDays.map(d => {
+      "data-testid": "cal-grid",
+      "data-week-start": weekStartsOn
+    }, weekdayLabels(weekStartsOn).map((h, i) => {
+      const wk = h === "Fri" || h === "Sat" || h === "Sun";
+      const radius = h === "Fri" ? "6px 0 0 6px" : i === 6 ? "0 6px 6px 0" : h === "Sun" && i === 0 ? 6 : 0;
+      return React.createElement("div", {
+        key: h,
+        "data-dow": h,
+        "data-weekend": wk ? "1" : "0",
+        className: "cal-hdr",
+        style: {
+          color: wk ? dk ? T.muted : T.title : dkSubtext,
+          background: wk ? dk ? "#0F2140" : "#eef3f8" : "transparent",
+          borderRadius: radius
+        }
+      }, h, h === "Fri" ? React.createElement("span", {
+        className: "cal-wk-label",
+        style: {
+          fontWeight: 500,
+          letterSpacing: 0,
+          textTransform: "none",
+          marginLeft: 4,
+          fontSize: 9
+        }
+      }, "weekend unit") : null);
+    }), gridDays.map(d => {
       const pv = previewGen && previewGen.schedule ? previewGen.schedule[d] : null;
       const a = pv || schedule[d] || null;
       const isPreview = !!pv;
@@ -10371,7 +10389,42 @@ function CallSchedule() {
       padding: "6px 16px",
       fontSize: 12
     })
-  }, "Dark"))), (isScheduler || isCoordinator) && React.createElement(Collapsible, {
+  }, "Dark")), React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      marginTop: 10,
+      flexWrap: "wrap"
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: "#5B6B82"
+    }
+  }, "Week starts on"), React.createElement("button", {
+    "data-testid": "week-start-sun",
+    "aria-pressed": weekStartsOn === "sun",
+    onClick: () => setWeekStartsOn("sun"),
+    style: _objectSpread(_objectSpread({}, css.btn(weekStartsOn === "sun")), {}, {
+      padding: "6px 16px",
+      fontSize: 12
+    })
+  }, "Sunday"), React.createElement("button", {
+    "data-testid": "week-start-mon",
+    "aria-pressed": weekStartsOn === "mon",
+    onClick: () => setWeekStartsOn("mon"),
+    style: _objectSpread(_objectSpread({}, css.btn(weekStartsOn === "mon")), {}, {
+      padding: "6px 16px",
+      fontSize: 12
+    })
+  }, "Monday"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "#8a94a0",
+      flexBasis: "100%"
+    }
+  }, "The month grid on this device: the calendar, the read-only page and the printable month. The week rows (MON/SUN DATES) always run Monday to Sunday."))), (isScheduler || isCoordinator) && React.createElement(Collapsible, {
     css: css,
     ck: "settings_audit",
     defaultOpen: false,
