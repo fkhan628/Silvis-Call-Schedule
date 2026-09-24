@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-es7FP3BiJ10bip5WuPb+J2ErURGvC59DiMSQY57n/qw=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-lcnJB8uXWf8jE9V31La2lKctFwF5aWa2P5kLlujWtTw=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-YcuuP3L8cGiUbTlaCA4rGgmgW/932GzSWNUbv0MeXpI=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-IQpqWDptz/6yKHGDdYb69O1WzAeVG0PapXkyKGtKCXs=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.23q";
+    var APP_VERSION = "2026.09.23r";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -258,16 +258,6 @@ function CallSchedule() {
       console.warn("Couldn't persist dark-mode setting:", e);
     }
   }, [darkMode]);
-  const [scheduleHistory, setScheduleHistory] = useState([]);
-  const pushUndo = useCallback(sched => {
-    setScheduleHistory(prev => [...prev.slice(-9), JSON.parse(JSON.stringify(sched))]);
-  }, []);
-  const undoLastChange = useCallback(() => {
-    if (scheduleHistory.length === 0) return;
-    const prev = scheduleHistory[scheduleHistory.length - 1];
-    setSchedule(prev);
-    setScheduleHistory(h => h.slice(0, -1));
-  }, [scheduleHistory]);
   const [vacSurgeon, setVacSurgeon] = useState("");
   const [vacStart, setVacStart] = useState(() => fmt(new Date()));
   const [vacEnd, setVacEnd] = useState(() => fmt(new Date()));
@@ -339,6 +329,27 @@ function CallSchedule() {
   useEffect(() => {
     scheduleRef.current = schedule;
   }, [schedule]);
+  const scheduleHistoryRef = useRef([]);
+  const [scheduleHistory, setScheduleHistory] = useState([]);
+  const setHistory = h => {
+    scheduleHistoryRef.current = h;
+    setScheduleHistory(h);
+  };
+  const pushUndo = useCallback((prev, next) => {
+    const entry = undoEntry(prev, next, dayVersionsRef.current);
+    if (entry) setHistory([...scheduleHistoryRef.current.slice(-9), entry]);
+  }, []);
+  const undoLastChange = useCallback(() => {
+    const h = scheduleHistoryRef.current;
+    if (h.length === 0) return;
+    const r = undoApply(h[h.length - 1], scheduleRef.current || {}, dayVersionsRef.current);
+    setHistory(h.slice(0, -1));
+    if (r.restored.length) {
+      scheduleRef.current = r.next;
+      setSchedule(r.next);
+    }
+    showToast(r.message, r.skipped.length ? "error" : "info");
+  }, []);
   const [officeContacts, setOfficeContacts] = useState([]);
   const [newOfficeName, setNewOfficeName] = useState("");
   const [newOfficeEmail, setNewOfficeEmail] = useState("");
@@ -1459,6 +1470,7 @@ function CallSchedule() {
       const a = next[day] || emptyDayAssignment();
       const row = assignmentToDayRow(day, a);
       const ver = dayVersionsRef.current[day];
+      let sentAgainst = ver;
       let r;
       if (ver === undefined) {
         r = await postDayRow(row, by, ts);
@@ -1466,6 +1478,7 @@ function CallSchedule() {
           const cur = await fetchDayRow(day);
           if (cur && typeof cur.version === "number") {
             dayVersionsRef.current[day] = cur.version;
+            sentAgainst = cur.version;
             r = await patchDayRow(row, cur.version, by, ts);
           } else {
             r = {
@@ -1489,6 +1502,8 @@ function CallSchedule() {
         continue;
       }
       dayVersionsRef.current[day] = r.version;
+      const nh = undoNoteWrite(scheduleHistoryRef.current, day, sentAgainst, r.version);
+      if (nh !== scheduleHistoryRef.current) setHistory(nh);
       persisted[day] = JSON.parse(JSON.stringify(a));
       written++;
     }
@@ -2397,7 +2412,9 @@ function CallSchedule() {
     const keepPersonSource = (before.source === "claim" || before.source === "trade") && ["primary", "backup"].some(r => !!before[r] && before[r] === after[r]);
     after.source = isExternalId(after.primary) || isExternalId(after.backup) ? "manual-external" : keepPersonSource ? before.source : "manual";
     if (sameAssignment(day, before, after)) return true;
-    pushUndo(schedule);
+    pushUndo(schedule, _objectSpread(_objectSpread({}, schedule), {}, {
+      [day]: after
+    }));
     setSchedule(p => _objectSpread(_objectSpread({}, p), {}, {
       [day]: after
     }));
@@ -2468,7 +2485,6 @@ function CallSchedule() {
       setSaveStatus("");
       return;
     }
-    pushUndo(schedule);
     const next = _objectSpread({}, schedule);
     let cleared = 0;
     days.forEach(d => {
@@ -2484,6 +2500,7 @@ function CallSchedule() {
       }
       next[d] = a;
     });
+    pushUndo(schedule, next);
     setSchedule(next);
     scheduleRef.current = next;
     noteSnapshotTaken();
@@ -3235,7 +3252,7 @@ function CallSchedule() {
   };
   const acceptMerged = async (pv, cur, next, snap) => {
     const changes = diffScheduleDays(cur, next).filter(c => c.role === "primary" || c.role === "backup");
-    pushUndo(cur);
+    pushUndo(cur, next);
     setSchedule(next);
     scheduleRef.current = next;
     setPreviewGen(null);
@@ -3532,7 +3549,7 @@ function CallSchedule() {
     counts.schedule_days_updated = m.updated;
     counts.schedule_days_skipped = m.skipped;
     if (m.changedDays.length) {
-      pushUndo(scheduleRef.current || schedule);
+      pushUndo(scheduleRef.current || schedule, m.next);
       setSchedule(m.next);
       scheduleRef.current = m.next;
       const r = await syncScheduleDays(m.next);
@@ -3604,7 +3621,7 @@ function CallSchedule() {
     scheduleRef.current = {};
     dayVersionsRef.current = {};
     lastSyncRef.current = {};
-    setScheduleHistory([]);
+    setHistory([]);
     const clearTs = new Date().toISOString();
     try {
       const {
@@ -5164,7 +5181,7 @@ function CallSchedule() {
     before_seed_import: "Before seed import (importer)"
   })[r] || r || "manual";
   const applyScheduleViaCAS = async sched => {
-    if (Object.keys(scheduleRef.current || {}).length > 0) pushUndo(scheduleRef.current);
+    if (Object.keys(scheduleRef.current || {}).length > 0) pushUndo(scheduleRef.current, sched);
     setSchedule(sched);
     scheduleRef.current = sched;
     intentionalScheduleWipeRef.current = true;
@@ -7408,6 +7425,7 @@ function CallSchedule() {
       padding: "0 4px"
     }
   }, myUnreadCount)), scheduleHistory.length > 0 && isScheduler && React.createElement("button", {
+    "data-testid": "undo-btn",
     onClick: undoLastChange,
     style: _objectSpread(_objectSpread({}, css.tab(false)), {}, {
       fontSize: 12,
