@@ -29,6 +29,31 @@ function getMondays(yr,mo,count) {
   return ms;
 }
 
+/* ═══ Week start of the MONTH grids (Item A, Faraz 9/23) ═══
+   The calendar view, the share page and the printable month start the week
+   on Sunday by default, like the Davenport app, or on Monday by the
+   per-device setting (localStorage 'silvis-week-start'). Only those three
+   grids read these three helpers: monOf(), the ER-panel author's Mon-Sun week rows, the
+   East weeks and the forecast are week-based and stay on Monday. */
+const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// 'mon' or 'sun' - anything else (missing, legacy, garbage) is Sunday.
+const normalizeWeekStart = v => v === "mon" ? "mon" : "sun";
+// The seven labels in grid order: Sun..Sat, or Mon..Sun for 'mon'. `names`
+// (optional) is a Sunday-first list of seven to rotate instead (S M T ..).
+const weekdayLabels = (weekStartsOn, names) => {
+  const src = names || WEEKDAY_SHORT, s = normalizeWeekStart(weekStartsOn) === "mon" ? 1 : 0;
+  return src.slice(s).concat(src.slice(0, s));
+};
+// Every day of a month grid as ISO strings: from the Sunday (Monday) on or
+// before the 1st, padded to whole weeks past the last day (28, 35 or 42).
+const monthGridDays = (year, month0, weekStartsOn) => {
+  const startDow = normalizeWeekStart(weekStartsOn) === "mon" ? 1 : 0;
+  const first = new Date(year, month0, 1), last = new Date(year, month0 + 1, 0);
+  const out = [];
+  for (let d = addD(first, -((first.getDay() - startDow + 7) % 7)); d <= last || out.length % 7 !== 0; d = addD(d, 1)) out.push(fmt(d));
+  return out;
+};
+
 function onVac(id,ds,v){ return (v[id]||[]).some(([a,b])=>ds>=a&&ds<=b); }
 
 // "10/12" from "2026-10-12" (no leading zeros) - the publish-diff convention.
@@ -1042,10 +1067,11 @@ function surgeonTextColor(c, code, dark) {
 /* ═══ Shareable read-only page (Prompt 9) ═══
    generateShareHTML(schedule, roster, { months, holidays, vacations,
    generatedAt, appUrl }) -> one self-contained HTML string: inline CSS, the
-   Outfit web font with a system fallback, NO scripts. Per month: the Mon..Sun
-   grid the app shows (two lines per day, "P <name>" / "B <name>", OPEN in
+   Outfit web font with a system fallback, NO scripts. Per month: the month
+   grid the app shows (Sunday-first by default, Monday-first with
+   opts.weekStartsOn 'mon' - Item A; two lines per day, "P <name>" / "B <name>", OPEN in
    red, an externalCover in italics, holiday unit names, vacation lines) and
-   the ER-panel author's week-rows table for that month (buildWeekRows). `months` follows
+   the ER-panel author's week-rows table for that month (buildWeekRows, always Mon-Sun). `months` follows
    normalizeMonths(); default = the schedule's span. opts.today (default
    todayCentral()): an unassigned slot before today renders an empty line
    (the P/B letter stays, no OPEN text, no red) - slotIsOpen decides. */
@@ -1054,6 +1080,7 @@ function generateShareHTML(schedule, roster, opts) {
   const sched = schedule || {};
   const list = (roster || []).filter(r => r && r.id);
   const months = normalizeMonths(o.months, sched);
+  const weekStartsOn = normalizeWeekStart(o.weekStartsOn);
   const holByDay = holidayNameByDay(o.holidays);
   const vacations = o.vacations || {};
   const generatedAt = o.generatedAt ? new Date(o.generatedAt) : new Date();
@@ -1074,10 +1101,10 @@ function generateShareHTML(schedule, roster, opts) {
   months.forEach(ym => {
     const range = monthRange(ym);
     const first = parse(range.start), last = parse(range.end);
-    let grid = `<div class="cg">` + ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((h, i) => `<div class="ch${i >= 4 ? " wk" : ""}">${h}</div>`).join("");
-    for (let d = monOf(first); d <= last || (fmt(d) > range.end && parse(fmt(d)).getDay() !== 1); d = addD(d, 1)) {
-      const ds = fmt(d);
-      if (ds < range.start || ds > range.end) { grid += `<div class="ce"></div>`; continue; }
+    let grid = `<div class="cg">` + weekdayLabels(weekStartsOn).map(h => `<div class="ch${h === "Fri" || h === "Sat" || h === "Sun" ? " wk" : ""}">${h}</div>`).join("");
+    monthGridDays(first.getFullYear(), first.getMonth(), weekStartsOn).forEach(ds => {
+      const d = parse(ds);
+      if (ds < range.start || ds > range.end) { grid += `<div class="ce"></div>`; return; }
       const a = sched[ds] || null;
       const dow = d.getDay();
       const isWk = dow === 5 || dow === 6 || dow === 0;
@@ -1090,7 +1117,7 @@ function generateShareHTML(schedule, roster, opts) {
       if (vac.length) inner += `<div class="vl">VAC ${vac.join(", ")}</div>`;
       if (a && a.note) inner += `<div class="nt" title="${escHtml(a.note)}">NOTE</div>`;
       grid += `<div class="${cls}" data-day="${ds}">${inner}</div>`;
-    }
+    });
     grid += `</div>`;
     const rows = buildWeekRows(sched, list, range.start, range.end, { today });
     let table = `<table class="wr" data-month="${range.start.slice(0, 7)}"><thead><tr><th>MON/SUN DATES</th><th>TRAUMA</th><th>TRAUMA BACKUP</th></tr></thead><tbody>`;
@@ -1158,9 +1185,10 @@ ${body}
 
 /* ═══ Printable month (Prompt 9) ═══
    buildPrintableCalendarHTML({ startYear, startMonth, numMonths, schedule,
-   roster, holidays, vacations }) -> a print-ready document: Davenport's page
+   roster, holidays, vacations, weekStartsOn }) -> a print-ready document: Davenport's page
    assembly and print CSS (letter portrait, one month per page, Sunday-first
-   grid, mini calendars in the leading empty cells, vacation bars laid out in
+   grid - Monday-first with weekStartsOn 'mon', Item A - mini calendars in the
+   leading empty cells, vacation bars laid out in
    lanes) with the daily-model cell content: "P <Name>" / "B <Name>" (OPEN in
    red, an external cover in italics), the holiday unit name, and one bar per
    surgeon vacation ("<Name> VAC"). Opened with window.open + document.write;
@@ -1177,6 +1205,9 @@ function buildPrintableCalendarHTML(opts) {
   const holByDay = holidayNameByDay(o.holidays);
   const today = todayOrCentral(o.today);
   const MONTH_NAMES = EXPORT_MONTH_NAMES;
+  const weekStartsOn = normalizeWeekStart(o.weekStartsOn);
+  const startDow = weekStartsOn === "mon" ? 1 : 0; // the grid's first column, as Date#getDay
+  const leadOf = (first) => (first.getDay() - startDow + 7) % 7; // columns before the 1st
   const nameById = {}; list.forEach(r => { nameById[r.id] = r.name || r.id; });
   const nameOf = (id) => nameById[id] || id;
 
@@ -1201,10 +1232,10 @@ function buildPrintableCalendarHTML(opts) {
     const first = new Date(year, month, 1);
     const last = new Date(year, month + 1, 0);
     const gridStart = new Date(first);
-    gridStart.setDate(first.getDate() - first.getDay());
+    gridStart.setDate(first.getDate() - leadOf(first));
     const weeks = [];
     let cursor = new Date(gridStart);
-    while (cursor <= last || cursor.getDay() !== 0) {
+    while (cursor <= last || cursor.getDay() !== startDow) {
       const week = [];
       for (let i = 0; i < 7; i++) {
         week.push({ date: new Date(cursor), ds: fmt(cursor), dayNum: cursor.getDate(), inMonth: cursor.getMonth() === month });
@@ -1250,11 +1281,11 @@ function buildPrintableCalendarHTML(opts) {
   function buildMiniCal(year, month) {
     const first = new Date(year, month, 1);
     const last = new Date(year, month + 1, 0);
-    const startDow = first.getDay();
+    const lead = leadOf(first);
     const days = last.getDate();
     let html = `<div class="mini-cal"><div class="mini-name">${MONTH_NAMES[month]} ${year}</div><div class="mini-grid">`;
-    ["S","M","T","W","T","F","S"].forEach(d => { html += `<div class="mini-dow">${d}</div>`; });
-    for (let i = 0; i < startDow; i++) html += `<div class="mini-day empty">0</div>`;
+    weekdayLabels(weekStartsOn, ["S","M","T","W","T","F","S"]).forEach(d => { html += `<div class="mini-dow">${d}</div>`; });
+    for (let i = 0; i < lead; i++) html += `<div class="mini-day empty">0</div>`;
     for (let d = 1; d <= days; d++) html += `<div class="mini-day">${d}</div>`;
     html += `</div></div>`;
     return html;
@@ -1273,7 +1304,7 @@ function buildPrintableCalendarHTML(opts) {
     let html = `<div class="page" data-month="${year}-${String(month + 1).padStart(2, "0")}">`;
     html += `<div class="month-title">${MONTH_NAMES[month]} ${year}</div>`;
     html += `<div class="dow-row">`;
-    ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].forEach(d => html += `<div class="dow">${d}</div>`);
+    weekdayLabels(weekStartsOn, ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]).forEach(d => html += `<div class="dow">${d}</div>`);
     html += `</div>`;
 
     weeks.forEach((week, weekIdx) => {
@@ -2454,6 +2485,7 @@ if (typeof module !== "undefined" && module.exports) {
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
+    normalizeWeekStart, weekdayLabels, monthGridDays,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
     openSlotReason, lastGenerateFromDiagnostics,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,

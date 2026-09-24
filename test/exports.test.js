@@ -235,12 +235,73 @@ check("share page: a month grid AND a week-rows table for each requested month, 
   assert.deepStrictEqual(tables, ["2026-10", "2026-11"]);
   assert.strictEqual((share.match(/<div class="cg">/g) || []).length, 2);
   assert.strictEqual((share.match(/<div class="ch(?: wk)?">/g) || []).length, 14, "7 day headers per grid");
-  // November 2026: 30 day cells, Mon..Sun grid padded to 5 full weeks (10/26..12/6 = 42 cells).
+  // November 2026: 30 day cells; the grid is Sunday-first by default (Item A, Faraz 9/23): Sun 11/1 .. Sat 12/5
+  // = 35 cells, 5 of them padding (the Monday-first 10/26..12/6 = 42 cells / 12 padding is the 'mon' setting below).
   const nov = share.slice(share.indexOf('data-month="2026-11">'), share.indexOf('<h3 class="wh">Week rows - November'));
   assert.strictEqual((nov.match(/class="cd[^"]*" data-day="2026-11-/g) || []).length, 30);
-  assert.strictEqual((nov.match(/class="ce"/g) || []).length, 12);
+  assert.strictEqual((nov.match(/class="ce"/g) || []).length, 5, "Sunday-first November 2026 has 5 padding cells (12/1-12/5)");
   const novRows = Array.from(share.slice(share.indexOf('<table class="wr" data-month="2026-11">')).matchAll(/<tr data-week="(\d{4}-\d{2}-\d{2})">/g)).map(m => m[1]).slice(0, 5);
   assert.deepStrictEqual(novRows, ["2026-10-26", "2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]);
+});
+/* ---------------- Item A (Faraz 9/23): the month grids start on Sunday, like the Davenport app ----------------
+   helpers.monthGridDays(year, month0, weekStartsOn) is the ONE grid builder (calendar view, share page, printable);
+   'sun' (default) runs from the Sunday on/before the 1st, 'mon' from the Monday. The week rows stay Mon-Sun. */
+check("Item A helpers: monthGridDays is Sunday-first by default (first cell a Sunday, last a Saturday, whole weeks: Oct/Nov 2026 = 35, Aug 2026 = 42); 'mon' keeps the first cell a Monday (Nov 2026 = 42); weekdayLabels follow", () => {
+  assert.strictEqual(typeof H.monthGridDays, "function", "helpers.monthGridDays is missing");
+  assert.strictEqual(typeof H.weekdayLabels, "function", "helpers.weekdayLabels is missing");
+  assert.strictEqual(typeof H.normalizeWeekStart, "function", "helpers.normalizeWeekStart is missing");
+  for (let m = 0; m < 24; m++) {
+    const y = 2026 + Math.floor(m / 12), mo = m % 12;
+    const sun = H.monthGridDays(y, mo), mon = H.monthGridDays(y, mo, "mon");
+    assert.strictEqual(H.parse(sun[0]).getDay(), 0, `${y}-${mo + 1} default: first cell ${sun[0]} is not a Sunday`);
+    assert.strictEqual(H.parse(sun[sun.length - 1]).getDay(), 6, `${y}-${mo + 1} default: last cell ${sun[sun.length - 1]} is not a Saturday`);
+    assert.ok(sun.length % 7 === 0 && sun.length >= 28 && sun.length <= 42, `${y}-${mo + 1} default: ${sun.length} cells`);
+    assert.strictEqual(H.parse(mon[0]).getDay(), 1, `${y}-${mo + 1} mon: first cell ${mon[0]} is not a Monday`);
+    assert.strictEqual(H.parse(mon[mon.length - 1]).getDay(), 0, `${y}-${mo + 1} mon: last cell ${mon[mon.length - 1]} is not a Sunday`);
+    assert.ok(mon.length % 7 === 0 && mon.length >= 28 && mon.length <= 42, `${y}-${mo + 1} mon: ${mon.length} cells`);
+    [sun, mon].forEach(g => { assert.ok(g.includes(H.fmt(new Date(y, mo, 1))) && g.includes(H.fmt(new Date(y, mo + 1, 0))), `${y}-${mo + 1}: the grid must hold the 1st and the last day`); });
+  }
+  assert.deepStrictEqual([H.monthGridDays(2026, 9)[0], H.monthGridDays(2026, 9).length, H.monthGridDays(2026, 9)[34]], ["2026-09-27", 35, "2026-10-31"], "October 2026 Sunday-first = 9/27..10/31");
+  assert.deepStrictEqual([H.monthGridDays(2026, 9, "mon")[0], H.monthGridDays(2026, 9, "mon").length, H.monthGridDays(2026, 9, "mon")[34]], ["2026-09-28", 35, "2026-11-01"], "October 2026 Monday-first = 9/28..11/1");
+  assert.deepStrictEqual([H.monthGridDays(2026, 10)[0], H.monthGridDays(2026, 10).length], ["2026-11-01", 35], "November 2026 Sunday-first = 11/1..12/5");
+  assert.deepStrictEqual([H.monthGridDays(2026, 10, "mon")[0], H.monthGridDays(2026, 10, "mon").length], ["2026-10-26", 42], "November 2026 Monday-first = 10/26..12/6");
+  assert.strictEqual(H.monthGridDays(2026, 7).length, 42, "August 2026 (starts on a Saturday) Sunday-first = 7/26..9/5");
+  assert.strictEqual(H.monthGridDays(2026, 1).length, 28, "February 2026 (starts on a Sunday, 28 days) Sunday-first = 4 whole weeks");
+  assert.deepStrictEqual(H.weekdayLabels(), ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]);
+  assert.deepStrictEqual(H.weekdayLabels("mon"), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+  assert.deepStrictEqual(H.weekdayLabels("sun", ["S", "M", "T", "W", "T", "F", "S"]), ["S", "M", "T", "W", "T", "F", "S"]);
+  assert.deepStrictEqual(H.weekdayLabels("mon", ["S", "M", "T", "W", "T", "F", "S"]), ["M", "T", "W", "T", "F", "S", "S"]);
+  // anything but 'mon' is Sunday (a missing / legacy / garbage stored value never breaks the grid)
+  assert.deepStrictEqual([undefined, null, "", "sun", "monday", "MON", 1].map(H.normalizeWeekStart), ["sun", "sun", "sun", "sun", "sun", "sun", "sun"]);
+  assert.strictEqual(H.normalizeWeekStart("mon"), "mon");
+  assert.deepStrictEqual(H.monthGridDays(2026, 10, "garbage"), H.monthGridDays(2026, 10));
+  // the week-based helpers are untouched: monOf is still the Monday, getMondays still Mondays
+  assert.strictEqual(H.fmt(H.monOf(H.parse("2026-11-01"))), "2026-10-26");
+  assert.strictEqual(H.fmt(H.getMondays(2026, 10, 1)[0]), "2026-11-02");
+});
+check("Item A share page: the grid header reads Sun..Sat with the wk class on Sun, Fri and Sat by default (the first cell of November 2026 is Sun 11/1, 35 cells); weekStartsOn 'mon' gives Mon..Sun with wk on Fri-Sun (10/26 first, 42 cells); the week rows are Mon-Sun either way", () => {
+  const hdrs = (html, month) => { const g = html.slice(html.indexOf(`data-month="${month}">`)); return Array.from(g.slice(0, g.indexOf("</h3>")).matchAll(/<div class="ch( wk)?">([A-Za-z]+)<\/div>/g)).map(m => m[2] + (m[1] ? "*" : "")); };
+  const cells = (html, month) => { const g = html.slice(html.indexOf(`data-month="${month}">`)); const grid = g.slice(0, g.indexOf('<h3 class="wh">')); return { n: (grid.match(/<div class="c[de]/g) || []).length, first: (grid.match(/data-day="(\d{4}-\d{2}-\d{2})"/) || [])[1], pad: (grid.match(/class="ce"/g) || []).length }; };
+  assert.deepStrictEqual(hdrs(share, "2026-11"), ["Sun*", "Mon", "Tue", "Wed", "Thu", "Fri*", "Sat*"]);
+  assert.deepStrictEqual(cells(share, "2026-11"), { n: 35, first: "2026-11-01", pad: 5 });
+  assert.deepStrictEqual(cells(share, "2026-10"), { n: 35, first: "2026-10-01", pad: 4 }, "October 2026 Sunday-first: 9/27..10/31, four padding cells before Thu 10/1");
+  const mon = H.generateShareHTML(schedule, roster, { months: ["2026-10", "2026-11"], holidays, vacations, generatedAt: new Date(2026, 8, 22, 9, 5), today: TODAY_NOV, weekStartsOn: "mon" });
+  assert.deepStrictEqual(hdrs(mon, "2026-11"), ["Mon", "Tue", "Wed", "Thu", "Fri*", "Sat*", "Sun*"]);
+  assert.deepStrictEqual(cells(mon, "2026-11"), { n: 42, first: "2026-11-01", pad: 12 });
+  assert.deepStrictEqual(cells(mon, "2026-10"), { n: 35, first: "2026-10-01", pad: 4 }, "October 2026 Monday-first: 9/28..11/1, three padding cells before 10/1 and one after 10/31");
+  // the weekend tint follows the day, not the column: 11/1 (Sun), 11/6 (Fri), 11/7 (Sat) carry .we in both modes; 11/2 (Mon) never
+  [share, mon].forEach(html => {
+    ["2026-11-01", "2026-11-06", "2026-11-07"].forEach(d => assert.ok(new RegExp(`class="cd we" data-day="${d}"`).test(html), d + " should be tinted as a weekend day"));
+    assert.ok(/class="cd" data-day="2026-11-02"/.test(html), "11/2 (Mon) must not be tinted");
+  });
+  // The ER-panel author's week rows (MON/SUN DATES) are unchanged by the setting
+  const rowsOf = (html) => Array.from(html.slice(html.indexOf('<table class="wr" data-month="2026-11">')).matchAll(/<tr data-week="(\d{4}-\d{2}-\d{2})">/g)).map(m => m[1]).slice(0, 5);
+  assert.deepStrictEqual(rowsOf(mon), rowsOf(share));
+  assert.deepStrictEqual(rowsOf(share), ["2026-10-26", "2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]);
+  assert.ok(share.includes("<th>MON/SUN DATES</th>") && mon.includes("<th>MON/SUN DATES</th>"));
+  // the same cell content in both modes (only the padding moves)
+  const cell = (html, d) => { const j = html.indexOf(`data-day="${d}"`); const i = html.lastIndexOf('<div class="cd', j); return html.slice(i, html.indexOf("</div></div>", j) + 12); };
+  ["2026-10-31", "2026-11-03", "2026-11-06", "2026-11-26"].forEach(d => assert.strictEqual(cell(mon, d), cell(share, d), d));
 });
 check("share page cells: two-line P/B, OPEN in red class, externalCover label, holiday name, vacation line, note flag", () => {
   const cell = (d) => { const j = share.indexOf(`data-day="${d}"`); const i = share.lastIndexOf('<div class="cd', j); return share.slice(i, share.indexOf("</div></div>", j) + 12); };
@@ -299,6 +360,32 @@ check("printable: one .page per month (2), Sunday-first DOW ribbon, vacation bar
   assert.ok(printable.includes("Silvis Surgical Care - Trauma / Acute Care Surgery Call") && printable.includes("Printed "));
   assert.ok(!/DSG|Davenport|APP/.test(printable.replace(/APP_/g, "")), "Davenport wording left behind");
   assert.ok(!/[^\x00-\x7F]/.test(printable.replace(/&middot;/g, "")), "non-ASCII in the printable document");
+});
+check("Item A printable: Sunday-first by default (November 2026: 5 week rows, no empty cell in the first row, mini calendars S..S); weekStartsOn 'mon' starts the DOW ribbon on Monday, the mini calendars on M, and November 2026 becomes 6 rows with 6 leading empties", () => {
+  const page = (html, month) => html.slice(html.indexOf(`<div class="page" data-month="${month}">`), html.indexOf('<div class="footer">', html.indexOf(`<div class="page" data-month="${month}">`)));
+  const ribbon = (html) => Array.from(html.matchAll(/<div class="dow">([A-Za-z]+)<\/div>/g)).map(m => m[1]);
+  const firstRowEmpties = (html) => { const r = html.slice(html.indexOf('<div class="week-row"'), html.indexOf('<div class="week-row"', html.indexOf('<div class="week-row"') + 10)); return (r.match(/<div class="cell empty">/g) || []).length; };
+  const novSun = page(printable, "2026-11");
+  assert.deepStrictEqual(ribbon(novSun), ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]);
+  assert.strictEqual((novSun.match(/<div class="week-row"/g) || []).length, 5, "Sunday-first November 2026 is 5 rows (11/1 is a Sunday)");
+  assert.strictEqual(firstRowEmpties(novSun), 0);
+  assert.strictEqual((printable.match(/<div class="mini-dow">S<\/div><div class="mini-dow">M<\/div>/g) || []).length, (printable.match(/<div class="mini-grid">/g) || []).length, "every mini calendar starts S M");
+  const mon = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 9, numMonths: 2, schedule, roster, holidays, vacations, today: TODAY_NOV, weekStartsOn: "mon" });
+  const novMon = page(mon, "2026-11");
+  assert.deepStrictEqual(ribbon(novMon), ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]);
+  assert.strictEqual((novMon.match(/<div class="week-row"/g) || []).length, 6, "Monday-first November 2026 is 6 rows (10/26..12/6)");
+  assert.strictEqual(firstRowEmpties(novMon), 6, "Mon 10/26 .. Sat 10/31 are empty (two of them hold the mini calendars) before Sun 11/1");
+  assert.ok((mon.match(/<div class="mini-grid">/g) || []).length >= 2 && (mon.match(/<div class="mini-dow">M<\/div><div class="mini-dow">T<\/div>/g) || []).length === (mon.match(/<div class="mini-grid">/g) || []).length, "every mini calendar starts M T");
+  assert.strictEqual((mon.match(/<div class="mini-dow">S<\/div><div class="mini-dow">M<\/div>/g) || []).length, 0);
+  // the December 2026 mini calendar in Monday mode: 12/1 is a Tuesday -> exactly one leading empty
+  const miniDec = novMon.slice(novMon.indexOf("December 2026</div>"), novMon.indexOf("</div></div>", novMon.indexOf("December 2026</div>")));
+  assert.strictEqual((miniDec.match(/<div class="mini-day empty">0<\/div>/g) || []).length, 1, miniDec.slice(0, 200));
+  // the day cells are the same in both modes
+  const cell = (html, d, next) => html.slice(html.indexOf(`data-day="${d}"`), html.indexOf(`data-day="${next}"`));
+  assert.strictEqual(cell(mon, "2026-11-06", "2026-11-07"), cell(printable, "2026-11-06", "2026-11-07"));
+  assert.strictEqual(cell(mon, "2026-11-26", "2026-11-27"), cell(printable, "2026-11-26", "2026-11-27"));
+  assert.strictEqual((mon.match(/<div class="cell" data-day="2026-11-/g) || []).length, 30);
+  assert.ok(!/[^\x00-\x7F]/.test(mon.replace(/&middot;/g, "")), "non-ASCII in the Monday-first printable");
 });
 check("printable: holidays accepted as the blob shape, a flat unit list or a day map; missing roster/vacations do not throw", () => {
   const flat = H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 10, numMonths: 1, schedule, roster, holidays: [{ name: "Thanksgiving", days: ["2026-11-26"] }] });

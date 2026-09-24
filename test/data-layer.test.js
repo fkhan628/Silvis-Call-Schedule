@@ -920,6 +920,26 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count('"silvis_collapse_setup_east"'), 0, "openEastVacPanel writes through the helper, not a legacy literal");
     assert.strictEqual(count('writeCollapseFlag("setup_east", true)'), 1);
   });
+  // Item A (Faraz 9/23): the calendar week starts on Sunday, like the Davenport app - a per-device setting
+  // ('silvis-week-start', 'sun' default / 'mon') read by the ONE grid builder helpers.monthGridDays and handed to
+  // both export grids; monOf() and every week-based rule stay Mon-Sun.
+  check("Item A pins: weekStartsOn state reads 'silvis-week-start' through normalizeWeekStart (Sunday default) and persists it; gridDays = monthGridDays(calYear, calMonth, weekStartsOn); the header row comes from weekdayLabels with the weekend-unit label on Fri; the Settings control is two buttons (week-start-sun / week-start-mon); the share page and the printable get weekStartsOn; monOf still drives the week rows", () => {
+    assert.strictEqual(count('localStorage.getItem("silvis-week-start")'), 1, "one read of the week-start key");
+    assert.ok(src.includes('normalizeWeekStart(localStorage.getItem("silvis-week-start"))'), "the stored value is normalised (a missing or garbage value is Sunday)");
+    assert.strictEqual(count('localStorage.setItem("silvis-week-start", weekStartsOn)'), 1, "persisted from the state, once");
+    assert.ok(src.includes("const [weekStartsOn, setWeekStartsOn] = useState("), "weekStartsOn state");
+    assert.ok(/const gridDays = useMemo\(\(\) => monthGridDays\(calYear, calMonth, weekStartsOn\), \[calYear, calMonth, weekStartsOn\]\);/.test(src), "gridDays is the shared builder, keyed on the setting");
+    assert.strictEqual(count('["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((h, i) => ('), 0, "the hard-coded Mon..Sun header row is gone");
+    assert.ok(src.includes("{weekdayLabels(weekStartsOn).map((h, i) => {"), "the header row follows the setting");
+    assert.ok(src.includes('{h === "Fri" ? <span className="cal-wk-label"'), "the small 'weekend unit' label sits on the Fri header wherever Fri falls");
+    assert.ok(src.includes('data-week-start={weekStartsOn}'), "the grid announces its mode");
+    assert.strictEqual(count('data-testid="week-start-sun"'), 1); assert.strictEqual(count('data-testid="week-start-mon"'), 1);
+    assert.ok(src.includes('onClick={()=>setWeekStartsOn("sun")}') && src.includes('onClick={()=>setWeekStartsOn("mon")}'));
+    assert.ok(src.includes("Week starts on"), "the Settings label");
+    assert.ok(/generateShareHTML\(schedule, surgeons, \{[^}]*weekStartsOn[^}]*\}\)/.test(src), "the share page gets the setting");
+    assert.ok(/buildPrintableCalendarHTML\(\{[^}]*weekStartsOn[^}]*\}\)/.test(src), "the printable gets the setting");
+    assert.ok(src.includes("monOf("), "monOf is still in use (week rows, East weeks) - Item A never touches it");
+  });
   // RLS-7: the two PATCH handlers that used to trust a 2xx alone now behave like patchTradeStatus - a 200 with zero
   // rows (an RLS-filtered write) adopts nothing locally and logs no audit row.
   check("RLS-7: toEdit and updateOfficeContact treat a 2xx with zero rows as 'not changed' (no local adopt, no audit row, no fabricated row)", () => {
@@ -1386,7 +1406,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   });
   check("review: the grid's weekend header / bracket and the unread-notification tint are theme tokens (no off-palette blues #3d6a8c / #a9c4da / #f0f8ff / #c0d8f0)", () => {
     for (const hex of ["#3d6a8c", "#a9c4da", "#f0f8ff", "#c0d8f0"]) assert.strictEqual(count(hex), 0, hex + " remains");
-    assert.ok(src.includes('color: i >= 4 ? (dk ? T.muted : T.title) : dkSubtext'), "weekend header text is a token");
+    assert.ok(src.includes('color: wk ? (dk ? T.muted : T.title) : dkSubtext'), "weekend header text is a token (Item A: keyed on the day, not the column)");
     assert.ok(src.includes('borderTop: "2px solid " + T.navyMuted'), "weekend bracket is T.navyMuted");
     assert.ok(src.includes('background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`'), "unread notification uses the accent tint + accent border");
   });

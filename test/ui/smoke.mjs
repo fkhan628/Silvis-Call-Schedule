@@ -1264,8 +1264,50 @@ try {
   const octInMonth = octCells.filter(c => c.day.startsWith("2026-10"));
   const pCells = octInMonth.filter(c => c.p);
   const openCells = octInMonth.filter(c => /OPEN/.test(c.text));
-  if (octCells.length !== 35 || octCells[0].day !== "2026-09-28" || octCells[34].day !== "2026-11-01") fail(`October 2026 grid is not 5 Mon-Sun rows 9/28..11/1: ${octCells.length} cells, ${octCells[0] && octCells[0].day}..${octCells[34] && octCells[34].day}`);
-  else ok("October 2026 grid: 35 Mon..Sun cells from 9/28 to 11/1 (weekend unit Fri-Sun in one row)");
+  // Item A (Faraz 9/23): the grid is Sunday-first by default, like the Davenport app - Sun 9/27 .. Sat 10/31.
+  if (octCells.length !== 35 || octCells[0].day !== "2026-09-27" || octCells[34].day !== "2026-10-31") fail(`October 2026 grid is not 5 Sun-Sat rows 9/27..10/31: ${octCells.length} cells, ${octCells[0] && octCells[0].day}..${octCells[34] && octCells[34].day}`);
+  else ok("October 2026 grid: 35 Sun..Sat cells from 9/27 to 10/31 (Sunday-first by default)");
+  // ---- Item A: the calendar header reads Sun..Sat by default, Mon..Sun after Settings > Week starts on: Monday, and back ----
+  {
+    const readHdr = () => page.$$eval("[data-testid=cal-grid] .cal-hdr", els => els.map(e => ({ dow: e.getAttribute("data-dow"), wk: e.getAttribute("data-weekend"), label: !!e.querySelector(".cal-wk-label"), tinted: !/^(rgba\(0, 0, 0, 0\)|transparent)$/.test(getComputedStyle(e).backgroundColor) })));
+    const modeOf = () => page.$eval("[data-testid=cal-grid]", el => el.getAttribute("data-week-start"));
+    const storedMode = () => page.evaluate(() => { try { return localStorage.getItem("silvis-week-start"); } catch (e) { return "ERR " + e; } });
+    const pressed = () => page.$$eval("[data-testid^=week-start-]", els => els.map(e => e.getAttribute("data-testid").slice(11) + ":" + e.getAttribute("aria-pressed")).join(","));
+    const expectHdr = async (mode, where) => {
+      const hdr = await readHdr();
+      const want = mode === "mon" ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const got = hdr.map(h => h.dow);
+      const wkCols = hdr.map((h, i) => h.wk === "1" && h.tinted ? i : -1).filter(i => i >= 0);
+      const wantWk = mode === "mon" ? [4, 5, 6] : [0, 5, 6];
+      const labelOn = hdr.filter(h => h.label).map(h => h.dow);
+      const cells = await readCells();
+      const firstDow = new Date(cells[0].day + "T12:00:00").getDay();
+      const problems = [];
+      if (got.join() !== want.join()) problems.push(`header ${got.join(" ")}`);
+      if (wkCols.join() !== wantWk.join()) problems.push(`weekend tint on columns ${wkCols.join(",") || "none"} (want ${wantWk.join(",")})`);
+      if (labelOn.join() !== "Fri") problems.push(`'weekend unit' label on ${labelOn.join(",") || "no header"} (want Fri)`);
+      if (cells.length % 7 !== 0 || firstDow !== (mode === "mon" ? 1 : 0)) problems.push(`${cells.length} cells from ${cells[0].day} (getDay ${firstDow})`);
+      if ((await modeOf()) !== mode) problems.push(`data-week-start ${await modeOf()}`);
+      if ((await storedMode()) !== mode) problems.push(`localStorage silvis-week-start ${await storedMode()}`);
+      if (problems.length) fail(`Item A week start ${where}: ${problems.join("; ")}`);
+      else ok(`Item A week start ${where}: header ${got.join(" ")}, weekend tint on columns ${wkCols.join(",")}, 'weekend unit' label on Fri, ${cells.length} cells from ${cells[0].day}, data-week-start + localStorage '${mode}'`);
+    };
+    await expectHdr("sun", "default (October 2026, nothing stored yet but the effect wrote 'sun')");
+    const setWeekStart = async (mode) => { await page.click('button[data-tab="settings"]'); await page.click(`[data-testid=week-start-${mode}]`); await page.waitForTimeout(150); const p = await pressed(); if (p !== (mode === "mon" ? "sun:false,mon:true" : "sun:true,mon:false")) fail(`Item A Settings control after ${mode}: aria-pressed reads ${p}`); await showMonth(2026, 9); };
+    await setWeekStart("mon");
+    await expectHdr("mon", "after Settings > Week starts on: Monday");
+    const octMon = await readCells();
+    if (octMon.length !== 35 || octMon[0].day !== "2026-09-28" || octMon[34].day !== "2026-11-01") fail(`Item A Monday mode: October 2026 is not 9/28..11/1: ${octMon.length} cells ${octMon[0] && octMon[0].day}..${octMon[34] && octMon[34].day}`); else ok("Item A Monday mode: October 2026 = 35 Mon..Sun cells 9/28..11/1 (the pre-Item-A grid)");
+    await page.locator("[data-testid=cal-grid]").screenshot({ path: path.join(OUT, "calendar-oct-2026-monday-first.png") });
+    await setWeekStart("sun");
+    await expectHdr("sun", "after Settings > Week starts on: Sunday again");
+    // the same day cells in both modes - only the padding moved
+    const octSun = await readCells();
+    const byDay = (arr) => Object.fromEntries(arr.filter(c => c.day.startsWith("2026-10")).map(c => [c.day, [c.p, c.b, c.ext, c.open, c.text].join("|")]));
+    const a = byDay(octMon), b = byDay(octSun), diff = Object.keys(a).filter(d => a[d] !== b[d]);
+    if (Object.keys(a).length !== 31 || diff.length) fail(`Item A: the October cells differ between the two modes (${diff.join(", ") || Object.keys(a).length + " days"})`); else ok("Item A: all 31 October cells identical in both modes (only the padding cells move)");
+    await page.locator("[data-testid=cal-grid]").screenshot({ path: path.join(OUT, "calendar-oct-2026-sunday-first.png") });
+  }
   if (!pCells.length) fail("October 2026: no cell carries a primary assignment"); else ok(`October 2026: ${pCells.length} day(s) with 'P <name>', e.g. ${pCells[0].day} P ${pCells[0].p}`);
   { const octOpen = liveOpenBetween("2026-10-01", "2026-10-31");
     if (!openCells.length) { if (octOpen) fail("October 2026: no cell shows OPEN although the live rows have an open slot on " + octOpen); else console.log("     (October 2026: no open slot in the live rows from today on - no OPEN cell expected)"); }
