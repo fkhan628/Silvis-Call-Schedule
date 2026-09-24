@@ -1609,6 +1609,41 @@ try {
   if (foot.bottom > foot.vh || foot.top < 0 || foot.h < 36) fail(`mobile 390px: the day editor's Save button is off screen or too small (${JSON.stringify(foot)})`); else ok(`mobile 390px: the day editor's Save button is on screen at open (bottom ${foot.bottom} of ${foot.vh}px, ${foot.h}px tall)`);
   await page.keyboard.press("Escape");
   await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+  // (c2) Prompt 16 A5 - iOS safe area. Chromium's Emulation.setSafeAreaInsetsOverride stands in for an iPhone in
+  // standalone mode (47 px notch above, 34 px home-indicator band below - env(safe-area-inset-*) then reads them the
+  // way iOS does; the harness cannot emulate display-mode). The header must grow by the top inset, the day editor's
+  // sticky Cancel / Save row must pad by the bottom inset. calendar-390-standalone.png / day-editor-390-standalone.png
+  // are the review pair copied to docs/screenshots/ios-safe-area/.
+  {
+    const saCdp = await context.newCDPSession(page);
+    const saInsets = (t, b) => saCdp.send("Emulation.setSafeAreaInsetsOverride", { insets: { top: t, topMax: t, bottom: b, bottomMax: b, left: 0, leftMax: 0, right: 0, rightMax: 0 } });
+    try {
+      await saInsets(47, 34);
+      await page.evaluate(() => window.scrollTo(0, 0)); // the earlier mobile steps leave the page scrolled; the header is measured from the top of the page
+      await page.waitForTimeout(250);
+      const saMeta = await page.evaluate(() => ({ viewport: (document.querySelector('meta[name="viewport"]') || {}).content || "", theme: Array.from(document.querySelectorAll('meta[name="theme-color"]')).map(m => m.content) }));
+      const saHdr = await page.$eval("[data-testid=app-header]", el => { const cs = getComputedStyle(el); return { padTop: cs.paddingTop, padBottom: cs.paddingBottom, top: Math.round(el.getBoundingClientRect().top) }; });
+      if (!/(^|,\s*)viewport-fit=cover(,|$)/.test(saMeta.viewport)) fail("safe area: the viewport meta lacks viewport-fit=cover: " + saMeta.viewport);
+      else if (saMeta.theme.join() !== "#FF5F05") fail("safe area: the theme-color meta moved: " + JSON.stringify(saMeta.theme));
+      else if (saHdr.padTop !== "61px" || saHdr.padBottom !== "14px" || saHdr.top !== 0) fail(`safe area: under a 47px top inset the header should pad 47 + 14 = 61px at the top and 14px below, from the very top (computed ${JSON.stringify(saHdr)})`);
+      else ok(`safe area (390 x 844, insets 47 / 34): viewport-fit=cover, theme-color kept, header padding-top ${saHdr.padTop} / bottom ${saHdr.padBottom}`);
+      await page.evaluate(() => { const t = document.querySelector("[data-testid=toast]"); if (t) t.click(); });
+      await page.waitForTimeout(150);
+      await page.screenshot({ path: path.join(OUT, "calendar-390-standalone.png"), fullPage: false });
+      await page.click('[data-day="2026-10-15"]');
+      await page.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+      await page.waitForTimeout(200);
+      const saFoot = await page.evaluate(() => { const f = document.querySelector("[data-testid=editor-footer]"), s = document.querySelector("[data-testid=editor-save]"); const r = s.getBoundingClientRect(); return { padBottom: getComputedStyle(f).paddingBottom, saveBottom: Math.round(r.bottom), vh: window.innerHeight }; });
+      if (saFoot.padBottom !== "46px") fail(`safe area: the day editor's sticky row should pad 34 + 12 = 46px at the bottom under a 34px inset (computed ${saFoot.padBottom})`);
+      else if (saFoot.saveBottom > saFoot.vh - 34) fail(`safe area: the day editor's Save button ends inside the 34px home-indicator band (bottom ${saFoot.saveBottom} of ${saFoot.vh})`);
+      else ok(`safe area: the day editor's Cancel / Save row pads ${saFoot.padBottom}; Save ends at ${saFoot.saveBottom} of ${saFoot.vh}px, above the 34px band`);
+      await page.screenshot({ path: path.join(OUT, "day-editor-390-standalone.png"), fullPage: false });
+      ok("screenshots test/ui/out/calendar-390-standalone.png, test/ui/out/day-editor-390-standalone.png");
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+    } catch (e) { fail("safe area: " + errLine(e)); try { await page.keyboard.press("Escape"); } catch (e2) {} }
+    finally { try { await saInsets(0, 0); } catch (e) {} await saCdp.detach().catch(() => {}); }
+  }
   // (d) the trade form's selects fit the phone width
   await page.click('button[data-tab="timeoff"]');
   await page.waitForSelector("[data-testid=trade-card]", { timeout: 8000 });
@@ -5242,6 +5277,19 @@ try {
       else ok("A3 session (no loop): 12 s later still ONE write, no further refresh, no save-error toast (toasts counted), ONE banner");
       await sess.screenshot({ path: path.join(OUT, "session-expired.png"), fullPage: true });
       ok("screenshot test/ui/out/session-expired.png");
+      // Prompt 16 A5: the lowest fixed banner pads by the home-indicator inset (the same CDP override as the
+      // calendar's safe-area step); with no other banner showing, session-expired IS the lowest one.
+      {
+        const bCdp = await sessCtx.newCDPSession(sess);
+        try {
+          await bCdp.send("Emulation.setSafeAreaInsetsOverride", { insets: { top: 47, topMax: 47, bottom: 34, bottomMax: 34, left: 0, leftMax: 0, right: 0, rightMax: 0 } });
+          await sess.waitForTimeout(200);
+          const bb = await sess.$eval("[data-testid=session-expired]", el => { const cs = getComputedStyle(el); const r = el.getBoundingClientRect(); return { padBottom: cs.paddingBottom, bottom: cs.bottom, gap: Math.round(window.innerHeight - r.bottom) }; });
+          if (bb.padBottom !== "43px" || bb.bottom !== "0px" || bb.gap !== 0) fail("A5 safe area: the session-expired banner (the lowest one) should sit at bottom 0 and pad 34 + 9 = 43px under a 34px inset: " + JSON.stringify(bb));
+          else ok(`A5 safe area: the session-expired banner sits at the bottom edge and pads ${bb.padBottom} (34px inset + 9px)`);
+        } catch (e) { fail("A5 safe area (banner): " + errLine(e)); }
+        finally { try { await bCdp.send("Emulation.setSafeAreaInsetsOverride", { insets: { top: 0, topMax: 0, bottom: 0, bottomMax: 0, left: 0, leftMax: 0, right: 0, rightMax: 0 } }); } catch (e) {} await bCdp.detach().catch(() => {}); }
+      }
       // (2b) a Setup edit while expired (the 9/23 review, major - the blob leg): Rules -> Acton -> max consecutive
       // days -> Save. The audit insert and the blob upsert both 401 (forced); the value must stay in the editor and
       // land after the sign-in instead of being replaced by the server's blob (the re-run's leg A used to adoptBlob

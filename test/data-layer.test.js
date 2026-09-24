@@ -2967,6 +2967,49 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- I. Prompt 16 A5: iOS safe area - the header, the fixed bottom banners, the day editor's sticky row, viewport-fit ---------------- */
+  console.log("\n[A5] Prompt 16 A5 (iOS safe area: env() insets on the header, the bottom banners, the toast and the sticky row; viewport-fit=cover)");
+  {
+    const A5SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const A5count = (s, needle) => s.split(needle).length - 1;
+    const A5line = (needle) => { const i = A5SRC.indexOf(needle); assert.ok(i > 0, "missing: " + needle); return A5SRC.slice(A5SRC.lastIndexOf("\n", i) + 1, A5SRC.indexOf("\n", i)); };
+    check("A5: app-styles.js exports SAFE_AREA (the two env() readers, 0px fallback) and css.bottomBanner - the lowest fixed banner pads its bottom by the inset, a banner stacked n high is lifted 44n px plus the inset; css.hdr pads its top by the inset on top of its 14px", () => {
+      const st = require(path.join(ROOT, "app-styles.js"));
+      assert.deepStrictEqual(st.SAFE_AREA, { top: "env(safe-area-inset-top, 0px)", bottom: "env(safe-area-inset-bottom, 0px)" });
+      assert.strictEqual(typeof st.css.bottomBanner, "function", "css.bottomBanner");
+      assert.deepStrictEqual(st.css.bottomBanner(0), { bottom: 0, paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 9px)" }, "the lowest banner");
+      assert.deepStrictEqual(st.css.bottomBanner(1), { bottom: "calc(44px + env(safe-area-inset-bottom, 0px))" }, "one banner below it");
+      assert.deepStrictEqual(st.css.bottomBanner(2), { bottom: "calc(88px + env(safe-area-inset-bottom, 0px))" }, "two banners below it");
+      assert.deepStrictEqual(st.css.bottomBanner(), st.css.bottomBanner(0), "no argument = the lowest banner");
+      assert.strictEqual(st.css.hdr.paddingTop, "calc(env(safe-area-inset-top, 0px) + 14px)", "css.hdr paddingTop");
+      assert.strictEqual(st.css.hdr.padding, "14px 20px", "the shorthand stays");
+      const keys = Object.keys(st.css.hdr);
+      assert.ok(keys.indexOf("paddingTop") > keys.indexOf("padding"), "paddingTop is declared after the padding shorthand (React applies style keys in order, so the longhand wins)");
+    });
+    check("A5 pins: the viewport meta carries viewport-fit=cover (once), the #FF5F05 theme-color meta and the black-translucent status bar stay", () => {
+      assert.ok(A5SRC.includes('<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">'), "the viewport meta");
+      assert.strictEqual(A5count(A5SRC, '<meta name="viewport"'), 1, "one viewport meta");
+      assert.strictEqual(A5count(A5SRC, '<meta name="theme-color" content="#FF5F05">'), 1, "the theme-color meta");
+      assert.ok(A5SRC.includes('<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">'), "black-translucent: the page draws under the status bar, which is why the header pads by the top inset");
+    });
+    check("A5 pins: the three fixed bottom banners (session-expired above minimum-version above update-available) position through css.bottomBanner spread AFTER their padding shorthand; no literal 44px offset or bottom:0 is left on them; the toast lifts by the bottom inset", () => {
+      assert.ok(A5line('data-testid="session-expired"').includes('style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0)),fontSize:12.5'), "the session-expired banner");
+      const fu = A5SRC.slice(A5SRC.indexOf("{forceUpdate && !paintSheet && !offerSheet && ("), A5SRC.indexOf("This app version ({APP_VERSION}) is below the required minimum"));
+      assert.ok(fu.includes('<div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5'), "the minimum-version banner");
+      const ua = A5SRC.slice(A5SRC.indexOf("{updateAvailable && !paintSheet && !offerSheet && ("), A5SRC.indexOf("New version available ({updateAvailable})"));
+      assert.ok(ua.includes('<div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5'), "the update-available banner");
+      assert.strictEqual(A5count(A5SRC, "css.bottomBanner("), 3, "exactly the three banners");
+      for (const gone of ["bottom:updateAvailable?44:0", "bottom:(forceUpdate?44:0)+(updateAvailable?44:0)", "bottom:0,zIndex:9998"]) assert.strictEqual(A5count(A5SRC, gone), 0, "literal offset left: " + gone);
+      assert.ok(A5line('data-testid="toast"').includes("...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), "the toast: lifted by the top inset over a painter sheet, by the bottom inset otherwise");
+    });
+    check("A5 pins: the day editor's sticky Cancel / Save row pads its bottom by the inset after its padding shorthand (the painter sheets' own four env() literals stay; every other site reads SAFE_AREA)", () => {
+      assert.ok(A5line('data-testid="editor-footer"').includes('position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",paddingBottom:`calc(${SAFE_AREA.bottom} + 12px)`,borderTop:'), "the editor footer");
+      assert.strictEqual(A5count(A5SRC, "env(safe-area-inset-"), 4, "the two painter sheets' header + footer literals, nothing else raw");
+      assert.strictEqual(A5count(A5SRC, "${SAFE_AREA.bottom}"), 2, "the toast and the editor footer");
+      assert.strictEqual(A5count(A5SRC, "${SAFE_AREA.top}"), 1, "the toast's painter-sheet placement is the only JSX reader of the top inset; the header's lives in css.hdr (app-styles.js)");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

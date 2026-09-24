@@ -86,10 +86,19 @@ function rosterNameColor(c, dark) { const col = c || {}; return dark ? (col.dk |
 // Pill border for a colour set (outside surgeons dashed).
 function pillBorder(c) { const col = c || {}; return (col.dashed ? "1px dashed " : "1px solid ") + (col.bd || LIGHT.border); }
 
+// iOS safe area (Prompt 16 A5). The viewport meta carries viewport-fit=cover and the status bar is black-translucent, so an
+// installed PWA draws under the notch and the home indicator; these two env() readers (0px everywhere else) keep the UI out of
+// them. Read them with a template literal AFTER the padding shorthand in the same style object (React applies keys in order).
+const SAFE_AREA = { top: "env(safe-area-inset-top, 0px)", bottom: "env(safe-area-inset-bottom, 0px)" };
+
 const css = {
   root: { fontFamily:font, background:LIGHT.bg, color:LIGHT.text, minHeight:"100vh" },
-  hdr: { background:LIGHT.navy, borderBottom:`1px solid ${LIGHT.navy}`, padding:"14px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 },
+  hdr: { background:LIGHT.navy, borderBottom:`1px solid ${LIGHT.navy}`, padding:"14px 20px", paddingTop:`calc(${SAFE_AREA.top} + 14px)`, display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 },
   h1: { fontSize:21, fontWeight:700, color:LIGHT.onNavy, margin:0, letterSpacing:-0.5 },
+  // A fixed bottom banner (update-available, minimum-version, session-expired): they stack 44 px apart, `stacked` = how many
+  // show below this one. The lowest pads its bottom by the home-indicator inset; the ones above are lifted by it. Spread it
+  // after the banner's padding shorthand.
+  bottomBanner: (stacked) => stacked ? { bottom: `calc(${stacked * 44}px + ${SAFE_AREA.bottom})` } : { bottom: 0, paddingBottom: `calc(${SAFE_AREA.bottom} + 9px)` },
   sub: { fontSize:11, color:LIGHT.navyMuted, margin:"2px 0 0", letterSpacing:0.8, textTransform:"uppercase" },
   nav: { display:"flex", gap:3, flexWrap:"wrap" },
   // Nav tabs sit on the navy bar: the active tab is lifted a touch and underlined in the accent (the caller passes T.accent so dark mode gets its own).
@@ -169,7 +178,7 @@ function eastVacSegStyle(active, state, dark) {
 
 // Node (tests: test/data-layer.test.js pins, test/ui/contrast.mjs).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle, OFFER_BRUSH };
+  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, SAFE_AREA, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle, OFFER_BRUSH };
 }
 
 /* ═══════════════════════════════════════════════════

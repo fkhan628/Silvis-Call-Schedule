@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -4855,7 +4855,7 @@ function CallSchedule() {
       )}
       {/* Non-blocking toast */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: 12 } : { bottom: 24 }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           {toast.msg}
         </div>
       )}
@@ -4893,21 +4893,22 @@ function CallSchedule() {
           sign-in card in place (openSignInAgain) - no reload, no biometric.unenroll(), no data dropped. Sits above the
           two version banners when they show. */}
       {sessionExpired && !!authUser && !isPublicMode && !paintSheet && !offerSheet && (
-        <div role="alert" data-testid="session-expired" style={{position:"fixed",left:0,right:0,bottom:(forceUpdate?44:0)+(updateAvailable?44:0),zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",fontSize:12.5,fontWeight:600,fontFamily:font}}>
+        <div role="alert" data-testid="session-expired" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0)),fontSize:12.5,fontWeight:600,fontFamily:font}}>
           <span>Your session expired - sign in again</span>
           <button data-testid="session-expired-signin" onClick={openSignInAgain} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Sign in</button>
         </div>
       )}
       {/* Minimum-version gate (client_versions row 'main') - persistent, reload is user-initiated */}
       {forceUpdate && !paintSheet && !offerSheet && (
-        <div role="alert" style={{position:"fixed",left:0,right:0,bottom:updateAvailable?44:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",fontSize:12.5,fontWeight:600,fontFamily:font}}>
+        <div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5,fontWeight:600,fontFamily:font}}>
           <span>This app version ({APP_VERSION}) is below the required minimum ({forceUpdate.min_version}). {forceUpdate.message}</span>
           <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Reload now</button>
         </div>
       )}
-      {/* Update-available banner (version.json) */}
+      {/* Update-available banner (version.json). The three fixed bottom banners stack 44 px apart through css.bottomBanner
+          (Prompt 16 A5): the lowest one pads by the iOS home-indicator inset, the ones above it are lifted by it. */}
       {updateAvailable && !paintSheet && !offerSheet && (
-        <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,bottom:0,zIndex:9998,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
+        <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9998,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
           <span>New version available ({updateAvailable})</span>
           <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Tap to reload</button>
           <button aria-label="Dismiss" onClick={()=>{ updateDismissedRef.current = updateAvailable; setUpdateAvailable(null); }} style={{background:"none",border:"none",color:"#8a9aa8",cursor:"pointer",fontSize:14,padding:"2px 6px"}}>x</button>
@@ -7379,8 +7380,9 @@ function DayEditor(props) {
         {info && <div role="status" data-testid="editor-info" style={{fontSize:12,color:sub,fontWeight:600,marginBottom:8}}>{info}</div>}
         {evalBroken && <div role="alert" data-testid="editor-eval-error" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>Eligibility check failed for {Array.from(new Set(evalErrors.map(o => o.name))).join(", ")}: {evalErrors[0].error} - saving is disabled until the rules evaluate again (reload the page; if it persists, tell the scheduler).</div>}
         {hint && <div role="status" data-testid="editor-hint" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>{hint}</div>}
-        {/* Sticky footer: the Cancel / Save row stays in view while the dialog body scrolls (a phone showed it below the fold - Prompt 11). */}
-        <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",borderTop:"1px solid " + border}}>
+        {/* Sticky footer: the Cancel / Save row stays in view while the dialog body scrolls (a phone showed it below the fold - Prompt 11);
+            it pads by the iOS home-indicator inset like the painter sheets' footers (Prompt 16 A5). */}
+        <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",paddingBottom:`calc(${SAFE_AREA.bottom} + 12px)`,borderTop:"1px solid " + border}}>
           {!isPublicMode && (canEdit || myRole) && (
             <button type="button" data-testid="editor-trade" onClick={() => onTrade(day, myRole || (entry && entry.primary ? "primary" : "backup"))} style={{background:"none",border:"none",color:THEME[dk ? "dark" : "light"].accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0}}>Propose a trade for this day</button>
           )}
