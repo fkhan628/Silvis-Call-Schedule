@@ -341,17 +341,7 @@ function CallSchedule() {
     try { localStorage.setItem("silvis-dark-mode", darkMode); } catch(e) { console.warn("Couldn't persist dark-mode setting:", e); }
   }, [darkMode]);
 
-  // --- Undo History (in-memory, this device) ---
-  const [scheduleHistory, setScheduleHistory] = useState([]);
-  const pushUndo = useCallback((sched) => {
-    setScheduleHistory(prev => [...prev.slice(-9), JSON.parse(JSON.stringify(sched))]);
-  }, []);
-  const undoLastChange = useCallback(() => {
-    if (scheduleHistory.length === 0) return;
-    const prev = scheduleHistory[scheduleHistory.length - 1];
-    setSchedule(prev);
-    setScheduleHistory(h => h.slice(0, -1));
-  }, [scheduleHistory]);
+  // (Undo history: below the sync refs - it reads dayVersionsRef and scheduleRef.)
 
   // Vacation entry form (Setup card + Time off tab share these)
   const [vacSurgeon, setVacSurgeon] = useState("");
@@ -451,6 +441,30 @@ function CallSchedule() {
   const intentionalScheduleWipeRef = useRef(false);
   const scheduleRef = useRef({});
   useEffect(() => { scheduleRef.current = schedule; }, [schedule]);
+
+  // --- Undo History (in-memory, this device; Prompt 16 B1: per edit and per day) ---
+  // An entry is the set of days ONE action changed, each with the assignment it had before and the schedule_days
+  // version this session had seen for it (helpers.js undoEntry, read off dayVersionsRef at push time). Undo puts
+  // back only those days and only where the version is still the recorded one: this session's own write advances
+  // the record (undoNoteWrite in syncScheduleDaysNow), a claim / trade / other device's write does not, so such a
+  // day is left as the table has it and named in the toast ("Undo: 2 of 3 days restored; 1 changed since (10/16)").
+  // Until B1 the button put back a whole-map snapshot and silently reverted whatever had landed meanwhile. The ref
+  // is the source of truth (the sync loop and the []-deps handlers read it); the state mirrors it for the button.
+  const scheduleHistoryRef = useRef([]);
+  const [scheduleHistory, setScheduleHistory] = useState([]);
+  const setHistory = (h) => { scheduleHistoryRef.current = h; setScheduleHistory(h); };
+  const pushUndo = useCallback((prev, next) => {
+    const entry = undoEntry(prev, next, dayVersionsRef.current);
+    if (entry) setHistory([...scheduleHistoryRef.current.slice(-9), entry]);
+  }, []);
+  const undoLastChange = useCallback(() => {
+    const h = scheduleHistoryRef.current;
+    if (h.length === 0) return;
+    const r = undoApply(h[h.length - 1], scheduleRef.current || {}, dayVersionsRef.current);
+    setHistory(h.slice(0, -1));
+    if (r.restored.length) { scheduleRef.current = r.next; setSchedule(r.next); }
+    showToast(r.message, r.skipped.length ? "error" : "info");
+  }, []);
 
   // --- Office Notifications ---
   const [officeContacts, setOfficeContacts] = useState([]);
@@ -1396,15 +1410,19 @@ function CallSchedule() {
       const a = next[day] || emptyDayAssignment();
       const row = assignmentToDayRow(day, a);
       const ver = dayVersionsRef.current[day];
+      let sentAgainst = ver; // B1: the version this write REALLY goes out against - the own-write note below is keyed on it
       let r;
       if (ver === undefined) {
         r = await postDayRow(row, by, ts);
         if (r.duplicate) {
           // The row exists (another device created it, or our version map is
-          // stale): adopt its version and retry ONCE as a CAS update.
+          // stale): adopt its version and retry ONCE as a CAS update. The retry
+          // goes out against the re-read version (B1: an undo entry recorded at
+          // "no row" must NOT follow it - that day reads as "changed since").
           const cur = await fetchDayRow(day);
           if (cur && typeof cur.version === "number") {
             dayVersionsRef.current[day] = cur.version;
+            sentAgainst = cur.version;
             r = await patchDayRow(row, cur.version, by, ts);
           } else {
             r = { error: "duplicate day and re-read failed", status: 409 };
@@ -1421,6 +1439,8 @@ function CallSchedule() {
       }
       if (r.conflict) { conflict = true; continue; }
       dayVersionsRef.current[day] = r.version;
+      const nh = undoNoteWrite(scheduleHistoryRef.current, day, sentAgainst, r.version);
+      if (nh !== scheduleHistoryRef.current) setHistory(nh);
       persisted[day] = JSON.parse(JSON.stringify(a));
       written++;
     }
@@ -2234,7 +2254,7 @@ function CallSchedule() {
     const keepPersonSource = (before.source === "claim" || before.source === "trade") && ["primary", "backup"].some(r => !!before[r] && before[r] === after[r]);
     after.source = (isExternalId(after.primary) || isExternalId(after.backup)) ? "manual-external" : keepPersonSource ? before.source : "manual";
     if (sameAssignment(day, before, after)) return true; // nothing changed - nothing to write
-    pushUndo(schedule);
+    pushUndo(schedule, { ...schedule, [day]: after });
     setSchedule(p => ({ ...p, [day]: after }));
     const lines = diffScheduleDays({ [day]: before }, { [day]: after }).map(c => formatDayChange(c, nameOf));
     logAudit("schedule.day_edit", fmtMD(day) + ": " + (lines.join("; ") || "edited"), {
@@ -2284,7 +2304,6 @@ function CallSchedule() {
       setSaveStatus("");
       return;
     }
-    pushUndo(schedule);
     const next = { ...schedule };
     let cleared = 0;
     days.forEach(d => {
@@ -2293,6 +2312,7 @@ function CallSchedule() {
       if (!a.backupLocked && a.backup) { a.backup = null; cleared++; }
       next[d] = a;
     });
+    pushUndo(schedule, next);
     setSchedule(next);
     scheduleRef.current = next;
     noteSnapshotTaken();
@@ -2775,7 +2795,7 @@ function CallSchedule() {
   };
   const acceptMerged = async (pv, cur, next, snap) => {
     const changes = diffScheduleDays(cur, next).filter(c => c.role === "primary" || c.role === "backup");
-    pushUndo(cur);
+    pushUndo(cur, next);
     setSchedule(next);
     scheduleRef.current = next;
     setPreviewGen(null);
@@ -2963,7 +2983,7 @@ function CallSchedule() {
     const m = suSeedDayMerge(scheduleRef.current || schedule, plan.scheduleDayRows, (st.live && st.live.schedule_days) || []);
     counts.schedule_days_inserted = m.inserted; counts.schedule_days_updated = m.updated; counts.schedule_days_skipped = m.skipped;
     if (m.changedDays.length) {
-      pushUndo(scheduleRef.current || schedule);
+      pushUndo(scheduleRef.current || schedule, m.next);
       setSchedule(m.next); scheduleRef.current = m.next;
       const r = await syncScheduleDays(m.next);
       if (!(r && r.ok)) errors.push("schedule_days: " + ((r && r.error) || "sync failed") + (r && r.blocked ? " (wipe guard)" : ""));
@@ -3024,7 +3044,7 @@ function CallSchedule() {
     scheduleRef.current = {};
     dayVersionsRef.current = {};
     lastSyncRef.current = {};
-    setScheduleHistory([]);
+    setHistory([]);
     // Step 2 - reset the config blob. If THIS fails the DB is half reset:
     // schedule deleted (recoverable from the snapshot), roster/rules intact
     // and still matching local state. Say exactly that; the guard refs stay
@@ -3960,7 +3980,7 @@ function CallSchedule() {
   // write uses. A confirmed restore may legitimately empty many days, so the
   // one-shot is armed and ALWAYS disarmed after.
   const applyScheduleViaCAS = async (sched) => {
-    if (Object.keys(scheduleRef.current || {}).length > 0) pushUndo(scheduleRef.current);
+    if (Object.keys(scheduleRef.current || {}).length > 0) pushUndo(scheduleRef.current, sched);
     setSchedule(sched);
     scheduleRef.current = sched;
     intentionalScheduleWipeRef.current = true;
@@ -5113,7 +5133,7 @@ function CallSchedule() {
             )}
           </button>
           {scheduleHistory.length > 0 && isScheduler && (
-            <button onClick={undoLastChange} style={{...css.tab(false),fontSize:12,padding:"4px 10px",color:T.accent}} title={`Undo (${scheduleHistory.length} steps)`}>Undo</button>
+            <button data-testid="undo-btn" onClick={undoLastChange} style={{...css.tab(false),fontSize:12,padding:"4px 10px",color:T.accent}} title={`Undo (${scheduleHistory.length} steps)`}>Undo</button>
           )}
           {mySurgeon && (
             <button data-testid="nav-paint-offers" onClick={()=>setOfferSheet({ personId: mySurgeon })} style={{...css.tab(false, T.accent),fontSize:12,padding:"5px 10px"}} title="Paint the dates you'll cover (primary / backup / either), any time ahead">Paint offers</button>

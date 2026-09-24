@@ -622,17 +622,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const body = src.slice(start, end);
     const ref = (v) => ({ current: v });
     const sameAssignment = (day, a, b) => JSON.stringify(H.assignmentToDayRow(day, a || H.emptyDayAssignment())) === JSON.stringify(H.assignmentToDayRow(day, b || H.emptyDayAssignment()));
-    const mk = () => {
-      const state = { toasts: [], patched: [] };
+    const mk = (stubs) => {
+      const s = stubs || {}; // B1 review: the duplicate-POST case swaps in its own history / postDayRow / fetchDayRow
+      const state = { toasts: [], patched: [], patchedAgainst: [], historySets: 0 };
       const intentionalScheduleWipeRef = ref(false);
+      const scheduleHistoryRef = ref(s.history || [{ days: [{ day: "2026-11-02", before: null, version: 1 }] }]); // Prompt 16 B1: an undo entry at the version the first write goes out against
       const lastSyncRef = ref({ "2026-11-02": { primary: "s1" }, "2026-11-03": { primary: "s2" }, "2026-11-04": { primary: "s3" }, "2026-11-05": { primary: "s4" } });
-      const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth"];
+      const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth", "undoNoteWrite", "scheduleHistoryRef", "setHistory"];
       const fns = new Function(...params, body + "\nreturn { syncScheduleDays, syncScheduleDaysNow };")(
         intentionalScheduleWipeRef, ref(0), ref(Promise.resolve()), lastSyncRef, ref({ "2026-11-02": 1, "2026-11-03": 1, "2026-11-04": 1, "2026-11-05": 1 }), ref(lastSyncRef.current),
         H.scheduleWipeCheck, sameAssignment, H.assignmentToDayRow, H.emptyDayAssignment,
-        async () => ({ version: 1 }), async (row, ver) => { state.patched.push(row.day); return { version: ver + 1 }; }, async () => null,
-        () => {}, () => {}, (m) => state.toasts.push(m), () => {}, async () => ({ sched: {}, vers: {} }), () => {}, null, null, () => "write failed", () => 0, { warn: () => {} }, { sessionExpired: false });
-      return { ...fns, state, intentionalScheduleWipeRef, lastSyncRef };
+        s.postDayRow || (async () => ({ version: 1 })), async (row, ver) => { state.patched.push(row.day); state.patchedAgainst.push(ver); return { version: ver + 1 }; }, s.fetchDayRow || (async () => null),
+        () => {}, () => {}, (m) => state.toasts.push(m), () => {}, async () => ({ sched: {}, vers: {} }), () => {}, null, null, () => "write failed", () => 0, { warn: () => {} }, { sessionExpired: false },
+        H.undoNoteWrite, scheduleHistoryRef, (h) => { scheduleHistoryRef.current = h; state.historySets++; });
+      return { ...fns, state, intentionalScheduleWipeRef, lastSyncRef, scheduleHistoryRef };
     };
     const wipe = { "2026-11-02": {}, "2026-11-03": {}, "2026-11-04": {}, "2026-11-05": {} };
     const t = mk();
@@ -647,6 +650,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(spentAtEnqueue, true, "the one-shot is consumed synchronously when its run is enqueued");
       assert.deepStrictEqual(t.state.patched, ["2026-11-02", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"]);
       assert.strictEqual(t.state.toasts.some(m => /wipe/i.test(m)), false, "no wipe-blocked toast");
+    });
+    check("B1 in the sync loop: the undo entry for 11/02 followed the session's two own PATCHes of that day (v1 -> 2 in run A, 2 -> 3 in run B) through undoNoteWrite + setHistory, and no other day was noted", () => {
+      assert.deepStrictEqual(t.scheduleHistoryRef.current, [{ days: [{ day: "2026-11-02", before: null, version: 3 }] }]);
+      assert.strictEqual(t.state.historySets, 2, "setHistory ran once per own write that matched an entry (the 11/03-11/05 writes matched none)");
+    });
+    // B1 review (minor): the duplicate-POST branch. dayVersionsRef has no version for 11/06 and the undo entry says
+    // "no row when the edit was made" (version null); the POST comes back 409 because another device created the row
+    // inside the debounce, the re-read says v3 and the retry PATCHes against 3. The own-write note must be keyed on
+    // the version the PATCH really went out against (3), not on `ver` (undefined -> null): the entry at null stays
+    // put, the day reads as "changed since", and Undo never writes an empty row over the foreign one.
+    const d = mk({ history: [{ days: [{ day: "2026-11-06", before: null, version: null }] }], postDayRow: async () => ({ duplicate: true }), fetchDayRow: async () => ({ version: 3 }) });
+    const rD = await d.syncScheduleDays({ ...d.lastSyncRef.current, "2026-11-06": { primary: "s6" } });
+    check("B1 review: in the duplicate-POST branch (409 -> re-read v3 -> CAS PATCH against 3) the own-write note is keyed on the version the PATCH went out against, so an undo entry recorded at 'no row' is NOT advanced and the day reads as changed since", () => {
+      assert.strictEqual(rD.ok, true, "run: " + JSON.stringify(rD));
+      assert.deepStrictEqual(d.state.patched, ["2026-11-06"], "the retry is one CAS PATCH");
+      assert.deepStrictEqual(d.state.patchedAgainst, [3], "against the re-read version");
+      assert.deepStrictEqual(d.scheduleHistoryRef.current, [{ days: [{ day: "2026-11-06", before: null, version: null }] }], "the entry at null stays at null - the row at v3 is foreign, this session never saw it");
+      assert.strictEqual(d.state.historySets, 0, "nothing noted");
     });
     const u = mk();
     const rU = await u.syncScheduleDays(wipe);
@@ -2484,12 +2505,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const run = async (status, sessionExpired) => {
         const state = { toasts: [], statuses: [], retries: 0 };
         const lastSyncRef = ref({ "2026-11-02": { primary: "s1" } });
-        const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth"];
+        const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth", "undoNoteWrite", "scheduleHistoryRef", "setHistory"];
         const fns = new Function(...params, body + "\nreturn { syncScheduleDays, syncScheduleDaysNow };")(
           ref(false), ref(0), ref(Promise.resolve()), lastSyncRef, ref({ "2026-11-02": 1 }), ref(lastSyncRef.current),
           H.scheduleWipeCheck, sameAssignment, H.assignmentToDayRow, H.emptyDayAssignment,
           async () => ({ version: 1 }), async () => ({ error: status === 401 ? "JWT expired" : status === 403 ? "row-level security" : "boom", status }), async () => null,
-          () => {}, (s) => state.statuses.push(s), (m) => state.toasts.push(m), () => { state.retries++; }, async () => ({ sched: {}, vers: {} }), () => {}, null, null, (st) => "write failed " + st, () => 0, { warn: () => {} }, { sessionExpired });
+          () => {}, (s) => state.statuses.push(s), (m) => state.toasts.push(m), () => { state.retries++; }, async () => ({ sched: {}, vers: {} }), () => {}, null, null, (st) => "write failed " + st, () => 0, { warn: () => {} }, { sessionExpired },
+          H.undoNoteWrite, ref([]), () => {});
         const r = await fns.syncScheduleDays({ "2026-11-02": { primary: "s3" } });
         return { r, state };
       };
@@ -3078,6 +3100,113 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(A5count(A5SRC, "env(safe-area-inset-"), 4, "the two painter sheets' header + footer literals, nothing else raw");
       assert.strictEqual(A5count(A5SRC, "${SAFE_AREA.bottom}"), 2, "the toast and the editor footer");
       assert.strictEqual(A5count(A5SRC, "${SAFE_AREA.top}"), 1, "the toast's painter-sheet placement is the only JSX reader of the top inset; the header's lives in css.hdr (app-styles.js)");
+    });
+  }
+
+  /* ---------------- Prompt 16 B1: Undo per edit and per day ---------------- */
+  console.log("\n[B1] Prompt 16 B1 (Undo stores {day, before, version} per edit and puts back only the days whose version has not moved)");
+  {
+    const needH = (n) => { if (typeof H[n] !== "function") throw new Error("helpers." + n + " is missing"); };
+    const A = { primary: "s2", backup: null, primaryLocked: false, backupLocked: false, source: "manual", externalCover: null, note: null };
+    const B0 = { primary: "s1", backup: "s3", primaryLocked: false, backupLocked: false, source: "import", externalCover: null, note: null };
+    const B1 = { ...B0, backup: "s4", source: "manual" };
+    const FOREIGN = { ...B0, primary: "s5", source: "claim" };
+    check("B1 helpers: undoEntry keeps only the days that changed, each with the assignment it had before (a deep copy; null for a day with no row) and the version this session had seen (null when none); nothing changed -> null", () => {
+      needH("undoEntry");
+      const prev = { "2026-10-16": B0, "2026-10-20": A };
+      const next = { "2026-10-15": A, "2026-10-16": B1, "2026-10-20": { ...A } };
+      const e = H.undoEntry(prev, next, { "2026-10-16": 7, "2026-10-20": 2 });
+      assert.deepStrictEqual(e.days.map(d => d.day), ["2026-10-15", "2026-10-16"], "10/20 is unchanged and stays out");
+      assert.deepStrictEqual(e.days[0], { day: "2026-10-15", before: null, version: null });
+      assert.deepStrictEqual(e.days[1], { day: "2026-10-16", before: B0, version: 7 });
+      assert.notStrictEqual(e.days[1].before, B0, "a copy, not the live object");
+      assert.strictEqual(H.undoEntry(prev, { ...prev }, {}), null);
+      assert.strictEqual(H.undoEntry(null, null, null), null);
+    });
+    check("B1 behaviour: one action over days A and B, then a claim lands on B (its version moves) -> Undo restores A only, leaves B as the table has it and the message names B", () => {
+      needH("undoApply");
+      const versions = { "2026-10-16": 7 };
+      const before = { "2026-10-16": B0 };
+      const after = { "2026-10-15": A, "2026-10-16": B1 };
+      const entry = H.undoEntry(before, after, versions);
+      // the claim: a realtime / poll row for 10/16 at v8 with a different holder
+      const live = { ...after, "2026-10-16": FOREIGN };
+      versions["2026-10-15"] = 1; // the entry's own POST of 10/15 is noted below; here the raw versions differ on purpose
+      const noted = H.undoNoteWrite([entry], "2026-10-15", undefined, 1)[0];
+      versions["2026-10-16"] = 8;
+      const r = H.undoApply(noted, live, versions);
+      assert.deepStrictEqual(r.restored, ["2026-10-15"]);
+      assert.deepStrictEqual(r.skipped, ["2026-10-16"]);
+      assert.deepStrictEqual(r.next, { "2026-10-16": FOREIGN }, "10/15 is back to no row; 10/16 keeps the claim");
+      assert.strictEqual(r.message, "Undo: 1 of 2 days restored; 1 changed since (10/16).");
+      assert.deepStrictEqual(live["2026-10-15"], A, "the input map is not mutated");
+    });
+    check("B1 behaviour: edit A (entry 1), edit B (entry 2), an external change on B's day -> the first Undo restores nothing and names the day, the second restores A", () => {
+      const versions = { "2026-10-16": 7 };
+      const m0 = { "2026-10-16": B0 };
+      const m1 = { ...m0, "2026-10-15": A };            // edit A: 10/15 OPEN -> Burchett
+      const e1 = H.undoEntry(m0, m1, versions);
+      const m2 = { ...m1, "2026-10-16": B1 };           // edit B: 10/16 backup Acton -> Philip
+      const e2 = H.undoEntry(m1, m2, versions);
+      let history = [e1, e2];
+      history = H.undoNoteWrite(history, "2026-10-15", undefined, 1); versions["2026-10-15"] = 1; // own POST
+      history = H.undoNoteWrite(history, "2026-10-16", 7, 8); versions["2026-10-16"] = 8;           // own PATCH
+      const live = { ...m2, "2026-10-16": FOREIGN }; versions["2026-10-16"] = 9;                    // a trade landed on 10/16
+      const first = H.undoApply(history[1], live, versions);
+      assert.deepStrictEqual(first.restored, []);
+      assert.deepStrictEqual(first.skipped, ["2026-10-16"]);
+      assert.strictEqual(first.next, live, "nothing to apply -> the same map back");
+      assert.strictEqual(first.message, "Undo: 0 of 1 day restored; 1 changed since (10/16).");
+      const second = H.undoApply(history[0], first.next, versions);
+      assert.deepStrictEqual(second.restored, ["2026-10-15"]);
+      assert.deepStrictEqual(second.next, { "2026-10-16": FOREIGN });
+      assert.strictEqual(second.message, "Undo: 1 day restored (10/15).");
+    });
+    check("B1 helpers: undoNoteWrite advances the recorded version in EVERY entry that carried the version the write went out against (own POST null -> 1, own PATCH 1 -> 2); an entry at another version and an unknown day are untouched and the array is returned as-is when nothing matched", () => {
+      needH("undoNoteWrite");
+      const e1 = { days: [{ day: "2026-10-15", before: null, version: null }] };
+      const e2 = { days: [{ day: "2026-10-15", before: A, version: 1 }, { day: "2026-10-16", before: B0, version: 7 }] };
+      const h1 = H.undoNoteWrite([e1, e2], "2026-10-15", undefined, 1);
+      assert.strictEqual(h1[0].days[0].version, 1, "e1 advanced");
+      assert.strictEqual(h1[1].days[0].version, 1, "e2 already at 1 (recorded after the POST) stays");
+      assert.strictEqual(e1.days[0].version, null, "input entries are not mutated");
+      const h2 = H.undoNoteWrite(h1, "2026-10-15", 1, 2);
+      assert.deepStrictEqual(h2.map(e => e.days[0].version), [2, 2], "both entries followed the PATCH");
+      assert.strictEqual(h2[1].days[1].version, 7, "10/16 untouched");
+      const same = H.undoNoteWrite(h2, "2026-10-16", 3, 4);
+      assert.strictEqual(same, h2, "no entry carried v3 for 10/16 -> the same array");
+      assert.strictEqual(H.undoNoteWrite(h2, "2026-10-16", 7, 7), h2, "a no-op version");
+      const many = H.undoApply({ days: [{ day: "2026-10-15", before: null, version: 0 }, { day: "2026-10-16", before: null, version: 0 }, { day: "2026-10-17", before: null, version: 0 }] }, { "2026-10-15": A, "2026-10-16": A, "2026-10-17": A }, { "2026-10-15": 0, "2026-10-16": 0, "2026-10-17": 0 });
+      assert.strictEqual(many.message, "Undo: 3 days restored.");
+      assert.deepStrictEqual(many.next, {});
+    });
+    const B1SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const B1count = (s, needle) => s.split(needle).length - 1;
+    check("B1 pins: pushUndo takes (prev, next) and stores helpers.undoEntry against dayVersionsRef; no whole-map snapshot is pushed anywhere; undoLastChange applies helpers.undoApply, keeps scheduleRef in step and toasts the message", () => {
+      assert.ok(B1SRC.includes("const pushUndo = useCallback((prev, next) => {"), "pushUndo(prev, next)");
+      assert.ok(B1SRC.includes("const entry = undoEntry(prev, next, dayVersionsRef.current);"), "undoEntry against the version map");
+      assert.strictEqual(B1count(B1SRC, "JSON.parse(JSON.stringify(sched))"), 0, "the whole-map snapshot push is gone");
+      assert.ok(B1SRC.includes("const r = undoApply(h[h.length - 1], scheduleRef.current || {}, dayVersionsRef.current);"), "undoApply against the live map and the version map");
+      assert.ok(B1SRC.includes("if (r.restored.length) { scheduleRef.current = r.next; setSchedule(r.next); }"), "the map moves only when a day came back");
+      assert.ok(B1SRC.includes('showToast(r.message, r.skipped.length ? "error" : "info");'), "the toast says what was restored and what was skipped");
+      // every push site hands over both maps
+      for (const site of ["pushUndo(schedule, { ...schedule, [day]: after });", "pushUndo(schedule, next);", "pushUndo(cur, next);", "pushUndo(scheduleRef.current || schedule, m.next);", "pushUndo(scheduleRef.current, sched);"]) assert.strictEqual(B1count(B1SRC, site), 1, "push site: " + site);
+      assert.strictEqual(B1count(B1SRC, "pushUndo("), 5, "the five sites and nothing else - no one-argument push left");
+      assert.strictEqual(B1count(B1SRC, "setScheduleHistory("), 1, "the state setter is reached only through setHistory (ref + state together)");
+      assert.ok(B1SRC.includes('data-testid="undo-btn"'), "the smoke's handle on the button");
+    });
+    check("B1 pins: syncScheduleDays notes the session's OWN write (undoNoteWrite from the version it went out against to the returned one) right after it advances dayVersionsRef - a foreign version move (realtime, poll, conflict reload) is never noted, which is what makes it 'changed since'", () => {
+      const i = B1SRC.indexOf("      dayVersionsRef.current[day] = r.version;\n      const nh = undoNoteWrite(scheduleHistoryRef.current, day, sentAgainst, r.version);\n      if (nh !== scheduleHistoryRef.current) setHistory(nh);\n      persisted[day] = JSON.parse(JSON.stringify(a));");
+      assert.ok(i > 0, "the own-write note sits between the version advance and the persisted copy in syncScheduleDaysNow and is keyed on sentAgainst");
+      // B1 review: sentAgainst is the version the write REALLY went out against - `ver` for an ordinary PATCH / POST,
+      // the re-read version in the duplicate-POST branch (a foreign row an undo entry at null must not follow).
+      const loop = B1SRC.slice(B1SRC.indexOf("      const ver = dayVersionsRef.current[day];"), i);
+      assert.ok(loop.includes("      let sentAgainst = ver;"), "sentAgainst starts as the version map's entry");
+      assert.ok(loop.includes("            dayVersionsRef.current[day] = cur.version;\n            sentAgainst = cur.version;\n            r = await patchDayRow(row, cur.version, by, ts);"), "the duplicate branch re-keys it on the re-read version before the CAS retry");
+      assert.strictEqual(B1count(loop, "sentAgainst = "), 2, "set in exactly those two places");
+      assert.strictEqual(B1count(B1SRC, "undoNoteWrite("), 1, "the sync loop is the only place a write is noted");
+      const rt = B1SRC.slice(B1SRC.indexOf("    const onDayChange = (payload) => {"), B1SRC.indexOf("    let rtChannel = null;"));
+      assert.ok(!rt.includes("undoNoteWrite") && !rt.includes("setHistory"), "the realtime handler leaves the history alone");
     });
   }
 

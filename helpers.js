@@ -451,6 +451,61 @@ function mergeRealtimeDay(day, localDay, lastSyncDay, incoming) {
   return { localChanged: localChanged, next: localChanged ? localDay : incoming, lastSync: incoming };
 }
 
+// ---- Undo, per edit and per day (Prompt 16 B1) ----
+// An undo entry is what ONE action changed: { days: [{ day, before, version }] } - the assignment the day had
+// before (null when it had no row) and the schedule_days version this session had last seen for it (null when
+// none). Undo puts back only those days, and only where the version is still the recorded one; a day whose
+// version moved through a claim, a trade or another device's write is left as the table has it and named in the
+// message. The session's OWN write moves the version too (POST -> 1, PATCH v -> v+1): syncScheduleDays reports it
+// through undoNoteWrite, which advances every entry that carried the version the write went out against, so an
+// entry stays restorable across its own save and a later edit of the same day. A whole-map snapshot used to be
+// pushed and put back wholesale, silently reverting whatever had landed meanwhile (the 9/23 review, section 3).
+function undoVersionOf(versions, day) {
+  const v = versions ? versions[day] : undefined;
+  return v === undefined || v === null ? null : v;
+}
+function undoEntry(prev, next, versions) {
+  const p = prev || {}, n = next || {};
+  const days = [];
+  for (const day of Object.keys(Object.assign({}, p, n)).sort()) {
+    if (sameDayAssignment(day, p[day], n[day])) continue;
+    days.push({ day, before: p[day] ? JSON.parse(JSON.stringify(p[day])) : null, version: undoVersionOf(versions, day) });
+  }
+  return days.length ? { days } : null;
+}
+function undoNoteWrite(history, day, fromVersion, toVersion) {
+  const from = fromVersion === undefined || fromVersion === null ? null : fromVersion;
+  const to = toVersion === undefined || toVersion === null ? null : toVersion;
+  const list = Array.isArray(history) ? history : [];
+  if (from === to) return list;
+  let touched = false;
+  const out = list.map(e => {
+    if (!e || !Array.isArray(e.days) || !e.days.some(d => d && d.day === day && d.version === from)) return e;
+    touched = true;
+    return { ...e, days: e.days.map(d => (d && d.day === day && d.version === from) ? { ...d, version: to } : d) };
+  });
+  return touched ? out : list;
+}
+function undoMessage(restored, skipped) {
+  const total = restored.length + skipped.length;
+  const dayWord = (n) => n + " day" + (n === 1 ? "" : "s");
+  if (!skipped.length) return "Undo: " + dayWord(total) + " restored" + (total === 1 ? " (" + fmtMD(restored[0]) + ")" : "") + ".";
+  const named = skipped.slice(0, 4).map(fmtMD).join(", ") + (skipped.length > 4 ? ", ..." : "");
+  return "Undo: " + restored.length + " of " + dayWord(total) + " restored; " + skipped.length + " changed since (" + named + ").";
+}
+function undoApply(entry, current, versions) {
+  const cur = current || {};
+  const next = { ...cur };
+  const restored = [], skipped = [];
+  for (const d of (entry && Array.isArray(entry.days)) ? entry.days : []) {
+    if (!d || !d.day) continue;
+    if (undoVersionOf(versions, d.day) !== (d.version === undefined ? null : d.version)) { skipped.push(d.day); continue; }
+    if (d.before) next[d.day] = JSON.parse(JSON.stringify(d.before)); else delete next[d.day];
+    restored.push(d.day);
+  }
+  return { next: restored.length ? next : cur, restored, skipped, message: undoMessage(restored, skipped) };
+}
+
 // Who effectively holds a role on a day. An external cover (e.g. "Atwell")
 // stands in for an OPEN primary: it is not a roster id, so it is carried as
 // the string "ext:<name>" and rendered as "<name> (external)" by the label
@@ -2402,6 +2457,7 @@ if (typeof module !== "undefined" && module.exports) {
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
     openSlotReason, lastGenerateFromDiagnostics,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
+    undoEntry, undoNoteWrite, undoApply, undoMessage,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,

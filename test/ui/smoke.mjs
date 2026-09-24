@@ -2169,6 +2169,12 @@ try {
   if (!day) fail("no row-less day within a year of the current month for the day-editor edit");
   else if (day.slice(0, 7) !== `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`) console.log(`     (edit day ${day}: the current month is fully published)`);
   if (day) {
+    // Prompt 16 B1 review: the edit below, the B1 undo step and the realtime race that follows all read `day` as
+    // this run left it (P Burchett) - about 20 s of steps that every write-intercepting run races against the
+    // app's 60-s poll (a poll inside that stretch drops the row-less day and the race's editor then opens on
+    // OPEN, saving { primary null, backup s3 }; seen once on the fixture source). Start them at the top of a
+    // fresh poll interval, exactly as the outside-surgeon step does.
+    await freshPollWindow("day editor edit");
     const beforeWrites = writes.length;
     await editDay(day, "primary", "s2");
     noteEdit(day, { primary_id: "s2" });
@@ -2194,6 +2200,75 @@ try {
     else ok("A4: the day edit wrote schedule_days only - no call_schedule_data write (the blob leg is keyed on the setup state, not the schedule)");
   }
   await page.screenshot({ path: path.join(OUT, "calendar-after-edit.png"), fullPage: true });
+
+  // ---- Prompt 16 B1: Undo is per edit and per day ----
+  // Two day-editor saves (the edit above on `day`, a second on `u2`), then Undo: exactly the second one comes back
+  // (u2 -> OPEN, re-synced as a CAS PATCH against the version its POST returned - the session's own write is not a
+  // foreign change) and `day` keeps Burchett. Then a third save on `u3` followed by a foreign realtime row for it
+  // (a claim landing, v9): Undo skips that day, says so in the toast, and the cell keeps the foreign row. Until B1 the
+  // button put back a whole-map snapshot, which reverted the foreign row silently.
+  if (day) {
+    const md = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
+    const monthDays = await page.$$eval("[data-day]", els => els.map(e => e.getAttribute("data-day")));
+    const spare = monthDays.filter(d => d !== day && d.slice(0, 7) === day.slice(0, 7) && !fixtureHasDay(d) && !liveByDay[d]).reverse();
+    const u2 = spare[0], u3 = spare[1];
+    if (!u2 || !u3) fail("B1: no two spare row-less days in " + day.slice(0, 7) + " for the undo step");
+    else {
+      const undoBtn = "[data-testid=undo-btn]";
+      const toastText = () => page.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+      const b1 = writes.length;
+      await editDay(u2, "primary", "s3");
+      await page.waitForTimeout(1800); // 800ms debounce + the POST
+      const postU2 = writes.slice(b1).find(w => w.method === "POST" && w.path.startsWith("/rest/v1/schedule_days") && /"day":"/.test(w.body) && JSON.parse(w.body).day === u2);
+      if (!postU2) fail("B1: the second save (" + u2 + " P -> Acton) produced no schedule_days POST; writes: " + JSON.stringify(writes.slice(b1).map(w => w.method + " " + w.path)));
+      const b2 = writes.length;
+      if (!(await page.$(undoBtn))) fail("B1: no Undo button after two saves");
+      else {
+        await page.click(undoBtn);
+        const sawToast = await waitFor(async () => /^Undo:/.test(await toastText()), 3000);
+        const t1 = await toastText();
+        if (!sawToast || t1 !== "Undo: 1 day restored (" + md(u2) + ").") fail("B1: Undo toast wrong: '" + t1 + "' (expected 'Undo: 1 day restored (" + md(u2) + ").')");
+        else ok("B1: Undo toast: '" + t1 + "'");
+        await page.waitForTimeout(1800);
+        const pU2 = await cellAttr(u2, "data-primary"), pDay = await cellAttr(day, "data-primary");
+        if (pU2) fail("B1: Undo did not put " + u2 + " back to OPEN (data-primary " + pU2 + ")");
+        else if (pDay !== "s2") fail("B1: Undo touched the earlier save on " + day + " (data-primary " + pDay + ")");
+        else ok("B1: Undo restored exactly the later save (" + u2 + " -> OPEN; " + day + " still Burchett)");
+        const patchU2 = writes.slice(b2).find(w => w.method === "PATCH" && w.path.startsWith("/rest/v1/schedule_days?day=eq." + u2 + "&version=eq.1"));
+        const pb = patchU2 ? JSON.parse(patchU2.body || "{}") : null;
+        if (!patchU2) fail("B1: the undo did not re-sync as PATCH ?day=eq." + u2 + "&version=eq.1; writes: " + JSON.stringify(writes.slice(b2).map(w => w.method + " " + w.path)));
+        else if (pb.primary_id !== null || pb.version !== 2) fail("B1: the undo PATCH body is wrong: " + JSON.stringify(pb));
+        else ok("B1: the undo re-synced as PATCH ?day=eq." + u2 + "&version=eq.1 with primary_id null, version 2 (the version the POST returned - the session's own write is not a foreign change)");
+      }
+      // The foreign-change half: a save on u3, then a claim lands on it (realtime v9) -> Undo leaves it alone.
+      const b3 = writes.length;
+      await editDay(u3, "backup", "s5");
+      await page.waitForTimeout(1800);
+      if (!writes.slice(b3).some(w => w.method === "POST" && w.path.startsWith("/rest/v1/schedule_days"))) fail("B1: the third save (" + u3 + " B -> Fierce) produced no schedule_days POST");
+      if (!rt.joined) { noteEdit(u3, { backup_id: "s5" }); console.log("     (realtime not joined - the foreign-change half of B1 skipped)"); }
+      else {
+        rtSendDayRow(dayRow(u3, { primary_id: "s4", backup_id: "s5", version: 9 }));
+        const adopted3 = await waitFor(async () => (await cellAttr(u3, "data-primary")) === "s4", 4000);
+        if (!adopted3) fail("B1: the foreign v9 row for " + u3 + " was not adopted (data-primary " + (await cellAttr(u3, "data-primary")) + ") - the skip case cannot be checked");
+        else if (!(await page.$(undoBtn))) fail("B1: no Undo button before the skip case"); // a missing button is one FAIL, not a 30 s click timeout that aborts the harness
+        else {
+          const b4 = writes.length;
+          await page.click(undoBtn);
+          const saw2 = await waitFor(async () => /^Undo:/.test(await toastText()), 3000);
+          const t2 = await toastText();
+          if (!saw2 || t2 !== "Undo: 0 of 1 day restored; 1 changed since (" + md(u3) + ").") fail("B1: the skip toast is wrong: '" + t2 + "' (expected 'Undo: 0 of 1 day restored; 1 changed since (" + md(u3) + ").')");
+          else ok("B1: a day changed since the edit is skipped and named: '" + t2 + "'");
+          await page.waitForTimeout(1800);
+          const p3 = await cellAttr(u3, "data-primary"), k3 = await cellAttr(u3, "data-backup");
+          const wrote = writes.slice(b4).filter(w => w.path.startsWith("/rest/v1/schedule_days"));
+          if (p3 !== "s4" || k3 !== "s5") fail("B1: Undo reverted the foreign row on " + u3 + " (P " + p3 + " / B " + k3 + ", expected s4 / s5)");
+          else if (wrote.length) fail("B1: the skipped undo still wrote schedule_days: " + JSON.stringify(wrote.map(w => w.method + " " + w.path)));
+          else ok("B1: " + u3 + " keeps the foreign row (P Philip / B Fierce, v9) and nothing was written");
+        }
+        noteEdit(u3, { primary_id: "s4", backup_id: "s5" });
+      }
+    }
+  }
 
   // ---- Realtime: a foreign row is adopted; a pending local edit survives the echo ----
   if (day && rt.joined) {
