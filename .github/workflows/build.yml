@@ -31,6 +31,8 @@ on:
       - "test/rules.test.js"
       - "test/east-feed.test.js"
       - "test/data-layer.test.js"
+      - "test/ui/contrast.mjs"
+      - "test/ui/theme-regions.js"
       - "test/importer.test.js"
       - "test/week-rows.test.js"
       - "test/exports.test.js"
@@ -136,6 +138,15 @@ jobs:
       # Chromium and live network; run it locally with `npm run smoke`.
       - name: Data-layer unit tests + source pins
         run: node test/data-layer.test.js
+
+      # Theme contrast gate (Prompt 16 B2): every token pair in app-styles.js
+      # (4.5:1 text, 3:1 bold labels / glyphs) and every literal text colour
+      # still written in the six regions test/ui/theme-regions.js names,
+      # measured on the region's surface in both themes. Pure - no browser,
+      # no network; the computed-colour probe of the same regions is in the
+      # Playwright smoke, run locally.
+      - name: Theme contrast gate
+        run: node test/ui/contrast.mjs
 
       # Static schema pins (no database): sql/schema.sql and the 2026-09-22
       # trade-guards migration define the same trigger + apply_trade() checks,

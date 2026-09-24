@@ -285,7 +285,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { contrastTable, formatTable, loadTheme, hexToRgb, contrastRatio } from "./contrast.mjs";
+import { contrastTable, formatTable, regionTable, formatRegionTable, loadTheme, hexToRgb, contrastRatio } from "./contrast.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
@@ -5543,6 +5543,91 @@ try {
     for (const f of ["index-source.html", "app-styles.js", "manifest.json", "config.js", "helpers.js"]) for (const [n, c] of countIn(f)) if (c) hits.push(`${f}: ${n} x${c}`);
     if (hits.length) fail("theme grep: Davenport blue / old green / DSG still live in the source: " + hits.join(", "));
     else ok("theme grep: #1a6fa8 / #2488c8 / 1f7a5c / DSG absent outside comments in index-source.html, app-styles.js, manifest.json, config.js, helpers.js");
+  }
+  // (b2) Prompt 16 B2: the six regions (test/ui/theme-regions.js) are written in theme tokens. Source side: the
+  // region table of contrast.mjs (every literal text colour still in a region, both themes) must be empty or all ok.
+  // Runtime side, on COMPUTED colours in both themes at 390 px: Settings > Notification settings (the pref labels,
+  // the reminder-hour label) and Restore from snapshot (its rows, or the empty / loading line), the Setup > Generate
+  // SuCheck labels (module scope: the light token repainted by the dark sheet), the Open shifts board (every text
+  // element in the card except the roster chips, which are label-class pills on their own tint, and disabled buttons)
+  // - each text element >= 4.5:1 against the first painted background above it (a gradient's first stop counts; a
+  // large label, 24 px or 18.66 px at 700+, needs 3:1). The claim sheet is covered by the region table and the
+  // Prompt 13 claim step above, the publish diff by the region table and the publish-dialog steps. Screenshots
+  // b2-settings-<theme>-390.png, b2-openshifts-<theme>-390.png - full-page, so the PNG shows the cards the probe
+  // measured (at 390 px the notification and snapshot cards sit below the fold of one 844 px viewport).
+  try {
+    const reg = regionTable();
+    if (reg.length) console.log("     six-region literal table:\n" + formatRegionTable(reg).split("\n").map(l => "       " + l).join("\n"));
+    const regBad = reg.filter(r => !r.ok);
+    if (regBad.length) fail("B2 region table: " + regBad.length + " literal text colour(s) below their minimum: " + regBad.map(r => `${r.region} ${r.theme} line ${r.line} <${r.tag}> ${r.literal} paints ${r.fg} on ${r.bg} ${r.ratio}:1`).join("; "));
+    else ok(`B2 region table: ${reg.length} literal text colour(s) left in the six regions${reg.length ? ", all at their minimum" : " - every text colour is a theme token"}`);
+  } catch (e) { fail("B2 region table: " + errLine(e)); }
+  {
+    const measure = (rootSel, skipSel) => page.evaluate(([rootSel, skipSel]) => {
+      const parseRgb = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); if (!m) return null; const p = m[1].split(",").map(x => parseFloat(x)); return p.length >= 4 && p[3] === 0 ? null : p.slice(0, 3); };
+      const lum = (rgb) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }; return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]); };
+      const ratio = (a, b) => { const la = lum(a), lb = lum(b); return Math.round(((Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)) * 100) / 100; };
+      const bgOf = (el) => {
+        for (let e = el; e; e = e.parentElement) {
+          const cs = getComputedStyle(e);
+          const c = parseRgb(cs.backgroundColor); if (c) return c;
+          if (/gradient/.test(cs.backgroundImage)) { const g = parseRgb(cs.backgroundImage); if (g) return g; }
+        }
+        return parseRgb(getComputedStyle(document.body).backgroundColor) || [255, 255, 255];
+      };
+      const roots = Array.from(document.querySelectorAll(rootSel));
+      const els = roots.flatMap(r => [r].concat(Array.from(r.querySelectorAll("*"))));
+      const rows = [];
+      for (const el of els) {
+        if (/^(OPTION|SELECT|INPUT|SCRIPT|STYLE|PRE)$/.test(el.tagName)) continue;
+        if (skipSel && (el.matches(skipSel) || el.closest(skipSel))) continue;
+        const own = Array.from(el.childNodes).filter(n => n.nodeType === 3 && n.textContent.trim()).map(n => n.textContent.trim()).join(" ");
+        if (!own) continue;
+        const cs = getComputedStyle(el);
+        if (cs.display === "none" || cs.visibility === "hidden" || !el.getClientRects().length) continue;
+        const fg = parseRgb(cs.color); if (!fg) continue;
+        const size = parseFloat(cs.fontSize), weight = parseInt(cs.fontWeight, 10) || 400;
+        const bg = bgOf(el);
+        rows.push({ text: own.slice(0, 40), tag: el.tagName.toLowerCase(), color: cs.color, bg: "rgb(" + bg.join(", ") + ")", ratio: ratio(fg, bg), min: size >= 24 || (size >= 18.66 && weight >= 700) ? 3 : 4.5 });
+      }
+      return rows;
+    }, [rootSel, skipSel || null]);
+    const judge = (label, rows) => {
+      const bad = rows.filter(r => r.ratio < r.min);
+      if (!rows.length) fail(`B2 ${label}: nothing measured (the region did not render)`);
+      else if (bad.length) fail(`B2 ${label}: ${bad.length} of ${rows.length} text element(s) below their minimum: ` + bad.slice(0, 6).map(r => `<${r.tag}> '${r.text}' ${r.color} on ${r.bg} ${r.ratio}:1 (min ${r.min})`).join("; "));
+      else ok(`B2 ${label}: ${rows.length} text element(s) at their minimum or better (worst ${Math.min(...rows.map(r => r.ratio))}:1)`);
+    };
+    const expandSettings = async (title, marker) => { if (!(await page.$(marker))) { const t = await page.$(`text=${title}`); if (t) { await t.click(); await page.waitForTimeout(250); } } };
+    try {
+      for (const theme of ["light", "dark"]) {
+        await page.setViewportSize({ width: 1180, height: 900 });
+        await page.click('button[data-tab="settings"]');
+        await page.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.waitForTimeout(300);
+        await expandSettings("Notification settings", "[data-testid=notif-pref], [data-testid=notif-prefs-load-failed]");
+        await expandSettings("Restore from snapshot", "[data-testid=snapshot-row], [data-testid=snapshot-empty]");
+        await page.waitForTimeout(300);
+        judge(`${theme} 390 notification settings`, await measure("[data-testid=notif-pref], [data-testid=notif-hour-label]"));
+        judge(`${theme} 390 snapshot list`, await measure("[data-testid=snapshot-row], [data-testid=snapshot-empty]"));
+        await page.locator("[data-testid=notif-pref], [data-testid=notif-prefs-load-failed]").first().scrollIntoViewIfNeeded().catch(() => {});
+        await page.waitForTimeout(150);
+        await page.screenshot({ path: path.join(OUT, `b2-settings-${theme}-390.png`), fullPage: true });
+        await page.click('button[data-tab="setup"]');
+        const genCard = page.locator("[data-testid=card-setup_generate]");
+        if ((await genCard.count()) && (await genCard.getAttribute("data-open")) !== "1") { await page.click("[data-testid=card-toggle-setup_generate]"); await page.waitForTimeout(250); }
+        judge(`${theme} 390 SuCheck labels (Setup > Generate)`, await measure("label[data-sucheck]"));
+        await page.click('button[data-tab="openshifts"]');
+        await page.waitForSelector("[data-testid=openshifts-table]", { timeout: 10000 });
+        await page.waitForTimeout(300);
+        judge(`${theme} 390 open-shifts board`, await measure("[data-testid=openshifts-card]", "[data-eligible-id], button[disabled]"));
+        await page.screenshot({ path: path.join(OUT, `b2-openshifts-${theme}-390.png`), fullPage: true });
+      }
+      ok("screenshots test/ui/out/b2-settings-{light,dark}-390.png, b2-openshifts-{light,dark}-390.png");
+    } catch (e) { fail("B2 computed-colour probe: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-b2.png"), fullPage: true }); } catch (e2) {} }
+    await page.setViewportSize({ width: 1180, height: 900 });
+    try { await page.click('button[data-tab="settings"]'); await page.click("button:has-text('Light')"); await page.click('button[data-tab="calendar"]'); await page.waitForTimeout(300); } catch (e) { fail("B2 probe: could not restore light / calendar: " + errLine(e)); }
   }
   // (c) the sign-in screen in both themes: a second page with the session token removed before the app boots.
   const signin = await context.newPage();

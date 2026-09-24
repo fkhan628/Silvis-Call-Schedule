@@ -3772,6 +3772,100 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- B2. Prompt 16 B2 (the six regions read theme tokens; the contrast gate is in the chain) ---------------- */
+  console.log("\n[B2] Prompt 16 B2 (notification settings, publish diff, snapshot list, SuCheck, open-shifts board, claim sheet carry no literal text colour; test/ui/contrast.mjs gates the chain)");
+  {
+    const REG = require(path.join(ROOT, "test", "ui", "theme-regions.js"));
+    const B2SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const regionText = (key) => REG.extractRegion(B2SRC, REG.REGIONS.find(r => r.key === key)).text;
+    const countIn = (s, n) => (s.match(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
+    check("the six regions are found by unique anchors and none carries a literal of the old set (#3a4a58, #7a8a98, #c04040, #5a6a78, #8a94a0, #1a8040, #f0f2f4)", () => {
+      assert.deepStrictEqual(REG.REGIONS.map(r => r.key), ["notif-settings", "publish-diff", "snapshot-list", "sucheck", "openshifts-board", "claim-sheet"]);
+      for (const r of REG.REGIONS) {
+        const { text } = REG.extractRegion(B2SRC, r);
+        assert.ok(text.length > 200, r.key + ": the region slice is suspiciously short (" + text.length + " chars) - an anchor moved");
+        for (const lit of REG.OLD_LITERALS) assert.ok(!new RegExp(lit, "i").test(text), `${r.key} (${r.label}) still carries ${lit}`);
+      }
+    });
+    check("theme-regions.js scanRegion reads a plain literal, a dk-conditional pair, a 3-digit hex, the element name, the style's own background, font size / weight (large-text class) and skips borderColor / T.* values; darkPaintOf follows the dark sheet per element", () => {
+      const snippet = [
+        '<div style={{fontSize:12,color:"#3a4a58",lineHeight:1.5}}>a</div>',
+        '<p style={{color:dk?"#c8d2dc":"#3a4a58"}}>b</p>',
+        '<span style={{fontSize:10,fontWeight:700,padding:"2px 7px",background:"#faeaea",color:"#c04040",borderColor:"#eabcbc"}}>c</span>',
+        '<h2 style={{ fontSize: 24, color: "#fff" }}>d</h2>',
+        '<label style={{color:T.text,borderColor:"#000000"}}>e</label>',
+        '<td style={{color:"#1a8040"}}>f</td>',
+      ].join("\n");
+      const hits = REG.scanRegion(snippet, 100);
+      assert.deepStrictEqual(hits.map(h => [h.line, h.tag, h.light, h.dark, h.conditional, h.ownBg && h.ownBg.light, h.fontSize, h.fontWeight, REG.isLarge(h)]), [
+        [100, "div", "#3a4a58", "#3a4a58", false, null, 12, 400, false],
+        [101, "p", "#3a4a58", "#c8d2dc", true, null, null, 400, false],
+        [102, "span", "#c04040", "#c04040", false, "#faeaea", 10, 700, false],
+        [103, "h2", "#ffffff", "#ffffff", false, null, 24, 400, true],
+        [105, "td", "#1a8040", "#1a8040", false, null, null, 400, false],
+      ]);
+      assert.deepStrictEqual(hits.map(REG.darkPaintOf), ["#3a4a58", "#c8d2dc", "#F06060", "#ffffff", "#C9D6E8"], "unmapped grey stays; conditional takes its dark arm; span #c04040 -> the sheet's #F06060; td -> the td rule");
+      assert.throws(() => REG.extractRegion("x", REG.REGIONS[0]), /start anchor not found/);
+      assert.throws(() => REG.extractRegion("<span>Notification settings</span> <span>Notification settings</span>", REG.REGIONS[0]), /not unique/);
+    });
+    check("no inline colour in the six regions is a hex literal at all - plain or dk-conditional (tokens only: T.text / T.muted / T.open / T.success, THEME.light.text in SuCheck, css.errBox)", () => {
+      for (const r of REG.REGIONS) {
+        const { text, firstLine } = REG.extractRegion(B2SRC, r);
+        assert.deepStrictEqual(REG.scanRegion(text, firstLine).map(h => `line ${h.line} <${h.tag}> ${h.snippet}`), [], r.key + ": literal text colours");
+      }
+    });
+    check("the regions read the tokens where the literals were; the publish notice paragraph appears once; the dark sheet repaints the SuCheck label's light token", () => {
+      assert.ok(countIn(regionText("notif-settings"), "color:T.text") >= 2 && countIn(regionText("notif-settings"), "color:T.success") === 2, "notification settings: two T.text labels, two T.success");
+      assert.ok(countIn(regionText("publish-diff"), "color:T.text") >= 2 && countIn(regionText("publish-diff"), "color:T.muted") >= 2 && regionText("publish-diff").includes('border:"1px solid " + T.border'), "publish diff: T.text lines, T.muted notes, T.border box");
+      assert.strictEqual(countIn(regionText("publish-diff"), "The changes listed above are already saved"), 1, "the publish notice paragraph must appear once (the 9/23 theme commit had left a second copy under it)");
+      assert.ok(countIn(regionText("snapshot-list"), "color:T.text") >= 1 && countIn(regionText("snapshot-list"), "color:T.muted") >= 3 && regionText("snapshot-list").includes("{...css.errBox,fontWeight:600}") && regionText("snapshot-list").includes('borderBottom:"1px solid " + T.border'), "snapshot list: T.text reason, T.muted stamp / empty / loading, css.errBox, T.border rows");
+      assert.ok(regionText("sucheck").includes('data-sucheck="" style={css.suCheck}>'), "SuCheck: style={css.suCheck} + data-sucheck for the smoke probe");
+      assert.ok(countIn(regionText("openshifts-board"), "color:T.open") === 2 && countIn(regionText("openshifts-board"), "color:T.muted") >= 6 && countIn(regionText("openshifts-board"), "color:T.success") === 1, "open-shifts board: OPEN + 'nobody' in T.open, the notes in T.muted, the empty row in T.success");
+      assert.strictEqual(countIn(regionText("claim-sheet"), "color:T.muted"), 3, "claim sheet + e-mail dialog: three T.muted notes");
+      const sheet = B2SRC.slice(B2SRC.indexOf("{darkMode && <style>{`"), B2SRC.indexOf("`}</style>}"));
+      assert.ok(/label\[style\*="color: rgb\(31, 42, 58\)"\]\s*\{ color: #E6ECF5 !important; \}/.test(sheet), "the dark sheet must keep repainting label rgb(31, 42, 58) -> #E6ECF5 (SuCheck depends on it)");
+    });
+    check("THEME.light.success #1A8040 / THEME.dark.success #40C060 (the green the dark sheet already gave spans) exist in both token sets; css.suCheck is the light text token (rgb(31, 42, 58) for the dark sheet's label rule)", () => {
+      const styles = require(path.join(ROOT, "app-styles.js"));
+      assert.strictEqual(styles.THEME.light.success, "#1A8040"); assert.strictEqual(styles.THEME.dark.success, "#40C060");
+      assert.ok(styles.css && styles.css.suCheck, "app-styles.js css.suCheck missing");
+      assert.strictEqual(styles.css.suCheck.color, styles.THEME.light.text);
+      assert.strictEqual(styles.css.suCheck.display, "inline-flex");
+    });
+    check("the contrast gate is in the deploy chain (package.json + a build.yml step run `node test/ui/contrast.mjs`) and its region table fails a tree that puts #3a4a58 back on the SuCheck label (1.59:1 dark) while passing this one", () => {
+      const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+      assert.ok(pkg.scripts.test.split("&&").map(s => s.trim()).includes("node test/ui/contrast.mjs"), "package.json test chain lacks `node test/ui/contrast.mjs`");
+      const yml = fs.readFileSync(path.join(ROOT, ".github", "workflows", "build.yml"), "utf8");
+      assert.ok(/run:\s*node test\/ui\/contrast\.mjs/.test(yml), "build.yml has no `run: node test/ui/contrast.mjs` step");
+      assert.ok(/-\s*"test\/ui\/contrast\.mjs"/.test(yml) && /-\s*"test\/ui\/theme-regions\.js"/.test(yml), "build.yml paths filter must watch test/ui/contrast.mjs and test/ui/theme-regions.js");
+      const good = 'data-sucheck="" style={css.suCheck}>';
+      assert.ok(B2SRC.includes(good), "SuCheck label style not found");
+      const bad = B2SRC.replace(good, 'data-sucheck="" style={{ ...css.suCheck, color: "#3a4a58" }}>');
+      const { pathToFileURL } = require("url");
+      const script = `import fs from "node:fs"; import { regionTable } from ${JSON.stringify(pathToFileURL(path.join(ROOT, "test", "ui", "contrast.mjs")).href)};
+        const [good, bad] = JSON.parse(fs.readFileSync(0, "utf8"));
+        const pick = (rows) => rows.filter(r => !r.ok).map(r => [r.region, r.theme, r.tag, r.literal, r.fg, r.bg, r.ratio]);
+        console.log(JSON.stringify({ goodRows: regionTable(good).length, goodBad: pick(regionTable(good)), badBad: pick(regionTable(bad)) }));`;
+      const r = require("child_process").spawnSync(process.execPath, ["--input-type=module", "-e", script], { input: JSON.stringify([B2SRC, bad]), encoding: "utf8", cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
+      assert.strictEqual(r.status, 0, "contrast probe crashed: " + String(r.stderr || "").slice(0, 400));
+      const out = JSON.parse(String(r.stdout || "").trim().split("\n").pop());
+      assert.strictEqual(out.goodRows, 0, "this tree still has literal text colours in the six regions: " + JSON.stringify(out.goodBad));
+      assert.deepStrictEqual(out.badBad, [["sucheck", "dark", "label", "#3a4a58", "#3a4a58", "#13294B", 1.59]], "the old literal must fail the region table in dark mode at 1.59:1 (light 9.13:1 passes)");
+    });
+    check("B2 review: the empty open-shifts row's T.success sits on an inner <span>, never on the <td> (the dark sheet's `td { color: #C9D6E8 !important }` beats an inline td colour, so a td-level token paints only in light mode); the smoke's b2 screenshots are fullPage (at 390 px the notification and snapshot cards sit below the fold)", () => {
+      const board = regionText("openshifts-board");
+      const emptyRow = board.slice(board.indexOf("{rows.length === 0 && <tr>"), board.indexOf("{rows.map(s => {"));
+      assert.ok(emptyRow.length > 0 && emptyRow.length < 600, "the empty-row line moved");
+      assert.ok(!/<td[^>]*color:T\.success/.test(emptyRow), "the empty row's <td> must not carry color:T.success (the td rule overrides it in dark mode)");
+      assert.ok(/<td colSpan=\{canAct \? 7 : 6\} style=\{\{fontWeight:600,padding:"12px 8px"\}\}><span data-testid="openshifts-empty" style=\{\{color:T\.success\}\}>\{!loaded \? "Loading schedule"/.test(emptyRow), "the empty row's text sits in <span data-testid=\"openshifts-empty\" style={{color:T.success}}> (the sheet leaves a span's inline colour alone; T.success resolves to #40C060 in dark)");
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      assert.ok(smoke.includes("`b2-settings-${theme}-390.png`), fullPage: true })"), "the smoke's b2-settings-<theme>-390.png must be a fullPage screenshot so the PNG shows the two cards the probe measured");
+      assert.ok(smoke.includes("`b2-openshifts-${theme}-390.png`), fullPage: true })"), "the smoke's b2-openshifts-<theme>-390.png must be a fullPage screenshot (the board's rows run past one 844 px viewport)");
+      const styles = fs.readFileSync(path.join(ROOT, "app-styles.js"), "utf8");
+      assert.ok(/Success green as running text \(Prompt 16 B2: "Saving", a sent test notification, the empty\n\s*\/\/ open-shifts board's <span>/.test(styles), "the app-styles.js success comment names the empty board's <span> (a td would be repainted by the dark sheet)");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

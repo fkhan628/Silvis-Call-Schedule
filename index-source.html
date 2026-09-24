@@ -4999,24 +4999,23 @@ function CallSchedule() {
       {showPublishDialog && !isPublicMode && (
         <div data-testid="publish-dialog" onClick={closePublishDialog} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,padding:24,maxWidth:520,width:"100%",maxHeight:"85vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.2)"}}>
-            <h3 style={{margin:"0 0 8px",fontSize:16,color:"#1F2A3A"}}>Publish schedule changes</h3>
-            <p style={{fontSize:13,color:"#5B6B82",margin:"0 0 12px",lineHeight:1.5}}>
+            <h3 style={{margin:"0 0 8px",fontSize:16,color:T.text}}>Publish schedule changes</h3>
+            <p style={{fontSize:13,color:T.muted,margin:"0 0 12px",lineHeight:1.5}}>
               {publishChanges.length === 0 ? "Nothing has changed since the last publish." : `${publishChanges.length} change(s) since ${lastPublished?.at ? fmtAuditTime(lastPublished.at) : "the beginning"}:`}
             </p>
             {publishChanges.length > 0 && (
-              <div style={{maxHeight:260,overflowY:"auto",border:"1px solid #DCE3EC",borderRadius:6,padding:"8px 10px",marginBottom:12}}>
+              <div style={{maxHeight:260,overflowY:"auto",border:"1px solid " + T.border,borderRadius:6,padding:"8px 10px",marginBottom:12}}>
                 {describePublishDiff(publishChanges, nameOf).map(g => (
                   <div key={g.key} style={{marginBottom:8}}>
                     <div style={{fontSize:11,fontWeight:700,color:T.title,textTransform:"uppercase",letterSpacing:0.6,marginBottom:3}}>{g.label}</div>
-                    {g.lines.map((l, i) => <div key={i} style={{fontSize:12,fontFamily:mono,color:"#3a4a58",lineHeight:1.5}}>{l.replace(" -> ", " \u2192 ")}</div>)}
+                    {g.lines.map((l, i) => <div key={i} style={{fontSize:12,fontFamily:mono,color:T.text,lineHeight:1.5}}>{l.replace(" -> ", " \u2192 ")}</div>)}
                   </div>
                 ))}
               </div>
             )}
             <label style={label}>Period label (subject line)</label>
             <input value={publishLabel} onChange={e=>setPublishLabel(e.target.value)} placeholder="e.g. Nov 2 - Jan 3" style={{...css.inp,width:"100%",marginBottom:16}}/>
-            <p style={{fontSize:11.5,color:"#7a8a98",margin:"0 0 10px",lineHeight:1.5}}>The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept &amp; Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open.</p>
-            <p style={{fontSize:11.5,color:"#5B6B82",margin:"0 0 10px",lineHeight:1.5}}>The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that).</p>
+            <p style={{fontSize:11.5,color:T.muted,margin:"0 0 10px",lineHeight:1.5}}>The changes listed above are already saved for every viewer; this dialog only sends the office notice. Skipping it does not undo anything (use Undo or a snapshot restore for that). After an Accept &amp; Publish the group's open-shifts note (in-app + e-mail to those who accept schedule updates) goes out either way when the published range leaves a slot open.</p>
             <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
               <button data-testid="publish-skip" onClick={closePublishDialog} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>Skip the notice</button>
               <button data-testid="publish-send" onClick={triggerPublishNotify} disabled={officeNotifBusy || publishChanges.length === 0} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:(officeNotifBusy || publishChanges.length === 0)?0.6:1}}>{officeNotifBusy?"Sending":"Send"}</button>
@@ -5683,16 +5682,16 @@ function CallSchedule() {
             <div style={css.card} data-testid="openshifts-card">
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                 <div style={css.cardT}>Open shifts</div>
-                <span style={{fontSize:11,color:"#7a8a98"}}>{!loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`}</span>
+                <span style={{fontSize:11,color:T.muted}}>{!loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`}</span>
               </div>
               <p style={sectionNote}>Every slot the published schedule leaves open, from today to the last published day (and on any day already assigned beyond it, such as a holiday unit) - each is one 24-hour shift, 07:00 to 07:00.{mySurgeon ? " Take any shift the rules allow you: it is written to the schedule at once (no approval) and the scheduler is told." : ""}{isScheduler ? " As the scheduler you can assign anyone from the day editor or write in outside cover." : ""} The generator's reason for leaving a slot open appears after the next Generate.</p>
               <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",marginBottom:10}}>
-                <span style={{fontSize:10,color:"#7a8a98",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}}>Show</span>
+                <span style={{fontSize:10,color:T.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}}>Show</span>
                 {horizonBtn(30, "Next 30 days")}{horizonBtn(60, "Next 60 days")}{horizonBtn("all", "All")}
                 <select data-testid="ob-role" value={obRole} onChange={e => setObRole(e.target.value)} style={{...css.inp,...dkInp,padding:"4px 8px",fontSize:12}}>
                   <option value="all">Both roles</option><option value="primary">Primary only</option><option value="backup">Backup only</option>
                 </select>
-                <label style={{fontSize:12,color:"#5a6a78",display:"inline-flex",alignItems:"center",gap:5,minHeight:36,cursor:"pointer"}}><input type="checkbox" data-testid="ob-weekend" checked={obWeekend} onChange={e => setObWeekend(e.target.checked)}/> weekends only</label>
+                <label style={{fontSize:12,color:T.muted,display:"inline-flex",alignItems:"center",gap:5,minHeight:36,cursor:"pointer"}}><input type="checkbox" data-testid="ob-weekend" checked={obWeekend} onChange={e => setObWeekend(e.target.checked)}/> weekends only</label>
                 <span style={{flex:"1 1 auto"}}/>
                 <button type="button" data-testid="ob-copy" onClick={boardCopyList} disabled={!rows.length} title="Plain text, one line per slot - ready for an email or Word" style={{...css.btn(copiedUrl==="ob"),padding:"6px 12px",fontSize:11,opacity:rows.length?1:0.5}}>{copiedUrl==="ob" ? "Copied" : "Copy list"}</button>
                 {isScheduler && <button type="button" data-testid="ob-email" ref={obEmailBtnRef} onClick={() => notifyOpenShifts("board", boardSlots, boardEnd)} disabled={!boardSlots.length} title="In-app note for everyone + e-mail to those who accept schedule updates; every open slot in the published range" style={{...css.btn(true),padding:"6px 12px",fontSize:11,opacity:boardSlots.length?1:0.5}}>Email the group now</button>}
@@ -5702,7 +5701,7 @@ function CallSchedule() {
                 <table className="setup-table" data-testid="openshifts-table" data-from={todayStr} data-to={boardEnd || ""} data-total={boardSlots.length} data-ranges={boardRanges.map(r => r.start + ".." + r.end).join(",")}>
                   <thead><tr><th>Date</th><th>Role</th><th>Unit</th><th>Why</th><th>Eligible now</th><th>Last announced</th>{canAct && <th>Action</th>}</tr></thead>
                   <tbody>
-                    {rows.length === 0 && <tr><td colSpan={canAct ? 7 : 6} style={{color:"#1a8040",fontWeight:600,padding:"12px 8px"}}>{!loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered."}</td></tr>}
+                    {rows.length === 0 && <tr><td colSpan={canAct ? 7 : 6} style={{fontWeight:600,padding:"12px 8px"}}><span data-testid="openshifts-empty" style={{color:T.success}}>{!loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered."}</span></td></tr>}
                     {rows.map(s => {
                       const key = openSlotKey(s.day, s.role);
                       const elig = boardElig[key] || null;
@@ -5713,11 +5712,11 @@ function CallSchedule() {
                       const locked = !!(schedule[s.day] && schedule[s.day][s.role + "Locked"]);
                       return (
                         <tr key={key} data-slot={key} data-day={s.day} data-role={s.role}>
-                          <td style={{whiteSpace:"nowrap",fontWeight:700}}>{DAY_HDR[parse(s.day).getDay()]} {fmtMD(s.day)}{s.day === todayStr ? <span style={{fontSize:10,color:"#7a8a98",marginLeft:4,fontWeight:400}}>today</span> : null}</td>
-                          <td style={{whiteSpace:"nowrap"}}><span style={{color:"#c04040",fontWeight:800,fontSize:10,letterSpacing:0.5}}>OPEN</span> {s.role === "primary" ? "Primary (TRAUMA)" : "Backup"}</td>
+                          <td style={{whiteSpace:"nowrap",fontWeight:700}}>{DAY_HDR[parse(s.day).getDay()]} {fmtMD(s.day)}{s.day === todayStr ? <span style={{fontSize:10,color:T.muted,marginLeft:4,fontWeight:400}}>today</span> : null}</td>
+                          <td style={{whiteSpace:"nowrap"}}><span style={{color:T.open,fontWeight:800,fontSize:10,letterSpacing:0.5}}>OPEN</span> {s.role === "primary" ? "Primary (TRAUMA)" : "Backup"}</td>
                           <td style={{whiteSpace:"nowrap",fontSize:12}}>{boardUnitText(s.unit)}</td>
                           <td style={{fontSize:12,minWidth:110}}>{s.reason || "-"}</td>
-                          <td style={{fontSize:12,minWidth:150}}>{!rulesCtx ? "-" : eligible.length ? eligible.map(chip) : <span style={{color:"#c04040",fontStyle:"italic"}}>nobody under the current rules</span>}</td>
+                          <td style={{fontSize:12,minWidth:150}}>{!rulesCtx ? "-" : eligible.length ? eligible.map(chip) : <span style={{color:T.open,fontStyle:"italic"}}>nobody under the current rules</span>}</td>
                           <td data-testid="ob-announced" style={{whiteSpace:"nowrap",fontSize:12}}>{announced ? fmtAuditTime(announced) : "never"}</td>
                           {canAct && <td style={{whiteSpace:"nowrap"}}>
                             <div style={{display:"flex",gap:4,alignItems:"center"}}>
@@ -5734,12 +5733,12 @@ function CallSchedule() {
                   </tbody>
                 </table>
               </div>
-              <div data-testid="openshifts-tail" data-primary={boardTail.primary} data-backup={boardTail.backup} data-through={boardTail.through} style={{fontSize:11,color:"#7a8a98",marginTop:8,lineHeight:1.5}}>
+              <div data-testid="openshifts-tail" data-primary={boardTail.primary} data-backup={boardTail.backup} data-through={boardTail.through} style={{fontSize:11,color:T.muted,marginTop:8,lineHeight:1.5}}>
                 {boardTail.primary + boardTail.backup > 0
                   ? <>Not listed: {boardTail.primary} primary / {boardTail.backup} backup day(s) between {fmtMD(boardTail.from)} and {fmtMD(boardTail.through)} have no schedule row yet{boardEnd ? ` (after the last published day, ${boardEndText})` : ""}. The coverage strip counts them as open; Generate covers them.</>
                   : <>The published schedule runs through {boardEndText} - this board and the coverage strip's next-60-days counts agree.</>}
               </div>
-              <div data-testid="openshifts-lastgen" data-mode={lastGenerate && typeof lastGenerate === "object" && lastGenerate.mode ? lastGenerate.mode : ""} data-fixed={lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : ""} style={{fontSize:11,color:"#7a8a98",marginTop:4,lineHeight:1.5}}>
+              <div data-testid="openshifts-lastgen" data-mode={lastGenerate && typeof lastGenerate === "object" && lastGenerate.mode ? lastGenerate.mode : ""} data-fixed={lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : ""} style={{fontSize:11,color:T.muted,marginTop:4,lineHeight:1.5}}>
                 {lastGenerate && typeof lastGenerate === "object" && lastGenerate.at
                   ? <>Why column: from the last Accept &amp; Publish on {new Date(lastGenerate.at).toLocaleString()}{lastGenerate.range && lastGenerate.range.start ? " over " + fmtMD(lastGenerate.range.start) + " - " + fmtMD(lastGenerate.range.end || lastGenerate.range.start) : ""} ({lastGenerate.mode === "fill-open-only" ? "fill open slots only" : "generate"}{Number.isInteger(lastGenerate.fixedSlots) ? ", " + lastGenerate.fixedSlots + " slot(s) fixed: locks, outside surgeons, claims and trades" : ""}){lastGenerate.carriedFrom ? "; earlier reasons kept for days outside that range" : ""}.</>
                   : <>Why column: no generate recorded yet - it fills after the next Accept &amp; Publish.</>}
@@ -5761,7 +5760,7 @@ function CallSchedule() {
                     {claimSheet.soft.length
                       ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)} <span style={{fontFamily:mono,fontSize:11}}>(weight {x.weight})</span></li>)}</ul></div>
                       : <div style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
-                    <p style={{fontSize:12,color:"#5a6a78",margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade.</p>
+                    <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade.</p>
                     <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
                       <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
                       <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : "Confirm - take this shift"}</button>
@@ -5773,9 +5772,9 @@ function CallSchedule() {
                 <div data-testid="ob-email-dialog" onClick={() => { if (!obNoticeBusy) closeObNotice(); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
                   <div role="dialog" aria-modal="true" aria-label="Email the group about open shifts" onClick={e => e.stopPropagation()} onKeyDown={claimSheetKeyDown} style={{background:dk?"#16213e":"#ffffff",color:dkText,borderRadius:12,padding:"16px 18px",maxWidth:560,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
                     <h3 style={{margin:"0 0 8px",fontSize:16,color:dkText}}>Email the group about {obNotice.count} open shift{obNotice.count === 1 ? "" : "s"}?</h3>
-                    <p style={{fontSize:12.5,color:"#5a6a78",margin:"0 0 10px",lineHeight:1.5}}>Everyone gets an in-app note; the e-mail goes to every linked surgeon who accepts schedule updates in Settings. Each slot listed gets a new "last announced" time on the board.</p>
+                    <p style={{fontSize:12.5,color:T.muted,margin:"0 0 10px",lineHeight:1.5}}>Everyone gets an in-app note; the e-mail goes to every linked surgeon who accepts schedule updates in Settings. Each slot listed gets a new "last announced" time on the board.</p>
                     <div data-testid="ob-email-preview" style={{border:"1px solid " + (dk ? "#2a3a5e" : "#e0e4ea"),borderRadius:8,padding:"10px 12px",fontSize:12,lineHeight:1.5}}>
-                      <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:0.6,color:"#7a8a98",marginBottom:4}}>Preview</div>
+                      <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:0.6,color:T.muted,marginBottom:4}}>Preview</div>
                       <div data-testid="ob-email-subject"><strong>Subject:</strong> {obNotice.subject}</div>
                       <pre data-testid="ob-email-message" style={{whiteSpace:"pre-wrap",fontFamily:mono,fontSize:11.5,margin:"8px 0",maxHeight:260,overflowY:"auto",color:"inherit"}}>{obNotice.message}</pre>
                       <div data-testid="ob-email-detail" style={{fontFamily:mono,fontSize:11.5,wordBreak:"break-all"}}>{obNotice.detail}</div>
@@ -6242,7 +6241,7 @@ function CallSchedule() {
           <div style={css.card}>
             <div onClick={()=>toggleSettingsCard("notifSettings")} style={{...css.cardT,margin:openSettingsCards.notifSettings?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",userSelect:"none"}}>
               <span>Notification settings</span>
-              <span style={{fontSize:12,color:"#5B6B82"}}>{openSettingsCards.notifSettings ? "-" : "+"}</span>
+              <span style={{fontSize:12,color:T.muted}}>{openSettingsCards.notifSettings ? "-" : "+"}</span>
             </div>
             {openSettingsCards.notifSettings && <>
               <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:12}}>
@@ -6254,17 +6253,17 @@ function CallSchedule() {
                   return (
                     <div style={{display:"flex",flexDirection:"column",gap:6}}>
                       {[["schedule_updates_email","Schedule published / changes affecting me"],["trade_updates_email","Trade proposed / accepted / declined"],["shift_reminders_email","Shift reminders"]].map(([key, text]) => (
-                        <label key={key} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:"#3a4a58"}}>
+                        <label key={key} data-testid="notif-pref" style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:T.text}}>
                           <input type="checkbox" checked={myPref[key] !== false} onChange={e=>saveNotifPref(mySurgeon, {[key]:e.target.checked})}/> {text}
                         </label>
                       ))}
                       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
-                        <span style={{fontSize:12,color:"#3a4a58",minWidth:160}}>Reminder hour (Central):</span>
+                        <span data-testid="notif-hour-label" style={{fontSize:12,color:T.text,minWidth:160}}>Reminder hour (Central):</span>
                         <select value={typeof myPref.reminder_hour_central === "number" ? myPref.reminder_hour_central : ""} onChange={e=>saveNotifPref(mySurgeon, { reminder_hour_central: e.target.value === "" ? null : parseInt(e.target.value,10) })} style={{...inp,padding:"4px 8px",fontSize:12,width:120}}>
                           <option value="">default</option>
                           {Array.from({length:24}, (_,i)=>{ const h12 = i===0?12:i>12?i-12:i; return <option key={i} value={i}>{h12}:00 {i<12?"AM":"PM"}</option>; })}
                         </select>
-                        {notifPrefsSaving && <span style={{fontSize:10,color:"#1a8040"}}>Saving</span>}
+                        {notifPrefsSaving && <span style={{fontSize:10,color:T.success}}>Saving</span>}
                       </div>
                     </div>
                   );
@@ -6276,7 +6275,7 @@ function CallSchedule() {
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                   {browserNotifPermission === "default" && <button onClick={requestBrowserNotifPermission} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Allow notifications</button>}
                   <button onClick={sendTestNotification} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Send test notification</button>
-                  {notifTestSent && <span style={{fontSize:11,color:"#1a8040",fontWeight:600}}>{notifTestSent}</span>}
+                  {notifTestSent && <span style={{fontSize:11,color:T.success,fontWeight:600}}>{notifTestSent}</span>}
                 </div>
               </div>
             </>}
@@ -6409,20 +6408,20 @@ function CallSchedule() {
           {isScheduler && <div style={css.card}>
             <div onClick={()=>toggleSettingsCard("restoreSnap")} style={{...css.cardT,margin:openSettingsCards.restoreSnap?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",userSelect:"none"}}>
               <span>Restore from snapshot</span>
-              <span style={{fontSize:12,color:"#5B6B82"}}>{openSettingsCards.restoreSnap ? "-" : "+"}</span>
+              <span style={{fontSize:12,color:T.muted}}>{openSettingsCards.restoreSnap ? "-" : "+"}</span>
             </div>
             {openSettingsCards.restoreSnap && <>
               <p style={sectionNote}>Snapshots are saved automatically before destructive actions and periodically. Restoring replaces the current schedule and setup for everyone with the selected copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so a restore can itself be undone.</p>
-              {snapshotsLoading && <div style={{fontSize:12,color:"#5B6B82"}}>Loading snapshots</div>}
+              {snapshotsLoading && <div style={{fontSize:12,color:T.muted}}>Loading snapshots</div>}
               {!snapshotsLoading && snapshotLoadFailed && (
-                <div style={{fontSize:12,fontWeight:600,color:"#a02020",background:"#fce8e8",border:"1px solid #e0a8a8",borderRadius:6,padding:"6px 10px"}}>Couldn't load your backups - this does NOT mean none exist. Tap Refresh; if it keeps failing, reload the app (your session may have expired).</div>
+                <div style={{...css.errBox,fontWeight:600}}>Couldn't load your backups - this does NOT mean none exist. Tap Refresh; if it keeps failing, reload the app (your session may have expired).</div>
               )}
-              {!snapshotsLoading && !snapshotLoadFailed && (!snapshotList || snapshotList.length === 0) && <div style={{fontSize:12,color:"#5B6B82"}}>No snapshots yet.</div>}
+              {!snapshotsLoading && !snapshotLoadFailed && (!snapshotList || snapshotList.length === 0) && <div data-testid="snapshot-empty" style={{fontSize:12,color:T.muted}}>No snapshots yet.</div>}
               {!snapshotsLoading && snapshotList && snapshotList.map(sn => (
-                <div key={sn.id} data-testid="snapshot-row" data-snapshot-id={sn.id} data-reason={sn.reason || ""} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid #f0f2f4"}}>
+                <div key={sn.id} data-testid="snapshot-row" data-snapshot-id={sn.id} data-reason={sn.reason || ""} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid " + T.border}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,fontWeight:600,color:"#3a4a58"}}>{snapshotReasonLabel(sn.reason)}</div>
-                    <div style={{fontSize:10,color:"#8a94a0",fontFamily:mono}}>{new Date(sn.created_at).toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})}</div>
+                    <div style={{fontSize:12,fontWeight:600,color:T.text}}>{snapshotReasonLabel(sn.reason)}</div>
+                    <div style={{fontSize:10,color:T.muted,fontFamily:mono}}>{new Date(sn.created_at).toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})}</div>
                   </div>
                   <button data-testid="snapshot-restore" disabled={!!restoreBusyId} onClick={()=>restoreSnapshot(sn)} style={{background:"none",border:"1px solid "+T.inputBorder,color:restoreBusyId?T.muted:T.title,borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:600,cursor:restoreBusyId?"default":"pointer",fontFamily:font}}>{restoreBusyId===sn.id ? "Restoring" : "Restore"}</button>
                 </div>
@@ -7912,8 +7911,10 @@ function SuField({ label, children, width, hint }) {
     </div>
   );
 }
+// SuCheck is module scope (no dk prop): css.suCheck (app-styles.js) writes the LIGHT text token, which the dark <style>
+// sheet repaints for `label[style*="color: rgb(31, 42, 58)"]` (Prompt 16 B2 - #3a4a58 read 1.6:1 on the dark card).
 function SuCheck({ label, checked, onChange, title, testid }) {
-  return <label title={title || ""} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "#3a4a58", marginRight: 12, marginBottom: 6, cursor: "pointer" }}><input type="checkbox" data-testid={testid || undefined} checked={!!checked} onChange={e => onChange(e.target.checked)} /> {label}</label>;
+  return <label title={title || ""} data-sucheck="" style={css.suCheck}><input type="checkbox" data-testid={testid || undefined} checked={!!checked} onChange={e => onChange(e.target.checked)} /> {label}</label>;
 }
 
 // --- Roster (names / codes only; no contact fields by design) ---

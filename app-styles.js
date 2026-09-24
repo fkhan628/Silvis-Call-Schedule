@@ -40,6 +40,10 @@ const THEME = {
     primaryStart: "#13294B", primaryEnd: "#1F3A6B", onPrimary: "#FFFFFF",
     accent: "#FF5F05", onAccent: "#13294B", accentText: "#C2410C", accentTint: "#FFE8DB",
     open: "#B91C1C", weekend: "#EEF2F7", holiday: "#FDF6DC", skeleton: "#E4E8EE",
+    // Success green as running text (Prompt 16 B2: "Saving", a sent test notification, the empty
+    // open-shifts board's <span> - on a span, never a td: the dark sheet's td rule would repaint it)
+    // - 4.99:1 on the card, 4.69:1 on the page; dark 6.17:1 / 7.38:1.
+    success: "#1A8040",
     // Fairness bars (TotalsCard): the fill gradient against its track, both stops >= 3:1.
     barTrack: "#EEF1F4", barStart: "#13294B", barEnd: "#1F3A6B",
   },
@@ -50,6 +54,7 @@ const THEME = {
     primaryStart: "#1F3A6B", primaryEnd: "#2E5090", onPrimary: "#FFFFFF",
     accent: "#FF8A4C", onAccent: "#0B1A33", accentText: "#FF8A4C", accentTint: "#3A2418",
     open: "#F06060", weekend: "#0F2140", holiday: "#3A3418", skeleton: "#243250",
+    success: "#40C060",
     barTrack: "#0F2140", barStart: "#4A78D0", barEnd: "#5B8DEF",
   },
 };
@@ -114,6 +119,9 @@ const css = {
   toolTitle: { fontSize:12, fontWeight:700, color:LIGHT.text, margin:"0 0 6px" },
   // Setup view (Prompt 6 Slice E): sub-section titles, compact controls, notice boxes.
   subT: { fontSize:12, fontWeight:700, color:LIGHT.text, margin:"12px 0 6px" },
+  // A Setup checkbox label (index-source.html SuCheck, module scope with no dk): the light text token, which the dark
+  // sheet repaints through its label[style*="color: rgb(31, 42, 58)"] rule (Prompt 16 B2 - #3a4a58 read 1.59:1 on the dark card).
+  suCheck: { display:"inline-flex", alignItems:"center", gap:5, fontSize:12, color:LIGHT.text, marginRight:12, marginBottom:6, cursor:"pointer" },
   mini: (a) => ({ background:a?LIGHT.navy:"transparent", border:`1px solid ${a?LIGHT.navy:LIGHT.inputBorder}`, color:a?LIGHT.onNavy:LIGHT.muted, borderRadius:6, padding:"3px 9px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:font }),
   danger: { background:"none", border:"1px solid #e8c0c0", color:"#904040", borderRadius:6, padding:"3px 9px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:font },
   warnBox: { fontSize:12, color:"#7a5a20", background:"#fbf1d8", border:"1px solid #e8d090", borderRadius:6, padding:"8px 10px", lineHeight:1.5 },

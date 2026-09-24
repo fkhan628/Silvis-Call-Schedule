@@ -7,7 +7,7 @@
     "bump": "node bump-version.js",
     "build": "node build.js",
     "deploy": "node bump-version.js && node build.js",
-    "test": "node test/rules.test.js && node test/east-feed.test.js && node test/data-layer.test.js && node test/schema.test.js && node test/importer.test.js && node test/week-rows.test.js && node test/exports.test.js && node test/totals.test.js && node test/holidays.test.js && node test/publish.test.js && node test/day-edit.test.js && node test/open-shifts.test.js && node test/offers.test.js && node test/offers-timeline.test.js && node test/edge-functions.test.js && node test/ci.test.js && node test/privacy.test.js && node test/water-fill.test.js && node test/generator-regression.js",
+    "test": "node test/rules.test.js && node test/east-feed.test.js && node test/data-layer.test.js && node test/ui/contrast.mjs && node test/schema.test.js && node test/importer.test.js && node test/week-rows.test.js && node test/exports.test.js && node test/totals.test.js && node test/holidays.test.js && node test/publish.test.js && node test/day-edit.test.js && node test/open-shifts.test.js && node test/offers.test.js && node test/offers-timeline.test.js && node test/edge-functions.test.js && node test/ci.test.js && node test/privacy.test.js && node test/water-fill.test.js && node test/generator-regression.js",
     "smoke": "node build.js && node test/ui/smoke.mjs",
     "test:ui": "node build.js && node test/ui/smoke.mjs"
   },
