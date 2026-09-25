@@ -379,7 +379,7 @@ check("obLastAnnounced(notifications, day, role): newest 'open_shifts' row whose
     // Prompt 16 B3 moved the role filter into helpers.notifVisibleTo (one pure function for every role): the memo is
     // the helper call, and the open-shifts rule is checked on the helper itself - a linked member and a viewer both read it.
     const memo = appSrc.split("\n").find(l => /const myNotifications = useMemo\(/.test(l)) || "";
-    assert.ok(/notifVisibleTo\(notifications, \{ isScheduler, isViewer, mySurgeon, clearedBefore: notifClearedBefore \}\)/.test(memo), "myNotifications memo is the helpers.notifVisibleTo call: " + memo.trim());
+    assert.ok(/notifVisibleTo\(notifications, \{ isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore \}\)/.test(memo), "myNotifications memo is the helpers.notifVisibleTo call (Prompt 20 F3: with follows): " + memo.trim());
     const feed = [{ id: "o", type: "open_shifts", data: {}, created_at: "2026-09-23T10:00:00Z" }, { id: "t", type: "trade_proposed", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-23T11:00:00Z" }];
     assert.deepStrictEqual(H.notifVisibleTo(feed, { mySurgeon: "s4" }).map(n => n.id), ["o"], "open_shifts passes the member filter (a member the trade does not name)");
     assert.deepStrictEqual(H.notifVisibleTo(feed, { isViewer: true }).map(n => n.id), ["o"], "open_shifts passes the viewer filter too");

@@ -2907,7 +2907,10 @@ function authLinkError(hash, search) {
 //   them (data.surgeon_id, data.from_surgeon_id, data.to_surgeon_id);
 // - a VIEWER (role viewer with no roster link: the office viewer, and every invited account until the admin links and
 //   promotes it) reads schedule_published and open_shifts only - nothing about trades, vacations or reminders;
-// - an account with another role but no roster link yet reads everything (unchanged from before B3).
+// - an account with another role but no roster link yet reads everything (unchanged from before B3);
+// - a FOLLOWER (Prompt 20 F3: a viewer whose who.follows names roster ids) reads exactly what each followed surgeon
+//   reads - the group-wide types plus every row naming one of them (a give from Prompt 19 names its parties like any
+//   trade) - instead of the two viewer types. A coordinator already reads everything; follows never narrows that.
 // clearedBefore is the per-device Clear watermark (the feed is shared; Clear is local). Never throws.
 const NOTIF_VIEWER_TYPES = ["schedule_published", "open_shifts"];
 const NOTIF_GROUP_TYPES = ["schedule_published", "schedule_changed", "manual_edit", "open_shifts"];
@@ -2915,19 +2918,19 @@ function notifVisibleTo(rows, who) {
   const list = (Array.isArray(rows) ? rows : []).filter(n => n && typeof n === "object");
   const w = who || {};
   const cleared = w.clearedBefore || "";
+  const follows = (Array.isArray(w.follows) ? w.follows : []).filter(x => typeof x === "string" && x !== "");
+  // what a linked surgeon reads, for a list of roster ids (his own id, or the ids a follower follows)
+  const readsAs = (ids) => list.filter(n => {
+    if (NOTIF_GROUP_TYPES.includes(n.type)) return true;
+    const d = n.data || {};
+    if (ids.includes(d.surgeon_id)) return true;
+    if (ids.includes(d.from_surgeon_id) || ids.includes(d.to_surgeon_id)) return true;
+    return false;
+  });
   let base;
-  if (w.isViewer) base = list.filter(n => NOTIF_VIEWER_TYPES.includes(n.type));
+  if (w.isViewer) base = follows.length ? readsAs(follows) : list.filter(n => NOTIF_VIEWER_TYPES.includes(n.type));
   else if (w.isScheduler || !w.mySurgeon) base = list;
-  else {
-    const me = w.mySurgeon;
-    base = list.filter(n => {
-      if (NOTIF_GROUP_TYPES.includes(n.type)) return true;
-      const d = n.data || {};
-      if (d.surgeon_id === me) return true;
-      if (d.from_surgeon_id === me || d.to_surgeon_id === me) return true;
-      return false;
-    });
-  }
+  else base = readsAs([w.mySurgeon]);
   return base.filter(n => (n.created_at || "") > cleared);
 }
 
@@ -2944,6 +2947,8 @@ function notifVisibleTo(rows, who) {
 //   fields match, so the red "couldn't load your profile" banner clears;
 // - no prev (the mount read is still in flight), an empty read, junk, or a row for another id keeps the profile:
 //   the own row is always readable, so an empty answer is an RLS surprise, never an unlink (failure != empty).
+// - Prompt 20 F3 (review): the follows list counts too, order-aware through followsOf (an empty list and no column -
+//   before revision o - are one value), so a follow the admin adds or removes reaches an open app on the next poll.
 // Never throws.
 const PROFILE_POLL_KEYS = ["person_id", "role", "display_name"];
 function profilePollMerge(prev, row) {
@@ -2953,6 +2958,7 @@ function profilePollMerge(prev, row) {
   if (row.id && prev.id && row.id !== prev.id) return { next: prev, changed: false, reason: "other-account" };
   const recovered = !!prev._loadFailed;
   const moved = PROFILE_POLL_KEYS.filter(k => norm(prev[k]) !== norm(row[k]));
+  if (JSON.stringify(followsOf(prev)) !== JSON.stringify(followsOf(row))) moved.push("follows");
   if (!moved.length && !recovered) return { next: prev, changed: false, reason: "unchanged" };
   const next = { ...row, id: row.id || prev.id };
   delete next._loadFailed;
@@ -3021,6 +3027,19 @@ function followsPatch(p, patch, rosterIds) {
   }
   if (pt.role && !FOLLOWER_ROLES.includes(pt.role) && followsOf(row).length) return { ok: true, patch: { ...pt, follows: [] } };
   return { ok: true, patch: pt };
+}
+
+// followedIdsOf(profile, rosterIds) (Prompt 20 F3): the roster ids the SIGNED-IN account follows - what drives its
+// Alerts feed (notifVisibleTo's follows), the Following tab and the followed surgeons' calendar links. Only a viewer /
+// coordinator account with no roster link follows anybody (a linked account is the surgeon himself); a failed profile
+// read (its fallback row reads viewer, _loadFailed) follows nobody; ids the roster does not list are dropped (the app
+// could not name them); the stored order is kept. Never throws.
+function followedIdsOf(p, rosterIds) {
+  if (!p || typeof p !== "object" || p._loadFailed) return [];
+  if (!FOLLOWER_ROLES.includes(p.role)) return [];
+  if (p.person_id !== null && p.person_id !== undefined && String(p.person_id) !== "") return [];
+  const known = Array.isArray(rosterIds) ? rosterIds : [];
+  return followsOf(p).filter(id => known.includes(id));
 }
 
 // ---- Prompt 16 B9 (9/24): small pure pieces the client items are built on ----
@@ -3111,7 +3130,7 @@ if (typeof module !== "undefined" && module.exports) {
     authLinkError, AUTH_LINK_ERROR_MESSAGE,
     notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,
     profilePollMerge, PROFILE_POLL_KEYS,
-    FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch,
+    FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

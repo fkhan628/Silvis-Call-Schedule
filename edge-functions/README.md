@@ -167,7 +167,7 @@ Each function carries its own gate instead:
 |---|---|---|
 | calendar-sync | OFF (must stay OFF - calendar apps send no auth header) | none: public read-only feed of anon-readable data |
 | office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline; constant-time compare since Prompt 16 B5 - SHA-256 both sides, XOR the bytes) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
-| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403. Prompt 19 S3 (v7, PENDING deploy): `trade_applied` may also carry scheduler-linked ids beside the two parties (an accepted give is reported to the scheduler) - the parties stay required, nobody else is allowed, a surgeon sender must be a party; the other `trade_*` stay exactly the two parties |
+| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403. Prompt 19 S3 (v7, deployed 2026-09-25 05:36 UTC): `trade_applied` may also carry scheduler-linked ids beside the two parties (an accepted give is reported to the scheduler) - the parties stay required, nobody else is allowed, a surgeon sender must be a party; the other `trade_*` stay exactly the two parties. A follower (Prompt 20 F3, v8 PENDING: a viewer / coordinator whose `user_profiles.follows` names roster surgeons) only ever RECEIVES - added after this gate for `trade_*` / `shift_claimed` / `open_shifts` / `schedule_published`, never counted in `targetIds`, the cap or the party check; as a caller it is the same 403 - and never one of Prompt 19's scheduler-linked `trade_applied` copies either |
 | daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed (constant-time compare since Prompt 16 B5) |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
@@ -224,6 +224,38 @@ Event descriptions carry Primary / Backup / Shift only: the day's internal note 
 | when (UTC) | slug | version before -> after | what changed | proof |
 |---|---|---|---|---|
 | 2026-09-25 11:37:21 | `calendar-sync` | v3 -> v4 (deployed 2026-09-25 11:37:21 UTC) | `buildEvents` no longer appends `Note: <note>`; the schedule_days read no longer selects `note` | observed 11:38 UTC, unauthenticated GET: group feed 200 / `BEGIN:VCALENDAR` / 216 events, `?surgeon=FAK` 200 / 28 events (as before), `?surgeon=FAK&east=1` 200 / 55 events, `?surgeon=MAB` 200 / 43 events - 0 note lines in all four (12 in the `?surgeon=FAK` feed before the deploy) |
+
+### Deploy record - Prompt 20 F3 (followers: what a follower gets, 2026-09-24) - PENDING, nothing deployed
+
+Two functions change; `calendar-sync` and `office-notifications` are untouched and are NOT redeployed. No function
+writes anything new. ORDER: revision o (`sql/migrations/2026-09-24-followers.sql`, report-first, applied by the
+orchestrator after Faraz's go - `user_profiles.follows` + `notification_preferences.profile_id`) and the client build
+that carries it FIRST; then these two. Both functions read the follower accounts with `select=*` and match the prefs rows
+by `profile_id` in code, so a deploy BEFORE revision o is harmless (no `follows` key -> no follower, never a 400) - it
+just adds nobody. Back each function up with `download` first; byte-compare after. `send-notification`'s base is
+Prompt 19's v7 (deployed 2026-09-25 05:36 UTC, record above): this branch was rebased onto it and its source is v7 plus the
+followers block (the `tradeExtraIds` widening and the give headings kept), so its next version is v8; `daily-reminder`'s is v5 -> v6.
+Both ship in ONE rollout with revision o and the member return-leg follow-up (Faraz 9/25): push -> min_version bump -> 24 h
+and every heartbeat on that build -> both migrations -> these two deploys.
+
+PRECONDITION (review F3): a follower has no notification switches in the app (Settings > Notification settings tells
+him what he receives and to ask the scheduler; F3 adds no client write path), and the follower e-mails say "to change
+what you receive or stop these e-mails, ask the scheduler". So before these two go live the scheduler must have a way
+to change or stop a follower's mail: either the follower prefs switches (a later step - the `prefs_own` profile_id path
+revision o prepares) or his own path to the follower's `notification_preferences` row by `profile_id` (the SQL editor:
+upsert the row with the flags off, or remove the follows in Setup > Users). Without one, do not deploy.
+
+Whose followers a send reaches (review F3, `followerUniverse`): the notice's own parties, never a scheduler copy - a
+`trade_*` the trade row's two parties, `shift_claimed` the claimer (not the scheduler-linked copies in `targetIds`, and
+not Prompt 19's scheduler-linked `trade_applied` copies), a targeted `open_shifts` its `targetIds`; a broadcast
+(`open_shifts` or `schedule_published` without `targetIds`) reaches every follower, whether or not the surgeon he follows
+has a linked account. `schedule_published` is added because the publish broadcast goes to LINKED persons only, so a
+follower (person_id null) was never in it.
+
+| when (UTC) | slug | version before -> after | what changed | proof to observe after the deploy (no mail can result) |
+|---|---|---|---|---|
+| (pending) | `send-notification` | v7 (Prompt 19, live) -> next (pending): v8 | `@followers` plain-JS block; for `trade_*` (a give included - it rides `trade_*` with `data.kind` 'give'), `shift_claimed`, `open_shifts` and `schedule_published`, AFTER every gate and after the surgeons' mail, each follower of a surgeon in `followerUniverse` (the notice's own parties, never a scheduler copy; a broadcast = every follower) gets one e-mail on his OWN flag (`trade_updates_email` / `schedule_updates_email`, prefs row by `profile_id`); the frame says "You follow Dr. <Name> ... this is the notice sent to Dr. <Name>" and its footer "to change what you receive or stop these e-mails, ask the scheduler"; the response adds `followers_sent`, `followers_failed`, `followers_skipped_pref_off`, `followers_error`, and `followers_added` [{ follower: <id8>, via, status }] for an admin / scheduler caller only; the surgeons' `sent` / `failed` unchanged | anon POST -> 401 as before; a scheduler session `{"type":"test","targetIds":[]}` -> 200 `sent 0` as before (the empty short circuit answers before any follower step, so it carries no followers_* keys); the first real trade / claim / open-shifts / publish send after the deploy answers `followers_sent` (and, from a scheduler session, `followers_added`) (the orchestrator reads the function log line `[send-notification] type=... followers: N account(s) follow someone, added=... sent=...`; a follower whose flag is off reads `skipped_pref_off`). A viewer / coordinator JWT still -> 403. Prompt 19 kept (v7 behaviour): the first accepted give's `trade_applied` (targets `<from>,<to>,<scheduler id>`) still answers 200 and its `followers_added` names only followers of `<from>` / `<to>` (never a follower of the scheduler copy); a `trade_proposed` naming the two parties plus the scheduler is still 403. |
+| (pending) | `daily-reminder` | v5 -> next (pending): v6 | reminder mode: after the surgeons' loop, every follower of a surgeon on call tomorrow gets "Reminder: Dr. <Name> is on primary call at Silvis tomorrow (Fri 10/9), backup <Name>" (backup: "... is on backup call ..., primary <Name>") - one e-mail per followed surgeon, at his OWN `reminder_hour_central` (else 17), only while his OWN `shift_reminders_email` is on; the footer says "to change the reminder hour or stop these reminders, ask the scheduler"; the response adds `"followers"` { accounts, planned, sent, failed, skipped_wrong_hour, skipped_off, skipped_no_email, results: [{ follower: <id8>, surgeon, role, status }], sample: { subject, line } } (or { error }) | one dryRun through pg_net with the hourly job's own vault-referenced header: `{"dryRun":true}` -> 200 with `"followers":{"accounts":N,...}` - with revision o applied and the two follows set (s2, s5), `accounts` 2; on a day s2 or s5 is on call tomorrow `planned` >= 1 and `sample.line` reads the sentence above; at a non-matching hour the entries read `skipped_wrong_hour` with `user_hour`; no address anywhere in the body. `{"mode":"open-shifts","dryRun":true}` / `{"mode":"offers","dryRun":true}` answer exactly as before (no followers key). |
 
 ### Deploy record - Item D (Khan's combined calendar + the digest's Davenport line, 2026-09-24) - filled 2026-09-24 07:55 UTC by the orchestrator (deployed after the client build 2026.09.24e was served)
 
@@ -512,6 +544,12 @@ curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" 
 # trade_proposed to the two parties + the scheduler -> 403 {"error":"not allowed: targetIds must be exactly the trade's two parties"} (unchanged: only trade_applied widens)
 curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe","trade_id":"<trade id>"},"targetIds":["<from>","<to>","s1"]}' | Select-Object -First 1
 ```
+Prompt 20 F3 (followers): every 200 past the empty short circuit also carries `followers_sent`, `followers_failed`,
+`followers_skipped_pref_off` and `followers_error` (null, or why the follower read failed - the surgeons' mail stands),
+and - to an admin / scheduler caller only - `followers_added` (a list of `{ follower: <id8>, via: [ids], status }` -
+`sent` / `failed_<code>` / `skipped_no_email` / `skipped_pref_off`). Only `trade_*`, `shift_claimed`, `open_shifts` and
+`schedule_published` can add a follower (the whose-followers rule is `followerUniverse`, section 3); every other
+category answers zero counts. No address is ever in the body.
 The positive surgeon case cannot be proven without a mail: a surgeon's `{"type":"test","targetIds":["<his own id>"]}`
 is one real e-mail to himself - it is listed in section 6 as the live proof of the gate's allow path.
 
@@ -523,7 +561,11 @@ curl.exe -s -i -X POST "$URL/daily-reminder" -H "Content-Type: application/json"
 curl.exe -s -i -X POST "$URL/daily-reminder" -H "x-cron-secret: wrong-value" -H "Content-Type: application/json" -d '{"dryRun":true}' | Select-Object -First 1
 # dry run: reads tomorrow's row, composes, sends NOTHING
 curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"dryRun":true}'
-#   -> {"date_tomorrow":"...","current_hour":H,"dry_run":true,"on_call":2,"sent":0,...,"results":[{"person_id":"s?","role":"primary","status":"skipped_wrong_hour"|"dry_run_composed"...}]}
+#   -> {"date_tomorrow":"...","current_hour":H,"dry_run":true,"on_call":2,"sent":0,...,"results":[{"person_id":"s?","role":"primary","status":"skipped_wrong_hour"|"dry_run_composed"...}],
+#       "followers":{"accounts":N,"planned":M,"sent":0,"failed":0,"skipped_wrong_hour":K,"skipped_off":0,"skipped_no_email":0,
+#                    "results":[{"follower":"<id8>","surgeon":"s2","role":"primary","status":"skipped_wrong_hour"|"dry_run_composed",...}],
+#                    "sample":{"subject":"Call reminder - tomorrow (...) Dr. <Name> is Silvis PRIMARY","line":"Reminder: Dr. <Name> is on primary call at Silvis tomorrow (Fri 10/9), backup <Name>"}|null}}
+#   (Prompt 20 F3: one entry per follower x followed surgeon on call tomorrow; "followers":{"error":"..."} when the follower read failed)
 # mode open-shifts dry run (Prompt 13 part 5c): reads schedule_days for today..today+30, composes the Monday notice, sends NOTHING, writes NO feed row
 curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"open-shifts","dryRun":true}'
 #   -> {"mode":"open-shifts","dry_run":true,"open":N,"through":"YYYY-MM-DD","published_through":"YYYY-MM-DD"|null,"window_end":"YYYY-MM-DD","sent":0,"failed":0,"skipped_pref_off":0,"skipped_no_email":0,"feed_row":"skipped_dry_run","results":[{"person_id":"s?","status":"dry_run_composed"}...]}
@@ -583,6 +625,12 @@ and quote the 200 body in the deploy record (section 3).
   (the daily cron job is the intended caller; on every other day it sends nothing).
 - `send-notification` types `offers_reminder` / `offers_closed` (Prompt 14 part 4) - targeted sends from
   the Periods section (the "Remind" button with a session); never a broadcast by design.
+- Prompt 20 F3 (followers, once deployed after revision o): the live `daily-reminder` `{}` at a follower's own reminder hour mails
+  him when a surgeon he follows is on call tomorrow, and every live `send-notification` `trade_*` / `shift_claimed` /
+  `open_shifts` / `schedule_published` send also mails the followers of the surgeons it concerns (their own flags decide;
+  a broadcast reaches every follower) - a follower account is a real recipient from then on, and only the scheduler can
+  change or stop his mail (the section 3 PRECONDITION). The Monday `{"mode":"open-shifts"}` cron and the offers mode do
+  NOT add followers.
 - Creating the third and fourth pg_cron jobs, `silvis-open-shifts-weekly` and `silvis-offers-daily` (section 4) - from then on the Monday open-shifts notice and the daily offers timeline run unattended.
 
 Planned first live proofs (Prompt 10 acceptance, run by Faraz): one real office

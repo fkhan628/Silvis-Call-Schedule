@@ -586,6 +586,12 @@ function CallSchedule() {
   // A failed profile read is NOT a viewer: its fallback profile also reads role viewer, but profileLoadFailed keeps the
   // red "couldn't load your profile" banner and every feature gate as it was.
   const isViewer = !!userProfile && userProfile.role === "viewer" && !userProfile.person_id && !profileLoadFailed;
+  // Prompt 20 F3: a FOLLOWER - a viewer / coordinator account the admin set to follow roster surgeons (user_profiles.follows,
+  // Setup > Users). Read-only: the Alerts feed shows him what each followed surgeon reads, the Mine tab becomes "Following"
+  // (their upcoming days, no buttons) and Settings offers their calendar feeds. No new write path. Declared before the
+  // feed memo below reads it (a const read before its line is a TDZ crash).
+  const myFollows = useMemo(() => profileLoadFailed ? [] : followedIdsOf(userProfile, surgeons.map(s => s.id)), [userProfile, surgeons, profileLoadFailed]);
+  const isFollowing = myFollows.length > 0;
 
   // --- Client version heartbeat (client_versions table) ---
   // Record this client's build + last-open so the scheduler can see who is on a
@@ -712,8 +718,9 @@ function CallSchedule() {
   // helpers.notifVisibleTo (Prompt 16 B3): the scheduler reads everything; a linked surgeon the group-wide types
   // (publish, change, manual edit, open shifts - the open-shifts notice is for everyone, Prompt 13; shift_claimed
   // reaches the claimer through data.surgeon_id) plus the rows that name them; a viewer schedule_published and
-  // open_shifts only; the per-device Clear watermark applies to all.
-  const myNotifications = useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, notifClearedBefore]);
+  // open_shifts only - unless he follows surgeons (Prompt 20 F3): then what each of them reads; the per-device Clear
+  // watermark applies to all.
+  const myNotifications = useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);
   const myUnreadCount = useMemo(() => myNotifications.filter(n => n.created_at > notifLastSeen).length, [myNotifications, notifLastSeen]);
   const myTradeRequests = useMemo(() => {
     if (isScheduler || !mySurgeon) return tradeRequests;
@@ -733,7 +740,7 @@ function CallSchedule() {
   // Prompt 16 B4: the 60-second poll re-reads this account's own user_profiles row (inside refreshAll, after
   // ensureFresh, so the read carries a live token) - a surgeon whose account the admin links or promotes while the
   // app is open sees Mine, the painter, the alerts and the role gates follow it without a reload. helpers.js
-  // profilePollMerge decides: a new profile only when person_id / role / display_name moved (or a failed mount
+  // profilePollMerge decides: a new profile only when person_id / role / display_name / follows moved (or a failed mount
   // read now succeeds - the red banner clears); an unchanged row never reaches setState; a failed read keeps the
   // current profile with a warning (never a demotion - failure != empty); an empty read keeps it too (the own row
   // is always readable, so an empty answer is an RLS surprise, not an unlink); nothing is read on a dead session
@@ -5421,10 +5428,11 @@ function CallSchedule() {
         {!isPublicMode && <div style={css.nav}>
           {(() => {
             // Prompt 16 B3: the office (A7) and a viewer get no trade card (the trades section returns null for both), so their tab reads "Time off".
-            const allTabs = [["setup","Setup"],["calendar","Calendar"],["openshifts","Open shifts"],["myschedule","Mine"],["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"],["totals","Totals"],["settings","Settings"]];
+            // Prompt 20 F3: for a follower the Mine tab is "Following" (the followed surgeons' upcoming days, read-only).
+            const allTabs = [["setup","Setup"],["calendar","Calendar"],["openshifts","Open shifts"],["myschedule", isFollowing ? "Following" : "Mine"],["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"],["totals","Totals"],["settings","Settings"]];
             let tabs = allTabs;
             if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
-            if (!mySurgeon) tabs = tabs.filter(([k]) => k !== "myschedule");
+            if (!mySurgeon && !isFollowing) tabs = tabs.filter(([k]) => k !== "myschedule");
             const pendingTrades = myTradeRequests.filter(r=>r.status==="pending").length;
             return tabs.map(([k,l]) =>
               <button key={k} data-tab={k} style={{...css.tab(view===k, T.accent),position:"relative"}} onClick={()=>setView(k)}>
@@ -5999,13 +6007,14 @@ function CallSchedule() {
         {/* ================ MY SCHEDULE (Prompt 6 Slice G) ================ */}
         {view==="myschedule" && !isPublicMode && (() => {
           const pid = (isScheduler && minePerson && sMap[minePerson]) ? minePerson : mySurgeon;
-          if (!pid) return (
+          // Prompt 20 F3: a follower has no roster link (pid empty) - he sees the surgeons he follows instead.
+          const following = !pid ? myFollows : [];
+          if (!pid && !following.length) return (
             <div style={css.card}><div style={css.cardT}>My schedule</div><p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p></div>
           );
-          const upcoming = upcomingDaysOf(pid, 90);
-          const next = upcomingDaysOf(pid, null)[0] || null;
-          const P = rulesCtx && rulesCtx.per ? rulesCtx.per[pid] : null;
-          const badgesFor = (d) => {
+          const perOf = (who) => rulesCtx && rulesCtx.per ? rulesCtx.per[who] : null;
+          const badgesFor = (d, who) => {
+            const P = perOf(who || pid);
             const out = [];
             const u = rulesCtx && rulesCtx.holidayByDay ? rulesCtx.holidayByDay[d] : null;
             if (u) out.push({ k: "H", text: u.name, title: u.name + " (" + (u.tier || "major") + " holiday unit)", bg: "#fbf1d8", fg: "#7a5a20" });
@@ -6042,27 +6051,18 @@ function CallSchedule() {
           const placedRole = (o) => { const a = schedule[String(o.day).slice(0, 10)]; return a ? (a.primary === pid ? "primary" : a.backup === pid ? "backup" : null) : null; };
           const syncUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(pid)}`;
           const pidVacs = (vacations[pid] || []).filter(([vs, ve]) => ve >= todayStr).length;
-          return <>
-            <div style={css.card} data-testid="mine-card">
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
-                <div style={{...css.cardT,margin:0}}>My schedule</div>
-                {isScheduler ? (
-                  <select data-testid="mine-person" value={pid} onChange={e=>setMinePerson(e.target.value)} style={{...inp,width:130}} title="As the scheduler you can view anyone's schedule">
-                    {surgeons.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                ) : <Badge id={pid}/>}
-                <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
-                  <button data-testid="paint-offers" onClick={()=>setOfferSheet({ personId: pid })} title={pid === mySurgeon ? "Paint the dates you'll cover (primary / backup / either), any time ahead" : "Enter " + nameOf(pid) + "'s offered dates as the scheduler (relayed; entered_by scheduler)"} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>{pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)}</button>
-                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} title="One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars" style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Download my calendar</button>
-                  <button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")} title={"Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>{copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"}</button>
-                </span>
-              </div>
+          // The hero (next call) + the 90-day list, shared by Mine (own: the offer tag and the trade button) and, read-only,
+          // by the Following view (Prompt 20 F3) - one renderer, so a follower sees exactly what the surgeon's Mine shows.
+          const daysBlock = (who, own) => {
+            const upcoming = upcomingDaysOf(who, 90);
+            const next = upcomingDaysOf(who, null)[0] || null;
+            return <>
               <div data-testid="next-call" data-next-day={next ? next.day : ""} data-next-role={next ? next.role : ""} style={{padding:"12px 14px",borderRadius:8,marginBottom:12,background:next ? (next.role === "primary" ? `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})` : "linear-gradient(135deg,#8a6a20,#b08a30)") : T.raised,color:next ? "#fff" : dkText}}>
-                {!loaded ? <span style={{fontStyle:"italic"}}>Loading schedule</span> : !next ? <span>No upcoming call on file for {nameOf(pid)}.</span> : (
+                {!loaded ? <span style={{fontStyle:"italic"}}>Loading schedule</span> : !next ? <span>No upcoming call on file for {nameOf(who)}.</span> : (
                   <>
                     <div style={{fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",opacity:0.85}}>Next call - {countdown(next.day)}</div>
                     <div style={{fontSize:18,fontWeight:700,marginTop:2}}>{roleWord(next.role)} - {dowShort(next.day)} {MO[parse(next.day).getMonth()]} {parse(next.day).getDate()}, {parse(next.day).getFullYear()}</div>
-                    <div style={{fontSize:12.5,marginTop:4,opacity:0.95}}>{next.role === "primary" ? "Backup" : "Primary"}: {holderLabel(next.other, nameOf)} - 07:00 to 07:00 next day{next.locked ? " - locked" : ""}{badgesFor(next.day).map(b => " - " + b.title).join("")}</div>
+                    <div style={{fontSize:12.5,marginTop:4,opacity:0.95}}>{next.role === "primary" ? "Backup" : "Primary"}: {holderLabel(next.other, nameOf)} - 07:00 to 07:00 next day{next.locked ? " - locked" : ""}{badgesFor(next.day, who).map(b => " - " + b.title).join("")}</div>
                   </>
                 )}
               </div>
@@ -6078,13 +6078,46 @@ function CallSchedule() {
                       <span style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:"#7a5a20"}}>{roleWord(x.role)}</span>
                       <span style={{...muted,minWidth:120}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
                       {x.locked && <Padlock title="locked" size={9}/>}
-                      {badgesFor(x.day).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
-                      {(() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
-                      <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} style={{...css.mini(false),marginLeft:"auto",color:"#6030a0",borderColor:"#c0a8e0"}}>Propose a trade</button>
+                      {badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
+                      {own && (() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
+                      {own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} style={{...css.mini(false),marginLeft:"auto",color:"#6030a0",borderColor:"#c0a8e0"}}>Propose a trade</button>}
                     </div>
                   ))}
                 </div>
               )}
+            </>;
+          }; // end of daysBlock
+          // Prompt 20 F3 (c): the Following view - one card per followed surgeon (the admin's list order), the same hero +
+          // list as Mine, no trade button, no offer tag, no painter, no vacation entry, no calendar buttons (Settings has the
+          // feed links). Nothing here writes.
+          if (following.length) return <>
+            {following.map(fid => (
+              <div key={fid} style={css.card} data-testid="following-card" data-surgeon={fid}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                  <div style={{...css.cardT,margin:0}}>Following</div>
+                  <Badge id={fid}/>
+                  <span style={muted}>{nameOf(fid)}'s schedule - read-only</span>
+                </div>
+                {daysBlock(fid, false)}
+              </div>
+            ))}
+          </>; // end of the Following view
+          return <>
+            <div style={css.card} data-testid="mine-card">
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                <div style={{...css.cardT,margin:0}}>My schedule</div>
+                {isScheduler ? (
+                  <select data-testid="mine-person" value={pid} onChange={e=>setMinePerson(e.target.value)} style={{...inp,width:130}} title="As the scheduler you can view anyone's schedule">
+                    {surgeons.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                ) : <Badge id={pid}/>}
+                <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                  <button data-testid="paint-offers" onClick={()=>setOfferSheet({ personId: pid })} title={pid === mySurgeon ? "Paint the dates you'll cover (primary / backup / either), any time ahead" : "Enter " + nameOf(pid) + "'s offered dates as the scheduler (relayed; entered_by scheduler)"} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>{pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)}</button>
+                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} title="One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars" style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Download my calendar</button>
+                  <button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")} title={"Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>{copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"}</button>
+                </span>
+              </div>
+              {daysBlock(pid, true)}
             </div>
             <div style={css.card} data-testid="mine-offers">
               {(() => {
@@ -6466,7 +6499,7 @@ function CallSchedule() {
                 <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Email</div>
                 <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Emails go to your sign-in address. Choose which events email you and when the daily reminder arrives (Central time).</p>
                 {notifPrefsLoadFailed && <div data-testid="notif-prefs-load-failed" style={{...css.errBox,marginBottom:8}}>Couldn't load your saved notification settings - the switches below show the DEFAULTS, not what is saved. Reload before changing anything here.</div>}
-                {!mySurgeon ? <p style={muted}>Available once your account is linked to a roster entry.</p> : (() => {
+                {!mySurgeon ? (isFollowing ? <p data-testid="notif-follower-note" style={muted}>You follow {myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and ")}. E-mails about them go to your sign-in address: trade and shift-taken notices, open shifts, schedule published, and a reminder the day before each of their call days (17:00 Central). These run on the defaults unless the scheduler set them otherwise - to change them or stop them, ask the scheduler.</p> : <p style={muted}>Available once your account is linked to a roster entry.</p>) : (() => {
                   const myPref = notifPrefs[mySurgeon] || {};
                   return (
                     <div style={{display:"flex",flexDirection:"column",gap:6}}>
@@ -6547,7 +6580,7 @@ function CallSchedule() {
 
           <div style={css.card}>
             <div style={css.cardT}>Live calendar sync</div>
-            <p style={sectionNote}>Subscribe to {isScheduler ? "these URLs" : isViewer ? "the full-schedule feed" : "your personal URL"} in Google Calendar, Outlook or Apple Calendar. The calendar auto-updates when the schedule changes. In Google Calendar: Other calendars (+), From URL, paste the link.</p>
+            <p style={sectionNote}>Subscribe to {isScheduler ? "these URLs" : isFollowing ? (isViewer ? "the feed of each surgeon you follow, or the full-schedule feed" : "the feed of each surgeon you follow") : isViewer ? "the full-schedule feed" : "your personal URL"} in Google Calendar, Outlook or Apple Calendar. The calendar auto-updates when the schedule changes. In Google Calendar: Other calendars (+), From URL, paste the link.</p>
             {mySurgeon && (() => {
               const myUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(mySurgeon)}`;
               return (
@@ -6560,6 +6593,21 @@ function CallSchedule() {
                 </div>
               );
             })()}
+            {/* Prompt 20 F3: a follower gets each followed surgeon's own feed (the same public per-surgeon URL the scheduler's
+                pills copy, matched on code), one row per followed surgeon, above the full feed. Read-only: a URL and Copy. */}
+            {myFollows.map(fid => {
+              const followUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(fid)}`;
+              const key = "follow-" + fid;
+              return (
+                <div key={key} data-testid="follow-sync" data-surgeon={fid} style={{marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>{nameOf(fid)}'s calendar (you follow {nameOf(fid)}):</div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <input readOnly data-testid="follow-sync-url" value={followUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
+                    <button data-testid="follow-sync-copy" onClick={()=>copyText(followUrl, key)} style={{...css.btn(copiedUrl===key),padding:"8px 14px",fontSize:11,minHeight:36,whiteSpace:"nowrap"}}>{copiedUrl===key ? "Copied" : "Copy"}</button>
+                  </div>
+                </div>
+              );
+            })}
             {/* Prompt 16 B3: the public full-schedule feed (the same URL the shareable page uses) is the scheduler's AND the
                 viewer's - a viewer has no personal URL, so without this the card was empty for the office viewer. */}
             {(isScheduler || isViewer) && <>

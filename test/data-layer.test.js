@@ -798,7 +798,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(card.includes("forecastOutsideCoverage(forecastFromFeedRows(forecastRows || []), cov)"), "EastFeedCard must prune its forecast strip with the published coverage (cov)");
     assert.ok(card.includes("inside the published coverage (ignored)"), "EastFeedCard must say how many forecast rows lie inside the published coverage and are ignored");
     // Fix round (finding 13): the calendar F badge honours an override busy:false.
-    const bs = src.indexOf("const badgesFor = (d) => {");
+    const bs = src.indexOf("const badgesFor = (d, who) => {"); // Prompt 20 F3: badgesFor reads the shown surgeon's ctx (who || pid)
     const badges = src.slice(bs, src.indexOf("return out;", bs));
     assert.ok(badges.includes("P.eastOverrides[d] === false"), "badgesFor must skip the F badge on an override busy:false day");
   });
@@ -4384,7 +4384,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(B3count('  const isViewer = !!userProfile && userProfile.role === "viewer" && !userProfile.person_id && !profileLoadFailed;\n'), 1, "the isViewer const (a failed profile read keeps its own red banner and is never branded a viewer)");
       assert.ok(B3SRC.indexOf("const isViewer = ") > B3SRC.indexOf("const isUnlinked = "), "declared after isUnlinked, before the first render");
       assert.strictEqual(B3count("{!isPublicMode && isUnlinked && !isCoordinator && !isViewer && ("), 1, "the unlinked-account banner never renders for a viewer (a failed profile read still does: profileLoadFailed keeps isViewer false)");
-      assert.strictEqual(B3count("useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, notifClearedBefore]);"), 1, "myNotifications is the helper with isViewer in its inputs and its deps");
+      assert.strictEqual(B3count("useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);"), 1, "myNotifications is the helper with isViewer in its inputs and its deps (Prompt 20 F3 adds follows: myFollows)");
       assert.strictEqual(B3count("if (isCoordinator || isViewer) return null; // Prompt 16 A7 / B3"), 1, "the trades section (the card and the request list) returns null for a viewer as for the office");
       assert.strictEqual(B3count('{!mySurgeon && !canEnterForAnyone && !isViewer ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : ('), 1, "the Time off card's 'not linked' sentence is not shown to a viewer");
       assert.strictEqual(B3count("{!isViewer && renderVacationForm("), 1, "no vacation form for a viewer");
@@ -4392,7 +4392,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(B3count('data-testid="viewer-timeoff-note"'), 1, "the viewer's own Time off sentence (one, instead of the 'not linked' one twice)");
       assert.strictEqual(B3count("{(isScheduler || isViewer) && <>"), 1, "the calendar-sync card's full-schedule block renders for a viewer");
       assert.strictEqual(B3count('data-testid="calsync-full"'), 1, "the full-schedule feed input carries a test id");
-      assert.strictEqual(B3count('{isScheduler ? "these URLs" : isViewer ? "the full-schedule feed" : "your personal URL"}'), 1, "the card's sentence names the full-schedule feed for a viewer");
+      assert.strictEqual(B3count('{isScheduler ? "these URLs" : isFollowing ? (isViewer ? "the feed of each surgeon you follow, or the full-schedule feed" : "the feed of each surgeon you follow") : isViewer ? "the full-schedule feed" : "your personal URL"}'), 1, "the card's sentence names the full-schedule feed for a viewer (Prompt 20 F3: and the followed feeds for a follower)");
       assert.strictEqual(B3count('(userProfile?.display_name || (isViewer ? "a read-only account" : "unlinked account"))'), 1, "the Account line does not call a viewer 'unlinked'");
       assert.strictEqual(B3count('["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"]'), 1, "the nav tab reads 'Time off' for a viewer or the office - the trades section returns null for both, so the label must not promise trades");
       // The per-surgeon pills stay the scheduler's: the block that maps surgeons to calendar-sync?surgeon= pills is inside an isScheduler-only guard.
@@ -5144,6 +5144,129 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(i > 0, "the guide bullet");
       const para = g.slice(i, g.indexOf("\n", i));
       for (const w of ["followsColumnState", "users-follows-pending", "select=*", "follows: []", "follows none", "saveUserProfile", "users.link", "followsPatch"]) assert.ok(para.includes(w), "the guide bullet names " + w);
+    });
+  }
+
+  /* ---------------- Prompt 20 F3 (Faraz 9/24). What a follower gets in the app: Alerts, Following, calendar links ---------------- */
+  console.log("\n[P20 F3] What a follower gets - Alerts feed, the Following tab, the followed surgeons' calendar links");
+  {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const count = (s) => src.split(s).length - 1;
+    const ROSTER = ["s1", "s2", "s3", "s4", "s5", "s6"];
+    check("P20 F3 behaviour: helpers.followedIdsOf(profile, rosterIds) - a viewer / coordinator account with no roster link follows the listed roster ids (list order, unknown ids dropped); a linked account, a surgeon / scheduler / admin, a failed profile read, a row without the column and junk follow nobody", () => {
+      assert.strictEqual(typeof H.followedIdsOf, "function", "helpers.js exports followedIdsOf");
+      assert.deepStrictEqual(H.followedIdsOf({ role: "viewer", person_id: null, follows: ["s2"] }, ROSTER), ["s2"], "the nurse practitioner's shape: a viewer following s2");
+      assert.deepStrictEqual(H.followedIdsOf({ role: "coordinator", person_id: null, follows: ["s5", "s2"] }, ROSTER), ["s5", "s2"], "a coordinator follows too; the stored order is kept");
+      assert.deepStrictEqual(H.followedIdsOf({ role: "viewer", follows: ["s2", "s9", "s2", "", 7] }, ROSTER), ["s2"], "an id the roster does not know, a duplicate and junk are dropped");
+      assert.deepStrictEqual(H.followedIdsOf({ role: "viewer", person_id: "s3", follows: ["s2"] }, ROSTER), [], "a linked account is the surgeon himself, never a follower");
+      ["surgeon", "scheduler", "admin", null, undefined].forEach((role) => assert.deepStrictEqual(H.followedIdsOf({ role, person_id: null, follows: ["s2"] }, ROSTER), [], "role " + role + " follows nobody"));
+      assert.deepStrictEqual(H.followedIdsOf({ role: "viewer", person_id: null, follows: ["s2"], _loadFailed: true }, ROSTER), [], "a failed profile read (its fallback reads viewer) follows nobody");
+      assert.deepStrictEqual(H.followedIdsOf({ role: "viewer", person_id: null }, ROSTER), [], "no column yet (before revision o): nobody");
+      assert.deepStrictEqual(H.followedIdsOf(null, ROSTER), [], "no profile");
+      assert.deepStrictEqual(H.followedIdsOf({ role: "viewer", follows: ["s2"] }, null), [], "no roster: nobody (never an id the app cannot name)");
+    });
+    const feed = [
+      { id: "n1", type: "schedule_published", data: {}, created_at: "2026-09-20T10:00:00Z" },
+      { id: "n2", type: "open_shifts", data: {}, created_at: "2026-09-21T10:00:00Z" },
+      { id: "n3", type: "trade_proposed", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-22T10:00:00Z" },
+      { id: "n4", type: "vacation_logged", data: { surgeon_id: "s3" }, created_at: "2026-09-23T10:00:00Z" },
+      { id: "n5", type: "schedule_changed", data: {}, created_at: "2026-09-23T11:00:00Z" },
+      { id: "n6", type: "shift_reminder", data: { surgeon_id: "s2" }, created_at: "2026-09-23T12:00:00Z" },
+      { id: "n7", type: "shift_claimed", data: { surgeon_id: "s5" }, created_at: "2026-09-23T13:00:00Z" },
+      { id: "n8", type: "trade_applied", data: { from_surgeon_id: "s4", to_surgeon_id: "s5", kind: "give" }, created_at: "2026-09-23T14:00:00Z" },
+      { id: "n9", type: "manual_edit", data: {}, created_at: "2026-09-23T15:00:00Z" },
+    ];
+    const ids = (rows) => rows.map(n => n.id);
+    check("P20 F3 behaviour: helpers.notifVisibleTo(rows, { isViewer, follows }) - a follower reads exactly what each followed surgeon reads (the group-wide types + every row naming one of them, a give included); a viewer following nobody keeps the two viewer types; a surgeon's own view is unchanged", () => {
+      const asSurgeon = (id) => ids(H.notifVisibleTo(feed, { mySurgeon: id }));
+      const asFollower = (f) => ids(H.notifVisibleTo(feed, { isViewer: true, follows: f }));
+      assert.deepStrictEqual(asFollower(["s2"]), asSurgeon("s2"), "follows s2 == what s2 reads");
+      assert.deepStrictEqual(asFollower(["s2"]), ["n1", "n2", "n3", "n5", "n6", "n9"]);
+      assert.deepStrictEqual(asFollower(["s5"]), asSurgeon("s5"), "follows s5 == what s5 reads (the claim and the give name him)");
+      assert.deepStrictEqual(asFollower(["s5"]), ["n1", "n2", "n5", "n7", "n8", "n9"]);
+      const union = feed.filter(n => asSurgeon("s2").includes(n.id) || asSurgeon("s5").includes(n.id)).map(n => n.id);
+      assert.deepStrictEqual(asFollower(["s2", "s5"]), union, "two followed surgeons: the union, in feed order");
+      assert.deepStrictEqual(asFollower([]), ["n1", "n2"], "a viewer following nobody: schedule_published + open_shifts only (B3)");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { isViewer: true })), ["n1", "n2"], "no follows key: the B3 viewer");
+      assert.deepStrictEqual(asFollower(["s2", null, 3]), asSurgeon("s2"), "junk entries in follows are ignored");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { isViewer: true, follows: ["s2"], clearedBefore: "2026-09-23T11:30:00Z" })), ["n6", "n9"], "the Clear watermark applies to a follower too");
+      assert.deepStrictEqual(asSurgeon("s3"), ["n1", "n2", "n3", "n4", "n5", "n9"], "a linked surgeon's view is unchanged");
+      assert.deepStrictEqual(ids(H.notifVisibleTo(feed, { mySurgeon: "", follows: ["s2"] })), ids(feed), "a coordinator (not a viewer, no link) already reads everything; follows never narrows it");
+    });
+    check("P20 F3 pins: myFollows = followedIdsOf(userProfile, roster ids) (never after a failed profile read) is declared before myNotifications, which passes follows: myFollows (and lists it in the deps); the Mine tab reads 'Following' for a follower and shows for him although he has no roster link", () => {
+      const decl = "  const myFollows = useMemo(() => profileLoadFailed ? [] : followedIdsOf(userProfile, surgeons.map(s => s.id)), [userProfile, surgeons, profileLoadFailed]);\n  const isFollowing = myFollows.length > 0;\n";
+      assert.strictEqual(count(decl), 1, "the myFollows / isFollowing declarations");
+      const memo = "useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);";
+      assert.strictEqual(count(memo), 1, "myNotifications passes follows and lists myFollows in its deps");
+      assert.ok(src.indexOf(decl) > 0 && src.indexOf(decl) < src.indexOf(memo), "myFollows is declared before the feed memo reads it (a const read before its line is a TDZ crash)");
+      assert.ok(src.indexOf(decl) > src.indexOf("  const isViewer = "), "declared after isViewer");
+      assert.strictEqual(count('["myschedule", isFollowing ? "Following" : "Mine"]'), 1, "the tab label");
+      assert.strictEqual(count('if (!mySurgeon && !isFollowing) tabs = tabs.filter(([k]) => k !== "myschedule");'), 1, "the tab shows for a follower");
+      assert.strictEqual(count('if (!mySurgeon) tabs = tabs.filter(([k]) => k !== "myschedule");'), 0, "the old filter is gone");
+    });
+    check("P20 F3 pins: the Mine view renders the hero + upcoming list through one daysBlock(who, own) for both; a follower gets one following-card per followed surgeon (Badge, read-only) with daysBlock(fid, false) - no trade button, no offer tag, no painter, no vacation entry, no write of any kind; the surgeon's own Mine still carries all of them", () => {
+      const a = src.indexOf('{view==="myschedule" && !isPublicMode && (() => {'), b = src.indexOf("{/* ================ TIME OFF & TRADES", a);
+      assert.ok(a > 0 && b > a, "the Mine view block");
+      const mine = src.slice(a, b);
+      assert.ok(mine.includes("const following = !pid ? myFollows : [];"), "a follower's pid is empty; his ids are myFollows");
+      assert.ok(mine.includes("if (!pid && !following.length) return ("), "the 'not linked' card only for an account that follows nobody");
+      assert.ok(mine.includes("const daysBlock = (who, own) => {"), "one renderer for the hero + upcoming list");
+      const fa = mine.indexOf("// Prompt 20 F3 (c): the Following view"), fb = mine.indexOf("// end of the Following view", fa);
+      assert.ok(fa > 0 && fb > fa, "the Following view is one marked block");
+      const fol = mine.slice(fa, fb);
+      assert.ok(fol.includes("if (following.length) return <>"), "the follower's return");
+      assert.ok(fol.includes('data-testid="following-card" data-surgeon={fid}'), "one card per followed surgeon");
+      assert.ok(fol.includes("{daysBlock(fid, false)}"), "the shared block, read-only");
+      for (const w of ["mine-trade", "proposeTradeForDay", "setOfferSheet", "paint-offers", "renderVacationList", "setView(\"timeoff\")", "fetch(", "db.", "supabase.", "saveNotifPref", "downloadMyCal"]) assert.ok(!fol.includes(w), "the Following view carries no " + w);
+      const d0 = mine.indexOf("const daysBlock = (who, own) => {"), d1 = mine.indexOf("// end of daysBlock", d0);
+      assert.ok(d1 > d0, "daysBlock is one marked block");
+      const db = mine.slice(d0, d1);
+      assert.ok(db.includes("{own && (() => { const t = offerTagOf(x.day, x.role);"), "the offer tag only on the own view");
+      assert.ok(db.includes('{own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)}'), "the trade button only on the own view");
+      assert.ok(db.includes("const upcoming = upcomingDaysOf(who, 90);") && db.includes("const next = upcomingDaysOf(who, null)[0] || null;"), "the same 90-day list and next call as Mine");
+      assert.ok(db.includes("badgesFor(x.day, who)") && db.includes("badgesFor(next.day, who)"), "the badges read the shown surgeon's own ctx");
+      const own = mine.slice(fb);
+      assert.ok(own.includes("{daysBlock(pid, true)}"), "the surgeon's own Mine uses the same block with its buttons");
+      assert.ok(own.includes('data-testid="paint-offers"') && own.includes('data-testid="mine-offers"') && own.includes('data-testid="mine-vacations"'), "the own Mine keeps the painter, the offers card and the vacations card");
+    });
+    check("P20 F3 pins: Settings > Live calendar sync offers each followed surgeon's feed (calendar-sync?surgeon=<CODE>) with a Copy button, above the full feed; the sentence names it; no write path", () => {
+      const a = src.indexOf("Live calendar sync"), b = src.indexOf("Requires the calendar-sync edge function", a);
+      const card = src.slice(a, b);
+      const f0 = card.indexOf("{myFollows.map(fid => {");
+      assert.ok(f0 > 0, "one row per followed surgeon");
+      assert.ok(f0 < card.indexOf('data-testid="calsync-full"'), "above the full feed");
+      assert.ok(card.includes("const followUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(fid)}`;"), "the per-surgeon feed URL (matched on code)");
+      assert.ok(card.includes('data-testid="follow-sync" data-surgeon={fid}') && card.includes('data-testid="follow-sync-url"') && card.includes('data-testid="follow-sync-copy" onClick={()=>copyText(followUrl, key)}'), "the row, the box and its Copy button");
+      assert.ok(card.includes('isFollowing ? (isViewer ? "the feed of each surgeon you follow, or the full-schedule feed" : "the feed of each surgeon you follow")'), "the card's sentence names the followed feeds");
+      assert.ok(!/fetch\(|db\.|supabase\./.test(card), "the card writes nothing");
+      assert.ok(!/[^\x00-\x7F]/.test(src), "index-source.html stays ASCII");
+      assert.ok(!/\r/.test(fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8")), "index-source.html stays LF");
+    });
+    check("P20 F3 (review) behaviour: helpers.profilePollMerge - a moved follows list (order-aware) is a change ('follows' in moved), so an open app drops a removed follow without a reload; the same list, or no column on either side (before revision o), is unchanged", () => {
+      const U = "u-follower";
+      const base = { id: U, person_id: null, role: "viewer", display_name: null, follows: ["s2"] };
+      const drop = H.profilePollMerge(base, { ...base, follows: [] });
+      assert.strictEqual(drop.changed, true, "the admin removed the follow -> a new profile");
+      assert.deepStrictEqual(drop.moved, ["follows"]);
+      assert.deepStrictEqual(drop.next.follows, []);
+      assert.strictEqual(H.profilePollMerge(base, { ...base, follows: ["s2", "s5"] }).changed, true, "an added follow");
+      assert.strictEqual(H.profilePollMerge({ ...base, follows: ["s2", "s5"] }, { ...base, follows: ["s5", "s2"] }).changed, true, "a reordered list (the Following cards' order)");
+      const same = H.profilePollMerge(base, { ...base, follows: ["s2"] });
+      assert.strictEqual(same.changed, false); assert.strictEqual(same.next, base, "the same list answers the SAME object");
+      const pre = { id: U, person_id: null, role: "viewer", display_name: null };
+      assert.strictEqual(H.profilePollMerge(pre, { ...pre }).changed, false, "no follows key on either side -> unchanged");
+      assert.strictEqual(H.profilePollMerge({ ...pre, follows: [] }, { ...pre }).changed, false, "an empty list and no column are one value");
+    });
+    check("P20 F3 (review) pins: Settings > Notification settings tells a follower the truth - which mail he receives about whom, that it runs on the defaults unless the scheduler set them otherwise, and to ask the scheduler to change or stop it (he has no switches; F3 adds no write path) - never 'Available once your account is linked'", () => {
+      const a = src.indexOf("<span>Notification settings</span>"), b = src.indexOf("Live calendar sync", a);
+      const card = src.slice(a, b);
+      const i = card.indexOf('{!mySurgeon ? (isFollowing ? <p data-testid="notif-follower-note" style={muted}>');
+      assert.ok(i > 0, "a follower branch before the unlinked sentence");
+      const note = card.slice(i, card.indexOf("</p>", i));
+      assert.ok(note.includes('myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and ")'), "names the followed surgeons");
+      assert.ok(/ask the scheduler/.test(note) && /17:00 Central/.test(note), "who changes it; the default hour");
+      assert.ok(card.indexOf("Available once your account is linked to a roster entry.") > i, "the unlinked sentence stays for everybody else");
+      assert.ok(!/fetch\(|saveNotifPref\(myFollows|db\./.test(note), "no write");
     });
   }
 

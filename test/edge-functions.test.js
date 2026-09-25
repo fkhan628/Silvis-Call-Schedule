@@ -1069,6 +1069,208 @@ check("Item D: index-source.html Settings (scheduler) shows the combined link fo
   assert.ok(/east=1/.test(guide) && /combined/.test(guide), "the build guide names the combined feed");
 });
 
+/* =====================================================================
+   Prompt 20 F3 (Faraz 9/24) - FOLLOWERS in the two per-user mail functions. A viewer / coordinator account
+   (user_profiles.follows, revision o) receives what each followed surgeon receives, read-only, driven by its OWN
+   notification_preferences row (keyed by profile_id). One plain-JS '@followers' mirror block, byte-identical in
+   send-notification and daily-reminder, extracted and run here:
+     followerFollows(p)            - the follows list (== helpers.js followsOf)
+     followerIndex(profiles, prefs) - the follower accounts with their own prefs row
+     followerUniverse(...)         - send-notification: whose followers a send reaches - the trade row's two parties, the
+                                     claimer, the targetIds, or null (a broadcast: every follower); never a scheduler copy
+     followerRecipients(...)       - send-notification: followers of that universe, for trade_* / shift_claimed /
+                                     open_shifts / schedule_published only, on the follower's own flag; added AFTER every gate
+     followerReminderPlan(...)     - daily-reminder: one entry per follower x followed surgeon on call tomorrow, at the
+                                     follower's own hour, on his own shift_reminders_email
+     followerReminderLine(...)     - "Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Fri 10/9), backup Khan"
+   ===================================================================== */
+let FOL = null;
+check("P20 F3: send-notification and daily-reminder carry an identical plain-JS '@followers' mirror block defining followerFollows, followerTag, followerIndex, followerUniverse, followerRecipients, followerReminderPlan, followerReminderLine and FOLLOWER_SEND_TYPES", () => {
+  const blocks = [["send-notification", blockOf(snSrc, "send-notification", "followers")], ["daily-reminder", blockOf(drSrc, "daily-reminder", "followers")]];
+  blocks.forEach(([n, b]) => plainJs(b, n));
+  identical(blocks, "followers");
+  const api = new Function(blocks[0][1] + "\nreturn { followerFollows, followerTag, followerIndex, followerUniverse, followerRecipients, followerReminderPlan, followerReminderLine, FOLLOWER_SEND_TYPES };")();
+  for (const k of Object.keys(api)) assert.ok(api[k], "the block defines " + k);
+  FOL = api;
+});
+const H20 = require(path.join(ROOT, "helpers.js"));
+const FPROFILES = [
+  { id: "f1aaaaaa-np", role: "viewer", person_id: null, email: "np@example.org", display_name: "Follower (harness)", follows: ["s2"] },
+  { id: "f2bbbbbb-app", role: "coordinator", person_id: null, email: "app@example.org", display_name: null, follows: ["s5", "s2"] },
+  { id: "f3cccccc-plain", role: "viewer", person_id: null, email: "plain@example.org", display_name: null, follows: [] },
+  { id: "f4dddddd-surgeon", role: "surgeon", person_id: "s3", email: "s3@example.org", display_name: null, follows: ["s2"] },
+  { id: "f5eeeeee-noaddr", role: "viewer", person_id: null, email: "  ", display_name: null, follows: ["s2"] },
+  { id: "f6ffffff-nocol", role: "viewer", person_id: null, email: "old@example.org", display_name: null },
+  // review F3: a viewer / coordinator LINKED to a roster entry is never a follower, whatever follows says (Setup's
+  // followsPatch checks the role only, and linking an account keeps its follows)
+  { id: "f7a1b2c3-linkedv", role: "viewer", person_id: "s3", email: "lv@example.org", display_name: null, follows: ["s2"] },
+  { id: "f8d4e5f6-linkedc", role: "coordinator", person_id: "s4", email: "lc@example.org", display_name: null, follows: ["s2", "s5"] },
+];
+const FPREFS = [
+  { person_id: "s2", profile_id: null, trade_updates_email: false, schedule_updates_email: false, shift_reminders_email: false, reminder_hour_central: 6 },
+  { person_id: null, profile_id: "f2bbbbbb-app", trade_updates_email: false, schedule_updates_email: true, shift_reminders_email: true, reminder_hour_central: 20 },
+];
+check("P20 F3: followerFollows is helpers.js followsOf (same answers over the fixture family); followerIndex keeps a viewer / coordinator with no roster link and a non-empty follows list, with its OWN prefs row by profile_id (a surgeon's person_id row never stands in); a row without the column (before revision o) is nobody; followerTag is the id's first 8 characters", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const family = [{ follows: ["s2", "s5"] }, { follows: ["s2", "s2", "", 7, null, "s5"] }, { follows: "s2" }, { follows: null }, {}, null, undefined, { follows: [] }];
+  family.forEach((p) => assert.deepStrictEqual(FOL.followerFollows(p), H20.followsOf(p), "mirror identity for " + JSON.stringify(p)));
+  const idx = FOL.followerIndex(FPROFILES, FPREFS);
+  assert.deepStrictEqual(idx.map((f) => f.tag), ["f1aaaaaa", "f2bbbbbb", "f5eeeeee"], "the viewer, the coordinator and the viewer without an address - not the plain viewer, the surgeon or the row without the column");
+  assert.deepStrictEqual(idx[1].follows, ["s5", "s2"]);
+  assert.strictEqual(idx[0].prefs, null, "no prefs row of his own -> null (every flag on, the default hour)");
+  assert.strictEqual(idx[1].prefs.reminder_hour_central, 20, "the coordinator's own row, by profile_id");
+  assert.strictEqual(idx[2].email, null, "a blank address is none");
+  assert.strictEqual(idx[0].name, "Follower (harness)");
+  assert.deepStrictEqual(FOL.followerIndex(null, null), [], "no rows -> nobody (never throws)");
+  assert.strictEqual(FOL.followerTag("f1aaaaaa-np"), "f1aaaaaa");
+  const linked = ["f7a1b2c3", "f8d4e5f6"];
+  assert.ok(!idx.some((f) => linked.indexOf(f.tag) >= 0), "a viewer / coordinator linked to a roster entry is never a follower");
+  const tr = FOL.followerRecipients(idx, "trade_applied", ["s2", "s5"], "trade_updates_email");
+  assert.ok(![...tr.list, ...tr.skipped].some((f) => linked.indexOf(f.tag || f.follower) >= 0), "... so no send lists him");
+  const pl = FOL.followerReminderPlan(idx, [{ person_id: "s2", role: "primary", otherLabel: "Khan" }, { person_id: "s5", role: "backup", otherLabel: "Burchett" }], 17, 17);
+  assert.ok(!pl.some((e) => linked.indexOf(e.follower) >= 0), "... and no reminder names him");
+});
+check("P20 F3: followerRecipients - trade_* (a give rides trade_* with data.kind 'give'), shift_claimed, open_shifts and schedule_published add each follower of an id in the universe ONCE (via = the followed ids in it), on the follower's OWN flag; a null universe (a broadcast) is every follower with all his follows; manual_edit, vacation_logged, test and the offers types add nobody; an empty universe adds nobody", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const idx = FOL.followerIndex(FPROFILES, FPREFS);
+  assert.deepStrictEqual(FOL.FOLLOWER_SEND_TYPES, ["trade_proposed", "trade_accepted", "trade_declined", "trade_applied", "shift_claimed", "open_shifts", "schedule_published"]);
+  // review F3: the publish mail is a broadcast over LINKED persons, so a follower (person_id null) was never in it - he
+  // gets it now, as every follower does, whether or not the followed surgeon's account is linked
+  const pub = FOL.followerRecipients(idx, "schedule_published", null, "schedule_updates_email");
+  assert.deepStrictEqual(pub.list.map((f) => [f.tag, f.via]), [["f1aaaaaa", ["s2"]], ["f2bbbbbb", ["s5", "s2"]], ["f5eeeeee", ["s2"]]], "a broadcast (null universe): every follower once, via all his follows");
+  const ob = FOL.followerRecipients(idx, "open_shifts", null, "schedule_updates_email");
+  assert.deepStrictEqual(ob.list.map((f) => f.tag), ["f1aaaaaa", "f2bbbbbb", "f5eeeeee"], "the open-shifts broadcast likewise (the in-app feed shows it to every follower)");
+  const pubOff = FOL.followerRecipients(FOL.followerIndex(FPROFILES, [{ person_id: null, profile_id: "f1aaaaaa-np", schedule_updates_email: false }]), "schedule_published", null, "schedule_updates_email");
+  assert.deepStrictEqual(pubOff.skipped, [{ follower: "f1aaaaaa", via: ["s2"], status: "skipped_pref_off" }], "his own schedule flag off -> no publish mail");
+  const t = FOL.followerRecipients(idx, "trade_proposed", ["s2", "s3"], "trade_updates_email");
+  assert.deepStrictEqual(t.list.map((f) => [f.tag, f.via]), [["f1aaaaaa", ["s2"]], ["f5eeeeee", ["s2"]]], "the s2 followers; the coordinator's own trade flag is off");
+  assert.deepStrictEqual(t.skipped, [{ follower: "f2bbbbbb", via: ["s2"], status: "skipped_pref_off" }], "the opted-out follower is reported, never mailed");
+  const c = FOL.followerRecipients(idx, "shift_claimed", ["s5", "s1"], "schedule_updates_email");
+  assert.deepStrictEqual(c.list.map((f) => [f.tag, f.via]), [["f2bbbbbb", ["s5"]]], "a claim by s5 reaches his follower on her schedule flag");
+  const o = FOL.followerRecipients(idx, "open_shifts", ["s1", "s2", "s3", "s4", "s5", "s6"], "schedule_updates_email");
+  assert.deepStrictEqual(o.list.map((f) => [f.tag, f.via]), [["f1aaaaaa", ["s2"]], ["f2bbbbbb", ["s5", "s2"]], ["f5eeeeee", ["s2"]]], "a broadcast universe: every follower once, even one following two surgeons in it");
+  ["manual_edit", "vacation_logged", "test", "offers_reminder", "offers_closed", "shift_reminder"].forEach((ty) => {
+    assert.deepStrictEqual(FOL.followerRecipients(idx, ty, ["s2", "s5"], "schedule_updates_email"), { list: [], skipped: [] }, ty + " adds no follower");
+    assert.deepStrictEqual(FOL.followerRecipients(idx, ty, null, "schedule_updates_email"), { list: [], skipped: [] }, ty + " adds no follower, even as a broadcast");
+  });
+  assert.deepStrictEqual(FOL.followerRecipients(idx, "trade_applied", [], "trade_updates_email"), { list: [], skipped: [] }, "empty universe");
+  assert.deepStrictEqual(FOL.followerRecipients(idx, "trade_applied", ["s4"], "trade_updates_email"), { list: [], skipped: [] }, "nobody follows s4");
+});
+check("P20 F3 (review): followerUniverse - whose followers a send reaches: a trade_* reaches the trade row's two parties (never a scheduler-linked copy in targetIds, e.g. Prompt 19's trade_applied), shift_claimed the claimer only (the caller; a scheduler caller may name data.surgeon_id), open_shifts / schedule_published the targetIds or, as a broadcast, null (every follower); any other type, a trade without its row, a targeted list without the party -> []", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const U = FOL.followerUniverse;
+  const surgeon = (pid) => ({ role: "surgeon", personId: pid }), sched = { role: "admin", personId: "s1" };
+  const trade = { from_surgeon_id: "s2", to_surgeon_id: "s3" };
+  assert.deepStrictEqual(U("trade_applied", ["s2", "s3", "s1"], sched, {}, trade), ["s2", "s3"], "the scheduler copy (s1) is not a party - his followers are not mailed about another surgeon's trade");
+  assert.deepStrictEqual(U("trade_proposed", ["s2", "s3"], surgeon("s2"), { kind: "give" }, trade), ["s2", "s3"], "a give rides trade_*: the two parties");
+  assert.deepStrictEqual(U("trade_declined", ["s2", "s3"], surgeon("s2"), {}, null), [], "no trade row -> nobody (the gate refuses it before this anyway)");
+  assert.deepStrictEqual(U("trade_declined", null, sched, {}, trade), [], "a trade is never a broadcast");
+  assert.deepStrictEqual(U("shift_claimed", ["s3", "s1"], surgeon("s3"), { surgeon_id: "s3" }, null), ["s3"], "the claimer - not the scheduler-linked copy");
+  assert.deepStrictEqual(U("shift_claimed", ["s3", "s1"], surgeon("s3"), { surgeon_id: "s1" }, null), ["s3"], "a surgeon caller cannot point the claim at someone else");
+  assert.deepStrictEqual(U("shift_claimed", ["s4", "s1"], sched, { surgeon_id: "s4" }, null), ["s4"], "a scheduler caller: data.surgeon_id when it is in targetIds");
+  assert.deepStrictEqual(U("shift_claimed", ["s1"], sched, { surgeon_id: "s4" }, null), [], "... and nobody when it is not");
+  assert.deepStrictEqual(U("open_shifts", ["s2", "s5"], sched, {}, null), ["s2", "s5"], "targeted open shifts: the targetIds");
+  assert.strictEqual(U("open_shifts", null, sched, {}, null), null, "the open-shifts broadcast: every follower");
+  assert.strictEqual(U("schedule_published", null, sched, {}, null), null, "the publish broadcast: every follower");
+  ["manual_edit", "vacation_logged", "test", "offers_reminder"].forEach((ty) => assert.deepStrictEqual(U(ty, null, sched, {}, null), [], ty + " -> nobody"));
+});
+check("P20 F3: followerReminderPlan + followerReminderLine - one entry per follower x followed surgeon on call tomorrow, at the follower's OWN hour (else the function default), on his OWN shift_reminders_email; nothing when the followed surgeon is off; the line reads 'Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Fri 10/9), backup Khan' / '... is on backup call ..., primary <Name>'", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const idx = FOL.followerIndex(FPROFILES, FPREFS);
+  const onCall = [{ person_id: "s2", role: "primary", otherLabel: "Khan" }, { person_id: "s5", role: "backup", otherLabel: "Burchett" }];
+  const at17 = FOL.followerReminderPlan(idx, onCall, 17, 17);
+  assert.deepStrictEqual(at17.map((e) => [e.follower, e.surgeon, e.role, e.status, e.user_hour]), [
+    ["f1aaaaaa", "s2", "primary", "due", 17],
+    ["f2bbbbbb", "s5", "backup", "skipped_wrong_hour", 20],
+    ["f2bbbbbb", "s2", "primary", "skipped_wrong_hour", 20],
+    ["f5eeeeee", "s2", "primary", "skipped_no_email", 17],
+  ], "17:00: the default-hour follower is due; the coordinator waits for her own 20:00; the address-less follower is reported");
+  const at20 = FOL.followerReminderPlan(idx, onCall, 20, 17);
+  assert.deepStrictEqual(at20.filter((e) => e.status === "due").map((e) => [e.follower, e.surgeon]), [["f2bbbbbb", "s5"], ["f2bbbbbb", "s2"]], "20:00: one e-mail per followed surgeon on call");
+  assert.ok(at17.every((e) => e.otherLabel === (e.surgeon === "s2" ? "Khan" : "Burchett")), "the other role's holder rides along");
+  const off = FOL.followerIndex(FPROFILES, [{ person_id: null, profile_id: "f1aaaaaa-np", shift_reminders_email: false }]);
+  assert.strictEqual(FOL.followerReminderPlan(off, onCall, 17, 17)[0].status, "skipped_off", "his own switch off -> nothing");
+  assert.deepStrictEqual(FOL.followerReminderPlan(idx, [{ person_id: "s4", role: "primary", otherLabel: "Khan" }], 17, 17), [], "the followed surgeons are off tomorrow -> nothing");
+  assert.deepStrictEqual(FOL.followerReminderPlan(idx, [], 17, 17), [], "nobody on call -> nothing");
+  assert.strictEqual(FOL.followerReminderLine("Burchett", "primary", "2026-10-09", "Khan"), "Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Fri 10/9), backup Khan");
+  assert.strictEqual(FOL.followerReminderLine("Fierce", "backup", "2026-10-10", "Burchett"), "Reminder: Dr. Fierce is on backup call at Silvis tomorrow (Sat 10/10), primary Burchett");
+  assert.strictEqual(FOL.followerReminderLine("Fierce", "backup", "2026-12-31", "OPEN"), "Reminder: Dr. Fierce is on backup call at Silvis tomorrow (Thu 12/31), primary OPEN");
+});
+check("P20 F3 source pins - send-notification: followers are added AFTER the gates and the surgeons' loop (targetIds, the cap, sendGate and tradePartyCheck never see them); the follower read is user_profiles?select=*&role=in.(viewer,coordinator) (select=* - naming follows would 400 before revision o) beside the prefs rows resolveRecipients already read; a failed follower read is logged and answered as followers_error, never a 502 after the surgeons were mailed; the response lists followers_sent / followers_failed / followers_skipped_pref_off (tags, never addresses) and followers_added only to an admin / scheduler caller; the follower read runs only for the FOLLOWER_SEND_TYPES; the follower universe is followerUniverse (the trade row's parties / the claimer, never a scheduler copy)", () => {
+  const h = snSrc.slice(snSrc.indexOf("serve(async (req) =>"));
+  const iLoop = h.indexOf("for (const r of list) {"), iFol = h.indexOf("followerRecipients(");
+  assert.ok(iLoop > 0 && iFol > iLoop, "followers come after the surgeons' loop");
+  for (const w of ["sendGate(caller, type, targetIds, schedulerIds)", "tradePartyCheck(trade, targetIds, extraIds, privileged ? null : caller.personId)", "targetIds.length > cap", "resolveRecipients(cat, targetIds, roster.names)"]) assert.ok(h.indexOf(w) > 0 && h.indexOf(w) < iFol, w + " runs before any follower is added");
+  assert.ok(/const fUniverse = followerUniverse\(type, targetIds, caller, data, tradeRow\);/.test(h), "review F3: the follower universe is the notice's own parties");
+  assert.ok(/tradeRow = trade;/.test(h) && h.indexOf("tradeRow = trade;") > h.indexOf("tradePartyCheck(trade, targetIds, extraIds, privileged ? null : caller.personId)"), "the trade row is kept only after the party check passed");
+  assert.ok(/followerRecipients\(followers, type, fUniverse, cat\.pref\)/.test(h), "the follower's own flag for the category (trade_updates_email / schedule_updates_email)");
+  const iGuard = h.indexOf("if (FOLLOWER_SEND_TYPES.indexOf(type) >= 0) {"), iRead = h.indexOf('rest("user_profiles?select=*&role=in.(viewer,coordinator)")');
+  assert.ok(iGuard > iLoop && iRead > iGuard && iFol > iRead, "review F3: the follower read runs inside the FOLLOWER_SEND_TYPES guard (no read, no followers_error on other sends)");
+  assert.ok(iRead > 0, "the follower accounts, select=*");
+  assert.ok(!/rest[(]["`][^"`]*follows/.test(snSrc), "no read names the follows column");
+  assert.ok(/const \{ list, skippedPrefOff, prefRows \} = await resolveRecipients\(/.test(h), "resolveRecipients hands back the prefs rows it read");
+  const fb = h.slice(iFol - 1200, h.indexOf("return json(200, {", iFol));
+  assert.ok(/try \{[^]*followerIndex\(fProfiles, prefRows\)[^]*\} catch \(e\) \{[^]*followersError = /.test(fb), "the follower part is isolated in its own try / catch");
+  assert.ok(/console\.error\(`\[send-notification\] followers: /.test(fb), "a follower failure is logged");
+  assert.ok(/buildEmail\(type, cat, data, f\.name \|\| "", f\.via\.map\(\(id\) => roster\.names\[id\] \|\| id\)\)/.test(fb), "the follower frame names the followed surgeon(s)");
+  assert.ok(/sendEmail\(f\.email, subject, html, `type=\$\{type\} follower=\$\{f\.tag\}`\)/.test(fb), "the log key is the follower tag, never the address");
+  const ret = h.slice(h.indexOf("return json(200, {", iFol));
+  assert.ok(/followers_sent: followersSent, followers_failed: followersFailed, followers_skipped_pref_off: followersPrefOff/.test(ret) && /followers_error: followersError/.test(ret), "the response lists the follower counts");
+  assert.ok(/\.\.\.\(privileged \? \{ followers_added: followersAdded \} : \{\}\)/.test(ret), "review F3: the per-follower list (id8 + followed ids) goes to an admin / scheduler caller only - a surgeon gets the counts");
+  assert.ok(!/followers_added: followersAdded, followers_sent/.test(ret), "... never unconditionally");
+  assert.ok(/sent, failed, skipped_no_email: skippedNoEmail, skipped_pref_off: skippedPrefOff, results/.test(ret), "the surgeons' accounting is unchanged (the client's toast reads sent / failed)");
+  assert.ok(/function buildEmail\(type: string, cat: Category, data: any, recipientName: string, followed: string\[\] = \[\]\)/.test(snSrc), "buildEmail takes the followed names");
+  assert.ok(snSrc.includes('${recipientName ? `Hi ${escHtml(recipientName)},` : "Hi,"}'), "review F3: a follower without a display name reads 'Hi,'");
+  // review F3: the follower frame is worded truthfully - the notice was SENT to the surgeon (he may have opted out), and a
+  // follower has no switches in the app, so he asks the scheduler
+  assert.ok(/this is the notice sent to \$\{escHtml\(followed\.map\(\(n\) => "Dr\. " \+ n\)\.join\(" and "\)\)\}/.test(snSrc), "'the notice sent to Dr. X'");
+  assert.ok(!/notice \$\{escHtml\(followed\.join\(" and "\)\)\} received/.test(snSrc), "never 'the notice X received'");
+  assert.ok(/followed\.length\s*\?\s*`You receive this because you follow [^`]*ask the scheduler[^`]*`\s*:\s*`[^`]*under Settings in the app/.test(snSrc), "the follower's footer says to ask the scheduler; the surgeons' footer keeps 'Settings in the app'");
+  assert.ok(!/never reaches a third person/.test(snSrc) && !/can never be addressed to a third person or broadcast\./.test(snSrc), "review F3: no comment still says trade mail never reaches a third person");
+});
+check("P20 F3 source pins - daily-reminder (reminder mode): after the surgeons' loop it reads the follower accounts (select=*) + every prefs row, plans followerReminderPlan(followers, onCall, now.hour, DEFAULT_REMINDER_HOUR), composes buildFollowerReminder with followerReminderLine, sends only when not dryRun, and answers `followers` { accounts, planned, sent, failed, skipped_wrong_hour, skipped_off, skipped_no_email, results, sample } - counts, tags and a sample line, never an address; a failed follower read is `followers.error`, the surgeons' reminders stand", () => {
+  const h = drSrc.slice(drSrc.indexOf("serve(async (req) =>"));
+  const iLoop = h.indexOf("for (const o of onCall) {"), iPlan = h.indexOf("followerReminderPlan(");
+  assert.ok(iLoop > 0 && iPlan > iLoop, "followers after the surgeons' loop");
+  assert.ok(h.includes("followerReminderPlan(followers, onCall, now.hour, DEFAULT_REMINDER_HOUR)"), "the follower's own hour, else the function default");
+  assert.ok(h.includes('rest("user_profiles?select=*&role=in.(viewer,coordinator)")') && h.includes('rest("notification_preferences?select=*")'), "the follower accounts + every prefs row (a follower's row is keyed by profile_id)");
+  assert.ok(!/rest[(]["`][^"`]*(follows|profile_id)/.test(drSrc), "no read names a revision-o column (a 400 before the apply)");
+  const fb = h.slice(iPlan - 1200, h.indexOf("return json(200, {", iPlan));
+  assert.ok(/followerReminderLine\(nameOf\(e\.surgeon\), e\.role, tomorrow, e\.otherLabel\)/.test(fb), "the third-party line");
+  assert.ok(/if \(dryRun\) \{[^]*dry_run_composed/.test(fb), "dryRun composes and sends nothing");
+  assert.ok(/sendEmail\(e\.email, subject, html, `follower=\$\{e\.follower\} surgeon=\$\{e\.surgeon\} role=\$\{e\.role\}`\)/.test(fb), "the log key is the tag + the followed id");
+  assert.ok(/\} catch \(e\) \{[^]*console\.error\(`\[daily-reminder\] followers: /.test(fb), "a follower failure is logged, not thrown");
+  const ret = h.slice(h.indexOf("return json(200, {", iPlan));
+  assert.ok(/followers: followersOut/.test(ret.slice(0, 600)), "the reminder response carries followers");
+  assert.ok(/accounts: followers\.length, planned: plan\.length/.test(fb) && /sample: /.test(fb), "counts + a sample");
+  assert.ok(/function buildFollowerReminder\(/.test(drSrc), "the follower's frame");
+  const fr = drSrc.slice(drSrc.indexOf("function buildFollowerReminder("), drSrc.indexOf("return { subject, html };", drSrc.indexOf("function buildFollowerReminder(")));
+  assert.ok(fr.includes("const subject = `Call reminder - tomorrow (${opts.dayLabel}) Dr. ${opts.surgeonName} is Silvis ${opts.role.toUpperCase()}`;"), "review F3: the follower subject");
+  assert.ok(fr.includes('${opts.name ? `Hi <strong>${escHtml(opts.name)}</strong>,` : "Hi,"}'), "review F3: the greeting falls back to 'Hi,'");
+  assert.ok(/you receive this because you follow Dr\. \$\{escHtml\(opts\.surgeonName\)\}; to change the reminder hour or stop these reminders, ask the scheduler\./.test(fr), "review F3: the follower footer says to ask the scheduler");
+  assert.ok(!/under Settings in the app/.test(fr), "review F3: a follower has no reminder switches in the app - the frame never points him there");
+});
+check("P20 F3: edge-functions/README.md - section 3 carries the pending Prompt 20 F3 deploy rows (send-notification and daily-reminder, next version, pending) with the proofs to observe; section 5 shows the daily-reminder dryRun `followers` object and the send-notification followers_* keys; the gate table says a follower never sends", () => {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const i = s3.indexOf("### Deploy record - Prompt 20 F3");
+  assert.ok(i > 0, "the Prompt 20 F3 deploy record");
+  const rec = s3.slice(i, s3.indexOf("\n### ", i + 10) > 0 ? s3.indexOf("\n### ", i + 10) : undefined);
+  assert.ok(/\| `send-notification` \|[^\n]*-> next \(pending\)/.test(rec) && /\| `daily-reminder` \|[^\n]*-> next \(pending\)/.test(rec), "one pending row per function");
+  assert.ok(/revision o/.test(rec) && /followers_added/.test(rec) && /"followers"/.test(rec), "the proofs: revision o first, followers_added, the dryRun followers object");
+  const dr = readme.slice(readme.indexOf("### daily-reminder"), readme.indexOf("## 6."));
+  assert.ok(/"followers":\{"accounts":/.test(dr), "section 5: the dryRun followers object");
+  const sn = readme.slice(readme.indexOf("### send-notification"), readme.indexOf("### daily-reminder"));
+  assert.ok(/followers_added/.test(sn), "section 5: send-notification's followers_* keys");
+  const gateRow = readme.split("\n").find((l) => /^\| send-notification \| OFF \|/.test(l)) || "";
+  assert.ok(/follower/.test(gateRow), "the gate row: a follower (viewer / coordinator) only receives");
+  // review F3
+  assert.ok(/PRECONDITION[^\n]*follower[^\n]*(switch|prefs)/i.test(rec), "section 3: the deploy precondition - a follower can change or stop his mail (switches, or the scheduler's path to his profile_id row) before these go live");
+  assert.ok(/schedule_published/.test(rec) && /schedule_published/.test(sn), "section 3 + 5: the publish mail reaches followers");
+  assert.ok(/scheduler copy|scheduler-linked cop/.test(rec), "section 3: a follower of a scheduler-linked surgeon is not mailed the scheduler copies");
+  const s6 = readme.slice(readme.indexOf("## 6."));
+  assert.ok(/schedule_published/.test(s6.slice(0, s6.indexOf("\n## ", 5) > 0 ? s6.indexOf("\n## ", 5) : undefined)) || /Prompt 20 F3[^\n]*schedule_published/.test(readme), "section 6: the live note names the publish mail");
+});
+
 (async () => {
   for (const [name, fn] of ASYNC) {
     try { await fn(); passed++; console.log("ok   " + name); }

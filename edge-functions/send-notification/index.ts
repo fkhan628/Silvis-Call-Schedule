@@ -20,7 +20,7 @@
 //     the group's mail account.
 //
 // What changed for Silvis:
-//   - notification_preferences is keyed by person_id and has NO email column
+//   - notification_preferences is keyed by person_id for a surgeon (by profile_id for a follower since revision o) and has NO email column
 //     (schedule_updates_email, trade_updates_email, shift_reminders_email,
 //     reminder_hour_central). Addresses come from user_profiles.email joined
 //     on person_id, read with the service role. A person with no linked
@@ -72,8 +72,9 @@
 //     its shift_trade_requests row in data.trade_id (a uuid; 400 without it)
 //     and the row's two parties (from_surgeon_id / to_surgeon_id, read with the
 //     service role) must be exactly the targetIds as a set (403 otherwise) -
-//     for every caller, the scheduler included, so a trade frame can never be
-//     addressed to a third person or broadcast. The pure pieces (isTradeType,
+//     for every caller, the scheduler included, so targetIds (the addressed
+//     parties) can never name a third person or be a broadcast; followers of
+//     the parties are added after this gate (Prompt 20 F3). The pure pieces (isTradeType,
 //     tradeIdOf, targetCap, tradePartyCheck) sit in the @sendGate block and are
 //     unit-tested; the log-redaction regex is the @logRedact block.
 //   - GIVE A DAY (Prompt 19 S3, 2026-09-24; v7 - prepared, NOT deployed yet;
@@ -101,6 +102,20 @@
 //     '// @giveFrame-end'). Cosmetic only: the gate never reads kind, and a
 //     v6 function simply ignores the extra key.
 //
+//   - FOLLOWERS (Prompt 20 F3, Faraz 9/24; revision o). A viewer / coordinator account the admin set to follow
+//     roster surgeons (user_profiles.follows) receives what they receive, read-only. For trade_* (a Prompt 19 give
+//     rides them with data.kind 'give'), shift_claimed, open_shifts and schedule_published, AFTER every gate and
+//     after the surgeons' mail, each follower of a surgeon in followerUniverse (the notice's own parties: the trade
+//     row's two, the claimer - never a scheduler-linked copy; or, for a broadcast, every follower) gets one e-mail on
+//     HIS OWN notification_preferences row (keyed by profile_id - the surgeons' rows stay keyed by person_id; a
+//     missing row means every flag on). The cap, sendGate and tradePartyCheck judge targetIds alone: a follower never
+//     counts as the acting party, never satisfies the party check, and a follower CALLER is still a 403 (viewer /
+//     coordinator never send). The frame says he follows Dr. X and that, to change what he receives, he asks the
+//     scheduler (he has no switches in the app). The response carries the follower counts; the per-follower list
+//     (followerTag id8 + followed ids, never an address) only to an admin / scheduler caller. The surgeons' sent /
+//     failed accounting (what the client's toast reads) is unchanged. The pure pieces are the @followers mirror block
+//     (identical in daily-reminder).
+//
 // Payload contract:
 //   POST { type: string, data: { subject?: string, message: string, detail?: string, trade_id?: uuid, kind?: 'give' }, targetIds?: string[] }
 //     data.kind 'give' (Prompt 19 S4, optional) only re-titles a trade_* frame (frameTitle); the gate never reads it
@@ -109,7 +124,9 @@
 //     targetIds [ids]   -> only those person ids (s1..s6); at most roster size + 1 of them
 //     trade_*           -> data.trade_id required; targetIds must be exactly that row's two parties
 //     trade_applied     -> the same two parties, plus (optionally) scheduler-linked ids (Prompt 19 S3, v7)
-//   -> 200 { sent, failed, skipped_no_email, skipped_pref_off, results: [{ person_id, status }] }
+//   -> 200 { sent, failed, skipped_no_email, skipped_pref_off, results: [{ person_id, status }],
+//            followers_sent, followers_failed, followers_skipped_pref_off, followers_error (null, or why the follower
+//            step could not run), and for an admin / scheduler caller followers_added: [{ follower: <id8>, via: [ids], status }] }
 //
 // Secrets (by NAME): RESEND_API_KEY, NOTIFICATION_FROM_EMAIL (required - there is
 // NO hardcoded fallback sender); SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are
@@ -213,6 +230,124 @@ function redactAddresses(text) {
   return String(text == null ? "" : text).replace(/\S+@\S+/g, "<redacted>");
 }
 // @logRedact-mirror-end
+
+// ---------------------------------------------------------------------------
+// Followers (Prompt 20 F3, Faraz 9/24). A viewer / coordinator account the admin
+// set to follow roster surgeons (user_profiles.follows, revision o) receives what
+// those surgeons receive, read-only, on its OWN notification_preferences row
+// (keyed by profile_id; no row -> every flag on, the default hour). Plain
+// JavaScript between the markers, byte-identical in send-notification and
+// daily-reminder: test/edge-functions.test.js extracts it, checks the copies
+// match, evaluates it with new Function and runs it (followerFollows answers
+// exactly like helpers.js followsOf). The accounts are read with select=*, so
+// before revision o (no follows column) the list is simply empty - never a 400.
+// Responses and logs name a follower by followerTag (the first 8 characters of
+// the account id), never by address.
+// ---------------------------------------------------------------------------
+// @followers-mirror-start
+const FOLLOWER_ROLE_NAMES = ["viewer", "coordinator"];
+// what send-notification adds followers to: the trade frames (a Prompt 19 give rides them with data.kind "give"),
+// the claim note, the open-shifts notice and the publish mail (review F3: the publish broadcast goes to LINKED persons,
+// so a follower - person_id null - was never in it); manual_edit, vacation_logged, test and the offers mail are not
+const FOLLOWER_SEND_TYPES = ["trade_proposed", "trade_accepted", "trade_declined", "trade_applied", "shift_claimed", "open_shifts", "schedule_published"];
+function followerFollows(p) {
+  const raw = p && typeof p === "object" ? p.follows : null;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  raw.forEach(function (v) { if (typeof v === "string" && v !== "" && out.indexOf(v) < 0) out.push(v); });
+  return out;
+}
+function followerTag(id) { return String(id == null ? "" : id).slice(0, 8); }
+// profiles: user_profiles rows (select=*); prefRows: notification_preferences rows (select=*). A follower is a viewer /
+// coordinator row with no roster link and a non-empty follows list; his prefs row is the one whose profile_id is his id.
+function followerIndex(profiles, prefRows) {
+  const prefsByProfile = {};
+  (Array.isArray(prefRows) ? prefRows : []).forEach(function (r) { if (r && typeof r === "object" && r.profile_id) prefsByProfile[String(r.profile_id)] = r; });
+  const out = [];
+  (Array.isArray(profiles) ? profiles : []).forEach(function (p) {
+    if (!p || typeof p !== "object" || !p.id) return;
+    if (FOLLOWER_ROLE_NAMES.indexOf(p.role) < 0) return;
+    if (p.person_id !== null && p.person_id !== undefined && String(p.person_id) !== "") return;
+    const follows = followerFollows(p);
+    if (!follows.length) return;
+    const email = typeof p.email === "string" && p.email.trim() ? p.email.trim() : null;
+    const name = typeof p.display_name === "string" && p.display_name.trim() ? p.display_name.trim() : null;
+    out.push({ id: String(p.id), tag: followerTag(p.id), email: email, name: name, follows: follows, prefs: prefsByProfile[String(p.id)] || null });
+  });
+  return out;
+}
+// send-notification: whose followers a send reaches (review F3) - the notice's own parties, never a scheduler-linked
+// copy in targetIds: a trade_* the trade row's two parties (inside targetIds; Prompt 19's trade_applied may add scheduler
+// copies), shift_claimed the claimer (a surgeon caller is the claimer; a scheduler caller may name data.surgeon_id),
+// open_shifts / schedule_published the targetIds - or null for a broadcast (every follower). Anything else: [].
+function followerUniverse(type, targetIds, caller, data, trade) {
+  if (FOLLOWER_SEND_TYPES.indexOf(type) < 0) return [];
+  const ids = Array.isArray(targetIds) ? targetIds.map(function (x) { return String(x); }) : null;
+  if (type.indexOf("trade_") === 0) {
+    if (!ids || !trade || typeof trade !== "object") return [];
+    const out = [];
+    [trade.from_surgeon_id, trade.to_surgeon_id].forEach(function (v) {
+      const id = v === null || v === undefined ? "" : String(v);
+      if (id && ids.indexOf(id) >= 0 && out.indexOf(id) < 0) out.push(id);
+    });
+    return out;
+  }
+  if (type === "shift_claimed") {
+    if (!ids) return [];
+    const privileged = !!caller && (caller.role === "admin" || caller.role === "scheduler");
+    const named = data && typeof data.surgeon_id === "string" ? data.surgeon_id : "";
+    const own = caller && caller.personId !== null && caller.personId !== undefined ? String(caller.personId) : "";
+    const who = privileged && named ? named : own;
+    return who && ids.indexOf(who) >= 0 ? [who] : [];
+  }
+  return ids;
+}
+// send-notification: the followers of any id in `universe` (followerUniverse's answer; null = a broadcast, every
+// follower with all his follows), once each, for the FOLLOWER_SEND_TYPES only; `via` = the followed ids inside the
+// universe. prefKey is the category's flag, read from the FOLLOWER'S row (an explicit false opts out; a missing row or
+// flag is on).
+function followerRecipients(followers, type, universe, prefKey) {
+  const list = [], skipped = [];
+  if (FOLLOWER_SEND_TYPES.indexOf(type) < 0) return { list: list, skipped: skipped };
+  const all = universe === null;
+  const ids = (Array.isArray(universe) ? universe : []).map(function (x) { return String(x); });
+  (Array.isArray(followers) ? followers : []).forEach(function (f) {
+    const via = all ? f.follows.slice() : f.follows.filter(function (id) { return ids.indexOf(id) >= 0; });
+    if (!via.length) return;
+    if (prefKey && f.prefs && f.prefs[prefKey] === false) { skipped.push({ follower: f.tag, via: via, status: "skipped_pref_off" }); return; }
+    list.push({ id: f.id, tag: f.tag, email: f.email, name: f.name, via: via });
+  });
+  return { list: list, skipped: skipped };
+}
+// daily-reminder: one entry per follower x followed surgeon on call tomorrow (onCall: [{ person_id, role, otherLabel }]).
+// The hour is the follower's own reminder_hour_central (else defaultHour); his own shift_reminders_email false -> off.
+function followerReminderPlan(followers, onCall, hour, defaultHour) {
+  const out = [];
+  const calls = Array.isArray(onCall) ? onCall : [];
+  (Array.isArray(followers) ? followers : []).forEach(function (f) {
+    f.follows.forEach(function (id) {
+      const o = calls.find(function (c) { return c && String(c.person_id) === id; });
+      if (!o) return;
+      const prefs = f.prefs || {};
+      const userHour = typeof prefs.reminder_hour_central === "number" ? prefs.reminder_hour_central : defaultHour;
+      let status = "due";
+      if (userHour !== hour) status = "skipped_wrong_hour";
+      else if (prefs.shift_reminders_email === false) status = "skipped_off";
+      else if (!f.email) status = "skipped_no_email";
+      out.push({ follower: f.tag, id: f.id, email: f.email, name: f.name, surgeon: id, role: o.role, otherLabel: o.otherLabel, user_hour: userHour, status: status });
+    });
+  });
+  return out;
+}
+const FOLLOWER_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// "Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Fri 10/9), backup Khan"
+function followerReminderLine(surgeonName, role, ymd, otherLabel) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ""));
+  const when = m ? FOLLOWER_DOW[new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay()] + " " + Number(m[2]) + "/" + Number(m[3]) : String(ymd || "?");
+  const other = role === "primary" ? "backup" : "primary";
+  return "Reminder: Dr. " + surgeonName + " is on " + role + " call at Silvis tomorrow (" + when + "), " + other + " " + otherLabel;
+}
+// @followers-mirror-end
 
 // Mail client. Logs counts/keys only - never the address.
 async function sendEmail(to: string, subject: string, html: string, logKey: string): Promise<{ ok: boolean; status: number }> {
@@ -421,7 +556,9 @@ function emailEnabled(cat: Category, prefs: any): boolean {
   return !(prefs && prefs[cat.pref] === false);
 }
 
-function buildEmail(type: string, cat: Category, data: any, recipientName: string): { subject: string; html: string } {
+// followed (Prompt 20 F3): the followed surgeons' names when the recipient is a FOLLOWER - the frame then says why he
+// receives it; the composed words are the ones the surgeon receives, unchanged.
+function buildEmail(type: string, cat: Category, data: any, recipientName: string, followed: string[] = []): { subject: string; html: string } {
   const title = frameTitle(type, cat.title, data); // Prompt 19 S4: a give (data.kind 'give') is headed as a give
   const subject = (typeof data?.subject === "string" && data.subject.trim())
     ? data.subject.trim().slice(0, 200)
@@ -432,6 +569,9 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
   const detail = typeof data?.detail === "string" && data.detail.trim()
     ? `<p style="margin:12px 0 0;padding:10px 14px;background:#f4f6f8;border-left:3px solid ${cat.color};border-radius:6px;font-family:monospace;font-size:13px;color:#2c3e50;line-height:1.6;">${textToHtml(data.detail.slice(0, MAX_MESSAGE_CHARS))}</p>`
     : "";
+  const followNote = followed.length
+    ? `<p style="font-size:13px;color:#5a6a78;line-height:1.6;margin:0 0 12px;padding:10px 14px;background:#f4f6f8;border-radius:8px;">You follow ${escHtml(followed.map((n) => "Dr. " + n).join(" and "))} in the ${escHtml(APP_NAME)} - this is the notice sent to ${escHtml(followed.map((n) => "Dr. " + n).join(" and "))}.</p>`
+    : "";
   const html = `
     <div style="font-family:'Outfit',Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
       <div style="background:${cat.color};color:#fff;padding:14px 20px;border-radius:10px 10px 0 0;">
@@ -439,8 +579,9 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
         <p style="margin:6px 0 0;font-size:13px;opacity:0.9;">${escHtml(APP_NAME)}</p>
       </div>
       <div style="background:#fff;border:1px solid #e0e4ea;border-top:none;padding:20px;border-radius:0 0 10px 10px;">
+        ${followNote}
         <p style="font-size:14px;color:#2c3e50;line-height:1.6;margin:0;">
-          Hi ${escHtml(recipientName)},<br><br>
+          ${recipientName ? `Hi ${escHtml(recipientName)},` : "Hi,"}<br><br>
           ${textToHtml(message)}
         </p>
         ${detail}
@@ -449,7 +590,7 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
         </a>
         <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e4ea;font-size:12px;color:#8a94a0;">
           <a href="${APP_URL}" style="color:#1a6fa8;">Open ${escHtml(APP_NAME)}</a> -
-          change your notification settings under Settings in the app.
+          ${followed.length ? `You receive this because you follow ${escHtml(followed.map((n) => "Dr. " + n).join(" and "))}; to change what you receive or stop these e-mails, ask the scheduler.` : `change your notification settings under Settings in the app.`}
         </div>
       </div>
     </div>`;
@@ -461,7 +602,7 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
 // ---------------------------------------------------------------------------
 interface Recipient { person_id: string; email: string | null; name: string; prefs: any }
 
-async function resolveRecipients(cat: Category, targetIds: string[] | null, names: Record<string, string>): Promise<{ list: Recipient[]; skippedPrefOff: number }> {
+async function resolveRecipients(cat: Category, targetIds: string[] | null, names: Record<string, string>): Promise<{ list: Recipient[]; skippedPrefOff: number; prefRows: any[] }> {
   const [profiles, prefRows] = await Promise.all([
     rest("user_profiles?select=person_id,email&person_id=not.is.null"),
     rest("notification_preferences?select=*"),
@@ -478,7 +619,8 @@ async function resolveRecipients(cat: Category, targetIds: string[] | null, name
     if (!(pid in emailById) || (!emailById[pid] && email)) emailById[pid] = email;
   }
 
-  // Universe = targetIds when given, else every linked person.
+  // Universe = targetIds when given, else every linked person. The prefs rows are handed back so the follower step
+  // (Prompt 20 F3) reads the same answer - a follower's own row is in prefRows, keyed by profile_id.
   const universe = targetIds ? targetIds.map(String) : Object.keys(emailById);
   const list: Recipient[] = [];
   let skippedPrefOff = 0;
@@ -487,7 +629,7 @@ async function resolveRecipients(cat: Category, targetIds: string[] | null, name
     if (!emailEnabled(cat, prefs)) { skippedPrefOff++; continue; }
     list.push({ person_id: pid, email: emailById[pid] ?? null, name: names[pid] || pid, prefs });
   }
-  return { list, skippedPrefOff };
+  return { list, skippedPrefOff, prefRows: Array.isArray(prefRows) ? prefRows : [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -585,9 +727,12 @@ serve(async (req) => {
     // -- Trade frame (Prompt 16 B5): a trade_* send names its shift_trade_requests
     //    row in data.trade_id and the row's two parties must be exactly targetIds -
     //    for every caller, the scheduler included (the app always has the row id;
-    //    trade mail is never a broadcast and never reaches anyone but the two
+    //    trade mail is never a broadcast and never names anyone but the two
     //    parties - and, on trade_applied only (Prompt 19 S3, v7), the
-    //    scheduler-linked ids). A surgeon sender must himself be a party.
+    //    scheduler-linked ids - in targetIds. A surgeon sender must himself be
+    //    a party. Followers of the two parties are added after every gate
+    //    (Prompt 20 F3) and never count as a party.
+    let tradeRow: any = null;
     if (isTradeType(type)) {
       const tradeId = tradeIdOf(data);
       if (!tradeId) {
@@ -605,9 +750,10 @@ serve(async (req) => {
         console.warn(`[send-notification] rejected (403): role=${caller.role || "none"} type=${type} targets=${targetIds ? targetIds.length : "broadcast"} trade=${trade ? "found" : "none"} - ${partyDenied}`);
         return json(403, { error: `not allowed: ${partyDenied}` });
       }
+      tradeRow = trade;
     }
 
-    const { list, skippedPrefOff } = await resolveRecipients(cat, targetIds, roster.names);
+    const { list, skippedPrefOff, prefRows } = await resolveRecipients(cat, targetIds, roster.names);
     console.log(`[send-notification] type=${type} targets=${targetIds ? targetIds.join(",") : "broadcast"} -> ${list.length} candidate(s), ${skippedPrefOff} opted out`);
 
     const results: { person_id: string; status: string }[] = [];
@@ -621,7 +767,43 @@ serve(async (req) => {
     }
     console.log(`[send-notification] type=${type} done: sent=${sent} failed=${failed} no_email=${skippedNoEmail} pref_off=${skippedPrefOff}`);
 
-    return json(200, { sent, failed, skipped_no_email: skippedNoEmail, skipped_pref_off: skippedPrefOff, results });
+    // -- Followers (Prompt 20 F3): AFTER every gate and after the surgeons' mail. The cap, sendGate and tradePartyCheck
+    //    above judged targetIds alone; a follower is never the acting party and never satisfies the party check - he is
+    //    only added here, for trade_* (a give included), shift_claimed, open_shifts and schedule_published, when
+    //    followerUniverse (the notice's own parties - never a scheduler-linked copy; a broadcast = every follower) holds
+    //    a surgeon he follows, on HIS OWN flag for the category. One e-mail per follower per send. A failed follower read
+    //    is logged and answered as followers_error - the surgeons' mail above has already gone and stands. The
+    //    per-follower list goes back to an admin / scheduler caller only; a surgeon gets the counts.
+    const followersAdded: { follower: string; via: string[]; status: string }[] = [];
+    let followersSent = 0, followersFailed = 0, followersPrefOff = 0;
+    let followersError: string | null = null;
+    if (FOLLOWER_SEND_TYPES.indexOf(type) >= 0) {
+      try {
+        const fProfiles = await rest("user_profiles?select=*&role=in.(viewer,coordinator)");
+        const followers = followerIndex(fProfiles, prefRows);
+        const fUniverse = followerUniverse(type, targetIds, caller, data, tradeRow);
+        const { list: fList, skipped } = followerRecipients(followers, type, fUniverse, cat.pref);
+        followersPrefOff = skipped.length;
+        for (const sk of skipped) followersAdded.push(sk);
+        for (const f of fList) {
+          if (!f.email) { followersAdded.push({ follower: f.tag, via: f.via, status: "skipped_no_email" }); continue; }
+          const { subject, html } = buildEmail(type, cat, data, f.name || "", f.via.map((id) => roster.names[id] || id));
+          const res = await sendEmail(f.email, subject, html, `type=${type} follower=${f.tag}`);
+          if (res.ok) { followersSent++; followersAdded.push({ follower: f.tag, via: f.via, status: "sent" }); }
+          else { followersFailed++; followersAdded.push({ follower: f.tag, via: f.via, status: `failed_${res.status}` }); }
+        }
+        console.log(`[send-notification] type=${type} followers: ${followers.length} account(s) follow someone, added=${fList.length} sent=${followersSent} failed=${followersFailed} pref_off=${followersPrefOff}`);
+      } catch (e) {
+        followersError = redactAddresses(e instanceof Error ? e.message : String(e));
+        console.error(`[send-notification] followers: ${followersError}`);
+      }
+    }
+
+    return json(200, {
+      sent, failed, skipped_no_email: skippedNoEmail, skipped_pref_off: skippedPrefOff, results,
+      followers_sent: followersSent, followers_failed: followersFailed, followers_skipped_pref_off: followersPrefOff, followers_error: followersError,
+      ...(privileged ? { followers_added: followersAdded } : {}),
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error(`[send-notification] error: ${message}`);

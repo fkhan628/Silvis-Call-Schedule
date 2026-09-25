@@ -389,6 +389,22 @@ const VIEWER_FEED = [
   { id: "vf-2", type: "open_shifts", title: "Open shifts (harness)", message: "open slots in the next 30 days", data: {}, created_at: "2026-09-23T10:00:00Z" },
   { id: "vf-1", type: "schedule_published", title: "Schedule published (harness)", message: "the schedule was published", data: {}, created_at: "2026-09-23T09:00:00Z" },
 ];
+// Prompt 20 F3: a fourth mocked session - a FOLLOWER (role viewer, no roster link, follows s2 and s5 - the shape of the
+// first two real followers; the harness never names them). Its notifications GET answers FOLLOW_FEED: seven rows, five of
+// which name a followed surgeon or are group-wide (so the follower must see them), two that name only s3 / s4 / s6 (so
+// he must not).
+const FOLLOW_UID = "00000000-0000-4000-8000-0000000000f3";
+const FOLLOW_PROFILE = { id: FOLLOW_UID, person_id: null, role: "viewer", display_name: "Follower (harness)", email: null, follows: ["s2", "s5"], created_at: "2026-09-24T00:00:00Z", authEmail: "follower@example.com" };
+const FOLLOW_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FOLLOW_UID, role: "authenticated", email: "follower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const FOLLOW_FEED = [
+  { id: "ff-7", type: "trade_proposed", title: "Trade proposed (harness)", message: "s2 proposed a trade with s3", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-23T15:00:00Z" },
+  { id: "ff-6", type: "vacation_logged", title: "Vacation logged (harness)", message: "s3 logged a vacation", data: { surgeon_id: "s3" }, created_at: "2026-09-23T14:00:00Z" },
+  { id: "ff-5", type: "shift_claimed", title: "Shift taken (harness)", message: "s5 took an open shift", data: { surgeon_id: "s5" }, created_at: "2026-09-23T13:00:00Z" },
+  { id: "ff-4", type: "trade_applied", title: "Trade applied (harness)", message: "s4 and s6 traded", data: { from_surgeon_id: "s4", to_surgeon_id: "s6" }, created_at: "2026-09-23T12:00:00Z" },
+  { id: "ff-3", type: "shift_reminder", title: "Reminder (harness)", message: "s2 is on call tomorrow", data: { surgeon_id: "s2" }, created_at: "2026-09-23T11:00:00Z" },
+  { id: "ff-2", type: "open_shifts", title: "Open shifts (harness)", message: "open slots in the next 30 days", data: {}, created_at: "2026-09-23T10:00:00Z" },
+  { id: "ff-1", type: "schedule_published", title: "Schedule published (harness)", message: "the schedule was published", data: {}, created_at: "2026-09-23T09:00:00Z" },
+];
 // The caller's JWT sub (what auth.uid() reads server-side) - the rpc mocks decide entered_by / source from it.
 const jwtSub = (req) => { try { const t = (req.headers()["authorization"] || "").replace(/^Bearer /i, ""); return JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")).sub || null; } catch (e) { return null; } };
 
@@ -7389,6 +7405,141 @@ try {
       }
     } catch (e) { fail("viewer session: " + errLine(e)); try { await pv.screenshot({ path: path.join(OUT, "failure-viewer.png"), fullPage: true }); } catch (e2) {} }
     await pv.close();
+  }
+
+  // ====================== Prompt 20 F3: the FOLLOWER session (what a follower gets in the app) ======================
+  // A fourth page signed in as FOLLOW_PROFILE (role viewer, no roster link, follows s2 + s5). 390 px in BOTH themes:
+  // (a) the nav shows the Mine tab labelled "Following" (no Setup, no Paint offers, no unlinked banner);
+  // (b) Following = one following-card per followed surgeon in the stored order, each with the same hero + 90-day list
+  //     Mine renders, and each list equals the days the page's OWN schedule_days answer gives that surgeon (derived from
+  //     the served rows, never pinned); no trade button, no offer tag, no painter, no offers / vacations card, no download;
+  // (c) Settings -> Live calendar sync: one follow-sync row per followed surgeon holding calendar-sync?surgeon=<CODE>,
+  //     above the full feed, Copy answers "Copied";
+  // (d) Alerts: the badge counts the five rows a followed surgeon reads and the panel lists exactly them (feed order);
+  // (e) nothing but the version heartbeat is written; no horizontal page scroll. Screenshots follower-390-<theme>.png.
+  {
+    const pf = await context.newPage();
+    watchPage(pf, "follower");
+    await pf.setViewportSize({ width: 390, height: 844 });
+    await pf.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FOLLOW_JWT);
+    await pf.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await pf.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(FOLLOW_PROFILE, async ({ url, req, json }) => {
+      if (!url.pathname.startsWith("/rest/v1/notifications") || req.method() !== "GET") return false;
+      const typeEq = url.searchParams.get("type");
+      const rows = typeEq && typeEq.startsWith("eq.") ? FOLLOW_FEED.filter(n => n.type === typeEq.slice(3)) : FOLLOW_FEED;
+      await json(200, rows);
+      return true;
+    }));
+    pf.on("dialog", (d) => d.accept());
+    // the page's own schedule_days answers (paged reads, limit / offset - merged by day; a later read of a day wins)
+    const servedByDay = new Map();
+    let servedDays = null;
+    pf.on("response", async (res) => {
+      try {
+        const u = new URL(res.url());
+        if (u.hostname !== SUPABASE_HOST || !u.pathname.startsWith("/rest/v1/schedule_days") || res.request().method() !== "GET" || u.searchParams.get("day")) return;
+        const body = await res.json();
+        if (Array.isArray(body) && body.length) { body.forEach(r => { if (r && r.day) servedByDay.set(r.day, r); }); servedDays = Array.from(servedByDay.values()); }
+      } catch (e) {}
+    });
+    const CODES = { s2: "MAB", s5: "NF" };
+    const NAMES_F3 = { s2: "Burchett", s5: "Fierce" };
+    const addDaysIso = (iso, n) => { const [y, m, d] = iso.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d + n)); return t.toISOString().slice(0, 10); };
+    const writesBefore = writes.length;
+    try {
+      for (const theme of ["light", "dark"]) {
+        await pf.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); localStorage.removeItem("silvis-notif-seen"); localStorage.removeItem("silvis-notif-cleared"); } catch (e) {} }, theme === "dark");
+        await loadWithRetry(pf, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "follower page (" + theme + ")");
+        await pf.waitForSelector("text=Synced", { timeout: 30000 });
+        await pf.waitForTimeout(1200);
+        // (a) the nav
+        const tabs = await pf.$$eval("button[data-tab]", els => els.map(e => [e.getAttribute("data-tab"), (e.textContent || "").trim()]));
+        const mineTab = tabs.find(([k]) => k === "myschedule");
+        const banner = await pf.$("[data-testid=unlinked-banner]");
+        const paintNav = await pf.$("[data-testid=nav-paint-offers]");
+        if (!mineTab || !/^Following/.test(mineTab[1])) fail(`F3 follower (${theme}): the Mine tab should show and read 'Following', got ${JSON.stringify(tabs)}`);
+        else if (tabs.some(([k]) => k === "setup") || paintNav || banner) fail(`F3 follower (${theme}): Setup (${tabs.some(([k]) => k === "setup")}) / Paint offers (${!!paintNav}) / the unlinked banner (${!!banner}) shown to a follower`);
+        else ok(`F3 follower (${theme}): nav = ${tabs.map(([, l]) => l.replace(/\d+$/, "")).join(", ")} - the Mine tab reads 'Following'; no Setup, no Paint offers, no unlinked banner`);
+        // (b) Following
+        await pf.click('button[data-tab="myschedule"]');
+        await pf.waitForSelector("[data-testid=following-card]", { timeout: 8000 });
+        const cards = await pf.$$eval("[data-testid=following-card]", els => els.map(c => ({
+          id: c.getAttribute("data-surgeon"),
+          days: Array.from(c.querySelectorAll("[data-testid=mine-day]")).map(r => r.getAttribute("data-day") + "|" + r.getAttribute("data-role")),
+          next: (c.querySelector("[data-testid=next-call]") || { getAttribute: () => null }).getAttribute("data-next-day") || "",
+          text: c.innerText || "",
+        })));
+        const forbidden = await pf.evaluate(() => ["mine-trade", "mine-offer-tag", "paint-offers", "mine-offers", "mine-vacations", "download-my-calendar", "copy-sync-url", "mine-card", "mine-person"].filter(t => document.querySelector("[data-testid=" + t + "]")));
+        const today = await pf.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : null));
+        if (cards.map(c => c.id).join(",") !== "s2,s5") fail(`F3 follower (${theme}): expected two following-cards s2, s5 (the stored order), got [${cards.map(c => c.id).join(",")}]`);
+        else if (forbidden.length) fail(`F3 follower (${theme}): the Following view renders surgeon-only controls: ${forbidden.join(", ")}`);
+        else if (!today || !servedDays) fail(`F3 follower (${theme}): cannot derive the expected days (today=${today}, served schedule_days rows=${servedDays ? servedDays.length : "none captured"})`);
+        else {
+          const limit = addDaysIso(today, 90);
+          const bad = [];
+          const counts = [];
+          for (const c of cards) {
+            const mine = servedDays.filter(r => r && r.day >= today && (r.primary_id === c.id || r.backup_id === c.id)).sort((a, b) => a.day < b.day ? -1 : 1);
+            const want = mine.filter(r => r.day <= limit).map(r => r.day + "|" + (r.primary_id === c.id ? "primary" : "backup"));
+            const wantNext = mine.length ? mine[0].day : "";
+            if (want.join(",") !== c.days.join(",")) bad.push(`${c.id}: list [${c.days.slice(0, 6).join(",")}...] (${c.days.length}) != served [${want.slice(0, 6).join(",")}...] (${want.length})`);
+            if (wantNext !== c.next) bad.push(`${c.id}: next call ${c.next || "(none)"} != served ${wantNext || "(none)"}`);
+            if (!c.text.includes("read-only")) bad.push(`${c.id}: the card does not say read-only`);
+            counts.push(`${c.id} ${c.days.length} day(s), next ${c.next || "none"}`);
+          }
+          if (bad.length) fail(`F3 follower (${theme}): Following does not match the served rows - ${bad.join(" | ")}`);
+          else ok(`F3 follower (${theme}): Following = two cards (${counts.join("; ")}), each list equal to the page's own schedule_days rows for that surgeon from ${today} to ${limit}; no trade / offer / painter / vacation / download control`);
+        }
+        // (c) Settings -> Live calendar sync
+        await pf.click('button[data-tab="settings"]');
+        await pf.waitForSelector("[data-testid=follow-sync]", { timeout: 8000 });
+        const rows = await pf.$$eval("[data-testid=follow-sync]", els => els.map(e => ({ id: e.getAttribute("data-surgeon"), url: (e.querySelector("[data-testid=follow-sync-url]") || {}).value || "" })));
+        const above = await pf.evaluate(() => { const f = document.querySelectorAll("[data-testid=follow-sync]"); const full = document.querySelector("[data-testid=calsync-full]"); return !!(f.length && full && Array.from(f).every(x => x.compareDocumentPosition(full) & Node.DOCUMENT_POSITION_FOLLOWING)); });
+        const wantRows = ["s2", "s5"].map(id => ({ id, url: `https://${SUPABASE_HOST}/functions/v1/calendar-sync?surgeon=${CODES[id]}` }));
+        const sBody = await pf.evaluate(() => document.body.innerText || "");
+        if (JSON.stringify(rows) !== JSON.stringify(wantRows)) fail(`F3 follower (${theme}): follow-sync rows should be ${JSON.stringify(wantRows)}, got ${JSON.stringify(rows)}`);
+        else if (!above) fail(`F3 follower (${theme}): the followed surgeons' feeds must sit above the full-schedule feed`);
+        else if (!/Subscribe to the feed of each surgeon you follow, or the full-schedule feed/.test(sBody)) fail(`F3 follower (${theme}): the calendar-sync sentence does not name the followed feeds`);
+        else {
+          await pf.click("[data-testid=follow-sync] >> nth=0 >> [data-testid=follow-sync-copy]");
+          await pf.waitForTimeout(250);
+          const label = await pf.$eval("[data-testid=follow-sync] >> nth=0 >> [data-testid=follow-sync-copy]", el => (el.textContent || "").trim()).catch(() => "");
+          if (label !== "Copied") fail(`F3 follower (${theme}): Copy on the first follow-sync row should read 'Copied', got '${label}'`);
+          else ok(`F3 follower (${theme}): Live calendar sync = ${rows.map(r => r.id + " " + r.url.replace("https://" + SUPABASE_HOST, "<project>")).join(", ")} above the full feed; Copy -> 'Copied'`);
+        }
+        // (c2) review F3: Settings > Notification settings tells a follower what he receives and to ask the scheduler
+        //      (he has no switches) - never "Available once your account is linked"
+        if (!(await pf.$("[data-testid=notif-follower-note]"))) { const t = await pf.$("text=Notification settings"); if (t) { await t.click(); await pf.waitForTimeout(250); } }
+        const fNote = await pf.$eval("[data-testid=notif-follower-note]", el => (el.textContent || "").trim()).catch(() => "");
+        const nBody = await pf.evaluate(() => document.body.innerText || "");
+        const wantNote = `You follow Dr. ${NAMES_F3.s2} and Dr. ${NAMES_F3.s5}.`;
+        if (!fNote.startsWith(wantNote) || !/ask the scheduler\.$/.test(fNote)) fail(`F3 follower (${theme}): the notification note should start '${wantNote}' and end 'ask the scheduler.', got '${fNote.slice(0, 160)}'`);
+        else if (/Available once your account is linked/.test(nBody) || (await pf.$("[data-testid=notif-pref]"))) fail(`F3 follower (${theme}): the unlinked sentence or a pref switch is shown to a follower`);
+        else ok(`F3 follower (${theme}): Notification settings = the follower note ('${wantNote} ... ask the scheduler.'), no switches, no unlinked sentence`);
+        // (d) Alerts
+        const badge = await pf.$eval('button[aria-label="Notifications"]', el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
+        await pf.click('button[aria-label="Notifications"]');
+        await pf.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
+        const nRows = await pf.$$eval("[data-testid=notif-row]", els => els.map(e => e.getAttribute("data-type")));
+        const wantTypes = "trade_proposed,shift_claimed,shift_reminder,open_shifts,schedule_published";
+        if (badge !== "5") fail(`F3 follower (${theme}): the Alerts badge should read 5 (the rows s2 / s5 read), got '${badge}'`);
+        else if (nRows.join(",") !== wantTypes) fail(`F3 follower (${theme}): the Alerts panel should list ${wantTypes}, got [${nRows.join(",")}]`);
+        else ok(`F3 follower (${theme}): Alerts badge 5; panel = ${wantTypes} (s3's vacation and the s4 / s6 trade filtered out)`);
+        await pf.click('button[aria-label="Close notifications"]');
+        await pf.waitForTimeout(200);
+        // (e) 390 px hygiene + the review shot (on Following)
+        await pf.click('button[data-tab="myschedule"]');
+        await pf.waitForSelector("[data-testid=following-card]", { timeout: 8000 });
+        const scrollW = await pf.evaluate(() => document.documentElement.scrollWidth);
+        if (scrollW > 390) fail(`F3 follower (${theme}): horizontal page scroll at 390 px (scrollWidth ${scrollW})`); else ok(`F3 follower (${theme}): no horizontal page scroll at 390 px`);
+        await pf.screenshot({ path: path.join(OUT, `follower-390-${theme}.png`), fullPage: true });
+        ok(`screenshot test/ui/out/follower-390-${theme}.png`);
+      }
+      const fw = writes.slice(writesBefore).filter(w => !/^\/rest\/v1\/client_versions/.test(w.path));
+      if (fw.length) fail(`F3 follower: the follower session wrote ${fw.length} time(s) besides the version heartbeat: ${fw.map(w => w.method + " " + w.path).join(", ")}`);
+      else ok("F3 follower: no write besides the client_versions heartbeat (a follower is read-only)");
+    } catch (e) { fail("follower session: " + errLine(e)); try { await pf.screenshot({ path: path.join(OUT, "failure-follower.png"), fullPage: true }); } catch (e2) {} }
+    await pf.close();
   }
 } catch (e) {
   fail("harness exception: " + (e && e.stack || e));

@@ -20,6 +20,17 @@
 //         the other role is <name>".
 //      The address comes from user_profiles.email joined on person_id
 //      (notification_preferences has no email column at Silvis).
+//   5. Prompt 20 F3 (revision o): every FOLLOWER (a viewer / coordinator
+//      account whose user_profiles.follows names a surgeon on call tomorrow)
+//      gets the same reminder worded for a third party - "Reminder: Dr.
+//      Burchett is on primary call at Silvis tomorrow (Fri 10/9), backup
+//      Khan" - one e-mail per followed surgeon, at the follower's OWN
+//      reminder_hour_central and shift_reminders_email (his prefs row is keyed
+//      by profile_id; none -> the default hour, on). The pure pieces are the
+//      @followers mirror block (identical in send-notification); the response
+//      adds `followers` { accounts, planned, sent, failed, skipped_*, results
+//      (tags, never addresses), sample: { subject, line } } - or { error }
+//      when the follower read failed (the surgeons' reminders stand).
 //
 // Dropped from Davenport on purpose: OneSignal push (send-push does not exist
 // in the Silvis project), APP shifts / "APP on call with you" / "No APP
@@ -195,6 +206,124 @@ function redactAddresses(text) {
 // @logRedact-mirror-end
 
 // ---------------------------------------------------------------------------
+// Followers (Prompt 20 F3, Faraz 9/24). A viewer / coordinator account the admin
+// set to follow roster surgeons (user_profiles.follows, revision o) receives what
+// those surgeons receive, read-only, on its OWN notification_preferences row
+// (keyed by profile_id; no row -> every flag on, the default hour). Plain
+// JavaScript between the markers, byte-identical in send-notification and
+// daily-reminder: test/edge-functions.test.js extracts it, checks the copies
+// match, evaluates it with new Function and runs it (followerFollows answers
+// exactly like helpers.js followsOf). The accounts are read with select=*, so
+// before revision o (no follows column) the list is simply empty - never a 400.
+// Responses and logs name a follower by followerTag (the first 8 characters of
+// the account id), never by address.
+// ---------------------------------------------------------------------------
+// @followers-mirror-start
+const FOLLOWER_ROLE_NAMES = ["viewer", "coordinator"];
+// what send-notification adds followers to: the trade frames (a Prompt 19 give rides them with data.kind "give"),
+// the claim note, the open-shifts notice and the publish mail (review F3: the publish broadcast goes to LINKED persons,
+// so a follower - person_id null - was never in it); manual_edit, vacation_logged, test and the offers mail are not
+const FOLLOWER_SEND_TYPES = ["trade_proposed", "trade_accepted", "trade_declined", "trade_applied", "shift_claimed", "open_shifts", "schedule_published"];
+function followerFollows(p) {
+  const raw = p && typeof p === "object" ? p.follows : null;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  raw.forEach(function (v) { if (typeof v === "string" && v !== "" && out.indexOf(v) < 0) out.push(v); });
+  return out;
+}
+function followerTag(id) { return String(id == null ? "" : id).slice(0, 8); }
+// profiles: user_profiles rows (select=*); prefRows: notification_preferences rows (select=*). A follower is a viewer /
+// coordinator row with no roster link and a non-empty follows list; his prefs row is the one whose profile_id is his id.
+function followerIndex(profiles, prefRows) {
+  const prefsByProfile = {};
+  (Array.isArray(prefRows) ? prefRows : []).forEach(function (r) { if (r && typeof r === "object" && r.profile_id) prefsByProfile[String(r.profile_id)] = r; });
+  const out = [];
+  (Array.isArray(profiles) ? profiles : []).forEach(function (p) {
+    if (!p || typeof p !== "object" || !p.id) return;
+    if (FOLLOWER_ROLE_NAMES.indexOf(p.role) < 0) return;
+    if (p.person_id !== null && p.person_id !== undefined && String(p.person_id) !== "") return;
+    const follows = followerFollows(p);
+    if (!follows.length) return;
+    const email = typeof p.email === "string" && p.email.trim() ? p.email.trim() : null;
+    const name = typeof p.display_name === "string" && p.display_name.trim() ? p.display_name.trim() : null;
+    out.push({ id: String(p.id), tag: followerTag(p.id), email: email, name: name, follows: follows, prefs: prefsByProfile[String(p.id)] || null });
+  });
+  return out;
+}
+// send-notification: whose followers a send reaches (review F3) - the notice's own parties, never a scheduler-linked
+// copy in targetIds: a trade_* the trade row's two parties (inside targetIds; Prompt 19's trade_applied may add scheduler
+// copies), shift_claimed the claimer (a surgeon caller is the claimer; a scheduler caller may name data.surgeon_id),
+// open_shifts / schedule_published the targetIds - or null for a broadcast (every follower). Anything else: [].
+function followerUniverse(type, targetIds, caller, data, trade) {
+  if (FOLLOWER_SEND_TYPES.indexOf(type) < 0) return [];
+  const ids = Array.isArray(targetIds) ? targetIds.map(function (x) { return String(x); }) : null;
+  if (type.indexOf("trade_") === 0) {
+    if (!ids || !trade || typeof trade !== "object") return [];
+    const out = [];
+    [trade.from_surgeon_id, trade.to_surgeon_id].forEach(function (v) {
+      const id = v === null || v === undefined ? "" : String(v);
+      if (id && ids.indexOf(id) >= 0 && out.indexOf(id) < 0) out.push(id);
+    });
+    return out;
+  }
+  if (type === "shift_claimed") {
+    if (!ids) return [];
+    const privileged = !!caller && (caller.role === "admin" || caller.role === "scheduler");
+    const named = data && typeof data.surgeon_id === "string" ? data.surgeon_id : "";
+    const own = caller && caller.personId !== null && caller.personId !== undefined ? String(caller.personId) : "";
+    const who = privileged && named ? named : own;
+    return who && ids.indexOf(who) >= 0 ? [who] : [];
+  }
+  return ids;
+}
+// send-notification: the followers of any id in `universe` (followerUniverse's answer; null = a broadcast, every
+// follower with all his follows), once each, for the FOLLOWER_SEND_TYPES only; `via` = the followed ids inside the
+// universe. prefKey is the category's flag, read from the FOLLOWER'S row (an explicit false opts out; a missing row or
+// flag is on).
+function followerRecipients(followers, type, universe, prefKey) {
+  const list = [], skipped = [];
+  if (FOLLOWER_SEND_TYPES.indexOf(type) < 0) return { list: list, skipped: skipped };
+  const all = universe === null;
+  const ids = (Array.isArray(universe) ? universe : []).map(function (x) { return String(x); });
+  (Array.isArray(followers) ? followers : []).forEach(function (f) {
+    const via = all ? f.follows.slice() : f.follows.filter(function (id) { return ids.indexOf(id) >= 0; });
+    if (!via.length) return;
+    if (prefKey && f.prefs && f.prefs[prefKey] === false) { skipped.push({ follower: f.tag, via: via, status: "skipped_pref_off" }); return; }
+    list.push({ id: f.id, tag: f.tag, email: f.email, name: f.name, via: via });
+  });
+  return { list: list, skipped: skipped };
+}
+// daily-reminder: one entry per follower x followed surgeon on call tomorrow (onCall: [{ person_id, role, otherLabel }]).
+// The hour is the follower's own reminder_hour_central (else defaultHour); his own shift_reminders_email false -> off.
+function followerReminderPlan(followers, onCall, hour, defaultHour) {
+  const out = [];
+  const calls = Array.isArray(onCall) ? onCall : [];
+  (Array.isArray(followers) ? followers : []).forEach(function (f) {
+    f.follows.forEach(function (id) {
+      const o = calls.find(function (c) { return c && String(c.person_id) === id; });
+      if (!o) return;
+      const prefs = f.prefs || {};
+      const userHour = typeof prefs.reminder_hour_central === "number" ? prefs.reminder_hour_central : defaultHour;
+      let status = "due";
+      if (userHour !== hour) status = "skipped_wrong_hour";
+      else if (prefs.shift_reminders_email === false) status = "skipped_off";
+      else if (!f.email) status = "skipped_no_email";
+      out.push({ follower: f.tag, id: f.id, email: f.email, name: f.name, surgeon: id, role: o.role, otherLabel: o.otherLabel, user_hour: userHour, status: status });
+    });
+  });
+  return out;
+}
+const FOLLOWER_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// "Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Fri 10/9), backup Khan"
+function followerReminderLine(surgeonName, role, ymd, otherLabel) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ""));
+  const when = m ? FOLLOWER_DOW[new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay()] + " " + Number(m[2]) + "/" + Number(m[3]) : String(ymd || "?");
+  const other = role === "primary" ? "backup" : "primary";
+  return "Reminder: Dr. " + surgeonName + " is on " + role + " call at Silvis tomorrow (" + when + "), " + other + " " + otherLabel;
+}
+// @followers-mirror-end
+
+// ---------------------------------------------------------------------------
 // x-cron-secret compare (Prompt 16 B5, review 2026-09-23 section 3). Plain
 // JavaScript between the markers: test/edge-functions.test.js extracts this
 // block from both cron functions, checks the copies are identical, evaluates
@@ -269,6 +398,35 @@ function buildReminder(opts: {
         </a>
         <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e4ea;font-size:12px;color:#8a94a0;">
           ${escHtml(APP_NAME)} - change your reminder hour or turn reminders off under Settings in the app.
+        </div>
+      </div>
+    </div>`;
+  return { subject, html };
+}
+
+// Prompt 20 F3: the day-before reminder worded for a FOLLOWER (a third party). line = followerReminderLine(...), e.g.
+// "Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Fri 10/9), backup Khan".
+function buildFollowerReminder(opts: {
+  name: string | null; surgeonName: string; role: "primary" | "backup"; line: string; dayLabel: string; note: string | null;
+}): { subject: string; html: string } {
+  const subject = `Call reminder - tomorrow (${opts.dayLabel}) Dr. ${opts.surgeonName} is Silvis ${opts.role.toUpperCase()}`;
+  const html = `
+    <div style="font-family:'Outfit',Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
+      <div style="background:linear-gradient(135deg,#1a6fa8,#2488c8);color:#fff;padding:14px 20px;border-radius:10px 10px 0 0;">
+        <h2 style="margin:0;font-size:18px;">Call Reminder</h2>
+        <p style="margin:6px 0 0;font-size:13px;opacity:0.9;">Tomorrow, ${escHtml(opts.dayLabel)}</p>
+      </div>
+      <div style="background:#fff;border:1px solid #e0e4ea;border-top:none;padding:20px;border-radius:0 0 10px 10px;">
+        <p style="font-size:15px;color:#2c3e50;line-height:1.6;margin:0 0 12px;">
+          ${opts.name ? `Hi <strong>${escHtml(opts.name)}</strong>,` : "Hi,"}<br><br>
+          ${escHtml(opts.line)} (07:00 to 07:00 next day).
+        </p>
+        ${opts.note ? `<p style="font-size:13px;color:#5a6a78;line-height:1.6;margin:0 0 12px;padding:10px 14px;background:#f4f6f8;border-radius:8px;">Note: ${escHtml(opts.note)}</p>` : ""}
+        <a href="${APP_URL}" style="display:inline-block;margin-top:8px;background:linear-gradient(135deg,#1a6fa8,#2488c8);color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">
+          View Full Schedule
+        </a>
+        <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e4ea;font-size:12px;color:#8a94a0;">
+          ${escHtml(APP_NAME)} - you receive this because you follow Dr. ${escHtml(opts.surgeonName)}; to change the reminder hour or stop these reminders, ask the scheduler.
         </div>
       </div>
     </div>`;
@@ -986,11 +1144,54 @@ serve(async (req) => {
     }
 
     console.log(`[daily-reminder] done: sent=${sent} failed=${failed} wrong_hour=${wrongHour} off=${off} no_email=${noEmail} (hour=${now.hour})`);
+
+    // Prompt 20 F3: FOLLOWERS. After the surgeons' reminders (which stand whatever happens here): every viewer /
+    // coordinator account following a surgeon on call tomorrow gets the day-before reminder worded for a third party -
+    // one e-mail per followed surgeon, at HIS OWN reminder hour (else DEFAULT_REMINDER_HOUR), only while HIS OWN
+    // shift_reminders_email is on (his prefs row is keyed by profile_id; select=* reads, so before revision o the list
+    // is empty, never a 400). dryRun composes and sends nothing; the answer is `followers` (counts, tags, a sample line -
+    // never an address). A failed read is followers.error, logged.
+    let followersOut: any;
+    try {
+      const [fProfiles, fPrefRows] = await Promise.all([
+        rest("user_profiles?select=*&role=in.(viewer,coordinator)"),
+        rest("notification_preferences?select=*"),
+      ]);
+      const followers = followerIndex(fProfiles, fPrefRows);
+      const plan = followerReminderPlan(followers, onCall, now.hour, DEFAULT_REMINDER_HOUR);
+      const fResults: { follower: string; surgeon: string; role: string; status: string; user_hour?: number }[] = [];
+      let fSent = 0, fFailed = 0, fWrongHour = 0, fOff = 0, fNoEmail = 0;
+      let sample: { subject: string; line: string } | null = null;
+      for (const e of plan) {
+        const line = followerReminderLine(nameOf(e.surgeon), e.role, tomorrow, e.otherLabel);
+        const { subject, html } = buildFollowerReminder({ name: e.name, surgeonName: nameOf(e.surgeon), role: e.role, line, dayLabel, note: day.note || null });
+        if (!sample) sample = { subject, line };
+        if (e.status === "skipped_wrong_hour") { fWrongHour++; fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status, user_hour: e.user_hour }); continue; }
+        if (e.status === "skipped_off") { fOff++; fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status }); continue; }
+        if (e.status === "skipped_no_email") { fNoEmail++; fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status }); continue; }
+        if (dryRun) { fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: "dry_run_composed" }); continue; }
+        const r = await sendEmail(e.email, subject, html, `follower=${e.follower} surgeon=${e.surgeon} role=${e.role}`);
+        if (r.ok) { fSent++; fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: "sent" }); }
+        else { fFailed++; fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: `failed_${r.status}` }); }
+      }
+      followersOut = {
+        accounts: followers.length, planned: plan.length, sent: fSent, failed: fFailed,
+        skipped_wrong_hour: fWrongHour, skipped_off: fOff, skipped_no_email: fNoEmail,
+        results: fResults, sample: sample,
+      };
+      console.log(`[daily-reminder] followers: accounts=${followers.length} planned=${plan.length} sent=${fSent} failed=${fFailed} wrong_hour=${fWrongHour} off=${fOff} no_email=${fNoEmail}`);
+    } catch (e) {
+      const why = redactAddresses(e instanceof Error ? e.message : String(e));
+      console.error(`[daily-reminder] followers: ${why}`);
+      followersOut = { error: why };
+    }
+
     return json(200, {
       date_tomorrow: tomorrow, current_hour: now.hour, dry_run: dryRun,
       on_call: onCall.length, sent, failed,
       skipped_wrong_hour: wrongHour, skipped_off: off, skipped_no_email: noEmail,
       results,
+      followers: followersOut,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
