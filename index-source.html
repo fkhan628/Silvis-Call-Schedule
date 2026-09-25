@@ -4441,9 +4441,10 @@ function CallSchedule() {
       showToast("Couldn't copy - long-press the message to copy it manually.", "error");
     }
   };
-  // Per-surgeon .ics (helpers.js buildICSEvents / generateICS): the same
-  // SUMMARY strings, 07:00 boundaries and UIDs as the calendar-sync feed,
-  // written as America/Chicago local times with a VTIMEZONE block.
+  // Per-surgeon .ics (helpers.js buildICSEvents / generateICS): all-day runs
+  // (a Fri-Sun block is one 3-day event), the same VEVENTs as the
+  // calendar-sync feed's default format; the 07:00 times are in each
+  // description. The download has no timed variant (the feed's ?timed=1 does).
   const downloadMyCal = (surgeonId) => {
     const s = surgeons.find(x => x.id === surgeonId);
     if (!s) return;
@@ -5810,7 +5811,7 @@ function CallSchedule() {
             <div data-testid="calendar-tools">
               <div style={css.toolBlock}>
                 <div style={{...css.toolTitle,color:dkText}}>Calendar files (.ics)</div>
-                <p style={sectionNote}>One event per shift, 07:00 to 07:00 the next day in Central time (the file carries the America/Chicago clock-change rules). Import the file once; for a feed that keeps itself current use the subscribe links in Settings.</p>
+                <p style={sectionNote}>One all-day event per run of consecutive days on call (a Fri-Sun weekend is one 3-day bar); the exact times, 07:00 to 07:00 Central, are in each event's description. If you imported an earlier file (one event per shift), delete those events first - an import never removes them. Import the file once; for a feed that keeps itself current use the subscribe links in Settings.</p>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                   {activeSurgeons.map(s => <button key={s.id} data-testid={"ics-" + s.code} data-pill="1" onClick={()=>downloadMyCal(s.id)} title={"Download " + icsFileName(s)} style={{...css.badge(sMap[s.id]?.idx||0, s),cursor:"pointer",padding:"4px 10px",fontSize:11}}>{s.name}</button>)}
                   <button data-testid="ics-all" onClick={downloadGroupCal} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Full group</button>
@@ -6043,7 +6044,7 @@ function CallSchedule() {
                 ) : <Badge id={pid}/>}
                 <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                   <button data-testid="paint-offers" onClick={()=>setOfferSheet({ personId: pid })} title={pid === mySurgeon ? "Paint the dates you'll cover (primary / backup / either), any time ahead" : "Enter " + nameOf(pid) + "'s offered dates as the scheduler (relayed; entered_by scheduler)"} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>{pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)}</button>
-                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} title="One 07:00-to-07:00 event per shift (America/Chicago), importable into Google, Apple or Outlook calendars" style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Download my calendar</button>
+                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} title="One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars" style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Download my calendar</button>
                   <button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")} title={"Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>{copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"}</button>
                 </span>
               </div>

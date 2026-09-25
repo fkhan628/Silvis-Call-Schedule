@@ -4,6 +4,24 @@
 // Serves a live .ics feed from `schedule_days` (one row per calendar day,
 // one 24-hour shift 07:00 -> 07:00 next day, America/Chicago).
 //
+// Format (2026-09-25, v5 - Faraz: "the calendar looks busy, and 07:00 -> 07:00
+// shifts draw across two days"): ALL-DAY by default. Each run of consecutive
+// days is ONE all-day event on its start date (DTSTART;VALUE=DATE, DTEND;VALUE=DATE
+// = the day after the last day - RFC 5545 exclusive end): per surgeon the same
+// role ("Silvis Primary" / "Silvis Backup", a Fri-Sun block is one 3-day bar),
+// the group feed the same primary AND backup ("P Burchett \u00b7 B Acton"). The
+// exact times are in the DESCRIPTION ("07:00 Fri \u2192 07:00 Mon (Central)"), with
+// the Primary / Backup holders. UIDs silvis-<start>-<role>@silvis-call and
+// silvis-<start>-group@silvis-call, keyed on the run's START day: a run that
+// grows or shrinks at its END keeps its UID and calendars update it in place; a
+// new start day is a new UID (the old one disappears - delete + add on the next
+// refresh). The Davenport days of east=1 merge the same way (a service week
+// Mon-Sat is one bar). ?timed=1 serves the old format byte-for-byte: one
+// 07:00 -> 07:00 timed event per day and role, "Silvis Primary Call[ - <Name>]",
+// UIDs silvis-<day>-<role>@silvis-call, one all-day Davenport event per busy day.
+// The app's own .ics download (helpers.js buildICSEvents) is all-day only and
+// writes the same VEVENTs as the default (test/exports.test.js pins it).
+//
 // URLs:
 //   /functions/v1/calendar-sync                 -> full-group feed (every primary + backup)
 //   /functions/v1/calendar-sync?surgeon=all     -> same as above
@@ -11,10 +29,12 @@
 //                                                  matched against the roster CODE first
 //                                                  (FAK/MAB/BDA/AFP/NF/SRK), then the last
 //                                                  name, then the roster id (s1..s6).
+//   /functions/v1/calendar-sync?...&timed=1        -> any of these in the old per-day timed format
 //   /functions/v1/calendar-sync?surgeon=FAK&east=1
 //       -> Item D (2026-09-24): the same per-surgeon feed PLUS one all-day event
-//          per Davenport busy day of that surgeon ("Khan - Davenport night" /
-//          "- Davenport service week" / "- Davenport weekend" / "- Davenport
+//          per Davenport busy day of that surgeon - since 9/25 one per run of
+//          consecutive days with the same reason, ?timed=1 keeps one per day -
+//          ("Khan - Davenport night" / "- Davenport service week" / "- Davenport weekend" / "- Davenport
 //          holiday" / "- Davenport day call" for a one-day day-call override;
 //          an en dash between the name and the words) and one all-day event per
 //          East vacation range reviewed as away ("Khan - away (Davenport
@@ -69,6 +89,14 @@ const DB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SUPABA
 
 const PAST_DAYS = 60;       // days before today (Central) included in the feed
 const FUTURE_DAYS = 400;    // days after today included in the feed
+// All-day runs (the default): rows are read this many days before the window so a
+// run that straddles today-PAST_DAYS and started at most RUN_LOOKBACK_DAYS before
+// it keeps its real start day (its UID) instead of a start that moves with the
+// window every day; runs that end before the window are dropped (endsOnOrAfter).
+// LIMIT: a longer run straddling the edge still starts at the read floor, which
+// moves daily (a new UID each day, delete + add on each refresh) - not expected
+// for a same-role / same-pair Silvis run. ?timed=1 reads exactly the old window.
+const RUN_LOOKBACK_DAYS = 14;
 // SHIFT_START_HOUR, PRODID and UID_DOMAIN live in the @icsCore block below (plain JS, unit-tested).
 
 // The Davenport (DSG) project, read-only, for ONE read: its roster blob, to
@@ -184,6 +212,8 @@ async function resolveEastId(code: string): Promise<string | null> {
 // Function and builds a real feed from fixture rows (two Silvis days + two
 // east_feed days) with no network and no Deno. Everything that shapes an event
 // or a line of the .ics lives here; the handler below only fetches.
+// test/exports.test.js evaluates it too and pins the app's own .ics download
+// (helpers.js buildICSEvents) to buildEvents' all-day output, VEVENT for VEVENT.
 // ---------------------------------------------------------------------------
 // @icsCore-mirror-start
 const SHIFT_START_HOUR = 7; // 07:00 Central -> 07:00 Central next day
@@ -252,13 +282,15 @@ function fold(line) {
   return out.join("\r\n");
 }
 
+// ?timed=1 - the format served until 2026-09-25, kept byte-for-byte (pinned by
+// test/edge-functions.test.js against the captured v4 output):
 // One event per filled role per day. Null slots are skipped (an OPEN day is
 // not a calendar entry). A day covered outside the roster (external_cover) has
 // primary_id null: no primary event, but the backup event's description names
 // the cover so the backup surgeon knows who is in house.
 // rows: schedule_days rows { day, primary_id, backup_id, external_cover } (the day's internal note is never read - Faraz 9/25: it never reaches a subscriber's calendar);
 // roster: { byId }; onlyId: a roster id or null (the group feed).
-function buildEvents(rows, roster, onlyId) {
+function buildTimedEvents(rows, roster, onlyId) {
   const events = [];
   const nameOf = (id) => {
     if (!id) return "OPEN";
@@ -303,12 +335,181 @@ function buildEvents(rows, roster, onlyId) {
   return events;
 }
 
-// Item D: the East entries (eastEntries, @eastCalendar block) as all-day events.
-// DTSTART;VALUE=DATE = the day, DTEND;VALUE=DATE = the next day (exclusive);
-// UIDs east-<CODE>-<date>-<reason>@silvis-call and
+// ---------------------------------------------------------------------------
+// ALL-DAY RUNS - the default since 2026-09-25 (Faraz: "the calendar looks busy,
+// and 07:00 -> 07:00 shifts draw across two days"). One ALL-DAY event per RUN
+// of consecutive calendar days:
+//   per surgeon (?surgeon=CODE): the same role for that surgeon, titled
+//     "Silvis Primary" / "Silvis Backup";
+//   full group: the same primary AND the same backup, titled
+//     "P Burchett \u00b7 B Acton" (last names; an empty slot reads OPEN, an
+//     external cover "<name> (external cover)"). A day with neither a
+//     primary_id nor a backup_id is no event (as before) and ends the run.
+// DTSTART;VALUE=DATE = the first day, DTEND;VALUE=DATE = the day after the last
+// day (RFC 5545: the end date is exclusive).
+// DESCRIPTION: "07:00 Fri \u2192 07:00 Mon (Central)" (the weekday of the first
+// day, the weekday of the day after the last day; a run of 7+ days adds each
+// date, "07:00 Mon 1/4 -> 07:00 Mon 1/11"), then "Primary: <name>" and
+// "Backup: <name>"; when a holder changes inside the run that line lists each
+// holder with its days, M/D or M/D-M/D: "Backup: 10/9-10/10 Acton, 10/11 Philip".
+// UIDs: silvis-<start>-<role>@silvis-call (per surgeon) and
+// silvis-<start>-group@silvis-call (group), keyed on the run's START day: a run
+// that grows or shrinks at its END keeps its UID and a subscribed calendar
+// updates it in place. When the START day changes (a day added before it, its
+// first day traded away) the run gets a new UID and the old UID disappears from
+// the feed: a subscription deletes the old event and adds the new one on its
+// next refresh - accepted, the calendar still ends up right. The per-surgeon
+// UID has the old per-day shape, so on the switch a run's first day updates in
+// place and the old events of its other days drop out.
+// ---------------------------------------------------------------------------
+const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function weekdayOf(s) {
+  const [y, m, d] = parseYmd(s);
+  return WEEKDAY_ABBR[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+function mdOf(s) {
+  const [, m, d] = parseYmd(s);
+  return `${m}/${d}`;
+}
+const compactYmd = (s) => String(s).replace(/-/g, "");
+// "07:00 Fri \u2192 07:00 Mon (Central)" for a run first..last (its last shift ends 07:00 the day after last)
+// A run of 7 days or more names its dates as well ("07:00 Mon 1/4 -> 07:00 Mon 1/11"): the
+// weekdays alone would read Mon -> Mon. Up to 6 days the weekdays are unambiguous.
+function runTimesLine(first, last) {
+  const end = addDays(last, 1);
+  const dated = addDays(first, 7) <= end;
+  const at = (s) => (dated ? `${weekdayOf(s)} ${mdOf(s)}` : weekdayOf(s));
+  return `07:00 ${at(first)} \u2192 07:00 ${at(end)} (Central)`;
+}
+// "Backup: Acton" when one holder covers the whole run, else "Backup: 10/9-10/10 Acton, 10/11 Philip".
+// days: [{ day, name }] in date order, consecutive.
+function runHolderLine(label, days) {
+  const groups = [];
+  for (const x of days) {
+    const g = groups[groups.length - 1];
+    if (g && g.name === x.name) g.last = x.day;
+    else groups.push({ first: x.day, last: x.day, name: x.name });
+  }
+  if (groups.length === 1) return `${label}: ${groups[0].name}`;
+  return `${label}: ` + groups.map((g) => (g.first === g.last ? mdOf(g.first) : `${mdOf(g.first)}-${mdOf(g.last)}`) + " " + g.name).join(", ");
+}
+// rows: schedule_days rows { day, primary_id, backup_id, external_cover } (any order; the note is never read);
+// roster: { byId }; onlyId: a roster id or null (the group feed). -> [{ uid, allDay: true, start, end, summary, desc }]
+function buildEvents(rows, roster, onlyId) {
+  const nameOf = (id) => {
+    if (!id) return "OPEN";
+    const r = roster.byId[id];
+    if (r) return r.name;
+    console.warn(`[calendar-sync] id "${id}" not in roster - rendered as-is`);
+    return id;
+  };
+  const days = rows.map((row) => ({
+    day: typeof row.day === "string" ? row.day.slice(0, 10) : String(row.day),
+    primaryId: row.primary_id || null,
+    backupId: row.backup_id || null,
+    // the group run key of the primary: the id, else the external cover's text, else nothing
+    primaryKey: row.primary_id ? "id:" + row.primary_id : (row.external_cover ? "ext:" + row.external_cover : ""),
+    primaryName: row.primary_id ? nameOf(row.primary_id) : (row.external_cover ? `${row.external_cover} (external cover)` : "OPEN"),
+    backupName: nameOf(row.backup_id),
+  })).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+  const pairKey = (d) => d.primaryKey + "|" + (d.backupId || "");
+  const runs = [];
+  const current = {}; // "primary" / "backup" (per surgeon) or "group" -> the run being extended
+  for (const d of days) {
+    const keys = onlyId
+      ? ["primary", "backup"].filter((role) => (role === "primary" ? d.primaryId : d.backupId) === onlyId)
+      : ((d.primaryId || d.backupId) ? ["group"] : []);
+    for (const key of keys) {
+      const cur = current[key];
+      if (cur && cur.last === addDays(d.day, -1) && (key !== "group" || cur.pair === pairKey(d))) {
+        cur.last = d.day;
+        cur.days.push(d);
+      } else {
+        const run = { key, first: d.day, last: d.day, pair: pairKey(d), days: [d] };
+        runs.push(run);
+        current[key] = run;
+      }
+    }
+  }
+  // runs are created in date order of their first day (primary before backup on a shared first day)
+  return runs.map((r) => ({
+    uid: `silvis-${r.first}-${r.key}@${UID_DOMAIN}`,   // stable per start day + role ("group" for the pair)
+    allDay: true,
+    start: compactYmd(r.first),
+    end: compactYmd(addDays(r.last, 1)),
+    summary: onlyId ? `Silvis ${ROLE_LABEL[r.key]}` : `P ${r.days[0].primaryName} \u00b7 B ${r.days[0].backupName}`,
+    desc: [
+      runTimesLine(r.first, r.last),
+      runHolderLine("Primary", r.days.map((x) => ({ day: x.day, name: x.primaryName }))),
+      runHolderLine("Backup", r.days.map((x) => ({ day: x.day, name: x.backupName }))),
+    ].join("\n"),
+  }));
+}
+
+// The all-day events that reach the feed window: a run whose last day is on or
+// after `from` is kept WHOLE (the handler reads RUN_LOOKBACK_DAYS before the
+// window, so a run straddling today-60 that started at most RUN_LOOKBACK_DAYS
+// before it keeps its real start day and UID instead of a start that moves every
+// day; a longer one still starts at the read floor); a run that ended before
+// `from` is dropped.
+function endsOnOrAfter(events, from) {
+  const floor = compactYmd(from);
+  return events.filter((e) => e.end > floor);
+}
+
+// Item D: the East entries (eastEntries, @eastCalendar block) as all-day events,
+// consecutive busy days with the SAME reason merged into one bar (a service week
+// Mon-Sat is one event; the digest collapses the same runs, eastDigestLines).
+// DTSTART;VALUE=DATE = the first day, DTEND;VALUE=DATE = the day after the last;
+// the description names the reason, or - when the days of the run differ (a
+// night inside a service week) - each day group's reasons on its own line.
+// UIDs east-<CODE>-<first day>-<reason>@silvis-call (a run growing / shrinking
+// at its end updates in place; a new first day or a higher-precedence reason is
+// a new UID - delete + add) and east-<CODE>-away-<start>-<end>@silvis-call
+// (one event per away range, unchanged).
+function eastIcsEvents(entries, code) {
+  const runs = [];
+  ((entries && entries.busy) || []).forEach((e) => {
+    const cur = runs[runs.length - 1];
+    if (cur && cur.reason === e.reason && addDays(cur.last, 1) === e.day) { cur.last = e.day; cur.items.push(e); }
+    else runs.push({ first: e.day, last: e.day, reason: e.reason, title: e.title, items: [e] });
+  });
+  const out = runs.map((r) => {
+    const groups = [];
+    r.items.forEach((e) => {
+      const g = groups[groups.length - 1];
+      if (g && g.detail === e.detail) g.last = e.day;
+      else groups.push({ first: e.day, last: e.day, detail: e.detail });
+    });
+    const call = groups.length === 1
+      ? "Davenport (East) call: " + groups[0].detail
+      : "Davenport (East) call:\n" + groups.map((g) => (g.first === g.last ? mdOf(g.first) : mdOf(g.first) + "-" + mdOf(g.last)) + " " + g.detail).join("\n");
+    return {
+      uid: `east-${code}-${r.first}-${r.reason}@${UID_DOMAIN}`,
+      allDay: true,
+      start: compactYmd(r.first),
+      end: compactYmd(addDays(r.last, 1)),
+      summary: r.title,
+      desc: call + "\nSource: the Davenport schedule as cached in the Silvis East feed",
+    };
+  });
+  ((entries && entries.away) || []).forEach((a) => out.push({
+    uid: `east-${code}-away-${a.start}-${a.end}@${UID_DOMAIN}`,
+    allDay: true,
+    start: compactYmd(a.start),
+    end: compactYmd(a.endExclusive),
+    summary: a.title,
+    desc: "Davenport (East) vacation, reviewed as away in the Silvis app",
+  }));
+  return out;
+}
+
+// ?timed=1 - the Davenport side as served until 2026-09-25 (kept byte-for-byte):
+// one all-day event per busy day. DTSTART;VALUE=DATE = the day, DTEND;VALUE=DATE
+// = the next day (exclusive); UIDs east-<CODE>-<date>-<reason>@silvis-call and
 // east-<CODE>-away-<start>-<end>@silvis-call - stable per day + first reason /
 // per range, so a refresh updates in place and never duplicates.
-function eastIcsEvents(entries, code) {
+function eastIcsDayEvents(entries, code) {
   const out = [];
   const ymd = (s) => String(s).replace(/-/g, "");
   ((entries && entries.busy) || []).forEach((e) => out.push({
@@ -593,14 +794,19 @@ Deno.serve(async (req) => {
     const surgeonParam = (url.searchParams.get("surgeon") || "").trim();
     const eastParam = (url.searchParams.get("east") || "").trim().toLowerCase();
     const eastWanted = eastParam === "1" || eastParam === "true" || eastParam === "yes";
+    // 2026-09-25: all-day runs are the default; ?timed=1 serves the old format
+    // (one 07:00 -> 07:00 event per day and role, the old titles and UIDs).
+    const timedParam = (url.searchParams.get("timed") || "").trim().toLowerCase();
+    const timed = timedParam === "1" || timedParam === "true" || timedParam === "yes";
 
     const today = centralYmd();
     const from = addDays(today, -PAST_DAYS);
     const to = addDays(today, FUTURE_DAYS);
+    const readFrom = addDays(from, -RUN_LOOKBACK_DAYS);
 
     const roster = await loadRoster();
     const rows: DayRow[] = (await rest(
-      `schedule_days?select=day,primary_id,backup_id,external_cover&day=gte.${from}&day=lte.${to}&order=day.asc`,
+      `schedule_days?select=day,primary_id,backup_id,external_cover&day=gte.${readFrom}&day=lte.${to}&order=day.asc`,
     )) || [];
 
     let onlyId: string | null = null;
@@ -622,7 +828,11 @@ Deno.serve(async (req) => {
       title = `Silvis Call - ${who.name}`;
     }
 
-    let events = buildEvents(rows, roster, onlyId);
+    // All-day runs over the rows from readFrom, cut back to the runs that reach the
+    // window; ?timed=1 builds the old per-day events over exactly the old window.
+    let events = timed
+      ? buildTimedEvents(rows.filter((r) => String(r.day).slice(0, 10) >= from), roster, onlyId)
+      : endsOnOrAfter(buildEvents(rows, roster, onlyId), from);
     let eastCount = 0;
     // Item D: east=1 adds the Davenport side for ONE surgeon whose East feature
     // reads busy days (eastFeedPerson). Anything else leaves the feed exactly as
@@ -641,13 +851,16 @@ Deno.serve(async (req) => {
       ]);
       if (!eastId) throw new HttpError(502, `East id for ${code} unresolved (no east_forecast row names it and the Davenport roster has no ${code}) - the combined feed is withheld rather than served without the Davenport events`);
       const weeks = (Array.isArray(feedRows) ? feedRows : []).map((r: any) => ({ weekMonday: String(r.week_monday).slice(0, 10), data: typeof r.data === "string" ? JSON.parse(r.data) : (r.data || {}) }));
-      const entries = eastEntries({ lastName: who.name, code, rosterId: onlyId, eastId, weeks, reviews: Array.isArray(reviews) ? reviews : [], from, to });
-      const eastEvents = eastIcsEvents(entries, code);
+      const reviewList = Array.isArray(reviews) ? reviews : [];
+      // merged same-reason runs by default (read from readFrom, cut like the Silvis runs); ?timed=1: one event per busy day
+      const eastEvents = timed
+        ? eastIcsDayEvents(eastEntries({ lastName: who.name, code, rosterId: onlyId, eastId, weeks, reviews: reviewList, from, to }), code)
+        : endsOnOrAfter(eastIcsEvents(eastEntries({ lastName: who.name, code, rosterId: onlyId, eastId, weeks, reviews: reviewList, from: readFrom, to }), code), from);
       eastCount = eastEvents.length;
       events = events.concat(eastEvents);
       title = `Silvis + Davenport - ${who.name}`;
     }
-    console.log(`[calendar-sync] feed=${onlyId || "all"} east=${eastWanted ? (eastCount ? "on" : "off") : "no"} days=${rows.length} events=${events.length} (east ${eastCount}) window=${from}..${to}`);
+    console.log(`[calendar-sync] feed=${onlyId || "all"} format=${timed ? "timed" : "all-day"} east=${eastWanted ? (eastCount ? "on" : "off") : "no"} days=${rows.length} events=${events.length} (east ${eastCount}) window=${from}..${to}`);
 
     // A zero-event calendar is still valid ICS, so a subscription stays healthy
     // and simply shows nothing until data appears.

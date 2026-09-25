@@ -1,7 +1,8 @@
 // Silvis Call Schedule - export builders (helpers.js, Prompt 9) unit test.
-//   .ics      buildICSEvents / generateICS: 07:00 -> 07:00 next-day boundaries,
-//             TZID lines + VTIMEZONE, stable UIDs, per-surgeon filtering, group
-//             naming, nothing for null slots or an externalCover.
+//   .ics      buildICSEvents / generateICS: all-day runs (DTSTART;VALUE=DATE /
+//             DTEND;VALUE=DATE, exclusive end), stable UIDs, per-surgeon filtering,
+//             group naming, nothing for an empty day, the same VEVENTs as the
+//             calendar-sync feed's default (its @icsCore block is evaluated here).
 //   ER panel  buildErCallPanelsHTML / Text / Document: the ER-panel author's exact header,
 //             one row per Mon-Sun week, no collapsing across a week boundary,
 //             OPEN in red, externalCover text.
@@ -54,100 +55,86 @@ const vacations = { s3: [["2026-11-03", "2026-11-05"]] };
 // 11/6 in the past and 11/9+ in the future.
 const TODAY_NOV = "2026-11-01", TODAY_MID = "2026-11-07";
 
-/* ---------------- ICS ---------------- */
+/* ---------------- ICS ----------------
+   Since 2026-09-25 (Faraz: "the calendar looks busy, and 07:00 -> 07:00 shifts draw across two days") the download is
+   ALL-DAY runs, the same events as the calendar-sync feed's default: one event per run of consecutive days (a surgeon's
+   file: the same role; the group file: the same primary AND the same backup), DTSTART;VALUE=DATE the first day,
+   DTEND;VALUE=DATE the day after the last (RFC 5545 exclusive end), the exact 07:00 -> 07:00 times in the description.
+   The download has no timed mode (the feed keeps one behind ?timed=1). */
 const all = H.buildICSEvents(schedule, null, roster, {});
 const khan = H.buildICSEvents(schedule, "s1", roster, {});
 const khanIcs = H.generateICS(khan, "Silvis Call - Khan");
 const allIcs = H.generateICS(all, "Silvis Call - All");
 
-check("ICS boundaries: each shift runs 07:00 local -> 07:00 local the next day (10/31 spans the fall-back night, both ends stay 07:00)", () => {
-  const e = all.find(x => x.day === "2026-10-31" && x.role === "primary");
-  assert.ok(e, "10/31 primary event missing");
-  assert.strictEqual(e.start, "20261031T070000");
-  assert.strictEqual(e.end, "20261101T070000");
-  const nov1 = all.find(x => x.day === "2026-11-01" && x.role === "primary");
-  assert.strictEqual(nov1.start, "20261101T070000"); assert.strictEqual(nov1.end, "20261102T070000");
-  all.forEach(x => { assert.ok(/T070000$/.test(x.start) && /T070000$/.test(x.end), "not a 07:00 boundary: " + JSON.stringify(x)); });
+check("ICS all-day runs: each event is DTSTART;VALUE=DATE the first day and DTEND;VALUE=DATE the day after the last (exclusive) - Khan's 10/31-11/2 run (across the fall-back) is ONE event 20261031 -> 20261103; no TZID, no timed stamp, no VTIMEZONE", () => {
+  assert.deepStrictEqual(khan.map(x => [x.day, x.last, x.role, x.start, x.end, x.allDay]), [["2026-10-31", "2026-11-02", "primary", "20261031", "20261103", true], ["2026-11-26", "2026-11-26", "primary", "20261126", "20261127", true]]);
+  assert.ok(khanIcs.includes("\r\nDTSTART;VALUE=DATE:20261031\r\nDTEND;VALUE=DATE:20261103\r\n"), "the all-day lines");
+  assert.ok(!/TZID|T070000|VTIMEZONE|DTSTART:/.test(khanIcs), "no timed stamp, no zone");
 });
-check("ICS TZID lines: DTSTART;TZID=America/Chicago:<local stamp> and DTEND likewise (no Z suffix)", () => {
-  assert.ok(khanIcs.includes("DTSTART;TZID=America/Chicago:20261031T070000\r\n"), "DTSTART;TZID line missing");
-  assert.ok(khanIcs.includes("DTEND;TZID=America/Chicago:20261101T070000\r\n"), "DTEND;TZID line missing");
-  assert.ok(!/DTSTART:\d{8}T\d{6}Z/.test(khanIcs), "a UTC DTSTART leaked in");
-  assert.ok(khanIcs.includes("X-WR-TIMEZONE:America/Chicago\r\n"));
-});
-check("ICS VTIMEZONE present for America/Chicago with the CDT (2nd Sun Mar) and CST (1st Sun Nov) rules, before the first VEVENT", () => {
-  const vt = khanIcs.indexOf("BEGIN:VTIMEZONE"), ve = khanIcs.indexOf("BEGIN:VEVENT");
-  assert.ok(vt > 0 && ve > vt, "VTIMEZONE must precede the events");
-  assert.ok(khanIcs.includes("TZID:America/Chicago\r\n"));
-  assert.ok(khanIcs.includes("TZNAME:CDT\r\nDTSTART:19700308T020000\r\nRRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU\r\n"));
-  assert.ok(khanIcs.includes("TZNAME:CST\r\nDTSTART:19701101T020000\r\nRRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU\r\n"));
-  assert.ok(khanIcs.includes("TZOFFSETFROM:-0600\r\nTZOFFSETTO:-0500") && khanIcs.includes("TZOFFSETFROM:-0500\r\nTZOFFSETTO:-0600"));
-  assert.strictEqual((khanIcs.match(/BEGIN:VTIMEZONE/g) || []).length, 1, "exactly one VTIMEZONE block");
-});
-check("ICS UID stability: 'silvis-<date>-<role>@silvis-call', identical across builds, unique per day+role, same in the per-surgeon and group files", () => {
-  const e = all.find(x => x.day === "2026-10-31" && x.role === "primary");
-  assert.strictEqual(e.uid, "silvis-2026-10-31-primary@silvis-call");
+check("ICS UID stability: 'silvis-<start>-<role>@silvis-call' per surgeon, 'silvis-<start>-group@silvis-call' for the group; identical across builds, unique", () => {
+  assert.deepStrictEqual(khan.map(x => x.uid), ["silvis-2026-10-31-primary@silvis-call", "silvis-2026-11-26-primary@silvis-call"]);
+  assert.strictEqual(all.find(x => x.day === "2026-10-31").uid, "silvis-2026-10-31-group@silvis-call");
   const again = H.buildICSEvents(schedule, null, roster, {});
   assert.deepStrictEqual(again.map(x => x.uid), all.map(x => x.uid));
   assert.strictEqual(new Set(all.map(x => x.uid)).size, all.length, "duplicate UIDs");
-  const k = khan.find(x => x.day === "2026-10-31" && x.role === "primary");
-  assert.strictEqual(k.uid, e.uid);
   assert.ok(khanIcs.includes("UID:silvis-2026-10-31-primary@silvis-call\r\n"));
 });
-check("ICS per-surgeon filtering: Khan's file holds only Khan's shifts, titled exactly 'Silvis Primary Call' / 'Silvis Backup Call'", () => {
-  assert.ok(khan.length > 0);
+check("ICS per-surgeon filtering: Khan's file holds only Khan's runs, titled exactly 'Silvis Primary' / 'Silvis Backup'; a role change splits Burchett's days into three runs", () => {
   khan.forEach(x => assert.strictEqual(x.surgeonId, "s1"));
-  assert.deepStrictEqual(khan.map(x => x.day), ["2026-10-31", "2026-11-01", "2026-11-02", "2026-11-26"]);
-  assert.deepStrictEqual([...new Set(khan.map(x => x.summary))], ["Silvis Primary Call"]);
+  assert.deepStrictEqual([...new Set(khan.map(x => x.summary))], ["Silvis Primary"]);
   const burchett = H.buildICSEvents(schedule, "s2", roster, {});
-  assert.deepStrictEqual(burchett.map(x => x.role + " " + x.day), ["primary 2026-10-30", "backup 2026-10-31", "backup 2026-11-01", "backup 2026-11-02", "primary 2026-11-07", "primary 2026-11-08"]);
-  assert.deepStrictEqual([...new Set(burchett.map(x => x.summary))].sort(), ["Silvis Backup Call", "Silvis Primary Call"]);
-  assert.ok(!/SUMMARY:Silvis Primary Call - /.test(khanIcs), "per-surgeon file must not carry ' - <Name>'");
+  assert.deepStrictEqual(burchett.map(x => x.role + " " + x.day + ".." + x.last + " " + x.summary), ["primary 2026-10-30..2026-10-30 Silvis Primary", "backup 2026-10-31..2026-11-02 Silvis Backup", "primary 2026-11-07..2026-11-08 Silvis Primary"]);
+  assert.ok(!/SUMMARY:Silvis (Primary|Backup) Call/.test(khanIcs), "the per-surgeon title has no 'Call' and no name");
 });
-check("ICS group naming: 'Silvis Primary Call - <Name>' / 'Silvis Backup Call - <Name>', primary before backup within a day, days ascending", () => {
-  const d1031 = all.filter(x => x.day === "2026-10-31");
-  assert.deepStrictEqual(d1031.map(x => x.summary), ["Silvis Primary Call - Khan", "Silvis Backup Call - Burchett"]);
-  const days = all.map(x => x.day);
-  assert.deepStrictEqual(days, [...days].sort());
-  assert.ok(allIcs.includes("SUMMARY:Silvis Backup Call - Fierce\r\n"));
+check("ICS group naming: one event per run of the SAME primary AND backup, 'P <name> \u00b7 B <name>' (OPEN for an empty backup), runs ascending", () => {
+  assert.deepStrictEqual(all.map(x => x.day + ".." + x.last + " " + x.summary), [
+    "2026-10-30..2026-10-30 P Burchett \u00b7 B Acton",
+    "2026-10-31..2026-11-02 P Khan \u00b7 B Burchett",
+    "2026-11-03..2026-11-05 P Atwell (external cover) \u00b7 B Fierce",
+    "2026-11-07..2026-11-08 P Burchett \u00b7 B Acton",
+    "2026-11-10..2026-11-10 P Philip \u00b7 B OPEN",
+    "2026-11-26..2026-11-26 P Khan \u00b7 B Sarkar",
+  ]);
+  assert.ok(allIcs.includes("SUMMARY:P Khan \u00b7 B Burchett\r\n"), "the middle dot is written as UTF-8");
+  all.forEach(x => { assert.strictEqual(x.role, "group"); assert.strictEqual(x.surgeonId, null); });
 });
-check("ICS emits nothing for a null slot or an externalCover: 11/6 has no event, 11/3-11/5 have only the Fierce backup event naming the cover in its description", () => {
-  assert.strictEqual(all.filter(x => x.day === "2026-11-06").length, 0);
-  const nov3 = all.filter(x => x.day === "2026-11-03");
-  assert.strictEqual(nov3.length, 1); assert.strictEqual(nov3[0].role, "backup"); assert.strictEqual(nov3[0].surgeonId, "s5");
-  assert.ok(nov3[0].desc.startsWith("Primary: Atwell (external cover)\nBackup: Fierce\n"), nov3[0].desc);
-  assert.ok(!all.some(x => /Atwell/.test(x.summary)), "an external cover became an event");
-  const nov10 = all.filter(x => x.day === "2026-11-10");
-  assert.strictEqual(nov10.length, 1); assert.strictEqual(nov10[0].role, "primary");
-  assert.strictEqual(nov10[0].desc.split("\n")[1], "Backup: OPEN");
+check("ICS emits nothing for a day with neither assignment (11/6, or a cover-only day); an externalCover names the primary of the group bar and of Fierce's backup run - it is never an event of its own", () => {
+  assert.ok(!all.some(x => x.day <= "2026-11-06" && x.last >= "2026-11-06"), "11/6 is inside no event");
+  const fierce = H.buildICSEvents(schedule, "s5", roster, {});
+  assert.deepStrictEqual(fierce.map(x => [x.day, x.last, x.role, x.desc]), [["2026-11-03", "2026-11-05", "backup", "07:00 Tue \u2192 07:00 Fri (Central)\nPrimary: Atwell (external cover)\nBackup: Fierce"]]);
+  assert.ok(!all.concat(fierce).some(x => /^Atwell|Silvis .* - Atwell/.test(x.summary)), "an external cover became an event");
   assert.deepStrictEqual(H.buildICSEvents({ "2026-11-03": day(null, null, { externalCover: "Atwell" }) }, null, roster, {}), []);
 });
-check("ICS DESCRIPTION: 'Primary: <name>' / 'Backup: <name>' / shift line only - the day's internal note never reaches a calendar (Faraz 9/25); RFC 5545 escaping and 75-octet folding; CRLF", () => {
-  const nov1 = all.find(x => x.day === "2026-11-01" && x.role === "primary");
-  assert.strictEqual(nov1.desc, "Primary: Khan\nBackup: Burchett\nShift: 07:00 to 07:00 next day (Central)", "the fixture day carries a note - it must not be in the description");
+check("ICS DESCRIPTION: '07:00 <Wkd> \u2192 07:00 <Wkd> (Central)' then 'Primary: ...' / 'Backup: ...' (the other role per day when it changes) - the day's internal note never reaches a calendar (Faraz 9/25); RFC 5545 escaping and 75-octet folding; CRLF", () => {
+  const k = khan[0];
+  assert.strictEqual(k.desc, "07:00 Sat \u2192 07:00 Tue (Central)\nPrimary: Khan\nBackup: Burchett", "the fixture's 11/1 carries a note - it must not be in the description");
   assert.ok(!/Note:|Bring/.test(allIcs), "no note text in the .ics download");
+  const mixed = H.buildICSEvents({ "2026-11-06": day("s1", "s2"), "2026-11-07": day("s1", "s3"), "2026-11-08": day("s1", "s3") }, "s1", roster, {});
+  assert.deepStrictEqual(mixed.map(x => x.desc), ["07:00 Fri \u2192 07:00 Mon (Central)\nPrimary: Khan\nBackup: 11/6 Burchett, 11/7-11/8 Acton"]);
   const escIcs = H.generateICS(H.buildICSEvents({ "2026-11-05": day(null, "s1", { externalCover: "Lee, locum; a\\b" }) }, null, roster, {}), "Silvis Call - All");
-  assert.ok(escIcs.includes("Primary: Lee\\, locum\\; a\\\\b (external cover)"), "comma / semicolon / backslash not escaped: " + escIcs.split("\r\n").filter(l => /Lee/.test(l)).join(" | "));
-  assert.ok(allIcs.includes("Primary: Khan\\nBackup: Burchett"), "newline not escaped as \\n");
-  const unfolded = allIcs.split("\r\n");
-  unfolded.forEach(l => assert.ok(Buffer.byteLength(l, "utf8") <= 75, "line over 75 octets: " + l));
+  assert.ok(escIcs.includes("SUMMARY:P Lee\\, locum\\; a\\\\b (external cover) \u00b7 B Khan"), "comma / semicolon / backslash not escaped: " + escIcs.split("\r\n").filter(l => /Lee/.test(l)).join(" | "));
+  assert.ok(allIcs.replace(/\r\n[ \t]/g, "").includes("(Central)\\nPrimary: Khan\\nBackup: Burchett"), "newline not escaped as \\n (checked on the unfolded text: the description line is folded at 75 octets)");
+  allIcs.split("\r\n").forEach(l => assert.ok(Buffer.byteLength(l, "utf8") <= 75, "line over 75 octets: " + l));
   assert.ok(!/[^\r]\n/.test(allIcs), "a bare LF slipped in");
   assert.ok(allIcs.startsWith("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Silvis Call Schedule//EN\r\n") && allIcs.endsWith("END:VCALENDAR\r\n"));
   assert.ok(/DTSTAMP:\d{8}T\d{6}Z/.test(allIcs));
 });
-check("ICS range option {from,to} filters days inclusively", () => {
+check("ICS range option {from,to} filters days inclusively before the runs are merged", () => {
   const r = H.buildICSEvents(schedule, null, roster, { from: "2026-11-01", to: "2026-11-02" });
-  assert.deepStrictEqual([...new Set(r.map(x => x.day))], ["2026-11-01", "2026-11-02"]);
+  assert.deepStrictEqual(r.map(x => [x.day, x.last, x.uid]), [["2026-11-01", "2026-11-02", "silvis-2026-11-01-group@silvis-call"]]);
 });
 check("ICS file names: silvis-call-<lastname>.ics per surgeon, silvis-call-all.ics for the group", () => {
   assert.strictEqual(H.icsFileName(roster[0]), "silvis-call-khan.ics");
   assert.strictEqual(H.icsFileName("Burchett"), "silvis-call-burchett.ics");
   assert.strictEqual(H.icsFileName(null), "silvis-call-all.ics");
 });
-check("generateICS stays backward compatible: events without tzid get plain DTSTART and no VTIMEZONE; opts.tz=false suppresses the zone", () => {
+check("generateICS stays backward compatible: events without tzid or allDay get plain DTSTART and no VTIMEZONE; tzid events still get TZID lines + one VTIMEZONE; opts.tz=false suppresses the zone", () => {
   const legacy = H.generateICS([{ start: "20261031T070000", end: "20261101T070000", summary: "x", desc: "y" }], "Legacy");
   assert.ok(legacy.includes("DTSTART:20261031T070000\r\n") && !legacy.includes("VTIMEZONE") && /UID:[^\r]+@silvis-call/.test(legacy));
-  const noTz = H.generateICS(khan, "Khan", { tz: false });
+  const tzEv = [{ uid: "a@silvis-call", tzid: "America/Chicago", start: "20261031T070000", end: "20261101T070000", summary: "x", desc: "y" }];
+  const tz = H.generateICS(tzEv, "Tz");
+  assert.ok(tz.includes("DTSTART;TZID=America/Chicago:20261031T070000\r\n") && (tz.match(/BEGIN:VTIMEZONE/g) || []).length === 1 && tz.includes("X-WR-TIMEZONE:America/Chicago\r\n"));
+  const noTz = H.generateICS(tzEv, "Tz", { tz: false });
   assert.ok(!noTz.includes("VTIMEZONE") && noTz.includes("DTSTART:20261031T070000\r\n"));
 });
 
@@ -582,6 +569,15 @@ const ICS = (() => {
       ["SUMMARY", "DESCRIPTION"].forEach(n => { const p = atMostOne(ev, n); if (p && /(^|[^\\])[;,]/.test(p.value)) fail(`${n} has an unescaped ; or ,`); });
       const inst = (p) => {
         const tz = p.params.TZID && p.params.TZID[0];
+        // RFC 5545 3.3.4 DATE (an all-day event): VALUE=DATE, YYYYMMDD, no TZID, a real calendar date
+        if (p.params.VALUE) {
+          if (p.params.VALUE.length !== 1 || p.params.VALUE[0] !== "DATE") fail(`${p.name};VALUE must be DATE: ${p.params.VALUE}`);
+          const m = /^(\d{4})(\d{2})(\d{2})$/.exec(p.value);
+          if (!m || tz) fail(`${p.name};VALUE=DATE must be YYYYMMDD without a TZID: ${p.value}`);
+          const dayMs = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+          if (new Date(dayMs).toISOString().slice(0, 10).replace(/-/g, "") !== p.value) fail(`${p.name} is not a calendar date: ${p.value}`);
+          return { date: p.value, dayMs };
+        }
         if (tz) { if (!zones[tz]) fail(`${p.name} uses TZID ${tz} without a VTIMEZONE`); if (!LOCAL.test(p.value)) fail(`${p.name};TZID value must be local form: ${p.value}`); return Object.assign({ local: p.value, tz }, zones[tz].resolve(p.value)); }
         if (UTC.test(p.value)) { const m = UTC.exec(p.value); return { utc: new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])), tz: "UTC", offsetMin: 0 }; }
         if (LOCAL.test(p.value)) return { local: p.value, floating: true };
@@ -589,6 +585,8 @@ const ICS = (() => {
       };
       const start = inst(ds), end = de ? inst(de) : null;
       if (start.utc && end && end.utc && !(end.utc > start.utc)) fail("DTEND not after DTSTART for " + uid);
+      if (end && (start.date !== undefined) !== (end.date !== undefined)) fail("DTSTART and DTEND must both be DATE or both DATE-TIME for " + uid);
+      if (start.date !== undefined && end && !(end.dayMs > start.dayMs)) fail("DTEND;VALUE=DATE not after DTSTART (the end date is exclusive) for " + uid);
       return { uid, start, end, summary: (atMostOne(ev, "SUMMARY") || {}).value || "", desc: (atMostOne(ev, "DESCRIPTION") || {}).value || "" };
     });
     return { cal, zones, events, childNames: cal.children.map(c => c.name) };
@@ -604,6 +602,20 @@ const ICS = (() => {
   return { validate, intlOffsetMin, intlLocal, edgeIcsDate };
 })();
 
+// The calendar-sync feed's own '@icsCore' block (plain JS), evaluated here so the download and the feed are compared
+// on the same fixture: the default all-day runs (buildEvents) and ?timed=1 (buildTimedEvents: the old per-day
+// 07:00 -> 07:00 events as absolute UTC stamps).
+const CS_TS = fs.readFileSync(path.join(__dirname, "..", "edge-functions", "calendar-sync", "index.ts"), "utf8").replace(/\r\n/g, "\n");
+const FEED = (() => {
+  const s = "// @icsCore-mirror-start", e = "// @icsCore-mirror-end", i = CS_TS.indexOf(s), j = CS_TS.indexOf(e);
+  if (i < 0 || j < i) return {};
+  return new Function(CS_TS.slice(i + s.length, j) + "\nreturn { buildEvents: typeof buildEvents === 'function' ? buildEvents : null, buildTimedEvents: typeof buildTimedEvents === 'function' ? buildTimedEvents : null, generateICS };")();
+})();
+const FEED_ROSTER = { byId: Object.fromEntries(roster.map(r => [r.id, r])) };
+// the in-memory schedule as schedule_days rows (what the feed reads)
+const toRows = (sched) => Object.keys(sched).sort().map(d => ({ day: d, primary_id: sched[d].primary || null, backup_id: sched[d].backup || null, external_cover: sched[d].externalCover || null }));
+const veventsOf = (text) => { const t = text.replace(/DTSTAMP:\d{8}T\d{6}Z/g, "DTSTAMP:X"), i = t.indexOf("BEGIN:VEVENT"); return i < 0 ? "" : t.slice(i, t.lastIndexOf("END:VCALENDAR")); };
+
 // Fixture across both clock changes plus an ordinary January day.
 const dstSchedule = {
   "2026-10-30": day("s2", "s3"), "2026-10-31": day("s1", "s2"), "2026-11-01": day("s1", "s2", { note: "Bring, the; pager\\ok" }), "2026-11-02": day("s3", "s1"),
@@ -611,21 +623,36 @@ const dstSchedule = {
   "2026-12-31": day("s2", "s3"), "2027-01-04": day("s4", "s1"), "2027-01-05": day("s6", null),
   "2027-03-13": day("s1", "s5"), "2027-03-14": day("s1", "s5"), "2027-03-15": day("s2", "s6"),
 };
+// Fixture across the year change (12/31 -> 1/1, the New Year holiday unit) plus two long runs: Philip primary
+// 1/3-1/10 (8 days) and the pair Philip + Sarkar 1/4-1/10 (7 days) - a run of 7+ days names its dates (review 9/25).
+const yearSchedule = {
+  "2026-12-30": day("s2", "s3"), "2026-12-31": day("s1", "s2"), "2027-01-01": day("s1", "s2"), "2027-01-02": day("s1", "s3"),
+  "2027-01-03": day("s4", "s5"), "2027-01-04": day("s4", "s6"), "2027-01-05": day("s4", "s6"), "2027-01-06": day("s4", "s6"),
+  "2027-01-07": day("s4", "s6"), "2027-01-08": day("s4", "s6"), "2027-01-09": day("s4", "s6"), "2027-01-10": day("s4", "s6"),
+  "2027-01-11": day("s4", null),
+};
 const strictGroup = ICS.validate(H.generateICS(H.buildICSEvents(dstSchedule, null, roster, {}), "Silvis Call - All"));
 const strictKhan = ICS.validate(H.generateICS(H.buildICSEvents(dstSchedule, "s1", roster, {}), "Silvis Call - Khan"));
 const toIcsUtc = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 
-check("strict ICS: the group and per-surgeon files parse under an independent RFC 5545 reader (CRLF, 75-octet raw lines, folding, grammar, nesting, once-only UID/DTSTAMP/DTSTART, DTEND after DTSTART, escaping)", () => {
-  assert.strictEqual(strictGroup.events.length, 20);
-  assert.strictEqual(strictKhan.events.length, 6);
-  assert.deepStrictEqual(strictGroup.childNames.filter(n => n === "VTIMEZONE"), ["VTIMEZONE"]);
-  assert.ok(strictGroup.childNames.indexOf("VTIMEZONE") < strictGroup.childNames.indexOf("VEVENT"), "VTIMEZONE must precede the events");
+check("strict ICS: the group and per-surgeon downloads parse under an independent RFC 5545 reader (CRLF, 75-octet raw lines, folding, grammar, nesting, once-only UID/DTSTAMP/DTSTART, escaping) as ALL-DAY events - DTSTART;VALUE=DATE / DTEND;VALUE=DATE, the end date exclusive and after the start, no TZID and so no VTIMEZONE", () => {
+  assert.strictEqual(strictGroup.events.length, 9, "nine group runs (10/31-11/1 Khan + Burchett and 3/13-3/14 Khan + Fierce are one bar each)");
+  assert.strictEqual(strictKhan.events.length, 4, "Khan: primary 10/31-11/1, backup 11/2, backup 1/4, primary 3/13-3/14");
+  strictGroup.events.concat(strictKhan.events).forEach(e => { assert.ok(e.start.date && e.end.date, "not an all-day event: " + e.uid); assert.ok(e.end.dayMs > e.start.dayMs); });
+  assert.deepStrictEqual(strictGroup.childNames.filter(n => n === "VTIMEZONE"), [], "no event carries a zone, so the file ships no VTIMEZONE");
   assert.throws(() => ICS.validate("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"), /PRODID|DTSTAMP/, "the reader really is strict");
   assert.throws(() => ICS.validate("BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n"), /CRLF|bare/);
+  const ev = (ds, de) => "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:x\r\nDTSTAMP:20260925T000000Z\r\n" + ds + "\r\n" + de + "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+  assert.throws(() => ICS.validate(ev("DTSTART;VALUE=DATE:20261009", "DTEND;VALUE=DATE:20261009")), /exclusive/, "an all-day DTEND equal to DTSTART is refused");
+  assert.throws(() => ICS.validate(ev("DTSTART;VALUE=DATE:20261009", "DTEND:20261010T120000Z")), /both DATE/, "mixed DATE / DATE-TIME is refused");
+  assert.throws(() => ICS.validate(ev("DTSTART;VALUE=DATE:20261332", "DTEND;VALUE=DATE:20261401")), /calendar date/, "a non-date is refused");
 });
-check("strict ICS: the shipped VTIMEZONE yields the tz database's transitions - CST from 2026-11-01T07:00Z (07:00 Central falls back), CDT from 2027-03-14T08:00Z - and every event resolves through it", () => {
-  const z = strictGroup.zones["America/Chicago"];
+check("strict ICS: generateICS's TZID path (kept for callers passing tzid events; the download itself no longer does) ships a VTIMEZONE whose transitions are the tz database's - CST from 2026-11-01T07:00Z, CDT from 2027-03-14T08:00Z - and resolves 07:00 -> 07:00 across the fall-back as 25 h, across the spring-forward as 23 h", () => {
+  const tzEv = (d, n) => ({ uid: "tz-" + d + "@silvis-call", tzid: "America/Chicago", start: d + "T070000", end: n + "T070000", summary: "x", desc: "y" });
+  const v = ICS.validate(H.generateICS([tzEv("20261031", "20261101"), tzEv("20270313", "20270314"), tzEv("20261102", "20261103")], "tz"));
+  const z = v.zones["America/Chicago"];
   assert.ok(z, "no America/Chicago VTIMEZONE");
+  assert.ok(v.childNames.indexOf("VTIMEZONE") < v.childNames.indexOf("VEVENT"), "VTIMEZONE must precede the events");
   const t26 = z.transitions(2026), t27 = z.transitions(2027);
   assert.strictEqual(t26.find(t => t.name === "CST").at.toISOString(), "2026-11-01T07:00:00.000Z");
   assert.strictEqual(t27.find(t => t.name === "CDT").at.toISOString(), "2027-03-14T08:00:00.000Z");
@@ -634,44 +661,78 @@ check("strict ICS: the shipped VTIMEZONE yields the tz database's transitions - 
     assert.strictEqual(after, t.to, `VTIMEZONE offset after ${t.at.toISOString()} (${t.name}) disagrees with the tz database`);
     assert.notStrictEqual(before, after, `tz database has no transition at ${t.at.toISOString()}`);
   });
-  strictGroup.events.forEach(e => { assert.strictEqual(e.start.tz, "America/Chicago"); assert.strictEqual(e.end.tz, "America/Chicago"); });
+  assert.deepStrictEqual(v.events.map(e => (e.end.utc - e.start.utc) / 3600000), [25, 23, 24]);
 });
-check("strict ICS: a November (CST) event and a January (CST) event both start 07:00 Central; the 10/31 shift spans the fall-back (25 h) and 3/13 the spring-forward (23 h); every other shift is 24 h 07:00 -> 07:00", () => {
-  const byUid = Object.fromEntries(strictGroup.events.map(e => [e.uid, e]));
+check("strict ICS: the feed's ?timed=1 output (calendar-sync buildTimedEvents, absolute UTC stamps) parses under the strict reader; a November (CST) and a January (CST) event start 07:00 Central; the 10/31 shift spans the fall-back (25 h) and 3/13 the spring-forward (23 h); every other shift is 24 h 07:00 -> 07:00 and every instant equals the edge icsDate port", () => {
+  assert.ok(FEED.buildTimedEvents, "calendar-sync's @icsCore block defines buildTimedEvents");
+  const timed = ICS.validate(FEED.generateICS(FEED.buildTimedEvents(toRows(dstSchedule), FEED_ROSTER, null), "Silvis Call - All"));
+  assert.strictEqual(timed.events.length, 20, "one event per filled role per day, as before 9/25");
+  const byUid = Object.fromEntries(timed.events.map(e => [e.uid, e]));
   const nov = byUid["silvis-2026-11-02-primary@silvis-call"], jan = byUid["silvis-2027-01-04-primary@silvis-call"];
   assert.deepStrictEqual(ICS.intlLocal(nov.start.utc), { ymd: "2026-11-02", hm: "07:00", zone: "CST" });
   assert.strictEqual(nov.start.utc.toISOString(), "2026-11-02T13:00:00.000Z");
   assert.deepStrictEqual(ICS.intlLocal(jan.start.utc), { ymd: "2027-01-04", hm: "07:00", zone: "CST" });
-  assert.strictEqual(jan.start.utc.toISOString(), "2027-01-04T13:00:00.000Z");
   const oct31 = byUid["silvis-2026-10-31-primary@silvis-call"];
   assert.deepStrictEqual([ICS.intlLocal(oct31.start.utc).zone, ICS.intlLocal(oct31.end.utc).zone], ["CDT", "CST"]);
-  strictGroup.events.forEach(e => {
-    const day = e.uid.slice(7, 17), next = H.fmt(H.addD(H.parse(day), 1));
-    assert.deepStrictEqual([ICS.intlLocal(e.start.utc).ymd, ICS.intlLocal(e.start.utc).hm], [day, "07:00"], "start " + e.uid);
+  timed.events.forEach(e => {
+    const d = e.uid.slice(7, 17), next = H.fmt(H.addD(H.parse(d), 1));
+    assert.deepStrictEqual([ICS.intlLocal(e.start.utc).ymd, ICS.intlLocal(e.start.utc).hm], [d, "07:00"], "start " + e.uid);
     assert.deepStrictEqual([ICS.intlLocal(e.end.utc).ymd, ICS.intlLocal(e.end.utc).hm], [next, "07:00"], "end " + e.uid);
-    const hours = (e.end.utc - e.start.utc) / 3600000;
-    assert.strictEqual(hours, day === "2026-10-31" ? 25 : day === "2027-03-13" ? 23 : 24, `${day} is ${hours} h`);
+    assert.strictEqual((e.end.utc - e.start.utc) / 3600000, d === "2026-10-31" ? 25 : d === "2027-03-13" ? 23 : 24, d);
+    const [y, m, dd] = d.split("-").map(Number), [ny, nm, nd] = next.split("-").map(Number);
+    assert.strictEqual(toIcsUtc(e.start.utc), ICS.edgeIcsDate(y, m, dd, 7), "start instant differs from the edge port for " + e.uid);
+    assert.strictEqual(toIcsUtc(e.end.utc), ICS.edgeIcsDate(ny, nm, nd, 7), "end instant differs from the edge port for " + e.uid);
   });
 });
-check("strict ICS: the download and the calendar-sync feed agree - identical UTC instants (edge icsDate port), SUMMARY / DESCRIPTION / UID formats and 07:00 start hour as written in edge-functions/calendar-sync/index.ts", () => {
-  strictGroup.events.forEach(e => {
-    const day = e.uid.slice(7, 17), [y, m, d] = day.split("-").map(Number);
-    const next = H.fmt(H.addD(H.parse(day), 1)), [ny, nm, nd] = next.split("-").map(Number);
-    assert.strictEqual(toIcsUtc(e.start.utc), ICS.edgeIcsDate(y, m, d, 7), "start instant differs from the feed for " + e.uid);
-    assert.strictEqual(toIcsUtc(e.end.utc), ICS.edgeIcsDate(ny, nm, nd, 7), "end instant differs from the feed for " + e.uid);
+check("strict ICS: the download and the calendar-sync feed agree - on the same fixtures the download's VEVENTs are byte-identical (DTSTAMP normalised) to the feed's default all-day output, for the group and for every surgeon; the feed's all-day text passes the strict reader too", () => {
+  assert.ok(FEED.buildEvents, "calendar-sync's @icsCore block defines buildEvents");
+  [["dstSchedule", dstSchedule], ["schedule", schedule], ["yearSchedule", yearSchedule]].forEach(([name, sched]) => {
+    [null].concat(roster.map(r => r.id)).forEach(id => {
+      const dl = H.generateICS(H.buildICSEvents(sched, id, roster, {}), "x");
+      const fd = FEED.generateICS(FEED.buildEvents(toRows(sched), FEED_ROSTER, id), "x");
+      assert.strictEqual(veventsOf(dl), veventsOf(fd), `${name} ${id || "group"}: the download differs from the feed`);
+      ICS.validate(fd);
+    });
   });
-  const ts = fs.readFileSync(path.join(__dirname, "..", "edge-functions", "calendar-sync", "index.ts"), "utf8");
-  assert.ok(ts.includes("const SHIFT_START_HOUR = 7;"), "feed start hour changed");
-  assert.ok(ts.includes('const UID_DOMAIN = "silvis-call";') && ts.includes("uid: `silvis-${day}-${role}@${UID_DOMAIN}`"), "feed UID format changed");
-  assert.ok(ts.includes("? `Silvis ${ROLE_LABEL[role]} Call`") && ts.includes(": `Silvis ${ROLE_LABEL[role]} Call - ${name}`"), "feed SUMMARY format changed");
-  assert.ok(ts.includes('const PRODID = "-//Silvis Call Schedule//EN";'), "feed PRODID changed");
-  assert.ok(ts.includes("`Primary: ${primaryLabel}`") && ts.includes("`Backup: ${backupLabel}`") && ts.includes('"Shift: 07:00 to 07:00 next day (Central)"') && !ts.includes("Note: "), "feed DESCRIPTION lines changed (Primary / Backup / Shift only, no note - Faraz 9/25)");
-  assert.ok(ts.includes("`${row.external_cover} (external cover)`"), "feed external-cover label changed");
-  const s = strictGroup.events.find(e => e.uid === "silvis-2026-11-01-primary@silvis-call");
-  assert.strictEqual(s.summary, "Silvis Primary Call - Khan");
-  assert.strictEqual(s.desc, "Primary: Khan\\nBackup: Burchett\\nShift: 07:00 to 07:00 next day (Central)", "the download matches the feed: no note line");
-  assert.deepStrictEqual([...new Set(strictKhan.events.map(e => e.summary))].sort(), ["Silvis Backup Call", "Silvis Primary Call"]);
-  assert.strictEqual(strictGroup.events.find(e => e.uid === "silvis-2026-11-03-backup@silvis-call").desc.split("\\n")[0], "Primary: Atwell (external cover)");
+  const s = strictGroup.events.find(e => e.uid === "silvis-2026-10-31-group@silvis-call");
+  assert.ok(s, "the 10/31 group run");
+  assert.deepStrictEqual([s.start.date, s.end.date, s.summary], ["20261031", "20261102", "P Khan \u00b7 B Burchett"]);
+  assert.strictEqual(s.desc, "07:00 Sat \u2192 07:00 Mon (Central)\\nPrimary: Khan\\nBackup: Burchett", "the times in the description and no note line (Faraz 9/25)");
+  assert.deepStrictEqual([...new Set(strictKhan.events.map(e => e.summary))].sort(), ["Silvis Backup", "Silvis Primary"]);
+  assert.strictEqual(strictGroup.events.find(e => e.uid === "silvis-2026-11-03-group@silvis-call").summary, "P Atwell (external cover) \u00b7 B Fierce");
+  assert.ok(CS_TS.includes("const SHIFT_START_HOUR = 7;") && CS_TS.includes('const UID_DOMAIN = "silvis-call";') && CS_TS.includes('const PRODID = "-//Silvis Call Schedule//EN";'), "feed start hour / UID domain / PRODID changed");
+});
+check("all-day runs across the YEAR change: Khan primary 12/31-1/2 is ONE event DTSTART;VALUE=DATE:20261231 / DTEND;VALUE=DATE:20270103, '07:00 Thu \u2192 07:00 Sun (Central)', 'Backup: 12/31-1/1 Burchett, 1/2 Acton'; the group bar 12/31-1/1 'P Khan \u00b7 B Burchett' ends 20270102; the download and the feed agree and both pass the strict reader", () => {
+  assert.ok(FEED.buildEvents, "calendar-sync's @icsCore block defines buildEvents");
+  const k = ICS.validate(H.generateICS(H.buildICSEvents(yearSchedule, "s1", roster, {}), "Silvis Call - Khan"));
+  assert.deepStrictEqual(k.events.map(e => [e.uid, e.start.date, e.end.date, e.summary, e.desc]), [["silvis-2026-12-31-primary@silvis-call", "20261231", "20270103", "Silvis Primary", "07:00 Thu \u2192 07:00 Sun (Central)\\nPrimary: Khan\\nBackup: 12/31-1/1 Burchett\\, 1/2 Acton"]]);
+  const g = ICS.validate(H.generateICS(H.buildICSEvents(yearSchedule, null, roster, { to: "2027-01-02" }), "Silvis Call - All"));
+  assert.deepStrictEqual(g.events.map(e => [e.uid, e.start.date, e.end.date, e.summary]), [
+    ["silvis-2026-12-30-group@silvis-call", "20261230", "20261231", "P Burchett \u00b7 B Acton"],
+    ["silvis-2026-12-31-group@silvis-call", "20261231", "20270102", "P Khan \u00b7 B Burchett"],
+    ["silvis-2027-01-02-group@silvis-call", "20270102", "20270103", "P Khan \u00b7 B Acton"],
+  ]);
+  assert.strictEqual(g.events[1].desc, "07:00 Thu \u2192 07:00 Sat (Central)\\nPrimary: Khan\\nBackup: Burchett");
+  const b = H.buildICSEvents(yearSchedule, "s2", roster, {});
+  assert.deepStrictEqual(b.map(e => [e.uid, e.start, e.end]), [["silvis-2026-12-30-primary@silvis-call", "20261230", "20261231"], ["silvis-2026-12-31-backup@silvis-call", "20261231", "20270102"]], "Burchett: primary 12/30, then backup across the year change");
+  [null].concat(roster.map(r => r.id)).forEach(id => {
+    const fd = FEED.generateICS(FEED.buildEvents(toRows(yearSchedule), FEED_ROSTER, id), "x");
+    assert.strictEqual(veventsOf(H.generateICS(H.buildICSEvents(yearSchedule, id, roster, {}), "x")), veventsOf(fd), `yearSchedule ${id || "group"}: the download differs from the feed`);
+    ICS.validate(fd);
+  });
+});
+check("all-day DESCRIPTION: a run of 7 days or more names its dates ('07:00 Mon 1/4 \u2192 07:00 Mon 1/11 (Central)', a weekday alone would read Mon -> Mon); a run of up to 6 days keeps the weekdays only; the download and the feed write the same line", () => {
+  assert.ok(FEED.buildEvents, "calendar-sync's @icsCore block defines buildEvents");
+  const pair = H.buildICSEvents(yearSchedule, null, roster, {}).find(e => e.uid === "silvis-2027-01-04-group@silvis-call");
+  assert.ok(pair, "the 1/4-1/10 Philip + Sarkar group run");
+  assert.deepStrictEqual([pair.start, pair.end, pair.summary], ["20270104", "20270111", "P Philip \u00b7 B Sarkar"]);
+  assert.strictEqual(pair.desc, "07:00 Mon 1/4 \u2192 07:00 Mon 1/11 (Central)\nPrimary: Philip\nBackup: Sarkar", "7 days: dated");
+  const philip = H.buildICSEvents(yearSchedule, "s4", roster, {});
+  assert.deepStrictEqual(philip.map(e => [e.start, e.end, e.desc]), [["20270103", "20270112", "07:00 Sun 1/3 \u2192 07:00 Tue 1/12 (Central)\nPrimary: Philip\nBackup: 1/3 Fierce, 1/4-1/10 Sarkar, 1/11 OPEN"]], "9 days: dated");
+  const sarkar = H.buildICSEvents(Object.assign({}, yearSchedule, { "2027-01-10": day("s4", "s3") }), "s6", roster, {});
+  assert.deepStrictEqual(sarkar.map(e => [e.start, e.end, e.desc]), [["20270104", "20270110", "07:00 Mon \u2192 07:00 Sun (Central)\nPrimary: Philip\nBackup: Sarkar"]], "6 days: weekdays only");
+  const feedPair = FEED.buildEvents(toRows(yearSchedule), FEED_ROSTER, null).find(e => e.uid === "silvis-2027-01-04-group@silvis-call");
+  assert.strictEqual(feedPair && feedPair.desc, pair.desc, "the feed writes the same dated line");
 });
 check("exports carry no contact data: no email address or phone number in the ICS files, share page, printable or ER panel documents", () => {
   const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, PHONE = /(?:\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/;
@@ -732,10 +793,10 @@ const scheduleExt = Object.assign({}, schedule, {
 });
 check("M: ICS - an outside surgeon's days are events named by last name in the group feed; his own feed (by id) and file name work", () => {
   const ev = H.buildICSEvents(scheduleExt, null, rosterExt, {}).filter(e => e.day === "2026-11-12" || e.day === "2026-11-13");
-  assert.deepStrictEqual(ev.map(e => e.summary), ["Silvis Primary Call - Locum", "Silvis Backup Call - Acton", "Silvis Primary Call - Philip", "Silvis Backup Call - Locum"]);
-  assert.ok(ev[0].desc.startsWith("Primary: Locum\nBackup: Acton\n"), ev[0].desc);
+  assert.deepStrictEqual(ev.map(e => e.summary), ["P Locum \u00b7 B Acton", "P Philip \u00b7 B Locum"]);
+  assert.ok(ev[0].desc.endsWith("\nPrimary: Locum\nBackup: Acton"), ev[0].desc);
   const mine = H.buildICSEvents(scheduleExt, "x1", rosterExt, {});
-  assert.deepStrictEqual(mine.map(e => e.day + " " + e.role + " " + e.summary), ["2026-11-12 primary Silvis Primary Call", "2026-11-13 backup Silvis Backup Call"]);
+  assert.deepStrictEqual(mine.map(e => e.day + " " + e.role + " " + e.summary), ["2026-11-12 primary Silvis Primary", "2026-11-13 backup Silvis Backup"]);
   assert.strictEqual(H.icsFileName(rosterExt[6]), "silvis-call-locum.ics");
 });
 check("M: week rows / ER panel - '11/12 Locum' is a surgeon entry (data-kind surgeon, never external); the Atwell cover is unchanged beside it", () => {

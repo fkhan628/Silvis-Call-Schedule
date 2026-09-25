@@ -21,7 +21,7 @@
 //     calendar-oct-2026.png, calendar-nov-2026.png, week-rows-oct-2026.png,
 //     day-editor-2026-10-15.png, calendar-mobile.png, calendar-oct-dark.png
 //   - Prompt 9 exports, from the Calendar tools card: the group and per-surgeon
-//     .ics downloads (VTIMEZONE, TZID lines, stable UIDs, summary naming), the
+//     .ics downloads (all-day runs since 9/25: VALUE=DATE lines, stable run UIDs, summary naming), the
 //     shareable read-only page (downloaded, re-opened through the static
 //     server, 10/15 OPEN red, week rows present, screenshot share-page.png),
 //     the printable popup (P/B strings, OPEN red, external cover, screenshot
@@ -1592,16 +1592,17 @@ try {
     const g = await saveDownload(() => page.click("[data-testid=ics-all]"));
     const n = (g.text.match(/BEGIN:VEVENT/g) || []).length;
     if (g.name !== "silvis-call-all.ics") fail("group ics filename: " + g.name);
-    else if (!g.text.startsWith("BEGIN:VCALENDAR\r\n") || !g.text.includes("BEGIN:VTIMEZONE") || !/DTSTART;TZID=America\/Chicago:\d{8}T070000\r\n/.test(g.text) || !/SUMMARY:Silvis Primary Call - \w+\r\n/.test(g.text) || !/UID:silvis-\d{4}-\d{2}-\d{2}-primary@silvis-call/.test(g.text)) fail("group ics content wrong: " + g.text.slice(0, 400).replace(/\r\n/g, " | "));
-    else ok(`group ics: ${g.name} (${n} events, VTIMEZONE + TZID lines, 'Silvis Primary Call - <Name>', stable UIDs)`);
+    // all-day runs since 9/25: DTSTART;VALUE=DATE / DTEND;VALUE=DATE, 'P <Name> \u00b7 B <Name>', UID silvis-<start>-group, no timed stamp
+    else if (!g.text.startsWith("BEGIN:VCALENDAR\r\n") || !/DTSTART;VALUE=DATE:\d{8}\r\nDTEND;VALUE=DATE:\d{8}\r\n/.test(g.text) || /TZID=|T070000/.test(g.text) || !/SUMMARY:P [\w() ]+ \u00b7 B [\w() ]+\r\n/.test(g.text) || !/UID:silvis-\d{4}-\d{2}-\d{2}-group@silvis-call/.test(g.text)) fail("group ics content wrong: " + g.text.slice(0, 400).replace(/\r\n/g, " | "));
+    else ok(`group ics: ${g.name} (${n} all-day run events, 'P <Name> \u00b7 B <Name>', UIDs silvis-<start>-group)`);
   } catch (e) { fail("group ics download: " + errLine(e)); }
   // (b) per-surgeon .ics from the tools card (Khan)
   try {
     const k = await saveDownload(() => page.click("[data-testid=ics-FAK]"));
     const n = (k.text.match(/BEGIN:VEVENT/g) || []).length;
     if (k.name !== "silvis-call-khan.ics") fail("per-surgeon ics filename: " + k.name);
-    else if (/SUMMARY:Silvis (Primary|Backup) Call - /.test(k.text) || (n > 0 && !/SUMMARY:Silvis (Primary|Backup) Call\r\n/.test(k.text))) fail("per-surgeon ics summaries wrong: " + (k.text.match(/SUMMARY:[^\r]*/g) || []).slice(0, 3).join(" | "));
-    else ok(`per-surgeon ics: ${k.name} (${n} events, summaries without a name suffix)`);
+    else if (/SUMMARY:Silvis (Primary|Backup) Call/.test(k.text) || (n > 0 && (!/SUMMARY:Silvis (Primary|Backup)\r\n/.test(k.text) || !/DTSTART;VALUE=DATE:\d{8}\r\n/.test(k.text)))) fail("per-surgeon ics summaries wrong: " + (k.text.match(/SUMMARY:[^\r]*/g) || []).slice(0, 3).join(" | "));
+    else ok(`per-surgeon ics: ${k.name} (${n} all-day run events, 'Silvis Primary' / 'Silvis Backup')`);
   } catch (e) { fail("per-surgeon ics download: " + errLine(e)); }
   // (c) share page: download 2 months, re-open through the static server, screenshot
   try {
@@ -1735,7 +1736,7 @@ try {
     await page.waitForSelector("[data-testid=download-my-calendar]", { timeout: 5000 });
     const mine = await saveDownload(() => page.click("[data-testid=download-my-calendar]"));
     const n = (mine.text.match(/BEGIN:VEVENT/g) || []).length;
-    if (mine.name !== "silvis-call-khan.ics" || !mine.text.includes("BEGIN:VTIMEZONE") || (n > 0 && !/UID:silvis-\d{4}-\d{2}-\d{2}-(primary|backup)@silvis-call/.test(mine.text))) fail("My schedule ics wrong: " + mine.name + " " + mine.text.slice(0, 200).replace(/\r\n/g, " | ")); else ok(`My schedule: ${mine.name} (${n} events, stable UIDs, VTIMEZONE)`);
+    if (mine.name !== "silvis-call-khan.ics" || !mine.text.startsWith("BEGIN:VCALENDAR\r\n") || /TZID=|T070000/.test(mine.text) || (n > 0 && (!/UID:silvis-\d{4}-\d{2}-\d{2}-(primary|backup)@silvis-call/.test(mine.text) || !/DTSTART;VALUE=DATE:\d{8}\r\n/.test(mine.text)))) fail("My schedule ics wrong: " + mine.name + " " + mine.text.slice(0, 200).replace(/\r\n/g, " | ")); else ok(`My schedule: ${mine.name} (${n} all-day run events, stable UIDs silvis-<start>-<role>)`);
     await page.screenshot({ path: path.join(OUT, "myschedule-export.png"), fullPage: false });
   } catch (e) { fail("My schedule ics: " + errLine(e)); }
   await showMonth(2026, 9);

@@ -684,11 +684,11 @@ const SILVIS_ROWS = [
 const ICS_ROSTER = { byId: { s1: { id: "s1", name: "Khan", code: "FAK" }, s2: { id: "s2", name: "Burchett", code: "MAB" }, s3: { id: "s3", name: "Acton", code: "BDA" } } };
 const ICS_WEEK = [{ weekMonday: "2026-10-12", data: { dayCall: "s2", nights: { mon: "s1", tue: "s6", wed: "s3", thu: "s4", wknd: "s5" }, off: "s7", dayCallOverrides: { "2026-10-15": "s6" } } }];
 let icsApi = null;
-check("Item D: calendar-sync carries a plain-JS '@icsCore' mirror block defining buildEvents, eastIcsEvents, generateICS, icsDate, esc and fold (the whole event / .ics shaping)", () => {
+check("Item D: calendar-sync carries a plain-JS '@icsCore' mirror block defining buildEvents (all-day runs, the default since 9/25), buildTimedEvents (?timed=1, the old per-day format), eastIcsEvents (merged Davenport runs), eastIcsDayEvents (?timed=1), generateICS, icsDate, esc and fold (the whole event / .ics shaping)", () => {
   const b = blockOf(csSrc, "calendar-sync", "icsCore");
   plainJs(b, "calendar-sync icsCore");
-  const api = new Function(b + "\nreturn { buildEvents, eastIcsEvents, generateICS, icsDate, esc, fold, addDays, UID_DOMAIN };")();
-  ["buildEvents", "eastIcsEvents", "generateICS", "icsDate", "esc", "fold", "addDays"].forEach((k) => assert.strictEqual(typeof api[k], "function", k + " is a function"));
+  const api = new Function(b + "\nreturn { buildEvents, buildTimedEvents, eastIcsEvents, eastIcsDayEvents, generateICS, icsDate, esc, fold, addDays, UID_DOMAIN };")();
+  ["buildEvents", "buildTimedEvents", "eastIcsEvents", "eastIcsDayEvents", "generateICS", "icsDate", "esc", "fold", "addDays"].forEach((k) => assert.strictEqual(typeof api[k], "function", k + " is a function"));
   assert.strictEqual(api.UID_DOMAIN, "silvis-call");
   assert.strictEqual(api.icsDate(2026, 10, 5, 7, 0), "20261005T120000Z", "07:00 CDT -> 12:00Z (the DST-aware conversion is intact)");
   assert.strictEqual(api.icsDate(2026, 12, 5, 7, 0), "20261205T130000Z", "07:00 CST -> 13:00Z");
@@ -696,8 +696,9 @@ check("Item D: calendar-sync carries a plain-JS '@icsCore' mirror block defining
 });
 const unfold = (ics) => ics.replace(/\r\n[ \t]/g, "");
 // Faraz 9/25: the day's internal note (e.g. "seed: office-er-call-panels-..." or "open (9/22)") never reaches a subscriber's
-// calendar - the event description is exactly the Primary / Backup / Shift lines, whatever the row's note says.
-check("calendar-sync: an event description carries Primary / Backup / Shift only - never the day's internal note", () => {
+// calendar - the event description is exactly the time line + Primary / Backup lines (all-day, the default) or the
+// Primary / Backup / Shift lines (?timed=1), whatever the row's note says.
+check("calendar-sync: an event description carries the times + Primary / Backup only (all-day default) or Primary / Backup / Shift (?timed=1) - never the day's internal note", () => {
   if (!icsApi) throw new Error("icsCore did not load");
   const rows = [{ day: "2026-10-05", primary_id: "s1", backup_id: "s2", external_cover: null, note: "seed: office-er-call-panels-2026-09-16" },
                 { day: "2026-10-24", primary_id: null, backup_id: "s1", external_cover: null, note: "open (9/22)" }];
@@ -705,13 +706,18 @@ check("calendar-sync: an event description carries Primary / Backup / Shift only
   assert.strictEqual(evs.length, 2, "two events for s1");
   evs.forEach((ev) => {
     assert.ok(!/Note:|seed:|office-er|open \(9\/22\)/.test(ev.desc), "no note in the description: " + JSON.stringify(ev.desc));
+    assert.ok(/^07:00 \w{3} \u2192 07:00 \w{3} \(Central\)\nPrimary: [^\n]+\nBackup: [^\n]+$/.test(ev.desc), "exactly the time line + Primary + Backup: " + JSON.stringify(ev.desc));
+  });
+  const timed = icsApi.buildTimedEvents(rows, ICS_ROSTER, "s1");
+  timed.forEach((ev) => {
+    assert.ok(!/Note:|seed:|office-er|open \(9\/22\)/.test(ev.desc), "no note in the timed description: " + JSON.stringify(ev.desc));
     assert.deepStrictEqual(ev.desc.split("\n").map((l) => l.split(":")[0]), ["Primary", "Backup", "Shift"], "exactly the three lines: " + JSON.stringify(ev.desc));
   });
-  const ics = unfold(icsApi.generateICS(evs, "Silvis - Khan"));
+  const ics = unfold(icsApi.generateICS(evs.concat(timed), "Silvis - Khan"));
   assert.ok(!/office-er|open \(9\/22\)|Note\\:|Note:/.test(ics), "the feed carries no note text");
   assert.ok(!/external_cover,note|,note&/.test(csSrc), "calendar-sync no longer reads schedule_days.note");
 });
-check("Item D ics: two Silvis days + two east_feed days -> four VEVENTs: the Silvis pair timed 07:00 Central with UIDs silvis-<day>-<role>@silvis-call, the Davenport pair ALL-DAY (DTSTART;VALUE=DATE the day, DTEND;VALUE=DATE the next day) titled 'Khan <en dash> Davenport night' / 'Khan <en dash> Davenport day call' with UIDs east-FAK-<day>-<reason>@silvis-call; a second build yields the same UIDs; a LOWER-precedence reason added later keeps the UID, a higher one (a holiday assigned onto the day) renames it", () => {
+check("Item D ics: two Silvis days + two east_feed days -> four VEVENTs: the Silvis pair ALL-DAY by default (a role change splits: 'Silvis Primary' 10/5, 'Silvis Backup' 10/6) and timed 07:00 Central under ?timed=1, UIDs silvis-<day>-<role>@silvis-call either way, the Davenport pair ALL-DAY (DTSTART;VALUE=DATE the day, DTEND;VALUE=DATE the next day) titled 'Khan <en dash> Davenport night' / 'Khan <en dash> Davenport day call' with UIDs east-FAK-<day>-<reason>@silvis-call; a second build yields the same UIDs; a LOWER-precedence reason added later keeps the UID, a higher one (a holiday assigned onto the day) renames it", () => {
   if (!icsApi || !eastApi) throw new Error("blocks did not load");
   const build = (weeks) => {
     const silvis = icsApi.buildEvents(SILVIS_ROWS, ICS_ROSTER, "s1");
@@ -725,8 +731,11 @@ check("Item D ics: two Silvis days + two east_feed days -> four VEVENTs: the Sil
   const ics = unfold(one.ics);
   assert.ok(/^BEGIN:VCALENDAR\r\n/.test(one.ics), "starts with BEGIN:VCALENDAR");
   assert.strictEqual((ics.match(/BEGIN:VEVENT/g) || []).length, 4, "four VEVENTs");
-  assert.ok(ics.indexOf("UID:silvis-2026-10-05-primary@silvis-call\r\nDTSTAMP:") >= 0 && ics.indexOf("\r\nDTSTART:20261005T120000Z\r\nDTEND:20261006T120000Z\r\nSUMMARY:Silvis Primary Call\r\n") >= 0, "the Silvis primary day is a timed event, 07:00 to 07:00 Central");
-  assert.ok(ics.indexOf("UID:silvis-2026-10-06-backup@silvis-call") >= 0 && ics.indexOf("SUMMARY:Silvis Backup Call\r\n") >= 0, "the Silvis backup day");
+  assert.ok(ics.indexOf("UID:silvis-2026-10-05-primary@silvis-call\r\nDTSTAMP:") >= 0 && ics.indexOf("\r\nDTSTART;VALUE=DATE:20261005\r\nDTEND;VALUE=DATE:20261006\r\nSUMMARY:Silvis Primary\r\n") >= 0, "the Silvis primary day is an all-day event on its start date");
+  assert.ok(ics.indexOf("UID:silvis-2026-10-06-backup@silvis-call") >= 0 && ics.indexOf("\r\nDTSTART;VALUE=DATE:20261006\r\nDTEND;VALUE=DATE:20261007\r\nSUMMARY:Silvis Backup\r\n") >= 0, "the Silvis backup day (the role change splits the run)");
+  const timedIcs = unfold(icsApi.generateICS(icsApi.buildTimedEvents(SILVIS_ROWS, ICS_ROSTER, "s1"), "Silvis - Khan"));
+  assert.ok(timedIcs.indexOf("UID:silvis-2026-10-05-primary@silvis-call\r\nDTSTAMP:") >= 0 && timedIcs.indexOf("\r\nDTSTART:20261005T120000Z\r\nDTEND:20261006T120000Z\r\nSUMMARY:Silvis Primary Call\r\n") >= 0, "?timed=1: the Silvis primary day is a timed event, 07:00 to 07:00 Central");
+  assert.ok(timedIcs.indexOf("UID:silvis-2026-10-06-backup@silvis-call") >= 0 && timedIcs.indexOf("SUMMARY:Silvis Backup Call\r\n") >= 0, "?timed=1: the Silvis backup day");
   assert.ok(ics.indexOf("UID:east-FAK-2026-10-13-night@silvis-call") >= 0, "the night's UID");
   assert.ok(ics.indexOf("\r\nDTSTART;VALUE=DATE:20261013\r\nDTEND;VALUE=DATE:20261014\r\nSUMMARY:Khan \u2013 Davenport night\r\n") >= 0, "the night is an all-day event ending the next day, titled with an en dash");
   assert.ok(ics.indexOf("UID:east-FAK-2026-10-15-override@silvis-call") >= 0 && ics.indexOf("\r\nDTSTART;VALUE=DATE:20261015\r\nDTEND;VALUE=DATE:20261016\r\nSUMMARY:Khan \u2013 Davenport day call\r\n") >= 0, "the override is 'Davenport day call'");
@@ -745,6 +754,209 @@ check("Item D ics: two Silvis days + two east_feed days -> four VEVENTs: the Sil
   const windowed = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks: ICS_WEEK, reviews: [], from: "2026-10-14", to: "2026-10-31" });
   assert.deepStrictEqual(windowed.busy.map((e) => e.day), ["2026-10-15"], "the feed window clips the East days");
   assert.strictEqual(eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: null, weeks: ICS_WEEK, reviews: [] }).busy.length, 0, "an unresolved id derives nothing (the handler answers 502 instead of a feed)");
+});
+/* ---- All-day runs (Faraz 2026-09-25: "the calendar looks busy, and 07:00 -> 07:00 shifts draw across two days") ----
+   The default feed: one ALL-DAY event per run of consecutive days (DTSTART;VALUE=DATE the first day, DTEND;VALUE=DATE the
+   day after the last - RFC 5545 exclusive end), the exact 07:00 -> 07:00 times in the description. ?timed=1 keeps the old
+   per-day timed format byte-for-byte. */
+const RUN_ROSTER = { byId: { s1: { id: "s1", name: "Khan", code: "FAK" }, s2: { id: "s2", name: "Burchett", code: "MAB" }, s3: { id: "s3", name: "Acton", code: "BDA" }, s4: { id: "s4", name: "Philip", code: "AFP" } } };
+const row = (day, p, b, ext) => ({ day, primary_id: p || null, backup_id: b || null, external_cover: ext || null });
+const BLOCK_ROWS = [row("2026-10-09", "s2", "s3"), row("2026-10-10", "s2", "s3"), row("2026-10-11", "s2", "s4")]; // Fri-Sun, Burchett's weekend block
+check("all-day: a Fri-Sun block -> ONE 3-day event (DTSTART;VALUE=DATE Fri, DTEND;VALUE=DATE Mon), 'Silvis Primary', UID silvis-<start>-primary@silvis-call, the times '07:00 Fri \u2192 07:00 Mon (Central)' and the other role's holders per day in the description; a run that grows or shrinks at its END keeps its UID, a new START day is a new UID", () => {
+  if (!icsApi) throw new Error("icsCore did not load");
+  const evs = icsApi.buildEvents(BLOCK_ROWS, RUN_ROSTER, "s2");
+  assert.deepStrictEqual(evs, [{ uid: "silvis-2026-10-09-primary@silvis-call", allDay: true, start: "20261009", end: "20261012", summary: "Silvis Primary", desc: "07:00 Fri \u2192 07:00 Mon (Central)\nPrimary: Burchett\nBackup: 10/9-10/10 Acton, 10/11 Philip" }]);
+  const ics = unfold(icsApi.generateICS(evs, "Silvis Call - Burchett"));
+  assert.strictEqual((ics.match(/BEGIN:VEVENT/g) || []).length, 1, "one VEVENT for the whole weekend");
+  assert.ok(ics.indexOf("UID:silvis-2026-10-09-primary@silvis-call\r\nDTSTAMP:") >= 0 && ics.indexOf("\r\nDTSTART;VALUE=DATE:20261009\r\nDTEND;VALUE=DATE:20261012\r\nSUMMARY:Silvis Primary\r\nDESCRIPTION:07:00 Fri \u2192 07:00 Mon (Central)\\nPrimary: Burchett\\nBackup: 10/9-10/10 Acton\\, 10/11 Philip\r\n") >= 0, "the all-day lines, the arrow as UTF-8 and the comma escaped: " + ics);
+  assert.deepStrictEqual(icsApi.buildEvents(BLOCK_ROWS, RUN_ROSTER, "s3").map((e) => [e.uid, e.start, e.end, e.summary, e.desc]), [["silvis-2026-10-09-backup@silvis-call", "20261009", "20261011", "Silvis Backup", "07:00 Fri \u2192 07:00 Sun (Central)\nPrimary: Burchett\nBackup: Acton"]], "Acton's two backup days are one 2-day bar");
+  assert.deepStrictEqual(icsApi.buildEvents(BLOCK_ROWS, RUN_ROSTER, "s4").map((e) => [e.uid, e.start, e.end, e.desc]), [["silvis-2026-10-11-backup@silvis-call", "20261011", "20261012", "07:00 Sun \u2192 07:00 Mon (Central)\nPrimary: Burchett\nBackup: Philip"]], "a single day is a one-day bar with both holders");
+  const grown = icsApi.buildEvents(BLOCK_ROWS.concat([row("2026-10-12", "s2", "s4")]), RUN_ROSTER, "s2");
+  assert.deepStrictEqual(grown.map((e) => [e.uid, e.start, e.end, e.desc]), [["silvis-2026-10-09-primary@silvis-call", "20261009", "20261013", "07:00 Fri \u2192 07:00 Tue (Central)\nPrimary: Burchett\nBackup: 10/9-10/10 Acton, 10/11-10/12 Philip"]], "grows at its end: same UID, the event updates in place");
+  const shrunk = icsApi.buildEvents(BLOCK_ROWS.slice(0, 2), RUN_ROSTER, "s2");
+  assert.deepStrictEqual(shrunk.map((e) => [e.uid, e.end]), [["silvis-2026-10-09-primary@silvis-call", "20261011"]], "shrinks at its end: same UID");
+  const earlier = icsApi.buildEvents([row("2026-10-08", "s2", "s3")].concat(BLOCK_ROWS), RUN_ROSTER, "s2");
+  assert.deepStrictEqual(earlier.map((e) => [e.uid, e.start, e.end]), [["silvis-2026-10-08-primary@silvis-call", "20261008", "20261012"]], "a new start day is a new UID (the old one disappears from the feed - a subscription deletes it and adds the new one)");
+});
+check("all-day: a role change mid-run splits (primary 10/5-10/6, backup 10/7, primary 10/8), and so does a day off (10/9 someone else) - four bars for Khan, primary before backup on a shared start day", () => {
+  if (!icsApi) throw new Error("icsCore did not load");
+  const rows = [row("2026-10-05", "s1", "s2"), row("2026-10-06", "s1", "s3"), row("2026-10-07", "s2", "s1"), row("2026-10-08", "s1", "s2"), row("2026-10-09", "s2", "s3"), row("2026-10-10", "s1", "s2")];
+  const evs = icsApi.buildEvents(rows, RUN_ROSTER, "s1");
+  assert.deepStrictEqual(evs.map((e) => [e.uid, e.start, e.end, e.summary]), [
+    ["silvis-2026-10-05-primary@silvis-call", "20261005", "20261007", "Silvis Primary"],
+    ["silvis-2026-10-07-backup@silvis-call", "20261007", "20261008", "Silvis Backup"],
+    ["silvis-2026-10-08-primary@silvis-call", "20261008", "20261009", "Silvis Primary"],
+    ["silvis-2026-10-10-primary@silvis-call", "20261010", "20261011", "Silvis Primary"],
+  ]);
+  assert.strictEqual(evs[0].desc, "07:00 Mon \u2192 07:00 Wed (Central)\nPrimary: Khan\nBackup: 10/5 Burchett, 10/6 Acton", "the other role's holder is listed per day when it changes");
+  assert.strictEqual(evs[1].desc, "07:00 Wed \u2192 07:00 Thu (Central)\nPrimary: Burchett\nBackup: Khan");
+  const gap = icsApi.buildEvents([row("2026-10-05", "s1", "s2"), row("2026-10-07", "s1", "s2")], RUN_ROSTER, "s1");
+  assert.deepStrictEqual(gap.map((e) => e.uid), ["silvis-2026-10-05-primary@silvis-call", "silvis-2026-10-07-primary@silvis-call"], "a missing day (no row) splits too");
+});
+check("all-day group feed: ONE event per run of consecutive days with the SAME primary AND the SAME backup, titled 'P <name> \u00b7 B <name>' (OPEN / '<name> (external cover)'), UID silvis-<start>-group@silvis-call; a day with neither assignment produces no event and breaks the run", () => {
+  if (!icsApi) throw new Error("icsCore did not load");
+  const rows = [row("2026-10-09", "s2", "s3"), row("2026-10-10", "s2", "s3"), row("2026-10-11", "s2", "s4"), row("2026-10-12", "s2", "s4"),
+    row("2026-10-13", null, null), row("2026-10-14", null, "s1", "Lee"), row("2026-10-15", null, "s1", "Lee"), row("2026-10-16", "s1", null),
+    row("2026-10-17", "s1", null), row("2026-10-18", "s3", "s1"), row("2026-10-19", null, null, "Lee"), row("2026-10-20", "s3", "s1")];
+  const evs = icsApi.buildEvents(rows, RUN_ROSTER, null);
+  assert.deepStrictEqual(evs.map((e) => [e.uid, e.start, e.end, e.summary]), [
+    ["silvis-2026-10-09-group@silvis-call", "20261009", "20261011", "P Burchett \u00b7 B Acton"],
+    ["silvis-2026-10-11-group@silvis-call", "20261011", "20261013", "P Burchett \u00b7 B Philip"],
+    ["silvis-2026-10-14-group@silvis-call", "20261014", "20261016", "P Lee (external cover) \u00b7 B Khan"],
+    ["silvis-2026-10-16-group@silvis-call", "20261016", "20261018", "P Khan \u00b7 B OPEN"],
+    ["silvis-2026-10-18-group@silvis-call", "20261018", "20261019", "P Acton \u00b7 B Khan"],
+    ["silvis-2026-10-20-group@silvis-call", "20261020", "20261021", "P Acton \u00b7 B Khan"],
+  ], "same primary with a different backup splits (10/11); the empty 10/13 and the cover-only 10/19 make no event and split identical pairs (10/18 | 10/20)");
+  assert.strictEqual(evs[0].desc, "07:00 Fri \u2192 07:00 Sun (Central)\nPrimary: Burchett\nBackup: Acton");
+  const ics = unfold(icsApi.generateICS(evs, "Silvis Call - All"));
+  assert.ok(ics.indexOf("\r\nDTSTART;VALUE=DATE:20261009\r\nDTEND;VALUE=DATE:20261011\r\nSUMMARY:P Burchett \u00b7 B Acton\r\n") >= 0, "the group bar, the middle dot as UTF-8");
+  assert.strictEqual(new Set(evs.map((e) => e.uid)).size, evs.length, "unique UIDs (runs partition the days)");
+});
+check("all-day Davenport: consecutive busy days with the SAME reason merge into one bar - a service week Mon-Sat is ONE event 'Khan \u2013 Davenport service week' (UID east-FAK-<first day>-service-week@silvis-call, DTEND the Sunday), the extra reasons listed per day in the description; the Sunday weekend is its own bar; away ranges stay one event per range", () => {
+  if (!icsApi || !eastApi) throw new Error("blocks did not load");
+  const weeks = [{ weekMonday: "2026-10-12", data: { dayCall: "s6", nights: { mon: "s1", tue: "s6", wed: "s3", thu: "s4", wknd: "s6" }, off: "s7", vacations: [{ code: "FAK", start: "2026-10-26", end: "2026-10-28" }] } }];
+  const entries = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks, reviews: [{ person_id: "s1", start: "2026-10-26", end: "2026-10-28", decision: "away" }], from: "2026-10-01", to: "2026-12-31" });
+  assert.strictEqual(entries.busy.length, 7, "seven busy days in the fixture (Mon-Sat service week + the Sunday weekend)");
+  const ev = icsApi.eastIcsEvents(entries, "FAK");
+  assert.deepStrictEqual(ev.map((e) => [e.uid, e.start, e.end, e.summary]), [
+    ["east-FAK-2026-10-12-service-week@silvis-call", "20261012", "20261018", "Khan \u2013 Davenport service week"],
+    ["east-FAK-2026-10-18-weekend@silvis-call", "20261018", "20261019", "Khan \u2013 Davenport weekend"],
+    ["east-FAK-away-2026-10-26-2026-10-28@silvis-call", "20261026", "20261029", "Khan \u2013 away (Davenport vacation)"],
+  ]);
+  assert.ok(ev.every((e) => e.allDay === true));
+  assert.strictEqual(ev[0].desc, "Davenport (East) call:\n10/12 Davenport service week\n10/13 Davenport service week, Davenport night\n10/14-10/15 Davenport service week\n10/16 Davenport service week, Davenport weekend\n10/17 Davenport service week\nSource: the Davenport schedule as cached in the Silvis East feed");
+  assert.strictEqual(ev[1].desc, "Davenport (East) call: Davenport weekend\nSource: the Davenport schedule as cached in the Silvis East feed", "a run whose days share one detail keeps today's one-line description");
+  assert.deepStrictEqual(icsApi.eastIcsDayEvents(entries, "FAK").filter((e) => /service-week|weekend/.test(e.uid)).map((e) => e.uid.slice(9, 19)), ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"], "?timed=1 keeps one all-day event per busy day (today's format)");
+  const ics = unfold(icsApi.generateICS(ev, "Silvis + Davenport - Khan"));
+  assert.ok(ics.indexOf("\r\nDTSTART;VALUE=DATE:20261012\r\nDTEND;VALUE=DATE:20261018\r\nSUMMARY:Khan \u2013 Davenport service week\r\n") >= 0, "one bar Mon-Sat");
+});
+// Captured from calendar-sync v4 (a1aee16, BEFORE the all-day change) with DTSTAMP normalised to "X": buildEvents +
+// eastIcsEvents + generateICS on TIMED_ROWS (both clock changes, an escaped external cover, an OPEN backup, a note)
+// and ICS_WEEK. ?timed=1 must reproduce it byte-for-byte.
+const TIMED_ROWS = [
+  { day: "2026-10-30", primary_id: "s2", backup_id: "s3", external_cover: null },
+  { day: "2026-10-31", primary_id: "s1", backup_id: "s2", external_cover: null },
+  { day: "2026-11-01", primary_id: "s1", backup_id: "s2", external_cover: null, note: "Bring, the; pager" },
+  { day: "2026-11-03", primary_id: null, backup_id: "s1", external_cover: "Lee, locum; a" + String.fromCharCode(92) + "b" },
+  { day: "2026-11-04", primary_id: "s1", backup_id: null, external_cover: null },
+  { day: "2027-03-13", primary_id: "s1", backup_id: "s3", external_cover: null },
+];
+const TIMED_V4_KHAN_EAST = [
+  "BEGIN:VCALENDAR",
+  "VERSION:2.0",
+  "PRODID:-//Silvis Call Schedule//EN",
+  "CALSCALE:GREGORIAN",
+  "METHOD:PUBLISH",
+  "X-WR-CALNAME:Silvis + Davenport - Khan",
+  "X-WR-TIMEZONE:America/Chicago",
+  "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
+  "X-PUBLISHED-TTL:PT1H",
+  "BEGIN:VEVENT",
+  "UID:silvis-2026-10-31-primary@silvis-call",
+  "DTSTAMP:X",
+  "DTSTART:20261031T120000Z",
+  "DTEND:20261101T130000Z",
+  "SUMMARY:Silvis Primary Call",
+  "DESCRIPTION:Primary: Khan\\nBackup: Burchett\\nShift: 07:00 to 07:00 next day",
+  "  (Central)",
+  "END:VEVENT",
+  "BEGIN:VEVENT",
+  "UID:silvis-2026-11-01-primary@silvis-call",
+  "DTSTAMP:X",
+  "DTSTART:20261101T130000Z",
+  "DTEND:20261102T130000Z",
+  "SUMMARY:Silvis Primary Call",
+  "DESCRIPTION:Primary: Khan\\nBackup: Burchett\\nShift: 07:00 to 07:00 next day",
+  "  (Central)",
+  "END:VEVENT",
+  "BEGIN:VEVENT",
+  "UID:silvis-2026-11-03-backup@silvis-call",
+  "DTSTAMP:X",
+  "DTSTART:20261103T130000Z",
+  "DTEND:20261104T130000Z",
+  "SUMMARY:Silvis Backup Call",
+  "DESCRIPTION:Primary: Lee\\, locum\\; a\\\\b (external cover)\\nBackup: Khan\\nShi",
+  " ft: 07:00 to 07:00 next day (Central)",
+  "END:VEVENT",
+  "BEGIN:VEVENT",
+  "UID:silvis-2026-11-04-primary@silvis-call",
+  "DTSTAMP:X",
+  "DTSTART:20261104T130000Z",
+  "DTEND:20261105T130000Z",
+  "SUMMARY:Silvis Primary Call",
+  "DESCRIPTION:Primary: Khan\\nBackup: OPEN\\nShift: 07:00 to 07:00 next day (Ce",
+  " ntral)",
+  "END:VEVENT",
+  "BEGIN:VEVENT",
+  "UID:silvis-2027-03-13-primary@silvis-call",
+  "DTSTAMP:X",
+  "DTSTART:20270313T130000Z",
+  "DTEND:20270314T120000Z",
+  "SUMMARY:Silvis Primary Call",
+  "DESCRIPTION:Primary: Khan\\nBackup: Acton\\nShift: 07:00 to 07:00 next day (C",
+  " entral)",
+  "END:VEVENT",
+  "BEGIN:VEVENT",
+  "UID:east-FAK-2026-10-13-night@silvis-call",
+  "DTSTAMP:X",
+  "DTSTART;VALUE=DATE:20261013",
+  "DTEND;VALUE=DATE:20261014",
+  "SUMMARY:Khan \u2013 Davenport night",
+  "DESCRIPTION:Davenport (East) call: Davenport night\\nSource: the Davenport s",
+  " chedule as cached in the Silvis East feed",
+  "END:VEVENT",
+  "BEGIN:VEVENT",
+  "UID:east-FAK-2026-10-15-override@silvis-call",
+  "DTSTAMP:X",
+  "DTSTART;VALUE=DATE:20261015",
+  "DTEND;VALUE=DATE:20261016",
+  "SUMMARY:Khan \u2013 Davenport day call",
+  "DESCRIPTION:Davenport (East) call: Davenport day call\\nSource: the Davenpor",
+  " t schedule as cached in the Silvis East feed",
+  "END:VEVENT",
+  "END:VCALENDAR",
+  "",
+].join("\r\n");
+// The v4 group feed on TIMED_ROWS (101 lines, 2823 bytes) - pinned by its SHA-256.
+const TIMED_V4_GROUP_SHA256 = "b3713dfd0a2832c0360fef53791b0543547f3f9f9fc2bed0c952466e08e65179";
+check("?timed=1 reproduces the pre-9/25 (v4) output byte-for-byte: buildTimedEvents + eastIcsDayEvents + generateICS on a fixture across both clock changes equal the captured v4 text (DTSTAMP normalised) - the per-surgeon + Davenport feed line for line, the group feed by SHA-256", () => {
+  if (!icsApi || !eastApi) throw new Error("blocks did not load");
+  const norm = (t) => t.replace(/DTSTAMP:\d{8}T\d{6}Z/g, "DTSTAMP:X");
+  const entries = eastApi.eastEntries({ lastName: "Khan", code: "FAK", rosterId: "s1", eastId: DAV_FAK, weeks: ICS_WEEK, reviews: [], from: "2026-10-01", to: "2027-12-31" });
+  const khan = norm(icsApi.generateICS(icsApi.buildTimedEvents(TIMED_ROWS, ICS_ROSTER, "s1").concat(icsApi.eastIcsDayEvents(entries, "FAK")), "Silvis + Davenport - Khan"));
+  const a = khan.split("\r\n"), b = TIMED_V4_KHAN_EAST.split("\r\n");
+  const i = a.findIndex((l, k) => l !== b[k]);
+  assert.strictEqual(khan, TIMED_V4_KHAN_EAST, "first difference at line " + i + ": " + JSON.stringify(a[i]) + " vs v4 " + JSON.stringify(b[i]));
+  const group = norm(icsApi.generateICS(icsApi.buildTimedEvents(TIMED_ROWS, ICS_ROSTER, null), "Silvis Call - All"));
+  assert.strictEqual(Buffer.byteLength(group, "utf8"), 2823, "the v4 group text is 2823 bytes");
+  assert.strictEqual(require("crypto").createHash("sha256").update(group, "utf8").digest("hex"), TIMED_V4_GROUP_SHA256, "the group feed differs from v4");
+});
+check("calendar-sync handler: ?timed=1 (1 / true / yes) picks buildTimedEvents + eastIcsDayEvents over EXACTLY the old window; the default builds all-day runs from rows read RUN_LOOKBACK_DAYS earlier and drops the runs that end before the window (a run straddling today-60 keeps its start day, so its UID does not move daily); X-WR-CALNAME, 200 / 404 / 405 unchanged", () => {
+  const h = csSrc.slice(csSrc.indexOf("Deno.serve(async (req) =>"));
+  assert.ok(/const timedParam = \(url\.searchParams\.get\("timed"\) \|\| ""\)\.trim\(\)\.toLowerCase\(\);/.test(h) && /const timed = timedParam === "1" \|\| timedParam === "true" \|\| timedParam === "yes";/.test(h), "the timed param is read like east");
+  assert.ok(/const RUN_LOOKBACK_DAYS = 14;/.test(csSrc) && /const readFrom = addDays\(from, -RUN_LOOKBACK_DAYS\);/.test(h) && /day=gte\.\$\{readFrom\}&day=lte\.\$\{to\}/.test(h), "rows are read from the lookback");
+  assert.ok(/timed\s*\? buildTimedEvents\(rows\.filter\(\(r\) => String\(r\.day\)\.slice\(0, 10\) >= from\), roster, onlyId\)\s*: endsOnOrAfter\(buildEvents\(rows, roster, onlyId\), from\)/.test(h), "the Silvis events by mode");
+  assert.ok(/timed\s*\? eastIcsDayEvents\(eastEntries\(\{[^}]*from, to \}\), code\)\s*: endsOnOrAfter\(eastIcsEvents\(eastEntries\(\{[^}]*from: readFrom, to \}\), code\), from\)/.test(h), "the Davenport events by mode");
+  assert.ok(/let title = "Silvis Call - All";/.test(h) && /title = `Silvis Call - \$\{who\.name\}`;/.test(h), "X-WR-CALNAME unchanged");
+  if (!icsApi) throw new Error("icsCore did not load");
+  const b = blockOf(csSrc, "calendar-sync", "icsCore");
+  const endsOnOrAfter = new Function(b + "\nreturn endsOnOrAfter;")();
+  const evs = icsApi.buildEvents([row("2026-10-09", "s2", "s3"), row("2026-10-10", "s2", "s3"), row("2026-10-13", "s1", "s3")], RUN_ROSTER, null);
+  assert.deepStrictEqual(endsOnOrAfter(evs, "2026-10-10").map((e) => e.uid), ["silvis-2026-10-09-group@silvis-call", "silvis-2026-10-13-group@silvis-call"], "a run that reaches the window's first day is kept whole (its start and UID unchanged)");
+  assert.deepStrictEqual(endsOnOrAfter(evs, "2026-10-11").map((e) => e.uid), ["silvis-2026-10-13-group@silvis-call"], "a run that ended before the window is dropped");
+});
+check("all-day docs: the calendar-sync header documents the all-day default, the run UIDs (silvis-<start>-<role> / silvis-<start>-group, a new start day = a new UID) and ?timed=1; edge-functions/README.md section 3 carries a PENDING calendar-sync v4 -> v5 row and section 5 the all-day + ?timed=1 checks; docs/SILVIS-BUILD-GUIDE.md says the feed is all-day by default, ?timed=1 keeps the old format and the app's download is all-day only", () => {
+  const head = csSrc.slice(0, csSrc.indexOf("const SUPABASE_URL"));
+  assert.ok(/VALUE=DATE/.test(head) && /silvis-<start>-<role>@silvis-call/.test(head) && /silvis-<start>-group@silvis-call/.test(head) && /timed=1/.test(head), "the header names the format, the UIDs and ?timed=1");
+  assert.ok(/new UID/.test(head) && /updates? (it )?in place/.test(head), "the header says what a start-day change does (a new UID) and that an end change updates in place");
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  assert.ok(/\| PENDING \| `calendar-sync` \| v4 -> v5 \(pending\)/.test(s3), "section 3: a PENDING calendar-sync v4 -> v5 row");
+  const s5 = readme.slice(readme.indexOf("### calendar-sync"), readme.indexOf("### office-notifications"));
+  assert.ok(/timed=1/.test(s5) && /DTSTART;VALUE=DATE/.test(s5) && /P <name> \. B <name>|P Burchett/.test(s5), "section 5: the all-day default and the ?timed=1 check");
+  const guide = read("docs/SILVIS-BUILD-GUIDE.md");
+  assert.ok(/timed=1/.test(guide) && /all-day/i.test(guide) && /download[^\n]*all-day only|all-day only[^\n]*download/i.test(guide), "the build guide: all-day default, ?timed=1, the download all-day only");
+  const tools = read("index-source.html").split("Calendar files (.ics)")[1] || "";
+  assert.ok(/earlier file[^<]*delete those events first/i.test(tools.slice(0, tools.indexOf("</p>"))), "the Calendar files note tells someone who imported an earlier per-day file to delete those events first (an import never removes events; review 9/25)");
 });
 check("Item D ics: an East vacation range reviewed as away -> one all-day event 'Khan <en dash> away (Davenport vacation)' over the whole range (DTEND the day after), UID east-FAK-away-<start>-<end>@silvis-call; a 'home' review, an unreviewed range, another person's review or a review whose range is no longer in the feed -> no event", () => {
   if (!icsApi || !eastApi) throw new Error("blocks did not load");

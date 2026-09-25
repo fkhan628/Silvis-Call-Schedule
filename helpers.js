@@ -1242,15 +1242,16 @@ function monthLabel(ym) { return EXPORT_MONTH_NAMES[ym.month] + " " + ym.year; }
 function monthRange(ym) { return { start: fmt(new Date(ym.year, ym.month, 1)), end: fmt(new Date(ym.year, ym.month + 1, 0)) }; }
 
 /* ═══ ICS Calendar Generation ═══
-   Client-side twin of edge-functions/calendar-sync/index.ts: same SUMMARY
-   strings, same 07:00 -> 07:00 next-day boundaries, same stable UID, same
-   DESCRIPTION lines. The server converts Central wall-clock to UTC per
-   endpoint; the download instead writes the LOCAL wall-clock with
-   TZID=America/Chicago and ships the CST/CDT rules in a VTIMEZONE block, so
-   every calendar app resolves each endpoint with its own offset (a shift
-   spanning the November fall-back still runs 07:00 to 07:00). */
+   Client-side twin of edge-functions/calendar-sync/index.ts buildEvents, the
+   feed's default ALL-DAY format since 2026-09-25 (Faraz: "the calendar looks
+   busy, and 07:00 -> 07:00 shifts draw across two days"): one all-day event per
+   run of consecutive days with the same SUMMARY, DESCRIPTION, UID and
+   DTSTART;VALUE=DATE / DTEND;VALUE=DATE lines - test/exports.test.js evaluates
+   the feed's @icsCore block and requires the download's VEVENTs to equal the
+   feed's. The download is all-day only (the feed alone keeps the old per-day
+   07:00 -> 07:00 events behind ?timed=1). generateICS still writes TZID local
+   stamps plus a VTIMEZONE block for a caller that passes timed tzid events. */
 const ICS_TZID = "America/Chicago";
-const ICS_SHIFT_START = "T070000";
 const ICS_UID_DOMAIN = "silvis-call";
 const ICS_ROLE_LABEL = { primary: "Primary", backup: "Backup" };
 
@@ -1288,13 +1289,50 @@ function icsVTimezone(tzid) {
   ].join("\r\n");
 }
 
-// buildICSEvents(schedule, surgeonId, roster, { from, to }) -> events sorted by
-// day (primary before backup). surgeonId null = the whole group (summaries
-// carry " - <Name>"). Null slots are skipped and an externalCover is not an
-// event (it is not a roster member); the backup event of such a day still
-// names the cover in its description. from/to (YYYY-MM-DD, inclusive) are
-// optional. Each event: { uid, day, role, surgeonId, tzid, start, end,
-// summary, desc } with start/end as LOCAL wall-clock stamps (07:00).
+// Date-string helpers for the runs (UTC arithmetic on YYYY-MM-DD, no zone involved).
+const ICS_WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function icsYmdParts(s) { return String(s).split("-").map(Number); }
+function icsAddDays(s, n) {
+  const p = icsYmdParts(s), d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + n));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+function icsWeekday(s) { const p = icsYmdParts(s); return ICS_WEEKDAY[new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay()]; }
+function icsMd(s) { const p = icsYmdParts(s); return `${p[1]}/${p[2]}`; }
+// An endpoint of a run for the times line: the weekday, plus M/D when the run is 7+ days
+// (the weekdays alone would read "Mon -> Mon"); the calendar-sync feed does the same (runTimesLine).
+function icsRunAt(run, s) { return icsAddDays(run.first, 7) <= icsAddDays(run.last, 1) ? `${icsWeekday(s)} ${icsMd(s)}` : icsWeekday(s); }
+// "Backup: Acton" when one holder covers the run, else "Backup: 10/9-10/10 Acton, 10/11 Philip".
+function icsHolderLine(label, days) {
+  const groups = [];
+  days.forEach(x => {
+    const g = groups[groups.length - 1];
+    if (g && g.name === x.name) g.last = x.day;
+    else groups.push({ first: x.day, last: x.day, name: x.name });
+  });
+  if (groups.length === 1) return `${label}: ${groups[0].name}`;
+  return `${label}: ` + groups.map(g => (g.first === g.last ? icsMd(g.first) : `${icsMd(g.first)}-${icsMd(g.last)}`) + " " + g.name).join(", ");
+}
+
+// buildICSEvents(schedule, surgeonId, roster, { from, to }) -> ALL-DAY events,
+// one per run of consecutive days (the calendar-sync feed's default format):
+//   surgeonId given: the days that surgeon holds the SAME role, titled
+//     "Silvis Primary" / "Silvis Backup", UID silvis-<start>-<role>@silvis-call;
+//   surgeonId null (the group): the days with the SAME primary AND backup,
+//     titled "P <name> \u00b7 B <name>" (OPEN for an empty slot, "<name> (external
+//     cover)" for an externalCover), UID silvis-<start>-group@silvis-call. A day
+//     with neither a primary nor a backup is no event and ends the run; an
+//     externalCover alone is not an event (it is not a roster member).
+// UIDs are keyed on the run's START day: a run growing or shrinking at its end
+// keeps its UID; a new start day is a new UID. start = the first day, end = the
+// day after the last (YYYYMMDD, exclusive - DTEND;VALUE=DATE). desc: "07:00 Fri
+// \u2192 07:00 Mon (Central)"; a run of 7+ days adds the dates, "07:00 Mon 1/4 ->
+// 07:00 Mon 1/11"), then "Primary: ..." / "Backup: ..." (each holder with
+// its days when it changes inside the run). The day's internal note never
+// reaches a calendar (Faraz 9/25). from/to (YYYY-MM-DD, inclusive, optional)
+// filter the days before the runs are merged. Each event: { uid, allDay: true,
+// day (first), last, role ('primary' | 'backup' | 'group'), surgeonId (null for
+// the group), start, end, summary, desc }; sorted by first day, primary before
+// backup on a shared first day.
 function buildICSEvents(schedule, surgeonId, roster, range) {
   const sched = schedule || {};
   const r = range || {};
@@ -1302,30 +1340,42 @@ function buildICSEvents(schedule, surgeonId, roster, range) {
   const nameById = {}; list.forEach(x => { if (x && x.id) nameById[x.id] = x.name || x.id; });
   const nameOf = (id) => id ? (nameById[id] || id) : "OPEN";
   const only = surgeonId || null;
-  const events = [];
+  const days = [];
   Object.keys(sched).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().forEach(day => {
     if (r.from && day < r.from) return;
     if (r.to && day > r.to) return;
     const a = sched[day];
     if (!a) return;
-    const next = fmt(addD(parse(day), 1));
-    const primaryLabel = a.primary ? nameOf(a.primary) : (a.externalCover ? `${a.externalCover} (external cover)` : "OPEN");
-    const backupLabel = nameOf(a.backup || null);
-    ["primary", "backup"].forEach(role => {
-      const id = role === "primary" ? a.primary : a.backup;
-      if (!id) return;
-      if (only && id !== only) return;
-      const summary = only ? `Silvis ${ICS_ROLE_LABEL[role]} Call` : `Silvis ${ICS_ROLE_LABEL[role]} Call - ${nameOf(id)}`;
-      const descLines = [`Primary: ${primaryLabel}`, `Backup: ${backupLabel}`, "Shift: 07:00 to 07:00 next day (Central)"];
-      // the day's internal note never reaches a calendar (Faraz 9/25) - the calendar-sync feed drops it the same way
-      events.push({
-        uid: `silvis-${day}-${role}@${ICS_UID_DOMAIN}`, day, role, surgeonId: id, tzid: ICS_TZID,
-        start: day.replace(/-/g, "") + ICS_SHIFT_START, end: next.replace(/-/g, "") + ICS_SHIFT_START,
-        summary, desc: descLines.join("\n"),
-      });
+    days.push({
+      day, primaryId: a.primary || null, backupId: a.backup || null,
+      primaryKey: a.primary ? "id:" + a.primary : (a.externalCover ? "ext:" + a.externalCover : ""),
+      primaryName: a.primary ? nameOf(a.primary) : (a.externalCover ? `${a.externalCover} (external cover)` : "OPEN"),
+      backupName: nameOf(a.backup || null),
     });
   });
-  return events;
+  const pairKey = (d) => d.primaryKey + "|" + (d.backupId || "");
+  const runs = [], current = {};
+  days.forEach(d => {
+    const keys = only
+      ? ["primary", "backup"].filter(role => (role === "primary" ? d.primaryId : d.backupId) === only)
+      : ((d.primaryId || d.backupId) ? ["group"] : []);
+    keys.forEach(key => {
+      const cur = current[key];
+      if (cur && cur.last === icsAddDays(d.day, -1) && (key !== "group" || cur.pair === pairKey(d))) { cur.last = d.day; cur.days.push(d); }
+      else { const run = { key, first: d.day, last: d.day, pair: pairKey(d), days: [d] }; runs.push(run); current[key] = run; }
+    });
+  });
+  return runs.map(run => ({
+    uid: `silvis-${run.first}-${run.key}@${ICS_UID_DOMAIN}`, allDay: true,
+    day: run.first, last: run.last, role: run.key, surgeonId: only,
+    start: run.first.replace(/-/g, ""), end: icsAddDays(run.last, 1).replace(/-/g, ""),
+    summary: only ? `Silvis ${ICS_ROLE_LABEL[run.key]}` : `P ${run.days[0].primaryName} \u00b7 B ${run.days[0].backupName}`,
+    desc: [
+      `07:00 ${icsRunAt(run, run.first)} \u2192 07:00 ${icsRunAt(run, icsAddDays(run.last, 1))} (Central)`,
+      icsHolderLine("Primary", run.days.map(x => ({ day: x.day, name: x.primaryName }))),
+      icsHolderLine("Backup", run.days.map(x => ({ day: x.day, name: x.backupName }))),
+    ].join("\n"),
+  }));
 }
 
 // File names: per surgeon "silvis-call-<lastname>.ics", group "silvis-call-all.ics".
@@ -1335,11 +1385,13 @@ function icsFileName(surgeonOrName) {
   return `silvis-call-${slug || "all"}.ics`;
 }
 
-// generateICS(events, calName, opts) -> the VCALENDAR text. Events carrying
-// `tzid` are written as DTSTART;TZID=<tz>:<local stamp> and the calendar gets
-// one VTIMEZONE block for that zone (opts.tz === false suppresses both);
-// events without tzid keep the old floating/UTC form. UIDs come from the
-// event when present (stable per day + role) - a random one otherwise.
+// generateICS(events, calName, opts) -> the VCALENDAR text. An `allDay` event
+// (buildICSEvents) is written as DTSTART;VALUE=DATE / DTEND;VALUE=DATE with its
+// YYYYMMDD start / end. Events carrying `tzid` are written as
+// DTSTART;TZID=<tz>:<local stamp> and the calendar gets one VTIMEZONE block for
+// that zone (opts.tz === false suppresses both); other events keep the old
+// floating/UTC form. UIDs come from the event when present (stable per run
+// start + role) - a random one otherwise.
 function generateICS(events, calName, opts) {
   const o = opts || {};
   const evs = Array.isArray(events) ? events : [];
@@ -1355,7 +1407,8 @@ function generateICS(events, calName, opts) {
   evs.forEach(e => {
     if (!e) return;
     lines.push("BEGIN:VEVENT", `UID:${e.uid || randomUid()}`, `DTSTAMP:${stamp}`);
-    if (useTz && e.tzid) lines.push(`DTSTART;TZID=${e.tzid}:${e.start}`, `DTEND;TZID=${e.tzid}:${e.end}`);
+    if (e.allDay) lines.push(`DTSTART;VALUE=DATE:${e.start}`, `DTEND;VALUE=DATE:${e.end}`);
+    else if (useTz && e.tzid) lines.push(`DTSTART;TZID=${e.tzid}:${e.start}`, `DTEND;TZID=${e.tzid}:${e.end}`);
     else lines.push(`DTSTART:${e.start}`, `DTEND:${e.end}`);
     lines.push(icsFold(`SUMMARY:${icsEscape(e.summary)}`), icsFold(`DESCRIPTION:${icsEscape(e.desc)}`), "END:VEVENT");
   });

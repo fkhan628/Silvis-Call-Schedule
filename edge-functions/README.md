@@ -178,6 +178,30 @@ After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 
+### Deploy record - calendar-sync all-day runs (Faraz 2026-09-25: "the calendar looks busy, and 07:00 -> 07:00 shifts draw across two days") - PENDING
+
+One function changes; `office-notifications`, `send-notification` and `daily-reminder` are untouched and are NOT
+redeployed. No schema, no RLS, no write. The feed becomes ALL-DAY by default: one all-day event per run of consecutive
+days (`DTSTART;VALUE=DATE` = the first day, `DTEND;VALUE=DATE` = the day after the last), the exact times in the
+description (`07:00 Fri -> 07:00 Mon (Central)`, the arrow is U+2192 in the feed); per surgeon a run is the same role
+(`Silvis Primary` / `Silvis Backup`, a Fri-Sun block is one 3-day bar), the group feed a run of the same primary AND
+backup (`P Burchett . B Acton`, the dot is a middle dot, U+00B7); `east=1` merges consecutive Davenport days with the
+same reason (a service week Mon-Sat is one bar). UIDs `silvis-<start>-<role>@silvis-call` / `silvis-<start>-group@silvis-call`
+/ `east-<CODE>-<start>-<reason>@silvis-call`: a run that grows or shrinks at its end updates in place; a new start day
+is a new UID (the old event is deleted and the new one added on the subscriber's next refresh). `?timed=1` serves the
+v4 format byte-for-byte (one 07:00 -> 07:00 event per day and role, `Silvis Primary Call[ - <Name>]`, UIDs
+`silvis-<day>-<role>@silvis-call`, one all-day Davenport event per busy day) - for anyone who prefers it. Subscribers
+see their calendar redrawn on the first refresh after the deploy (each run's first-day event updates in place; the
+per-day events of its other days drop out; the group feed's per-role UIDs are replaced by the `-group` ones).
+Counts computed read-only from the anon-readable rows on 2026-09-25 (window 2026-07-27 .. 2027-10-30) by running the
+new `@icsCore` block: group 216 -> 82 events, `?surgeon=FAK` 28 -> 14, `?surgeon=MAB` 43 -> 35, `?surgeon=NF` 45 -> 16,
+`?surgeon=FAK&east=1` 55 -> 31 (14 Silvis + 12 Davenport runs from 22 busy days + the 5 away ranges, which are
+authenticated-read and inferred as 55 - 28 - 22); `?timed=1` reproduces 216 / 28 / 43 / 45 / 55.
+
+| when (UTC) | slug | version before -> after | what changed | proof (section 5, no mail can result) |
+|---|---|---|---|---|
+| PENDING | `calendar-sync` | v4 -> v5 (pending) | all-day runs by default (`buildEvents`, `eastIcsEvents` merged runs, `endsOnOrAfter` + a `RUN_LOOKBACK_DAYS = 14` read so a run straddling today-60 that started at most 14 days before it keeps its start day; the description dates a run of 7+ days); the old per-day format behind `?timed=1` (`buildTimedEvents`, `eastIcsDayEvents`, exactly the old window); X-WR-CALNAME, 200 / 404 / 405 unchanged | pending: unauthenticated GET plain -> 200 `BEGIN:VCALENDAR`, `DTSTART;VALUE=DATE:` lines, `SUMMARY:P <name> . B <name>`, about 82 events; `?surgeon=FAK` about 14 (`SUMMARY:Silvis Primary` / `Silvis Backup`); `?surgeon=MAB` about 35; `?surgeon=NF` about 16; `?surgeon=FAK&east=1` about 31; `?timed=1` on each equals the v4 counts (216 / 28 / 43 / 45 / 55) and shapes; `?surgeon=ZZZ` -> 404; POST -> 405 |
+
 ### Deploy record - Prompt 19 S3 (give a day: the applied give is mailed to the scheduler too) - deployed 2026-09-25 05:36:23 UTC by the orchestrator
 
 One function changes; `calendar-sync`, `office-notifications` and `daily-reminder` are untouched and are NOT
@@ -387,7 +411,9 @@ in PowerShell (the `curl` alias is Invoke-WebRequest).
 ### calendar-sync (unauthenticated GET)
 ```powershell
 curl.exe -s -i "$URL/calendar-sync"              | Select-Object -First 12   # 200, Content-Type text/calendar, BEGIN:VCALENDAR
-curl.exe -s   "$URL/calendar-sync?surgeon=FAK"   | Select-Object -First 20   # X-WR-CALNAME:Silvis Call - Khan, SUMMARY:Silvis Primary Call
+curl.exe -s   "$URL/calendar-sync?surgeon=FAK"   | Select-Object -First 20   # X-WR-CALNAME:Silvis Call - Khan, DTSTART;VALUE=DATE:..., SUMMARY:Silvis Primary (all-day runs, v5)
+curl.exe -s   "$URL/calendar-sync"               | Select-String "SUMMARY:P " | Select-Object -First 3   # SUMMARY:P Burchett . B Acton (a middle dot, U+00B7) - one event per run of the same pair
+curl.exe -s   "$URL/calendar-sync?surgeon=FAK&timed=1" | Select-Object -First 20   # the v4 format: DTSTART:...T120000Z / T130000Z, SUMMARY:Silvis Primary Call
 curl.exe -s -i "$URL/calendar-sync?surgeon=ZZZ"  | Select-Object -First 3    # 404 JSON error
 curl.exe -s -i -X POST "$URL/calendar-sync"      | Select-Object -First 3    # 405
 # Item D (2026-09-24): the combined Silvis + Davenport feed - the same feed plus ALL-DAY Davenport events
@@ -395,13 +421,19 @@ curl.exe -s "$URL/calendar-sync?surgeon=FAK&east=1" | Select-String "X-WR-CALNAM
 #   -> X-WR-CALNAME:Silvis + Davenport - Khan; DTSTART;VALUE=DATE:YYYYMMDD / DTEND;VALUE=DATE:<next day>;
 #      SUMMARY:Khan - Davenport night | service week | weekend | holiday | day call (a one-day day-call override),
 #      SUMMARY:Khan - away (Davenport vacation) for an East vacation range reviewed as away; UIDs east-FAK-<date>-<reason>@silvis-call
+#      (since v5 one event per run of consecutive days with the same reason - a service week Mon-Sat is one bar, <date> its first day;
+#      with &timed=1 one event per busy day as in v3 / v4)
 #      (the dash in every SUMMARY line is an en dash, U+2013 - bytes E2 80 93; this README stays ASCII, so do not byte-compare it)
 curl.exe -s "$URL/calendar-sync?surgeon=NF&east=1"  | Select-Object -First 8    # exactly like ?surgeon=NF (her East feature derives weeks, no busy-day role: the flag is ignored)
 curl.exe -s "$URL/calendar-sync?east=1"             | Select-Object -First 8    # exactly like the group feed (east=1 needs a single surgeon)
 curl.exe -s -i "$URL/calendar-sync?surgeon=ZZZ&east=1" | Select-Object -First 3 # 404 as without the flag
 ```
-Expect one VEVENT per filled role per day inside today-60 .. today+400. Spot-check
-a date in CDT: `DTSTART:...T120000Z` for 07:00 Central; in CST `T130000Z`.
+Since v5 (all-day runs) expect one VEVENT per run of consecutive days inside today-60 .. today+400 (a run that
+started up to 14 days before the window is served whole): `DTSTART;VALUE=DATE:<first day>` / `DTEND;VALUE=DATE:<the day
+after the last>`, the description starting `07:00 <Wkd> -> 07:00 <Wkd> (Central)` (the arrow is U+2192; a run of 7+ days
+adds M/D to each end, `07:00 Mon 1/4 -> 07:00 Mon 1/11`). With `?timed=1`
+expect the v4 shape - one VEVENT per filled role per day inside today-60 .. today+400; spot-check a date in CDT:
+`DTSTART:...T120000Z` for 07:00 Central; in CST `T130000Z`.
 If the first call returns 401 the dashboard toggle re-enabled Verify JWT - turn it off.
 `?surgeon=FAK&east=1` answering `502 {"error":"East id for FAK unresolved ..."}` means neither an `east_forecast` row
 (`data.code` + `data.fakId`) nor the Davenport roster blob could name the code - the feed is withheld on purpose
