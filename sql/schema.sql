@@ -53,7 +53,7 @@
 -- Revision 2026-09-24 m (Prompt 16 follow-up 5b, sql/migrations/2026-09-24-trade-audit-names.sql, applied 2026-09-24 ~17:21 Central after the probes): apply_trade()'s
 -- audit row carries actor_name (the caller's user_profiles.display_name, else the roster name, else the id) and detail.summary in the client's
 -- trade.accept wording (roster names by id); claim_open_slot()'s audit detail gains the same summary key (its feed title). Nothing else in either body changes.
--- Revision 2026-09-24 n (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql, report-first, NOT yet applied): shift_trade_requests.kind
+-- Revision 2026-09-24 n (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql, applied 2026-09-25 ~00:34 Central after the probes): shift_trade_requests.kind
 -- 'trade' | 'give' (default 'trade'; a give carries no return leg - shift_trade_requests_give_one_way); trade_insert_guard() lets a member
 -- insert a 'give' with no return shift and refuses a 'give' with a return leg for every caller (TRADE_INELIGIBLE); trade_update_guard() adds kind
 -- to the TRADE_IMMUTABLE leg list. apply_trade() is unchanged (the receiver already applies a one-way row as a party). The member return-leg

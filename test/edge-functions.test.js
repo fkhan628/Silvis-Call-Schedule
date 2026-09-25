@@ -498,12 +498,12 @@ check("Prompt 19 S3 source pins - send-notification: after the trade row is read
   assert.ok(/Prompt 19 S3/.test(snSrc) && /\bv7\b/.test(snSrc), "the file header names the Prompt 19 S3 change (v7)");
   assert.ok(/trade_applied[^\n]*scheduler/.test(snSrc.slice(0, snSrc.indexOf("import "))), "the payload contract names trade_applied's scheduler ids");
 });
-check("Prompt 19 S3: edge-functions/README.md - section 3 carries the PENDING send-notification v6 -> v7 row (deploy BEFORE the Prompt 19 client push) with the proofs to observe; section 5 lists the trade_applied + scheduler check; the gate row names it", () => {
+check("Prompt 19 S3: edge-functions/README.md - section 3 carries the DEPLOYED send-notification v6 -> v7 row (deploy BEFORE the Prompt 19 client push) with the proofs to observe; section 5 lists the trade_applied + scheduler check; the gate row names it", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   assert.ok(/Prompt 19/.test(s3), "section 3 names Prompt 19");
-  assert.ok(/send-notification[^\n]*v6 -> v7 \(pending\)/.test(s3), "section 3: send-notification v6 -> v7 (pending)");
+  assert.ok(/send-notification[^\n]*v6 -> v7 \(deployed 2026-09-25 05:36/.test(s3), "section 3: send-notification v6 -> v7 (deployed 2026-09-25 05:36 UTC)");
   assert.ok(/BEFORE the Prompt 19 client push/.test(s3), "section 3 states the order (v7 first - under v6 the give's applied mail is refused whole)");
-  const row = s3.split("\n").find((l) => /v6 -> v7 \(pending\)/.test(l)) || "";
+  const row = s3.split("\n").find((l) => /v6 -> v7 \(deployed/.test(l)) || "";
   assert.ok(/403/.test(row) && /scheduler/.test(row) && /trade_applied/.test(row), "the pending row names the proofs (a scheduler beside the parties passes; a third surgeon still 403): " + row.slice(0, 160));
   const s5 = readme.slice(readme.indexOf("### send-notification"), readme.indexOf("### daily-reminder"));
   assert.ok(/Prompt 19/.test(s5) && /trade_applied/.test(s5) && /scheduler/.test(s5), "section 5 lists the trade_applied + scheduler case");
@@ -583,7 +583,7 @@ check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame 
   const pc = (head.split("\n").find((l) => l.includes("POST { type: string, data: {")) || "");
   assert.ok(pc.includes("kind?: 'give'"), "the Payload contract line names the optional data.kind: " + pc.trim());
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
-  const row = s3.split("\n").find((l) => /v6 -> v7 \(pending\)/.test(l)) || "";
+  const row = s3.split("\n").find((l) => /v6 -> v7 \(deployed/.test(l)) || "";
   assert.ok(/data\.kind/.test(row) && /Give Applied/.test(row) && /Day Offered/.test(row), "the pending v7 row names the S4 give headings: " + row.slice(0, 160));
 });
 check("B5 (3): index-source.html - every trade_* sendEmailNotif call passes data.trade_id (the shift_trade_requests row id) so the v6 function accepts it; there is no trade_accepted mail call", () => {

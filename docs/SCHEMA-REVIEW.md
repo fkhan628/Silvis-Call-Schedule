@@ -893,7 +893,7 @@ Backfill (Faraz 9/24, same session, after the apply): the two `trade.apply` rows
 
 ## 2026-09-24 - give a day: shift_trade_requests.kind (Prompt 19)
 
-**Status: PREPARED - report-first (not applied).** `sql/migrations/2026-09-24-give-kind.sql` adds a column and two checks to
+**Status: APPLIED 2026-09-25 ~00:34 Central (05:34 UTC) by the orchestrator through the linked CLI, under Faraz's 9/24 go ("push if it appears things will go well"); the member return-leg refusal is NOT in it (the prepared follow-up below).** `sql/migrations/2026-09-24-give-kind.sql` adds a column and two checks to
 `shift_trade_requests` and replaces two live trigger functions (`trade_insert_guard`, `trade_update_guard`; guide section 4.3), so
 this section is the report; the orchestrator applies the file after Faraz's go and fills the *observed:* line at the end. Source:
 Faraz 9/24, Prompt 19 "Give a day away" - a member offers one of his days (or a whole weekend / holiday unit, one row per day) to a
@@ -1042,7 +1042,7 @@ Rolling back = re-running the B6 `trade_insert_guard` and the 9/23 `trade_update
 then `alter table public.shift_trade_requests drop constraint shift_trade_requests_give_one_way, drop constraint
 shift_trade_requests_kind_check, drop column kind;` (only after every give row is gone or re-labelled - the column is data).
 
-observed: _to be filled by the orchestrator after the apply_
+observed: applied 2026-09-25 05:34:26 UTC (`supabase db query --linked -f sql/migrations/2026-09-24-give-kind.sql`, empty result, no error). Trade probe BEFORE (35 cases): every give case `ERR column kind of relation shift_trade_requests does not exist` (GIVE_SETUP, O, P, Q2, Q4, R, S, S2, U2, U3), `P2=ERR TRADE_NOT_FOUND`, `S3=rows=0 status=null`, `T=ERR TRADE_NOT_FOUND`, `T2=actor=null summary=null`, and the stored `Q=status=pending return=null`, `Q3=status=pending return=2030-03-04 return_role=null`, `U=status=pending from=s3 return=null`. AFTER: `GIVE_SETUP=ok`, `O=status=pending from=s2 kind=give return=null`, `P=status=pending from=s2 kind=give`, `P2=ERR TRADE_STALE: 2030-03-03 primary is no longer held by s2`, `Q2` / `Q4` / `U2` = `ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift`, `R` / `S2` = `ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade`, `S=rows=0 kind=trade`, `S3=rows=1 status=accepted`, `T=status=applied 03-25p=s2`, `T2=actor=Burchett summary=Trade applied: Burchett takes Primary Mon Mar 25 (from Acton, one-way)`, `U3=status=pending from=s3 kind=give`; `Q`, `Q3` and `U` identical before and after (old installed builds keep working - the split); the 17 other cases identical before and after. `scripts/verify-rls.sh` afterwards: 160 passed, 0 failed. send-notification v7 (the give's `trade_applied` may add the scheduler ids) deployed 2026-09-25 05:36:23 UTC BEFORE the client push, as the order requires (edge-functions/README.md section 3).
 
 ## 2026-09-25 - member trade return leg (Prompt 19 follow-up; `sql/migrations/2026-09-25-member-trade-return-leg.sql`)
 
