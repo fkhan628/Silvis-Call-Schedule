@@ -59,6 +59,10 @@
 -- to the TRADE_IMMUTABLE leg list. apply_trade() is unchanged (the receiver already applies a one-way row as a party). The member return-leg
 -- refusal (a member 'trade' without return_day AND return_role) is DEFERRED to the follow-up below - old installed builds send a whole-unit
 -- trade's tail rows without a return leg, so a member's one-way 'trade' is still accepted, as today.
+-- Revision 2026-09-24 o (Prompt 20 F1, sql/migrations/2026-09-24-followers.sql, report-first, NOT yet applied): FOLLOWERS - user_profiles.follows jsonb
+-- (the roster ids an account follows; a JSON array of non-empty strings, user_profiles_follows_shape; admin-set through user_profiles_admin -
+-- user_profiles_self_update and _self_insert pin it); notification_preferences keyed by a new id (person_id stays UNIQUE and becomes nullable,
+-- profile_id -> user_profiles for an unlinked follower, exactly one of the two: notification_preferences_one_owner); prefs_own adds profile_id = auth.uid().
 -- PREPARED FOLLOW-UP, NOT MIRRORED (sql/migrations/2026-09-25-member-trade-return-leg.sql, report-first, NOT applied): trade_insert_guard() with the member return-leg refusal
 -- added back (S1's body); apply only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain. This file
 -- mirrors what the next apply makes live, so its body is NOT below; the commit that records its apply mirrors it and adds Revision 2026-09-25 p here
@@ -76,6 +80,7 @@ create table if not exists public.user_profiles (
   role          text not null default 'viewer' check (role in ('admin','scheduler','surgeon','viewer','coordinator')),   -- coordinator: Prompt 16 A7 (office users)
   email         text,
   display_name  text,
+  follows       jsonb not null default '[]'::jsonb,   -- Prompt 20 F1: roster ids this account follows (admin-set)
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -87,6 +92,13 @@ alter table public.user_profiles add constraint user_profiles_role_check
 alter table public.user_profiles drop constraint if exists user_profiles_coordinator_unlinked;
 alter table public.user_profiles add constraint user_profiles_coordinator_unlinked
   check (role <> 'coordinator' or person_id is null);   -- an office account is never a roster entry
+-- Prompt 20 F1 (followers, sql/migrations/2026-09-24-followers.sql): the column on an EXISTING table and its shape - a JSON
+-- array of non-empty strings (roster ids, e.g. ["s2"]; strict jsonpath, so a nested array is refused). Only the admin writes
+-- it (user_profiles_admin; user_profiles_self_update and _self_insert below pin it).
+alter table public.user_profiles add column if not exists follows jsonb not null default '[]'::jsonb;
+alter table public.user_profiles drop constraint if exists user_profiles_follows_shape;
+alter table public.user_profiles add constraint user_profiles_follows_shape
+  check (case when jsonb_typeof(follows) = 'array' then not jsonb_path_exists(follows, 'strict $[*] ? (@.type() != "string" || @ == "")') else false end);
 
 -- Profile rows are created by the database when an auth user is created/invited (and the
 -- email is kept in sync), so Setup -> Users can link a person who has never opened the app.
@@ -1061,13 +1073,31 @@ create table if not exists public.notifications (
 create index if not exists notifications_created_idx on public.notifications(created_at desc);
 
 create table if not exists public.notification_preferences (
-  person_id                 text primary key,
+  id                        uuid primary key default gen_random_uuid(),   -- Prompt 20 F1: the key (person_id was, until revision o)
+  person_id                 text unique,                                  -- a surgeon's row: his roster id (null on a follower's row)
+  profile_id                uuid unique references public.user_profiles(id) on delete cascade,   -- a follower's row: his profile id (Prompt 20 F1)
   schedule_updates_email    boolean not null default true,
   trade_updates_email       boolean not null default true,
   shift_reminders_email     boolean not null default true,
   reminder_hour_central     integer check (reminder_hour_central between 0 and 23),
-  updated_at                timestamptz not null default now()
+  updated_at                timestamptz not null default now(),
+  constraint notification_preferences_one_owner check (num_nonnulls(person_id, profile_id) = 1)
 );
+-- Prompt 20 F1 (followers, sql/migrations/2026-09-24-followers.sql): the same shape on an EXISTING table, where person_id was
+-- the primary key. person_id becomes UNIQUE before the key moves to id (an upsert that names on_conflict=person_id keeps
+-- resolving; the client's prefs save does), then nullable; profile_id is an unlinked follower's key; exactly one of the two.
+alter table public.notification_preferences add column if not exists id uuid not null default gen_random_uuid();
+alter table public.notification_preferences add column if not exists profile_id uuid references public.user_profiles(id) on delete cascade;
+alter table public.notification_preferences drop constraint if exists notification_preferences_person_id_key;
+alter table public.notification_preferences add constraint notification_preferences_person_id_key unique (person_id);
+alter table public.notification_preferences drop constraint if exists notification_preferences_pkey;
+alter table public.notification_preferences add constraint notification_preferences_pkey primary key (id);
+alter table public.notification_preferences alter column person_id drop not null;
+alter table public.notification_preferences drop constraint if exists notification_preferences_profile_id_key;
+alter table public.notification_preferences add constraint notification_preferences_profile_id_key unique (profile_id);
+alter table public.notification_preferences drop constraint if exists notification_preferences_one_owner;
+alter table public.notification_preferences add constraint notification_preferences_one_owner
+  check (num_nonnulls(person_id, profile_id) = 1);   -- a surgeon's row (person_id) or a follower's row (profile_id), never both, never neither
 
 create table if not exists public.audit_log (
   id          uuid primary key default gen_random_uuid(),
@@ -1217,19 +1247,21 @@ create policy east_vacation_reviews_self_delete on public.east_vacation_reviews 
 -- session addresses notifications to - schedulerIdsLoud); a scheduler / admin reads every row. Self-update of display_name
 -- only: role, person_id AND email are pinned against self-service (the Resend sender must never be re-pointed by its
 -- owner); corrections are the admin's (user_profiles_admin; Setup -> Users is isAdmin-gated in the client).
+-- Prompt 20 F1: follows (whom an account follows) is pinned the same way, and a self-insert follows nobody - the admin sets it.
 drop policy if exists user_profiles_read on public.user_profiles;
 create policy user_profiles_read on public.user_profiles for select to authenticated
   using (id = auth.uid() or public.silvis_is_sched() or role in ('admin','scheduler'));
 drop policy if exists user_profiles_self_insert on public.user_profiles;
 create policy user_profiles_self_insert on public.user_profiles for insert to authenticated
-  with check (id = auth.uid() and role = 'viewer' and person_id is null);   -- signup lands as viewer, unlinked; admin links + promotes
+  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb);   -- signup lands as viewer, unlinked, following nobody; admin links + promotes
 drop policy if exists user_profiles_self_update on public.user_profiles;
 create policy user_profiles_self_update on public.user_profiles for update to authenticated
   using (id = auth.uid())
   with check (id = auth.uid()
     and role = (select role from public.user_profiles p where p.id = auth.uid())
     and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())
-    and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id or email
+    and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())
+    and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id or email, nor choose whom it follows
 drop policy if exists user_profiles_admin on public.user_profiles;
 create policy user_profiles_admin on public.user_profiles for all to authenticated
   using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');
@@ -1281,11 +1313,11 @@ create policy notif_insert on public.notifications for insert to authenticated
 drop policy if exists notif_delete_sched on public.notifications;
 create policy notif_delete_sched on public.notifications for delete to authenticated using (public.silvis_is_sched());
 
--- notification_preferences: own row
+-- notification_preferences: own row - a linked person's by person_id, an unlinked follower's by profile_id (Prompt 20 F1) - or scheduler
 drop policy if exists prefs_own on public.notification_preferences;
 create policy prefs_own on public.notification_preferences for all to authenticated
-  using (person_id = public.silvis_person_id() or public.silvis_is_sched())
-  with check (person_id = public.silvis_person_id() or public.silvis_is_sched());
+  using (person_id = public.silvis_person_id() or profile_id = auth.uid() or public.silvis_is_sched())
+  with check (person_id = public.silvis_person_id() or profile_id = auth.uid() or public.silvis_is_sched());
 
 -- audit_log: insert by a scheduler / admin, by a linked person writing as themself (actor_id = their roster id - what
 -- the client's logAudit sends; Prompt 16 A1) or by a coordinator writing as itself (actor_id = auth.uid()::text - logAudit's

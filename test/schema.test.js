@@ -1111,6 +1111,9 @@ const PRELAUNCH_CASES = ["S1", "S2", "S3", "S4", "L1", "L2", "L3", "L4", "L5", "
 // Prompt 16 A7 re-creates notif_insert + audit_insert with the coordinator clause: schema.sql mirrors the A7 texts for those
 // two (pinned in the A7 block below); the A1 migration file keeps its own texts.
 const PRELAUNCH_SUPERSEDED_BY_A7 = ["notif_insert", "audit_insert"];
+// Prompt 20 F1 (2026-09-24-followers.sql) re-creates user_profiles_self_update with the follows pin: schema.sql mirrors the F1
+// text for it (pinned in the F1 block below); the A1 migration file keeps its own text.
+const PRELAUNCH_SUPERSEDED = PRELAUNCH_SUPERSEDED_BY_A7.concat(["user_profiles_self_update"]);
 function checkPrelaunchPolicies(n, s, superseded) {
   Object.keys(PRELAUNCH_POLICIES).forEach((p) => {
     ok(s.indexOf("drop policy if exists " + p + " on public." + PRELAUNCH_TABLE_OF[p] + ";") >= 0, n + ": `drop policy if exists " + p + " on public." + PRELAUNCH_TABLE_OF[p] + ";` missing (idempotency)");
@@ -1157,14 +1160,14 @@ ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-0
 ok(/REPORT-FIRST|report-first/.test(prelaunchMig), "the prelaunch migration header must say it is report-first (RLS on the live database)");
 
 step("P16 A1: schema.sql mirrors the six policies, both guards and the grants byte for byte; user_profiles_admin stays admin-only");
-checkPrelaunchPolicies("schema.sql", schema, PRELAUNCH_SUPERSEDED_BY_A7);
+checkPrelaunchPolicies("schema.sql", schema, PRELAUNCH_SUPERSEDED);
 checkPrelaunchGuards("schema.sql", schema);
-Object.keys(PRELAUNCH_POLICIES).filter((p) => !PRELAUNCH_SUPERSEDED_BY_A7.includes(p)).forEach((p) => ok(policyText(schema, p) === policyText(prelaunchMig, p), "policy " + p + ": schema.sql differs from the prelaunch migration"));
+Object.keys(PRELAUNCH_POLICIES).filter((p) => !PRELAUNCH_SUPERSEDED.includes(p)).forEach((p) => ok(policyText(schema, p) === policyText(prelaunchMig, p), "policy " + p + ": schema.sql differs from the prelaunch migration"));
 ["call_offers_guard", "call_offers_delete_guard"].forEach((name) => ok(functionText(schema, name) === functionText(prelaunchMig, name), name + "(): schema.sql differs from the prelaunch migration"));
 ok(schema.indexOf(OFFER_STATUS_GRANTS) >= 0, "schema.sql must carry the offer_status grants right after its definition");
 ok(schema.indexOf(OFFER_STATUS_GRANTS) > schema.indexOf("create or replace function public.offer_status(") && schema.indexOf(OFFER_STATUS_GRANTS) < schema.indexOf("create or replace function public.call_offers_guard("), "the offer_status grants sit between offer_status() and call_offers_guard()");
 ok(schema.indexOf("create policy user_profiles_admin on public.user_profiles for all to authenticated\n  using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');") > 0, "schema.sql: user_profiles_admin must stay admin-only (Setup -> Users is isAdmin-gated in the client; a scheduler-role account corrects nothing there)");
-ok(schema.indexOf("create policy user_profiles_self_insert on public.user_profiles for insert to authenticated\n  with check (id = auth.uid() and role = 'viewer' and person_id is null);") > 0, "schema.sql: user_profiles_self_insert unchanged (viewer, unlinked)");
+ok(schema.indexOf("create policy user_profiles_self_insert on public.user_profiles for insert to authenticated\n  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb);") > 0, "schema.sql: user_profiles_self_insert lands as viewer, unlinked and (Prompt 20 F1) following nobody");
 ok(/-- Revision 2026-09-24 j \(Prompt 16 A1, sql\/migrations\/2026-09-24-prelaunch-rls\.sql, applied 2026-09-23[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 j (the pre-launch RLS migration, applied 2026-09-23)");
 ok(!/create policy notif_delete/.test(offersMig) && !/notif_delete_sched/.test(claimMigration), "notif_delete_sched belongs to the prelaunch migration only");
 
@@ -1376,7 +1379,7 @@ ok(/save_offers\('zz', /.test(coProbe) && /set_offer_mode\(o::uuid, 'preferred',
 
 step("P16 A7: verify-rls.sh section 11 - the client gates, the probe graded case by case, leftovers counted, nothing written over REST");
 ok(/^echo "== 11\. /m.test(vr), "verify-rls.sh has no section 11");
-const s11 = vr.slice(vr.indexOf('echo "== 11. '));
+const s11 = vr.slice(vr.indexOf('echo "== 11. '), vr.indexOf('echo "== 12. ') > vr.indexOf('echo "== 11. ') ? vr.indexOf('echo "== 12. ') : vr.length);   // section 12a' reads the live Pages client (Prompt 20 F1)
 ok(s11.length > 0 && s11.length < vr.length, "verify-rls.sh section 11 could not be sliced out");
 ok(/coordinator-probe\.sql/.test(s11), "section 11 must run sql/probes/coordinator-probe.sql through the linked CLI");
 COORD_CASES.forEach((k) => ok(new RegExp("expect_(eq|err)11\\s+" + k + "\\s").test(s11), "section 11 does not grade probe case " + k));
@@ -1879,5 +1882,183 @@ ok(reviewFu.includes("and t.detail ~ ', day 1 of [0-9]+\\]'") && reviewFu.includ
 ["Q", "Q3"].forEach((k) => ok(reviewFu.includes("| `" + k + "` |") && reviewFu.includes("`" + FU_Q + "`"), "the follow-up section's probe table must list " + k + " refused (`" + FU_Q + "`)"));
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-25-member-trade-return-leg\.sql/.test(reviewFu) && /Revision 2026-09-25 p/.test(reviewFu) && /PREPARED_NOT_MIRRORED/.test(reviewFu), "the follow-up section must carry the CLI apply line and its record step (Revision 2026-09-25 p, mirror, PREPARED_NOT_MIRRORED emptied, Q / Q3 re-graded)");
 ok(/observed: /.test(reviewFu), "the follow-up section must carry an 'observed:' line");
+
+// ---- Prompt 20 F1 (2026-09-24) - followers: user_profiles.follows + notification_preferences for an unlinked account ----
+// sql/migrations/2026-09-24-followers.sql (REPORT-FIRST, not applied; revision o): a viewer / coordinator account follows roster
+// ids (user_profiles.follows, admin-set: the self-update / self-insert policies pin it, user_profiles_admin is the write path of
+// Setup > Users) and owns a notification_preferences row by profile_id (the table's key moves from person_id to a new id; person_id
+// stays UNIQUE so an upsert that names on_conflict=person_id still resolves; exactly one of person_id / profile_id is set).
+// schema.sql mirrors every text byte for byte; sql/probes/followers-probe.sql rolls itself back (users keyed 'probe-follow-',
+// the surgeon linked to the non-roster id 'probe-follow'); scripts/verify-rls.sh section 12 grades it.
+const FOLLOW_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-followers.sql");
+const FOLLOW_PROBE = path.join(ROOT, "sql", "probes", "followers-probe.sql");
+const FOLLOW_SHAPE = "check (case when jsonb_typeof(follows) = 'array' then not jsonb_path_exists(follows, 'strict $[*] ? (@.type() != \"string\" || @ == \"\")') else false end)";
+const FOLLOW_DDL = [   // in this order: person_id is UNIQUE before the key moves; the key moves before person_id may be null
+  "alter table public.user_profiles add column if not exists follows jsonb not null default '[]'::jsonb;",
+  "alter table public.user_profiles drop constraint if exists user_profiles_follows_shape;",
+  "alter table public.user_profiles add constraint user_profiles_follows_shape\n  " + FOLLOW_SHAPE + ";",
+  "alter table public.notification_preferences add column if not exists id uuid not null default gen_random_uuid();",
+  "alter table public.notification_preferences add column if not exists profile_id uuid references public.user_profiles(id) on delete cascade;",
+  "alter table public.notification_preferences drop constraint if exists notification_preferences_person_id_key;",
+  "alter table public.notification_preferences add constraint notification_preferences_person_id_key unique (person_id);",
+  "alter table public.notification_preferences drop constraint if exists notification_preferences_pkey;",
+  "alter table public.notification_preferences add constraint notification_preferences_pkey primary key (id);",
+  "alter table public.notification_preferences alter column person_id drop not null;",
+  "alter table public.notification_preferences drop constraint if exists notification_preferences_profile_id_key;",
+  "alter table public.notification_preferences add constraint notification_preferences_profile_id_key unique (profile_id);",
+  "alter table public.notification_preferences drop constraint if exists notification_preferences_one_owner;",
+  "alter table public.notification_preferences add constraint notification_preferences_one_owner\n  check (num_nonnulls(person_id, profile_id) = 1);",
+];
+const FOLLOW_POLICIES = {
+  user_profiles_self_insert: "create policy user_profiles_self_insert on public.user_profiles for insert to authenticated\n  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb);",
+  user_profiles_self_update: "create policy user_profiles_self_update on public.user_profiles for update to authenticated\n  using (id = auth.uid())\n  with check (id = auth.uid()\n    and role = (select role from public.user_profiles p where p.id = auth.uid())\n    and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())\n    and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())\n    and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid()));",
+  prefs_own: "create policy prefs_own on public.notification_preferences for all to authenticated\n  using (person_id = public.silvis_person_id() or profile_id = auth.uid() or public.silvis_is_sched())\n  with check (person_id = public.silvis_person_id() or profile_id = auth.uid() or public.silvis_is_sched());",
+};
+const FOLLOW_TABLE_OF = { user_profiles_self_insert: "user_profiles", user_profiles_self_update: "user_profiles", prefs_own: "notification_preferences" };
+const FOLLOW_CASES = ["R1", "K1", "F1", "F2", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "A1", "A2", "A3", "A4", "A5", "A6", "F3", "F4", "S1", "S2", "S3", "S4", "I1", "I2", "X1"];
+const FOLLOW_AFTER = {   // the exact AFTER value of every case graded by equality (R1 is graded by grade_r1_12: ids = rows and person + profile = rows on every run; person=N profile=0 only on the apply-time run)
+  K1: "pk=id unique=person_id,profile_id", F2: "updated=1", P1: "ok rows=1 schedule=false", P2: "updated=1", P3: "own=1 others=0", P4: "updated=0", P5: "deleted=0",
+  A1: "updated=1 follows=[\"s2\"]", A5: "probe_rows=3", F3: "follows=[\"s2\"]", S1: "ok rows=1 schedule=false", S3: "own=1 others=0", I2: "ok follows=[]", X1: "before=1 after=0",
+};
+const FOLLOW_ERR = {   // [SQLSTATE, the substring the grader looks for]
+  F1: ["42501", "for table \"user_profiles\""], F4: ["42501", "for table \"user_profiles\""], S4: ["42501", "for table \"user_profiles\""], I1: ["42501", "for table \"user_profiles\""],
+  P6: ["42501", "for table \"notification_preferences\""], P7: ["42501", "for table \"notification_preferences\""], P8: ["42501", "for table \"notification_preferences\""],
+  P9: ["23514", "notification_preferences_one_owner"], A6: ["23514", "notification_preferences_one_owner"],
+  A2: ["23514", "user_profiles_follows_shape"], A3: ["23514", "user_profiles_follows_shape"], A4: ["23514", "user_profiles_follows_shape"],
+  S2: ["23505", "notification_preferences_person_id_key"],
+};
+function checkFollowers(n, s) {
+  let at = -1;
+  FOLLOW_DDL.forEach((d) => {
+    const i = s.indexOf(d);
+    ok(i >= 0, n + ": missing DDL line:\n" + d);
+    ok(i > at, n + ": DDL line out of order (person_id UNIQUE before the key moves; the key before `drop not null`):\n" + d);
+    at = i;
+  });
+  Object.keys(FOLLOW_POLICIES).forEach((p) => {
+    ok(s.indexOf("drop policy if exists " + p + " on public." + FOLLOW_TABLE_OF[p] + ";") >= 0, n + ": `drop policy if exists " + p + " on public." + FOLLOW_TABLE_OF[p] + ";` missing (idempotency)");
+    ok(s.indexOf(FOLLOW_POLICIES[p]) >= 0, n + ": policy " + p + " must read exactly:\n" + FOLLOW_POLICIES[p]);
+    eq((s.match(new RegExp("create policy " + p + " on public\\.", "g")) || []).length, 1, n + ": policy " + p + " must be created exactly once;");
+  });
+}
+step("P20 F1: the followers migration file - follows + its shape check + the two pins, the notification_preferences key move, prefs_own, nothing else");
+const followMig = read(FOLLOW_MIGRATION);
+ok(!/\r/.test(followMig), "followers migration has CRLF line endings");
+checkFollowers("followers migration", followMig);
+eq((followMig.match(/^create policy /gm) || []).length, 3, "the followers migration must create exactly three policies (user_profiles_self_insert, user_profiles_self_update, prefs_own);");
+eq((followMig.match(/^drop policy if exists /gm) || []).length, 3, "the followers migration must drop-if-exists exactly the three policies;");
+eq((followMig.match(/^alter table /gm) || []).length, FOLLOW_DDL.length, "the followers migration's ALTER statements are exactly the pinned DDL lines;");
+const followStmts = followMig.replace(/--[^\n]*/g, "");
+ok(!/create or replace function|create table|drop table|drop column|create trigger|drop trigger|user_profiles_admin/.test(followStmts), "the followers migration must not define a function, create / drop a table or column, touch a trigger or re-create user_profiles_admin (the admin's write path stays as it is)");
+ok(!/^\s*(insert|update|delete)\b/im.test(followStmts), "the followers migration must not write a row (every existing notification_preferences row keeps its person_id; the new columns fill by default)");
+ok(/^-- supersedes: sql\/migrations\/2026-09-24-prelaunch-rls\.sql$/m.test(followMig), "the followers migration must declare `-- supersedes: sql/migrations/2026-09-24-prelaunch-rls.sql` (same day; it re-creates A1's user_profiles_self_update with the follows pin)");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-followers\.sql/.test(followMig), "the followers migration header must carry the CLI apply line for the orchestrator");
+ok(/REPORT-FIRST/.test(followMig) && /Blast radius/.test(followMig), "the followers migration header must say it is report-first and state the blast radius");
+ok(/select count\(\*\) from public\.notification_preferences;/.test(followMig), "the followers migration header must carry the read-only pre-count (the probe's R1 must equal it after)");
+ok(/on_conflict=person_id/.test(followMig) && /DEPLOY THAT CLIENT FIRST/.test(followMig), "the followers migration header must say the client's prefs upsert names on_conflict=person_id and ships BEFORE the apply (without it PostgREST resolves the merge on the primary key, which moves to id)");
+ok(/send-notification/.test(followMig) && /daily-reminder/.test(followMig), "the followers migration header must state that both edge functions' person_id reads stay valid");
+ok(/user_profiles_admin/.test(followMig) && /isAdmin/.test(followMig) && /not widened to schedulers/.test(followMig), "the followers migration header must name the admin write path (user_profiles_admin; Setup > Users is isAdmin-gated) and say it is not widened to schedulers");
+
+step("P20 F1: schema.sql mirrors the followers migration byte for byte, the from-scratch tables carry the new shape, the header records revision o");
+checkFollowers("schema.sql", schema);
+Object.keys(FOLLOW_POLICIES).forEach((p) => ok(policyText(schema, p) === policyText(followMig, p), "policy " + p + ": schema.sql differs from the followers migration"));
+ok(/\n  follows       jsonb not null default '\[\]'::jsonb,/.test(schema.slice(schema.indexOf("create table if not exists public.user_profiles ("), schema.indexOf("create or replace function public.handle_new_auth_user()"))), "schema.sql's user_profiles create table must carry `follows jsonb not null default '[]'::jsonb` (a from-scratch schema)");
+ok(schema.indexOf(FOLLOW_DDL[0]) > schema.indexOf("alter table public.user_profiles add constraint user_profiles_coordinator_unlinked") && schema.indexOf(FOLLOW_DDL[2]) < schema.indexOf("create or replace function public.handle_new_auth_user()"), "the follows DDL sits right after the user_profiles constraints, before handle_new_auth_user()");
+const prefsTable = sliceBetween(schema, "create table if not exists public.notification_preferences (", "\n);");
+ok(prefsTable && /\n  id                        uuid primary key default gen_random_uuid\(\),/.test(prefsTable) && /\n  person_id                 text unique,/.test(prefsTable) && /\n  profile_id                uuid unique references public\.user_profiles\(id\) on delete cascade,/.test(prefsTable) && /\n  constraint notification_preferences_one_owner check \(num_nonnulls\(person_id, profile_id\) = 1\)\n\);$/.test(prefsTable), "schema.sql's notification_preferences create table must carry id (primary key), person_id unique, profile_id unique -> user_profiles on delete cascade and the one-owner check (a from-scratch schema)");
+ok(!/person_id\s+text primary key/.test(prefsTable || ""), "notification_preferences.person_id is no longer the primary key");
+ok(schema.indexOf(FOLLOW_DDL[3]) > schema.indexOf("create table if not exists public.notification_preferences (") && schema.indexOf(FOLLOW_DDL[FOLLOW_DDL.length - 1]) < schema.indexOf("create table if not exists public.audit_log ("), "the notification_preferences DDL sits right after its create table, before audit_log");
+ok(/-- Revision 2026-09-24 o \(Prompt 20 F1, sql\/migrations\/2026-09-24-followers\.sql, (report-first, NOT yet applied|applied 2026-)[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 o (followers; 'report-first, NOT yet applied' until the record step writes 'applied <timestamp>')");
+
+step("P20 F1: the probe is self-rolling-back, reports the prefs row count BEFORE (PROBE_SETUP) and AFTER (R1), acts as a follower / a second follower / a surgeon / the admin, covers R1..X1");
+const foProbe = read(FOLLOW_PROBE);
+ok(!/\r/.test(foProbe), "followers probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(foProbe), "followers probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(foProbe) && /grant insert, select on probe_results to authenticated;/.test(foProbe), "followers probe must collect into a temp table probe_results granted to authenticated");
+const foLastDo = foProbe.lastIndexOf("do $$");
+ok(foLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(foProbe.slice(foLastDo)), "followers probe's last DO block must raise 'PROBE_RESULTS %;END' so the batch rolls back");
+FOLLOW_CASES.forEach((k) => ok(foProbe.indexOf("values ('" + k + "'") >= 0, "followers probe lacks case " + k));
+ok(/raise exception 'PROBE_SETUP: user_profiles\.follows \/ notification_preferences\.profile_id are absent - sql\/migrations\/2026-09-24-followers\.sql is not applied \(this is the BEFORE picture\) - notification_preferences rows=%', n;/.test(foProbe), "the BEFORE picture is the PROBE_SETUP raise, and it carries the notification_preferences row count (rows=N)");
+ok(foProbe.indexOf("values ('R1'") < foProbe.indexOf("insert into auth.users"), "R1 (the row count AFTER) is taken before any fixture row exists");
+ok(/'probe-follow-' \|\| [a-z_]+ \|\| '@example\.test'/.test(foProbe), "followers probe's throwaway auth users must be probe-follow-<uuid>@example.test (the leftover count keys on it)");
+ok(/set person_id = 'probe-follow', role = 'surgeon'/.test(foProbe) && /set role = 'admin'/.test(foProbe), "followers probe links its surgeon to the NON-roster id 'probe-follow' (no live prefs row is touched even inside the rolled-back batch) and makes an admin");
+ok(/on conflict \(person_id\) do update/.test(foProbe) && /on conflict \(id\) do update/.test(foProbe) && /on conflict \(profile_id\) do update/.test(foProbe), "S1 upserts on person_id (the client's on_conflict=person_id), S2 on the primary key (what PostgREST does without on_conflict), P1 on profile_id (the follower's own row)");
+ok(/'\[\["s2"\]\]'/.test(foProbe), "A4 must try a nested array (the strict jsonpath refuses it; lax mode would unwrap it)");
+ok(/delete from auth\.users where id = /.test(foProbe) && /delete from public\.user_profiles where id = /.test(foProbe), "X1 deletes the follower's auth user (his prefs row cascades) and I1 / I2 start from a deleted profile row (the self-insert door)");
+ok(/'ERR ' \|\| sqlstate \|\| ' ' \|\| replace\(sqlerrm, ';', ','\)/.test(foProbe) && /get diagnostics n = row_count;/.test(foProbe), "followers probe records the SQLSTATE with each error and observes UPDATE / DELETE row counts (RLS filters silently)");
+const foHeader = foProbe.slice(0, foProbe.indexOf("create temp table probe_results"));
+Object.keys(FOLLOW_AFTER).forEach((k) => ok(foHeader.indexOf(FOLLOW_AFTER[k]) > 0, "followers probe header must state " + k + "'s AFTER string `" + FOLLOW_AFTER[k] + "`"));
+Object.keys(FOLLOW_ERR).forEach((k) => ok(foHeader.indexOf(FOLLOW_ERR[k][1]) > 0, "followers probe header must state " + k + "'s AFTER refusal (`" + FOLLOW_ERR[k][1] + "`)"));
+ok(/rows=N person=N profile=0 ids=N/.test(foHeader), "followers probe header must state R1's AFTER shape (rows=N person=N profile=0 ids=N)");
+ok(/person \+ profile = rows/.test(foHeader) && /ids = rows/.test(foHeader), "followers probe header must state R1's lasting invariants (ids = rows, person + profile = rows) - the apply-time shape stops holding once a follower saves prefs");
+ok(!/set local role anon/.test(foProbe) && !/'2030-/.test(foProbe), "followers probe has no anon case (prefs has no anon policy) and no schedule fixture day");
+
+step("P20 F1: verify-rls.sh section 12 - the client's on_conflict pin, the probe graded case by case (R1 by shape, optionally against SILVIS_PREFS_ROWS_BEFORE), leftovers counted, nothing written over REST");
+ok(/^echo "== 12\. /m.test(vr), "verify-rls.sh has no section 12");
+const s12 = vr.slice(vr.indexOf('echo "== 12. '));
+ok(s12.length > 0 && s12.length < vr.length, "verify-rls.sh section 12 could not be sliced out");
+ok(/followers-probe\.sql/.test(s12), "section 12 must run sql/probes/followers-probe.sql through the linked CLI");
+FOLLOW_CASES.filter((k) => k !== "R1").forEach((k) => ok(new RegExp("expect_(eq|err)12\\s+" + k + "\\s").test(s12), "section 12 does not grade probe case " + k));
+Object.keys(FOLLOW_AFTER).forEach((k) => ok(s12.indexOf(FOLLOW_AFTER[k].replace(/"/g, '\\"')) > 0, "section 12 must expect " + k + " = " + FOLLOW_AFTER[k]));
+Object.keys(FOLLOW_ERR).forEach((k) => ok(new RegExp("expect_err12\\s+" + k + "\\s+" + FOLLOW_ERR[k][0] + "\\s").test(s12), "section 12 must grade " + k + " as ERR " + FOLLOW_ERR[k][0]));
+// R1 counts every live prefs row, so after the first follower saves prefs it reads e.g. rows=7 person=6 profile=1 ids=7 on a
+// healthy table (review 9/24, major): graded by grade_r1_12 - invariants on every run, the strict picture only on the apply-time run.
+const r1Start = s12.indexOf("\ngrade_r1_12() {\n");
+const r1Fn = r1Start >= 0 ? s12.slice(r1Start + 1, s12.indexOf("\n}\n", r1Start) + 3) : "";
+const r1Cases = [
+  ["rows=7 person=6 profile=1 ids=7", "", "OK"],    // a follower has saved prefs: healthy on every later run
+  ["rows=6 person=6 profile=0 ids=6", "", "OK"],
+  ["rows=6 person=6 profile=0 ids=6", "6", "OK"],   // the apply-time run
+  ["rows=7 person=6 profile=1 ids=7", "6", "BAD"],  // the apply-time run: no follower row can exist yet
+  ["rows=5 person=5 profile=0 ids=5", "6", "BAD"],  // a row lost by the key move
+  ["rows=7 person=6 profile=0 ids=7", "", "BAD"],   // a row with no owner
+  ["rows=7 person=7 profile=0 ids=6", "", "BAD"],   // two rows share an id
+  ["", "", "BAD"],
+  ["PROBE_SETUP", "", "BAD"],
+];
+const r1Script = 'ok() { echo "OK $*"; }\nbad() { echo "BAD $*"; }\n' + r1Fn + r1Cases.map(([v, b]) => 'echo "== case"\ngrade_r1_12 ' + JSON.stringify(v) + " " + JSON.stringify(b)).join("\n") + "\n";
+const r1Run = require("child_process").spawnSync("bash", ["-c", r1Script], { encoding: "utf8" });
+ok(!r1Run.error, "bash could not be started to run grade_r1_12: " + (r1Run.error && r1Run.error.message));
+const r1Out = (r1Run.stdout || "").split("== case\n").slice(1);
+r1Cases.forEach(([v, b, want], i) => {
+  const o = r1Out[i] || "";
+  const got = /^BAD /m.test(o) ? "BAD" : (/^OK /m.test(o) ? "OK" : "none");
+  ok(got === want, "grade_r1_12 '" + v + "' SILVIS_PREFS_ROWS_BEFORE='" + b + "': expected " + want + ", got " + got + " (" + (o.trim() || (r1Run.stderr || "").trim().slice(0, 200)) + ")");
+});
+ok(s12.indexOf("person=\\1 profile=0") < 0, "section 12 must not grade R1 by the apply-time shape alone (rows = person, profile 0) - it goes red once a follower saves prefs");
+ok(s12.indexOf('grade_r1_12 "$(case_val12 R1)" "${SILVIS_PREFS_ROWS_BEFORE:-}"') > 0, "section 12 must grade R1 with grade_r1_12, passing SILVIS_PREFS_ROWS_BEFORE");
+ok(/SILVIS_PREFS_ROWS_BEFORE/.test(s12) && /SILVIS_PREFS_ROWS_BEFORE/.test(vr.slice(0, vr.indexOf('echo "== 1.'))), "section 12 compares R1 with SILVIS_PREFS_ROWS_BEFORE when set, and the file header documents the variable");
+ok(/PROBE_SETUP: user_profiles\.follows/.test(s12) && /notification_preferences rows=/.test(s12), "section 12 must name the BEFORE picture (PROBE_SETUP) and print its row count");
+ok(/email like 'probe-follow-%@example\.test'/.test(s12) && /person_id = 'probe-follow'/.test(s12) && /LEFT ROWS BEHIND/.test(s12), "section 12 must count leftovers (auth.users probe-follow-*, prefs person_id 'probe-follow') and report them as a failure");
+const s12write = s12.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+const s12curl = s12write.split("\n").filter((l) => /\bcurl /.test(l));
+ok(s12curl.length === 2 && s12curl.every((l) => /curl -s -o "\$T\/vr12-[a-z]+\.[a-z]+" -w '%\{http_code\}' "\$PAGES\/(config\.js|index\.html)\?vr=\$\$"/.test(l) && !/ -X | -d | -H /.test(l)), "section 12's only curls are two anon GETs of the live Pages client (config.js, index.html) - nothing is written over REST:\n" + s12curl.join("\n"));
+ok(/^PAGES="https:\/\/fkhan628\.github\.io\/Silvis-Call-Schedule"$/m.test(s12), "section 12 must name the live Pages origin (PAGES=...)");
+ok(s12.indexOf("grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' \"$T/vr12-config.js\"") > 0 && s12.indexOf("grep -qF 'onConflict: \"person_id\"' \"$T/vr12-index.html\"") > 0, "section 12a' must check the LIVE client (the served config.js sends on_conflict, the served index.html names onConflict: \"person_id\")");
+ok(/do NOT apply/.test(s12), "section 12a' must say the migration may not be applied while the live client lacks the pin");
+ok(s12.indexOf('db.upsert("notification_preferences", row, { onConflict: "person_id" })') > 0, "section 12a must check the client's prefs upsert names on_conflict=person_id");
+
+step("P20 F1: docs - SCHEMA-REVIEW.md PREPARED section (before / after, blast radius, probe table, apply order, observed placeholder), tables (a) / (b), guide 4.3 row");
+ok(/## 2026-09-24 - followers: user_profiles\.follows \+ notification_preferences for an unlinked account \(Prompt 20 F1\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - followers: user_profiles.follows + notification_preferences for an unlinked account (Prompt 20 F1)' section");
+const reviewF1 = review.slice(review.indexOf("## 2026-09-24 - followers:"));
+ok(/^\*\*Status: (PREPARED - report-first \(not applied\)|APPLIED 2026-)/.test(((reviewF1.match(/\*\*Status: [^*]*\*\*/) || [""])[0])), "the F1 section's status line must read 'Status: PREPARED - report-first (not applied)' (or 'APPLIED 2026-...' after the record step)");
+ok(/observed: /.test(reviewF1), "the F1 section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
+Object.keys(FOLLOW_POLICIES).forEach((p) => ok(reviewF1.includes(FOLLOW_POLICIES[p].replace(/\n  /g, "\n      ")), "the F1 section must quote the AFTER text of " + p + " verbatim (indented as a code block)"));
+FOLLOW_CASES.forEach((k) => ok(new RegExp("^\\| `" + k + "` \\|", "m").test(reviewF1), "the F1 probe table lacks a row for " + k));
+ok(/Blast radius/.test(reviewF1) && /send-notification/.test(reviewF1) && /daily-reminder/.test(reviewF1) && /on_conflict=person_id/.test(reviewF1), "the F1 section must state the blast radius, both edge functions' person_id reads and the client's on_conflict=person_id");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-followers\.sql/.test(reviewF1) && /followers-probe\.sql/.test(reviewF1), "the F1 section must carry the CLI apply line and the probe command");
+ok(/client first/i.test(reviewF1) && /SILVIS_PREFS_ROWS_BEFORE/.test(reviewF1), "the F1 section's apply order must put the client (on_conflict=person_id) first and carry the BEFORE count into verify-rls");
+ok(/verify-rls\.sh[^\n]*12a'/.test(reviewF1) && /min_version/.test(reviewF1.slice(reviewF1.indexOf("**Apply order.**"), reviewF1.indexOf("Rolling back"))), "the F1 apply order must observe the live client (verify-rls 12a') and decide client_versions.min_version as an explicit step");
+ok(!/delete from public\.notification_preferences where person_id is null/.test(reviewF1) && /select count\(\*\) from public\.notification_preferences where person_id is null/.test(reviewF1.slice(reviewF1.indexOf("Rolling back"))), "the F1 rollback must start from a read-only guard (count of follower prefs rows must be 0), never a silent delete of followers' prefs");
+ok(/person \+ profile = rows/.test(reviewF1), "the F1 probe table must state R1's lasting invariants (ids = rows, person + profile = rows)");
+ok(/select=\*&person_id=in\.\(\.\.\.\)/.test(reviewF1) && /select=\*&person_id=in\.\(\.\.\.\)/.test(followMig), "the F1 section and the migration header must describe daily-reminder's day-before read as select=*&person_id=in.(...)");
+ok(/user_profiles_admin/.test(reviewF1) && /scheduler/.test(reviewF1), "the F1 section must say which policy lets the admin write follows (user_profiles_admin) and why a non-admin scheduler is not added");
+const tblA = review.slice(review.indexOf("## (a) "), review.indexOf("## (b) "));
+const tblB = review.slice(review.indexOf("## (b) "), review.indexOf("## (c) "));
+ok(/^\| `user_profiles` \|[^\n]*follows/m.test(tblA) && /^\| `notification_preferences` \|[^\n]*profile_id/m.test(tblA), "SCHEMA-REVIEW table (a) must name user_profiles.follows and notification_preferences.profile_id");
+ok(/^\| `notification_preferences` \|[^\n]*profile_id/m.test(tblB) && /^\| `user_profiles` \|[^\n]*follows/m.test(tblB), "SCHEMA-REVIEW table (b) must name the prefs profile_id clause and the follows pin");
+ok(/2026-09-24-followers\.sql/.test(g43) && /report-first, (NOT applied|applied 2026-)/.test(g43.slice(g43.indexOf("2026-09-24-followers.sql") - 400)), "guide 4.3 must carry the Prompt 20 F1 bullet (report-first, NOT applied - or 'applied 2026-MM-DD' after the record step)");
+["user_profiles.follows", "user_profiles_self_update", "user_profiles_self_insert", "notification_preferences` key", "prefs_own"].forEach((p) => ok(new RegExp("^\\| `" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "m").test(g43.slice(g43.indexOf("2026-09-24-followers.sql"))), "guide 4.3's F1 table lacks a row for " + p));
+ok(/applied: (_to be filled by the orchestrator_|2026-)/.test(g43.slice(g43.indexOf("2026-09-24-followers.sql"))), "guide 4.3's F1 bullet must carry the 'applied: _to be filled by the orchestrator_' placeholder");
 
 console.log("schema.test.js: " + N + " assertions passed");

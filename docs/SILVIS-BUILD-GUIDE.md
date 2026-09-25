@@ -241,6 +241,18 @@ Proof: trade probe `E3` / `F2` and claim probe `B3` (rolled back; expected strin
 
 Proof: trade probe `GIVE_SETUP` and `O` .. `U3` (rolled back; expected strings in its header - Q / Q3 read stored before and after this file; their refused value is the follow-up's acceptance case), `scripts/verify-rls.sh` section 5 (and 6a posts a return leg) and section 5c (anon `select=kind` reads HTTP 200 - the gate before the client push), the record in `docs/SCHEMA-REVIEW.md` "2026-09-24 - give a day: shift_trade_requests.kind (Prompt 19)" (status PREPARED until the orchestrator's *observed:* line; applied: 2026-09-25 05:34 UTC by the orchestrator (linked CLI) - probes GIVE_SETUP / O .. U3 as expected, Q / Q3 / U unchanged, verify-rls 160 / 0).
 
+- **Followers (Prompt 20 F1, `sql/migrations/2026-09-24-followers.sql`, prepared 2026-09-24 — report-first, NOT applied; revision o, after Prompt 19's n).** A viewer (or coordinator) account follows one or more surgeons and receives what they receive, read-only — no new role. The data half: whom an account follows, and a prefs row for an account with no roster link. The client's prefs save names `on_conflict=person_id` in the same branch and ships BEFORE the apply (without it PostgREST merges on the primary key, which moves to `id`: 23505 / HTTP 409 for every existing surgeon row). One row per change:
+
+| change | before | after | client / function path that depends on it |
+|---|---|---|---|
+| `user_profiles.follows` | — | `jsonb not null default '[]'`, an array of non-empty strings (`user_profiles_follows_shape`, strict jsonpath) | written by the admin through `user_profiles_admin` (Setup → Users, `isAdmin`-gated; not widened to a non-admin scheduler — the client lets none save accounts); read by the later Prompt 20 steps |
+| `user_profiles_self_update` | pins `role`, `person_id`, `email` | also pins `follows` | a follower / surgeon cannot choose whom he follows |
+| `user_profiles_self_insert` | viewer, `person_id is null` | also `follows = '[]'` | the self-insert door lands following nobody |
+| `notification_preferences` key | `person_id` primary key | `id` primary key; `person_id` UNIQUE + nullable; `profile_id` UNIQUE → `user_profiles` on delete cascade; exactly one of the two (`notification_preferences_one_owner`) | `saveNotifPref` upserts with `?on_conflict=person_id`; `send-notification` / `daily-reminder` read by `person_id` with the service role — unchanged, a follower row (no `person_id`) is skipped by both |
+| `prefs_own` | own `person_id` or scheduler | also `profile_id = auth.uid()` | a follower's own prefs row (a later step's Settings card) |
+
+Proof: `sql/probes/followers-probe.sql` (rolled back; BEFORE the migration it raises `PROBE_SETUP ... rows=N`, AFTER it `R1` must read `rows=N person=N profile=0 ids=N` with the same N on the apply-time run, and ids = rows, person + profile = rows on every later run; 28 cases in its header), `scripts/verify-rls.sh` section 12 (12a' observes the live Pages client before the apply; `SILVIS_PREFS_ROWS_BEFORE=<N>` on the apply-time run), the record in `docs/SCHEMA-REVIEW.md` "2026-09-24 - followers" (status PREPARED; applied: _to be filled by the orchestrator_).
+
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
 `payloadLooksWiped` (retarget to: no `schedule_days` rows would be written AND no vacations AND no availability),

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
+#   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
@@ -14,7 +15,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -667,6 +668,97 @@ if linked; then
   fi
 else
   echo "   SKIP 11b (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 12. followers (Prompt 20 F1): user_profiles.follows (admin-set) + notification_preferences keyed by id (person_id unique, profile_id for an unlinked follower) =="
+# sql/migrations/2026-09-24-followers.sql (report-first; applied by the orchestrator after Faraz's go, AFTER the client that
+# names on_conflict=person_id is live). Nothing here writes over REST. 12a checks that client pin from the source (without it
+# PostgREST merges the surgeons' prefs upsert on the primary key, which moves to id: 23505 / HTTP 409 - probe S2).
+# 12b runs sql/probes/followers-probe.sql: four throwaway users (follower / second follower / surgeon linked to the NON-roster
+# id 'probe-follow' / admin), acts as each of them, ends with RAISE 'PROBE_RESULTS ...;END' so everything rolls back.
+# Expectations are the AFTER-migration picture; BEFORE it the first block raises PROBE_SETUP carrying the prefs row count
+# (this section prints it - pass it back as SILVIS_PREFS_ROWS_BEFORE=<n> after the apply and R1 is compared with it).
+# 12a. client pin (read from the source)
+if grep -qF 'db.upsert("notification_preferences", row, { onConflict: "person_id" })' index-source.html && grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' config.js; then ok "client: the prefs upsert names on_conflict=person_id (valid before and after the key move)"; else bad "client: the prefs upsert does not name on_conflict=person_id - after the migration PostgREST would merge on the new id key and 409 every existing surgeon's save"; fi
+# 12a'. the LIVE client (two anon GETs of the Pages build - read-only; review 9/24): the source pin above says nothing about
+# what the surgeons' browsers run. The migration may be applied only once the served config.js sends ?on_conflict= and the
+# served index.html names onConflict: "person_id" (the push merged, CI built, Pages redeployed). Red before the push - expected.
+PAGES="https://fkhan628.github.io/Silvis-Call-Schedule"
+c12a=$(curl -s -o "$T/vr12-config.js" -w '%{http_code}' "$PAGES/config.js?vr=$$")
+c12b=$(curl -s -o "$T/vr12-index.html" -w '%{http_code}' "$PAGES/index.html?vr=$$")
+if [ "$c12a" = "200" ] && [ "$c12b" = "200" ] && grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' "$T/vr12-config.js" && grep -qF 'onConflict: "person_id"' "$T/vr12-index.html"; then ok "live client: the served build sends the prefs upsert with on_conflict=person_id (config.js + index.html from $PAGES)"; else bad "live client: the served build (config.js HTTP $c12a, index.html HTTP $c12b) does not carry the on_conflict=person_id prefs upsert - do NOT apply sql/migrations/2026-09-24-followers.sql until Pages serves it (the CDN can lag a few minutes after the deploy)"; fi
+# grade_r1_12 <R1> [<count before>]: R1 counts EVERY live prefs row, so it is graded by what stays true once followers own rows -
+# ids = rows (each row its own id) and person + profile = rows (exactly one owner each). The apply-time run
+# (SILVIS_PREFS_ROWS_BEFORE=<N> set) adds the strict picture: profile=0 and person=N (no follower row can exist yet; no row lost
+# or added by the key move). Without the variable the strict half is skipped, so a later run on healthy data stays green.
+grade_r1_12() {
+  r1v="$1"; r1b="$2"
+  r1f=$(echo "$r1v" | sed -n 's/^rows=\([0-9][0-9]*\) person=\([0-9][0-9]*\) profile=\([0-9][0-9]*\) ids=\([0-9][0-9]*\)$/\1 \2 \3 \4/p')
+  if [ -z "$r1f" ]; then bad "followers probe R1: expected rows=N person=P profile=F ids=N (got '$r1v')"; return 0; fi
+  set -- $r1f
+  if [ "$4" -eq "$1" ] && [ $(($2 + $3)) -eq "$1" ]; then ok "followers probe R1: every prefs row has its own id and exactly one owner ($r1v)"; else bad "followers probe R1: ids must equal rows and person + profile must equal rows (got '$r1v')"; fi
+  if [ -n "$r1b" ]; then
+    if [ "$3" -eq 0 ] 2>/dev/null && [ "$2" -eq "$r1b" ] 2>/dev/null; then ok "followers probe R1 (apply-time run): no follower row yet and the $2 surgeon rows equal the count before ($r1b)"; else bad "followers probe R1 (apply-time run): expected person=$r1b profile=0, got '$r1v' - a row was lost or added by the key move (or SILVIS_PREFS_ROWS_BEFORE is stale)"; fi
+  else
+    echo "   (R1 graded by its lasting invariants; on the run right after the apply set SILVIS_PREFS_ROWS_BEFORE=<the count the BEFORE run printed> to also require person=N profile=0)"
+  fi
+}
+# 12b. the rolled-back probe
+if linked; then
+  PROBE12="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/followers-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE12" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    if echo "$out" | grep -q 'PROBE_SETUP: user_profiles.follows'; then bad "followers probe: sql/migrations/2026-09-24-followers.sql is not applied (the BEFORE picture; $(echo "$out" | grep -oE 'notification_preferences rows=[0-9]+' | head -1) - keep that count for SILVIS_PREFS_ROWS_BEFORE)"; else bad "followers probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"; fi
+  else
+    results12=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results12" | tr ';' '\n' | sed 's/^/   /'
+    case_val12()   { echo "$results12" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    # expect_eq12 / expect_err12: the CLI escapes the quotes inside the probe's text, so the value is unescaped first
+    expect_eq12()  { v=$(case_val12 "$1" | sed 's/\\//g'); [ "$v" = "$2" ] && ok "followers probe $1: $3" || bad "followers probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err12() { v=$(case_val12 "$1" | sed 's/\\//g'); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "followers probe $1: $4"; else bad "followers probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    grade_r1_12 "$(case_val12 R1)" "${SILVIS_PREFS_ROWS_BEFORE:-}"
+    expect_eq12  K1  "pk=id unique=person_id,profile_id"             "the key is id; person_id and profile_id are each UNIQUE (on_conflict=person_id / profile_id resolve)"
+    expect_err12 F1  42501 'for table "user_profiles"'               "a follower cannot set his own follows (user_profiles_self_update pins it)"
+    expect_eq12  F2  "updated=1"                                     "a follower still changes his own display_name"
+    expect_eq12  P1  "ok rows=1 schedule=false"                      "a follower upserts his own prefs row by profile_id"
+    expect_eq12  P2  "updated=1"                                     "a follower updates his own prefs row"
+    expect_eq12  P3  "own=1 others=0"                                "a follower reads his own prefs row and no other"
+    expect_eq12  P4  "updated=0"                                     "a follower's update of another person's prefs touches nothing (RLS is silent)"
+    expect_eq12  P5  "deleted=0"                                     "a follower's delete of another person's prefs touches nothing"
+    expect_err12 P6  42501 'for table "notification_preferences"'    "a follower cannot insert a prefs row for a roster id"
+    expect_err12 P7  42501 'for table "notification_preferences"'    "a follower cannot insert a prefs row for another profile"
+    expect_err12 P8  42501 'for table "notification_preferences"'    "a follower cannot re-point his row to a roster id"
+    expect_err12 P9  23514 "notification_preferences_one_owner"      "a prefs row never carries both keys"
+    expect_eq12  A1  "updated=1 follows=[\"s2\"]"                    "the admin sets a follower's follows (user_profiles_admin - the Setup > Users path)"
+    expect_err12 A2  23514 "user_profiles_follows_shape"             "follows must be an array of strings ([1] refused)"
+    expect_err12 A3  23514 "user_profiles_follows_shape"             "follows must be an array (an object refused)"
+    expect_err12 A4  23514 "user_profiles_follows_shape"             "follows may not nest arrays (strict jsonpath)"
+    expect_eq12  A5  "probe_rows=3"                                  "the admin reads every prefs row (surgeon's and followers')"
+    expect_err12 A6  23514 "notification_preferences_one_owner"      "a prefs row never carries neither key"
+    expect_eq12  F3  "follows=[\"s2\"]"                              "a follower reads whom he follows"
+    expect_err12 F4  42501 'for table "user_profiles"'               "a follower cannot clear his own follows"
+    expect_eq12  S1  "ok rows=1 schedule=false"                      "a surgeon's upsert on person_id still resolves on his existing row (the client's on_conflict=person_id)"
+    expect_err12 S2  23505 "notification_preferences_person_id_key"  "an upsert on the primary key (no on_conflict) now hits the person_id key - why the client names on_conflict=person_id"
+    expect_eq12  S3  "own=1 others=0"                                "a surgeon reads his own prefs row and no follower's"
+    expect_err12 S4  42501 'for table "user_profiles"'               "a surgeon cannot set his own follows"
+    expect_err12 I1  42501 'for table "user_profiles"'               "a self-insert may not choose whom it follows (user_profiles_self_insert pins follows = [])"
+    expect_eq12  I2  "ok follows=[]"                                 "a self-insert still lands as a viewer following nobody"
+    expect_eq12  X1  "before=1 after=0"                              "deleting a follower's account removes his prefs row (profile_id on delete cascade)"
+  fi
+  LEFTOVER12_SQL="select ((select count(*) from auth.users where email like 'probe-follow-%@example.test') + (select count(*) from public.user_profiles where display_name like 'probe follow%') + (select count(*) from public.notification_preferences where person_id = 'probe-follow'))::int as leftover"
+  r=$(q "$LEFTOVER12_SQL")
+  if ! echo "$r" | grep -q '"leftover"'; then
+    bad "followers probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "followers probe persisted nothing (leftover count 0: auth.users / user_profiles / notification_preferences)"
+  else
+    bad "followers probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.notification_preferences where person_id = 'probe-follow';"
+    echo "      delete from auth.users where email like 'probe-follow-%@example.test';   -- user_profiles rows cascade, and the followers' prefs rows with them"
+    echo "      delete from public.user_profiles where display_name like 'probe follow%';"
+  fi
+else
+  echo "   SKIP 12b (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo

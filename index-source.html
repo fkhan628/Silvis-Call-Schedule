@@ -3854,7 +3854,8 @@ function CallSchedule() {
           reminder_hour_central: typeof cur.reminder_hour_central === "number" ? cur.reminder_hour_central : null,
           updated_at: new Date().toISOString(),
         };
-        const { error: prefErr } = await db.upsert("notification_preferences", row);
+        // on_conflict=person_id (Prompt 20 F1): the table's primary key moves to id in revision o; person_id stays UNIQUE.
+        const { error: prefErr } = await db.upsert("notification_preferences", row, { onConflict: "person_id" });
         if (prefErr) throw new Error(`notif pref save failed: ${String(prefErr).slice(0, 200)}`);
         auditRef.current.logAudit("prefs.save", `Saved notification prefs for ${auditRef.current.nameOf(personId)}`, { person_id: personId });
       } catch(e) { console.warn("Save notif pref error:", e); showToast("Couldn't save notification settings - check your connection and try again.", "error"); }

@@ -150,7 +150,7 @@ async function authFetch(url, init) {
 //   • supabase.from(t).select(cols).eq(col,val).single()  → { data, error }
 //       .single() returns the FIRST row or null and never errors on zero rows
 //       (maybeSingle semantics) — there is NO .maybeSingle(); use .single().
-//   • supabase.from(t).upsert(row)                         → { error }
+//   • supabase.from(t).upsert(row[, { onConflict }])       → { error }
 // For insert/update/delete/order/limit/multiple-filters use db.* (below),
 // dbAuth.*, or a raw fetch (see the time_off deletes in index-source.html).
 // Any unsupported method throws a clear "not implemented" error. Previously an
@@ -198,10 +198,14 @@ var supabase = {
       limit: _notImpl(".select().limit()"),
       in: _notImpl(".select().in()"),
     }),
-    upsert: async (row) => {
+    upsert: async (row, opts) => {
       // Write path -> authFetch (Prompt 16 A3): dbAuthHeaders() at send time, a refresh first when the token is
       // near its exp, one refresh + one retry on a 401.
-      const res = await authFetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+      // opts.onConflict (Prompt 20 F1, supabase-js's option name): the unique column(s) the merge resolves on, sent as
+      // ?on_conflict=. Without it PostgREST merges on the PRIMARY KEY - which for notification_preferences moves from
+      // person_id to id in revision o, so the prefs save names person_id explicitly.
+      const oc = opts && opts.onConflict ? `?on_conflict=${encodeURIComponent(opts.onConflict)}` : "";
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/${table}${oc}`, {
         method: "POST", headers: { Prefer: "resolution=merge-duplicates" },
         body: JSON.stringify(row),
       });
@@ -276,8 +280,8 @@ const db = {
     } else console.warn(`db.update(${table}) failed: HTTP ${res.status}`, text.slice(0, 200));
     return { data: Array.isArray(rows) ? rows : [], error: res.ok ? null : (text || `HTTP ${res.status}`) };
   },
-  async upsert(table, row) {
-    return supabase.from(table).upsert(row);
+  async upsert(table, row, opts) {
+    return supabase.from(table).upsert(row, opts);
   },
 };
 

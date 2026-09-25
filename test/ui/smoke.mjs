@@ -6233,6 +6233,30 @@ try {
         await expandSettings("Restore from snapshot", "[data-testid=snapshot-row], [data-testid=snapshot-empty]");
         await page.waitForTimeout(300);
         judge(`${theme} 390 notification settings`, await measure("[data-testid=notif-pref], [data-testid=notif-hour-label]"));
+        if (theme === "light") {
+          // Prompt 20 F1 (review 9/24): the prefs save must name on_conflict=person_id - revision o moves the table's primary key
+          // to id, and an upsert without it would merge on id and 409 every existing surgeon's save. Two flips inside the 500 ms
+          // debounce: exactly one mocked POST, and the switch ends where it started.
+          try {
+            const box = page.locator("[data-testid=notif-pref] input[type=checkbox]").first();
+            if (!(await box.count())) fail("F1 prefs upsert: no notification switch rendered (the harness account is not linked?)");
+            else {
+              const was = await box.isChecked();
+              const w0 = writes.length;
+              await box.click();
+              await box.click();
+              await page.waitForTimeout(1000);
+              const posts = writes.slice(w0).filter((w) => w.path.startsWith("/rest/v1/notification_preferences"));
+              let row = null; try { const b = JSON.parse(posts.length ? posts[0].body : "null"); row = Array.isArray(b) ? b[0] : b; } catch (e) {}
+              if (posts.length !== 1) fail(`F1 prefs upsert: expected exactly one write to notification_preferences, got ${posts.length}: ` + posts.map((w) => `${w.method} ${w.path}`).join(", "));
+              else if (posts[0].method !== "POST" || posts[0].path !== "/rest/v1/notification_preferences?on_conflict=person_id") fail(`F1 prefs upsert: expected POST /rest/v1/notification_preferences?on_conflict=person_id, got ${posts[0].method} ${posts[0].path}`);
+              else if (!/resolution=merge-duplicates/.test(posts[0].prefer)) fail(`F1 prefs upsert: Prefer must carry resolution=merge-duplicates, got '${posts[0].prefer}'`);
+              else if (!row || typeof row.person_id !== "string" || !row.person_id || "id" in row || "profile_id" in row) fail("F1 prefs upsert: the body must carry the linked person_id and neither id nor profile_id: " + String(posts[0].body).slice(0, 200));
+              else if ((await box.isChecked()) !== was) fail("F1 prefs upsert: the switch did not return to its starting state after two flips");
+              else ok(`F1 prefs upsert: one POST ${posts[0].path} (Prefer ${posts[0].prefer}) for ${row.person_id}; the switch is back where it started`);
+            }
+          } catch (e) { fail("F1 prefs upsert: " + errLine(e)); }
+        }
         judge(`${theme} 390 snapshot list`, await measure("[data-testid=snapshot-row], [data-testid=snapshot-empty]"));
         await page.locator("[data-testid=notif-pref], [data-testid=notif-prefs-load-failed]").first().scrollIntoViewIfNeeded().catch(() => {});
         await page.waitForTimeout(150);

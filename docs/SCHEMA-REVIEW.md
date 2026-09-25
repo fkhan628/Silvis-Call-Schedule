@@ -11,7 +11,7 @@ Verification: `scripts/verify-rls.sh`.*
 
 | Table | Purpose |
 |---|---|
-| `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. |
+| `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. Prompt 20 F1 (prepared 2026-09-24, report-first, not yet applied - see the section at the end): `follows` jsonb, the roster ids an account follows (admin-set). |
 | `call_schedule_data` | One row `main`: roster (names/codes), `surgeonRules`, `groupRules`, holiday units, settings blob. Anon-read. |
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
 | `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. |
@@ -21,7 +21,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, prepared) - Prompt 19, prepared, not yet applied. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
-| `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. |
+| `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (prepared, not yet applied): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. |
 | `audit_log` | Who did what; insert by any authenticated user, read by scheduler/admin. Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the two SQL functions' rows do so since the item 5b migration (applied 2026-09-24; the two earlier `trade.apply` rows backfilled - section at the end); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
@@ -40,10 +40,10 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `client_versions` | anon: row `main` only; authenticated: all rows | scheduler/admin all rows; each authenticated user may insert/update **their own** heartbeat row (`id = auth.uid()`) |
 | `time_off` | anyone (anon) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 | `east_overrides` | anyone (anon) | scheduler/admin |
-| `user_profiles` | authenticated | self-insert as `viewer` with **no `person_id`**; self-update may not change `role` or `person_id`; admin: everything |
+| `user_profiles` | authenticated | self-insert as `viewer` with **no `person_id`**; self-update may not change `role` or `person_id`; admin: everything. Prompt 20 F1 (prepared): self-insert and self-update pin `follows` too (only the admin sets it) |
 | `shift_trade_requests` | authenticated | insert: proposer or scheduler; update: parties + scheduler, and a trigger restricts non-schedulers to status moves on a pending trade (counter-party → accepted/declined, proposer → cancelled) |
 | `notifications` | authenticated | insert: any authenticated user |
-| `notification_preferences` | own row or scheduler | own row or scheduler |
+| `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (prepared): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()` |
 | `audit_log` | scheduler/admin | insert: any authenticated user |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
@@ -1130,3 +1130,142 @@ gate). Order:
 Rolling back = re-running the give-kind `trade_insert_guard` body and trigger (`sql/migrations/2026-09-24-give-kind.sql`).
 
 observed: _to be filled by the orchestrator after the apply_
+
+## 2026-09-24 - followers: user_profiles.follows + notification_preferences for an unlinked account (Prompt 20 F1)
+
+**Status: PREPARED - report-first (not applied).** `sql/migrations/2026-09-24-followers.sql` changes row-level security and a primary
+key on the live project (guide section 4.3), so this section is the report; the orchestrator applies the file after Faraz's go and fills
+the *observed:* line at the end. What it is for: a viewer (or coordinator) account follows one or more surgeons and receives what that
+surgeon receives, read-only - no new role, viewer + `follows`. This file is the data half only; the client and the two edge functions
+learn to read `follows` / a follower's prefs row in later Prompt 20 steps. Same-day ordering: the file declares
+`-- supersedes: sql/migrations/2026-09-24-prelaunch-rls.sql` (it re-creates A1's `user_profiles_self_update`) and runs after Prompt 19's
+revision n; `sql/schema.sql` mirrors it (header revision o, "report-first, NOT yet applied" until the record step); `test/schema.test.js`
+pins every text, the order of the DDL and this section.
+
+**Before / after.**
+
+| object | before | after |
+|---|---|---|
+| `user_profiles.follows` | - | `jsonb not null default '[]'` - the roster ids whose notifications the account receives; `user_profiles_follows_shape`: an array of non-empty strings (strict jsonpath, so `[["s2"]]` is refused - lax mode would unwrap it) |
+| `user_profiles_self_update` | pins `role`, `person_id`, `email` | also pins `follows` (a follower cannot add a surgeon to his list; a surgeon cannot follow anyone by himself) |
+| `user_profiles_self_insert` | `role = 'viewer' and person_id is null` | also `follows = '[]'::jsonb` (that door - reachable only when a profile row is missing - lands following nobody) |
+| `user_profiles_admin` | admin: every verb | unchanged - it is the write path for `follows`: Setup > Users' `saveUserProfile` PATCHes `user_profiles?id=eq.<id>` and the client refuses a non-admin before the request (`if (!isAdmin)`). A non-admin scheduler cannot save an account in the client today, so the policy is not widened to the scheduler |
+| `notification_preferences` key | `person_id text primary key` | `id uuid not null default gen_random_uuid()` is the primary key (`notification_preferences_pkey`); `person_id` UNIQUE (`notification_preferences_person_id_key`, added before the key moves) and nullable; `profile_id uuid` UNIQUE -> `user_profiles(id)` on delete cascade; `notification_preferences_one_owner`: exactly one of `person_id` / `profile_id` |
+| `prefs_own` | `person_id = silvis_person_id() or silvis_is_sched()` | adds `or profile_id = auth.uid()` - a follower reads and writes his own row only |
+
+The three policy texts after the migration, verbatim:
+
+    create policy user_profiles_self_insert on public.user_profiles for insert to authenticated
+      with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb);
+
+    create policy user_profiles_self_update on public.user_profiles for update to authenticated
+      using (id = auth.uid())
+      with check (id = auth.uid()
+        and role = (select role from public.user_profiles p where p.id = auth.uid())
+        and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())
+        and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())
+        and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid()));
+
+    create policy prefs_own on public.notification_preferences for all to authenticated
+      using (person_id = public.silvis_person_id() or profile_id = auth.uid() or public.silvis_is_sched())
+      with check (person_id = public.silvis_person_id() or profile_id = auth.uid() or public.silvis_is_sched());
+
+Every existing `notification_preferences` row keeps its `person_id` and flags, gets a fresh `id` and `profile_id` null (the one-owner
+check holds for all of them); the file writes and deletes no row. If the live key constraint had another name than
+`notification_preferences_pkey`, the `add constraint notification_preferences_pkey primary key (id)` line fails ("multiple primary keys")
+and the whole file rolls back - the pre-check reads the names first.
+
+**What could break.**
+
+- **The surgeons' prefs save (found while preparing this file).** The client's upsert (`db.upsert` -> `POST rest/v1/notification_preferences`,
+  `Prefer: resolution=merge-duplicates`) sent NO `on_conflict`, so PostgREST merged on the primary key - `person_id` until now. After the move
+  the key is `id`, and a payload without `id` hits `notification_preferences_person_id_key` instead: 23505 -> HTTP 409 on every existing
+  surgeon's save (probe `S2` shows it). This branch makes the client send `?on_conflict=person_id` (`db.upsert(table, row, { onConflict })`,
+  supabase-js's option name; valid BEFORE the migration too, where `person_id` is the key) - so the client ships first. A PWA still
+  running an older build gets the loud "Couldn't save notification settings" toast (never a silent loss) until it reloads.
+- **The edge functions** read prefs with the service role by `person_id`: `send-notification` (`select=*`, keyed by `person_id`, a row
+  without one skipped) and `daily-reminder` (`select=person_id,schedule_updates_email` for the open-shifts / close paths;
+  `select=*&person_id=in.(...)` for the day-before reminder).
+  Both stay valid; `select=*` now also returns `id` / `profile_id`, which neither reads; a follower's row (`person_id` null) is ignored by
+  both until a later Prompt 20 step teaches them to read it.
+- **The client's reads.** The prefs load (`select=*`, keyed `prefs[r.person_id]`) sees no follower row until one exists (a later step keys
+  those by `profile_id`); the `user_profiles?select=*` reads (`fetchProfile`, `loadAllProfilesLoud`, `loadClientVersions`) gain a `follows`
+  key nobody reads yet; `saveUserProfile` PATCHes only the keys it changes. `handle_new_auth_user` inserts `(id, email, role)` - `follows`
+  takes its default; its email re-sync never touches `follows`.
+- **PostgREST's schema cache** reloads on DDL by itself on Supabase; if a REST call answers PGRST204 (column not found) right after the
+  apply, `notify pgrst, 'reload schema';`.
+
+Blast radius, in one sentence: every `user_profiles` row gains `follows = []` (nothing reads it yet); `notification_preferences` gets a new
+primary key and two columns - the surgeons' rows keep their `person_id` and flags, both edge functions' `person_id` reads stay valid, and
+the one write path affected is the client's prefs upsert, which this branch pins to `on_conflict=person_id` (client first).
+
+**The probe (`sql/probes/followers-probe.sql`, rolls itself back; `scripts/verify-rls.sh` section 12 grades it).** Four throwaway users
+`probe-follow-<uuid>@example.test` - a follower and a second follower (unlinked viewers), a surgeon linked to the NON-roster id
+`probe-follow` (no live prefs row is touched even inside the rolled-back batch) and an admin. BEFORE the migration the first block raises
+`PROBE_SETUP: user_profiles.follows / notification_preferences.profile_id are absent - ... (this is the BEFORE picture) -
+notification_preferences rows=N`; AFTER it every case reads:
+
+| case | who / what | AFTER |
+|---|---|---|
+| `R1` | postgres, before any fixture: the table's rows | apply-time run: `rows=N person=N profile=0 ids=N` (the same N as the BEFORE run); every run: ids = rows and person + profile = rows (`grade_r1_12` - a follower's saved prefs make it e.g. `rows=N+1 person=N profile=1 ids=N+1`, still green) |
+| `K1` | postgres: key + unique constraints | `pk=id unique=person_id,profile_id` |
+| `F1` | follower sets his own `follows` to `["s2"]` | `ERR 42501 new row violates row-level security policy for table "user_profiles"` |
+| `F2` | follower changes his own display_name | `updated=1` |
+| `P1` | follower upserts his own prefs row on `profile_id` | `ok rows=1 schedule=false` |
+| `P2` | follower updates it | `updated=1` |
+| `P3` | follower reads the table | `own=1 others=0` |
+| `P4` | follower updates the surgeon's and the other follower's rows | `updated=0` |
+| `P5` | follower deletes them | `deleted=0` |
+| `P6` | follower inserts a row for `person_id` s2 | `ERR 42501 ... for table "notification_preferences"` |
+| `P7` | follower inserts a row for the other follower's `profile_id` | `ERR 42501 ... for table "notification_preferences"` |
+| `P8` | follower re-points his row to `person_id` s2 | `ERR 42501 ... for table "notification_preferences"` |
+| `P9` | follower inserts a row with both keys | `ERR 23514 ... violates check constraint "notification_preferences_one_owner"` |
+| `A1` | admin sets the follower's `follows` to `["s2"]` | `updated=1 follows=["s2"]` |
+| `A2` | admin sets `follows` to `[1]` | `ERR 23514 ... violates check constraint "user_profiles_follows_shape"` |
+| `A3` | admin sets `follows` to `{"s2": true}` | `ERR 23514 ... "user_profiles_follows_shape"` |
+| `A4` | admin sets `follows` to `[["s2"]]` | `ERR 23514 ... "user_profiles_follows_shape"` |
+| `A5` | admin reads the three probe prefs rows | `probe_rows=3` |
+| `A6` | admin inserts a prefs row with neither key | `ERR 23514 ... "notification_preferences_one_owner"` |
+| `F3` | follower reads whom he follows | `follows=["s2"]` |
+| `F4` | follower clears his own `follows` | `ERR 42501 ... for table "user_profiles"` |
+| `S1` | surgeon upserts his row on `person_id` (the client's `on_conflict=person_id`) | `ok rows=1 schedule=false` |
+| `S2` | surgeon upserts on the primary key (PostgREST without `on_conflict`) | `ERR 23505 duplicate key value violates unique constraint "notification_preferences_person_id_key"` |
+| `S3` | surgeon reads the table | `own=1 others=0` |
+| `S4` | surgeon sets his own `follows` | `ERR 42501 ... for table "user_profiles"` |
+| `I1` | the second follower's profile row deleted as postgres; he self-inserts it with `follows` `["s2"]` | `ERR 42501 ... for table "user_profiles"` |
+| `I2` | he self-inserts it following nobody | `ok follows=[]` |
+| `X1` | postgres deletes the follower's auth user | `before=1 after=0` (his prefs row cascades through `user_profiles`) |
+
+Leftover count 0 (auth.users `probe-follow-%@example.test`, `user_profiles` display names `probe follow%`, prefs `person_id = 'probe-follow'`).
+
+**Apply order.**
+
+1. Client first: the branch's `saveNotifPref` sends `?on_conflict=person_id` (pinned by `test/data-layer.test.js` and verify-rls 12a). It
+   ships with the push; observe that the live build carries it before step 4: `bash scripts/verify-rls.sh` section 12a' (two anon GETs
+   of the Pages `config.js` / `index.html`) must print `ok live client: ...` - red means do NOT apply yet.
+   Then decide `client_versions.min_version` explicitly: a PWA left open on an older build keeps sending the upsert without
+   `on_conflict` and gets the "Couldn't save notification settings" toast after step 4 until it reloads. Either raise row `main`'s
+   `min_version` to the APP_VERSION the deploy stamped (SQL only - no client path writes it: `update public.client_versions set
+   min_version = '<that version>' where id = 'main';`, which puts the refresh banner on every older client), or leave it and record
+   why in the observed line (e.g. every surgeon's app already reloaded). Either way the choice is written down.
+2. Pre-checks, read-only: `select count(*) from public.notification_preferences;` and
+   `select conname, contype from pg_constraint where conrelid = 'public.notification_preferences'::regclass order by 1;`
+   (expected: `notification_preferences_pkey` `p` only). The table is authenticated-only, so the count is read through the CLI, not anon.
+3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/followers-probe.sql` -> `PROBE_SETUP ... rows=N` (N = step 2's count).
+4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-followers.sql`.
+5. Probe AFTER (the table above; `R1` must say `rows=N person=N profile=0` with step 2's N).
+6. `SILVIS_PREFS_ROWS_BEFORE=<N> SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` - section 12 green, leftover 0.
+7. The record step, ONE commit: this status line -> `**Status: APPLIED <timestamp>.**`; `sql/schema.sql` revision o -> `applied <timestamp>`;
+   the guide 4.3 bullet -> `report-first, applied 2026-MM-DD` + its `applied:` line; tables (a) / (b) drop "prepared"; the observed line
+   below. The pins accept both wordings.
+
+Rolling back (only while no follower row exists; the client's `on_conflict=person_id` is valid either way). First the read-only guard
+`select count(*) from public.notification_preferences where person_id is null;` - it must be 0. Anything else means followers have
+saved prefs that the old key (`person_id` not null) cannot hold: stop and decide with Faraz (record the rows first; nothing is
+deleted by this recipe). With 0: drop `notification_preferences_one_owner` and
+`notification_preferences_pkey`, `alter column person_id set not null`, `add constraint notification_preferences_pkey primary key (person_id)`,
+drop `notification_preferences_person_id_key` / `_profile_id_key`, drop the columns `profile_id` and `id`; re-create `prefs_own`,
+`user_profiles_self_update` (A1's text in `sql/migrations/2026-09-24-prelaunch-rls.sql`) and `user_profiles_self_insert` (without the
+`follows` clause); drop `user_profiles_follows_shape` and the `follows` column.
+
+observed: _to be filled by the orchestrator after the apply (BEFORE sentinel with its row count, AFTER sentinel, verify-rls section 12 lines, leftover count)._

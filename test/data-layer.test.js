@@ -3353,6 +3353,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(r.error, null, JSON.stringify(r));
       assert.deepStrictEqual(a3calls.map(c => (isRefresh(c) ? "refresh" : c.method + " " + c.bearer.slice(-8))), ["refresh", "POST " + NEW3.slice(-8)], "refresh first, then the write with the new token");
     });
+    await acheck("P20 F1: supabase.upsert / db.upsert take { onConflict } and send ?on_conflict=<column> (without it PostgREST merges on the PRIMARY KEY - notification_preferences' key moves from person_id to id); without opts the URL is unchanged; the prefs save names person_id", async () => {
+      setSession(FRESH, "r8b"); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, []);
+      const r1 = await A3.supabase.from("notification_preferences").upsert({ person_id: "s2" }, { onConflict: "person_id" });
+      const r2 = await A3.db.upsert("notification_preferences", { person_id: "s2" }, { onConflict: "person_id" });
+      const r3 = await A3.db.upsert("call_schedule_data", { id: "main" });
+      assert.deepStrictEqual([r1.error, r2.error, r3.error], [null, null, null], JSON.stringify([r1, r2, r3]));
+      const urls = a3calls.filter(c => !isRefresh(c)).map(c => c.url.replace(/^https?:\/\/[^/]+/, ""));
+      assert.deepStrictEqual(urls, ["/rest/v1/notification_preferences?on_conflict=person_id", "/rest/v1/notification_preferences?on_conflict=person_id", "/rest/v1/call_schedule_data"], "onConflict -> ?on_conflict=<column>; no opts -> the bare table URL: " + JSON.stringify(urls));
+      const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
+      assert.strictEqual((src.match(/db\.upsert\("notification_preferences", row, \{ onConflict: "person_id" \}\)/g) || []).length, 1, "saveNotifPref must upsert with { onConflict: \"person_id\" } (valid before AND after revision o: person_id is the key before, UNIQUE after)");
+      assert.ok(!/db\.upsert\("notification_preferences", row\)/.test(src), "no prefs upsert without on_conflict is left");
+    });
     await acheck("A3 sign-in: auth.signIn stores the pair, clears sessionExpired ('restored' event) and hands the token to realtime.setAuth (the recovery / invite hash path goes through the same _saveSession)", async () => {
       A3.auth.sessionExpired = true; a3calls.length = 0; rtAuth.length = 0; events.length = 0;
       answer = (c) => c.url.includes("/auth/v1/token?grant_type=password") ? resp(200, tokenBody(NEW4, "r10")) : resp(500, "unexpected");
