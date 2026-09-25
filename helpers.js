@@ -757,6 +757,51 @@ function tradeAcceptMsg(req) {
 function tradeDeclineMsg(req) {
   return `${req.to_surgeon_name} declined the trade: ${tradeLegsText(req, "would have taken")}`;
 }
+// Prompt 19 (Faraz 9/24): a give - kind 'give', no return leg. Addressed to the receiver ("you") and naming him too, so
+// the copy the giver and the scheduler read is unambiguous: "Acton offers you Sat 10/10 primary - nothing in return (a
+// give to Burchett)". unitLabel (optional, e.g. "Thanksgiving unit 11/26-11/29 (4 days)") names a whole unit instead.
+function tradeGiveWhat(req, unitLabel) {
+  return unitLabel ? "the " + unitLabel + " " + req.role : TT_DOW[parse(req.day).getDay()] + " " + fmtMD(req.day) + " " + req.role;
+}
+function tradeGiveMsg(req, unitLabel) {
+  return `${req.from_surgeon_name} offers you ${tradeGiveWhat(req, unitLabel)} - nothing in return (a give to ${req.to_surgeon_name})`;
+}
+// The give's e-mail (trade_proposed) goes to BOTH parties and send-notification greets each one by name, so its subject
+// and message are neutral - no "you" (S2 review 9/24). The receiver-addressed tradeGiveMsg stays the in-app line.
+function tradeGiveEmail(req, unitLabel) {
+  const what = tradeGiveWhat(req, unitLabel), from = req.from_surgeon_name, to = req.to_surgeon_name;
+  return {
+    subject: `Day offered: ${what} (${from} to ${to})`,
+    message: `${from} is offering ${what} to ${to} - nothing in return. ${to} can accept or decline in the app; the schedule changes only if ${to} accepts.`,
+  };
+}
+// The shift_trade_requests rows of ONE proposal from the Propose card - one row per given day, in order. Pure.
+//   p = { fromId, fromName, toId, toName, days, role, retDays, returnRole, give, isScheduler, stamp(i) -> "" | unit stamp,
+//         submittedAt }
+// A trade: a single return day rides on the FIRST row (the rest of a unit is one-way inside the group); a return unit of
+// the same size pairs day for day. A give (Prompt 19): no return leg on any row, whatever retDays holds. `kind` is sent
+// only as 'give' - on every row of a give, and on a member's trade row without a return leg (the tail rows of a whole
+// unit traded for one return day: trade_insert_guard refuses a member 'trade' without a return leg since
+// 2026-09-24-give-kind.sql); a trade row with its return leg, and every scheduler trade row, send no kind (default
+// 'trade'). detail = the composed sentence (tradeGiveMsg / tradeProposeMsg) plus the unit stamp when one is given.
+function tradeProposalRows(p) {
+  const days = (p && p.days) || [];
+  const ret = p.give ? [] : (p.retDays || []);
+  return days.map((d, i) => {
+    const back = p.give ? null : ret.length === days.length ? ret[i] : (i === 0 ? (ret[0] || null) : null);
+    const req = {
+      from_surgeon_id: p.fromId, from_surgeon_name: p.fromName,
+      to_surgeon_id: p.toId, to_surgeon_name: p.toName,
+      day: d, role: p.role,
+      return_day: back || null, return_role: back ? p.returnRole : null,
+      status: "pending", submitted_at: p.submittedAt,
+    };
+    if (p.give || (!back && !p.isScheduler)) req.kind = "give";
+    const stamp = typeof p.stamp === "function" ? p.stamp(i) : "";
+    req.detail = (p.give ? tradeGiveMsg(req) : tradeProposeMsg(req)) + (stamp ? " " + stamp : "");
+    return req;
+  });
+}
 
 // Dated slot label for (dayStr, role) where role is "primary" | "backup".
 function slotLabel(dayStr, role) {
@@ -2765,7 +2810,7 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
-    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, slotLabel, suggestTradePartners, tradeDayShort,
+    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
     ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,
     buildWeekRows, exportColorsFor,

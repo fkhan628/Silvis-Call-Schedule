@@ -510,6 +510,7 @@ function CallSchedule() {
   const [tradeReturnDay, setTradeReturnDay] = useState("");
   const [tradeReturnRole, setTradeReturnRole] = useState("primary");
   const [tradeWholeUnit, setTradeWholeUnit] = useState(true); // fg-1: a unit day (holiday unit / Fri-Sun block) trades as the whole unit unless the scheduler splits it
+  const [tradeKind, setTradeKind] = useState("trade");     // Prompt 19: the Propose card's switch - "trade" (day for day) | "give" (one-way, nothing in return)
   const [tradeBusy, setTradeBusy] = useState("");          // trade id (or "propose") while a trade write is in flight
   const [tradeApplyErr, setTradeApplyErr] = useState({});  // { trade_id: verbatim apply_trade error } for accepted-but-not-applied trades
   const [minePerson, setMinePerson] = useState("");        // My schedule: whose (the scheduler may pick anyone)
@@ -2435,6 +2436,7 @@ function CallSchedule() {
   const proposeTradeForDay = (day, role, pick) => {
     setTradeDay(day);
     setTradeRole(role === "backup" ? "backup" : "primary");
+    setTradeKind("trade"); // Prompt 19: every entry point here reads "Propose a trade" (the pick may carry a return day)
     if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);
     else if (isScheduler && pick && pick.from && poolSurgeons.some(s => s.id === pick.from)) setTradeFrom(pick.from); // a pool member only - never an outside surgeon written in by hand (review 9/24)
     if (pick && pick.to) { setTradeTo(pick.to); setTradeReturnDay(pick.returnDay || ""); if (pick.returnRole) setTradeReturnRole(pick.returnRole); }
@@ -3386,18 +3388,19 @@ function CallSchedule() {
   // the year, then - for a member's two-way proposal - a workable return day) over the card's OWN checks:
   // tradeEligibility / tradeEligibilityOver (the rules.js chokepoint, locks ignored, claim flag) and tradeUnitOf.
   // Unit-aware: when the given day is a unit day and "Trade the whole unit" is on, the whole unit is ranked and a
-  // return unit must pair day for day. The scheduler's one-way proposals skip the return-day ranking. No rules
-  // context = no suggestions (the card's warning stands).
+  // return unit must pair day for day. The scheduler's one-way proposals skip the return-day ranking, and so does a
+  // give (Prompt 19: kind "give" - nothing comes back; the receiver is still ranked by eligibility and lowest total).
+  // No rules context = no suggestions (the card's warning stands). kind defaults to a trade (the box and the editor).
   // Review 9/24: when `fromId` is the person whose vacation was just refused and `day` is one of the refused slots, no
   // return day may fall inside that range - the time_off row was never written, so the rules cannot know it. The box
   // and the card (arriving from the box) share the window through tradeSuggestionsFor, so their chips agree.
   const tradeAvoidWindow = (day, fromId) => vacConflict && vacConflict.personId === fromId && suIsIso(vacConflict.start) && suIsIso(vacConflict.end) && (vacConflict.items || []).some(i => i.day === day) ? { start: vacConflict.start, end: vacConflict.end } : null;
-  const tradeSuggestionsFor = (day, role, fromId) => {
+  const tradeSuggestionsFor = (day, role, fromId, kind) => {
     if (!rulesCtx || !suIsIso(day) || !fromId) return [];
     const unit = tradeUnitOf(day, role, fromId);
     const whole = !!unit && tradeWholeUnit;
     return suggestTradePartners(rulesCtx, schedule, day, role, fromId, {
-      today: todayStr, pool: poolSurgeons.map(s => s.id), nameOf, offerDays: whole ? unit.days : [day], twoWay: !isScheduler, floors: TOTALS_YTD_FLOORS,
+      today: todayStr, pool: poolSurgeons.map(s => s.id), nameOf, offerDays: whole ? unit.days : [day], twoWay: !isScheduler && kind !== "give", floors: TOTALS_YTD_FLOORS,
       eligibility: (days, r, cand) => days.length > 1 ? tradeEligibilityOver(days, r, cand) : tradeEligibility(days[0], r, cand),
       unitOf: tradeUnitOf,
       avoidReturnDays: tradeAvoidWindow(day, fromId),
@@ -3433,11 +3436,14 @@ function CallSchedule() {
   const tradeNamed = (r) => ({ ...r, from_surgeon_name: nameOf(r.from_surgeon_id), to_surgeon_name: nameOf(r.to_surgeon_id) });
 
   // --- Propose ---
+  // Prompt 19 (Faraz 9/24): tradeKind "give" = a one-way give - the same holder, unit and receiver-eligibility checks, no
+  // return leg (nothing comes back, no one-way confirm), every row sent with kind 'give', worded as a give.
   const submitTradeRequest = async () => {
     if (isPublicMode) return;
+    const give = tradeKind === "give";
     const fromId = isScheduler ? tradeFrom : (mySurgeon || "");
     if (!fromId || !tradeTo || !tradeDay || !tradeRole) { showToast("Pick both surgeons, the day and the role.", "error"); return; }
-    if (fromId === tradeTo) { showToast("Pick a different surgeon to trade with.", "error"); return; }
+    if (fromId === tradeTo) { showToast(give ? "Pick a different surgeon to give the day to." : "Pick a different surgeon to trade with.", "error"); return; }
     if (!isScheduler && fromId !== mySurgeon) { showToast("You can only propose trades for your own days.", "error"); return; }
     const sched = scheduleRef.current || {};
     const holder = sched[tradeDay] ? sched[tradeDay][tradeRole] : null;
@@ -3461,7 +3467,9 @@ function CallSchedule() {
     // The return leg: a unit day of the counter-party's comes back as a whole
     // unit too (day for day when the sizes match), never as a split.
     let retDays = [], retUnit = null;
-    if (tradeReturnDay) {
+    if (give) {
+      // a give: nothing comes back - any return day left in the form is ignored (the card clears it and hides the controls)
+    } else if (tradeReturnDay) {
       const rHolder = sched[tradeReturnDay] ? sched[tradeReturnDay][tradeReturnRole] : null;
       if (rHolder !== tradeTo) { showToast(`${nameOf(tradeTo)} is not ${tradeReturnRole} on ${fmtMD(tradeReturnDay)} (that slot is ${holderLabel(rHolder, nameOf)}).`, "error"); return; }
       retUnit = tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo);
@@ -3478,33 +3486,24 @@ function CallSchedule() {
         if (!rulesUnknownGate(rElig, fromId, retLabel + " in return", "propose")) return;
       }
     } else if (!isScheduler) {
-      showToast("A return shift is required - pick the day and role you'll take in return. One-way trades are the scheduler's call.", "error");
+      showToast("A return shift is required - pick the day and role you'll take in return, or switch to Give away (nothing in return).", "error");
       return;
     } else if (!confirm("No return shift specified. One-way trades are for emergencies only. Submit anyway?")) return;
     const fromName = nameOf(fromId), toName = nameOf(tradeTo);
     setTradeBusy("propose");
     try {
-      // One row per given day. A single return day rides on the first row (the
-      // rest of the unit is one-way inside the group); a matching return unit
-      // pairs day for day. The unit stamp in detail ties the rows together.
-      const rows = days.map((d, i) => {
-        const back = retDays.length === days.length ? retDays[i] : (i === 0 ? (retDays[0] || null) : null);
-        const req = {
-          from_surgeon_id: fromId, from_surgeon_name: fromName,
-          to_surgeon_id: tradeTo, to_surgeon_name: toName,
-          day: d, role: tradeRole,
-          return_day: back || null, return_role: back ? tradeReturnRole : null,
-          status: "pending", submitted_at: new Date().toISOString(),
-        };
-        req.detail = tradeProposeMsg(req) + (whole ? " " + tradeUnitStamp(unit, i) : "");
-        return req;
-      });
+      // One row per given day (helpers.tradeProposalRows, pure): a single return day rides on the first row (the rest of
+      // the unit is one-way inside the group); a matching return unit pairs day for day; the unit stamp in detail ties the
+      // rows together. Prompt 19: a give carries no return leg and every row is sent with kind 'give'; so are the TAIL rows
+      // of a member's whole-unit trade with one return day (trade_insert_guard refuses a member 'trade' without a return
+      // leg); a trade row sends no kind (the column default 'trade'), and the scheduler's rows are unchanged.
+      const rows = tradeProposalRows({ fromId, fromName, toId: tradeTo, toName, days, role: tradeRole, retDays, returnRole: tradeReturnRole, give, isScheduler, stamp: whole ? (i) => tradeUnitStamp(unit, i) : null, submittedAt: new Date().toISOString() });
       const inserted = [];
       for (const req of rows) {
         const { data: row, error } = await db.insert("shift_trade_requests", req);
         if (error || !row) {
           console.warn("trade insert failed", error);
-          showToast(`Couldn't submit the trade${inserted.length ? ` (${inserted.length} of ${rows.length} unit days were submitted - cancel them or ask the scheduler)` : ""}: ` + describeDbError(error), "error");
+          showToast(`Couldn't submit the ${give ? "give" : "trade"}${inserted.length ? ` (${inserted.length} of ${rows.length} unit days were submitted - cancel them or ask the scheduler)` : ""}: ` + describeDbError(error), "error");
           break;
         }
         inserted.push(row);
@@ -3512,14 +3511,17 @@ function CallSchedule() {
       if (!inserted.length) return;
       setTradeRequests(prev => [...inserted.slice().reverse(), ...prev.filter(r => !inserted.some(x => x.id === r.id))]);
       const first = inserted[0];
-      const msg = !whole ? first.detail
+      const msg = give ? tradeGiveMsg({ from_surgeon_name: fromName, to_surgeon_name: toName, day: days[0], role: tradeRole }, whole ? unitText(unit) : null)
+        : !whole ? first.detail
         : `${fromName} proposed a trade: ${toName} would take ${roleWordOf(tradeRole)} ${fmtMD(days[0])}-${fmtMD(days[days.length - 1])} (the ${unitText(unit)}, moved as one)`
           + (retDays.length > 1 ? `; ${fromName} would take ${roleWordOf(tradeReturnRole)} ${fmtMD(retDays[0])}-${fmtMD(retDays[retDays.length - 1])} in return` : retDays.length === 1 ? `; ${fromName} would take ${slotLabel(retDays[0], tradeReturnRole)} in return` : " (one-way - no return shift)");
-      logAudit("trade.propose", msg, { trade_id: first.id, trade_ids: inserted.map(r => r.id), from: fromId, to: tradeTo, day: tradeDay, role: tradeRole, days, return_day: first.return_day, return_role: first.return_role, return_days: retDays, unit: unit ? unit.name : null });
-      await addNotification("trade_proposed", "Shift trade proposed", msg, { from_surgeon_id: fromId, to_surgeon_id: tradeTo, trade_id: first.id, trade_ids: inserted.map(r => r.id), day: tradeDay });
-      sendEmailNotif("trade_proposed", { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)), trade_id: first.id }, [fromId, tradeTo]);
+      logAudit("trade.propose", msg, { trade_id: first.id, trade_ids: inserted.map(r => r.id), from: fromId, to: tradeTo, day: tradeDay, role: tradeRole, days, return_day: first.return_day, return_role: first.return_role, return_days: retDays, unit: unit ? unit.name : null, kind: give ? "give" : "trade" });
+      await addNotification("trade_proposed", give ? "Day offered - nothing in return" : "Shift trade proposed", msg, { from_surgeon_id: fromId, to_surgeon_id: tradeTo, trade_id: first.id, trade_ids: inserted.map(r => r.id), day: tradeDay, kind: give ? "give" : "trade" });
+      // the e-mail goes to both parties (greeted by name), so a give's is worded neutrally (helpers.tradeGiveEmail)
+      const giveMail = give ? tradeGiveEmail({ from_surgeon_name: fromName, to_surgeon_name: toName, day: days[0], role: tradeRole }, whole ? unitText(unit) : null) : null;
+      sendEmailNotif("trade_proposed", giveMail ? { message: giveMail.message, subject: giveMail.subject, trade_id: first.id } : { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)), trade_id: first.id }, [fromId, tradeTo]);
       setTradeDay(""); setTradeReturnDay("");
-      if (inserted.length === rows.length) showToast(whole ? `Trade proposed for the ${unitText(unit)} - ${inserted.length} rows.` : "Trade proposed.", "success");
+      if (inserted.length === rows.length) showToast(give ? (whole ? `Offered the ${unitText(unit)} to ${toName} - ${inserted.length} rows.` : `Offered to ${toName} - nothing in return.`) : whole ? `Trade proposed for the ${unitText(unit)} - ${inserted.length} rows.` : "Trade proposed.", "success");
     } catch(e) { console.warn("Submit trade error:", e); showToast("Couldn't submit the trade - check your connection and try again.", "error"); }
     finally { setTradeBusy(""); }
   };
@@ -6107,9 +6109,10 @@ function CallSchedule() {
             const cands = poolSurgeons.filter(s => s.id !== fromId).map(s => ({ s, e: dayOk ? eligOf(s.id) : null }));
             cands.sort((a, b) => ((a.e && !a.e.ok) ? 1 : 0) - ((b.e && !b.e.ok) ? 1 : 0));
             const toElig = dayOk && tradeTo ? eligOf(tradeTo) : null;
-            const retUnit = suIsIso(tradeReturnDay) && tradeTo && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo) : null;
+            const give = tradeKind === "give"; // Prompt 19: a give has no return leg - the return controls are not rendered
+            const retUnit = !give && suIsIso(tradeReturnDay) && tradeTo && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo) : null;
             const retPaired = !!(retUnit && whole && retUnit.days.length === offerDays.length);
-            const retElig = suIsIso(tradeReturnDay) && fromId ? (retPaired ? tradeEligibilityOver(retUnit.days, tradeReturnRole, fromId) : tradeEligibility(tradeReturnDay, tradeReturnRole, fromId)) : null;
+            const retElig = !give && suIsIso(tradeReturnDay) && fromId ? (retPaired ? tradeEligibilityOver(retUnit.days, tradeReturnRole, fromId) : tradeEligibility(tradeReturnDay, tradeReturnRole, fromId)) : null;
             const unitOfDay = (d) => rulesCtx && rulesCtx.holidayByDay ? rulesCtx.holidayByDay[d] : null;
             const givenLabel = whole ? "the " + unitText(unit) : slotLabel(tradeDay, tradeRole);
             const pending = myTradeRequests.filter(r => r.status === "pending" || r.status === "accepted");
@@ -6149,7 +6152,13 @@ function CallSchedule() {
             return <>
               <div style={css.card} data-testid="trade-card">
                 <div style={css.cardT}>Propose a shift trade</div>
-                <p style={sectionNote}>By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. {isScheduler ? "As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor." : "All trades are two-way: pick the day and role you take in return."}</p>
+                <p style={sectionNote}>By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. {isScheduler ? "As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor." : "A trade is two-way: pick the day and role you take in return."} <strong>Give away</strong> offers the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back; they accept or decline, and an accepted give is applied like a trade.</p>
+                {fromId && (
+                  <div data-testid="trade-kind" role="group" aria-label="Trade or give away" style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+                    <button type="button" data-testid="trade-kind-trade" aria-pressed={!give} onClick={()=>setTradeKind("trade")} style={{...css.mini(!give),fontSize:12,padding:"5px 12px"}}>Trade (day for day)</button>
+                    <button type="button" data-testid="trade-kind-give" aria-pressed={give} onClick={()=>{ setTradeKind("give"); setTradeReturnDay(""); }} style={{...css.mini(give),fontSize:12,padding:"5px 12px"}}>Give away (nothing in return)</button>
+                  </div>
+                )}
                 {!fromId ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
                   <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
                     {!rulesCtx && <div data-testid="trade-rules-unavailable" style={{...css.warnBox,flex:"1 1 100%"}}>Rules unavailable - the setup has not loaded, so nobody's eligibility can be checked. Members cannot propose or accept until it does; the scheduler is asked to confirm each step.</div>}
@@ -6179,7 +6188,7 @@ function CallSchedule() {
                         card's own checks); one tap fills Trade with and, when one was found, the return day. Chips wrap inside the card. */}
                     {(() => {
                       if (!dayOk || holder !== fromId || !rulesCtx) return null;
-                      const sugg = tradeSuggestionsFor(tradeDay, tradeRole, fromId);
+                      const sugg = tradeSuggestionsFor(tradeDay, tradeRole, fromId, tradeKind);
                       if (!sugg.length) return null;
                       return (
                         <div data-testid="trade-suggested" data-count={sugg.length} style={{flex:"1 1 100%",maxWidth:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
@@ -6195,7 +6204,7 @@ function CallSchedule() {
                         </div>
                       );
                     })()}
-                    <div className="trade-pick-wrap"><label style={label}>Trade with</label>
+                    <div className="trade-pick-wrap"><label style={label}>{give ? "Give to" : "Trade with"}</label>
                       <select data-testid="trade-to" className="trade-pick" value={tradeTo} onChange={e=>{ setTradeTo(e.target.value); setTradeReturnDay(""); }} style={{...inp,width:230,maxWidth:"100%"}}>
                         <option value="">Select</option>
                         {cands.map(({ s, e }) => {
@@ -6206,6 +6215,7 @@ function CallSchedule() {
                     </div>
                     {toElig && !toElig.ok && <div data-testid="trade-to-reason" style={{...css.errBox,flex:"1 1 100%"}}>{nameOf(tradeTo)} can't take {givenLabel}: {tradeReasonText(toElig)}. {toElig.unknown ? "" : "Pick someone else or ask the scheduler."}</div>}
                     {toElig && toElig.ok && toElig.soft && toElig.soft.length > 0 && <div style={{...css.warnBox,flex:"1 1 100%"}}>Allowed with a note: {toElig.soft.map(softTag).join(", ")}.</div>}
+                    {!give && <>
                     <div className="trade-pick-wrap"><label style={label}>Their day + role (return)</label>
                       <select data-testid="trade-theirs-pick" className="trade-pick" value={suIsIso(tradeReturnDay) && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeReturnDay + "|" + tradeReturnRole : ""} onChange={e=>{ const v = e.target.value.split("|"); if (v[0]) { setTradeReturnDay(v[0]); setTradeReturnRole(v[1]); } else setTradeReturnDay(""); }} style={{...inp,width:260,maxWidth:"100%"}} disabled={!tradeTo}>
                         <option value="">{isScheduler ? "None (one-way)" : (tradeTo ? "Pick one of their days" : "Pick a surgeon first")}</option>
@@ -6217,7 +6227,8 @@ function CallSchedule() {
                       <select data-testid="trade-return-role" value={tradeReturnRole} onChange={e=>setTradeReturnRole(e.target.value)} style={{...inp,width:100}}><option value="primary">Primary</option><option value="backup">Backup</option></select></div>
                     {retUnit && <div data-testid="trade-return-unit" data-paired={retPaired ? "1" : "0"} style={{...css.warnBox,flex:"1 1 100%"}}>{nameOf(tradeTo)}'s {fmtMD(tradeReturnDay)} is part of the {unitText(retUnit)}{retPaired ? " - it comes back as a whole unit, day for day." : (isScheduler ? " - taking that day alone would split it (you will be asked to confirm)." : " - it can only come back as a whole unit matching the " + offerDays.length + "-day unit you give; pick another day.")}</div>}
                     {retElig && !retElig.ok && <div data-testid="trade-return-reason" style={{...css.errBox,flex:"1 1 100%"}}>{nameOf(fromId)} can't take {retPaired ? "the " + unitText(retUnit) : slotLabel(tradeReturnDay, tradeReturnRole)} in return: {tradeReasonText(retElig)}.</div>}
-                    <button data-testid="trade-submit" disabled={tradeBusy === "propose"} onClick={submitTradeRequest} style={{...css.btn(true),padding:"7px 18px",background:"linear-gradient(135deg,#6030a0,#8050c0)",borderColor:"#6030a0"}}>{tradeBusy === "propose" ? "Submitting" : whole ? `Propose unit trade (${offerDays.length} days)` : "Propose trade"}</button>
+                    </>}
+                    <button data-testid="trade-submit" disabled={tradeBusy === "propose"} onClick={submitTradeRequest} style={{...css.btn(true),padding:"7px 18px",background:"linear-gradient(135deg,#6030a0,#8050c0)",borderColor:"#6030a0"}}>{tradeBusy === "propose" ? "Submitting" : give ? (whole ? "Offer the " + unitText(unit) : "Offer this day") + (tradeTo ? " to " + nameOf(tradeTo) : "") : whole ? `Propose unit trade (${offerDays.length} days)` : "Propose trade"}</button>
                   </div>
                 )}
               </div>

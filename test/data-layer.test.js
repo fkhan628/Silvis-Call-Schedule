@@ -1136,7 +1136,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(oneWay.map(x => x.id), ["s3", "s4", "s2"]);
     });
     check("Item C pins: the card renders tradeSuggestionsFor (the pure helper over tradeEligibility / tradeEligibilityOver / tradeUnitOf, two-way for members) as trade-suggest-chip buttons that fill Trade with and the return day; the vacation-conflict box and the day editor's link pre-fill the card with the top suggestion", () => {
-      const tf = src.indexOf("const tradeSuggestionsFor = (day, role, fromId) => {");
+      const tf = src.indexOf("const tradeSuggestionsFor = (day, role, fromId, kind) => {"); // Prompt 19 S2: kind ("give" skips the return-day ranking)
       assert.ok(tf > 0, "tradeSuggestionsFor at App scope");
       const tfBody = src.slice(tf, src.indexOf("const unitText = ", tf));
       assert.ok(tfBody.length > 0 && tfBody.length < 3000, "tradeSuggestionsFor precedes unitText");
@@ -1170,6 +1170,120 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const et = src.indexOf('data-testid="editor-trade"');
       const link = src.slice(et, src.indexOf("Propose a trade for this day", et) + 140);
       assert.ok(link.includes("onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)}") && link.includes('Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}'), "the link names the suggestion and passes it on");
+    });
+  }
+  // Prompt 19 step 2 (Faraz 9/24): "Give a day away" on the Propose card - a Trade / Give away switch; a give carries no
+  // return leg, every row is sent with kind 'give' and is worded as a give; the unit rule and the receiver's eligibility
+  // check are the trade path's. helpers.tradeGiveMsg / tradeProposalRows are pure (behaviour); the card and
+  // submitTradeRequest are pinned.
+  {
+    const mk = (o) => ({ fromId: "s3", fromName: "Acton", toId: "s2", toName: "Burchett", role: "primary", returnRole: "backup", isScheduler: false, submittedAt: "2026-09-24T12:00:00.000Z", ...o });
+    const tg = ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"];
+    const stampOf = (i) => "[unit holiday 2026-11-26 4: Thanksgiving unit 11/26-11/29 (4 days), day " + (i + 1) + " of 4]";
+    check("Prompt 19 S2: helpers.tradeGiveMsg words a give for the receiver and names him - 'Acton offers you Sat 10/10 primary - nothing in return (a give to Burchett)'; a whole unit reads 'the <unit> <role>'; ASCII", () => {
+      assert.strictEqual(typeof H.tradeGiveMsg, "function", "helpers.tradeGiveMsg is exported");
+      const req = { from_surgeon_name: "Acton", to_surgeon_name: "Burchett", day: "2026-10-10", role: "primary" };
+      assert.strictEqual(H.tradeGiveMsg(req), "Acton offers you Sat 10/10 primary - nothing in return (a give to Burchett)");
+      assert.strictEqual(H.tradeGiveMsg({ ...req, day: "2026-10-13", role: "backup" }), "Acton offers you Tue 10/13 backup - nothing in return (a give to Burchett)");
+      assert.strictEqual(H.tradeGiveMsg({ ...req, day: "2026-11-26" }, "Thanksgiving unit 11/26-11/29 (4 days)"), "Acton offers you the Thanksgiving unit 11/26-11/29 (4 days) primary - nothing in return (a give to Burchett)");
+      assert.ok(!/[^\x00-\x7f]/.test(H.tradeGiveMsg(req)), "ASCII");
+    });
+    // S2 review: the give's e-mail goes to BOTH parties and send-notification greets each by name ("Hi Acton, ..."), so
+    // its subject and message are neutral - the receiver-addressed tradeGiveMsg stays the in-app / row wording.
+    check("Prompt 19 S2 review: helpers.tradeGiveEmail - a neutral subject 'Day offered: Sat 10/10 primary (Acton to Burchett)' and message for the two-party e-mail (no 'you'); a whole unit reads 'the <unit> <role>'; ASCII", () => {
+      assert.strictEqual(typeof H.tradeGiveEmail, "function", "helpers.tradeGiveEmail is exported");
+      const req = { from_surgeon_name: "Acton", to_surgeon_name: "Burchett", day: "2026-10-10", role: "primary" };
+      assert.deepStrictEqual(H.tradeGiveEmail(req), {
+        subject: "Day offered: Sat 10/10 primary (Acton to Burchett)",
+        message: "Acton is offering Sat 10/10 primary to Burchett - nothing in return. Burchett can accept or decline in the app; the schedule changes only if Burchett accepts.",
+      });
+      const u = H.tradeGiveEmail({ ...req, day: "2026-11-26" }, "Thanksgiving unit 11/26-11/29 (4 days)");
+      assert.strictEqual(u.subject, "Day offered: the Thanksgiving unit 11/26-11/29 (4 days) primary (Acton to Burchett)");
+      assert.ok(u.message.startsWith("Acton is offering the Thanksgiving unit 11/26-11/29 (4 days) primary to Burchett - nothing in return."));
+      assert.ok(!/\byou\b/i.test(u.subject + " " + u.message), "neither line addresses one party as 'you'");
+      assert.ok(!/[^\x00-\x7f]/.test(u.subject + u.message), "ASCII");
+    });
+    check("Prompt 19 S2: helpers.tradeProposalRows - a give has no return leg on any row (even when retDays is handed in) and sends kind 'give' on every row; a trade row keeps the pre-Prompt 19 shape (no kind); a member's unit tail rows (no return leg) go as 'give'; the scheduler's rows are unchanged", () => {
+      assert.strictEqual(typeof H.tradeProposalRows, "function", "helpers.tradeProposalRows is exported");
+      // a single-day give
+      const g1 = H.tradeProposalRows(mk({ give: true, days: ["2026-10-10"], retDays: [] }));
+      assert.deepStrictEqual(g1, [{ from_surgeon_id: "s3", from_surgeon_name: "Acton", to_surgeon_id: "s2", to_surgeon_name: "Burchett", day: "2026-10-10", role: "primary", return_day: null, return_role: null, status: "pending", submitted_at: "2026-09-24T12:00:00.000Z", kind: "give", detail: "Acton offers you Sat 10/10 primary - nothing in return (a give to Burchett)" }]);
+      // a give never carries a return leg, whatever is left in the form
+      const g2 = H.tradeProposalRows(mk({ give: true, days: ["2026-10-10"], retDays: ["2026-10-20"] }));
+      assert.strictEqual(g2[0].return_day, null); assert.strictEqual(g2[0].return_role, null); assert.strictEqual(g2[0].kind, "give");
+      // a whole-unit give: one row per day, each kind give, no return, the unit stamp appended
+      const gu = H.tradeProposalRows(mk({ give: true, days: tg, retDays: ["2026-12-01"], stamp: stampOf }));
+      assert.deepStrictEqual(gu.map(r => r.day), tg);
+      assert.ok(gu.every(r => r.kind === "give" && r.return_day === null && r.return_role === null), "every unit row is a one-way give");
+      assert.strictEqual(gu[1].detail, "Acton offers you Fri 11/27 primary - nothing in return (a give to Burchett) " + stampOf(1));
+      // the scheduler's give: kind give as well (trade_insert_guard allows it)
+      assert.ok(H.tradeProposalRows(mk({ give: true, isScheduler: true, days: tg, stamp: stampOf })).every(r => r.kind === "give" && r.return_day === null));
+      // a member's single-day trade: the pre-Prompt 19 row, key for key - no kind (the column default 'trade')
+      const t1 = H.tradeProposalRows(mk({ give: false, days: ["2026-10-10"], retDays: ["2026-10-20"] }));
+      assert.deepStrictEqual(Object.keys(t1[0]), ["from_surgeon_id", "from_surgeon_name", "to_surgeon_id", "to_surgeon_name", "day", "role", "return_day", "return_role", "status", "submitted_at", "detail"]);
+      assert.strictEqual(t1[0].return_day, "2026-10-20"); assert.strictEqual(t1[0].return_role, "backup");
+      assert.strictEqual(t1[0].detail, "Acton proposed a trade: Burchett would take Primary - Sat Oct 10; Acton would take Backup - Tue Oct 20");
+      // a member's whole unit traded for ONE return day: row 1 carries it (no kind), rows 2..4 are one-way -> kind give
+      const tu = H.tradeProposalRows(mk({ give: false, days: tg, retDays: ["2026-12-01"], stamp: stampOf }));
+      assert.deepStrictEqual(tu.map(r => [r.return_day, r.kind || null]), [["2026-12-01", null], [null, "give"], [null, "give"], [null, "give"]]);
+      assert.ok(tu.every((r, i) => r.detail.endsWith(" " + stampOf(i))), "the unit stamp ties the rows together (tradeGroupOf ignores kind)");
+      assert.ok(/proposed a trade: .*one-way - no return shift/.test(tu[1].detail), "a tail row keeps the trade wording");
+      // unit for unit: every row has its return -> no kind anywhere
+      const uu = H.tradeProposalRows(mk({ give: false, days: tg, retDays: ["2026-12-24", "2026-12-25", "2026-12-26", "2026-12-27"], stamp: stampOf }));
+      assert.ok(uu.every((r, i) => r.return_day === ["2026-12-24", "2026-12-25", "2026-12-26", "2026-12-27"][i] && !("kind" in r)));
+      // the scheduler: a one-way trade and his unit tails stay 'trade' rows (no kind), exactly as before
+      assert.ok(!("kind" in H.tradeProposalRows(mk({ give: false, isScheduler: true, days: ["2026-10-10"], retDays: [] }))[0]));
+      assert.ok(H.tradeProposalRows(mk({ give: false, isScheduler: true, days: tg, retDays: ["2026-12-01"], stamp: stampOf })).every(r => !("kind" in r)));
+      assert.deepStrictEqual(H.tradeProposalRows(mk({ give: true, days: [] })), [], "no days, no rows");
+    });
+    check("Prompt 19 S2 pins: submitTradeRequest - the holder, unit-split and receiver-eligibility checks run for a give exactly as for a trade; a give skips the return leg and the one-way confirm; rows come from tradeProposalRows; the audit row, the notification and the e-mail carry / read as a give", () => {
+      const a = src.indexOf("const submitTradeRequest = async () => {");
+      const b = src.slice(a, src.indexOf("// --- Status writes ---", a));
+      assert.ok(a > 0 && b.length > 0 && b.length < 9000, "submitTradeRequest precedes the status writes");
+      const at = (needle) => { const i = b.indexOf(needle); assert.ok(i > 0, "missing: " + needle); return i; };
+      const giveI = at('const give = tradeKind === "give";');
+      const holderI = at("if (holder !== fromId) {");
+      const splitI = at("if (unit && !whole) {\n      if (!isScheduler) { showToast(`Blocked: ${fmtMD(tradeDay)} is ${reasonLabel(\"unit-split:\" + unitText(unit))}.`, \"error\"); return; }");
+      const eligI = at("const elig = whole ? tradeEligibilityOver(days, tradeRole, tradeTo) : tradeEligibility(tradeDay, tradeRole, tradeTo);");
+      const branchI = at("    if (give) {\n");
+      const retI = at("} else if (tradeReturnDay) {");
+      const reqI = at("} else if (!isScheduler) {\n      showToast(\"A return shift is required - pick the day and role you'll take in return, or switch to Give away (nothing in return).\", \"error\");");
+      const confI = at('} else if (!confirm("No return shift specified. One-way trades are for emergencies only. Submit anyway?")) return;');
+      const rowsI = at("const rows = tradeProposalRows({ fromId, fromName, toId: tradeTo, toName, days, role: tradeRole, retDays, returnRole: tradeReturnRole, give, isScheduler, stamp: whole ? (i) => tradeUnitStamp(unit, i) : null, submittedAt: new Date().toISOString() });");
+      assert.ok(giveI < holderI && holderI < splitI && splitI < eligI && eligI < branchI && branchI < retI && retI < reqI && reqI < confI && confI < rowsI, "order: kind, holder, unit split, receiver eligibility, then give | return leg | member refusal | scheduler confirm, then the rows");
+      assert.ok(!/if \(give\)[^\n]*return;/.test(b.slice(giveI, eligI)), "no early exit for a give before the shared checks");
+      assert.ok(b.includes('db.insert("shift_trade_requests", req)'), "the insert path is the trade's");
+      assert.ok(b.includes("const msg = give ? tradeGiveMsg({ from_surgeon_name: fromName, to_surgeon_name: toName, day: days[0], role: tradeRole }, whole ? unitText(unit) : null)"), "the proposal message reads as a give (the unit named when whole)");
+      assert.ok(b.includes('unit: unit ? unit.name : null, kind: give ? "give" : "trade" });'), "the trade.propose audit row carries kind");
+      assert.ok(b.includes('await addNotification("trade_proposed", give ? "Day offered - nothing in return" : "Shift trade proposed", msg, {') && b.includes('day: tradeDay, kind: give ? "give" : "trade" });'), "the in-app notification: same type, a give title, kind in data");
+      assert.ok(b.includes("const giveMail = give ? tradeGiveEmail({ from_surgeon_name: fromName, to_surgeon_name: toName, day: days[0], role: tradeRole }, whole ? unitText(unit) : null) : null;"), "a give's e-mail words come from tradeGiveEmail (neutral - both parties get it)");
+      assert.ok(b.includes('sendEmailNotif("trade_proposed", giveMail ? { message: giveMail.message, subject: giveMail.subject, trade_id: first.id } : { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)), trade_id: first.id }, [fromId, tradeTo]);'), "the e-mail: trade_proposed with trade_id, both parties, the neutral give subject / message; a trade's e-mail unchanged");
+      assert.ok(!b.includes("Day offered to you"), "no receiver-addressed subject on the two-party e-mail");
+      assert.ok(!b.includes("tradeProposeMsg(req)"), "the row sentence is composed in tradeProposalRows");
+    });
+    check("Prompt 19 S2 pins: the card's Trade / Give away switch (aria-pressed) sits above the form; give clears the return day, hides every return control, says 'Give to', ranks one-way suggestions and labels the button 'Offer this day to <Name>' / 'Offer the <unit> to <Name>'; the trade entry points reset it to trade", () => {
+      assert.ok(src.includes('const [tradeKind, setTradeKind] = useState("trade");'), "state, trade by default");
+      const c0 = src.indexOf('<div style={css.cardT}>Propose a shift trade</div>');
+      const card = src.slice(c0, src.indexOf('data-testid="trades-pending"', c0));
+      const sw = card.indexOf('data-testid="trade-kind"'), form = card.indexOf("{!fromId ? <p style={muted}>");
+      assert.ok(sw > 0 && form > sw, "the switch sits above the form");
+      assert.ok(card.includes('<button type="button" data-testid="trade-kind-trade" aria-pressed={!give} onClick={()=>setTradeKind("trade")}') && card.includes(">Trade (day for day)</button>"), "Trade (day for day)");
+      assert.ok(card.includes('<button type="button" data-testid="trade-kind-give" aria-pressed={give} onClick={()=>{ setTradeKind("give"); setTradeReturnDay(""); }}') && card.includes(">Give away (nothing in return)</button>"), "Give away clears any chosen return day");
+      const open = card.indexOf("{!give && <>"), close = card.indexOf("</>}", open);
+      assert.ok(open > 0 && close > open, "the return controls are wrapped");
+      ["trade-theirs-pick", "trade-return-day", "trade-return-role", "trade-return-unit", "trade-return-reason"].forEach(t => {
+        const i = card.indexOf('data-testid="' + t + '"');
+        assert.ok(i > open && i < close, t + " renders only in trade mode");
+      });
+      assert.ok(card.indexOf('data-testid="trade-submit"') > close && card.indexOf('data-testid="trade-to"') < open, "Give to and the button stay");
+      assert.ok(card.includes('<label style={label}>{give ? "Give to" : "Trade with"}</label>'), "the receiver select reads Give to");
+      assert.ok(card.includes('{tradeBusy === "propose" ? "Submitting" : give ? (whole ? "Offer the " + unitText(unit) : "Offer this day") + (tradeTo ? " to " + nameOf(tradeTo) : "") : whole ? `Propose unit trade (${offerDays.length} days)` : "Propose trade"}'), "the button text");
+      assert.ok(card.includes("const sugg = tradeSuggestionsFor(tradeDay, tradeRole, fromId, tradeKind);"), "the chips follow the switch");
+      assert.ok(src.includes('twoWay: !isScheduler && kind !== "give"'), "a give skips the return-day ranking (d) - the one-way path");
+      assert.ok(src.includes('const retUnit = !give && suIsIso(tradeReturnDay)') && src.includes('const retElig = !give && suIsIso(tradeReturnDay)'), "no return checks in give mode");
+      const pt = src.slice(src.indexOf("const proposeTradeForDay = (day, role, pick) => {"), src.indexOf("// --- Clear schedule"));
+      assert.ok(pt.includes('setTradeKind("trade");'), "'Propose a trade' entry points open the card in trade mode");
+      assert.ok(!/[^\x00-\x7f]/.test(card), "the card source stays ASCII");
     });
   }
   // RLS-7: the two PATCH handlers that used to trust a 2xx alone now behave like patchTradeStatus - a 200 with zero

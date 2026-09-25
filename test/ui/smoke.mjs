@@ -3847,6 +3847,168 @@ try {
       }
     }
 
+    // ----- (A2) Prompt 19 S2: Give away - the switch hides every return control, the button names the receiver, the
+    //      POST carries kind 'give' and no return leg, and the notification / e-mail / audit read as a give -----
+    try {
+      const RET_IDS = ["trade-theirs-pick", "trade-return-day", "trade-return-role", "trade-return-unit", "trade-return-reason"];
+      const retShown = () => page.evaluate((ids) => ids.filter(t => document.querySelector("[data-testid=" + t + "]")), RET_IDS);
+      const pressed = () => page.evaluate(() => ["trade-kind-trade", "trade-kind-give"].map(t => { const e = document.querySelector("[data-testid=" + t + "]"); return e ? e.getAttribute("aria-pressed") : null; }).join(","));
+      await page.selectOption("[data-testid=trade-from]", "s2");
+      await page.waitForTimeout(150);
+      if ((await pressed()) !== "true,false") fail("Give away: the card should open in trade mode (aria-pressed trade,give = true,false), got " + (await pressed()));
+      const gMine = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => o.value).filter(Boolean));
+      let gPicked = null, gTo = null;
+      for (const v of gMine.slice(0, 12)) {
+        await page.selectOption("[data-testid=trade-mine-pick]", v);
+        await page.waitForTimeout(150);
+        if (await page.$("[data-testid=trade-unit]")) continue;
+        const opts = await readToOpts();
+        const e = opts.find(x => x.eligible === "true");
+        if (e) { gPicked = v; gTo = e; break; }
+      }
+      if (!gPicked) throw new Error("no non-unit upcoming day of Burchett's with an eligible receiver: " + gMine.join(", "));
+      await page.selectOption("[data-testid=trade-to]", gTo.value);
+      await page.waitForTimeout(150);
+      const retBefore = await retShown();
+      await page.click("[data-testid=trade-kind-give]");
+      await page.waitForTimeout(200);
+      const retAfter = await retShown();
+      const chipsWithReturn = await page.$$eval("[data-testid=trade-suggest-chip]", els => els.filter(e => e.getAttribute("data-return-day")).length);
+      const gLabel = (await page.$eval("[data-testid=trade-submit]", el => el.textContent)).trim();
+      const gName = gTo.text.split(" - ")[0];
+      if (!retBefore.includes("trade-theirs-pick") || !retBefore.includes("trade-return-day") || !retBefore.includes("trade-return-role")) fail("Give away: trade mode should show the return controls, saw " + JSON.stringify(retBefore));
+      else if ((await pressed()) !== "false,true") fail("Give away: after the tap aria-pressed should read trade,give = false,true, got " + (await pressed()));
+      else if (retAfter.length) fail("Give away: return controls still rendered in give mode: " + JSON.stringify(retAfter));
+      else if (gLabel !== "Offer this day to " + gName) fail(`Give away: the button should read 'Offer this day to ${gName}', got '${gLabel}'`);
+      else if (chipsWithReturn) fail("Give away: " + chipsWithReturn + " Suggested chip(s) still carry a return day (the give ranks one-way)");
+      else ok(`Give away: the switch (aria-pressed false,true) hides every return control (${retBefore.length} shown in trade mode, 0 now), no chip carries a return day, the button reads '${gLabel}'`);
+      const [gDay, gRole] = gPicked.split("|");
+      const pendingIds = () => page.$$eval("[data-testid=trade-row][data-status=pending]", els => els.map(e => e.getAttribute("data-trade-id")));
+      const idsBeforeG = await pendingIds();
+      // S2 review: a give asks nothing - no one-way confirm (that is the scheduler's TRADE path). Every dialog is recorded.
+      const gDialogs = [];
+      const gDialog = (d) => { gDialogs.push(d.message()); d.accept(); };
+      page.on("dialog", gDialog);
+      const beforeG = writes.length;
+      await page.click("[data-testid=trade-submit]");
+      await waitFor(() => writesSince(beforeG, "/rest/v1/shift_trade_requests").length > 0, 8000);
+      await page.waitForTimeout(800);
+      page.off("dialog", gDialog);
+      if (gDialogs.length) fail("Give away: the scheduler's give fired " + gDialogs.length + " dialog(s) - a give has no one-way confirm: " + JSON.stringify(gDialogs));
+      else ok("Give away: no dialog on the scheduler's give (the one-way confirm is the trade path's)");
+      const gPost = writesSince(beforeG, "/rest/v1/shift_trade_requests").filter(w => w.method === "POST").map(bodyOf);
+      const gb = gPost[0] || null;
+      const gNotif = writesSince(beforeG, "/rest/v1/notifications").map(bodyOf).find(n => n && n.type === "trade_proposed");
+      const gMail = writesSince(beforeG).filter(w => /send-notification/.test(w.path)).map(bodyOf).find(b => b && b.type === "trade_proposed");
+      const gAudit = auditSince(beforeG, "trade.propose");
+      const giveRx = new RegExp("^Burchett offers you \\w{3} \\d{1,2}/\\d{1,2} " + gRole + " - nothing in return \\(a give to " + gName + "\\)$");
+      if (gPost.length !== 1 || !gb || gb.kind !== "give" || gb.from_surgeon_id !== "s2" || gb.to_surgeon_id !== gTo.value || gb.day !== gDay || gb.role !== gRole || gb.return_day !== null || gb.return_role !== null || gb.status !== "pending") fail("Give away: expected ONE POST { kind: give, s2 -> " + gTo.value + ", " + gRole + " " + gDay + ", return null } got " + JSON.stringify(gPost));
+      else if (!giveRx.test(gb.detail)) fail("Give away: the row's detail should read 'Burchett offers you <Dy M/D> " + gRole + " - nothing in return (a give to " + gName + ")', got " + gb.detail);
+      else if (!gNotif || gNotif.message !== gb.detail || gNotif.title !== "Day offered - nothing in return" || !gNotif.data || gNotif.data.kind !== "give") fail("Give away: the trade_proposed notification should carry the give sentence, the give title and data.kind give: " + JSON.stringify(gNotif));
+      else if (!gMail || !new RegExp("^Burchett is offering \\w{3} \\d{1,2}/\\d{1,2} " + gRole + " to " + gName + " - nothing in return\\. " + gName + " can accept or decline in the app; the schedule changes only if " + gName + " accepts\\.$").test(gMail.data.message || "") || !new RegExp("^Day offered: \\w{3} \\d{1,2}/\\d{1,2} " + gRole + " \\(Burchett to " + gName + "\\)$").test(gMail.data.subject || "") || /\byou\b/i.test(gMail.data.subject + " " + gMail.data.message) || JSON.stringify(gMail.targetIds) !== JSON.stringify(["s2", gTo.value])) fail("Give away: send-notification trade_proposed should carry the NEUTRAL give e-mail (both parties get it: 'Day offered: <Dy M/D> " + gRole + " (Burchett to " + gName + ")', no 'you') and both parties: " + JSON.stringify(gMail));
+      else if (!gAudit || !gAudit.detail || gAudit.detail.kind !== "give") fail("Give away: the trade.propose audit row should carry kind give: " + JSON.stringify(gAudit));
+      else ok(`Give away: POST { kind: give, return null } "${gb.detail}" + notification (title 'Day offered - nothing in return', data.kind give) + neutral e-mail '${gMail.data.subject}' to both parties + audit trade.propose kind give`);
+      if (!writesSince(beforeG).every(w => noAddress(w.body))) fail("Give away: a write body carries an email address");
+      // Leave no pending row behind (the mock's trade store is shared with the later sessions - a viewer counts every pending
+      // row in the Time off tab badge): the scheduler withdraws the give - one PATCH status cancelled.
+      const gIds = (await pendingIds()).filter(id => !idsBeforeG.includes(id));
+      if (gIds.length !== 1) fail("Give away: expected ONE new pending row for the give, got " + JSON.stringify(gIds));
+      else {
+        page.on("dialog", acceptAll);
+        const beforeC = writes.length;
+        await page.locator(`[data-testid=trade-row][data-trade-id="${gIds[0]}"] [data-testid=trade-cancel]`).click();
+        await waitFor(() => writesSince(beforeC, "/rest/v1/shift_trade_requests").some(w => w.method === "PATCH"), 8000);
+        await page.waitForTimeout(500);
+        page.off("dialog", acceptAll);
+        const cp = writesSince(beforeC, "/rest/v1/shift_trade_requests").find(w => w.method === "PATCH");
+        const cst = await page.locator(`[data-testid=trade-row][data-trade-id="${gIds[0]}"]`).getAttribute("data-status").catch(() => null);
+        if (!cp || cp.path !== "/rest/v1/shift_trade_requests?id=eq." + gIds[0] || (bodyOf(cp) || {}).status !== "cancelled" || cst !== "cancelled") fail("Give away: withdrawing the give should PATCH ?id=eq.<id> { status: cancelled } and list it cancelled, got " + JSON.stringify(cp && [cp.path, cp.body]) + " / " + cst);
+        else ok("Give away: the pending give is withdrawn (PATCH status cancelled, listed cancelled) - no pending row is left for the later sessions");
+      }
+      await page.click("[data-testid=trade-kind-trade]");
+      await page.waitForTimeout(150);
+      const back = await retShown();
+      if ((await pressed()) !== "true,false" || !back.includes("trade-theirs-pick")) fail("Give away: switching back to Trade should restore the return controls, saw " + JSON.stringify(back));
+      else ok("Give away: back to Trade (day for day) - the return controls are rendered again");
+    } catch (e) { fail("Give away (A2) exception: " + errLine(e)); }
+
+    // ----- (A2m) S2 review: the MEMBER give (a second session - Burchett s2, role surgeon, 390 px - the path the group
+    //      uses; the scheduler's chips are one-way in either mode, so A2 cannot show the switch changing the ranking):
+    //      trade-mode chips rank a return day, give-mode chips carry none; the give POSTs ONE row { kind: give, return
+    //      null } with no dialog and no 'A return shift is required' toast; Burchett withdraws it (no pending row left) -----
+    {
+      const MEM_UID = "00000000-0000-4000-8000-00000000e0e2";
+      const MEM_PROFILE = { id: MEM_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z" };
+      const MEM_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: MEM_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+      const mp = await context.newPage();
+      watchPage(mp, "member-give");
+      await mp.setViewportSize({ width: 390, height: 844 });
+      await mp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, MEM_JWT);
+      await mp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await mp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(MEM_PROFILE));
+      const mDialogs = [];
+      mp.on("dialog", (d) => { mDialogs.push(d.message()); d.accept(); });
+      try {
+        await loadWithRetry(mp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "member page (give)");
+        await mp.waitForSelector("text=Synced", { timeout: 30000 });
+        await mp.click('button[data-tab="timeoff"]');
+        await mp.waitForSelector("[data-testid=trade-card]", { timeout: 8000 });
+        if (await mp.$("[data-testid=trade-from]")) throw new Error("the member page shows the scheduler's From picker - it is being treated as the scheduler, so nothing below proves the member path");
+        const chipsOf = () => mp.$$eval("[data-testid=trade-suggest-chip]", els => els.map(e => ({ id: e.getAttribute("data-id"), ret: e.getAttribute("data-return-day"), text: e.textContent.trim() })));
+        const mVals = await mp.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => o.value).filter(Boolean));
+        let mPick = null, tradeChips = [];
+        for (const v of mVals.slice(0, 12)) {
+          await mp.selectOption("[data-testid=trade-mine-pick]", v);
+          await mp.waitForTimeout(150);
+          if (await mp.$("[data-testid=trade-unit]")) continue;
+          const cs = await chipsOf();
+          if (cs.some(c => c.ret)) { mPick = v; tradeChips = cs; break; }
+        }
+        if (!mPick) throw new Error("no non-unit upcoming day of Burchett's whose trade-mode chips rank a return day: " + mVals.slice(0, 12).join(", "));
+        await mp.click("[data-testid=trade-kind-give]");
+        await mp.waitForTimeout(200);
+        const giveChips = await chipsOf();
+        if (!giveChips.length) fail("Give away (member): give mode shows no Suggested chip for " + mPick + " (trade mode showed " + tradeChips.length + ")");
+        else if (giveChips.some(c => c.ret || /give back|no return day/.test(c.text))) fail("Give away (member): give-mode chips still rank a return day: " + JSON.stringify(giveChips));
+        else ok(`Give away (member): ${mPick} - trade-mode chips rank a return day (${tradeChips.filter(c => c.ret).length} of ${tradeChips.length}), give-mode chips carry none (${giveChips.map(c => c.text).join(" | ")})`);
+        const top = giveChips[0];
+        const topName = top ? top.text.split(" - ")[0] : "";
+        if (top) { await mp.click(`[data-testid=trade-suggest-chip][data-id="${top.id}"]`); await mp.waitForTimeout(150); }
+        const mLabel = (await mp.$eval("[data-testid=trade-submit]", el => el.textContent)).trim();
+        if (!top || mLabel !== "Offer this day to " + topName) throw new Error(`the top give chip should fill Give to - the button reads '${mLabel}'`);
+        const [mDay, mRole] = mPick.split("|");
+        const mPending = () => mp.$$eval("[data-testid=trade-row][data-status=pending]", els => els.map(e => e.getAttribute("data-trade-id")));
+        const mIdsBefore = await mPending();
+        const dlgBefore = mDialogs.length;
+        const beforeM = writes.length;
+        await mp.click("[data-testid=trade-submit]");
+        await waitFor(() => writesSince(beforeM, "/rest/v1/shift_trade_requests").some(w => w.method === "POST"), 8000);
+        await mp.waitForTimeout(800);
+        const mToast = await mp.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+        const mPost = writesSince(beforeM, "/rest/v1/shift_trade_requests").filter(w => w.method === "POST").map(bodyOf);
+        const mb = mPost[0] || null;
+        if (mDialogs.length !== dlgBefore) fail("Give away (member): the give fired a dialog: " + JSON.stringify(mDialogs.slice(dlgBefore)));
+        else if (/return shift is required/i.test(mToast)) fail("Give away (member): the give hit the member refusal: " + mToast);
+        else if (mPost.length !== 1 || !mb || mb.kind !== "give" || mb.from_surgeon_id !== "s2" || mb.to_surgeon_id !== top.id || mb.day !== mDay || mb.role !== mRole || mb.return_day !== null || mb.return_role !== null || mb.status !== "pending") fail("Give away (member): expected ONE POST { kind: give, s2 -> " + top.id + ", " + mRole + " " + mDay + ", return null } got " + JSON.stringify(mPost));
+        else if (mToast !== "Offered to " + topName + " - nothing in return.") fail("Give away (member): the toast should read 'Offered to " + topName + " - nothing in return.', got '" + mToast + "'");
+        else ok(`Give away (member): one POST { kind: give, s2 -> ${top.id}, ${mRole} ${mDay}, return null }, no dialog, toast '${mToast}'`);
+        if (!writesSince(beforeM).every(w => noAddress(w.body))) fail("Give away (member): a write body carries an email address");
+        // Burchett withdraws his own give (canCancel = the proposer): one PATCH status cancelled - no pending row left
+        const mNew = (await mPending()).filter(id => !mIdsBefore.includes(id));
+        if (mNew.length !== 1) fail("Give away (member): expected ONE new pending row for the give, got " + JSON.stringify(mNew));
+        else {
+          const beforeMC = writes.length;
+          await mp.locator(`[data-testid=trade-row][data-trade-id="${mNew[0]}"] [data-testid=trade-cancel]`).click();
+          await waitFor(() => writesSince(beforeMC, "/rest/v1/shift_trade_requests").some(w => w.method === "PATCH"), 8000);
+          await mp.waitForTimeout(500);
+          const mcp = writesSince(beforeMC, "/rest/v1/shift_trade_requests").find(w => w.method === "PATCH");
+          if (!mcp || mcp.path !== "/rest/v1/shift_trade_requests?id=eq." + mNew[0] || (bodyOf(mcp) || {}).status !== "cancelled") fail("Give away (member): withdrawing the give should PATCH ?id=eq.<id> { status: cancelled }, got " + JSON.stringify(mcp && [mcp.path, mcp.body]));
+          else ok("Give away (member): Burchett withdraws his give (PATCH status cancelled) - no pending row is left for the later sessions");
+        }
+      } catch (e) { fail("Give away (member, A2m) exception: " + errLine(e)); }
+      await mp.close();
+    }
+
     // ----- (B) Khan's Thanksgiving unit (fg-1) -----
     await page.selectOption("[data-testid=trade-from]", "s1");
     await page.waitForTimeout(150);
@@ -3864,6 +4026,16 @@ try {
     ok("Trades unit: counter-parties checked over the WHOLE unit: " + uOpts.map(o => `${o.text} [${o.eligible}]`).join(", "));
     await page.selectOption("[data-testid=trade-to]", uGood.value);
     await page.waitForTimeout(150);
+    // Prompt 19 S2: in give mode the whole unit is offered as one - "Offer the <unit> to <Name>"; back to Trade after
+    await page.click("[data-testid=trade-kind-give]");
+    await page.waitForTimeout(150);
+    const uGiveLabel = (await page.$eval("[data-testid=trade-submit]", el => el.textContent)).trim();
+    const uGiveBox = await page.$eval("[data-testid=trade-unit]", el => el.getAttribute("data-unit-days")).catch(() => null);
+    await page.click("[data-testid=trade-kind-trade]");
+    await page.waitForTimeout(150);
+    if (uGiveLabel !== "Offer the Thanksgiving unit 11/26-11/29 (4 days) to " + uGood.text.split(" - ")[0]) fail("Give away unit: the button should read 'Offer the Thanksgiving unit 11/26-11/29 (4 days) to " + uGood.text.split(" - ")[0] + "', got '" + uGiveLabel + "'");
+    else if (uGiveBox !== "2026-11-26,2026-11-27,2026-11-28,2026-11-29") fail("Give away unit: the unit box should still list the four days in give mode, got " + uGiveBox);
+    else ok("Give away unit: '" + uGiveLabel + "' - the unit box stays (a unit is offered whole unless the scheduler splits it)");
     // (B1) 'whole unit' unticked -> the scheduler must confirm the split; dismissed -> no write
     await page.click("[data-testid=trade-whole-unit]");
     await page.waitForTimeout(150);
