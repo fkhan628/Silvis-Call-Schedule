@@ -22,7 +22,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, prepared) - Prompt 19, prepared, not yet applied. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (prepared, not yet applied): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. |
-| `audit_log` | Who did what; insert by any authenticated user, read by scheduler/admin. Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the two SQL functions' rows do so since the item 5b migration (applied 2026-09-24; the two earlier `trade.apply` rows backfilled - section at the end); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
+| `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, prepared 2026-09-25 and not yet applied: every signed-in user the rows he wrote - `audit_read_own`, section at the end). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the two SQL functions' rows do so since the item 5b migration (applied 2026-09-24; the two earlier `trade.apply` rows backfilled - section at the end); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
@@ -44,7 +44,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `shift_trade_requests` | authenticated | insert: proposer or scheduler; update: parties + scheduler, and a trigger restricts non-schedulers to status moves on a pending trade (counter-party → accepted/declined, proposer → cancelled) |
 | `notifications` | authenticated | insert: any authenticated user |
 | `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (prepared): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()` |
-| `audit_log` | scheduler/admin | insert: any authenticated user |
+| `audit_log` | scheduler/admin, every row (`audit_read`); a coordinator its own `timeoff.` / `offers.` / `availability.` rows (`audit_read_coord`, Prompt 16 A7). Prompt 21 step 1 (prepared, not yet applied - waits for the 24-hour gate): `audit_read_own` - every signed-in user the rows he wrote (`actor_id` = his roster id when linked, else his profile id), which the client's `INSERT ... RETURNING` needs | insert (`audit_insert`, Prompt 16 A1 / A7): scheduler/admin, a linked person as himself (`actor_id` = his roster id), a coordinator as itself (`actor_id` = its profile id); an unlinked viewer none |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
 | `call_offers` | authenticated | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin; never anon (deliberately absent from the anon `read_all` loop) |
@@ -1294,3 +1294,237 @@ drop `notification_preferences_person_id_key` / `_profile_id_key`, drop the colu
 `follows` clause); drop `user_profiles_follows_shape` and the `follows` column.
 
 observed: _to be filled by the orchestrator after the apply (BEFORE sentinel with its row count, AFTER sentinel, verify-rls section 12 lines, leftover count)._
+
+## 2026-09-25 - audit_log read-back: audit_read_own (Prompt 21 step 1; `sql/migrations/2026-09-25-audit-read-own.sql`)
+
+**Status: PREPARED - report-first (not applied); waits for the 24-hour gate and Faraz's go - never applied ahead of the gate.**
+`sql/migrations/2026-09-25-audit-read-own.sql` changes row-level security on the live project (guide section 4.3), so this section is
+the report; the orchestrator applies the file only after the gate has run and Faraz has approved, and fills the *observed:* line at
+the end. One select policy on `audit_log`; `audit_insert`, `audit_read` and `audit_read_coord` are byte-unchanged; no table, column,
+function, trigger, grant or row. `sql/schema.sql` mirrors it (header revision q, "report-first, NOT yet applied" until the record
+step); `test/schema.test.js` pins the text, the mirror, the probe, `scripts/verify-rls.sh` section 13 and this section.
+
+**Evidence (the live check, 9/25 ~7:30 CDT).** Acton entered two vacations on 9/24, at 13:17 and 13:19 CDT. Both
+`time_off` rows exist (created 18:17 and 18:19 UTC, `created_by` s3) and so do both `vacation_logged` notifications, but `audit_log`
+has no `timeoff.add` row for either. The API gateway log shows `POST /rest/v1/audit_log` -> 403 at 2026-09-24 18:17:57Z and 18:19:23Z -
+the only failed writes from a real client in the 24 hours before the 9/25 check. Every row in `audit_log` so far was written by Khan
+or by a CLI.
+
+**Cause.** `config.js` `db.insert` sends `Prefer: return=representation`, so PostgREST runs `INSERT ... RETURNING`. A RETURNING that
+reads the row's columns needs the new row to pass a SELECT policy as well as the INSERT one (PostgreSQL checks the returned row
+against the table's SELECT policies and raises, rather than filtering it). `audit_insert`'s WITH CHECK passes for a linked surgeon
+(`actor_id = silvis_person_id()`), but `audit_read` is the scheduler / admin's and `audit_read_coord` covers only a coordinator's own
+`timeoff.` / `offers.` / `availability.` rows - so the insert is refused with 42501 `new row violates row-level security policy for
+table "audit_log"` -> HTTP 403, and `logAudit` only calls `console.warn`. Probe case `L4` (the prelaunch probe, `scripts/verify-rls.sh`
+section 10) inserts WITHOUT RETURNING, which is why verify-rls passed.
+
+**The diagnostic (9/25 ~15:35 CDT, rolled back).** One batch against the live database through the linked CLI with throwaway users
+(a surgeon linked to s3, a coordinator, an unlinked viewer, an admin linked to s1); every insert ran once as the database is today
+and once after `create policy audit_read_own` inside the same transaction, and the final RAISE rolled everything back. Faraz's
+leftover check in the SQL editor at 15:50 CDT: 0 probe users, 0 probe audit rows, the policies still
+`audit_insert,audit_read,audit_read_coord`, no probe user or probe audit row of any other kind, `user_profiles` still 10 rows.
+
+| who / what | today (live) | with `audit_read_own` |
+|---|---|---|
+| surgeon s3, `timeoff.add`, no RETURNING | ok | ok |
+| surgeon s3, `RETURNING *` | ERR 42501 | ok |
+| surgeon s3, `RETURNING 1` | ok | ok |
+| coordinator (no roster link, `actor_id = auth.uid()`), `timeoff.add`, `RETURNING *` | ok (`audit_read_coord` covers the family) | ok |
+| coordinator, `prefs.save`, `RETURNING *` | ERR 42501 | ok |
+| coordinator, `prefs.save`, no RETURNING | ok | ok |
+| unlinked viewer (what a follower is), `prefs.save`, with or without RETURNING | ERR 42501 (`audit_insert`'s WITH CHECK) | ERR 42501 |
+| admin s1, `RETURNING *` (control) | ok | ok |
+| rows written by someone else, visible to the surgeon / the coordinator | 0 / 0 | 0 / 0 |
+
+`RETURNING 1` reads no column, so no SELECT policy is consulted: the refusal was always the read-back, never the insert.
+
+**The policy (after), verbatim:**
+
+    create policy audit_read_own on public.audit_log for select to authenticated
+      using ((public.silvis_person_id() is not null and actor_id = public.silvis_person_id()) or actor_id = auth.uid()::text);
+
+A signed-in user reads the rows whose `actor_id` is his own roster id (a linked person - what `logAudit` writes:
+`userProfile.person_id`) or his own profile id (`auth.uid()::text` - `logAudit`'s fallback for an account with no roster link, i.e. a
+coordinator). That is exactly the row `audit_insert` has just let him write, so `INSERT ... RETURNING` passes for every caller
+`audit_insert` admits. The `silvis_person_id() is not null` guard states the intent (an unlinked account never matches through the
+roster clause). Policies are OR'ed, so the scheduler's `audit_read` (every row) is untouched.
+
+**Decisions (Faraz 9/25).**
+
+- **1b** - approved as written: `audit_read_own` with the text above. **`audit_read_coord` is kept**: now redundant (for a
+  coordinator its rows are a subset of `audit_read_own`'s), kept on purpose to keep the change small. `audit_insert` is not changed.
+- **1c** - approved: no change for viewers or followers now. An unlinked viewer (what a follower is) is refused by `audit_insert`'s
+  WITH CHECK before any read-back; the client's follower prefs save deliberately writes no audit row (`saveFollowerPref` in
+  `index-source.html`); opening `audit_insert` to viewers would reopen the stranger hole the pre-launch migration closed (prelaunch
+  probe `S4`). A follows-scoped clause is a possible later item, not part of this step.
+- **1d** - approved: the step-1 files are written and committed locally - not pushed, not applied. Order: the 24-hour gate runs ->
+  report -> Faraz approves -> apply -> verify-rls -> push. If the gate reports instead of applying, stop and tell Faraz. Never apply
+  this file ahead of the gate (why: apply order step 1). The rebase onto the gate's record commit (apply order step 2) is
+  preparation between "Faraz approves" and "apply", not a change to this order.
+- **Step 3, widened** - at apply time, backfill EVERY member or coordinator write that has no audit row, not only Acton's two. Faraz
+  checked on 9/25: today that is only Acton's two 9/24 vacations (no other member `time_off` rows, offers, prefs or trades since
+  launch), but anything entered before the apply is lost the same way, so the candidates are re-read at apply time. Same shape:
+  actor + action as `logAudit` words it, `created_at` copied from the source row, `detail.backfilled = true`; a snapshot first; Faraz
+  sees the rows before they are inserted.
+- Step 2 (the client: `logAudit` sends `Prefer: return=minimal` through an option on `db.insert`) is a separate, later commit. This
+  file alone fixes every installed build, because the database refused the read-back, not the write.
+
+**Who reads what afterwards.**
+
+- A linked surgeon: the rows with `actor_id` = his roster id - his own client's rows, the `trade.apply` / `schedule.claim` rows
+  `apply_trade` / `claim_open_slot` write when he is the caller, and step 3's backfilled rows in his name. Any account linked to the
+  same roster id reads the same rows.
+- A coordinator: every row it wrote (`actor_id` = its profile id), not only the three families.
+- A viewer / follower: none (it can write none).
+- Scheduler / admin: every row, as before.
+- Nobody reads a row somebody else wrote. The CLI rows (`scripts/day-edit.js`, `scripts/publish-preview.js`: `actor_id` null) and the
+  `daily-reminder` function's `period.close` rows (`actor_id` `cron`) stay scheduler / admin only (probe cases `S6` / `C6` pin both).
+- The read follows `actor_id`, not role - unlike `audit_read_coord`, which requires `silvis_is_coord()`. An office account demoted to
+  viewer keeps reading the rows it wrote as coordinator (its profile id), and linking an account to a roster id (admin-only:
+  `user_profiles_admin`; `user_profiles_self_update` pins `person_id`) hands it that id's audit history - for s1, the scheduler's own
+  rows included (`users.link`, `roster.edit`, `data.reset`, `office_contact.*` details). The exposure is small (vacations and
+  availability are anon-readable, offers authenticated-readable); the trust boundary is the admin's link.
+
+**What could break.** Nothing that reads today. A surgeon's client never reads `audit_log` - `loadAudit` runs only for `isScheduler`
+(Settings) and `isCoordinator` - so the only change a surgeon sees is that his writes stop failing, and the scheduler starts seeing
+them in Settings > Activity log. A coordinator's Activity log ("your entries") may now also list its own rows outside the three
+families (a `prefs.save` row, should one be written). The reads stay authenticated (`readAuthOnlyTable`; no anon policy on
+`audit_log`), and `detail` carries names and dates, no contact data. The `daily-reminder` writes its rows with the service role and
+`Prefer: return=minimal` - untouched. Blast radius, in one sentence: from the apply on, every signed-in user can read back the audit
+rows he wrote himself - which is what lets his `logAudit` insert land - and nothing else; no write path, no other table and no other
+reader changes.
+
+**The probe (`sql/probes/audit-read-own-probe.sql`, rolls itself back; `scripts/verify-rls.sh` section 13 grades it).** Six throwaway
+users `probe-auditown-<uuid>@example.test` - a surgeon linked to s3, a second surgeon linked to s2, two coordinators (no roster link),
+an unlinked viewer and an admin linked to s1 - and eight fixture audit rows (s3, s2 and s1 `timeoff.add`; the coordinator's
+`prefs.save`; the second coordinator's `timeoff.add` and `prefs.save`; a CLI row with `actor_id` null and a `daily-reminder` row with
+`actor_id` `cron`). Every probe audit row carries `detail.probe = 'probe-auditown'` and every count is taken over those rows only.
+`RETURNING *` is what PostgREST reads back for `return=representation`; `S2` / `C4` use PostgREST's return=representation shape
+(the insert inside a CTE `pgrst_source`, `returning public.audit_log.*`, the body through `json_to_record`, the result through
+`json_agg`) - RLS-equivalent (a column-reading RETURNING inside the `pgrst_source` CTE), not byte-identical: PostgREST 12's own
+statement builds the body through `json_to_recordset(CASE json_typeof ...)` and selects more columns, and no REST call is made
+(a REST insert would persist a row). The probe runs clean before the apply too; nine cases move:
+
+| case | who / what | BEFORE (live 9/25) | AFTER |
+|---|---|---|---|
+| `P1` | postgres: the policies on `audit_log` | `policies=audit_insert,audit_read,audit_read_coord` | `policies=audit_insert,audit_read,audit_read_coord,audit_read_own` |
+| `S1` | surgeon s3 inserts his `timeoff.add` row, `RETURNING *` - the case that would have caught the bug | `ERR 42501 new row violates row-level security policy for table "audit_log"` | `ok` |
+| `S2` | surgeon s3, PostgREST's return=representation shape (RLS-equivalent) | `ERR 42501 ...` | `ok rows=1` |
+| `S3` | surgeon s3, `RETURNING 1` (control) | `ok` | `ok` |
+| `S4` | surgeon s3, no RETURNING (control; the prelaunch `L4`) | `ok` | `ok` |
+| `S5` | surgeon s3 reads his own probe rows (the fixture, S1-S4) | `own=0` | `own=5` |
+| `S6` | surgeon s3 reads the rows of s2, s1, the two coordinators, the CLI (`actor_id` null) and `cron` | `s2=0 s1=0 coord=0 cli=0 cron=0` | `s2=0 s1=0 coord=0 cli=0 cron=0` |
+| `S7` | surgeon s3 inserts as s2, `RETURNING *` | `ERR 42501 ...` | `ERR 42501 ...` (`audit_insert`, unchanged) |
+| `T1` | surgeon s2 reads his own row and s3's rows | `own=0 s3=0` | `own=1 s3=0` |
+| `C1` | coordinator `timeoff.add` as itself, `RETURNING *` | `ok` | `ok` |
+| `C2` | coordinator `prefs.save` as itself, `RETURNING *` | `ERR 42501 ...` | `ok` |
+| `C3` | coordinator `prefs.save`, no RETURNING (control) | `ok` | `ok` |
+| `C4` | coordinator `prefs.save`, PostgREST's return=representation shape (RLS-equivalent) | `ERR 42501 ...` | `ok rows=1` |
+| `C5` | coordinator reads its own rows in / outside the three families | `own_family=1 own_other=0` | `own_family=1 own_other=4` |
+| `C6` | coordinator reads the second coordinator's, the surgeons', the CLI's and `cron`'s rows | `coord2=0 surgeons=0 cli=0 cron=0` | `coord2=0 surgeons=0 cli=0 cron=0` |
+| `C7` | coordinator inserts as s3, `RETURNING *` | `ERR 42501 ...` | `ERR 42501 ...` (`audit_insert`, unchanged) |
+| `D1` | second coordinator reads its own family row, its own `prefs.save` row, the first coordinator's rows | `own_family=1 own_other=0 coord=0` | `own_family=1 own_other=1 coord=0` |
+| `V1` | viewer `prefs.save` as itself, no RETURNING | `ERR 42501 ...` | `ERR 42501 ...` (decision 1c) |
+| `V2` | viewer `prefs.save` as itself, `RETURNING *` | `ERR 42501 ...` | `ERR 42501 ...` |
+| `V3` | viewer reads the probe rows | `visible=0` | `visible=0` |
+| `A1` | admin s1, `RETURNING *` (control) | `ok` | `ok` |
+| `A2` | admin reads every probe row (his count = the count as postgres) | `sees_all=t` | `sees_all=t` |
+| `C21` | `sql/probes/coordinator-probe.sql` (section 11): the coordinator reads its own `probe.coord` row | `own_family=1 others=0 own_other=0` | `own_family=1 others=0 own_other=1` |
+
+Leftover count 0 (`audit_log` rows with `detail ->> 'probe' = 'probe-auditown'`, auth.users `probe-auditown-%@example.test`). Section 13
+grades the AFTER column, so before the apply it is red on exactly `P1 S1 S2 S5 T1 C2 C4 C5 D1` (it names them, and
+`test/schema.test.js` runs the section against a faked CLI both ways); section 11's `C21` is red before the apply too.
+
+**Apply order.**
+
+1. **The 24-hour gate first - never apply this file ahead of it.** The gate (scheduled task `silvis-24h-gate`, Sat 9/26 15:30 CDT) runs
+   `scripts/verify-rls.sh` from a detached worktree at `33e529d`, where `coordinator-probe.sql` case `C21` expects
+   `own_family=1 others=0 own_other=0` (`own_other` = the coordinator's own `probe.coord` row, outside the three families: invisible
+   today). With `audit_read_own` live it reads `own_other=1`, so an early apply turns the gate's verify-rls red and the gate applies
+   nothing. The gate's first check also compares `scripts/verify-rls.sh` and `sql/probes/` with `33e529d`, so the commit carrying this
+   file is not pushed before the gate has run. The gate runs -> its report -> Faraz approves -> steps 2-9. If the gate reports instead
+   of applying, stop and tell Faraz.
+2. **Rebase first.** `fix/activity-log-gap` is cut at `33e529d`, and the gate's record commit lands on `main` before this apply. Per
+   the followers and return-leg files it flips revision o to applied, mirrors the return-leg follow-up as revision p (replacing the
+   `PREPARED FOLLOW-UP, NOT MIRRORED` paragraph), makes section 5's `Q` / `Q3` REFUSED the default and drops
+   `SILVIS_RETURN_LEG_APPLIED` from `scripts/verify-rls.sh`, and fills the followers section's *observed:* line and the guide 4.3
+   followers bullet - all beside this change's own lines. Rebase this branch onto `origin/main`, resolve the conflicts (the
+   `sql/schema.sql` header - revision q stays after p, and `test/schema.test.js` fails otherwise; the end of this file; guide 4.3;
+   `scripts/verify-rls.sh`; the tail of `test/schema.test.js`), re-run `SILVIS_GEN_BUDGET_MS=40000 npm test && node build.js` (then
+   `git checkout -- index.html version.json`) and `bash -n scripts/verify-rls.sh`, and report the resolutions with the gate results.
+   Steps 3-9 run from the rebased branch. If the record commit has not landed yet, step 6 runs with `SILVIS_RETURN_LEG_APPLIED=1`
+   whenever the return-leg file is live (section 5's `Q` / `Q3`).
+3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/audit-read-own-probe.sql` -> the BEFORE column.
+   Dry run observed 2026-09-25 22:55 UTC (Faraz's go, rolled back): all 22 cases read exactly their BEFORE string (P1 the three
+   policies; S1 / S2 / C2 / C4 / S7 / C7 / V1 / V2 ERR 42501; S5 `own=0`; T1 `own=0 s3=0`; C5 `own_family=1 own_other=0`; D1
+   `own_family=1 own_other=0 coord=0`; the rest as listed). The leftover check for that run is Cowork's, in the SQL editor.
+   Run it again at apply time: the live picture may have moved.
+4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-25-audit-read-own.sql`.
+5. Probe AFTER -> the AFTER column (`P1` ends in `audit_read_own`; `S1=ok`, `S2=ok rows=1`, `C2=ok`, `C4=ok rows=1`).
+6. `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` from the rebased branch: section 13 green, section 11's `C21` `own_other=1`,
+   every leftover count 0. Run it with whatever variables the rebased sections still call for (after the gate's record step section
+   5 needs no `SILVIS_RETURN_LEG_APPLIED` - see step 2; `SILVIS_PREFS_ROWS_BEFORE` as the followers section says, if section 12
+   still reads it).
+7. Push (1d: after verify-rls). Nothing in the commit depends on the backfill.
+8. **Step 3, the backfill**, in the same session (Faraz 9/25: every member or coordinator write that has no audit row).
+   a) The ground truth is the API gateway log - the source of the 9/24 evidence: every `POST /rest/v1/audit_log` -> 403 from launch
+   to the apply is one lost `logAudit` row, with its timestamp (and the caller, where the log records the JWT subject). Count them,
+   as far back as the project's log retention reaches; if it does not reach launch, the report says so. **Retention is 24 hours on
+   this plan (Faraz 9/25 evening), so the list is a chain of reads:** Cowork's reads cover launch -> 2026-09-25 22:27 UTC - the two
+   9/24 403s (18:17:57Z, 18:19:23Z) are the only failed `audit_log` writes and both match Acton's `time_off` rows (both have aged
+   out of the log since); Cowork reads again on 2026-09-26 at 17:00 CDT; at apply time the orchestrator reads the last 24 hours
+   (or asks for a Cowork read). Together those reads are the list. If more than 24 hours separate two consecutive reads, the
+   report says so: that window's 403s cannot be known, and the DB reconciliation in (b) / (c) is the only backstop there.
+   **The list so far** (Faraz / Cowork; each read's window, then its 403s and what they become):
+
+   | read | window (UTC) | 403s | step 3 |
+   |---|---|---|---|
+   | Cowork, 9/25 | launch -> 2026-09-25 22:27 | 2026-09-24 18:17:57, 18:19:23 | Acton's two `timeoff.add`: both match his `time_off` rows -> backfill |
+   | Cowork, 9/26 17:00 CDT | 2026-09-25 22:00 -> 2026-09-26 22:00 | 2026-09-25 23:06:06, 23:06:18; 2026-09-26 00:16:35 | Fierce's notification-prefs saves (`prefs.save`, actor `s5`). 23:06:18 matches his `notification_preferences` row (updated 2026-09-25 23:06:18Z) -> backfill one `prefs.save` row, `created_at` 23:06:18Z; 23:06:06 and 00:16:35 are probable `prefs.save` writes, not independently recoverable (the prefs row keeps only its last update) -> listed for Faraz, not backfilled |
+   | apply time (orchestrator or Cowork) | the last 24 hours | - | must start no later than 2026-09-26 22:00Z, i.e. the apply-time read by 2026-09-27 22:00Z; later than that, the report names the gap |
+
+   A `prefs.save` backfill row reads as `logAudit` words it (`saveNotifPref`): action `prefs.save`, summary
+   `Saved notification prefs for <roster name>`, `detail.person_id` = the surgeon's roster id, plus `backfilled: true`.
+   b) Re-read the source rows, read-only - every `time_off` row written by a surgeon or a coordinator with no `timeoff.add` row by the
+   same writer, for the same person, written right after it (matched on `person_id` and `created_at` proximity, never on the dates:
+   `time_off` has no `updated_at`, and a vacation edited after it was added carries its new dates):
+
+          select t.id, t.person_id, t.start_date, t.end_date, t.note, t.created_by, t.created_at
+            from public.time_off t
+           where t.created_by in (select coalesce(p.person_id, p.id::text) from public.user_profiles p where p.role in ('surgeon', 'coordinator'))
+             and not exists (select 1 from public.audit_log a
+                              where a.action = 'timeoff.add' and a.actor_id = t.created_by
+                                and a.detail ->> 'person_id' = t.person_id
+                                and a.created_at between t.created_at - interval '1 minute' and t.created_at + interval '2 minutes')
+           order by t.created_at;
+
+   and the same check for every other family a member or the office writes through `logAudit`: `call_offers` rows `entered_by` a
+   member or a coordinator (`offers.save`), `shift_trade_requests` rows from a member (`trade.propose`, and their `trade.accept` /
+   `trade.decline` / `trade.cancel`), `notification_preferences` rows saved since launch (`prefs.save`), `availability` rows
+   `created_by` a coordinator (`availability.add`). On 9/25 the only candidates were Acton's two 9/24 vacations.
+   c) Reconcile: the candidates from (b) against the 403s from (a), one to one by time and caller. A 403 no source row explains - a
+   `timeoff.edit` or `timeoff.remove` (the row changed or is gone), a `trade.decline` / `trade.cancel` whose row moved on, a repeated
+   `prefs.save`, a refused `schedule.claim`, an `eastvac.review`, a `timeoff.paint` - cannot be rebuilt from the tables (the gateway
+   log carries no body): it is listed for Faraz as not recoverable, never silently skipped. A `timeoff.add` candidate whose row may
+   have been edited since (an extra 403 from the same caller after it) is flagged: its backfill would carry the current dates.
+   d) Take a `call_schedule_snapshots` row first (a failed capture blocks the insert).
+   e) Build one row per write the way `logAudit` words it: `actor_id` = the writer's roster id (else his profile id); `actor_name` =
+   his `display_name`, else his roster name, else `Unknown`; `action` as the client names it; `detail` = `{ summary, ...the client's
+   keys }` - for a vacation `summary` = `Added vacation for <roster name>: <start>` plus ` -> <end>` when the range is longer than a
+   day, keys `person_id`, `start`, `end`, `note` (null when empty) - plus `backfilled: true`; `created_at` copied from the source row.
+   f) Show Faraz the rows (and the 403s listed as not recoverable) before inserting; then insert them in one guarded block (the
+   expected count must match, else raise and persist nothing). Undo: `delete from public.audit_log where detail ->> 'backfilled' =
+   'true' and id in (<the ids the insert returned>);`.
+9. The record step, ONE commit: this status line -> `**Status: APPLIED <timestamp>.**` with the observed line (both probe sentinels,
+   the verify-rls section 11 / 13 lines, the leftover counts, the 403 reconciliation, the backfilled rows and their snapshot);
+   `sql/schema.sql` revision q `report-first, NOT yet applied` -> `applied <timestamp>` (and the same words in its `audit_log`
+   comment block); tables (a) / (b)'s `audit_log` rows and the guide 4.3 bullet drop "prepared" (`report-first, applied
+   2026-MM-DD` and its `applied:` line). The `test/schema.test.js` pins accept both wordings. Then Prompt 21 step 2 (the client's
+   `Prefer: return=minimal`) and step 4 (the other `return=representation` writers whose writer cannot read the row back - a report)
+   follow as their own commits.
+
+Rolling back = `drop policy if exists audit_read_own on public.audit_log;` - it reopens the gap for every build that still sends
+`return=representation` (every build before Prompt 21 step 2). The backfilled rows stay (they are the record) unless Faraz asks for
+apply step 8's undo.
+
+observed: _to be filled by the orchestrator after the apply (the gate's report, the BEFORE and AFTER sentinels, verify-rls sections 11 / 13, the leftover counts, the backfilled rows)._

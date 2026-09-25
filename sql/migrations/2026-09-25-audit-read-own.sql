@@ -1,0 +1,104 @@
+-- ============================================================================
+-- Silvis Call Schedule - migration 2026-09-25: audit_read_own - a user reads back the audit rows he wrote (Prompt 21 step 1,
+-- Faraz 9/25: the Activity log gap). ONE select policy on public.audit_log (drop if exists / create - idempotent). No table,
+-- column, function, trigger, grant or row is touched; audit_insert, audit_read and audit_read_coord are NOT changed.
+-- REPORT-FIRST, NOT APPLIED (CLAUDE.md, guide section 4.3: row-level security on the live database). sql/schema.sql mirrors the
+-- policy (header revision q, "report-first, NOT yet applied" until the record step); test/schema.test.js pins the identity.
+--
+-- The gap (the live check of 9/25 ~7:30 CDT): Acton entered two vacations on 9/24. Both time_off rows exist (created 18:17 and
+-- 18:19 UTC, created_by s3) and so do both vacation_logged notifications, but audit_log has no timeoff.add row for either; the API
+-- gateway log shows POST /rest/v1/audit_log -> 403 at 2026-09-24 18:17:57Z and 18:19:23Z - the only failed writes from a real
+-- client in the 24 hours before the 9/25 check. Every audit row so far was written by Khan or by a CLI.
+-- The cause, proven 9/25 ~15:35 CDT by a rolled-back diagnostic on the live database with throwaway users (the leftover check in
+-- the SQL editor at 15:50 CDT: 0 probe users, 0 probe audit rows, the policies still audit_insert / audit_read /
+-- audit_read_coord, user_profiles still 10 rows): config.js db.insert sends Prefer: return=representation, so PostgREST runs
+-- INSERT ... RETURNING. audit_insert's WITH CHECK passes for a linked surgeon (actor_id = silvis_person_id()), but a RETURNING
+-- that reads columns also needs a SELECT policy that sees the new row, and none does for him: 42501 "new row violates row-level
+-- security policy for table "audit_log"" -> HTTP 403, which logAudit only console.warns. A coordinator's own row outside the
+-- timeoff. / offers. / availability. families (prefs.save) fails the same way - audit_read_coord does not reach it. RETURNING 1
+-- and a plain insert pass (they read no column); the prelaunch probe's L4 (verify-rls section 10) inserts WITHOUT RETURNING,
+-- which is why verify-rls stayed green. The diagnostic, today / with this policy created inside the rolled-back transaction:
+--   surgeon s3  timeoff.add, no RETURNING               ok / ok
+--   surgeon s3  RETURNING *                             ERR 42501 / ok
+--   surgeon s3  RETURNING 1                             ok / ok
+--   coordinator timeoff.add RETURNING * (actor = uid)   ok / ok        (audit_read_coord covers the three families)
+--   coordinator prefs.save RETURNING *                  ERR 42501 / ok
+--   coordinator prefs.save, no RETURNING                ok / ok
+--   unlinked viewer (what a follower is) prefs.save, with or without RETURNING
+--                                                       ERR 42501 / ERR 42501   (refused by audit_insert's WITH CHECK)
+--   admin s1 RETURNING * (control)                      ok / ok
+--   rows written by someone else, visible to the surgeon / the coordinator: 0 / 0 both ways
+--
+-- The policy (1b, approved as written, Faraz 9/25): a signed-in user reads the rows whose actor_id is his own roster id (a
+-- linked person) or his own profile id (auth.uid()::text - what logAudit writes for an account with no roster link: a
+-- coordinator). That is exactly the row audit_insert has just let him write, so INSERT ... RETURNING passes for every caller
+-- audit_insert admits. audit_read_coord is KEPT - now redundant (its rows are a subset of these), kept on purpose to keep the
+-- change small; audit_read (scheduler / admin, every row) and audit_insert are unchanged.
+-- 1c (approved, Faraz 9/25): no change for viewers or followers now. An unlinked viewer - what a follower is - is refused by
+-- audit_insert's WITH CHECK before any read-back, with or without RETURNING; the client's follower prefs save deliberately
+-- writes no audit row (index-source.html saveFollowerPref), and opening audit_insert to viewers would reopen the stranger hole
+-- the pre-launch migration closed (prelaunch probe S4). A follows-scoped clause is a possible later item, not part of this file.
+--
+-- Who reads what afterwards. A linked surgeon: the rows with actor_id = his roster id - his own client's rows, and the
+-- trade.apply / schedule.claim rows apply_trade / claim_open_slot write when he is the caller (any account linked to the same
+-- roster id reads the same rows). A coordinator: every row it wrote (actor_id = its profile id), not only the three families.
+-- A viewer: none (it can write none). Scheduler / admin: every row, as before. Nobody reads a row somebody else wrote; the CLI
+-- rows (actor_id null) and the daily-reminder's 'cron' rows stay scheduler / admin only (probe cases S6 / C6 pin both). The read
+-- follows actor_id, not role (audit_read_coord, by contrast, requires silvis_is_coord()): an office account demoted to viewer
+-- keeps reading the rows it wrote as coordinator (its profile id), and linking an account to a roster id - admin-only
+-- (user_profiles_admin; user_profiles_self_update pins person_id) - hands it that id's audit history, s1's scheduler rows
+-- included (users.link, roster.edit, data.reset, office_contact.*). Client effect: none for surgeons (the
+-- client calls loadAudit for isScheduler / isCoordinator only); a coordinator's Settings > Activity log may now also list its
+-- own rows outside the three families (a prefs.save row, should one be written). This file fixes every installed build at once
+-- - the refusal was the read-back, not the insert; step 2 (logAudit sends Prefer: return=minimal) is a separate, later commit.
+--
+-- WAITS FOR THE 24-HOUR GATE - never apply this file ahead of it (1d, Faraz 9/25). The gate (scheduled task silvis-24h-gate, Sat
+-- 9/26 15:30 CDT) runs scripts/verify-rls.sh from a detached worktree at 33e529d, where sql/probes/coordinator-probe.sql case C21
+-- expects "own_family=1 others=0 own_other=0" (own_other = the coordinator's own 'probe.coord' row, outside the three families:
+-- invisible today). With this policy live it reads own_other=1, so an early apply turns the gate's verify-rls red and the gate
+-- applies nothing. The gate's first check also compares scripts/verify-rls.sh and sql/probes/ with 33e529d, so the commit carrying
+-- this file is not pushed before the gate has run. Order: the gate runs -> report -> Faraz approves -> rebase this branch
+-- (fix/activity-log-gap, cut at 33e529d) onto origin/main, which by then carries the gate's record commit (revision o applied,
+-- the return-leg's revision p, SILVIS_RETURN_LEG_APPLIED gone from verify-rls section 5), resolve the conflicts (sql/schema.sql's
+-- header, the end of docs/SCHEMA-REVIEW.md, guide 4.3, scripts/verify-rls.sh, test/schema.test.js), re-run the gates -> apply
+-- this file -> verify-rls from the rebased branch -> push. If the gate reports instead of applying, stop.
+--
+-- Apply live with the Supabase CLI (absolute path; the workdir is a directory linked with `supabase link --project-ref
+-- bzhsroegtagqhutbnsrp`), or paste the file into the SQL editor as ONE session:
+--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-25-audit-read-own.sql
+-- Acceptance - sql/probes/audit-read-own-probe.sql (rolls itself back; its header states every case BEFORE and AFTER;
+-- scripts/verify-rls.sh section 13 grades the AFTER picture). The cases that move:
+--   BEFORE: P1=policies=audit_insert,audit_read,audit_read_coord
+--           S1=ERR 42501 new row violates row-level security policy for table "audit_log"   (S2 / C2 / C4 the same)
+--           S5=own=0   T1=own=0 s3=0   C5=own_family=1 own_other=0   D1=own_family=1 own_other=0 coord=0
+--   AFTER:  P1=policies=audit_insert,audit_read,audit_read_coord,audit_read_own
+--           S1=ok   S2=ok rows=1   C2=ok   C4=ok rows=1
+--           S5=own=5   T1=own=1 s3=0   C5=own_family=1 own_other=4   D1=own_family=1 own_other=1 coord=0
+--   every other case reads the same before and after (the controls, the unchanged refusals, the invisible rows); and
+--   sql/probes/coordinator-probe.sql C21 moves from own_family=1 others=0 own_other=0 to own_family=1 others=0 own_other=1.
+-- Order (the same sequence as the SCHEMA-REVIEW section's apply order): the rebase above -> probe BEFORE -> this file, one
+-- session -> probe AFTER -> verify-rls from the rebased branch (section 13 green, section 11's C21 own_other=1, leftover
+-- counts 0) -> push (1d) -> step 3, the backfill: EVERY member or coordinator write since launch that has no audit row (Faraz
+-- 9/25: today only Acton's two 9/24 vacations - no other member time_off rows, offers, prefs or trades - but anything entered
+-- before this apply is lost the same way, so the candidates are re-read at apply time). The ground truth is the API gateway
+-- log's POST /rest/v1/audit_log -> 403 entries from launch to the apply (one lost logAudit row each - the source of the 9/24
+-- evidence). The log keeps only 24 hours on this plan (Faraz 9/25 evening), so the list is a chain of reads: Cowork's reads
+-- cover launch -> 2026-09-25 22:27 UTC (the two 9/24 403s are the only failed audit_log writes, both matching Acton's time_off
+-- rows; they have aged out of the log since), Cowork reads again on 2026-09-26 at 17:00 CDT, and at apply time the last 24 hours
+-- are read (by the orchestrator, or a Cowork read). If more than 24 hours separate two consecutive reads, the report says so -
+-- that window's 403s are unknowable. The DB reconciliation below stays the backstop. The source-table scan is reconciled
+-- against those reads, and a 403 no source row explains (an edit, a removal, a
+-- trade whose status moved on, a repeated prefs.save) is listed for Faraz as not recoverable from the tables, never skipped.
+-- One row per write shaped as logAudit words it (actor + action + detail.summary), created_at copied from the source row,
+-- detail.backfilled = true; a call_schedule_snapshots row first (a failed capture blocks the insert); the rows (and the
+-- unrecoverable 403s) shown to Faraz before inserting -> the record step, ONE commit: sql/schema.sql revision q "report-first,
+-- NOT yet applied" -> "applied <timestamp>"; the docs/SCHEMA-REVIEW.md section's status line -> APPLIED with the observed line
+-- (both probe sentinels, the verify-rls section 11 / 13 lines, the leftover counts, the backfilled rows); table (b)'s audit_log
+-- row and the guide 4.3 bullet drop "prepared" (the test/schema.test.js pins accept both wordings).
+-- Rolling back = `drop policy if exists audit_read_own on public.audit_log;` - it reopens the gap for every build that still
+-- sends return=representation (every build before step 2).
+-- ============================================================================
+
+drop policy if exists audit_read_own on public.audit_log;
+create policy audit_read_own on public.audit_log for select to authenticated
+  using ((public.silvis_person_id() is not null and actor_id = public.silvis_person_id()) or actor_id = auth.uid()::text);

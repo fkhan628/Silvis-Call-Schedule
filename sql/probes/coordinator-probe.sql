@@ -47,8 +47,10 @@
 --   C18 coordinator audit row, actor_id = own uid       ok
 --   C19 coordinator audit row, actor_id = s3            ERR 42501 new row violates row-level security policy for table "audit_log"
 --   C20 coordinator inserts a notification              ok
---   C21 coordinator reads audit_log                     own_family=1 others=0 own_other=0
---         own_family = its own 'timeoff.add' row (C18b) visible; others = the fixture's s1 row (invisible); own_other = its own 'probe.coord' row (outside the families: invisible)
+--   C21 coordinator reads audit_log                     own_family=1 others=0 own_other=1
+--         own_family = its own 'timeoff.add' row (C18b) visible; others = the fixture's s1 row (invisible); own_other = its own 'probe.coord' row
+--         (outside the three families, but its own: visible through audit_read_own - Prompt 21 step 1, sql/migrations/2026-09-25-audit-read-own.sql;
+--         before that migration audit_read_coord alone answered and C21 read own_family=1 others=0 own_other=0)
 --   C22 coordinator UPDATEs s3's 8/7 offer directly     updated=0
 --   C23 coordinator DELETEs s3's 8/7 offer directly     deleted=0
 --   C24 coordinator inserts a snapshot                  ERR 42501 new row violates row-level security policy for table "call_schedule_snapshots"
@@ -58,7 +60,8 @@
 --         (C26 / C27: call_offers.person_id has no foreign key - the office may relay for the live roster in call_schedule_data 'main' only; the scheduler's relay is not checked)
 --   L1  surgeon adds his own vacation 8/12              ok           (unchanged)
 --   L2  surgeon inserts his own 8/8 offer directly      ok rows=1    (RLS unchanged for surgeons)
---   L3  surgeon reads audit_log                         visible=0    (no read policy for him)
+--   L3  surgeon reads audit_log                         visible=0    (he wrote none of the probe's audit rows: audit_read_own shows him his own rows only
+--                                                                     - Prompt 21 step 1; before it no read policy reached him at all)
 --   A1  admin save_offers('s3', [8/9 either])           ok entered_by=scheduler source=email-relay   (the scheduler's relay is unchanged)
 --   A2  admin set_offer_mode(published, preferred, s3)  ok           (never frozen)
 --   A3  admin links the coordinator to s2               ERR 23514 new row for relation "user_profiles" violates check constraint "user_profiles_coordinator_unlinked"

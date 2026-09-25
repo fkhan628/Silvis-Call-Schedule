@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
@@ -538,6 +538,8 @@ if grep -q 'user_profiles?select=person_id,role&role=in.(scheduler,admin)&person
 # 10c. sql/probes/prelaunch-rls-probe.sql: three throwaway users (stranger / surgeon s3 / admin s1), fixtures in 2030-07 keyed
 #      'probe-prelaunch', acts as each of them and as anon, ends with RAISE 'PROBE_RESULTS ...;END' so everything rolls back.
 #      Expectations are the AFTER-migration picture; the probe header lists the BEFORE string of every case (the holes).
+#      L4 inserts the surgeon's audit row WITHOUT RETURNING, so it never asked for the read-back the client's db.insert does
+#      (Prefer: return=representation) - the gap Acton's 9/24 vacations fell into; section 13 (Prompt 21 step 1) probes that shape.
 if linked; then
   PROBE10="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/prelaunch-rls-probe.sql"
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE10" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
@@ -600,13 +602,17 @@ fi
 echo "== 11. coordinator role (Prompt 16 A7): office users - vacations / availability / offers relay, no scheduler power =="
 # sql/migrations/2026-09-24-coordinator-role.sql (report-first; applied by the orchestrator after A1). Nothing here writes
 # over REST. 11a checks the client gates the new role reads on (the Activity log read for a coordinator is
-# audit_read_coord: own rows in the timeoff. / offers. / availability. families - a wider read would be a silent 200 + []).
+# audit_read_coord: own rows in the timeoff. / offers. / availability. families - a wider read would be a silent 200 + [];
+# since Prompt 21 step 1 audit_read_own also answers its own rows outside the families, and still no one else's).
 # 11b runs sql/probes/coordinator-probe.sql: three throwaway users (coordinator / surgeon s3 / admin s1), fixtures in
 # 2030-08 keyed 'probe-coord', acts as each of them, ends with RAISE 'PROBE_RESULTS ...;END' so everything rolls back.
 # Expectations are the AFTER-migration picture; BEFORE it the fixture setup raises PROBE_SETUP (no coordinator role) and
-# this section reports no sentinel - which IS the before picture.
+# this section reports no sentinel - which IS the before picture. C21 grades the picture after
+# sql/migrations/2026-09-25-audit-read-own.sql (Prompt 21 step 1): own_other=1 - the coordinator reads its own 'probe.coord'
+# row through audit_read_own. Until that file is applied C21 reads own_other=0 and is RED here (expected; section 13 is the
+# same apply's own probe). The 24-hour gate runs the 33e529d copy of this file, which still expects own_other=0.
 # 11a. client gates (read from the source)
-if grep -q 'const isCoordinator = userProfile?.role === "coordinator";' index-source.html && grep -q 'if (view === "settings" && isCoordinator) loadAudit();' index-source.html; then ok "client: isCoordinator is derived from user_profiles.role and the coordinator's Activity log read is its own gated effect (audit_read_coord answers own family rows only)"; else bad "client: the coordinator role flag or its Activity log effect is missing from index-source.html"; fi
+if grep -q 'const isCoordinator = userProfile?.role === "coordinator";' index-source.html && grep -q 'if (view === "settings" && isCoordinator) loadAudit();' index-source.html; then ok "client: isCoordinator is derived from user_profiles.role and the coordinator's Activity log read is its own gated effect (audit_read_coord / audit_read_own answer its own rows only)"; else bad "client: the coordinator role flag or its Activity log effect is missing from index-source.html"; fi
 if grep -qE '\{!isPublicMode && isUnlinked && !isCoordinator( && !isViewer)? && \(' index-source.html; then ok "client: the unlinked-account banner is not shown to a coordinator (an office account has no roster link by design)"; else bad "client: the unlinked banner is not gated off for a coordinator"; fi
 if grep -q 'created_by: userProfile?.person_id || authUser?.id || null,' index-source.html; then ok "client: time_off.created_by carries the caller's roster id or profile id (a coordinator's profile id)"; else bad "client: time_off.created_by no longer falls back to the profile id"; fi
 # 11b. the rolled-back probe
@@ -642,7 +648,7 @@ if linked; then
     expect_eq11  C18 "ok"                                          "a coordinator writes audit rows as itself (actor_id = its profile id)"
     expect_err11 C19 42501 'row-level security policy for table "audit_log"' "a coordinator cannot write an audit row as a surgeon"
     expect_eq11  C20 "ok"                                          "a coordinator inserts a notification (the vacation-logged feed row)"
-    expect_eq11  C21 "own_family=1 others=0 own_other=0"           "a coordinator reads only its own timeoff./offers./availability. audit rows (audit_read_coord)"
+    expect_eq11  C21 "own_family=1 others=0 own_other=1"           "a coordinator reads its own audit rows - the timeoff./offers./availability. family (audit_read_coord) and outside it (audit_read_own, Prompt 21 step 1) - and no one else's"
     expect_eq11  C22 "updated=0"                                   "a coordinator's direct UPDATE of an offer touches nothing"
     expect_eq11  C23 "deleted=0"                                   "a coordinator's direct DELETE of an offer touches nothing"
     expect_err11 C24 42501 'row-level security policy for table "call_schedule_snapshots"' "a coordinator cannot write a snapshot"
@@ -651,7 +657,7 @@ if linked; then
     expect_err11 C27 OM007 "MODE_UNKNOWN_PERSON"                   "set_offer_mode relay for an id that is not on the roster is refused"
     expect_eq11  L1  "ok"                                          "a surgeon still enters his own vacation"
     expect_eq11  L2  "ok rows=1"                                   "a surgeon still inserts his own offer directly (RLS unchanged for surgeons)"
-    expect_eq11  L3  "visible=0"                                   "a surgeon still reads no audit row"
+    expect_eq11  L3  "visible=0"                                   "a surgeon reads none of the probe's audit rows (he wrote none of them; audit_read_own shows him his own only)"
     expect_eq11  A1  "ok entered_by=scheduler source=email-relay"  "the scheduler's relay keeps entered_by scheduler / source email-relay"
     expect_eq11  A2  "ok"                                          "the scheduler sets a mode on a published period (never frozen)"
     expect_err11 A3  23514 "user_profiles_coordinator_unlinked"    "the admin cannot link a coordinator to a roster id (check constraint)"
@@ -772,6 +778,72 @@ if linked; then
   fi
 else
   echo "   SKIP 12b (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 13. audit_log read-back (Prompt 21 step 1): a user reads back the audit rows he wrote (audit_read_own) =="
+# sql/migrations/2026-09-25-audit-read-own.sql (report-first; applied by the orchestrator only AFTER the 24-hour gate and
+# Faraz's go). The client's db.insert sends Prefer: return=representation, so logAudit runs INSERT ... RETURNING; without a
+# SELECT policy that sees the new row a linked surgeon's audit insert is refused with 42501 (HTTP 403) - Acton's two vacations
+# of 9/24 never reached audit_log. Section 10's L4 inserts WITHOUT RETURNING, which is why it stayed green. Nothing here writes
+# over REST. sql/probes/audit-read-own-probe.sql: six throwaway users probe-auditown-<uuid>@example.test (surgeon s3, second
+# surgeon s2, coordinator, second coordinator, unlinked viewer, admin s1), every audit row tagged detail.probe =
+# 'probe-auditown', inserts WITH RETURNING * and in PostgREST's return=representation shape (RLS-equivalent: a column-reading
+# RETURNING inside a CTE pgrst_source - not PostgREST's byte-identical statement, and no REST call), fixture rows for a CLI
+# writer (actor_id null) and the daily-reminder ('cron') that no non-scheduler may read, ends with RAISE
+# 'PROBE_RESULTS ...;END' so everything rolls back.
+# Expectations are the AFTER-apply picture (precedent: sections 11 / 12 grade the AFTER picture and are red before their
+# apply). BEFORE the apply the probe runs clean and nine cases are RED - expected: P1 (the policy list lacks audit_read_own),
+# S1 and S2 (the surgeon's RETURNING insert: ERR 42501), S5 (own=0), T1 (own=0 s3=0), C2 and C4 (the coordinator's prefs.save
+# RETURNING insert: ERR 42501), C5 (own_other=0), D1 (own_other=0). Every other case reads the same before and after.
+if linked; then
+  PROBE13="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/audit-read-own-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE13" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "audit read-back probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results13=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results13" | tr ';' '\n' | sed 's/^/   /'
+    case_val13()   { echo "$results13" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    # expect_eq13 / expect_err13: the CLI escapes the quotes inside the probe's text, so the value is unescaped first
+    expect_eq13()  { v=$(case_val13 "$1" | sed 's/\\//g'); [ "$v" = "$2" ] && ok "audit read-back probe $1: $3" || bad "audit read-back probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err13() { v=$(case_val13 "$1" | sed 's/\\//g'); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "audit read-back probe $1: $4"; else bad "audit read-back probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    if ! case_val13 P1 | grep -q 'audit_read_own'; then echo "   (the BEFORE picture: audit_read_own is not live - sql/migrations/2026-09-25-audit-read-own.sql is not applied; P1 S1 S2 S5 T1 C2 C4 C5 D1 below are red until it is)"; fi
+    expect_eq13  P1  "policies=audit_insert,audit_read,audit_read_coord,audit_read_own" "audit_log carries the three policies it had plus audit_read_own, nothing else"
+    expect_eq13  S1  "ok"                                            "a linked surgeon's own audit row inserts WITH RETURNING * (what the client's db.insert asks for)"
+    expect_eq13  S2  "ok rows=1"                                     "the same insert in PostgREST's return=representation shape (CTE pgrst_source ... returning public.audit_log.*) returns its row"
+    expect_eq13  S3  "ok"                                            "RETURNING 1 (reads no column) was never refused (control)"
+    expect_eq13  S4  "ok"                                            "a plain insert (section 10's L4) was never refused (control)"
+    expect_eq13  S5  "own=5"                                         "the surgeon reads back every probe row he wrote (the fixture, S1-S4)"
+    expect_eq13  S6  "s2=0 s1=0 coord=0 cli=0 cron=0"                "the surgeon reads no row another author wrote (s2, s1, the coordinators, a CLI row - actor_id null - and a daily-reminder 'cron' row)"
+    expect_err13 S7  42501 'row-level security policy for table "audit_log"' "a surgeon still cannot write an audit row as another surgeon (audit_insert unchanged)"
+    expect_eq13  T1  "own=1 s3=0"                                    "a second surgeon reads his own row and none of s3's"
+    expect_eq13  C1  "ok"                                            "a coordinator's timeoff.add row with RETURNING * (audit_read_coord already covered the family)"
+    expect_eq13  C2  "ok"                                            "a coordinator's prefs.save row with RETURNING * (outside the three families: audit_read_own)"
+    expect_eq13  C3  "ok"                                            "a coordinator's prefs.save row without RETURNING (control)"
+    expect_eq13  C4  "ok rows=1"                                     "a coordinator's prefs.save in PostgREST's return=representation shape returns its row"
+    expect_eq13  C5  "own_family=1 own_other=4"                      "a coordinator reads back its own rows in and outside the three families"
+    expect_eq13  C6  "coord2=0 surgeons=0 cli=0 cron=0"              "a coordinator reads no other coordinator's row, no surgeon's, no CLI row and no 'cron' row"
+    expect_err13 C7  42501 'row-level security policy for table "audit_log"' "a coordinator still cannot write an audit row as a surgeon (audit_insert unchanged)"
+    expect_eq13  D1  "own_family=1 own_other=1 coord=0"              "a second coordinator reads its own rows and none of the first coordinator's"
+    expect_err13 V1  42501 'row-level security policy for table "audit_log"' "an unlinked viewer (a follower) writes no audit row (audit_insert unchanged; decision 1c)"
+    expect_err13 V2  42501 'row-level security policy for table "audit_log"' "an unlinked viewer's RETURNING insert is refused by the same WITH CHECK"
+    expect_eq13  V3  "visible=0"                                     "an unlinked viewer reads no audit row"
+    expect_eq13  A1  "ok"                                            "the admin's audit row with RETURNING * (control: audit_read)"
+    expect_eq13  A2  "sees_all=t"                                    "the admin reads every probe row (audit_read unchanged)"
+  fi
+  LEFTOVER13_SQL="select ((select count(*) from public.audit_log where detail ->> 'probe' = 'probe-auditown') + (select count(*) from auth.users where email like 'probe-auditown-%@example.test'))::int as leftover"
+  r=$(q "$LEFTOVER13_SQL")
+  if ! echo "$r" | grep -q '"leftover"'; then
+    bad "audit read-back probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "audit read-back probe persisted nothing (leftover count 0: audit_log detail.probe = probe-auditown / auth.users)"
+  else
+    bad "audit read-back probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.audit_log where detail ->> 'probe' = 'probe-auditown';"
+    echo "      delete from auth.users where email like 'probe-auditown-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 13 (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo

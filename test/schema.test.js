@@ -63,6 +63,12 @@
 //   - trade_update_guard(): kind joins the TRADE_IMMUTABLE leg list; the rest is the 9/23 trade-past body byte for byte,
 //   - apply_trade() untouched (the receiver already applies a one-way row as a party); the file declares `-- supersedes:` B6;
 //     B6's trade_insert_guard and the 9/23 trade_update_guard are frozen by sha256; the probe gains GIVE_SETUP and O..U.
+// Prompt 21 step 1 (2026-09-25, Faraz - sql/migrations/2026-09-25-audit-read-own.sql, REPORT-FIRST, not applied; waits for the
+//   24-hour gate): audit_read_own lets a user read back the audit rows he wrote, so logAudit's INSERT ... RETURNING (db.insert,
+//   Prefer: return=representation) stops failing 42501 for a linked surgeon; the policy text exactly as approved, the three
+//   existing audit policies byte-unchanged, schema.sql's mirror + revision q, the rolled-back probe (RETURNING and PostgREST's
+//   return=representation shape as a surgeon / a coordinator / a viewer; CLI and 'cron' rows stay unread), verify-rls.sh
+//   section 13 (run against a faked CLI), C21, and the apply order (rebase after the gate's record commit; 403 reconciliation).
 //   node test/schema.test.js
 
 "use strict";
@@ -1374,7 +1380,9 @@ ok(/get diagnostics n = row_count;/.test(coProbe), "coordinator probe must obser
 ok(/action like 'timeoff\.%'/.test(coordMig) && /'timeoff\.add', '\{"probe":"probe-coord"\}'::jsonb/.test(coProbe), "C21 must measure audit_read_coord with a family row (timeoff.add) beside a non-family row (probe.coord)");
 ok(!/simple-protocol/.test(coProbe), "coordinator probe header must not claim a simple-protocol connection");
 ok(!/set local role anon/.test(coProbe), "coordinator probe has no anon case (nothing anon changed in A7)");
-["ok created_by=self", "ok entered_by=self source=office-relay", "own_family=1 others=0 own_other=0", "user_profiles_coordinator_unlinked", "TRADE_FORBIDDEN", "closed on 2030-07-20", "OS004 OFFERS_UNKNOWN_PERSON: zz is not a roster id", "OM007 MODE_UNKNOWN_PERSON: zz is not a roster id"].forEach((s) => ok(coProbe.slice(0, coProbe.indexOf("create temp table")).indexOf(s) > 0, "coordinator probe header must state the AFTER string `" + s + "`"));
+// C21's AFTER string is the picture after Prompt 21 step 1 (sql/migrations/2026-09-25-audit-read-own.sql): own_other=1 - the
+// coordinator reads its own 'probe.coord' row through audit_read_own (own_other=0 was audit_read_coord alone; pinned below).
+["ok created_by=self", "ok entered_by=self source=office-relay", "own_family=1 others=0 own_other=1", "user_profiles_coordinator_unlinked", "TRADE_FORBIDDEN", "closed on 2030-07-20", "OS004 OFFERS_UNKNOWN_PERSON: zz is not a roster id", "OM007 MODE_UNKNOWN_PERSON: zz is not a roster id"].forEach((s) => ok(coProbe.slice(0, coProbe.indexOf("create temp table")).indexOf(s) > 0, "coordinator probe header must state the AFTER string `" + s + "`"));
 ok(/save_offers\('zz', /.test(coProbe) && /set_offer_mode\(o::uuid, 'preferred', 'zz'\)/.test(coProbe), "C26 / C27 must relay for 'zz' (not a roster id) through save_offers and set_offer_mode as the coordinator");
 
 step("P16 A7: verify-rls.sh section 11 - the client gates, the probe graded case by case, leftovers counted, nothing written over REST");
@@ -1383,7 +1391,7 @@ const s11 = vr.slice(vr.indexOf('echo "== 11. '), vr.indexOf('echo "== 12. ') > 
 ok(s11.length > 0 && s11.length < vr.length, "verify-rls.sh section 11 could not be sliced out");
 ok(/coordinator-probe\.sql/.test(s11), "section 11 must run sql/probes/coordinator-probe.sql through the linked CLI");
 COORD_CASES.forEach((k) => ok(new RegExp("expect_(eq|err)11\\s+" + k + "\\s").test(s11), "section 11 does not grade probe case " + k));
-["ok created_by=self", "ok entered_by=self source=office-relay", "ok entered_by=scheduler source=email-relay", "own_family=1 others=0 own_other=0", "own=1 leak=0 sched_ok=t", "ON_CALL_CONFLICT", "TRADE_FORBIDDEN", "MODE_FROZEN", "closed on 2030-07-20", "42501", "23514", "user_profiles_coordinator_unlinked", "updated=0", "deleted=0", "contacts=0", "visible=0", "OFFERS_UNKNOWN_PERSON", "MODE_UNKNOWN_PERSON"].forEach((c) => ok(s11.indexOf(c) > 0, "section 11 must expect " + c));
+["ok created_by=self", "ok entered_by=self source=office-relay", "ok entered_by=scheduler source=email-relay", "own_family=1 others=0 own_other=1", "own=1 leak=0 sched_ok=t", "ON_CALL_CONFLICT", "TRADE_FORBIDDEN", "MODE_FROZEN", "closed on 2030-07-20", "42501", "23514", "user_profiles_coordinator_unlinked", "updated=0", "deleted=0", "contacts=0", "visible=0", "OFFERS_UNKNOWN_PERSON", "MODE_UNKNOWN_PERSON"].forEach((c) => ok(s11.indexOf(c) > 0, "section 11 must expect " + c));
 ok(/source = 'probe-coord'/.test(s11) && /note = 'probe-coord'/.test(s11) && /label like 'probe coord%'/.test(s11) && /action = 'probe\.coord' or detail ->> 'probe' = 'probe-coord'/.test(s11) && /title = 'probe-coord'/.test(s11) && /reason = 'probe-coord'/.test(s11) && /email like 'probe-coord-%@example\.test'/.test(s11),
   "section 11 must count leftovers over schedule_days / time_off / availability / call_offers / call_periods / audit_log / notifications / snapshots / auth.users and fail on non-zero");
 ok(/LEFT ROWS BEHIND/.test(s11), "section 11 must report leftovers as a failure with the cleanup statements");
@@ -2012,7 +2020,7 @@ ok(!/set local role anon/.test(foProbe) && !/'2030-/.test(foProbe), "followers p
 
 step("P20 F1: verify-rls.sh section 12 - the client's on_conflict pin, the probe graded case by case (R1 by shape, optionally against SILVIS_PREFS_ROWS_BEFORE), leftovers counted, nothing written over REST");
 ok(/^echo "== 12\. /m.test(vr), "verify-rls.sh has no section 12");
-const s12 = vr.slice(vr.indexOf('echo "== 12. '));
+const s12 = vr.slice(vr.indexOf('echo "== 12. '), vr.indexOf('echo "== 13. ') > vr.indexOf('echo "== 12. ') ? vr.indexOf('echo "== 13. ') : vr.length);   // section 13 is Prompt 21 step 1's (audit read-back)
 ok(s12.length > 0 && s12.length < vr.length, "verify-rls.sh section 12 could not be sliced out");
 ok(/followers-probe\.sql/.test(s12), "section 12 must run sql/probes/followers-probe.sql through the linked CLI");
 FOLLOW_CASES.filter((k) => k !== "R1").forEach((k) => ok(new RegExp("expect_(eq|err)12\\s+" + k + "\\s").test(s12), "section 12 does not grade probe case " + k));
@@ -2058,7 +2066,9 @@ ok(s12.indexOf('db.upsert("notification_preferences", row, { onConflict: "person
 
 step("P20 F1: docs - SCHEMA-REVIEW.md PREPARED section (before / after, blast radius, probe table, apply order, observed placeholder), tables (a) / (b), guide 4.3 row");
 ok(/## 2026-09-24 - followers: user_profiles\.follows \+ notification_preferences for an unlinked account \(Prompt 20 F1\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - followers: user_profiles.follows + notification_preferences for an unlinked account (Prompt 20 F1)' section");
-const reviewF1 = review.slice(review.indexOf("## 2026-09-24 - followers:"));
+// Bounded at the next "## " heading (review fix, Prompt 21 step 1): the audit read-back section that follows carries its own
+// probe table (P1, S1-S7, A1, A2 ...), an 'observed:' line and 'Blast radius', which would otherwise satisfy the F1 pins below.
+const reviewF1 = (() => { const at = review.indexOf("## 2026-09-24 - followers:"), end = review.indexOf("\n## ", at + 1); return at < 0 ? "" : review.slice(at, end < 0 ? review.length : end); })();
 ok(/^\*\*Status: (PREPARED - report-first \(not applied\)|APPLIED 2026-)/.test(((reviewF1.match(/\*\*Status: [^*]*\*\*/) || [""])[0])), "the F1 section's status line must read 'Status: PREPARED - report-first (not applied)' (or 'APPLIED 2026-...' after the record step)");
 ok(/observed: /.test(reviewF1), "the F1 section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
 Object.keys(FOLLOW_POLICIES).forEach((p) => ok(reviewF1.includes(FOLLOW_POLICIES[p].replace(/\n  /g, "\n      ")), "the F1 section must quote the AFTER text of " + p + " verbatim (indented as a code block)"));
@@ -2148,5 +2158,219 @@ step("P20 R2 review: verify-rls section 12a / 12a' cannot drift from the client 
   ok(pins.some((p) => /(^|vr12-)helpers\.js$/.test(p.file) && /onConflict: "person_id"/.test(p.s) && p.file === "helpers.js") && pins.some((p) => p.file === "$T/vr12-helpers.js" && /onConflict: "person_id"/.test(p.s)), "section 12a / 12a' must pin helpers.js notifPrefSaveRequest's on_conflict=person_id row (source and served)");
 }
 console.log("- P20 R2 review: section 12a / 12a' pins all exist in the files they name");
+
+// ---- Prompt 21 step 1 (2026-09-25, Faraz) - the Activity log gap: a user reads back the audit rows he wrote ----
+// Acton's two vacations of 9/24 never reached audit_log (POST /rest/v1/audit_log -> 403 at 18:17:57Z / 18:19:23Z): config.js
+// db.insert sends Prefer: return=representation, so logAudit runs INSERT ... RETURNING, and a RETURNING that reads columns needs
+// a SELECT policy that sees the new row - none did for a linked surgeon (42501; logAudit only console.warns). The prelaunch
+// probe's L4 inserts WITHOUT RETURNING, which is why verify-rls stayed green. sql/migrations/2026-09-25-audit-read-own.sql
+// (REPORT-FIRST, NOT applied; revision q) creates ONE policy, audit_read_own, exactly as Faraz approved it (1b); audit_insert,
+// audit_read and audit_read_coord stay byte-unchanged (audit_read_coord kept on purpose, now redundant). It waits for the 24-hour
+// gate: the gate runs the 33e529d verify-rls, whose C21 expects own_other=0 - an earlier apply turns it red. schema.sql mirrors
+// the policy; sql/probes/audit-read-own-probe.sql (rolled back) inserts WITH RETURNING and in PostgREST's return=representation
+// shape as a surgeon, a coordinator and a viewer - the case that would have caught the bug; verify-rls.sh section 13 grades its
+// AFTER picture (nine cases red before the apply, run here against a faked CLI) and section 11's C21 now expects own_other=1.
+const AUDIT_OWN_FILE = "2026-09-25-audit-read-own.sql";
+const AUDIT_OWN_MIGRATION = path.join(ROOT, "sql", "migrations", AUDIT_OWN_FILE);
+const AUDIT_OWN_PROBE = path.join(ROOT, "sql", "probes", "audit-read-own-probe.sql");
+const AUDIT_READ_OWN = "create policy audit_read_own on public.audit_log for select to authenticated\n  using ((public.silvis_person_id() is not null and actor_id = public.silvis_person_id()) or actor_id = auth.uid()::text);";
+const AUDIT_UNCHANGED = {   // byte-unchanged by Prompt 21 step 1
+  audit_insert: COORD_POLICIES.audit_insert,
+  audit_read: "create policy audit_read on public.audit_log for select to authenticated using (public.silvis_is_sched());",
+  audit_read_coord: COORD_POLICIES.audit_read_coord,
+};
+const AUDIT_OWN_CASES = ["P1", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "T1", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "D1", "V1", "V2", "V3", "A1", "A2"];
+const AUDIT_OWN_AFTER = {   // the exact AFTER value of every case graded by equality
+  P1: "policies=audit_insert,audit_read,audit_read_coord,audit_read_own", S1: "ok", S2: "ok rows=1", S3: "ok", S4: "ok", S5: "own=5",
+  S6: "s2=0 s1=0 coord=0 cli=0 cron=0", T1: "own=1 s3=0", C1: "ok", C2: "ok", C3: "ok", C4: "ok rows=1", C5: "own_family=1 own_other=4",
+  C6: "coord2=0 surgeons=0 cli=0 cron=0", D1: "own_family=1 own_other=1 coord=0", V3: "visible=0", A1: "ok", A2: "sees_all=t",
+};
+const AUDIT_OWN_ERR = ["S7", "C7", "V1", "V2"];   // ERR 42501 ... for table "audit_log" before AND after (audit_insert's WITH CHECK, unchanged)
+const AUDIT_OWN_BEFORE = { P1: "policies=audit_insert,audit_read,audit_read_coord", S5: "own=0", T1: "own=0 s3=0", C5: "own_family=1 own_other=0", D1: "own_family=1 own_other=0 coord=0" };
+const AUDIT_OWN_REFUSED_BEFORE = ["S1", "S2", "C2", "C4"];   // the RETURNING inserts: ERR 42501 before, ok after
+const AUDIT_OWN_RED_BEFORE = ["P1", "S1", "S2", "S5", "T1", "C2", "C4", "C5", "D1"];
+const RLS_42501_AUDIT = 'ERR 42501 new row violates row-level security policy for table "audit_log"';
+
+step("P21 S1: the migration - ONE policy, audit_read_own, exactly as approved (1b); nothing else dropped or created; report-first, waits for the 24-hour gate");
+const aoMig = read(AUDIT_OWN_MIGRATION);
+ok(!/\r/.test(aoMig), "audit-read-own migration has CRLF line endings");
+ok(migFiles.includes(AUDIT_OWN_FILE) && !PREPARED_NOT_MIRRORED.includes(AUDIT_OWN_FILE), "sql/migrations/" + AUDIT_OWN_FILE + " is a mirrored migration (not exempt like the member return-leg follow-up)");
+eq(aoMig.split("\n").filter((l) => !/^\s*--/.test(l) && l.trim() !== "").join("\n"), "drop policy if exists audit_read_own on public.audit_log;\n" + AUDIT_READ_OWN,
+  "the audit-read-own migration's statements must be exactly the drop-if-exists and the approved policy (Faraz 9/25, 1b as written);");
+const aoHdr = aoMig.slice(0, aoMig.search(/^drop policy if exists audit_read_own/m));   // the header quotes the same statement as its rollback
+ok(/^-- REPORT-FIRST, NOT APPLIED/m.test(aoHdr) && /audit_insert, audit_read and audit_read_coord are NOT changed/.test(aoHdr), "the migration header must say REPORT-FIRST, NOT APPLIED and that the three existing audit policies are not changed");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-25-audit-read-own\.sql/.test(aoHdr), "the migration header must carry the CLI apply line for the orchestrator");
+ok(/WAITS FOR THE 24-HOUR GATE - never apply this file ahead of it/.test(aoHdr) && /silvis-24h-gate/.test(aoHdr) && /33e529d/.test(aoHdr) && /C21/.test(aoHdr) && /own_other=1/.test(aoHdr) && /If the gate reports instead of applying, stop\./.test(aoHdr),
+  "the migration header must state the gate constraint (the gate's 33e529d verify-rls C21 expects own_other=0; an early apply turns it red) and the order (gate -> report -> go -> apply -> verify-rls -> push; stop if the gate reports)");
+// Review fix (9/25): the branch is cut at 33e529d and the gate's record commit lands on main first, so the apply order rebases
+// before the probes / apply / verify-rls; and the detailed order carries the push between verify-rls and the backfill, the
+// same sequence as the SCHEMA-REVIEW section's.
+{
+  const hj = aoHdr.replace(/\n-- /g, " ");
+  ok(/Faraz approves -> rebase this branch/.test(hj) && /re-run the gates -> apply this file -> verify-rls from the rebased branch -> push\./.test(hj),
+    "the migration header's gate order must rebase onto origin/main (after the gate's record commit) and re-run the gates before the apply");
+  ok(/probe BEFORE -> this file, one session -> probe AFTER -> verify-rls from the rebased branch \([^)]*\) -> push \(1d\) -> step 3, the backfill/.test(hj),
+    "the migration header's detailed order must read: rebase -> probe BEFORE -> apply -> probe AFTER -> verify-rls -> push -> step 3 -> record");
+  ok(/POST \/rest\/v1\/audit_log -> 403 entries from launch to the apply/.test(hj) && /not recoverable from the tables, never skipped/.test(hj),
+    "the migration header's step 3 must reconcile against the gateway log's 403s and list the unrecoverable ones for Faraz");
+}
+ok(/18:17:57Z/.test(aoHdr) && /18:19:23Z/.test(aoHdr) && /Prefer: return=representation/.test(aoHdr) && /RETURNING 1/.test(aoHdr) && /L4/.test(aoHdr), "the migration header must carry the evidence (the two 403s), the cause (return=representation -> RETURNING) and why L4 missed it");
+ok(/1c \(approved, Faraz 9\/25\): no change for viewers or followers now/.test(aoHdr) && /saveFollowerPref/.test(aoHdr) && /prelaunch probe S4/.test(aoHdr), "the migration header must record decision 1c (no change for viewers / followers; the stranger hole)");
+// (comment lines wrap: join the `-- ` continuations before matching a sentence)
+ok(/EVERY member or coordinator write since launch that has no audit row/.test(aoHdr.replace(/\n-- /g, " ")) && /detail\.backfilled = true/.test(aoHdr) && /call_schedule_snapshots row first/.test(aoHdr) && /shown to Faraz before inserting/.test(aoHdr),
+  "the migration header's order must carry step 3 as widened by Faraz 9/25 (every member / coordinator write without an audit row; detail.backfilled; snapshot first; Faraz sees the rows first)");
+ok(/^-- Rolling back = `drop policy if exists audit_read_own on public\.audit_log;`/m.test(aoHdr), "the migration header must give the rollback (drop policy if exists audit_read_own)");
+ok(!/^-- supersedes:/m.test(aoMig) && !/^-- PREPARED FOLLOW-UP/m.test(aoMig), "the audit-read-own migration redefines no function (no supersedes line) and is not a NOT-MIRRORED follow-up");
+
+step("P21 S1: schema.sql mirrors audit_read_own byte for byte beside audit_read_coord; audit_insert / audit_read / audit_read_coord byte-unchanged; the header records revision q");
+ok(policyText(schema, "audit_read_own") === AUDIT_READ_OWN, "schema.sql: policy audit_read_own must read exactly:\n" + AUDIT_READ_OWN);
+ok(policyText(schema, "audit_read_own") === policyText(aoMig, "audit_read_own"), "policy audit_read_own: schema.sql differs from sql/migrations/" + AUDIT_OWN_FILE);
+eq((schema.match(/create policy audit_read_own on public\./g) || []).length, 1, "schema.sql must create audit_read_own exactly once;");
+eq((schema.match(/drop policy if exists audit_read_own on public\.audit_log;/g) || []).length, 1, "schema.sql must drop-if-exists audit_read_own exactly once (idempotency);");
+Object.keys(AUDIT_UNCHANGED).forEach((p) => ok(policyText(schema, p) === AUDIT_UNCHANGED[p], "schema.sql: " + p + " must stay byte-unchanged by Prompt 21 step 1:\n" + AUDIT_UNCHANGED[p]));
+eq(Array.from(schema.matchAll(/create policy ([a-z_]+) on public\.audit_log\b/g)).map((m) => m[1]), ["audit_insert", "audit_read", "audit_read_coord", "audit_read_own"], "schema.sql's audit_log policies must be exactly these four, in this order;");
+ok(schema.indexOf(AUDIT_READ_OWN) > schema.indexOf(AUDIT_UNCHANGED.audit_read_coord) && schema.indexOf(AUDIT_READ_OWN) < schema.indexOf("-- snapshots: scheduler/admin only"), "audit_read_own sits right after audit_read_coord, before the snapshots policies");
+const aoComment = schema.slice(schema.indexOf("-- audit_log: insert by a scheduler / admin"), schema.indexOf("drop policy if exists audit_insert on public.audit_log;"));
+ok(/audit_read_own/.test(aoComment) && /return=representation/.test(aoComment) && /revision q/.test(aoComment), "schema.sql's audit_log comment block must name audit_read_own, why (return=representation -> RETURNING) and revision q");
+ok(/-- Revision 2026-09-25 q \(Prompt 21 step 1, sql\/migrations\/2026-09-25-audit-read-own\.sql, (report-first, NOT yet applied|applied 2026-)[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-25 q (audit_read_own; 'report-first, NOT yet applied' until the record step writes 'applied <timestamp>')");
+// Revision q follows whichever records the member return-leg follow-up: the PREPARED FOLLOW-UP line today, the Revision
+// 2026-09-25 p line once the gate's record step replaces it (review fix 9/25: after that rebase an indexOf of the old line is
+// -1 and a plain '>' would pass vacuously - so one of the two must exist).
+{
+  const qAt = header.search(/^-- Revision 2026-09-25 q /m), pAt = header.search(/^-- Revision 2026-09-25 p /m), fuAt = header.search(/^-- PREPARED FOLLOW-UP, NOT MIRRORED/m);
+  ok(pAt >= 0 || fuAt >= 0, "schema.sql's header must record the member return-leg follow-up - the PREPARED FOLLOW-UP line or, after its record step, Revision 2026-09-25 p");
+  ok(qAt > 0 && qAt > Math.max(pAt, fuAt), "revision q must follow the member return-leg follow-up's line (PREPARED FOLLOW-UP today, Revision 2026-09-25 p after its record step; revision p stays reserved for it)");
+}
+
+step("P21 S1: the probe is self-rolling-back, acts as two surgeons / two coordinators / a viewer / the admin, inserts WITH RETURNING and in PostgREST's shape, counts probe rows only, states BEFORE and AFTER");
+const aoProbe = read(AUDIT_OWN_PROBE);
+ok(!/\r/.test(aoProbe), "audit read-back probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(aoProbe), "audit read-back probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(aoProbe) && /grant insert, select on probe_results to authenticated;/.test(aoProbe), "audit read-back probe must collect into a temp table probe_results granted to authenticated");
+const aoLastDo = aoProbe.lastIndexOf("do $$");
+ok(aoLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(aoProbe.slice(aoLastDo)), "audit read-back probe's last DO block must raise 'PROBE_RESULTS %;END' so the batch rolls back");
+AUDIT_OWN_CASES.forEach((k) => ok(aoProbe.indexOf("values ('" + k + "', ") >= 0, "audit read-back probe lacks case " + k));
+ok(/'probe-auditown-' \|\| [a-z_]+ \|\| '@example\.test'/.test(aoProbe), "audit read-back probe's throwaway auth users must be probe-auditown-<uuid>@example.test (the leftover count keys on it)");
+ok(/set person_id = 's3', role = 'surgeon' where id = surgeon;/.test(aoProbe) && /set person_id = 's2', role = 'surgeon' where id = surgeon2;/.test(aoProbe) && /set person_id = 's1', role = 'admin' where id = admin_u;/.test(aoProbe)
+  && /set role = 'coordinator' where id = coord;/.test(aoProbe) && /set role = 'coordinator' where id = coord2;/.test(aoProbe) && /role = 'viewer' and person_id is null/.test(aoProbe),
+  "audit read-back probe fixtures: surgeon s3, second surgeon s2, admin s1, two coordinators (no roster link) and an unlinked viewer (asserted as created)");
+const aoCase = (k) => { const at = aoProbe.indexOf("values ('" + k + "', "); return at < 0 ? "" : aoProbe.slice(aoProbe.lastIndexOf("  begin\n", at), at); };
+["S1", "S7", "C1", "C2", "C7", "V2", "A1"].forEach((k) => ok(/insert into public\.audit_log [^;]*\) returning \* into r;/.test(aoCase(k)), "case " + k + " must insert WITH `returning * into r` (what PostgREST reads back for Prefer: return=representation)"));
+["S2", "C4"].forEach((k) => {
+  const c = aoCase(k);
+  ok(/with pgrst_source as \(\n\s+insert into public\.audit_log /.test(c) && /returning public\.audit_log\.\*\)/.test(c) && /json_to_record\(pgrst_payload\.json_data\)/.test(c) && /json_agg\(_postgrest_t\)/.test(c) && /from \(select \* from pgrst_source\) _postgrest_t;/.test(c),
+    "case " + k + " must use PostgREST's return=representation shape - RLS-equivalent, not byte-identical (CTE pgrst_source, returning public.audit_log.*, json_to_record body, json_agg over _postgrest_t)");
+});
+ok(/RLS-equivalent/.test(aoProbe.slice(0, aoProbe.indexOf("create temp table"))) && !/a pass here is a pass over REST/.test(aoProbe), "the probe header must call S2 / C4 RLS-equivalent to PostgREST's statement, never 'a pass over REST' (no REST call is made)");
+// Review fix (9/25): the rows no non-scheduler may read - a CLI row (actor_id null: scripts/day-edit.js, scripts/publish-preview.js)
+// and a daily-reminder row (actor_id 'cron') - are fixtures, and S6 / C6 count them (a later coalesce() in the policy would show)
+ok(/\(null, 'probe auditown', 'schedule\.day_edit', '\{"probe":"probe-auditown"\}'::jsonb\)/.test(aoProbe) && /\('cron', 'probe auditown', 'period\.close', '\{"probe":"probe-auditown"\}'::jsonb\)/.test(aoProbe),
+  "the probe fixtures must include a CLI row (actor_id null) and a daily-reminder row (actor_id 'cron'), both tagged probe-auditown");
+["S6", "C6"].forEach((k) => ok(/count\(\*\) filter \(where actor_id is null\), count\(\*\) filter \(where actor_id = 'cron'\)/.test(aoCase(k)) && /' cli=' \|\| n_cli \|\| ' cron=' \|\| n_cron/.test(aoProbe.slice(aoProbe.indexOf("values ('" + k + "', "), aoProbe.indexOf("values ('" + k + "', ") + 200)),
+  "case " + k + " must count the CLI (actor_id null) and 'cron' rows it can see and report them as cli= / cron="));
+ok(/\) returning 1 into n;/.test(aoCase("S3")), "case S3 must insert with RETURNING 1 (reads no column - the control that passes before and after)");
+["S4", "C3", "V1"].forEach((k) => ok(/insert into public\.audit_log [^;]*;/.test(aoCase(k)) && !/returning/.test(aoCase(k)), "case " + k + " must be a plain insert (no RETURNING)"));
+ok(/values \('s2', 'probe auditown'/.test(aoCase("S7")) && /values \('s3', 'probe auditown'/.test(aoCase("C7")), "S7 inserts as s2 (a surgeon as another surgeon) and C7 as s3 (a coordinator as a surgeon) - the unchanged refusals");
+const aoCode = aoProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+aoCode.split("\n").filter((l) => /probe auditown/.test(l)).forEach((l) => ok(/probe-auditown/.test(l), "every probe audit row must carry detail.probe = 'probe-auditown' on the same line as its actor_name (the leftover count keys on it): " + l.trim()));
+Array.from(aoCode.matchAll(/insert into public\.audit_log[^;]*;/g)).forEach((m) => ok(/probe auditown/.test(m[0]), "every audit insert in the probe must write actor_name 'probe auditown' (and so the probe tag): " + m[0].slice(0, 160)));
+Array.from(aoCode.matchAll(/from public\.audit_log\b[^;]*/g)).forEach((m) => ok(/where detail ->> 'probe' = 'probe-auditown'/.test(m[0]), "every audit_log read in the probe must count probe rows only (where detail ->> 'probe' = 'probe-auditown') - the live table's rows never enter a result: " + m[0].slice(0, 160)));
+ok(/from pg_policies where schemaname = 'public' and tablename = 'audit_log'/.test(aoCode), "P1 must read the audit_log policy names from pg_policies (the apply's fingerprint)");
+ok(!/set local role anon/.test(aoProbe) && !/'2030-/.test(aoProbe), "audit read-back probe has no anon case and no schedule fixture day");
+const aoProbeHdr = aoProbe.slice(0, aoProbe.indexOf("create temp table probe_results"));
+Object.keys(AUDIT_OWN_AFTER).forEach((k) => ok(aoProbeHdr.indexOf(AUDIT_OWN_AFTER[k]) > 0, "audit read-back probe header must state " + k + "'s AFTER string `" + AUDIT_OWN_AFTER[k] + "`"));
+Object.keys(AUDIT_OWN_BEFORE).forEach((k) => ok(aoProbeHdr.indexOf(AUDIT_OWN_BEFORE[k]) > 0, "audit read-back probe header must state " + k + "'s BEFORE string `" + AUDIT_OWN_BEFORE[k] + "`"));
+ok(aoProbeHdr.indexOf(RLS_42501_AUDIT) > 0 && /return=representation/.test(aoProbeHdr) && /THE case/.test(aoProbeHdr), "audit read-back probe header must state the 42501 refusal, the return=representation shape and mark S1 as THE case");
+ok(!/simple-protocol/.test(aoProbe), "audit read-back probe header must not claim a simple-protocol connection");
+
+step("P21 S1: verify-rls.sh section 13 grades the AFTER picture case by case (nine cases red before the apply, by name), counts leftovers, writes nothing over REST; section 11's C21 expects own_other=1");
+ok(/^echo "== 13\. /m.test(vr), "verify-rls.sh has no section 13");
+const s13 = vr.slice(vr.indexOf('echo "== 13. '), vr.indexOf('echo "RESULT: '));
+ok(s13.length > 0 && s13.length < vr.length, "verify-rls.sh section 13 could not be sliced out (it must sit right before the RESULT line)");
+ok(/audit-read-own-probe\.sql/.test(s13) && /PROBE13="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/audit-read-own-probe\.sql"/.test(s13), "section 13 must run sql/probes/audit-read-own-probe.sql through the linked CLI (absolute path via pwd -W, as 11b / 12b)");
+AUDIT_OWN_CASES.forEach((k) => ok(new RegExp("expect_(eq|err)13\\s+" + k + "\\s").test(s13), "section 13 does not grade probe case " + k));
+Object.keys(AUDIT_OWN_AFTER).forEach((k) => ok(s13.indexOf("expect_eq13  " + k + "  \"" + AUDIT_OWN_AFTER[k] + "\"") >= 0, "section 13 must grade " + k + " = " + AUDIT_OWN_AFTER[k]));
+AUDIT_OWN_ERR.forEach((k) => ok(new RegExp("expect_err13\\s+" + k + "\\s+42501\\s+'row-level security policy for table \"audit_log\"'").test(s13), "section 13 must grade " + k + " as ERR 42501 on audit_log"));
+ok(s13.indexOf(AUDIT_OWN_RED_BEFORE.join(" ") + " below are red until it is") > 0, "section 13 must name the cases that are red before the apply: " + AUDIT_OWN_RED_BEFORE.join(" "));
+ok(/nine cases are RED/.test(s13) && AUDIT_OWN_RED_BEFORE.every((k) => new RegExp("#[^\\n]*\\b" + k + "\\b").test(s13)), "section 13's comment must say which nine cases are red before the apply");
+ok(/detail ->> 'probe' = 'probe-auditown'/.test(s13) && /email like 'probe-auditown-%@example\.test'/.test(s13) && /LEFT ROWS BEHIND/.test(s13), "section 13 must count leftovers (audit_log probe-auditown rows, auth.users probe-auditown-*) and report them as a failure with the cleanup statements");
+ok(/SKIP 13 \(supabase CLI not linked at \$WORKDIR\)/.test(s13), "section 13 must SKIP when the CLI is not linked");
+const s13code = s13.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+ok(!/\bcurl /.test(s13code) && !/-X (POST|PATCH|DELETE|PUT)/.test(s13code), "section 13 must write nothing over REST (no curl at all)");
+ok(/audit read-back probe \(13\)/.test(vr.slice(0, vr.indexOf('echo "== 1.'))), "verify-rls.sh's usage header must list the audit read-back probe (13)");
+ok(/expect_eq11\s+C21\s+"own_family=1 others=0 own_other=1"/.test(s11) && !/expect_eq11\s+C21\s+"own_family=1 others=0 own_other=0"/.test(s11), "section 11's C21 must expect own_other=1 (the coordinator reads its own 'probe.coord' row through audit_read_own)");
+ok(/2026-09-25-audit-read-own\.sql/.test(s11) && /33e529d/.test(s11), "section 11's comment must say C21 is red until the audit-read-own apply and that the gate runs the 33e529d copy");
+// Review fix (9/25): the C21 move and the gate constraint both rest on the SQL that computes own_other - pin it: the
+// coordinator's own 'probe.coord' row (outside the three families) inserted as itself, counted by actor = auth.uid().
+ok(/values \(u, 'probe office', 'probe\.coord', '\{\}'::jsonb\);/.test(coProbe) && /count\(\*\) filter \(where actor_id = auth\.uid\(\)::text and action = 'probe\.coord'\)\s+into own, leak, c from public\.audit_log/.test(coProbe) && /' own_other=' \|\| c\);/.test(coProbe),
+  "coordinator-probe C21's own_other must count the coordinator's own 'probe.coord' row (actor_id = auth.uid(), outside the families) - the row audit_read_own makes visible");
+ok(!/a surgeon still reads no audit row/.test(s11) && !/no read policy for him\)/.test(coProbe) && /audit_read_own/.test(coProbe.slice(0, coProbe.indexOf("create temp table"))), "section 11's L3 / the coordinator probe's C21 / L3 comments must no longer say a surgeon has no audit read policy");
+{
+  // Grade section 13 for real against a faked CLI (no network): the AFTER results must be all green, the BEFORE results red on
+  // exactly the nine cases the comment names. The CLI escapes the quotes of the error text, as the live output does.
+  const code13 = vr.slice(vr.indexOf('echo "== 13. '), vr.indexOf('\necho\necho "RESULT: '));
+  const ERRQ = 'ERR 42501 new row violates row-level security policy for table \\"audit_log\\"';
+  const after = Object.assign({}, AUDIT_OWN_AFTER);
+  AUDIT_OWN_ERR.forEach((k) => { after[k] = ERRQ; });
+  const before = Object.assign({}, after, AUDIT_OWN_BEFORE);
+  AUDIT_OWN_REFUSED_BEFORE.forEach((k) => { before[k] = ERRQ; });
+  const run13 = (m) => {
+    const res = Object.keys(m).sort().map((k) => k + "=" + m[k]).join(";");
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "linked() { true; }\nq() { echo '{\"rows\":[{\"leftover\":0}]}'; }\nsupabase() { echo 'Initialising login role...'; echo '{\"message\": \"ERROR: P0001: PROBE_RESULTS " + res + ";END\"}'; }\n" +
+      code13 + "\necho \"RESULT $pass $fail\"\n";
+    // the script goes in on stdin, not as `bash -c <arg>`: on Windows the command-line quoting of the escaped \" in the faked
+    // CLI output does not survive the trip into Git Bash
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 13: " + (r.error && r.error.message));
+    return { out: r.stdout || "", failed: Array.from((r.stdout || "").matchAll(/^FAIL  audit read-back probe ([A-Z][0-9]):/gm)).map((x) => x[1]).sort(), result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const ra = run13(after);
+  eq(ra.result, [AUDIT_OWN_CASES.length + 1, 0], "section 13 against the AFTER picture: every case + the leftover check PASS, nothing FAILs (" + ra.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + ra.err.slice(0, 200) + ");");
+  const rb = run13(before);
+  eq(rb.failed, AUDIT_OWN_RED_BEFORE.slice().sort(), "section 13 against the BEFORE picture must fail exactly the nine cases its comment names;");
+  ok(/the BEFORE picture: audit_read_own is not live/.test(rb.out) && !/the BEFORE picture/.test(ra.out), "section 13 must name the BEFORE picture when P1 lacks audit_read_own (and only then)");
+}
+
+step("P21 S1: docs - SCHEMA-REVIEW.md PREPARED section (evidence, cause, diagnostic, decisions 1b / 1c / 1d + the widened step 3, blast radius, probe table, apply order with the gate, rollback, observed placeholder), table (b), guide 4.3 bullet");
+ok(/^## 2026-09-25 - audit_log read-back: audit_read_own \(Prompt 21 step 1; `sql\/migrations\/2026-09-25-audit-read-own\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-25 - audit_log read-back: audit_read_own (Prompt 21 step 1; `sql/migrations/2026-09-25-audit-read-own.sql`)' section");
+const reviewP21 = (() => { const at = review.indexOf("## 2026-09-25 - audit_log read-back: audit_read_own"), end = review.indexOf("\n## ", at + 1); return at < 0 ? "" : review.slice(at, end < 0 ? review.length : end); })();
+ok(/^\*\*Status: (PREPARED - report-first \(not applied\)|APPLIED 2026-)/.test(((reviewP21.match(/\*\*Status: [^*]*\*\*/) || [""])[0])), "the P21 section's status line must read 'Status: PREPARED - report-first (not applied) ...' (or 'APPLIED 2026-...' after the record step)");
+ok(reviewP21.includes(AUDIT_READ_OWN.replace(/\n  /g, "\n      ")), "the P21 section must quote the audit_read_own text verbatim (indented as a code block)");
+AUDIT_OWN_CASES.concat(["C21"]).forEach((k) => ok(new RegExp("^\\| `" + k + "` \\|", "m").test(reviewP21), "the P21 probe table lacks a row for " + k));
+ok(/18:17:57Z/.test(reviewP21) && /18:19:23Z/.test(reviewP21) && /Prefer: return=representation/.test(reviewP21) && /RETURNING 1/.test(reviewP21) && /\bL4\b/.test(reviewP21), "the P21 section must carry the evidence, the cause and why L4 missed it");
+ok(/\*\*Decisions \(Faraz 9\/25\)\.\*\*/.test(reviewP21) && /\*\*1b\*\*/.test(reviewP21) && /\*\*1c\*\*/.test(reviewP21) && /\*\*1d\*\*/.test(reviewP21) && /\*\*Step 3, widened\*\*/.test(reviewP21), "the P21 section must record decisions 1b, 1c, 1d and the widened step 3");
+ok(/33e529d/.test(reviewP21) && /silvis-24h-gate/.test(reviewP21) && /own_other=1/.test(reviewP21) && /reports instead of applying, stop/.test(reviewP21), "the P21 section's apply order must carry the gate constraint (33e529d, C21 own_other) and the stop rule");
+ok(/detail\.backfilled = true/.test(reviewP21) && /call_schedule_snapshots/.test(reviewP21) && /before inserting/.test(reviewP21) && /created_at/.test(reviewP21), "the P21 section's step 3 must be the widened backfill (every member / coordinator write without an audit row; created_at copied; detail.backfilled; snapshot first; Faraz sees the rows first)");
+ok(/Blast radius/.test(reviewP21) && /loadAudit/.test(reviewP21) && /prefs\.save/.test(reviewP21), "the P21 section must state the blast radius (surgeons' client never calls loadAudit; a coordinator's Activity may list its own prefs.save rows)");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-25-audit-read-own\.sql/.test(reviewP21) && /audit-read-own-probe\.sql/.test(reviewP21), "the P21 section must carry the CLI apply line and the probe command");
+ok(/drop policy if exists audit_read_own on public\.audit_log;/.test(reviewP21.slice(reviewP21.indexOf("Rolling back"))), "the P21 section's rollback must drop audit_read_own");
+ok(/observed: /.test(reviewP21), "the P21 section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
+// Review fixes (9/25): the apply order rebases onto the gate's record commit before the probes, pushes after verify-rls and
+// before the backfill (the migration header's sequence); step 3 reconciles against the gateway log's 403s and matches a lost
+// timeoff.add by person + time, never by the (editable) dates; the read follows actor_id, not role.
+{
+  const at = (s) => reviewP21.indexOf(s);
+  const order = ["1. **The 24-hour gate first", "2. **Rebase first.**", "3. Probe BEFORE", "4. The migration, one session", "5. Probe AFTER", "6. `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` from the rebased branch", "7. Push (1d: after verify-rls)", "8. **Step 3, the backfill**", "9. The record step, ONE commit"];
+  ok(order.every((s, i) => at(s) > 0 && (i === 0 || at(s) > at(order[i - 1]))), "the P21 apply order must read: gate -> rebase -> probe BEFORE -> apply -> probe AFTER -> verify-rls (rebased branch) -> push -> step 3 backfill -> record (missing or out of order: " + order.filter((s) => at(s) < 0).join(" | ") + ")");
+  ok(/Rebase this branch onto `origin\/main`/.test(reviewP21) && /revision\s+q stays after p/.test(reviewP21), "the P21 rebase step must rebase onto origin/main and keep revision q after p");
+  ok(/`POST \/rest\/v1\/audit_log` -> 403 from launch/.test(reviewP21) && /not recoverable, never silently skipped/.test(reviewP21), "the P21 backfill must reconcile against the gateway log's 403s and list the unrecoverable ones for Faraz");
+  // Faraz 9/25 evening: the gateway log keeps 24 hours, so the 403 list is a chain of reads (Cowork's to 2026-09-25 22:27 UTC,
+  // Cowork's 9/26 17:00 CDT read, the apply-time read) and a gap of more than 24 hours between two reads must be reported.
+  ok(/Retention is 24 hours on\s+this plan/.test(reviewP21) && /22:27 UTC/.test(reviewP21) && /more than 24 hours separate two consecutive reads/.test(reviewP21), "the P21 backfill must treat the 24-hour gateway log as a chain of reads and report a gap of more than 24 hours");
+  ok(/keeps only 24 hours on this plan/.test(aoHdr) && /22:27 UTC/.test(aoHdr) && /more than 24 hours separate two consecutive reads/.test(aoHdr.replace(/\n-- /g, " ")), "the migration header's step 3 must carry the 24-hour chain-of-reads rule");
+  ok(/Dry run observed 2026-09-25 22:55 UTC/.test(reviewP21), "the P21 order's probe BEFORE step must record the 9/25 dry run");
+  // Cowork's 9/26 read (Faraz): three prefs.save 403s from Fierce - the one matching his prefs row is backfilled, the other
+  // two are listed as probable and not independently recoverable; the apply-time read must close the chain by 9/27 22:00Z.
+  ok(/2026-09-25 22:00 -> 2026-09-26 22:00/.test(reviewP21) && /23:06:18 matches his `notification_preferences` row/.test(reviewP21) && /23:06:06 and 00:16:35 are probable `prefs\.save` writes, not independently recoverable/.test(reviewP21) && /2026-09-27 22:00Z/.test(reviewP21), "the P21 step-3 list must carry Cowork's 9/26 read (Fierce's prefs.save 403s: one backfilled, two listed) and the apply-time read deadline");
+  ok(/a\.detail ->> 'person_id' = t\.person_id/.test(reviewP21) && /a\.created_at between t\.created_at - interval/.test(reviewP21) && !/a\.detail ->> 'start' = t\.start_date/.test(reviewP21), "the P21 time_off candidate query must match on person_id and created_at proximity, never on the dates");
+  ok(/The read follows `actor_id`, not role/.test(reviewP21) && /user_profiles_admin/.test(reviewP21), "the P21 section must say the read follows actor_id, not role (a demoted coordinator; linking hands over a roster id's history)");
+  ok(!/PostgREST's own statement/.test(reviewP21) && /RLS-equivalent/.test(reviewP21), "the P21 section must call S2 / C4 RLS-equivalent to PostgREST's statement, not PostgREST's own statement");
+}
+ok(/^\| `audit_log` \|[^\n]*audit_read_own/m.test(tblB) && /^\| `audit_log` \|[^\n]*audit_read_coord/m.test(tblB), "SCHEMA-REVIEW table (b)'s audit_log row must name audit_read_coord and the prepared audit_read_own");
+const g43ao = g43.indexOf("2026-09-25-audit-read-own.sql");
+ok(g43ao > 0 && /report-first, (NOT applied|applied 2026-)/.test(g43.slice(Math.max(0, g43ao - 400), g43ao + 400)), "guide 4.3 must carry the Prompt 21 step 1 bullet (report-first, NOT applied - or 'applied 2026-MM-DD' after the record step)");
+ok(/^\| `audit_read_own` \|/m.test(g43.slice(g43ao)) && /applied: (_to be filled by the orchestrator_|2026-)/.test(g43.slice(g43ao)) && /24-hour gate/.test(g43.slice(g43ao)), "guide 4.3's Prompt 21 step 1 bullet must carry its audit_read_own row, the gate and the 'applied: _to be filled by the orchestrator_' placeholder");
+console.log("- P21 S1: audit_read_own prepared (report-first, not applied; waits for the 24-hour gate); probe + verify-rls section 13 + C21 own_other=1");
 
 console.log("schema.test.js: " + N + " assertions passed");
