@@ -12,7 +12,11 @@
 //     cover in the grid and as '9/28-10/4 Atwell' in the ER-panel author's week row, the day
 //     editor for 2026-10-15 lists greyed (ineligible) options with their first
 //     hard reason (Sarkar - outside-window), eligible options come first, Esc
-//     closes it; November 2026 shows E (East-derived) and F (forecast) badges;
+//     closes it; November 2026's grid shows NO E (East-derived) / F (forecast)
+//     badge, East legend line or 'East-derived:' hover to anyone, the scheduler
+//     included (Item E2, Faraz 9/25), while the scheduler's day editor still
+//     shows the East status on exactly the rules' derived / forecast days (the
+//     first month from November 2026 with each);
 //     a 390px viewport keeps the grid readable (codes instead of names, no
 //     horizontal scroll, NO clipped pill / truncated OPEN / overflowing P-B
 //     line - vis-001); the year field accepts typed input key by key
@@ -1823,27 +1827,162 @@ try {
   await page.keyboard.press("Escape");
   await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).then(() => ok("Esc closes the day editor")).catch(() => fail("Esc did not close the day editor"));
 
-  // ---- November 2026: E (East-derived) and F (forecast) badges ----
+  // ---- November 2026 (Item E2, Faraz 9/25): a CLEAN month grid for the scheduler too ----
+  // Item E (9/24) had kept the E (East-derived week) and F / f (East forecast) badges for the scheduler; Item E2 took
+  // them off the grid for everyone ("it makes it busy ... just want to improve readability"): no [data-badge="E"] / "F"
+  // / "f" in any cell, no "East-derived:" in any cell title, no "East-derived week" / "East forecast" legend line -
+  // proven on a grid that actually LOADED (cells and filled cells > 0), so a clean grid is never an empty one. The
+  // confirm badge and the East-vacation diamonds are not part of it and keep their own checks. The East information
+  // must still reach the scheduler through the day editor - the block after the screenshot proves that.
   await showMonth(2026, 10);
   const novCells = await readCells();
-  const eDays = novCells.filter(c => c.badges.includes("E")).map(c => c.day);
-  const fDays = novCells.filter(c => c.badges.some(b => b === "F" || b === "f")).map(c => c.day);
-  if (!eDays.length) fail("November 2026: no E badge (Fierce's East-derived week from the east_feed cache expected)"); else ok(`November 2026: E badge on ${eDays.length} day(s): ${eDays[0]}..${eDays[eDays.length - 1]}`);
-  if (!fDays.length) fail("November 2026: no F forecast badge (east_forecast rows from 11/16 expected)"); else ok(`November 2026: F badge on ${fDays.length} day(s), first ${fDays[0]}`);
+  {
+    const novTitles = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), title: e.getAttribute("title") || "" })));
+    const novLegend = await page.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " "));
+    const novFilled = novCells.filter(c => c.p || c.ext).length;
+    const novEastBadges = novCells.filter(c => c.badges.some(b => b === "E" || b === "F" || b === "f"));
+    const novEastHover = novTitles.filter(c => /East-derived:/.test(c.title));
+    if (!novCells.length || !novFilled) fail(`Item E2 (scheduler, 1180): November 2026 never loaded (${novCells.length} cells, ${novFilled} filled) - a clean grid must not be an empty one`);
+    else if (novEastBadges.length || novEastHover.length) fail(`Item E2 (scheduler, 1180): November 2026 still shows East markings to the scheduler - badges on ${novEastBadges.map(c => c.day + ":" + c.badges.join("")).slice(0, 6).join(", ") || "none"}; 'East-derived:' hover on ${novEastHover.length} day(s)${novEastHover.length ? " (" + novEastHover.slice(0, 3).map(c => c.day).join(", ") + ")" : ""}`);
+    else if (/East-derived/.test(novLegend) || /East forecast/.test(novLegend)) fail("Item E2 (scheduler, 1180): the legend still carries an East line: " + novLegend.slice(0, 220));
+    else ok(`Item E2 (scheduler, 1180): November 2026 grid has no E / F / f badge and no 'East-derived:' hover bit (${novCells.length} cells, ${novFilled} filled) and the legend has no 'East-derived week' / 'East forecast' line`);
+  }
   await page.screenshot({ path: path.join(OUT, "calendar-nov-2026.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-nov-2026.png");
 
-  // ---- Item E (Faraz 9/24): the East badges are the scheduler's business only ----
-  // The scheduler (this page, role admin) keeps the E / F badges (asserted just above) and both legend lines; a
-  // surgeon (a second page routed as role surgeon, roster s2) gets a clean grid on the same month - no
-  // [data-badge="E"] / "F" / "f" in the grid, no "East-derived:" hover bit, no "East-derived" / "East forecast"
-  // legend line - at 390 px in both themes. Dark runs first so the shared localStorage ends light again. The
-  // confirm badge and the vacation dots are not East information and stay for everyone; the day editor and
-  // Setup > East feed are untouched (display only).
+  // ---- Item E2 (scheduler): the day editor still carries the East status the grid dropped ----
+  // The rules' own picture first - the App's rulesCtxState memo on the committed React tree (the same walk as the Item C
+  // restatement further down; the editor is closed here, so the App's memo is the only rules context on the tree). Then
+  // the days of a month are opened one by one in the day editor (the 1st by a click on its cell, then ArrowRight - the
+  // editor's own day navigation, the grid follows it) and its [data-testid=east-status] lines are read. Two halves, each
+  // on the FIRST month from November 2026 on (12 months scanned) where the rules hold something East:
+  //  (a) derived weeks - ctx.derivedByDay (Fierce's derived week, 11/9-11/15 today): the editor's "East week -> Silvis
+  //      <role> (derived)" lines fall on EXACTLY the rules' derived days of that month, with the rules' role(s);
+  //  (b) the forecast - the first month with a forecast day of 20% or more (the retired f badge's floor) that the editor
+  //      words as a forecast: the editor's "East forecast NN% (treated as busy | below the NN% threshold)" lines are
+  //      EXACTLY the rules' - same days, same percentages, same busy wording (at / above ctx.forecastThreshold). The
+  //      rules' list mirrors eastStatusLines' order of precedence: a numeric ctx.per[id].eastForecast[d] outside
+  //      ctx.eastCoverage, on a day that is not a standing East day, not published / override busy (P.eastBusy) and not
+  //      an override busy:false day (the editor words all of those differently).
+  // Fix round (review 9/25): the months come from the rules, not a fixed November - once Davenport publishes November,
+  // forecastOutsideCoverage prunes every November forecast day and a fixed month would fail on good data - and the
+  // forecast half demands every line, not just one. Nothing East in all 12 months fails loudly: the check must never
+  // pass on an empty picture. The grid goes back to November 2026 afterwards (the confirm-badge checks below click 11/26
+  // and 11/25). novEastSummary feeds the surgeon message below and says "shows" only when both halves passed.
+  let novEastSummary = "the day-editor East check did not run";
+  try {
+    const MONTHS_E2 = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const rulesEast = await page.evaluate(() => {
+      const rootEl = document.getElementById("root");
+      const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+      if (!ck) return { error: "no React container key on #root" };
+      const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+      let ctx = null, n = 0; const stack = [current];
+      while (stack.length && !ctx && n++ < 500000) {
+        const f = stack.pop(); if (!f) continue;
+        if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+        if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+      }
+      if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+      const cov = ctx.eastCoverage || null;
+      const months = [];
+      for (let i = 0; i < 12; i++) {
+        const y = 2026 + Math.floor((10 + i) / 12), m0 = (10 + i) % 12, last = new Date(y, m0 + 1, 0).getDate();
+        const days = []; for (let d = 1; d <= last; d++) days.push(y + "-" + String(m0 + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0"));
+        const derived = days.filter(d => ctx.derivedByDay && ctx.derivedByDay[d] && Object.keys(ctx.derivedByDay[d]).length > 0).map(d => ({ day: d, roles: Object.keys(ctx.derivedByDay[d]).sort().join("+") }));
+        const forecast = [];
+        Object.keys(ctx.per || {}).forEach(id => {
+          const P = ctx.per[id], fc = P && P.eastForecast;
+          if (!fc) return;
+          days.forEach(d => {
+            const p = fc[d];
+            if (typeof p !== "number") return;
+            const standing = P.eastStanding && P.eastStanding.size ? P.eastStanding.get(d.slice(5)) : null;
+            const busy = !!(P.eastBusy && P.eastBusy.has(d)), ovFree = !!(P.eastOverrides && P.eastOverrides[d] === false), covered = !!(cov && d >= cov.from && d <= cov.to);
+            if (standing || busy || ovFree || covered) return;
+            forecast.push({ day: d, id, pct: Math.round(p * 100), busy: p >= ctx.forecastThreshold, p20: p >= 0.2 });
+          });
+        });
+        months.push({ y, m0, last, derived, forecast });
+      }
+      return { months, threshold: ctx.forecastThreshold };
+    });
+    if (rulesEast.error) throw new Error("could not read the rules context: " + rulesEast.error);
+    const monthLabel = (mo) => MONTHS_E2[mo.m0] + " " + mo.y;
+    const scanWindow = monthLabel(rulesEast.months[0]) + " - " + monthLabel(rulesEast.months[rulesEast.months.length - 1]);
+    const dMonth = rulesEast.months.find(mo => mo.derived.length > 0) || null;
+    const fMonth = rulesEast.months.find(mo => mo.forecast.some(f => f.p20)) || null;
+    // the editor pass over one month (cached - both halves may land on the same month): the 1st by a click on its cell,
+    // then ArrowRight day by day, waiting for each day's title before reading its East lines
+    const scans = new Map();
+    const scanMonth = async (mo) => {
+      const k = mo.y + "-" + mo.m0;
+      if (scans.has(k)) return scans.get(k);
+      await showMonth(mo.y, mo.m0);
+      const pre = mo.y + "-" + String(mo.m0 + 1).padStart(2, "0") + "-";
+      const out = {};
+      await page.click(`[data-day="${pre}01"]`);
+      await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      for (let n = 1; n <= mo.last; n++) {
+        if (n > 1) await page.keyboard.press("ArrowRight");
+        await page.waitForFunction((t) => { const el = document.querySelector("[data-testid=editor-title]"); return !!el && el.textContent.trim().endsWith(t); }, " " + MONTHS_E2[mo.m0] + " " + n + ", " + mo.y, { timeout: 5000 });
+        out[pre + String(n).padStart(2, "0")] = await page.$$eval("[data-testid=day-editor] [data-testid=east-status]", els => els.map(e => e.textContent.replace(/\s+/g, " ").trim()));
+      }
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+      scans.set(k, out);
+      return out;
+    };
+    const DERIVED_RE = /: East week -> Silvis (primary|backup) \(derived\)/;
+    const FC_RE = /: East forecast (\d+)% \((treated as busy|below the \d+% threshold)\)/;
+    let derivedPass = "", forecastPass = "";
+    // (a) derived weeks: the editor names exactly the rules' derived days, with the rules' role(s)
+    if (!dMonth) fail(`Item E2 (scheduler, day editor): the rules context derives no Silvis role on any day ${scanWindow} (Fierce's East-derived weeks from the east_feed cache / the seed's statedWeeks expected - 11/9-11/15 today) - the derived-week half would prove nothing`);
+    else {
+      const scan = await scanMonth(dMonth);
+      const want = dMonth.derived.map(x => x.day + " " + x.roles);
+      const got = Object.keys(scan).map(d => { const roles = scan[d].map(t => DERIVED_RE.exec(t)).filter(Boolean).map(m => m[1]).sort(); return roles.length ? d + " " + roles.join("+") : null; }).filter(Boolean);
+      if (want.join("|") !== got.join("|")) fail(`Item E2 (scheduler, day editor): ${monthLabel(dMonth)} - the editor's 'East week -> Silvis <role> (derived)' days (${got.length}: ${got.join(", ") || "none"}) differ from the rules' derived days (${want.length}: ${want.join(", ")})`);
+      else {
+        derivedPass = `${want.length} derived day(s) of ${monthLabel(dMonth)}`;
+        ok(`Item E2 (scheduler, day editor): ${monthLabel(dMonth)} (the first month from November 2026 with a derived week) - 'East week -> Silvis <role> (derived)' on exactly the ${want.length} day(s) the rules derive, same role(s) (${want[0]} .. ${want[want.length - 1]}), e.g. "${(scan[dMonth.derived[0].day].find(t => DERIVED_RE.test(t)) || "").slice(0, 90)}"`);
+      }
+    }
+    // (b) the forecast: every rules forecast day of the month reads 'East forecast NN% (...)' with the rules' own
+    // percentage and busy wording, and the editor shows no forecast line the rules do not hold
+    if (!fMonth) fail(`Item E2 (scheduler, day editor): the rules context has no East forecast day of 20% or more that the day editor would word as a forecast (outside the published coverage; not standing, busy or override-cleared) on any day ${scanWindow} (east_forecast rows from 11/16 expected while Davenport is unpublished) - the forecast half would prove nothing`);
+    else {
+      const scan = await scanMonth(fMonth);
+      const fkey = (f) => f.day + " " + f.pct + "% " + (f.busy ? "busy" : "below");
+      const want = fMonth.forecast.map(fkey).sort();
+      const got = []; Object.keys(scan).forEach(d => scan[d].forEach(t => { const m = FC_RE.exec(t); if (m) got.push(fkey({ day: d, pct: Number(m[1]), busy: m[2] === "treated as busy" })); })); got.sort();
+      const busyN = fMonth.forecast.filter(f => f.busy).length, p20N = fMonth.forecast.filter(f => f.p20).length;
+      if (want.join("|") !== got.join("|")) {
+        const missing = want.filter(x => !got.includes(x)), extra = got.filter(x => !want.includes(x));
+        const probe = (missing[0] || extra[0] || "").slice(0, 10);
+        fail(`Item E2 (scheduler, day editor): ${monthLabel(fMonth)} - the editor's 'East forecast NN%' lines differ from the rules' (${want.length} expected, ${got.length} read): missing ${missing.slice(0, 6).join(", ") || "none"}; not in the rules ${extra.slice(0, 6).join(", ") || "none"}${probe ? "; the editor's East lines on " + probe + ": " + JSON.stringify(scan[probe] || []) : ""}`);
+      } else {
+        const eg = fMonth.forecast.find(f => f.busy) || fMonth.forecast.find(f => f.p20);
+        forecastPass = `${want.length} forecast day(s) of ${monthLabel(fMonth)}`;
+        ok(`Item E2 (scheduler, day editor): ${monthLabel(fMonth)} (the first month from November 2026 with a forecast day of 20%+ outside the published coverage) - all ${want.length} rules forecast day(s) read 'East forecast NN%' with the rules' percentage and wording, none extra (${p20N} at 20%+; ${busyN ? busyN + " 'treated as busy' at or above " + Math.round(rulesEast.threshold * 100) + "%" : "none at or above the " + Math.round(rulesEast.threshold * 100) + "% threshold this month"}; e.g. ${eg.day} ${eg.pct}%)`);
+      }
+    }
+    novEastSummary = derivedPass && forecastPass ? `the scheduler's day editor shows the rules' ${derivedPass} and ${forecastPass}` : "the scheduler's day-editor East check FAILED above";
+    await showMonth(2026, 10);
+  } catch (e) {
+    novEastSummary = "the scheduler's day-editor East check threw above";
+    fail("Item E2 (scheduler, day editor): the East-status pass threw: " + errLine(e));
+    if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+    await showMonth(2026, 10).catch(() => {});
+  }
+
+  // ---- Item E (Faraz 9/24; Item E2 9/25): surgeons get the clean grid too ----
+  // Since Item E2 the scheduler's own grid is clean as well (asserted above); this pass keeps the surgeon side: a surgeon
+  // (a second page routed as role surgeon, roster s2) gets a clean grid on the same month - no [data-badge="E"] / "F" /
+  // "f" in the grid, no "East-derived:" hover bit, no "East-derived" / "East forecast" legend line - at 390 px in both
+  // themes. Dark runs first so the shared localStorage ends light again. The confirm badge and the vacation dots are not
+  // East information and stay for everyone; the day editor and Setup > East feed are untouched (display only).
   {
-    const legendSched = await page.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " "));
-    if (!/East-derived week/.test(legendSched) || !/East forecast at or above/.test(legendSched)) fail("Item E (scheduler, 1180): the legend lost its E / F lines: " + legendSched.slice(0, 220));
-    else ok(`Item E (scheduler, 1180): November 2026 keeps the E / F badges (E on ${eDays.length}, F/f on ${fDays.length} day(s)) and the legend's 'East-derived week' / 'East forecast' lines`);
     const SURG_UID = "00000000-0000-4000-8000-00000000e0e0";
     const SURG_PROFILE = { id: SURG_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z" };
     const SURG_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: SURG_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
@@ -1879,7 +2018,7 @@ try {
         else if (!cellsS.length || !filledS) fail(`Item E (surgeon, 390 ${theme}): November 2026 never loaded for the surgeon page (${cellsS.length} cells, ${filledS} filled) - a clean grid must not be an empty one`);
         else if (eastCells.length || hoverCells.length) fail(`Item E (surgeon, 390 ${theme}): November 2026 still shows East information to a surgeon - badges on ${eastCells.map(c => c.day + ":" + c.badges.join("")).slice(0, 6).join(", ")}; 'East-derived:' hover on ${hoverCells.length} day(s)`);
         else if (/East-derived/.test(legendS) || /East forecast/.test(legendS)) fail(`Item E (surgeon, 390 ${theme}): the legend still carries the East lines: ${legendS.slice(0, 220)}`);
-        else ok(`Item E (surgeon, 390 ${theme}): November 2026 grid has no E / F / f badge and no 'East-derived:' hover bit (${cellsS.length} cells, ${filledS} filled; the scheduler sees E on ${eDays.length} / F on ${fDays.length} day(s)) and the legend has no 'East-derived' / 'East forecast' line`);
+        else ok(`Item E (surgeon, 390 ${theme}): November 2026 grid has no E / F / f badge and no 'East-derived:' hover bit (${cellsS.length} cells, ${filledS} filled; ${novEastSummary}) and the legend has no 'East-derived' / 'East forecast' line`);
         await sp.screenshot({ path: path.join(OUT, `calendar-nov-2026-surgeon-390-${theme}.png`), fullPage: true });
       }
       ok("screenshots test/ui/out/calendar-nov-2026-surgeon-390-dark.png / -light.png");
@@ -2095,25 +2234,26 @@ try {
     }
   } catch (e) { fail("Item C 390px: " + String(e && e.message || e).split("\n")[0]); }
   await page.click('button[data-tab="calendar"]');
-  // ---- Item E (scheduler, 390 dark): symmetry with the surgeon pass above ----
-  // The scheduler keeps the E / F badges, the "East-derived:" hover bit and both legend lines at 390 px in the dark
-  // theme too (the gate is a boolean - isScheduler && !isPublicMode - with no viewport or theme dependence; this pins
-  // it where the surgeon side is checked). Counts must match the 1180 px pass on the same month. Light is restored
-  // before the viewport goes back to 1180 so the theme flow below is unchanged.
+  // ---- Item E2 (scheduler, 390 dark): the clean grid holds at phone width in the dark theme too ----
+  // Since Item E2 (Faraz 9/25) the scheduler's grid carries no E / F / f badge, no "East-derived:" hover bit and no
+  // East legend line at any width or theme (nothing is gated any more - the markup is gone); this pins it where the
+  // surgeon side is checked, on a grid that actually loaded (cells and filled cells > 0). Light is restored before the
+  // viewport goes back to 1180 so the theme flow below is unchanged.
   {
     await page.click('button[data-tab="settings"]');
     await page.click("button:has-text('Dark')");
     await showMonth(2026, 10);
     const themeSched = await page.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode") === "true" ? "dark" : "light"; } catch (e) { return "?"; } });
     const nov390 = await readCells();
-    const e390 = nov390.filter(c => c.badges.includes("E")).map(c => c.day);
-    const f390 = nov390.filter(c => c.badges.some(b => b === "F" || b === "f")).map(c => c.day);
+    const filled390 = nov390.filter(c => c.p || c.ext).length;
+    const east390 = nov390.filter(c => c.badges.some(b => b === "E" || b === "F" || b === "f"));
     const hover390 = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.filter(e => /East-derived:/.test(e.getAttribute("title") || "")).length);
     const legend390 = await page.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " "));
-    if (themeSched !== "dark") fail(`Item E (scheduler, 390 dark): the Dark toggle did not take (silvis-dark-mode reads ${themeSched})`);
-    else if (!e390.length || e390.length !== eDays.length || f390.length !== fDays.length || hover390 !== e390.length) fail(`Item E (scheduler, 390 dark): November 2026 lost East information at 390 px - E on ${e390.length} (1180: ${eDays.length}), F/f on ${f390.length} (1180: ${fDays.length}), 'East-derived:' hover on ${hover390} day(s)`);
-    else if (!/East-derived week/.test(legend390) || !/East forecast at or above/.test(legend390)) fail("Item E (scheduler, 390 dark): the legend lost its E / F lines: " + legend390.slice(0, 220));
-    else ok(`Item E (scheduler, 390 dark): November 2026 keeps the E / F badges (E on ${e390.length}, F/f on ${f390.length} day(s), 'East-derived:' hover on ${hover390}) and the legend's 'East-derived week' / 'East forecast' lines`);
+    if (themeSched !== "dark") fail(`Item E2 (scheduler, 390 dark): the Dark toggle did not take (silvis-dark-mode reads ${themeSched})`);
+    else if (!nov390.length || !filled390) fail(`Item E2 (scheduler, 390 dark): November 2026 never loaded (${nov390.length} cells, ${filled390} filled) - a clean grid must not be an empty one`);
+    else if (east390.length || hover390) fail(`Item E2 (scheduler, 390 dark): November 2026 still shows East markings at 390 px - badges on ${east390.map(c => c.day + ":" + c.badges.join("")).slice(0, 6).join(", ") || "none"}; 'East-derived:' hover on ${hover390} day(s)`);
+    else if (/East-derived/.test(legend390) || /East forecast/.test(legend390)) fail("Item E2 (scheduler, 390 dark): the legend still carries an East line: " + legend390.slice(0, 220));
+    else ok(`Item E2 (scheduler, 390 dark): November 2026 grid has no E / F / f badge and no 'East-derived:' hover bit (${nov390.length} cells, ${filled390} filled) and the legend has no 'East-derived week' / 'East forecast' line`);
     await page.screenshot({ path: path.join(OUT, "calendar-nov-2026-390-dark.png"), fullPage: true });
     ok("screenshot test/ui/out/calendar-nov-2026-390-dark.png");
     await page.click('button[data-tab="settings"]');
@@ -6910,8 +7050,9 @@ try {
     else ok(`?public=1: schedule loaded - ${filled.length} of ${pubCells.length} visible cells carry an assignment (e.g. ${filled[0].day} P ${filled[0].p || filled[0].ext})`);
     const pubBanner = await pub.$eval("[data-testid=today-banner]", el => el.textContent).catch(() => "");
     if (/loading/i.test(pubBanner)) fail("?public=1: today banner still shows the loading placeholder: " + pubBanner); else ok("?public=1: today banner shows real holders: " + pubBanner.replace(/\s+/g, " ").slice(0, 90));
-    // Item E (Faraz 9/24): the public link gets the clean grid too - November 2026 (the scheduler's E / F month above)
-    // carries no E / F / f badge, no "East-derived:" hover bit and no East legend line.
+    // Item E (Faraz 9/24; Item E2 9/25): the public link gets the clean grid too - November 2026 (the month whose
+    // derived / forecast days the scheduler's day editor was checked on above) carries no E / F / f badge, no
+    // "East-derived:" hover bit and no East legend line.
     await pub.selectOption("[data-testid=cal-month-select]", "10");
     if ((await pub.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2026") await pub.fill("[data-testid=cal-year-input]", "2026");
     await pub.waitForFunction(() => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === "November 2026"; }, null, { timeout: 10000 });

@@ -84,6 +84,10 @@ export const contrastTable = (mod) => {
     add(theme, "mini / tab active label on navy", T.onNavy, T.navy, "label");
     add(theme, "today ring (orange glyph) on card", T.accent, T.surface, "label");
     add(theme, "active-tab underline (orange) on the navy bar", T.accent, T.navy, "label");
+    // Item E2 (9/25): the month grid's E badge and its legend swatch were T.badge's only readers and came off
+    // the grid; nothing in the app renders T.badge any more (My schedule's E badge writes its own #5a3a90 on #e8e0f8).
+    // The row and the token (app-styles.js THEME.light / THEME.dark .badge) stay until a later cleanup pass that drops
+    // both together - E2 touched no theme file; the row name is kept so the printed table reads as before.
     add(theme, "E badge (white on navy glyph)", "#FFFFFF", T.badge, "label");
     // 9px 700 digits are read as text (review of TH): light uses navy digits on the orange, dark the page navy.
     add(theme, "count badge digits on the accent", T.onAccent, T.accent, "text");

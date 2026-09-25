@@ -4563,22 +4563,19 @@ function CallSchedule() {
     return map;
   }, [vacations, gridDays]);
   const vacNamesOn = (d) => Object.keys(vacations).filter(pid => onVac(pid, d, vacations)).map(nameOf);
-  // Forecast badge input: the highest East forecast probability on each day
-  // (from ctxInputs.eastForecast - normally one surgeon, generic by data).
-  const forecastByDay = useMemo(() => {
-    const out = {};
-    Object.keys(ctxInputs.eastForecast || {}).forEach(id => {
-      const fc = ctxInputs.eastForecast[id] || {};
-      Object.keys(fc).forEach(d => { if (out[d] === undefined || fc[d] > out[d].p) out[d] = { p: fc[d], id }; });
-    });
-    return out;
-  }, [ctxInputs]);
+  // Item E2 (Faraz 9/25: "remove the east specific markings on the calendar because it makes it busy ...
+  // just want to improve readability"): the month grid carries NO East-derived / forecast marking for anyone, the
+  // scheduler included - the E (East-derived week) and F / f (East forecast at / above the threshold, 20% or more)
+  // cell badges, their two legend lines and the "East-derived: ..." hover-title bit are gone, together with the
+  // grid-only forecastByDay map and the eastBadgesVisible flag Item E (9/24) had gated them with. The scheduler reads
+  // the East status where it always was: the day editor's East lines (eastStatusLines) and Setup > East feed - both
+  // unchanged. Display only: rules.js (ctx.derivedByDay included), the feed, the forecast and the generator are
+  // untouched. Out of scope on purpose and still drawn (Faraz: "don't change those until I say"): the grid's
+  // East-VACATION diamonds + their legend line + the "East vacation:" hover, My schedule / Following's E / O / F / EV
+  // badges, the coverage strip's forecast / feed items, exports, print and calendar-sync.
+  // forecastThreshold (just below) stays: the grid no longer reads it, but the coverage glance (suCoverageGlance) and
+  // Setup > East feed (EastFeedCard's threshold={forecastThreshold} prop) still do.
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
-  // Item E (Faraz 9/24): the East badges are the scheduler's business only - the month grid's E (East-derived week)
-  // and F / f (forecast) badges, their legend lines and the "East-derived: ..." hover bit render only for the
-  // scheduler in signed-in mode; surgeons, coordinators, viewers and ?public=1 get a clean grid. Display only: rules,
-  // the feed, the forecast, the generator, the day editor and Setup > East feed are unchanged.
-  const eastBadgesVisible = isScheduler && !isPublicMode;
   // Coverage at a glance (Prompt 11): the next 60 days from today - open
   // primary / backup days, forecast-busy days that still hold that surgeon as
   // primary (should be 0), the East feed's coverage end, the last publish and
@@ -5759,7 +5756,7 @@ function CallSchedule() {
               </div>
             )}
             {loaded && Object.keys(schedule).length === 0 && <p style={{...muted,fontStyle:"italic",marginBottom:8}}>No schedule days in the database yet - every day from today shows OPEN.</p>}
-            {!rulesImported && loaded && <p style={{...muted,marginBottom:8}}>Rules not imported yet: East and holiday badges appear once Setup imports the seed (Slice E).</p>}
+            {!rulesImported && loaded && <p style={{...muted,marginBottom:8}}>Rules not imported yet: holiday units (and the day editor's East status) appear once Setup imports the seed (Slice E).</p>}
 
             {/* The grid */}
             <div className="cal-grid" data-testid="cal-grid" data-week-start={weekStartsOn}>
@@ -5782,10 +5779,8 @@ function CallSchedule() {
                 const inMonth = d >= monthStartStr && d <= monthEndStr;
                 const isWk = dow === 5 || dow === 6 || dow === 0;
                 const hol = rulesCtx ? isHolidayDay(rulesCtx, d) : null;
-                // Item E: derived / fc are null for everyone but the signed-in scheduler, so the E and F badges, the
-                // "East-derived: ..." hover bit and nBadges (the holiday-label gutter) follow the one flag together.
-                const derived = eastBadgesVisible && rulesCtx ? rulesCtx.derivedByDay[d] : null;
-                const fc = eastBadgesVisible ? forecastByDay[d] : null;
+                // Item E2 (9/25): no East-derived / forecast lookup here any more - the cell draws no E / F / f badge
+                // and its hover title carries no "East-derived: ..." bit, for every viewer (the day editor has the East status).
                 const pH = dayHolder(a, "primary"); const bH = a ? a.backup : null;
                 const openP = slotIsOpen(d, pH, todayStr), openB = slotIsOpen(d, bH, todayStr); // past unassigned days are blank, not OPEN
                 const inFilter = calSurgeonFilters.length === 0 || (a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup)));
@@ -5793,13 +5788,14 @@ function CallSchedule() {
                 const isToday = d === todayStr;
                 const bg = hol ? T.holiday : isWk ? T.weekend : T.surface;
                 const bracket = isWk ? { borderTop: "2px solid " + (isToday ? T.accent : T.navyMuted), borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
-                const derivedWho = derived ? Object.keys(derived).map(r => nameOf(derived[r]) + " Silvis " + r).join(", ") : "";
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
                 const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
-                if (hol) titleBits.push(hol.name + " (holiday unit)"); if (derivedWho) titleBits.push("East-derived: " + derivedWho); if (a && a.note) titleBits.push("note: " + a.note);
+                if (hol) titleBits.push(hol.name + " (holiday unit)"); if (a && a.note) titleBits.push("note: " + a.note);
                 if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
-                // The header reserves 15px per 13px badge shown (E / F / confirm), at least the 30px two badges need, so a badge never covers the holiday label.
-                const nBadges = (derived ? 1 : 0) + (fc && fc.p >= 0.2 ? 1 : 0) + (awaitingConfirmation(a) ? 1 : 0);
+                // The header reserves 15px per 13px badge shown, at least 30px, so a badge never covers the holiday label. Since
+                // Item E2 (9/25) the confirm "?" is the grid's only badge (the E / F / f badges are gone), so nBadges counts just
+                // that one; a future cell badge adds its own term here.
+                const nBadges = awaitingConfirmation(a) ? 1 : 0;
                 return (
                   <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
                     onClick={()=>setEditorDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditorDay(d); } }}
@@ -5810,8 +5806,6 @@ function CallSchedule() {
                       {hol && <span className="cal-hol" title={hol.name + " - holiday unit (" + hol.tier + ")"} style={{fontSize:9,fontWeight:700,color:"#8a6a10",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{hol.name}</span>}
                     </div>
                     <div className="cal-badges">
-                      {derived && <span data-badge="E" title={"East-derived week: " + derivedWho} style={badge(true, T.badge)}>E</span>}
-                      {fc && fc.p >= 0.2 && <span data-badge={fc.p >= forecastThreshold ? "F" : "f"} title={"East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)"} style={badge(fc.p >= forecastThreshold, "#8a5a10")}>F</span>}
                       {awaitingConfirmation(a) && <span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={badge(true, "#c2410c")}>?</span>}
                     </div>
                     <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)}/>
@@ -5839,8 +5833,7 @@ function CallSchedule() {
               <span><span style={{color:T.open,fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>
               <span><span style={{fontStyle:"italic"}}>Atwell</span> = external cover</span>
               <span style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot</span>
-              {eastBadgesVisible && <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, T.badge)}>E</span> East-derived week</span>}
-              {eastBadgesVisible && <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#8a5a10")}>F</span> East forecast at or above {Math.round(forecastThreshold * 100)}%, <span style={badge(false, "#8a5a10")}>F</span> 20% or more</span>}
+              {/* Item E2 (9/25): no "E East-derived week" / "F East forecast" line - the grid draws neither badge any more */}
               <span>Fri-Sun tinted = weekend unit</span>
               <span>gold = holiday unit</span>
               <span>dots = vacations</span>

@@ -797,7 +797,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const card = src.slice(cs, src.indexOf("\nfunction ", cs + 10));
     assert.ok(card.includes("forecastOutsideCoverage(forecastFromFeedRows(forecastRows || []), cov)"), "EastFeedCard must prune its forecast strip with the published coverage (cov)");
     assert.ok(card.includes("inside the published coverage (ignored)"), "EastFeedCard must say how many forecast rows lie inside the published coverage and are ignored");
-    // Fix round (finding 13): the calendar F badge honours an override busy:false.
+    // Fix round (finding 13): My schedule's F badge (badgesFor - the month grid has drawn none since Item E2, 9/25) honours an override busy:false.
     const bs = src.indexOf("const badgesFor = (d, who) => {"); // Prompt 20 F3: badgesFor reads the shown surgeon's ctx (who || pid)
     const badges = src.slice(bs, src.indexOf("return out;", bs));
     assert.ok(badges.includes("P.eastOverrides[d] === false"), "badgesFor must skip the F badge on an override busy:false day");
@@ -1879,36 +1879,69 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('const AWAITING_CONFIRMATION_MARKER = "awaiting confirmation - ";'), "index-source.html marker literal");
     assert.ok(src.includes("const awaitingConfirmation = (a) =>"), "one predicate: a locked day whose note starts with the marker");
     assert.strictEqual(count('data-testid="confirm-badge"'), 2, "DayEditor role row + month grid cell");
-    assert.strictEqual(count('data-badge="confirm"'), 1, "the grid badge is readable through [data-badge] like E / F");
+    assert.strictEqual(count('data-badge="confirm"'), 1, "the grid badge is readable through [data-badge] (the only grid badge since Item E2, 9/25)");
     assert.strictEqual(count("awaiting the scheduler's confirmation"), 2, "the hover title on both badges");
     // review B-1: saveDayEdit rebuilds an overridden day's note as '[override: ...] <note>', which moves the marker off
     // index 0 - the predicate strips the app's own override tag (same regex literal as saveDayEdit) before it looks.
     assert.ok(src.includes('const awaitingConfirmation = (a) => !!(a && (a.primaryLocked || a.backupLocked) && typeof a.note === "string" && a.note.replace(/^\\[override:[^\\]]*\\]\\s*/, "").indexOf(AWAITING_CONFIRMATION_MARKER) === 0);'), "the predicate tolerates the '[override: ...] ' prefix saveDayEdit puts in front of the note");
     assert.ok(count("/^\\[override:[^\\]]*\\]\\s*/") >= 2, "saveDayEdit and the predicate share one override-tag regex literal");
-    // review B-2: in the month grid the badge is a 13px '?' square like E / F (the header reserves 15px per badge shown),
+    // review B-2: in the month grid the badge is a 13px '?' square (the E / F badges it sat beside came off the grid on 9/25, Item E2; the header reserves 15px per badge shown),
     // so it never covers the holiday label; the word 'confirm' stays in the day editor where there is room.
     assert.ok(src.includes('<span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler\'s confirmation" style={badge(true, "#c2410c")}>?</span>'), "grid badge = 13px square via badge(), glyph '?'");
     assert.ok(src.includes("paddingRight:Math.max(30, 4 + 15 * nBadges)"), "the cell header widens its reserved gutter per badge shown");
     assert.ok(src.includes("style={confirmBadgeStyle}>confirm</span>"), "the day editor keeps the word 'confirm'");
   });
 
-  // Item E (Faraz 9/24: "not important for the Silvis guys to know"): the month grid's E (East-derived week) and F / f
-  // (East forecast at / above threshold, 20% or more) badges, their two legend lines and the "East-derived: ..." hover bit
-  // render only for the scheduler in signed-in mode. One flag gates the cell's derived / forecast lookups, so the E and
-  // F badges, the hover bit and nBadges (the holiday-label gutter) follow it together; surgeons, coordinators, viewers
-  // and ?public=1 get a clean grid. Display only - the day editor and Setup > East feed keep their own East information.
-  check("Item E (9/24): E and F / f badges, their legend lines and the East-derived hover bit render only when isScheduler && !isPublicMode", () => {
-    assert.strictEqual(count("const eastBadgesVisible = isScheduler && !isPublicMode;"), 1, "exactly one eastBadgesVisible flag (isScheduler && !isPublicMode)");
-    assert.ok(src.includes("const derived = eastBadgesVisible && rulesCtx ? rulesCtx.derivedByDay[d] : null;"), "the cell's derived-week lookup is gated by the flag (E badge, hover bit and nBadges follow)");
-    assert.ok(src.includes("const fc = eastBadgesVisible ? forecastByDay[d] : null;"), "the cell's forecast lookup is gated by the flag (F / f badge and nBadges follow)");
-    assert.strictEqual(count('{derived && <span data-badge="E" title={"East-derived week: " + derivedWho}'), 1, "the E badge still keys off the (gated) derived lookup");
-    assert.strictEqual(count('{fc && fc.p >= 0.2 && <span data-badge={fc.p >= forecastThreshold ? "F" : "f"}'), 1, "the F / f badge still keys off the (gated) forecast lookup");
-    assert.ok(src.includes('if (derivedWho) titleBits.push("East-derived: " + derivedWho);'), "the hover bit still keys off derivedWho (empty when the flag is off)");
-    assert.ok(src.includes("const nBadges = (derived ? 1 : 0) + (fc && fc.p >= 0.2 ? 1 : 0) + (awaitingConfirmation(a) ? 1 : 0);"), "nBadges counts the gated derived / fc, so the holiday-label gutter is right for both audiences");
-    assert.ok(src.includes('{eastBadgesVisible && <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, T.badge)}>E</span> East-derived week</span>}'), "the legend's E line is gated");
-    assert.ok(src.includes('{eastBadgesVisible && <span style={{display:"inline-flex",alignItems:"center",gap:3}}><span style={badge(true, "#8a5a10")}>F</span> East forecast at or above {Math.round(forecastThreshold * 100)}%, <span style={badge(false, "#8a5a10")}>F</span> 20% or more</span>}'), "the legend's F line is gated");
-    assert.strictEqual(count("rulesCtx.derivedByDay[d]"), 1, "the grid is the flag's only derivedByDay reader (the day editor and Setup > East feed take their East information from rulesCtx / the feed card as before)");
-    assert.strictEqual(count("eastBadgesVisible"), 5, "the flag is declared once and read four times (derived, fc, two legend lines) - nothing in rules, the feed, the forecast or the generator reads it");
+  // Item E2 (Faraz 9/25: "remove the east specific markings on the calendar because it makes it busy"): the
+  // month grid carries no East-derived / forecast marking for ANYONE, the scheduler included. The E (East-derived week)
+  // and F / f (East forecast at / above threshold, 20% or more) cell badges, their two legend lines and the
+  // "East-derived: ..." hover-title bit are gone with the flag Item E (9/24) had gated them with (eastBadgesVisible) and
+  // the grid-only forecastByDay map; nBadges now counts the confirm badge alone. The scheduler keeps the East status
+  // where it was: the day editor's East lines (eastStatusLines) and Setup > East feed, both unchanged. Out of scope and
+  // pinned as STILL drawn: the grid's East-VACATION diamonds, their legend line and the "East vacation:" hover. Display
+  // only - rules.js (ctx.derivedByDay), the feed, the forecast and the generator are untouched. The pins below read CODE
+  // (comments stripped from the slices), so the dated history comments may name the removed identifiers.
+  check("Item E2 (9/25): no E / F / f badge, East legend line or 'East-derived:' hover in the month grid for anyone; confirm badge + nBadges kept; day editor + Setup > East feed unchanged", () => {
+    const noJsxComments = (t) => t.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:"'])\/\/[^\n]*/g, "$1");
+    const gridAt = src.indexOf('<div className="cal-grid" data-testid="cal-grid"');
+    const legendAt = src.indexOf('<div className="cal-legend"');
+    const weekRowsAt = src.indexOf('<Collapsible css={css} ck="cal_weekrows"');
+    assert.ok(gridAt > 0 && legendAt > gridAt && weekRowsAt > legendAt, "the month grid, its legend and the week rows are where the pins expect them (grid < legend < week rows)");
+    const grid = noJsxComments(src.slice(gridAt, legendAt));
+    const legend = noJsxComments(src.slice(legendAt, weekRowsAt));
+    // (1) the grid cell: no East-derived / forecast lookup, badge or hover bit
+    assert.ok(!/derivedByDay|forecastByDay|eastBadgesVisible|derivedWho/.test(grid), "the grid cell still reads an East-derived / forecast lookup (derivedByDay / forecastByDay / eastBadgesVisible / derivedWho)");
+    // Fix round (review 9/25): not a list of the old E / F expressions - the grid's ONLY badge is the confirm '?', so a
+    // re-added E / F / f in any spelling (a literal data-badge="F", a scheduler-only data-badge="f", a badge() square
+    // without a data-badge attribute) fails here.
+    assert.ok(!/data-badge=(?!"confirm")/.test(grid), "the grid cell renders a badge other than the confirm '?' (E / F / f are gone since Item E2, 9/25)");
+    assert.strictEqual((grid.match(/[^.\w]badge\(/g) || []).length, 1, "the grid cell calls badge() for something other than the confirm '?' (the only grid badge since Item E2, 9/25)");
+    assert.ok(!/East-derived|East forecast/.test(grid), "the grid cell still carries 'East-derived' / 'East forecast' text (badge title or the 'East-derived: ...' hover bit)");
+    // (2) the legend: no E / F line; the East-vacation line and the ordinary lines stay
+    assert.ok(!/East-derived|East forecast/.test(legend), "the grid legend still carries an 'East-derived week' / 'East forecast' line");
+    assert.ok(legend.includes("locked slot") && legend.includes("Fri-Sun tinted = weekend unit"), "the legend's ordinary lines are gone too - the slice is wrong");
+    assert.ok(legend.includes(" home = East vacation</span>}"), "the legend's East-vacation line (out of scope, Faraz 9/25) must stay");
+    // (3) whole file: the removed flag / map / lookups are declared and read nowhere in code
+    assert.strictEqual(count("const eastBadgesVisible"), 0, "the eastBadgesVisible flag is still declared");
+    assert.strictEqual(count("eastBadgesVisible &&") + count("eastBadgesVisible ?"), 0, "something still reads eastBadgesVisible");
+    assert.strictEqual(count("const forecastByDay"), 0, "the grid-only forecastByDay map is still declared");
+    assert.strictEqual(count("forecastByDay["), 0, "something still reads forecastByDay");
+    assert.strictEqual(count("rulesCtx.derivedByDay["), 0, "a new app-side reader of rulesCtx.derivedByDay appeared - the grid's E badge was its only reader until Item E2 (9/25); if the new reader is on purpose and is NOT the month grid, update this pin (the grid-slice check in (1) is the one that guards the grid)");
+    assert.strictEqual(count('titleBits.push("East-derived: "'), 0, "the 'East-derived: ...' hover bit is still pushed");
+    // (4) kept: the confirm badge, the gutter, the East-vacation diamonds and their hover
+    assert.strictEqual(count('<span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler\'s confirmation" style={badge(true, "#c2410c")}>?</span>'), 1, "the grid's confirm badge must stay");
+    assert.ok(grid.includes("const nBadges = awaitingConfirmation(a) ? 1 : 0;"), "nBadges counts the confirm badge (the only grid badge since Item E2)");
+    assert.ok(grid.includes("paddingRight:Math.max(30, 4 + 15 * nBadges)"), "the header still reserves the holiday-label gutter from nBadges");
+    assert.ok(grid.includes("data-eastvac={m.id}") && grid.includes('titleBits.push("East vacation: "'), "the East-vacation diamond and its 'East vacation:' hover (out of scope) must stay");
+    // (5) the day editor's East status and Setup > East feed are unchanged
+    assert.ok(src.includes("const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];"), "the day editor no longer builds its East lines");
+    assert.ok(src.includes('data-testid="east-status" data-eastvac={l.eastVac || undefined}'), "the day editor no longer renders its East status lines");
+    assert.ok(src.includes('text: name + ": East week -> Silvis " + dRole + " (derived)"'), "the day editor's derived-week line changed");
+    assert.ok(src.includes('text: name + ": East forecast " + Math.round(p * 100) + "% ("'), "the day editor's forecast line changed");
+    assert.ok(src.includes('<Collapsible css={css} ck="setup_east" defaultOpen={false} title="East feed (Davenport, read-only)">'), "Setup > East feed lost its card");
+    assert.ok(src.includes('<div data-testid="east-derived"') && src.includes('data-testid="east-forecast-days"'), "Setup > East feed lost its derived-weeks list or its forecast-days line");
+    // (6) rules-side untouched: the generator still reads the derived weeks from the ctx (display-only change)
+    assert.ok(fs.readFileSync(path.join(ROOT, "rules.js"), "utf8").includes("derivedByDay: Object.create(null)") && fs.readFileSync(path.join(ROOT, "generator.js"), "utf8").includes("ctx.derivedByDay[d]"), "rules.js / generator.js no longer carry ctx.derivedByDay - Item E2 is display only");
   });
 
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
