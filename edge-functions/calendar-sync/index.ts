@@ -256,7 +256,7 @@ function fold(line) {
 // not a calendar entry). A day covered outside the roster (external_cover) has
 // primary_id null: no primary event, but the backup event's description names
 // the cover so the backup surgeon knows who is in house.
-// rows: schedule_days rows { day, primary_id, backup_id, external_cover, note };
+// rows: schedule_days rows { day, primary_id, backup_id, external_cover } (the day's internal note is never read - Faraz 9/25: it never reaches a subscriber's calendar);
 // roster: { byId }; onlyId: a roster id or null (the group feed).
 function buildEvents(rows, roster, onlyId) {
   const events = [];
@@ -290,7 +290,6 @@ function buildEvents(rows, roster, onlyId) {
         `Backup: ${backupLabel}`,
         "Shift: 07:00 to 07:00 next day (Central)",
       ];
-      if (row.note) descLines.push(`Note: ${row.note}`);
       events.push({
         uid: `silvis-${day}-${role}@${UID_DOMAIN}`,   // stable per day + role
         allDay: false,
@@ -574,7 +573,6 @@ interface DayRow {
   primary_id: string | null;
   backup_id: string | null;
   external_cover: string | null;
-  note: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -602,7 +600,7 @@ Deno.serve(async (req) => {
 
     const roster = await loadRoster();
     const rows: DayRow[] = (await rest(
-      `schedule_days?select=day,primary_id,backup_id,external_cover,note&day=gte.${from}&day=lte.${to}&order=day.asc`,
+      `schedule_days?select=day,primary_id,backup_id,external_cover&day=gte.${from}&day=lte.${to}&order=day.asc`,
     )) || [];
 
     let onlyId: string | null = null;

@@ -695,6 +695,22 @@ check("Item D: calendar-sync carries a plain-JS '@icsCore' mirror block defining
   icsApi = api;
 });
 const unfold = (ics) => ics.replace(/\r\n[ \t]/g, "");
+// Faraz 9/25: the day's internal note (e.g. "seed: office-er-call-panels-..." or "open (9/22)") never reaches a subscriber's
+// calendar - the event description is exactly the Primary / Backup / Shift lines, whatever the row's note says.
+check("calendar-sync: an event description carries Primary / Backup / Shift only - never the day's internal note", () => {
+  if (!icsApi) throw new Error("icsCore did not load");
+  const rows = [{ day: "2026-10-05", primary_id: "s1", backup_id: "s2", external_cover: null, note: "seed: office-er-call-panels-2026-09-16" },
+                { day: "2026-10-24", primary_id: null, backup_id: "s1", external_cover: null, note: "open (9/22)" }];
+  const evs = icsApi.buildEvents(rows, ICS_ROSTER, "s1");
+  assert.strictEqual(evs.length, 2, "two events for s1");
+  evs.forEach((ev) => {
+    assert.ok(!/Note:|seed:|office-er|open \(9\/22\)/.test(ev.desc), "no note in the description: " + JSON.stringify(ev.desc));
+    assert.deepStrictEqual(ev.desc.split("\n").map((l) => l.split(":")[0]), ["Primary", "Backup", "Shift"], "exactly the three lines: " + JSON.stringify(ev.desc));
+  });
+  const ics = unfold(icsApi.generateICS(evs, "Silvis - Khan"));
+  assert.ok(!/office-er|open \(9\/22\)|Note\\:|Note:/.test(ics), "the feed carries no note text");
+  assert.ok(!/external_cover,note|,note&/.test(csSrc), "calendar-sync no longer reads schedule_days.note");
+});
 check("Item D ics: two Silvis days + two east_feed days -> four VEVENTs: the Silvis pair timed 07:00 Central with UIDs silvis-<day>-<role>@silvis-call, the Davenport pair ALL-DAY (DTSTART;VALUE=DATE the day, DTEND;VALUE=DATE the next day) titled 'Khan <en dash> Davenport night' / 'Khan <en dash> Davenport day call' with UIDs east-FAK-<day>-<reason>@silvis-call; a second build yields the same UIDs; a LOWER-precedence reason added later keeps the UID, a higher one (a holiday assigned onto the day) renames it", () => {
   if (!icsApi || !eastApi) throw new Error("blocks did not load");
   const build = (weeks) => {
