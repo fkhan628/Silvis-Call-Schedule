@@ -178,7 +178,7 @@ After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 
-### Deploy record - calendar-sync all-day runs (Faraz 2026-09-25: "the calendar looks busy, and 07:00 -> 07:00 shifts draw across two days") - PENDING
+### Deploy record - calendar-sync all-day runs (Faraz 2026-09-25: "the calendar looks busy, and 07:00 -> 07:00 shifts draw across two days") - deployed 2026-09-25 13:20:14 UTC by the orchestrator
 
 One function changes; `office-notifications`, `send-notification` and `daily-reminder` are untouched and are NOT
 redeployed. No schema, no RLS, no write. The feed becomes ALL-DAY by default: one all-day event per run of consecutive
@@ -200,7 +200,7 @@ authenticated-read and inferred as 55 - 28 - 22); `?timed=1` reproduces 216 / 28
 
 | when (UTC) | slug | version before -> after | what changed | proof (section 5, no mail can result) |
 |---|---|---|---|---|
-| PENDING | `calendar-sync` | v4 -> v5 (pending) | all-day runs by default (`buildEvents`, `eastIcsEvents` merged runs, `endsOnOrAfter` + a `RUN_LOOKBACK_DAYS = 14` read so a run straddling today-60 that started at most 14 days before it keeps its start day; the description dates a run of 7+ days); the old per-day format behind `?timed=1` (`buildTimedEvents`, `eastIcsDayEvents`, exactly the old window); X-WR-CALNAME, 200 / 404 / 405 unchanged | pending: unauthenticated GET plain -> 200 `BEGIN:VCALENDAR`, `DTSTART;VALUE=DATE:` lines, `SUMMARY:P <name> . B <name>`, about 82 events; `?surgeon=FAK` about 14 (`SUMMARY:Silvis Primary` / `Silvis Backup`); `?surgeon=MAB` about 35; `?surgeon=NF` about 16; `?surgeon=FAK&east=1` about 31; `?timed=1` on each equals the v4 counts (216 / 28 / 43 / 45 / 55) and shapes; `?surgeon=ZZZ` -> 404; POST -> 405 |
+| 2026-09-25 13:20:14 | `calendar-sync` | v4 -> **v5 (deployed 2026-09-25 13:20:14 UTC)** | all-day runs by default (`buildEvents`, `eastIcsEvents` merged runs, `endsOnOrAfter` + a `RUN_LOOKBACK_DAYS = 14` read so a run straddling today-60 that started at most 14 days before it keeps its start day; the description dates a run of 7+ days); the old per-day format behind `?timed=1` (`buildTimedEvents`, `eastIcsDayEvents`, exactly the old window); X-WR-CALNAME, 200 / 404 / 405 unchanged | observed 13:20-13:21 UTC, no auth header, every variant 200 `text/calendar` `BEGIN:VCALENDAR` (tool: before / after bodies kept outside the repo): events before (v4) -> after (v5), all of them all-day after: group 216 -> 82; `?surgeon=FAK` 28 -> 14; `MAB` 43 -> 35; `BDA` 48 -> 35; `AFP` 46 -> 26; `NF` 45 -> 16; `SRK` 6 -> 6; `?surgeon=FAK&east=1` 55 (27 all-day) -> 31 - the lane's predictions exactly. `?timed=1` on all eight equals the v4 body fetched just before the deploy, byte for byte with the per-request DTSTAMP lines ignored (216 / 28 / 43 / 48 / 46 / 45 / 6 / 55). `?surgeon=ZZZ` -> 404; POST -> 405. Live v4 downloaded first (byte-identical to the repo's v4 at a1aee16); after the deploy `functions list` reads v5 (13:20:14) and the downloaded copy is byte-identical to this commit's `index.ts` |
 
 ### Deploy record - Prompt 19 S3 (give a day: the applied give is mailed to the scheduler too) - deployed 2026-09-25 05:36:23 UTC by the orchestrator
 

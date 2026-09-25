@@ -945,12 +945,12 @@ check("calendar-sync handler: ?timed=1 (1 / true / yes) picks buildTimedEvents +
   assert.deepStrictEqual(endsOnOrAfter(evs, "2026-10-10").map((e) => e.uid), ["silvis-2026-10-09-group@silvis-call", "silvis-2026-10-13-group@silvis-call"], "a run that reaches the window's first day is kept whole (its start and UID unchanged)");
   assert.deepStrictEqual(endsOnOrAfter(evs, "2026-10-11").map((e) => e.uid), ["silvis-2026-10-13-group@silvis-call"], "a run that ended before the window is dropped");
 });
-check("all-day docs: the calendar-sync header documents the all-day default, the run UIDs (silvis-<start>-<role> / silvis-<start>-group, a new start day = a new UID) and ?timed=1; edge-functions/README.md section 3 carries a PENDING calendar-sync v4 -> v5 row and section 5 the all-day + ?timed=1 checks; docs/SILVIS-BUILD-GUIDE.md says the feed is all-day by default, ?timed=1 keeps the old format and the app's download is all-day only", () => {
+check("all-day docs: the calendar-sync header documents the all-day default, the run UIDs (silvis-<start>-<role> / silvis-<start>-group, a new start day = a new UID) and ?timed=1; edge-functions/README.md section 3 carries the deployed calendar-sync v4 -> v5 row and section 5 the all-day + ?timed=1 checks; docs/SILVIS-BUILD-GUIDE.md says the feed is all-day by default, ?timed=1 keeps the old format and the app's download is all-day only", () => {
   const head = csSrc.slice(0, csSrc.indexOf("const SUPABASE_URL"));
   assert.ok(/VALUE=DATE/.test(head) && /silvis-<start>-<role>@silvis-call/.test(head) && /silvis-<start>-group@silvis-call/.test(head) && /timed=1/.test(head), "the header names the format, the UIDs and ?timed=1");
   assert.ok(/new UID/.test(head) && /updates? (it )?in place/.test(head), "the header says what a start-day change does (a new UID) and that an end change updates in place");
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
-  assert.ok(/\| PENDING \| `calendar-sync` \| v4 -> v5 \(pending\)/.test(s3), "section 3: a PENDING calendar-sync v4 -> v5 row");
+  assert.ok(/\| 2026-09-25 13:20:14 \| `calendar-sync` \| v4 -> \*\*v5 \(deployed 2026-09-25 13:20:14 UTC\)\*\*/.test(s3) && !/\| PENDING \| `calendar-sync`/.test(s3), "section 3: the calendar-sync v4 -> v5 row carries its deploy (2026-09-25 13:20:14 UTC), no PENDING row left");
   const s5 = readme.slice(readme.indexOf("### calendar-sync"), readme.indexOf("### office-notifications"));
   assert.ok(/timed=1/.test(s5) && /DTSTART;VALUE=DATE/.test(s5) && /P <name> \. B <name>|P Burchett/.test(s5), "section 5: the all-day default and the ?timed=1 check");
   const guide = read("docs/SILVIS-BUILD-GUIDE.md");
