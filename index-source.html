@@ -5729,7 +5729,7 @@ function CallSchedule() {
                 const dim = !inFilter || (calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup")))); // only-OPEN reads the openSlots Set, never a per-cell rule
                 const isToday = d === todayStr;
                 const bg = hol ? T.holiday : isWk ? T.weekend : T.surface;
-                const bracket = isWk ? { borderTop: "2px solid " + T.navyMuted, borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
+                const bracket = isWk ? { borderTop: "2px solid " + (isToday ? T.accent : T.navyMuted), borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
                 const derivedWho = derived ? Object.keys(derived).map(r => nameOf(derived[r]) + " Silvis " + r).join(", ") : "";
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
                 const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];

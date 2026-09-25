@@ -923,6 +923,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   // Item A (Faraz 9/23): the calendar week starts on Sunday, like the Davenport app - a per-device setting
   // ('silvis-week-start', 'sun' default / 'mon') read by the ONE grid builder helpers.monthGridDays and handed to
   // both export grids; monOf() and every week-based rule stay Mon-Sun.
+  // 2026-09-25 (smoke, first Friday after launch): the weekend-unit bracket is spread after the cell's border and set
+  // borderTop navy, so on Fri / Sat / Sun today's cell lost the orange ring's top edge. The bracket keeps the accent for today.
+  check("today ring: on a weekend-unit day the bracket's top border stays the orange accent when the day is today", () => {
+    assert.ok(src.includes('const bracket = isWk ? { borderTop: "2px solid " + (isToday ? T.accent : T.navyMuted),'), "the weekend bracket keeps the accent top border on today");
+    assert.ok(src.indexOf("const isToday = d === todayStr;") >= 0 && src.indexOf("const isToday = d === todayStr;") < src.indexOf("const bracket = isWk ? {"), "isToday is known before the bracket is built");
+  });
   check("Item A pins: weekStartsOn state reads 'silvis-week-start' through normalizeWeekStart (Sunday default) and persists it; gridDays = monthGridDays(calYear, calMonth, weekStartsOn); the header row comes from weekdayLabels with the weekend-unit label on Fri; the Settings control is two buttons (week-start-sun / week-start-mon); the share page and the printable get weekStartsOn; monOf still drives the week rows", () => {
     assert.strictEqual(count('localStorage.getItem("silvis-week-start")'), 1, "one read of the week-start key");
     assert.ok(src.includes('normalizeWeekStart(localStorage.getItem("silvis-week-start"))'), "the stored value is normalised (a missing or garbage value is Sunday)");
@@ -2262,7 +2268,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   check("review: the grid's weekend header / bracket and the unread-notification tint are theme tokens (no off-palette blues #3d6a8c / #a9c4da / #f0f8ff / #c0d8f0)", () => {
     for (const hex of ["#3d6a8c", "#a9c4da", "#f0f8ff", "#c0d8f0"]) assert.strictEqual(count(hex), 0, hex + " remains");
     assert.ok(src.includes('color: wk ? (dk ? T.muted : T.title) : dkSubtext'), "weekend header text is a token (Item A: keyed on the day, not the column)");
-    assert.ok(src.includes('borderTop: "2px solid " + T.navyMuted'), "weekend bracket is T.navyMuted");
+    assert.ok(src.includes('borderTop: "2px solid " + (isToday ? T.accent : T.navyMuted)'), "weekend bracket is T.navyMuted (T.accent on today - the today ring keeps its top edge)");
     assert.ok(src.includes('background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`'), "unread notification uses the accent tint + accent border");
   });
 
