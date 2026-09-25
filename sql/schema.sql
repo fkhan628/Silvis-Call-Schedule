@@ -55,8 +55,14 @@
 -- trade.accept wording (roster names by id); claim_open_slot()'s audit detail gains the same summary key (its feed title). Nothing else in either body changes.
 -- Revision 2026-09-24 n (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql, report-first, NOT yet applied): shift_trade_requests.kind
 -- 'trade' | 'give' (default 'trade'; a give carries no return leg - shift_trade_requests_give_one_way); trade_insert_guard() lets a member
--- insert a 'give' with no return shift and refuses a member 'trade' without one (TRADE_INELIGIBLE, both); trade_update_guard() adds kind
--- to the TRADE_IMMUTABLE leg list. apply_trade() is unchanged (the receiver already applies a one-way row as a party).
+-- insert a 'give' with no return shift and refuses a 'give' with a return leg for every caller (TRADE_INELIGIBLE); trade_update_guard() adds kind
+-- to the TRADE_IMMUTABLE leg list. apply_trade() is unchanged (the receiver already applies a one-way row as a party). The member return-leg
+-- refusal (a member 'trade' without return_day AND return_role) is DEFERRED to the follow-up below - old installed builds send a whole-unit
+-- trade's tail rows without a return leg, so a member's one-way 'trade' is still accepted, as today.
+-- PREPARED FOLLOW-UP, NOT MIRRORED (sql/migrations/2026-09-25-member-trade-return-leg.sql, report-first, NOT applied): trade_insert_guard() with the member return-leg refusal
+-- added back (S1's body); apply only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain. This file
+-- mirrors what the next apply makes live, so its body is NOT below; the commit that records its apply mirrors it and adds Revision 2026-09-25 p here
+-- (test/schema.test.js exempts that one file from the mirror pin, by name, while this line reads NOT MIRRORED).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -279,7 +285,8 @@ create table if not exists public.shift_trade_requests (
 create index if not exists trade_status_idx on public.shift_trade_requests(status, submitted_at desc);
 create index if not exists trade_day_idx    on public.shift_trade_requests(day);
 -- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): what the row is. 'trade' = day for day (a member's
--- trade carries its return shift - trade_insert_guard; the scheduler may still record a one-way 'trade', as before); 'give' = a
+-- trade carries its return shift - enforced by trade_insert_guard only once the prepared follow-up
+-- sql/migrations/2026-09-25-member-trade-return-leg.sql is applied; the scheduler may still record a one-way 'trade', as before); 'give' = a
 -- member offers one of his days (or each day of a unit, one row per day) to a named colleague and nothing comes back - never a
 -- return leg, for any caller (the check below; trade_insert_guard raises the readable sentence first). Existing rows read 'trade'.
 -- A give is accepted / declined / cancelled / applied exactly like a trade (apply_trade: a party or the scheduler; return_day null
@@ -349,9 +356,10 @@ create trigger trade_update_guard_trg
 -- (call_schedule_data 'main' -> roster[] -> name by id) for EVERY insert, after the id normalisation, instead of storing
 -- the client's strings; an unknown id or a missing roster reads as the id (display data, never a refusal).
 -- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): a member (neither scheduler nor server) may insert
--- a 'give' - one of his days to a named colleague, NO return day and NO return role - and a member 'trade' must carry both
--- (TRADE_INELIGIBLE: a trade needs a return shift ...); a 'give' with a return leg is refused for every caller (TRADE_INELIGIBLE:
--- a give is one-way ...). The scheduler / server may still insert a one-way 'trade' (unchanged) and may insert a 'give' - it
+-- a 'give' - one of his days to a named colleague, NO return day and NO return role; a 'give' with a return leg is refused for
+-- every caller (TRADE_INELIGIBLE: a give is one-way ...). A member 'trade' without a return leg is still accepted (as before):
+-- that refusal is the prepared follow-up sql/migrations/2026-09-25-member-trade-return-leg.sql, NOT mirrored here until it is
+-- applied (old installed builds send unit-tail rows without a return leg). The scheduler / server may still insert a one-way 'trade' (unchanged) and may insert a 'give' - it
 -- means the same one-way move, labelled as a give. from := me, the same-surgeon refusal and the roster names are unchanged: a
 -- member's give on a day he does not hold lands from HIM and apply_trade refuses it later (TRADE_STALE).
 create or replace function public.trade_insert_guard() returns trigger
@@ -369,11 +377,6 @@ begin
     new.status          := 'pending';
     new.submitted_at    := now();
     new.decided_at      := null;
-    -- (2026-09-24, Prompt 19) a member's 'trade' carries its return shift (return_day AND return_role); a one-way row from a
-    -- member is a 'give'. kind null reads as a trade here (the not-null constraint refuses it after the trigger anyway).
-    if new.kind is distinct from 'give' and (new.return_day is null or new.return_role is null) then
-      raise exception 'TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead' using errcode = 'P0001';
-    end if;
   end if;
   -- (2026-09-24, Prompt 19) a give is one-way for EVERY caller, the scheduler and the server-side roles included
   if new.kind = 'give' and (new.return_day is not null or new.return_role is not null) then

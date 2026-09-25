@@ -123,15 +123,17 @@ if linked; then
     expect_eq         F2 "actor=Probe Scheduler summary=Trade applied: Burchett takes Primary Fri Mar 15 (from Acton, one-way)" "apply_trade's audit row takes the caller's display_name and carries the one-way summary"
     # 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): shift_trade_requests.kind 'trade' | 'give'. Before the migration
     # GIVE_SETUP and every case naming kind read 'ERR column  kind  ... does not exist', P2 / T read TRADE_NOT_FOUND, T2 actor=null summary=null
-    # and Q status=pending return=null, Q3 status=pending return=2030-03-04 return_role=null and S3 rows=0 status=null (the probe header lists them);
-    # U is the same before and after.
+    # and S3 rows=0 status=null (the probe header lists them); U, Q and Q3 are the same before and after. Q / Q3 (a member 'trade' with no or half
+    # a return leg) stay STORED: the member return-leg refusal was split out into the prepared follow-up
+    # sql/migrations/2026-09-25-member-trade-return-leg.sql (old installed builds send unit-tail rows without a return leg); its record step
+    # switches these two lines to the refused sentence - grading them refused before that apply would fail against the live DB.
     expect_eq         GIVE_SETUP "ok"                          "the give fixtures insert (the kind column exists)"
     expect_eq         O "status=pending from=s2 kind=give return=null" "a member gives his own day with no return leg (kind 'give')"
     expect_eq         P "status=pending from=s2 kind=give"       "a member's give naming someone else's day lands FROM HIM (from forced, never refused at insert)"
     expect_eq         P2 "ERR TRADE_STALE: 2030-03-03 primary is no longer held by s2" "apply_trade refuses a give of a day the giver does not hold"
-    expect_eq         Q "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead" "a member 'trade' without a return leg is refused (added in Prompt 19)"
+    expect_eq         Q "status=pending return=null"             "a member 'trade' without a return leg is still stored (the refusal is the prepared follow-up's)"
     expect_eq         Q2 "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift" "a member 'give' with a return leg is refused"
-    expect_eq         Q3 "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead" "a member 'trade' with a half leg (return day, no return role) is refused"
+    expect_eq         Q3 "status=pending return=2030-03-04 return_role=null" "a member 'trade' with a half leg (return day, no return role) is still stored (the refusal is the prepared follow-up's)"
     expect_eq         Q4 "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift" "a member 'give' carrying only a return role is refused"
     expect_eq         R "ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade" "a member may not change kind on his own pending row"
     expect_eq         S "rows=0 kind=trade"                      "a member may not change kind on a row he is no party to (RLS filters it: 0 rows)"
@@ -174,7 +176,8 @@ case "$line" in "HTTP 200") ok "PostgREST knows shift_trade_requests.kind (anon 
 echo "== 6. trade guards over REST (JWT-gated; SILVIS_SURGEON_JWT = a surgeon-role user's access token) =="
 if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
   # 6a. insert with status 'accepted' as a surgeon -> lands as 'pending' (from_surgeon_id = the caller). It carries a return
-  #     leg: since Prompt 19 (sql/migrations/2026-09-24-give-kind.sql) a member 'trade' without one is refused (TRADE_INELIGIBLE).
+  #     leg: once the Prompt 19 follow-up (sql/migrations/2026-09-25-member-trade-return-leg.sql) is applied, a member 'trade'
+  #     without one is refused (TRADE_INELIGIBLE); with one, 6a passes before and after it.
   line=$(curl -s -o $T/vr6a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/shift_trade_requests" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"from_surgeon_id":"s9x","to_surgeon_id":"s9test","day":"2030-03-20","role":"primary","return_day":"2030-03-22","return_role":"backup","status":"accepted","detail":"verify-rls.sh 6a probe"}')
   st=$(grep -oE '"status":"[a-z]+"' $T/vr6a.json | head -1)
   echo "   $line  $st  body: $(head -c 200 $T/vr6a.json)"

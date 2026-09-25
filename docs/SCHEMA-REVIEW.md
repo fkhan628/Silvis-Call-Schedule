@@ -19,7 +19,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
-| `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; a member trade needs a return leg) - Prompt 19, prepared, not yet applied. |
+| `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, prepared) - Prompt 19, prepared, not yet applied. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. |
 | `audit_log` | Who did what; insert by any authenticated user, read by scheduler/admin. Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the two SQL functions' rows do so since the item 5b migration (applied 2026-09-24; the two earlier `trade.apply` rows backfilled - section at the end); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
@@ -903,6 +903,19 @@ ordering: the file declares `-- supersedes: sql/migrations/2026-09-24-definer-lo
 mirrors `sql/schema.sql` from this file (header revision n, "report-first, NOT yet applied" until the record step).
 `apply_trade` is NOT redefined.
 
+**Split (2026-09-24, S1 review - major; Faraz offline, the orchestrator took option (b) of the decision below).** As first
+prepared (S1, `f9ad08f`) this file also refused a member `'trade'` without a return leg. That refusal breaks
+**old installed builds** during the rollout: the build before Prompt 19's client step saves a member's whole-unit trade for one return day as a
+head row WITH the return leg plus tail rows WITHOUT one, so after the apply the tails would be refused, leaving a half-saved unit
+proposal whose head row, if accepted, applies as a **unit split** - and an installed PWA keeps its old build until its user
+reloads. What ships now (this file): the `kind` column, both checks, the give-one-way refusal for every caller and kind
+immutability - nothing an old build sends is refused (it never sends `kind`; the default `'trade'` applies and its tails land as
+today). What waits: the member return-leg refusal, re-created byte-for-byte as S1 wrote it in the PREPARED follow-up
+`sql/migrations/2026-09-25-member-trade-return-leg.sql` (its own section below), applied only after the `client_versions`
+`min_version` bump to the Prompt 19 build (step 7 below) and a day for old builds to drain. The Prompt 19 client already sends a
+member's unit tails as kind `'give'` and never inserts a member trade without a return leg, so nothing in the new app depends on
+the deferred refusal. `sql/schema.sql` mirrors this file (what the next apply makes live), not the follow-up.
+
 **Before / after.**
 
 Table, before: no `kind`; a row is a trade with an optional return leg. After (additive; existing rows read `'trade'`):
@@ -915,13 +928,9 @@ Table, before: no `kind`; a row is a trade with an optional return leg. After (a
 
 `trade_insert_guard`, before (B6, live): a member's row is normalised (from := his roster id, pending, stamped now, undecided), then
 the same-surgeon refusal and the roster names - a member one-way trade (no return leg) was **not** refused by the database, only by
-the client (`A return shift is required ... One-way trades are the scheduler's call`). After - two blocks added, everything else
-byte-for-byte B6's:
+the client (`A return shift is required ... One-way trades are the scheduler's call`). After - one block added, everything else
+byte-for-byte B6's (a member one-way `'trade'` is still accepted by the database; the refusal is the follow-up's):
 
-    -- inside the member branch, right after the normalisation:
-    if new.kind is distinct from 'give' and (new.return_day is null or new.return_role is null) then
-      raise exception 'TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead' using errcode = 'P0001';
-    end if;
     -- after the member branch, for EVERY caller:
     if new.kind = 'give' and (new.return_day is not null or new.return_role is not null) then
       raise exception 'TRADE_INELIGIBLE: a give is one-way - it carries no return shift' using errcode = 'P0001';
@@ -934,11 +943,12 @@ return_role. After - one line added to the list, everything else byte-for-byte:
          or new.kind is distinct from old.kind then
         raise exception 'TRADE_IMMUTABLE: only the scheduler may change the legs of a trade' using errcode = 'P0001';
 
-- **Codes.** Both new insert refusals use the existing `TRADE_INELIGIBLE` code (the client shows TRADE_* sentences verbatim); no
+- **Codes.** The new insert refusal uses the existing `TRADE_INELIGIBLE` code (the client shows TRADE_* sentences verbatim); no
   new code. The kind change is refused with the existing `TRADE_IMMUTABLE`.
-- **The member 'trade' refusal is ADDED** (Faraz: "a 'trade' from a member still needs one"): return_day AND return_role are both
-  required, so a half leg (a day without a role) is refused too. Scheduler / server rows are unchanged: a one-way `'trade'` is
-  still theirs to record (probe U).
+- **The member 'trade' refusal is deferred** (Faraz: "a 'trade' from a member still needs one" - the rule stands, its server
+  half waits): until the follow-up is applied, a member `'trade'` with no or half a return leg is stored exactly as today (probes
+  Q / Q3 read the same before and after this file); only the client refuses it. Scheduler / server rows are unchanged: a one-way
+  `'trade'` is still theirs to record (probe U).
 - **A scheduler-inserted 'give'** is allowed and means the same one-way move as his one-way trade, labelled as a give (probe U3). A
   give with a return leg is refused for every caller - the guard raises the sentence, and `shift_trade_requests_give_one_way`
   holds the invariant for writes that bypass the member rules (a scheduler UPDATE, which `trade_update_guard` lets through).
@@ -952,45 +962,34 @@ return_role. After - one line added to the list, everything else byte-for-byte:
   RECEIVER may apply an accepted one-way row; every return-leg step is guarded by `t.return_day is not null`; the 5b audit summary
   reads "Trade applied: <to> takes <Role> <Dy Mon D> (from <from>, one-way)" (probes T / T2).
 
-**What could break.** (1) **Unit tails - the rollout window.** The live client proposes a whole weekend / holiday unit as one
-row per day; with a single return day (a non-unit day) only row 1 carries it - rows 2..n are one-way `'trade'` rows from a member
-("the rest of the unit is one-way inside the group", `submitTradeRequest`). From the apply on the guard refuses those tail rows,
-and it keeps refusing them until EVERY client runs the Prompt 19 build - not merely until the push: CI builds and Pages
-redeploys, and an installed PWA keeps its old build until its user reloads (the `client_versions` min-version gate is a
-persistent banner; the reload is user-initiated). In that window a stale client's whole-unit proposal with one return day
-inserts row 1 (with the return leg), is refused on row 2, and then - because `submitTradeRequest` returns early only when NO row
-was inserted - still announces the WHOLE unit: the `trade.propose` audit row, the `trade_proposed` notification and the e-mail to
-both parties all read "... would take Primary <Fri>-<Sun> (the <unit>, moved as one); ... in return". The giver sees the
-client's "Couldn't submit the trade (1 of N unit days were submitted - cancel them or ask the scheduler): TRADE_INELIGIBLE: a
-trade needs a return shift - ... or give the day instead" toast (a give option that build does not have). The receiver's
-`acceptTrade` groups only the rows that exist (`tradeGroupOf` matches stamp, parties, role and status; it never counts the N days
-of the stamp), so the lone head row can be accepted, and `apply_trade` (no unit check) moves day 1 plus the return day while the
-rest of the unit stays with the giver - a member path to a **unit split**, which the client otherwise forbids. Matched
-unit-for-unit trades (every row has its return) and single-day trades are unaffected. The Prompt 19 client step must send such
-tails as `kind: 'give'` (`tradeGroupOf` groups by the unit stamp, parties, role and status - not by kind - so the group stays one
-proposal); a client that sends `kind` BEFORE PostgREST knows the column fails every insert (unknown column), which is why
-`verify-rls.sh` section 5c gates the push. Mitigations in the apply order below: the push right after the AFTER probe and 5c,
-the min-version bump with a reload message, and the orphaned-head check. (2) Existing rows: untouched (the guard is INSERT-only;
-every row reads `'trade'`, passes both checks). (3) `verify-rls.sh` 6a posted a member trade without a return leg - it now sends
-one (`return_day 2030-03-22 backup`). (4) Nothing server-side reads `kind` besides the two triggers and the two checks;
-`send-notification` reads only the two party columns; `apply_trade` does not read it. Blast radius, in one sentence: from the
-apply on, a member's new trade row must carry a return leg or be a give - which refuses the unit-tail rows of any client still
-on a pre-Prompt 19 build (until every installed app has reloaded), leaving an announced whole-unit proposal whose lone head row
-can be accepted and applied as a unit split - and a member can no longer change a row's kind; nothing else in the database or
-the app changes.
+**What could break.** (1) **Unit tails - no rollout window in this file.** The live client proposes a whole weekend / holiday
+unit as one row per day; with a single return day (a non-unit day) only row 1 carries it - rows 2..n are one-way `'trade'` rows
+from a member ("the rest of the unit is one-way inside the group", `submitTradeRequest`). This file does not refuse them (the
+member return-leg refusal is the follow-up's), so a stale app's whole-unit proposal saves every row exactly as today and no
+half-saved proposal - and no member path to a **unit split** - can arise from this apply. That window belongs to the follow-up
+(its section below states it and its gate). The Prompt 19 client sends such tails as `kind: 'give'` (`tradeGroupOf` groups by
+the unit stamp, parties, role and status - not by kind - so the group stays one proposal); a client that sends `kind` BEFORE
+PostgREST knows the column fails every insert (unknown column), which is why `verify-rls.sh` section 5c gates the push.
+(2) Existing rows: untouched (the guard is INSERT-only; every row reads `'trade'`, passes both checks). (3) `verify-rls.sh` 6a
+posts a member trade WITH a return leg (`return_day 2030-03-22 backup`), so it passes before and after both files. (4) Nothing
+server-side reads `kind` besides the two triggers and the two checks; `send-notification` reads only the two party columns;
+`apply_trade` does not read it. Blast radius, in one sentence: from the apply on, a new trade row that is a give must carry no
+return leg (a kind no live client sends yet) and a member can no longer change a row's kind; every row an old or new client
+sends today is still accepted, and nothing else in the database or the app changes.
 
-**Decision for Faraz before the apply (open).** (a) Accept the window with the mitigations below (this file as prepared; the
-window is only hit by a member proposing a whole unit with ONE non-unit return day from a stale app). (b) Two phases, no window:
-apply this file without the member return-leg block (the column, both checks, the give-one-way refusal and kind immutability
-are safe for the live client - `kind` defaults to `'trade'`), then apply the `if new.kind is distinct from 'give' and (...)`
-block (probe cases Q / Q3) as a follow-up migration once the min-version bump is in and the heartbeats show no older build -
-this departs from "one migration" and needs a second report. (c) A server-side exemption for unit-tail rows (keyed on the
-`[unit ... day N of M]` detail stamp, N > 1) - no window, but it ties the database to client text. Recommended: (b) if a unit
-split is unacceptable even once; otherwise (a).
+**Decision (taken 2026-09-24: option (b)).** Put to Faraz as: (a) Accept the window with the mitigations (the file as first
+prepared; the window is only hit by a member proposing a whole unit with ONE non-unit return day from a stale app).
+(b) Two phases, no window: apply this file without the member return-leg block (the column, both checks, the give-one-way
+refusal and kind immutability are safe for the live client - `kind` defaults to `'trade'`), then apply the block (probe cases
+Q / Q3) as a follow-up migration once the min-version bump is in and the heartbeats show no older build - a second report.
+(c) A server-side exemption for unit-tail rows (keyed on the `[unit ... day N of M]` detail stamp, N > 1) - no window, but it
+ties the database to client text. Faraz is offline for a few days ("push if it appears things will go well"), so the orchestrator took the safe one,
+(b): this file is phase 1, `sql/migrations/2026-09-25-member-trade-return-leg.sql` is phase 2 (PREPARED, its own section below).
 
 **The probe (`sql/probes/trade-guards-probe.sql`, rolls itself back; `scripts/verify-rls.sh` section 5 grades it).** A / G / H / N
-now insert WITH a return leg (return 2030-03-04 backup) so they keep testing what they tested - their expected strings are
-unchanged. The give fixtures (2030-03-25 / 03-27, trade ids `...030`-`...034`) sit in a block of their own (GIVE_SETUP) so the
+insert WITH a return leg (return 2030-03-04 backup) so they keep testing what they tested once the follow-up lands - their
+expected strings are unchanged. Q / Q3 (a member `'trade'` with no / half a return leg) read the SAME before and after this file
+(stored); their refused value is the follow-up's acceptance case (its section below), never graded live before that apply. The give fixtures (2030-03-25 / 03-27, trade ids `...030`-`...034`) sit in a block of their own (GIVE_SETUP) so the
 BEFORE run still reports every other case. The report flattens quotes and `;` to spaces.
 
 | case | what | BEFORE the migration | AFTER |
@@ -999,9 +998,9 @@ BEFORE run still reports every other case. The report flattens quotes and `;` to
 | `O` | member gives his own day, no return | `ERR column  kind  ... does not exist` | `status=pending from=s2 kind=give return=null` |
 | `P` | member gives a day held by s3, naming s3 as from | `ERR column  kind  ... does not exist` | `status=pending from=s2 kind=give` |
 | `P2` | member applies an accepted give of a day he does not hold | `ERR TRADE_NOT_FOUND` | `ERR TRADE_STALE: 2030-03-03 primary is no longer held by s2` |
-| `Q` | member 'trade' with no return | `status=pending return=null` | `ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead` |
+| `Q` | member 'trade' with no return | `status=pending return=null` | `status=pending return=null` (unchanged - refused only by the follow-up) |
 | `Q2` | member 'give' with a return | `ERR column  kind  ... does not exist` | `ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift` |
-| `Q3` | member 'trade' with a half leg (return day, no return role) | `status=pending return=2030-03-04 return_role=null` | `ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead` |
+| `Q3` | member 'trade' with a half leg (return day, no return role) | `status=pending return=2030-03-04 return_role=null` | `status=pending return=2030-03-04 return_role=null` (unchanged - refused only by the follow-up) |
 | `Q4` | member 'give' carrying only a return role | `ERR column  kind  ... does not exist` | `ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift` |
 | `R` | member changes kind on his own pending give | `ERR column  kind  ... does not exist` | `ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade` |
 | `S` | member changes kind on a row between s3 and s4 | `ERR column  kind  ... does not exist` | `rows=0 kind=trade` |
@@ -1019,8 +1018,8 @@ Pre-check (the one-way rows that stay as they are - the guard is INSERT-only):
 `select count(*) from public.shift_trade_requests where return_day is null and status in ('pending', 'accepted');`
 
 Apply: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-give-kind.sql` (after
-`2026-09-24-trade-audit-names.sql`, applied 2026-09-24 22:21 UTC). Order (the window above runs from step 2 until the last old
-build has reloaded, so the steps between the apply and the push are the gates only):
+`2026-09-24-trade-audit-names.sql`, applied 2026-09-24 22:21 UTC). Order (no rollout window runs from this apply - old builds
+keep working - but the client push still waits for the 5c gate, and step 7 starts the follow-up's drain clock):
 1. trade probe BEFORE (the left column);
 2. the migration, one session (it ends with `notify pgrst, 'reload schema'` so PostgREST sees the column at once);
 3. trade probe AFTER (the right column);
@@ -1030,9 +1029,83 @@ build has reloaded, so the steps between the apply and the push are the gates on
 5. the Prompt 19 client push AT ONCE (it sends `kind`), then wait for the CI build + Pages redeploy;
 6. `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` in full (section 5 green, 5c PASS, leftover 0) - after the push, not before;
 7. `update public.client_versions set min_version = '<the Prompt 19 APP_VERSION>', message = 'Please reload: trades and gives changed' where id = 'main';`
-   so every older app shows the reload banner (Settings > client heartbeats shows who is still behind);
-8. right after step 7 and again once the heartbeats show no older build, the orphaned-head check - a unit-stamped head row whose unit has fewer rows than
-   its stamp says, submitted after the apply (the scheduler cancels a pending / accepted one and repairs an applied one):
+   so every older app shows the reload banner (Settings > client heartbeats shows who is still behind) - the precondition of the
+   follow-up, which waits a further day after this for old builds to drain (the orphaned-head check moved to the follow-up: this
+   file refuses no unit tail, so it cannot leave a lone head row);
+8. the record step, ONE commit: paste the AFTER sentinel and the 5c line at *observed:* below and change this status line to
+   `**Status: APPLIED <timestamp>.**`; change `sql/schema.sql`'s `Revision 2026-09-24 n (... report-first, NOT yet applied)` to
+   `applied <timestamp>`; the guide 4.3 row `report-first, NOT applied` -> `report-first, applied 2026-MM-DD` and its `applied:`
+   placeholder; table (a)'s `shift_trade_requests` row drops "prepared, not yet applied" (-> "applied 2026-MM-DD") - the four
+   pins in `test/schema.test.js` accept both wordings.
+
+Rolling back = re-running the B6 `trade_insert_guard` and the 9/23 `trade_update_guard` bodies (frozen by sha256 in the suite),
+then `alter table public.shift_trade_requests drop constraint shift_trade_requests_give_one_way, drop constraint
+shift_trade_requests_kind_check, drop column kind;` (only after every give row is gone or re-labelled - the column is data).
+
+observed: _to be filled by the orchestrator after the apply_
+
+## 2026-09-25 - member trade return leg (Prompt 19 follow-up; `sql/migrations/2026-09-25-member-trade-return-leg.sql`)
+
+**Status: PREPARED - report-first (not applied); apply only after the Prompt 19 min_version bump and a day for old builds to drain.**
+Phase 2 of the Prompt 19 split (decision (b) in the section above): the member return-leg refusal S1 wrote into
+`2026-09-24-give-kind.sql`, moved out because it breaks **old installed builds** during the rollout. The file re-creates
+`trade_insert_guard` only - byte-for-byte S1's body (`git show f9ad08f:sql/migrations/2026-09-24-give-kind.sql`; `test/schema.test.js`
+pins its sha256, proves it is the give-kind body plus this one block, and that undoing both Prompt 19 blocks gives B6's body) - and
+its trigger; no table, check, policy, grant or row. `sql/schema.sql` does NOT mirror it (it mirrors what the next apply makes live);
+its header carries a `PREPARED FOLLOW-UP, NOT MIRRORED` line instead of a revision line, and the suite exempts this one file from the
+newest-migration mirror pin by name (`PREPARED_NOT_MIRRORED`) while that line and the file's marker say so. Revision
+`2026-09-25 p` is planned, written only by the record step.
+
+**Before / after.** Before (the give-kind guard): a member `'trade'` with no or half a return leg is stored; only the client
+refuses it. After - one block inside the member branch, right after the normalisation, everything else the give-kind body's:
+
+    if new.kind is distinct from 'give' and (new.return_day is null or new.return_role is null) then
+      raise exception 'TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead' using errcode = 'P0001';
+    end if;
+
+An ADDED refusal (Faraz: "a 'trade' from a member still needs one"): return_day AND return_role are both required, so a half leg
+is refused too; a `kind` null reads as a trade (the not-null constraint refuses it after the trigger anyway). Scheduler / server
+rows are unchanged (a one-way `'trade'` is still theirs to record, probe U); a member give with no return leg stays accepted (O).
+
+**Gate - when to apply.** After the give-kind file is applied, the Prompt 19 client is pushed, and `client_versions` row `main`
+carries `min_version` = the Prompt 19 build (give-kind step 7); then wait a day for old builds to drain - Settings > client
+heartbeats must show no build older than the Prompt 19 one for that day. Nothing in the new client depends on this refusal: it
+sends a member's unit tails as kind `'give'` and never inserts a member trade without a return leg.
+
+**What could break.** **Unit tails - the rollout window** (the reason for the gate). The build before Prompt 19's client step
+proposes a whole weekend / holiday unit as one row per day; with a single return day (a non-unit day) only row 1 carries it - rows
+2..n are one-way `'trade'` rows from a member ("the rest of the unit is one-way inside the group", `submitTradeRequest`). From this
+apply on the guard refuses those tail rows, until EVERY client runs the Prompt 19 build - not merely until the push: an installed
+PWA keeps its old build until its user reloads (the min-version gate is a persistent banner; the reload is user-initiated). A
+stale client's whole-unit proposal with one return day then inserts row 1 (with the return leg), is refused on row 2, and -
+because `submitTradeRequest` returns early only when NO row was inserted - still announces the WHOLE unit: the `trade.propose`
+audit row, the `trade_proposed` notification and the e-mail to both parties all read "... would take Primary <Fri>-<Sun> (the
+<unit>, moved as one); ... in return". The giver sees "Couldn't submit the trade (1 of N unit days were submitted - cancel them or
+ask the scheduler): TRADE_INELIGIBLE: a trade needs a return shift - ... or give the day instead" (a give option that build does
+not have). The receiver's `acceptTrade` groups only the rows that exist (`tradeGroupOf` never counts the N days of the stamp), so
+the lone head row can be accepted, and `apply_trade` (no unit check) moves day 1 plus the return day while the rest of the unit
+stays with the giver - a member path to a **unit split**, which the client otherwise forbids. The gate makes that window empty;
+the orphaned-head check below catches a straggler. Matched unit-for-unit trades and single-day trades are unaffected. Blast
+radius, in one sentence: from the apply on, a member's new `'trade'` row must carry a full return leg (a give needs none) - which
+refuses only what a pre-Prompt 19 build sends for a whole unit with one return day; nothing else changes.
+
+**The probe (`sql/probes/trade-guards-probe.sql`, rolls itself back) - this file's acceptance case.** Every other case keeps its
+expectation. `scripts/verify-rls.sh` section 5 grades Q / Q3 as stored until this file's record step (grading them refused before
+the apply would fail against the live DB).
+
+| case | what | BEFORE this file (give-kind live) | AFTER |
+|---|---|---|---|
+| `Q` | member 'trade' with no return | `status=pending return=null` | `ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead` |
+| `Q3` | member 'trade' with a half leg (return day, no return role) | `status=pending return=2030-03-04 return_role=null` | `ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead` |
+
+Apply: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-25-member-trade-return-leg.sql` (after the
+gate). Order:
+1. trade probe BEFORE (Q / Q3 stored);
+2. the migration, one session;
+3. trade probe AFTER (Q / Q3 refused, every other case unchanged);
+4. the orphaned-head check - a unit-stamped head row whose unit has fewer rows than its stamp says, submitted after this apply (a
+   straggler on an old build; the scheduler cancels a pending / accepted one and repairs an applied one) - right after the apply
+   and again a day later:
 
        select t.id, t.day, t.role, t.status, t.from_surgeon_id, t.to_surgeon_id, t.detail
          from public.shift_trade_requests t
@@ -1043,14 +1116,17 @@ build has reloaded, so the steps between the apply and the push are the gates on
                   and substring(x.detail from '\[unit [a-z-]+ [0-9-]+ [0-9]+:') = substring(t.detail from '\[unit [a-z-]+ [0-9-]+ [0-9]+:'))
               < substring(t.detail from ', day 1 of ([0-9]+)\]')::int;
 
-9. the record step, ONE commit: paste the AFTER sentinel and the 5c line at *observed:* below and change this status line to
-   `**Status: APPLIED <timestamp>.**`; change `sql/schema.sql`'s `Revision 2026-09-24 n (... report-first, NOT yet applied)` to
-   `applied <timestamp>`; the guide 4.3 row `report-first, NOT applied` -> `report-first, applied 2026-MM-DD` and its `applied:`
-   placeholder; table (a)'s `shift_trade_requests` row drops "prepared, not yet applied" (-> "applied 2026-MM-DD") - the four
-   pins in `test/schema.test.js` accept both wordings.
+5. the record step, ONE commit: mirror this body into `sql/schema.sql`'s `trade_insert_guard` and replace its `PREPARED
+   FOLLOW-UP, NOT MIRRORED` header line with `Revision 2026-09-25 p (Prompt 19 follow-up, sql/migrations/2026-09-25-member-trade-return-leg.sql,
+   applied <timestamp>)`; drop the file's `PREPARED FOLLOW-UP` marker line; in `test/schema.test.js` empty `PREPARED_NOT_MIRRORED`
+   (and move the marker-line pin with it), flip `GIVE_CASES` Q / Q3, flip **schema.sql's** `checkInsertGuard` call to
+   `needsReturn=true`, compare schema.sql's `trade_insert_guard` with this file (not the give-kind file), undo it with
+   `undoFollowUp` and flip the "schema.sql must NOT carry the member block" pin, and grade the `guardVerdict` cases' shipped
+   column against the give-kind file's body - the give-kind file stays frozen as applied (one block), so its `checkInsertGuard`
+   call **stays** `needsReturn=false` and its undo stays `undoInsert` (optionally freeze its `trade_insert_guard` by sha256 once it
+   is no longer the newest); switch `verify-rls.sh` section 5's Q / Q3 lines to the refused sentence; this status line -> `**Status: APPLIED <timestamp>.**` with the AFTER sentinel
+   at *observed:*; the guide 4.3 Prompt 19 row.
 
-Rolling back = re-running the B6 `trade_insert_guard` and the 9/23 `trade_update_guard` bodies (frozen by sha256 in the suite),
-then `alter table public.shift_trade_requests drop constraint shift_trade_requests_give_one_way, drop constraint
-shift_trade_requests_kind_check, drop column kind;` (only after every give row is gone or re-labelled - the column is data).
+Rolling back = re-running the give-kind `trade_insert_guard` body and trigger (`sql/migrations/2026-09-24-give-kind.sql`).
 
 observed: _to be filled by the orchestrator after the apply_

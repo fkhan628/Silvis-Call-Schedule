@@ -85,8 +85,12 @@
 --        BEFORE: no actor, no summary                    -> F2=actor=null summary=null
 --        AFTER : display_name + the one-way sentence    -> F2=actor=Probe Scheduler summary=Trade applied: Burchett takes Primary Fri Mar 15 (from Acton, one-way)
 -- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql) - shift_trade_requests.kind 'trade' | 'give'.
--- A member 'trade' must now carry a return leg, so the member inserts of A, G, H and N send one (return 2030-03-04 backup) and
--- keep testing what they tested (their expectations are unchanged). The give fixtures (days 2030-03-25 / 03-27, trade ids
+-- A member 'trade' will need a return leg once the prepared follow-up sql/migrations/2026-09-25-member-trade-return-leg.sql is
+-- applied, so the member inserts of A, G, H and N already send one (return 2030-03-04 backup) and keep testing what they tested
+-- before and after both files (their expectations are unchanged). Split 2026-09-24: the member return-leg refusal is NOT in the
+-- give-kind file (old installed builds send unit-tail rows without a return leg), so Q / Q3 read the SAME before and after the
+-- give-kind apply (stored) and verify-rls.sh grades them so; their refused value is the follow-up's acceptance case, listed
+-- below as "AFTER the follow-up" and graded only from that file's record step on. The give fixtures (days 2030-03-25 / 03-27, trade ids
 -- ...030-...034) sit in their own block: before the migration it fails on the missing column and says so (GIVE_SETUP), the
 -- other cases still run. A missing column reads 'ERR column  kind  ... does not exist' (the report flattens the quotes).
 --   GIVE_SETUP the give fixtures (as postgres)
@@ -100,13 +104,13 @@
 --   P2 surgeon (s2) applies an ACCEPTED give from s2 (fixture ...030) of 2030-03-03 primary, which s3 holds
 --        BEFORE: TRADE_NOT_FOUND (no fixture)           AFTER: P2=ERR TRADE_STALE: 2030-03-03 primary is no longer held by s2
 --   Q  surgeon (s2) inserts a 'trade' (kind omitted = the default) with NO return leg
---        BEFORE: stored (only the client refused it)    -> Q=status=pending return=null
---        AFTER : refused                                -> Q=ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead
+--        BEFORE and AFTER the give-kind apply: stored   -> Q=status=pending return=null   (only the client refuses it)
+--        AFTER the follow-up (2026-09-25-member-trade-return-leg.sql): refused -> Q=ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead
 --   Q2 surgeon (s2) inserts a 'give' WITH a return leg
 --        BEFORE: ERR ... kind ... does not exist        AFTER: Q2=ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift
 --   Q3 surgeon (s2) inserts a 'trade' with a HALF return leg (return day 2030-03-04, no return role) - both are required
---        BEFORE: stored                                 -> Q3=status=pending return=2030-03-04 return_role=null
---        AFTER : refused                                -> Q3=ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead
+--        BEFORE and AFTER the give-kind apply: stored   -> Q3=status=pending return=2030-03-04 return_role=null
+--        AFTER the follow-up (2026-09-25-member-trade-return-leg.sql): refused -> Q3=ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead
 --   Q4 surgeon (s2) inserts a 'give' carrying only a return ROLE (no return day)
 --        BEFORE: ERR ... kind ... does not exist        AFTER: Q4=ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift
 --   R  surgeon (s2) sets kind 'trade' on his OWN pending give (fixture ...031)
