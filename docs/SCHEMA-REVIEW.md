@@ -1047,6 +1047,7 @@ observed: applied 2026-09-25 05:34:26 UTC (`supabase db query --linked -f sql/mi
 ## 2026-09-25 - member trade return leg (Prompt 19 follow-up; `sql/migrations/2026-09-25-member-trade-return-leg.sql`)
 
 **Status: PREPARED - report-first (not applied); apply only after the Prompt 19 min_version bump and a day for old builds to drain.**
+*Rollout (Faraz 9/25): ONE gate for this file and the followers file (revision o) - push the client, raise `client_versions.min_version` to that build, wait 24 h and require every heartbeat of the last 24 h to be on it or newer, then apply both with their probes. The gate (a scheduled task following a runbook outside the repo) grades the AFTER picture with `SILVIS_RETURN_LEG_APPLIED=1 bash scripts/verify-rls.sh` (section 5 then wants Q / Q3 refused; the default run keeps grading them STORED). The record step below makes REFUSED the default and drops that variable.*
 Phase 2 of the Prompt 19 split (decision (b) in the section above): the member return-leg refusal S1 wrote into
 `2026-09-24-give-kind.sql`, moved out because it breaks **old installed builds** during the rollout. The file re-creates
 `trade_insert_guard` only - byte-for-byte S1's body (`git show f9ad08f:sql/migrations/2026-09-24-give-kind.sql`; `test/schema.test.js`

@@ -1870,7 +1870,24 @@ const FU_Q = "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day 
   ok(fuHdr.includes(k + "=" + FU_Q), "the follow-up header must state its acceptance case " + k + "=" + FU_Q);
   ok(probeHdr.includes("AFTER the follow-up (" + RETURN_LEG_FILE + "): refused -> " + k + "=" + FU_Q), "the trade probe header must state " + k + "'s value after the follow-up (`AFTER the follow-up (" + RETURN_LEG_FILE + "): refused -> " + k + "=...`)");
 });
-ok(!/expect_eq\s+Q3?\s+"ERR TRADE_INELIGIBLE: a trade needs a return shift/.test(vr), "verify-rls.sh must NOT grade Q / Q3 as refused before the follow-up is applied (the live DB accepts them today - the record step of the follow-up flips them)");
+// 24-hour gate (Faraz 9/25): the REFUSED grading of Q / Q3 exists only behind SILVIS_RETURN_LEG_APPLIED=1 (the gate's run right after
+// the return-leg apply); by default Q / Q3 are graded STORED until the follow-up's record step (which makes REFUSED the default).
+{
+  const rlIf = vr.indexOf('if [ "${SILVIS_RETURN_LEG_APPLIED:-}" = "1" ]; then');
+  const rlElse = rlIf < 0 ? -1 : vr.indexOf("\n    else\n", rlIf);
+  const rlFi = rlElse < 0 ? -1 : vr.indexOf("\n    fi\n", rlElse);
+  ok(rlIf > 0 && rlElse > rlIf && rlFi > rlElse, "verify-rls.sh section 5 needs the SILVIS_RETURN_LEG_APPLIED if / else / fi around Q / Q3");
+  const outside = vr.slice(0, rlIf) + vr.slice(rlElse);
+  ok(!/expect_eq\s+Q3?\s+"ERR TRADE_INELIGIBLE: a trade needs a return shift/.test(outside), "verify-rls.sh must NOT grade Q / Q3 as refused by default before the follow-up is applied (the live DB accepts them today - the record step of the follow-up flips them)");
+  const flagged = vr.slice(rlIf, rlElse), dflt = vr.slice(rlElse, rlFi);
+  const REFUSED_RL = "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead";
+  ["Q", "Q3"].forEach((k) => {
+    ok(flagged.includes("expect_eq       " + k + " \"" + REFUSED_RL + "\""), "under SILVIS_RETURN_LEG_APPLIED=1 section 5 must grade " + k + " refused with the migration's exact sentence");
+    ok(read(path.join(ROOT, "sql", "migrations", "2026-09-25-member-trade-return-leg.sql")).includes(REFUSED_RL.replace("ERR ", "")), "the flagged sentence must be the return-leg migration's own");
+  });
+  ok(/expect_eq\s+Q\s+"status=pending return=null"/.test(dflt) && /expect_eq\s+Q3\s+"status=pending return=2030-03-04 return_role=null"/.test(dflt), "by default section 5 grades Q / Q3 STORED");
+  ok(/SILVIS_RETURN_LEG_APPLIED/.test(vr.slice(0, vr.indexOf('echo "== 1.'))), "the file header documents SILVIS_RETURN_LEG_APPLIED");
+}
 step("Prompt 19 follow-up: docs/SCHEMA-REVIEW.md carries its own PREPARED section (why, the block, the window, the gate, Q / Q3, apply order with the orphaned-head check, observed placeholder); the guide row names it");
 ok(/## 2026-09-25 - member trade return leg \(Prompt 19 follow-up; `sql\/migrations\/2026-09-25-member-trade-return-leg\.sql`\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-25 - member trade return leg (Prompt 19 follow-up; `sql/migrations/2026-09-25-member-trade-return-leg.sql`)' section");
 const reviewFu = (() => { const at = review.indexOf("## 2026-09-25 - member trade return leg"), end = review.indexOf("\n## ", at + 1); return review.slice(at, end < 0 ? review.length : end); })();
