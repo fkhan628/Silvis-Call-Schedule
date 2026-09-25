@@ -191,6 +191,16 @@ below, for `send-notification` alone).
 |---|---|---|---|---|
 | 2026-09-25 05:36:23 | `send-notification` | v6 -> v7 (deployed 2026-09-25 05:36:23 UTC; live v6 backed up first, byte-identical to the repo's v6; observed 05:36 UTC: no session -> 401, an invalid token -> 401) | `trade_applied` only: scheduler-linked ids may ride beside the row's two parties (`tradeExtraIds` -> `tradePartyCheck`'s third argument), consulted only when the targets name an id beyond the two parties (`tradeNamesOthers` - an admin / scheduler caller reads the list there, so a v6-shaped send never depends on that read); a surgeon sender must be one of the row's parties (`tradePartyCheck`'s fourth argument, 403 `the sender must be a party to the trade`) and may name at most the two parties besides the schedulers; every v6 refusal is kept. Prompt 19 S4 (same pending v7): a give's mail carries `data.kind` `give` and its frame heading (and default subject) reads `Day Offered` / `Give Accepted` / `Give Declined` / `Give Applied` instead of `Shift Trade ...` (`frameTitle`, the `@giveFrame` block; cosmetic - the gate never reads kind, v6 ignores the key) | to observe after the deploy (section 5, Prompt 19 lines): `trade_applied` naming a real row's two parties plus a NON-scheduler surgeon -> 403 `targetIds may add only scheduler-linked ids to the trade's two parties`; `trade_applied` naming one party plus the scheduler -> 403 `targetIds must include both of the trade's parties`; `trade_proposed` naming the two parties plus the scheduler -> 403 `targetIds must be exactly the trade's two parties` (unchanged); anon -> 401 as before. The allow path (the two parties + the scheduler) sends real mail - it is observed on the first accepted give: the function log line `type=trade_applied targets=<from>,<to>,<scheduler id>` and `sent` = the opted-in recipients; the S4 heading is seen on that same first give mail (a `Give Applied` frame, not `Shift Trade Applied`) |
 
+### Deploy record - calendar-sync without the day note (Faraz 2026-09-25) - deployed 2026-09-25 11:37:21 UTC by the orchestrator
+
+Event descriptions carry Primary / Backup / Shift only: the day's internal note (e.g. `seed: office-er-call-panels-...`,
+`open (9/22)`) is no longer read or written (the app's own .ics download drops it the same way). Live v3 downloaded first
+(byte-identical to the repo's v3), then deployed with `--no-verify-jwt`.
+
+| when (UTC) | slug | version before -> after | what changed | proof |
+|---|---|---|---|---|
+| 2026-09-25 11:37:21 | `calendar-sync` | v3 -> v4 (deployed 2026-09-25 11:37:21 UTC) | `buildEvents` no longer appends `Note: <note>`; the schedule_days read no longer selects `note` | observed 11:38 UTC, unauthenticated GET: group feed 200 / `BEGIN:VCALENDAR` / 216 events, `?surgeon=FAK` 200 / 28 events (as before), `?surgeon=FAK&east=1` 200 / 55 events, `?surgeon=MAB` 200 / 43 events - 0 note lines in all four (12 in the `?surgeon=FAK` feed before the deploy) |
+
 ### Deploy record - Item D (Khan's combined calendar + the digest's Davenport line, 2026-09-24) - filled 2026-09-24 07:55 UTC by the orchestrator (deployed after the client build 2026.09.24e was served)
 
 Two functions change; `send-notification` and `daily-reminder` are untouched and are NOT redeployed. No schema, no RLS,
