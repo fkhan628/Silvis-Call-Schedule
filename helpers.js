@@ -1317,7 +1317,7 @@ function buildICSEvents(schedule, surgeonId, roster, range) {
       if (only && id !== only) return;
       const summary = only ? `Silvis ${ICS_ROLE_LABEL[role]} Call` : `Silvis ${ICS_ROLE_LABEL[role]} Call - ${nameOf(id)}`;
       const descLines = [`Primary: ${primaryLabel}`, `Backup: ${backupLabel}`, "Shift: 07:00 to 07:00 next day (Central)"];
-      if (a.note) descLines.push(`Note: ${a.note}`);
+      // the day's internal note never reaches a calendar (Faraz 9/25) - the calendar-sync feed drops it the same way
       events.push({
         uid: `silvis-${day}-${role}@${ICS_UID_DOMAIN}`, day, role, surgeonId: id, tzid: ICS_TZID,
         start: day.replace(/-/g, "") + ICS_SHIFT_START, end: next.replace(/-/g, "") + ICS_SHIFT_START,

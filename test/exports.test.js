@@ -122,10 +122,12 @@ check("ICS emits nothing for a null slot or an externalCover: 11/6 has no event,
   assert.strictEqual(nov10[0].desc.split("\n")[1], "Backup: OPEN");
   assert.deepStrictEqual(H.buildICSEvents({ "2026-11-03": day(null, null, { externalCover: "Atwell" }) }, null, roster, {}), []);
 });
-check("ICS DESCRIPTION: 'Primary: <name>' / 'Backup: <name>' / shift line + 'Note: ...' when a note exists; RFC 5545 escaping and 75-octet folding; CRLF", () => {
+check("ICS DESCRIPTION: 'Primary: <name>' / 'Backup: <name>' / shift line only - the day's internal note never reaches a calendar (Faraz 9/25); RFC 5545 escaping and 75-octet folding; CRLF", () => {
   const nov1 = all.find(x => x.day === "2026-11-01" && x.role === "primary");
-  assert.strictEqual(nov1.desc, "Primary: Khan\nBackup: Burchett\nShift: 07:00 to 07:00 next day (Central)\nNote: Bring, the; pager");
-  assert.ok(allIcs.includes("Note: Bring\\, the\\; pager"), "comma/semicolon not escaped");
+  assert.strictEqual(nov1.desc, "Primary: Khan\nBackup: Burchett\nShift: 07:00 to 07:00 next day (Central)", "the fixture day carries a note - it must not be in the description");
+  assert.ok(!/Note:|Bring/.test(allIcs), "no note text in the .ics download");
+  const escIcs = H.generateICS(H.buildICSEvents({ "2026-11-05": day(null, "s1", { externalCover: "Lee, locum; a\\b" }) }, null, roster, {}), "Silvis Call - All");
+  assert.ok(escIcs.includes("Primary: Lee\\, locum\\; a\\\\b (external cover)"), "comma / semicolon / backslash not escaped: " + escIcs.split("\r\n").filter(l => /Lee/.test(l)).join(" | "));
   assert.ok(allIcs.includes("Primary: Khan\\nBackup: Burchett"), "newline not escaped as \\n");
   const unfolded = allIcs.split("\r\n");
   unfolded.forEach(l => assert.ok(Buffer.byteLength(l, "utf8") <= 75, "line over 75 octets: " + l));
@@ -663,11 +665,11 @@ check("strict ICS: the download and the calendar-sync feed agree - identical UTC
   assert.ok(ts.includes('const UID_DOMAIN = "silvis-call";') && ts.includes("uid: `silvis-${day}-${role}@${UID_DOMAIN}`"), "feed UID format changed");
   assert.ok(ts.includes("? `Silvis ${ROLE_LABEL[role]} Call`") && ts.includes(": `Silvis ${ROLE_LABEL[role]} Call - ${name}`"), "feed SUMMARY format changed");
   assert.ok(ts.includes('const PRODID = "-//Silvis Call Schedule//EN";'), "feed PRODID changed");
-  assert.ok(ts.includes("`Primary: ${primaryLabel}`") && ts.includes("`Backup: ${backupLabel}`") && ts.includes('"Shift: 07:00 to 07:00 next day (Central)"') && ts.includes("descLines.push(`Note: ${row.note}`)"), "feed DESCRIPTION lines changed");
+  assert.ok(ts.includes("`Primary: ${primaryLabel}`") && ts.includes("`Backup: ${backupLabel}`") && ts.includes('"Shift: 07:00 to 07:00 next day (Central)"') && !ts.includes("Note: "), "feed DESCRIPTION lines changed (Primary / Backup / Shift only, no note - Faraz 9/25)");
   assert.ok(ts.includes("`${row.external_cover} (external cover)`"), "feed external-cover label changed");
   const s = strictGroup.events.find(e => e.uid === "silvis-2026-11-01-primary@silvis-call");
   assert.strictEqual(s.summary, "Silvis Primary Call - Khan");
-  assert.strictEqual(s.desc, "Primary: Khan\\nBackup: Burchett\\nShift: 07:00 to 07:00 next day (Central)\\nNote: Bring\\, the\\; pager\\\\ok");
+  assert.strictEqual(s.desc, "Primary: Khan\\nBackup: Burchett\\nShift: 07:00 to 07:00 next day (Central)", "the download matches the feed: no note line");
   assert.deepStrictEqual([...new Set(strictKhan.events.map(e => e.summary))].sort(), ["Silvis Backup Call", "Silvis Primary Call"]);
   assert.strictEqual(strictGroup.events.find(e => e.uid === "silvis-2026-11-03-backup@silvis-call").desc.split("\\n")[0], "Primary: Atwell (external cover)");
 });
