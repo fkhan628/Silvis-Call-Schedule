@@ -1225,11 +1225,12 @@ check("P20 F3 source pins - send-notification: followers are added AFTER the gat
   assert.ok(/sent, failed, skipped_no_email: skippedNoEmail, skipped_pref_off: skippedPrefOff, results/.test(ret), "the surgeons' accounting is unchanged (the client's toast reads sent / failed)");
   assert.ok(/function buildEmail\(type: string, cat: Category, data: any, recipientName: string, followed: string\[\] = \[\]\)/.test(snSrc), "buildEmail takes the followed names");
   assert.ok(snSrc.includes('${recipientName ? `Hi ${escHtml(recipientName)},` : "Hi,"}'), "review F3: a follower without a display name reads 'Hi,'");
-  // review F3: the follower frame is worded truthfully - the notice was SENT to the surgeon (he may have opted out), and a
-  // follower has no switches in the app, so he asks the scheduler
+  // review F3: the follower frame is worded truthfully - the notice was SENT to the surgeon (he may have opted out); P20 R2:
+  // a follower now has his own switches (Settings > Notification settings, saved by profile_id), so the footer points there
   assert.ok(/this is the notice sent to \$\{escHtml\(followed\.map\(\(n\) => "Dr\. " \+ n\)\.join\(" and "\)\)\}/.test(snSrc), "'the notice sent to Dr. X'");
   assert.ok(!/notice \$\{escHtml\(followed\.join\(" and "\)\)\} received/.test(snSrc), "never 'the notice X received'");
-  assert.ok(/followed\.length\s*\?\s*`You receive this because you follow [^`]*ask the scheduler[^`]*`\s*:\s*`[^`]*under Settings in the app/.test(snSrc), "the follower's footer says to ask the scheduler; the surgeons' footer keeps 'Settings in the app'");
+  assert.ok(/followed\.length\s*\?\s*`You receive this because you follow [^`]*; to change what you receive or stop these e-mails, use Notification settings under Settings in the app\.`\s*:\s*`[^`]*under Settings in the app/.test(snSrc), "P20 R2: the follower's footer points at his own switches (Notification settings under Settings in the app); the surgeons' footer keeps 'Settings in the app'");
+  assert.ok(!/You receive this because you follow [^`]*ask the scheduler/.test(snSrc), "P20 R2: the follower's footer no longer says to ask the scheduler");
   assert.ok(!/never reaches a third person/.test(snSrc) && !/can never be addressed to a third person or broadcast\./.test(snSrc), "review F3: no comment still says trade mail never reaches a third person");
 });
 check("P20 F3 source pins - daily-reminder (reminder mode): after the surgeons' loop it reads the follower accounts (select=*) + every prefs row, plans followerReminderPlan(followers, onCall, now.hour, DEFAULT_REMINDER_HOUR), composes buildFollowerReminder with followerReminderLine, sends only when not dryRun, and answers `followers` { accounts, planned, sent, failed, skipped_wrong_hour, skipped_off, skipped_no_email, results, sample } - counts, tags and a sample line, never an address; a failed follower read is `followers.error`, the surgeons' reminders stand", () => {
@@ -1251,8 +1252,8 @@ check("P20 F3 source pins - daily-reminder (reminder mode): after the surgeons' 
   const fr = drSrc.slice(drSrc.indexOf("function buildFollowerReminder("), drSrc.indexOf("return { subject, html };", drSrc.indexOf("function buildFollowerReminder(")));
   assert.ok(fr.includes("const subject = `Call reminder - tomorrow (${opts.dayLabel}) Dr. ${opts.surgeonName} is Silvis ${opts.role.toUpperCase()}`;"), "review F3: the follower subject");
   assert.ok(fr.includes('${opts.name ? `Hi <strong>${escHtml(opts.name)}</strong>,` : "Hi,"}'), "review F3: the greeting falls back to 'Hi,'");
-  assert.ok(/you receive this because you follow Dr\. \$\{escHtml\(opts\.surgeonName\)\}; to change the reminder hour or stop these reminders, ask the scheduler\./.test(fr), "review F3: the follower footer says to ask the scheduler");
-  assert.ok(!/under Settings in the app/.test(fr), "review F3: a follower has no reminder switches in the app - the frame never points him there");
+  assert.ok(/you receive this because you follow Dr\. \$\{escHtml\(opts\.surgeonName\)\}; to change the reminder hour or stop these reminders, use Notification settings under Settings in the app\./.test(fr), "P20 R2: the follower footer points at his own reminder switch and hour (Notification settings under Settings in the app)");
+  assert.ok(!/ask the scheduler/.test(fr), "P20 R2: the follower frame no longer says to ask the scheduler (he has the switches)");
 });
 check("P20 F3: edge-functions/README.md - section 3 carries the pending Prompt 20 F3 deploy rows (send-notification and daily-reminder, next version, pending) with the proofs to observe; section 5 shows the daily-reminder dryRun `followers` object and the send-notification followers_* keys; the gate table says a follower never sends", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));

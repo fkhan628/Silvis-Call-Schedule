@@ -693,6 +693,16 @@ function CallSchedule() {
   const notifPrefsRef = useRef(notifPrefs);
   useEffect(() => { notifPrefsRef.current = notifPrefs; }, [notifPrefs]);
   const [notifPrefsSaving, setNotifPrefsSaving] = useState(false);
+  // Prompt 20 R2 (Faraz 9/25): a FOLLOWER's own prefs row (notification_preferences keyed by profile_id = his own
+  // user_profiles.id). followerPrefState: "idle" (not a follower) | "loading" | "ok" (read; row null = none yet, every
+  // flag on) | "unavailable" (the profile_id column is missing - revision o not applied: the card says so) | "failed" (the
+  // read failed: the card says so). The switches are enabled - and saveFollowerPref may write - only in "ok".
+  const [followerPref, setFollowerPref] = useState(null);
+  const [followerPrefState, setFollowerPrefState] = useState("idle");
+  const followerPrefRef = useRef(null);
+  const followerPrefStateRef = useRef("idle");
+  const followerSaveTimerRef = useRef(null);
+  const followerPrefsEditable = followerPrefState === "ok";
   const [notifTestSent, setNotifTestSent] = useState("");
   const lastNotifCountRef = useRef(null);
 
@@ -3821,7 +3831,8 @@ function CallSchedule() {
         const rows = await res.json();
         if (!Array.isArray(rows)) throw new Error("unexpected response body");
         const prefs = {};
-        rows.forEach(r => { prefs[r.person_id] = r; });
+        // keyed by roster id; a follower's row (person_id null, keyed by profile_id - Prompt 20 R2) is read on its own path
+        rows.forEach(r => { if (r && r.person_id) prefs[r.person_id] = r; });
         setNotifPrefs(prefs);
         setNotifPrefsLoadFailed(false);
       } catch(e) {
@@ -3832,6 +3843,26 @@ function CallSchedule() {
       }
     })();
   }, [loaded, reloadTrigger, authUser]);
+
+  // --- Load the FOLLOWER's own prefs row (Prompt 20 R2) - by profile_id. Before revision o the column is missing
+  // (PostgREST 400 42703): the card says "available after the next update" and writes nothing. A failed read is said,
+  // never shown as an empty state. A reload while a save is pending keeps the local switches. ---
+  const followerProfileId = isFollowing && userProfile && userProfile.id ? String(userProfile.id) : "";
+  useEffect(() => {
+    if (!loaded || !authUser || !followerProfileId) { followerPrefStateRef.current = "idle"; setFollowerPrefState("idle"); return; }
+    let live = true;
+    const pid = followerProfileId;
+    if (followerPrefStateRef.current !== "ok") { followerPrefStateRef.current = "loading"; setFollowerPrefState("loading"); }
+    (async () => {
+      const r = await notifPrefsDb.loadFollower(pid);
+      if (!live) return;
+      if (r.state === "ok") { if (!followerSaveTimerRef.current) { followerPrefRef.current = r.row; setFollowerPref(r.row); } }
+      else console.warn("Load follower notif prefs:", r.state, r.error || "");
+      followerPrefStateRef.current = r.state;
+      setFollowerPrefState(r.state);
+    })();
+    return () => { live = false; };
+  }, [loaded, reloadTrigger, authUser, followerProfileId]);
 
   // --- Load Office Contacts (scheduler/admin) ---
   useEffect(() => {
@@ -3860,23 +3891,37 @@ function CallSchedule() {
     notifSaveTimerRef.current[personId] = setTimeout(async () => {
       setNotifPrefsSaving(true);
       try {
-        const cur = notifPrefsRef.current[personId] || {};
-        const row = {
-          person_id: personId,
-          schedule_updates_email: cur.schedule_updates_email !== false,
-          trade_updates_email: cur.trade_updates_email !== false,
-          shift_reminders_email: cur.shift_reminders_email !== false,
-          reminder_hour_central: typeof cur.reminder_hour_central === "number" ? cur.reminder_hour_central : null,
-          updated_at: new Date().toISOString(),
-        };
         // on_conflict=person_id (Prompt 20 F1): the table's primary key moves to id in revision o; person_id stays UNIQUE.
-        const { error: prefErr } = await db.upsert("notification_preferences", row, { onConflict: "person_id" });
+        // The body names person_id and never profile_id (config.js notifPrefsDb.save / helpers.notifPrefSaveRequest, P20 R2).
+        const { error: prefErr } = await notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {});
         if (prefErr) throw new Error(`notif pref save failed: ${String(prefErr).slice(0, 200)}`);
         auditRef.current.logAudit("prefs.save", `Saved notification prefs for ${auditRef.current.nameOf(personId)}`, { person_id: personId });
       } catch(e) { console.warn("Save notif pref error:", e); showToast("Couldn't save notification settings - check your connection and try again.", "error"); }
       setNotifPrefsSaving(false);
     }, 500);
   }, []);
+
+  // --- Save the FOLLOWER's own prefs (Prompt 20 R2) - the same 500 ms debounce, by profile_id (POST
+  // ?on_conflict=profile_id, no person_id key; prefs_own lets him write his own row only). Never a write unless his row
+  // was read ("ok"): not before revision o, not over an unknown row. No audit entry for either follower role: audit_insert
+  // refuses a viewer, and a coordinator (whom it would accept) is not audited either, so there is one follower path. ---
+  const saveFollowerPref = (updates) => {
+    const pid = followerProfileId;
+    if (followerPrefStateRef.current !== "ok" || !pid) return;
+    const merged = { ...(followerPrefRef.current || {}), ...updates };
+    followerPrefRef.current = merged;
+    setFollowerPref(merged);
+    if (followerSaveTimerRef.current) clearTimeout(followerSaveTimerRef.current);
+    followerSaveTimerRef.current = setTimeout(async () => {
+      followerSaveTimerRef.current = null;
+      setNotifPrefsSaving(true);
+      try {
+        const { error } = await notifPrefsDb.save({ profileId: pid }, followerPrefRef.current);
+        if (error) throw new Error(`follower notif pref save failed: ${String(error).slice(0, 200)}`);
+      } catch(e) { console.warn("Save follower notif pref error:", e); showToast("Couldn't save notification settings - check your connection and try again.", "error"); }
+      setNotifPrefsSaving(false);
+    }, 500);
+  };
 
   // --- Fire browser notifications when polling detects new in-app notifications ---
   useEffect(() => {
@@ -6498,8 +6543,30 @@ function CallSchedule() {
               <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:12}}>
                 <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Email</div>
                 <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Emails go to your sign-in address. Choose which events email you and when the daily reminder arrives (Central time).</p>
-                {notifPrefsLoadFailed && <div data-testid="notif-prefs-load-failed" style={{...css.errBox,marginBottom:8}}>Couldn't load your saved notification settings - the switches below show the DEFAULTS, not what is saved. Reload before changing anything here.</div>}
-                {!mySurgeon ? (isFollowing ? <p data-testid="notif-follower-note" style={muted}>You follow {myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and ")}. E-mails about them go to your sign-in address: trade and shift-taken notices, open shifts, schedule published, and a reminder the day before each of their call days (17:00 Central). These run on the defaults unless the scheduler set them otherwise - to change them or stop them, ask the scheduler.</p> : <p style={muted}>Available once your account is linked to a roster entry.</p>) : (() => {
+                {notifPrefsLoadFailed && mySurgeon && <div data-testid="notif-prefs-load-failed" style={{...css.errBox,marginBottom:8}}>Couldn't load your saved notification settings - the switches below show the DEFAULTS, not what is saved. Reload before changing anything here.</div>}
+                {/* Prompt 20 R2 (Faraz 9/25): a follower's OWN switches - his row by profile_id (saveFollowerPref). Enabled
+                    only after his row was read; before revision o the card says so, a failed read says so. */}
+                {!mySurgeon ? (isFollowing ? (
+                  <div data-testid="notif-follower-prefs" data-state={followerPrefState} style={{display:"flex",flexDirection:"column",gap:6}}>
+                    <p style={{...muted,margin:"0 0 4px",lineHeight:1.5}}>You follow {myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and ")}. These switches are yours: which e-mails about them reach your sign-in address, and when the reminder the day before each of their call days arrives (5:00 PM Central unless you pick an hour).</p>
+                    {followerPrefState === "unavailable" && <div data-testid="notif-follower-unavailable" role="status" style={{...css.errBox,marginBottom:4}}>Follower settings are available after the next update.</div>}
+                    {followerPrefState === "failed" && <div data-testid="notif-follower-load-failed" role="alert" style={{...css.errBox,marginBottom:4}}>Couldn't load your saved notification settings - reload before changing anything here.</div>}
+                    {followerPrefState === "loading" && <span style={{fontSize:11,color:T.muted}}>Loading your saved settings...</span>}
+                    {[["schedule_updates_email","Schedule published, open shifts, shifts taken"],["trade_updates_email","Trade proposed / accepted / declined"],["shift_reminders_email","Reminder the day before their call"]].map(([key, text]) => (
+                      <label key={key} data-testid="notif-pref" data-key={key} style={{display:"flex",alignItems:"center",gap:8,cursor:followerPrefsEditable?"pointer":"default",fontSize:12,color:T.text,opacity:followerPrefsEditable?1:0.6}}>
+                        <input type="checkbox" checked={(followerPref || {})[key] !== false} disabled={!followerPrefsEditable} onChange={e=>saveFollowerPref({[key]:e.target.checked})}/> {text}
+                      </label>
+                    ))}
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
+                      <span data-testid="notif-hour-label" style={{fontSize:12,color:T.text,minWidth:160}}>Reminder hour (Central):</span>
+                      <select data-testid="notif-follower-hour" value={typeof (followerPref || {}).reminder_hour_central === "number" ? followerPref.reminder_hour_central : ""} disabled={!followerPrefsEditable} onChange={e=>saveFollowerPref({ reminder_hour_central: e.target.value === "" ? null : parseInt(e.target.value,10) })} style={{...inp,padding:"4px 8px",fontSize:12,width:120}}>
+                        <option value="">default</option>
+                        {Array.from({length:24}, (_,i)=>{ const h12 = i===0?12:i>12?i-12:i; return <option key={i} value={i}>{h12}:00 {i<12?"AM":"PM"}</option>; })}
+                      </select>
+                      {notifPrefsSaving && <span style={{fontSize:10,color:T.success}}>Saving</span>}
+                    </div>
+                  </div>
+                ) : <p style={muted}>Available once your account is linked to a roster entry.</p>) : (() => {
                   const myPref = notifPrefs[mySurgeon] || {};
                   return (
                     <div style={{display:"flex",flexDirection:"column",gap:6}}>

@@ -111,8 +111,8 @@
 //     HIS OWN notification_preferences row (keyed by profile_id - the surgeons' rows stay keyed by person_id; a
 //     missing row means every flag on). The cap, sendGate and tradePartyCheck judge targetIds alone: a follower never
 //     counts as the acting party, never satisfies the party check, and a follower CALLER is still a 403 (viewer /
-//     coordinator never send). The frame says he follows Dr. X and that, to change what he receives, he asks the
-//     scheduler (he has no switches in the app). The response carries the follower counts; the per-follower list
+//     coordinator never send). The frame says he follows Dr. X and points him at his OWN switches (Settings >
+//     Notification settings - his row by profile_id, Prompt 20 R2). The response carries the follower counts; the per-follower list
 //     (followerTag id8 + followed ids, never an address) only to an admin / scheduler caller. The surgeons' sent /
 //     failed accounting (what the client's toast reads) is unchanged. The pure pieces are the @followers mirror block
 //     (identical in daily-reminder).
@@ -591,7 +591,7 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
         </a>
         <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e4ea;font-size:12px;color:#8a94a0;">
           <a href="${APP_URL}" style="color:#1a6fa8;">Open ${escHtml(APP_NAME)}</a> -
-          ${followed.length ? `You receive this because you follow ${escHtml(followed.map((n) => "Dr. " + n).join(" and "))}; to change what you receive or stop these e-mails, ask the scheduler.` : `change your notification settings under Settings in the app.`}
+          ${followed.length ? `You receive this because you follow ${escHtml(followed.map((n) => "Dr. " + n).join(" and "))}; to change what you receive or stop these e-mails, use Notification settings under Settings in the app.` : `change your notification settings under Settings in the app.`}
         </div>
       </div>
     </div>`;

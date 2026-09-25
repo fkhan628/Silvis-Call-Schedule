@@ -686,15 +686,20 @@ echo "== 12. followers (Prompt 20 F1): user_profiles.follows (admin-set) + notif
 # id 'probe-follow' / admin), acts as each of them, ends with RAISE 'PROBE_RESULTS ...;END' so everything rolls back.
 # Expectations are the AFTER-migration picture; BEFORE it the first block raises PROBE_SETUP carrying the prefs row count
 # (this section prints it - pass it back as SILVIS_PREFS_ROWS_BEFORE=<n> after the apply and R1 is compared with it).
-# 12a. client pin (read from the source)
-if grep -qF 'db.upsert("notification_preferences", row, { onConflict: "person_id" })' index-source.html && grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' config.js; then ok "client: the prefs upsert names on_conflict=person_id (valid before and after the key move)"; else bad "client: the prefs upsert does not name on_conflict=person_id - after the migration PostgREST would merge on the new id key and 409 every existing surgeon's save"; fi
-# 12a'. the LIVE client (two anon GETs of the Pages build - read-only; review 9/24): the source pin above says nothing about
-# what the surgeons' browsers run. The migration may be applied only once the served config.js sends ?on_conflict= and the
-# served index.html names onConflict: "person_id" (the push merged, CI built, Pages redeployed). Red before the push - expected.
+# 12a. client pin (read from the source). Since P20 R2 the one prefs upsert is config.js notifPrefsDb.save (db.upsert with the
+# request's own onConflict), the row is helpers.js notifPrefSaveRequest's (a surgeon's -> on_conflict=person_id), and Settings
+# saves a surgeon through notifPrefsDb.save({ personId }. test/schema.test.js checks every string below exists in its file.
+if grep -qF 'notifPrefsDb.save({ personId }' index-source.html && grep -qF 'db.upsert("notification_preferences", req.row, { onConflict: req.onConflict })' config.js && grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' config.js && grep -qF '? { onConflict: "person_id", row: { person_id: personId' helpers.js; then ok "client: the prefs upsert names on_conflict=person_id (valid before and after the key move)"; else bad "client: the prefs upsert does not name on_conflict=person_id - after the migration PostgREST would merge on the new id key and 409 every existing surgeon's save"; fi
+# 12a'. the LIVE client (three anon GETs of the Pages build - read-only; review 9/24, helpers.js added P20 R2): the source pin
+# above says nothing about what the surgeons' browsers run. The migration may be applied only once the served config.js sends
+# ?on_conflict= through notifPrefsDb.save, the served helpers.js builds a surgeon's row with on_conflict=person_id and the
+# served index.html saves a surgeon through notifPrefsDb.save({ personId } (babel splits that call over lines, hence tr -d)
+# (the push merged, CI built, Pages redeployed). Red before the push - expected.
 PAGES="https://fkhan628.github.io/Silvis-Call-Schedule"
 c12a=$(curl -s -o "$T/vr12-config.js" -w '%{http_code}' "$PAGES/config.js?vr=$$")
 c12b=$(curl -s -o "$T/vr12-index.html" -w '%{http_code}' "$PAGES/index.html?vr=$$")
-if [ "$c12a" = "200" ] && [ "$c12b" = "200" ] && grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' "$T/vr12-config.js" && grep -qF 'onConflict: "person_id"' "$T/vr12-index.html"; then ok "live client: the served build sends the prefs upsert with on_conflict=person_id (config.js + index.html from $PAGES)"; else bad "live client: the served build (config.js HTTP $c12a, index.html HTTP $c12b) does not carry the on_conflict=person_id prefs upsert - do NOT apply sql/migrations/2026-09-24-followers.sql until Pages serves it (the CDN can lag a few minutes after the deploy)"; fi
+c12c=$(curl -s -o "$T/vr12-helpers.js" -w '%{http_code}' "$PAGES/helpers.js?vr=$$")
+if [ "$c12a" = "200" ] && [ "$c12b" = "200" ] && [ "$c12c" = "200" ] && grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' "$T/vr12-config.js" && grep -qF 'db.upsert("notification_preferences", req.row, { onConflict: req.onConflict })' "$T/vr12-config.js" && grep -qF '? { onConflict: "person_id", row: { person_id: personId' "$T/vr12-helpers.js" && tr -d ' \r\n' < "$T/vr12-index.html" | grep -qF 'notifPrefsDb.save({personId}'; then ok "live client: the served build sends the prefs upsert with on_conflict=person_id (config.js + helpers.js + index.html from $PAGES)"; else bad "live client: the served build (config.js HTTP $c12a, index.html HTTP $c12b, helpers.js HTTP $c12c) does not carry the on_conflict=person_id prefs upsert - do NOT apply sql/migrations/2026-09-24-followers.sql until Pages serves it (the CDN can lag a few minutes after the deploy)"; fi
 # grade_r1_12 <R1> [<count before>]: R1 counts EVERY live prefs row, so it is graded by what stays true once followers own rows -
 # ids = rows (each row its own id) and person + profile = rows (exactly one owner each). The apply-time run
 # (SILVIS_PREFS_ROWS_BEFORE=<N> set) adds the strict picture: profile=0 and person=N (no follower row can exist yet; no row lost

@@ -402,6 +402,13 @@ const FOLLOW_GIVE_ROW = { id: FOLLOW_GIVE_ID, submitted_at: "2026-09-23T15:00:00
 const FOLLOW_UID = "00000000-0000-4000-8000-0000000000f3";
 const FOLLOW_PROFILE = { id: FOLLOW_UID, person_id: null, role: "viewer", display_name: "Follower (harness)", email: null, follows: ["s2", "s5"], created_at: "2026-09-24T00:00:00Z", authEmail: "follower@example.com" };
 const FOLLOW_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FOLLOW_UID, role: "authenticated", email: "follower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+// Prompt 20 R2: the follower's OWN notification_preferences row (keyed by profile_id). followPrefsColumn "present" serves
+// it on GET ?profile_id=eq.<his id> (the row below, or [] once cleared) and keeps what a POST ?on_conflict=profile_id sends;
+// "absent" answers every GET naming profile_id like PostgREST before revision o (HTTP 400 42703 - the live answer seen
+// 9/25) - the browser's own "status of 400" line for it is expected (followerPrefs400Lines, consumed one line each).
+let followPrefsColumn = "present";
+let followPrefRow = { id: "00000000-0000-4000-8000-0000000000e1", person_id: null, profile_id: FOLLOW_UID, schedule_updates_email: true, trade_updates_email: true, shift_reminders_email: false, reminder_hour_central: 20 };
+let followerPrefs400Lines = 0;
 const FOLLOW_FEED = [
   { id: "ff-7", type: "trade_proposed", title: "Day offered (harness)", message: "s3 offers s2 a day - nothing in return", data: { kind: "give", trade_id: FOLLOW_GIVE_ID, from_surgeon_id: "s3", to_surgeon_id: "s2" }, created_at: "2026-09-23T15:00:00Z" },
   { id: "ff-6", type: "vacation_logged", title: "Vacation logged (harness)", message: "s3 logged a vacation", data: { surgeon_id: "s3" }, created_at: "2026-09-23T14:00:00Z" },
@@ -680,6 +687,7 @@ const watchPage = (pg, tag) => {
       else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
       else if (expiredWrites401 && /status of (401|400)|Save failed: Error: blob save failed: .*JWT expired/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // Prompt 16 A3: the 401s of the expired-bearer writes, the 400 of the rejected refresh and the blob leg's own console.error for that 401 - all forced by the harness
       else if (b7DeadLinkStatusLines > 0 && /status of (401|400)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); b7DeadLinkStatusLines--; } // Prompt 16 B7: the dead link's probe (401) and its refresh (400), answered by the B7 route
+      else if (followerPrefs400Lines > 0 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); followerPrefs400Lines--; } // Prompt 20 R2: the follower's prefs read before revision o (42703), answered by the follower route
       else consoleErrors.push(msg.text());
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -7440,6 +7448,23 @@ try {
       // P20 R1: his (authenticated) trade read holds the pending give ff-7 names; any trade write falls through to the
       // shared route, which records it - and step (e) then fails on it
       if (url.pathname.startsWith("/rest/v1/shift_trade_requests") && req.method() === "GET") { followTradeGets++; await json(200, [FOLLOW_GIVE_ROW]); return true; }
+      // P20 R2: his own prefs row (see followPrefsColumn). A GET without profile_id (the roster prefs load) reads what
+      // prefs_own would give him - his own row, person_id null - which the app must not take for a roster row.
+      if (url.pathname.startsWith("/rest/v1/notification_preferences")) {
+        const byProfile = url.searchParams.has("profile_id");
+        if (req.method() === "GET") {
+          if (followPrefsColumn === "absent" && byProfile) { followerPrefs400Lines++; await json(400, { code: "42703", details: null, hint: null, message: "column notification_preferences.profile_id does not exist" }); return true; }
+          await json(200, followPrefsColumn === "present" && followPrefRow && (!byProfile || url.searchParams.get("profile_id") === "eq." + FOLLOW_UID) ? [followPrefRow] : []);
+          return true;
+        }
+        const body = req.postData() || "";
+        writes.push({ method: req.method(), path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+        if (followPrefsColumn === "absent") { followerPrefs400Lines++; await json(400, { code: "PGRST204", message: "Could not find the 'profile_id' column of 'notification_preferences' in the schema cache", details: null, hint: null }); return true; }
+        let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+        if (req.method() === "POST" && url.searchParams.get("on_conflict") === "profile_id" && b.profile_id === FOLLOW_UID) followPrefRow = { ...(followPrefRow || { id: "00000000-0000-4000-8000-0000000000e1", person_id: null }), ...b };
+        await json(201, []);
+        return true;
+      }
       if (!url.pathname.startsWith("/rest/v1/notifications") || req.method() !== "GET") return false;
       const typeEq = url.searchParams.get("type");
       const rows = typeEq && typeEq.startsWith("eq.") ? FOLLOW_FEED.filter(n => n.type === typeEq.slice(3)) : FOLLOW_FEED;
@@ -7462,6 +7487,7 @@ try {
     const NAMES_F3 = { s2: "Burchett", s5: "Fierce" };
     const addDaysIso = (iso, n) => { const [y, m, d] = iso.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d + n)); return t.toISOString().slice(0, 10); };
     const writesBefore = writes.length;
+    let followerPrefToggles = 0; // P20 R2: toggles (c2) made that passed its checks - (e2) expects one prefs POST each
     try {
       for (const theme of ["light", "dark"]) {
         await pf.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); localStorage.removeItem("silvis-notif-seen"); localStorage.removeItem("silvis-notif-cleared"); } catch (e) {} }, theme === "dark");
@@ -7523,15 +7549,51 @@ try {
           if (label !== "Copied") fail(`F3 follower (${theme}): Copy on the first follow-sync row should read 'Copied', got '${label}'`);
           else ok(`F3 follower (${theme}): Live calendar sync = ${rows.map(r => r.id + " " + r.url.replace("https://" + SUPABASE_HOST, "<project>")).join(", ")} above the full feed; Copy -> 'Copied'`);
         }
-        // (c2) review F3: Settings > Notification settings tells a follower what he receives and to ask the scheduler
-        //      (he has no switches) - never "Available once your account is linked"
-        if (!(await pf.$("[data-testid=notif-follower-note]"))) { const t = await pf.$("text=Notification settings"); if (t) { await t.click(); await pf.waitForTimeout(250); } }
-        const fNote = await pf.$eval("[data-testid=notif-follower-note]", el => (el.textContent || "").trim()).catch(() => "");
-        const nBody = await pf.evaluate(() => document.body.innerText || "");
-        const wantNote = `You follow Dr. ${NAMES_F3.s2} and Dr. ${NAMES_F3.s5}.`;
-        if (!fNote.startsWith(wantNote) || !/ask the scheduler\.$/.test(fNote)) fail(`F3 follower (${theme}): the notification note should start '${wantNote}' and end 'ask the scheduler.', got '${fNote.slice(0, 160)}'`);
-        else if (/Available once your account is linked/.test(nBody) || (await pf.$("[data-testid=notif-pref]"))) fail(`F3 follower (${theme}): the unlinked sentence or a pref switch is shown to a follower`);
-        else ok(`F3 follower (${theme}): Notification settings = the follower note ('${wantNote} ... ask the scheduler.'), no switches, no unlinked sentence`);
+        // (c2) P20 R2 (Faraz 9/25; replaces F3's 'ask the scheduler' note): Settings > Notification settings gives the
+        //      follower his OWN three switches + the reminder hour, read from his row by profile_id (the served row has
+        //      shift reminders off and 20:00 - the light run; the dark run reads what the light toggle saved), and ONE
+        //      toggle sends ONE POST ?on_conflict=profile_id whose body names his profile_id and no person_id
+        {
+          const R2 = `R2 follower prefs (${theme})`;
+          if (!(await pf.$("[data-testid=notif-follower-prefs]"))) { const t = await pf.$("text=Notification settings"); if (t) { await t.click(); await pf.waitForTimeout(250); } }
+          try {
+            await pf.waitForSelector("[data-testid=notif-follower-prefs][data-state=ok]", { timeout: 8000 });
+            const want = followPrefRow ? { ...followPrefRow } : {};
+            const st = await pf.$eval("[data-testid=notif-follower-prefs]", (el) => ({
+              intro: ((el.querySelector("p") || {}).textContent || "").trim(),
+              sw: Array.from(el.querySelectorAll("[data-testid=notif-pref]")).map(l => { const i = l.querySelector("input[type=checkbox]"); return { key: l.getAttribute("data-key"), checked: !!(i && i.checked), disabled: !i || i.disabled }; }),
+              hour: (el.querySelector("[data-testid=notif-follower-hour]") || {}).value,
+              hourDisabled: !!(el.querySelector("[data-testid=notif-follower-hour]") || {}).disabled,
+              banners: ["notif-follower-unavailable", "notif-follower-load-failed"].filter(t => el.querySelector("[data-testid=" + t + "]")),
+            }));
+            const nBody = await pf.evaluate(() => document.body.innerText || "");
+            const wantIntro = `You follow Dr. ${NAMES_F3.s2} and Dr. ${NAMES_F3.s5}.`;
+            const keys = ["schedule_updates_email", "trade_updates_email", "shift_reminders_email"];
+            const wantChecked = keys.map(k => want[k] !== false);
+            if (!st.intro.startsWith(wantIntro)) fail(`${R2}: the editor should start '${wantIntro}', got '${st.intro.slice(0, 120)}'`);
+            else if (st.sw.map(x => x.key).join() !== keys.join() || st.sw.some(x => x.disabled) || st.hourDisabled) fail(`${R2}: expected three enabled switches ${keys.join(", ")} and an enabled hour, got ${JSON.stringify(st.sw)} hourDisabled=${st.hourDisabled}`);
+            else if (JSON.stringify(st.sw.map(x => x.checked)) !== JSON.stringify(wantChecked) || st.hour !== (typeof want.reminder_hour_central === "number" ? String(want.reminder_hour_central) : "")) fail(`${R2}: the switches must show his served row ${JSON.stringify(wantChecked)} hour ${want.reminder_hour_central}, got ${JSON.stringify(st.sw.map(x => x.checked))} hour '${st.hour}'`);
+            else if (st.banners.length || /Available once your account is linked/.test(nBody) || /ask the scheduler/.test(nBody) || (await pf.$("[data-testid=notif-follower-note]"))) fail(`${R2}: banners ${st.banners.join(",") || "none"}; the unlinked sentence / F3's 'ask the scheduler' note must be gone`);
+            else ok(`${R2}: three switches (${st.sw.map(x => x.key.replace("_email", "") + "=" + (x.checked ? "on" : "off")).join(", ")}) + hour ${st.hour || "default"}, read from his row by profile_id; no unlinked sentence, no 'ask the scheduler'`);
+            // one toggle -> one POST ?on_conflict=profile_id
+            const box = pf.locator("[data-testid=notif-follower-prefs] [data-testid=notif-pref][data-key=trade_updates_email] input[type=checkbox]");
+            const was = await box.isChecked();
+            const w0 = writes.length;
+            await box.click();
+            await pf.waitForTimeout(1100);
+            const posts = writes.slice(w0).filter((w) => w.path.startsWith("/rest/v1/notification_preferences"));
+            let row = null; try { const b = JSON.parse(posts.length ? posts[0].body : "null"); row = Array.isArray(b) ? b[0] : b; } catch (e) {}
+            if (posts.length !== 1) fail(`${R2} toggle: expected exactly one write to notification_preferences, got ${posts.length}: ` + posts.map((w) => `${w.method} ${w.path}`).join(", "));
+            else if (posts[0].method !== "POST" || posts[0].path !== "/rest/v1/notification_preferences?on_conflict=profile_id") fail(`${R2} toggle: expected POST /rest/v1/notification_preferences?on_conflict=profile_id, got ${posts[0].method} ${posts[0].path}`);
+            else if (!/resolution=merge-duplicates/.test(posts[0].prefer)) fail(`${R2} toggle: Prefer must carry resolution=merge-duplicates, got '${posts[0].prefer}'`);
+            else if (!row || row.profile_id !== FOLLOW_UID || "person_id" in row || "id" in row || row.trade_updates_email !== !was) fail(`${R2} toggle: the body must name his profile_id, no person_id / id, trade_updates_email ${!was}: ` + String(posts[0].body).slice(0, 220));
+            else if ((await box.isChecked()) === was) fail(`${R2} toggle: the switch did not move`);
+            else { followerPrefToggles++; ok(`${R2} toggle: one POST ${posts[0].path} (Prefer ${posts[0].prefer}) with profile_id = the follower's own id, no person_id; trade_updates_email -> ${!was}`); }
+            await pf.locator("[data-testid=notif-follower-prefs]").scrollIntoViewIfNeeded().catch(() => {});
+            await pf.screenshot({ path: path.join(OUT, `follower-prefs-390-${theme}.png`), fullPage: true });
+            ok(`screenshot test/ui/out/follower-prefs-390-${theme}.png`);
+          } catch (e) { fail(`${R2}: ` + errLine(e)); }
+        }
         // (d) Alerts
         const badge = await pf.$eval('button[aria-label="Notifications"]', el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
         await pf.click('button[aria-label="Notifications"]');
@@ -7564,21 +7626,29 @@ try {
             "paint-offers", "nav-paint-offers", "ofp-sheet", "ofp-save", "ob-take", "ob-assign", "ob-external", "ob-email", "claim-sheet", "claim-confirm",
             "editor-save", "editor-trade", "undo-btn", "generate-panel", "gen-run", "gen-accept", "roster-save", "rules-save", "group-save", "holidays-save",
             "users-card", "seed-card", "import-file", "reset-all-data", "export-backup", "snapshot-restore", "avail-add", "east-override-save", "east-refresh",
-            "prd-new", "notif-pref", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade"];
+            "prd-new", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade"];
+          // P20 R2: "notif-pref" left this list - a follower's OWN prefs switches (Settings > Notification settings, his row
+          // by profile_id) are his; (c2) checks them and (e) counts their writes. Everything above stays forbidden, and so does
+          // any notif-pref OUTSIDE [data-testid=notif-follower-prefs] (a surgeon's switches rendered for him - R2 review 9/25).
           const navTabs = await pf.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
           const hitsByTab = [];
           let timeoffDates = -1;
           for (const k of navTabs) {
             await pf.click(`button[data-tab="${k}"]`);
             await pf.waitForTimeout(350);
-            const hits = await pf.evaluate((ids) => ids.filter(t => document.querySelector("[data-testid=" + t + "]")), EDIT_IDS);
+            const hits = await pf.evaluate((ids) => {
+              const h = ids.filter(t => document.querySelector("[data-testid=" + t + "]"));
+              const foreign = Array.from(document.querySelectorAll("[data-testid=notif-pref]")).filter(el => !el.closest("[data-testid=notif-follower-prefs]")).length;
+              if (foreign) h.push("notif-pref x" + foreign + " outside notif-follower-prefs");
+              return h;
+            }, EDIT_IDS);
             if (hits.length) hitsByTab.push(`${k}: ${hits.join(", ")}`);
             if (k === "timeoff") timeoffDates = await pf.locator("[data-testid=timeoff-card] input[type=date]").count();
           }
           if (!navTabs.includes("calendar") || !navTabs.includes("timeoff") || !navTabs.includes("myschedule")) fail(`${F4}: expected the Calendar, Time off and Following tabs in the nav, got ${navTabs.join(",")}`);
           else if (hitsByTab.length) fail(`${F4}: edit controls rendered for a follower - ${hitsByTab.join(" | ")}`);
           else if (timeoffDates !== 0) fail(`${F4}: Time off shows ${timeoffDates} date input(s) - a vacation form for a follower`);
-          else ok(`${F4}: tabs ${navTabs.join(", ")} swept - no trade card, no vacation form, no painter, no Take / Assign / board e-mail, no Generate / Setup / data tools, no Undo, no pref switch`);
+          else ok(`${F4}: tabs ${navTabs.join(", ")} swept - no trade card, no vacation form, no painter, no Take / Assign / board e-mail, no Generate / Setup / data tools, no Undo, no notif-pref outside his own notif-follower-prefs`);
           // the day editor on a day s2 holds (the visible month's cells carry data-primary / data-backup from the rows)
           await pf.click('button[data-tab="calendar"]');
           await pf.waitForSelector("[data-testid=cal-grid] .cal-cell[data-day]", { timeout: 8000 });
@@ -7617,10 +7687,50 @@ try {
         if (scrollW > 390) fail(`F3 follower (${theme}): horizontal page scroll at 390 px (scrollWidth ${scrollW})`); else ok(`F3 follower (${theme}): no horizontal page scroll at 390 px`);
         await pf.screenshot({ path: path.join(OUT, `follower-390-${theme}.png`), fullPage: true });
         ok(`screenshot test/ui/out/follower-390-${theme}.png`);
+        // (g) P20 R2: BEFORE revision o (notification_preferences has no profile_id column - the read answers 400 42703):
+        //     the card says "Follower settings are available after the next update", the three switches and the hour are
+        //     disabled, a click on a switch writes nothing, no horizontal scroll. Then the column is served again.
+        {
+          const R2P = `R2 follower prefs before revision o (${theme})`;
+          followPrefsColumn = "absent";
+          try {
+            const w0 = writes.length;
+            await loadWithRetry(pf, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "follower page, prefs column absent (" + theme + ")");
+            await pf.waitForSelector("text=Synced", { timeout: 30000 });
+            await pf.click('button[data-tab="settings"]');
+            if (!(await pf.$("[data-testid=notif-follower-prefs]"))) { const t = await pf.$("text=Notification settings"); if (t) { await t.click(); await pf.waitForTimeout(250); } }
+            await pf.waitForSelector("[data-testid=notif-follower-prefs][data-state=unavailable]", { timeout: 8000 });
+            const st = await pf.$eval("[data-testid=notif-follower-prefs]", (el) => ({
+              msg: ((el.querySelector("[data-testid=notif-follower-unavailable]") || {}).textContent || "").trim(),
+              failed: !!el.querySelector("[data-testid=notif-follower-load-failed]"),
+              sw: Array.from(el.querySelectorAll("[data-testid=notif-pref] input[type=checkbox]")).map(i => i.disabled),
+              hourDisabled: !!(el.querySelector("[data-testid=notif-follower-hour]") || {}).disabled,
+            }));
+            await pf.$$eval("[data-testid=notif-follower-prefs] [data-testid=notif-pref] input[type=checkbox]", els => els.forEach(i => i.click()));
+            await pf.waitForTimeout(900);
+            const pw = writes.slice(w0).filter(w => w.path.startsWith("/rest/v1/notification_preferences"));
+            const scrollW = await pf.evaluate(() => document.documentElement.scrollWidth);
+            if (st.msg !== "Follower settings are available after the next update.") fail(`${R2P}: expected 'Follower settings are available after the next update.', got '${st.msg}'`);
+            else if (st.failed) fail(`${R2P}: the missing column is not a failed read - it must say 'after the next update', not 'couldn't load'`);
+            else if (st.sw.length !== 3 || st.sw.some(d => !d) || !st.hourDisabled) fail(`${R2P}: the three switches and the hour must render disabled, got ${JSON.stringify(st.sw)} hourDisabled=${st.hourDisabled}`);
+            else if (pw.length) fail(`${R2P}: wrote ${pw.map(w => w.method + " " + w.path).join(", ")}`);
+            else if (scrollW > 390) fail(`${R2P}: horizontal page scroll at 390 px (scrollWidth ${scrollW})`);
+            else ok(`${R2P}: '${st.msg}' with the three switches and the hour disabled; clicks on them wrote nothing; no horizontal scroll`);
+            await pf.locator("[data-testid=notif-follower-prefs]").scrollIntoViewIfNeeded().catch(() => {});
+            await pf.screenshot({ path: path.join(OUT, `follower-prefs-premigration-390-${theme}.png`), fullPage: true });
+            ok(`screenshot test/ui/out/follower-prefs-premigration-390-${theme}.png`);
+          } catch (e) { fail(`${R2P}: ` + errLine(e)); }
+          followPrefsColumn = "present";
+        }
       }
-      const fw = writes.slice(writesBefore).filter(w => !/^\/rest\/v1\/client_versions/.test(w.path));
-      if (fw.length) fail(`F3 follower: the follower session wrote ${fw.length} time(s) besides the version heartbeat: ${fw.map(w => w.method + " " + w.path).join(", ")}`);
-      else ok("F3 follower: no write besides the client_versions heartbeat (a follower is read-only)");
+      // (e2) P20 R2: the follower's only writes are the heartbeat and his OWN prefs row - one POST ?on_conflict=profile_id
+      //      per toggle (c2) made, nothing else
+      const prefPosts = writes.slice(writesBefore).filter(w => w.method === "POST" && w.path === "/rest/v1/notification_preferences?on_conflict=profile_id");
+      if (prefPosts.length !== followerPrefToggles || followerPrefToggles !== 2) fail(`F3 follower: expected one prefs POST per toggle (2 toggles, one per theme), got ${prefPosts.length} POST(s) for ${followerPrefToggles} toggle(s)`);
+      else ok(`F3 follower: ${prefPosts.length} prefs POST(s) ?on_conflict=profile_id, one per toggle`);
+      const fw = writes.slice(writesBefore).filter(w => !/^\/rest\/v1\/client_versions/.test(w.path) && !prefPosts.includes(w));
+      if (fw.length) fail(`F3 follower: the follower session wrote ${fw.length} time(s) besides the version heartbeat and his own prefs row: ${fw.map(w => w.method + " " + w.path).join(", ")}`);
+      else ok("F3 follower: no write besides the client_versions heartbeat and his own prefs row (the schedule stays read-only)");
     } catch (e) { fail("follower session: " + errLine(e)); try { await pf.screenshot({ path: path.join(OUT, "failure-follower.png"), fullPage: true }); } catch (e2) {} }
     await pf.close();
   }

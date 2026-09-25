@@ -3042,6 +3042,41 @@ function followedIdsOf(p, rosterIds) {
   return followsOf(p).filter(id => known.includes(id));
 }
 
+// ---- Prompt 20 R2 (Faraz 9/25): the notification_preferences row a Settings save sends, for either owner ----
+// notifPrefSaveRequest(owner, cur, nowIso) -> { onConflict, row } or null (no write):
+//   owner { personId }  - a surgeon's row: on_conflict=person_id, the body names person_id and NEVER profile_id (that
+//                          column exists only from revision o, so a surgeon's save must not name it - before AND after).
+//   owner { profileId } - a follower's row (a viewer / coordinator with no roster link; profileId = his own
+//                          user_profiles.id = auth.uid(), what prefs_own checks): on_conflict=profile_id, the body names
+//                          profile_id and carries NO person_id key (the row's person_id stays null - one_owner).
+//   neither, or both, or blank -> null.
+// The flags are the card's: a flag that is not explicitly false is on; the hour is a number or null (the default).
+function notifPrefSaveRequest(owner, cur, nowIso) {
+  const o = owner && typeof owner === "object" ? owner : {};
+  const personId = typeof o.personId === "string" && o.personId ? o.personId : "";
+  const profileId = typeof o.profileId === "string" && o.profileId ? o.profileId : "";
+  if ((personId && profileId) || (!personId && !profileId)) return null;
+  const c = cur && typeof cur === "object" ? cur : {};
+  const flags = {
+    schedule_updates_email: c.schedule_updates_email !== false,
+    trade_updates_email: c.trade_updates_email !== false,
+    shift_reminders_email: c.shift_reminders_email !== false,
+    reminder_hour_central: typeof c.reminder_hour_central === "number" ? c.reminder_hour_central : null,
+    updated_at: nowIso || new Date().toISOString(),
+  };
+  return personId
+    ? { onConflict: "person_id", row: { person_id: personId, ...flags } }
+    : { onConflict: "profile_id", row: { profile_id: profileId, ...flags } };
+}
+// notifPrefReadFailureState(status, bodyText) - a non-2xx answer to the follower's read
+// (notification_preferences?select=*&profile_id=eq.<id>): "unavailable" is PostgREST's missing-column answer, HTTP 400
+// with code 42703 naming profile_id (observed live 9/25: {"code":"42703",...,"message":"column
+// notification_preferences.profile_id does not exist"} - revision o not applied yet); anything else is "failed".
+function notifPrefReadFailureState(status, bodyText) {
+  const t = String(bodyText || "");
+  return Number(status) === 400 && /profile_id/.test(t) && /42703|does not exist/.test(t) ? "unavailable" : "failed";
+}
+
 // ---- Prompt 16 B9 (9/24): small pure pieces the client items are built on ----
 
 // (a) The Generate worker's script. The app builds a classic Web Worker from a Blob of this text - no second script
@@ -3131,6 +3166,7 @@ if (typeof module !== "undefined" && module.exports) {
     notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
+    notifPrefSaveRequest, notifPrefReadFailureState,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

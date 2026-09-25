@@ -3237,7 +3237,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     let A3 = null;
     // fetch stub: records { url, method, bearer, body }; `answer(call)` decides the response, and may throw for a network error
     let answer = () => resp(200, []);
-    sandbox.__fetch = async (url, opts) => { const c = { url: String(url), method: (opts && opts.method) || "GET", bearer: bearerOf(opts), body: opts && opts.body ? JSON.parse(opts.body) : null }; a3calls.push(c); return answer(c); };
+    sandbox.__fetch = async (url, opts) => { const c = { url: String(url), method: (opts && opts.method) || "GET", bearer: bearerOf(opts), prefer: String((opts && opts.headers && (opts.headers.Prefer || opts.headers.prefer)) || ""), body: opts && opts.body ? JSON.parse(opts.body) : null }; a3calls.push(c); return answer(c); };
     const isRefresh = (c) => c.method === "POST" && c.url.includes("/auth/v1/token?grant_type=refresh_token");
     const need = () => { if (!A3) throw new Error("the A3 sandbox exports are missing (auth.ensureFresh / authFetch not implemented)"); };
     const acheck = async (name, fn) => { try { need(); await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
@@ -3363,8 +3363,79 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const urls = a3calls.filter(c => !isRefresh(c)).map(c => c.url.replace(/^https?:\/\/[^/]+/, ""));
       assert.deepStrictEqual(urls, ["/rest/v1/notification_preferences?on_conflict=person_id", "/rest/v1/notification_preferences?on_conflict=person_id", "/rest/v1/call_schedule_data"], "onConflict -> ?on_conflict=<column>; no opts -> the bare table URL: " + JSON.stringify(urls));
       const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
-      assert.strictEqual((src.match(/db\.upsert\("notification_preferences", row, \{ onConflict: "person_id" \}\)/g) || []).length, 1, "saveNotifPref must upsert with { onConflict: \"person_id\" } (valid before AND after revision o: person_id is the key before, UNIQUE after)");
-      assert.ok(!/db\.upsert\("notification_preferences", row\)/.test(src), "no prefs upsert without on_conflict is left");
+      const cfg = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
+      // P20 R2: the one prefs upsert lives in config.js notifPrefsDb.save and always names on_conflict (person_id for a
+      // surgeon - valid before AND after revision o: person_id is the key before, UNIQUE after; profile_id for a follower)
+      assert.strictEqual((cfg.match(/db\.upsert\("notification_preferences", req\.row, \{ onConflict: req\.onConflict \}\)/g) || []).length, 1, "notifPrefsDb.save must upsert with { onConflict: req.onConflict }");
+      assert.ok(src.includes("notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {})"), "saveNotifPref (a surgeon's row) must save through notifPrefsDb.save({ personId }, ...)");
+      assert.ok(!/db\.upsert\("notification_preferences"/.test(src) && !/db\.upsert\("notification_preferences", (row|req\.row)\)/.test(cfg), "no prefs upsert without on_conflict is left (and none outside notifPrefsDb)");
+    });
+    // ---- Prompt 20 R2 (Faraz 9/25): the follower's own prefs row - saved and read by profile_id ----
+    const r2Api = () => { const x = vm.runInContext("typeof notifPrefsDb === 'object' && notifPrefsDb ? notifPrefsDb : null", sandbox); if (!x || typeof x.save !== "function" || typeof x.loadFollower !== "function") throw new Error("config.js does not define notifPrefsDb.save / notifPrefsDb.loadFollower"); return x; };
+    const R2_PID = "00000000-0000-4000-8000-0000000000f3";
+    const r2Path = (c) => c.url.replace(/^https?:\/\/[^/]+/, "");
+    await acheck("P20 R2 behaviour: a follower's save - notifPrefsDb.save({ profileId }) is ONE POST /rest/v1/notification_preferences?on_conflict=profile_id (Prefer resolution=merge-duplicates, the user's bearer) whose body names profile_id and carries NO person_id key (his row's person_id stays null - one_owner), no id, the three flags (a missing flag is on) and the hour", async () => {
+      setSession(FRESH, "r8c"); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, []);
+      const r = await r2Api().save({ profileId: R2_PID }, { trade_updates_email: false, reminder_hour_central: 20 });
+      assert.strictEqual(r.error, null, JSON.stringify(r));
+      const w = a3calls.filter(c => !isRefresh(c));
+      assert.strictEqual(w.length, 1, "one request: " + JSON.stringify(w.map(c => c.method + " " + r2Path(c))));
+      assert.strictEqual(w[0].method + " " + r2Path(w[0]), "POST /rest/v1/notification_preferences?on_conflict=profile_id");
+      assert.ok(/resolution=merge-duplicates/.test(w[0].prefer), "Prefer: " + w[0].prefer);
+      assert.strictEqual(w[0].bearer, FRESH, "the user's JWT (authFetch), never anon");
+      const b = w[0].body;
+      assert.strictEqual(b.profile_id, R2_PID, "profile_id = his own user_profiles.id");
+      assert.ok(!("person_id" in b), "no person_id key in a follower's body: " + JSON.stringify(b));
+      assert.ok(!("id" in b), "no id key");
+      assert.deepStrictEqual([b.schedule_updates_email, b.trade_updates_email, b.shift_reminders_email, b.reminder_hour_central], [true, false, true, 20]);
+      assert.ok(typeof b.updated_at === "string" && !isNaN(Date.parse(b.updated_at)), "updated_at stamped");
+    });
+    await acheck("P20 R2 pin: a surgeon's save still names person_id - notifPrefsDb.save({ personId: 's2' }) is POST ?on_conflict=person_id with person_id in the body and NO profile_id key (the column exists only from revision o: naming it would 400 every surgeon's save before the apply); an owner with neither key, or both, writes nothing", async () => {
+      setSession(FRESH, "r8d"); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, []);
+      const r = await r2Api().save({ personId: "s2" }, { schedule_updates_email: false, reminder_hour_central: "7" });
+      assert.strictEqual(r.error, null, JSON.stringify(r));
+      const w = a3calls.filter(c => !isRefresh(c));
+      assert.deepStrictEqual(w.map(c => c.method + " " + r2Path(c)), ["POST /rest/v1/notification_preferences?on_conflict=person_id"]);
+      assert.strictEqual(w[0].body.person_id, "s2");
+      assert.ok(!("profile_id" in w[0].body) && !("id" in w[0].body), "neither profile_id nor id: " + JSON.stringify(w[0].body));
+      assert.deepStrictEqual([w[0].body.schedule_updates_email, w[0].body.trade_updates_email, w[0].body.shift_reminders_email, w[0].body.reminder_hour_central], [false, true, true, null], "a non-number hour is the default (null)");
+      a3calls.length = 0;
+      for (const owner of [null, {}, { personId: "" }, { profileId: "" }, { personId: "s2", profileId: R2_PID }]) {
+        const x = await r2Api().save(owner, {});
+        assert.ok(x && x.error, "refused without a single owner: " + JSON.stringify(owner));
+      }
+      assert.strictEqual(a3calls.length, 0, "no request for a refused owner");
+    });
+    await acheck("P20 R2 behaviour: a follower's read - notifPrefsDb.loadFollower(id) is GET /rest/v1/notification_preferences?select=*&profile_id=eq.<id> with the user's bearer -> { state: 'ok', row } (row null when he has none: every flag on); PostgREST's missing-column answer (HTTP 400, 42703 naming profile_id - before revision o) -> 'unavailable'; any other failure (another 400, 401, 500, a network error, a non-array body) -> 'failed', never an empty 'ok'; no id -> 'failed' without a request; it never writes", async () => {
+      setSession(FRESH, "r8e"); a3calls.length = 0;
+      const ROW = { id: "p-1", person_id: null, profile_id: R2_PID, schedule_updates_email: false, trade_updates_email: true, shift_reminders_email: true, reminder_hour_central: 20 };
+      const run = async (ans) => { answer = (c) => isRefresh(c) ? resp(500, "unexpected") : ans(c); return r2Api().loadFollower(R2_PID); };
+      let r = await run(() => resp(200, [ROW]));
+      assert.strictEqual(r.state, "ok"); assert.deepStrictEqual(JSON.parse(JSON.stringify(r.row)), ROW);
+      const g = a3calls.filter(c => !isRefresh(c));
+      assert.deepStrictEqual(g.map(c => c.method + " " + r2Path(c)), ["GET /rest/v1/notification_preferences?select=*&profile_id=eq." + R2_PID]);
+      assert.strictEqual(g[0].bearer, FRESH, "the user's JWT");
+      r = await run(() => resp(200, []));
+      assert.deepStrictEqual([r.state, r.row], ["ok", null], "no row yet: ok + null (the switches read on)");
+      r = await run(() => resp(400, { code: "42703", details: null, hint: null, message: "column notification_preferences.profile_id does not exist" }));
+      assert.strictEqual(r.state, "unavailable", "the live pre-migration answer (observed 9/25 with an anon read): " + JSON.stringify(r));
+      for (const [label, ans] of [
+        ["another 400", () => resp(400, { code: "PGRST100", message: "failed to parse filter (eq.)" })],
+        ["401", () => resp(401, { code: "PGRST301", message: "JWT expired" })],
+        ["500", () => resp(500, "upstream error")],
+        ["network", () => { throw new TypeError("Failed to fetch"); }],
+        ["non-array body", () => resp(200, { unexpected: true })],
+      ]) {
+        r = await run(ans);
+        assert.strictEqual(r.state, "failed", label + " -> failed: " + JSON.stringify(r));
+        assert.ok(r.error, label + " carries why");
+      }
+      assert.ok(a3calls.filter(c => !isRefresh(c)).every(c => c.method === "GET"), "reads only");
+      a3calls.length = 0;
+      r = await r2Api().loadFollower("");
+      assert.strictEqual(r.state, "failed"); assert.strictEqual(a3calls.length, 0, "no request without an id");
     });
     await acheck("A3 sign-in: auth.signIn stores the pair, clears sessionExpired ('restored' event) and hands the token to realtime.setAuth (the recovery / invite hash path goes through the same _saveSession)", async () => {
       A3.auth.sessionExpired = true; a3calls.length = 0; rtAuth.length = 0; events.length = 0;
@@ -4446,7 +4517,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       }
     });
     check("the regions read the tokens where the literals were; the publish notice paragraph appears once; the dark sheet repaints the SuCheck label's light token", () => {
-      assert.ok(countIn(regionText("notif-settings"), "color:T.text") >= 2 && countIn(regionText("notif-settings"), "color:T.success") === 2, "notification settings: two T.text labels, two T.success");
+      assert.ok(countIn(regionText("notif-settings"), "color:T.text") >= 2 && countIn(regionText("notif-settings"), "color:T.success") === 3, "notification settings: two T.text labels, three T.success (the surgeon's Saving, the follower's Saving - P20 R2 - and the test line)");
       assert.ok(countIn(regionText("publish-diff"), "color:T.text") >= 2 && countIn(regionText("publish-diff"), "color:T.muted") >= 2 && regionText("publish-diff").includes('border:"1px solid " + T.border'), "publish diff: T.text lines, T.muted notes, T.border box");
       assert.strictEqual(countIn(regionText("publish-diff"), "The changes listed above are already saved"), 1, "the publish notice paragraph must appear once (the 9/23 theme commit had left a second copy under it)");
       assert.ok(countIn(regionText("snapshot-list"), "color:T.text") >= 1 && countIn(regionText("snapshot-list"), "color:T.muted") >= 3 && regionText("snapshot-list").includes("{...css.errBox,fontWeight:600}") && regionText("snapshot-list").includes('borderBottom:"1px solid " + T.border'), "snapshot list: T.text reason, T.muted stamp / empty / loading, css.errBox, T.border rows");
@@ -5257,16 +5328,28 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.profilePollMerge(pre, { ...pre }).changed, false, "no follows key on either side -> unchanged");
       assert.strictEqual(H.profilePollMerge({ ...pre, follows: [] }, { ...pre }).changed, false, "an empty list and no column are one value");
     });
-    check("P20 F3 (review) pins: Settings > Notification settings tells a follower the truth - which mail he receives about whom, that it runs on the defaults unless the scheduler set them otherwise, and to ask the scheduler to change or stop it (he has no switches; F3 adds no write path) - never 'Available once your account is linked'", () => {
+    check("P20 R2 pins (replace F3's note): Settings > Notification settings gives a follower his OWN three switches + the reminder hour (notif-follower-prefs, names the followed surgeons), saved through saveFollowerPref -> notifPrefsDb.save({ profileId }) and read through notifPrefsDb.loadFollower; every control is disabled unless the read answered 'ok'; before revision o ('unavailable') the card says 'Follower settings are available after the next update'; a failed read says so - never a silent empty state; the F3 'ask the scheduler' note is gone; everybody else keeps 'Available once your account is linked'", () => {
       const a = src.indexOf("<span>Notification settings</span>"), b = src.indexOf("Live calendar sync", a);
       const card = src.slice(a, b);
-      const i = card.indexOf('{!mySurgeon ? (isFollowing ? <p data-testid="notif-follower-note" style={muted}>');
-      assert.ok(i > 0, "a follower branch before the unlinked sentence");
-      const note = card.slice(i, card.indexOf("</p>", i));
-      assert.ok(note.includes('myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and ")'), "names the followed surgeons");
-      assert.ok(/ask the scheduler/.test(note) && /17:00 Central/.test(note), "who changes it; the default hour");
-      assert.ok(card.indexOf("Available once your account is linked to a roster entry.") > i, "the unlinked sentence stays for everybody else");
-      assert.ok(!/fetch\(|saveNotifPref\(myFollows|db\./.test(note), "no write");
+      assert.ok(!card.includes("notif-follower-note") && !/ask the scheduler/.test(card), "F3's note (no switches, 'ask the scheduler') is gone");
+      const i = card.indexOf('{!mySurgeon ? (isFollowing ? (');
+      assert.ok(i > 0, "a follower branch first in the no-roster-link arm");
+      const fb = card.slice(i, card.indexOf("Available once your account is linked to a roster entry.", i));
+      assert.ok(fb.length > 0 && card.indexOf("Available once your account is linked to a roster entry.") > i, "the unlinked sentence stays for everybody else, after the follower branch");
+      assert.ok(fb.includes('data-testid="notif-follower-prefs"') && fb.includes("data-state={followerPrefState}"), "the follower editor carries its read state");
+      assert.ok(fb.includes('myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and ")'), "names the followed surgeons");
+      ["schedule_updates_email", "trade_updates_email", "shift_reminders_email", "reminder_hour_central"].forEach(k => assert.ok(fb.includes(k), "the " + k + " control"));
+      assert.ok(fb.includes('data-testid="notif-follower-unavailable"') && fb.includes("Follower settings are available after the next update"), "the pre-migration sentence");
+      assert.ok(fb.includes('data-testid="notif-follower-load-failed"'), "a failed read is said, not shown as defaults");
+      assert.ok((fb.match(/disabled=\{!followerPrefsEditable\}/g) || []).length >= 2, "the switches (one mapped input) and the hour select are disabled unless editable");
+      assert.ok(src.includes('const followerPrefsEditable = followerPrefState === "ok";'), "editable only after an ok read");
+      assert.ok(/onChange=\{e=>saveFollowerPref\(\{\[key\]:e\.target\.checked\}\)\}/.test(fb) && /saveFollowerPref\(\{ reminder_hour_central:/.test(fb), "the controls save through saveFollowerPref");
+      const s0 = src.indexOf("const saveFollowerPref = ");
+      assert.ok(s0 > 0, "saveFollowerPref");
+      const sf = src.slice(s0, src.indexOf("\n  };\n", s0));
+      const gate = sf.indexOf('if (followerPrefStateRef.current !== "ok" || !pid) return;');
+      assert.ok(gate > 0 && gate < sf.indexOf("notifPrefsDb.save({ profileId: pid }, followerPrefRef.current)"), "no write unless the read answered ok (never before revision o, never over an unknown row)");
+      assert.ok(/notifPrefsDb\.loadFollower\(pid\)/.test(src), "the follower's row is read by profile_id");
     });
   }
 

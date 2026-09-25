@@ -303,6 +303,37 @@ const db = {
 // NOTE: p.schedule / p.vacations / p.availability here are the reason
 // buildStateBundle keeps those keys in the in-memory bundle even though blob
 // writes strip them - this predicate IS their consumer.
+// ---- Prompt 20 R2 (Faraz 9/25): notification preferences - the one save path, and a follower's own read ----
+// save(owner, cur): owner { personId } (a surgeon, on_conflict=person_id) or { profileId } (a follower - his own
+// user_profiles.id - on_conflict=profile_id, no person_id key); the row is helpers.js notifPrefSaveRequest's. A write, so
+// db.upsert -> authFetch (the user's JWT, a refresh + one retry on a 401). An owner with neither / both keys writes
+// nothing and answers { error }.
+// loadFollower(profileId): GET ?select=*&profile_id=eq.<id> with the user's JWT -> { state: "ok", row } (row null when
+// he has none yet: every flag on), { state: "unavailable" } for PostgREST's missing-column 400 (revision o not applied:
+// the card says so and writes nothing), { state: "failed", error } for anything else - never an empty "ok".
+const notifPrefsDb = {
+  async save(owner, cur) {
+    const req = notifPrefSaveRequest(owner, cur, new Date().toISOString());
+    if (!req) return { error: "notifPrefsDb.save: the owner must be exactly one of personId / profileId" };
+    return db.upsert("notification_preferences", req.row, { onConflict: req.onConflict });
+  },
+  async loadFollower(profileId) {
+    if (typeof profileId !== "string" || !profileId) return { state: "failed", error: "no profile id" };
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/notification_preferences?select=*&profile_id=eq.${encodeURIComponent(profileId)}`, { headers: dbAuthHeaders() });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        return { state: notifPrefReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` };
+      }
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return { state: "failed", error: "unexpected response body" };
+      return { state: "ok", row: rows[0] || null };
+    } catch (e) {
+      return { state: "failed", error: String((e && e.message) || e) };
+    }
+  },
+};
+
 function payloadLooksWiped(p) {
   if (typeof payloadLooksWipedDaily === "function") return payloadLooksWipedDaily(p);
   // helpers.js not loaded (should never happen in the app - the loader order

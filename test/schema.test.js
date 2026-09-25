@@ -2049,11 +2049,12 @@ ok(/PROBE_SETUP: user_profiles\.follows/.test(s12) && /notification_preferences 
 ok(/email like 'probe-follow-%@example\.test'/.test(s12) && /person_id = 'probe-follow'/.test(s12) && /LEFT ROWS BEHIND/.test(s12), "section 12 must count leftovers (auth.users probe-follow-*, prefs person_id 'probe-follow') and report them as a failure");
 const s12write = s12.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 const s12curl = s12write.split("\n").filter((l) => /\bcurl /.test(l));
-ok(s12curl.length === 2 && s12curl.every((l) => /curl -s -o "\$T\/vr12-[a-z]+\.[a-z]+" -w '%\{http_code\}' "\$PAGES\/(config\.js|index\.html)\?vr=\$\$"/.test(l) && !/ -X | -d | -H /.test(l)), "section 12's only curls are two anon GETs of the live Pages client (config.js, index.html) - nothing is written over REST:\n" + s12curl.join("\n"));
+ok(s12curl.length === 3 && s12curl.every((l) => /curl -s -o "\$T\/vr12-[a-z]+\.[a-z]+" -w '%\{http_code\}' "\$PAGES\/(config\.js|index\.html|helpers\.js)\?vr=\$\$"/.test(l) && !/ -X | -d | -H /.test(l)), "section 12's only curls are three anon GETs of the live Pages client (config.js, index.html, helpers.js - P20 R2) - nothing is written over REST:\n" + s12curl.join("\n"));
 ok(/^PAGES="https:\/\/fkhan628\.github\.io\/Silvis-Call-Schedule"$/m.test(s12), "section 12 must name the live Pages origin (PAGES=...)");
-ok(s12.indexOf("grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' \"$T/vr12-config.js\"") > 0 && s12.indexOf("grep -qF 'onConflict: \"person_id\"' \"$T/vr12-index.html\"") > 0, "section 12a' must check the LIVE client (the served config.js sends on_conflict, the served index.html names onConflict: \"person_id\")");
+ok(s12.indexOf("grep -qF 'on_conflict=${encodeURIComponent(opts.onConflict)}' \"$T/vr12-config.js\"") > 0 && s12.indexOf("grep -qF 'db.upsert(\"notification_preferences\", req.row, { onConflict: req.onConflict })' \"$T/vr12-config.js\"") > 0 && s12.indexOf("grep -qF '? { onConflict: \"person_id\", row: { person_id: personId' \"$T/vr12-helpers.js\"") > 0 && s12.indexOf("tr -d ' \\r\\n' < \"$T/vr12-index.html\" | grep -qF 'notifPrefsDb.save({personId}'") > 0, "section 12a' must check the LIVE client (P20 R2: the served config.js sends on_conflict through notifPrefsDb.save, the served helpers.js builds a surgeon's row with on_conflict=person_id, the served index.html saves a surgeon through notifPrefsDb.save({ personId })");
 ok(/do NOT apply/.test(s12), "section 12a' must say the migration may not be applied while the live client lacks the pin");
-ok(s12.indexOf('db.upsert("notification_preferences", row, { onConflict: "person_id" })') > 0, "section 12a must check the client's prefs upsert names on_conflict=person_id");
+ok(s12.indexOf("grep -qF 'notifPrefsDb.save({ personId }' index-source.html") > 0 && s12.indexOf("grep -qF 'db.upsert(\"notification_preferences\", req.row, { onConflict: req.onConflict })' config.js") > 0 && s12.indexOf("grep -qF '? { onConflict: \"person_id\", row: { person_id: personId' helpers.js") > 0, "section 12a must check the client's prefs upsert names on_conflict=person_id (P20 R2: index-source.html notifPrefsDb.save({ personId }, config.js notifPrefsDb.save's db.upsert, helpers.js notifPrefSaveRequest)");
+ok(s12.indexOf('db.upsert("notification_preferences", row, { onConflict: "person_id" })') < 0 && s12.indexOf("grep -qF 'onConflict: \"person_id\"' \"$T/vr12-index.html\"") < 0, "section 12a / 12a' must no longer grep the pre-R2 inline upsert (index-source.html / the served index.html no longer carry it)");
 
 step("P20 F1: docs - SCHEMA-REVIEW.md PREPARED section (before / after, blast radius, probe table, apply order, observed placeholder), tables (a) / (b), guide 4.3 row");
 ok(/## 2026-09-24 - followers: user_profiles\.follows \+ notification_preferences for an unlinked account \(Prompt 20 F1\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-24 - followers: user_profiles.follows + notification_preferences for an unlinked account (Prompt 20 F1)' section");
@@ -2102,5 +2103,50 @@ ok(/Decisions \(Faraz 9\/25/.test(g43.slice(g43.indexOf("2026-09-24-followers.sq
   ok(/re-creates its trigger `trade_insert_guard_trg`/.test(decF1), "the no-overlap sentence must name the follow-up's trigger re-create, not 'trade_insert_guard() only'");
 }
 console.log("- P20 R1: Faraz 9/25 decisions recorded (publish mail yes, the self-insert pin kept, follows cleared on a role change); one rollout with the member return-leg follow-up, no shared object");
+
+step("P20 R2 review: verify-rls section 12a / 12a' cannot drift from the client - every fixed string it greps exists in the file it names");
+{
+  // The prefs upsert moved into config.js notifPrefsDb.save + helpers.js notifPrefSaveRequest (P20 R2); a gate still grepping
+  // the old inline call went red on a correct build and would have stopped the rollout at its migration step. So: every
+  // `grep -qF '<s>' <file>` in 12a / 12a' must find <s> in that repo file. A served copy "$T/vr12-<f>" maps to the repo's <f>;
+  // the served index.html is the babel output of index-source.html, transpiled here exactly as build.js does; a
+  // `tr -d '<chars>' < <file> |` pipe strips the same characters first.
+  const gate = s12.slice(s12.indexOf("# 12a. client pin"), s12.indexOf("# grade_r1_12"));
+  ok(gate.length > 0, "section 12a / 12a' not found between '# 12a. client pin' and '# grade_r1_12'");
+  const gateCode = gate.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  let served = null;
+  const servedIndex = () => {
+    if (served === null) {
+      const html = read(path.join(ROOT, "index-source.html"));
+      const open = html.search(/<script\s+type=["']text\/babel["']\s*>/i);
+      const jsx = html.slice(html.indexOf(">", open) + 1, html.indexOf("</script>", open));
+      served = require("@babel/core").transformSync(jsx, {
+        babelrc: false, configFile: false, compact: false, comments: false,
+        presets: [["@babel/preset-env", { targets: { safari: "11" }, modules: false }], ["@babel/preset-react", { runtime: "classic", development: false }]],
+      }).code;
+    }
+    return served;
+  };
+  const trChars = (s) => s.replace(/\\r/g, "\r").replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+  const rx = /(?:tr -d '([^']*)' < ("[^"]+"|[^\s|;]+) \| )?grep -qF '([^']+)'(?: ("[^"]+"|[^\s|;)]+))?/g;
+  const pins = [];
+  let m;
+  while ((m = rx.exec(gateCode))) {
+    const file = (m[2] || m[4] || "").replace(/^"|"$/g, "");
+    pins.push({ strip: m[1], file, s: m[3] });
+  }
+  pins.forEach((p) => {
+    ok(!!p.file, "a grep -qF in section 12a / 12a' names no file: '" + p.s + "'");
+    const base = p.file.replace(/^\$T\/vr12-/, "");
+    const isServed = base !== p.file;
+    let text = isServed && base === "index.html" ? servedIndex() : read(path.join(ROOT, base));
+    if (p.strip !== undefined) { const cs = trChars(p.strip); text = text.split("").filter((c) => !cs.includes(c)).join(""); }
+    ok(text.includes(p.s), "verify-rls section 12a" + (isServed ? "'" : "") + " greps '" + p.s + "' in " + p.file + ", but " + (isServed && base === "index.html" ? "the babel build of index-source.html" : base) + (p.strip !== undefined ? " (after tr -d)" : "") + " does not contain it - the gate would report red on a correct build");
+  });
+  ok(pins.length >= 7, "section 12a / 12a' should grep at least 7 fixed strings (source: index-source.html, config.js x2, helpers.js; served: index.html, config.js x2, helpers.js) - found " + pins.length + ": " + JSON.stringify(pins));
+  ok(pins.some((p) => /index-source\.html$/.test(p.file) && /personId/.test(p.s)) && pins.some((p) => /vr12-index\.html$/.test(p.file) && /personId/.test(p.s)), "section 12a / 12a' must pin the surgeon's save (notifPrefsDb.save({ personId }) in the source and in the served index.html");
+  ok(pins.some((p) => /(^|vr12-)helpers\.js$/.test(p.file) && /onConflict: "person_id"/.test(p.s) && p.file === "helpers.js") && pins.some((p) => p.file === "$T/vr12-helpers.js" && /onConflict: "person_id"/.test(p.s)), "section 12a / 12a' must pin helpers.js notifPrefSaveRequest's on_conflict=person_id row (source and served)");
+}
+console.log("- P20 R2 review: section 12a / 12a' pins all exist in the files they name");
 
 console.log("schema.test.js: " + N + " assertions passed");

@@ -1183,8 +1183,10 @@ and the whole file rolls back - the pre-check reads the names first.
 - **The self-insert pin stays**: `user_profiles_self_insert` keeps `follows = '[]'::jsonb` (and `user_profiles_self_update` keeps its
   `follows` pin) - a profile never chooses whom it follows; the admin sets it in Setup > Users through `user_profiles_admin`.
 - **A role change away from viewer / coordinator keeps clearing `follows`** (`helpers.followsPatch` adds `follows: []` to the same PATCH).
-- The follower's own notification-preferences editor (the three switches, saved by `profile_id` through `prefs_own`) is to be built on
-  this branch before the rollout - it is what the functions' deploy PRECONDITION (`edge-functions/README.md` section 3) asks for.
+- The follower's own notification-preferences editor (the three switches and the reminder hour, saved by `profile_id` through `prefs_own`)
+  is built (Prompt 20 R2, 9/25) and ships in the same push - it is what the functions' deploy PRECONDITION (`edge-functions/README.md`
+  section 3) asks for. Before this migration it reads PostgREST's 400 `42703` for `profile_id` and says "Follower settings are available
+  after the next update" with every control disabled - no write.
 - **One rollout** with the member return-leg follow-up (`sql/migrations/2026-09-25-member-trade-return-leg.sql`), so everyone reloads
   once: push the app -> bump `client_versions.min_version` to that build -> 24 h have passed and every heartbeat in Client versions from
   the last 24 h is on that build or newer (if not, report instead of applying) -> apply both migrations with their before / after
@@ -1206,8 +1208,8 @@ and the whole file rolls back - the pre-check reads the names first.
   `select=*&person_id=in.(...)` for the day-before reminder).
   Both stay valid; `select=*` now also returns `id` / `profile_id`, which neither reads; a follower's row (`person_id` null) is ignored by
   both until a later Prompt 20 step teaches them to read it.
-- **The client's reads.** The prefs load (`select=*`, keyed `prefs[r.person_id]`) sees no follower row until one exists (a later step keys
-  those by `profile_id`); the `user_profiles?select=*` reads (`fetchProfile`, `loadAllProfilesLoud`, `loadClientVersions`) gain a `follows`
+- **The client's reads.** The prefs load (`select=*`, keyed `prefs[r.person_id]`) skips a row without `person_id`; a follower's own row is
+  read on its own path by `profile_id=eq.<his id>` (Prompt 20 R2 - a 400 `42703` before this migration, which the card says); the `user_profiles?select=*` reads (`fetchProfile`, `loadAllProfilesLoud`, `loadClientVersions`) gain a `follows`
   key nobody reads yet; `saveUserProfile` PATCHes only the keys it changes. `handle_new_auth_user` inserts `(id, email, role)` - `follows`
   takes its default; its email re-sync never touches `follows`.
 - **PostgREST's schema cache** reloads on DDL by itself on Supabase; if a REST call answers PGRST204 (column not found) right after the
@@ -1258,9 +1260,10 @@ Leftover count 0 (auth.users `probe-follow-%@example.test`, `user_profiles` disp
 
 **Apply order.**
 
-1. Client first: the branch's `saveNotifPref` sends `?on_conflict=person_id` (pinned by `test/data-layer.test.js` and verify-rls 12a). It
-   ships with the push; observe that the live build carries it before step 4: `bash scripts/verify-rls.sh` section 12a' (two anon GETs
-   of the Pages `config.js` / `index.html`) must print `ok live client: ...` - red means do NOT apply yet.
+1. Client first: the branch's `saveNotifPref` sends `?on_conflict=person_id` through `notifPrefsDb.save({ personId })` (config.js;
+   the row is helpers.js `notifPrefSaveRequest`'s since P20 R2 - pinned by `test/data-layer.test.js` and verify-rls 12a, whose strings
+   `test/schema.test.js` checks against the files they name). It ships with the push; observe that the live build carries it before
+   step 4: `bash scripts/verify-rls.sh` section 12a' (three anon GETs of the Pages `config.js` / `helpers.js` / `index.html`) must print `ok live client: ...` - red means do NOT apply yet.
    Then raise `client_versions.min_version` (decided, Faraz 9/25 - no longer a choice): a PWA left open on an older build keeps sending
    the upsert without `on_conflict` and gets the "Couldn't save notification settings" toast after step 4 until it reloads. Raise row
    `main`'s `min_version` to the APP_VERSION the deploy stamped (SQL only - no client path writes it: `update public.client_versions set

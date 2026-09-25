@@ -426,7 +426,7 @@ function buildFollowerReminder(opts: {
           View Full Schedule
         </a>
         <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e4ea;font-size:12px;color:#8a94a0;">
-          ${escHtml(APP_NAME)} - you receive this because you follow Dr. ${escHtml(opts.surgeonName)}; to change the reminder hour or stop these reminders, ask the scheduler.
+          ${escHtml(APP_NAME)} - you receive this because you follow Dr. ${escHtml(opts.surgeonName)}; to change the reminder hour or stop these reminders, use Notification settings under Settings in the app.
         </div>
       </div>
     </div>`;
