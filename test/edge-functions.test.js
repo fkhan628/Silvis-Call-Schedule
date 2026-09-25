@@ -421,6 +421,95 @@ check("B5 (3): tradePartyCheck - the row's two parties == targetIds as a set (or
   refused({ from_surgeon_id: "s3" }, ["s3", "s2"], "a row without a to party");
   refused({ from_surgeon_id: "s3", to_surgeon_id: null }, ["s3"], "a null party");
 });
+/* ---- Prompt 19 S3 (Faraz 9/24): an accepted give's trade_applied mail also goes to the scheduler(s) ----
+   The client sends the give's trade_applied to [from, to, ...schedulerIds]. The gate keeps every B5 refusal and widens
+   exactly one: on trade_applied (only) scheduler-linked ids may ride BESIDE the two parties - the parties stay required,
+   nobody else is allowed; the other trade_* categories stay "exactly the two parties". Prepared as v7, NOT deployed. */
+let tradeExtraIds = null;
+check("Prompt 19 S3: the sendGate block defines tradeExtraIds(type, schedulerIds) - trade_applied -> the scheduler-linked ids (as strings); every other type, the other trade_* included, -> [] (a missing list -> [])", () => {
+  const api = new Function(gateBlock() + "\nreturn { tradeExtraIds: typeof tradeExtraIds === 'function' ? tradeExtraIds : null };")();
+  assert.strictEqual(typeof api.tradeExtraIds, "function", "tradeExtraIds is a function in the @sendGate block");
+  tradeExtraIds = api.tradeExtraIds;
+  assert.deepStrictEqual(tradeExtraIds("trade_applied", ["s1", 6]), ["s1", "6"]);
+  assert.deepStrictEqual(tradeExtraIds("trade_applied", null), []);
+  ["trade_proposed", "trade_accepted", "trade_declined", "shift_claimed", "vacation_logged", "test", ""].forEach((t) => assert.deepStrictEqual(tradeExtraIds(t, ["s1"]), [], t));
+});
+check("Prompt 19 S3: tradePartyCheck(trade, targetIds, extraIds) - with extraIds (trade_applied's scheduler ids) the two parties are REQUIRED and the extra ids ALLOWED, nobody else; without extraIds the check is exactly B5's (a scheduler id beside the parties is refused)", () => {
+  if (!tradePartyCheck) throw new Error("gate block did not load");
+  const row = { from_surgeon_id: "s3", to_surgeon_id: "s2" };
+  const refused = (trade, ids, extra, why) => { const r = tradePartyCheck(trade, ids, extra); assert.strictEqual(typeof r, "string", why + " must be refused"); assert.ok(r.length > 0, why + " is a sentence"); return r; };
+  assert.strictEqual(tradePartyCheck(row, ["s3", "s2", "s1"], ["s1"]), null, "the parties + the scheduler");
+  assert.strictEqual(tradePartyCheck(row, ["s1", "s2", "s3"], ["s1"]), null, "order");
+  assert.strictEqual(tradePartyCheck(row, ["s3", "s2", "s1", "s6"], ["s1", "s6"]), null, "two scheduler-linked ids");
+  assert.strictEqual(tradePartyCheck(row, ["s3", "s2"], ["s1"]), null, "the scheduler is allowed, not required (a failed lookup mails the parties)");
+  assert.strictEqual(tradePartyCheck({ from_surgeon_id: "s1", to_surgeon_id: "s2" }, ["s1", "s2"], ["s1"]), null, "a scheduler who is a party counts once");
+  assert.ok(/both of the trade's parties|two parties/.test(refused(row, ["s2", "s1"], ["s1"], "a party missing (the giver)")));
+  refused(row, ["s3", "s1"], ["s1"], "a party missing (the receiver)");
+  refused(row, ["s3", "s2", "s4"], ["s1"], "a non-scheduler third id");
+  refused(row, ["s3", "s2", "s1", "s4"], ["s1"], "a non-scheduler fourth id");
+  refused(row, ["s3", "s2", "s1"], [], "a scheduler id with no extra list (every other trade_* category)");
+  refused(row, ["s3", "s2", "s1"], undefined, "a scheduler id without the third argument (B5's call shape)");
+  refused(row, null, ["s1"], "a broadcast");
+  refused(row, [], ["s1"], "an empty list");
+  refused(null, ["s3", "s2", "s1"], ["s1"], "no row (unknown trade_id)");
+  refused({ from_surgeon_id: "s3", to_surgeon_id: null }, ["s3", "s1"], ["s1"], "a row without both parties");
+});
+check("Prompt 19 S3 review: tradePartyCheck's fourth argument senderId - a surgeon sender (non-null senderId) must be one of the row's two parties even when scheduler ids may ride along (a surgeon-role account linked to a scheduler id cannot mail about someone else's trade); null (admin / scheduler caller) skips it; tradeNamesOthers(trade, targetIds) - true only when targetIds names an id outside the row's two parties", () => {
+  const api = new Function(gateBlock() + "\nreturn { tradeNamesOthers: typeof tradeNamesOthers === 'function' ? tradeNamesOthers : null };")();
+  if (!tradePartyCheck) throw new Error("gate block did not load");
+  const row = { from_surgeon_id: "s2", to_surgeon_id: "s3" };
+  const r1 = tradePartyCheck(row, ["s1", "s2", "s3"], ["s1"], "s1");
+  assert.strictEqual(typeof r1, "string", "a surgeon sender who is not a party is refused (s1 linked to a scheduler account, trade s2 -> s3)");
+  assert.ok(/sender must be a party/.test(r1), r1);
+  assert.strictEqual(typeof tradePartyCheck(row, ["s2", "s3"], [], "s4"), "string", "a non-party sender, v6 shape");
+  assert.strictEqual(tradePartyCheck(row, ["s1", "s2", "s3"], ["s1"], "s2"), null, "the giver");
+  assert.strictEqual(tradePartyCheck(row, ["s1", "s2", "s3"], ["s1"], "s3"), null, "the receiver");
+  assert.strictEqual(tradePartyCheck(row, ["s1", "s2", "s3"], ["s1"], null), null, "an admin / scheduler caller (no sender check)");
+  assert.strictEqual(tradePartyCheck(row, ["s2", "s3"]), null, "B5's two-argument call shape is unchanged");
+  assert.strictEqual(typeof api.tradeNamesOthers, "function", "tradeNamesOthers is a function in the @sendGate block");
+  assert.strictEqual(api.tradeNamesOthers(row, ["s3", "s2"]), false, "exactly the parties");
+  assert.strictEqual(api.tradeNamesOthers(row, ["s3", "s3"]), false, "a subset of the parties");
+  assert.strictEqual(api.tradeNamesOthers(row, ["s3", "s2", "s1"]), true, "a third id");
+  assert.strictEqual(api.tradeNamesOthers(row, null), false, "a broadcast (refused elsewhere)");
+  assert.strictEqual(api.tradeNamesOthers(null, ["s1"]), false, "no row (refused elsewhere)");
+});
+check("Prompt 19 S3: sendGate - a surgeon's trade_applied may ALSO carry scheduler-linked ids (himself required, at most the two parties besides the schedulers; an empty scheduler list fails closed); trade_proposed / trade_accepted / trade_declined keep 'the two parties only'", () => {
+  if (!sendGate) throw new Error("gate block did not load");
+  allow(surgeon, "trade_applied", ["s3", "s2", "s1"]);
+  allow(surgeon, "trade_applied", ["s1", "s2", "s3"]);
+  allow(surgeon, "trade_applied", ["s2", "s3"]);
+  assert.strictEqual(sendGate(surgeon, "trade_applied", ["s3", "s2", "s1", "s6"], ["s1", "s6"]), null, "two scheduler-linked ids beside the parties");
+  deny(surgeon, "trade_applied", ["s3", "s2", "s4"], "a non-scheduler third id");
+  deny(surgeon, "trade_applied", ["s2", "s1"], "the caller is not among the targets");
+  deny(surgeon, "trade_applied", ["s3", "s2", "s1", "s4"], "a non-scheduler beside the scheduler");
+  assert.strictEqual(typeof sendGate(surgeon, "trade_applied", ["s3", "s2", "s1"], []), "string", "an empty scheduler list refuses the third id (fail closed)");
+  ["trade_proposed", "trade_accepted", "trade_declined"].forEach((t) => deny(surgeon, t, ["s3", "s2", "s1"], t + " to a scheduler beside the parties"));
+});
+check("Prompt 19 S3 source pins - send-notification: after the trade row is read, extraIds = tradeExtraIds(type, ...) ONLY when trade_applied names an id beyond the two parties (a v6-shaped send never depends on the extra lookup); a privileged caller reads the scheduler ids there; tradePartyCheck(trade, targetIds, extraIds, senderId) with the surgeon sender's person id (null when privileged); the surgeon path keeps the list read before sendGate; the header documents v7", () => {
+  const h = snSrc.slice(snSrc.indexOf("serve(async (req) =>"));
+  const party = h.indexOf("tradePartyCheck(");
+  assert.ok(party > 0, "tradePartyCheck is called in the handler");
+  const ex = h.indexOf('const extraIds = type === "trade_applied" && tradeNamesOthers(trade, targetIds) ? tradeExtraIds(type, privileged ? await loadSchedulerIds() : schedulerIds) : [];');
+  assert.ok(ex > 0, "the extra ids are read only for a trade_applied that names someone beyond the parties (a scheduler / admin caller reads them there; a surgeon's list was read before sendGate)");
+  assert.ok(ex > h.indexOf("shift_trade_requests?select=from_surgeon_id,to_surgeon_id") && ex < party, "after the trade row is read, before the party check");
+  assert.ok(h.includes("const partyDenied = tradePartyCheck(trade, targetIds, extraIds, privileged ? null : caller.personId);"), "tradePartyCheck gets the extra ids and the surgeon sender");
+  assert.ok(!h.includes('type === "trade_applied" && privileged ? await loadSchedulerIds()'), "no unconditional privileged lookup");
+  assert.ok(/const schedulerIds = privileged \? \[\] : await loadSchedulerIds\(\);/.test(h), "the surgeon path is unchanged");
+  assert.ok(/Prompt 19 S3/.test(snSrc) && /\bv7\b/.test(snSrc), "the file header names the Prompt 19 S3 change (v7)");
+  assert.ok(/trade_applied[^\n]*scheduler/.test(snSrc.slice(0, snSrc.indexOf("import "))), "the payload contract names trade_applied's scheduler ids");
+});
+check("Prompt 19 S3: edge-functions/README.md - section 3 carries the PENDING send-notification v6 -> v7 row (deploy BEFORE the Prompt 19 client push) with the proofs to observe; section 5 lists the trade_applied + scheduler check; the gate row names it", () => {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  assert.ok(/Prompt 19/.test(s3), "section 3 names Prompt 19");
+  assert.ok(/send-notification[^\n]*v6 -> v7 \(pending\)/.test(s3), "section 3: send-notification v6 -> v7 (pending)");
+  assert.ok(/BEFORE the Prompt 19 client push/.test(s3), "section 3 states the order (v7 first - under v6 the give's applied mail is refused whole)");
+  const row = s3.split("\n").find((l) => /v6 -> v7 \(pending\)/.test(l)) || "";
+  assert.ok(/403/.test(row) && /scheduler/.test(row) && /trade_applied/.test(row), "the pending row names the proofs (a scheduler beside the parties passes; a third surgeon still 403): " + row.slice(0, 160));
+  const s5 = readme.slice(readme.indexOf("### send-notification"), readme.indexOf("### daily-reminder"));
+  assert.ok(/Prompt 19/.test(s5) && /trade_applied/.test(s5) && /scheduler/.test(s5), "section 5 lists the trade_applied + scheduler case");
+  const gateRow = readme.split("\n").find((l) => /^\| send-notification \| OFF \|/.test(l)) || "";
+  assert.ok(/trade_applied[^|]*scheduler/.test(gateRow), "the gate row names trade_applied's scheduler ids: " + gateRow.slice(0, 120));
+});
 check("B5 (3) handler order: SUPABASE_URL / service-key check -> GoTrue -> role read -> senderRole 403 -> ONLY THEN the RESEND_API_KEY / NOTIFICATION_FROM_EMAIL 500s (an unauthenticated caller learns nothing about configuration) -> body -> targetIds normalised -> roster read -> cap 400 -> sendGate 403 -> trade_*: tradeIdOf 400 -> shift_trade_requests read by encoded id (service role, the two party columns) -> tradePartyCheck 403 -> resolveRecipients(cat, targetIds, roster.names)", () => {
   const h = snSrc.slice(snSrc.indexOf("serve(async (req) =>"));
   const sb = h.indexOf("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing");
@@ -461,10 +550,11 @@ check("B5 (3): the new refusal log lines carry the role, the type and counts onl
 });
 check("B5 (3): index-source.html - every trade_* sendEmailNotif call passes data.trade_id (the shift_trade_requests row id) so the v6 function accepts it; there is no trade_accepted mail call", () => {
   const calls = appSrc.split("\n").filter((l) => /sendEmailNotif\("trade_/.test(l));
-  assert.strictEqual(calls.length, 4, "four trade_* mail calls (proposed, applied, applied-as-a-unit, declined); found " + calls.length);
+  // Prompt 19 S3: a fifth call - the applied give's mail (notifyGiveApplied: the parties + the scheduler ids, v7)
+  assert.strictEqual(calls.length, 5, "five trade_* mail calls (proposed, applied, applied-as-a-unit, the applied give, declined); found " + calls.length);
   calls.forEach((l) => assert.ok(/trade_id:\s*(first|t)\.id\b/.test(l), "the call carries trade_id: <row>.id -> " + l.trim().slice(0, 140)));
   assert.strictEqual(calls.filter((l) => /"trade_proposed"/.test(l)).length, 1);
-  assert.strictEqual(calls.filter((l) => /"trade_applied"/.test(l)).length, 2);
+  assert.strictEqual(calls.filter((l) => /"trade_applied"/.test(l)).length, 3);
   assert.strictEqual(calls.filter((l) => /"trade_declined"/.test(l)).length, 1);
   assert.ok(!/sendEmailNotif\("trade_accepted"/.test(appSrc), "no trade_accepted mail call (the app posts the in-app note only)");
 });

@@ -167,7 +167,7 @@ Each function carries its own gate instead:
 |---|---|---|
 | calendar-sync | OFF (must stay OFF - calendar apps send no auth header) | none: public read-only feed of anon-readable data |
 | office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline; constant-time compare since Prompt 16 B5 - SHA-256 both sides, XOR the bytes) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
-| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403 |
+| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403. Prompt 19 S3 (v7, PENDING deploy): `trade_applied` may also carry scheduler-linked ids beside the two parties (an accepted give is reported to the scheduler) - the parties stay required, nobody else is allowed, a surgeon sender must be a party; the other `trade_*` stay exactly the two parties |
 | daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed (constant-time compare since Prompt 16 B5) |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
@@ -177,6 +177,19 @@ calendar-sync check in section 5.
 After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
+
+### Deploy record - Prompt 19 S3 (give a day: the applied give is mailed to the scheduler too) - PENDING, not deployed
+
+One function changes; `calendar-sync`, `office-notifications` and `daily-reminder` are untouched and are NOT
+redeployed. No schema, no RLS. Order: deploy v7 BEFORE the Prompt 19 client push - v7 accepts everything v6 accepts
+(the widening is additive), but under v6 the give's `trade_applied` mail (targetIds [from, to, scheduler]) is refused
+403 as a whole, so the two parties would get no mail either (the in-app rows are written regardless). Read
+`supabase functions list` first, back the live copy up with `download`, byte-compare after (the same commands as
+below, for `send-notification` alone).
+
+| when (UTC) | slug | version before -> after | what changed | proof (section 5, no mail can result) |
+|---|---|---|---|---|
+| (pending) | `send-notification` | v6 -> v7 (pending) | `trade_applied` only: scheduler-linked ids may ride beside the row's two parties (`tradeExtraIds` -> `tradePartyCheck`'s third argument), consulted only when the targets name an id beyond the two parties (`tradeNamesOthers` - an admin / scheduler caller reads the list there, so a v6-shaped send never depends on that read); a surgeon sender must be one of the row's parties (`tradePartyCheck`'s fourth argument, 403 `the sender must be a party to the trade`) and may name at most the two parties besides the schedulers; every v6 refusal is kept | to observe after the deploy (section 5, Prompt 19 lines): `trade_applied` naming a real row's two parties plus a NON-scheduler surgeon -> 403 `targetIds may add only scheduler-linked ids to the trade's two parties`; `trade_applied` naming one party plus the scheduler -> 403 `targetIds must include both of the trade's parties`; `trade_proposed` naming the two parties plus the scheduler -> 403 `targetIds must be exactly the trade's two parties` (unchanged); anon -> 401 as before. The allow path (the two parties + the scheduler) sends real mail - it is observed on the first accepted give: the function log line `type=trade_applied targets=<from>,<to>,<scheduler id>` and `sent` = the opted-in recipients |
 
 ### Deploy record - Item D (Khan's combined calendar + the digest's Davenport line, 2026-09-24) - filled 2026-09-24 07:55 UTC by the orchestrator (deployed after the client build 2026.09.24e was served)
 
@@ -445,6 +458,17 @@ curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" 
 # targetIds over the cap (roster size + 1: with the six-entry roster the cap is 7; count the blob's roster entries, outside surgeons included) -> 400
 #   {"error":"targetIds has 9 ids - the cap is 7 (roster size + 1)"} - nothing resolved, nothing sent
 curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"manual_edit","data":{"message":"probe"},"targetIds":["s1","s2","s3","s4","s5","s6","s7","s8","s9"]}' | Select-Object -First 1
+# Prompt 19 S3 (v7): trade_applied may add the scheduler-linked ids to the row's two parties - and nothing else. Take any
+# shift_trade_requests row WHOSE PARTIES ARE BOTH NOT SCHEDULER-LINKED (neither is s1 - with the scheduler as a party the
+# second and third calls below would be allowed sends) (<trade id> = its id, <from> / <to> = its from_surgeon_id /
+# to_surgeon_id, <other> = a surgeon who is neither party nor scheduler-linked) and fill them in by hand. With such a row
+# none of these can send mail:
+# the two parties + a non-scheduler -> 403 {"error":"not allowed: targetIds may add only scheduler-linked ids to the trade's two parties"}
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"trade_applied","data":{"message":"probe","trade_id":"<trade id>"},"targetIds":["<from>","<to>","<other>"]}' | Select-Object -First 1
+# one party + the scheduler -> 403 {"error":"not allowed: targetIds must include both of the trade's parties"}
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"trade_applied","data":{"message":"probe","trade_id":"<trade id>"},"targetIds":["<from>","s1"]}' | Select-Object -First 1
+# trade_proposed to the two parties + the scheduler -> 403 {"error":"not allowed: targetIds must be exactly the trade's two parties"} (unchanged: only trade_applied widens)
+curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe","trade_id":"<trade id>"},"targetIds":["<from>","<to>","s1"]}' | Select-Object -First 1
 ```
 The positive surgeon case cannot be proven without a mail: a surgeon's `{"type":"test","targetIds":["<his own id>"]}`
 is one real e-mail to himself - it is listed in section 6 as the live proof of the gate's allow path.

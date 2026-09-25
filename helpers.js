@@ -775,6 +775,123 @@ function tradeGiveEmail(req, unitLabel) {
     message: `${from} is offering ${what} to ${to} - nothing in return. ${to} can accept or decline in the app; the schedule changes only if ${to} accepts.`,
   };
 }
+// Prompt 19 S3 (Faraz 9/24): accept / decline of a give. Pure; the dashes and the arrow are written as escapes (\u2014 em
+// dash, \u2013 en dash, \u2192 arrow) so this file's give wording stays ASCII in source.
+// A ROW is a give when it says so (kind 'give') and carries no return leg; a pre-migration row (no kind) is a trade. A
+// member's whole-unit trade for ONE return day sends its tail rows as kind 'give' too (S2), so a GROUP (tradeGroupOf) is
+// a give only when every row is - the head row carries the return leg and makes the group a trade.
+function tradeIsGive(r) {
+  return !!r && typeof r === "object" && r.kind === "give" && !r.return_day && !r.return_role;
+}
+function tradeGroupIsGive(rows) {
+  const list = Array.isArray(rows) ? rows : [rows];
+  return list.length > 0 && list.every(tradeIsGive);
+}
+// S3 review: whether a row belongs to a give is decided on its WHOLE proposal, in every status - the app's same-status
+// group (tradeGroupOf) is not enough, because a unit's rows drift apart (a tail's apply refused, a PATCH that failed
+// part-way) and the 'give' tails of a member's unit trade would then read as a give on their own. The proposal of r:
+// r plus the rows with the same unit tag (tagOf(r): kind, start, n - the app's tradeUnitTag), the same parties and
+// role, in the same phase (live: pending / accepted / applied; closed: declined / cancelled - a re-offer after a
+// decline is its own proposal) and submitted within 10 minutes of r (the rows of one proposal are inserted one after
+// the other; a re-offer of the same unit weeks later, after a revert, is its own proposal). A row without a unit tag
+// is its own proposal. Sorted by day.
+const TRADE_PROPOSAL_WINDOW_MS = 10 * 60 * 1000;
+function tradeProposalOf(r, rows, tagOf) {
+  if (!r || typeof r !== "object") return [];
+  const tag = typeof tagOf === "function" ? tagOf(r) : null;
+  if (!tag) return [r];
+  const live = (st) => st === "pending" || st === "accepted" || st === "applied";
+  const at = (x) => { const t = Date.parse(x && x.submitted_at); return isNaN(t) ? null : t; };
+  const t0 = at(r);
+  const same = (x) => {
+    if (!x || typeof x !== "object" || x.id === r.id) return false;
+    const t = tagOf(x);
+    if (!t || t.kind !== tag.kind || t.start !== tag.start || t.n !== tag.n) return false;
+    if (x.from_surgeon_id !== r.from_surgeon_id || x.to_surgeon_id !== r.to_surgeon_id || x.role !== r.role) return false;
+    if (live(x.status) !== live(r.status)) return false;
+    const t1 = at(x);
+    return t0 === null || t1 === null || Math.abs(t1 - t0) <= TRADE_PROPOSAL_WINDOW_MS;
+  };
+  return [r].concat((Array.isArray(rows) ? rows : []).filter(same)).sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
+}
+function tradeProposalIsGive(r, rows, tagOf) {
+  return !!r && tradeGroupIsGive(tradeProposalOf(r, rows, tagOf));
+}
+// " (weekend unit, 10/9\u201310/11)" / " (Thanksgiving unit, 11/26\u201311/29)" from a unit tag ({ kind, start, n, text } - the
+// app's tradeUnitTag reads it off the row's detail stamp); "" without one.
+function tradeGiveUnitNote(tag) {
+  if (!tag || typeof tag.start !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(tag.start) || !(Number(tag.n) > 0)) return "";
+  const name = String(tag.text || "").split(" unit ")[0];
+  const word = tag.kind === "weekend-block" || name === "weekend block" ? "weekend" : (name || "holiday");
+  const end = fmt(addD(parse(tag.start), Number(tag.n) - 1));
+  return " (" + word + " unit, " + fmtMD(tag.start) + "\u2013" + fmtMD(end) + ")";
+}
+function tradeGiveSlot(req, tag) {
+  return TT_DOW[parse(req.day).getDay()] + " " + fmtMD(req.day) + " " + req.role + tradeGiveUnitNote(tag);
+}
+// The give's one line in Trades and in Alerts, by status. viewerId === the receiver -> "you" (the receiver's Accept /
+// Decline sit under it); anyone else (the giver, the scheduler) reads both names.
+//   pending   "Acton offers you Sat 10/10 primary (weekend unit, 10/10\u201310/11) \u2014 nothing in return"
+//   accepted / applied  "Burchett takes Sat 10/10 primary from Acton \u2014 nothing in return"
+//   declined  "Burchett declined Acton's offer of Sat 10/10 primary"
+//   cancelled "Acton withdrew the offer of Sat 10/10 primary to Burchett"
+function tradeGiveLine(req, tag, viewerId) {
+  const what = tradeGiveSlot(req, tag), from = req.from_surgeon_name, to = req.to_surgeon_name, st = req.status || "pending";
+  if (st === "accepted" || st === "applied") return `${to} takes ${what} from ${from} \u2014 nothing in return`;
+  if (st === "declined") return `${to} declined ${from}'s offer of ${what}`;
+  if (st === "cancelled") return `${from} withdrew the offer of ${what} to ${to}`;
+  return (viewerId && viewerId === req.to_surgeon_id ? `${from} offers you ${what}` : `${from} offers ${to} ${what}`) + " \u2014 nothing in return";
+}
+function tradeGiveAcceptMsg(req, tag) {
+  return `${req.to_surgeon_name} accepted ${req.from_surgeon_name}'s give: ${req.to_surgeon_name} takes ${tradeGiveSlot(req, tag)} \u2014 nothing in return`;
+}
+function tradeGiveDeclineMsg(req, tag) {
+  return `${req.to_surgeon_name} declined ${req.from_surgeon_name}'s give: ${tradeGiveSlot(req, tag)} stays with ${req.from_surgeon_name}`;
+}
+function tradeGiveCancelMsg(req, tag) {
+  return `${req.from_surgeon_name} withdrew the give: ${tradeGiveSlot(req, tag)} stays with ${req.from_surgeon_name} (it was offered to ${req.to_surgeon_name})`;
+}
+// "Give applied: Acton \u2192 Burchett, 10/10\u201310/11 primary" (a unit: its first and last day) / "Give applied: Acton \u2192
+// Burchett, Sat 10/10 primary" (one day; no days = the row's own day).
+function tradeGiveAppliedLine(req, days) {
+  const list = (Array.isArray(days) && days.length ? days : [req.day]).slice().sort();
+  const span = list.length > 1 ? fmtMD(list[0]) + "\u2013" + fmtMD(list[list.length - 1]) : TT_DOW[parse(list[0]).getDay()] + " " + fmtMD(list[0]);
+  return `Give applied: ${req.from_surgeon_name} \u2192 ${req.to_surgeon_name}, ${span} ${req.role}`;
+}
+// The applied give's e-mail targets: the two parties, then the scheduler-linked ids (send-notification v7 lets them ride
+// beside the parties on trade_applied only), each once. schedulerIds null = the lookup failed (the app already toasted)
+// -> the parties alone, never a broadcast.
+function tradeAppliedTargets(req, schedulerIds) {
+  const out = [];
+  [req && req.from_surgeon_id, req && req.to_surgeon_id].concat(Array.isArray(schedulerIds) ? schedulerIds : []).forEach(id => {
+    if (id === null || id === undefined || id === "") return;
+    const s = String(id);
+    if (out.indexOf(s) < 0) out.push(s);
+  });
+  return out;
+}
+// What accepting a give writes besides the PATCHes: the trade.accept audit row (kind 'give') and the 'Give accepted' feed
+// row naming both parties. rows = the accepted group (names resolved, sorted by day); tag = its unit tag or null.
+function giveAcceptedNotes(rows, tag) {
+  const list = Array.isArray(rows) ? rows : [rows];
+  const first = list[0], ids = list.map(r => r.id);
+  const message = tradeGiveAcceptMsg(first, tag);
+  return {
+    audit: { action: "trade.accept", message, detail: { trade_id: first.id, trade_ids: ids, day: first.day, role: first.role, days: list.map(r => r.day), return_day: null, return_role: null, from: first.from_surgeon_id, to: first.to_surgeon_id, kind: "give" } },
+    notification: { type: "trade_accepted", title: "Give accepted", message, data: { from_surgeon_id: first.from_surgeon_id, to_surgeon_id: first.to_surgeon_id, trade_id: first.id, trade_ids: ids, day: first.day, kind: "give" } },
+  };
+}
+// ... and once apply_trade has moved every row: the 'Give applied' feed row (both parties by id; the scheduler reads the
+// whole feed) and the ONE trade_applied e-mail (trade_id = the first row) to tradeAppliedTargets.
+function giveAppliedNotes(rows, schedulerIds) {
+  const list = Array.isArray(rows) ? rows : [rows];
+  const first = list[0], ids = list.map(r => r.id), days = list.map(r => r.day);
+  const line = tradeGiveAppliedLine(first, days);
+  return {
+    notification: { type: "trade_applied", title: "Give applied", message: line, data: { from_surgeon_id: first.from_surgeon_id, to_surgeon_id: first.to_surgeon_id, trade_id: first.id, trade_ids: ids, day: first.day, days, kind: "give" } },
+    email: { subject: line, message: `${line}. ${first.to_surgeon_name} now holds ${days.length > 1 ? "those days" : "that day"}; nothing comes back to ${first.from_surgeon_name}.`, trade_id: first.id, targetIds: tradeAppliedTargets(first, schedulerIds) },
+  };
+}
 // The shift_trade_requests rows of ONE proposal from the Propose card - one row per given day, in order. Pure.
 //   p = { fromId, fromName, toId, toName, days, role, retDays, returnRole, give, isScheduler, stamp(i) -> "" | unit stamp,
 //         submittedAt }
@@ -2810,7 +2927,7 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
-    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, slotLabel, suggestTradePartners, tradeDayShort,
+    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
     ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,
     buildWeekRows, exportColorsFor,

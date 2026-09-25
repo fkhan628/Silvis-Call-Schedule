@@ -824,13 +824,15 @@ const offerModeRpc = (b, json) => {
 // B3: an optional `extra({ route, req, url, json })` runs before the shared route and answers `true` when it fulfilled
 // the request (the viewer session serves its own notifications feed that way); `profile.authEmail` is the auth user's
 // address for that session (never part of the profile row the app reads).
+// Prompt 19 S3: the scheduler lookup (schedulerIdsLoud: user_profiles?select=person_id,role&role=in.(scheduler,admin)...)
+// answers the scheduler-linked rows like the real table does (the harness's admin, s1) - not the session's own row.
 const routeSupabaseAs = (profile, extra) => async (route) => {
   const req = route.request();
   const url = new URL(req.url());
   const json = (status, body) => route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
   const { authEmail, ...row } = profile;
   if (url.pathname.startsWith("/auth/v1/user") && req.method() === "GET") return json(200, { id: profile.id, email: authEmail || "office@example.com", aud: "authenticated", role: "authenticated" });
-  if (url.pathname.startsWith("/rest/v1/user_profiles") && req.method() === "GET") return json(200, [row]);
+  if (url.pathname.startsWith("/rest/v1/user_profiles") && req.method() === "GET") return json(200, /role=in\./.test(url.search) ? [{ person_id: FAKE_PROFILE.person_id, role: FAKE_PROFILE.role }] : [row]);
   if (extra && await extra({ route, req, url, json })) return;
   return routeSupabase(route);
 };
@@ -4004,6 +4006,85 @@ try {
           const mcp = writesSince(beforeMC, "/rest/v1/shift_trade_requests").find(w => w.method === "PATCH");
           if (!mcp || mcp.path !== "/rest/v1/shift_trade_requests?id=eq." + mNew[0] || (bodyOf(mcp) || {}).status !== "cancelled") fail("Give away (member): withdrawing the give should PATCH ?id=eq.<id> { status: cancelled }, got " + JSON.stringify(mcp && [mcp.path, mcp.body]));
           else ok("Give away (member): Burchett withdraws his give (PATCH status cancelled) - no pending row is left for the later sessions");
+        }
+        // ----- (A3r) Prompt 19 S3: the RECEIVER answers a give (a third session - the colleague Burchett's give chip
+        //      named, role surgeon, 390 px). The harness re-serves Burchett's give as a fresh pending row (his own was
+        //      withdrawn above) and his trade_proposed feed row, re-pointed at it. Trades: the row reads the give line
+        //      ("Burchett offers you <Dy M/D> <role> - nothing in return", em dash) with Accept / Decline and no Cancel.
+        //      Alerts: the same line with Accept / Decline. Accept from Alerts: PATCH accepted THEN rpc/apply_trade
+        //      { p_trade_id } only; 'Give accepted' + 'Give applied' feed rows naming both parties; ONE send-notification
+        //      trade_applied to [Burchett, receiver, the scheduler (s1)] with trade_id and the 'Give applied: Burchett
+        //      <arrow> <Name>, ...' subject; the trade.accept audit row carries kind give; no address in any write; no
+        //      horizontal scroll with the Alerts panel open. The row is taken out of the store afterwards. -----
+        if (mb && top) {
+          const EM = String.fromCharCode(0x2014), ARROW = String.fromCharCode(0x2192);
+          const giveId = crypto.randomUUID();
+          tradeStore.push({ ...mb, id: giveId, status: "pending", submitted_at: new Date().toISOString(), decided_at: null });
+          const propFeed = writesSince(beforeM, "/rest/v1/notifications").map(bodyOf).find(n => n && n.type === "trade_proposed") || null;
+          const giveFeed = propFeed ? { ...propFeed, id: crypto.randomUUID(), created_at: new Date().toISOString(), data: { ...(propFeed.data || {}), trade_id: giveId, trade_ids: [giveId] } } : null;
+          const RCV_UID = "00000000-0000-4000-8000-00000000e0e3";
+          const RCV_PROFILE = { id: RCV_UID, person_id: top.id, role: "surgeon", display_name: topName, email: null, created_at: "2026-09-24T00:00:00Z" };
+          const RCV_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: RCV_UID, role: "authenticated", email: "receiver@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+          const rp = await context.newPage();
+          watchPage(rp, "receiver-give");
+          await rp.setViewportSize({ width: 390, height: 844 });
+          await rp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, RCV_JWT);
+          await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+          await rp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(RCV_PROFILE, async ({ url, req, json }) => {
+            if (!url.pathname.startsWith("/rest/v1/notifications") || req.method() !== "GET") return false;
+            await json(200, giveFeed && !url.searchParams.get("type") ? [giveFeed] : []);
+            return true;
+          }));
+          const rDialogs = [];
+          rp.on("dialog", (d) => { rDialogs.push(d.message()); d.accept(); });
+          try {
+            if (!giveFeed) throw new Error("the member's give wrote no trade_proposed feed row to re-serve");
+            const [yy, mm, dd] = mDay.split("-").map(Number);
+            const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(yy, mm - 1, dd).getDay()];
+            const wantLine = `Burchett offers you ${dow} ${mm}/${dd} ${mRole} ${EM} nothing in return`;
+            await loadWithRetry(rp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "receiver page (give)");
+            await rp.waitForSelector("text=Synced", { timeout: 30000 });
+            await rp.click('button[data-tab="timeoff"]');
+            const rowSel = `[data-testid=trade-row][data-trade-id="${giveId}"]`;
+            await rp.waitForSelector(rowSel, { timeout: 10000 });
+            const rowInfo = await rp.$eval(rowSel, el => ({ kind: el.getAttribute("data-kind"), line: (el.querySelector("[data-testid=trade-give-line]") || { textContent: "" }).textContent.trim(), accept: !!el.querySelector("[data-testid=trade-accept]"), decline: !!el.querySelector("[data-testid=trade-decline]"), cancel: !!el.querySelector("[data-testid=trade-cancel]") }));
+            if (rowInfo.kind !== "give" || rowInfo.line !== wantLine || !rowInfo.accept || !rowInfo.decline || rowInfo.cancel) fail("Give (receiver): the Trades row should read '" + wantLine + "' with Accept / Decline and no Cancel, got " + JSON.stringify(rowInfo));
+            else ok(`Give (receiver, Trades): '${rowInfo.line}' - Accept / Decline, no Cancel (data-kind give)`);
+            await rp.click('button[aria-label="Notifications"]');
+            await rp.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
+            const nLine = await rp.$eval("[data-testid=notif-give-line]", el => el.textContent.trim()).catch(() => "");
+            const nBtns = await rp.$$eval("[data-testid=notif-give-accept], [data-testid=notif-give-decline]", els => els.map(e => e.getAttribute("data-testid")));
+            const rScroll = await rp.evaluate(() => document.documentElement.scrollWidth);
+            if (nLine !== wantLine || nBtns.join(",") !== "notif-give-accept,notif-give-decline") fail("Give (receiver): the Alerts row should read '" + wantLine + "' with Accept / Decline, got '" + nLine + "' " + JSON.stringify(nBtns));
+            else if (rScroll > 392) fail("Give (receiver): the page scrolls horizontally with the Alerts panel open (scrollWidth " + rScroll + ")");
+            else ok(`Give (receiver, Alerts): '${nLine}' - Accept / Decline; scrollWidth ${rScroll}`);
+            const beforeR = writes.length, dlgR = rDialogs.length;
+            await rp.click("[data-testid=notif-give-accept]");
+            await waitFor(() => writesSince(beforeR).some(w => /send-notification/.test(w.path) && (bodyOf(w) || {}).type === "trade_applied"), 10000);
+            await rp.waitForTimeout(500);
+            const seq = writesSince(beforeR);
+            const patchI = seq.findIndex(w => w.method === "PATCH" && w.path === "/rest/v1/shift_trade_requests?id=eq." + giveId && (bodyOf(w) || {}).status === "accepted");
+            const rpcI = seq.findIndex(w => w.method === "POST" && w.path === "/rest/v1/rpc/apply_trade");
+            const rpcB = rpcI >= 0 ? bodyOf(seq[rpcI]) : null;
+            const feed = seq.filter(w => w.path.startsWith("/rest/v1/notifications")).map(bodyOf).filter(Boolean);
+            const accN = feed.find(n => n.type === "trade_accepted"), appN = feed.find(n => n.type === "trade_applied");
+            const mails = seq.filter(w => /send-notification/.test(w.path)).map(bodyOf).filter(b => b && b.type === "trade_applied");
+            const wantTargets = ["s2", top.id, "s1"].filter((id, i, a) => a.indexOf(id) === i);
+            const audit = auditSince(beforeR, "trade.accept");
+            const stored = tradeStore.find(r => r.id === giveId);
+            if (rDialogs.length !== dlgR) fail("Give (receiver): accepting fired a dialog: " + JSON.stringify(rDialogs.slice(dlgR)));
+            else if (patchI < 0 || rpcI < 0 || rpcI < patchI) fail("Give (receiver): expected PATCH accepted THEN rpc/apply_trade, got " + JSON.stringify(seq.map(w => w.method + " " + w.path)));
+            else if (!rpcB || JSON.stringify(Object.keys(rpcB)) !== '["p_trade_id"]' || rpcB.p_trade_id !== giveId) fail("Give (receiver): rpc/apply_trade body should be exactly { p_trade_id }, got " + JSON.stringify(rpcB));
+            else if (!accN || accN.title !== "Give accepted" || !appN || appN.title !== "Give applied" || !String(appN.message).startsWith("Give applied: Burchett " + ARROW + " " + topName + ", ") || [accN, appN].some(n => !n.data || n.data.from_surgeon_id !== "s2" || n.data.to_surgeon_id !== top.id || n.data.kind !== "give")) fail("Give (receiver): feed rows wrong: " + JSON.stringify(feed));
+            else if (mails.length !== 1 || JSON.stringify(mails[0].targetIds) !== JSON.stringify(wantTargets) || !mails[0].data || mails[0].data.trade_id !== giveId || mails[0].data.subject !== appN.message) fail("Give (receiver): expected ONE trade_applied mail to " + JSON.stringify(wantTargets) + " with trade_id and the applied line as subject, got " + JSON.stringify(mails));
+            else if (!audit || !audit.detail || audit.detail.kind !== "give") fail("Give (receiver): the trade.accept audit row should carry kind give, got " + JSON.stringify(audit));
+            else if (!stored || stored.status !== "applied") fail("Give (receiver): the row should read applied after apply_trade, got " + JSON.stringify(stored && stored.status));
+            else ok(`Give (receiver, accept from Alerts): PATCH accepted -> rpc/apply_trade { p_trade_id }; feed 'Give accepted' + '${appN.message}'; send-notification trade_applied -> ${JSON.stringify(mails[0].targetIds)}; audit trade.accept kind give`);
+            if (!seq.every(w => noAddress(w.body))) fail("Give (receiver): a write body carries an email address");
+          } catch (e) { fail("Give (receiver, A3r) exception: " + errLine(e)); }
+          const gi = tradeStore.findIndex(r => r.id === giveId);
+          if (gi >= 0) tradeStore.splice(gi, 1);
+          await rp.close();
         }
       } catch (e) { fail("Give away (member, A2m) exception: " + errLine(e)); }
       await mp.close();

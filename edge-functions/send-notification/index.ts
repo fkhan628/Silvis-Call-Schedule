@@ -76,6 +76,22 @@
 //     addressed to a third person or broadcast. The pure pieces (isTradeType,
 //     tradeIdOf, targetCap, tradePartyCheck) sit in the @sendGate block and are
 //     unit-tested; the log-redaction regex is the @logRedact block.
+//   - GIVE A DAY (Prompt 19 S3, 2026-09-24; v7 - prepared, NOT deployed yet;
+//     see README section 3). When a colleague accepts a give (a one-way
+//     shift_trade_requests row, kind 'give'), the app mails trade_applied to
+//     both parties AND the scheduler(s): targetIds = [from, to, ...scheduler-
+//     linked ids]. The gate widens for trade_applied ONLY: scheduler-linked ids
+//     may ride beside the two parties (tradeExtraIds -> tradePartyCheck's third
+//     argument); the two parties stay required and nobody else is allowed. A
+//     surgeon sender still has to be one of the row's parties (tradePartyCheck's
+//     senderId) and may name at most the two parties besides the schedulers.
+//     trade_proposed / trade_accepted / trade_declined stay "exactly the two
+//     parties". The scheduler ids are consulted only when a trade_applied names
+//     an id beyond the two parties (tradeNamesOthers); an admin / scheduler
+//     caller reads them there (a surgeon's list is already read before
+//     sendGate), so a v6-shaped send never depends on that extra read.
+//     Everything v6 accepts, v7 accepts - deploy v7 BEFORE the client that
+//     sends the give.
 //
 // Payload contract:
 //   POST { type: string, data: { subject?: string, message: string, detail?: string, trade_id?: uuid }, targetIds?: string[] }
@@ -83,6 +99,7 @@
 //     targetIds []      -> send to nobody (200, sent 0) - defense in depth
 //     targetIds [ids]   -> only those person ids (s1..s6); at most roster size + 1 of them
 //     trade_*           -> data.trade_id required; targetIds must be exactly that row's two parties
+//     trade_applied     -> the same two parties, plus (optionally) scheduler-linked ids (Prompt 19 S3, v7)
 //   -> 200 { sent, failed, skipped_no_email, skipped_pref_off, results: [{ person_id, status }] }
 //
 // Secrets (by NAME): RESEND_API_KEY, NOTIFICATION_FROM_EMAIL (required - there is
@@ -278,9 +295,14 @@ function sendGate(caller, type, targetIds, schedulerIds) {
     case "trade_proposed":
     case "trade_accepted":
     case "trade_declined":
-    case "trade_applied":
       if (ids.length > 2) return type + " goes to the two parties only";
       if (ids.indexOf(me) < 0) return type + " must include the caller as a party";
+      return null;
+    case "trade_applied":
+      // Prompt 19 S3 (v7): an accepted give's applied mail also goes to the scheduler(s) - scheduler-linked ids may ride
+      // beside the parties; tradePartyCheck (the trade frame) then requires the row's two parties themselves
+      if (ids.indexOf(me) < 0) return type + " must include the caller as a party";
+      if (ids.filter(function (id, i, a) { return a.indexOf(id) === i && !isSched(id); }).length > 2) return type + " goes to the two parties and the scheduler(s) only";
       return null;
     case "shift_claimed":
       if (ids.indexOf(me) < 0) return "shift_claimed must include the claimer (the caller)";
@@ -323,14 +345,43 @@ function targetCap(rosterCount) {
 // row that data.trade_id names (from_surgeon_id / to_surgeon_id), compared as
 // sets of strings. null = proceed, else the refusal (403). The handler reads
 // the row with the service role; an unknown id arrives here as null.
-function tradePartyCheck(trade, targetIds) {
+// Prompt 19 S3 (v7): extraIds (tradeExtraIds below - trade_applied's
+// scheduler-linked ids, [] for every other category) may ride BESIDE the two
+// parties: the parties stay required, nobody else is allowed. Without extraIds
+// the check is exactly the v6 one. senderId (S3 review): a surgeon caller's
+// person id - he must be one of the row's two parties (v6's exact match implied
+// it; with extra ids it has to be said); null / undefined for an admin /
+// scheduler caller.
+function tradePartyCheck(trade, targetIds, extraIds, senderId) {
   if (!Array.isArray(targetIds) || targetIds.length === 0) return "trade mail is never a broadcast - targetIds must name the two parties";
   if (!trade || trade.from_surgeon_id == null || trade.to_surgeon_id == null) return "data.trade_id names no trade";
   const distinctSorted = function (ids) { return ids.map(String).filter(function (id, i, a) { return a.indexOf(id) === i; }).sort(); };
   const want = distinctSorted([trade.from_surgeon_id, trade.to_surgeon_id]);
+  if (senderId != null && want.indexOf(String(senderId)) < 0) return "the sender must be a party to the trade";
   const got = distinctSorted(targetIds);
-  if (want.length !== got.length || want.some(function (id, i) { return id !== got[i]; })) return "targetIds must be exactly the trade's two parties";
+  const extra = distinctSorted(Array.isArray(extraIds) ? extraIds : []);
+  if (!extra.length) {
+    if (want.length !== got.length || want.some(function (id, i) { return id !== got[i]; })) return "targetIds must be exactly the trade's two parties";
+    return null;
+  }
+  if (!want.every(function (id) { return got.indexOf(id) >= 0; })) return "targetIds must include both of the trade's parties";
+  if (got.some(function (id) { return want.indexOf(id) < 0 && extra.indexOf(id) < 0; })) return "targetIds may add only scheduler-linked ids to the trade's two parties";
   return null;
+}
+// The ids a trade_* send may add to the two parties: the scheduler-linked ids on
+// trade_applied (Prompt 19 S3: an accepted give is reported to the scheduler),
+// nobody on every other category.
+function tradeExtraIds(type, schedulerIds) {
+  if (type !== "trade_applied" || !Array.isArray(schedulerIds)) return [];
+  return schedulerIds.map(function (x) { return String(x); });
+}
+// true when targetIds names an id outside the row's two parties - the only case
+// in which the scheduler-linked ids are consulted (S3 review: a v6-shaped send
+// never waits on, or fails with, that read).
+function tradeNamesOthers(trade, targetIds) {
+  if (!trade || !Array.isArray(targetIds)) return false;
+  const parties = [String(trade.from_surgeon_id), String(trade.to_surgeon_id)];
+  return targetIds.some(function (id) { return parties.indexOf(String(id)) < 0; });
 }
 // @sendGate-end
 
@@ -514,7 +565,9 @@ serve(async (req) => {
     // -- Trade frame (Prompt 16 B5): a trade_* send names its shift_trade_requests
     //    row in data.trade_id and the row's two parties must be exactly targetIds -
     //    for every caller, the scheduler included (the app always has the row id;
-    //    trade mail is never a broadcast and never reaches a third person).
+    //    trade mail is never a broadcast and never reaches anyone but the two
+    //    parties - and, on trade_applied only (Prompt 19 S3, v7), the
+    //    scheduler-linked ids). A surgeon sender must himself be a party.
     if (isTradeType(type)) {
       const tradeId = tradeIdOf(data);
       if (!tradeId) {
@@ -523,7 +576,11 @@ serve(async (req) => {
       }
       const rows = await rest(`shift_trade_requests?select=from_surgeon_id,to_surgeon_id&id=eq.${encodeURIComponent(tradeId)}`);
       const trade = Array.isArray(rows) && rows[0] ? rows[0] : null;
-      const partyDenied = tradePartyCheck(trade, targetIds);
+      // Prompt 19 S3 (v7): trade_applied may also name the scheduler(s). The list is consulted only when targetIds
+      // names someone beyond the two parties - an admin / scheduler caller's is read here, a surgeon's was read before
+      // sendGate - so a v6-shaped send never depends on that read. A surgeon sender must be one of the parties.
+      const extraIds = type === "trade_applied" && tradeNamesOthers(trade, targetIds) ? tradeExtraIds(type, privileged ? await loadSchedulerIds() : schedulerIds) : [];
+      const partyDenied = tradePartyCheck(trade, targetIds, extraIds, privileged ? null : caller.personId);
       if (partyDenied) {
         console.warn(`[send-notification] rejected (403): role=${caller.role || "none"} type=${type} targets=${targetIds ? targetIds.length : "broadcast"} trade=${trade ? "found" : "none"} - ${partyDenied}`);
         return json(403, { error: `not allowed: ${partyDenied}` });

@@ -1286,6 +1286,298 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/[^\x00-\x7f]/.test(card), "the card source stays ASCII");
     });
   }
+  // Prompt 19 step 3 (Faraz 9/24): accept / decline of a give. The receiver reads the pending give in Trades and in
+  // Alerts ("Acton offers you Sat 10/10 primary (weekend unit, 10/10-10/11) - nothing in return", em / en dash) with
+  // Accept / Decline; eligibility is re-checked at accept; apply_trade runs one-way for every row; both parties get the
+  // accepted + applied rows and the scheduler(s) get the applied give in-app and by e-mail (trade_applied to [from, to,
+  // ...schedulerIds] - send-notification v7). The helpers are pure (behaviour); the status writes are lifted out of the
+  // component verbatim and run against stubs (behaviour); the Trades / Alerts rendering is pinned.
+  {
+    const tag2 = { kind: "weekend-block", start: "2026-10-10", n: 2, text: "weekend block unit 10/10-10/11 (2 days)" };
+    const stamp2 = (i) => "[unit weekend-block 2026-10-10 2: weekend block unit 10/10-10/11 (2 days), day " + (i + 1) + " of 2]";
+    const giveRow = (o) => ({ id: "g1", from_surgeon_id: "s3", from_surgeon_name: "Acton", to_surgeon_id: "s2", to_surgeon_name: "Burchett", day: "2026-10-10", role: "primary", return_day: null, return_role: null, kind: "give", status: "pending", submitted_at: "2026-09-24T12:00:00.000Z", detail: "x", ...o });
+    const unitGive = (o) => [giveRow({ detail: "Acton offers you Sat 10/10 primary - nothing in return (a give to Burchett) " + stamp2(0), ...o }), giveRow({ id: "g2", day: "2026-10-11", detail: "Acton offers you Sun 10/11 primary - nothing in return (a give to Burchett) " + stamp2(1), ...o })];
+    check("Prompt 19 S3: helpers.tradeIsGive / tradeGroupIsGive - a row is a give when kind 'give' and no return leg; a GROUP only when every row is (a member's unit trade - head with the return leg, 'give' tails - stays a trade); a pre-migration row (no kind) is a trade", () => {
+      assert.strictEqual(typeof H.tradeIsGive, "function", "helpers.tradeIsGive is exported");
+      assert.strictEqual(typeof H.tradeGroupIsGive, "function", "helpers.tradeGroupIsGive is exported");
+      assert.strictEqual(H.tradeIsGive(giveRow()), true);
+      assert.strictEqual(H.tradeIsGive(giveRow({ kind: undefined })), false, "a pre-migration row (no kind) is a trade");
+      assert.strictEqual(H.tradeIsGive(giveRow({ kind: "trade" })), false);
+      assert.strictEqual(H.tradeIsGive(giveRow({ return_day: "2026-10-20", return_role: "backup" })), false, "a row with a return leg is never read as a give");
+      assert.strictEqual(H.tradeIsGive(null), false);
+      assert.strictEqual(H.tradeGroupIsGive(unitGive()), true, "every row of the unit is a give");
+      assert.strictEqual(H.tradeGroupIsGive([giveRow({ kind: undefined, return_day: "2026-12-01", return_role: "backup" }), giveRow({ id: "g2", day: "2026-10-11" })]), false, "a member's unit TRADE (the head carries the return leg; the tails go as 'give') is a trade");
+      assert.strictEqual(H.tradeGroupIsGive([]), false, "no rows");
+      assert.strictEqual(H.tradeGroupIsGive(giveRow()), true, "a lone row");
+    });
+    check("Prompt 19 S3: helpers.tradeGiveLine - the receiver reads 'Acton offers you Sat 10/10 primary (weekend unit, 10/10\u201310/11) \u2014 nothing in return'; the giver and the scheduler read both names; a holiday unit names the holiday; accepted / applied / declined / cancelled wording", () => {
+      assert.strictEqual(typeof H.tradeGiveLine, "function", "helpers.tradeGiveLine is exported");
+      assert.strictEqual(H.tradeGiveLine(giveRow(), tag2, "s2"), "Acton offers you Sat 10/10 primary (weekend unit, 10/10\u201310/11) \u2014 nothing in return");
+      assert.strictEqual(H.tradeGiveLine(giveRow(), null, "s2"), "Acton offers you Sat 10/10 primary \u2014 nothing in return");
+      assert.strictEqual(H.tradeGiveLine(giveRow(), tag2, "s3"), "Acton offers Burchett Sat 10/10 primary (weekend unit, 10/10\u201310/11) \u2014 nothing in return", "the giver reads both names");
+      assert.strictEqual(H.tradeGiveLine(giveRow(), null, null), "Acton offers Burchett Sat 10/10 primary \u2014 nothing in return", "the scheduler (no roster link needed) reads both names");
+      const tg = { kind: "holiday", start: "2026-11-26", n: 4, text: "Thanksgiving unit 11/26-11/29 (4 days)" };
+      assert.strictEqual(H.tradeGiveLine(giveRow({ day: "2026-11-27" }), tg, "s2"), "Acton offers you Fri 11/27 primary (Thanksgiving unit, 11/26\u201311/29) \u2014 nothing in return");
+      assert.strictEqual(H.tradeGiveLine(giveRow({ status: "accepted" }), null, "s2"), "Burchett takes Sat 10/10 primary from Acton \u2014 nothing in return");
+      assert.strictEqual(H.tradeGiveLine(giveRow({ status: "applied", role: "backup" }), null, "s3"), "Burchett takes Sat 10/10 backup from Acton \u2014 nothing in return");
+      assert.strictEqual(H.tradeGiveLine(giveRow({ status: "declined" }), null, "s2"), "Burchett declined Acton's offer of Sat 10/10 primary");
+      assert.strictEqual(H.tradeGiveLine(giveRow({ status: "cancelled" }), tag2, "s2"), "Acton withdrew the offer of Sat 10/10 primary (weekend unit, 10/10\u201310/11) to Burchett");
+    });
+    check("Prompt 19 S3: helpers.tradeGiveAppliedLine - 'Give applied: Acton \u2192 Burchett, 10/10\u201310/11 primary' for a unit (days in any order), 'Give applied: Acton \u2192 Burchett, Sat 10/10 primary' for a day; tradeAppliedTargets - [from, to, ...schedulerIds] de-duplicated, the parties alone when the scheduler lookup failed (null)", () => {
+      assert.strictEqual(typeof H.tradeGiveAppliedLine, "function", "helpers.tradeGiveAppliedLine is exported");
+      assert.strictEqual(typeof H.tradeAppliedTargets, "function", "helpers.tradeAppliedTargets is exported");
+      assert.strictEqual(H.tradeGiveAppliedLine(giveRow(), ["2026-10-11", "2026-10-10"]), "Give applied: Acton \u2192 Burchett, 10/10\u201310/11 primary");
+      assert.strictEqual(H.tradeGiveAppliedLine(giveRow(), ["2026-10-10"]), "Give applied: Acton \u2192 Burchett, Sat 10/10 primary");
+      assert.strictEqual(H.tradeGiveAppliedLine(giveRow({ role: "backup" })), "Give applied: Acton \u2192 Burchett, Sat 10/10 backup", "no days = the row's own day");
+      assert.deepStrictEqual(H.tradeAppliedTargets(giveRow(), ["s1"]), ["s3", "s2", "s1"]);
+      assert.deepStrictEqual(H.tradeAppliedTargets(giveRow(), ["s1", "s3", "s6"]), ["s3", "s2", "s1", "s6"], "a scheduler who is a party is listed once");
+      assert.deepStrictEqual(H.tradeAppliedTargets(giveRow(), null), ["s3", "s2"], "a failed scheduler lookup (null, already toasted) mails the parties");
+      assert.deepStrictEqual(H.tradeAppliedTargets(giveRow(), []), ["s3", "s2"]);
+    });
+    check("Prompt 19 S3: helpers.giveAcceptedNotes / giveAppliedNotes - the trade.accept audit row carries kind 'give'; 'Give accepted' / 'Give applied' rows name both parties (data.from_surgeon_id / to_surgeon_id) with kind give; the e-mail is trade_applied with trade_id, the applied line as the subject and targetIds [from, to, ...schedulerIds]", () => {
+      assert.strictEqual(typeof H.giveAcceptedNotes, "function", "helpers.giveAcceptedNotes is exported");
+      assert.strictEqual(typeof H.giveAppliedNotes, "function", "helpers.giveAppliedNotes is exported");
+      const rows = unitGive({ status: "accepted" });
+      const msg = "Burchett accepted Acton's give: Burchett takes Sat 10/10 primary (weekend unit, 10/10\u201310/11) \u2014 nothing in return";
+      assert.deepStrictEqual(H.giveAcceptedNotes(rows, tag2), {
+        audit: { action: "trade.accept", message: msg, detail: { trade_id: "g1", trade_ids: ["g1", "g2"], day: "2026-10-10", role: "primary", days: ["2026-10-10", "2026-10-11"], return_day: null, return_role: null, from: "s3", to: "s2", kind: "give" } },
+        notification: { type: "trade_accepted", title: "Give accepted", message: msg, data: { from_surgeon_id: "s3", to_surgeon_id: "s2", trade_id: "g1", trade_ids: ["g1", "g2"], day: "2026-10-10", kind: "give" } },
+      });
+      const line = "Give applied: Acton \u2192 Burchett, 10/10\u201310/11 primary";
+      assert.deepStrictEqual(H.giveAppliedNotes(rows, ["s1"]), {
+        notification: { type: "trade_applied", title: "Give applied", message: line, data: { from_surgeon_id: "s3", to_surgeon_id: "s2", trade_id: "g1", trade_ids: ["g1", "g2"], day: "2026-10-10", days: ["2026-10-10", "2026-10-11"], kind: "give" } },
+        email: { subject: line, message: line + ". Burchett now holds those days; nothing comes back to Acton.", trade_id: "g1", targetIds: ["s3", "s2", "s1"] },
+      });
+      const one = H.giveAppliedNotes([giveRow({ status: "accepted" })], null);
+      assert.strictEqual(one.email.message, "Give applied: Acton \u2192 Burchett, Sat 10/10 primary. Burchett now holds that day; nothing comes back to Acton.");
+      assert.deepStrictEqual(one.email.targetIds, ["s3", "s2"]);
+      assert.strictEqual(H.tradeGiveDeclineMsg(giveRow(), tag2), "Burchett declined Acton's give: Sat 10/10 primary (weekend unit, 10/10\u201310/11) stays with Acton");
+      assert.strictEqual(H.tradeGiveCancelMsg(giveRow(), null), "Acton withdrew the give: Sat 10/10 primary stays with Acton (it was offered to Burchett)");
+    });
+    // S3 review (major): a give is decided on the WHOLE proposal, whatever each row's status. A member's unit trade for
+    // one return day sends its tail rows as kind 'give' (S2); once the head and the tails drift apart (a tail's apply
+    // refused, a PATCH that failed part-way) the same-status group of the tails alone would read as a give.
+    check("Prompt 19 S3 review: helpers.tradeProposalOf / tradeProposalIsGive(r, rows, tagOf) - the proposal is the rows with the same unit stamp, parties and role, live (pending / accepted / applied) or closed (declined / cancelled) like r, submitted within 10 minutes of r; a give only when every row of it is - a member unit trade with its head applied and its 'give' tails accepted stays a trade", () => {
+      assert.strictEqual(typeof H.tradeProposalOf, "function", "helpers.tradeProposalOf is exported");
+      assert.strictEqual(typeof H.tradeProposalIsGive, "function", "helpers.tradeProposalIsGive is exported");
+      const tagOf = (r) => { const m = /\[unit (holiday|weekend-block) (\d{4}-\d{2}-\d{2}) (\d+): ([^\]]+), day (\d+) of \d+\]/.exec(String(r && r.detail || "")); return m ? { kind: m[1], start: m[2], n: Number(m[3]), text: m[4], index: Number(m[5]) } : null; };
+      const st3 = (i) => " [unit weekend-block 2026-10-09 3: weekend block unit 10/9-10/11 (3 days), day " + (i + 1) + " of 3]";
+      const unit3 = (sts, o) => ["2026-10-09", "2026-10-10", "2026-10-11"].map((d, i) => giveRow({ id: "t" + i, day: d, status: sts[i], detail: "d" + st3(i), ...(i === 0 && !(o && o.give) ? { kind: "trade", return_day: "2026-10-20", return_role: "backup" } : {}), ...((o && o.row) || {}) }));
+      const tr = unit3(["applied", "accepted", "accepted"]);
+      assert.strictEqual(H.tradeGroupIsGive(tr.slice(1)), true, "the same-status tails alone look like a give (the bug)");
+      assert.deepStrictEqual(H.tradeProposalOf(tr[1], tr, tagOf).map(r => r.id), ["t0", "t1", "t2"], "the whole proposal, sorted by day");
+      assert.strictEqual(H.tradeProposalIsGive(tr[1], tr, tagOf), false, "a tail of a member unit trade (head applied) is a trade");
+      assert.strictEqual(H.tradeProposalIsGive(tr[0], tr, tagOf), false, "the head is a trade");
+      const tp = unit3(["accepted", "pending", "pending"]);
+      assert.strictEqual(H.tradeProposalIsGive(tp[2], tp, tagOf), false, "pending tails after the head was accepted: a trade");
+      const gv = unit3(["applied", "accepted", "accepted"], { give: true });
+      assert.strictEqual(H.tradeProposalIsGive(gv[1], gv, tagOf), true, "a give whose rows drifted apart stays a give");
+      const lone = giveRow({ detail: "no stamp" });
+      assert.deepStrictEqual(H.tradeProposalOf(lone, [lone, ...tr], tagOf).map(r => r.id), ["g1"], "a row without a unit stamp is its own proposal");
+      assert.strictEqual(H.tradeProposalIsGive(lone, [lone], tagOf), true);
+      assert.strictEqual(H.tradeProposalIsGive(giveRow({ kind: "trade", return_day: "2026-10-20", return_role: "backup" }), [], tagOf), false);
+      // a re-proposal of the same unit is its own proposal: after a decline (closed vs live) and long after an applied one
+      const old = unit3(["declined", "declined", "declined"]);
+      const again = unit3(["pending", "pending", "pending"], { give: true, row: { submitted_at: "2026-09-24T12:05:00.000Z" } }).map(r => ({ ...r, id: "n" + r.id }));
+      assert.strictEqual(H.tradeProposalIsGive(again[0], old.concat(again), tagOf), true, "a give re-offered after the trade was declined");
+      assert.strictEqual(H.tradeProposalIsGive(old[1], old.concat(again), tagOf), false, "the declined trade stays a trade");
+      const past = unit3(["applied", "applied", "applied"], { row: { submitted_at: "2026-09-01T12:00:00.000Z" } });
+      const later = unit3(["pending", "pending", "pending"], { give: true }).map(r => ({ ...r, id: "n" + r.id }));
+      assert.strictEqual(H.tradeProposalIsGive(later[1], past.concat(later), tagOf), true, "a give of the same unit weeks after an applied trade (reverted since)");
+      assert.strictEqual(H.tradeProposalIsGive(null, tr, tagOf), false);
+    });
+  }
+  // Prompt 19 S3 (behaviour): acceptTrade / declineTrade / cancelTrade / retryApplyTrade and the helpers they call are
+  // lifted out of the component verbatim (tradeUnitTag, tradeGroupOf, roleWordOf, tradeNamed, then patchTradeStatus
+  // through cancelTrade) and run against stubs: the PATCH fetch, the rpc authFetch, the feed insert, the mail call, the
+  // audit log and the scheduler lookup record what they are handed.
+  await (async () => {
+    const lift = (a, b) => { const i = src.indexOf(a); const j = i >= 0 ? src.indexOf(b, i + a.length) : -1; if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 50) + "' .. '" + b.slice(0, 50) + "' not found"); return src.slice(i, j); };
+    let body = null, liftErr = null;
+    try {
+      body = lift("  const tradeUnitTag = (r) =>", "  // Days a person holds from today on")
+        + lift("  const tradeNamed = (r) =>", "\n\n")
+        + "\n" + lift("  const patchTradeStatus = async (trade, status) => {", "  // --- Mark Notifications as Seen ---");
+    } catch (e) { liftErr = e; }
+    const stamp2 = (i) => "[unit weekend-block 2026-10-10 2: weekend block unit 10/10-10/11 (2 days), day " + (i + 1) + " of 2]";
+    const base = (o) => ({ id: "g1", from_surgeon_id: "s3", from_surgeon_name: "stored-name", to_surgeon_id: "s2", to_surgeon_name: "stored-name", day: "2026-10-10", role: "primary", return_day: null, return_role: null, kind: "give", status: "pending", submitted_at: "2026-09-24T12:00:00.000Z", detail: "x", ...o });
+    const unitRows = () => [base({ detail: "d " + stamp2(0) }), base({ id: "g2", day: "2026-10-11", detail: "d " + stamp2(1) })];
+    const PARAMS = ["fetch", "SUPABASE_URL", "dbAuthHeaders", "describeDbError", "console", "authFetch", "setTradeApplyErr", "showToast", "refreshTradesRef", "setTradeRequests", "refreshDaysRef",
+      "tradeAppliedMsg", "addNotification", "sendEmailNotif", "slotLabel", "tradeBusy", "isScheduler", "mySurgeon", "tradeRequests", "tradeEligibilityOver", "tradeEligibility", "tradeReasonText",
+      "rulesUnknownGate", "nameOf", "confirm", "fmtMD", "setTradeBusy", "tradeAcceptMsg", "tradeDeclineMsg", "tradeCancelMsg", "tradeLegsText", "logAudit", "schedulerIdsLoud",
+      "tradeIsGive", "tradeGroupIsGive", "tradeGiveLine", "giveAcceptedNotes", "giveAppliedNotes", "tradeGiveDeclineMsg", "tradeGiveCancelMsg", "tradeProposalIsGive"];
+    const mk = (o) => {
+      const st = { order: [], patches: [], rpcs: [], notifs: [], mails: [], audits: [], toasts: [], elig: [], lookups: 0 };
+      const rows = o.rows;
+      const fetchStub = async (url, init) => {
+        const id = decodeURIComponent(String(url).split("id=eq.")[1] || "");
+        const b = JSON.parse(init.body);
+        st.patches.push({ url: String(url), method: init.method, id, status: b.status }); st.order.push("PATCH " + id + " " + b.status);
+        const row = rows.find(r => r.id === id); if (!row) return { ok: true, status: 200, text: async () => "[]" };
+        row.status = b.status; row.decided_at = b.decided_at;
+        return { ok: true, status: 200, text: async () => JSON.stringify([{ ...row }]) };
+      };
+      const authFetch = async (url, init) => {
+        const b = JSON.parse(init.body);
+        st.rpcs.push({ url: String(url), method: init.method, body: b }); st.order.push("RPC " + b.p_trade_id);
+        const row = rows.find(r => r.id === b.p_trade_id); if (row) row.status = "applied";
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, trade_id: b.p_trade_id }) };
+      };
+      const elig = (days, role, cand) => { st.elig.push([days, role, cand]); return o.elig || { ok: true, hard: [], soft: [] }; };
+      const args = [fetchStub, "https://x.supabase.co", () => ({ Authorization: "Bearer t" }), (t) => String(t), { warn: () => {} }, authFetch, () => {}, (m) => st.toasts.push(m), { current: null }, () => {}, { current: async () => {} },
+        H.tradeAppliedMsg, async (type, title, message, data) => { st.notifs.push({ type, title, message, data }); st.order.push("NOTIF " + type); },
+        (type, data, targetIds) => { st.mails.push({ type, data, targetIds }); st.order.push("MAIL " + type); return Promise.resolve({ ok: true }); },
+        H.slotLabel, "", !!o.isScheduler, o.me === undefined ? "s2" : o.me, rows, (days, r, c) => elig(days, r, c), (d, r, c) => elig([d], r, c), () => "on vacation",
+        () => false, nameOf, () => true, H.fmtMD, () => {}, H.tradeAcceptMsg, H.tradeDeclineMsg, H.tradeCancelMsg, H.tradeLegsText, (action, message, detail) => st.audits.push({ action, message, detail }),
+        async () => { st.lookups++; st.order.push("LOOKUP"); return o.schedIds === undefined ? ["s1"] : o.schedIds; },
+        H.tradeIsGive, H.tradeGroupIsGive, H.tradeGiveLine, H.giveAcceptedNotes, H.giveAppliedNotes, H.tradeGiveDeclineMsg, H.tradeGiveCancelMsg, H.tradeProposalIsGive];
+      const fns = new Function(...PARAMS, body + "\nreturn { acceptTrade, declineTrade, cancelTrade, retryApplyTrade, notifGiveTrade };")(...args);
+      return { ...fns, st, rows };
+    };
+    const run = async (o, fn, pick) => { const t = mk(o); await t[fn](pick ? pick(t.rows) : t.rows[0]); return t; };
+    const stamp3 = (i) => "[unit weekend-block 2026-10-09 3: weekend block unit 10/9-10/11 (3 days), day " + (i + 1) + " of 3]";
+    // a member's whole-unit TRADE for one return day (S2): the head carries the return leg, the tails go as kind 'give'
+    const unitTrade = (sts) => ["2026-10-09", "2026-10-10", "2026-10-11"].map((d, i) => base({ id: "t" + i, day: d, status: sts[i], detail: "d " + stamp3(i), ...(i === 0 ? { kind: "trade", return_day: "2026-10-20", return_role: "backup" } : {}) }));
+    let A = null, B = null, C = null, D = null, E = null, F = null, G = null, H1 = null, H2 = null, runErr = null;
+    if (!liftErr) {
+      try {
+        A = await run({ rows: unitRows() }, "acceptTrade");                                                  // the receiver accepts a 2-day weekend give
+        B = await run({ rows: [base()], schedIds: null }, "acceptTrade");                                    // a one-day give; the scheduler lookup failed
+        C = await run({ rows: [base({ kind: undefined, return_day: "2026-10-20", return_role: "backup" })] }, "acceptTrade"); // an ordinary trade
+        D = await run({ rows: [base()], elig: { ok: false, hard: ["vacation"], soft: [] } }, "acceptTrade"); // the receiver is no longer eligible
+        E = await run({ rows: unitRows() }, "declineTrade");
+        F = await run({ rows: [base()], me: "s3" }, "cancelTrade");
+        G = await run({ rows: [base({ status: "accepted" })], isScheduler: true, me: "s1" }, "retryApplyTrade");
+        H1 = await run({ rows: unitTrade(["applied", "accepted", "accepted"]), isScheduler: true, me: "s1" }, "retryApplyTrade", (rs) => rs[1]); // Retry apply on a tail
+        H2 = await run({ rows: unitTrade(["accepted", "pending", "pending"]) }, "acceptTrade", (rs) => rs[1]);                                // accept the pending tails
+      } catch (e) { runErr = e; }
+    }
+    const ready = () => { if (liftErr) throw liftErr; if (runErr) throw runErr; };
+    const UNIT_LINE = "Give applied: Acton \u2192 Burchett, 10/10\u201310/11 primary";
+    check("Prompt 19 S3 (behaviour): the receiver accepts a 2-day weekend give - eligibility re-checked over both days for him; PATCH accepted on both rows, THEN rpc/apply_trade once per row with exactly { p_trade_id } (one-way: no return leg is sent); 'Give accepted' and 'Give applied' rows naming both parties; ONE trade_applied e-mail to [from, to, scheduler] with trade_id and the applied line", () => {
+      ready();
+      assert.deepStrictEqual(A.st.elig, [[["2026-10-10", "2026-10-11"], "primary", "s2"]], "the receiver's eligibility over the unit, re-checked at accept - no return-leg check for a give");
+      assert.deepStrictEqual(A.st.order, ["PATCH g1 accepted", "PATCH g2 accepted", "NOTIF trade_accepted", "RPC g1", "RPC g2", "LOOKUP", "NOTIF trade_applied", "MAIL trade_applied"]);
+      A.st.rpcs.forEach(r => { assert.strictEqual(r.method, "POST"); assert.strictEqual(r.url, "https://x.supabase.co/rest/v1/rpc/apply_trade"); assert.deepStrictEqual(Object.keys(r.body), ["p_trade_id"]); });
+      assert.deepStrictEqual(A.st.rpcs.map(r => r.body.p_trade_id), ["g1", "g2"]);
+      assert.ok(A.st.patches.every(p => p.url === "https://x.supabase.co/rest/v1/shift_trade_requests?id=eq." + p.id && p.method === "PATCH"));
+      assert.deepStrictEqual(A.st.notifs.map(n => [n.type, n.title]), [["trade_accepted", "Give accepted"], ["trade_applied", "Give applied"]]);
+      assert.strictEqual(A.st.notifs[1].message, UNIT_LINE);
+      A.st.notifs.forEach(n => { assert.strictEqual(n.data.from_surgeon_id, "s3"); assert.strictEqual(n.data.to_surgeon_id, "s2"); assert.strictEqual(n.data.kind, "give"); assert.deepStrictEqual(n.data.trade_ids, ["g1", "g2"]); });
+      // who reads them (helpers.notifVisibleTo): both parties and the scheduler; not a third surgeon, not a viewer
+      const feed = A.st.notifs.map((n, i) => ({ ...n, id: "n" + i, created_at: "2026-09-24T12:00:0" + i + ".000Z" }));
+      assert.strictEqual(H.notifVisibleTo(feed, { mySurgeon: "s3" }).length, 2, "the giver");
+      assert.strictEqual(H.notifVisibleTo(feed, { mySurgeon: "s2" }).length, 2, "the receiver");
+      assert.strictEqual(H.notifVisibleTo(feed, { isScheduler: true, mySurgeon: "s1" }).length, 2, "the scheduler");
+      assert.strictEqual(H.notifVisibleTo(feed, { mySurgeon: "s4" }).length, 0, "a third surgeon");
+      assert.strictEqual(H.notifVisibleTo(feed, { isViewer: true }).length, 0, "a viewer");
+      assert.deepStrictEqual(A.st.mails, [{ type: "trade_applied", data: { message: UNIT_LINE + ". Burchett now holds those days; nothing comes back to Acton.", subject: UNIT_LINE, trade_id: "g1" }, targetIds: ["s3", "s2", "s1"] }]);
+      assert.strictEqual(A.st.audits.length, 1);
+      assert.strictEqual(A.st.audits[0].action, "trade.accept");
+      assert.strictEqual(A.st.audits[0].detail.kind, "give");
+      assert.deepStrictEqual(A.rows.map(r => r.status), ["applied", "applied"]);
+      assert.ok(!A.st.toasts.some(m => /NOT applied|Couldn't/.test(m)), "no failure toast: " + JSON.stringify(A.st.toasts));
+    });
+    check("Prompt 19 S3 (behaviour): a one-day give with a failed scheduler lookup (null) - PATCH, rpc, the two rows; the e-mail goes to the two parties only", () => {
+      ready();
+      assert.deepStrictEqual(B.st.order, ["PATCH g1 accepted", "NOTIF trade_accepted", "RPC g1", "LOOKUP", "NOTIF trade_applied", "MAIL trade_applied"]);
+      assert.strictEqual(B.st.notifs[1].message, "Give applied: Acton \u2192 Burchett, Sat 10/10 primary");
+      assert.deepStrictEqual(B.st.mails[0].targetIds, ["s3", "s2"]);
+      assert.strictEqual(B.st.mails[0].data.trade_id, "g1");
+    });
+    check("Prompt 19 S3 (behaviour): an ordinary trade is unchanged - 'Shift trade accepted' / 'Shift trade applied', the e-mail to the two parties (no scheduler lookup), the return leg re-checked for the proposer; the trade.accept audit row carries kind 'trade'", () => {
+      ready();
+      assert.deepStrictEqual(C.st.order, ["PATCH g1 accepted", "NOTIF trade_accepted", "RPC g1", "NOTIF trade_applied", "MAIL trade_applied"]);
+      assert.deepStrictEqual(C.st.notifs.map(n => n.title), ["Shift trade accepted", "Shift trade applied"]);
+      assert.deepStrictEqual(C.st.mails[0].targetIds, ["s3", "s2"]);
+      assert.strictEqual(C.st.lookups, 0);
+      assert.deepStrictEqual(C.st.elig, [[["2026-10-10"], "primary", "s2"], [["2026-10-20"], "backup", "s3"]]);
+      assert.strictEqual(C.st.audits[0].detail.kind, "trade");
+    });
+    check("Prompt 19 S3 (behaviour): the receiver no longer eligible at accept -> 'Can't accept: ...' toast, no PATCH, no rpc, no row, no mail", () => {
+      ready();
+      assert.deepStrictEqual(D.st.order, []);
+      assert.ok(D.st.toasts.some(m => /^Can't accept: Burchett can't take /.test(m)), JSON.stringify(D.st.toasts));
+    });
+    check("Prompt 19 S3 (behaviour): declining a give - PATCH declined on both unit rows; 'Give declined' row and the trade_declined e-mail to the two parties (give words); the trade.decline audit row carries kind 'give'", () => {
+      ready();
+      assert.deepStrictEqual(E.st.order, ["PATCH g1 declined", "PATCH g2 declined", "NOTIF trade_declined", "MAIL trade_declined"]);
+      assert.strictEqual(E.st.notifs[0].title, "Give declined");
+      assert.strictEqual(E.st.notifs[0].message, "Burchett declined Acton's give: Sat 10/10 primary (weekend unit, 10/10\u201310/11) stays with Acton");
+      assert.deepStrictEqual(E.st.mails[0].targetIds, ["s3", "s2"]);
+      assert.strictEqual(E.st.mails[0].data.trade_id, "g1");
+      assert.strictEqual(E.st.audits[0].detail.kind, "give");
+      assert.strictEqual(E.st.rpcs.length, 0);
+    });
+    check("Prompt 19 S3 (behaviour): the proposer withdraws a pending give - PATCH cancelled, a 'Give withdrawn' row, no e-mail; kind 'give' on the audit row", () => {
+      ready();
+      assert.deepStrictEqual(F.st.order, ["PATCH g1 cancelled", "NOTIF trade_cancelled"]);
+      assert.strictEqual(F.st.notifs[0].title, "Give withdrawn");
+      assert.strictEqual(F.st.notifs[0].message, "Acton withdrew the give: Sat 10/10 primary stays with Acton (it was offered to Burchett)");
+      assert.strictEqual(F.st.audits[0].detail.kind, "give");
+    });
+    check("Prompt 19 S3 (behaviour): the scheduler's Retry apply on an accepted give - rpc once, then the give's applied row + the e-mail to [from, to, scheduler]", () => {
+      ready();
+      assert.deepStrictEqual(G.st.order, ["RPC g1", "LOOKUP", "NOTIF trade_applied", "MAIL trade_applied"]);
+      assert.strictEqual(G.st.notifs[0].title, "Give applied");
+      assert.deepStrictEqual(G.st.mails[0].targetIds, ["s3", "s2", "s1"]);
+    });
+    check("Prompt 19 S3 review (behaviour): the 'give' tail rows of a member's unit TRADE stay a trade - Retry apply on a tail whose head is applied -> 'Shift trade applied' to the two parties, no scheduler lookup; accepting the pending tails after the head was accepted -> the trade path (audit kind 'trade', 'Shift trade accepted')", () => {
+      ready();
+      assert.deepStrictEqual(H1.st.order, ["RPC t1", "NOTIF trade_applied", "MAIL trade_applied"]);
+      assert.strictEqual(H1.st.notifs[0].title, "Shift trade applied");
+      assert.deepStrictEqual(H1.st.mails[0].targetIds, ["s3", "s2"]);
+      assert.strictEqual(H1.st.lookups, 0, "no scheduler lookup for a trade");
+      assert.deepStrictEqual(H2.st.order, ["PATCH t1 accepted", "PATCH t2 accepted", "NOTIF trade_accepted", "RPC t1", "RPC t2", "NOTIF trade_applied", "MAIL trade_applied"]);
+      assert.deepStrictEqual(H2.st.notifs.map(n => n.title), ["Shift trade accepted", "Shift trade applied"]);
+      assert.strictEqual(H2.st.audits[0].detail.kind, "trade");
+      assert.deepStrictEqual(H2.st.mails[0].targetIds, ["s3", "s2"]);
+      assert.strictEqual(H2.st.lookups, 0);
+    });
+    check("Prompt 19 S3 review (behaviour): a failed scheduler lookup on an applied give is the LAST toast and says who was e-mailed (the two parties), not 'no email was sent'", () => {
+      ready();
+      const last = B.st.toasts[B.st.toasts.length - 1] || "";
+      assert.ok(/scheduler/.test(last) && /only the two parties were e-mailed/.test(last), "the last toast names the missed scheduler mail: " + JSON.stringify(B.st.toasts));
+      assert.ok(!B.st.toasts.some(m => /no email was sent/.test(m)), JSON.stringify(B.st.toasts));
+      const lastG = G.st.toasts[G.st.toasts.length - 1] || "";
+      assert.strictEqual(lastG, "Give applied to the schedule.", "a found scheduler: the plain success toast");
+    });
+    check("Prompt 19 S3 review (behaviour): notifGiveTrade - the Alerts Accept / Decline appear for the RECEIVER of a pending give only (the scheduler answers from Trades); not for the giver, a third surgeon, a trade alert, another alert type, a decided give, or the 'give' tail of a member unit trade", () => {
+      ready();
+      const give = { type: "trade_proposed", data: { kind: "give", trade_id: "g1" } };
+      const who = (o, n, rows) => { const t = mk({ rows: rows || unitRows(), ...o }); const r = t.notifGiveTrade(n || give); return r ? r.id : null; };
+      assert.strictEqual(who({ me: "s2" }), "g1", "the receiver");
+      assert.strictEqual(who({ isScheduler: true, me: "s1" }), null, "the scheduler (Trades keeps his Accept / Decline)");
+      assert.strictEqual(who({ me: "s3" }), null, "the giver");
+      assert.strictEqual(who({ me: "s4" }), null, "a third surgeon");
+      assert.strictEqual(who({ me: "s2" }, { type: "trade_proposed", data: { kind: "trade", trade_id: "g1" } }), null, "a trade alert");
+      assert.strictEqual(who({ me: "s2" }, { type: "trade_accepted", data: { kind: "give", trade_id: "g1" } }), null, "another type");
+      assert.strictEqual(who({ me: "s2" }, null, unitRows().map(r => ({ ...r, status: "accepted" }))), null, "a decided give");
+      assert.strictEqual(who({ me: "s2" }, { type: "trade_proposed", data: { kind: "give", trade_id: "t1" } }, unitTrade(["accepted", "pending", "pending"])), null, "a unit trade's pending 'give' tail");
+    });
+  })();
+  check("Prompt 19 S3 pins: Trades renders a give group with tradeGiveLine (data-kind give, testid trade-give-line) and keeps Accept / Decline for the receiver and the scheduler; the Alerts panel shows a pending give addressed to this account with the same line and Accept / Decline (click does not bubble to the row's navigation); the scheduler's revert link says a give is reverted one-way; notifyGiveApplied mails [from, to, ...schedulerIds]; ASCII", () => {
+    const tr = src.slice(src.indexOf("const tradeRow = (r) => {"), src.indexOf("return <>", src.indexOf("const tradeRow = (r) => {")));
+    assert.ok(tr.includes("const giveGroup = tradeIsGiveProposal(r);"), "the row knows whether its proposal (every status) is a give");
+    assert.ok(tr.includes('data-kind={giveGroup ? "give" : "trade"}'), "data-kind on the row");
+    assert.ok(tr.includes('{giveGroup ? <span data-testid="trade-give-line">{tradeGiveLine(named, tag, mySurgeon)}</span> : tradeLegsText(named, tenseFor(r.status))}'), "the give line replaces the legs text");
+    assert.ok(tr.includes("const canAnswer = r.status === \"pending\" && (isScheduler || r.to_surgeon_id === mySurgeon);"), "Accept / Decline: the receiver and the scheduler, unchanged");
+    assert.ok(tr.includes('title={giveGroup ? "The scheduler reverts a give by putting " + named.from_surgeon_name + " back on " + fmtMD(r.day) + " in the day editor - one-way, nothing else moves" : "The scheduler reverts a trade by editing the day"}'), "the revert link for a give");
+    const np = src.slice(src.indexOf('data-testid="notif-panel"'), src.indexOf("{/* Unlinked-account banner"));
+    assert.ok(np.includes("const giveT = notifGiveTrade(n);"), "each alert looks up its pending give");
+    assert.ok(np.includes('<p data-testid="notif-give-line"') && np.includes("{tradeGiveLine(tradeNamed(giveT), tradeUnitTag(giveT), mySurgeon)}"), "the Alerts line");
+    assert.ok(np.includes('data-testid="notif-give-accept"') && np.includes("onClick={(e)=>{ e.stopPropagation(); acceptTrade(giveT); }}"), "Accept from Alerts");
+    assert.ok(np.includes('data-testid="notif-give-decline"') && np.includes("onClick={(e)=>{ e.stopPropagation(); declineTrade(giveT); }}"), "Decline from Alerts");
+    const ng = src.slice(src.indexOf("const notifGiveTrade = (n) => {"), src.indexOf("\n  };", src.indexOf("const notifGiveTrade = (n) => {")));
+    assert.ok(ng.includes('n.type !== "trade_proposed"') && ng.includes('d.kind !== "give"') && ng.includes('r.status === "pending"') && ng.includes("r.to_surgeon_id === mySurgeon") && !ng.includes("isScheduler") && ng.includes("tradeIsGiveProposal(r)"), "only a pending give addressed to this account (the receiver)");
+    const gp = src.slice(src.indexOf("const tradeIsGiveProposal = (r) =>"), src.indexOf("\n", src.indexOf("const tradeIsGiveProposal = (r) =>")));
+    assert.strictEqual(gp, "const tradeIsGiveProposal = (r) => tradeProposalIsGive(r, tradeRequests, tradeUnitTag);", "the app's give predicate is the pure whole-proposal helper");
+    ["tradeGroupIsGive(group)", "tradeIsGive(applied)", "tradeGroupIsGive(tradeGroupOf("].forEach((x) => assert.ok(!src.includes(x), "no same-status give test left: " + x));
+    const nga = src.slice(src.indexOf("const notifyGiveApplied = async (rows) => {"), src.indexOf("// opts.silent: a unit group's caller"));
+    assert.ok(nga.includes("const ids = await schedulerIdsLoud({ quiet: true });") && nga.includes("const n = giveAppliedNotes(rows, ids);"), "the scheduler ids ride on the applied give; a failed lookup is reported by the caller's final toast");
+    assert.ok(nga.includes('sendEmailNotif("trade_applied", { message: n.email.message, subject: n.email.subject, trade_id: first.id }, n.email.targetIds);'), "one trade_applied mail with trade_id");
+    assert.ok(!/[^\x00-\x7f]/.test(src), "index-source.html stays ASCII");
+  });
   // RLS-7: the two PATCH handlers that used to trust a 2xx alone now behave like patchTradeStatus - a 200 with zero
   // rows (an RLS-filtered write) adopts nothing locally and logs no audit row.
   check("RLS-7: toEdit and updateOfficeContact treat a 2xx with zero rows as 'not changed' (no local adopt, no audit row, no fabricated row)", () => {
