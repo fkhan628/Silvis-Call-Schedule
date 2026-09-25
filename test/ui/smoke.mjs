@@ -3734,7 +3734,7 @@ try {
     //      (Badge, full name, N upcoming) with that person's compact "Mon D-D" lines under it; the range just added
     //      reads "Mar 2-3 (2027) harness range" (en dash) with its Edit / Remove controls, under Khan's header. ----
     try {
-      await page.waitForSelector("[data-testid=timeoff-card] [data-testid=vac-line-s1-2027-03-02]", { timeout: 5000 });
+      await page.waitForSelector("[data-testid=timeoff-card] [data-testid=vac-line-s1-2027-03-02]", { timeout: 15000 });   // 5 s timed out under load (landing run 9/25)
       const readGroups = (sel) => page.$eval(sel, card => {
         const idOf = (el) => el.getAttribute("data-testid").replace(/^vac-group-/, "");
         const groups = Array.from(card.querySelectorAll("[data-testid^=vac-group-]")).map(h => {
@@ -3766,11 +3766,11 @@ try {
       else ok(`Item B grouped vacations (Time off): ${g.groups.length} group(s) in roster order (${ids.join(", ")}), Khan's header '${s1.text}', the new line reads 'Mar 2\u20133 (2027) harness range' with Edit / Remove under vac-group-s1, every line under its own header, none orphaned`);
       // Show past: every header gains "+M past" exactly when M > 0 and lists upcoming + past lines; off again afterwards.
       await page.click("[data-testid=timeoff-card] [data-testid=vac-show-past]");
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(400);   // 150 ms flaked under load (9/24 - 9/25)
       const gp = await readGroups("[data-testid=timeoff-card]");
       const bad = gp.groups.filter(x => x.lines !== x.upcoming + x.past || (x.past > 0) !== new RegExp("\\+" + x.past + " past$").test(x.text));
       await page.click("[data-testid=timeoff-card] [data-testid=vac-show-past]");
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(400);   // 150 ms flaked under load (9/24 - 9/25)
       const gOff = await readGroups("[data-testid=timeoff-card]");
       if (bad.length) fail("Item B Show past (Time off): headers and lines disagree: " + JSON.stringify(bad.map(x => ({ id: x.id, text: x.text, lines: x.lines }))));
       else if (gOff.groups.map(x => x.id + ":" + x.lines).join() !== g.groups.map(x => x.id + ":" + x.lines).join()) fail("Item B Show past (Time off): the list did not return to the upcoming-only picture: " + gOff.groups.map(x => x.id + ":" + x.lines).join(","));
@@ -5810,6 +5810,12 @@ try {
     // holders and no preview flag. (It was the constant 2026-11-03 while the range was November.)
     const pubProbe = previewGrid.find(c => expectedDays.has(c.day) && (c.p || c.b)) || previewGrid.find(c => c.p) || null;
     const pubChanged = !!(pubProbe && expectedDays.has(pubProbe.day));
+    // settle before reading (landing run 2026-09-25: under load the 400 ms wait above once read the pre-accept holders): up to 5 s for
+    // the probe cell to show the preview's holders with no preview flag - a real miss still fails the check below after the timeout
+    if (pubProbe) await page.waitForFunction(({ d, p, b }) => {
+      const el = document.querySelector(`[data-day="${d}"]`);
+      return !!el && (el.getAttribute("data-primary") || "") === p && (el.getAttribute("data-backup") || "") === b && el.getAttribute("data-preview") !== "1";
+    }, { d: pubProbe.day, p: pubProbe.p || "", b: pubProbe.b || "" }, { timeout: 5000 }).catch(() => {});
     const pubP = pubProbe ? await cellAttr(pubProbe.day, "data-primary").catch(() => null) : null;
     const pubB = pubProbe ? await cellAttr(pubProbe.day, "data-backup").catch(() => null) : null;
     const pubPrev = pubProbe ? await cellAttr(pubProbe.day, "data-preview").catch(() => null) : null;
