@@ -717,6 +717,24 @@ const dayStore = {};
 // JSON comes back. A second claim of the same slot is refused with the
 // function's own CLAIM_HELD token so the verbatim-message path can be seen.
 const claimedDays = {}; // day -> { primary_id? , backup_id?, source, updated_by, updated_at } overlaid on every schedule_days GET
+// The schedule_days rows a GET is answered with while an overlay is active: the fixture or the live rows, a claimed day
+// read back with the claimer (version + 1, what the function's UPDATE leaves) and the harness-opened slot blank. Shared
+// by the route below and (Prompt 19 S5) the give receiver's session, which lays the applied give on top.
+const scheduleDayRows = async (route, req, url) => {
+  let rows = fixtureAnswer(url);
+  if (!rows) {
+    const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+    rows = await res.json().catch(() => []);
+  }
+  const overlay = (r) => {
+    let o = r;
+    if (harnessOpen.day && r.day === harnessOpen.day) o = { ...o, [harnessOpen.role === "primary" ? "primary_id" : "backup_id"]: null };
+    if (claimedDays[r.day]) o = { ...o, ...claimedDays[r.day], version: (Number(r.version) || 0) + 1 };
+    return o;
+  };
+  return (Array.isArray(rows) ? rows : []).map(overlay);
+};
+let schedFeed = null; // Prompt 19 S5: { page, rows } - the notifications feed served to the scheduler's page during the give check
 // Prompt 14 part 3a (the offer painter): call_offers / call_periods are authenticated-only tables, so the anon
 // passthrough would answer [] - the harness serves them: ONE period (the seed's first offerPeriods entry with a
 // fake uuid; s1 is on its rulesOnly list, exactly as the seed says) served OPEN - status 'upcoming' whatever the
@@ -1070,18 +1088,12 @@ const routeSupabase = async (route, scope) => {
   // Prompt 13 part 3: a claimed day reads back with the claimer, version + 1 (what the function's UPDATE leaves).
   // ... and the harness-opened slot (LIVE mode, P13R-2) reads back blank with its live source and version.
   if ((Object.keys(claimedDays).length || harnessOpen.day) && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
-    let rows = fixtureAnswer(url);
-    if (!rows) {
-      const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
-      rows = await res.json().catch(() => []);
-    }
-    const overlay = (r) => {
-      let o = r;
-      if (harnessOpen.day && r.day === harnessOpen.day) o = { ...o, [harnessOpen.role === "primary" ? "primary_id" : "backup_id"]: null };
-      if (claimedDays[r.day]) o = { ...o, ...claimedDays[r.day], version: (Number(r.version) || 0) + 1 };
-      return o;
-    };
-    return json(200, (Array.isArray(rows) ? rows : []).map(overlay));
+    return json(200, await scheduleDayRows(route, req, url));
+  }
+  // Prompt 19 S5: the scheduler's page (schedFeed.page) reads schedFeed.rows as its Alerts feed while a check needs it
+  // (the anon passthrough answers [] for the authenticated-only notifications table).
+  if (schedFeed && method === "GET" && url.pathname === "/rest/v1/notifications" && req.frame().page() === schedFeed.page) {
+    return json(200, url.searchParams.get("type") ? [] : schedFeed.rows);
   }
   const fx = fixtureAnswer(url);
   if (fx) return json(200, fx);
@@ -4038,7 +4050,18 @@ try {
           await rp.setViewportSize({ width: 390, height: 844 });
           await rp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, RCV_JWT);
           await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
-          await rp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(RCV_PROFILE, async ({ url, req, json }) => {
+          await rp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(RCV_PROFILE, async ({ route, url, req, json }) => {
+            // Prompt 19 S5: once the mocked apply_trade has marked the give applied, this session's schedule_days reads carry
+            // what the SQL function writes (the slot -> the receiver, source 'trade', version + 1) - scoped to this page, so
+            // the scheduler's page and the later sessions keep the unchanged table.
+            if (url.pathname === "/rest/v1/schedule_days" && req.method() === "GET" && !daysWiped) {
+              const g = tradeStore.find(r => r.id === giveId);
+              if (!g || g.status !== "applied") return false;
+              const col = g.role === "primary" ? "primary_id" : "backup_id";
+              const rows = await scheduleDayRows(route, req, url);
+              await json(200, rows.map(r => r.day === g.day ? { ...r, [col]: g.to_surgeon_id, source: "trade", updated_by: g.to_surgeon_id, version: (Number(r.version) || 0) + 1 } : r));
+              return true;
+            }
             if (!url.pathname.startsWith("/rest/v1/notifications") || req.method() !== "GET") return false;
             await json(200, giveFeed && !url.searchParams.get("type") ? [giveFeed] : []);
             return true;
@@ -4050,8 +4073,21 @@ try {
             const [yy, mm, dd] = mDay.split("-").map(Number);
             const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(yy, mm - 1, dd).getDay()];
             const wantLine = `Burchett offers you ${dow} ${mm}/${dd} ${mRole} ${EM} nothing in return`;
+            // Prompt 19 S5: the receiver's calendar is read for the given slot BEFORE the accept (Burchett holds it) and after.
+            const cellAttr = mRole === "primary" ? "data-primary" : "data-backup";
+            const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            const rpShowMonth = async () => {
+              await rp.click('button[data-tab="calendar"]');
+              await rp.selectOption("[data-testid=cal-month-select]", String(mm - 1));
+              if ((await rp.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(yy)) await rp.fill("[data-testid=cal-year-input]", String(yy));
+              await rp.waitForFunction((want) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === want; }, MONTHS[mm - 1] + " " + yy, { timeout: 5000 });
+              await rp.waitForTimeout(300);
+            };
+            const cellHolder = () => rp.$eval(`[data-testid=cal-grid] .cal-cell[data-day="${mDay}"]`, (el, a) => el.getAttribute(a), cellAttr).catch(() => null);
             await loadWithRetry(rp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "receiver page (give)");
             await rp.waitForSelector("text=Synced", { timeout: 30000 });
+            await rpShowMonth();
+            const holderBefore = await cellHolder();
             await rp.click('button[data-tab="timeoff"]');
             const rowSel = `[data-testid=trade-row][data-trade-id="${giveId}"]`;
             await rp.waitForSelector(rowSel, { timeout: 10000 });
@@ -4095,6 +4131,61 @@ try {
             // Prompt 19 S4: the applied give's mail is marked kind give (send-notification v7 heads it "Give Applied")
             if (mails.length !== 1 || !mails[0].data || mails[0].data.kind !== "give") fail("Give (receiver, S4): the trade_applied mail should carry data.kind give, got " + JSON.stringify(mails.map(m => m.data)));
             else ok("Give (receiver, S4): the trade_applied mail carries data.kind give (headed 'Give Applied' by send-notification v7)");
+            // ----- (A3d) Prompt 19 S5: the day MOVES, and the scheduler reads the 'Give applied' row -----
+            // (1) the receiver's calendar cell for the slot read Burchett (s2) before the accept and reads the receiver right
+            //     after it (runApplyTrade's refetch reads what apply_trade wrote - this session's schedule_days overlay);
+            // (2) in BOTH themes at 390 px after a reload: the cell still reads the receiver, his Mine tab lists the day in
+            //     that role (when it falls inside Mine's 90-day window), no horizontal page scroll;
+            // (3) the scheduler's page (s1, the harness's admin) is served the mocked 'Give applied' insert as its feed and
+            //     its Alerts panel lists it - the row the accept wrote for the scheduler (who reads the whole feed).
+            await rp.click('button[aria-label="Close notifications"]').catch(() => {});
+            await rpShowMonth();
+            await rp.waitForFunction(([d, a, want]) => { const el = document.querySelector('[data-testid=cal-grid] .cal-cell[data-day="' + d + '"]'); return !!el && el.getAttribute(a) === want; }, [mDay, cellAttr, top.id], { timeout: 8000 }).catch(() => {});
+            const holderAfter = await cellHolder();
+            if (holderBefore !== "s2") fail(`Give (receiver, S5): before the accept the ${mDay} ${mRole} cell should read Burchett (s2), got ${holderBefore}`);
+            else if (holderAfter !== top.id) fail(`Give (receiver, S5): right after the accept the ${mDay} ${mRole} cell should read ${topName} (${top.id}) - the refetch after apply_trade - got ${holderAfter}`);
+            else ok(`Give (receiver, S5): the day moved - the ${mDay} ${mRole} calendar cell read s2 (Burchett) before the accept and reads ${top.id} (${topName}) right after it, no reload`);
+            const within90 = (new Date(yy, mm - 1, dd) - new Date(new Date().toDateString())) / 864e5 < 90;
+            const themeWas = await rp.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode"); } catch (e) { return null; } });   // the origin's storage is shared with the scheduler's page
+            // S5 review: the shared flag is put back in a finally (a throw inside the loop must not leave the scheduler's page
+            // in dark mode), and each pass proves its theme took - the stored flag AND the dark body paint (#0B1A33).
+            try {
+            for (const theme of ["light", "dark"]) {
+              await rp.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); } catch (e) {} }, theme === "dark");
+              await loadWithRetry(rp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "receiver page (give, " + theme + ")");
+              await rp.waitForSelector("text=Synced", { timeout: 30000 });
+              const themeT = await rp.evaluate(() => { let f = "?"; try { f = localStorage.getItem("silvis-dark-mode") === "true" ? "dark" : "light"; } catch (e) {} return { flag: f, bg: getComputedStyle(document.body).backgroundColor }; });
+              const paintT = themeT.bg === "rgb(11, 26, 51)" ? "dark" : "light";
+              await rpShowMonth();
+              const cellT = await cellHolder();
+              await rp.click('button[data-tab="myschedule"]');
+              const mineSel = `[data-testid=mine-day][data-day="${mDay}"][data-role="${mRole}"]`;
+              const mineRow = within90 ? await rp.waitForSelector(mineSel, { timeout: 8000 }).then(() => true, () => false) : null;
+              const swT = await rp.evaluate(() => document.documentElement.scrollWidth);
+              if (themeT.flag !== theme || paintT !== theme) fail(`Give (receiver, S5, ${theme}): the ${theme} theme did not take (silvis-dark-mode reads ${themeT.flag}, body background ${themeT.bg})`);
+              else if (cellT !== top.id) fail(`Give (receiver, S5, ${theme}): after a reload the ${mDay} ${mRole} cell should read ${top.id}, got ${cellT}`);
+              else if (mineRow === false) fail(`Give (receiver, S5, ${theme}): ${topName}'s Mine tab does not list ${mDay} ${mRole} (${mineSel})`);
+              else if (swT > 392) fail(`Give (receiver, S5, ${theme}): the page scrolls horizontally on Mine (scrollWidth ${swT})`);
+              else ok(`Give (receiver, S5, ${theme}, 390 px): after a reload the ${mDay} cell reads ${top.id} and ${mineRow ? "Mine lists " + mDay + " " + mRole : "(" + mDay + " is past Mine's 90-day window - the cell is the proof)"}; body ${themeT.bg}; scrollWidth ${swT}`);
+            }
+            } finally {
+              await rp.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, themeWas).catch((e) => fail("Give (receiver, S5): could not put the shared silvis-dark-mode flag back: " + errLine(e)));
+            }
+            if (appN) {
+              const schedRow = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...appN };
+              schedFeed = { page, rows: [schedRow] };
+              try {
+                if (!rtSendRow("notifications", schedRow, "INSERT")) throw new Error("the scheduler page's realtime channel is not joined - the feed refresh cannot be triggered");
+                await page.click('button[aria-label="Notifications"]');
+                await page.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
+                const seen = await page.waitForFunction((msg) => Array.from(document.querySelectorAll("[data-testid=notif-row][data-type=trade_applied]")).some(e => e.textContent.includes(msg) && e.textContent.includes("Give applied")), appN.message, { timeout: 8000 }).then(() => true, () => false);
+                await page.click('button[aria-label="Close notifications"]').catch(() => {});
+                if (!seen) fail("Give (scheduler, S5): the scheduler's Alerts panel does not list the 'Give applied' row: " + JSON.stringify(appN));
+                else ok(`Give (scheduler, S5): the accept's notifications insert { type: trade_applied, title: 'Give applied' } is listed in the scheduler's Alerts ('${appN.message}')`);
+              } catch (e) { fail("Give (scheduler, S5) exception: " + errLine(e)); }
+              schedFeed = null;
+              rtSendRow("notifications", { id: schedRow.id }, "DELETE");   // the scheduler's feed reads the (empty) passthrough again
+            } else fail("Give (scheduler, S5): no 'Give applied' notifications insert was recorded");
           } catch (e) { fail("Give (receiver, A3r) exception: " + errLine(e)); }
           const gi = tradeStore.findIndex(r => r.id === giveId);
           if (gi >= 0) tradeStore.splice(gi, 1);

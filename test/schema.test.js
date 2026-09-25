@@ -1709,4 +1709,78 @@ ok(/table \(a\)'s \`shift_trade_requests\` row drops "prepared, not yet applied"
 ok(/^\| \`shift_trade_requests\` \|[^\n]*\`kind\` \`trade\` \/ \`give\`[^\n]*Prompt 19, (prepared, not yet applied|applied 2026-)/m.test(review), "SCHEMA-REVIEW table (a)'s shift_trade_requests row must name kind and read 'Prompt 19, prepared, not yet applied' (or 'applied 2026-MM-DD' after the record step)");
 ok(/EVERY installed app runs the client step/.test(g43) && /section 5c \(anon \`select=kind\` reads HTTP 200/.test(g43), "guide 4.3's Prompt 19 row must state the window (every installed app) and its proof must name section 5c");
 
+// Prompt 19 S5 (tests): the new kind through the PREPARED trade_insert_guard, read as behaviour. guardVerdict re-reads the
+// guard's own `if <cond> then raise 'TRADE_INELIGIBLE: ...'` statements out of the function text (so a changed condition
+// changes the verdict), runs the member branch's ones only for a member caller (after from := me), and answers the first
+// raise or "ok". The live DB half of the same cases is the probe (O = a member give with no return leg accepted, Q = a
+// member trade with none refused), graded by verify-rls.sh section 5 - those run only after the migration is applied.
+step("Prompt 19 S5: the prepared trade_insert_guard, read as behaviour - a member give with no return leg is accepted, a member trade with no return leg (kind omitted = the 'trade' default) is refused; the live B6 guard accepted a member trade with no return leg (Q's BEFORE); every TRADE_INELIGIBLE raise is translated (none skipped); probe O / Q run as the member caller");
+const guardVerdict = (fn, caller, row) => {
+  const memberAt = fn.indexOf("if not (public.silvis_is_sched() or server) then");
+  const memberEnd = fn.indexOf("\n  end if;\n", fn.indexOf("new.decided_at      := null;"));
+  if (memberAt < 0 || memberEnd < memberAt) throw new Error("guardVerdict: the member branch was not found");
+  const r = { kind: "trade", return_day: null, return_role: null, ...row };   // the column default is 'trade' (KIND_DDL above)
+  if (caller.member) r.from_surgeon_id = caller.me;                          // the member branch forces from := me first
+  const toJs = (c) => c
+    .replace(/new\.(\w+) is distinct from ('[^']*')/g, "(r.$1 !== $2)")
+    .replace(/new\.(\w+) is not null/g, "(r.$1 != null)")
+    .replace(/new\.(\w+) is null/g, "(r.$1 == null)")
+    .replace(/new\.(\w+) = new\.(\w+)/g, "(r.$1 != null && r.$2 != null && r.$1 === r.$2)")   // SQL: NULL = x is NULL, never true
+    .replace(/new\.(\w+) = ('[^']*')/g, "(r.$1 === $2)")
+    .replace(/ and /g, " && ").replace(/ or /g, " || ");
+  // S5 review: every TRADE_INELIGIBLE raise in the body must be one this evaluator reads - a refusal added in another
+  // form (a coalesce(...), a local variable) would otherwise be skipped and the "ok" cases would pass without it.
+  const raises = (fn.match(/raise exception 'TRADE_INELIGIBLE:/g) || []).length;
+  const read = [...fn.matchAll(/\n\s*if (new\.[^\n]*?) then\n\s*raise exception '(TRADE_INELIGIBLE: [^']*)'/g)];
+  if (read.length !== raises) throw new Error("guardVerdict: " + raises + " TRADE_INELIGIBLE raise(s) in the body, " + read.length + " in the form it evaluates (if new.<col> ... then raise) - extend the evaluator");
+  for (const m of read) {
+    if (m.index > memberAt && m.index < memberEnd && !caller.member) continue;
+    const js = toJs(m[1]);
+    if (/new\./.test(js)) throw new Error("guardVerdict: untranslated condition `" + m[1] + "`");
+    if (Function("r", "return " + js + ";")(r)) return "ERR " + m[2];
+  }
+  return "ok";
+};
+{
+  const MEMBER = { member: true, me: "s2" }, SCHED = { member: false };
+  const give = functionText(schema, "trade_insert_guard"), b6 = functionText(locksMig, "trade_insert_guard");
+  const NEEDS = "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead";
+  const ONEWAY = "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift";
+  const base = { from_surgeon_id: "s2", to_surgeon_id: "s3", day: "2030-03-27", role: "primary" };
+  const CASES = [
+    ["member give, no return leg (probe O)", MEMBER, { ...base, kind: "give" }, "ok"],
+    ["member trade, kind omitted, no return leg (probe Q)", MEMBER, { ...base }, NEEDS],
+    ["member trade, kind 'trade', no return leg", MEMBER, { ...base, kind: "trade" }, NEEDS],
+    ["member trade, half leg - return day, no role (probe Q3)", MEMBER, { ...base, return_day: "2030-03-04" }, NEEDS],
+    ["member trade with a full return leg", MEMBER, { ...base, return_day: "2030-03-04", return_role: "backup" }, "ok"],
+    ["member give WITH a return leg (probe Q2)", MEMBER, { ...base, kind: "give", return_day: "2030-03-04", return_role: "backup" }, ONEWAY],
+    ["member give carrying only a return role (probe Q4)", MEMBER, { ...base, kind: "give", return_role: "backup" }, ONEWAY],
+    ["member give naming someone else as from (probe P: from := me)", MEMBER, { ...base, kind: "give", from_surgeon_id: "s3", to_surgeon_id: "s4" }, "ok"],
+    ["member give to himself", MEMBER, { ...base, kind: "give", to_surgeon_id: "s2" }, "ERR TRADE_INELIGIBLE: a trade needs two different surgeons"],
+    ["scheduler one-way trade (probe U, unchanged)", SCHED, { ...base, from_surgeon_id: "s3", to_surgeon_id: "s4" }, "ok"],
+    ["scheduler give (probe U3)", SCHED, { ...base, kind: "give", from_surgeon_id: "s3", to_surgeon_id: "s4" }, "ok"],
+    ["scheduler give WITH a return leg (probe U2)", SCHED, { ...base, kind: "give", from_surgeon_id: "s3", to_surgeon_id: "s4", return_day: "2030-03-04", return_role: "backup" }, ONEWAY],
+  ];
+  CASES.forEach(([what, caller, row, want]) => eq(guardVerdict(give, caller, row), want, "prepared trade_insert_guard (schema.sql = the give-kind migration): " + what + ";"));
+  // The live guard (B6, frozen by sha256 above) is the BEFORE: it never refused a member's one-way trade (only the client
+  // did - Q's BEFORE in the probe header reads status=pending return=null) and knew no kind.
+  eq(guardVerdict(b6, MEMBER, { ...base }), "ok", "the live B6 trade_insert_guard accepted a member trade with no return leg (the BEFORE Prompt 19 closes);");
+  // the evaluator refuses to grade a body with a refusal it cannot read (S5 review), and models SQL NULL in "a = b"
+  let unread = null;
+  try { guardVerdict(give.replace("if new.from_surgeon_id = new.to_surgeon_id then", "if coalesce(new.from_surgeon_id, '') = new.to_surgeon_id then"), MEMBER, { ...base, kind: "give" }); } catch (e) { unread = String(e.message); }
+  eq(unread, "guardVerdict: 3 TRADE_INELIGIBLE raise(s) in the body, 2 in the form it evaluates (if new.<col> ... then raise) - extend the evaluator", "a TRADE_INELIGIBLE raise in another form must stop guardVerdict, not be skipped;");
+  eq(guardVerdict(give, SCHED, { ...base, kind: "give", from_surgeon_id: null, to_surgeon_id: null }), "ok", "NULL = NULL is not true in SQL - the same-surgeon raise does not fire on two NULLs;");
+  eq(guardVerdict(b6, MEMBER, { ...base, to_surgeon_id: "s2" }), "ERR TRADE_INELIGIBLE: a trade needs two different surgeons", "guardVerdict reads B6's same-surgeon refusal (the evaluator is not vacuous on the frozen body);");
+  // The probe's O and Q are the MEMBER caller (probe_ctx 'surgeon' = s2, role surgeon) through PostgREST's role and claims
+  // - not the scheduler, not the server bypass - and insert exactly the rows the cases above read.
+  ok(/update public\.user_profiles set person_id = 's2', role = 'surgeon'   where id = surgeon;/.test(probe), "the probe's 'surgeon' caller must be linked to s2 with role surgeon (a member)");
+  [["O", "-- ---------- O:", "-- ---------- P:", "(kind, from_surgeon_id, to_surgeon_id, day, role, status, detail)", "values ('give', 's2', 's3', '2030-03-27', 'primary', 'pending', 'probe O')"],
+   ["Q", "-- ---------- Q:", "-- ---------- Q2:", "(from_surgeon_id, to_surgeon_id, day, role, status, detail)", "values ('s2', 's3', '2030-03-27', 'primary', 'pending', 'probe Q')"]].forEach(([k, from, to, cols, vals]) => {
+    const blk = probe.slice(probe.indexOf(from), probe.indexOf(to));
+    ok(blk.length > 0 && blk.includes("uid text := (select v from probe_ctx where k = 'surgeon');") && blk.includes("execute 'set local role authenticated';") && blk.includes("perform set_config('request.jwt.claims', '{\"sub\":\"' || uid || '\",\"role\":\"authenticated\"}', true);"), "probe case " + k + " must run as the member caller (probe_ctx 'surgeon', role authenticated, its sub in request.jwt.claims)");
+    ok(blk.includes("insert into public.shift_trade_requests " + cols + "\n    " + vals + " returning id into tid;"), "probe case " + k + " must insert " + cols + " " + vals + " (no return columns" + (k === "Q" ? ", no kind - the column default 'trade'" : "") + ")");
+    ok(!/probe_ctx where k = 'sched'/.test(blk), "probe case " + k + " must not switch to the scheduler caller");
+  });
+}
+
 console.log("schema.test.js: " + N + " assertions passed");

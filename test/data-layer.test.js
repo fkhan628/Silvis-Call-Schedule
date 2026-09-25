@@ -1412,9 +1412,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const fetchStub = async (url, init) => {
         const id = decodeURIComponent(String(url).split("id=eq.")[1] || "");
         const b = JSON.parse(init.body);
-        st.patches.push({ url: String(url), method: init.method, id, status: b.status }); st.order.push("PATCH " + id + " " + b.status);
+        st.patches.push({ url: String(url), method: init.method, id, status: b.status, body: b }); st.order.push("PATCH " + id + " " + b.status);
         const row = rows.find(r => r.id === id); if (!row) return { ok: true, status: 200, text: async () => "[]" };
-        row.status = b.status; row.decided_at = b.decided_at;
+        Object.assign(row, b); // the whole PATCH body lands on the row, as PostgREST would write it (S5 review: a return leg PATCHed onto a give would show)
         return { ok: true, status: 200, text: async () => JSON.stringify([{ ...row }]) };
       };
       const authFetch = async (url, init) => {
@@ -1424,7 +1424,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, trade_id: b.p_trade_id }) };
       };
       const elig = (days, role, cand) => { st.elig.push([days, role, cand]); return o.elig || { ok: true, hard: [], soft: [] }; };
-      const args = [fetchStub, "https://x.supabase.co", () => ({ Authorization: "Bearer t" }), (t) => String(t), { warn: () => {} }, authFetch, () => {}, (m) => st.toasts.push(m), { current: null }, () => {}, { current: async () => {} },
+      const args = [fetchStub, "https://x.supabase.co", () => ({ Authorization: "Bearer t" }), (t) => String(t), { warn: () => {} }, authFetch, () => {}, (m) => st.toasts.push(m), { current: null }, () => {},
+        // Prompt 19 S5: o.recordRefresh records the calendar refetch (refreshDaysRef) in the order - the rows apply_trade wrote
+        { current: o.recordRefresh ? async () => { st.order.push("REFRESH"); } : async () => {} },
         H.tradeAppliedMsg, async (type, title, message, data) => { st.notifs.push({ type, title, message, data }); st.order.push("NOTIF " + type); },
         (type, data, targetIds) => { st.mails.push({ type, data, targetIds }); st.order.push("MAIL " + type); return Promise.resolve({ ok: true }); },
         H.slotLabel, "", !!o.isScheduler, o.me === undefined ? "s2" : o.me, rows, (days, r, c) => elig(days, r, c), (d, r, c) => elig([d], r, c), () => "on vacation",
@@ -1438,7 +1440,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const stamp3 = (i) => "[unit weekend-block 2026-10-09 3: weekend block unit 10/9-10/11 (3 days), day " + (i + 1) + " of 3]";
     // a member's whole-unit TRADE for one return day (S2): the head carries the return leg, the tails go as kind 'give'
     const unitTrade = (sts) => ["2026-10-09", "2026-10-10", "2026-10-11"].map((d, i) => base({ id: "t" + i, day: d, status: sts[i], detail: "d " + stamp3(i), ...(i === 0 ? { kind: "trade", return_day: "2026-10-20", return_role: "backup" } : {}) }));
-    let A = null, B = null, C = null, D = null, E = null, F = null, G = null, H1 = null, H2 = null, runErr = null;
+    let A = null, B = null, C = null, D = null, E = null, F = null, G = null, H1 = null, H2 = null, I1 = null, I2 = null, runErr = null;
     if (!liftErr) {
       try {
         A = await run({ rows: unitRows() }, "acceptTrade");                                                  // the receiver accepts a 2-day weekend give
@@ -1450,6 +1452,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         G = await run({ rows: [base({ status: "accepted" })], isScheduler: true, me: "s1" }, "retryApplyTrade");
         H1 = await run({ rows: unitTrade(["applied", "accepted", "accepted"]), isScheduler: true, me: "s1" }, "retryApplyTrade", (rs) => rs[1]); // Retry apply on a tail
         H2 = await run({ rows: unitTrade(["accepted", "pending", "pending"]) }, "acceptTrade", (rs) => rs[1]);                                // accept the pending tails
+        I1 = await run({ rows: [base()], recordRefresh: true }, "acceptTrade");                              // Prompt 19 S5: the one-way apply, a day
+        I2 = await run({ rows: unitRows(), recordRefresh: true }, "acceptTrade");                            // ... and a weekend unit
       } catch (e) { runErr = e; }
     }
     const ready = () => { if (liftErr) throw liftErr; if (runErr) throw runErr; };
@@ -1477,6 +1481,25 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(A.st.audits[0].detail.kind, "give");
       assert.deepStrictEqual(A.rows.map(r => r.status), ["applied", "applied"]);
       assert.ok(!A.st.toasts.some(m => /NOT applied|Couldn't/.test(m)), "no failure toast: " + JSON.stringify(A.st.toasts));
+    });
+    // Prompt 19 S5 (tests): the one-way apply as the client runs it - apply_trade moves the day on the server (return_day
+    // null: nothing comes back), so after EACH rpc the calendar is re-read (refreshDaysRef) before the next row and before
+    // the 'Give applied' row / e-mail and the success toast; no return leg is sent, checked or stored.
+    check("Prompt 19 S5 (behaviour): the one-way apply - a one-day give and a weekend-unit give: PATCH accepted, then per row rpc/apply_trade { p_trade_id } alone followed by the calendar refetch, then the scheduler lookup, 'Give applied' and ONE e-mail; the rows stay one-way (return null) and only the receiver's eligibility is consulted; the success toast names the days", () => {
+      ready();
+      assert.deepStrictEqual(I1.st.order, ["PATCH g1 accepted", "NOTIF trade_accepted", "RPC g1", "REFRESH", "LOOKUP", "NOTIF trade_applied", "MAIL trade_applied"]);
+      assert.deepStrictEqual(I2.st.order, ["PATCH g1 accepted", "PATCH g2 accepted", "NOTIF trade_accepted", "RPC g1", "REFRESH", "RPC g2", "REFRESH", "LOOKUP", "NOTIF trade_applied", "MAIL trade_applied"]);
+      [I1, I2].forEach((t) => {
+        t.st.rpcs.forEach(r => assert.deepStrictEqual(r.body, { p_trade_id: r.body.p_trade_id }, "the rpc body is { p_trade_id } alone - no return leg is sent"));
+        t.st.patches.forEach(p => assert.deepStrictEqual(Object.keys(p.body).sort(), ["decided_at", "status"], "the accept PATCH writes status + decided_at only - no return leg, no kind: " + JSON.stringify(p.body)));
+        assert.strictEqual(t.st.patches.length, t.rows.length, "one PATCH per row");
+        assert.ok(t.rows.every(r => r.status === "applied" && r.return_day === null && r.return_role === null && r.kind === "give"), "every row applied and still one-way: " + JSON.stringify(t.rows));
+        assert.ok(t.st.elig.length > 0, "the receiver's eligibility was consulted at all");
+        assert.ok(t.st.elig.every(([, , cand]) => cand === "s2"), "only the receiver's eligibility is consulted (no return leg for the giver): " + JSON.stringify(t.st.elig));
+        assert.deepStrictEqual(t.st.mails.map(m => m.targetIds), [["s3", "s2", "s1"]]);
+      });
+      assert.strictEqual(I1.st.toasts[I1.st.toasts.length - 1], "Give accepted - applied to the schedule.");
+      assert.strictEqual(I2.st.toasts[I2.st.toasts.length - 1], "Give accepted - 2 days applied to the schedule.");
     });
     check("Prompt 19 S3 (behaviour): a one-day give with a failed scheduler lookup (null) - PATCH, rpc, the two rows; the e-mail goes to the two parties only", () => {
       ready();
