@@ -8,11 +8,22 @@
 //   - asserts the app reaches the calendar with the header "Silvis Call Schedule"
 //   - clicks every nav tab, asserting no pageerror / unexpected console error
 //   - Slice B/C/D on the imported data: October 2026 shows 'P <name>' cells and
-//     OPEN cells (10/15 is P OPEN), the week of 9/28 shows the Atwell external
+//     OPEN cells where the served rows leave a slot open (10/15 was P OPEN until
+//     the scheduler filled it 9/25 15:24 CDT: Burchett primary, locked, Khan
+//     backup), the week of 9/28 shows the Atwell external
 //     cover in the grid and as '9/28-10/4 Atwell' in the ER-panel author's week row, the day
 //     editor for 2026-10-15 lists greyed (ineligible) options with their first
-//     hard reason (Sarkar - outside-window), eligible options come first, Esc
-//     closes it; November 2026's grid shows NO E (East-derived) / F (forecast)
+//     hard reason (read off its served row since 9/25: a primary locked to H
+//     greys every other option 'slot-locked:H' and the 'Not eligible' line reads
+//     '<Name> - slot locked to <H>'), eligible options come first, Esc closes
+//     it; the window reason (Sarkar - outside-window, 'outside the availability
+//     window') is read on a day DERIVED from the served rows + the blob (the
+//     first weekday on/after today outside every window whose primary is neither
+//     locked nor covered, held by her in neither role, off the holiday units,
+//     where the rules' own first reason for her is outside-window; the rules
+//     must list outside-window on every such candidate - the first 40 in date
+//     order;
+//     day-editor-window-reason.png); November 2026's grid shows NO E (East-derived) / F (forecast)
 //     badge, East legend line or 'East-derived:' hover to anyone, the scheduler
 //     included (Item E2, Faraz 9/25), while the scheduler's day editor still
 //     shows the East status on exactly the rules' derived / forecast days (the
@@ -23,11 +34,13 @@
 //     (vis-002); dark mode keeps week-row names, vacation dots and the title
 //     at 3:1+ contrast measured on computed colours (vis-003). Screenshots:
 //     calendar-oct-2026.png, calendar-nov-2026.png, week-rows-oct-2026.png,
-//     day-editor-2026-10-15.png, calendar-mobile.png, calendar-oct-dark.png
+//     day-editor-2026-10-15.png, day-editor-window-reason.png (when a derived
+//     day exists), calendar-mobile.png, calendar-oct-dark.png
 //   - Prompt 9 exports, from the Calendar tools card: the group and per-surgeon
 //     .ics downloads (all-day runs since 9/25: VALUE=DATE lines, stable run UIDs, summary naming), the
 //     shareable read-only page (downloaded, re-opened through the static
-//     server, 10/15 OPEN red, week rows present, screenshot share-page.png),
+//     server, 10/15 OPEN red while the served rows leave it open, week rows
+//     present, screenshot share-page.png),
 //     the printable popup (P/B strings, OPEN red, external cover, screenshot
 //     printable-page.png), the ER-panel author's ER Call Panels (header text, visible-month
 //     default, the 11/2-12/13 preset with its rows printed and screenshotted
@@ -67,8 +80,13 @@
 //     the top) and this run's edits, with an observed premise (every plan-day
 //     cell equals its live row, and a schedule_days poll after this run's last
 //     write) before the apply. Left as dated pins: the 10/15 'P OPEN' family
-//     (the one open primary, pending the group's 10/15 decision) and the
-//     'respect locks OFF over 10/5-10/11' preview. SM2 review: the row-less day
+//     (each also guarded by liveOpenEarly - since the scheduler filled 10/15 on
+//     9/25 they print 'held live' and the cell pin checks the holder) and the
+//     'respect locks OFF over 10/5-10/11' preview. 9/25 (10/15 filled): the
+//     today-forward half of item Q (the first open slot on/after today), the
+//     Slice D reasons (10/15's lock, the window day) and the Open shifts
+//     'Email the group now' step (run while a slot is still on the board)
+//     read the served rows as well. SM2 review: the row-less day
 //     scans run to 400 days past the LAST live row and skip Fri-Sun triples that
 //     overlap a holiday unit of the blob; the outside surgeon's day is the first
 //     row-less weekday after this run's last edit and the whole outside-surgeon
@@ -160,7 +178,11 @@
 //     calendar cell shows s1 (the harness overlays the claimer on the mocked
 //     row); Email the group now (confirm) -> feed open_shifts with data.slots,
 //     broadcast send-notification, audit openshifts.notify, 'last announced'
-//     fills; 390 px in BOTH themes with the same probe (no page scroll, table
+//     fills - run BEFORE the claim when the claim takes the board's only open
+//     slot (LIVE mode since 10/15 was filled 9/25: the harness-opened slot is
+//     the only one) because the button is disabled on an empty board; an
+//     empty board asserts it disabled and says the send path did not run;
+//     390 px in BOTH themes with the same probe (no page scroll, table
 //     scrolls in its wrapper with the swipe hint, buttons >= 36 px; dark adds
 //     the navy body and table text >= 3:1). Screenshots openshifts.png,
 //     openshifts-sheet.png, openshifts-email-preview.png, openshifts-390.png,
@@ -1214,8 +1236,8 @@ try {
   else fail("the app never joined the mocked realtime channel (SDK handshake changed? frames seen: " + rt.frames.join(",") + ")");
 
   // ---- LIVE mode: the claim scenario needs one open slot s1 may take (P13R-2, 9/23) ----
-  // Since the 9/23 publish the live table has next to no open slot, and what is open (10/15 primary, a Thursday) is
-  // never Khan's. The harness then OPENS one backup slot in what it serves: a Mon/Wed 'generated' row after the
+  // Since the 9/23 publish the live table has next to no open slot: 10/15 primary (a Thursday, never Khan's) until the
+  // scheduler filled it 9/25, none since. The harness then OPENS one backup slot in what it serves: a Mon/Wed 'generated' row after the
   // seed's range (the seed import sees no diff), outside the holiday units, unlocked, held by neither s1 nor an
   // outside cover - tried in date order, each candidate judged by the app's OWN board (Take enabled for s1 =
   // eligibility() said yes), at most six reloads. The chosen blank goes into liveRowsEarly too, so every pin derived
@@ -1339,8 +1361,8 @@ try {
       if (!focusIn) fail(`B9b (${theme}): focus did not land inside the day editor when it opened`);
       else if (!afterTab.inside || !afterTab.first || !afterShift.inside || !afterShift.last) fail(`B9b (${theme}): Tab from the last of ${n} focusables should wrap to the first and Shift+Tab back to the last: ${JSON.stringify({ afterTab, afterShift })}`);
       else ok(`B9b (${theme}): focus lands in the dialog; Tab wraps over its ${n} focusables (last -> '${afterTab.label}' -> last)`);
-      // a dirty draft: an eligible primary other than the current one, else an eligible backup, else a typed note (on
-      // 10/15 every pool member is ineligible for primary - that is why the day is open - and backup may be locked)
+      // a dirty draft: an eligible primary other than the current one, else an eligible backup, else a typed note (10/15's
+      // primary is locked since the scheduler filled it 9/25 - and its backup may be locked - so it is usually the note)
       const daysWritesBefore = writes.filter(w => w.path.startsWith("/rest/v1/schedule_days")).length;
       const pickIn = (role) => page.$$eval(`[data-testid=editor-${role}] option`, els => { if (!els.length || els[0].closest("select").disabled) return null; const cur = els.find(o => o.selected); const o = els.find(x => x.getAttribute("data-eligible") === "true" && x.value && (!cur || x.value !== cur.value)); return o ? o.value : null; });
       let how = null;
@@ -1596,15 +1618,21 @@ try {
   // TH: OPEN is the theme's red token #B91C1C (light) - item O.1 keeps OPEN red so it never competes with the orange accent.
   if (openRed) { if (!/rgb\(185, 28, 28\)/.test(openRed)) fail("week rows: OPEN entry is not the OPEN red #B91C1C: " + openRed); else ok("week rows: OPEN entries are red #B91C1C"); }
   else if (octOpenExpected) fail("week rows: no OPEN entry found in the October 2026 week rows although the live rows leave a slot open on/after today " + todayIso);
-  else console.log(`     (no open slot on/after today ${todayIso} in the October 2026 week rows - the 'OPEN entries are red' pin is not exercised; the share-page / printable pins cover the colour while 10/15 is open)`);
+  else console.log(`     (no open slot on/after today ${todayIso} in the October 2026 week rows - the 'OPEN entries are red' pin is not exercised here; the today-forward check below reads the colour on the first open slot's week row)`);
   await page.locator("[data-testid=week-rows]").screenshot({ path: path.join(OUT, "week-rows-oct-2026.png") });
   ok("screenshot test/ui/out/week-rows-oct-2026.png");
 
   // ---- Item Q (Faraz 9/22): an unassigned slot is OPEN only from today (Central) forward ----
   // September 2026 (9/1-9/13 have no rows; the import has open backups before
   // 9/22): no week-row entry dated before today may read "M/D OPEN" and no grid
-  // cell before today may carry the red OPEN pill or a data-open flag. October
-  // 10/15 must still be OPEN in both places while today <= 2026-10-15. A past
+  // cell before today may carry the red OPEN pill or a data-open flag. The other
+  // half - an open slot today or later still reads OPEN in both places - was
+  // pinned to 10/15 until the scheduler filled it (9/25 15:24 CDT, Burchett P
+  // locked, Khan B); since then it runs on the FIRST open slot on/after today in
+  // the served rows (liveOpen, through the last live row - the harness-opened
+  // slot counts, the app is served the same blank): its 'M/D OPEN' entry once
+  // per open role in its week row, in the OPEN red, and data-open = those roles'
+  // letters with the red pill in the grid. No open slot = a console line. A past
   // cell's hover title must not say OPEN either (fix round: the tooltip).
   await showMonth(2026, 8);
   const sepEntries = await page.$$eval("[data-testid=week-rows] tr[data-week]", trs => trs.flatMap(tr => Array.from(tr.querySelectorAll('[data-kind="open"]')).map(el => ({ week: tr.getAttribute("data-week"), text: el.textContent.trim() }))));
@@ -1621,14 +1649,26 @@ try {
   else ok(`September 2026 grid: none of the ${sepGrid.length} cell(s) before today ${todayCentral} shows an OPEN pill, data-open, OPEN text or an OPEN tooltip (e.g. ${sepGrid[0].day} title='${sepGrid[0].title}')`);
   await page.screenshot({ path: path.join(OUT, "calendar-sep-2026.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-sep-2026.png");
-  await showMonth(2026, 9);
-  if (todayCentral <= "2026-10-15") {
-    const oct15Rows = await page.$$eval('[data-testid=week-rows] tr[data-week="2026-10-12"] [data-kind="open"]', els => els.map(e => e.textContent.trim()));
-    const oct15Cell = await page.$eval('[data-testid=cal-grid] [data-day="2026-10-15"]', el => ({ open: el.getAttribute("data-open"), pill: !!el.querySelector(".cal-pill.cal-open"), text: el.textContent }));
-    if (!oct15Rows.includes("10/15 OPEN")) fail("October 2026 week rows: '10/15 OPEN' (today or later) is missing: " + JSON.stringify(oct15Rows));
-    else if (!/P/.test(oct15Cell.open || "") || !oct15Cell.pill || !/OPEN/.test(oct15Cell.text)) fail("October 2026 grid: 10/15 should still be P OPEN with the red pill: " + JSON.stringify(oct15Cell));
-    else ok(`today-forward: 10/15 still reads '10/15 OPEN' in the week rows and P OPEN (data-open=${oct15Cell.open}, red pill) in the grid (today ${todayCentral})`);
-  } else console.log(`     (today ${todayCentral} is after 2026-10-15 - the '10/15 still OPEN' half of the today-forward check is skipped)`);
+  {
+    const fwdDay = daysBetween(todayIso, lastLiveDay).find(d => liveOpen(d, "primary") || liveOpen(d, "backup")) || null;
+    if (!fwdDay) console.log(`     (today-forward: no open slot on/after today ${todayCentral} in the served rows through ${lastLiveDay} - the 'still OPEN' half of the check is not exercised this run)`);
+    else {
+      const fwdRoles = ["primary", "backup"].filter(r => liveOpen(fwdDay, r));
+      const fwdLetters = fwdRoles.map(r => r === "primary" ? "P" : "B").join("");
+      const fwdMonday = isoAddDays(fwdDay, -((new Date(fwdDay + "T12:00:00Z").getUTCDay() + 6) % 7)); // the week rows are Mon-Sun
+      const fwdWhy = harnessOpen.day === fwdDay ? " (the harness-opened slot, blanked in what the app is served)" : "";
+      const want = `${mdOf(fwdDay)} OPEN`;
+      await showMonth(Number(fwdDay.slice(0, 4)), Number(fwdDay.slice(5, 7)) - 1);
+      const fwdEntries = await page.$$eval(`[data-testid=week-rows] tr[data-week="${fwdMonday}"] [data-kind="open"]`, els => els.map(e => ({ text: e.textContent.trim(), color: getComputedStyle(e).color })));
+      const fwdCell = await page.$eval(`[data-testid=cal-grid] [data-day="${fwdDay}"]`, el => ({ open: el.getAttribute("data-open"), pill: !!el.querySelector(".cal-pill.cal-open"), text: el.textContent })).catch(() => null);
+      const mine = fwdEntries.filter(e => e.text === want);
+      if (mine.length !== fwdRoles.length) fail(`today-forward: the week row of ${mdOf(fwdMonday)} should list '${want}' once per open role (${fwdRoles.join(" + ")}) for ${fwdDay}${fwdWhy}, got ${JSON.stringify(fwdEntries.map(e => e.text))}`);
+      else if (!mine.every(e => /rgb\(185, 28, 28\)/.test(e.color))) fail(`today-forward: '${want}' in the week row of ${mdOf(fwdMonday)} is not the OPEN red #B91C1C: ${mine.map(e => e.color).join(", ")}`);
+      else if (!fwdCell || fwdCell.open !== fwdLetters || !fwdCell.pill || !/OPEN/.test(fwdCell.text)) fail(`today-forward: the grid cell ${fwdDay} should read ${fwdLetters} OPEN (data-open=${fwdLetters}, red pill)${fwdWhy}: ${JSON.stringify(fwdCell)}`);
+      else ok(`today-forward: the first open slot on/after today ${todayCentral} in the served rows, ${fwdDay} ${fwdRoles.join(" + ")}${fwdWhy}, reads '${want}' (red #B91C1C) in the week row of ${mdOf(fwdMonday)} and ${fwdLetters} OPEN (data-open=${fwdCell.open}, red pill) in the grid`);
+    }
+    await showMonth(2026, 9); // the exports below start from October 2026
+  }
 
   // ---- Prompt 9: exports (Calendar tools card + My schedule .ics) ----
   // Real downloads are captured and read back; the share page is re-opened
@@ -1800,21 +1840,40 @@ try {
   await showMonth(2026, 9);
 
   // ---- Slice D: the day editor for 2026-10-15 ----
+  // The expected reasons come from 10/15's SERVED row, never a pin. Until 9/25 the day was open and the pin read
+  // 'Sarkar - outside-window'; the scheduler then filled it (9/25 15:24 CDT: Burchett primary, locked, Khan backup).
+  // A primary locked to H: every other option is greyed with 'slot-locked:H' as its FIRST hard reason (the slot facts
+  // lead eligibility()'s list), H's own option stays eligible, and the 'Not eligible' line reads '<Name> - slot locked
+  // to <H's name>' for each greyed option. A primary that is not locked: the lock half says so and is not exercised.
+  // The window reason (the pre-9/25 pin) runs on its own derived day right after this editor closes.
   await page.click('[data-day="2026-10-15"]');
   await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
   const edTitle = await page.$eval("[data-testid=editor-title]", el => el.textContent);
   if (!/Thu October 15, 2026/.test(edTitle)) fail("day editor title wrong: " + edTitle); else ok("day editor opened: " + edTitle);
-  const pOpts = await page.$$eval("[data-testid=editor-primary] option", els => els.map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
+  const readEditorOpts = () => page.$$eval("[data-testid=editor-primary] option", els => els.map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
+  const pOpts = await readEditorOpts();
   const greyed = pOpts.filter(o => o.eligible === "false");
   if (!greyed.length || !greyed.every(o => / - [a-z-]+/.test(o.text))) fail("day editor 10/15: no greyed primary option with a reason: " + JSON.stringify(pOpts)); else ok(`day editor 10/15: ${greyed.length} greyed primary option(s) with a reason, e.g. "${greyed[0].text}"`);
-  const sarkar = greyed.find(o => /^Sarkar - /.test(o.text));
-  if (!sarkar) fail("day editor 10/15: Sarkar is not greyed in the Primary dropdown: " + JSON.stringify(pOpts.filter(o => /Sarkar/.test(o.text))));
-  else if (!/window/.test(sarkar.text)) fail("day editor 10/15: Sarkar is greyed but not with her window reason: " + sarkar.text);
-  else ok(`day editor 10/15: "${sarkar.text}" (window/hard reason)`);
   const lastEligible = pOpts.map(o => o.eligible).lastIndexOf("true"), firstIneligible = pOpts.map(o => o.eligible).indexOf("false");
   if (firstIneligible >= 0 && lastEligible > firstIneligible) fail("day editor: options are not eligible-first: " + pOpts.map(o => o.eligible[0] + ":" + o.text).join(" | ")); else ok("day editor: eligible options listed first");
   const reasonsText = await page.$eval("[data-testid=editor-primary-reasons]", el => el.textContent).catch(() => "");
-  if (!/Sarkar - outside the availability window/.test(reasonsText)) fail("day editor: plain-English reason line missing for Sarkar: " + reasonsText); else ok("day editor: reason line maps the code to words (Sarkar - outside the availability window)");
+  {
+    const r1015 = liveByDay["2026-10-15"] || null;
+    const lockH = r1015 && r1015.primary_locked && r1015.primary_id ? r1015.primary_id : null;
+    if (!lockH) console.log(`     (day editor 10/15: the served row's primary is not locked (${JSON.stringify(r1015 && { primary_id: r1015.primary_id, primary_locked: r1015.primary_locked, external_cover: r1015.external_cover })}) - the lock-reason half is not exercised; the window reason runs on its derived day below)`);
+    else {
+      const hName = rosterNameOf(lockH);
+      const holderOpt = pOpts.find(o => o.value === lockH);
+      const others = pOpts.filter(o => o.value && o.value !== lockH);
+      const badOpt = others.filter(o => o.eligible !== "false" || o.text !== `${rosterNameOf(o.value)} - slot-locked:${lockH}`);
+      const missingWords = others.filter(o => !reasonsText.includes(`${rosterNameOf(o.value)} - slot locked to ${hName}`));
+      if (!holderOpt || holderOpt.eligible !== "true") fail(`day editor 10/15: the lock holder ${hName} (${lockH}, primary locked in the served row) should be an eligible option: ${JSON.stringify(holderOpt)}`);
+      else if (!others.length || badOpt.length) fail(`day editor 10/15: every option but the lock holder ${hName} must be greyed with its first hard reason 'slot-locked:${lockH}' (the served row locks the primary): ${JSON.stringify((badOpt.length ? badOpt : pOpts).slice(0, 6))}`);
+      else ok(`day editor 10/15: the served row locks the primary to ${hName} - ${others.length} other option(s) greyed 'slot-locked:${lockH}' (e.g. "${others[0].text}"), "${holderOpt.text}" eligible`);
+      if (!others.length || missingWords.length) fail(`day editor 10/15: the 'Not eligible' line should read '<Name> - slot locked to ${hName}' for ${missingWords.map(o => rosterNameOf(o.value)).join(", ") || "every greyed option"}: ${reasonsText}`);
+      else ok(`day editor 10/15: the reason line maps the code to words for all ${others.length} ("${rosterNameOf(others[0].value)} - slot locked to ${hName}")`);
+    }
+  }
   const eastLines = await page.$$eval("[data-testid=east-status]", els => els.map(e => e.textContent));
   if (eastLines.length < 2) fail("day editor: East status lines missing (expected Khan + Fierce): " + JSON.stringify(eastLines)); else ok("day editor East status: " + eastLines.join(" || "));
   await page.screenshot({ path: path.join(OUT, "day-editor-2026-10-15.png"), fullPage: false });
@@ -1826,6 +1885,74 @@ try {
   if (!/Fri October 16, 2026/.test(navTitle)) fail("ArrowRight did not move the editor to 10/16: " + navTitle); else ok("ArrowRight moves the editor to Fri October 16, 2026");
   await page.keyboard.press("Escape");
   await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).then(() => ok("Esc closes the day editor")).catch(() => fail("Esc did not close the day editor"));
+
+  // ---- Slice D (window reason, derived since 9/25): the windows surgeon greyed 'outside-window' where it applies ----
+  // Was pinned to 10/15 (open until 9/25). The surgeon is the one whose surgeonRules in the live blob carry
+  // availableWindows (Sarkar); the candidate days are the served rows on/after today, Mon-Fri, outside every window,
+  // whose primary is neither locked nor externally covered (a slot fact would lead the list), that she holds in neither
+  // role and that sit off every holiday unit of the blob. Premise from the rules' own picture (the App's rulesCtxState
+  // memo, the same walk as the Item E2 block below, with the editor closed): outside-window must be among her hard
+  // reasons on EVERY candidate - the first 40 in date order (FAIL otherwise - that rule is what is under test; rdStatic
+  // has no early return before it, so it is always collected); the day used is the first where it is
+  // her FIRST hard reason (the editor shows hard[0]; a vacation or a dated row may come first on some days). The editor
+  // must then grey her option '<Name> - outside-window' and its 'Not eligible' line must read '<Name> - outside the
+  // availability window'. No candidate, or none where the window reason comes first = a console line, never a silent pass.
+  try {
+    const sRules = (liveBlobData && liveBlobData.surgeonRules) || {};
+    const winId = Object.keys(sRules).find(id => sRules[id] && Array.isArray(sRules[id].availableWindows) && sRules[id].availableWindows.length) || null;
+    if (!winId) console.log("     (day editor window reason: no surgeon in the live blob has availableWindows - not exercised)");
+    else {
+      const wins = sRules[winId].availableWindows.filter(w => w && w.start && w.end);
+      const winName = rosterNameOf(winId);
+      const wdOf = (d) => new Date(d + "T12:00:00Z").getUTCDay();
+      const cands = liveRows.filter(r => r.day >= todayIso && wdOf(r.day) >= 1 && wdOf(r.day) <= 5 && !wins.some(w => r.day >= w.start && r.day <= w.end) && !r.primary_locked && !r.external_cover && r.primary_id !== winId && r.backup_id !== winId && !holidayUnitDays.has(r.day)).map(r => r.day).slice(0, 40);
+      if (!cands.length) console.log(`     (day editor window reason: no weekday on/after today ${todayIso} in the served rows lies outside ${winName}'s windows with an unlocked, uncovered primary she holds in neither role - not exercised)`);
+      else {
+        const rh = await page.evaluate(([days, id]) => {
+          const rootEl = document.getElementById("root");
+          const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+          if (!ck) return { error: "no React container key on #root" };
+          const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+          let ctx = null, n = 0; const stack = [current];
+          while (stack.length && !ctx && n++ < 500000) {
+            const f = stack.pop(); if (!f) continue;
+            if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+            if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+          }
+          if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+          if (typeof eligibility !== "function") return { error: "eligibility() is not a page global" };
+          const out = {};
+          days.forEach(d => { try { out[d] = (eligibility(ctx, d, "primary", id) || {}).hard || []; } catch (e) { out[d] = ["threw: " + String(e && e.message || e)]; } });
+          return { out };
+        }, [cands, winId]);
+        if (rh.error) fail("day editor window reason: " + rh.error);
+        else {
+          const noWin = cands.filter(d => !rh.out[d].includes("outside-window"));
+          const winDay = cands.find(d => rh.out[d][0] === "outside-window") || null;
+          if (noWin.length) fail(`day editor window reason: the rules do not report outside-window for ${winName} on ${noWin.length} of ${cands.length} served day(s) outside every window: ${noWin.slice(0, 4).map(d => d + " [" + rh.out[d].join(", ") + "]").join("; ")}`);
+          else if (!winDay) console.log(`     (day editor window reason: on all ${cands.length} candidate day(s) an earlier hard reason leads ${winName}'s list (e.g. ${cands[0]}: ${rh.out[cands[0]][0]}) - the editor's window wording is not exercised this run)`);
+          else {
+            await showMonth(Number(winDay.slice(0, 4)), Number(winDay.slice(5, 7)) - 1);
+            await page.click(`[data-day="${winDay}"]`);
+            await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+            const wOpts = await readEditorOpts();
+            const wOpt = wOpts.find(o => o.value === winId);
+            const wReasons = await page.$eval("[data-testid=editor-primary-reasons]", el => el.textContent).catch(() => "");
+            const r = liveByDay[winDay];
+            if (!wOpt || wOpt.eligible !== "false" || wOpt.text !== `${winName} - outside-window`) fail(`day editor ${winDay}: ${winName} should be greyed '${winName} - outside-window' (outside every window, primary ${r.primary_id ? rosterNameOf(r.primary_id) : "OPEN"} unlocked): ${JSON.stringify(wOpt || wOpts)}`);
+            else ok(`day editor ${winDay} (derived: the first weekday on/after today outside ${winName}'s windows with an unlocked primary, ${r.primary_id ? rosterNameOf(r.primary_id) : "OPEN"}): "${wOpt.text}" (window/hard reason)`);
+            if (!wReasons.includes(`${winName} - outside the availability window`)) fail(`day editor ${winDay}: plain-English reason line missing for ${winName}: ${wReasons}`);
+            else ok(`day editor ${winDay}: reason line maps the code to words (${winName} - outside the availability window)`);
+            await page.screenshot({ path: path.join(OUT, "day-editor-window-reason.png"), fullPage: false });
+            ok("screenshot test/ui/out/day-editor-window-reason.png");
+          }
+        }
+      }
+    }
+  } catch (e) { fail("day editor window reason: " + errLine(e)); }
+  finally {
+    if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => fail("day editor window reason: Esc did not close the editor")); }
+  }
 
   // ---- November 2026 (Item E2, Faraz 9/25): a CLEAN month grid for the scheduler too ----
   // Item E (9/24) had kept the E (East-derived week) and F / f (East forecast) badges for the scheduler; Item E2 took
@@ -2500,8 +2627,10 @@ try {
   // audit / feed duplicate; send-notification shift_claimed to the scheduler +
   // claimer), Email the group now (feed row open_shifts with data.slots, a
   // broadcast send-notification, audit openshifts.notify, 'last announced'
-  // filled), 390 px in light and dark (no page scroll, table scrolls in its
-  // wrapper with the swipe hint), screenshots openshifts*.png.
+  // filled - on a board that still lists a slot: BEFORE the claim when the
+  // claim takes the only one, else after it; see emailGroupNow), 390 px in
+  // light and dark (no page scroll, table scrolls in its wrapper with the
+  // swipe hint), screenshots openshifts*.png.
   try {
     const parseBody = (w) => { try { return JSON.parse(w.body); } catch (e) { return null; } };
     const noAddr = (s) => !/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(String(s || ""));
@@ -2601,8 +2730,79 @@ try {
     else if (!lines.every(l => /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l))) fail("Open shifts: a Copy list line is not 'Ddd MM/DD - role (unit) - open': " + lines.find(l => !/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l)));
     else if (!noAddr(clip[0])) fail("Open shifts: the Copy list carries an email address");
     else ok(`Open shifts: Copy list -> ${lines.length} line(s), e.g. "${lines[0]}"${lines.length > 1 ? ` ... "${lines[lines.length - 1]}"` : ""}`);
+    // Email the group now (scheduler): a confirm dialog PREVIEWS the composed e-mail (Prompt 13 part 5b: subject 'N open shifts through M/D',
+    // the slots grouped by Monday week, the #openshifts deep link) and writes NOTHING until Send -> feed row open_shifts (data.slots = the
+    // whole range, title = the subject) + broadcast send-notification { subject, message, detail } + audit openshifts.notify; 'last announced' fills.
+    // 9/25 (10/15 filled): the button is disabled={!boardSlots.length} in index-source.html, and page.click on a disabled
+    // button waits out Playwright's 30 s actionability timeout - the 9/25 17:00 run's "Open shifts board: page.click:
+    // Timeout 30000ms exceeded" was exactly that: the claim took the harness-opened slot, the only open slot once 10/15 was
+    // filled, and the step then clicked Email on the emptied board (its "nothing to announce" branch came after the click).
+    // So the step runs on a board that still lists a slot: BEFORE the claim when the claim takes the only one
+    // (emailBeforeClaim), else after it as before; a board with no slot at all asserts the button disabled and says so.
+    let emailExercised = false;
+    const emailGroupNow = async (when) => {
+      const cur0 = await readBoard();
+      if (!cur0.rows.length) {
+        const dis = await page.$eval("[data-testid=ob-email]", b => b.disabled).catch(() => null);
+        if (dis !== true) fail(`Open shifts: with no open slot on the board (${when}) Email the group now must be disabled - nothing to announce - but disabled=${dis}`);
+        else console.log(`     (Open shifts: no open slot on the board ${when} - Email the group now is disabled, as it must be; its preview / send path is not exercised this run)`);
+        return;
+      }
+      emailExercised = true;
+      const beforeMail = writes.length;
+      await clearToast();
+      await page.click("[data-testid=ob-email]");
+      await page.waitForSelector("[data-testid=ob-email-dialog]", { timeout: 5000 });
+      await page.waitForTimeout(200);
+      const pv = await page.$eval("[data-testid=ob-email-preview]", el => ({
+        subject: (el.querySelector("[data-testid=ob-email-subject]") || { textContent: "" }).textContent.replace(/^Subject:\s*/, "").trim(),
+        message: (el.querySelector("[data-testid=ob-email-message]") || { textContent: "" }).textContent,
+        detail: (el.querySelector("[data-testid=ob-email-detail]") || { textContent: "" }).textContent.trim(),
+        label: el.innerText.split("\n")[0].trim(),
+      }));
+      await page.screenshot({ path: path.join(OUT, "openshifts-email-preview.png"), fullPage: false });
+      const previewWrites = writes.slice(beforeMail).filter(w => /send-notification|\/rest\/v1\/(notifications|audit_log)/.test(w.path));
+      const weekHeads = (pv.message.match(/^Week of Mon \d{1,2}\/\d{1,2}:$/gm) || []).length;
+      const previewLines = pv.message.split("\n").filter(l => /^  \w{3} \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l)).length;
+      if (previewWrites.length) fail("Open shifts: the Email-the-group preview dialog already wrote something before Send: " + previewWrites.map(w => w.method + " " + w.path).join(", "));
+      else if (!/^Preview$/i.test(pv.label)) fail("Open shifts: the confirm dialog has no 'Preview' section heading, got: " + pv.label);
+      else if (!/^\d+ open shifts? through \d{1,2}\/\d{1,2}$/.test(pv.subject)) fail("Open shifts: preview subject is not 'N open shifts through M/D': " + pv.subject);
+      else if (!pv.subject.startsWith(cur0.rows.length + " open shift")) fail(`Open shifts: preview subject counts ${pv.subject} but the board lists ${cur0.rows.length}`);
+      else if (weekHeads < 1 || previewLines !== cur0.rows.length) fail(`Open shifts: preview message should group ${cur0.rows.length} indented slot lines under 'Week of Mon M/D:' headings (got ${weekHeads} heading(s), ${previewLines} line(s)): ` + pv.message.slice(0, 240).replace(/\n/g, " | "));
+      else if (!/^Take this shift: http:\/\/[^\s]+#openshifts$/.test(pv.detail)) fail("Open shifts: preview detail is not the 'Take this shift: <app>#openshifts' deep link: " + pv.detail);
+      else ok(`Open shifts: Email the group now (${when}) previews the e-mail before sending - subject "${pv.subject}", ${weekHeads} week group(s), ${previewLines} slot line(s), detail "${pv.detail}" - and writes nothing until Send`);
+      // Escape closes it without a write; open again and send
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("[data-testid=ob-email-dialog]", { state: "detached", timeout: 3000 });
+      const escWrites = writes.slice(beforeMail).filter(w => /send-notification|\/rest\/v1\/(notifications|audit_log)/.test(w.path));
+      if (escWrites.length) fail("Open shifts: closing the preview with Escape wrote a notice: " + escWrites.map(w => w.method + " " + w.path).join(", "));
+      else if (writes.length !== beforeMail) console.log("     (unrelated background write(s) while the preview was open: " + writes.slice(beforeMail).map(w => w.method + " " + w.path).join(", ") + ")");
+      await page.click("[data-testid=ob-email]");
+      await page.waitForSelector("[data-testid=ob-email-send]", { timeout: 5000 });
+      await page.click("[data-testid=ob-email-send]");
+      await page.waitForSelector("[data-testid=ob-email-dialog]", { state: "detached", timeout: 8000 });
+      await waitFor(() => writes.slice(beforeMail).some(w => /send-notification/.test(w.path)), 8000);
+      // the audit row is written after the e-mail outcome is known (the toast states it) - wait for it rather than for time
+      await waitFor(() => writes.slice(beforeMail).some(w => w.path.startsWith("/rest/v1/audit_log") && /openshifts\.notify/.test(w.body || "")), 8000);
+      await page.waitForTimeout(400);
+      const feed = writes.slice(beforeMail).filter(w => w.path.startsWith("/rest/v1/notifications")).map(parseBody).find(n => n && n.type === "open_shifts");
+      const mail2 = writes.slice(beforeMail).filter(w => /send-notification/.test(w.path)).map(parseBody).find(b => b && b.type === "open_shifts");
+      const audit2 = writes.slice(beforeMail).filter(w => w.path.startsWith("/rest/v1/audit_log")).map(parseBody).find(b => b && b.action === "openshifts.notify");
+      const cur = await readBoard();
+      if (!feed || !feed.data || !Array.isArray(feed.data.slots) || feed.data.slots.length !== cur0.rows.length || !feed.data.slots.every(s => s && s.day && (s.role === "primary" || s.role === "backup"))) fail("Open shifts: Email the group now wrote no open_shifts feed row with data.slots for every open slot: " + JSON.stringify(feed && feed.data));
+      else if (String(feed.message).split("\n").filter(l => / - open/.test(l)).length !== cur0.rows.length) fail("Open shifts: the open_shifts feed message does not list one openSlotsLine per slot: " + String(feed.message).slice(0, 200));
+      else if (!mail2 || mail2.targetIds !== undefined || !mail2.data || !/ - open/.test(String(mail2.data.message))) fail("Open shifts: Email the group now must POST send-notification type open_shifts as a broadcast (no targetIds; the server gates per category) with the list in data.message: " + JSON.stringify(mail2));
+      else if (!/^\d+ open shifts? through \d{1,2}\/\d{1,2}$/.test(String(mail2.data.subject)) || feed.title !== mail2.data.subject || !/#openshifts$/.test(String(mail2.data.detail)) || !/Week of Mon/.test(String(mail2.data.message)) || mail2.data.message !== feed.message) fail("Open shifts: the e-mail must carry subject 'N open shifts through M/D' (= the feed row's title), the week-grouped message (= the feed message) and the #openshifts detail: " + JSON.stringify(mail2.data).slice(0, 300));
+      else if (!audit2 || audit2.detail.count !== cur0.rows.length) fail("Open shifts: no audit 'openshifts.notify' with the count: " + JSON.stringify(audit2));
+      else if (cur.rows.some(r => r.announced === "never")) fail(`Open shifts: 'last announced' still reads 'never' on ${cur.rows.filter(r => r.announced === "never").length} row(s) after the notice`);
+      else ok(`Open shifts: Email the group now (${when}) -> feed open_shifts (${feed.data.slots.length} slots) + send-notification open_shifts (broadcast) + audit openshifts.notify; 'last announced' now "${cur.rows[0].announced}"`);
+      if (!writes.slice(beforeMail).every(w => noAddr(w.body))) fail("Open shifts: a notice write body carries an email address");
+    };
     // Take this shift as s1 on the first row where s1 is eligible.
     const target = all.rows.find(r => r.take === "enabled");
+    // the claim would take the board's only open slot (LIVE mode since 10/15 was filled 9/25): announce while it is listed
+    const emailBeforeClaim = !!target && all.rows.length === 1;
+    if (emailBeforeClaim) await emailGroupNow("before the claim, which takes the board's only open slot");
     let claimExercised = false;
     if (!target) console.log("     (no row where s1 is eligible under the current rules - the claim flow is not exercised)");
     else {
@@ -2659,61 +2859,12 @@ try {
       const held = await page.evaluate((slot) => { const b = document.querySelector(`tr[data-slot="${slot}"] [data-testid=ob-take]`); return !!b; }, target.slot);
       if (held) fail(`Open shifts: ${target.slot} is still offered after the claim`);
     }
-    // Email the group now (scheduler): a confirm dialog PREVIEWS the composed e-mail (Prompt 13 part 5b: subject 'N open shifts through M/D',
-    // the slots grouped by Monday week, the #openshifts deep link) and writes NOTHING until Send -> feed row open_shifts (data.slots = the
-    // whole range, title = the subject) + broadcast send-notification { subject, message, detail } + audit openshifts.notify; 'last announced' fills.
-    const beforeMail = writes.length;
-    const cur0 = await readBoard();
-    await clearToast();
-    await page.click("[data-testid=ob-email]");
-    if (cur0.rows.length) {
-      await page.waitForSelector("[data-testid=ob-email-dialog]", { timeout: 5000 });
-      await page.waitForTimeout(200);
-      const pv = await page.$eval("[data-testid=ob-email-preview]", el => ({
-        subject: (el.querySelector("[data-testid=ob-email-subject]") || { textContent: "" }).textContent.replace(/^Subject:\s*/, "").trim(),
-        message: (el.querySelector("[data-testid=ob-email-message]") || { textContent: "" }).textContent,
-        detail: (el.querySelector("[data-testid=ob-email-detail]") || { textContent: "" }).textContent.trim(),
-        label: el.innerText.split("\n")[0].trim(),
-      }));
-      await page.screenshot({ path: path.join(OUT, "openshifts-email-preview.png"), fullPage: false });
-      const previewWrites = writes.slice(beforeMail).filter(w => /send-notification|\/rest\/v1\/(notifications|audit_log)/.test(w.path));
-      const weekHeads = (pv.message.match(/^Week of Mon \d{1,2}\/\d{1,2}:$/gm) || []).length;
-      const previewLines = pv.message.split("\n").filter(l => /^  \w{3} \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l)).length;
-      if (previewWrites.length) fail("Open shifts: the Email-the-group preview dialog already wrote something before Send: " + previewWrites.map(w => w.method + " " + w.path).join(", "));
-      else if (!/^Preview$/i.test(pv.label)) fail("Open shifts: the confirm dialog has no 'Preview' section heading, got: " + pv.label);
-      else if (!/^\d+ open shifts? through \d{1,2}\/\d{1,2}$/.test(pv.subject)) fail("Open shifts: preview subject is not 'N open shifts through M/D': " + pv.subject);
-      else if (!pv.subject.startsWith(cur0.rows.length + " open shift")) fail(`Open shifts: preview subject counts ${pv.subject} but the board lists ${cur0.rows.length}`);
-      else if (weekHeads < 1 || previewLines !== cur0.rows.length) fail(`Open shifts: preview message should group ${cur0.rows.length} indented slot lines under 'Week of Mon M/D:' headings (got ${weekHeads} heading(s), ${previewLines} line(s)): ` + pv.message.slice(0, 240).replace(/\n/g, " | "));
-      else if (!/^Take this shift: http:\/\/[^\s]+#openshifts$/.test(pv.detail)) fail("Open shifts: preview detail is not the 'Take this shift: <app>#openshifts' deep link: " + pv.detail);
-      else ok(`Open shifts: Email the group now previews the e-mail before sending - subject "${pv.subject}", ${weekHeads} week group(s), ${previewLines} slot line(s), detail "${pv.detail}" - and writes nothing until Send`);
-      // Escape closes it without a write; open again and send
-      await page.keyboard.press("Escape");
-      await page.waitForSelector("[data-testid=ob-email-dialog]", { state: "detached", timeout: 3000 });
-      const escWrites = writes.slice(beforeMail).filter(w => /send-notification|\/rest\/v1\/(notifications|audit_log)/.test(w.path));
-      if (escWrites.length) fail("Open shifts: closing the preview with Escape wrote a notice: " + escWrites.map(w => w.method + " " + w.path).join(", "));
-      else if (writes.length !== beforeMail) console.log("     (unrelated background write(s) while the preview was open: " + writes.slice(beforeMail).map(w => w.method + " " + w.path).join(", ") + ")");
-      await page.click("[data-testid=ob-email]");
-      await page.waitForSelector("[data-testid=ob-email-send]", { timeout: 5000 });
-      await page.click("[data-testid=ob-email-send]");
-      await page.waitForSelector("[data-testid=ob-email-dialog]", { state: "detached", timeout: 8000 });
-    }
-    await waitFor(() => writes.slice(beforeMail).some(w => /send-notification/.test(w.path)), 8000);
-    // the audit row is written after the e-mail outcome is known (the toast states it) - wait for it rather than for time
-    await waitFor(() => writes.slice(beforeMail).some(w => w.path.startsWith("/rest/v1/audit_log") && /openshifts\.notify/.test(w.body || "")), 8000);
-    await page.waitForTimeout(400);
-    const feed = writes.slice(beforeMail).filter(w => w.path.startsWith("/rest/v1/notifications")).map(parseBody).find(n => n && n.type === "open_shifts");
-    const mail2 = writes.slice(beforeMail).filter(w => /send-notification/.test(w.path)).map(parseBody).find(b => b && b.type === "open_shifts");
-    const audit2 = writes.slice(beforeMail).filter(w => w.path.startsWith("/rest/v1/audit_log")).map(parseBody).find(b => b && b.action === "openshifts.notify");
-    const cur = await readBoard();
-    if (!cur0.rows.length) console.log("     (no open slot left - Email the group now has nothing to announce)");
-    else if (!feed || !feed.data || !Array.isArray(feed.data.slots) || feed.data.slots.length !== cur0.rows.length || !feed.data.slots.every(s => s && s.day && (s.role === "primary" || s.role === "backup"))) fail("Open shifts: Email the group now wrote no open_shifts feed row with data.slots for every open slot: " + JSON.stringify(feed && feed.data));
-    else if (String(feed.message).split("\n").filter(l => / - open/.test(l)).length !== cur0.rows.length) fail("Open shifts: the open_shifts feed message does not list one openSlotsLine per slot: " + String(feed.message).slice(0, 200));
-    else if (!mail2 || mail2.targetIds !== undefined || !mail2.data || !/ - open/.test(String(mail2.data.message))) fail("Open shifts: Email the group now must POST send-notification type open_shifts as a broadcast (no targetIds; the server gates per category) with the list in data.message: " + JSON.stringify(mail2));
-    else if (!/^\d+ open shifts? through \d{1,2}\/\d{1,2}$/.test(String(mail2.data.subject)) || feed.title !== mail2.data.subject || !/#openshifts$/.test(String(mail2.data.detail)) || !/Week of Mon/.test(String(mail2.data.message)) || mail2.data.message !== feed.message) fail("Open shifts: the e-mail must carry subject 'N open shifts through M/D' (= the feed row's title), the week-grouped message (= the feed message) and the #openshifts detail: " + JSON.stringify(mail2.data).slice(0, 300));
-    else if (!audit2 || audit2.detail.count !== cur0.rows.length) fail("Open shifts: no audit 'openshifts.notify' with the count: " + JSON.stringify(audit2));
-    else if (cur.rows.some(r => r.announced === "never")) fail(`Open shifts: 'last announced' still reads 'never' on ${cur.rows.filter(r => r.announced === "never").length} row(s) after the notice`);
-    else ok(`Open shifts: Email the group now -> feed open_shifts (${feed.data.slots.length} slots) + send-notification open_shifts (broadcast) + audit openshifts.notify; 'last announced' now "${cur.rows[0].announced}"`);
-    if (!writes.slice(beforeMail).every(w => noAddr(w.body))) fail("Open shifts: a notice write body carries an email address");
+    if (!emailBeforeClaim) await emailGroupNow(target ? "after the claim" : "(no claim this run)");
+    // 9/25 (10/15 filled): in LIVE mode the claim takes the board's only open slot, so the 390 px / dark probes below
+    // may run on the empty-state board (one 'No open shifts' cell) - say so, so their ok lines never stand in silently
+    // for a populated table.
+    const probeRows = (await readBoard()).rows.length;
+    if (!probeRows) console.log("     (Open shifts 390 px / dark: the board is empty here (no open slot left" + (claimExercised ? " after the claim" : "") + ") - the probes below measure the empty-state row only; populated-row contrast and the table's in-wrapper scroll are not exercised this run)");
     // 390 px, light: no page scroll, the table scrolls inside its wrapper with the swipe hint, buttons >= 36 px.
     const mobileProbe = () => page.evaluate(() => {
       const wrap = document.querySelector("[data-testid=openshifts-wrap]");
@@ -2726,7 +2877,7 @@ try {
     if (m1.pageW > 392) fail(`Open shifts 390px: the page scrolls horizontally (scrollWidth ${m1.pageW})`);
     else if (!/table-wrap/.test(m1.cls) || !/swipe sideways/.test(m1.hint)) fail("Open shifts 390px: the table wrapper lacks the table-wrap swipe hint: " + JSON.stringify(m1));
     else if (m1.minBtn && m1.minBtn < 36) fail(`Open shifts 390px: a button is shorter than 36px (${m1.minBtn})`);
-    else ok(`Open shifts 390px (light): no horizontal page scroll (${m1.pageW}), the table scrolls inside its wrapper (${m1.wrapScroll} in ${m1.wrapClient}) with the swipe hint, buttons >= 36px`);
+    else ok(`Open shifts 390px (light): no horizontal page scroll (${m1.pageW}), the table ${m1.wrapScroll > m1.wrapClient ? "scrolls inside" : "fits"} its wrapper (${m1.wrapScroll} in ${m1.wrapClient}) with the swipe hint, buttons >= 36px`);
     await clearToast();
     await page.screenshot({ path: path.join(OUT, "openshifts-390.png"), fullPage: true });
     await page.setViewportSize({ width: 1180, height: 900 });
@@ -2746,7 +2897,7 @@ try {
       const worst = cells.map(td => { const fg = parseRgb(getComputedStyle(td).color); return fg ? Math.round(ratio(fg, bgOf(td)) * 100) / 100 : 21; }).reduce((a, b) => Math.min(a, b), 21);
       return { worst, cells: cells.length };
     });
-    if (darkText.cells && darkText.worst < 3) fail(`Open shifts dark: a table cell's text is below 3:1 contrast (${darkText.worst})`); else ok(`Open shifts dark: table text contrast >= 3:1 (worst ${darkText.worst} over ${darkText.cells} cells)`);
+    if (darkText.cells && darkText.worst < 3) fail(`Open shifts dark: a table cell's text is below 3:1 contrast (${darkText.worst})`); else ok(`Open shifts dark: table text contrast >= 3:1 (worst ${darkText.worst} over ${darkText.cells} cells${probeRows ? "" : " - the empty-state row only"})`);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(400);
     // Part 6: the dark 390 px pass runs the SAME probe as the light one (wrapper hint, button height) plus the dark body, and keeps its own screenshot.
@@ -2757,13 +2908,15 @@ try {
     else if (!/table-wrap/.test(m2.cls) || !/swipe sideways/.test(m2.hint)) fail("Open shifts 390px (dark): the table wrapper lacks the table-wrap swipe hint: " + JSON.stringify(m2));
     else if (m2.minBtn && m2.minBtn < 36) fail(`Open shifts 390px (dark): a button is shorter than 36px (${m2.minBtn})`);
     else if (/rgb\(255, 255, 255\)/.test(m2.wrapBg) || !/rgb\(22, 33, 62\)/.test(m2.wrapBg)) fail("Open shifts 390px (dark): the table-wrap swipe-hint cover is still white under dark mode (computed background-image): " + m2.wrapBg.slice(0, 200));
-    else ok(`Open shifts 390px (dark): no horizontal page scroll (${m2.pageW}), body ${m2.bodyBg}, the table scrolls inside its wrapper (${m2.wrapScroll} in ${m2.wrapClient}) with the swipe hint painted in the dark card colour, buttons >= 36px`);
+    else ok(`Open shifts 390px (dark): no horizontal page scroll (${m2.pageW}), body ${m2.bodyBg}, the table ${m2.wrapScroll > m2.wrapClient ? "scrolls inside" : "fits"} its wrapper (${m2.wrapScroll} in ${m2.wrapClient}) with the swipe hint painted in the dark card colour, buttons >= 36px`);
     await clearToast();
     await page.screenshot({ path: path.join(OUT, "openshifts-390-dark.png"), fullPage: true });
     // The 'ok screenshots' line is earned: the sheet and preview shots sit inside conditionals, so check that every one of the six exists, is from THIS run and is under 300 KB (review shots stay in test/ui/out/ - B10 9/23).
-    // (the sheet shot exists only when the claim flow ran - LIVE mode without a claimable slot skips it and says so)
-    const SIX = ["openshifts.png", "openshifts-sheet.png", "openshifts-email-preview.png", "openshifts-390.png", "openshifts-dark.png", "openshifts-390-dark.png"].filter(f => f !== "openshifts-sheet.png" || claimExercised);
+    // (the sheet shot exists only when the claim flow ran - LIVE mode without a claimable slot skips it and says so; the
+    // preview shot only when emailGroupNow found a slot to announce - it says so otherwise)
+    const SIX = ["openshifts.png", "openshifts-sheet.png", "openshifts-email-preview.png", "openshifts-390.png", "openshifts-dark.png", "openshifts-390-dark.png"].filter(f => (f !== "openshifts-sheet.png" || claimExercised) && (f !== "openshifts-email-preview.png" || emailExercised));
     if (!claimExercised) console.log("     (openshifts-sheet.png not required: the claim flow did not run)");
+    if (!emailExercised) console.log("     (openshifts-email-preview.png not required: the board had no open slot to announce)");
     const shotState = SIX.map(f => { const p = path.join(OUT, f); if (!fs.existsSync(p)) return { f, why: "missing" }; const st = fs.statSync(p); if (st.mtimeMs < shotStart - 2000) return { f, why: "stale (" + new Date(st.mtimeMs).toISOString() + ")" }; if (st.size > 300 * 1024) return { f, why: "too big (" + st.size + " bytes)" }; return { f, size: st.size }; });
     const badShots = shotState.filter(s => s.why);
     if (badShots.length) fail("screenshots missing or stale: " + badShots.map(s => `${s.f} ${s.why}`).join(", "));
