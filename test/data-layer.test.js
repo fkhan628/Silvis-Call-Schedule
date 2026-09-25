@@ -929,6 +929,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('const bracket = isWk ? { borderTop: "2px solid " + (isToday ? T.accent : T.navyMuted),'), "the weekend bracket keeps the accent top border on today");
     assert.ok(src.indexOf("const isToday = d === todayStr;") >= 0 && src.indexOf("const isToday = d === todayStr;") < src.indexOf("const bracket = isWk ? {"), "isToday is known before the bracket is built");
   });
+  // A3 follow-up (smoke 2026-09-25, 'A3 session (no loop): a save-error toast showed beside the banner'): the in-app
+  // notification insert must not toast while the session is expired - the one session-expired banner already says so.
+  check("A3 follow-up: addNotification suppresses its save-error toast while auth.sessionExpired (the banner is the one message)", () => {
+    const fn = src.slice(src.indexOf("const addNotification = useCallback("), src.indexOf("const addNotification = useCallback(") + 900);
+    assert.ok(fn.length > 200, "addNotification not found");
+    assert.ok(fn.includes('if (insertErr) { console.warn("Notification insert failed:", insertErr); if (!auth.sessionExpired) showToast("Couldn\'t save that notification.", "error"); }'), "the insert-error toast is gated on !auth.sessionExpired");
+  });
   check("Item A pins: weekStartsOn state reads 'silvis-week-start' through normalizeWeekStart (Sunday default) and persists it; gridDays = monthGridDays(calYear, calMonth, weekStartsOn); the header row comes from weekdayLabels with the weekend-unit label on Fri; the Settings control is two buttons (week-start-sun / week-start-mon); the share page and the printable get weekStartsOn; monOf still drives the week rows", () => {
     assert.strictEqual(count('localStorage.getItem("silvis-week-start")'), 1, "one read of the week-start key");
     assert.ok(src.includes('normalizeWeekStart(localStorage.getItem("silvis-week-start"))'), "the stored value is normalised (a missing or garbage value is Sunday)");

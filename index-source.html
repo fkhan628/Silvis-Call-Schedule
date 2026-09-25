@@ -3253,7 +3253,7 @@ function CallSchedule() {
     try {
       const notif = { type, title, message, data, created_at: new Date().toISOString() };
       const { data: inserted, error: insertErr } = await db.insert("notifications", notif);
-      if (insertErr) { console.warn("Notification insert failed:", insertErr); showToast("Couldn't save that notification.", "error"); }
+      if (insertErr) { console.warn("Notification insert failed:", insertErr); if (!auth.sessionExpired) showToast("Couldn't save that notification.", "error"); }
       if (inserted) setNotifications(prev => [inserted, ...prev].slice(0, 50));
     } catch(e) { console.warn("Notification error:", e); showToast("Couldn't send the notification - check your connection.", "error"); }
   }, []);
