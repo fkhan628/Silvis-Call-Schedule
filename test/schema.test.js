@@ -2061,4 +2061,29 @@ ok(/2026-09-24-followers\.sql/.test(g43) && /report-first, (NOT applied|applied 
 ["user_profiles.follows", "user_profiles_self_update", "user_profiles_self_insert", "notification_preferences` key", "prefs_own"].forEach((p) => ok(new RegExp("^\\| `" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "m").test(g43.slice(g43.indexOf("2026-09-24-followers.sql"))), "guide 4.3's F1 table lacks a row for " + p));
 ok(/applied: (_to be filled by the orchestrator_|2026-)/.test(g43.slice(g43.indexOf("2026-09-24-followers.sql"))), "guide 4.3's F1 bullet must carry the 'applied: _to be filled by the orchestrator_' placeholder");
 
+// ---- Prompt 20 R1 (rebase onto Prompt 19, 9/25) - Faraz's decisions on the Followers file are recorded; the file ships in ONE rollout
+// with the member return-leg follow-up, and the two never touch the same object (followers: user_profiles / notification_preferences;
+// the follow-up: trade_insert_guard() and its trigger trade_insert_guard_trg on shift_trade_requests only).
+const reviewF1Only = reviewF1.slice(0, reviewF1.indexOf("\n## ", 5) > 0 ? reviewF1.indexOf("\n## ", 5) : undefined);
+const decF1 = reviewF1Only.slice(reviewF1Only.indexOf("**Decisions (Faraz 9/25).**"));
+ok(reviewF1Only.indexOf("**Decisions (Faraz 9/25).**") > 0 && decF1.indexOf("**What could break.**") > 0, "the Followers section must carry the Decisions (Faraz 9/25) paragraph, before What could break");
+ok(/\*\*Followers get the publish e-mail\*\* - yes/.test(decF1) && /\*\*The self-insert pin stays\*\*/.test(decF1) && /keeps clearing `follows`/.test(decF1) && /\*\*One rollout\*\*[^]*2026-09-25-member-trade-return-leg\.sql/.test(decF1), "the three decisions and the one rollout with the member return-leg follow-up");
+ok(!/decision needed/i.test(reviewF1Only) && !/decision needed/i.test(guide), "no decision-needed wording left");
+ok(/Decisions \(Faraz 9\/25/.test(g43.slice(g43.indexOf("2026-09-24-followers.sql"))), "guide 4.3 records the decisions beside the Followers row");
+{
+  const fol = fs.readFileSync(FOLLOW_MIGRATION, "utf8").replace(/--[^\n]*/g, "");
+  const fu = fs.readFileSync(path.join(ROOT, "sql", "migrations", "2026-09-25-member-trade-return-leg.sql"), "utf8").replace(/--[^\n]*/g, "");
+  ok(!/trade_insert_guard|shift_trade_requests|apply_trade/.test(fol), "the followers migration touches no trade object (the member return-leg follow-up owns trade_insert_guard)");
+  ok(!/user_profiles|notification_preferences/.test(fu), "the member return-leg follow-up touches no followers object");
+}
+{
+  // review R1: the ordered steps the orchestrator follows must carry the decided gate, not the old either/or
+  const ao = reviewF1Only.slice(reviewF1Only.indexOf("**Apply order.**"), reviewF1Only.indexOf("Rolling back"));
+  ok(!/or leave it and record/.test(ao) && !/Either way the choice/.test(ao), "the F1 apply order must no longer offer leaving min_version as it is (Faraz 9/25: bump it)");
+  ok(/raise `client_versions\.min_version` \(decided, Faraz 9\/25/.test(ao) && /24 h have passed/.test(ao) && /every heartbeat in Client versions/.test(ao) && /report instead of applying/.test(ao), "the F1 apply order must raise min_version, then wait 24 h with every heartbeat of the last 24 h on that build or newer, else report instead of applying");
+  ok(/member trade return leg/.test(ao) && /ONE rollout/.test(ao), "the F1 apply order must name the member return-leg follow-up applied in the same rollout");
+  ok(/re-creates its trigger `trade_insert_guard_trg`/.test(decF1), "the no-overlap sentence must name the follow-up's trigger re-create, not 'trade_insert_guard() only'");
+}
+console.log("- P20 R1: Faraz 9/25 decisions recorded (publish mail yes, the self-insert pin kept, follows cleared on a role change); one rollout with the member return-leg follow-up, no shared object");
+
 console.log("schema.test.js: " + N + " assertions passed");

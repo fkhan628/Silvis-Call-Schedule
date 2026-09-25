@@ -253,6 +253,8 @@ Proof: trade probe `GIVE_SETUP` and `O` .. `U3` (rolled back; expected strings i
 
 Proof: `sql/probes/followers-probe.sql` (rolled back; BEFORE the migration it raises `PROBE_SETUP ... rows=N`, AFTER it `R1` must read `rows=N person=N profile=0 ids=N` with the same N on the apply-time run, and ids = rows, person + profile = rows on every later run; 28 cases in its header), `scripts/verify-rls.sh` section 12 (12a' observes the live Pages client before the apply; `SILVIS_PREFS_ROWS_BEFORE=<N>` on the apply-time run), the record in `docs/SCHEMA-REVIEW.md` "2026-09-24 - followers" (status PREPARED; applied: _to be filled by the orchestrator_).
 
+Decisions (Faraz 9/25, recorded in the SCHEMA-REVIEW section): followers **do** get the publish e-mail (`schedule_published`); the `user_profiles_self_insert` pin (`follows = '[]'`) and the self-update pin **stay** - a profile never chooses whom it follows; a role change away from viewer / coordinator **keeps clearing** `follows`. The follower's own prefs editor (three switches, by `profile_id`) is built before the rollout, and revision o ships in ONE rollout with the member return-leg follow-up: push -> min_version bump -> 24 h with every heartbeat on that build -> both migrations (probes + verify-rls) -> `send-notification` v8 + `daily-reminder` v6.
+
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
 `payloadLooksWiped` (retarget to: no `schedule_days` rows would be written AND no vacations AND no availability),

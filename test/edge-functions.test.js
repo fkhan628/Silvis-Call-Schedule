@@ -570,7 +570,7 @@ check("Prompt 19 S4: send-notification's '@giveFrame' block defines frameTitle(t
   assert.strictEqual(frameTitle("trade_applied", "Shift Trade Applied", null), "Shift Trade Applied", "no data");
   assert.strictEqual(frameTitle("constructor", "X", { kind: "give" }), "X", "no prototype key is a give category");
 });
-check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame with frameTitle(type, cat.title, data) (the h2 and the default subject); the gate never reads data.kind; the header names the S4 change (still v7, pending); README section 3's pending v7 row names the give headings", () => {
+check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame with frameTitle(type, cat.title, data) (the h2 and the default subject); the gate never reads data.kind; the header names the S4 change (v7, deployed 2026-09-25 05:36 UTC - P20 R1: the header says so and names the Followers change as the pending v8); README section 3's v7 row names the give headings", () => {
   const b = snSrc.slice(snSrc.indexOf("function buildEmail("), snSrc.indexOf("return { subject, html };", snSrc.indexOf("function buildEmail(")));
   assert.ok(b.includes("const title = frameTitle(type, cat.title, data);"), "the heading comes from frameTitle");
   assert.ok(b.includes(": `${title} - ${APP_NAME}`;"), "the default subject uses it");
@@ -580,6 +580,10 @@ check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame 
   assert.ok(!/kind/.test(gate), "the gate never reads kind (the heading is cosmetic)");
   const head = snSrc.slice(0, snSrc.indexOf("import "));
   assert.ok(/Prompt 19 S4/.test(head) && /data\.kind/.test(head) && /Give Applied/.test(head), "the header documents the give headings");
+  // P20 R1 (review): v7 is live (README section 3's record), so the header no longer calls it pending; this source is the pending v8
+  assert.ok(!/NOT deployed yet/.test(head) && !/pending v7/.test(head), "the header must not call Prompt 19's v7 pending (deployed 2026-09-25 05:36 UTC)");
+  assert.ok(/GIVE A DAY \(Prompt 19 S3, 2026-09-24; v7, deployed 2026-09-25 05:36 UTC;/.test(head), "the GIVE A DAY paragraph records v7 as deployed 2026-09-25 05:36 UTC");
+  assert.ok(/FOLLOWERS \(Prompt 20 F3, Faraz 9\/24; revision o; v8 on base v7 - prepared, NOT deployed; README section 3\)/.test(head), "the FOLLOWERS paragraph names itself the pending v8 on base v7");
   const pc = (head.split("\n").find((l) => l.includes("POST { type: string, data: {")) || "");
   assert.ok(pc.includes("kind?: 'give'"), "the Payload contract line names the optional data.kind: " + pc.trim());
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
@@ -1410,6 +1414,145 @@ check("P20 F4: send-notification - ONE follower of s2 (and s5) is added for a tr
   const r1 = FOL.followerRecipients(optedOut, "trade_proposed", FOL.followerUniverse("trade_proposed", ["s2", "s3"], s2, {}, s2s3), "trade_updates_email");
   assert.deepStrictEqual(r1, { list: [], skipped: [{ follower: "f4a0b1c2", via: ["s2"], status: "skipped_pref_off" }] }, "his own trade flag off -> reported, never mailed");
   assert.ok(/role viewer may not send notifications/.test(sendGate({ role: "viewer", personId: null }, "trade_proposed", ["s2", "s3"], SCHED) || ""), "and the follower himself never sends (viewer -> refused)");
+});
+
+/* =====================================================================
+   Prompt 20 R1 (rebase onto Prompt 19, 9/25) - send-notification's merged trade path: Prompt 19's v7 party gate
+   (trade_applied may carry scheduler-linked ids: tradeNamesOthers -> tradeExtraIds -> tradePartyCheck's third and fourth
+   arguments) AND Followers F3 (followers of the row's two parties added after every gate) in ONE handler. r1TradeSend
+   replays the handler's lines in the handler's order through the real '@sendGate' and '@followers' blocks; the source
+   pins below keep the replay honest (a merge that kept only one side's lines fails here).
+   ===================================================================== */
+const R1_SCHED_FOLLOWER = { id: "f5b0c1d2-follower", role: "coordinator", person_id: null, email: "follower2@example.org", display_name: null, follows: ["s1"] };
+function r1Gate() {
+  return new Function(gateBlock() + "\nreturn { sendGate, tradePartyCheck, tradeExtraIds: typeof tradeExtraIds === 'function' ? tradeExtraIds : null, tradeNamesOthers: typeof tradeNamesOthers === 'function' ? tradeNamesOthers : null };")();
+}
+// status 403 = the handler answers before any mail; 200 = the follower list the handler would mail
+function r1TradeSend(G, caller, type, targetIds, data, trade, schedulerIdsLive, followers) {
+  const privileged = caller.role === "admin" || caller.role === "scheduler";
+  const schedulerIds = privileged ? [] : schedulerIdsLive;
+  const gateDenied = G.sendGate(caller, type, targetIds, schedulerIds);
+  if (gateDenied) return { status: 403, error: gateDenied };
+  let tradeRow = null;
+  if (type.indexOf("trade_") === 0) {
+    const extraIds = type === "trade_applied" && G.tradeNamesOthers(trade, targetIds) ? G.tradeExtraIds(type, privileged ? schedulerIdsLive : schedulerIds) : [];
+    const partyDenied = G.tradePartyCheck(trade, targetIds, extraIds, privileged ? null : caller.personId);
+    if (partyDenied) return { status: 403, error: partyDenied };
+    tradeRow = trade;
+  }
+  const fUniverse = FOL.followerUniverse(type, targetIds, caller, data, tradeRow);
+  const r = FOL.followerRecipients(followers, type, fUniverse, "trade_updates_email");
+  return { status: 200, followers: r.list.map((f) => f.tag + " via " + f.via.join("+")), skipped: r.skipped };
+}
+check("P20 R1: send-notification's merged trade path - the handler still runs Prompt 19's party gate (sendGate -> tradeNamesOthers / tradeExtraIds -> tradePartyCheck(trade, targetIds, extraIds, sender)) and only THEN keeps the trade row for followerUniverse; the follower step reads that row, after the surgeons' loop", () => {
+  const h = snSrc.slice(snSrc.indexOf("serve(async (req) =>"));
+  const order = [
+    "const schedulerIds = privileged ? [] : await loadSchedulerIds();",
+    "const gateDenied = sendGate(caller, type, targetIds, schedulerIds);",
+    "let tradeRow: any = null;",
+    'const extraIds = type === "trade_applied" && tradeNamesOthers(trade, targetIds) ? tradeExtraIds(type, privileged ? await loadSchedulerIds() : schedulerIds) : [];',
+    "const partyDenied = tradePartyCheck(trade, targetIds, extraIds, privileged ? null : caller.personId);",
+    "tradeRow = trade;",
+    "for (const r of list) {",
+    "const fUniverse = followerUniverse(type, targetIds, caller, data, tradeRow);",
+    "followerRecipients(followers, type, fUniverse, cat.pref)",
+  ];
+  let at = -1;
+  order.forEach((l) => { const i = h.indexOf(l); assert.ok(i > 0, "the handler reads: " + l); assert.ok(i > at, "in order: " + l); at = i; });
+  assert.strictEqual(h.split("tradePartyCheck(").length - 1, 1, "one party check in the handler (no second, narrower copy)");
+  assert.ok(!/targetIds\s*=\s*[^;]*follower/i.test(h) && !/targetIds\.push\(/.test(h), "no follower is ever written into targetIds");
+});
+check("P20 R1 (a): a give's trade_applied to [from, to, scheduler] from a party (or the scheduler) passes the v7 gate AND adds the follower of from / to - via the party only - while the follower of the scheduler's roster id is not added (the scheduler copy is never a party)", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const G = r1Gate();
+  assert.strictEqual(typeof G.tradeExtraIds, "function", "the merged gate block keeps tradeExtraIds (Prompt 19 S3)");
+  assert.strictEqual(typeof G.tradeNamesOthers, "function", "the merged gate block keeps tradeNamesOthers (Prompt 19 S3)");
+  const followers = FOL.followerIndex([F4_FOLLOWER, R1_SCHED_FOLLOWER], []);
+  assert.strictEqual(followers.length, 2, "two follower accounts (one of s2 / s5, one of s1)");
+  const give = { from_surgeon_id: "s2", to_surgeon_id: "s3" };
+  const data = { trade_id: UUID, kind: "give", message: "probe" };
+  const s2 = { role: "surgeon", personId: "s2" }, s3 = { role: "surgeon", personId: "s3" };
+  [[s3, "the receiver (accepts and applies)"], [s2, "the giver"], [sched, "the scheduler"], [admin, "an admin"]].forEach(([who, label]) => {
+    const r = r1TradeSend(G, who, "trade_applied", ["s2", "s3", "s1"], data, give, SCHED, followers);
+    assert.strictEqual(r.status, 200, label + ": [from, to, scheduler] passes - " + r.error);
+    assert.deepStrictEqual(r.followers, ["f4a0b1c2 via s2"], label + ": the follower of the giver is added via s2 only; the follower of s1 (the scheduler copy) is not");
+  });
+  const toS5 = r1TradeSend(G, s2, "trade_applied", ["s2", "s5", "s1"], data, { from_surgeon_id: "s2", to_surgeon_id: "s5" }, SCHED, followers);
+  assert.deepStrictEqual(toS5.followers, ["f4a0b1c2 via s2+s5"], "a give between two surgeons he follows -> ONE e-mail, via both");
+  const toS4 = r1TradeSend(G, s3, "trade_applied", ["s3", "s4", "s1"], data, { from_surgeon_id: "s3", to_surgeon_id: "s4" }, SCHED, followers);
+  assert.strictEqual(toS4.status, 200, "a give between s3 and s4 still mails [from, to, scheduler]");
+  assert.deepStrictEqual(toS4.followers, [], "... and adds no follower (neither party is followed; s1's follower is not reached through the copy)");
+  const third = r1TradeSend(G, { role: "surgeon", personId: "s4" }, "trade_applied", ["s2", "s3", "s1"], data, give, SCHED, followers);
+  assert.strictEqual(third.status, 403, "a third surgeon sending the give's trade_applied is still refused");
+  const thirdAsTarget = r1TradeSend(G, sched, "trade_applied", ["s2", "s3", "s4"], data, give, SCHED, followers);
+  assert.strictEqual(thirdAsTarget.status, 403, "a non-scheduler third id beside the parties is still refused (even from the scheduler)");
+});
+check("P20 R1 (b): a follower id placed in targetIds never satisfies the party check - not in place of a party, not beside the two parties (trade_applied's extra slot takes scheduler-linked ids only), not from the scheduler; and a follower caller is refused before any trade row is read", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const G = r1Gate();
+  const followers = FOL.followerIndex([F4_FOLLOWER], []);
+  const row = { from_surgeon_id: "s2", to_surgeon_id: "s3" };
+  const fid = F4_FOLLOWER.id;
+  assert.strictEqual(typeof G.tradeExtraIds, "function", "the merged gate block keeps tradeExtraIds (Prompt 19 S3)");
+  const s2 = { role: "surgeon", personId: "s2" };
+  ["trade_proposed", "trade_accepted", "trade_declined", "trade_applied"].forEach((t) => {
+    [[s2, "the giver"], [sched, "the scheduler"]].forEach(([who, label]) => {
+      [["s2", fid], [fid, "s3"], ["s2", "s3", fid], ["s2", "s3", "s1", fid]].forEach((ids) => {
+        const r = r1TradeSend(G, who, t, ids, { trade_id: UUID }, row, SCHED, followers);
+        assert.strictEqual(r.status, 403, t + " by " + label + " to " + JSON.stringify(ids) + " must be refused (the follower is not a party)");
+      });
+    });
+    assert.strictEqual(typeof G.tradePartyCheck(row, ["s2", fid], G.tradeExtraIds(t, SCHED), null), "string", t + ": the follower in the receiver's place is not a party");
+    assert.strictEqual(typeof G.tradePartyCheck(row, ["s2", "s3", fid], G.tradeExtraIds(t, SCHED), null), "string", t + ": beside the parties he is not an extra id");
+    const asCaller = r1TradeSend(G, { role: "viewer", personId: null }, t, ["s2", "s3"], { trade_id: UUID }, row, SCHED, followers);
+    assert.strictEqual(asCaller.status, 403, t + ": a follower (viewer) caller is refused by sendGate");
+    const asCoord = r1TradeSend(G, { role: "coordinator", personId: null }, t, ["s2", "s3"], { trade_id: UUID }, row, SCHED, followers);
+    assert.strictEqual(asCoord.status, 403, t + ": a follower (coordinator) caller is refused by sendGate");
+  });
+  // with the follower outside targetIds the same send passes and he is ADDED - as a recipient, not a party
+  const ok2 = r1TradeSend(G, s2, "trade_proposed", ["s2", "s3"], { trade_id: UUID }, row, SCHED, followers);
+  assert.strictEqual(ok2.status, 200);
+  assert.deepStrictEqual(ok2.followers, ["f4a0b1c2 via s2"]);
+});
+check("P20 R1 (c): the scheduler extra ids ride ONLY on trade_applied - tradeExtraIds is [] for every other category, and trade_proposed / trade_accepted / trade_declined to [from, to, scheduler] stay refused for a party and for the scheduler (no follower added: the send is refused before the follower step)", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const G = r1Gate();
+  assert.strictEqual(typeof G.tradeExtraIds, "function", "the merged gate block keeps tradeExtraIds (Prompt 19 S3)");
+  const followers = FOL.followerIndex([F4_FOLLOWER, R1_SCHED_FOLLOWER], []);
+  const row = { from_surgeon_id: "s2", to_surgeon_id: "s3" };
+  const types = Array.from(new Set((snSrc.match(/^\s{2}([a-z_]+):\s+\{ pref:/gm) || []).map((l) => l.trim().split(":")[0])));
+  assert.ok(types.length >= 12 && types.includes("trade_applied") && types.includes("schedule_published"), "the CATEGORIES keys are read from the source: " + types.join(","));
+  types.forEach((t) => { if (t !== "trade_applied") assert.deepStrictEqual(G.tradeExtraIds(t, SCHED), [], t + ": no extra ids"); });
+  assert.deepStrictEqual(G.tradeExtraIds("trade_applied", SCHED), ["s1"], "trade_applied: the scheduler-linked ids");
+  const s2 = { role: "surgeon", personId: "s2" }, s3 = { role: "surgeon", personId: "s3" };
+  ["trade_proposed", "trade_accepted", "trade_declined"].forEach((t) => {
+    [[s2, "the giver"], [s3, "the receiver"], [sched, "the scheduler"], [admin, "an admin"]].forEach(([who, label]) => {
+      const r = r1TradeSend(G, who, t, ["s2", "s3", "s1"], { trade_id: UUID, kind: "give" }, row, SCHED, followers);
+      assert.strictEqual(r.status, 403, t + " by " + label + " to [from, to, scheduler] must be refused");
+      assert.strictEqual(r.followers, undefined, t + " by " + label + ": refused before any follower is added");
+      const plain = r1TradeSend(G, who, t, ["s2", "s3"], { trade_id: UUID, kind: "give" }, row, SCHED, followers);
+      assert.strictEqual(plain.status, 200, t + " by " + label + " to exactly the two parties passes - " + plain.error);
+      assert.deepStrictEqual(plain.followers, ["f4a0b1c2 via s2"], t + " by " + label + ": the follower of s2 is added, s1's is not");
+    });
+  });
+});
+
+check("P20 R1: edge-functions/README.md section 3 - the Prompt 19 v7 record stays as deployed (2026-09-25 05:36:23 UTC, v6 -> v7) and the Followers record is a PENDING v8 on base v7 (daily-reminder v5 -> v6), with Faraz's 9/25 decisions (publish mail yes, the self-insert pin kept, follows cleared on a role change) and the one rollout", () => {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const i19 = s3.indexOf("### Deploy record - Prompt 19 S3"), i20 = s3.indexOf("### Deploy record - Prompt 20 F3");
+  assert.ok(i19 > 0 && i20 > i19, "both records, Prompt 19 first");
+  const rec19 = s3.slice(i19, i20), rec20 = s3.slice(i20, s3.indexOf("\n### ", i20 + 10));
+  assert.ok(/\| 2026-09-25 05:36:23 \| `send-notification` \| v6 -> v7 \(deployed 2026-09-25 05:36:23 UTC/.test(rec19), "the v7 deploy row, as recorded");
+  assert.ok(/\| \(pending\) \| `send-notification` \| v7 \(Prompt 19, live\) -> next \(pending\): v8 \|/.test(rec20), "send-notification: base v7, next v8");
+  assert.ok(!/current \(v6/.test(rec20), "no v6 base left");
+  assert.ok(/\| \(pending\) \| `daily-reminder` \| v5 -> next \(pending\): v6 \|/.test(rec20), "daily-reminder v5 -> v6");
+  assert.ok(/followers_added` names only followers of `<from>` \/ `<to>`/.test(rec20), "the v8 proof keeps the give's trade_applied path");
+  const dec = rec20.slice(rec20.indexOf("Decisions (Faraz 9/25)"));
+  assert.ok(rec20.indexOf("Decisions (Faraz 9/25)") > 0, "the decisions paragraph");
+  assert.ok(/publish e-mail/.test(dec) && /`user_profiles_self_insert` `follows = '\[\]'`/.test(dec) && /keeps clearing `follows`/.test(dec) && /ONE rollout/.test(dec), "publish mail, the pin, the role-change clear, one rollout");
+  const gateRow = readme.split("\n").find((l) => /^\| send-notification \| OFF \|/.test(l)) || "";
+  assert.ok(/Prompt 19 S3 \(v7, deployed 2026-09-25 05:36 UTC\)/.test(gateRow) && /A follower \(Prompt 20 F3, v8 PENDING/.test(gateRow), "the gate row carries both, v7 deployed and the follower sentence pending");
+  assert.ok(!/decision needed/i.test(readme), "no 'decision needed' left");
 });
 
 (async () => {

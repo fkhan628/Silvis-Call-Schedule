@@ -77,7 +77,7 @@
 //     the parties are added after this gate (Prompt 20 F3). The pure pieces (isTradeType,
 //     tradeIdOf, targetCap, tradePartyCheck) sit in the @sendGate block and are
 //     unit-tested; the log-redaction regex is the @logRedact block.
-//   - GIVE A DAY (Prompt 19 S3, 2026-09-24; v7 - prepared, NOT deployed yet;
+//   - GIVE A DAY (Prompt 19 S3, 2026-09-24; v7, deployed 2026-09-25 05:36 UTC;
 //     see README section 3). When a colleague accepts a give (a one-way
 //     shift_trade_requests row, kind 'give'), the app mails trade_applied to
 //     both parties AND the scheduler(s): targetIds = [from, to, ...scheduler-
@@ -93,7 +93,8 @@
 //     sendGate), so a v6-shaped send never depends on that extra read.
 //     Everything v6 accepts, v7 accepts - deploy v7 BEFORE the client that
 //     sends the give.
-//   - GIVE HEADINGS (Prompt 19 S4, 2026-09-24; part of the same pending v7).
+//   - GIVE HEADINGS (Prompt 19 S4, 2026-09-24; part of the same v7, deployed
+//     2026-09-25 05:36 UTC).
 //     A give is mailed through the existing trade_* categories (no new
 //     category); the app marks its mail with data.kind 'give' and the frame's
 //     heading (and the default subject) then reads "Day Offered" / "Give
@@ -102,8 +103,8 @@
 //     '// @giveFrame-end'). Cosmetic only: the gate never reads kind, and a
 //     v6 function simply ignores the extra key.
 //
-//   - FOLLOWERS (Prompt 20 F3, Faraz 9/24; revision o). A viewer / coordinator account the admin set to follow
-//     roster surgeons (user_profiles.follows) receives what they receive, read-only. For trade_* (a Prompt 19 give
+//   - FOLLOWERS (Prompt 20 F3, Faraz 9/24; revision o; v8 on base v7 - prepared, NOT deployed; README section 3).
+//     A viewer / coordinator account the admin set to follow roster surgeons (user_profiles.follows) receives what they receive, read-only. For trade_* (a Prompt 19 give
 //     rides them with data.kind 'give'), shift_claimed, open_shifts and schedule_published, AFTER every gate and
 //     after the surgeons' mail, each follower of a surgeon in followerUniverse (the notice's own parties: the trade
 //     row's two, the claimer - never a scheduler-linked copy; or, for a broadcast, every follower) gets one e-mail on

@@ -392,12 +392,18 @@ const VIEWER_FEED = [
 // Prompt 20 F3: a fourth mocked session - a FOLLOWER (role viewer, no roster link, follows s2 and s5 - the shape of the
 // first two real followers; the harness never names them). Its notifications GET answers FOLLOW_FEED: seven rows, five of
 // which name a followed surgeon or are group-wide (so the follower must see them), two that name only s3 / s4 / s6 (so
-// he must not).
+// he must not). P20 R1 (review, after the rebase onto Prompt 19): ff-7 is a pending GIVE (data.kind 'give', a trade_id)
+// from s3 addressed TO s2, a surgeon he follows, backed by FOLLOW_GIVE_ROW on his shift_trade_requests GET - the case
+// where a follower reads a followed surgeon's give alert. Only the give's receiver answers it (notifGiveTrade needs
+// to_surgeon_id === the account's own person_id), so the follower's panel must show the stored text and no Accept /
+// Decline.
+const FOLLOW_GIVE_ID = "00000000-0000-4000-8000-0000000000f7";
+const FOLLOW_GIVE_ROW = { id: FOLLOW_GIVE_ID, submitted_at: "2026-09-23T15:00:00Z", day: "2026-12-02", role: "primary", from_surgeon_id: "s3", to_surgeon_id: "s2", return_day: null, return_role: null, status: "pending", kind: "give" };
 const FOLLOW_UID = "00000000-0000-4000-8000-0000000000f3";
 const FOLLOW_PROFILE = { id: FOLLOW_UID, person_id: null, role: "viewer", display_name: "Follower (harness)", email: null, follows: ["s2", "s5"], created_at: "2026-09-24T00:00:00Z", authEmail: "follower@example.com" };
 const FOLLOW_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FOLLOW_UID, role: "authenticated", email: "follower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
 const FOLLOW_FEED = [
-  { id: "ff-7", type: "trade_proposed", title: "Trade proposed (harness)", message: "s2 proposed a trade with s3", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-23T15:00:00Z" },
+  { id: "ff-7", type: "trade_proposed", title: "Day offered (harness)", message: "s3 offers s2 a day - nothing in return", data: { kind: "give", trade_id: FOLLOW_GIVE_ID, from_surgeon_id: "s3", to_surgeon_id: "s2" }, created_at: "2026-09-23T15:00:00Z" },
   { id: "ff-6", type: "vacation_logged", title: "Vacation logged (harness)", message: "s3 logged a vacation", data: { surgeon_id: "s3" }, created_at: "2026-09-23T14:00:00Z" },
   { id: "ff-5", type: "shift_claimed", title: "Shift taken (harness)", message: "s5 took an open shift", data: { surgeon_id: "s5" }, created_at: "2026-09-23T13:00:00Z" },
   { id: "ff-4", type: "trade_applied", title: "Trade applied (harness)", message: "s4 and s6 traded", data: { from_surgeon_id: "s4", to_surgeon_id: "s6" }, created_at: "2026-09-23T12:00:00Z" },
@@ -7423,7 +7429,11 @@ try {
     await pf.setViewportSize({ width: 390, height: 844 });
     await pf.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FOLLOW_JWT);
     await pf.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    let followTradeGets = 0;
     await pf.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(FOLLOW_PROFILE, async ({ url, req, json }) => {
+      // P20 R1: his (authenticated) trade read holds the pending give ff-7 names; any trade write falls through to the
+      // shared route, which records it - and step (e) then fails on it
+      if (url.pathname.startsWith("/rest/v1/shift_trade_requests") && req.method() === "GET") { followTradeGets++; await json(200, [FOLLOW_GIVE_ROW]); return true; }
       if (!url.pathname.startsWith("/rest/v1/notifications") || req.method() !== "GET") return false;
       const typeEq = url.searchParams.get("type");
       const rows = typeEq && typeEq.startsWith("eq.") ? FOLLOW_FEED.filter(n => n.type === typeEq.slice(3)) : FOLLOW_FEED;
@@ -7525,6 +7535,16 @@ try {
         if (badge !== "5") fail(`F3 follower (${theme}): the Alerts badge should read 5 (the rows s2 / s5 read), got '${badge}'`);
         else if (nRows.join(",") !== wantTypes) fail(`F3 follower (${theme}): the Alerts panel should list ${wantTypes}, got [${nRows.join(",")}]`);
         else ok(`F3 follower (${theme}): Alerts badge 5; panel = ${wantTypes} (s3's vacation and the s4 / s6 trade filtered out)`);
+        // (d2) P20 R1 (review): ff-7 is a pending give from s3 TO s2 (followed), backed by the served trade row - the
+        //      follower reads it as its stored text, with no Accept / Decline (only the give's receiver answers it)
+        {
+          const giveCtl = await pf.$$eval("[data-testid=notif-panel] [data-testid=notif-give-accept], [data-testid=notif-panel] [data-testid=notif-give-decline], [data-testid=notif-panel] [data-testid=notif-give-line]", els => els.map(e => e.getAttribute("data-testid")));
+          const ff7 = await pf.$$eval("[data-testid=notif-row][data-type=trade_proposed]", els => els.map(e => (e.innerText || "").trim()));
+          if (!followTradeGets) fail(`F3 follower give alert (${theme}): the page never read shift_trade_requests - the give row behind ff-7 was not loaded, so this check proves nothing`);
+          else if (giveCtl.length) fail(`F3 follower give alert (${theme}): a follower is offered the give's receiver controls for a surgeon he follows - ${giveCtl.join(", ")}`);
+          else if (ff7.length !== 1 || !ff7[0].includes("s3 offers s2 a day - nothing in return")) fail(`F3 follower give alert (${theme}): the give alert should read its stored text, got ${JSON.stringify(ff7).slice(0, 200)}`);
+          else ok(`F3 follower give alert (${theme}): the pending give s3 -> s2 (followed; its trade row served on ${followTradeGets} GET(s)) reads its stored text - no notif-give-accept / notif-give-decline / notif-give-line`);
+        }
         await pf.click('button[aria-label="Close notifications"]');
         await pf.waitForTimeout(200);
         // (f) Prompt 20 F4: NO edit control anywhere. Every tab the follower's nav offers is visited and swept for the
@@ -7538,7 +7558,7 @@ try {
             "paint-offers", "nav-paint-offers", "ofp-sheet", "ofp-save", "ob-take", "ob-assign", "ob-external", "ob-email", "claim-sheet", "claim-confirm",
             "editor-save", "editor-trade", "undo-btn", "generate-panel", "gen-run", "gen-accept", "roster-save", "rules-save", "group-save", "holidays-save",
             "users-card", "seed-card", "import-file", "reset-all-data", "export-backup", "snapshot-restore", "avail-add", "east-override-save", "east-refresh",
-            "prd-new", "notif-pref"];
+            "prd-new", "notif-pref", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade"];
           const navTabs = await pf.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
           const hitsByTab = [];
           let timeoffDates = -1;

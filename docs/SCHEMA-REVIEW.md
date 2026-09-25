@@ -1175,6 +1175,23 @@ check holds for all of them); the file writes and deletes no row. If the live ke
 `notification_preferences_pkey`, the `add constraint notification_preferences_pkey primary key (id)` line fails ("multiple primary keys")
 and the whole file rolls back - the pre-check reads the names first.
 
+**Decisions (Faraz 9/25).** Taken on the prepared file; nothing in it changes because of them:
+
+- **Followers get the publish e-mail** - yes. `send-notification` (v8, pending) adds the followers to `schedule_published` as F3 built it
+  (the publish broadcast reaches linked persons only, so a follower was never in it before).
+- **The self-insert pin stays**: `user_profiles_self_insert` keeps `follows = '[]'::jsonb` (and `user_profiles_self_update` keeps its
+  `follows` pin) - a profile never chooses whom it follows; the admin sets it in Setup > Users through `user_profiles_admin`.
+- **A role change away from viewer / coordinator keeps clearing `follows`** (`helpers.followsPatch` adds `follows: []` to the same PATCH).
+- The follower's own notification-preferences editor (the three switches, saved by `profile_id` through `prefs_own`) is to be built on
+  this branch before the rollout - it is what the functions' deploy PRECONDITION (`edge-functions/README.md` section 3) asks for.
+- **One rollout** with the member return-leg follow-up (`sql/migrations/2026-09-25-member-trade-return-leg.sql`), so everyone reloads
+  once: push the app -> bump `client_versions.min_version` to that build -> 24 h have passed and every heartbeat in Client versions from
+  the last 24 h is on that build or newer (if not, report instead of applying) -> apply both migrations with their before / after
+  probes and `scripts/verify-rls.sh` -> deploy `send-notification` v8 and `daily-reminder` v6 -> report; stop and report if any probe
+  differs. The two files do not overlap: this one touches `user_profiles` / `notification_preferences` (columns, constraints, three
+  policies) only; the follow-up redefines `trade_insert_guard()` and re-creates its trigger `trade_insert_guard_trg` on
+  `shift_trade_requests` only.
+
 **What could break.**
 
 - **The surgeons' prefs save (found while preparing this file).** The client's upsert (`db.upsert` -> `POST rest/v1/notification_preferences`,
@@ -1243,11 +1260,15 @@ Leftover count 0 (auth.users `probe-follow-%@example.test`, `user_profiles` disp
 1. Client first: the branch's `saveNotifPref` sends `?on_conflict=person_id` (pinned by `test/data-layer.test.js` and verify-rls 12a). It
    ships with the push; observe that the live build carries it before step 4: `bash scripts/verify-rls.sh` section 12a' (two anon GETs
    of the Pages `config.js` / `index.html`) must print `ok live client: ...` - red means do NOT apply yet.
-   Then decide `client_versions.min_version` explicitly: a PWA left open on an older build keeps sending the upsert without
-   `on_conflict` and gets the "Couldn't save notification settings" toast after step 4 until it reloads. Either raise row `main`'s
-   `min_version` to the APP_VERSION the deploy stamped (SQL only - no client path writes it: `update public.client_versions set
-   min_version = '<that version>' where id = 'main';`, which puts the refresh banner on every older client), or leave it and record
-   why in the observed line (e.g. every surgeon's app already reloaded). Either way the choice is written down.
+   Then raise `client_versions.min_version` (decided, Faraz 9/25 - no longer a choice): a PWA left open on an older build keeps sending
+   the upsert without `on_conflict` and gets the "Couldn't save notification settings" toast after step 4 until it reloads. Raise row
+   `main`'s `min_version` to the APP_VERSION the deploy stamped (SQL only - no client path writes it: `update public.client_versions set
+   min_version = '<that version>' where id = 'main';`, which puts the refresh banner on every older client); record the version in the
+   observed line.
+   Then the drain gate: wait until 24 h have passed since the bump AND every heartbeat in Client versions (Settings) from the last 24 h
+   is on that build or newer. If not, report instead of applying - steps 2-7 wait. The same gate covers the member return-leg
+   follow-up (section "2026-09-25 - member trade return leg" above), which is applied in the same window (ONE rollout, see the
+   Decisions paragraph); `send-notification` v8 and `daily-reminder` v6 are deployed only after both files are applied and verified.
 2. Pre-checks, read-only: `select count(*) from public.notification_preferences;` and
    `select conname, contype from pg_constraint where conrelid = 'public.notification_preferences'::regclass order by 1;`
    (expected: `notification_preferences_pkey` `p` only). The table is authenticated-only, so the count is read through the CLI, not anon.

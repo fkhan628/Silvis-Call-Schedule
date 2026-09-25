@@ -245,6 +245,13 @@ to change or stop a follower's mail: either the follower prefs switches (a later
 revision o prepares) or his own path to the follower's `notification_preferences` row by `profile_id` (the SQL editor:
 upsert the row with the flags off, or remove the follows in Setup > Users). Without one, do not deploy.
 
+Decisions (Faraz 9/25): followers **do** get the publish e-mail - `schedule_published` stays in `FOLLOWER_SEND_TYPES`;
+the database pin that stops a profile from choosing whom it follows stays (`user_profiles_self_insert` `follows = '[]'`, the
+self-update pin); a role change away from viewer / coordinator keeps clearing `follows`. The PRECONDITION above is to be met by the
+follower's own prefs editor (the three switches, saved by `profile_id`), to be built on this branch before the rollout. These two deploys
+are the last step of ONE rollout with revision o and the member return-leg follow-up (push -> min_version bump -> 24 h with every
+heartbeat on that build -> both migrations -> `send-notification` v8 + `daily-reminder` v6).
+
 Whose followers a send reaches (review F3, `followerUniverse`): the notice's own parties, never a scheduler copy - a
 `trade_*` the trade row's two parties, `shift_claimed` the claimer (not the scheduler-linked copies in `targetIds`, and
 not Prompt 19's scheduler-linked `trade_applied` copies), a targeted `open_shifts` its `targetIds`; a broadcast
