@@ -1271,6 +1271,147 @@ check("P20 F3: edge-functions/README.md - section 3 carries the pending Prompt 2
   assert.ok(/schedule_published/.test(s6.slice(0, s6.indexOf("\n## ", 5) > 0 ? s6.indexOf("\n## ", 5) : undefined)) || /Prompt 20 F3[^\n]*schedule_published/.test(readme), "section 6: the live note names the publish mail");
 });
 
+/* =====================================================================
+   Prompt 20 F4 - the two end-to-end proofs through the '@followers' mirror block (with the '@sendGate' block for the
+   send side). ONE follower account (a viewer, no roster link, follows s2 and s5 - the harness never names the real
+   ones) and nobody else:
+     daily-reminder dryRun  - the reminder-mode follower branch replayed over a week of schedule_days rows: tomorrow's
+                              onCall is built the way the handler builds it (pinned below), then followerReminderPlan +
+                              followerReminderLine; dryRun composes and sends nothing -> one reminder per followed surgeon
+                              on call tomorrow, none on a day neither is on call, never an address in the answer
+     send-notification      - sendGate -> tradePartyCheck -> followerUniverse -> followerRecipients for a trade: the
+                              follower of s2 is added for a trade s2 is a party to (a give too), never for one he is not
+   ===================================================================== */
+const F4_FOLLOWER = { id: "f4a0b1c2-follower", role: "viewer", person_id: null, email: "follower@example.org", display_name: "Follower (harness)", follows: ["s2", "s5"] };
+const F4_NAMES = { s1: "Khan", s2: "Burchett", s3: "Acton", s4: "Philip", s5: "Fierce", s6: "Sarkar" };
+// the handler's own reminder-mode lines (daily-reminder/index.ts, serve -> reminder mode), replayed; the source pins in
+// the check below keep the replay honest
+function f4DryRunFollowers(day, profiles, prefRows, hour, tomorrow) {
+  const DEFAULT_REMINDER_HOUR = 17;
+  const nameOf = (id) => (id ? (F4_NAMES[id] || id) : "OPEN");
+  const primaryLabel = day.primary_id ? nameOf(day.primary_id) : (day.external_cover ? `${day.external_cover} (external cover)` : "OPEN");
+  const backupLabel = nameOf(day.backup_id);
+  const onCall = [];
+  if (day.primary_id) onCall.push({ person_id: String(day.primary_id), role: "primary", otherLabel: backupLabel });
+  if (day.backup_id) onCall.push({ person_id: String(day.backup_id), role: "backup", otherLabel: primaryLabel });
+  if (onCall.length === 0) return { on_call: 0, followers: undefined };   // the handler answers before the follower branch
+  const followers = FOL.followerIndex(profiles, prefRows);
+  const plan = FOL.followerReminderPlan(followers, onCall, hour, DEFAULT_REMINDER_HOUR);
+  const results = [], lines = [];
+  let wrongHour = 0, off = 0, noEmail = 0;
+  let sample = null;
+  const dayLabel = tomorrow;   // the handler's fmtDay(tomorrow); only the shape of the sample matters here
+  for (const e of plan) {
+    const line = FOL.followerReminderLine(nameOf(e.surgeon), e.role, tomorrow, e.otherLabel);
+    const subject = `Call reminder - tomorrow (${dayLabel}) Dr. ${nameOf(e.surgeon)} is Silvis ${e.role.toUpperCase()}`;   // buildFollowerReminder's subject (pinned in the F3 check)
+    if (!sample) sample = { subject, line };
+    if (e.status === "skipped_wrong_hour") { wrongHour++; results.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status, user_hour: e.user_hour }); continue; }
+    if (e.status === "skipped_off") { off++; results.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status }); continue; }
+    if (e.status === "skipped_no_email") { noEmail++; results.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status }); continue; }
+    lines.push(line);
+    results.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: "dry_run_composed" });   // dryRun: composed, never sent
+  }
+  return { on_call: onCall.length, followers: { accounts: followers.length, planned: plan.length, sent: 0, failed: 0, skipped_wrong_hour: wrongHour, skipped_off: off, skipped_no_email: noEmail, results, sample }, lines };
+}
+check("P20 F4: daily-reminder dryRun fixture - ONE follower (viewer, follows s2 + s5) over a week of schedule_days rows: one reminder per followed surgeon on call tomorrow (both on the same day -> two, each worded for its surgeon), exactly one when only one is on, NONE on a day neither is on call (and none when nobody is), none at another hour or with his own switch off; dryRun sends nothing and the answer carries tags and counts, never an address", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const h = drSrc.slice(drSrc.indexOf("serve(async (req) =>"));
+  // the replay's onCall / labels / early return / dryRun branch are the handler's own lines
+  [
+    'if (day.primary_id) onCall.push({ person_id: String(day.primary_id), role: "primary", otherLabel: backupLabel });',
+    'if (day.backup_id) onCall.push({ person_id: String(day.backup_id), role: "backup", otherLabel: primaryLabel });',
+    ': (day.external_cover ? `${day.external_cover} (external cover)` : "OPEN");',
+    "const backupLabel = nameOf(day.backup_id);",
+    "if (onCall.length === 0) {",
+    'const nameOf = (id: string | null): string => (id ? (names[id] || id) : "OPEN");',
+    "const line = followerReminderLine(nameOf(e.surgeon), e.role, tomorrow, e.otherLabel);",
+    'if (dryRun) { fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: "dry_run_composed" }); continue; }',
+  ].forEach((l) => assert.ok(h.includes(l), "the handler still reads: " + l));
+  // review F4: the follower's own hour / switch / address gates are the handler's lines too, each ahead of dryRun and
+  // of the real send - so a handler that mails an opted-out follower (or mails him every hour) fails here
+  assert.ok(drSrc.includes("const DEFAULT_REMINDER_HOUR = 17;"), "the handler's default reminder hour is still 17 (the replay's)");
+  const fLoop = h.slice(h.indexOf("const plan = followerReminderPlan("), h.indexOf("followersOut = {"));
+  assert.ok(fLoop.length > 0 && fLoop.indexOf("for (const e of plan) {") > 0, "the follower loop is found");
+  const iDry = fLoop.indexOf("if (dryRun) { fResults.push(");
+  const iSend = fLoop.indexOf("await sendEmail(e.email, ");
+  assert.ok(iDry > 0 && iSend > iDry, "the follower loop: dryRun answers before the real send");
+  [
+    "if (!sample) sample = { subject, line };",
+    'if (e.status === "skipped_wrong_hour") { fWrongHour++; fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status, user_hour: e.user_hour }); continue; }',
+    'if (e.status === "skipped_off") { fOff++; fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status }); continue; }',
+    'if (e.status === "skipped_no_email") { fNoEmail++; fResults.push({ follower: e.follower, surgeon: e.surgeon, role: e.role, status: e.status }); continue; }',
+  ].forEach((l) => {
+    const i = fLoop.indexOf(l);
+    assert.ok(i > 0, "the follower loop still reads: " + l);
+    assert.ok(i < iDry && i < iSend, "before the dryRun branch and the real send: " + l);
+  });
+  assert.ok(h.indexOf("if (onCall.length === 0) {") < h.indexOf("followerReminderPlan("), "an empty day answers before the follower branch (no follower reminder)");
+  const profiles = [F4_FOLLOWER];
+  const WEEK = [
+    { day: "2026-10-08", primary_id: "s2", backup_id: "s5", external_cover: null },   // both followed surgeons
+    { day: "2026-10-09", primary_id: "s2", backup_id: "s3", external_cover: null },   // s2 only
+    { day: "2026-10-10", primary_id: "s3", backup_id: "s4", external_cover: null },   // neither - an off day for him
+    { day: "2026-10-11", primary_id: null, backup_id: "s5", external_cover: "Dr. Outside" },   // s5 behind an outside primary
+    { day: "2026-10-12", primary_id: null, backup_id: null, external_cover: null },   // nobody
+  ];
+  const got = {};
+  WEEK.forEach((row) => { got[row.day] = f4DryRunFollowers(row, profiles, [], 17, row.day); });
+  const composed = (d) => (got[d].followers ? got[d].followers.results.filter((r) => r.status === "dry_run_composed").map((r) => r.surgeon + " " + r.role) : []);
+  assert.deepStrictEqual(composed("2026-10-08"), ["s2 primary", "s5 backup"], "both followed surgeons on -> one reminder each");
+  assert.deepStrictEqual(got["2026-10-08"].lines, [
+    "Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Thu 10/8), backup Fierce",
+    "Reminder: Dr. Fierce is on backup call at Silvis tomorrow (Thu 10/8), primary Burchett",
+  ]);
+  assert.deepStrictEqual(composed("2026-10-09"), ["s2 primary"], "only s2 on -> one reminder (the s3 backup is nobody he follows)");
+  assert.deepStrictEqual(got["2026-10-09"].lines, ["Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Fri 10/9), backup Acton"]);
+  assert.deepStrictEqual(got["2026-10-10"].followers, { accounts: 1, planned: 0, sent: 0, failed: 0, skipped_wrong_hour: 0, skipped_off: 0, skipped_no_email: 0, results: [], sample: null }, "an off day for both followed surgeons -> no reminder (the account is counted, nothing planned)");
+  assert.deepStrictEqual(got["2026-10-10"].lines, []);
+  assert.deepStrictEqual(got["2026-10-11"].lines, ["Reminder: Dr. Fierce is on backup call at Silvis tomorrow (Sun 10/11), primary Dr. Outside (external cover)"], "s5 behind an outside primary -> one reminder, the outside cover named");
+  assert.deepStrictEqual(got["2026-10-12"], { on_call: 0, followers: undefined }, "nobody on call -> the handler answers before any follower is read");
+  const total = WEEK.reduce((n, row) => n + composed(row.day).length, 0);
+  assert.strictEqual(total, 4, "the week: 2 + 1 + 0 + 1 + 0 reminders - one per followed surgeon-day, never one per day or per account");
+  assert.ok(Object.values(got).every((g) => !g.followers || g.followers.sent === 0), "dryRun sends nothing");
+  assert.deepStrictEqual(got["2026-10-08"].followers.sample, { subject: "Call reminder - tomorrow (2026-10-08) Dr. Burchett is Silvis PRIMARY", line: got["2026-10-08"].lines[0] }, "the answer's sample = the first planned reminder's subject + line (the handler's shape)");
+  const wire = JSON.stringify(Object.values(got).map((g) => g.followers || null));
+  assert.ok(!/@/.test(wire) && wire.indexOf(F4_FOLLOWER.id) < 0 && /"f4a0b1c2"/.test(wire), "the answer names the follower by his id8 tag only - no address, no full id: " + wire.slice(0, 160));
+  // his own hour / his own switch (his prefs row is keyed by profile_id); the followed surgeon's prefs never decide
+  const at18 = f4DryRunFollowers(WEEK[0], profiles, [], 18, WEEK[0].day);
+  assert.deepStrictEqual(at18.followers.results.map((r) => r.status), ["skipped_wrong_hour", "skipped_wrong_hour"], "18:00 is not his hour (the default 17) -> nothing composed");
+  const own20 = [{ person_id: null, profile_id: F4_FOLLOWER.id, shift_reminders_email: true, reminder_hour_central: 20 }];
+  assert.strictEqual(f4DryRunFollowers(WEEK[1], profiles, own20, 20, WEEK[1].day).lines.length, 1, "his own 20:00 -> the s2 reminder at 20:00");
+  const offRow = [{ person_id: null, profile_id: F4_FOLLOWER.id, shift_reminders_email: false }];
+  assert.deepStrictEqual(f4DryRunFollowers(WEEK[0], profiles, offRow, 17, WEEK[0].day).followers.results.map((r) => r.status), ["skipped_off", "skipped_off"], "his own switch off -> no reminder");
+  const s2Row = [{ person_id: "s2", profile_id: null, shift_reminders_email: false, reminder_hour_central: 6 }];
+  assert.strictEqual(f4DryRunFollowers(WEEK[1], profiles, s2Row, 17, WEEK[1].day).lines.length, 1, "the followed surgeon's own prefs (off, 06:00) never decide the follower's reminder");
+});
+check("P20 F4: send-notification - ONE follower of s2 (and s5) is added for a trade s2 is a party to (proposed by s2, accepted by s3, applied by the scheduler, a Prompt 19 give riding trade_* with data.kind 'give') and NOT for a trade between s3 and s4; every send first passes the real sendGate + tradePartyCheck (targetIds never carry him); the follower himself never sends", () => {
+  if (!FOL) throw new Error("followers block did not load");
+  if (!sendGate || !tradePartyCheck) throw new Error("gate block did not load");
+  const followers = FOL.followerIndex([F4_FOLLOWER], []);
+  assert.strictEqual(followers.length, 1, "the one follower account");
+  const send = (caller, type, targetIds, data, trade) => {
+    const gate = sendGate(caller, type, targetIds, SCHED);
+    assert.strictEqual(gate, null, type + " by " + JSON.stringify(caller) + " passes the gate: " + gate);
+    assert.strictEqual(tradePartyCheck(trade, targetIds), null, type + ": targetIds are the row's two parties");
+    const universe = FOL.followerUniverse(type, targetIds, caller, data, trade);
+    return FOL.followerRecipients(followers, type, universe, "trade_updates_email");
+  };
+  const s2s3 = { from_surgeon_id: "s2", to_surgeon_id: "s3" };
+  const s3s4 = { from_surgeon_id: "s3", to_surgeon_id: "s4" };
+  const s2 = { role: "surgeon", personId: "s2" }, s3 = { role: "surgeon", personId: "s3" };
+  const added = (r) => r.list.map((f) => f.tag + " via " + f.via.join("+"));
+  assert.deepStrictEqual(added(send(s2, "trade_proposed", ["s2", "s3"], { trade_id: UUID }, s2s3)), ["f4a0b1c2 via s2"], "s2 proposes to s3 -> the follower of s2 is added, via s2 only");
+  assert.deepStrictEqual(added(send(s3, "trade_accepted", ["s3", "s2"], { trade_id: UUID }, s2s3)), ["f4a0b1c2 via s2"], "s3 accepts s2's trade -> still added (s2 is a party)");
+  assert.deepStrictEqual(added(send(sched, "trade_applied", ["s2", "s3"], { trade_id: UUID }, s2s3)), ["f4a0b1c2 via s2"], "the scheduler applies it -> added");
+  assert.deepStrictEqual(added(send(s2, "trade_proposed", ["s2", "s3"], { trade_id: UUID, kind: "give" }, s2s3)), ["f4a0b1c2 via s2"], "a give (data.kind 'give' on trade_*) -> added the same way");
+  assert.deepStrictEqual(send(s3, "trade_proposed", ["s3", "s4"], { trade_id: UUID }, s3s4), { list: [], skipped: [] }, "s3 <-> s4 -> the follower of s2 / s5 is not added (not even as a skipped entry)");
+  assert.deepStrictEqual(send(sched, "trade_applied", ["s3", "s4"], { trade_id: UUID }, s3s4), { list: [], skipped: [] }, "... nor when the scheduler applies it");
+  const optedOut = FOL.followerIndex([F4_FOLLOWER], [{ person_id: null, profile_id: F4_FOLLOWER.id, trade_updates_email: false }]);
+  const r1 = FOL.followerRecipients(optedOut, "trade_proposed", FOL.followerUniverse("trade_proposed", ["s2", "s3"], s2, {}, s2s3), "trade_updates_email");
+  assert.deepStrictEqual(r1, { list: [], skipped: [{ follower: "f4a0b1c2", via: ["s2"], status: "skipped_pref_off" }] }, "his own trade flag off -> reported, never mailed");
+  assert.ok(/role viewer may not send notifications/.test(sendGate({ role: "viewer", personId: null }, "trade_proposed", ["s2", "s3"], SCHED) || ""), "and the follower himself never sends (viewer -> refused)");
+});
+
 (async () => {
   for (const [name, fn] of ASYNC) {
     try { await fn(); passed++; console.log("ok   " + name); }

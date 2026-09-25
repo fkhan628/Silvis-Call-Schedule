@@ -7527,6 +7527,63 @@ try {
         else ok(`F3 follower (${theme}): Alerts badge 5; panel = ${wantTypes} (s3's vacation and the s4 / s6 trade filtered out)`);
         await pf.click('button[aria-label="Close notifications"]');
         await pf.waitForTimeout(200);
+        // (f) Prompt 20 F4: NO edit control anywhere. Every tab the follower's nav offers is visited and swept for the
+        //     surgeon / scheduler controls (trade card and its buttons, the vacation form, the offer painter, Take this
+        //     shift, the scheduler's board / Generate / Setup / data tools, Undo); Time off has no date input; the
+        //     calendar's day editor opened on a day s2 holds (derived from the served rows' cells) reads Close - no
+        //     Save, no 'Propose a trade', no enabled select / input / textarea. Following lists s2's upcoming days.
+        {
+          const F4 = `F4 follower no-edit (${theme})`;
+          const EDIT_IDS = ["trade-card", "trade-submit", "trade-accept", "trade-decline", "trade-cancel", "mine-trade", "vac-add", "vac-note",
+            "paint-offers", "nav-paint-offers", "ofp-sheet", "ofp-save", "ob-take", "ob-assign", "ob-external", "ob-email", "claim-sheet", "claim-confirm",
+            "editor-save", "editor-trade", "undo-btn", "generate-panel", "gen-run", "gen-accept", "roster-save", "rules-save", "group-save", "holidays-save",
+            "users-card", "seed-card", "import-file", "reset-all-data", "export-backup", "snapshot-restore", "avail-add", "east-override-save", "east-refresh",
+            "prd-new", "notif-pref"];
+          const navTabs = await pf.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
+          const hitsByTab = [];
+          let timeoffDates = -1;
+          for (const k of navTabs) {
+            await pf.click(`button[data-tab="${k}"]`);
+            await pf.waitForTimeout(350);
+            const hits = await pf.evaluate((ids) => ids.filter(t => document.querySelector("[data-testid=" + t + "]")), EDIT_IDS);
+            if (hits.length) hitsByTab.push(`${k}: ${hits.join(", ")}`);
+            if (k === "timeoff") timeoffDates = await pf.locator("[data-testid=timeoff-card] input[type=date]").count();
+          }
+          if (!navTabs.includes("calendar") || !navTabs.includes("timeoff") || !navTabs.includes("myschedule")) fail(`${F4}: expected the Calendar, Time off and Following tabs in the nav, got ${navTabs.join(",")}`);
+          else if (hitsByTab.length) fail(`${F4}: edit controls rendered for a follower - ${hitsByTab.join(" | ")}`);
+          else if (timeoffDates !== 0) fail(`${F4}: Time off shows ${timeoffDates} date input(s) - a vacation form for a follower`);
+          else ok(`${F4}: tabs ${navTabs.join(", ")} swept - no trade card, no vacation form, no painter, no Take / Assign / board e-mail, no Generate / Setup / data tools, no Undo, no pref switch`);
+          // the day editor on a day s2 holds (the visible month's cells carry data-primary / data-backup from the rows)
+          await pf.click('button[data-tab="calendar"]');
+          await pf.waitForSelector("[data-testid=cal-grid] .cal-cell[data-day]", { timeout: 8000 });
+          const cellDays = await pf.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), b: e.getAttribute("data-backup") })));
+          const todayCal = await pf.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : ""));
+          const s2Cells = cellDays.filter(c => c.p === "s2" || c.b === "s2");
+          const s2Cell = s2Cells.find(c => todayCal && c.day >= todayCal) || s2Cells[0] || null;   // an upcoming s2 day when the month has one
+          const pick = s2Cell || cellDays[Math.floor(cellDays.length / 2)];
+          await pf.click(`[data-testid=cal-grid] .cal-cell[data-day="${pick.day}"]`);
+          await pf.waitForSelector("[data-testid=day-editor] [role=dialog]", { timeout: 5000 });
+          const ed = await pf.$eval("[data-testid=day-editor] [role=dialog]", (d) => ({
+            save: !!d.querySelector("[data-testid=editor-save]"),
+            trade: !!d.querySelector("[data-testid=editor-trade]"),
+            enabled: Array.from(d.querySelectorAll("select, textarea, input:not([type=hidden])")).filter(x => !x.disabled && !x.readOnly).length,
+            buttons: Array.from(d.querySelectorAll("button")).map(b => (b.textContent || "").trim()).filter(Boolean),
+          }));
+          if (ed.save || ed.trade || ed.enabled) fail(`${F4}: the day editor on ${pick.day} offers an edit - save=${ed.save} trade=${ed.trade} enabled fields=${ed.enabled} (buttons ${JSON.stringify(ed.buttons)})`);
+          else if (!ed.buttons.includes("Close") || ed.buttons.includes("Cancel") || ed.buttons.includes("Save")) fail(`${F4}: the day editor footer should read Close only (no Cancel / Save), got ${JSON.stringify(ed.buttons)}`);
+          else ok(`${F4}: the day editor on ${pick.day}${s2Cell ? " (s2 " + (s2Cell.p === "s2" ? "primary" : "backup") + ")" : " (no s2 day in the visible month - a mid-month day)"} is read-only - buttons ${ed.buttons.join(" / ")}; no Save, no 'Propose a trade', no enabled field`);
+          await pf.click("[data-testid=day-editor] [role=dialog] button[aria-label=Close]");
+          await pf.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
+          // Following lists s2's upcoming days (the list itself is checked against the served rows in (b))
+          await pf.click('button[data-tab="myschedule"]');
+          await pf.waitForSelector("[data-testid=following-card][data-surgeon=s2]", { timeout: 8000 });
+          const s2Days = await pf.$$eval("[data-testid=following-card][data-surgeon=s2] [data-testid=mine-day]", els => els.map(r => r.getAttribute("data-day")));
+          const today2 = await pf.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : null));
+          const servedS2 = (servedDays || []).filter(r => r && today2 && r.day >= today2 && r.day <= addDaysIso(today2, 90) && (r.primary_id === "s2" || r.backup_id === "s2")).length;
+          if (servedS2 > 0 && !s2Days.length) fail(`${F4}: the served rows give s2 ${servedS2} upcoming day(s) but the Following card lists none`);
+          else if (s2Days.some(d => !today2 || d < today2)) fail(`${F4}: the s2 card lists a past day: ${s2Days.filter(d => d < today2).join(",")}`);
+          else ok(`${F4}: Following lists s2's ${s2Days.length} upcoming day(s) (${s2Days.slice(0, 3).join(", ")}${s2Days.length > 3 ? ", ..." : ""}), none before ${today2}`);
+        }
         // (e) 390 px hygiene + the review shot (on Following)
         await pf.click('button[data-tab="myschedule"]');
         await pf.waitForSelector("[data-testid=following-card]", { timeout: 8000 });
