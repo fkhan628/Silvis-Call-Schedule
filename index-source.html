@@ -2529,6 +2529,9 @@ function CallSchedule() {
   // Users (admin). user_profiles is authenticated-read; the loud read below
   // distinguishes "failed" from "no accounts" (dbAuth.getAllProfiles returns
   // [] for both, which is exactly the silent shape this app must not show).
+  // Prompt 20 F2: select=* carries user_profiles.follows once revision o is applied; before that the key is simply
+  // absent (an explicit ...,follows column list would answer 400 42703 and blank the card). UsersCard reads the
+  // column's presence from the rows (helpers.js followsColumnState) and keeps the Follows chips disabled until then.
   const loadAllProfilesLoud = async () => {
     setProfilesLoading(true); setProfilesErr("");
     try {
@@ -2556,6 +2559,11 @@ function CallSchedule() {
     // Prompt 16 A7: a coordinator (office account) is never a roster entry - the DB refuses it too (user_profiles_coordinator_unlinked).
     const nextRole = patch.role || p.role, nextPerson = patch.person_id !== undefined ? patch.person_id : p.person_id;
     if (nextRole === "coordinator" && nextPerson) { showToast("Refused: a coordinator (office account) is never linked to a roster id - set the roster link to none first.", "error"); return false; }
+    // Prompt 20 F2: follows (user_profiles.follows, revision o) - a viewer / coordinator account's roster ids only; a role
+    // change away from those roles clears a list the row would no longer show (helpers.js followsPatch).
+    const fp = followsPatch(p, patch, rosterPool.map(s => s.id));
+    if (!fp.ok) { showToast("Refused: " + fp.error + ".", "error"); return false; }
+    patch = fp.patch;
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?id=eq.${encodeURIComponent(p.id)}`, {
         method: "PATCH", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
@@ -2567,7 +2575,7 @@ function CallSchedule() {
       const updated = rows[0];
       setAllProfiles(prev => prev.map(x => x.id === p.id ? { ...x, ...updated } : x));
       if (authUser && p.id === authUser.id) setUserProfile(prev => ({ ...(prev || {}), ...updated }));
-      const what = Object.keys(patch).map(k => k + " -> " + (k === "person_id" ? (patch[k] ? nameOf(patch[k]) : "none") : String(patch[k]))).join(", ");
+      const what = Object.keys(patch).map(k => k === "follows" ? followsAuditText(patch[k]) : k + " -> " + (k === "person_id" ? (patch[k] ? nameOf(patch[k]) : "none") : String(patch[k]))).join(", ");
       logAudit("users.link", `Account ${p.display_name || p.id.slice(0, 8)}: ${what}`, { user_id: p.id, patch });
       showToast("Account updated.", "success");
       return true;
@@ -8300,16 +8308,31 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
   const [names, setNames] = React.useState({});
   const admins = (profiles || []).filter(p => p.role === "admin").length;
   const commitName = (p) => { const v = names[p.id]; if (v === undefined || v === (p.display_name || "")) return; onSave(p, { display_name: v.trim() || null }); };
+  // Prompt 20 F2: Follows - a viewer / coordinator account receives what the followed surgeons receive, read-only. One
+  // chip per ACTIVE roster surgeon in roster order (plus any id the row follows that the active roster no longer lists,
+  // so it can be cleared); one save per row at a time, each through onSave (saveUserProfile, audit users.link).
+  const [busy, setBusy] = React.useState({});
+  const followsState = followsColumnState(profiles);
+  const active = (roster || []).filter(s => s.active !== false);
+  const order = (roster || []).map(s => s.id);
+  const chipIds = (p) => active.map(s => s.id).concat(followsOf(p).filter(id => !active.some(s => s.id === id)));
+  const toggleFollow = async (p, id) => {
+    if (followsState !== "present" || busy[p.id]) return;
+    setBusy(b => ({ ...b, [p.id]: true }));
+    try { await onSave(p, { follows: followsToggle(followsOf(p), id, order) }); }
+    finally { setBusy(b => { const n = { ...b }; delete n[p.id]; return n; }); }
+  };
   return (
     <div data-testid="users-card">
       <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Accounts come from Supabase Auth (invite from the dashboard; the database creates the profile row). Link each one to a roster id and give it a role. The address column is read from user_profiles (authenticated-read) and is never copied anywhere else. {admins <= 1 ? "There is one admin - it cannot be demoted until another exists." : admins + " admins."}</p>
       {loading && <p style={{ fontSize: 12, color: "#5B6B82" }}>Loading accounts</p>}
       {error && <div data-testid="users-error" style={css.errBox}>{error}</div>}
+      {followsState === "absent" && <p data-testid="users-follows-pending" style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>Follows is read-only until the database update that adds it (revision o) is applied - the accounts loaded without the column.</p>}
       {!loading && !error && (!profiles || profiles.length === 0) && <p style={{ fontSize: 12, color: "#5B6B82", fontStyle: "italic" }}>No accounts loaded yet.</p>}
       {!loading && profiles && profiles.length > 0 && (
         <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="users-table">
-            <thead><tr><th>Address (display only)</th><th>Display name</th><th>Role</th><th>Roster link</th><th>Since</th></tr></thead>
+            <thead><tr><th>Address (display only)</th><th>Display name</th><th>Role</th><th>Roster link</th><th>Follows</th><th>Since</th></tr></thead>
             <tbody>
               {profiles.map(p => (
                 <tr key={p.id} data-user={p.id} data-role={p.role}>
@@ -8326,6 +8349,15 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
                       {(roster || []).map(s => <option key={s.id} value={s.id}>{s.id} {s.name}</option>)}
                     </select>
                   </td>
+                  <td>{FOLLOWER_ROLES.includes(p.role || "viewer") ? (
+                    <div data-testid={"user-follows-" + p.id} role="group" aria-label="Follows" style={{ display: "flex", flexWrap: "wrap", gap: 4, minWidth: 120, maxWidth: 200 }}>
+                      {chipIds(p).map(id => {
+                        const s = (roster || []).find(x => x.id === id), on = followsOf(p).includes(id);
+                        return <button key={id} type="button" data-testid={"user-follow-" + p.id + "-" + id} aria-pressed={on ? "true" : "false"} disabled={followsState !== "present" || !!busy[p.id]} onClick={() => toggleFollow(p, id)}
+                          title={(s ? s.name : id) + (on ? " - followed (click to stop)" : " - click to follow")} style={{ ...css.mini(on), padding: "2px 7px", opacity: followsState === "present" ? 1 : 0.5 }}>{s && s.code ? s.code : id}</button>;
+                      })}
+                    </div>
+                  ) : <span data-testid={"user-nofollow-" + p.id} title="Follows applies to viewer and coordinator accounts only" style={{ color: "#5B6B82", fontSize: 11 }}>-</span>}</td>
                   <td style={{ fontSize: 11, color: "#5B6B82", fontFamily: mono }}>{p.created_at ? String(p.created_at).slice(0, 10) : ""}</td>
                 </tr>
               ))}

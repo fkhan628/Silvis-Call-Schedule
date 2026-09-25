@@ -2963,6 +2963,66 @@ function profilePollMerge(prev, row) {
   };
 }
 
+/* === Followers (Prompt 20 F2): Setup > Users' Follows control === */
+// A viewer or coordinator account follows roster ids (user_profiles.follows, a jsonb array - revision o, prepared in
+// F1) and receives what those surgeons receive, read-only. The admin sets the list in Setup > Users through
+// saveUserProfile (the users.link path). These are the pure pieces; none of them throws.
+const FOLLOWER_ROLES = ["viewer", "coordinator"];
+// followsOf(profile): the follows list as roster-id strings - junk entries, blanks and duplicates dropped. A row
+// without the column (the read is select=*, so before revision o the key is simply missing) or with a non-array
+// value follows nobody.
+function followsOf(p) {
+  const raw = p && typeof p === "object" ? p.follows : null;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  raw.forEach(v => { if (typeof v === "string" && v !== "" && !out.includes(v)) out.push(v); });
+  return out;
+}
+// followsColumnState(rows): "present" when any profile row carries a follows key (the column is NOT NULL with a
+// default, so after revision o every row has it), "absent" when rows came back without one (the column is not
+// there yet - a select=* read never errors over it), "unknown" for no rows / a failed read.
+function followsColumnState(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "unknown";
+  return rows.some(r => r && typeof r === "object" && Object.prototype.hasOwnProperty.call(r, "follows")) ? "present" : "absent";
+}
+// followsToggle(list, id, order): the list with id added or removed, in roster order (`order` = the roster's ids);
+// an id the order does not know (a surgeon since removed) keeps its place after the known ones - a toggle of another
+// chip never drops it.
+function followsToggle(list, id, order) {
+  const cur = followsOf({ follows: list });
+  const next = cur.includes(id) ? cur.filter(x => x !== id) : cur.concat([id]);
+  const ord = Array.isArray(order) ? order : [];
+  return ord.filter(x => next.includes(x)).concat(next.filter(x => !ord.includes(x)));
+}
+// followsAuditText(list): the users.link summary piece - "follows s2, s5" or "follows none".
+function followsAuditText(list) {
+  const l = followsOf({ follows: list });
+  return "follows " + (l.length ? l.join(", ") : "none");
+}
+// followsPatch(p, patch, rosterIds): what saveUserProfile may send, as far as follows goes. Returns
+// { ok: true, patch } or { ok: false, error }.
+// - patch.follows given: refused unless the account's role AFTER the patch is viewer / coordinator and the value is
+//   an array of distinct roster ids (or ids the row already follows); junk is refused, not cleaned - the chips only
+//   ever send clean lists, so anything else is a bug to surface.
+// - a role change away from viewer / coordinator on a row that follows somebody: follows: [] joins the same PATCH (the
+//   row shows no Follows control any more, so a list left behind would be invisible). A row without the column (before
+//   revision o) or following nobody is left alone, so the PATCH never names a column that is not there.
+function followsPatch(p, patch, rosterIds) {
+  const row = p && typeof p === "object" ? p : {};
+  const pt = patch && typeof patch === "object" ? patch : {};
+  const nextRole = pt.role || row.role || "viewer";
+  if (pt.follows !== undefined) {
+    if (!FOLLOWER_ROLES.includes(nextRole)) return { ok: false, error: "only a viewer or coordinator account follows surgeons" };
+    const ids = Array.isArray(rosterIds) ? rosterIds : [], had = followsOf(row);
+    if (!Array.isArray(pt.follows) || followsOf({ follows: pt.follows }).length !== pt.follows.length || pt.follows.some(id => !ids.includes(id) && !had.includes(id))) {
+      return { ok: false, error: "follows must be a list of distinct roster ids" };
+    }
+    return { ok: true, patch: pt };
+  }
+  if (pt.role && !FOLLOWER_ROLES.includes(pt.role) && followsOf(row).length) return { ok: true, patch: { ...pt, follows: [] } };
+  return { ok: true, patch: pt };
+}
+
 // ---- Prompt 16 B9 (9/24): small pure pieces the client items are built on ----
 
 // (a) The Generate worker's script. The app builds a classic Web Worker from a Blob of this text - no second script
@@ -3051,6 +3111,7 @@ if (typeof module !== "undefined" && module.exports) {
     authLinkError, AUTH_LINK_ERROR_MESSAGE,
     notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,
     profilePollMerge, PROFILE_POLL_KEYS,
+    FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

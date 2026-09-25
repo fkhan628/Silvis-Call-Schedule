@@ -5048,6 +5048,105 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- Prompt 20 F2 (Faraz 9/24). Setup > Users: Follows for viewer / coordinator accounts ---------------- */
+  console.log("\n[P20 F2] Setup > Users - Follows (viewer / coordinator rows, users.link path)");
+  {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const F = vm.runInContext("({ followsOf: typeof followsOf === 'function' ? followsOf : null, followsColumnState: typeof followsColumnState === 'function' ? followsColumnState : null, followsToggle: typeof followsToggle === 'function' ? followsToggle : null, followsAuditText: typeof followsAuditText === 'function' ? followsAuditText : null, followsPatch: typeof followsPatch === 'function' ? followsPatch : null, FOLLOWER_ROLES: typeof FOLLOWER_ROLES !== 'undefined' ? FOLLOWER_ROLES : null })", sandbox);
+    const plain = (v) => JSON.parse(JSON.stringify(v)); // values built inside the vm carry its Array prototype
+    const order = ["s1", "s2", "s3", "s4", "s5", "s6"];
+    check("P20 F2 behaviour: helpers.js followsOf / followsColumnState / followsToggle / followsAuditText / FOLLOWER_ROLES - a row without the column follows nobody, the column's presence is read from the rows (select=* never names it), a toggle keeps roster order and never drops an id the roster no longer lists, the audit piece reads 'follows s2, s5' / 'follows none'", () => {
+      for (const k of Object.keys(F)) assert.ok(F[k], "helpers.js does not define " + k);
+      assert.deepStrictEqual(plain(F.FOLLOWER_ROLES), ["viewer", "coordinator"]);
+      assert.deepStrictEqual(plain(F.followsOf({ follows: ["s2", "s5"] })), ["s2", "s5"]);
+      assert.deepStrictEqual(plain(F.followsOf({ id: "u" })), [], "no column (before revision o): nobody");
+      assert.deepStrictEqual(plain(F.followsOf({ follows: null })), []);
+      assert.deepStrictEqual(plain(F.followsOf({ follows: "s2" })), [], "a non-array value is nobody");
+      assert.deepStrictEqual(plain(F.followsOf({ follows: ["s2", "", 3, "s2", null, "s5"] })), ["s2", "s5"], "junk, blanks and duplicates dropped");
+      assert.deepStrictEqual(plain(F.followsOf(null)), []);
+      assert.strictEqual(F.followsColumnState([]), "unknown");
+      assert.strictEqual(F.followsColumnState(null), "unknown");
+      assert.strictEqual(F.followsColumnState([{ id: "a", role: "viewer" }]), "absent", "rows without the key: the column is not there yet");
+      assert.strictEqual(F.followsColumnState([{ id: "a" }, { id: "b", follows: [] }]), "present");
+      assert.deepStrictEqual(plain(F.followsToggle(["s2"], "s5", order)), ["s2", "s5"]);
+      assert.deepStrictEqual(plain(F.followsToggle(["s5"], "s2", order)), ["s2", "s5"], "roster order, not click order");
+      assert.deepStrictEqual(plain(F.followsToggle(["s2", "s5"], "s2", order)), ["s5"]);
+      assert.deepStrictEqual(plain(F.followsToggle(["s9", "s5"], "s2", order)), ["s2", "s5", "s9"], "an id the roster no longer lists stays, after the known ones");
+      assert.deepStrictEqual(plain(F.followsToggle(undefined, "s2", order)), ["s2"]);
+      assert.strictEqual(F.followsAuditText(["s2", "s5"]), "follows s2, s5");
+      assert.strictEqual(F.followsAuditText(["s2"]), "follows s2");
+      assert.strictEqual(F.followsAuditText([]), "follows none");
+      assert.strictEqual(F.followsAuditText(undefined), "follows none");
+    });
+    check("P20 F2 behaviour: helpers.js followsPatch(p, patch, rosterIds) - follows only for a viewer / coordinator (after the patch) and only roster ids (or ids the row already follows); a role change away from viewer / coordinator on a row that follows somebody clears the list in the same PATCH; a row without the column is never sent one", () => {
+      assert.ok(F.followsPatch, "helpers.js does not define followsPatch");
+      const viewer = { id: "u1", role: "viewer", follows: ["s2"] }, coord = { id: "u2", role: "coordinator", follows: [] }, surgeon = { id: "u3", role: "surgeon", person_id: "s3", follows: [] };
+      assert.deepStrictEqual(plain(F.followsPatch(viewer, { follows: ["s2", "s5"] }, order)), { ok: true, patch: { follows: ["s2", "s5"] } });
+      assert.deepStrictEqual(plain(F.followsPatch(coord, { follows: [] }, order)), { ok: true, patch: { follows: [] } });
+      assert.strictEqual(F.followsPatch(surgeon, { follows: ["s2"] }, order).ok, false, "a surgeon account follows nobody");
+      assert.strictEqual(F.followsPatch({ id: "u4", role: "admin" }, { follows: [] }, order).ok, false, "an admin account has no Follows");
+      assert.strictEqual(F.followsPatch(viewer, { role: "surgeon", follows: ["s2"] }, order).ok, false, "the role AFTER the patch decides");
+      assert.strictEqual(F.followsPatch(viewer, { follows: ["x1"] }, order).ok, false, "not a roster id");
+      assert.strictEqual(F.followsPatch(viewer, { follows: "s2" }, order).ok, false, "not an array");
+      assert.strictEqual(F.followsPatch(viewer, { follows: ["s2", "s2"] }, order).ok, false, "duplicates refused, not cleaned");
+      assert.deepStrictEqual(plain(F.followsPatch({ id: "u5", role: "viewer", follows: ["s9", "s2"] }, { follows: ["s9"] }, order)), { ok: true, patch: { follows: ["s9"] } }, "an id the row already follows may stay although the roster no longer lists it");
+      assert.deepStrictEqual(plain(F.followsPatch(viewer, { role: "surgeon" }, order)), { ok: true, patch: { role: "surgeon", follows: [] } }, "promoted: the invisible list is cleared in the same PATCH");
+      assert.deepStrictEqual(plain(F.followsPatch(viewer, { role: "coordinator" }, order)), { ok: true, patch: { role: "coordinator" } }, "viewer -> coordinator keeps the list");
+      assert.deepStrictEqual(plain(F.followsPatch({ id: "u6", role: "viewer" }, { role: "surgeon" }, order)), { ok: true, patch: { role: "surgeon" } }, "no column (before revision o): the PATCH never names follows");
+      assert.deepStrictEqual(plain(F.followsPatch(viewer, { display_name: "X" }, order)), { ok: true, patch: { display_name: "X" } });
+      assert.strictEqual(F.followsPatch(null, null, null).ok, true, "junk never throws");
+    });
+    check("P20 F2 behaviour: saveUserProfile runs followsPatch before the PATCH (refusal toast, return false) and its users.link summary names the ids - 'follows s2, s5' / 'follows none' - beside the other keys", () => {
+      const at = src.indexOf("  const saveUserProfile = async (p, patch) => {");
+      assert.ok(at > 0, "saveUserProfile");
+      const sup = src.slice(at, src.indexOf("\n  };\n", at));
+      const gate = 'const fp = followsPatch(p, patch, rosterPool.map(s => s.id));\n    if (!fp.ok) { showToast("Refused: " + fp.error + ".", "error"); return false; }\n    patch = fp.patch;';
+      assert.ok(sup.includes(gate), "the followsPatch gate");
+      assert.ok(sup.indexOf(gate) > sup.indexOf('nextRole === "coordinator" && nextPerson') && sup.indexOf(gate) < sup.indexOf('method: "PATCH"'), "the gate runs after the coordinator refusal and before the PATCH");
+      const m = sup.match(/const what = (Object\.keys\(patch\)\.map\(k => [^\n]+\.join\(", "\));/);
+      assert.ok(m, "the users.link summary line");
+      const what = new Function("patch", "nameOf", "followsAuditText", "return " + m[1] + ";");
+      const nameOf = (id) => ({ s2: "Burchett" }[id] || id);
+      assert.strictEqual(what({ follows: ["s2", "s5"] }, nameOf, F.followsAuditText), "follows s2, s5");
+      assert.strictEqual(what({ follows: [] }, nameOf, F.followsAuditText), "follows none");
+      assert.strictEqual(what({ role: "surgeon", follows: [] }, nameOf, F.followsAuditText), "role -> surgeon, follows none");
+      assert.strictEqual(what({ person_id: "s2" }, nameOf, F.followsAuditText), "person_id -> Burchett", "the other keys read as before");
+      assert.strictEqual(what({ person_id: null }, nameOf, F.followsAuditText), "person_id -> none");
+      assert.ok(sup.includes('logAudit("users.link", `Account ${p.display_name || p.id.slice(0, 8)}: ${what}`, { user_id: p.id, patch });'), "the same users.link audit call (admin only - saveUserProfile's isAdmin gate is unchanged)");
+      assert.ok(sup.startsWith('  const saveUserProfile = async (p, patch) => {\n    if (!isAdmin) { showToast("Only the admin can change accounts.", "error"); return false; }'), "admin-only gate first");
+    });
+    check("P20 F2 pins: UsersCard shows a Follows column; viewer / coordinator rows get one chip per ACTIVE roster surgeon in roster order (plus any followed id the active roster no longer lists), aria-pressed, saved through onSave(p, { follows }) one save at a time; surgeon / scheduler / admin rows show no control; the column state comes from followsColumnState(profiles) and the chips are disabled with a note while it is absent; the Setup > Users read stays user_profiles?select=* (an explicit follows column would 400 before the apply)", () => {
+      const a = src.indexOf("\nfunction UsersCard("), b = src.indexOf("\n}\n", a);
+      assert.ok(a > 0, "UsersCard");
+      const uc = src.slice(a, b);
+      assert.ok(uc.includes("<th>Roster link</th><th>Follows</th><th>Since</th>"), "the Follows header between Roster link and Since");
+      assert.ok(uc.includes("const followsState = followsColumnState(profiles);"), "column state from the rows");
+      assert.ok(uc.includes("const active = (roster || []).filter(s => s.active !== false);"), "active roster surgeons");
+      assert.ok(uc.includes("const chipIds = (p) => active.map(s => s.id).concat(followsOf(p).filter(id => !active.some(s => s.id === id)));"), "roster order, followed extras after");
+      assert.ok(uc.includes("{FOLLOWER_ROLES.includes(p.role || \"viewer\") ? ("), "the control renders for viewer / coordinator rows only");
+      assert.ok(uc.includes('data-testid={"user-follows-" + p.id}'), "the chip group testid");
+      assert.ok(uc.includes('data-testid={"user-follow-" + p.id + "-" + id} aria-pressed={on ? "true" : "false"} disabled={followsState !== "present" || !!busy[p.id]} onClick={() => toggleFollow(p, id)}'), "chip: testid, aria-pressed, disabled while the column is absent or a save is in flight");
+      assert.ok(uc.includes("await onSave(p, { follows: followsToggle(followsOf(p), id, order) });"), "the save goes through onSave (saveUserProfile, users.link)");
+      assert.ok(uc.includes('{followsState === "absent" && <p data-testid="users-follows-pending"'), "the note while the column is absent");
+      const reads = src.match(/rest\/v1\/user_profiles\?select=[^`&]*/g) || [];
+      assert.ok(src.includes("const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?select=*&order=created_at.asc`, { headers: dbAuthHeaders() });"), "loadAllProfilesLoud stays select=*");
+      assert.ok(!reads.some(r => /follows/.test(r)), "no user_profiles read names follows explicitly: " + JSON.stringify(reads));
+      assert.ok(!/[^\x00-\x7f]/.test(uc), "UsersCard is ASCII");
+    });
+    check("P20 F2 fix (review): toggleFollow keeps its own guard (no save while the column is absent or a save is in flight - the disabled attribute is not the only stop); the surgeon / scheduler / admin placeholder is the muted token #5B6B82 (the dark sheet remaps it; #b0b8c0 read about 2.0:1 on the light card) with its own testid; the build guide names the Follows column, the select=* read with followsColumnState, users-follows-pending and the clear-on-role-change rule", () => {
+      const a = src.indexOf("\nfunction UsersCard("), b = src.indexOf("\n}\n", a);
+      const uc = src.slice(a, b);
+      assert.ok(uc.includes('    if (followsState !== "present" || busy[p.id]) return;\n    setBusy(b => ({ ...b, [p.id]: true }));'), "toggleFollow's guard precedes the busy flag and the save");
+      assert.ok(uc.includes(') : <span data-testid={"user-nofollow-" + p.id} title="Follows applies to viewer and coordinator accounts only" style={{ color: "#5B6B82", fontSize: 11 }}>-</span>}</td>'), "the placeholder in the muted token, with a testid");
+      assert.ok(!uc.includes('<span style={{ color: "#b0b8c0", fontSize: 11 }}>-</span>'), "no #b0b8c0 placeholder left in UsersCard");
+      const g = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"), "utf8");
+      const i = g.indexOf("- **Setup > Users: Follows (Prompt 20 F2");
+      assert.ok(i > 0, "the guide bullet");
+      const para = g.slice(i, g.indexOf("\n", i));
+      for (const w of ["followsColumnState", "users-follows-pending", "select=*", "follows: []", "follows none", "saveUserProfile", "users.link", "followsPatch"]) assert.ok(para.includes(w), "the guide bullet names " + w);
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

@@ -704,6 +704,18 @@ const representation = (method, url, body) => {
 const snapStore = [];
 let minVersionOverride = null; // Prompt 11: { min_version, message } served for client_versions row 'main'
 let cvExtrasFixture = false;   // Item 5a (9/24): the Client versions listing carries a heartbeat row for the office + viewer accounts and user_profiles carries all three mocked profiles
+// Prompt 20 F2: Setup > Users' Follows. null = off; "present" = user_profiles serves the admin, the office account, a
+// follower (viewer) and a linked surgeon, each with a follows column (the follower's kept in followsStore, which the
+// PATCH updates); "absent" = the same rows without the column (before revision o). A GET with ?id=eq. answers that row.
+let followsFixture = null;
+const followsStore = {};
+const FOLLOWER_UID = "00000000-0000-4000-8000-0000000000f1", F2_SURGEON_UID = "00000000-0000-4000-8000-0000000000f2";
+const followsFixtureRows = () => {
+  const rows = [FAKE_PROFILE, COORD_PROFILE,
+    { id: FOLLOWER_UID, person_id: null, role: "viewer", display_name: "Follower (harness)", email: null, created_at: "2026-09-24T00:00:00Z" },
+    { id: F2_SURGEON_UID, person_id: "s3", role: "surgeon", display_name: "Surgeon (harness)", email: null, created_at: "2026-09-24T00:00:00Z" }];
+  return followsFixture === "present" ? rows.map(r => ({ ...r, follows: followsStore[r.id] || [] })) : rows;
+};
 let emptyDaysFor = null, emptyDaysServed = 0; // Prompt 16 B9 (h): the page whose NEXT schedule_days GET answers 200 + [] (an RLS-filtered / dead-token read)
 // Prompt 11 (factory reset): once the app's DELETE of every schedule_days row is
 // recorded, the table reads as EMPTY from then on and later CAS POSTs / PATCHes
@@ -887,11 +899,23 @@ const routeSupabase = async (route, scope) => {
     return json(401, { code: "PGRST301", message: "JWT expired", details: null, hint: null });
   }
   if (url.pathname.startsWith("/rest/v1/user_profiles")) {
+    const idEq = (url.searchParams.get("id") || "").replace(/^eq\./, "");
+    if (method === "GET" && followsFixture) { const rows = followsFixtureRows(); return json(200, idEq ? rows.filter(r => r.id === idEq) : rows); }
     if (method === "GET") { const { authEmail, ...viewerRow } = VIEWER_PROFILE; return json(200, cvExtrasFixture ? [FAKE_PROFILE, COORD_PROFILE, viewerRow] : [FAKE_PROFILE]); }
     const body = req.postData() || "";
     writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
     // A PATCH with Prefer: return=representation answers the merged row, like
     // PostgREST does for a row the caller may update (Slice E Users card).
+    // Prompt 20 F2: while followsFixture is armed the PATCH answers the row it names (?id=eq.<uuid>) and keeps a follows
+    // list; with the column "absent" a PATCH naming follows gets PostgREST's missing-column answer (400 PGRST204).
+    if (method === "PATCH" && followsFixture) {
+      let patch = {}; try { patch = JSON.parse(body); } catch (e) {}
+      const base = followsFixtureRows().find(r => r.id === idEq);
+      if (!base) return json(200, []);
+      if (followsFixture === "absent" && "follows" in patch) return json(400, { code: "PGRST204", message: "Could not find the 'follows' column of 'user_profiles' in the schema cache", details: null, hint: null });
+      if (Array.isArray(patch.follows)) followsStore[idEq] = patch.follows;
+      return json(200, [{ ...base, ...patch }]);
+    }
     if (method === "PATCH") { let patch = {}; try { patch = JSON.parse(body); } catch (e) {} return json(200, [{ ...FAKE_PROFILE, ...patch }]); }
     return json(method === "POST" ? 201 : 200, []);
   }
@@ -4541,6 +4565,88 @@ try {
       else ok(`Users: PATCH /rest/v1/user_profiles?id=eq.${FAKE_UID.slice(0, 8)}... { display_name } with return=representation; audit users.link (no address in it)`);
       const usersText = await page.$eval("[data-testid=users-table]", el => el.innerText);
       if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(usersText)) fail("Users: an email address is rendered although the mocked profile has none"); else ok("Users: no address rendered for the mocked profile (email null -> '(none on file)')");
+    }
+
+    // ---- Prompt 20 F2: Follows chips on viewer / coordinator rows, at 390 px ----
+    // followsFixture serves four accounts (admin, office, follower, linked surgeon). With the column present: the
+    // follower and the office rows carry one chip per active roster surgeon in roster order (the follower's s2 pressed),
+    // the admin and surgeon rows carry none; s5 / s2 / s5 clicks each send ONE PATCH ?id=eq.<follower> { follows } with
+    // return=representation and a users.link audit naming the ids ("follows s2, s5" -> "follows s5" -> "follows none");
+    // the page never scrolls sideways. With the column absent (before revision o): the note, disabled chips, no PATCH.
+    {
+      const F2 = "F2 Users follows";
+      const chip = (uid, id) => `[data-testid="user-follow-${uid}-${id}"]`;
+      const refreshUsers = async () => { await page.click('[data-testid=card-setup_users] button:has-text("Refresh")'); };
+      const rowState = () => page.$$eval("[data-testid=users-table] tr[data-user]", trs => trs.map(tr => ({
+        id: tr.getAttribute("data-user"), role: tr.getAttribute("data-role"),
+        control: !!tr.querySelector('[data-testid^="user-follows-"]'),
+        chips: Array.from(tr.querySelectorAll('[data-testid^="user-follow-"]')).map(b => ({ id: b.getAttribute("data-testid").split("-").pop(), pressed: b.getAttribute("aria-pressed"), disabled: b.disabled })),
+        options: Array.from(tr.querySelectorAll('select[data-testid^="user-link-"] option')).map(o => o.value).filter(Boolean),
+      })));
+      try {
+        followsStore[FOLLOWER_UID] = ["s2"];
+        followsFixture = "present";
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openCard("setup_users");
+        await refreshUsers();
+        await page.waitForSelector(chip(FOLLOWER_UID, "s2"), { timeout: 8000 });
+        const rows = await rowState();
+        const by = (id) => rows.find(r => r.id === id) || { chips: [], options: [] };
+        const fo = by(FOLLOWER_UID), co = by(COORD_UID), ad = by(FAKE_UID), su = by(F2_SURGEON_UID);
+        const ids = fo.chips.map(c => c.id), opts = fo.options;
+        const inOrder = ids.every((id, i) => opts.indexOf(id) >= 0 && (i === 0 || opts.indexOf(id) > opts.indexOf(ids[i - 1])));
+        if (rows.length !== 4) fail(`${F2}: expected the four fixture accounts, got ${rows.length}`);
+        else if (!fo.control || !co.control || ad.control || su.control) fail(`${F2}: the Follows control must render on the viewer and coordinator rows only: ` + JSON.stringify(rows.map(r => [r.role, r.control])));
+        else if (!ids.includes("s2") || !ids.includes("s5") || !inOrder || ids.some(id => /^x/.test(id)) || co.chips.map(c => c.id).join() !== ids.join()) fail(`${F2}: chips must be the active pool surgeons in roster order (the same on both rows): follower ${ids.join(",")} office ${co.chips.map(c => c.id).join(",")} roster ${opts.join(",")}`);
+        else if (fo.chips.filter(c => c.pressed === "true").map(c => c.id).join() !== "s2" || co.chips.some(c => c.pressed === "true") || fo.chips.some(c => c.disabled)) fail(`${F2}: the follower must show s2 pressed (only), the office none, nothing disabled: ` + JSON.stringify([fo.chips, co.chips]));
+        else ok(`${F2}: viewer + coordinator rows carry ${ids.length} chips in roster order (${ids.join(" ")}), the follower's s2 pressed; admin and surgeon rows show no control`);
+        // review fix: the admin / surgeon placeholder paints the muted token (light #5B6B82, remapped to #9FB0C8 by the dark
+        // sheet) - never the old #b0b8c0 (about 2.0:1 on the light card)
+        const naColors = [];
+        for (const uid of [FAKE_UID, F2_SURGEON_UID]) naColors.push(await page.$eval(`[data-testid="user-nofollow-${uid}"]`, el => getComputedStyle(el).color).catch(() => null));
+        if (!naColors.every(c => c === "rgb(91, 107, 130)" || c === "rgb(159, 176, 200)")) fail(`${F2}: the admin / surgeon '-' placeholder must paint the muted token (rgb(91, 107, 130) light / rgb(159, 176, 200) dark): ` + JSON.stringify(naColors));
+        else ok(`${F2}: the admin / surgeon placeholder paints the muted token (${naColors.join(", ")})`);
+        const steps = [["s5", ["s2", "s5"], "follows s2, s5"], ["s2", ["s5"], "follows s5"], ["s5", [], "follows none"]];
+        for (const [id, want, words] of steps) {
+          const w0 = writes.length;
+          await page.click(chip(FOLLOWER_UID, id));
+          await page.waitForSelector(`${chip(FOLLOWER_UID, id)}[aria-pressed="${want.includes(id) ? "true" : "false"}"]:not([disabled])`, { timeout: 5000 });
+          const gotAudit = await waitFor(() => !!auditSince(w0, "users.link"), 3000, 100);
+          const patches = writesSince(w0, "/rest/v1/user_profiles").filter(w => w.method === "PATCH");
+          let body = {}; try { body = JSON.parse(patches.length ? patches[0].body : "{}"); } catch (e) {}
+          const audit = auditSince(w0, "users.link");
+          const summary = audit && audit.detail ? audit.detail.summary : null;
+          if (patches.length !== 1 || patches[0].path !== `/rest/v1/user_profiles?id=eq.${FOLLOWER_UID}` || !/return=representation/.test(patches[0].prefer || "")) fail(`${F2}: ${id} click must send ONE PATCH ?id=eq.<follower> with return=representation: ` + patches.map(w => `${w.method} ${w.path}`).join(", "));
+          else if (JSON.stringify(body.follows) !== JSON.stringify(want) || Object.keys(body).sort().join() !== "follows,updated_at") fail(`${F2}: ${id} click: the PATCH body must be { follows: ${JSON.stringify(want)}, updated_at }, got ${patches[0].body}`);
+          else if (!gotAudit || summary !== `Account Follower (harness): ${words}`) fail(`${F2}: ${id} click: the users.link audit summary must read 'Account Follower (harness): ${words}', got ${JSON.stringify(summary)}`);
+          else ok(`${F2}: ${id} -> PATCH { follows: ${JSON.stringify(want)} }, audit users.link '${summary}'`);
+        }
+        const wide = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth }));
+        if (wide.sw > wide.iw) fail(`${F2}: the page scrolls sideways at 390 px (scrollWidth ${wide.sw} > ${wide.iw})`); else ok(`${F2}: no sideways page scroll at 390 px (scrollWidth ${wide.sw})`);
+        await page.locator(chip(FOLLOWER_UID, "s2")).scrollIntoViewIfNeeded();
+        await page.locator("[data-testid=card-setup_users]").screenshot({ path: path.join(OUT, "setup-users-follows-390.png") });
+        ok("screenshot test/ui/out/setup-users-follows-390.png");
+        // before revision o: the rows carry no follows key
+        followsFixture = "absent";
+        await refreshUsers();
+        await page.waitForSelector("[data-testid=users-follows-pending]", { timeout: 8000 });
+        await page.waitForSelector(`${chip(FOLLOWER_UID, "s2")}[disabled]`, { timeout: 5000 });
+        const wA = writes.length;
+        await page.$eval(chip(FOLLOWER_UID, "s5"), b => b.click());
+        await page.waitForTimeout(400);
+        const rowsA = await rowState();
+        const allDisabled = rowsA.filter(r => r.control).every(r => r.chips.length && r.chips.every(c => c.disabled && c.pressed === "false"));
+        const patchesA = writesSince(wA, "/rest/v1/user_profiles");
+        if (!allDisabled || patchesA.length || await page.$("[data-testid=users-error]")) fail(`${F2}: without the column the chips must be disabled and unpressed, a click must write nothing and the card must not error: disabled=${allDisabled} writes=${patchesA.length}`);
+        else ok(`${F2}: without the column (before revision o) the card loads, says so (users-follows-pending), the chips are disabled and a click writes nothing`);
+      } catch (e) { fail(`${F2}: ` + String(e && e.message || e).split("\n")[0]); try { await page.screenshot({ path: path.join(OUT, "failure-f2-users.png"), fullPage: true }); } catch (e2) {} }
+      followsFixture = null;
+      try {
+        await refreshUsers();
+        await page.waitForSelector(`[data-user="${FOLLOWER_UID}"]`, { state: "detached", timeout: 8000 });
+        ok(`${F2}: fixture dropped - the one-profile picture is back`);
+      } catch (e) { fail(`${F2}: the fixture rows did not clear: ` + String(e && e.message || e).split("\n")[0]); }
+      await page.setViewportSize({ width: 1180, height: 900 });
     }
 
     // ---- Rules editor: pattern preview (next 8 matching dates) + save round trip ----
