@@ -3911,11 +3911,19 @@ try {
       else if (!gAudit || !gAudit.detail || gAudit.detail.kind !== "give") fail("Give away: the trade.propose audit row should carry kind give: " + JSON.stringify(gAudit));
       else ok(`Give away: POST { kind: give, return null } "${gb.detail}" + notification (title 'Day offered - nothing in return', data.kind give) + neutral e-mail '${gMail.data.subject}' to both parties + audit trade.propose kind give`);
       if (!writesSince(beforeG).every(w => noAddress(w.body))) fail("Give away: a write body carries an email address");
+      // Prompt 19 S4: the give's e-mail is marked data.kind give (send-notification v7 heads it "Day Offered")
+      if (!gMail || !gMail.data || gMail.data.kind !== "give") fail("Give away (S4): the trade_proposed mail should carry data.kind give, got " + JSON.stringify(gMail && gMail.data));
+      else ok("Give away (S4): the trade_proposed mail carries data.kind give (headed 'Day Offered' by send-notification v7)");
       // Leave no pending row behind (the mock's trade store is shared with the later sessions - a viewer counts every pending
       // row in the Time off tab badge): the scheduler withdraws the give - one PATCH status cancelled.
       const gIds = (await pendingIds()).filter(id => !idsBeforeG.includes(id));
       if (gIds.length !== 1) fail("Give away: expected ONE new pending row for the give, got " + JSON.stringify(gIds));
       else {
+        // Prompt 19 S4: the Trades list names the give - the pending title counts gives, the row's chip reads "give - pending",
+        // its meta line "offered by Burchett"
+        const s4 = await page.evaluate((id) => { const row = document.querySelector('[data-testid=trade-row][data-trade-id="' + id + '"]'); const t = (sel, root) => { const e = (root || document).querySelector(sel); return e ? e.textContent.trim() : null; }; return { title: t('[data-testid=trades-pending-title]'), status: row ? t('[data-testid=trade-status]', row) : null, meta: row ? t('[data-testid=trade-meta]', row) : null }; }, gIds[0]);
+        if (!/^Pending (trades \(\d+\) and )?gives \([1-9]\d*\)$/.test(s4.title || "") || s4.status !== "give - pending" || !/^offered by Burchett /.test(s4.meta || "")) fail("Give away (S4): the Trades list should name the give (title 'Pending [trades (n) and ]gives (n)', chip 'give - pending', 'offered by Burchett'), got " + JSON.stringify(s4));
+        else ok(`Give away (S4): Trades reads '${s4.title}', the row's chip '${s4.status}', '${s4.meta.split(" ").slice(0, 3).join(" ")}'`);
         page.on("dialog", acceptAll);
         const beforeC = writes.length;
         await page.locator(`[data-testid=trade-row][data-trade-id="${gIds[0]}"] [data-testid=trade-cancel]`).click();
@@ -4050,6 +4058,9 @@ try {
             const rowInfo = await rp.$eval(rowSel, el => ({ kind: el.getAttribute("data-kind"), line: (el.querySelector("[data-testid=trade-give-line]") || { textContent: "" }).textContent.trim(), accept: !!el.querySelector("[data-testid=trade-accept]"), decline: !!el.querySelector("[data-testid=trade-decline]"), cancel: !!el.querySelector("[data-testid=trade-cancel]") }));
             if (rowInfo.kind !== "give" || rowInfo.line !== wantLine || !rowInfo.accept || !rowInfo.decline || rowInfo.cancel) fail("Give (receiver): the Trades row should read '" + wantLine + "' with Accept / Decline and no Cancel, got " + JSON.stringify(rowInfo));
             else ok(`Give (receiver, Trades): '${rowInfo.line}' - Accept / Decline, no Cancel (data-kind give)`);
+            const r4 = await rp.evaluate((id) => { const row = document.querySelector('[data-testid=trade-row][data-trade-id="' + id + '"]'); const t = (sel, root) => { const e = (root || document).querySelector(sel); return e ? e.textContent.trim() : null; }; return { title: t('[data-testid=trades-pending-title]'), status: row ? t('[data-testid=trade-status]', row) : null, meta: row ? t('[data-testid=trade-meta]', row) : null }; }, giveId);
+            if (!/^Pending (trades \(\d+\) and )?gives \([1-9]\d*\)$/.test(r4.title || "") || r4.status !== "give - pending" || !/^offered by Burchett /.test(r4.meta || "")) fail("Give (receiver, S4): the Trades list should name the give (title 'Pending [trades (n) and ]gives (n)', chip 'give - pending', 'offered by Burchett'), got " + JSON.stringify(r4));
+            else ok(`Give (receiver, S4): Trades reads '${r4.title}', the row's chip '${r4.status}'`);
             await rp.click('button[aria-label="Notifications"]');
             await rp.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
             const nLine = await rp.$eval("[data-testid=notif-give-line]", el => el.textContent.trim()).catch(() => "");
@@ -4081,6 +4092,9 @@ try {
             else if (!stored || stored.status !== "applied") fail("Give (receiver): the row should read applied after apply_trade, got " + JSON.stringify(stored && stored.status));
             else ok(`Give (receiver, accept from Alerts): PATCH accepted -> rpc/apply_trade { p_trade_id }; feed 'Give accepted' + '${appN.message}'; send-notification trade_applied -> ${JSON.stringify(mails[0].targetIds)}; audit trade.accept kind give`);
             if (!seq.every(w => noAddress(w.body))) fail("Give (receiver): a write body carries an email address");
+            // Prompt 19 S4: the applied give's mail is marked kind give (send-notification v7 heads it "Give Applied")
+            if (mails.length !== 1 || !mails[0].data || mails[0].data.kind !== "give") fail("Give (receiver, S4): the trade_applied mail should carry data.kind give, got " + JSON.stringify(mails.map(m => m.data)));
+            else ok("Give (receiver, S4): the trade_applied mail carries data.kind give (headed 'Give Applied' by send-notification v7)");
           } catch (e) { fail("Give (receiver, A3r) exception: " + errLine(e)); }
           const gi = tradeStore.findIndex(r => r.id === giveId);
           if (gi >= 0) tradeStore.splice(gi, 1);

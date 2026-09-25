@@ -620,12 +620,14 @@ function holderLabel(v, nameOf) {
 }
 
 // formatDayChange(change, nameOf) -> "10/12 P Philip -> Fierce". Plain "->" in
-// code; the UI may render an arrow glyph instead.
+// code; the UI may render an arrow glyph instead. Prompt 19 S4: a change labelled
+// by labelGiveChanges (via "give") reads "10/10 P Acton -> Burchett (give)".
 function formatDayChange(change, nameOf) {
   if (!change) return "";
   const md = fmtMD(change.day);
-  if (change.role === "primary") return `${md} P ${holderLabel(change.from, nameOf)} -> ${holderLabel(change.to, nameOf)}`;
-  if (change.role === "backup") return `${md} B ${holderLabel(change.from, nameOf)} -> ${holderLabel(change.to, nameOf)}`;
+  const via = change.via === "give" ? " (give)" : "";
+  if (change.role === "primary") return `${md} P ${holderLabel(change.from, nameOf)} -> ${holderLabel(change.to, nameOf)}${via}`;
+  if (change.role === "backup") return `${md} B ${holderLabel(change.from, nameOf)} -> ${holderLabel(change.to, nameOf)}${via}`;
   if (change.role === "lock") {
     const lockWord = (f) => f === "PB" ? "both locked" : f === "P" ? "primary locked" : f === "B" ? "backup locked" : "unlocked";
     return `${md} lock ${lockWord(change.from)} -> ${lockWord(change.to)}`;
@@ -889,8 +891,89 @@ function giveAppliedNotes(rows, schedulerIds) {
   const line = tradeGiveAppliedLine(first, days);
   return {
     notification: { type: "trade_applied", title: "Give applied", message: line, data: { from_surgeon_id: first.from_surgeon_id, to_surgeon_id: first.to_surgeon_id, trade_id: first.id, trade_ids: ids, day: first.day, days, kind: "give" } },
-    email: { subject: line, message: `${line}. ${first.to_surgeon_name} now holds ${days.length > 1 ? "those days" : "that day"}; nothing comes back to ${first.from_surgeon_name}.`, trade_id: first.id, targetIds: tradeAppliedTargets(first, schedulerIds) },
+    email: { subject: line, message: `${line}. ${first.to_surgeon_name} now holds ${days.length > 1 ? "those days" : "that day"}; nothing comes back to ${first.from_surgeon_name}.`, trade_id: first.id, kind: "give", targetIds: tradeAppliedTargets(first, schedulerIds) },
   };
+}
+// ---- Prompt 19 S4 (Faraz 9/24): a give reads as a give everywhere - pure, ASCII ----
+// The Trades list's section titles: the rows are split by isGive(row) (the app passes its whole-proposal predicate).
+// Without gives the pre-Prompt 19 title stands ("Pending trades (2)"); without trades "Pending gives (1)"; both ->
+// "Pending trades (2) and gives (1)". Counts are rows, as before (a 4-day unit counts 4).
+function tradeListTitle(label, rows, isGive) {
+  const list = Array.isArray(rows) ? rows : [];
+  const g = typeof isGive === "function" ? list.filter(r => isGive(r)).length : 0, t = list.length - g;
+  if (!g) return `${label} trades (${t})`;
+  if (!t) return `${label} gives (${g})`;
+  return `${label} trades (${t}) and gives (${g})`;
+}
+function tradeListEmpty(label) {
+  return `No ${String(label).toLowerCase()} trades or gives.`;
+}
+// The row's status chip: "give - pending" / "give - accepted - not applied yet" for a give; a trade's is unchanged.
+function tradeRowStatus(status, give) {
+  return (give ? "give - " : "") + (status === "accepted" ? "accepted - not applied yet" : String(status || ""));
+}
+// The Activity log. The client's trade.propose / accept / decline / cancel rows carry detail.kind since Prompt 19; the
+// server's trade.apply row (apply_trade, 5b) carries none - its summary reads "Trade applied: <to> takes <Role> <Dy Mon D>
+// (from <from>, one-way)". A trade id is a give's when the loaded trade rows say so (isGive = the app's whole-proposal
+// predicate) or when one of the give's own audit rows (kind 'give') names it in trade_id / trade_ids - so the apply row
+// still reads as a give once its trade row has scrolled out of the last 100.
+function auditGiveTradeIds(entries, tradeRows, isGive) {
+  const out = [];
+  const add = (id) => { if (id === null || id === undefined || id === "") return; const s = String(id); if (out.indexOf(s) < 0) out.push(s); };
+  (Array.isArray(tradeRows) ? tradeRows : []).forEach(r => { if (r && typeof isGive === "function" && isGive(r)) add(r.id); });
+  (Array.isArray(entries) ? entries : []).forEach(en => {
+    const d = en && en.detail;
+    if (!d || typeof d !== "object" || d.kind !== "give") return;
+    add(d.trade_id);
+    (Array.isArray(d.trade_ids) ? d.trade_ids : []).forEach(add);
+  });
+  return out;
+}
+// One Activity log line -> { summary, action, give }. A give's trade.apply summary is re-worded ("Give applied: ...,
+// nothing in return)"); a give's trade.propose summary - the receiver-addressed tradeGiveMsg ("<giver> offers you ...
+// (a give to <receiver>)") - reads neutral in the log ("Give offered: <giver> -> <receiver>, <what> - nothing in return",
+// S4 review); a give's other trade.* rows keep their (already give-worded) summary; the action reads "<action> (give)".
+// Everything else is the row as before: detail.summary, else the action.
+function auditEntryText(en, giveIds) {
+  const action = String(en && en.action || "");
+  const d = en && en.detail && typeof en.detail === "object" ? en.detail : {};
+  const base = d.summary || action;
+  const ids = Array.isArray(giveIds) ? giveIds : [];
+  const give = action.indexOf("trade.") === 0 && (d.kind === "give" || (action === "trade.apply" && d.trade_id !== undefined && d.trade_id !== null && ids.indexOf(String(d.trade_id)) >= 0));
+  if (!give) return { summary: base, action, give: false };
+  let summary = base;
+  if (action === "trade.apply") {
+    summary = typeof d.summary === "string" && /^Trade applied: /.test(d.summary)
+      ? d.summary.replace(/^Trade applied: /, "Give applied: ").replace(/, one-way\)$/, ", nothing in return)")
+      : "Give applied";
+  } else if (action === "trade.propose" && typeof d.summary === "string") {
+    const m = /^(.+?) offers you (.+) - nothing in return [(]a give to (.+)[)]$/.exec(d.summary);
+    if (m) summary = "Give offered: " + m[1] + " -> " + m[3] + ", " + m[2] + " - nothing in return";
+  }
+  return { summary, action: action + " (give)", give: true };
+}
+// The publish diff. schedule_days carries no kind - apply_trade writes source 'trade' for a trade and a give alike - so
+// a change is labelled from the shift_trade_requests rows: on a day whose source is 'trade', the LATEST applied row
+// (decided_at, else submitted_at) whose leg lands on that slot (day / role -> to_surgeon_id, or the return leg
+// return_day / return_role -> from_surgeon_id) must have put change.to there and be a give (isGive) -> via 'give'.
+// A later trade or a hand edit over the give, a trade's return leg and a declined give stay unlabelled. Pure: the
+// changes are copied, never mutated.
+function labelGiveChanges(changes, schedule, tradeRows, isGive) {
+  const rows = (Array.isArray(tradeRows) ? tradeRows : []).filter(r => r && r.status === "applied");
+  const when = (r) => String(r.decided_at || r.submitted_at || "");
+  return (Array.isArray(changes) ? changes : []).map(c => {
+    if (!c || (c.role !== "primary" && c.role !== "backup") || !c.to) return c;
+    const day = schedule && schedule[c.day];
+    if (!day || day.source !== "trade") return c;
+    let best = null, holder = null;
+    rows.forEach(r => {
+      const lands = r.day === c.day && r.role === c.role ? r.to_surgeon_id : r.return_day === c.day && r.return_role === c.role ? r.from_surgeon_id : null;
+      if (lands === null || lands === undefined) return;
+      if (!best || when(r) > when(best)) { best = r; holder = lands; }
+    });
+    if (!best || String(holder) !== String(c.to) || typeof isGive !== "function" || !isGive(best)) return c;
+    return { ...c, via: "give" };
+  });
 }
 // The shift_trade_requests rows of ONE proposal from the Propose card - one row per given day, in order. Pure.
 //   p = { fromId, fromName, toId, toName, days, role, retDays, returnRole, give, isScheduler, stamp(i) -> "" | unit stamp,
@@ -2927,7 +3010,7 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
-    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, slotLabel, suggestTradePartners, tradeDayShort,
+    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
     ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,
     buildWeekRows, exportColorsFor,

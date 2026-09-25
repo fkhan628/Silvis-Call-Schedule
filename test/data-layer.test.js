@@ -1257,7 +1257,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(b.includes('unit: unit ? unit.name : null, kind: give ? "give" : "trade" });'), "the trade.propose audit row carries kind");
       assert.ok(b.includes('await addNotification("trade_proposed", give ? "Day offered - nothing in return" : "Shift trade proposed", msg, {') && b.includes('day: tradeDay, kind: give ? "give" : "trade" });'), "the in-app notification: same type, a give title, kind in data");
       assert.ok(b.includes("const giveMail = give ? tradeGiveEmail({ from_surgeon_name: fromName, to_surgeon_name: toName, day: days[0], role: tradeRole }, whole ? unitText(unit) : null) : null;"), "a give's e-mail words come from tradeGiveEmail (neutral - both parties get it)");
-      assert.ok(b.includes('sendEmailNotif("trade_proposed", giveMail ? { message: giveMail.message, subject: giveMail.subject, trade_id: first.id } : { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)), trade_id: first.id }, [fromId, tradeTo]);'), "the e-mail: trade_proposed with trade_id, both parties, the neutral give subject / message; a trade's e-mail unchanged");
+      assert.ok(b.includes('sendEmailNotif("trade_proposed", giveMail ? { message: giveMail.message, subject: giveMail.subject, trade_id: first.id, kind: "give" } : { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)), trade_id: first.id }, [fromId, tradeTo]);'), "the e-mail: trade_proposed with trade_id, both parties, the neutral give subject / message; a trade's e-mail unchanged");
       assert.ok(!b.includes("Day offered to you"), "no receiver-addressed subject on the two-party e-mail");
       assert.ok(!b.includes("tradeProposeMsg(req)"), "the row sentence is composed in tradeProposalRows");
     });
@@ -1346,7 +1346,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const line = "Give applied: Acton \u2192 Burchett, 10/10\u201310/11 primary";
       assert.deepStrictEqual(H.giveAppliedNotes(rows, ["s1"]), {
         notification: { type: "trade_applied", title: "Give applied", message: line, data: { from_surgeon_id: "s3", to_surgeon_id: "s2", trade_id: "g1", trade_ids: ["g1", "g2"], day: "2026-10-10", days: ["2026-10-10", "2026-10-11"], kind: "give" } },
-        email: { subject: line, message: line + ". Burchett now holds those days; nothing comes back to Acton.", trade_id: "g1", targetIds: ["s3", "s2", "s1"] },
+        email: { subject: line, message: line + ". Burchett now holds those days; nothing comes back to Acton.", trade_id: "g1", kind: "give", targetIds: ["s3", "s2", "s1"] }, // Prompt 19 S4: kind heads the mail as a give
       });
       const one = H.giveAppliedNotes([giveRow({ status: "accepted" })], null);
       assert.strictEqual(one.email.message, "Give applied: Acton \u2192 Burchett, Sat 10/10 primary. Burchett now holds that day; nothing comes back to Acton.");
@@ -1471,7 +1471,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.notifVisibleTo(feed, { isScheduler: true, mySurgeon: "s1" }).length, 2, "the scheduler");
       assert.strictEqual(H.notifVisibleTo(feed, { mySurgeon: "s4" }).length, 0, "a third surgeon");
       assert.strictEqual(H.notifVisibleTo(feed, { isViewer: true }).length, 0, "a viewer");
-      assert.deepStrictEqual(A.st.mails, [{ type: "trade_applied", data: { message: UNIT_LINE + ". Burchett now holds those days; nothing comes back to Acton.", subject: UNIT_LINE, trade_id: "g1" }, targetIds: ["s3", "s2", "s1"] }]);
+      assert.deepStrictEqual(A.st.mails, [{ type: "trade_applied", data: { message: UNIT_LINE + ". Burchett now holds those days; nothing comes back to Acton.", subject: UNIT_LINE, trade_id: "g1", kind: "give" }, targetIds: ["s3", "s2", "s1"] }]); // Prompt 19 S4: kind give heads the mail as a give
       assert.strictEqual(A.st.audits.length, 1);
       assert.strictEqual(A.st.audits[0].action, "trade.accept");
       assert.strictEqual(A.st.audits[0].detail.kind, "give");
@@ -1542,6 +1542,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const lastG = G.st.toasts[G.st.toasts.length - 1] || "";
       assert.strictEqual(lastG, "Give applied to the schedule.", "a found scheduler: the plain success toast");
     });
+    // Prompt 19 S4: a give's e-mail is marked data.kind 'give' so send-notification heads it as a give ('Give Applied',
+    // 'Give Declined') through the same trade_* category; a trade's e-mail carries no kind (v6 / v7 read it as a trade).
+    check("Prompt 19 S4 (behaviour): every give e-mail carries data.kind 'give' - the applied give (accept, Retry apply) and the declined give; a trade's e-mails (an ordinary trade, a member unit trade's 'give' tails) carry no kind", () => {
+      ready();
+      [["accept a unit give", A], ["accept a one-day give, lookup failed", B], ["decline a give", E], ["Retry apply on a give", G]].forEach(([what, t]) => {
+        assert.ok(t.st.mails.length > 0, what + ": a mail was sent");
+        t.st.mails.forEach(m => assert.strictEqual(m.data.kind, "give", what + ": " + m.type + " data.kind -> " + JSON.stringify(m.data)));
+      });
+      [["an ordinary trade", C], ["Retry apply on a unit trade's tail", H1], ["accepting a unit trade's pending tails", H2]].forEach(([what, t]) => {
+        assert.ok(t.st.mails.length > 0, what + ": a mail was sent");
+        t.st.mails.forEach(m => assert.ok(!("kind" in m.data), what + ": " + m.type + " carries no kind -> " + JSON.stringify(m.data)));
+      });
+    });
     check("Prompt 19 S3 review (behaviour): notifGiveTrade - the Alerts Accept / Decline appear for the RECEIVER of a pending give only (the scheduler answers from Trades); not for the giver, a third surgeon, a trade alert, another alert type, a decided give, or the 'give' tail of a member unit trade", () => {
       ready();
       const give = { type: "trade_proposed", data: { kind: "give", trade_id: "g1" } };
@@ -1575,8 +1588,170 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     ["tradeGroupIsGive(group)", "tradeIsGive(applied)", "tradeGroupIsGive(tradeGroupOf("].forEach((x) => assert.ok(!src.includes(x), "no same-status give test left: " + x));
     const nga = src.slice(src.indexOf("const notifyGiveApplied = async (rows) => {"), src.indexOf("// opts.silent: a unit group's caller"));
     assert.ok(nga.includes("const ids = await schedulerIdsLoud({ quiet: true });") && nga.includes("const n = giveAppliedNotes(rows, ids);"), "the scheduler ids ride on the applied give; a failed lookup is reported by the caller's final toast");
-    assert.ok(nga.includes('sendEmailNotif("trade_applied", { message: n.email.message, subject: n.email.subject, trade_id: first.id }, n.email.targetIds);'), "one trade_applied mail with trade_id");
+    assert.ok(nga.includes('sendEmailNotif("trade_applied", { message: n.email.message, subject: n.email.subject, trade_id: first.id, kind: n.email.kind }, n.email.targetIds);'), "one trade_applied mail with trade_id (and, since S4, kind give)");
     assert.ok(!/[^\x00-\x7f]/.test(src), "index-source.html stays ASCII");
+  });
+  // Prompt 19 step 4 (Faraz 9/24): "Text everywhere" - a give reads as a give on every surface: the Trades list (section
+  // titles count gives separately, the row's status chip and meta line), the e-mail headings (send-notification, through
+  // the existing trade_* categories - the client marks a give's mail with data.kind 'give'), the Activity log (the
+  // server's trade.apply row carries no kind: the app derives it from the trade id) and the publish diff ("10/10 P Acton
+  // -> Burchett (give)": schedule_days carries only source 'trade', so the kind is derived from the applied
+  // shift_trade_requests row that put the holder there). Pure helpers (behaviour) + pins.
+  check("Prompt 19 S4: helpers.tradeListTitle - 'Pending trades (2)' without gives (the pre-Prompt 19 title), 'Pending gives (1)' without trades, 'Pending trades (2) and gives (1)' with both; tradeListEmpty 'No pending trades or gives.'; tradeRowStatus - a give's chip reads 'give - pending' / 'give - accepted - not applied yet', a trade's is unchanged", () => {
+    assert.strictEqual(typeof H.tradeListTitle, "function", "helpers.tradeListTitle is exported");
+    const isG = (r) => r.kind === "give";
+    const T = { kind: "trade" }, G = { kind: "give" };
+    assert.strictEqual(H.tradeListTitle("Pending", [T, T], isG), "Pending trades (2)");
+    assert.strictEqual(H.tradeListTitle("Pending", [], isG), "Pending trades (0)");
+    assert.strictEqual(H.tradeListTitle("Pending", [G], isG), "Pending gives (1)");
+    assert.strictEqual(H.tradeListTitle("Completed", [T, G, T], isG), "Completed trades (2) and gives (1)");
+    assert.strictEqual(H.tradeListTitle("Completed", [T, G], null), "Completed trades (2)", "no predicate: everything is a trade");
+    assert.strictEqual(H.tradeListEmpty("Pending"), "No pending trades or gives.");
+    assert.strictEqual(H.tradeListEmpty("Completed"), "No completed trades or gives.");
+    assert.strictEqual(H.tradeRowStatus("pending", true), "give - pending");
+    assert.strictEqual(H.tradeRowStatus("accepted", true), "give - accepted - not applied yet");
+    assert.strictEqual(H.tradeRowStatus("applied", false), "applied");
+    assert.strictEqual(H.tradeRowStatus("accepted", false), "accepted - not applied yet");
+  });
+  check("Prompt 19 S4: helpers.auditGiveTradeIds / auditEntryText - the server's trade.apply row of a give (known from the trade rows or from a give's own audit rows) reads 'Give applied: Burchett takes Primary Sat Oct 10 (from Acton, nothing in return)' and its action 'trade.apply (give)'; a give's trade.propose row reads neutral ('Give offered: Acton -> Burchett, Sat 10/10 primary - nothing in return', not 'offers you'); trade.accept / decline / cancel rows with kind give keep their give summary; every give row reads '<action> (give)'; a trade's rows (the scheduler's one-way trade included) are unchanged", () => {
+    assert.strictEqual(typeof H.auditGiveTradeIds, "function", "helpers.auditGiveTradeIds is exported");
+    assert.strictEqual(typeof H.auditEntryText, "function", "helpers.auditEntryText is exported");
+    const APPLY = (id, one) => ({ action: "trade.apply", detail: { summary: "Trade applied: Burchett takes Primary Sat Oct 10 (from Acton" + (one ? ", one-way)" : "; Acton takes Backup Tue Oct 20 in return)"), trade_id: id } });
+    const entries = [
+      APPLY("g1", true), APPLY("g9", true), APPLY("t1", false), APPLY("s1", true),
+      { action: "trade.accept", detail: { summary: "Burchett accepted Acton's give: ...", trade_id: "g9", trade_ids: ["g9", "g10"], kind: "give" } },
+      { action: "trade.accept", detail: { summary: "Burchett accepted the trade", trade_id: "t1", kind: "trade" } },
+      { action: "trade.propose", detail: { summary: "Acton offers you Sat 10/10 primary - nothing in return (a give to Burchett)", trade_id: "g1", kind: "give" } },
+      { action: "offers.save", detail: { summary: "Acton: 2 offer change(s)" } },
+    ];
+    const rows = [{ id: "g1", kind: "give" }, { id: "t1" }, { id: "s1", kind: "trade" }];
+    const ids = H.auditGiveTradeIds(entries, rows, (r) => r.kind === "give");
+    assert.deepStrictEqual(ids.slice().sort(), ["g1", "g10", "g9"], "from the trade rows (g1) and from a give's audit rows (g9, g10); never a trade's");
+    assert.deepStrictEqual(H.auditEntryText(entries[0], ids), { summary: "Give applied: Burchett takes Primary Sat Oct 10 (from Acton, nothing in return)", action: "trade.apply (give)", give: true });
+    assert.deepStrictEqual(H.auditEntryText(entries[1], ids), { summary: "Give applied: Burchett takes Primary Sat Oct 10 (from Acton, nothing in return)", action: "trade.apply (give)", give: true }, "known from the accept row only (the trade rows scrolled out of the window)");
+    assert.deepStrictEqual(H.auditEntryText(entries[2], ids), { summary: entries[2].detail.summary, action: "trade.apply", give: false }, "a two-way trade");
+    assert.deepStrictEqual(H.auditEntryText(entries[3], ids), { summary: entries[3].detail.summary, action: "trade.apply", give: false }, "the scheduler's one-way TRADE stays 'one-way'");
+    assert.deepStrictEqual(H.auditEntryText(entries[4], ids), { summary: entries[4].detail.summary, action: "trade.accept (give)", give: true });
+    assert.deepStrictEqual(H.auditEntryText(entries[5], ids), { summary: "Burchett accepted the trade", action: "trade.accept", give: false });
+    // S4 review: the propose line was addressed to the receiver ("offers you"); the log reads it neutral
+    assert.deepStrictEqual(H.auditEntryText(entries[6], ids), { summary: "Give offered: Acton -> Burchett, Sat 10/10 primary - nothing in return", action: "trade.propose (give)", give: true });
+    assert.deepStrictEqual(H.auditEntryText({ action: "trade.propose", detail: { summary: "Acton offers you the Oct 9-11 weekend primary - nothing in return (a give to Burchett)", kind: "give" } }, ids).summary, "Give offered: Acton -> Burchett, the Oct 9-11 weekend primary - nothing in return", "a unit give");
+    assert.deepStrictEqual(H.auditEntryText({ action: "trade.propose", detail: { summary: "Something else entirely", kind: "give" } }, ids), { summary: "Something else entirely", action: "trade.propose (give)", give: true }, "an unrecognised summary is kept as it is");
+    assert.deepStrictEqual(H.auditEntryText(entries[7], ids), { summary: "Acton: 2 offer change(s)", action: "offers.save", give: false });
+    assert.deepStrictEqual(H.auditEntryText({ action: "trade.apply", detail: { trade_id: "g1" } }, ids), { summary: "Give applied", action: "trade.apply (give)", give: true }, "no summary on the row");
+    assert.deepStrictEqual(H.auditEntryText({ action: "x.y", detail: null }, ids), { summary: "x.y", action: "x.y", give: false }, "no detail: the action, as before");
+    assert.deepStrictEqual(H.auditGiveTradeIds(null, null, null), [], "nothing loaded -> no ids");
+  });
+  check("Prompt 19 S4: helpers.labelGiveChanges - a primary / backup change whose day has source 'trade' and whose latest applied shift_trade_requests leg landing on that slot put change.to there, from a give, carries via 'give'; formatDayChange then reads '10/10 P Acton -> Burchett (give)'; a trade, a later trade over the give, a hand edit (source 'manual', or source kept 'trade' by keepPersonSource when the other role is untouched), a give later traded away and back (latest by decided_at, not the earliest), a give followed by two return legs over the slot, and a return leg of a trade stay unlabelled", () => {
+    assert.strictEqual(typeof H.labelGiveChanges, "function", "helpers.labelGiveChanges is exported");
+    const isG = (r) => r.kind === "give";
+    const schedule = {
+      "2026-10-10": { primary: "s2", backup: "s4", source: "trade" },   // given Acton -> Burchett (primary)
+      "2026-10-11": { primary: "s2", backup: "s1", source: "trade" },   // given, then traded on to Khan (backup)
+      "2026-10-12": { primary: "s6", backup: null, source: "manual" },  // given, then edited by hand
+      "2026-10-13": { primary: "s3", backup: "s5", source: "trade" },   // a two-way trade: the return leg lands Acton here
+      "2026-10-14": { primary: "s2", backup: null, source: "trade" },   // an ordinary trade
+    };
+    const tr = [
+      { id: "g1", kind: "give", status: "applied", day: "2026-10-10", role: "primary", from_surgeon_id: "s3", to_surgeon_id: "s2", return_day: null, return_role: null, decided_at: "2026-10-01T10:00:00Z" },
+      { id: "g2", kind: "give", status: "applied", day: "2026-10-11", role: "backup", from_surgeon_id: "s3", to_surgeon_id: "s6", return_day: null, return_role: null, decided_at: "2026-10-01T10:00:00Z" },
+      { id: "t2", status: "applied", day: "2026-10-11", role: "backup", from_surgeon_id: "s6", to_surgeon_id: "s1", return_day: "2026-10-20", return_role: "backup", decided_at: "2026-10-02T10:00:00Z" },
+      { id: "g3", kind: "give", status: "applied", day: "2026-10-12", role: "primary", from_surgeon_id: "s3", to_surgeon_id: "s6", return_day: null, return_role: null, decided_at: "2026-10-01T10:00:00Z" },
+      { id: "t3", status: "applied", day: "2026-10-01", role: "backup", from_surgeon_id: "s3", to_surgeon_id: "s4", return_day: "2026-10-13", return_role: "primary", decided_at: "2026-10-01T10:00:00Z" },
+      { id: "t4", status: "applied", day: "2026-10-14", role: "primary", from_surgeon_id: "s5", to_surgeon_id: "s2", return_day: "2026-10-21", return_role: "primary", decided_at: "2026-10-01T10:00:00Z" },
+      { id: "g5", kind: "give", status: "declined", day: "2026-10-14", role: "primary", from_surgeon_id: "s5", to_surgeon_id: "s2", return_day: null, return_role: null, decided_at: "2026-10-03T10:00:00Z" },
+    ];
+    const changes = [
+      { day: "2026-10-10", role: "primary", from: "s3", to: "s2" },
+      { day: "2026-10-11", role: "backup", from: "s3", to: "s1" },
+      { day: "2026-10-12", role: "primary", from: "s3", to: "s6" },
+      { day: "2026-10-13", role: "primary", from: "s4", to: "s3" },
+      { day: "2026-10-14", role: "primary", from: "s5", to: "s2" },
+    ];
+    const out = H.labelGiveChanges(changes, schedule, tr, isG);
+    assert.deepStrictEqual(out.map(c => c.via || null), ["give", null, null, null, null]);
+    assert.deepStrictEqual(out[0], { day: "2026-10-10", role: "primary", from: "s3", to: "s2", via: "give" }, "the change itself is kept, via added");
+    assert.ok(!("via" in changes[0]), "the input is not mutated");
+    assert.strictEqual(H.formatDayChange(out[0], nameOf), "10/10 P Acton -> Burchett (give)");
+    assert.strictEqual(H.formatDayChange(out[4], nameOf), "10/14 P Fierce -> Burchett", "a trade's line is unchanged");
+    assert.strictEqual(H.formatDayChange({ day: "2026-10-10", role: "backup", from: null, to: "s1", via: "give" }, nameOf), "10/10 B OPEN -> Khan (give)");
+    assert.deepStrictEqual(H.describePublishDiff(out, nameOf)[0].lines[0], "10/10 P Acton -> Burchett (give)", "the publish dialog's month groups carry the label");
+    assert.deepStrictEqual(H.labelGiveChanges(changes, schedule, null, isG).map(c => c.via || null), [null, null, null, null, null], "no trade rows loaded -> nothing labelled");
+    assert.deepStrictEqual(H.labelGiveChanges(null, schedule, tr, isG), [], "no changes -> []");
+    // S4 review: the three branches that decide the label, each case killing one mutant of helpers.labelGiveChanges.
+    const sched2 = {
+      // (a) the scheduler hand-edits the given slot (s2 -> s6) and leaves backup alone: keepPersonSource keeps source 'trade'
+      "2026-10-15": { primary: "s6", backup: "s4", source: "trade" },
+      // (b) given s3 -> s2, traded s2 -> s5, traded back s5 -> s2 (the rows listed out of time order on purpose)
+      "2026-10-16": { primary: "s2", backup: "s4", source: "trade" },
+      // (c) given s3 -> s2, then two trades whose RETURN legs move the slot s2 -> s5 -> s2
+      "2026-10-17": { primary: "s2", backup: "s4", source: "trade" },
+    };
+    const tr2 = [
+      { id: "g6", kind: "give", status: "applied", day: "2026-10-15", role: "primary", from_surgeon_id: "s3", to_surgeon_id: "s2", return_day: null, return_role: null, decided_at: "2026-10-01T10:00:00Z" },
+      { id: "t8", status: "applied", day: "2026-10-16", role: "primary", from_surgeon_id: "s5", to_surgeon_id: "s2", return_day: "2026-10-26", return_role: "primary", decided_at: "2026-10-03T10:00:00Z" },
+      { id: "g7", kind: "give", status: "applied", day: "2026-10-16", role: "primary", from_surgeon_id: "s3", to_surgeon_id: "s2", return_day: null, return_role: null, decided_at: "2026-10-01T10:00:00Z" },
+      { id: "t7", status: "applied", day: "2026-10-16", role: "primary", from_surgeon_id: "s2", to_surgeon_id: "s5", return_day: "2026-10-25", return_role: "primary", decided_at: "2026-10-02T10:00:00Z" },
+      { id: "g8", kind: "give", status: "applied", day: "2026-10-17", role: "primary", from_surgeon_id: "s3", to_surgeon_id: "s2", return_day: null, return_role: null, decided_at: "2026-10-01T10:00:00Z" },
+      { id: "t9", status: "applied", day: "2026-10-27", role: "primary", from_surgeon_id: "s5", to_surgeon_id: "s2", return_day: "2026-10-17", return_role: "primary", decided_at: "2026-10-02T10:00:00Z" },
+      { id: "t10", status: "applied", day: "2026-10-28", role: "primary", from_surgeon_id: "s2", to_surgeon_id: "s5", return_day: "2026-10-17", return_role: "primary", decided_at: "2026-10-03T10:00:00Z" },
+    ];
+    const ch2 = [
+      { day: "2026-10-15", role: "primary", from: "s3", to: "s6" },
+      { day: "2026-10-16", role: "primary", from: "s3", to: "s2" },
+      { day: "2026-10-17", role: "primary", from: "s3", to: "s2" },
+    ];
+    const out2 = H.labelGiveChanges(ch2, sched2, tr2, isG);
+    assert.strictEqual(out2[0].via, undefined, "(a) a hand edit of the given slot with source still 'trade' is not a give (the latest leg put s2 there, not s6)");
+    assert.strictEqual(out2[1].via, undefined, "(b) the LATEST applied leg (t8, a trade, by decided_at) decides, not the earliest (the give g7)");
+    assert.strictEqual(out2[2].via, undefined, "(c) a trade's return leg over the slot counts as a leg: the latest (t10's return leg) put s2 back there, not the give");
+    // the same slots with only the give loaded read as a give - the three cases fail on the branch, not on the data
+    assert.deepStrictEqual(H.labelGiveChanges(ch2.slice(1), sched2, tr2.filter(r => r.kind === "give"), isG).map(c => c.via || null), ["give", "give"], "control: the give alone labels 10/16 and 10/17");
+  });
+  check("Prompt 19 S4 pins: Trades - the section titles count gives separately (tradeListTitle with the whole-proposal predicate), the empty lines and notes say 'trades and gives', a give row's status chip reads 'give - <status>' and its meta line 'offered by'; the Activity log reads each row through auditEntryText with the give trade ids (tradeRequests + the give audit rows); the publish diff labels a give's change (labelGiveChanges over the live days and tradeRequests); every give e-mail carries data.kind 'give'; ASCII", () => {
+    const tr = src.slice(src.indexOf("const tradeRow = (r) => {"), src.indexOf("return <>", src.indexOf("const tradeRow = (r) => {")));
+    assert.ok(tr.includes('<span data-testid="trade-status" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:statusColor(r.status)}}>{tradeRowStatus(r.status, giveGroup)}</span>'), "the status chip names a give");
+    assert.ok(tr.includes('<div data-testid="trade-meta" style={{fontSize:10,color:"#9aa4ae",fontFamily:mono,marginTop:2}}>{giveGroup ? "offered" : "proposed"} by {named.from_surgeon_name}'), "a give is 'offered by' the giver");
+    const lists = src.slice(src.indexOf('<div style={css.card} data-testid="trades-pending">'), src.indexOf("{/* ================ TOTALS"));
+    assert.ok(lists.includes('<div style={css.cardT} data-testid="trades-pending-title">{tradeListTitle("Pending", pending, tradeIsGiveProposal)}</div>'), "the pending title counts gives separately");
+    assert.ok(lists.includes('<div style={css.cardT} data-testid="trades-completed-title">{tradeListTitle("Completed", done, tradeIsGiveProposal)}</div>'), "the completed title counts gives separately");
+    assert.ok(lists.includes('{tradeListEmpty("Pending")}') && lists.includes('{tradeListEmpty("Completed")}'), "the empty lines say trades or gives");
+    assert.ok(lists.includes("Every open trade and give.") && lists.includes("Trades and gives waiting on you show Accept / Decline"), "the section note names gives");
+    assert.ok(!lists.includes("Pending trades (") && !lists.includes("Completed trades (") && !lists.includes("No pending trades.") && !lists.includes("No completed trades."), "no hard-coded trade-only title left");
+    assert.ok(src.includes("const auditGiveIds = useMemo(() => auditGiveTradeIds(auditEntries, tradeRequests, tradeIsGiveProposal), [auditEntries, tradeRequests]);"), "the give trade ids of the Activity log");
+    assert.ok(src.indexOf("const auditGiveIds = useMemo(") > src.indexOf("const tradeIsGiveProposal = (r) =>"), "computed after the predicate it calls");
+    const al = src.slice(src.indexOf('ck="settings_audit"'), src.indexOf('ck="settings_client_versions"'));
+    assert.ok(al.includes("const at = auditEntryText(en, auditGiveIds);") && al.includes("{at.summary}") && al.includes("{fmtAuditTime(en.created_at)} - {at.action}"), "each Activity log line reads through auditEntryText");
+    assert.ok(!al.includes("(en.detail && en.detail.summary) || en.action"), "the raw summary is no longer rendered directly");
+    const op = src.slice(src.indexOf("const openPublishDialog = () => {"), src.indexOf("publishRef.current = openPublishDialog;"));
+    assert.ok(op.includes('const changes = labelGiveChanges(diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup"), schedule, tradeRequests, tradeIsGiveProposal);'), "the publish diff labels the changes a give made");
+    const sub = src.slice(src.indexOf("const submitTradeRequest = async () => {"), src.indexOf("// --- Status writes ---"));
+    assert.ok(sub.includes("giveMail ? { message: giveMail.message, subject: giveMail.subject, trade_id: first.id, kind: \"give\" }"), "the proposed give's mail carries kind give");
+    const dec = src.slice(src.indexOf("const declineTrade = async"), src.indexOf("const cancelTrade = async"));
+    assert.ok(dec.includes('trade_id: first.id, ...(give ? { kind: "give" } : {}) }, [first.from_surgeon_id, first.to_surgeon_id]);'), "the declined give's mail carries kind give");
+    const nga = src.slice(src.indexOf("const notifyGiveApplied = async (rows) => {"), src.indexOf("// opts.silent: a unit group's caller"));
+    assert.ok(nga.includes('sendEmailNotif("trade_applied", { message: n.email.message, subject: n.email.subject, trade_id: first.id, kind: n.email.kind }, n.email.targetIds);'), "the applied give's mail carries kind give");
+    assert.ok(!/[^\x00-\x7f]/.test(src), "index-source.html stays ASCII");
+  });
+  check("Prompt 19 S4 review pins: the error toasts on the give path name a give - submit, accept (incl. 'accepted but NOT applied' and the refresh failure), Retry apply, decline and withdraw read 'give' when the proposal is one; a trade's toasts keep 'trade'", () => {
+    const body = (a, b) => src.slice(src.indexOf(a), src.indexOf(b, src.indexOf(a)));
+    const sub = body("const submitTradeRequest = async () => {", "// --- Status writes ---");
+    const run = body("const runApplyTrade = async (trade, opts) => {", "const acceptTrade = async");
+    const acc = body("const acceptTrade = async (trade) => {", "const retryApplyTrade = async");
+    const rt = body("const retryApplyTrade = async (trade) => {", "const declineTrade = async");
+    const dec = body("const declineTrade = async (trade) => {", "const cancelTrade = async");
+    const can = body("const cancelTrade = async (trade) => {", "// --- Mark Notifications as Seen ---");
+    [sub, run, acc, rt, dec, can].forEach((b, i) => assert.ok(b.length > 200, "body " + i + " found"));
+    assert.ok(sub.includes("showToast(`Couldn't submit the ${give ? \"give\" : \"trade\"} - check your connection and try again.`, \"error\")"), "submit");
+    assert.ok(run.includes('showToast("The " + (tradeIsGiveProposal(t) ? "give" : "trade") + " is accepted but NOT applied: " + a.error, "error");'), "accepted but NOT applied");
+    assert.ok(run.includes('showToast((tradeIsGiveProposal(t) ? "Give" : "Trade") + " applied, but the calendar could not be refreshed - reload to see it.", "error");'), "the refresh failure after apply");
+    assert.ok(acc.indexOf('const noun = give ? "give" : "trade";') > 0 && acc.indexOf('const noun = give ? "give" : "trade";') < acc.indexOf("Only the surgeon asked can accept this"), "accept: the noun is known before the first toast");
+    assert.ok(acc.includes("Only the surgeon asked can accept this ${noun}.") && acc.includes("Couldn't accept the ${noun}${accepted.length") && acc.includes("Couldn't accept the ${noun} - check your connection"), "accept");
+    assert.ok(rt.includes(' apply the " + (tradeIsGiveProposal(trade) ? "give" : "trade") + " - check your connection and try again.", "error");'), "Retry apply");
+    assert.ok(dec.indexOf('const noun = give ? "give" : "trade";') > 0 && dec.includes("Only the surgeon asked can decline this ${noun}.") && dec.includes("Couldn't decline the ${noun}${done.length") && dec.includes("Couldn't decline the ${noun} - check your connection"), "decline");
+    assert.ok(can.includes('give ? "Only the giver can withdraw this give." : "Only the proposer can cancel this trade."') && can.includes("Couldn't ${give ? \"withdraw the give\" : \"cancel the trade\"}") && can.includes('were ${give ? "withdrawn" : "cancelled"}'), "withdraw");
+    [run, acc, rt, dec].forEach((b, i) => assert.ok(!/the trade is accepted|this trade[.]|Couldn't (accept|decline|apply) the trade/i.test(b), "no trade-only toast left in body " + i));
+    assert.ok(!/Couldn't submit the trade -|Couldn't cancel the trade -/.test(sub + can), "no trade-only submit / cancel toast left");
   });
   // RLS-7: the two PATCH handlers that used to trust a 2xx alone now behave like patchTradeStatus - a 200 with zero
   // rows (an RLS-filtered write) adopts nothing locally and logs no audit row.

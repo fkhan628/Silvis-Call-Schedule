@@ -548,6 +548,44 @@ check("B5 (3): the new refusal log lines carry the role, the type and counts onl
     assert.ok(!/personId|person_id|uid|user\.id|email|tradeId|trade_id\}/.test(l), "the log line carries no person id / user id / trade id / address: " + l.trim());
   });
 });
+/* ---- Prompt 19 S4 (Faraz 9/24): a give's e-mail is headed as a give - through the existing trade_* categories ----
+   The client marks a give's mail with data.kind 'give' (proposed, declined, applied); send-notification's frame heading
+   (and the default subject) then reads "Day Offered" / "Give Accepted" / "Give Declined" / "Give Applied". No new
+   category, no gate change: the plain-JS block between '// @giveFrame-start' and '// @giveFrame-end' is extracted and run. */
+check("Prompt 19 S4: send-notification's '@giveFrame' block defines frameTitle(type, baseTitle, data) - data.kind 'give' on trade_proposed / accepted / declined / applied -> 'Day Offered' / 'Give Accepted' / 'Give Declined' / 'Give Applied'; a trade (no kind, kind 'trade'), another category with kind give, or no data -> the category's own title", () => {
+  const i = snSrc.search(/^\/\/ @giveFrame-start[ \t]*$/m), j = snSrc.search(/^\/\/ @giveFrame-end[ \t]*$/m);
+  assert.ok(i >= 0 && j > i, "send-notification/index.ts carries '// @giveFrame-start' / '// @giveFrame-end' on lines of their own");
+  const block = snSrc.slice(i + "// @giveFrame-start".length, j);
+  plainJs(block, "send-notification @giveFrame");
+  const frameTitle = new Function(block + "\nreturn frameTitle;")();
+  assert.strictEqual(typeof frameTitle, "function", "frameTitle is a function");
+  assert.strictEqual(frameTitle("trade_proposed", "Shift Trade Proposed", { kind: "give" }), "Day Offered");
+  assert.strictEqual(frameTitle("trade_accepted", "Shift Trade Accepted", { kind: "give" }), "Give Accepted");
+  assert.strictEqual(frameTitle("trade_declined", "Shift Trade Declined", { kind: "give" }), "Give Declined");
+  assert.strictEqual(frameTitle("trade_applied", "Shift Trade Applied", { kind: "give" }), "Give Applied");
+  assert.strictEqual(frameTitle("trade_applied", "Shift Trade Applied", {}), "Shift Trade Applied", "a trade (no kind)");
+  assert.strictEqual(frameTitle("trade_applied", "Shift Trade Applied", { kind: "trade" }), "Shift Trade Applied", "kind trade");
+  assert.strictEqual(frameTitle("trade_applied", "Shift Trade Applied", { kind: "GIVE" }), "Shift Trade Applied", "only the exact value");
+  assert.strictEqual(frameTitle("shift_claimed", "Shift Taken", { kind: "give" }), "Shift Taken", "another category keeps its title");
+  assert.strictEqual(frameTitle("trade_applied", "Shift Trade Applied", null), "Shift Trade Applied", "no data");
+  assert.strictEqual(frameTitle("constructor", "X", { kind: "give" }), "X", "no prototype key is a give category");
+});
+check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame with frameTitle(type, cat.title, data) (the h2 and the default subject); the gate never reads data.kind; the header names the S4 change (still v7, pending); README section 3's pending v7 row names the give headings", () => {
+  const b = snSrc.slice(snSrc.indexOf("function buildEmail("), snSrc.indexOf("return { subject, html };", snSrc.indexOf("function buildEmail(")));
+  assert.ok(b.includes("const title = frameTitle(type, cat.title, data);"), "the heading comes from frameTitle");
+  assert.ok(b.includes(": `${title} - ${APP_NAME}`;"), "the default subject uses it");
+  assert.ok(b.includes('<h2 style="margin:0;font-size:18px;">${escHtml(title)}</h2>'), "the frame's h2 uses it");
+  assert.ok(!b.includes("escHtml(cat.title)"), "no heading from cat.title left");
+  const gate = snSrc.slice(snSrc.search(/^\/\/ @sendGate-start[ \t]*$/m), snSrc.search(/^\/\/ @sendGate-end[ \t]*$/m));
+  assert.ok(!/kind/.test(gate), "the gate never reads kind (the heading is cosmetic)");
+  const head = snSrc.slice(0, snSrc.indexOf("import "));
+  assert.ok(/Prompt 19 S4/.test(head) && /data\.kind/.test(head) && /Give Applied/.test(head), "the header documents the give headings");
+  const pc = (head.split("\n").find((l) => l.includes("POST { type: string, data: {")) || "");
+  assert.ok(pc.includes("kind?: 'give'"), "the Payload contract line names the optional data.kind: " + pc.trim());
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const row = s3.split("\n").find((l) => /v6 -> v7 \(pending\)/.test(l)) || "";
+  assert.ok(/data\.kind/.test(row) && /Give Applied/.test(row) && /Day Offered/.test(row), "the pending v7 row names the S4 give headings: " + row.slice(0, 160));
+});
 check("B5 (3): index-source.html - every trade_* sendEmailNotif call passes data.trade_id (the shift_trade_requests row id) so the v6 function accepts it; there is no trade_accepted mail call", () => {
   const calls = appSrc.split("\n").filter((l) => /sendEmailNotif\("trade_/.test(l));
   // Prompt 19 S3: a fifth call - the applied give's mail (notifyGiveApplied: the parties + the scheduler ids, v7)

@@ -92,9 +92,18 @@
 //     sendGate), so a v6-shaped send never depends on that extra read.
 //     Everything v6 accepts, v7 accepts - deploy v7 BEFORE the client that
 //     sends the give.
+//   - GIVE HEADINGS (Prompt 19 S4, 2026-09-24; part of the same pending v7).
+//     A give is mailed through the existing trade_* categories (no new
+//     category); the app marks its mail with data.kind 'give' and the frame's
+//     heading (and the default subject) then reads "Day Offered" / "Give
+//     Accepted" / "Give Declined" / "Give Applied" instead of "Shift Trade ..."
+//     (frameTitle, the plain-JS block between '// @giveFrame-start' and
+//     '// @giveFrame-end'). Cosmetic only: the gate never reads kind, and a
+//     v6 function simply ignores the extra key.
 //
 // Payload contract:
-//   POST { type: string, data: { subject?: string, message: string, detail?: string, trade_id?: uuid }, targetIds?: string[] }
+//   POST { type: string, data: { subject?: string, message: string, detail?: string, trade_id?: uuid, kind?: 'give' }, targetIds?: string[] }
+//     data.kind 'give' (Prompt 19 S4, optional) only re-titles a trade_* frame (frameTitle); the gate never reads it
 //     targetIds ABSENT  -> broadcast to every linked person (opted in for the category)
 //     targetIds []      -> send to nobody (200, sent 0) - defense in depth
 //     targetIds [ids]   -> only those person ids (s1..s6); at most roster size + 1 of them
@@ -228,6 +237,16 @@ async function sendEmail(to: string, subject: string, html: string, logKey: stri
 // Categories -> preference flag + visual frame
 // ---------------------------------------------------------------------------
 interface Category { pref: string | null; title: string; color: string; cta: string }
+
+// Prompt 19 S4: a give's heading. Plain JavaScript (test/edge-functions.test.js extracts and runs it); only the exact
+// data.kind 'give' on one of the four trade_* categories changes the heading - anything else keeps the category's title.
+// @giveFrame-start
+const GIVE_TITLES = { trade_proposed: "Day Offered", trade_accepted: "Give Accepted", trade_declined: "Give Declined", trade_applied: "Give Applied" };
+function frameTitle(type, baseTitle, data) {
+  const give = !!data && typeof data === "object" && data.kind === "give" && Object.prototype.hasOwnProperty.call(GIVE_TITLES, type);
+  return give ? GIVE_TITLES[type] : baseTitle;
+}
+// @giveFrame-end
 
 const CATEGORIES: Record<string, Category> = {
   schedule_published: { pref: "schedule_updates_email", title: "Schedule Published", color: "#1a6fa8", cta: "View Your Schedule" },
@@ -403,9 +422,10 @@ function emailEnabled(cat: Category, prefs: any): boolean {
 }
 
 function buildEmail(type: string, cat: Category, data: any, recipientName: string): { subject: string; html: string } {
+  const title = frameTitle(type, cat.title, data); // Prompt 19 S4: a give (data.kind 'give') is headed as a give
   const subject = (typeof data?.subject === "string" && data.subject.trim())
     ? data.subject.trim().slice(0, 200)
-    : `${cat.title} - ${APP_NAME}`;
+    : `${title} - ${APP_NAME}`;
   const message: string = type === "test"
     ? `Email notifications for the ${APP_NAME} are working.`
     : String(data.message).slice(0, MAX_MESSAGE_CHARS);
@@ -415,7 +435,7 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
   const html = `
     <div style="font-family:'Outfit',Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
       <div style="background:${cat.color};color:#fff;padding:14px 20px;border-radius:10px 10px 0 0;">
-        <h2 style="margin:0;font-size:18px;">${escHtml(cat.title)}</h2>
+        <h2 style="margin:0;font-size:18px;">${escHtml(title)}</h2>
         <p style="margin:6px 0 0;font-size:13px;opacity:0.9;">${escHtml(APP_NAME)}</p>
       </div>
       <div style="background:#fff;border:1px solid #e0e4ea;border-top:none;padding:20px;border-radius:0 0 10px 10px;">

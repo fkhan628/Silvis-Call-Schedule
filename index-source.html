@@ -3536,10 +3536,10 @@ function CallSchedule() {
       await addNotification("trade_proposed", give ? "Day offered - nothing in return" : "Shift trade proposed", msg, { from_surgeon_id: fromId, to_surgeon_id: tradeTo, trade_id: first.id, trade_ids: inserted.map(r => r.id), day: tradeDay, kind: give ? "give" : "trade" });
       // the e-mail goes to both parties (greeted by name), so a give's is worded neutrally (helpers.tradeGiveEmail)
       const giveMail = give ? tradeGiveEmail({ from_surgeon_name: fromName, to_surgeon_name: toName, day: days[0], role: tradeRole }, whole ? unitText(unit) : null) : null;
-      sendEmailNotif("trade_proposed", giveMail ? { message: giveMail.message, subject: giveMail.subject, trade_id: first.id } : { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)), trade_id: first.id }, [fromId, tradeTo]);
+      sendEmailNotif("trade_proposed", giveMail ? { message: giveMail.message, subject: giveMail.subject, trade_id: first.id, kind: "give" } : { message: msg, subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)), trade_id: first.id }, [fromId, tradeTo]);
       setTradeDay(""); setTradeReturnDay("");
       if (inserted.length === rows.length) showToast(give ? (whole ? `Offered the ${unitText(unit)} to ${toName} - ${inserted.length} rows.` : `Offered to ${toName} - nothing in return.`) : whole ? `Trade proposed for the ${unitText(unit)} - ${inserted.length} rows.` : "Trade proposed.", "success");
-    } catch(e) { console.warn("Submit trade error:", e); showToast("Couldn't submit the trade - check your connection and try again.", "error"); }
+    } catch(e) { console.warn("Submit trade error:", e); showToast(`Couldn't submit the ${give ? "give" : "trade"} - check your connection and try again.`, "error"); }
     finally { setTradeBusy(""); }
   };
 
@@ -3583,7 +3583,7 @@ function CallSchedule() {
     const ids = await schedulerIdsLoud({ quiet: true });
     const n = giveAppliedNotes(rows, ids);
     await addNotification(n.notification.type, n.notification.title, n.notification.message, n.notification.data);
-    sendEmailNotif("trade_applied", { message: n.email.message, subject: n.email.subject, trade_id: first.id }, n.email.targetIds);
+    sendEmailNotif("trade_applied", { message: n.email.message, subject: n.email.subject, trade_id: first.id, kind: n.email.kind }, n.email.targetIds);
     return ids !== null;
   };
   const GIVE_NO_SCHED_MAIL = " The scheduler's account could not be looked up, so only the two parties were e-mailed (the scheduler still sees it in Alerts).";
@@ -3594,7 +3594,7 @@ function CallSchedule() {
     if (!a.ok) {
       console.warn("apply_trade refused:", a.error);
       setTradeApplyErr(prev => ({ ...prev, [t.id]: a.error }));
-      showToast("The trade is accepted but NOT applied: " + a.error, "error");
+      showToast("The " + (tradeIsGiveProposal(t) ? "give" : "trade") + " is accepted but NOT applied: " + a.error, "error"); // Prompt 19 S4
       if (refreshTradesRef.current) refreshTradesRef.current();
       return false;
     }
@@ -3603,7 +3603,7 @@ function CallSchedule() {
     setTradeRequests(prev => prev.map(r => r.id === t.id ? applied : r));
     // The function wrote schedule_days (version+1, source 'trade'); realtime
     // delivers the rows too, but refetch so the calendar is right immediately.
-    try { if (refreshDaysRef.current) await refreshDaysRef.current(); } catch (e) { console.warn("schedule refetch after apply_trade failed:", e); showToast("Trade applied, but the calendar could not be refreshed - reload to see it.", "error"); }
+    try { if (refreshDaysRef.current) await refreshDaysRef.current(); } catch (e) { console.warn("schedule refetch after apply_trade failed:", e); showToast((tradeIsGiveProposal(t) ? "Give" : "Trade") + " applied, but the calendar could not be refreshed - reload to see it.", "error"); }
     if (refreshTradesRef.current) refreshTradesRef.current();
     if (opts && opts.silent) return true;
     // Prompt 19 S3: a give row applied on its own (Retry apply) is reported as a give - the parties and the scheduler(s)
@@ -3619,11 +3619,12 @@ function CallSchedule() {
   const acceptTrade = async (trade) => {
     if (!trade || trade.status !== "pending" || tradeBusy) return;
     const t = tradeNamed(trade);
-    if (!isScheduler && t.to_surgeon_id !== mySurgeon) { showToast("Only the surgeon asked can accept this trade.", "error"); return; }
+    const give = tradeIsGiveProposal(t); // Prompt 19 S3: the whole proposal is a one-way give (no return leg to re-check below)
+    const noun = give ? "give" : "trade"; // Prompt 19 S4: the error toasts name a give
+    if (!isScheduler && t.to_surgeon_id !== mySurgeon) { showToast(`Only the surgeon asked can accept this ${noun}.`, "error"); return; }
     // fg-1: a unit proposal is accepted as one (every pending row of the group);
     // fg-2: both checks fail closed (unknown -> member stopped, scheduler confirms).
     const group = tradeGroupOf(t, "pending").map(tradeNamed);
-    const give = tradeIsGiveProposal(t); // Prompt 19 S3: the whole proposal is a one-way give (no return leg to re-check below)
     const gDays = group.map(g => g.day);
     const tag = tradeUnitTag(t);
     const what = group.length > 1 ? "the " + (tag ? tag.text : gDays.length + " unit days") : slotLabel(t.day, t.role);
@@ -3653,7 +3654,7 @@ function CallSchedule() {
       for (const g of group) {
         const p = await patchTradeStatus(g, "accepted");
         if (!p.ok) {
-          showToast(`Couldn't accept the trade${accepted.length ? ` (${accepted.length} of ${group.length} unit days are accepted - use Retry apply on them)` : ""}: ` + p.error, "error");
+          showToast(`Couldn't accept the ${noun}${accepted.length ? ` (${accepted.length} of ${group.length} unit days are accepted - use Retry apply on them)` : ""}: ` + p.error, "error");
           if (refreshTradesRef.current) refreshTradesRef.current();
           if (!accepted.length) return;
           break;
@@ -3690,28 +3691,29 @@ function CallSchedule() {
         sendEmailNotif("trade_applied", { message: amsg, subject: "Shift trade applied - " + (tag ? tag.text : slotLabel(first.day, first.role)), trade_id: first.id }, [first.from_surgeon_id, first.to_surgeon_id]);
         showToast(`Trade applied to the schedule (${accepted.length} days).`, "success");
       }
-    } catch (e) { console.warn("accept trade error:", e); showToast("Couldn't accept the trade - check your connection and try again.", "error"); }
+    } catch (e) { console.warn("accept trade error:", e); showToast(`Couldn't accept the ${noun} - check your connection and try again.`, "error"); }
     finally { setTradeBusy(""); }
   };
   const retryApplyTrade = async (trade) => {
     if (!trade || trade.status !== "accepted" || tradeBusy) return;
     setTradeBusy(trade.id);
     try { await runApplyTrade(trade); }
-    catch (e) { console.warn("retry apply error:", e); showToast("Couldn't apply the trade - check your connection and try again.", "error"); }
+    catch (e) { console.warn("retry apply error:", e); showToast("Couldn't apply the " + (tradeIsGiveProposal(trade) ? "give" : "trade") + " - check your connection and try again.", "error"); }
     finally { setTradeBusy(""); }
   };
   const declineTrade = async (trade) => {
     if (!trade || trade.status !== "pending" || tradeBusy) return;
     const t = tradeNamed(trade);
-    if (!isScheduler && t.to_surgeon_id !== mySurgeon) { showToast("Only the surgeon asked can decline this trade.", "error"); return; }
-    const group = tradeGroupOf(t, "pending").map(tradeNamed); // fg-1: a unit is declined as one
     const give = tradeIsGiveProposal(t); // Prompt 19 S3: worded as a give; the day stays with the giver
+    const noun = give ? "give" : "trade"; // Prompt 19 S4: the error toasts name a give
+    if (!isScheduler && t.to_surgeon_id !== mySurgeon) { showToast(`Only the surgeon asked can decline this ${noun}.`, "error"); return; }
+    const group = tradeGroupOf(t, "pending").map(tradeNamed); // fg-1: a unit is declined as one
     setTradeBusy(t.id);
     try {
       const done = [];
       for (const g of group) {
         const p = await patchTradeStatus(g, "declined");
-        if (!p.ok) { showToast(`Couldn't decline the trade${done.length ? ` (${done.length} of ${group.length} unit days were declined)` : ""}: ` + p.error, "error"); if (refreshTradesRef.current) refreshTradesRef.current(); if (!done.length) return; break; }
+        if (!p.ok) { showToast(`Couldn't decline the ${noun}${done.length ? ` (${done.length} of ${group.length} unit days were declined)` : ""}: ` + p.error, "error"); if (refreshTradesRef.current) refreshTradesRef.current(); if (!done.length) return; break; }
         const row = tradeNamed({ ...g, ...p.row, status: "declined" });
         done.push(row);
         setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
@@ -3720,24 +3722,24 @@ function CallSchedule() {
       const msg = give ? tradeGiveDeclineMsg(first, tag) : done.length > 1 ? `${first.to_surgeon_name} declined the trade: ${tag ? "the " + tag.text : done.length + " unit days"} (${done.length} days) - ${tradeLegsText(first, "would have taken")}` : tradeDeclineMsg(first);
       logAudit("trade.decline", msg, { trade_id: first.id, trade_ids: done.map(r => r.id), day: first.day, role: first.role, from: first.from_surgeon_id, to: first.to_surgeon_id, kind: give ? "give" : "trade" });
       await addNotification("trade_declined", give ? "Give declined" : "Shift trade declined", msg, { from_surgeon_id: first.from_surgeon_id, to_surgeon_id: first.to_surgeon_id, trade_id: first.id, trade_ids: done.map(r => r.id), day: first.day, kind: give ? "give" : "trade" });
-      sendEmailNotif("trade_declined", { message: msg, subject: (give ? "Give declined - " : "Shift trade declined - ") + (tag ? tag.text : slotLabel(first.day, first.role)), trade_id: first.id }, [first.from_surgeon_id, first.to_surgeon_id]);
+      sendEmailNotif("trade_declined", { message: msg, subject: (give ? "Give declined - " : "Shift trade declined - ") + (tag ? tag.text : slotLabel(first.day, first.role)), trade_id: first.id, ...(give ? { kind: "give" } : {}) }, [first.from_surgeon_id, first.to_surgeon_id]);
       showToast(give ? (done.length > 1 ? `Give declined (${done.length} days).` : "Give declined.") : done.length > 1 ? `Trade declined (${done.length} days).` : "Trade declined.", "info");
-    } catch (e) { console.warn("decline trade error:", e); showToast("Couldn't decline the trade - check your connection and try again.", "error"); }
+    } catch (e) { console.warn("decline trade error:", e); showToast(`Couldn't decline the ${noun} - check your connection and try again.`, "error"); }
     finally { setTradeBusy(""); }
   };
   const cancelTrade = async (trade) => {
     if (!trade || trade.status !== "pending" || tradeBusy) return;
     const t = tradeNamed(trade);
-    if (!isScheduler && t.from_surgeon_id !== mySurgeon) { showToast("Only the proposer can cancel this trade.", "error"); return; }
-    const group = tradeGroupOf(t, "pending").map(tradeNamed); // fg-1: a unit is withdrawn as one
     const give = tradeIsGiveProposal(t); // Prompt 19 S3: the proposer withdraws his give while it is pending
+    if (!isScheduler && t.from_surgeon_id !== mySurgeon) { showToast(give ? "Only the giver can withdraw this give." : "Only the proposer can cancel this trade.", "error"); return; }
+    const group = tradeGroupOf(t, "pending").map(tradeNamed); // fg-1: a unit is withdrawn as one
     if (!confirm(give ? (group.length > 1 ? `Withdraw this give (${group.length} days)?` : "Withdraw this give?") : group.length > 1 ? `Cancel this unit trade proposal (${group.length} days)?` : "Cancel this trade proposal?")) return;
     setTradeBusy(t.id);
     try {
       const done = [];
       for (const g of group) {
         const p = await patchTradeStatus(g, "cancelled");
-        if (!p.ok) { showToast(`Couldn't cancel the trade${done.length ? ` (${done.length} of ${group.length} unit days were cancelled)` : ""}: ` + p.error, "error"); if (refreshTradesRef.current) refreshTradesRef.current(); if (!done.length) return; break; }
+        if (!p.ok) { showToast(`Couldn't ${give ? "withdraw the give" : "cancel the trade"}${done.length ? ` (${done.length} of ${group.length} unit days were ${give ? "withdrawn" : "cancelled"})` : ""}: ` + p.error, "error"); if (refreshTradesRef.current) refreshTradesRef.current(); if (!done.length) return; break; }
         const row = tradeNamed({ ...g, ...p.row, status: "cancelled" });
         done.push(row);
         setTradeRequests(prev => prev.map(r => r.id === row.id ? row : r));
@@ -3748,7 +3750,7 @@ function CallSchedule() {
       // In-app only: send-notification has no 'cancelled' category (a withdrawn proposal needs no email).
       await addNotification("trade_cancelled", give ? "Give withdrawn" : "Shift trade cancelled", msg, { from_surgeon_id: first.from_surgeon_id, to_surgeon_id: first.to_surgeon_id, trade_id: first.id, trade_ids: done.map(r => r.id), day: first.day, kind: give ? "give" : "trade" });
       showToast(give ? (done.length > 1 ? `Give withdrawn (${done.length} days).` : "Give withdrawn.") : done.length > 1 ? `Trade cancelled (${done.length} days).` : "Trade cancelled.", "info");
-    } catch (e) { console.warn("cancel trade error:", e); showToast("Couldn't cancel the trade - check your connection and try again.", "error"); }
+    } catch (e) { console.warn("cancel trade error:", e); showToast(`Couldn't ${give ? "withdraw the give" : "cancel the trade"} - check your connection and try again.`, "error"); }
     finally { setTradeBusy(""); }
   };
 
@@ -3758,6 +3760,10 @@ function CallSchedule() {
     setNotifLastSeen(now);
     try { localStorage.setItem("silvis-notif-seen", now); } catch(e) { console.warn("Couldn't persist notifications-seen marker:", e); }
   };
+  // Prompt 19 S4: the Activity log names a give - the server's trade.apply row carries no kind, so the trade ids that
+  // belong to a give come from the loaded trade rows (the whole-proposal predicate) and from the give's own audit rows
+  // (kind 'give': trade_id / trade_ids), then helpers.auditEntryText words each line.
+  const auditGiveIds = useMemo(() => auditGiveTradeIds(auditEntries, tradeRequests, tradeIsGiveProposal), [auditEntries, tradeRequests]);
   // --- Clear Notifications (local view, this device only) ---
   const clearAllNotifications = useCallback(() => {
     if (!confirm("Clear notifications from this view? Only this device is affected - the shared feed and other devices are untouched.")) return;
@@ -3954,7 +3960,9 @@ function CallSchedule() {
     } catch(e) { console.warn("computePeriodLabel failed - the publish dialog opens with a blank period label:", e); return ""; }
   };
   const openPublishDialog = () => {
-    const changes = diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup");
+    // Prompt 19 S4: a change a give made reads "10/10 P Acton -> Burchett (give)" - schedule_days only says source 'trade',
+    // so helpers.labelGiveChanges finds the latest applied shift_trade_requests leg that put the holder there.
+    const changes = labelGiveChanges(diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup"), schedule, tradeRequests, tradeIsGiveProposal);
     setPublishChanges(changes);
     setPublishLabel(computePeriodLabel());
     setShowPublishDialog(true);
@@ -6193,9 +6201,9 @@ function CallSchedule() {
                 <div key={r.id} data-testid="trade-row" data-trade-id={r.id} data-status={r.status} data-kind={giveGroup ? "give" : "trade"} data-unit={tag ? tag.kind + ":" + tag.start : undefined} data-group={groupN} style={rowBox}>
                   <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center"}}>
                     <span style={{fontSize:12.5,color:dkText}}>{giveGroup ? <span data-testid="trade-give-line">{tradeGiveLine(named, tag, mySurgeon)}</span> : tradeLegsText(named, tenseFor(r.status))}{tag && <span data-testid="trade-unit-tag" title="A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together" style={{marginLeft:8,fontSize:10,fontWeight:700,color:"#7a5a20",background:"#fbf1d8",borderRadius:4,padding:"1px 6px",whiteSpace:"nowrap"}}>{tag.text} - day {tag.index} of {tag.n}</span>}</span>
-                    <span style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:statusColor(r.status)}}>{r.status === "accepted" ? "accepted - not applied yet" : r.status}</span>
+                    <span data-testid="trade-status" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:statusColor(r.status)}}>{tradeRowStatus(r.status, giveGroup)}</span>
                   </div>
-                  <div style={{fontSize:10,color:"#9aa4ae",fontFamily:mono,marginTop:2}}>proposed by {named.from_surgeon_name} {fmtAuditTime(r.submitted_at)}{r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""}</div>
+                  <div data-testid="trade-meta" style={{fontSize:10,color:"#9aa4ae",fontFamily:mono,marginTop:2}}>{giveGroup ? "offered" : "proposed"} by {named.from_surgeon_name} {fmtAuditTime(r.submitted_at)}{r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""}</div>
                   {err && <div data-testid="trade-apply-error" style={{...css.errBox,marginTop:6}}>Apply failed: {err}</div>}
                   {(canAnswer || canCancel || canRetry || (isScheduler && r.status === "applied")) && (
                     <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
@@ -6294,13 +6302,13 @@ function CallSchedule() {
               </div>
 
               <div style={css.card} data-testid="trades-pending">
-                <div style={css.cardT}>Pending trades ({pending.length})</div>
-                <p style={sectionNote}>{isScheduler ? "Every open trade. The surgeon asked answers; you can answer or cancel any of them." : "Trades waiting on you show Accept / Decline; ones you proposed show Cancel."}</p>
-                {pending.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No pending trades.</p> : <div style={{display:"flex",flexDirection:"column",gap:6}}>{pending.map(tradeRow)}</div>}
+                <div style={css.cardT} data-testid="trades-pending-title">{tradeListTitle("Pending", pending, tradeIsGiveProposal)}</div>
+                <p style={sectionNote}>{isScheduler ? "Every open trade and give. The surgeon asked answers; you can answer or cancel any of them." : "Trades and gives waiting on you show Accept / Decline; ones you proposed show Cancel."}</p>
+                {pending.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>{tradeListEmpty("Pending")}</p> : <div style={{display:"flex",flexDirection:"column",gap:6}}>{pending.map(tradeRow)}</div>}
               </div>
               <div style={css.card} data-testid="trades-completed">
-                <div style={css.cardT}>Completed trades ({done.length})</div>
-                {done.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No completed trades.</p> : <div style={{display:"flex",flexDirection:"column",gap:6}}>{done.slice(0, 40).map(tradeRow)}</div>}
+                <div style={css.cardT} data-testid="trades-completed-title">{tradeListTitle("Completed", done, tradeIsGiveProposal)}</div>
+                {done.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>{tradeListEmpty("Completed")}</p> : <div style={{display:"flex",flexDirection:"column",gap:6}}>{done.slice(0, 40).map(tradeRow)}</div>}
               </div>
             </>;
           })()}
@@ -6342,13 +6350,13 @@ function CallSchedule() {
                   {auditEntries.map(en => {
                     const si = surgeons.findIndex(s => s.id === en.actor_id);
                     const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
-                    const summary = (en.detail && en.detail.summary) || en.action;
+                    const at = auditEntryText(en, auditGiveIds); // Prompt 19 S4: a give's rows read as a give
                     return (
                       <div key={en.id} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"7px 2px",borderBottom:"1px solid "+(dk?"#243240":"#eef1f4")}}>
                         <span style={{flexShrink:0,fontSize:10,fontWeight:700,letterSpacing:0.4,padding:"2px 7px",borderRadius:5,background:c?c.tg:(dk?"#243240":"#eef1f4"),color:c?c.tx:"#5B6B82",border:`1px solid ${c?c.bd:(dk?"#2a3a48":"#DCE3EC")}`,minWidth:38,textAlign:"center"}}>{en.actor_name || "?"}</span>
                         <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:12.5,color:dk?"#c8d2dc":"#3a4a58",lineHeight:1.35}}>{summary}</div>
-                          <div style={{fontSize:10,color:"#9aa4ae",marginTop:1,fontFamily:mono}}>{fmtAuditTime(en.created_at)} - {en.action}</div>
+                          <div style={{fontSize:12.5,color:dk?"#c8d2dc":"#3a4a58",lineHeight:1.35}}>{at.summary}</div>
+                          <div style={{fontSize:10,color:"#9aa4ae",marginTop:1,fontFamily:mono}}>{fmtAuditTime(en.created_at)} - {at.action}</div>
                         </div>
                       </div>
                     );
