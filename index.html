@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-CxPF/l7H8Fu8gKx9St+z8IUaRxvLxYyDeBfIP+z8VZU=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-tqeMRaArgWJPPm5YzZJ5ipJDkXUXhPQDui9Li+sba1c=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-hcuQ8GXzGJ1cZZmdv5nZwmevPHG5SfnTQge/EieOc+E=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-x5GD+ViPPSZLpFtoe2R1UZyUm2rDqLfnmgbMWiS7Cw0=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.25c";
+    var APP_VERSION = "2026.09.25d";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -5944,21 +5944,7 @@ function CallSchedule() {
     return map;
   }, [vacations, gridDays]);
   const vacNamesOn = d => Object.keys(vacations).filter(pid => onVac(pid, d, vacations)).map(nameOf);
-  const forecastByDay = useMemo(() => {
-    const out = {};
-    Object.keys(ctxInputs.eastForecast || {}).forEach(id => {
-      const fc = ctxInputs.eastForecast[id] || {};
-      Object.keys(fc).forEach(d => {
-        if (out[d] === undefined || fc[d] > out[d].p) out[d] = {
-          p: fc[d],
-          id
-        };
-      });
-    });
-    return out;
-  }, [ctxInputs]);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
-  const eastBadgesVisible = isScheduler && !isPublicMode;
   const glance = useMemo(() => suCoverageGlance(schedule, todayStr, 60, ctxInputs.eastForecast, forecastThreshold), [schedule, todayStr, ctxInputs, forecastThreshold]);
   const eastCoverageEnd = useMemo(() => {
     if (typeof coverageOf !== "function") return null;
@@ -8881,7 +8867,7 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         marginBottom: 8
       })
-    }, "Rules not imported yet: East and holiday badges appear once Setup imports the seed (Slice E)."), React.createElement("div", {
+    }, "Rules not imported yet: holiday units (and the day editor's East status) appear once Setup imports the seed (Slice E)."), React.createElement("div", {
       className: "cal-grid",
       "data-testid": "cal-grid",
       "data-week-start": weekStartsOn
@@ -8917,8 +8903,6 @@ function CallSchedule() {
       const inMonth = d >= monthStartStr && d <= monthEndStr;
       const isWk = dow === 5 || dow === 6 || dow === 0;
       const hol = rulesCtx ? isHolidayDay(rulesCtx, d) : null;
-      const derived = eastBadgesVisible && rulesCtx ? rulesCtx.derivedByDay[d] : null;
-      const fc = eastBadgesVisible ? forecastByDay[d] : null;
       const pH = dayHolder(a, "primary");
       const bH = a ? a.backup : null;
       const openP = slotIsOpen(d, pH, todayStr),
@@ -8932,13 +8916,11 @@ function CallSchedule() {
         borderTopLeftRadius: dow === 5 ? 8 : 6,
         borderTopRightRadius: dow === 0 ? 8 : 6
       } : {};
-      const derivedWho = derived ? Object.keys(derived).map(r => nameOf(derived[r]) + " Silvis " + r).join(", ") : "";
       const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
       if (hol) titleBits.push(hol.name + " (holiday unit)");
-      if (derivedWho) titleBits.push("East-derived: " + derivedWho);
       if (a && a.note) titleBits.push("note: " + a.note);
       if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
-      const nBadges = (derived ? 1 : 0) + (fc && fc.p >= 0.2 ? 1 : 0) + (awaitingConfirmation(a) ? 1 : 0);
+      const nBadges = awaitingConfirmation(a) ? 1 : 0;
       return React.createElement("div", {
         key: d,
         className: "cal-cell" + (isPreview ? " cal-preview" : ""),
@@ -8995,15 +8977,7 @@ function CallSchedule() {
         }
       }, hol.name)), React.createElement("div", {
         className: "cal-badges"
-      }, derived && React.createElement("span", {
-        "data-badge": "E",
-        title: "East-derived week: " + derivedWho,
-        style: badge(true, T.badge)
-      }, "E"), fc && fc.p >= 0.2 && React.createElement("span", {
-        "data-badge": fc.p >= forecastThreshold ? "F" : "f",
-        title: "East forecast: " + Math.round(fc.p * 100) + "% that " + nameOf(fc.id) + " is on East call (busy at " + Math.round(forecastThreshold * 100) + "% or more)",
-        style: badge(fc.p >= forecastThreshold, "#8a5a10")
-      }, "F"), awaitingConfirmation(a) && React.createElement("span", {
+      }, awaitingConfirmation(a) && React.createElement("span", {
         "data-badge": "confirm",
         "data-testid": "confirm-badge",
         title: "awaiting the scheduler's confirmation",
@@ -9107,25 +9081,7 @@ function CallSchedule() {
         alignItems: "center",
         gap: 3
       }
-    }, React.createElement(Padlock, null), " locked slot"), eastBadgesVisible && React.createElement("span", {
-      style: {
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 3
-      }
-    }, React.createElement("span", {
-      style: badge(true, T.badge)
-    }, "E"), " East-derived week"), eastBadgesVisible && React.createElement("span", {
-      style: {
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 3
-      }
-    }, React.createElement("span", {
-      style: badge(true, "#8a5a10")
-    }, "F"), " East forecast at or above ", Math.round(forecastThreshold * 100), "%, ", React.createElement("span", {
-      style: badge(false, "#8a5a10")
-    }, "F"), " 20% or more"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), eastVacPeople.length > 0 && React.createElement("span", {
+    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), eastVacPeople.length > 0 && React.createElement("span", {
       style: {
         display: "inline-flex",
         alignItems: "center",
