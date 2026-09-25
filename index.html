@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-l0Cpo6bvnFrrhougTzvBOlVNMMc2fin6PQBCIuFxVkQ=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-Cqn4j9xfhm6N9CsW6ksczMmEYNxG83ZA+emMjly7HGs=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-qQHIBn/D2zTb3v+B0+ycWtcq/xb7ieB7XovMMLJOlW4=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-nZiUR9qCfLa3mmH5EI3em3ExMen/Adatk6LjuQJGwGY=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.24i";
+    var APP_VERSION = "2026.09.25a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -385,6 +385,7 @@ function CallSchedule() {
   const [tradeReturnDay, setTradeReturnDay] = useState("");
   const [tradeReturnRole, setTradeReturnRole] = useState("primary");
   const [tradeWholeUnit, setTradeWholeUnit] = useState(true);
+  const [tradeKind, setTradeKind] = useState("trade");
   const [tradeBusy, setTradeBusy] = useState("");
   const [tradeApplyErr, setTradeApplyErr] = useState({});
   const [minePerson, setMinePerson] = useState("");
@@ -1177,7 +1178,7 @@ function CallSchedule() {
     if (/JWT|401/.test(s)) return "Your session expired - sign in again.";
     return s.slice(0, 200);
   };
-  const schedulerIdsLoud = async () => {
+  const schedulerIdsLoud = async opts => {
     if (schedulerAdminIds.length) return schedulerAdminIds;
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?select=person_id,role&role=in.(scheduler,admin)&person_id=not.is.null`, {
@@ -1188,7 +1189,7 @@ function CallSchedule() {
       return [...new Set((Array.isArray(rows) ? rows : []).map(r => r && r.person_id).filter(Boolean))];
     } catch (e) {
       console.warn("scheduler lookup failed - the email to the scheduler was skipped:", e);
-      showToast("Couldn't look up the scheduler's account - the in-app note was posted but no email was sent.", "error");
+      if (!(opts && opts.quiet)) showToast("Couldn't look up the scheduler's account - the in-app note was posted but no email was sent.", "error");
       return null;
     }
   };
@@ -2632,6 +2633,7 @@ function CallSchedule() {
   const proposeTradeForDay = (day, role, pick) => {
     setTradeDay(day);
     setTradeRole(role === "backup" ? "backup" : "primary");
+    setTradeKind("trade");
     if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);else if (isScheduler && pick && pick.from && poolSurgeons.some(s => s.id === pick.from)) setTradeFrom(pick.from);
     if (pick && pick.to) {
       setTradeTo(pick.to);
@@ -4040,7 +4042,7 @@ function CallSchedule() {
     start: vacConflict.start,
     end: vacConflict.end
   } : null;
-  const tradeSuggestionsFor = (day, role, fromId) => {
+  const tradeSuggestionsFor = (day, role, fromId, kind) => {
     if (!rulesCtx || !suIsIso(day) || !fromId) return [];
     const unit = tradeUnitOf(day, role, fromId);
     const whole = !!unit && tradeWholeUnit;
@@ -4049,7 +4051,7 @@ function CallSchedule() {
       pool: poolSurgeons.map(s => s.id),
       nameOf,
       offerDays: whole ? unit.days : [day],
-      twoWay: !isScheduler,
+      twoWay: !isScheduler && kind !== "give",
       floors: TOTALS_YTD_FLOORS,
       eligibility: (days, r, cand) => days.length > 1 ? tradeEligibilityOver(days, r, cand) : tradeEligibility(days[0], r, cand),
       unitOf: tradeUnitOf,
@@ -4087,6 +4089,7 @@ function CallSchedule() {
     };
     return [r].concat(tradeRequests.filter(x => x.id !== r.id && same(x))).sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
   };
+  const tradeIsGiveProposal = r => tradeProposalIsGive(r, tradeRequests, tradeUnitTag);
   const roleWordOf = r => r === "primary" ? "Primary" : "Backup";
   const upcomingDaysOf = (pid, horizonDays) => {
     if (!pid) return [];
@@ -4107,15 +4110,23 @@ function CallSchedule() {
     from_surgeon_name: nameOf(r.from_surgeon_id),
     to_surgeon_name: nameOf(r.to_surgeon_id)
   });
+  const notifGiveTrade = n => {
+    const d = n && n.data || {};
+    if (!n || n.type !== "trade_proposed" || d.kind !== "give" || !d.trade_id) return null;
+    const r = tradeRequests.find(x => x.id === d.trade_id);
+    if (!r || !(r.status === "pending" && !!mySurgeon && r.to_surgeon_id === mySurgeon)) return null;
+    return tradeIsGiveProposal(r) ? r : null;
+  };
   const submitTradeRequest = async () => {
     if (isPublicMode) return;
+    const give = tradeKind === "give";
     const fromId = isScheduler ? tradeFrom : mySurgeon || "";
     if (!fromId || !tradeTo || !tradeDay || !tradeRole) {
       showToast("Pick both surgeons, the day and the role.", "error");
       return;
     }
     if (fromId === tradeTo) {
-      showToast("Pick a different surgeon to trade with.", "error");
+      showToast(give ? "Pick a different surgeon to give the day to." : "Pick a different surgeon to trade with.", "error");
       return;
     }
     if (!isScheduler && fromId !== mySurgeon) {
@@ -4149,7 +4160,7 @@ function CallSchedule() {
     }
     let retDays = [],
       retUnit = null;
-    if (tradeReturnDay) {
+    if (give) {} else if (tradeReturnDay) {
       const rHolder = sched[tradeReturnDay] ? sched[tradeReturnDay][tradeReturnRole] : null;
       if (rHolder !== tradeTo) {
         showToast(`${nameOf(tradeTo)} is not ${tradeReturnRole} on ${fmtMD(tradeReturnDay)} (that slot is ${holderLabel(rHolder, nameOf)}).`, "error");
@@ -4175,29 +4186,26 @@ function CallSchedule() {
         if (!rulesUnknownGate(rElig, fromId, retLabel + " in return", "propose")) return;
       }
     } else if (!isScheduler) {
-      showToast("A return shift is required - pick the day and role you'll take in return. One-way trades are the scheduler's call.", "error");
+      showToast("A return shift is required - pick the day and role you'll take in return, or switch to Give away (nothing in return).", "error");
       return;
     } else if (!confirm("No return shift specified. One-way trades are for emergencies only. Submit anyway?")) return;
     const fromName = nameOf(fromId),
       toName = nameOf(tradeTo);
     setTradeBusy("propose");
     try {
-      const rows = days.map((d, i) => {
-        const back = retDays.length === days.length ? retDays[i] : i === 0 ? retDays[0] || null : null;
-        const req = {
-          from_surgeon_id: fromId,
-          from_surgeon_name: fromName,
-          to_surgeon_id: tradeTo,
-          to_surgeon_name: toName,
-          day: d,
-          role: tradeRole,
-          return_day: back || null,
-          return_role: back ? tradeReturnRole : null,
-          status: "pending",
-          submitted_at: new Date().toISOString()
-        };
-        req.detail = tradeProposeMsg(req) + (whole ? " " + tradeUnitStamp(unit, i) : "");
-        return req;
+      const rows = tradeProposalRows({
+        fromId,
+        fromName,
+        toId: tradeTo,
+        toName,
+        days,
+        role: tradeRole,
+        retDays,
+        returnRole: tradeReturnRole,
+        give,
+        isScheduler,
+        stamp: whole ? i => tradeUnitStamp(unit, i) : null,
+        submittedAt: new Date().toISOString()
       });
       const inserted = [];
       for (const req of rows) {
@@ -4207,7 +4215,7 @@ function CallSchedule() {
         } = await db.insert("shift_trade_requests", req);
         if (error || !row) {
           console.warn("trade insert failed", error);
-          showToast(`Couldn't submit the trade${inserted.length ? ` (${inserted.length} of ${rows.length} unit days were submitted - cancel them or ask the scheduler)` : ""}: ` + describeDbError(error), "error");
+          showToast(`Couldn't submit the ${give ? "give" : "trade"}${inserted.length ? ` (${inserted.length} of ${rows.length} unit days were submitted - cancel them or ask the scheduler)` : ""}: ` + describeDbError(error), "error");
           break;
         }
         inserted.push(row);
@@ -4215,7 +4223,12 @@ function CallSchedule() {
       if (!inserted.length) return;
       setTradeRequests(prev => [...inserted.slice().reverse(), ...prev.filter(r => !inserted.some(x => x.id === r.id))]);
       const first = inserted[0];
-      const msg = !whole ? first.detail : `${fromName} proposed a trade: ${toName} would take ${roleWordOf(tradeRole)} ${fmtMD(days[0])}-${fmtMD(days[days.length - 1])} (the ${unitText(unit)}, moved as one)` + (retDays.length > 1 ? `; ${fromName} would take ${roleWordOf(tradeReturnRole)} ${fmtMD(retDays[0])}-${fmtMD(retDays[retDays.length - 1])} in return` : retDays.length === 1 ? `; ${fromName} would take ${slotLabel(retDays[0], tradeReturnRole)} in return` : " (one-way - no return shift)");
+      const msg = give ? tradeGiveMsg({
+        from_surgeon_name: fromName,
+        to_surgeon_name: toName,
+        day: days[0],
+        role: tradeRole
+      }, whole ? unitText(unit) : null) : !whole ? first.detail : `${fromName} proposed a trade: ${toName} would take ${roleWordOf(tradeRole)} ${fmtMD(days[0])}-${fmtMD(days[days.length - 1])} (the ${unitText(unit)}, moved as one)` + (retDays.length > 1 ? `; ${fromName} would take ${roleWordOf(tradeReturnRole)} ${fmtMD(retDays[0])}-${fmtMD(retDays[retDays.length - 1])} in return` : retDays.length === 1 ? `; ${fromName} would take ${slotLabel(retDays[0], tradeReturnRole)} in return` : " (one-way - no return shift)");
       logAudit("trade.propose", msg, {
         trade_id: first.id,
         trade_ids: inserted.map(r => r.id),
@@ -4227,26 +4240,39 @@ function CallSchedule() {
         return_day: first.return_day,
         return_role: first.return_role,
         return_days: retDays,
-        unit: unit ? unit.name : null
+        unit: unit ? unit.name : null,
+        kind: give ? "give" : "trade"
       });
-      await addNotification("trade_proposed", "Shift trade proposed", msg, {
+      await addNotification("trade_proposed", give ? "Day offered - nothing in return" : "Shift trade proposed", msg, {
         from_surgeon_id: fromId,
         to_surgeon_id: tradeTo,
         trade_id: first.id,
         trade_ids: inserted.map(r => r.id),
-        day: tradeDay
+        day: tradeDay,
+        kind: give ? "give" : "trade"
       });
-      sendEmailNotif("trade_proposed", {
+      const giveMail = give ? tradeGiveEmail({
+        from_surgeon_name: fromName,
+        to_surgeon_name: toName,
+        day: days[0],
+        role: tradeRole
+      }, whole ? unitText(unit) : null) : null;
+      sendEmailNotif("trade_proposed", giveMail ? {
+        message: giveMail.message,
+        subject: giveMail.subject,
+        trade_id: first.id,
+        kind: "give"
+      } : {
         message: msg,
         subject: "Shift trade proposed - " + (whole ? unitText(unit) : slotLabel(tradeDay, tradeRole)),
         trade_id: first.id
       }, [fromId, tradeTo]);
       setTradeDay("");
       setTradeReturnDay("");
-      if (inserted.length === rows.length) showToast(whole ? `Trade proposed for the ${unitText(unit)} - ${inserted.length} rows.` : "Trade proposed.", "success");
+      if (inserted.length === rows.length) showToast(give ? whole ? `Offered the ${unitText(unit)} to ${toName} - ${inserted.length} rows.` : `Offered to ${toName} - nothing in return.` : whole ? `Trade proposed for the ${unitText(unit)} - ${inserted.length} rows.` : "Trade proposed.", "success");
     } catch (e) {
       console.warn("Submit trade error:", e);
-      showToast("Couldn't submit the trade - check your connection and try again.", "error");
+      showToast(`Couldn't submit the ${give ? "give" : "trade"} - check your connection and try again.`, "error");
     } finally {
       setTradeBusy("");
     }
@@ -4323,6 +4349,22 @@ function CallSchedule() {
       };
     }
   };
+  const notifyGiveApplied = async rows => {
+    const first = rows[0];
+    const ids = await schedulerIdsLoud({
+      quiet: true
+    });
+    const n = giveAppliedNotes(rows, ids);
+    await addNotification(n.notification.type, n.notification.title, n.notification.message, n.notification.data);
+    sendEmailNotif("trade_applied", {
+      message: n.email.message,
+      subject: n.email.subject,
+      trade_id: first.id,
+      kind: n.email.kind
+    }, n.email.targetIds);
+    return ids !== null;
+  };
+  const GIVE_NO_SCHED_MAIL = " The scheduler's account could not be looked up, so only the two parties were e-mailed (the scheduler still sees it in Alerts).";
   const runApplyTrade = async (trade, opts) => {
     const t = tradeNamed(trade);
     const a = await applyTradeRpc(t);
@@ -4331,7 +4373,7 @@ function CallSchedule() {
       setTradeApplyErr(prev => _objectSpread(_objectSpread({}, prev), {}, {
         [t.id]: a.error
       }));
-      showToast("The trade is accepted but NOT applied: " + a.error, "error");
+      showToast("The " + (tradeIsGiveProposal(t) ? "give" : "trade") + " is accepted but NOT applied: " + a.error, "error");
       if (refreshTradesRef.current) refreshTradesRef.current();
       return false;
     }
@@ -4349,10 +4391,15 @@ function CallSchedule() {
       if (refreshDaysRef.current) await refreshDaysRef.current();
     } catch (e) {
       console.warn("schedule refetch after apply_trade failed:", e);
-      showToast("Trade applied, but the calendar could not be refreshed - reload to see it.", "error");
+      showToast((tradeIsGiveProposal(t) ? "Give" : "Trade") + " applied, but the calendar could not be refreshed - reload to see it.", "error");
     }
     if (refreshTradesRef.current) refreshTradesRef.current();
     if (opts && opts.silent) return true;
+    if (tradeIsGiveProposal(applied)) {
+      const mailed = await notifyGiveApplied([applied]);
+      showToast("Give applied to the schedule." + (mailed ? "" : GIVE_NO_SCHED_MAIL), mailed ? "success" : "error");
+      return true;
+    }
     const msg = tradeAppliedMsg(applied);
     await addNotification("trade_applied", "Shift trade applied", msg, {
       from_surgeon_id: t.from_surgeon_id,
@@ -4371,8 +4418,10 @@ function CallSchedule() {
   const acceptTrade = async trade => {
     if (!trade || trade.status !== "pending" || tradeBusy) return;
     const t = tradeNamed(trade);
+    const give = tradeIsGiveProposal(t);
+    const noun = give ? "give" : "trade";
     if (!isScheduler && t.to_surgeon_id !== mySurgeon) {
-      showToast("Only the surgeon asked can accept this trade.", "error");
+      showToast(`Only the surgeon asked can accept this ${noun}.`, "error");
       return;
     }
     const group = tradeGroupOf(t, "pending").map(tradeNamed);
@@ -4411,7 +4460,7 @@ function CallSchedule() {
       for (const g of group) {
         const p = await patchTradeStatus(g, "accepted");
         if (!p.ok) {
-          showToast(`Couldn't accept the trade${accepted.length ? ` (${accepted.length} of ${group.length} unit days are accepted - use Retry apply on them)` : ""}: ` + p.error, "error");
+          showToast(`Couldn't accept the ${noun}${accepted.length ? ` (${accepted.length} of ${group.length} unit days are accepted - use Retry apply on them)` : ""}: ` + p.error, "error");
           if (refreshTradesRef.current) refreshTradesRef.current();
           if (!accepted.length) return;
           break;
@@ -4424,6 +4473,19 @@ function CallSchedule() {
       }
       const first = accepted[0],
         last = accepted[accepted.length - 1];
+      if (give) {
+        const acc = giveAcceptedNotes(accepted, tag);
+        logAudit(acc.audit.action, acc.audit.message, acc.audit.detail);
+        await addNotification(acc.notification.type, acc.notification.title, acc.notification.message, acc.notification.data);
+        for (const row of accepted) {
+          if (!(await runApplyTrade(row, {
+            silent: true
+          }))) return;
+        }
+        const mailed = await notifyGiveApplied(accepted);
+        showToast((accepted.length > 1 ? `Give accepted - ${accepted.length} days applied to the schedule.` : "Give accepted - applied to the schedule.") + (mailed ? "" : GIVE_NO_SCHED_MAIL), mailed ? "success" : "error");
+        return;
+      }
       const unitName = tag ? "the " + tag.text : accepted.length + " unit days";
       const msg = accepted.length > 1 ? `${first.to_surgeon_name} accepted the trade: ${first.to_surgeon_name} takes ${roleWordOf(first.role)} ${fmtMD(first.day)}-${fmtMD(last.day)} (${unitName}, moved as one)${first.return_day ? "; " + first.from_surgeon_name + " takes " + slotLabel(first.return_day, first.return_role) + (retRows.length > 1 ? " and " + (retRows.length - 1) + " more return day(s)" : "") : ""}` : tradeAcceptMsg(first);
       logAudit("trade.accept", msg, {
@@ -4435,7 +4497,8 @@ function CallSchedule() {
         return_day: first.return_day,
         return_role: first.return_role,
         from: first.from_surgeon_id,
-        to: first.to_surgeon_id
+        to: first.to_surgeon_id,
+        kind: "trade"
       });
       await addNotification("trade_accepted", "Shift trade accepted", msg, {
         from_surgeon_id: first.from_surgeon_id,
@@ -4471,7 +4534,7 @@ function CallSchedule() {
       }
     } catch (e) {
       console.warn("accept trade error:", e);
-      showToast("Couldn't accept the trade - check your connection and try again.", "error");
+      showToast(`Couldn't accept the ${noun} - check your connection and try again.`, "error");
     } finally {
       setTradeBusy("");
     }
@@ -4483,7 +4546,7 @@ function CallSchedule() {
       await runApplyTrade(trade);
     } catch (e) {
       console.warn("retry apply error:", e);
-      showToast("Couldn't apply the trade - check your connection and try again.", "error");
+      showToast("Couldn't apply the " + (tradeIsGiveProposal(trade) ? "give" : "trade") + " - check your connection and try again.", "error");
     } finally {
       setTradeBusy("");
     }
@@ -4491,8 +4554,10 @@ function CallSchedule() {
   const declineTrade = async trade => {
     if (!trade || trade.status !== "pending" || tradeBusy) return;
     const t = tradeNamed(trade);
+    const give = tradeIsGiveProposal(t);
+    const noun = give ? "give" : "trade";
     if (!isScheduler && t.to_surgeon_id !== mySurgeon) {
-      showToast("Only the surgeon asked can decline this trade.", "error");
+      showToast(`Only the surgeon asked can decline this ${noun}.`, "error");
       return;
     }
     const group = tradeGroupOf(t, "pending").map(tradeNamed);
@@ -4502,7 +4567,7 @@ function CallSchedule() {
       for (const g of group) {
         const p = await patchTradeStatus(g, "declined");
         if (!p.ok) {
-          showToast(`Couldn't decline the trade${done.length ? ` (${done.length} of ${group.length} unit days were declined)` : ""}: ` + p.error, "error");
+          showToast(`Couldn't decline the ${noun}${done.length ? ` (${done.length} of ${group.length} unit days were declined)` : ""}: ` + p.error, "error");
           if (refreshTradesRef.current) refreshTradesRef.current();
           if (!done.length) return;
           break;
@@ -4515,31 +4580,35 @@ function CallSchedule() {
       }
       const first = done[0],
         tag = tradeUnitTag(first);
-      const msg = done.length > 1 ? `${first.to_surgeon_name} declined the trade: ${tag ? "the " + tag.text : done.length + " unit days"} (${done.length} days) - ${tradeLegsText(first, "would have taken")}` : tradeDeclineMsg(first);
+      const msg = give ? tradeGiveDeclineMsg(first, tag) : done.length > 1 ? `${first.to_surgeon_name} declined the trade: ${tag ? "the " + tag.text : done.length + " unit days"} (${done.length} days) - ${tradeLegsText(first, "would have taken")}` : tradeDeclineMsg(first);
       logAudit("trade.decline", msg, {
         trade_id: first.id,
         trade_ids: done.map(r => r.id),
         day: first.day,
         role: first.role,
         from: first.from_surgeon_id,
-        to: first.to_surgeon_id
+        to: first.to_surgeon_id,
+        kind: give ? "give" : "trade"
       });
-      await addNotification("trade_declined", "Shift trade declined", msg, {
+      await addNotification("trade_declined", give ? "Give declined" : "Shift trade declined", msg, {
         from_surgeon_id: first.from_surgeon_id,
         to_surgeon_id: first.to_surgeon_id,
         trade_id: first.id,
         trade_ids: done.map(r => r.id),
-        day: first.day
+        day: first.day,
+        kind: give ? "give" : "trade"
       });
-      sendEmailNotif("trade_declined", {
+      sendEmailNotif("trade_declined", _objectSpread({
         message: msg,
-        subject: "Shift trade declined - " + (tag ? tag.text : slotLabel(first.day, first.role)),
+        subject: (give ? "Give declined - " : "Shift trade declined - ") + (tag ? tag.text : slotLabel(first.day, first.role)),
         trade_id: first.id
-      }, [first.from_surgeon_id, first.to_surgeon_id]);
-      showToast(done.length > 1 ? `Trade declined (${done.length} days).` : "Trade declined.", "info");
+      }, give ? {
+        kind: "give"
+      } : {}), [first.from_surgeon_id, first.to_surgeon_id]);
+      showToast(give ? done.length > 1 ? `Give declined (${done.length} days).` : "Give declined." : done.length > 1 ? `Trade declined (${done.length} days).` : "Trade declined.", "info");
     } catch (e) {
       console.warn("decline trade error:", e);
-      showToast("Couldn't decline the trade - check your connection and try again.", "error");
+      showToast(`Couldn't decline the ${noun} - check your connection and try again.`, "error");
     } finally {
       setTradeBusy("");
     }
@@ -4547,19 +4616,20 @@ function CallSchedule() {
   const cancelTrade = async trade => {
     if (!trade || trade.status !== "pending" || tradeBusy) return;
     const t = tradeNamed(trade);
+    const give = tradeIsGiveProposal(t);
     if (!isScheduler && t.from_surgeon_id !== mySurgeon) {
-      showToast("Only the proposer can cancel this trade.", "error");
+      showToast(give ? "Only the giver can withdraw this give." : "Only the proposer can cancel this trade.", "error");
       return;
     }
     const group = tradeGroupOf(t, "pending").map(tradeNamed);
-    if (!confirm(group.length > 1 ? `Cancel this unit trade proposal (${group.length} days)?` : "Cancel this trade proposal?")) return;
+    if (!confirm(give ? group.length > 1 ? `Withdraw this give (${group.length} days)?` : "Withdraw this give?" : group.length > 1 ? `Cancel this unit trade proposal (${group.length} days)?` : "Cancel this trade proposal?")) return;
     setTradeBusy(t.id);
     try {
       const done = [];
       for (const g of group) {
         const p = await patchTradeStatus(g, "cancelled");
         if (!p.ok) {
-          showToast(`Couldn't cancel the trade${done.length ? ` (${done.length} of ${group.length} unit days were cancelled)` : ""}: ` + p.error, "error");
+          showToast(`Couldn't ${give ? "withdraw the give" : "cancel the trade"}${done.length ? ` (${done.length} of ${group.length} unit days were ${give ? "withdrawn" : "cancelled"})` : ""}: ` + p.error, "error");
           if (refreshTradesRef.current) refreshTradesRef.current();
           if (!done.length) return;
           break;
@@ -4572,26 +4642,28 @@ function CallSchedule() {
       }
       const first = done[0],
         tag = tradeUnitTag(first);
-      const msg = done.length > 1 ? `${first.from_surgeon_name} cancelled the trade: ${tag ? "the " + tag.text : done.length + " unit days"} (${done.length} days) - ${tradeLegsText(first, "would have taken")}` : tradeCancelMsg(first);
+      const msg = give ? tradeGiveCancelMsg(first, tag) : done.length > 1 ? `${first.from_surgeon_name} cancelled the trade: ${tag ? "the " + tag.text : done.length + " unit days"} (${done.length} days) - ${tradeLegsText(first, "would have taken")}` : tradeCancelMsg(first);
       logAudit("trade.cancel", msg, {
         trade_id: first.id,
         trade_ids: done.map(r => r.id),
         day: first.day,
         role: first.role,
         from: first.from_surgeon_id,
-        to: first.to_surgeon_id
+        to: first.to_surgeon_id,
+        kind: give ? "give" : "trade"
       });
-      await addNotification("trade_cancelled", "Shift trade cancelled", msg, {
+      await addNotification("trade_cancelled", give ? "Give withdrawn" : "Shift trade cancelled", msg, {
         from_surgeon_id: first.from_surgeon_id,
         to_surgeon_id: first.to_surgeon_id,
         trade_id: first.id,
         trade_ids: done.map(r => r.id),
-        day: first.day
+        day: first.day,
+        kind: give ? "give" : "trade"
       });
-      showToast(done.length > 1 ? `Trade cancelled (${done.length} days).` : "Trade cancelled.", "info");
+      showToast(give ? done.length > 1 ? `Give withdrawn (${done.length} days).` : "Give withdrawn." : done.length > 1 ? `Trade cancelled (${done.length} days).` : "Trade cancelled.", "info");
     } catch (e) {
       console.warn("cancel trade error:", e);
-      showToast("Couldn't cancel the trade - check your connection and try again.", "error");
+      showToast(`Couldn't ${give ? "withdraw the give" : "cancel the trade"} - check your connection and try again.`, "error");
     } finally {
       setTradeBusy("");
     }
@@ -4605,6 +4677,7 @@ function CallSchedule() {
       console.warn("Couldn't persist notifications-seen marker:", e);
     }
   };
+  const auditGiveIds = useMemo(() => auditGiveTradeIds(auditEntries, tradeRequests, tradeIsGiveProposal), [auditEntries, tradeRequests]);
   const clearAllNotifications = useCallback(() => {
     if (!confirm("Clear notifications from this view? Only this device is affected - the shared feed and other devices are untouched.")) return;
     const now = new Date().toISOString();
@@ -4899,7 +4972,7 @@ function CallSchedule() {
     }
   };
   const openPublishDialog = () => {
-    const changes = diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup");
+    const changes = labelGiveChanges(diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup"), schedule, tradeRequests, tradeIsGiveProposal);
     setPublishChanges(changes);
     setPublishLabel(computePeriodLabel());
     setShowPublishDialog(true);
@@ -7835,6 +7908,8 @@ function CallSchedule() {
       shift_claimed: "calendar"
     };
     const targetTab = tabMap[n.type] || null;
+    const giveT = notifGiveTrade(n);
+    const giveN = giveT ? tradeGroupOf(giveT).length : 0;
     return React.createElement("div", {
       key: n.id,
       "data-testid": "notif-row",
@@ -7871,14 +7946,53 @@ function CallSchedule() {
         fontSize: 10,
         color: "#a0a8b0"
       }
-    }, new Date(n.created_at).toLocaleDateString())), React.createElement("p", {
+    }, new Date(n.created_at).toLocaleDateString())), giveT ? React.createElement("p", {
+      "data-testid": "notif-give-line",
       style: {
         fontSize: 12,
         color: "#5B6B82",
         margin: "3px 0 0",
         lineHeight: 1.4
       }
-    }, n.message), targetTab && React.createElement("span", {
+    }, tradeGiveLine(tradeNamed(giveT), tradeUnitTag(giveT), mySurgeon)) : React.createElement("p", {
+      style: {
+        fontSize: 12,
+        color: "#5B6B82",
+        margin: "3px 0 0",
+        lineHeight: 1.4
+      }
+    }, n.message), giveT && React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 6,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("button", {
+      "data-testid": "notif-give-accept",
+      disabled: !!tradeBusy,
+      onClick: e => {
+        e.stopPropagation();
+        acceptTrade(giveT);
+      },
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "6px 14px",
+        fontSize: 12,
+        minHeight: 36
+      })
+    }, tradeBusy === giveT.id ? "Working" : giveN > 1 ? `Accept (${giveN} days)` : "Accept"), React.createElement("button", {
+      "data-testid": "notif-give-decline",
+      disabled: !!tradeBusy,
+      onClick: e => {
+        e.stopPropagation();
+        declineTrade(giveT);
+      },
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "6px 14px",
+        fontSize: 12,
+        minHeight: 36
+      })
+    }, giveN > 1 ? `Decline (${giveN} days)` : "Decline")), targetTab && React.createElement("span", {
       style: {
         fontSize: 10,
         color: T.accentText,
@@ -8753,7 +8867,7 @@ function CallSchedule() {
       const isToday = d === todayStr;
       const bg = hol ? T.holiday : isWk ? T.weekend : T.surface;
       const bracket = isWk ? {
-        borderTop: "2px solid " + T.navyMuted,
+        borderTop: "2px solid " + (isToday ? T.accent : T.navyMuted),
         borderTopLeftRadius: dow === 5 ? 8 : 6,
         borderTopRightRadius: dow === 0 ? 8 : 6
       } : {};
@@ -10271,9 +10385,10 @@ function CallSchedule() {
     }));
     cands.sort((a, b) => (a.e && !a.e.ok ? 1 : 0) - (b.e && !b.e.ok ? 1 : 0));
     const toElig = dayOk && tradeTo ? eligOf(tradeTo) : null;
-    const retUnit = suIsIso(tradeReturnDay) && tradeTo && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo) : null;
+    const give = tradeKind === "give";
+    const retUnit = !give && suIsIso(tradeReturnDay) && tradeTo && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo) : null;
     const retPaired = !!(retUnit && whole && retUnit.days.length === offerDays.length);
-    const retElig = suIsIso(tradeReturnDay) && fromId ? retPaired ? tradeEligibilityOver(retUnit.days, tradeReturnRole, fromId) : tradeEligibility(tradeReturnDay, tradeReturnRole, fromId) : null;
+    const retElig = !give && suIsIso(tradeReturnDay) && fromId ? retPaired ? tradeEligibilityOver(retUnit.days, tradeReturnRole, fromId) : tradeEligibility(tradeReturnDay, tradeReturnRole, fromId) : null;
     const unitOfDay = d => rulesCtx && rulesCtx.holidayByDay ? rulesCtx.holidayByDay[d] : null;
     const givenLabel = whole ? "the " + unitText(unit) : slotLabel(tradeDay, tradeRole);
     const pending = myTradeRequests.filter(r => r.status === "pending" || r.status === "accepted");
@@ -10295,11 +10410,13 @@ function CallSchedule() {
       const err = tradeApplyErr[r.id];
       const tag = tradeUnitTag(r);
       const groupN = tag ? tradeGroupOf(r).length : 1;
+      const giveGroup = tradeIsGiveProposal(r);
       return React.createElement("div", {
         key: r.id,
         "data-testid": "trade-row",
         "data-trade-id": r.id,
         "data-status": r.status,
+        "data-kind": giveGroup ? "give" : "trade",
         "data-unit": tag ? tag.kind + ":" + tag.start : undefined,
         "data-group": groupN,
         style: rowBox
@@ -10316,7 +10433,9 @@ function CallSchedule() {
           fontSize: 12.5,
           color: dkText
         }
-      }, tradeLegsText(named, tenseFor(r.status)), tag && React.createElement("span", {
+      }, giveGroup ? React.createElement("span", {
+        "data-testid": "trade-give-line"
+      }, tradeGiveLine(named, tag, mySurgeon)) : tradeLegsText(named, tenseFor(r.status)), tag && React.createElement("span", {
         "data-testid": "trade-unit-tag",
         title: "A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together",
         style: {
@@ -10330,20 +10449,22 @@ function CallSchedule() {
           whiteSpace: "nowrap"
         }
       }, tag.text, " - day ", tag.index, " of ", tag.n)), React.createElement("span", {
+        "data-testid": "trade-status",
         style: {
           fontSize: 10,
           fontWeight: 700,
           textTransform: "uppercase",
           color: statusColor(r.status)
         }
-      }, r.status === "accepted" ? "accepted - not applied yet" : r.status)), React.createElement("div", {
+      }, tradeRowStatus(r.status, giveGroup))), React.createElement("div", {
+        "data-testid": "trade-meta",
         style: {
           fontSize: 10,
           color: "#9aa4ae",
           fontFamily: mono,
           marginTop: 2
         }
-      }, "proposed by ", named.from_surgeon_name, " ", fmtAuditTime(r.submitted_at), r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""), err && React.createElement("div", {
+      }, giveGroup ? "offered" : "proposed", " by ", named.from_surgeon_name, " ", fmtAuditTime(r.submitted_at), r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""), err && React.createElement("div", {
         "data-testid": "trade-apply-error",
         style: _objectSpread(_objectSpread({}, css.errBox), {}, {
           marginTop: 6
@@ -10388,7 +10509,7 @@ function CallSchedule() {
         })
       }, busy ? "Working" : "Retry apply"), isScheduler && (r.status === "applied" || r.status === "accepted") && React.createElement("button", {
         onClick: () => goToDay(r.day),
-        title: "The scheduler reverts a trade by editing the day",
+        title: giveGroup ? "The scheduler reverts a give by putting " + named.from_surgeon_name + " back on " + fmtMD(r.day) + " in the day editor - one-way, nothing else moves" : "The scheduler reverts a trade by editing the day",
         style: css.mini(false)
       }, "Open ", fmtMD(r.day), " in the day editor")));
     };
@@ -10399,7 +10520,38 @@ function CallSchedule() {
       style: css.cardT
     }, "Propose a shift trade"), React.createElement("p", {
       style: sectionNote
-    }, "By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. ", isScheduler ? "As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor." : "All trades are two-way: pick the day and role you take in return."), !fromId ? React.createElement("p", {
+    }, "By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. ", isScheduler ? "As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor." : "A trade is two-way: pick the day and role you take in return.", " ", React.createElement("strong", null, "Give away"), " offers the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back; they accept or decline, and an accepted give is applied like a trade."), fromId && React.createElement("div", {
+      "data-testid": "trade-kind",
+      role: "group",
+      "aria-label": "Trade or give away",
+      style: {
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        marginBottom: 10
+      }
+    }, React.createElement("button", {
+      type: "button",
+      "data-testid": "trade-kind-trade",
+      "aria-pressed": !give,
+      onClick: () => setTradeKind("trade"),
+      style: _objectSpread(_objectSpread({}, css.mini(!give)), {}, {
+        fontSize: 12,
+        padding: "5px 12px"
+      })
+    }, "Trade (day for day)"), React.createElement("button", {
+      type: "button",
+      "data-testid": "trade-kind-give",
+      "aria-pressed": give,
+      onClick: () => {
+        setTradeKind("give");
+        setTradeReturnDay("");
+      },
+      style: _objectSpread(_objectSpread({}, css.mini(give)), {}, {
+        fontSize: 12,
+        padding: "5px 12px"
+      })
+    }, "Give away (nothing in return)")), !fromId ? React.createElement("p", {
       style: muted
     }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement("div", {
       style: {
@@ -10518,7 +10670,7 @@ function CallSchedule() {
       }
     }, isScheduler ? "Unchecked: this single day would split the unit - you will be asked to confirm." : "A single day of a unit cannot be traded - tick the box to trade the whole unit.")), (() => {
       if (!dayOk || holder !== fromId || !rulesCtx) return null;
-      const sugg = tradeSuggestionsFor(tradeDay, tradeRole, fromId);
+      const sugg = tradeSuggestionsFor(tradeDay, tradeRole, fromId, tradeKind);
       if (!sugg.length) return null;
       return React.createElement("div", {
         "data-testid": "trade-suggested",
@@ -10563,7 +10715,7 @@ function CallSchedule() {
       className: "trade-pick-wrap"
     }, React.createElement("label", {
       style: label
-    }, "Trade with"), React.createElement("select", {
+    }, give ? "Give to" : "Trade with"), React.createElement("select", {
       "data-testid": "trade-to",
       className: "trade-pick",
       value: tradeTo,
@@ -10599,7 +10751,7 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
         flex: "1 1 100%"
       })
-    }, "Allowed with a note: ", toElig.soft.map(softTag).join(", "), "."), React.createElement("div", {
+    }, "Allowed with a note: ", toElig.soft.map(softTag).join(", "), "."), !give && React.createElement(React.Fragment, null, React.createElement("div", {
       className: "trade-pick-wrap"
     }, React.createElement("label", {
       style: label
@@ -10658,7 +10810,7 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, css.errBox), {}, {
         flex: "1 1 100%"
       })
-    }, nameOf(fromId), " can't take ", retPaired ? "the " + unitText(retUnit) : slotLabel(tradeReturnDay, tradeReturnRole), " in return: ", tradeReasonText(retElig), "."), React.createElement("button", {
+    }, nameOf(fromId), " can't take ", retPaired ? "the " + unitText(retUnit) : slotLabel(tradeReturnDay, tradeReturnRole), " in return: ", tradeReasonText(retElig), ".")), React.createElement("button", {
       "data-testid": "trade-submit",
       disabled: tradeBusy === "propose",
       onClick: submitTradeRequest,
@@ -10667,18 +10819,19 @@ function CallSchedule() {
         background: "linear-gradient(135deg,#6030a0,#8050c0)",
         borderColor: "#6030a0"
       })
-    }, tradeBusy === "propose" ? "Submitting" : whole ? `Propose unit trade (${offerDays.length} days)` : "Propose trade"))), React.createElement("div", {
+    }, tradeBusy === "propose" ? "Submitting" : give ? (whole ? "Offer the " + unitText(unit) : "Offer this day") + (tradeTo ? " to " + nameOf(tradeTo) : "") : whole ? `Propose unit trade (${offerDays.length} days)` : "Propose trade"))), React.createElement("div", {
       style: css.card,
       "data-testid": "trades-pending"
     }, React.createElement("div", {
-      style: css.cardT
-    }, "Pending trades (", pending.length, ")"), React.createElement("p", {
+      style: css.cardT,
+      "data-testid": "trades-pending-title"
+    }, tradeListTitle("Pending", pending, tradeIsGiveProposal)), React.createElement("p", {
       style: sectionNote
-    }, isScheduler ? "Every open trade. The surgeon asked answers; you can answer or cancel any of them." : "Trades waiting on you show Accept / Decline; ones you proposed show Cancel."), pending.length === 0 ? React.createElement("p", {
+    }, isScheduler ? "Every open trade and give. The surgeon asked answers; you can answer or cancel any of them." : "Trades and gives waiting on you show Accept / Decline; ones you proposed show Cancel."), pending.length === 0 ? React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         fontStyle: "italic"
       })
-    }, "No pending trades.") : React.createElement("div", {
+    }, tradeListEmpty("Pending")) : React.createElement("div", {
       style: {
         display: "flex",
         flexDirection: "column",
@@ -10688,12 +10841,13 @@ function CallSchedule() {
       style: css.card,
       "data-testid": "trades-completed"
     }, React.createElement("div", {
-      style: css.cardT
-    }, "Completed trades (", done.length, ")"), done.length === 0 ? React.createElement("p", {
+      style: css.cardT,
+      "data-testid": "trades-completed-title"
+    }, tradeListTitle("Completed", done, tradeIsGiveProposal)), done.length === 0 ? React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         fontStyle: "italic"
       })
-    }, "No completed trades.") : React.createElement("div", {
+    }, tradeListEmpty("Completed")) : React.createElement("div", {
       style: {
         display: "flex",
         flexDirection: "column",
@@ -10824,7 +10978,7 @@ function CallSchedule() {
   }, auditEntries.map(en => {
     const si = surgeons.findIndex(s => s.id === en.actor_id);
     const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
-    const summary = en.detail && en.detail.summary || en.action;
+    const at = auditEntryText(en, auditGiveIds);
     return React.createElement("div", {
       key: en.id,
       style: {
@@ -10859,14 +11013,14 @@ function CallSchedule() {
         color: dk ? "#c8d2dc" : "#3a4a58",
         lineHeight: 1.35
       }
-    }, summary), React.createElement("div", {
+    }, at.summary), React.createElement("div", {
       style: {
         fontSize: 10,
         color: "#9aa4ae",
         marginTop: 1,
         fontFamily: mono
       }
-    }, fmtAuditTime(en.created_at), " - ", en.action)));
+    }, fmtAuditTime(en.created_at), " - ", at.action)));
   }))), isScheduler && React.createElement(Collapsible, {
     css: css,
     ck: "settings_client_versions",
