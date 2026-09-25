@@ -981,8 +981,9 @@ function labelGiveChanges(changes, schedule, tradeRows, isGive) {
 // A trade: a single return day rides on the FIRST row (the rest of a unit is one-way inside the group); a return unit of
 // the same size pairs day for day. A give (Prompt 19): no return leg on any row, whatever retDays holds. `kind` is sent
 // only as 'give' - on every row of a give, and on a member's trade row without a return leg (the tail rows of a whole
-// unit traded for one return day: trade_insert_guard refuses a member 'trade' without a return leg since
-// 2026-09-24-give-kind.sql); a trade row with its return leg, and every scheduler trade row, send no kind (default
+// unit traded for one return day: sent as a give so the rows stay valid once the prepared follow-up
+// 2026-09-25-member-trade-return-leg.sql makes trade_insert_guard refuse a member 'trade' without a return leg - the
+// give-kind migration itself does not refuse it); a trade row with its return leg, and every scheduler trade row, send no kind (default
 // 'trade'). detail = the composed sentence (tradeGiveMsg / tradeProposeMsg) plus the unit stamp when one is given.
 function tradeProposalRows(p) {
   const days = (p && p.days) || [];

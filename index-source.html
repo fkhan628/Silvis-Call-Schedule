@@ -3512,8 +3512,9 @@ function CallSchedule() {
       // One row per given day (helpers.tradeProposalRows, pure): a single return day rides on the first row (the rest of
       // the unit is one-way inside the group); a matching return unit pairs day for day; the unit stamp in detail ties the
       // rows together. Prompt 19: a give carries no return leg and every row is sent with kind 'give'; so are the TAIL rows
-      // of a member's whole-unit trade with one return day (trade_insert_guard refuses a member 'trade' without a return
-      // leg); a trade row sends no kind (the column default 'trade'), and the scheduler's rows are unchanged.
+      // of a member's whole-unit trade with one return day (valid today, and still valid once the prepared follow-up
+      // 2026-09-25-member-trade-return-leg.sql refuses a member 'trade' without a return leg); a trade row sends no kind
+      // (the column default 'trade'), and the scheduler's rows are unchanged.
       const rows = tradeProposalRows({ fromId, fromName, toId: tradeTo, toName, days, role: tradeRole, retDays, returnRole: tradeReturnRole, give, isScheduler, stamp: whole ? (i) => tradeUnitStamp(unit, i) : null, submittedAt: new Date().toISOString() });
       const inserted = [];
       for (const req of rows) {
