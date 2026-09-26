@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-hcuQ8GXzGJ1cZZmdv5nZwmevPHG5SfnTQge/EieOc+E=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-x5GD+ViPPSZLpFtoe2R1UZyUm2rDqLfnmgbMWiS7Cw0=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-9g0HJwlbT4Sc4aIO05Yqbc+H5GTKnQr25IgMvpl+ijU=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-a0Nywu4bbCPzw0XMNTcVYjgzRHmKZeMeo7hj7U7V+Aw=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.25d";
+    var APP_VERSION = "2026.09.25e";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -908,7 +908,7 @@ function CallSchedule() {
   const rosterPool = useMemo(() => surgeons.filter(s => s.type !== "external"), [surgeons]);
   const poolSurgeons = useMemo(() => rosterPool.filter(s => s.active !== false), [rosterPool]);
   const logAudit = (action, summary, details) => {
-    (async () => {
+    return (async () => {
       try {
         var _surgeons$find3;
         const {
@@ -921,9 +921,14 @@ function CallSchedule() {
             summary: summary
           }, details || {})
         });
-        if (error) console.warn("audit log insert failed", error);
+        if (error) {
+          console.warn("audit log insert failed", error);
+          return false;
+        }
+        return true;
       } catch (e) {
         console.warn("audit log failed", e);
+        return false;
       }
     })();
   };
@@ -2584,11 +2589,7 @@ function CallSchedule() {
     if (after.primary) after.externalCover = null;
     after.externalCover = (after.externalCover || "").trim() || null;
     const overrides = meta && meta.overrides || [];
-    let note = (after.note || "").replace(/^\[override:[^\]]*\]\s*/, "").trim();
-    if (overrides.length) {
-      const tag = "[override: " + overrides.map(o => nameOf(o.id) + " " + o.role + ": " + o.reasons.join(", ")).join("; ") + "]";
-      note = note ? tag + " " + note : tag;
-    }
+    const note = (after.note || "").replace(/^\[override:[^\]]*\]\s*/, "").trim();
     after.note = note || null;
     const isExternalId = id => !!(id && sMap[id] && sMap[id].type === "external");
     const keepPersonSource = (before.source === "claim" || before.source === "trade") && ["primary", "backup"].some(r => !!before[r] && before[r] === after[r]);
@@ -2605,16 +2606,22 @@ function CallSchedule() {
     }, {
       [day]: after
     }).map(c => formatDayChange(c, nameOf));
-    logAudit("schedule.day_edit", fmtMD(day) + ": " + (lines.join("; ") || "edited"), {
+    const dayEditLogged = logAudit("schedule.day_edit", fmtMD(day) + ": " + (lines.join("; ") || "edited"), {
       day,
       before: assignmentToDayRow(day, before),
       after: assignmentToDayRow(day, after),
       overrides
     });
-    if (overrides.length) logAudit("schedule.override", "Override on " + fmtMD(day) + ": " + overrides.map(o => nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", ")).join("; "), {
-      day,
-      overrides
-    });
+    if (overrides.length) {
+      const overrideText = overrides.map(o => nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", ")).join("; ");
+      const overrideLogged = logAudit("schedule.override", "Override on " + fmtMD(day) + ": " + overrideText, {
+        day,
+        overrides
+      });
+      Promise.all([dayEditLogged, overrideLogged]).then(([de, ov]) => {
+        if (!de && !ov) showToast("Override on " + fmtMD(day) + ": the audit log refused both rows, so its reasons are recorded nowhere - note them: " + overrideText + ".", "error");else if (!de || !ov) console.warn("override audit: one of the two rows was refused; the " + (de ? "schedule.day_edit" : "schedule.override") + " row keeps the reasons", day);
+      });
+    }
     const lockChanges = ["primary", "backup"].filter(r => !!before[r + "Locked"] !== !!after[r + "Locked"]).map(r => ({
       role: r,
       locked: !!after[r + "Locked"]
@@ -4869,7 +4876,7 @@ function CallSchedule() {
     }
     if (notifications.length > lastNotifCountRef.current) {
       const newOnes = notifications.slice(0, notifications.length - lastNotifCountRef.current);
-      newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", n.message || "", `silvis-${n.id}`));
+      newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));
     }
     lastNotifCountRef.current = notifications.length;
   }, [loaded, notifications, sendBrowserNotif]);
@@ -5945,6 +5952,7 @@ function CallSchedule() {
   }, [vacations, gridDays]);
   const vacNamesOn = d => Object.keys(vacations).filter(pid => onVac(pid, d, vacations)).map(nameOf);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
+  const eastDetailsVisible = isScheduler && !isPublicMode;
   const glance = useMemo(() => suCoverageGlance(schedule, todayStr, 60, ctxInputs.eastForecast, forecastThreshold), [schedule, todayStr, ctxInputs, forecastThreshold]);
   const eastCoverageEnd = useMemo(() => {
     if (typeof coverageOf !== "function") return null;
@@ -5982,7 +5990,7 @@ function CallSchedule() {
   const eastVacUnreviewed = eastVacPeople.reduce((n, p) => n + p.unreviewedUpcoming, 0);
   const eastVacByDay = useMemo(() => {
     const map = {};
-    if (!gridDays.length) return map;
+    if (!eastDetailsVisible || !gridDays.length) return map;
     const lo = gridDays[0],
       hi = gridDays[gridDays.length - 1];
     eastVacPeople.forEach(p => {
@@ -6014,7 +6022,7 @@ function CallSchedule() {
       });
     });
     return map;
-  }, [eastVacPeople, gridDays, rulesCtx]);
+  }, [eastVacPeople, gridDays, rulesCtx, eastDetailsVisible]);
   const eastVacConflictRows = useMemo(() => {
     if (!rulesCtx || typeof eastVacationConflicts !== "function") return [];
     try {
@@ -6101,7 +6109,11 @@ function CallSchedule() {
       return m;
     };
     const src = lastGenerate && typeof lastGenerate === "object" ? lastGenerate.openSlots : null;
-    const fromLast = Array.isArray(src) ? toMap(src) : src && typeof src === "object" ? src : {};
+    const fromLastRaw = Array.isArray(src) ? toMap(src) : src && typeof src === "object" ? src : {};
+    const fromLast = {};
+    Object.keys(fromLastRaw).forEach(k => {
+      fromLast[k] = openSlotReasonCurrent(fromLastRaw[k]);
+    });
     const unc = previewGen && previewGen.diagnostics && Array.isArray(previewGen.diagnostics.uncovered) ? previewGen.diagnostics.uncovered : [];
     const fromPreview = toMap(unc.map(u => u && typeof u === "object" ? {
       day: u.day,
@@ -8008,7 +8020,7 @@ function CallSchedule() {
         margin: "3px 0 0",
         lineHeight: 1.4
       }
-    }, n.message), giveT && React.createElement("div", {
+    }, n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message), giveT && React.createElement("div", {
       style: {
         display: "flex",
         gap: 6,
@@ -8631,7 +8643,7 @@ function CallSchedule() {
           color: dkText,
           marginRight: 2
         }
-      }, "Next 60 days:"), covItem("cov-open-primary", "open primary", glance.openPrimary, "#c04040"), covItem("cov-open-backup", "open backup", glance.openBackup, "#c04040"), covItem("cov-forecast-primary", "forecast-busy as primary", glance.forecastPrimary.map(x => x.day), "#8a5a10"), React.createElement("span", {
+      }, "Next 60 days:"), covItem("cov-open-primary", "open primary", glance.openPrimary, "#c04040"), covItem("cov-open-backup", "open backup", glance.openBackup, "#c04040"), eastDetailsVisible && covItem("cov-forecast-primary", "forecast-busy as primary", glance.forecastPrimary.map(x => x.day), "#8a5a10"), eastDetailsVisible && React.createElement("span", {
         "data-testid": "cov-east-end",
         "data-value": eastCoverageEnd || "",
         title: "Last day covered by a published Davenport week in the East feed cache"
@@ -8639,12 +8651,12 @@ function CallSchedule() {
         style: {
           fontFamily: mono
         }
-      }, eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown")), !isPublicMode && (isScheduler ? eastVacPeople.length > 0 : !!eastVacById[mySurgeon]) && React.createElement("button", {
+      }, eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown")), eastDetailsVisible && eastVacPeople.length > 0 && React.createElement("button", {
         type: "button",
         "data-testid": "cov-eastvac-unreviewed",
         "data-count": eastVacUnreviewed,
         onClick: openEastVacPanel,
-        title: (eastVacUnreviewed ? "Undecided Davenport vacation range(s) - treated as away (a Silvis vacation) until reviewed. " : "Every upcoming East vacation is reviewed. ") + (isScheduler ? "Opens Setup > East feed." : "Opens Time off."),
+        title: (eastVacUnreviewed ? "Undecided Davenport vacation range(s) - treated as away (a Silvis vacation) until reviewed. " : "Every upcoming East vacation is reviewed. ") + "Opens Setup > East feed.",
         style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
           color: eastVacUnreviewed ? "#8a5a10" : "#1a8040",
           borderColor: eastVacUnreviewed ? "#8a5a10" : "#a0d8b0",
@@ -8867,7 +8879,7 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         marginBottom: 8
       })
-    }, "Rules not imported yet: holiday units (and the day editor's East status) appear once Setup imports the seed (Slice E)."), React.createElement("div", {
+    }, "Rules not imported yet: holiday units", eastDetailsVisible ? " (and the day editor's East status)" : "", " appear once Setup imports the seed (Slice E)."), React.createElement("div", {
       className: "cal-grid",
       "data-testid": "cal-grid",
       "data-week-start": weekStartsOn
@@ -9081,7 +9093,7 @@ function CallSchedule() {
         alignItems: "center",
         gap: 3
       }
-    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), eastVacPeople.length > 0 && React.createElement("span", {
+    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), eastDetailsVisible && eastVacPeople.length > 0 && React.createElement("span", {
       style: {
         display: "inline-flex",
         alignItems: "center",
@@ -9387,6 +9399,7 @@ function CallSchedule() {
     ctxInputs: ctxInputs,
     ctxError: rulesCtxState.error,
     canEdit: isScheduler && !isPublicMode,
+    eastDetailsVisible: eastDetailsVisible,
     rulesImported: rulesImported,
     isPublicMode: isPublicMode,
     nameOf: nameOf,
@@ -10911,7 +10924,8 @@ function CallSchedule() {
     Badge: Badge,
     showToast: showToast,
     ytdFloors: TOTALS_YTD_FLOORS,
-    loaded: loaded
+    loaded: loaded,
+    eastDetailsVisible: eastDetailsVisible
   }), view === "settings" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
@@ -14221,6 +14235,7 @@ function DayEditor(props) {
     ctxInputs,
     ctxError,
     canEdit,
+    eastDetailsVisible,
     rulesImported,
     isPublicMode,
     nameOf,
@@ -14300,7 +14315,7 @@ function DayEditor(props) {
   })), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
-  const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
+  const east = ctx && eastDetailsVisible ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
   const editorBlockDays = React.useMemo(() => {
     const dow = parse(day).getDay();
     const idx = dow === 5 ? 0 : dow === 6 ? 1 : dow === 0 ? 2 : -1;
@@ -14591,7 +14606,8 @@ function DayEditor(props) {
         color: sub,
         fontWeight: 700
       }
-    }, "outside surgeon - written in by hand"), cur && cur.lockHolder && cur.conflicts.length > 0 && React.createElement("span", {
+    }, "outside surgeon - written in by hand"), eastDetailsVisible && cur && cur.lockHolder && cur.conflicts.length > 0 && React.createElement("span", {
+      "data-testid": "editor-" + role + "-lock-breaks",
       title: cur.conflicts.join(", "),
       style: {
         fontSize: 10,
@@ -14811,7 +14827,7 @@ function DayEditor(props) {
       fontWeight: 700,
       color: "#8a6a10"
     }
-  }, hol.name), " holiday unit (", hol.tier, "): ", hol.days.map(fmtMD).join(", "), " - one primary and one backup stick through the unit.") : "Not in a holiday unit."), east.length === 0 ? React.createElement("div", null, "East: ", rulesImported ? "no East features configured" : "rules not imported yet") : east.map(l => React.createElement("div", {
+  }, hol.name), " holiday unit (", hol.tier, "): ", hol.days.map(fmtMD).join(", "), " - one primary and one backup stick through the unit.") : "Not in a holiday unit."), eastDetailsVisible && (east.length === 0 ? React.createElement("div", null, "East: ", rulesImported ? "no East features configured" : "rules not imported yet") : east.map(l => React.createElement("div", {
     key: l.id + l.text,
     "data-testid": "east-status",
     "data-eastvac": l.eastVac || undefined,
@@ -14823,12 +14839,14 @@ function DayEditor(props) {
       marginRight: 6,
       verticalAlign: "middle"
     })
-  }) : null, "East - ", l.text)), React.createElement("div", null, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off"), ctxError && React.createElement("div", {
+  }) : null, "East - ", l.text))), React.createElement("div", null, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off"), ctxError && React.createElement("div", {
     style: {
       color: "#a83232",
       fontWeight: 700
     }
-  }, "Eligibility unavailable: ", ctxError), !rulesImported && React.createElement("div", null, "Rules not imported yet - eligibility reflects locks, vacations and availability rows only."), entry && entry.source && React.createElement("div", null, "Source: ", entry.source)), roleBlock("primary"), roleBlock("backup"), pending && React.createElement("div", {
+  }, "Eligibility unavailable: ", ctxError), !rulesImported && React.createElement("div", null, "Rules not imported yet - eligibility reflects locks, vacations and availability rows only."), entry && entry.source && React.createElement("div", {
+    "data-testid": "editor-source"
+  }, "Source: ", entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source)), roleBlock("primary"), roleBlock("backup"), pending && React.createElement("div", {
     "data-testid": "override-confirm",
     role: "alertdialog",
     style: {
@@ -14860,12 +14878,13 @@ function DayEditor(props) {
       fontFamily: mono
     }
   }, r), " - ", reasonLabel(r, nameOf)))), React.createElement("div", {
+    "data-testid": "override-note",
     style: {
       fontSize: 11,
       color: sub,
       marginBottom: 8
     }
-  }, "Overriding assigns anyway and prefixes the day's note with [override: ...]; the audit log records it."), React.createElement("div", {
+  }, "Overriding assigns anyway; the audit log records it with these reasons. The day's note gets no reasons (anyone can read it)."), React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -14932,6 +14951,7 @@ function DayEditor(props) {
       opacity: draft.primary ? 0.6 : 1
     })
   }))) : React.createElement("div", {
+    "data-testid": "editor-note-view",
     style: {
       fontSize: 12,
       color: sub,
@@ -15106,7 +15126,8 @@ function TotalsCard({
   Badge,
   showToast,
   ytdFloors,
-  loaded
+  loaded,
+  eastDetailsVisible
 }) {
   const T = THEME[dk ? "dark" : "light"];
   const now = parse(today);
@@ -15206,7 +15227,7 @@ function TotalsCard({
     rows: ttOutsideSurgeons(roster || [], src.sched, range.from, range.to, opts)
   }));
   const hasOutside = outside.some(o => o.rows.length > 0);
-  const showEast = list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
+  const showEast = !!eastDetailsVisible && list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
   const rows = [];
   list.forEach(s => sources.forEach(src => {
     const t = ttTotalsFor(src.sched, s.id, range.from, range.to, _objectSpread(_objectSpread({}, opts), {}, {
@@ -15248,6 +15269,12 @@ function TotalsCard({
       const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
       const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool"]);
       outside.forEach(o => o.rows.forEach(x => data.push([range.label, range.from, range.to, o.src.label, x.name, x.code, x.primary, x.backup, x.total, "", "", "", "", "", "", "", "", "", "", "", "", "outside"])));
+      if (!eastDetailsVisible) {
+        const eastCol = headers.indexOf("East days");
+        headers.splice(eastCol, 1);
+        data.forEach(r => r.splice(eastCol, 1));
+        headers[headers.indexOf("Counted vs cap (P + East P-week days)")] = "Counted vs cap";
+      }
       const csv = ttCsvText(headers, data);
       const name = "silvis-totals-" + rangeMode + "-" + range.from + "-" + range.to + ".csv";
       const real = downloadTextFile(csv, name, "text/csv");
@@ -15375,7 +15402,7 @@ function TotalsCard({
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
       marginBottom: 8
     })
-  }, "Rules context unavailable - caps, targets, holiday units and East days show as '-' until the setup loads."), mode !== "fairness" ? React.createElement("div", {
+  }, "Rules context unavailable - caps, targets", eastDetailsVisible ? ", holiday units and East days" : " and holiday units", " show as '-' until the setup loads."), mode !== "fairness" ? React.createElement("div", {
     className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
@@ -15413,7 +15440,7 @@ function TotalsCard({
     title: "Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)"
   }, "East days"), React.createElement("th", {
     style: th,
-    title: "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it"
+    title: eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it"
   }, "Cap (P)", nMonths > 1 ? " /mo" : ""), React.createElement("th", {
     style: th,
     title: "Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder) (*)"
@@ -15438,7 +15465,7 @@ function TotalsCard({
     "data-minor": r.t.minorHolidays,
     "data-maxconsec": r.t.maxConsecutive,
     "data-maxconsecany": r.t.maxConsecutiveAnyRole,
-    "data-east": r.east,
+    "data-east": showEast ? r.east : undefined,
     style: {
       borderTop: "1px solid " + border,
       opacity: r.src === "preview" ? 0.85 : 1,
@@ -15486,7 +15513,7 @@ function TotalsCard({
     style: _objectSpread(_objectSpread({}, td), {}, {
       color: overCap(r) ? "#c04040" : td.color
     }),
-    title: r.cap === null ? undefined : countsEast(r.id) ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts"
+    title: r.cap === null ? undefined : countsEast(r.id) ? eastDetailsVisible ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " day(s) - the primary days plus the other days this cap counts; backup never counts" : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts"
   }, capText(r)), React.createElement("td", {
     "data-col": "target",
     style: td
@@ -15570,7 +15597,7 @@ function TotalsCard({
         borderRadius: 4
       }
     }), countsEast(r.id) && r.eastP > 0 && React.createElement("div", {
-      title: "+ " + r.eastP + " East primary-week day(s) counted toward the cap (P)",
+      title: "+ " + r.eastP + (eastDetailsVisible ? " East primary-week" : " other") + " day(s) counted toward the cap (P)",
       style: {
         position: "absolute",
         left: pct(r.t.total) + "%",
