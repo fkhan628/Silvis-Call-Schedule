@@ -18,8 +18,10 @@
 //      audit rows (schedule.day_edit + schedule.lock, the app's action names),
 //      no notifications statement anywhere, no mail, tagged DO block, no bare $$
 //   D  eligibility gating: a hard failure is refused (exit 2) without --override;
-//      with --override the note gets the app's '[override: ...]' tag and a
-//      schedule.override audit row; a clean pick passes; the ctx is evaluated
+//      with --override a schedule.override audit row (and the day_edit row's
+//      overrides) carry the reasons and the note gets NO tag (Item E3, Faraz 9/25:
+//      schedule_days.note is anon-readable - an old tag is still stripped); a
+//      clean pick passes; the ctx is evaluated
 //      with the role unlocked (the editor's pick-time state); a batch is gated
 //      as SEQUENTIAL editor saves (Khan Fri-Mon: the 4th day is max-consecutive)
 //   E  verify-after-apply: the simulated post-apply rows verify; a tampered row,
@@ -278,18 +280,25 @@ step("D: eligibility gating (synthetic ctx from the seed)");
   eq(g1.exitCode, DE.EXIT.REFUSED, "hard without --override -> exit 2");
   ok(g1.refusals.length === 1 && /Khan primary/.test(g1.refusals[0]) && /hard-never-weekday/.test(g1.refusals[0]) && /--override/.test(g1.refusals[0]), "the refusal reads like the editor's override warning: " + g1.refusals[0]);
   ok(planK.days[0].overrides.length === 0 && !/\[override:/.test(planK.days[0].afterRow.note || ""), "no override is recorded without the flag");
-  // with --override: the app's note tag, overrides in the plan, a schedule.override audit row in the SQL
+  // with --override: overrides in the plan and a schedule.override audit row in the SQL - and, since Item E3 (Faraz 9/25),
+  // NO '[override: ...]' tag in the note: schedule_days is anon-readable, the audit rows keep the reasons
   const g2 = DE.gate(planK, evK, { override: true, roster });
   eq(g2.exitCode, DE.EXIT.OK); eq(g2.refusals, []);
   eq(planK.days[0].overrides, [{ id: "s1", role: "primary", reasons: evK[0].hard }], "the override is recorded like DayEditor.confirmOverride");
-  ok(/^\[override: Khan primary: /.test(planK.days[0].afterRow.note) && / seed: burchett-email-2026-09-17$/.test(planK.days[0].afterRow.note), "the note gets the app's '[override: ...] ' prefix in front of the kept note: " + planK.days[0].afterRow.note);
+  eq(planK.days[0].afterRow.note, "seed: burchett-email-2026-09-17", "Item E3: an override leaves the kept note as it is - no '[override: ...]' tag, no reason code");
+  ok(!/\[override:|hard-never-weekday/.test(JSON.stringify(planK.days[0].afterRow)), "Item E3: no tag or reason code anywhere in the row written to schedule_days");
   const sqlK = DE.dayEditSql(planK, { by: BY });
   eq((sqlK.match(/'schedule\.override'/g) || []).length, 1, "one schedule.override audit row");
-  ok(/"overrides": ?\[\{"id": ?"s1", ?"role": ?"primary"/.test(sqlK), "the day_edit row carries the overrides");
-  // an existing override tag is stripped before a new one is applied (saveDayEdit's replace)
+  ok(/"overrides": ?\[\{"id": ?"s1", ?"role": ?"primary", ?"reasons": ?\["hard-never-weekday/.test(sqlK), "the day_edit row carries the overrides WITH their reasons");
+  ok(/Override on 10\/20: Khan primary despite hard-never-weekday/.test(sqlK), "Item E3: the schedule.override row's summary names who despite which reasons (the CLI path keeps them in the audit)");
+  ok(!/note = '\[override:/.test(sqlK), "Item E3: the UPDATE writes no tagged note");
+  // an existing (pre-9/25) override tag is stripped on the next edit (saveDayEdit's replace) - with or without a new override
   const liveO = clone(LIVE); liveO.find(r => r.day === "2026-10-20").note = "[override: Acton backup: x] seed: burchett-email-2026-09-17";
   const planO = DE.planEdits(liveO, [DE.parseSet("2026-10-20:backup=s2")], { lock: true, by: BY, roster });
   eq(planO.days[0].afterRow.note, "seed: burchett-email-2026-09-17", "an old override tag does not survive a clean edit");
+  const planOK = DE.planEdits(liveO, [DE.parseSet("2026-10-20:primary=s1")], { lock: true, by: BY, roster });
+  DE.gate(planOK, evK, { override: true, roster });
+  eq(planOK.days[0].afterRow.note, "seed: burchett-email-2026-09-17", "Item E3: an old tag is stripped and none is written by an overridden edit either");
   // an evaluation that THROWS fails closed (the editor disables Save): refused even with --override
   const evT = evK.map(e => Object.assign({}, e, { ok: false, hard: ["rules-error:boom"], error: "boom" }));
   eq(DE.gate(planK, evT, { override: true, roster }).exitCode, DE.EXIT.REFUSED, "a thrown check is never overridable");
@@ -314,9 +323,10 @@ step("D: eligibility gating (synthetic ctx from the seed)");
   eq(evN.slice(0, 3).map(e => e.day + " " + (e.ok ? "ok" : "HARD " + e.hard.join(","))), ["2026-11-06 ok", "2026-11-07 ok", "2026-11-08 ok"], "Khan Fri-Sun 11/6-11/8 primary: the first three picks pass");
   ok(!evN[3].ok && evN[3].hard.some(h => /max-consecutive/.test(h)), "Khan's fourth day in a row (Mon 11/9) is HARD max-consecutive - visible only because the batch is gated sequentially: " + JSON.stringify({ ok: evN[3].ok, hard: evN[3].hard }));
   eq(DE.gate(planN, evN, { override: false, roster }).exitCode, DE.EXIT.REFUSED, "...so the four-day batch is refused without --override");
-  eq(DE.gate(planN, evN, { override: true, roster }).exitCode, DE.EXIT.OK, "...and saved with --override, the 11/9 note tagged");
-  ok(/^\[override: Khan primary: .*max-consecutive/.test(planN.days[3].afterRow.note || ""), "the override tag lands on 11/9 only: " + planN.days[3].afterRow.note);
-  ok(!planN.days[2].afterRow.note, "11/8 carries no tag");
+  eq(DE.gate(planN, evN, { override: true, roster }).exitCode, DE.EXIT.OK, "...and saved with --override");
+  eq(planN.days[3].overrides.map(o => o.id + " " + o.role + " " + o.reasons.filter(r => /max-consecutive/.test(r)).length), ["s1 primary 1"], "the override (max-consecutive) is recorded on 11/9 only - for the audit rows");
+  ok(planN.days.every(d => !d.afterRow.note), "Item E3: no note on any of the four days (no tag on 11/9, none elsewhere)");
+  ok(planN.days.slice(0, 3).every(d => d.overrides.length === 0), "11/6-11/8 carry no override");
 }
 
 /* ------------------------------------------------------------------ E */

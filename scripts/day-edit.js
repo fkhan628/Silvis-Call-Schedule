@@ -33,7 +33,8 @@
 //     time and the next pick sees the earlier save, so day n of a multi-day batch is
 //     evaluated on live + the `after` of every earlier plan day (date order), its own edited
 //     roles cleared and unlocked. A hard rule two edits create together (Khan Fri-Sun + Mon =
-//     max-consecutive) is therefore seen and refused / tagged on the day that trips it.
+//     max-consecutive) is therefore seen and refused / overridden (recorded for the audit rows)
+//     on the day that trips it.
 //   - a role LOCKED to someone else: the editor cannot re-assign it without unticking Lock
 //     first (the select is disabled while locked; clearRole refuses 'unlock it first'). The
 //     tool does the untick-pick-retick in one step, prints 'replacing LOCKED holder <name>
@@ -42,8 +43,9 @@
 //     so no schedule.lock row - the same as the editor's untick + retick).
 //   - the row after (saveDayEdit 1801-1823): primary and backup must differ (1803);
 //     a roster primary replaces an external cover (1804); the note is stripped of an
-//     old '[override: ...]' tag and, with overrides, prefixed with
-//     '[override: <Name> <role>: <reasons>]' (1807-1812); source = 'manual-external'
+//     old '[override: ...]' tag and gets NO new one - since Item E3 (Faraz 9/25) an
+//     override's reasons live in the audit rows only (schedule.day_edit detail.overrides
+//     + schedule.override), never in the anon-readable note; source = 'manual-external'
 //     when either holder is an outside surgeon, else the row's own claim / trade source
 //     while a held role keeps its holder, else 'manual' for the WHOLE row (1815-1822)
 //     - so a backup edit on an import / generated row turns the row's source to
@@ -223,7 +225,7 @@ function scheduleFromRows(rows, base) {
   return out;
 }
 
-// Recompute the derived fields of a plan day from its `after` assignment (used after an override changes the note).
+// Recompute the derived fields of a plan day from its `after` assignment (re-run by gate on every plan day).
 function finishDay(d, nameOf) {
   d.afterRow = H.assignmentToDayRow(d.day, d.after);
   d.changedCols = Object.keys(d.afterRow).filter((k) => k !== "day" && JSON.stringify(d.afterRow[k]) !== JSON.stringify(d.beforeRow[k]));
@@ -371,9 +373,11 @@ function evaluateEdits(plan, liveSchedule, mkCtx) {
 }
 
 // gate(plan, evals, { override, nameOf }) -> { refusals[], exitCode, overrides[] }. Mutates the plan days like the editor:
-// with --override a hard failure is recorded ({ id, role, reasons }, confirmOverride 5721-5731) and the note gets
-// saveDayEdit's tag (1809-1812); without it the day editor's override warning is a refusal (exit 2). A thrown check is
-// refused either way (evalBroken 5703). Re-entrant: the note is rebuilt from the day's stripped base note each time.
+// with --override a hard failure is recorded ({ id, role, reasons }, confirmOverride 5721-5731) for the audit rows ONLY -
+// since Item E3 (Faraz 9/25) saveDayEdit writes no '[override: ...]' tag into the note (schedule_days is anon-readable;
+// the schedule.day_edit detail.overrides and the schedule.override row keep the reasons); without it the day editor's
+// override warning is a refusal (exit 2). A thrown check is refused either way (evalBroken 5703). Re-entrant: the note is
+// the day's stripped base note each time (an old tag written before 9/25 never survives an edit).
 function gate(plan, evals, opts) {
   opts = opts || {};
   const nameOf = opts.nameOf || (opts.roster ? nameOfFactory(opts.roster) : plan.nameOf) || nameOfFactory([]);
@@ -385,19 +389,14 @@ function gate(plan, evals, opts) {
     if (!d) return;
     if (e.error) { refusals.push(e.day + ": the eligibility check for " + nameOf(e.id) + " " + e.role + " THREW (" + e.error + ") - the editor disables Save until the rules evaluate again; not overridable"); return; }
     if (!opts.override) {
-      refusals.push(e.day + ": " + nameOf(e.id) + " " + e.role + " - hard: " + e.hard.join(", ") + ". The day editor would ask \"Override?\" here - re-run with --override to save it anyway (the note gets the '[override: ...]' tag and a schedule.override audit row is written).");
+      refusals.push(e.day + ": " + nameOf(e.id) + " " + e.role + " - hard: " + e.hard.join(", ") + ". The day editor would ask \"Override?\" here - re-run with --override to save it anyway (a schedule.override audit row records the reasons; the note is left without them).");
       return;
     }
     d.overrides.push({ id: e.id, role: e.role, reasons: e.hard.slice() });
     overrides.push({ day: e.day, id: e.id, role: e.role, reasons: e.hard.slice() });
   });
   (plan.days || []).forEach((d) => {
-    let note = d.baseNote || "";
-    if (d.overrides.length) {
-      const tag = "[override: " + d.overrides.map((o) => nameOf(o.id) + " " + o.role + ": " + o.reasons.join(", ")).join("; ") + "]";
-      note = note ? tag + " " + note : tag;
-    }
-    d.after.note = note || null;
+    d.after.note = d.baseNote || null;   // Item E3 (9/25): no reason codes in the anon-readable note - the audit rows carry them
     finishDay(d, nameOf);
   });
   return { refusals, overrides, exitCode: refusals.length ? EXIT.REFUSED : EXIT.OK };
@@ -711,7 +710,7 @@ async function main() {
     console.error("refused (exit " + g.exitCode + ")");
     return g.exitCode;
   }
-  if (g.overrides.length) { console.log("\nOVERRIDE confirmed (--override) - the note carries the tag, a schedule.override audit row is written:"); g.overrides.forEach((o) => console.log("  " + o.day + " " + nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", "))); }
+  if (g.overrides.length) { console.log("\nOVERRIDE confirmed (--override) - a schedule.override audit row records the reasons (the note carries none since Item E3, 9/25):"); g.overrides.forEach((o) => console.log("  " + o.day + " " + nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", "))); }
 
   console.log("\n--- rows (final) ---");
   console.log(renderPlan(plan, nameOf));

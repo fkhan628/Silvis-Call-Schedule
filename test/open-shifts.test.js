@@ -505,12 +505,16 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
    surgeons, never an id / name / free text); lastGenerateFromDiagnostics(dg, at)
    builds the blob record call_schedule_data.data.lastGenerate. That blob is
    anon-readable, so every string the generator can make us write is run through
-   the importer's denylist gate (Prompt 12 item F) here. */
+   the importer's denylist gate (Prompt 12 item F) here.
+   Item E3 (Faraz 9/25: "The open-shifts notice drops its East reason sentences for
+   everyone; say 'not available' instead"): the four East codes share the category
+   'not available' (the row the two East categories had); openSlotReasonCurrent
+   brings a sentence stored before 9/25 up to date where it is read. */
 {
   const R = require(path.join(ROOT, "rules.js"));
   const IMP = require(path.join(ROOT, "importer.js"));
   const LG = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "last-generate-diagnostics.json"), "utf8"));
-  const CATEGORIES = ["vacations", "weekday patterns and stated availability", "East feed busy", "East-derived week", "caps reached", "already on call that day", "holiday opt-outs", "backup opt-outs", "locks", "other rules"];
+  const CATEGORIES = ["vacations", "weekday patterns and stated availability", "not available", "caps reached", "already on call that day", "holiday opt-outs", "backup opt-outs", "locks", "other rules"];
   const NAMES = [].concat(...LG.roster.map(r => [r.id, r.name, r.code]));
   const noNames = (text, what) => NAMES.forEach(n => assert.ok(!new RegExp("\\b" + n + "\\b").test(text), (what || "reason") + " leaks '" + n + "': " + text));
   const oneReason = (code) => H.openSlotReason({ s1: [code], s2: [code], s3: [code], s4: [code], s5: [code], s6: [code] });
@@ -569,8 +573,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     const table = {
       "vacations": ["time-off:2026-11-05", "day-before-vacation"],
       "weekday patterns and stated availability": ["hard-never-weekday:Mon", "weekday-not-allowed:Tue", "recurring-unavailable:Thu", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern:Wed", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row"],
-      "East feed busy": ["east-busy", "east-forecast-busy:2026-12-01"],
-      "East-derived week": ["derived-lock:2026-11-09", "derived-lock-held:2026-11-10"],
+      "not available": ["east-busy", "east-forecast-busy:2026-12-01", "derived-lock:2026-11-09", "derived-lock-held:2026-11-10"], // Item E3 (9/25): the four East codes, one neutral category
       "caps reached": ["monthly-cap:8", "backup-cap:7", "backup-weekend-cap:1", "max-consecutive:2", "max-major-holidays:1"],
       "already on call that day": ["holds-other-role"],
       "holiday opt-outs": ["holiday-opt-out:Thanksgiving"],
@@ -598,12 +601,12 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   });
   check("openSlotReason: a mix unions the categories in table order, once each; empty / junk input -> 'no eligible surgeon'; never an id, name or code from the input", () => {
     const mixed = H.openSlotReason({ s1: ["monthly-cap:8", "holds-other-role"], s2: ["time-off:2026-11-05"], s3: ["east-busy", "time-off:2026-11-06"], s4: ["weekday-pattern:Thu"], s5: ["derived-lock:2026-11-09"], s6: ["backup-opt-out"] });
-    assert.strictEqual(mixed, "no eligible surgeon - vacations, weekday patterns and stated availability, East feed busy, East-derived week, caps reached, already on call that day, backup opt-outs");
+    assert.strictEqual(mixed, "no eligible surgeon - vacations, weekday patterns and stated availability, not available, caps reached, already on call that day, backup opt-outs", "Item E3: east-busy and derived-lock read 'not available' ONCE, in the table's order");
     assert.strictEqual(H.openSlotReason({}), "no eligible surgeon");
     assert.strictEqual(H.openSlotReason(null), "no eligible surgeon");
     assert.strictEqual(H.openSlotReason({ s1: [] }), "no eligible surgeon");
     assert.strictEqual(H.openSlotReason({ s1: "time-off:2026-11-05" }), "no eligible surgeon - vacations", "a bare string is accepted like a one-item list");
-    assert.strictEqual(H.openSlotReason({ s1: [null, 3, "east-busy"] }), "no eligible surgeon - East feed busy", "non-strings are skipped");
+    assert.strictEqual(H.openSlotReason({ s1: [null, 3, "east-busy"] }), "no eligible surgeon - not available", "non-strings are skipped");
     // Names / codes smuggled into a detail never reach the sentence.
     const smuggled = H.openSlotReason({ s1: ["time-off:Khan FAK s1"], Khan: ["monthly-cap:Burchett"], FAK: ["what-is-this:Acton wife funeral"] });
     assert.strictEqual(smuggled, "no eligible surgeon - vacations, caps reached, other rules");
@@ -628,6 +631,62 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.strictEqual(everything, "no eligible surgeon - " + CATEGORIES.join(", "));
     IMP.impRefuseNoteDenylist({ lastGenerate: { openSlots: Object.keys(rendered).map(c => ({ day: "2026-11-05", role: "primary", reason: rendered[c] })).concat([{ day: "2026-11-06", role: "backup", reason: everything }]) } });
     IMP.impRefuseNoteDenylist({ lastGenerate: { openSlots: CATEGORIES.map(c => ({ day: "2026-11-05", role: "primary", reason: "no eligible surgeon - " + c })) } });
+  });
+  check("Item E3 (9/25): no category, sentence or stored-sentence rewrite names East / Davenport / derived - the four East codes read 'not available' for everyone", () => {
+    const eastCodes = R.HARD_REASONS.filter(c => /^(east-|derived-)/.test(c));
+    assert.deepStrictEqual(eastCodes.slice().sort(), ["derived-lock-held:", "derived-lock:", "east-busy", "east-forecast-busy:"], "the East codes of the vocabulary changed - map any new one to 'not available' and update this pin");
+    eastCodes.forEach(c => assert.strictEqual(oneReason(c + (c.endsWith(":") ? "x" : "")), "no eligible surgeon - not available", c));
+    CATEGORIES.forEach(c => assert.ok(!/east|davenport|derived/i.test(c), "a category still names East: " + c));
+    const all = R.HARD_REASONS.map(c => c + (c.endsWith(":") ? "x" : ""));
+    assert.ok(!/east|davenport|derived/i.test(H.openSlotReason({ s1: all })), "the union sentence still names East");
+    assert.strictEqual(H.openSlotReason({ s1: ["time-off:2026-11-05", "east-busy"], s2: ["east-forecast-busy:2026-11-05", "derived-lock-held:s5"] }), "no eligible surgeon - vacations, not available", "vacations + every East code -> 'vacations, not available' (deduplicated)");
+  });
+  check("Item E3 (9/25): openSlotReasonCurrent brings a STORED pre-9/25 sentence up to date (renamed, deduplicated, table order, both sentence shapes) and leaves every current sentence byte for byte", () => {
+    assert.strictEqual(H.openSlotReasonCurrent("no eligible surgeon - weekday patterns and stated availability, East feed busy, East-derived week, caps reached"), "no eligible surgeon - weekday patterns and stated availability, not available, caps reached");
+    assert.strictEqual(H.openSlotReasonCurrent("no eligible surgeon - East feed busy"), "no eligible surgeon - not available");
+    assert.strictEqual(H.openSlotReasonCurrent("no eligible surgeon - East-derived week, vacations"), "no eligible surgeon - vacations, not available", "put back in table order");
+    assert.strictEqual(H.openSlotReasonCurrent("generator could not place - report it (other surgeons: vacations, East feed busy, holiday opt-outs, locks)"), "generator could not place - report it (other surgeons: vacations, not available, holiday opt-outs, locks)");
+    assert.strictEqual(H.openSlotReasonCurrent("no eligible surgeon - East feed busy, some future category"), "no eligible surgeon - not available, some future category", "an unknown category is kept (after the known ones)");
+    // current sentences (and junk) pass through unchanged
+    ["no eligible surgeon", "no eligible surgeon - vacations, not available", "generator could not place - report it", "generator could not place - report it (other surgeons: locks)", "", "free text"].forEach(t => assert.strictEqual(H.openSlotReasonCurrent(t), t, JSON.stringify(t)));
+    [null, undefined, 3].forEach(v => assert.strictEqual(H.openSlotReasonCurrent(v), v));
+    // idempotent on every sentence the generator can write today
+    CATEGORIES.forEach(c => { const t = "no eligible surgeon - " + c; assert.strictEqual(H.openSlotReasonCurrent(t), t); });
+    // the fixture's pre-9/25 wording (as stored in the live blob before E3) reads exactly today's rendering
+    const legacy = { "2026-11-05|primary": "no eligible surgeon - weekday patterns and stated availability, East feed busy, caps reached", "2026-11-07|backup": "no eligible surgeon - vacations, East-derived week, caps reached, already on call that day, backup opt-outs", "2026-11-26|primary": "generator could not place - report it (other surgeons: vacations, East feed busy, holiday opt-outs, locks)" };
+    LG.expected.openSlots.forEach(sl => { const k = sl.day + "|" + sl.role; if (legacy[k]) assert.strictEqual(H.openSlotReasonCurrent(legacy[k]), sl.reason, k); });
+    IMP.impRefuseNoteDenylist({ lastGenerate: { openSlots: Object.keys(legacy).map(k => ({ day: k.slice(0, 10), role: k.slice(11), reason: H.openSlotReasonCurrent(legacy[k]) })) } });
+    // review 9/25: a stored value with stray whitespace is still matched (trimmed); without a retired name it stays byte for byte
+    assert.strictEqual(H.openSlotReasonCurrent("  no eligible surgeon - East feed busy, vacations \n"), "no eligible surgeon - vacations, not available");
+    assert.strictEqual(H.openSlotReasonCurrent("  no eligible surgeon - vacations  "), "  no eligible surgeon - vacations  ");
+  });
+  check("Item E3 (9/25): openSlotsMessageCurrent brings an open_shifts notice ALREADY POSTED (a notifications row's message) up to date line by line - each slot line's reason through openSlotReasonCurrent, every other line and a current message byte for byte", () => {
+    const slots = [{ day: "2026-11-05", role: "primary", reason: "no eligible surgeon - weekday patterns and stated availability, East feed busy, caps reached" },
+      { day: "2026-11-06", role: "primary", unit: { kind: "weekend", pattern: "block" }, reason: "no eligible surgeon - vacations, East-derived week" },
+      { day: "2026-11-26", role: "primary", unit: { kind: "holiday", name: "Thanksgiving" }, reason: "generator could not place - report it (other surgeons: vacations, East feed busy, holiday opt-outs, locks)" },
+      { day: "2026-11-27", role: "backup", reason: null }];
+    const old = H.openShiftsEmail(slots, { appUrl: "https://example.test/app" }).message;
+    assert.ok(/East feed busy/.test(old) && /East-derived week/.test(old), "the composed pre-9/25 message names the retired categories: " + old);
+    const cur = H.openSlotsMessageCurrent(old);
+    assert.ok(!/\beast\b|davenport|derived week/i.test(cur), "no East wording is left: " + cur);
+    const want = H.openShiftsEmail(slots.map(s => ({ ...s, reason: H.openSlotReasonCurrent(s.reason) })), { appUrl: "https://example.test/app" }).message;
+    assert.strictEqual(cur, want, "exactly the message today's sentences compose");
+    assert.ok(cur.indexOf("  Thu 11/26 - primary (holiday: Thanksgiving) - open - generator could not place - report it (other surgeons: vacations, not available, holiday opt-outs, locks)") >= 0, cur);
+    assert.strictEqual(H.openSlotsMessageCurrent(want), want, "a current message is returned byte for byte");
+    [null, undefined, 3, "", "free text East feed busy"].forEach(v => assert.strictEqual(H.openSlotsMessageCurrent(v), v, JSON.stringify(v)));
+  });
+  check("Item E3 (9/25): the board reads the stored sentences through openSlotReasonCurrent (Why column, Alerts and the 5a / 5b e-mails share boardReasons); the Monday cron RELAYS the stored sentence - daily-reminder carries no copy of the category table and builds its reasons map from blob lastGenerate.openSlots[i].reason", () => {
+    const br = appSrc.slice(appSrc.indexOf("const boardReasons = useMemo("), appSrc.indexOf("const boardWeekendKinds = useMemo("));
+    assert.ok(br.includes("fromLast[k] = openSlotReasonCurrent(fromLastRaw[k]);"), "boardReasons must read the stored sentences through openSlotReasonCurrent");
+    const ann = appSrc.slice(appSrc.indexOf("const announceOpenShiftsAfterPublish = async"), appSrc.indexOf("const sendOpenShiftsNotice = async"));
+    assert.ok(ann.includes("reasons: boardReasons"), "5a composes from boardReasons");
+    // review 9/25: an Alerts row posted before 9/25 (any origin - the app's 5a / 5b or the cron's feed row) is read through
+    // openSlotsMessageCurrent in the feed and in the browser notification; the row itself is never rewritten
+    assert.ok(appSrc.includes('{n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message}</p>}'), "the Alerts feed reads an open_shifts message through openSlotsMessageCurrent");
+    assert.ok(appSrc.includes('newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));'), "the browser notification reads it the same way");
+    const daily = fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"), "utf8");
+    assert.ok(!/OPEN_SLOT_REASON|openSlotReason\(|East feed busy|East-derived week|not available/.test(daily), "daily-reminder must not carry its own reason table or category words - it relays the stored sentence");
+    assert.ok(/const lg = blob\?\.lastGenerate/.test(daily) && /reasons\[`\$\{s\.day\}\|\$\{s\.role\}`\] = s\.reason;/.test(daily), "daily-reminder builds its reasons map from blob lastGenerate.openSlots[i].reason (relay)");
   });
   check("lastGenerateFromDiagnostics(diagnostics, at) on the fixture: { at, range: { start, end }, openSlots sorted by day then role, weekendKinds } - reasons are the rendered sentences, never the reasons map", () => {
     const out = H.lastGenerateFromDiagnostics(LG.diagnostics, LG.at);
@@ -662,8 +721,10 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
       weekendKinds: { "2026-10-16": "block", "2026-11-06": "split", "2026-12-25": "daily" } };
     const dg = { range: { start: "2026-11-02", end: "2026-11-30" }, mode: "fill-open-only", fixedSlots: 40, uncovered: [{ day: "2026-11-05", role: "primary", reasons: { s1: ["east-busy"] } }], weekendUnits: [{ friday: "2026-11-06", kind: "block" }] };
     const out = H.lastGenerateFromDiagnostics(dg, "2026-09-23T01:00:00.000Z", prevRec);
+    // Item E3 (9/25): the fresh 11/5 sentence reads 'not available' (east-busy), and so does the CARRIED 12/24 one - the
+    // previous record's pre-9/25 'East feed busy' is brought up to date on the way through (openSlotReasonCurrent)
     assert.deepStrictEqual(out, { at: "2026-09-23T01:00:00.000Z", range: { start: "2026-11-02", end: "2026-11-30" }, mode: "fill-open-only", fixedSlots: 40,
-      openSlots: [{ day: "2026-10-15", role: "primary", reason: "no eligible surgeon - weekday patterns and stated availability" }, { day: "2026-11-05", role: "primary", reason: "no eligible surgeon - East feed busy" }, { day: "2026-12-24", role: "primary", reason: "no eligible surgeon - East feed busy" }],
+      openSlots: [{ day: "2026-10-15", role: "primary", reason: "no eligible surgeon - weekday patterns and stated availability" }, { day: "2026-11-05", role: "primary", reason: "no eligible surgeon - not available" }, { day: "2026-12-24", role: "primary", reason: "no eligible surgeon - not available" }],
       weekendKinds: { "2026-11-06": "block", "2026-10-16": "block", "2026-12-25": "daily" }, carriedFrom: "2026-09-20T10:00:00.000Z" });
     IMP.impRefuseNoteDenylist({ lastGenerate: out });
     // nothing to carry (previous covers the same range, or no previous / no range) -> no carriedFrom key

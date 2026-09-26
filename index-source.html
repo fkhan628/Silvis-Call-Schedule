@@ -1011,8 +1011,11 @@ function CallSchedule() {
   // --- Audit log ---
   // Append-only record of who changed what. Fire-and-forget + try/catch so it
   // never blocks or breaks an action. Called from the mutation choke points.
+  // Item E3 review (9/25): it answers a promise of true (row written) / false (refused or failed) - every caller
+  // still ignores it except saveDayEdit on an override, whose two audit rows are the only copy of its reasons since
+  // the note carries none (it toasts the scheduler when both are refused). Never throws, never rejects.
   const logAudit = (action, summary, details) => {
-    (async () => {
+    return (async () => {
       try {
         const { error } = await db.insert("audit_log", {
           actor_id: userProfile?.person_id || authUser?.id || null,
@@ -1020,8 +1023,9 @@ function CallSchedule() {
           action: action,
           detail: { summary: summary, ...(details || {}) },
         });
-        if (error) console.warn("audit log insert failed", error);
-      } catch (e) { console.warn("audit log failed", e); }
+        if (error) { console.warn("audit log insert failed", error); return false; }
+        return true;
+      } catch (e) { console.warn("audit log failed", e); return false; }
     })();
   };
   // Latest-closure bridge for callbacks memoized with [] deps (saveNotifPref):
@@ -2393,12 +2397,13 @@ function CallSchedule() {
 
   // --- Day editor save: the ONLY manual schedule mutation path ---
   // DayEditor (module scope) validates every pick through eligibility() and
-  // collects explicit overrides; this applies the result: undo point, note
-  // prefixed '[override: ...]', source "manual", audit 'schedule.day_edit'
-  // with before/after rows, a schedule_changed notification for everyone
-  // affected. Persistence is unchanged: the autosave's days leg pushes the
-  // new map through syncScheduleDays (per-day CAS; a conflict toasts
-  // "Changed by someone else - reloaded").
+  // collects explicit overrides; this applies the result: undo point, source
+  // "manual", audit 'schedule.day_edit' with before/after rows and the
+  // overrides (+ 'schedule.override' naming who despite which reasons), a
+  // schedule_changed notification for everyone affected. Persistence is
+  // unchanged: the autosave's days leg pushes the new map through
+  // syncScheduleDays (per-day CAS; a conflict toasts "Changed by someone else -
+  // reloaded").
   const saveDayEdit = (day, next, meta) => {
     if (!isScheduler || isPublicMode) { showToast("Only the scheduler can change the schedule.", "error"); return false; }
     const before = schedule[day] || emptyDayAssignment();
@@ -2407,11 +2412,12 @@ function CallSchedule() {
     if (after.primary) after.externalCover = null; // a roster primary replaces an external cover
     after.externalCover = (after.externalCover || "").trim() || null;
     const overrides = (meta && meta.overrides) || [];
-    let note = (after.note || "").replace(/^\[override:[^\]]*\]\s*/, "").trim();
-    if (overrides.length) {
-      const tag = "[override: " + overrides.map(o => nameOf(o.id) + " " + o.role + ": " + o.reasons.join(", ")).join("; ") + "]";
-      note = note ? tag + " " + note : tag;
-    }
+    // Item E3 (Faraz 9/25: "Overrides stop writing reason codes into schedule_days.note; the schedule.override audit row
+    // already keeps them"): schedule_days is anon-readable and CLAUDE.md says notes in anon-readable tables carry no
+    // reasons, so an override writes NOTHING into the note any more - the reasons live in the two audit rows below
+    // (schedule.day_edit detail.overrides, schedule.override). The strip stays: a note that still starts with an old
+    // '[override: ...]' tag (written before 9/25) loses it on its next save, and awaitingConfirmation keeps skipping one.
+    const note = (after.note || "").replace(/^\[override:[^\]]*\]\s*/, "").trim();
     after.note = note || null;
     // Prompt 12 M: a day that carries an outside surgeon (roster type "external") in either role is a
     // hand-written assignment - source manual-external (the generator never moves such a slot).
@@ -2428,10 +2434,23 @@ function CallSchedule() {
     pushUndo(schedule, { ...schedule, [day]: after });
     setSchedule(p => ({ ...p, [day]: after }));
     const lines = diffScheduleDays({ [day]: before }, { [day]: after }).map(c => formatDayChange(c, nameOf));
-    logAudit("schedule.day_edit", fmtMD(day) + ": " + (lines.join("; ") || "edited"), {
+    const dayEditLogged = logAudit("schedule.day_edit", fmtMD(day) + ": " + (lines.join("; ") || "edited"), {
       day, before: assignmentToDayRow(day, before), after: assignmentToDayRow(day, after), overrides,
     });
-    if (overrides.length) logAudit("schedule.override", "Override on " + fmtMD(day) + ": " + overrides.map(o => nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", ")).join("; "), { day, overrides });
+    // Item E3 review (9/25): the two audit rows are the ONLY record of an override's reasons now (the note carries none),
+    // so when BOTH are refused / fail the scheduler is told, with the reasons - never left to the console (one row
+    // written still keeps them: schedule.day_edit detail.overrides or schedule.override). Also while the session has
+    // expired (unlike a save-error toast, Prompt 16 A3): audit rows are never re-sent after the sign-in, so this line is
+    // the last place the reasons exist. (As before E3, the audit rows go out before the autosave's CAS sync; a sync
+    // conflict still leaves them standing for an override that did not land.)
+    if (overrides.length) {
+      const overrideText = overrides.map(o => nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", ")).join("; ");
+      const overrideLogged = logAudit("schedule.override", "Override on " + fmtMD(day) + ": " + overrideText, { day, overrides });
+      Promise.all([dayEditLogged, overrideLogged]).then(([de, ov]) => {
+        if (!de && !ov) showToast("Override on " + fmtMD(day) + ": the audit log refused both rows, so its reasons are recorded nowhere - note them: " + overrideText + ".", "error");
+        else if (!de || !ov) console.warn("override audit: one of the two rows was refused; the " + (de ? "schedule.day_edit" : "schedule.override") + " row keeps the reasons", day);
+      });
+    }
     // A lock change gets its own row (Prompt 11): the day_edit row carries it
     // too, but "who locked what" must be searchable by action.
     const lockChanges = ["primary", "backup"].filter(r => !!before[r + "Locked"] !== !!after[r + "Locked"]).map(r => ({ role: r, locked: !!after[r + "Locked"] }));
@@ -3929,7 +3948,8 @@ function CallSchedule() {
     if (lastNotifCountRef.current === null) { lastNotifCountRef.current = notifications.length; return; }
     if (notifications.length > lastNotifCountRef.current) {
       const newOnes = notifications.slice(0, notifications.length - lastNotifCountRef.current);
-      newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", n.message || "", `silvis-${n.id}`));
+      // Item E3 (9/25): an open_shifts row stored with a pre-9/25 reason ('East feed busy') reads 'not available' here too
+      newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));
     }
     lastNotifCountRef.current = notifications.length;
   }, [loaded, notifications, sendBrowserNotif]);
@@ -4572,10 +4592,23 @@ function CallSchedule() {
   // unchanged. Display only: rules.js (ctx.derivedByDay included), the feed, the forecast and the generator are
   // untouched. Out of scope on purpose and still drawn (Faraz: "don't change those until I say"): the grid's
   // East-VACATION diamonds + their legend line + the "East vacation:" hover, My schedule / Following's E / O / F / EV
-  // badges, the coverage strip's forecast / feed items, exports, print and calendar-sync.
+  // badges, the coverage strip's forecast / feed items, exports, print and calendar-sync. (Since Item E3, the same
+  // evening, the diamonds, their legend line and hover and the strip's forecast / feed items are the scheduler's only -
+  // eastDetailsVisible, a few lines below; My schedule / Following, exports, print and calendar-sync are unchanged.)
   // forecastThreshold (just below) stays: the grid no longer reads it, but the coverage glance (suCoverageGlance) and
   // Setup > East feed (EastFeedCard's threshold={forecastThreshold} prop) still do.
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
+  // Item E3 (Faraz 9/25: "East and override details are the scheduler's business"): ONE flag for everything E3 shows to
+  // the scheduler only - the day editor's East lines (eastStatusLines, the East-vacation review state included) and its
+  // "locked holder breaks: ..." line, the grid's East-vacation diamonds with their "East vacation:" hover bits and legend
+  // line, the coverage strip's "forecast-busy as primary", "East feed through" and "unreviewed East vacations" items, and
+  // Totals' East days column (header tooltip, cells, the fairness row's " + N East P-week", the footnote, the cap
+  // wording) and the same column in its CSV export. Surgeons, coordinators, viewers, followers and ?public=1 get none of
+  // it - no empty heading, no East word in a title. Faraz is both the scheduler and Khan (s1), so what was "scheduler and
+  // Khan" (the strip's unreviewed count) becomes scheduler-only with nothing lost. The pattern Item E used (9/24);
+  // display only - rules, the feed, the forecast and the generator are untouched. Unchanged on purpose (decided 9/24):
+  // My schedule / Following's badges, Khan's ?east=1 calendar feed and the office digest's Davenport section.
+  const eastDetailsVisible = isScheduler && !isPublicMode;
   // Coverage at a glance (Prompt 11): the next 60 days from today - open
   // primary / backup days, forecast-busy days that still hold that surgeon as
   // primary (should be 0), the East feed's coverage end, the last publish and
@@ -4618,9 +4651,11 @@ function CallSchedule() {
   // wins - no east-clear, ctx warning); a Silvis time_off day inside a range carries
   // no East marker (the Silvis dot stands; the day editor shows no East line there).
   // Without a ctx (rules error) the range state is drawn as is.
+  // Item E3 (Faraz 9/25): the scheduler's only - an empty map for everyone else, so no diamond, no "East vacation:"
+  // cell / dots hover bit and no .cal-dots row of its own is drawn (the round Silvis vacation dots stay for everyone).
   const eastVacByDay = useMemo(() => {
     const map = {};
-    if (!gridDays.length) return map;
+    if (!eastDetailsVisible || !gridDays.length) return map;
     const lo = gridDays[0], hi = gridDays[gridDays.length - 1];
     eastVacPeople.forEach(p => {
       const P = rulesCtx && rulesCtx.per && rulesCtx.per[p.id] && rulesCtx.per[p.id].eastVacationDays && rulesCtx.per[p.id].eastClear ? rulesCtx.per[p.id] : null;
@@ -4641,7 +4676,7 @@ function CallSchedule() {
       });
     });
     return map;
-  }, [eastVacPeople, gridDays, rulesCtx]);
+  }, [eastVacPeople, gridDays, rulesCtx, eastDetailsVisible]);
   // The time_off trigger mirrored for the DERIVED ranges (rules.eastVacationConflicts):
   // published days the person holds inside an unreviewed / away range (and a
   // published primary the day before one) - a report, never a block on a lock.
@@ -4651,7 +4686,9 @@ function CallSchedule() {
     catch (e) { console.warn("East vacation conflict report failed", e); return []; }
   }, [rulesCtx]);
   // The strip's count opens where the decision is made: the scheduler's Setup ->
-  // East feed panel (forced open), a surgeon's own Time off view.
+  // East feed panel (forced open), a surgeon's own Time off view. Since Item E3 (9/25) the strip item renders for the
+  // scheduler only (eastDetailsVisible), so the Time off branch is no longer reached from the strip; kept as the
+  // non-scheduler fallback.
   const openEastVacPanel = () => {
     if (isPublicMode) return;
     if (isScheduler) {
@@ -4734,7 +4771,12 @@ function CallSchedule() {
   const boardReasons = useMemo(() => {
     const toMap = (list) => { const m = {}; (Array.isArray(list) ? list : []).forEach(s => { if (s && suIsIso(s.day) && (s.role === "primary" || s.role === "backup") && typeof s.reason === "string") m[openSlotKey(s.day, s.role)] = s.reason; }); return m; };
     const src = lastGenerate && typeof lastGenerate === "object" ? lastGenerate.openSlots : null;
-    const fromLast = Array.isArray(src) ? toMap(src) : (src && typeof src === "object" ? src : {});
+    // Item E3 (Faraz 9/25): a sentence stored before 9/25 may name 'East feed busy' / 'East-derived week' - read through
+    // helpers.openSlotReasonCurrent it says 'not available' on the board, in Alerts and in the e-mails composed from this
+    // map (5a / 5b); the stored blob itself changes with the next Accept & Publish.
+    const fromLastRaw = Array.isArray(src) ? toMap(src) : (src && typeof src === "object" ? src : {});
+    const fromLast = {};
+    Object.keys(fromLastRaw).forEach(k => { fromLast[k] = openSlotReasonCurrent(fromLastRaw[k]); });
     const unc = previewGen && previewGen.diagnostics && Array.isArray(previewGen.diagnostics.uncovered) ? previewGen.diagnostics.uncovered : [];
     const fromPreview = toMap(unc.map(u => u && typeof u === "object" ? { day: u.day, role: u.role, reason: openSlotReason(u.reasons) } : null));
     return { ...fromLast, ...fromPreview };
@@ -5532,9 +5574,11 @@ function CallSchedule() {
                   <span style={{fontSize:12,fontWeight:600,color:"#1F2A3A"}}>{n.title}</span>
                   <span style={{fontSize:10,color:"#a0a8b0"}}>{new Date(n.created_at).toLocaleDateString()}</span>
                 </div>
+                {/* Item E3 (Faraz 9/25): an open_shifts row posted before 9/25 may name 'East feed busy' / 'East-derived week' in
+                    a slot's reason - read through helpers.openSlotsMessageCurrent it says 'not available' (the row is not rewritten) */}
                 {giveT
                   ? <p data-testid="notif-give-line" style={{fontSize:12,color:"#5B6B82",margin:"3px 0 0",lineHeight:1.4}}>{tradeGiveLine(tradeNamed(giveT), tradeUnitTag(giveT), mySurgeon)}</p>
-                  : <p style={{fontSize:12,color:"#5B6B82",margin:"3px 0 0",lineHeight:1.4}}>{n.message}</p>}
+                  : <p style={{fontSize:12,color:"#5B6B82",margin:"3px 0 0",lineHeight:1.4}}>{n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message}</p>}
                 {giveT && (
                   <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
                     <button data-testid="notif-give-accept" disabled={!!tradeBusy} onClick={(e)=>{ e.stopPropagation(); acceptTrade(giveT); }} style={{...css.btn(true),padding:"6px 14px",fontSize:12,minHeight:36}}>{tradeBusy === giveT.id ? "Working" : giveN > 1 ? `Accept (${giveN} days)` : "Accept"}</button>
@@ -5694,13 +5738,16 @@ function CallSchedule() {
                   <span style={{fontWeight:700,color:dkText,marginRight:2}}>Next 60 days:</span>
                   {covItem("cov-open-primary", "open primary", glance.openPrimary, "#c04040")}
                   {covItem("cov-open-backup", "open backup", glance.openBackup, "#c04040")}
-                  {covItem("cov-forecast-primary", "forecast-busy as primary", glance.forecastPrimary.map(x => x.day), "#8a5a10")}
-                  <span data-testid="cov-east-end" data-value={eastCoverageEnd || ""} title="Last day covered by a published Davenport week in the East feed cache">East feed through <strong style={{fontFamily:mono}}>{eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown"}</strong></span>
+                  {/* Item E3 (Faraz 9/25): the strip's three East items are the scheduler's only (eastDetailsVisible) - surgeons,
+                      coordinators, viewers and ?public=1 read open primary / open backup / last published and nothing East. */}
+                  {eastDetailsVisible && covItem("cov-forecast-primary", "forecast-busy as primary", glance.forecastPrimary.map(x => x.day), "#8a5a10")}
+                  {eastDetailsVisible && <span data-testid="cov-east-end" data-value={eastCoverageEnd || ""} title="Last day covered by a published Davenport week in the East feed cache">East feed through <strong style={{fontFamily:mono}}>{eastCoverageEnd ? fmtMD(eastCoverageEnd) : "unknown"}</strong></span>}
                   {/* Prompt 15 part 3: East vacations still to decide (upcoming ranges of the person with the East code) - opens the panel where the decision is made.
-                      Shown to the scheduler and to the person with the East code only: another surgeon's or the viewer's Time off view has no East card (a dead end). */}
-                  {!isPublicMode && (isScheduler ? eastVacPeople.length > 0 : !!eastVacById[mySurgeon]) && (
+                      Item E3 (9/25): the scheduler's only - it was the scheduler's and Khan's (another surgeon's or the viewer's Time off
+                      view has no East card, a dead end); Faraz is both, so nothing is lost. */}
+                  {eastDetailsVisible && eastVacPeople.length > 0 && (
                     <button type="button" data-testid="cov-eastvac-unreviewed" data-count={eastVacUnreviewed} onClick={openEastVacPanel}
-                      title={(eastVacUnreviewed ? "Undecided Davenport vacation range(s) - treated as away (a Silvis vacation) until reviewed. " : "Every upcoming East vacation is reviewed. ") + (isScheduler ? "Opens Setup > East feed." : "Opens Time off.")}
+                      title={(eastVacUnreviewed ? "Undecided Davenport vacation range(s) - treated as away (a Silvis vacation) until reviewed. " : "Every upcoming East vacation is reviewed. ") + "Opens Setup > East feed."}
                       style={{...css.mini(false),color: eastVacUnreviewed ? "#8a5a10" : "#1a8040",borderColor: eastVacUnreviewed ? "#8a5a10" : "#a0d8b0",fontFamily:font,cursor:"pointer"}}>
                       unreviewed East vacations: <span style={{fontFamily:mono,fontWeight:800}}>{eastVacUnreviewed}</span>{eastVacPeople.length === 1 ? " (" + nameOf(eastVacPeople[0].id) + ")" : ""}
                     </button>
@@ -5756,7 +5803,7 @@ function CallSchedule() {
               </div>
             )}
             {loaded && Object.keys(schedule).length === 0 && <p style={{...muted,fontStyle:"italic",marginBottom:8}}>No schedule days in the database yet - every day from today shows OPEN.</p>}
-            {!rulesImported && loaded && <p style={{...muted,marginBottom:8}}>Rules not imported yet: holiday units (and the day editor's East status) appear once Setup imports the seed (Slice E).</p>}
+            {!rulesImported && loaded && <p style={{...muted,marginBottom:8}}>Rules not imported yet: holiday units{eastDetailsVisible ? " (and the day editor's East status)" : ""} appear once Setup imports the seed (Slice E).</p>}
 
             {/* The grid */}
             <div className="cal-grid" data-testid="cal-grid" data-week-start={weekStartsOn}>
@@ -5791,6 +5838,7 @@ function CallSchedule() {
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
                 const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
                 if (hol) titleBits.push(hol.name + " (holiday unit)"); if (a && a.note) titleBits.push("note: " + a.note);
+                // Item E3 (9/25): eastVacByDay is empty unless eastDetailsVisible, so this bit (and the dots row's) is the scheduler's only
                 if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
                 // The header reserves 15px per 13px badge shown, at least 30px, so a badge never covers the holiday label. Since
                 // Item E2 (9/25) the confirm "?" is the grid's only badge (the E / F / f badges are gone), so nBadges counts just
@@ -5837,7 +5885,8 @@ function CallSchedule() {
               <span>Fri-Sun tinted = weekend unit</span>
               <span>gold = holiday unit</span>
               <span>dots = vacations</span>
-              {eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"><span style={eastVacMarkStyle("unreviewed", dk)}/> unreviewed <span style={eastVacMarkStyle("away", dk, dkSubtext)}/> away <span style={eastVacMarkStyle("home", dk)}/> home = East vacation</span>}
+              {/* Item E3 (9/25): the East-vacation legend line follows the diamonds - the scheduler's only */}
+              {eastDetailsVisible && eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"><span style={eastVacMarkStyle("unreviewed", dk)}/> unreviewed <span style={eastVacMarkStyle("away", dk, dkSubtext)}/> away <span style={eastVacMarkStyle("home", dk)}/> home = East vacation</span>}
               <span>orange outline = today</span>
               {isScheduler && !isPublicMode && <span>Click a day to edit (eligibility-checked); saves per day with compare-and-swap.</span>}
             </div>
@@ -5908,7 +5957,7 @@ function CallSchedule() {
         {(view==="calendar" || view==="openshifts") && editorDay && (
           <DayEditor key={editorDay} day={editorDay} entry={schedule[editorDay] || null}
             roster={surgeons} ctxInputs={ctxInputs} ctxError={rulesCtxState.error}
-            canEdit={isScheduler && !isPublicMode} rulesImported={rulesImported} isPublicMode={isPublicMode}
+            canEdit={isScheduler && !isPublicMode} eastDetailsVisible={eastDetailsVisible} rulesImported={rulesImported} isPublicMode={isPublicMode}
             nameOf={nameOf} codeOf={codeOf} colorOf={colorOf} mySurgeon={mySurgeon}
             vacationNames={vacNamesOn(editorDay)} focusExternal={editorFocus === "external"}
             onSave={(next, meta) => { if (saveDayEdit(editorDay, next, meta)) setEditorDay(null); }}
@@ -6398,7 +6447,7 @@ function CallSchedule() {
 
         {/* ================ TOTALS (Prompt 6 Slice F) - counts only, never $ ================ */}
         {view==="totals" && !isPublicMode && (
-          <TotalsCard css={css} dk={dk} roster={surgeons} schedule={schedule} ctx={rulesCtx} surgeonRules={surgeonRules} preview={previewGen} today={todayStr} nameOf={nameOf} Badge={Badge} showToast={showToast} ytdFloors={TOTALS_YTD_FLOORS} loaded={loaded}/>
+          <TotalsCard css={css} dk={dk} roster={surgeons} schedule={schedule} ctx={rulesCtx} surgeonRules={surgeonRules} preview={previewGen} today={todayStr} nameOf={nameOf} Badge={Badge} showToast={showToast} ytdFloors={TOTALS_YTD_FLOORS} loaded={loaded} eastDetailsVisible={eastDetailsVisible}/>
         )}
 
         {/* ================ SETTINGS ================ */}
@@ -7610,8 +7659,9 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
 // has to re-confirm. The month grid and the day editor show a small "confirm" badge on it; nothing else changes
 // (the lock stays a lock until it is edited). Same literal as importer.js IMP_AWAITING_MARKER, pinned by
 // test/data-layer.test.js; the marker leaves the note on the next seed import once the flag is removed. A manual edit
-// that needed an override puts the app's own '[override: ...] ' tag in front of the note (saveDayEdit) - the predicate
-// strips that tag first, so the badge survives an overridden backup pick on a flagged day (review B-1).
+// that needed an override USED to put the app's own '[override: ...] ' tag in front of the note (saveDayEdit, until
+// Item E3 on 9/25 - no new tag is written since) - the predicate still strips such a tag first, so the badge survives
+// an old tagged note on a flagged day (review B-1).
 const AWAITING_CONFIRMATION_MARKER = "awaiting confirmation - ";
 const awaitingConfirmation = (a) => !!(a && (a.primaryLocked || a.backupLocked) && typeof a.note === "string" && a.note.replace(/^\[override:[^\]]*\]\s*/, "").indexOf(AWAITING_CONFIRMATION_MARKER) === 0);
 const confirmBadgeStyle = { display:"inline-flex", alignItems:"center", height:13, padding:"0 4px", borderRadius:3, fontSize:8, fontWeight:800, lineHeight:1, letterSpacing:0.5, textTransform:"uppercase", background:"#c2410c", color:"#ffffff", whiteSpace:"nowrap" };
@@ -7701,11 +7751,13 @@ function offersLoadVerdict(st) {
 // current pick counts ("holds-other-role") and a lock toggled off in the
 // draft stops blocking. Ineligible options stay selectable for the scheduler
 // but only through the Override panel, which lists ALL hard reasons; the
-// overrides ride along to onSave (note prefix + audit). Non-schedulers get
-// the read-only detail. Esc closes; Left/Right arrows move a day when the
-// draft is clean and focus is not in a field.
+// overrides ride along to onSave (audit only - no note tag since Item E3,
+// 9/25). Non-schedulers get the read-only detail, without the East lines and
+// the "locked holder breaks" line (eastDetailsVisible, Item E3). Esc closes;
+// Left/Right arrows move a day when the draft is clean and focus is not in a
+// field.
 function DayEditor(props) {
-  const { day, entry, roster, ctxInputs, ctxError, canEdit, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, suggestTrade, css, dk, focusExternal } = props;
+  const { day, entry, roster, ctxInputs, ctxError, canEdit, eastDetailsVisible, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, suggestTrade, css, dk, focusExternal } = props;
   // focusExternal (optional): the Open shifts board's 'Outside cover' opened
   // this editor - put the caret in the external-cover input (the write still
   // goes through Save below).
@@ -7752,7 +7804,10 @@ function DayEditor(props) {
   const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } } }), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
-  const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
+  // Item E3 (Faraz 9/25): the East lines - the East-vacation review state and its diamond included - are the
+  // scheduler's only (the App's eastDetailsVisible = isScheduler && !isPublicMode); nobody else gets them built, let
+  // alone drawn. The rest of the editor (holders, locks, holiday unit, vacations, offers, note) is the same for everyone.
+  const east = ctx && eastDetailsVisible ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
   // Small items (9/22): the Fri/Sat/Sun triple this day belongs to (null on Mon-Thu, or
   // when any of the three days is a holiday-unit day - a holiday unit is not a weekend
   // unit). A candidate who holds the OTHER two days of it in the role being asked about
@@ -7913,7 +7968,9 @@ function DayEditor(props) {
           {locked && <Padlock title={role + " locked"} size={11}/>}
           {locked && awaitingConfirmation(opened) && <span data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={confirmBadgeStyle}>confirm</span>}
           {cur && cur.external && <span data-testid={"editor-" + role + "-external-tag"} style={{fontSize:10,color:sub,fontWeight:700}}>outside surgeon - written in by hand</span>}
-          {cur && cur.lockHolder && cur.conflicts.length > 0 && <span title={cur.conflicts.join(", ")} style={{fontSize:10,color:"#8a5a10",fontWeight:700}}>locked holder breaks: {cur.conflicts.map(c => reasonLabel(c, nameOf)).join("; ")}</span>}
+          {/* Item E3 (Faraz 9/25): which rule a locked holder breaks (East reasons among them, the raw codes in the hover) is
+              override detail - the scheduler's only, like the Override panel's reason list */}
+          {eastDetailsVisible && cur && cur.lockHolder && cur.conflicts.length > 0 && <span data-testid={"editor-" + role + "-lock-breaks"} title={cur.conflicts.join(", ")} style={{fontSize:10,color:"#8a5a10",fontWeight:700}}>locked holder breaks: {cur.conflicts.map(c => reasonLabel(c, nameOf)).join("; ")}</span>}
           {ov && <span data-testid={"override-tag-" + role} style={{fontSize:10,color:"#a83232",fontWeight:700}}>override: {ov.reasons.join(", ")}</span>}
         </div>
         {canEdit && (
@@ -7971,11 +8028,14 @@ function DayEditor(props) {
         </div>
         <div style={{fontSize:12,color:sub,lineHeight:1.6,marginBottom:10}}>
           <div>{hol ? <><span style={{fontWeight:700,color:"#8a6a10"}}>{hol.name}</span> holiday unit ({hol.tier}): {hol.days.map(fmtMD).join(", ")} - one primary and one backup stick through the unit.</> : "Not in a holiday unit."}</div>
-          {east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map(l => <div key={l.id + l.text} data-testid="east-status" data-eastvac={l.eastVac || undefined} style={{color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : l.tone === "home" ? "#1a8040" : sub}}>{l.eastVac ? <span style={{...eastVacMarkStyle(l.eastVac, dk, sub),marginRight:6,verticalAlign:"middle"}}/> : null}East - {l.text}</div>)}
+          {/* Item E3 (Faraz 9/25): the East block - status lines, the East-vacation state and diamond, and the "East: ..." placeholder
+              line - is the scheduler's only; everyone else gets no East heading, line or word here */}
+          {eastDetailsVisible && (east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map(l => <div key={l.id + l.text} data-testid="east-status" data-eastvac={l.eastVac || undefined} style={{color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : l.tone === "home" ? "#1a8040" : sub}}>{l.eastVac ? <span style={{...eastVacMarkStyle(l.eastVac, dk, sub),marginRight:6,verticalAlign:"middle"}}/> : null}East - {l.text}</div>))}
           <div>Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div>
           {ctxError && <div style={{color:"#a83232",fontWeight:700}}>Eligibility unavailable: {ctxError}</div>}
           {!rulesImported && <div>Rules not imported yet - eligibility reflects locks, vacations and availability rows only.</div>}
-          {entry && entry.source && <div>Source: {entry.source}</div>}
+          {/* Item E3 (9/25): a derived-week row's source "east-derived" reads "generated" (the generator wrote it) to everyone but the scheduler */}
+          {entry && entry.source && <div data-testid="editor-source">Source: {entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source}</div>}
         </div>
 
         {roleBlock("primary")}
@@ -7987,7 +8047,7 @@ function DayEditor(props) {
             <ul style={{margin:"0 0 8px",paddingLeft:18,fontSize:12,color: dk ? "#e0b0b0" : "#8a3030",lineHeight:1.5}}>
               {pending.reasons.map(r => <li key={r}><span style={{fontFamily:mono}}>{r}</span> - {reasonLabel(r, nameOf)}</li>)}
             </ul>
-            <div style={{fontSize:11,color:sub,marginBottom:8}}>Overriding assigns anyway and prefixes the day's note with [override: ...]; the audit log records it.</div>
+            <div data-testid="override-note" style={{fontSize:11,color:sub,marginBottom:8}}>Overriding assigns anyway; the audit log records it with these reasons. The day's note gets no reasons (anyone can read it).</div>
             <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
               <button type="button" onClick={() => setPending(null)} style={{...css.btn(false),padding:"5px 12px",fontSize:12}}>Keep as is</button>
               <button type="button" data-testid="override-accept" onClick={confirmOverride} style={{...css.btn(true),padding:"5px 12px",fontSize:12,background:"linear-gradient(135deg,#a83232,#c04a4a)",borderColor:"#a83232"}}>Override and assign</button>
@@ -8007,7 +8067,7 @@ function DayEditor(props) {
             </div>
           </div>
         ) : (
-          <div style={{fontSize:12,color:sub,marginBottom:10}}>{draft.note ? <>Note: {draft.note}</> : "No note."}</div>
+          <div data-testid="editor-note-view" style={{fontSize:12,color:sub,marginBottom:10}}>{draft.note ? <>Note: {draft.note}</> : "No note."}</div>
         )}
 
         {info && <div role="status" data-testid="editor-info" style={{fontSize:12,color:sub,fontWeight:600,marginBottom:8}}>{info}</div>}
@@ -8103,7 +8163,7 @@ const TOTALS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep
 // The year-to-date floor per year (the published schedule starts 2026-09-14): the Totals card's YTD range and the
 // Item C trade suggestions' running yearly tally both read it.
 const TOTALS_YTD_FLOORS = { "2026": "2026-09-14" };
-function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, loaded }) {
+function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, loaded, eastDetailsVisible }) {
   const T = THEME[dk ? "dark" : "light"];
   const now = parse(today);
   const [mode, setMode] = useState("month"); // month | ytd | rolling | fairness
@@ -8166,7 +8226,12 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const list = (roster || []).filter(s => s && s.id && s.type !== "external");
   const outside = sources.map(src => ({ src, rows: ttOutsideSurgeons(roster || [], src.sched, range.from, range.to, opts) }));
   const hasOutside = outside.some(o => o.rows.length > 0);
-  const showEast = list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
+  // Item E3 (Faraz 9/25): the East days column - header + tooltip, cells, the fairness row's " + N East P-week", the
+  // footnote - and the East wording of the cap tooltips are the scheduler's only (eastDetailsVisible from the App); the
+  // CSV export follows the on-screen column. The NUMBERS do not change for anyone: a cap that counts East days (Fierce's)
+  // still compares primary + East primary-week days with the cap, and flags over it the same way - the other roles read
+  // that count with neutral wording ("other days this cap counts").
+  const showEast = !!eastDetailsVisible && list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
   const rows = [];
   list.forEach(s => sources.forEach(src => {
     const t = ttTotalsFor(src.sched, s.id, range.from, range.to, { ...opts, unitCollapse: collapseFor(s.id) });
@@ -8194,6 +8259,14 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
       const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool"]);
       outside.forEach(o => o.rows.forEach(x => data.push([range.label, range.from, range.to, o.src.label, x.name, x.code, x.primary, x.backup, x.total, "", "", "", "", "", "", "", "", "", "", "", "", "outside"])));
+      // Item E3 (9/25): the CSV follows the on-screen column - without eastDetailsVisible the "East days" column is left out
+      // (header and cells) and the cap-count header drops its East wording; the scheduler's file is unchanged, column for column.
+      if (!eastDetailsVisible) {
+        const eastCol = headers.indexOf("East days");
+        headers.splice(eastCol, 1);
+        data.forEach(r => r.splice(eastCol, 1));
+        headers[headers.indexOf("Counted vs cap (P + East P-week days)")] = "Counted vs cap";
+      }
       const csv = ttCsvText(headers, data);
       const name = "silvis-totals-" + rangeMode + "-" + range.from + "-" + range.to + ".csv";
       const real = downloadTextFile(csv, name, "text/csv");
@@ -8231,7 +8304,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       <div data-testid="totals-period" style={{ fontSize: 12.5, color: dk ? "#c0c0d8" : "#3a4a58", marginBottom: 8 }}>
         <strong>{periodText}</strong> - {range.from} to {range.to}. One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.{!loaded ? " Loading schedule..." : ""}
       </div>
-      {!ctx && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules context unavailable - caps, targets, holiday units and East days show as '-' until the setup loads.</div>}
+      {!ctx && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules context unavailable - caps, targets{eastDetailsVisible ? ", holiday units and East days" : " and holiday units"} show as '-' until the setup loads.</div>}
       {mode !== "fairness" ? (
         <div className="table-wrap" style={css.tableWrap}>
           <table data-testid="totals-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
@@ -8240,19 +8313,19 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                 <th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}
                 <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
                 {showEast && <th style={th} title="Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)">East days</th>}
-                <th style={th} title="Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it">Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder) (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else min(level, backup cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool backup slots, open + already held (a locked day counts against its holder) (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th>
+                <th style={th} title={eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder) (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else min(level, backup cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool backup slots, open + already held (a locked day counts against its holder) (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(r => (
-                <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-maxconsecany={r.t.maxConsecutiveAnyRole} data-east={r.east} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
+                <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-maxconsecany={r.t.maxConsecutiveAnyRole} data-east={showEast ? r.east : undefined} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
                   <td style={tdL}><Badge id={r.id}/></td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: r.src === "preview" ? "#7a4fbf" : "#5B6B82" }}>{r.srcLabel}</td>}
                   <td style={td}>{r.t.primary}</td><td style={td}>{r.t.backup}</td><td style={{ ...td, fontWeight: 700 }}>{r.t.total}</td><td style={td}>{r.t.weekendDays}</td>
                   <td style={td} title={r.t.holidayUnits.join(", ") || "none"}>{r.t.majorHolidays} / {r.t.minorHolidays}</td>
                   <td data-col="maxconsec" data-flag={overConsec(r) ? "over" : undefined} style={{ ...td, color: overConsec(r) ? "#c04040" : td.color }}>{r.t.maxConsecutive}{r.maxRule !== null ? " (" + r.maxRule + ")" : ""}</td>
                   <td data-col="maxconsecany" data-flag={overConsecAny(r) ? "over" : undefined} style={{ ...td, color: overConsecAny(r) ? "#c04040" : td.color }}>{r.t.maxConsecutiveAnyRole}{r.maxRuleAny !== null ? " (" + r.maxRuleAny + ")" : ""}</td>
                   {showEast && <td style={td}>{r.east || (countsEast(r.id) ? 0 : "-")}</td>}
-                  <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}</td>
+                  <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? (eastDetailsVisible ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " day(s) - the primary days plus the other days this cap counts; backup never counts") : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}</td>
                   <td data-col="target" style={td}>{targetText(r)}</td>
                   <td data-col="deviation" data-flag={devFlag(r)} style={{ ...td, color: devColor(r), fontWeight: 600 }}>{r.deviation}</td>
                   <td data-col="targetb" style={td}>{targetBText(r)}</td>
@@ -8273,7 +8346,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                 <div style={{ width: 110, display: "flex", gap: 6, alignItems: "center" }}><Badge id={r.id}/>{r.src === "preview" && <span style={{ fontSize: 9, color: "#7a4fbf" }}>preview</span>}</div>
                 <div data-testid="fairness-track" style={{ flex: "1 1 220px", position: "relative", height: 18, background: T.barTrack, borderRadius: 4, overflow: "hidden" }}>
                   <div data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`, borderRadius: 4 }}/>
-                  {countsEast(r.id) && r.eastP > 0 && <div title={"+ " + r.eastP + " East primary-week day(s) counted toward the cap (P)"} style={{ position: "absolute", left: pct(r.t.total) + "%", top: 0, bottom: 0, width: Math.max(0, pct(r.t.total + r.eastP) - pct(r.t.total)) + "%", background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)" }}/>}
+                  {countsEast(r.id) && r.eastP > 0 && <div title={"+ " + r.eastP + (eastDetailsVisible ? " East primary-week" : " other") + " day(s) counted toward the cap (P)"} style={{ position: "absolute", left: pct(r.t.total) + "%", top: 0, bottom: 0, width: Math.max(0, pct(r.t.total + r.eastP) - pct(r.t.total)) + "%", background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)" }}/>}
                   {targetSum(r) !== null && <div data-testid="fairness-target-mark" title={"target P " + (r.target === null ? "-" : r.target) + " + B " + (r.targetB === null ? "-" : r.targetB) + " = " + targetSum(r)} style={{ position: "absolute", left: pct(targetSum(r)) + "%", top: 0, bottom: 0, width: 2, background: "#1a8040" }}/>}
                   {r.cap !== null && <div title={"cap " + r.cap * nMonths} style={{ position: "absolute", left: pct(r.cap * nMonths) + "%", top: 0, bottom: 0, width: 2, background: "#c04040" }}/>}
                 </div>

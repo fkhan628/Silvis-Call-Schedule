@@ -232,12 +232,22 @@ function openSlotWeekendKinds(weekendUnits) {
    carries an id, a name, a date or any free text from the input -
    test/open-shifts.test.js runs every vocabulary code through the importer's
    denylist gate (Prompt 12 F). No category at all (no active surgeon, junk
-   input) -> 'no eligible surgeon'. */
+   input) -> 'no eligible surgeon'.
+   Item E3 (Faraz 9/25: "The open-shifts notice drops its East reason sentences
+   for everyone; say 'not available' instead"): the four East codes (east-busy,
+   east-forecast-busy, derived-lock, derived-lock-held) share ONE category,
+   'not available', in the row the two East categories ('East feed busy',
+   'East-derived week') had - so a slot whose reasons were vacations + East reads
+   'no eligible surgeon - vacations, not available', once. The sentence reaches
+   the board's Why column, in-app Alerts and the group e-mail (Accept & Publish,
+   'Email the group now' and the Monday cron, which relays the stored sentence);
+   a sentence stored before 9/25 is brought up to date where it is read
+   (openSlotReasonCurrent below; an Alerts row already posted through
+   openSlotsMessageCurrent). */
 const OPEN_SLOT_REASON_TABLE = [
   ["vacations", ["time-off", "day-before-vacation"]],
   ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row", "not-offered"]],
-  ["East feed busy", ["east-busy", "east-forecast-busy"]],
-  ["East-derived week", ["derived-lock", "derived-lock-held"]],
+  ["not available", ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"]], // Item E3 (9/25): East busy / forecast-busy / derived weeks, named for nobody
   ["caps reached", ["monthly-cap", "backup-cap", "backup-weekend-cap", "max-consecutive", "max-major-holidays"]],
   ["already on call that day", ["holds-other-role"]],
   ["holiday opt-outs", ["holiday-opt-out"]],
@@ -265,6 +275,46 @@ function openSlotReason(reasonsById) {
   const cats = OPEN_SLOT_REASON_TABLE.map(row => row[0]).concat([OPEN_SLOT_REASON_OTHER]).filter(c => seen[c]);
   if (seen[OPEN_SLOT_REASON_UNPLACED]) return cats.length ? OPEN_SLOT_REASON_UNPLACED + " (other surgeons: " + cats.join(", ") + ")" : OPEN_SLOT_REASON_UNPLACED;
   return cats.length ? "no eligible surgeon - " + cats.join(", ") : "no eligible surgeon";
+}
+/* openSlotReasonCurrent(reason) -> a STORED reason sentence in today's vocabulary (Item E3, Faraz 9/25). A sentence
+   written before 9/25 (blob lastGenerate.openSlots[i].reason) may name the two retired East categories 'East feed
+   busy' / 'East-derived week'; both read 'not available' now. The category list after 'no eligible surgeon - ' (or
+   inside the placeholder's '(other surgeons: ...)') is renamed, deduplicated and put back in table order; a sentence
+   without a retired category is returned unchanged (byte for byte), and so is a non-string; a sentence that names one
+   is matched trimmed (a stored value with stray whitespace is still brought up to date - review 9/25). Read-side only:
+   the board's reasons map (index-source.html boardReasons), the carry-over of an earlier record
+   (lastGenerateFromDiagnostics) and the Alerts feed's open_shifts rows (openSlotsMessageCurrent below) call it; the blob
+   itself is rewritten by the next Accept & Publish. The Monday cron (daily-reminder, 5c) relays the stored text as is
+   until then - its job, silvis-open-shifts-weekly, is not created yet (edge-functions/README.md section 4). Pure. */
+const OPEN_SLOT_REASON_RETIRED = { "East feed busy": "not available", "East-derived week": "not available" };
+function openSlotReasonCurrent(reason) {
+  if (typeof reason !== "string" || !Object.keys(OPEN_SLOT_REASON_RETIRED).some(k => reason.indexOf(k) >= 0)) return reason;
+  const order = OPEN_SLOT_REASON_TABLE.map(row => row[0]).concat([OPEN_SLOT_REASON_OTHER]);
+  const fix = (list) => {
+    const cats = [];
+    list.split(", ").forEach(c => { const n = OPEN_SLOT_REASON_RETIRED[c] || c; if (cats.indexOf(n) < 0) cats.push(n); });
+    const known = cats.filter(c => order.indexOf(c) >= 0).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    return known.concat(cats.filter(c => order.indexOf(c) < 0)).join(", ");
+  };
+  const t = reason.trim();
+  let m = /^(no eligible surgeon - )(.+)$/.exec(t);
+  if (m) return m[1] + fix(m[2]);
+  m = /^(generator could not place - report it [(]other surgeons: )(.+)([)])$/.exec(t);
+  if (m) return m[1] + fix(m[2]) + m[3];
+  return reason;
+}
+/* openSlotsMessageCurrent(message) -> an open_shifts notice's STORED message (a notifications row: Accept & Publish,
+   'Email the group now', the Monday cron) in today's vocabulary (Item E3, Faraz 9/25: "drops its East reason sentences
+   for everyone"). Each slot line ('  Fri 11/06 - primary (weekend block) - open - <reason>', openSlotsLine) has its
+   reason run through openSlotReasonCurrent; every other line, and a message that names no retired category, is returned
+   unchanged (byte for byte), and so is a non-string. Read-side only - the Alerts feed and the browser notification;
+   the row itself is never rewritten. Pure. */
+function openSlotsMessageCurrent(message) {
+  if (typeof message !== "string" || !Object.keys(OPEN_SLOT_REASON_RETIRED).some(k => message.indexOf(k) >= 0)) return message;
+  return message.split("\n").map(line => {
+    const m = /^(.*? - open - )(.+)$/.exec(line);
+    return m ? m[1] + openSlotReasonCurrent(m[2]) : line;
+  }).join("\n");
 }
 /* lastGenerateFromDiagnostics(diagnostics, atIso) -> { at, range: { start, end },
    openSlots: [{ day, role, reason }], weekendKinds: { '<friday>': kind } } - the
@@ -297,7 +347,7 @@ function lastGenerateFromDiagnostics(diagnostics, atIso, previous) {
   const prev = previous && typeof previous === "object" && start && end ? previous : null;
   const carried = (prev && Array.isArray(prev.openSlots) ? prev.openSlots : [])
     .filter(u => u && typeof u === "object" && openSlotIsDay(u.day) && OPEN_SLOT_ROLES.indexOf(u.role) >= 0 && (u.day < start || u.day > end) && typeof u.reason === "string" && u.reason.trim())
-    .map(u => ({ day: u.day, role: u.role, reason: u.reason.trim() }));
+    .map(u => ({ day: u.day, role: u.role, reason: openSlotReasonCurrent(u.reason.trim()) })); // Item E3: a carried pre-9/25 sentence is brought up to date
   const weekendKinds = openSlotWeekendKinds(dg.weekendUnits);
   const prevKinds = prev ? openSlotWeekendKinds(prev.weekendKinds) : {};
   Object.keys(prevKinds).forEach(f => { if ((f < start || f > end) && weekendKinds[f] === undefined) weekendKinds[f] = prevKinds[f]; });
@@ -3174,7 +3224,7 @@ if (typeof module !== "undefined" && module.exports) {
     vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
-    openSlotReason, lastGenerateFromDiagnostics,
+    openSlotReason, openSlotReasonCurrent, openSlotsMessageCurrent, lastGenerateFromDiagnostics,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     undoEntry, undoNoteWrite, undoApply, undoMessage,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,

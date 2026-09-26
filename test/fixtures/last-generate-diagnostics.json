@@ -202,7 +202,7 @@
       {
         "day": "2026-11-05",
         "role": "primary",
-        "reason": "no eligible surgeon - weekday patterns and stated availability, East feed busy, caps reached"
+        "reason": "no eligible surgeon - weekday patterns and stated availability, not available, caps reached"
       },
       {
         "day": "2026-11-05",
@@ -212,12 +212,12 @@
       {
         "day": "2026-11-07",
         "role": "backup",
-        "reason": "no eligible surgeon - vacations, East-derived week, caps reached, already on call that day, backup opt-outs"
+        "reason": "no eligible surgeon - vacations, not available, caps reached, already on call that day, backup opt-outs"
       },
       {
         "day": "2026-11-26",
         "role": "primary",
-        "reason": "generator could not place - report it (other surgeons: vacations, East feed busy, holiday opt-outs, locks)"
+        "reason": "generator could not place - report it (other surgeons: vacations, not available, holiday opt-outs, locks)"
       }
     ],
     "weekendKinds": {

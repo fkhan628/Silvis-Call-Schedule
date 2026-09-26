@@ -1881,10 +1881,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count('data-testid="confirm-badge"'), 2, "DayEditor role row + month grid cell");
     assert.strictEqual(count('data-badge="confirm"'), 1, "the grid badge is readable through [data-badge] (the only grid badge since Item E2, 9/25)");
     assert.strictEqual(count("awaiting the scheduler's confirmation"), 2, "the hover title on both badges");
-    // review B-1: saveDayEdit rebuilds an overridden day's note as '[override: ...] <note>', which moves the marker off
-    // index 0 - the predicate strips the app's own override tag (same regex literal as saveDayEdit) before it looks.
-    assert.ok(src.includes('const awaitingConfirmation = (a) => !!(a && (a.primaryLocked || a.backupLocked) && typeof a.note === "string" && a.note.replace(/^\\[override:[^\\]]*\\]\\s*/, "").indexOf(AWAITING_CONFIRMATION_MARKER) === 0);'), "the predicate tolerates the '[override: ...] ' prefix saveDayEdit puts in front of the note");
-    assert.ok(count("/^\\[override:[^\\]]*\\]\\s*/") >= 2, "saveDayEdit and the predicate share one override-tag regex literal");
+    // review B-1: saveDayEdit used to rebuild an overridden day's note as '[override: ...] <note>' (until Item E3, 9/25 -
+    // no new tag is written since), which moved the marker off index 0; a note written before 9/25 may still start with
+    // such a tag, so the predicate strips it (same regex literal as saveDayEdit's strip) before it looks.
+    assert.ok(src.includes('const awaitingConfirmation = (a) => !!(a && (a.primaryLocked || a.backupLocked) && typeof a.note === "string" && a.note.replace(/^\\[override:[^\\]]*\\]\\s*/, "").indexOf(AWAITING_CONFIRMATION_MARKER) === 0);'), "the predicate tolerates an old '[override: ...] ' prefix (written before Item E3) in front of the note");
+    assert.ok(count("/^\\[override:[^\\]]*\\]\\s*/") >= 2, "saveDayEdit's strip and the predicate share one override-tag regex literal");
     // review B-2: in the month grid the badge is a 13px '?' square (the E / F badges it sat beside came off the grid on 9/25, Item E2; the header reserves 15px per badge shown),
     // so it never covers the holiday label; the word 'confirm' stays in the day editor where there is room.
     assert.ok(src.includes('<span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler\'s confirmation" style={badge(true, "#c2410c")}>?</span>'), "grid badge = 13px square via badge(), glyph '?'");
@@ -1932,9 +1933,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count('<span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler\'s confirmation" style={badge(true, "#c2410c")}>?</span>'), 1, "the grid's confirm badge must stay");
     assert.ok(grid.includes("const nBadges = awaitingConfirmation(a) ? 1 : 0;"), "nBadges counts the confirm badge (the only grid badge since Item E2)");
     assert.ok(grid.includes("paddingRight:Math.max(30, 4 + 15 * nBadges)"), "the header still reserves the holiday-label gutter from nBadges");
-    assert.ok(grid.includes("data-eastvac={m.id}") && grid.includes('titleBits.push("East vacation: "'), "the East-vacation diamond and its 'East vacation:' hover (out of scope) must stay");
+    assert.ok(grid.includes("data-eastvac={m.id}") && grid.includes('titleBits.push("East vacation: "'), "the East-vacation diamond and its 'East vacation:' hover (out of E2's scope; the scheduler's only since Item E3, 9/25) must stay");
     // (5) the day editor's East status and Setup > East feed are unchanged
-    assert.ok(src.includes("const east = ctx ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];"), "the day editor no longer builds its East lines");
+    assert.ok(src.includes("const east = ctx && eastDetailsVisible ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];"), "the day editor no longer builds its East lines (for the scheduler - Item E3, 9/25)");
     assert.ok(src.includes('data-testid="east-status" data-eastvac={l.eastVac || undefined}'), "the day editor no longer renders its East status lines");
     assert.ok(src.includes('text: name + ": East week -> Silvis " + dRole + " (derived)"'), "the day editor's derived-week line changed");
     assert.ok(src.includes('text: name + ": East forecast " + Math.round(p * 100) + "% ("'), "the day editor's forecast line changed");
@@ -1942,6 +1943,138 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('<div data-testid="east-derived"') && src.includes('data-testid="east-forecast-days"'), "Setup > East feed lost its derived-weeks list or its forecast-days line");
     // (6) rules-side untouched: the generator still reads the derived weeks from the ctx (display-only change)
     assert.ok(fs.readFileSync(path.join(ROOT, "rules.js"), "utf8").includes("derivedByDay: Object.create(null)") && fs.readFileSync(path.join(ROOT, "generator.js"), "utf8").includes("ctx.derivedByDay[d]"), "rules.js / generator.js no longer carry ctx.derivedByDay - Item E2 is display only");
+  });
+
+  // Item E3 (Faraz 9/25: "East and override details are the scheduler's business"): ONE flag, eastDetailsVisible =
+  // isScheduler && !isPublicMode, gates the day editor's East lines (the East-vacation state included) and its "locked
+  // holder breaks" line, the grid's East-vacation diamonds / hover bits / legend line, the coverage strip's three East
+  // items and Totals' East days column (+ tooltip, the fairness " + N East P-week", the footnote, the cap wording) and
+  // the CSV's East column. Overrides stop writing reason codes into schedule_days.note (anon-readable; CLAUDE.md: notes
+  // there carry no reasons) - the audit rows keep them; the strip regex stays. The pins read CODE (comments stripped).
+  // Review 9/25: logAudit lifted verbatim and run against stub inserts (a written row, a refused row, a thrown insert) -
+  // the answer saveDayEdit's override toast reads; asserted in the check below.
+  const e3LogAudit = await (async () => {
+    const laAt = src.indexOf("  const logAudit = (action, summary, details) => {"), laEnd = src.indexOf("\n  };\n", laAt);
+    if (laAt < 0 || laEnd < laAt) return "logAudit not found";
+    const mk = (insert) => new Function("db", "userProfile", "authUser", "surgeons", "console", src.slice(laAt, laEnd + 5) + "\nreturn logAudit;")({ insert }, { person_id: "s1", display_name: "Khan" }, { id: "u1" }, [], { warn: () => {} });
+    try {
+      return await Promise.all([
+        mk(async () => ({ data: [{ id: "a1" }], error: null }))("schedule.override", "x", {}),
+        mk(async () => ({ data: null, error: { message: "HTTP 401" } }))("schedule.override", "x", {}),
+        mk(async () => { throw new Error("offline"); })("schedule.override", "x", {}),
+      ]);
+    } catch (e) { return "rejected: " + (e && e.message || e); }
+  })();
+  check("Item E3 (9/25): eastDetailsVisible gates every East detail for non-schedulers (day editor, grid diamonds + legend, coverage strip, Totals + CSV); overrides write no reason codes into the note", () => {
+    const noComments = (t) => t.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+    // (1) the one flag
+    assert.strictEqual(count("const eastDetailsVisible = isScheduler && !isPublicMode;"), 1, "ONE eastDetailsVisible = isScheduler && !isPublicMode");
+    const flagAt = src.indexOf("const eastDetailsVisible = isScheduler && !isPublicMode;");
+    assert.ok(flagAt > 0 && flagAt < src.indexOf("const eastVacByDay = useMemo(() => {"), "declared before its first reader (eastVacByDay) - a const read before its line is a TDZ crash");
+    // (2) grid: the diamonds' map is empty for non-schedulers; the legend line is gated
+    const ms = src.indexOf("const eastVacByDay = useMemo(() => {");
+    assert.ok(src.slice(ms, ms + 200).includes("if (!eastDetailsVisible || !gridDays.length) return map;"), "eastVacByDay returns an empty map unless eastDetailsVisible");
+    assert.ok(src.includes('{eastDetailsVisible && eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation'), "the legend's East-vacation line is gated");
+    const gridAt = src.indexOf('<div className="cal-grid" data-testid="cal-grid"'), weekRowsAt = src.indexOf('<Collapsible css={css} ck="cal_weekrows"');
+    const gridAndLegend = noComments(src.slice(gridAt, weekRowsAt));
+    assert.ok(!/East|Davenport/.test(gridAndLegend.replace(/eastVacByDay\[d\][^\n]*/g, "").replace(/\{eastDetailsVisible && eastVacPeople\.length > 0 && [^\n]*/g, "")), "grid / legend East text outside the gated eastVacByDay bits and the gated legend line");
+    // (3) the coverage strip: the three East items are gated; nothing else in it says East
+    const stripAt = src.indexOf('<div data-testid="coverage-strip"'), stripEnd = src.indexOf("</div>", src.indexOf('data-testid="cov-last-published"'));
+    const strip = noComments(src.slice(stripAt, stripEnd));
+    assert.ok(strip.includes('{eastDetailsVisible && covItem("cov-forecast-primary", "forecast-busy as primary"'), "the forecast-busy item is gated");
+    assert.ok(strip.includes('{eastDetailsVisible && <span data-testid="cov-east-end"'), "the East feed through item is gated");
+    assert.ok(strip.includes("{eastDetailsVisible && eastVacPeople.length > 0 && ("), "the unreviewed East vacations item is gated (scheduler only - it was the scheduler's and Khan's)");
+    assert.ok(!/eastVacById\[mySurgeon\]/.test(strip), "no Khan-as-surgeon branch left in the strip");
+    // what is left once the three gated items are cut out must say nothing East
+    const evAt = strip.indexOf("{eastDetailsVisible && eastVacPeople.length > 0 && (");
+    const evEnd = strip.indexOf("</button>", evAt);
+    assert.ok(evAt > 0 && evEnd > evAt, "the gated East-vacation item is where the pin expects it");
+    const ungated = (strip.slice(0, evAt) + strip.slice(evEnd)).split("\n").filter(l => !/^\s*\{eastDetailsVisible && /.test(l)).join("\n");
+    assert.ok(!/East|Davenport|forecast/.test(ungated), "the coverage strip says something East outside the gated items: " + (ungated.split("\n").filter(l => /East|Davenport|forecast/.test(l)).join(" | ")).slice(0, 300));
+    assert.ok(src.includes(`Rules not imported yet: holiday units{eastDetailsVisible ? " (and the day editor's East status)" : ""} appear`), "the rules-not-imported line names the East status to the scheduler only");
+    // (4) the day editor: the prop, the East block, the locked-holder line, the Source masking
+    assert.ok(src.includes("canEdit={isScheduler && !isPublicMode} eastDetailsVisible={eastDetailsVisible}"), "DayEditor gets the App's flag");
+    const de = src.slice(src.indexOf("function DayEditor(props) {"), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
+    assert.ok(de.includes("const { day, entry, roster, ctxInputs, ctxError, canEdit, eastDetailsVisible,"), "DayEditor reads the flag from its props");
+    assert.ok(de.includes('{eastDetailsVisible && (east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map('), "the East block (lines + placeholder) is the scheduler's only");
+    assert.ok(de.includes('{eastDetailsVisible && cur && cur.lockHolder && cur.conflicts.length > 0 && <span data-testid={"editor-" + role + "-lock-breaks"}'), "the 'locked holder breaks' line is the scheduler's only");
+    assert.strictEqual((de.match(/locked holder breaks: /g) || []).length, 1, "one 'locked holder breaks' line");
+    assert.ok(de.includes('entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source'), "a derived-week row's source reads 'generated' to non-schedulers");
+    assert.ok(de.includes('{entry && entry.source && <div data-testid="editor-source">Source: '), "the Source line carries data-testid editor-source (the smoke reads it)");
+    // every East word the editor can render outside canEdit-only parts sits behind eastDetailsVisible. Review 9/25: the
+    // scan starts at roleBlock (the role rows - "locked holder breaks", "Not eligible ... (East vacation, ...)"), not at
+    // the final return; a line is gated when it names eastDetailsVisible / canEdit itself or sits inside a JSX block
+    // opened by '{canEdit && ... (' / '{eastDetailsVisible && ... (' (the block ends at the next non-blank line indented
+    // no deeper than its opener).
+    const ungatedEast = (code) => {
+      const out = []; let gateIndent = -1;
+      const ind = (l) => l.match(/^ */)[0].length;
+      code.split("\n").forEach(l => {
+        if (gateIndent >= 0 && l.trim() && ind(l) <= gateIndent) gateIndent = -1;
+        if (/East|Davenport/.test(l) && gateIndent < 0 && !/eastDetailsVisible|canEdit/.test(l)) out.push(l.trim());
+        if (gateIndent < 0 && /\{(?:canEdit|eastDetailsVisible)\b[^\n]*&& \($/.test(l.trimEnd())) gateIndent = ind(l);
+      });
+      return out;
+    };
+    assert.deepStrictEqual(ungatedEast("  const roleBlock = (role) => {\n        {canEdit && x > 0 && (\n          <div>East a</div>\n        )}\n        <span>East b</span>\n        {eastDetailsVisible && <i>East c</i>}\n"), ["<span>East b</span>"], "the scanner itself: a line inside a gated block and a gated line pass, an ungated line is reported");
+    const rbAt = de.indexOf("  const roleBlock = (role) => {");
+    const deScan = noComments(de.slice(rbAt));
+    assert.ok(rbAt > 0 && deScan.includes("Not eligible:") && deScan.includes("locked holder breaks: ") && deScan.includes('<div data-testid="day-editor"'), "the scan covers roleBlock (its 'Not eligible' and 'locked holder breaks' lines) and the editor's return");
+    const ue = ungatedEast(deScan);
+    assert.deepStrictEqual(ue, [], "an editor line with East text reachable without eastDetailsVisible / canEdit: " + ue.join(" | ").slice(0, 300));
+    // (5) Totals: the column, the row text, the footnote, the cap wording, the CSV
+    assert.ok(src.includes("loaded={loaded} eastDetailsVisible={eastDetailsVisible}/>"), "TotalsCard gets the App's flag");
+    const tc = src.slice(src.indexOf("function TotalsCard({"), src.indexOf("function SuField("));
+    assert.ok(tc.includes("function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, loaded, eastDetailsVisible })"), "TotalsCard reads the flag");
+    assert.ok(tc.includes("const showEast = !!eastDetailsVisible && list.some(s => eastFor(s.id) > 0 || countsEast(s.id));"), "the East days column is the scheduler's only");
+    assert.ok(tc.includes('{showEast && <th style={th} title="Days on East (Davenport) call') && tc.includes("{showEast && <td style={td}>{r.east") && tc.includes('{showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""}') && tc.includes("{showEast && <div style={{ fontSize: 11, color: \"#5B6B82\", marginTop: 4 }}>East days:"), "header, cells, fairness text and footnote all read showEast");
+    assert.ok(tc.includes("data-east={showEast ? r.east : undefined}"), "the row's data-east attribute follows the column");
+    assert.ok(tc.includes('if (!eastDetailsVisible) {') && tc.includes('const eastCol = headers.indexOf("East days");') && tc.includes("headers.splice(eastCol, 1);") && tc.includes("data.forEach(r => r.splice(eastCol, 1));") && tc.includes('headers[headers.indexOf("Counted vs cap (P + East P-week days)")] = "Counted vs cap";'), "the CSV drops the East days column (header AND every row) and the East wording for non-schedulers");
+    // text a person can read = a string literal or JSX text naming East / Davenport (identifiers like countsEast are code, not text)
+    const eastText = (l) => /"[^"\n]*(East|Davenport)[^"\n]*"/.test(l) || />[^<>{}\n]*(East|Davenport)[^<>{}\n]*</.test(l);
+    const tcLines = noComments(tc).split("\n").filter(l => eastText(l) && !/^\s*const (headers|eastCol) = /.test(l) && !/headers\[headers\.indexOf/.test(l));
+    assert.ok(tcLines.every(l => /showEast|eastDetailsVisible/.test(l)), "a Totals line with East text outside showEast / eastDetailsVisible: " + tcLines.filter(l => !/showEast|eastDetailsVisible/.test(l)).join(" | ").slice(0, 300));
+    // behaviour: the component's OWN transform block (lifted verbatim, review 9/25 - not a re-implementation) over a
+    // header and two rows (a pool row, an outside row), with and without the flag
+    const H0 = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
+    assert.ok(tc.includes('const headers = ["' + H0.join('", "') + '"];'), "the scheduler's CSV header is unchanged, column for column");
+    const txAt = tc.indexOf("if (!eastDetailsVisible) {"), txEnd = tc.indexOf("\n      }\n", txAt);
+    assert.ok(txAt > 0 && txEnd > txAt, "the CSV transform block is where the pin expects it");
+    const csvTx = new Function("headers", "data", "eastDetailsVisible", tc.slice(txAt, txEnd + 8));
+    const mkCsv = () => ({ hd: H0.slice(), data: [H0.map((_, i) => "p" + i), H0.map((_, i) => "o" + i)] });
+    const off = mkCsv(); csvTx(off.hd, off.data, false);
+    assert.ok(off.hd.length === 21 && !off.hd.some(h => /East/.test(h)) && off.hd[17] === "Counted vs cap", "non-scheduler CSV header: 21 columns, no East word, 'Counted vs cap': " + off.hd.join(" | "));
+    assert.ok(off.data.every(r => r.length === 21 && r.indexOf(r[0][0] + "13") < 0 && r[13] === r[0][0] + "14"), "non-scheduler CSV rows: the East cell is gone from EVERY row, so no value shifts under the wrong header: " + JSON.stringify(off.data));
+    const on = mkCsv(); csvTx(on.hd, on.data, true);
+    assert.deepStrictEqual(on, mkCsv(), "the scheduler's CSV is untouched by the transform");
+    // (6) overrides: no tag written; the strip regex and the audit rows stay
+    const fn = src.slice(src.indexOf("const saveDayEdit = "), src.indexOf("const proposeTradeForDay"));
+    assert.ok(fn.length > 0, "saveDayEdit found");
+    assert.ok(!noComments(fn).includes('"[override: "'), "saveDayEdit builds no '[override: ...]' tag any more");
+    assert.ok(fn.includes('const note = (after.note || "").replace(/^\\[override:[^\\]]*\\]\\s*/, "").trim();') && fn.includes("after.note = note || null;"), "an old tag is still stripped on the next save");
+    assert.ok(fn.includes('logAudit("schedule.day_edit", ') && fn.includes("before: assignmentToDayRow(day, before), after: assignmentToDayRow(day, after), overrides,"), "the schedule.day_edit row still carries the overrides");
+    assert.ok(fn.includes('const overrideText = overrides.map(o => nameOf(o.id) + " " + o.role + " despite " + o.reasons.join(", ")).join("; ");') && fn.includes('logAudit("schedule.override", "Override on " + fmtMD(day) + ": " + overrideText, { day, overrides })'), "the schedule.override row still names who despite which reasons");
+    // review 9/25: the audit rows are the only copy of the reasons now - a refused schedule.override row is told to the scheduler
+    assert.ok(fn.includes('const dayEditLogged = logAudit("schedule.day_edit", ') && fn.includes("const overrideLogged = logAudit(\"schedule.override\", ") && fn.includes("Promise.all([dayEditLogged, overrideLogged]).then(([de, ov]) => {"), "saveDayEdit waits on both audit rows of an override");
+    assert.ok(fn.includes('if (!de && !ov) showToast("Override on " + fmtMD(day) + ": the audit log refused both rows, so its reasons are recorded nowhere - note them: " + overrideText + ".", "error");'), "both rows refused -> the scheduler is told, with the reasons");
+    // behaviour: the decision saveDayEdit takes on the two answers (lifted verbatim)
+    const decAt = fn.indexOf("if (!de && !ov) showToast("), decEnd = fn.indexOf("\n      });", decAt);
+    assert.ok(decAt > 0 && decEnd > decAt, "the audit decision is where the pin expects it");
+    const runDecide = (de, ov) => { const out = []; new Function("de", "ov", "fmtMD", "day", "overrideText", "showToast", "console", fn.slice(decAt, decEnd))(de, ov, (d) => d, "10/15", "Burchett primary despite backup-only-row", (m, t) => out.push("toast " + t + " " + m), { warn: (m) => out.push("warn " + m) }); return out; };
+    assert.deepStrictEqual(runDecide(true, true), [], "both rows written -> nothing");
+    assert.ok(/^toast error Override on 10\/15: the audit log refused both rows, .*Burchett primary despite backup-only-row\.$/.test(runDecide(false, false).join("|")), "both refused -> one error toast naming the reasons: " + runDecide(false, false).join("|"));
+    assert.ok(/^warn .*the schedule\.day_edit row keeps the reasons/.test(runDecide(true, false).join("|")) && /^warn .*the schedule\.override row keeps the reasons/.test(runDecide(false, true).join("|")), "one row refused -> a console line naming the row that keeps the reasons, no toast");
+    assert.deepStrictEqual(e3LogAudit, [true, false, false], "logAudit (lifted verbatim) answers true for a written row, false for a refused or thrown insert, and never rejects: " + JSON.stringify(e3LogAudit));
+    assert.ok(!src.includes("prefixes the day's note with [override: ...]"), "the Override panel's old sentence is gone");
+    assert.ok(src.includes('data-testid="override-note"') && src.includes("Overriding assigns anyway; the audit log records it with these reasons. The day's note gets no reasons (anyone can read it)."), "the Override panel says where the reasons go");
+    // behaviour: the note transform saveDayEdit applies (strip, never add)
+    const stripTag = (n) => ((n || "").replace(/^\[override:[^\]]*\]\s*/, "").trim()) || null;
+    assert.strictEqual(stripTag("[override: Burchett primary: backup-only-row, whitelist-month] seed: office-er-call-panels-2026-09-16"), "seed: office-er-call-panels-2026-09-16");
+    assert.strictEqual(stripTag("[override: Burchett primary: backup-only-row, whitelist-month]"), null);
+    assert.strictEqual(stripTag("operational note"), "operational note");
+    // CLAUDE.md is the rule this cites
+    const claudeMd = fs.readFileSync(path.join(ROOT, "CLAUDE.md"), "utf8");
+    assert.ok(/Notes in anon-readable tables carry no reasons/.test(claudeMd), "CLAUDE.md still states the rule Item E3 applies to override notes");
   });
 
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
@@ -2559,17 +2692,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const pb = src.slice(ps, src.indexOf("const eastVacById = useMemo", ps));
     assert.ok(pb.includes("if (isPublicMode) return out;"), "eastVacPeople is empty in public mode");
     assert.ok(pb.includes("eastVacationReviewRows, todayStr, isPublicMode]"), "the memo depends on isPublicMode");
-    assert.ok(src.includes("{!isPublicMode && (isScheduler ? eastVacPeople.length > 0 : !!eastVacById[mySurgeon]) && ("), "the strip item's render condition");
+    // Item E3 (9/25): the strip item is the scheduler's only now (it was the scheduler's and Khan's - Faraz is both)
+    assert.ok(src.includes("{eastDetailsVisible && eastVacPeople.length > 0 && ("), "the strip item's render condition (eastDetailsVisible, Item E3)");
   });
   check("P15 fix: the calendar marker is per DAY from the rules ctx when it is available - unreviewed / away from P.eastVacationDays, home from P.eastClear, a home day the feed says busy carries feedBusy (the feed wins), a Silvis time_off day inside a range carries no East marker - and falls back to the range state without a ctx", () => {
     const ms = src.indexOf("const eastVacByDay = useMemo(() => {");
-    const mb = src.slice(ms, src.indexOf("\n  }, [", ms) + 60);
+    const mb = src.slice(ms, src.indexOf("\n  }, [", ms) + 80); // +80 (was +60): the deps list grew by eastDetailsVisible (Item E3, 9/25)
     assert.ok(ms > 0, "eastVacByDay memo missing");
     assert.ok(mb.includes("P.eastVacationDays[d]"), "unreviewed / away days come from P.eastVacationDays");
     assert.ok(mb.includes("P.eastClear.has(d)"), "home days come from P.eastClear");
     assert.ok(mb.includes("feedBusy: true"), "a home day the feed says busy is flagged");
     assert.ok(mb.includes("P.vacation.has(d)"), "a Silvis time_off day inside the range: no East marker (the Silvis dot stands, as the day editor shows no East line)");
-    assert.ok(mb.includes("[eastVacPeople, gridDays, rulesCtx]"), "the memo depends on the rules ctx");
+    assert.ok(mb.includes("[eastVacPeople, gridDays, rulesCtx, eastDetailsVisible]"), "the memo depends on the rules ctx (and on eastDetailsVisible, Item E3)");
     assert.ok(src.includes('data-eastvac-feedbusy={m.feedBusy ? "1" : undefined}'), "the cell marker carries the feed-busy flag");
   });
 

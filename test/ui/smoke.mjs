@@ -27,7 +27,23 @@
 //     badge, East legend line or 'East-derived:' hover to anyone, the scheduler
 //     included (Item E2, Faraz 9/25), while the scheduler's day editor still
 //     shows the East status on exactly the rules' derived / forecast days (the
-//     first month from November 2026 with each);
+//     first month from November 2026 with each); Item E3 (Faraz 9/25): as a
+//     surgeon, Khan as a surgeon (the East-code person - the one role the strip's
+//     East-vacation item used to reach), a coordinator, a viewer and on ?public=1
+//     the day editor (a derived day, the harness's unreviewed East-vacation day,
+//     10/15's locked holder, the first served east-derived row - 'Source:
+//     generated'), the grid + legend (November 2026, the East-vacation month),
+//     the coverage strip and Totals (month, fairness, every CSV line) carry NO
+//     East text (case-insensitive), title or [data-eastvac] - the page's role
+//     proven first (its Time off tab / offers card) and the checks non-vacuous
+//     against that page's own rules context (on ?public=1 the grid never drew an
+//     East-vacation marker - a no-op check there; its day editor is the proof) -
+//     while the scheduler's same surfaces keep every East item (screenshots
+//     e3-*.png); a day's note is left out and reported as a pending decision;
+//     the block-member step's override save (Fierce, weekend-block-only) writes
+//     a schedule_days row with no '[override: ...]' tag or reason in its note
+//     while schedule.override / schedule.day_edit carry the reasons, and the
+//     Accept & Publish lastGenerate names no East reason (Item E3);
 //     a 390px viewport keeps the grid readable (codes instead of names, no
 //     horizontal scroll, NO clipped pill / truncated OPEN / overflowing P-B
 //     line - vis-001); the year field accepts typed input key by key
@@ -1405,6 +1421,8 @@ try {
   };
   // Edit one role of one day through the day editor (override panel accepted
   // when the rules refuse the pick - the harness reports that it happened).
+  // Answers the override's hard reasons when one was accepted, else null (Item E3 review, 9/25: the caller that
+  // needs an override observes what the save wrote).
   const editDay = async (d, role, id) => {
     const [y, m] = d.split("-");
     await showMonth(Number(y), Number(m) - 1);
@@ -1416,13 +1434,19 @@ try {
       console.log(`     (${d} ${role} already ${id} in the app's map - no edit needed)`);
       await page.keyboard.press("Escape");
       await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
-      return;
+      return null;
     }
     await page.selectOption(`[data-testid=editor-${role}]`, id);
     const ov = await page.$("[data-testid=override-confirm]");
-    if (ov) { console.log(`     (${d} ${role} -> ${id} needed an override: ${(await ov.innerText()).split("\n").slice(0, 2).join(" / ")})`); await page.click("[data-testid=override-accept]"); }
+    let ovReasons = null;
+    if (ov) {
+      ovReasons = await ov.$$eval("li span", els => els.map(e => e.textContent.trim()).filter(Boolean)).catch(() => []);
+      console.log(`     (${d} ${role} -> ${id} needed an override: ${(await ov.innerText()).split("\n").slice(0, 2).join(" / ")})`);
+      await page.click("[data-testid=override-accept]");
+    }
     await page.click("[data-testid=editor-save]");
     await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+    return ovReasons;
   };
 
   // ---- The published rows (Prompt 12 SM2: read here, before the first pin that depends on them) ----
@@ -2151,6 +2175,336 @@ try {
       ok("screenshots test/ui/out/calendar-nov-2026-surgeon-390-dark.png / -light.png");
     } catch (e) { fail("Item E (surgeon): the surgeon page check threw: " + String(e && e.message || e).split("\n")[0]); }
     await sp.close();
+  }
+
+  // ---- Item E3 (Faraz 9/25): East and override details are the scheduler's business ----
+  // Faraz: "Smoke as a surgeon, a coordinator, a viewer and on ?public=1: no East text in the day editor, grid, coverage
+  // strip or Totals. As the scheduler: unchanged." One pass per role over the same surfaces, each proven NON-VACUOUS
+  // (the page's role read from the page itself first - its Time off tab, and the office's offers card - since a failed
+  // profile read falls back to a read-only page that would prove nothing; the page loaded and its grid filled; the
+  // editor open on its day with both role blocks; the rules context on THAT page holding the East facts the surface
+  // would have shown; Totals rows present):
+  //  - the day editor on (a) the first day from November 2026 the rules derive a Silvis role for (Fierce's East week),
+  //    (b) the first day of the mocked unreviewed East-vacation range (EASTVAC_RANGES[0] - the public page gets the same
+  //    east_feed overlay, so its rules treat the day as Khan's unreviewed East vacation, the pre-E3 public "unreviewed"
+  //    display), (c) Thu 10/15 (Burchett's locked primary breaks backup-only-row / whitelist-month - the scheduler's
+  //    "locked holder breaks" line, while the served row holds that lock), (d) the first served row from November 2026
+  //    whose source is 'east-derived' (the 9/23 publish's derived primary locks, 12/7-12/13): 'Source: east-derived' for
+  //    the scheduler, 'Source: generated' for everyone else (review 9/25; a console line when no such row is served);
+  //  - the month grid + legend of November 2026 and of the East-vacation month (the scheduler's diamonds + legend line);
+  //    on ?public=1 the grid never drew an East-vacation marker (eastVacPeople is empty in public mode since 9/23), so the
+  //    public grid check is a no-op by construction - that page's day editor is its E3 proof;
+  //  - the coverage strip (the scheduler's "forecast-busy as primary", "East feed through", "unreviewed East vacations");
+  //    the last was drawn for the scheduler and the person with the East code only, so KHAN AS A SURGEON (person s1, role
+  //    surgeon) is the role that proves its gate - the other roles never saw it;
+  //  - Totals for November 2026, month and fairness views + EVERY line of the CSV (signed-in roles; ?public=1 has no
+  //    Totals) - the scheduler's East days column, footnote, fairness " + N East P-week" and 22-field CSV lines; 21 fields
+  //    on every line for the others (a header that lost its East column over rows that kept it would shift every value).
+  // "No East text" = no match of E3_RE (case-insensitive: innerText returns CSS-uppercased text as shown) in the
+  // surface's visible text or in any title / aria-label inside it, and no [data-eastvac] element. A day's NOTE is data,
+  // not an E3 code surface (the importer's 11/9-11/16 seed notes say "East primary week ..."): the grid's "note: ..."
+  // hover bit, the NOTE marker's hover and the editor's read-only "Note: ..." line (editor-note-view) are left out of the
+  // match and reported by day as a PENDING decision for Faraz (reword the seed + the live rows) - never silently. The
+  // main page (the scheduler) is checked on the same surfaces and must still show every one of them. The grid goes back
+  // to November 2026 afterwards.
+  {
+    const E3_RE = /\beast\b|davenport|east-(?:busy|forecast|derived)|derived-lock/i;
+    const E3_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const E3_VAC_DAY = EASTVAC_RANGES[0].start;          // unreviewed (no review row in the harness store)
+    const E3_LOCK_DAY = "2026-10-15";
+    const E3_SRC_DAY = Object.keys(liveEarlyByDay).sort().find(d => d >= "2026-11-01" && liveEarlyByDay[d] && liveEarlyByDay[d].source === "east-derived") || null;
+    if (!E3_SRC_DAY) console.log("     (Item E3: no served schedule_days row from November 2026 has source 'east-derived' this run - the editor's 'Source: generated' masking is checked by the data-layer pin only)");
+    const e3NoteDays = new Set();
+    // Visible text + title / aria-label of a surface, the day's note left out (see above) and its day recorded.
+    const e3Scan = (pg, sel) => pg.evaluate(({ sel, src, flags }) => {
+      const RE = new RegExp(src, flags);
+      const root = document.querySelector(sel);
+      if (!root) return null;
+      const noteKeys = [];
+      const noteAt = (el, t) => { if (RE.test(t)) { const c = el.closest("[data-day]"); noteKeys.push(c ? c.getAttribute("data-day") : "editor"); } };
+      let text = root.innerText || "";
+      root.querySelectorAll("[data-testid=editor-note-view]").forEach(el => { const t = el.innerText || ""; if (t) { noteAt(el, t); text = text.split(t).join(""); } });
+      const hits = [];
+      const m = RE.exec(text);
+      if (m) hits.push("text '..." + text.slice(Math.max(0, m.index - 50), m.index + 60).replace(/\s+/g, " ") + "...'");
+      [root].concat(Array.from(root.querySelectorAll("[title],[aria-label]"))).forEach(el => ["title", "aria-label"].forEach(a => {
+        let v = el.getAttribute(a);
+        if (!v) return;
+        if (a === "title" && el.classList && el.classList.contains("cal-note")) { noteAt(el, v); return; }   // the NOTE marker's hover = the note
+        if (a === "title") { const bits = v.split(" | "); bits.filter(b => b.indexOf("note: ") === 0).forEach(b => noteAt(el, b.slice(6))); v = bits.filter(b => b.indexOf("note: ") !== 0).join(" | "); }
+        if (RE.test(v)) hits.push(a + " '" + v.slice(0, 140) + "'");
+      }));
+      const ev = root.querySelectorAll("[data-eastvac]").length;
+      if (ev) hits.push(ev + " [data-eastvac] element(s)");
+      return { hits, textLen: text.length, noteKeys: Array.from(new Set(noteKeys)) };
+    }, { sel, src: E3_RE.source, flags: E3_RE.flags });
+    // The rules context of the page (the App's rulesCtxState memo; call with no editor open - the editor keeps its own):
+    // the first derived day from November 2026, the East-vacation state of the given days, the caps that count East days.
+    const e3Facts = (pg, days) => pg.evaluate((days) => {
+      const rootEl = document.getElementById("root");
+      const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+      if (!ck) return { error: "no React container key on #root" };
+      const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+      let ctx = null, n = 0; const stack = [current];
+      while (stack.length && !ctx && n++ < 500000) {
+        const f = stack.pop(); if (!f) continue;
+        if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+        if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+      }
+      if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+      let derivedDay = null;
+      for (let t = Date.UTC(2026, 10, 1); t < Date.UTC(2027, 10, 1) && !derivedDay; t += 86400000) { const d = new Date(t).toISOString().slice(0, 10); if (ctx.derivedByDay && ctx.derivedByDay[d] && Object.keys(ctx.derivedByDay[d]).length) derivedDay = d; }
+      const eastVac = {};
+      Object.keys(ctx.per || {}).forEach(id => { const P = ctx.per[id]; days.forEach(d => { if (P && P.eastVacationDays && P.eastVacationDays[d]) eastVac[d] = id + " " + P.eastVacationDays[d]; }); });
+      const countsEast = Object.keys(ctx.per || {}).filter(id => ctx.per[id] && ctx.per[id].countsEastDays);
+      return { derivedDay, eastVac, countsEast };
+    }, days);
+    const e3Month = async (pg, y, m0) => {
+      if (await pg.$('button[data-tab="calendar"]')) await pg.click('button[data-tab="calendar"]');
+      await pg.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
+      await pg.selectOption("[data-testid=cal-month-select]", String(m0));
+      if ((await pg.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(y)) await pg.fill("[data-testid=cal-year-input]", String(y));
+      await pg.waitForFunction((t) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === t; }, E3_MONTHS[m0] + " " + y, { timeout: 8000 });
+      await pg.waitForTimeout(300);
+    };
+    const e3Grid = async (pg, y, m0) => {
+      await e3Month(pg, y, m0);
+      const cells = await pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ p: e.getAttribute("data-primary"), ext: e.getAttribute("data-ext") })));
+      const grid = await e3Scan(pg, "[data-testid=cal-grid]");
+      const legend = await e3Scan(pg, ".cal-legend");
+      const legendText = await pg.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+      grid.noteKeys.forEach(k => e3NoteDays.add(k));
+      return { cells: cells.length, filled: cells.filter(c => c.p || c.ext).length, hits: grid.hits.concat(legend.hits), diamonds: await pg.$$eval("[data-testid=cal-grid] [data-eastvac]", els => els.length), legendText };
+    };
+    const e3Editor = async (pg, day) => {
+      const y = Number(day.slice(0, 4)), m0 = Number(day.slice(5, 7)) - 1;
+      await e3Month(pg, y, m0);
+      await pg.click(`[data-day="${day}"]`);
+      await pg.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+      await pg.waitForFunction((t) => { const el = document.querySelector("[data-testid=editor-title]"); return !!el && el.textContent.trim().endsWith(t); }, " " + E3_MONTHS[m0] + " " + Number(day.slice(8)) + ", " + y, { timeout: 5000 });
+      await pg.waitForTimeout(150);
+      const scan = await e3Scan(pg, "[data-testid=day-editor] [role=dialog]");
+      scan.noteKeys.forEach(k => e3NoteDays.add(k === "editor" ? day : k));
+      const info = await pg.evaluate(() => ({
+        east: Array.from(document.querySelectorAll("[data-testid=day-editor] [data-testid=east-status]")).map(e => e.textContent.replace(/\s+/g, " ").trim()),
+        eastVac: document.querySelectorAll("[data-testid=day-editor] [data-testid=east-status][data-eastvac]").length,
+        breaks: Array.from(document.querySelectorAll("[data-testid=day-editor] [data-testid$=-lock-breaks]")).map(e => e.textContent.replace(/\s+/g, " ").trim()),
+        blocks: document.querySelectorAll("[data-testid=day-editor] [data-testid=editor-primary-block], [data-testid=day-editor] [data-testid=editor-backup-block]").length,
+        source: ((document.querySelector("[data-testid=day-editor] [data-testid=editor-source]") || {}).textContent || "").replace(/\s+/g, " ").trim(),
+      }));
+      await pg.keyboard.press("Escape");
+      await pg.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+      return { ...scan, ...info };
+    };
+    const e3Strip = async (pg) => {
+      await e3Month(pg, 2026, 10);
+      const s = await e3Scan(pg, "[data-testid=coverage-strip]");
+      const ids = await pg.$$eval("[data-testid=coverage-strip] [data-testid]", els => els.map(e => e.getAttribute("data-testid")));
+      const text = await pg.$eval("[data-testid=coverage-strip]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+      return { ...s, ids, text };
+    };
+    const e3Download = async (pg, trigger) => {
+      const [d] = await Promise.all([pg.waitForEvent("download", { timeout: 8000 }), trigger()]);
+      const target = path.join(OUT, "e3-" + d.suggestedFilename());
+      await d.saveAs(target);
+      return fs.readFileSync(target, "utf8");
+    };
+    // RFC 4180 fields of every non-empty CSV line (ttCsvText quotes a field holding a comma, a quote or a line break)
+    const e3CsvLines = (text) => text.split("\r\n").filter(l => l.length).map(line => {
+      const out = []; let cur = "", q = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+        else if (c === '"') q = true; else if (c === ",") { out.push(cur); cur = ""; } else cur += c;
+      }
+      out.push(cur);
+      return out;
+    });
+    const e3Totals = async (pg, shot) => {
+      await pg.click('button[data-tab="totals"]');
+      await pg.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
+      await pg.click("[data-testid=totals-mode-month]");
+      await pg.selectOption("[data-testid=totals-year]", "2026");
+      await pg.selectOption("[data-testid=totals-month]", "10");
+      await pg.waitForFunction(() => /2026-11-01 to 2026-11-30/.test((document.querySelector("[data-testid=totals-period]") || {}).textContent || ""), null, { timeout: 5000 });
+      await pg.waitForFunction(() => document.querySelectorAll("[data-testid^=totals-row-]").length >= 6, null, { timeout: 8000 });
+      const month = await e3Scan(pg, "[data-testid=totals-card]");
+      const monthText = await pg.$eval("[data-testid=totals-card]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+      const hdr = await pg.$$eval("[data-testid=totals-table] thead th", ths => ths.map(t => t.textContent.trim()));
+      const rows = await pg.$$eval("[data-testid^=totals-row-]", els => els.length);
+      if (shot) await pg.screenshot({ path: path.join(OUT, shot), fullPage: true }).catch(() => {});
+      await pg.click("[data-testid=totals-mode-fairness]");
+      await pg.waitForSelector("[data-testid=fairness-view]", { timeout: 4000 });
+      const fair = await e3Scan(pg, "[data-testid=totals-card]");
+      const fierce = await pg.$eval("[data-testid=fairness-row-s5]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+      await pg.click("[data-testid=totals-mode-month]");
+      const csv = e3CsvLines(await e3Download(pg, () => pg.click("[data-testid=totals-csv]")));
+      await pg.click('button[data-tab="calendar"]');
+      return { month, monthText, fair, hdr, rows, fierce, csvHeader: csv[0] || [], csvRows: csv.slice(1) };
+    };
+    const hitsText = (h) => h.slice(0, 4).join("; ");
+
+    // (1) the scheduler (the main page): every E3 surface still shows its East detail
+    const sched = {};
+    try {
+      const factsS = await e3Facts(page, [E3_VAC_DAY]);
+      if (factsS.error) throw new Error("rules context: " + factsS.error);
+      if (!factsS.derivedDay) throw new Error("the scheduler's rules derive no Silvis role from November 2026 on (Fierce's East week expected) - nothing East to open");
+      if (!factsS.eastVac[E3_VAC_DAY]) throw new Error("the scheduler's rules hold no East vacation on " + E3_VAC_DAY + " (the harness's unreviewed range) - the East-vacation checks would prove nothing");
+      sched.derivedDay = factsS.derivedDay;
+      const strip = await e3Strip(page);
+      const want = ["cov-forecast-primary", "cov-east-end", "cov-eastvac-unreviewed"];
+      if (want.some(t => !strip.ids.includes(t)) || !/East feed through/.test(strip.text) || !/unreviewed East vacations: /.test(strip.text)) fail(`Item E3 (scheduler): the coverage strip lost an East item - want ${want.join(", ")} + 'East feed through' + 'unreviewed East vacations': ${strip.ids.join(",")} / '${strip.text.slice(0, 200)}'`);
+      else ok(`Item E3 (scheduler): the coverage strip keeps its three East items (${want.join(", ")}) - '${strip.text.slice(0, 160)}'`);
+      const vacM = [Number(E3_VAC_DAY.slice(0, 4)), Number(E3_VAC_DAY.slice(5, 7)) - 1];
+      const gV = await e3Grid(page, vacM[0], vacM[1]);
+      if (!gV.diamonds || !/= East vacation/.test(gV.legendText)) fail(`Item E3 (scheduler): ${E3_MONTHS[vacM[1]]} ${vacM[0]} lost the East-vacation diamonds (${gV.diamonds}) or their legend line: '${gV.legendText.slice(0, 200)}'`);
+      else ok(`Item E3 (scheduler): ${E3_MONTHS[vacM[1]]} ${vacM[0]} keeps ${gV.diamonds} East-vacation diamond(s) and the legend's '= East vacation' line`);
+      const eD = await e3Editor(page, factsS.derivedDay);
+      const eV = await e3Editor(page, E3_VAC_DAY);
+      const eL = await e3Editor(page, E3_LOCK_DAY);
+      sched.lockBreaks = eL.breaks.length > 0;
+      if (!eD.east.some(t => /East week -> Silvis (primary|backup) \(derived\)/.test(t))) fail(`Item E3 (scheduler, day editor ${factsS.derivedDay}): the derived-week East line is gone: ${JSON.stringify(eD.east)}`);
+      else if (!eV.eastVac || !eV.east.some(t => /East \(Davenport\) vacation, unreviewed/.test(t))) fail(`Item E3 (scheduler, day editor ${E3_VAC_DAY}): the East-vacation review state is gone: ${JSON.stringify(eV.east)}`);
+      else ok(`Item E3 (scheduler, day editor): the East lines stay - ${factsS.derivedDay} "${(eD.east.find(t => /derived/.test(t)) || "").slice(0, 80)}", ${E3_VAC_DAY} "${(eV.east.find(t => /vacation/.test(t)) || "").slice(0, 80)}" (with its diamond); ${eD.east.length} / ${eV.east.length} East line(s)`);
+      if (sched.lockBreaks) ok(`Item E3 (scheduler, day editor ${E3_LOCK_DAY}): 'locked holder breaks' still shown - "${eL.breaks[0].slice(0, 110)}"`);
+      else console.log(`     (Item E3: the scheduler's ${E3_LOCK_DAY} editor shows no 'locked holder breaks' line - the served row no longer locks a holder who breaks a rule; the other roles' check of that line is vacuous this run)`);
+      if (E3_SRC_DAY) {
+        const eS = await e3Editor(page, E3_SRC_DAY);
+        if (eS.source !== "Source: east-derived") fail(`Item E3 (scheduler, day editor ${E3_SRC_DAY}): the served row's source must read 'Source: east-derived' to the scheduler, got '${eS.source}'`);
+        else ok(`Item E3 (scheduler, day editor ${E3_SRC_DAY}): '${eS.source}' (the served row's own source)`);
+      }
+      const tS = await e3Totals(page, "e3-scheduler-totals.png");
+      const badS = tS.csvRows.filter(r => r.length !== 22);
+      if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 22) fail(`Item E3 (scheduler, Totals Nov 2026): the East days column must stay on screen and in the CSV (22 columns): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
+      else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 22 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
+      else if (!/East days: days on Davenport call/.test(tS.monthText)) fail(`Item E3 (scheduler, Totals Nov 2026): the 'East days: days on Davenport call ...' footnote is gone`);
+      else ok(`Item E3 (scheduler, Totals Nov 2026): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 22 fields each, unchanged)`);
+      sched.fierceEastP = /East P-week/.test(tS.fierce);
+      if (factsS.countsEast.includes("s5")) {
+        if (!sched.fierceEastP) fail(`Item E3 (scheduler, fairness Nov 2026): Fierce's cap counts East days, so his row must read ' + N East P-week': '${tS.fierce.slice(0, 160)}'`);
+        else ok(`Item E3 (scheduler, fairness Nov 2026): Fierce's row keeps ' + N East P-week' - '${tS.fierce.slice(0, 120)}'`);
+      } else console.log(`     (Item E3: Fierce's cap does not count East days in this rules context (countsEastDays: ${factsS.countsEast.join(",") || "none"}) - the fairness ' + N East P-week' check is vacuous this run)`);
+    } catch (e) {
+      fail("Item E3 (scheduler): the scheduler pass threw: " + errLine(e));
+      if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+    }
+
+    // (2) surgeon, Khan as a surgeon, coordinator, viewer, ?public=1: nothing East on the same surfaces
+    const e3Jwt = (uid, email) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: uid, role: "authenticated", email, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const SURG3_UID = "00000000-0000-4000-8000-00000000e3e3";
+    const SURG3_PROFILE = { id: SURG3_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-25T00:00:00Z" };
+    // Khan as a SURGEON (not the scheduler): the person with the East code - before E3 the strip's "unreviewed East
+    // vacations" item was drawn for him and the scheduler only, so this is the page that proves that gate
+    const KHAN3_UID = "00000000-0000-4000-8000-00000000e3e1";
+    const KHAN3_PROFILE = { id: KHAN3_UID, person_id: "s1", role: "surgeon", display_name: "Khan", email: null, created_at: "2026-09-25T00:00:00Z" };
+    const publicRoute = async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      if (req.method() !== "GET") { writes.push({ method: req.method(), path: url.pathname, body: req.postData() || "", public: true }); return route.fulfill({ status: 200, contentType: "application/json", body: "[]" }); }
+      if (url.pathname === "/rest/v1/east_feed") return routeSupabase(route);   // the same East-vacation overlay the signed-in pages read
+      const fx = fixtureAnswer(url);
+      if (fx) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(fx) });
+      const headers = { ...req.headers() }; headers["authorization"] = "Bearer " + ANON_KEY;
+      return route.continue({ headers });
+    };
+    const ROLES_E3 = [
+      { tag: "surgeon", kind: "surgeon", file: "surgeon", jwt: e3Jwt(SURG3_UID, "surgeon@example.com"), route: routeSupabaseAs(SURG3_PROFILE), totals: true },
+      { tag: "Khan as surgeon", kind: "surgeon", file: "khan-surgeon", jwt: e3Jwt(KHAN3_UID, "khan-surgeon@example.com"), route: routeSupabaseAs(KHAN3_PROFILE), totals: true, eastPerson: true },
+      { tag: "coordinator", kind: "coordinator", file: "coordinator", jwt: COORD_JWT, route: routeSupabaseAs(COORD_PROFILE), totals: true },
+      { tag: "viewer", kind: "viewer", file: "viewer", jwt: VIEWER_JWT, route: routeSupabaseAs(VIEWER_PROFILE), totals: true },
+      { tag: "?public=1", kind: "public", file: "public", jwt: null, route: publicRoute, totals: false, url: BASE + "?public=1" },
+    ];
+    const e3PubErrors = [];
+    for (const R of ROLES_E3) {
+      const T = `Item E3 (${R.tag})`;
+      const rp = await context.newPage();
+      // the signed-in pages report through watchPage like every other role page; the public page like the ?public=1 block
+      // below (page errors only - its anon reads are not the signed-in console's)
+      if (R.jwt) watchPage(rp, "e3-" + R.file);
+      else rp.on("pageerror", (e) => e3PubErrors.push(String(e && e.message || e)));
+      if (R.jwt) await rp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, R.jwt);
+      await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await rp.route((url) => url.hostname === SUPABASE_HOST, R.route);
+      rp.on("dialog", (d) => d.accept());
+      try {
+        if (R.url) {
+          await loadWithRetry(rp, R.url, "[data-testid=cal-month]", 30000, "item E3 " + R.tag);
+          await rp.waitForFunction(() => !/Loading schedule/i.test(document.body.innerText || "") && !!document.querySelector("[data-testid=cal-grid] .cal-cell:not([data-primary=''])"), null, { timeout: 30000 });
+          if (await rp.$("button[data-tab]")) throw new Error("the ?public=1 page shows the signed-in nav - it is not the public page");
+        } else {
+          await loadWithRetry(rp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "item E3 " + R.tag);
+          await rp.waitForSelector("text=Synced", { timeout: 30000 });
+          // the page's role, read from the page (review 9/25): a failed profile read falls back to a read-only page whose
+          // Time off tab reads "Time off & Trades" without a Mine tab - it would pass every check below and prove nothing
+          const tabInfo = await rp.$$eval("button[data-tab]", els => els.map(e => ({ k: e.getAttribute("data-tab"), t: (e.textContent || "").trim() })));
+          const tabs = tabInfo.map(x => x.k);
+          if (tabs.includes("setup")) throw new Error("the mocked page shows a Setup tab - it is being treated as the scheduler, so nothing below would prove anything: " + tabs.join(","));
+          const toText = (tabInfo.find(x => x.k === "timeoff") || {}).t || "";
+          const roleOk = R.kind === "surgeon" ? /^Time off & Trades/.test(toText) && tabs.includes("myschedule") : toText === "Time off" && !tabs.includes("myschedule");
+          if (!roleOk) throw new Error(`the page does not read as a ${R.tag} (Time off tab '${toText}', tabs ${tabs.join(",")}) - a failed profile read would prove nothing about this role`);
+          let officeCard = null;
+          if (R.kind === "coordinator" || R.kind === "viewer") {
+            await rp.click('button[data-tab="timeoff"]');
+            await rp.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
+            officeCard = !!(await rp.$("[data-testid=coord-offers-card]"));
+            if (officeCard !== (R.kind === "coordinator")) throw new Error(`the page does not read as a ${R.tag}: the office's 'Offers - enter for a surgeon' card is ${officeCard ? "shown" : "missing"}`);
+          }
+          ok(`${T}: the page reads as a ${R.tag} - Time off tab '${toText}', ${tabs.includes("myschedule") ? "a Mine tab" : "no Mine tab"}${officeCard === null ? "" : officeCard ? ", the office's offers card" : ", no office offers card"}`);
+        }
+        await rp.waitForTimeout(800);
+        const facts = await e3Facts(rp, [E3_VAC_DAY]);
+        if (facts.error) throw new Error("rules context: " + facts.error);
+        // the coverage strip
+        const strip = await e3Strip(rp);
+        const eastIds = strip.ids.filter(t => /^cov-(forecast-primary|east-end|eastvac-unreviewed)$/.test(t));
+        if (!strip.ids.includes("cov-open-primary") || !strip.textLen) fail(`${T}: the coverage strip did not render (${strip.ids.join(",")})`);
+        else if (strip.hits.length || eastIds.length) fail(`${T}: the coverage strip still shows East detail - ${eastIds.join(", ")}${eastIds.length && strip.hits.length ? "; " : ""}${hitsText(strip.hits)}`);
+        else ok(`${T}: coverage strip without East items - '${strip.text.slice(0, 120)}'${R.eastPerson ? (facts.eastVac[E3_VAC_DAY] ? " (before E3 this page drew 'unreviewed East vacations': the rules here hold " + facts.eastVac[E3_VAC_DAY] + " East vacation on " + E3_VAC_DAY + ")" : " (NOTE: the rules here hold no East vacation on " + E3_VAC_DAY + " - the strip gate is not exercised)") : ""}`);
+        // the grid + legend: November 2026 and the East-vacation month
+        const gN = await e3Grid(rp, 2026, 10);
+        const vacM = [Number(E3_VAC_DAY.slice(0, 4)), Number(E3_VAC_DAY.slice(5, 7)) - 1];
+        const gV = await e3Grid(rp, vacM[0], vacM[1]);
+        if (!gN.cells || !gN.filled || !gV.cells) fail(`${T}: the grid never loaded (November 2026: ${gN.cells} cells, ${gN.filled} filled; ${E3_MONTHS[vacM[1]]} ${vacM[0]}: ${gV.cells} cells)`);
+        else if (gN.hits.length || gV.hits.length) fail(`${T}: the month grid / legend shows East detail - November 2026: ${hitsText(gN.hits) || "none"}; ${E3_MONTHS[vacM[1]]} ${vacM[0]}: ${hitsText(gV.hits) || "none"}`);
+        else if (R.kind === "public") ok(`${T}: November 2026 (${gN.cells} cells, ${gN.filled} filled) and ${E3_MONTHS[vacM[1]]} ${vacM[0]} (${gV.cells} cells) - no diamond, no East hover, no East legend line (a no-op here by construction: public mode never drew an East-vacation marker, eastVacPeople is empty there since 9/23; this page's day editor below is its E3 proof)`);
+        else ok(`${T}: November 2026 (${gN.cells} cells, ${gN.filled} filled) and ${E3_MONTHS[vacM[1]]} ${vacM[0]} (${gV.cells} cells; the rules on this page hold ${facts.eastVac[E3_VAC_DAY] ? E3_VAC_DAY + " as " + facts.eastVac[E3_VAC_DAY] + " East vacation - before E3 this grid drew its diamond" : "no East vacation on " + E3_VAC_DAY}) - no diamond, no East hover, no East legend line`);
+        if (!facts.eastVac[E3_VAC_DAY]) fail(`${T}: this page's rules hold no East vacation on ${E3_VAC_DAY} - the harness's east_feed overlay did not reach it, so the East-vacation checks prove nothing`);
+        // the day editor: the derived day, the East-vacation day, 10/15, the first served east-derived row
+        const days = [facts.derivedDay || sched.derivedDay, E3_VAC_DAY, E3_LOCK_DAY, E3_SRC_DAY].filter(Boolean).filter((d, i, a) => a.indexOf(d) === i);
+        if (!facts.derivedDay) fail(`${T}: this page's rules derive no Silvis role from November 2026 on - the derived-day editor check falls back to the scheduler's day`);
+        for (const d of days) {
+          const ed = await e3Editor(rp, d);
+          if (ed.blocks !== 2) fail(`${T}, day editor ${d}: the editor did not render its two role blocks (${ed.blocks}) - an empty editor proves nothing`);
+          else if (ed.hits.length || ed.east.length || ed.eastVac || ed.breaks.length) fail(`${T}, day editor ${d}: East / override detail shown - ${[hitsText(ed.hits), ed.east.length ? ed.east.length + " east-status line(s): " + ed.east[0].slice(0, 80) : "", ed.breaks.length ? "'" + ed.breaks[0].slice(0, 80) + "'" : ""].filter(Boolean).join("; ")}`);
+          else if (d === E3_SRC_DAY && ed.source !== "Source: generated") fail(`${T}, day editor ${d}: the served 'east-derived' row must read 'Source: generated' here, got '${ed.source}'`);
+          else ok(`${T}, day editor ${d}: no East line, no East-vacation state, no 'locked holder breaks'${d === E3_LOCK_DAY && sched.lockBreaks ? " (the scheduler's editor shows it)" : ""}${d === E3_VAC_DAY && facts.eastVac[d] ? " (the rules hold " + facts.eastVac[d] + " East vacation here)" : ""}${d === E3_SRC_DAY ? " - '" + ed.source + "' (the row's source is east-derived)" : ""}`);
+        }
+        // Totals (signed-in roles): screen, fairness and EVERY CSV line
+        if (R.totals) {
+          const tt = await e3Totals(rp, "e3-" + R.file + "-totals.png");
+          const badRows = tt.csvRows.filter(r => r.length !== 21);
+          if (tt.rows < 6) fail(`${T}, Totals Nov 2026: ${tt.rows} row(s) - the table never loaded`);
+          else if (tt.month.hits.length || tt.fair.hits.length || tt.hdr.includes("East days")) fail(`${T}, Totals Nov 2026: East detail shown - month ${hitsText(tt.month.hits) || "none"}; fairness ${hitsText(tt.fair.hits) || "none"}; header ${tt.hdr.join(" | ")}`);
+          else ok(`${T}, Totals Nov 2026: ${tt.rows} rows, no East column / tooltip / footnote; fairness view without East text (Fierce: '${tt.fierce.slice(0, 90)}')${sched.fierceEastP ? " while the scheduler's reads 'East P-week'" : ""}`);
+          if (tt.csvHeader.some(h => E3_RE.test(h)) || tt.csvHeader.length !== 21 || !tt.csvHeader.includes("Counted vs cap")) fail(`${T}, Totals CSV: the header must follow the screen (21 columns, no East column, 'Counted vs cap'): ${tt.csvHeader.join(" | ")}`);
+          else if (tt.csvRows.length < 6 || badRows.length) fail(`${T}, Totals CSV: every line must carry the header's 21 fields (the East cell dropped from the rows too) - ${tt.csvRows.length} row(s), ${badRows.length} with another count: ${badRows.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
+          else if (tt.csvRows.some(r => r.some(v => E3_RE.test(v)))) fail(`${T}, Totals CSV: a row names East: ${tt.csvRows.filter(r => r.some(v => E3_RE.test(v))).slice(0, 1).map(r => r.join(",")).join("")}`);
+          else ok(`${T}, Totals CSV: header + ${tt.csvRows.length} line(s), 21 fields each, no East column ('... ${tt.csvHeader.slice(12, 18).join(", ")} ...')`);
+        }
+        await rp.screenshot({ path: path.join(OUT, "e3-" + R.file + ".png"), fullPage: true }).catch(() => {});
+      } catch (e) { fail(`${T}: the pass threw: ` + errLine(e)); try { await rp.screenshot({ path: path.join(OUT, "failure-e3-" + R.file + ".png"), fullPage: true }); } catch (e2) {} }
+      await rp.close();
+    }
+    if (e3PubErrors.length) fail("Item E3 (?public=1): page errors: " + e3PubErrors.join(" | "));
+    // A day's note is data, not an E3 code surface - but it is East text every role reads, so it is reported by day and
+    // named as the decision it needs (review 9/25), never dropped silently.
+    if (e3NoteDays.size) console.log(`     E3 PENDING - Faraz's decision (data, not an E3 code surface): ${e3NoteDays.size} served day note(s) name East (${Array.from(e3NoteDays).sort().join(", ")}) - the importer's 11/9-11/16 seed notes ("Fierce 9/22: East primary week 11/9 = Silvis backup ..."). Every role, ?public=1 included, reads them in the grid hover, the NOTE marker and the editor's Note line. Removing them needs BOTH the seed (docs/silvis-seed.json existingAssignments notes) and the live rows (a re-import, or a snapshot-first note rewrite) - the live rows alone come back with the next import.`);
+    else ok("Item E3: no served day note names East in the months and days checked");
+    // the main page's own session token back (each role page above stored its own in the shared origin storage)
+    await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
+    if (writes.some(w => w.public)) fail("Item E3 (?public=1): the public page attempted a write: " + JSON.stringify(writes.filter(w => w.public)));
+    await showMonth(2026, 10).catch(() => {});
   }
 
   // ---- Prompt 12 B / Z: the "confirm" badge follows the schedule_days note; Thanksgiving is confirmed -> no badge ----
@@ -4754,7 +5108,34 @@ try {
       const blk = weekendTriples[0];
       const blkHeld = await Promise.all(blk.map(d => cellAttr(d, "data-primary").catch(() => null)));
       if (blkHeld.some(Boolean)) fail(`block-member check: the derived row-less triple ${blk.join("/")} already holds a primary in the grid (${blkHeld.join(", ")}) - the row-less derivation is broken`);
-      await editDay(blk[1], "primary", "s5"); noteEdit(blk[1], { primary_id: "s5" });
+      const wOv = writes.length;
+      const ovReasons = await editDay(blk[1], "primary", "s5"); noteEdit(blk[1], { primary_id: "s5" });
+      // Item E3 (Faraz 9/25: "Overrides stop writing reason codes into schedule_days.note; the schedule.override audit row
+      // already keeps them") - observed on this override save (review 9/25): the schedule_days write for the day carries
+      // no '[override: ...]' tag and none of the reasons, the schedule.override audit row names them, and the
+      // schedule.day_edit row carries them in detail.overrides.
+      if (!ovReasons) console.log(`     (Item E3: ${blk[1]} Fierce primary needed no override this run - the override-write check is vacuous)`);
+      else {
+        const e3Body = (w) => { try { return JSON.parse(w.body || "null"); } catch (e) { return null; } };
+        let dayRow = null, ovAudit = null, deAudit = null;
+        for (let i = 0; i < 30 && !(dayRow && ovAudit && deAudit); i++) {
+          await page.waitForTimeout(200);
+          const since = writes.slice(wOv);
+          since.filter(w => w.path.startsWith("/rest/v1/schedule_days")).forEach(w => { const b = e3Body(w); (Array.isArray(b) ? b : [b]).forEach(r => { if (r && r.day === blk[1]) dayRow = r; }); });
+          const audits = since.filter(w => w.path.startsWith("/rest/v1/audit_log")).map(e3Body).filter(Boolean);
+          ovAudit = audits.find(b => b.action === "schedule.override" && b.detail && b.detail.day === blk[1]) || null;
+          deAudit = audits.find(b => b.action === "schedule.day_edit" && b.detail && b.detail.day === blk[1]) || null;
+        }
+        const noteW = dayRow ? dayRow.note : undefined;
+        const leaked = typeof noteW === "string" ? ovReasons.filter(r => noteW.indexOf(r) >= 0) : [];
+        const ovListed = ovAudit && Array.isArray(ovAudit.detail.overrides) && ovAudit.detail.overrides[0] && Array.isArray(ovAudit.detail.overrides[0].reasons) ? ovAudit.detail.overrides[0].reasons : [];
+        const deListed = deAudit && Array.isArray(deAudit.detail.overrides) && deAudit.detail.overrides[0] && Array.isArray(deAudit.detail.overrides[0].reasons) ? deAudit.detail.overrides[0].reasons : [];
+        if (!dayRow) fail(`Item E3 (override save ${blk[1]}): no schedule_days write for the day within 6 s of the save`);
+        else if (/\[override:/.test(noteW || "") || leaked.length) fail(`Item E3 (override save ${blk[1]}): the anon-readable note carries the override (${JSON.stringify(noteW)}${leaked.length ? " - reasons " + leaked.join(", ") : ""})`);
+        else if (!ovAudit || !ovListed.length || !/despite /.test(String(ovAudit.detail.summary || ""))) fail(`Item E3 (override save ${blk[1]}): no schedule.override audit row naming the reasons: ${JSON.stringify(ovAudit)}`);
+        else if (!deAudit || !deListed.length) fail(`Item E3 (override save ${blk[1]}): the schedule.day_edit audit row lacks detail.overrides[0].reasons: ${JSON.stringify(deAudit && deAudit.detail)}`);
+        else ok(`Item E3 (override save ${blk[1]}): the schedule_days write's note is ${JSON.stringify(noteW)} (no tag, no reason); schedule.override reads '${String(ovAudit.detail.summary).slice(0, 110)}' and schedule.day_edit carries overrides [${deListed.join(", ")}]`);
+      }
       await editDay(blk[2], "primary", "s5"); noteEdit(blk[2], { primary_id: "s5" });
       await showMonth(+blk[0].slice(0, 4), +blk[0].slice(5, 7) - 1);
       await page.click(`[data-day="${blk[0]}"]`);
@@ -6138,6 +6519,9 @@ try {
         const rosterWord = /\b(Khan|Burchett|Acton|Philip|Fierce|Sarkar|FAK|MAB|BDA|AFP|NF|SRK|s[1-6])\b/;
         const slots = Array.isArray(lg.openSlots) ? lg.openSlots : null;
         const badSlot = slots ? slots.find(s => !s || !/^\d{4}-\d{2}-\d{2}$/.test(s.day) || !/^(primary|backup)$/.test(s.role) || typeof s.reason !== "string" || !sentence.test(s.reason) || rosterWord.test(s.reason)) : null;
+        // Item E3 (Faraz 9/25): no stored sentence names East any more - fresh ones say 'not available', and a sentence
+        // carried from the live blob's earlier record is brought up to date on the way through (openSlotReasonCurrent)
+        const eastSlot = slots ? slots.find(s => s && typeof s.reason === "string" && /\beast\b|davenport|derived week/i.test(s.reason)) : null;
         let denied = null; try { require(path.join(ROOT, "importer.js")).impRefuseNoteDenylist({ lastGenerate: lg }); } catch (e) { denied = String(e && e.message || e).split("\n")[0]; }
         // P13R (e): the record also carries the run facts of the Prompt 12 head's diagnostics - mode (item T) and fixedSlots - and carriedFrom when a sub-range run kept earlier reasons
         const extraKeys = Object.keys(lg).filter(k => !["at", "range", "openSlots", "weekendKinds", "mode", "fixedSlots", "carriedFrom"].includes(k));
@@ -6146,8 +6530,9 @@ try {
         if (!slots || !lg.range || typeof lg.weekendKinds !== "object" || !lg.weekendKinds || typeof lg.at !== "string" || extraKeys.length) fail("Accept & Publish: lastGenerate shape wrong (extra keys: " + extraKeys.join(",") + "): " + JSON.stringify(lg).slice(0, 300));
         else if (lg.range.start !== genStart || lg.range.end !== genEnd) fail("Accept & Publish: lastGenerate.range is not the harness preview range " + genStart + ".." + genEnd + ": " + JSON.stringify(lg.range));
         else if (badSlot) fail("Accept & Publish: lastGenerate.openSlots carries a non-operational entry: " + JSON.stringify(badSlot));
+        else if (eastSlot) fail("Item E3 (Accept & Publish): a lastGenerate reason still names East (it must say 'not available'): " + JSON.stringify(eastSlot));
         else if (denied) fail("Accept & Publish: lastGenerate fails the importer denylist gate: " + denied);
-        else ok(`Accept & Publish: blob autosave carries data.lastGenerate { at, range ${lg.range.start}..${lg.range.end}, ${slots.length} open slot(s), ${Object.keys(lg.weekendKinds).length} weekend kind(s) } - every reason operational (${slots.slice(0, 2).map(s => s.day + " " + s.role + ": " + s.reason).join("; ") || "none open"}), past the importer denylist`);
+        else ok(`Accept & Publish: blob autosave carries data.lastGenerate { at, range ${lg.range.start}..${lg.range.end}, ${slots.length} open slot(s), ${Object.keys(lg.weekendKinds).length} weekend kind(s) } - every reason operational (${slots.slice(0, 2).map(s => s.day + " " + s.role + ": " + s.reason).join("; ") || "none open"}), none naming East (Item E3), past the importer denylist`);
       }
     }
     await page.click('button[data-tab="setup"]');
