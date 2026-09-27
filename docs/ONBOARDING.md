@@ -56,7 +56,12 @@ afterwards; the editor keeps query history).*
    ```
 
 4. Tell them: **Time off** is self-service (no approval) and is refused over a day they are already published — trade
-   first. **Trades** are by day and role. Their calendar subscription URL is in **Settings → Live calendar sync**.
+   first. **Trades** are by day and role; every "propose a trade" shortcut lands on the trade form with the next empty
+   field focused. Trades and gives (for days still ahead) waiting on their answer come first on **Time off & Trades** (**Waiting on you**; the
+   tab badge counts only those) and can be accepted or declined straight from **Alerts**. A vacation starting less than
+   six weeks out (the offers freeze, `groupRules.offerPeriods`) is saved as usual with a note that the schedule through
+   that date is already being built - check Open shifts or propose a trade. Their calendar subscription URL is in
+   **Settings → Live calendar sync**.
    Then walk them through the offers section below.
 
 ## What to tell a surgeon about offers (Prompt 14 — from the Nov 2026 – Jan 2027 period)
@@ -83,7 +88,8 @@ days a surgeon was placed on outside his list.*
 
 **How to paint (show them on their phone).** Open **Mine** and tap **Paint my
 offers** (or the **Paint offers** button in the top bar; a reminder e-mail's link `#offers` opens it too). You get one
-row per day for the month; ‹ › move ahead as far as you like. Tap a brush at the top — **Primary**, **Backup**, **Either**
+row per day for the month; ‹ › move ahead as far as you like. While a period is open, a **Go to <period> (freezes M/D,
+in N days)** button under the month jumps straight to its first month. Tap a brush at the top — **Primary**, **Backup**, **Either**
 (happy with either role) or **Clear** — then tap the days; tap a day again with the same brush to take it back. For a
 run of days switch **Range** on, tap the first day, then the last (the line under the brushes tells you which tap you
 are on and has an "x cancel start"). Prefer typing? **Paste dates** takes "11/3, 11/5, 11/16-11/20". Greyed rows
@@ -109,7 +115,8 @@ right now; the count sits on the tab as a badge. **Take this shift** is immediat
 the day is theirs (no approval step, no waiting for the scheduler), it shows on everyone's calendar and in the feed,
 the scheduler and the surgeon each get an e-mail, and the audit log keeps the entry. The button is offered only when the
 hard schedule rules allow it (their OR / outreach days, monthly and backup caps, vacations, holiday opt-outs). Soft
-preferences are shown as warnings on the confirm sheet but do not block. The scheduler can still reassign the
+preferences are shown as warnings on the confirm sheet but do not block. When Take is greyed out the reason is written
+next to it (on a phone the button's tooltip never shows). The scheduler can still reassign the
 day from the day editor afterwards. The group is also e-mailed on publish (from the app's Accept & Publish dialog; the 9/23 command-line publish sent
 nothing) and — once the Monday cron job `silvis-open-shifts-weekly` is created (`edge-functions/README.md` section 4 / guide
 16.4–16.5 step 3; NOT created yet as of 2026-09-23) — every Monday 07:00 Central while any shift in the next 30 days is open
