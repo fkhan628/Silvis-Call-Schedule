@@ -2661,11 +2661,11 @@ try {
                 };
               }, role);
               if (od.blocks !== 2 || !od.youIn || od.you !== 1) fail(`${DS}, ${own.day} (${role}): his row must carry the one You chip (blocks ${od.blocks}, chip on his row ${od.youIn}, chips ${od.you})`);
-              // Give away only today onward (a give on a past day is refused at accept - TRADE_PAST)
+              // Propose a trade and Give away only today onward (either on a past day is refused at accept - TRADE_PAST; Faraz 9/27)
               const upcoming = !!todayCal && own.day >= todayCal;
-              if (!od.trade || od.trade.tag !== "BUTTON" || !/^Propose a trade for this day/.test(od.trade.text) || (upcoming ? !od.give || od.give.text !== "Give away" : !!od.give)) fail(`${DS}, ${own.day}: Propose a trade${upcoming ? " + Give away" : " and no Give away (a past day)"} expected, got ${JSON.stringify({ trade: od.trade, give: od.give })}`);
+              if (upcoming ? (!od.trade || od.trade.tag !== "BUTTON" || !/^Propose a trade for this day/.test(od.trade.text) || !od.give || od.give.text !== "Give away") : (!!od.trade || !!od.give)) fail(`${DS}, ${own.day}: ${upcoming ? "Propose a trade + Give away" : "no Propose a trade and no Give away (a past day)"} expected, got ${JSON.stringify({ trade: od.trade, give: od.give })}`);
               else if (od.offers || od.source) fail(`${DS}, ${own.day}: the summary still shows ${od.offers} offers line(s) / a Source line (${od.source})`);
-              else ok(`${DS}, ${own.day} (${role}): You chip on his row, '${od.trade.text.slice(0, 70)}' (${od.trade.h}px)${upcoming ? " + 'Give away' (" + od.give.h + "px)" : ", no Give away (a past day)"}, no offers lines, no Source line`);
+              else ok(`${DS}, ${own.day} (${role}): You chip on his row, ${upcoming ? "'" + od.trade.text.slice(0, 70) + "' (" + od.trade.h + "px) + 'Give away' (" + od.give.h + "px)" : "no Propose a trade, no Give away (a past day)"}, no offers lines, no Source line`);
               if (upcoming && od.give) {
                 await rp.click("[data-testid=day-editor] [data-testid=editor-give]");
                 await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
@@ -2675,6 +2675,29 @@ try {
                 else ok(`${DS}: Give away closed the editor and opened the Propose card in give mode`);
               } else {
                 console.log(`     (${DS}: ${own.day} is past - the Give away click is not exercised)`);
+                await rp.keyboard.press("Escape");
+                await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
+              }
+            }
+            // Faraz 9/27: a PAST own day (this month or last, before today in Central time) - the summary keeps his You chip but
+            // offers neither Propose a trade nor Give away (either is refused at accept on a past day - TRADE_PAST)
+            if (/^\d{4}-\d{2}-\d{2}$/.test(todayCal || "")) {
+              const ty = Number(todayCal.slice(0, 4)), tm = Number(todayCal.slice(5, 7)) - 1;
+              let past = null;
+              for (const [yy, mm] of [[ty, tm], tm === 0 ? [ty - 1, 11] : [ty, tm - 1]]) {
+                await e3Month(rp, yy, mm);
+                const cells = await rp.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), b: e.getAttribute("data-backup"), pv: e.getAttribute("data-preview") })));
+                past = cells.filter(c => !c.pv && c.day.slice(5, 7) === String(mm + 1).padStart(2, "0") && c.day < todayCal && (c.p === pid || c.b === pid)).pop() || null;
+                if (past) break;
+              }
+              if (!past) console.log(`     (${DS}: no past day of ${pid} this month or last on this page - the past-day summary (no trade, no give) is not exercised)`);
+              else {
+                await rp.click(`[data-testid=cal-grid] .cal-cell[data-day="${past.day}"]`);
+                await rp.waitForSelector("[data-testid=day-editor] [role=dialog]", { timeout: 5000 });
+                await rp.waitForTimeout(150);
+                const pd = await rp.evaluate(() => { const dlg = document.querySelector("[data-testid=day-editor] [role=dialog]"); return { you: dlg.querySelectorAll("[data-testid=editor-you]").length, trade: !!dlg.querySelector("[data-testid=editor-trade]"), give: !!dlg.querySelector("[data-testid=editor-give]") }; });
+                if (pd.you !== 1 || pd.trade || pd.give) fail(`${DS}, past own day ${past.day}: the You chip and no Propose a trade / Give away expected, got ${JSON.stringify(pd)}`);
+                else ok(`${DS}, past own day ${past.day}: You chip, no Propose a trade, no Give away`);
                 await rp.keyboard.press("Escape");
                 await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
               }
@@ -5406,25 +5429,19 @@ try {
     else ok("Time off clean range: one POST /rest/v1/time_off { s1, 2027-03-02..03 } + one audit timeoff.add + one notification vacation_logged \"" + vacNotif.message + "\"");
     // Shift-adjust (9/27): a surgeon's own saved vacation that starts less than closeWeeksBeforeStart weeks out (6 - the seed's
     // groupRules.offerPeriods) gets the inline advisory vac-lead-note 'The schedule through <M/D> is already being built -
-    // ...' (never a dialog on the add path); a later start gets none. The harness's clean range starts 2027-03-02, so which
-    // side it falls on is read from today (no fixed date is assumed).
+    // ...' (never a dialog on the add path). Faraz 9/27 (ship 9/27 A): never for the scheduler - he builds that schedule -
+    // nor the office or a viewer. This page is the scheduler (Khan, s1) adding his own range, so NO note on either side of
+    // the window; which side 2027-03-02 falls on is read from today (no fixed date is assumed) and only named. A surgeon's
+    // in-window note is pinned in data-layer (helpers.vacationLeadNote + the addVac / render guards).
     try {
       const leadDays = Math.round((Date.UTC(2027, 2, 2) - Date.UTC(+todayIso.slice(0, 4), +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10))) / 86400000);
       // the window the app reads: groupRules.offerPeriods.closeWeeksBeforeStart of the served blob (the seed's), a number > 0, else 6
       const leadRule = ((JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules || {}).offerPeriods || {}).closeWeeksBeforeStart;
       const leadWeeks = typeof leadRule === "number" && isFinite(leadRule) && leadRule > 0 ? leadRule : 6;
-      const leadWin = leadWeeks * 7;
-      const lead = await page.$eval("[data-testid=vac-lead-note]", el => ({ text: (el.firstElementChild ? el.firstElementChild.textContent : el.textContent).replace(/\s+/g, " ").trim(), start: el.getAttribute("data-start"), through: el.getAttribute("data-through"), dismiss: !!el.querySelector("[data-testid=vac-lead-note-dismiss]") })).catch(() => null);
-      if (leadDays >= leadWin) {
-        if (lead) fail(`Time off lead-time advisory: 2027-03-02 is ${leadDays} days out (>= ${leadWeeks} weeks) yet vac-lead-note shows '${lead.text}'`);
-        else ok(`Time off lead-time advisory: none for 2027-03-02 (${leadDays} days out, past the ${leadWeeks}-week freeze window); the in-window note is not exercised by this range until ${isoAddDays("2027-03-02", -(leadWin - 1))} (helpers.vacationLeadNote is pinned in data-layer)`);
-      } else {
-        const want = isoAddDays(todayIso, leadWin - 1);
-        if (!lead) fail(`Time off lead-time advisory: 2027-03-02 is ${leadDays} days out (< ${leadWeeks} weeks) but no vac-lead-note rendered`);
-        else if (!lead.dismiss) fail("Time off lead-time advisory: no dismiss button (vac-lead-note-dismiss)");
-        else if (lead.start !== "2027-03-02" || lead.through !== want || lead.text !== "The schedule through " + mdOf(want) + " is already being built - check Open shifts or propose a trade if this affects a call day.") fail("Time off lead-time advisory: expected start 2027-03-02, through " + want + " and the fixed sentence, got " + JSON.stringify(lead));
-        else ok(`Time off lead-time advisory: '${lead.text}' (2027-03-02 is ${leadDays} days out)`);
-      }
+      const inWindow = leadDays < leadWeeks * 7;
+      const lead = await page.$eval("[data-testid=vac-lead-note]", el => (el.firstElementChild ? el.firstElementChild.textContent : el.textContent).replace(/\s+/g, " ").trim()).catch(() => null);
+      if (lead) fail(`Time off lead-time advisory: the scheduler's own vacation 2027-03-02 (${leadDays} days out, ${inWindow ? "inside" : "past"} the ${leadWeeks}-week window) shows vac-lead-note '${lead}' - the note is never the scheduler's`);
+      else ok(`Time off lead-time advisory: none for the scheduler's own 2027-03-02 (${leadDays} days out, ${inWindow ? "inside" : "past"} the ${leadWeeks}-week window) - never for the scheduler; a surgeon's in-window note is pinned in data-layer`);
     } catch (e) { fail("Time off lead-time advisory: " + errLine(e)); }
     // Prompt 21 step 2 (Faraz 9/26): the audit row goes out with Prefer: return=minimal (logAudit -> db.insert's { returning:
     // "minimal" }: an INSERT without RETURNING, which a writer who cannot read the row back is not refused - Acton's 9/24
@@ -5854,7 +5871,8 @@ try {
             else ok(`Give (receiver, S4): Trades reads '${r4.title}', the row's chip '${r4.status}'`);
             // Shift-adjust (9/27): "Waiting on you" - the give sits in the block at the TOP of Time off & Trades (before the
             // vacation card) through the same row renderer, under its own testids (trade-waiting-row, Accept / Decline only),
-            // while the Pending card keeps its one trade-row; a surgeon's tab badge counts exactly the waiting rows
+            // while the Pending card keeps its one trade-row; a surgeon's tab badge counts exactly the waiting rows (one per proposal,
+            // Faraz 9/27 - a unit is one row)
             try {
               const wt = await rp.evaluate((id) => {
                 const blk = document.querySelector("[data-testid=trades-waiting]");
@@ -5864,8 +5882,18 @@ try {
                 return { blk: !!blk, first: !!(blk && tc && (blk.compareDocumentPosition(tc) & Node.DOCUMENT_POSITION_FOLLOWING)), rows: blk ? blk.querySelectorAll("[data-testid=trade-waiting-row]").length : 0,
                   count: blk ? blk.getAttribute("data-count") : null, row: !!row, btns: row ? Array.from(row.querySelectorAll("button")).map(b => b.getAttribute("data-testid")) : [],
                   badge: badge ? badge.textContent.trim() : null, pendingRows: document.querySelectorAll('[data-testid=trades-pending] [data-testid=trade-row][data-trade-id="' + id + '"]').length,
-                  anyRows: document.querySelectorAll('[data-testid=trade-row][data-trade-id="' + id + '"]').length };
+                  anyRows: document.querySelectorAll('[data-testid=trade-row][data-trade-id="' + id + '"]').length,
+                  // Faraz 9/27: ONE Waiting row per proposal - a unit proposal's waiting row names the unit and its days
+                  // (trade-waiting-unit-line, data-days = data-group days); no two waiting rows of one unit proposal
+                  units: blk ? Array.from(blk.querySelectorAll("[data-testid=trade-waiting-row][data-unit]")).map(r => ({ unit: r.getAttribute("data-unit"), kind: r.getAttribute("data-kind"), group: r.getAttribute("data-group"), days: r.getAttribute("data-days"), line: ((r.querySelector("[data-testid=trade-waiting-unit-line]") || {}).textContent || "").trim(), meta: ((r.querySelector("[data-testid=trade-meta]") || {}).textContent || "").replace(/\s+\d.*$/, "").trim(), dayTag: !!r.querySelector("[data-testid=trade-unit-tag]") })) : [] };
               }, giveId);
+              const wUnits = wt.units || [];
+              const wMulti = wUnits.filter(u => Number(u.group) > 1);
+              const wDup = wUnits.filter((u, i) => wUnits.findIndex(v => v.unit === u.unit && v.kind === u.kind && v.meta === u.meta) !== i);
+              const wBad = wMulti.filter(u => !u.line || u.dayTag || String(u.days || "").split(",").filter(Boolean).length !== Number(u.group) || !/ unit | \(\d+ days\)/.test(u.line));
+              if (wDup.length || wBad.length) fail("Waiting on you (one row per proposal): a unit proposal must be ONE waiting row naming the unit and its days (no 'day i of n' tag), got " + JSON.stringify({ dup: wDup, bad: wBad }));
+              else if (wMulti.length) ok(`Waiting on you (one row per proposal): ${wMulti.length} unit proposal(s), each one row - '${wMulti[0].line.slice(0, 90)}' (${wMulti[0].group} days)`);
+              else console.log("     (Waiting on you: no multi-day unit proposal waits on this receiver - the one-row-per-unit reading is not exercised here; helpers.tradesWaitingOn / tradeWaitingUnitLine are pinned in data-layer)");
               if (!wt.blk || !wt.row || !wt.first) fail("Give (receiver, waiting on you): the give should be listed in trades-waiting above the vacation card, got " + JSON.stringify(wt));
               else if (wt.btns.join(",") !== "trade-waiting-accept,trade-waiting-decline") fail("Give (receiver, waiting on you): the row should offer Accept / Decline only (trade-waiting-accept, trade-waiting-decline), got " + JSON.stringify(wt.btns));
               else if (String(wt.rows) !== wt.count || wt.badge !== String(wt.rows)) fail(`Give (receiver, waiting on you): the block lists ${wt.rows} row(s) (data-count ${wt.count}) and the Time off tab badge reads ${JSON.stringify(wt.badge)} - a surgeon's badge counts exactly the rows waiting on him`);

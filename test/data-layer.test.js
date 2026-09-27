@@ -1179,8 +1179,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const st = src.slice(src.indexOf("suggestTrade={(d, r) => {"), src.indexOf("css={css} dk={dk}/>", src.indexOf("suggestTrade={(d, r) => {")));
       assert.ok(st.includes("return from && poolSurgeons.some(s => s.id === from) ? tradePickOf(from, tradeSuggestionsFor(d, r, from)[0] || null) : null;"), "the editor suggests nothing (and moves no From) when the holder is not a pool member");
       const ed = src.slice(src.indexOf("function DayEditor(props) {"), src.indexOf('data-testid="editor-footer"'));
-      assert.ok(ed.includes("const tradePick = typeof suggestTrade === \"function\" && !isPublicMode && (canEdit || myRole) ? suggestTrade(day, tradeLinkRole) : null;"), "the editor computes the top suggestion for the link's role");
+      // Faraz 9/27 (ship 9/27 A): the summary's link follows Give away - his own day from today on; the scheduler's on every day
+      assert.ok(ed.includes("const showTrade = !isPublicMode && (canEdit || (!!myRole && day >= todayC));") && ed.includes("const tradePick = typeof suggestTrade === \"function\" && showTrade ? suggestTrade(day, tradeLinkRole) : null;"), "the editor computes the top suggestion for the link's role, only where the link shows");
       const et = src.indexOf('data-testid="editor-trade"');
+      assert.ok(src.slice(et - 200, et).includes("{showTrade && ("), "the link shows under showTrade (the scheduler always; a linked surgeon on his own day from today on)");
       const link = src.slice(et, src.indexOf("Propose a trade for this day", et) + 140);
       assert.ok(link.includes("onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)}") && link.includes('Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}'), "the link names the suggestion and passes it on");
     });
@@ -1347,6 +1349,33 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(H.tradesWaitingOn(dated, "s2", "2026-09-27").map(r => r.id), ["p2", "p4", "p5"], "yesterday and a past return day drop out; today stays");
       assert.deepStrictEqual(H.tradesWaitingOn(dated, "s2").map(r => r.id), ["p1", "p2", "p3", "p4", "p5"], "no today -> no date filter");
       assert.deepStrictEqual(H.tradesWaitingOn(dated, "s2", "junk").map(r => r.id).length, 5, "a non-ISO today -> no date filter");
+      // Faraz 9/27 (ship 9/27 A): ONE entry per proposal - a holiday-unit / weekend-block proposal's rows (same unit tag,
+      // parties and role - the app's tradeGroupOf) collapse to the earliest-day row, where the proposal first appears
+      const tagOf = (r) => { const m = /\[unit (holiday|weekend-block) (\d{4}-\d{2}-\d{2}) (\d+): ([^\]]+), day (\d+) of \d+\]/.exec(String(r && r.detail || "")); return m ? { kind: m[1], start: m[2], n: Number(m[3]), text: m[4], index: Number(m[5]) } : null; };
+      const hs = (i) => "[unit holiday 2026-11-26 4: Thanksgiving unit 11/26-11/29 (4 days), day " + (i + 1) + " of 4]";
+      const ws = (i) => "[unit weekend-block 2026-10-09 3: weekend block unit 10/9-10/11 (3 days), day " + (i + 1) + " of 3]";
+      const u = (id, day, detail, o) => ({ id, status: "pending", from_surgeon_id: "s3", to_surgeon_id: "s2", role: "primary", day, detail, ...o });
+      const unitRows = [u("single", "2026-10-02", "x"), u("h2", "2026-11-27", hs(1)), u("h1", "2026-11-26", hs(0)), u("w1", "2026-10-09", ws(0), { kind: "give" }), u("h3", "2026-11-28", hs(2)),
+        u("w2", "2026-10-10", ws(1), { kind: "give" }), u("h4", "2026-11-29", hs(3)), u("w3", "2026-10-11", ws(2), { kind: "give" }),
+        u("hB", "2026-11-26", hs(0), { role: "backup" }), u("hO", "2026-11-26", hs(0), { from_surgeon_id: "s4" }), u("hX", "2026-11-27", hs(1), { status: "declined" })];
+      assert.deepStrictEqual(H.tradesWaitingOn(unitRows, "s2", "2026-09-27", tagOf).map(r => r.id), ["single", "h1", "w1", "hB", "hO"], "a unit trade is one entry (its first day), a unit give is one entry; another role or proposer is its own proposal; a declined row is not waiting");
+      assert.strictEqual(H.tradesWaitingOn(unitRows, "s2", "2026-09-27").length, 10, "without tagOf every pending row is its own entry (the old reading)");
+      assert.deepStrictEqual(H.tradesWaitingOn(unitRows.slice(1, 7).filter(r => r.detail !== "x" && tagOf(r).kind === "holiday"), "s2", "2026-11-27", tagOf), [], "a unit with a day already past is not waiting as a whole (its Accept would be refused TRADE_PAST)");
+      assert.deepStrictEqual(H.tradesWaitingOn(unitRows, "s2", "2026-11-27", tagOf).map(r => r.id), [], "every proposal here has a past day by 11/27");
+    });
+    check("Ship 9/27 A (behaviour): helpers.tradeWaitingUnitLine names the unit and its days for the one Waiting row - a give, a two-way unit trade (a return span / one return slot), a one-way trade; ASCII", () => {
+      assert.strictEqual(typeof H.tradeWaitingUnitLine, "function", "exported");
+      const hs = (i) => "[unit holiday 2026-11-26 4: Thanksgiving unit 11/26-11/29 (4 days), day " + (i + 1) + " of 4]";
+      const tag = { kind: "holiday", start: "2026-11-26", n: 4, text: "Thanksgiving unit 11/26-11/29 (4 days)", index: 1 };
+      const g = (o, rr) => ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].map((d, i) => ({ id: "h" + i, status: "pending", from_surgeon_id: "s3", from_surgeon_name: "Acton", to_surgeon_id: "s2", to_surgeon_name: "Burchett", role: "primary", day: d, detail: hs(i), kind: "trade", return_day: null, return_role: null, ...o, ...(rr ? rr(i) : {}) }));
+      assert.strictEqual(H.tradeWaitingUnitLine(g({ kind: "give" }), tag, "s2"), "Acton offers you primary for the Thanksgiving unit 11/26-11/29 (4 days) - nothing in return");
+      assert.strictEqual(H.tradeWaitingUnitLine(g({ kind: "give" }), tag, "s1"), "Acton offers Burchett primary for the Thanksgiving unit 11/26-11/29 (4 days) - nothing in return", "anyone else reads both names");
+      assert.strictEqual(H.tradeWaitingUnitLine(g({}, (i) => ({ return_day: "2026-12-0" + (3 + i), return_role: "backup" })), tag, "s2"), "Burchett would take primary for the Thanksgiving unit 11/26-11/29 (4 days); Acton would take backup 12/3-12/6 (4 days)");
+      assert.strictEqual(H.tradeWaitingUnitLine(g({}, (i) => i === 0 ? { return_day: "2026-12-05", return_role: "backup" } : {}), tag, "s2"), "Burchett would take primary for the Thanksgiving unit 11/26-11/29 (4 days); Acton would take " + H.slotLabel("2026-12-05", "backup"));
+      assert.strictEqual(H.tradeWaitingUnitLine(g({}), tag, "s2"), "Burchett would take primary for the Thanksgiving unit 11/26-11/29 (4 days) (one-way - no return shift)");
+      assert.strictEqual(H.tradeWaitingUnitLine(g({ kind: "give" }).slice(0, 3), tag, "s2"), "Acton offers you primary for the Thanksgiving unit 11/26-11/28 (3 days) - nothing in return", "the days are the rows that move together, not the stamp's");
+      assert.strictEqual(H.tradeWaitingUnitLine([], tag, "s2"), "");
+      assert.ok(/^[\x20-\x7e]*$/.test(H.tradeWaitingUnitLine(g({ kind: "give" }), tag, "s2")), "ASCII");
     });
     check("Shift-adjust (behaviour): notifTradeProposal (lifted verbatim with notifGiveTrade) - Alerts Accept / Decline for the surgeon ASKED on a pending two-way trade (data.kind trade, or none on an old row); never the proposer, a third surgeon, the scheduler not asked, a decided row, a give (notifGiveTrade's), another type or a row without trade_id", () => {
       const lift = (a, b) => { const i = src.indexOf(a); const j = i >= 0 ? src.indexOf(b, i + a.length) : -1; if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 50) + "' not found"); return src.slice(i, j); };
@@ -1388,10 +1417,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const wb = src.slice(w, tc);
       assert.ok(src.slice(v0, w).includes("{!isCoordinator && !isViewer && mySurgeon && tradesWaitingOnMe.length > 0 && ("), "linked surgeons only, and only when something waits");
       assert.ok(wb.includes('{tradesWaitingOnMe.map(r => tradeRow(r, "waiting"))}') && wb.includes("Waiting on you ({tradesWaitingOnMe.length})"), "the same row renderer, counted title");
-      assert.ok(src.includes("const waitingToday = todayCentral();") && src.includes("const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon, waitingToday), [tradeRequests, mySurgeon, waitingToday]);"), "the rows come from helpers.tradesWaitingOn, past days left out");
+      // Faraz 9/27 (ship 9/27 A): one row per proposal - tradesWaitingOn groups by tradeUnitTag, computed below its definition
+      assert.ok(src.includes("const waitingToday = todayCentral();") && src.includes("const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon, waitingToday, tradeUnitTag), [tradeRequests, mySurgeon, waitingToday]);"), "the rows come from helpers.tradesWaitingOn, one per proposal, past days left out");
+      assert.ok(src.indexOf("const tradesWaitingOnMe = useMemo(") > src.indexOf("  const tradeUnitTag = (r) =>"), "computed below tradeUnitTag (read during render - no temporal dead zone)");
+      assert.ok(src.indexOf("const tradesWaitingOnMe = useMemo(") > src.indexOf("  // Days a person holds from today on"), "and outside the tradeUnitTag .. 'Days a person holds' span the behaviour tests lift");
       assert.ok(src.slice(v0, w).includes('boxShadow:"inset 4px 0 0 " + T.accent') && !src.includes("box-shadow"), "the accent is an inset shadow - the dark sheet repaints css.card borders, never box-shadow");
       const tr = src.slice(src.indexOf("const tradeRow = (r, where) => {"), src.indexOf("\n  };\n", src.indexOf("const tradeRow = (r, where) => {")));
       assert.ok(tr.includes('const waiting = where === "waiting";') && tr.includes('data-testid={waiting ? "trade-waiting-row" : "trade-row"}') && tr.includes('data-testid={waiting ? "trade-waiting-accept" : "trade-accept"}') && tr.includes('data-testid={waiting ? "trade-waiting-decline" : "trade-decline"}'), "a waiting row never shares the Pending card's selectors");
+      assert.ok(tr.includes("const unitGroup = waiting && tag && groupN > 1 ? tradeGroupOf(r).map(tradeNamed) : null;") && tr.includes('{unitGroup ? <span data-testid="trade-waiting-unit-line" style={{fontSize:12.5,color:dkText}}>{tradeWaitingUnitLine(unitGroup, tag, mySurgeon)}</span> :') && tr.includes('data-days={unitGroup ? unitGroup.map(g => g.day).join(",") : undefined}'), "a unit's one Waiting row names the unit and its days (helpers.tradeWaitingUnitLine over the group Accept / Decline act on)");
+      assert.ok(tr.includes("onClick={()=>acceptTrade(r)}") && tr.includes("onClick={()=>declineTrade(r)}") && tr.includes("groupN > 1 ? `Accept (${groupN} days)` : \"Accept\""), "Accept / Decline on the unit row are the Pending card's whole-group path (acceptTrade / declineTrade), counted in days");
       assert.ok(tr.includes('{!waiting && canCancel && <button data-testid="trade-cancel"') && tr.includes('{!waiting && canRetry && <button data-testid="trade-retry"'), "Cancel / Retry stay on the Pending card");
       assert.ok(src.includes("{pending.length === 0 ? <p style={{...muted,fontStyle:\"italic\"}}>{tradeListEmpty(\"Pending\")}</p> : <div style={{display:\"flex\",flexDirection:\"column\",gap:6}}>{pending.map(tradeRow)}</div>}"), "the Pending card is unchanged");
       assert.ok(src.includes('const pendingTrades = isScheduler ? myTradeRequests.filter(r=>r.status==="pending").length : tradesWaitingOnMe.length;'), "badge: the scheduler counts all pending, a surgeon only what waits on him");
@@ -1411,10 +1445,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(gj.includes('minHeight: 36, height: 36, padding: "0 12px"') && gj.includes('whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"') && gj.includes("title={periodJump.text}"), "one 36 px line, never wrapping (the smoke's day-list >= 45% floor), full text in the title");
       assert.ok(src.includes("const m0 = (() => { const s = preferred ? String(preferred.start_day || \"\").slice(0, 10) : \"\"; return suIsIso(s) && s > today ? parse(s) : t0; })();"), "the opening month is unchanged");
       const av = src.slice(src.indexOf("const addVac = async () => {"), src.indexOf("const rmVac = "));
-      assert.ok(av.includes("const lead = vacationLeadNote(vacStart, todayStr, groupRules && groupRules.offerPeriods);") && av.includes("if (!isCoordinator && vacSurgeon === mySurgeon)"), "a surgeon's own add inside the window");
+      assert.ok(av.includes("const lead = vacationLeadNote(vacStart, todayStr, groupRules && groupRules.offerPeriods);") && av.includes("if (!isScheduler && !isCoordinator && !isViewer && vacSurgeon === mySurgeon)"), "a surgeon's own add inside the window - never the scheduler's (Faraz 9/27, ship 9/27 A), the office's or a viewer's");
       assert.ok(!av.includes("confirm("), "no dialog on the vacation add path");
       const vf = src.slice(src.indexOf("const renderVacationForm = (personChoices) => ("), src.indexOf("const authBox = "));
       assert.ok(vf.includes('<button data-testid="vac-lead-note-dismiss" onClick={()=>setVacLeadNote(null)}') && src.includes("useEffect(() => { setVacLeadNote(null); }, [view]);") && src.includes('if (confirm("Remove this vacation?")) { setVacLeadNote(null); toRemove(sid, rowId); }'), "the note is dismissible and retires on a view change or a removal");
+      assert.ok(vf.includes('{vacLeadNote && !isScheduler && !isCoordinator && !isViewer && (\n        <div data-testid="vac-lead-note"'), "the render is guarded the same way (never for the scheduler, the office or a viewer)");
       assert.ok(vf.includes('<div data-testid="vac-lead-note"') && vf.includes("color:T.text,borderLeft:\"3px solid \" + T.accent") && vf.includes("The schedule through {fmtMD(vacLeadNote.through)} is already being built - check Open shifts or propose a trade if this affects a call day."), "the advisory under the form");
       assert.ok(!/[^\x00-\x7f]/.test(src), "index-source.html stays ASCII");
     });
@@ -2204,7 +2239,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   // createElement returns plain nodes, in a vm realm holding config.js, helpers.js and app-styles.js. Rules-engine
   // calls are stubs that count their calls. The scheduler (canEdit) keeps every part of the full editor; everyone else
   // gets the summary, and a linked surgeon's actions follow his day.
-  check("Day-click summary (9/27): the scheduler's day editor is the full editor; every other viewer gets a summary (full names, You chip, OPEN / '-', no offers / Source / eligibility plumbing / padlock / keyboard hint) with a linked surgeon's Propose a trade + Give away on his own day and See it on Open shifts on an OPEN slot", () => {
+  check("Day-click summary (9/27): the scheduler's day editor is the full editor; every other viewer gets a summary (full names, You chip, OPEN / '-', no offers / Source / eligibility plumbing / padlock / keyboard hint) with a linked surgeon's Propose a trade + Give away on his own day from today on and See it on Open shifts on an OPEN slot", () => {
     const babel = require("@babel/core");
     const a0 = src.lastIndexOf("const AWAITING_CONFIRMATION_MARKER = ");
     const a1 = src.indexOf("// --- Client versions", a0);
@@ -2329,11 +2364,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       none(V, ["editor-you", "editor-trade", "editor-give", "editor-open-shifts"].concat(PLUMBING), who);
       assert.ok(text(V).includes("Michael Burchett"), who + ": the holder's full name");
     }
-    // (5) a past day: the empty slot reads '-' (the grid's blank), no board link, and no Give away (an accept on a past
-    // day is refused - TRADE_PAST); the trade link keeps its pinned condition
+    // (5) a past day: the empty slot reads '-' (the grid's blank), no board link, and - on his own past day - neither Give
+    // away nor Propose a trade (an accept on a past day is refused - TRADE_PAST; Faraz 9/27: the trade follows the give);
+    // the scheduler's full editor keeps its trade link on a past day
     const P = render({ me: "s2", day: PAST });
-    none(P, ["editor-backup-open", "editor-open-shifts", "editor-give"], "a past day");
-    one(P, "editor-trade");
+    none(P, ["editor-backup-open", "editor-open-shifts", "editor-give", "editor-trade"], "a past own day");
+    assert.strictEqual(by(one(P, "editor-primary-block"), "editor-you").length, 1, "it is still his day (the You chip), only the actions go");
+    one(render({ canEdit: true, me: "s1", day: PAST }), "editor-trade");
+    const TD = render({ me: "s2", day: vm.runInContext("todayCentral()", box) });
+    one(TD, "editor-trade"); one(TD, "editor-give");
     assert.strictEqual(text(one(P, "editor-backup-block")).replace("Backup", ""), "-", "a past empty slot reads '-'");
     // (6) outside cover and an outside surgeon; the holiday unit, who is off and no note
     const E = render({ day: HOL_DAY, me: "s3", vac: ["Acton"], entry: { primary: null, backup: "x1", primaryLocked: false, backupLocked: false, source: "manual-external", externalCover: "Atwell", note: null } });

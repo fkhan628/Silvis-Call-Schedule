@@ -481,9 +481,10 @@ buttons, the notification center, the refresh/version banner, and Settings → D
   phone has no hover title), and the holiday unit / note / "Off: ..." only when there is one. The offers lines, the
   Source line, the eligibility plumbing (unavailable / rules-not-imported / eval-error), the padlock and the keyboard hint
   are the scheduler's; the eligibility sweeps and the offers read are not computed for the summary. A linked surgeon
-  (never the office, a viewer, a follower or `?public=1`) gets Propose a trade (`editor-trade`, now a button) on his own
-  day and Give away (`editor-give`, `proposeGiveForDay` - the Propose card in give mode) on his own day from today on (a
-  give on a past day would only be refused at accept, TRADE_PAST), and "See it on Open shifts" (`editor-open-shifts`) on
+  (never the office, a viewer, a follower or `?public=1`) gets Propose a trade (`editor-trade`, now a button) and Give
+  away (`editor-give`, `proposeGiveForDay` - the Propose card in give mode) on his own day from today on (a trade or give
+  on a past day would only be refused at accept, TRADE_PAST - Faraz 9/27: the trade follows the give; the scheduler's
+  full editor keeps its trade link on every day), and "See it on Open shifts" (`editor-open-shifts`) on
   an OPEN slot the board lists (`openOnBoard`, the App's `boardKeys` from `obBoardSlots` - not a day after the published
   block with no row) on a day he does not already hold (the board's Take is off for him there); My schedule's rows carry
   Give away (`mine-give`, the row owner as From when the scheduler picked another surgeon) beside Propose a trade, and a

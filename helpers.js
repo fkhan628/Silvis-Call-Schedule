@@ -2989,16 +2989,58 @@ function vacationLeadNote(start, today, rules) {
   if (days >= weeks * 7) return null;
   return { through: suAddDays(today, weeks * 7 - 1), weeks, days };
 }
-// tradesWaitingOn(rows, personId, today) -> the PENDING trade / give rows addressed to personId (the ones only they can
-// answer: Accept / Decline), in the order given. [] without a person. With an ISO `today`, a row whose day or return
-// day is before it is left out: the server refuses a member's Accept on it (trade_update_guard TRADE_PAST, strict <),
-// so it is not "waiting" - the Pending card still lists it with Decline. The Time off & Trades "Waiting on you" block
-// and a surgeon's tab badge read it (the scheduler's badge keeps counting every pending trade).
-function tradesWaitingOn(rows, personId, today) {
+// tradesWaitingOn(rows, personId, today, tagOf) -> the PENDING trade / give proposals addressed to personId (the ones only
+// they can answer: Accept / Decline), ONE row per proposal, in the order given. [] without a person. With `tagOf` (the
+// app's tradeUnitTag: { kind, start, n } off a row's unit stamp), the rows of a weekend-block / holiday-unit proposal (same
+// tag, parties and role - the app's tradeGroupOf, which Accept / Decline act on) collapse to their earliest-day row, placed
+// where the proposal first appears (Faraz 9/27: one row and one badge count per proposal). With an ISO `today`, a
+// proposal with any row whose day or return day is before it is left out: the server refuses a member's Accept on it
+// (trade_update_guard TRADE_PAST, strict <), so it is not "waiting" - the Pending card still lists it with Decline.
+// The Time off & Trades "Waiting on you" block and a surgeon's tab badge read it (the scheduler's badge keeps counting
+// every pending trade).
+function tradesWaitingOn(rows, personId, today, tagOf) {
   if (!personId || !Array.isArray(rows)) return [];
   const t = suIsIso(today) ? today : null;
   const past = (d) => t !== null && suIsIso(String(d || "").slice(0, 10)) && String(d).slice(0, 10) < t;
-  return rows.filter(r => r && r.status === "pending" && r.to_surgeon_id === personId && !past(r.day) && !(r.return_day && past(r.return_day)));
+  const mine = rows.filter(r => r && r.status === "pending" && r.to_surgeon_id === personId);
+  const keyOf = (r) => {
+    const tag = typeof tagOf === "function" ? tagOf(r) : null;
+    return tag ? [tag.kind, tag.start, tag.n, r.from_surgeon_id, r.to_surgeon_id, r.role].join("|") : null;
+  };
+  const groups = new Map(), order = [];
+  mine.forEach((r, i) => {
+    const k = keyOf(r) || ("row#" + i);
+    if (!groups.has(k)) { groups.set(k, []); order.push(k); }
+    groups.get(k).push(r);
+  });
+  const out = [];
+  for (const k of order) {
+    const g = groups.get(k);
+    if (g.some(r => past(r.day) || (r.return_day && past(r.return_day)))) continue;
+    out.push(g.slice().sort((a, b) => String(a.day || "") < String(b.day || "") ? -1 : String(a.day || "") > String(b.day || "") ? 1 : 0)[0]);
+  }
+  return out;
+}
+// tradeWaitingUnitLine(group, tag, viewerId) -> the one line of a unit proposal in "Waiting on you" (rows named - the
+// app's tradeNamed - and sorted by day; tag = the head's unit tag). It names the unit and its days from the rows that
+// move together (Accept / Decline act on them all), e.g.
+//   give   "Acton offers you primary for the Thanksgiving unit 11/26-11/29 (4 days) - nothing in return"
+//   trade  "Burchett would take primary for the Thanksgiving unit 11/26-11/29 (4 days); Acton would take backup 12/3-12/6 (4 days)"
+//   one-way "... (one-way - no return shift)". ASCII; "" without rows.
+function tradeWaitingUnitLine(group, tag, viewerId) {
+  const g = (Array.isArray(group) ? group : []).filter(r => r && typeof r === "object" && suIsIso(String(r.day || "").slice(0, 10)));
+  if (!g.length) return "";
+  const first = g[0], last = g[g.length - 1];
+  const name = tag && tag.text ? String(tag.text).split(" unit ")[0] : "";
+  const span = (a, b, n) => fmtMD(a) + (n > 1 ? "-" + fmtMD(b) : "") + " (" + n + " day" + (n === 1 ? "" : "s") + ")";
+  const unit = (name ? "the " + name + " unit " : "") + span(first.day, last.day, g.length);
+  const role = String(first.role || "");
+  const toWord = viewerId && viewerId === first.to_surgeon_id ? "you" : first.to_surgeon_name;
+  if (tradeGroupIsGive(g)) return first.from_surgeon_name + " offers " + toWord + " " + role + " for " + unit + " - nothing in return";
+  const ret = g.filter(r => r.return_day && r.return_role).map(r => r).sort((a, b) => a.return_day < b.return_day ? -1 : a.return_day > b.return_day ? 1 : 0);
+  if (!ret.length) return first.to_surgeon_name + " would take " + role + " for " + unit + " (one-way - no return shift)";
+  const back = ret.length === 1 ? slotLabel(ret[0].return_day, ret[0].return_role) : ret[0].return_role + " " + span(ret[0].return_day, ret[ret.length - 1].return_day, ret.length);
+  return first.to_surgeon_name + " would take " + role + " for " + unit + "; " + first.from_surgeon_name + " would take " + back;
 }
 // offerRulesWords(rules, groupRules) -> plain sentences describing one surgeon's rules, built from the DATA in
 // call_schedule_data.data.surgeonRules (no surgeon-specific branch; a key that is absent says nothing). Shown by
@@ -3700,6 +3742,6 @@ if (typeof module !== "undefined" && module.exports) {
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
     OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
-    offerPeriodJump, vacationLeadNote, tradesWaitingOn,
+    offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine,
   };
 }

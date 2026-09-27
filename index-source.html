@@ -770,11 +770,6 @@ function CallSchedule() {
     if (isScheduler || !mySurgeon) return tradeRequests;
     return tradeRequests.filter(r => r.from_surgeon_id === mySurgeon || r.to_surgeon_id === mySurgeon);
   }, [tradeRequests, isScheduler, mySurgeon]);
-  // "Waiting on you": the pending trades / gives addressed to this surgeon (helpers.tradesWaitingOn) - the block at the top
-  // of Time off & Trades and a surgeon's tab badge (the scheduler's badge keeps counting every pending trade). A row whose
-  // day or return day is already past is left out (a member's Accept would be refused TRADE_PAST); the Pending card keeps it.
-  const waitingToday = todayCentral();
-  const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon, waitingToday), [tradeRequests, mySurgeon, waitingToday]);
 
   // Profile read that FAILS LOUDLY: a non-2xx is a load failure, not "no
   // profile". (dbAuth.getProfile returns null for both - keep it for the
@@ -4009,6 +4004,14 @@ function CallSchedule() {
     setNotifLastSeen(now);
     try { localStorage.setItem("silvis-notif-seen", now); } catch(e) { console.warn("Couldn't persist notifications-seen marker:", e); }
   };
+  // "Waiting on you": the pending trades / gives addressed to this surgeon (helpers.tradesWaitingOn) - the block at the top
+  // of Time off & Trades and a surgeon's tab badge (the scheduler's badge keeps counting every pending trade). ONE row per
+  // proposal (Faraz 9/27): a weekend-block / holiday-unit proposal's rows (tradeUnitTag - the same group tradeGroupOf
+  // hands Accept / Decline) collapse to one row and one badge count. A proposal with a day or return day already past is
+  // left out (a member's Accept would be refused TRADE_PAST); the Pending card keeps it. (Computed below tradeUnitTag,
+  // which it reads during render - a const above it would be in its temporal dead zone.)
+  const waitingToday = todayCentral();
+  const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon, waitingToday, tradeUnitTag), [tradeRequests, mySurgeon, waitingToday]);
   // Prompt 19 S4: the Activity log names a give - the server's trade.apply row carries no kind, so the trade ids that
   // belong to a give come from the loaded trade rows (the whole-proposal predicate) and from the give's own audit rows
   // (kind 'give': trade_id / trade_ids), then helpers.auditEntryText words each line.
@@ -4331,7 +4334,8 @@ function CallSchedule() {
     if (r.ok) {
       // Lead-time advisory (inline, non-blocking - never a confirm on the add path): a surgeon's own vacation that starts
       // inside the offers freeze window (groupRules.offerPeriods.closeWeeksBeforeStart) lands on a schedule already being built.
-      if (!isCoordinator && vacSurgeon === mySurgeon) { const lead = vacationLeadNote(vacStart, todayStr, groupRules && groupRules.offerPeriods); if (lead) setVacLeadNote({ ...lead, start: vacStart }); }
+      // Never for the scheduler (Faraz 9/27: he builds that schedule), the office or a viewer.
+      if (!isScheduler && !isCoordinator && !isViewer && vacSurgeon === mySurgeon) { const lead = vacationLeadNote(vacStart, todayStr, groupRules && groupRules.offerPeriods); if (lead) setVacLeadNote({ ...lead, start: vacStart }); }
       setVacStart(todayCentral()); setVacEnd(todayCentral()); setVacNote(""); showToast("Vacation saved.", "success");
     }
   };
@@ -5515,7 +5519,7 @@ function CallSchedule() {
           <button onClick={()=>setVacConflict(null)} aria-label="Dismiss" style={{background:"none",border:"none",color:"#8a3030",cursor:"pointer",fontSize:14}}>x</button>
         </div>
       )}
-      {vacLeadNote && (
+      {vacLeadNote && !isScheduler && !isCoordinator && !isViewer && (
         <div data-testid="vac-lead-note" data-start={vacLeadNote.start} data-through={vacLeadNote.through} role="status" style={{flex:"1 1 100%",fontSize:12,lineHeight:1.5,color:T.text,borderLeft:"3px solid " + T.accent,padding:"4px 10px",display:"flex",alignItems:"flex-start",gap:8}}>
           <span style={{flex:1}}>The schedule through {fmtMD(vacLeadNote.through)} is already being built - check Open shifts or propose a trade if this affects a call day.</span>
           <button data-testid="vac-lead-note-dismiss" onClick={()=>setVacLeadNote(null)} aria-label="Dismiss the lead-time note" style={{background:"none",border:"none",color:T.muted,cursor:"pointer",fontSize:14,minWidth:36,minHeight:36,padding:0,flexShrink:0}}>x</button>
@@ -5545,10 +5549,15 @@ function CallSchedule() {
     const tag = tradeUnitTag(r);                       // fg-1: part of a unit proposal
     const groupN = tag ? tradeGroupOf(r).length : 1;   // rows in the same status that move with this one
     const giveGroup = tradeIsGiveProposal(r);           // Prompt 19 S3 review: the whole proposal, every status
+    // Faraz 9/27: "Waiting on you" shows ONE row per proposal (helpers.tradesWaitingOn hands the unit's earliest-day row):
+    // a unit's row names the unit and its days (helpers.tradeWaitingUnitLine) and its Accept / Decline act on the whole
+    // group through acceptTrade / declineTrade, exactly as the Pending card's unit rows do.
+    const unitGroup = waiting && tag && groupN > 1 ? tradeGroupOf(r).map(tradeNamed) : null;
     return (
-      <div key={r.id} data-testid={waiting ? "trade-waiting-row" : "trade-row"} data-trade-id={r.id} data-status={r.status} data-kind={giveGroup ? "give" : "trade"} data-unit={tag ? tag.kind + ":" + tag.start : undefined} data-group={groupN} style={rowBox}>
+      <div key={r.id} data-testid={waiting ? "trade-waiting-row" : "trade-row"} data-trade-id={r.id} data-status={r.status} data-kind={giveGroup ? "give" : "trade"} data-unit={tag ? tag.kind + ":" + tag.start : undefined} data-group={groupN} data-days={unitGroup ? unitGroup.map(g => g.day).join(",") : undefined} style={rowBox}>
         <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          <span style={{fontSize:12.5,color:dkText}}>{giveGroup ? <span data-testid="trade-give-line">{tradeGiveLine(named, tag, mySurgeon)}</span> : tradeLegsText(named, tenseFor(r.status))}{tag && <span data-testid="trade-unit-tag" title="A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together" style={{marginLeft:8,fontSize:10,fontWeight:700,color:"#7a5a20",background:"#fbf1d8",borderRadius:4,padding:"1px 6px",whiteSpace:"nowrap"}}>{tag.text} - day {tag.index} of {tag.n}</span>}</span>
+          {unitGroup ? <span data-testid="trade-waiting-unit-line" style={{fontSize:12.5,color:dkText}}>{tradeWaitingUnitLine(unitGroup, tag, mySurgeon)}</span> :
+          <span style={{fontSize:12.5,color:dkText}}>{giveGroup ? <span data-testid="trade-give-line">{tradeGiveLine(named, tag, mySurgeon)}</span> : tradeLegsText(named, tenseFor(r.status))}{tag && <span data-testid="trade-unit-tag" title="A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together" style={{marginLeft:8,fontSize:10,fontWeight:700,color:"#7a5a20",background:"#fbf1d8",borderRadius:4,padding:"1px 6px",whiteSpace:"nowrap"}}>{tag.text} - day {tag.index} of {tag.n}</span>}</span>}
           <span data-testid="trade-status" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:statusColor(r.status)}}>{tradeRowStatus(r.status, giveGroup)}</span>
         </div>
         <div data-testid="trade-meta" style={{fontSize:10,color:"#9aa4ae",fontFamily:mono,marginTop:2}}>{giveGroup ? "offered" : "proposed"} by {named.from_surgeon_name} {fmtAuditTime(r.submitted_at)}{r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""}</div>
@@ -8409,7 +8418,10 @@ function DayEditor(props) {
   // Item C: the "Propose a trade for this day" link names the top suggested counter-party for the link's role (the
   // viewer's own role, else the day's primary) and hands the pick to onTrade, which pre-fills the card.
   const tradeLinkRole = myRole || (entry && entry.primary ? "primary" : "backup");
-  const tradePick = typeof suggestTrade === "function" && !isPublicMode && (canEdit || myRole) ? suggestTrade(day, tradeLinkRole) : null;
+  // Faraz 9/27: the summary's Propose a trade follows Give away - his own day from today on (a past day cannot be traded:
+  // the accept is refused, TRADE_PAST); the scheduler's full editor keeps its link on every day.
+  const showTrade = !isPublicMode && (canEdit || (!!myRole && day >= todayC));
+  const tradePick = typeof suggestTrade === "function" && showTrade ? suggestTrade(day, tradeLinkRole) : null;
   const optionLabel = (o, role) => {
     if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");
     // U3c: the offer tag ("offered primary", "not offered", "rules") stands in for the soft offered / outside-offers
@@ -8554,7 +8566,7 @@ function DayEditor(props) {
         {/* Sticky footer: the Cancel / Save row stays in view while the dialog body scrolls (a phone showed it below the fold - Prompt 11);
             it pads by the iOS home-indicator inset like the painter sheets' footers (Prompt 16 A5). */}
         <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",paddingBottom:`calc(${SAFE_AREA.bottom} + 12px)`,borderTop:"1px solid " + border}}>
-          {!isPublicMode && (canEdit || myRole) && (
+          {showTrade && (
             <button type="button" data-testid="editor-trade" data-suggested={tradePick && tradePick.to ? tradePick.to : undefined} onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)} style={canEdit ? {background:"none",border:"none",color:THEME[dk ? "dark" : "light"].accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0,textAlign:"left"} : {...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36,textAlign:"left"}}>Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}</button>
           )}
           {/* Day-click summary (9/27): the linked surgeon's own actions - give his day away (the Propose card in give mode; today
