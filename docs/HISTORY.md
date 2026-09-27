@@ -27,6 +27,8 @@ the 9/23 publish.*
 | `PREVIEW-2026-11-02-to-2027-01-03.json` | 2026-09-23 | The same preview as data - the input of the 9/23 publish; `test/fixtures/publish-preview-2026-09-23.json` is its copy for `test/publish.test.js`. | kept in the private folder |
 | `PREVIEW-DIFF-2026-09-22.md` | 2026-09-22 | The 9/22 preview-to-preview diff (`scripts/preview-diff.js`). | kept in the private folder |
 | `EDGE-FUNCTIONS-REVIEW.md` | 2026-09-22 | The review of the four edge functions retargeted from Davenport and what changed in each. | kept in the private folder |
+| `APP-REVIEW-2026-09-27.md` | 2026-09-27 | The whole-app review for efficiency and everyday use: 53 verified findings, a ranked do-first list, scheduler-only proposals, what was checked and is not a problem, and a one-task-per-branch sequence. | **in the repo**: `docs/APP-REVIEW-2026-09-27.md` (the sessions that fix these items need it) |
 
 Citations of these files elsewhere (SQL migration headers, seed revision entries, test comments) name the design document
-they came from; the document is in the private folder, not in this repo.
+they came from; the document is in the private folder, not in this repo. The one exception is
+`docs/APP-REVIEW-2026-09-27.md` (2026-09-27): it lives in the repo because the sessions that fix its items need it.
