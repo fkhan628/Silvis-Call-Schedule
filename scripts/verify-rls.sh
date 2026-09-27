@@ -840,8 +840,9 @@ else
 fi
 
 echo "== 14. call pay (2026-09-27): anon sees neither table, anon cannot write, rolled-back probe =="
-# sql/migrations/2026-09-27-call-pay.sql (report-first, NOT applied until Faraz runs it): call_pay_settings (the rates + flags,
-# scheduler / linked-surgeon read) and call_pay_logs (the primary's call-ins, own rows / scheduler). Neither table is anon-readable
+# sql/migrations/2026-09-27-call-pay.sql (report-first, NOT applied until Faraz runs it): call_pay_settings (the rates + flags +
+# the per-surgeon stipend switch; scheduler / office coordinator (read-only) / switched-on linked-surgeon read) and call_pay_logs
+# (the primary's call-ins; own rows while switched on / scheduler; the coordinator reads every row). Neither table is anon-readable
 # and anon's table privileges are revoked, so an anon request is refused (401 / 403 / 42501). With SILVIS_CALL_PAY_APPLIED=1
 # (and, after the record step, always) an anon 200 is a FAIL even with Content-Range */0 - it would mean the revoke did not
 # take; without the flag a 200 + */0 (RLS alone, the section 8 shape) still passes. Nothing here writes over REST except the anon POST that must be refused, and nothing
@@ -883,9 +884,12 @@ else
   echo "   SKIP 14c (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment)"
 fi
 # 14d. sql/probes/call-pay-probe.sql through the linked CLI (rolls itself back; never reads a rate). Expectations are the
-# AFTER-apply picture; the probe's header lists every case.
+# AFTER-apply picture; the probe's header lists every case. The probe flips the stipend switches of s2 / s3 inside its own
+# transaction; the switch list (roster ids, never a rate) is read before and after and must be unchanged.
 if linked; then
   PROBE14="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/call-pay-probe.sql"
+  OFF14_SQL="select coalesce((select stipend_off_ids::text from public.call_pay_settings where id = 'main'), 'none') as off_ids"
+  off14_before=$(q "$OFF14_SQL" | tr -d ' \n')
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE14" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
   applied14=1
   if echo "$out" | grep -q 'PROBE_SETUP: call_pay_logs is absent'; then
@@ -902,6 +906,7 @@ if linked; then
     expect_eq14  P1  "policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write" "the two tables carry exactly the six call pay policies"
     expect_eq14  P2  "anon_logs=f anon_settings=f auth_truncate=f"   "anon holds no privilege on either table; authenticated no TRUNCATE / REFERENCES / TRIGGER (revoked)"
     expect_eq14  P3  "rows=1"                                        "the settings table holds the one 'main' row"
+    expect_eq14  P4  "anon_exec=f auth_exec=t definer=t"             "silvis_pay_enabled is security definer, executable by authenticated, not by anon"
     expect_err14 N1  42501 "permission denied for table call_pay_logs"      "anon cannot read the call-ins"
     expect_err14 N2  42501 "permission denied for table call_pay_settings"  "anon cannot read the rates"
     expect_err14 N3  42501 "permission denied for table call_pay_logs"      "anon cannot log a call-in"
@@ -925,15 +930,27 @@ if linked; then
     expect_err14 X1  PY002 "PAY_NOT_PRIMARY"                          "a row on a day the surgeon no longer holds cannot be edited"
     expect_eq14  X2  "deleted=1"                                     "but its owner can delete it"
     expect_eq14  T1  "own=1 s3=0"                                    "a second surgeon reads his own call-in and none of s3's"
-    expect_eq14  C1  "visible=0"                                     "a coordinator reads no call-in"
-    expect_eq14  C2  "rows=0"                                        "a coordinator reads no rate"
-    expect_err14 C3  42501 'row-level security policy for table "call_pay_logs"' "a coordinator cannot log a call-in"
+    expect_eq14  C1  "sees_all=t"                                    "the office coordinator reads every call-in (read-only, for preparing the stipends)"
+    expect_eq14  C2  "rows=1"                                        "the office coordinator reads the settings row"
+    expect_err14 C3  PY004 "PAY_READ_ONLY"                            "the office coordinator cannot log a call-in (the guard refuses it before RLS)"
+    expect_eq14  C4  "updated=0"                                     "the office coordinator cannot edit a call-in"
+    expect_eq14  C5  "deleted=0"                                     "the office coordinator cannot delete a call-in"
     expect_eq14  V1  "visible=0"                                     "a viewer (a follower) reads no call-in"
     expect_eq14  V2  "rows=0"                                        "a viewer reads no rate"
     expect_eq14  A1  "sees_all=t"                                    "the admin reads every call-in"
     expect_eq14  A2  "updated=1 updated_by=s1"                       "the admin writes the settings row (updated_by stamped)"
     expect_eq14  A3  "ok created_by=s1"                              "the admin logs a call-in for a surgeon on his primary day"
     expect_err14 A4  PY002 "PAY_NOT_PRIMARY"                          "the primary-only guard applies to the admin too"
+    expect_eq14  O1  "rows=0"                                        "a surgeon switched off the stipend reads no rate (RLS)"
+    expect_eq14  O2  "own=0"                                         "a switched-off surgeon reads none of his call-ins (RLS)"
+    expect_err14 O3  PY005 "PAY_STIPEND_OFF"                          "a switched-off surgeon cannot log a call-in"
+    expect_eq14  O4  "updated=0"                                     "a switched-off surgeon cannot edit his call-ins"
+    expect_eq14  O5  "deleted=0"                                     "a switched-off surgeon cannot delete his call-ins"
+    expect_eq14  O6  "settings=1 own=1"                              "a switched-on surgeon is unchanged (the rates and his own row)"
+    expect_eq14  O7  "sees_s3=t"                                     "the admin still reads a switched-off surgeon's call-ins"
+    expect_err14 O8  PY005 "PAY_STIPEND_OFF"                          "nobody, the admin included, logs a call-in for a switched-off surgeon"
+    expect_err14 O9  PY005 "PAY_STIPEND_OFF"                          "nobody, the admin included, edits a switched-off surgeon's call-in"
+    expect_eq14  O10 "sees_s3=t"                                     "the office coordinator still reads a switched-off surgeon's call-ins"
   fi
   if [ "$applied14" = "1" ]; then
     LEFTOVER14_SQL="select ((select count(*) from auth.users where email like 'probe-pay-%@example.test') + (select count(*) from public.schedule_days where source = 'probe-pay') + (select count(*) from public.call_pay_logs where note like 'probe-pay%'))::int as leftover"
@@ -950,6 +967,16 @@ if linked; then
     echo "      delete from public.call_pay_logs where note like 'probe-pay%';"
     echo "      delete from public.schedule_days where source = 'probe-pay';"
     echo "      delete from auth.users where email like 'probe-pay-%@example.test';   -- user_profiles rows cascade"
+  fi
+  if [ "$applied14" = "1" ]; then
+    off14_after=$(q "$OFF14_SQL" | tr -d ' \n')
+    if ! echo "$off14_after" | grep -q '"off_ids"'; then
+      bad "call pay probe: the stipend switch list could not be read after the probe: $(echo "$off14_after" | head -c 200)"
+    elif [ "$off14_before" = "$off14_after" ]; then
+      ok "call pay probe left the stipend switches as they were (stipend_off_ids read before and after: unchanged)"
+    else
+      bad "call pay probe CHANGED the stipend switches (stipend_off_ids differs before / after the probe): the batch did not run as one transaction - Faraz resets them in Setup > Pay rates"
+    fi
   fi
 else
   echo "   SKIP 14d (supabase CLI not linked at $WORKDIR)"

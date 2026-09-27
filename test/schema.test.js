@@ -2457,22 +2457,35 @@ const PAY_FILE = "2026-09-27-call-pay.sql";
 const PAY_MIGRATION = path.join(ROOT, "sql", "migrations", PAY_FILE);
 const PAY_PROBE = path.join(ROOT, "sql", "probes", "call-pay-probe.sql");
 const PAY_S = "public.silvis_is_sched()";
-const PAY_OWN = "(" + PAY_S + " or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()))";
+// Faraz 9/27 items 5a / 5b (folded in before the apply): the office COORDINATOR reads both tables (read-only - it prepares the
+// stipends) and writes neither; a surgeon's own-row clause also requires that he is paid by the call stipend
+// (public.silvis_pay_enabled - the per-surgeon switch in call_pay_settings.stipend_off_ids), so a switched-off surgeon reads
+// no rate and none of his call-ins and writes none - in RLS, not only in the client.
+const PAY_SELF = "(public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id))";
+const PAY_OWN = "(" + PAY_S + " or " + PAY_SELF + ")";
+const PAY_READ = "(" + PAY_S + " or public.silvis_is_coord() or " + PAY_SELF + ")";
 const PAY_POLICIES = {
-  call_pay_settings_read: "create policy call_pay_settings_read on public.call_pay_settings for select to authenticated\n  using (" + PAY_S + " or (public.silvis_role() = 'surgeon' and public.silvis_person_id() is not null));",
+  call_pay_settings_read: "create policy call_pay_settings_read on public.call_pay_settings for select to authenticated\n  using (" + PAY_S + " or public.silvis_is_coord() or (public.silvis_role() = 'surgeon' and public.silvis_pay_enabled(public.silvis_person_id())));",
   call_pay_settings_write: "create policy call_pay_settings_write on public.call_pay_settings for all to authenticated\n  using (" + PAY_S + ") with check (" + PAY_S + ");",
-  call_pay_logs_read: "create policy call_pay_logs_read on public.call_pay_logs for select to authenticated\n  using " + PAY_OWN + ";",
+  call_pay_logs_read: "create policy call_pay_logs_read on public.call_pay_logs for select to authenticated\n  using " + PAY_READ + ";",
   call_pay_logs_insert: "create policy call_pay_logs_insert on public.call_pay_logs for insert to authenticated\n  with check " + PAY_OWN + ";",
   call_pay_logs_update: "create policy call_pay_logs_update on public.call_pay_logs for update to authenticated\n  using " + PAY_OWN + "\n  with check " + PAY_OWN + ";",
   call_pay_logs_delete: "create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated\n  using " + PAY_OWN + ";",
 };
-const PAY_CASES = ["P1", "P2", "P3", "N1", "N2", "N3", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "X1", "X2", "T1", "C1", "C2", "C3", "V1", "V2", "A1", "A2", "A3", "A4"];
+const PAY_CASES = ["P1", "P2", "P3", "P4", "N1", "N2", "N3", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "X1", "X2", "T1", "C1", "C2", "C3", "C4", "C5", "V1", "V2", "A1", "A2", "A3", "A4",
+  "O1", "O2", "O3", "O4", "O5", "O6", "O7", "O8", "O9", "O10"];
 const PAY_AFTER_EQ = {
   P1: "policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write",
   P2: "anon_logs=f anon_settings=f auth_truncate=f", P3: "rows=1", S1: "ok created_by=s3 hours=1.50", S6: "ok", S10: "own=2 others=0", S11: "updated=1 hours=2.25 created_by=s3",
-  S12: "updated=0", S13: "deleted=0", S14: "rows=1", S15: "updated=0", S17: "updated=1 created_by=s3", X2: "deleted=1", T1: "own=1 s3=0", C1: "visible=0",
-  C2: "rows=0", V1: "visible=0", V2: "rows=0", A1: "sees_all=t", A2: "updated=1 updated_by=s1", A3: "ok created_by=s1",
+  S12: "updated=0", S13: "deleted=0", S14: "rows=1", S15: "updated=0", S17: "updated=1 created_by=s3", X2: "deleted=1", T1: "own=1 s3=0",
+  // 5a: the office coordinator reads every call-in and the settings row (was visible=0 / rows=0), writes nothing
+  C1: "sees_all=t", C2: "rows=1", C4: "updated=0", C5: "deleted=0",
+  V1: "visible=0", V2: "rows=0", A1: "sees_all=t", A2: "updated=1 updated_by=s1", A3: "ok created_by=s1",
+  // 5b: the switch helper's grants, and s3 switched off the stipend
+  P4: "anon_exec=f auth_exec=t definer=t",
+  O1: "rows=0", O2: "own=0", O4: "updated=0", O5: "deleted=0", O6: "settings=1 own=1", O7: "sees_s3=t", O10: "sees_s3=t",
 };
+const PAY_STIPEND_OFF_ERR = "ERR PY005 PAY_STIPEND_OFF: s3 is not paid by the call stipend - no call-in is logged for him (switched off in Setup > Pay rates)";
 const PAY_AFTER_ERR = {   // what the probe records AFTER the apply (the CLI escapes the quotes, as the live output does)
   N1: "ERR 42501 permission denied for table call_pay_logs", N2: "ERR 42501 permission denied for table call_pay_settings", N3: "ERR 42501 permission denied for table call_pay_logs",
   S2: "ERR PY002 PAY_NOT_PRIMARY: s3 is not the primary on 2020-03-03 - call pay is logged for the primary only",
@@ -2484,7 +2497,8 @@ const PAY_AFTER_ERR = {   // what the probe records AFTER the apply (the CLI esc
   S9: "ERR PY003 PAY_HOURS_OVER: s3 already has 0 h logged on 2020-03-04 - one call day holds at most 24 h",
   S16: 'ERR 42501 new row violates row-level security policy for table \\"call_pay_settings\\"',
   X1: "ERR PY002 PAY_NOT_PRIMARY: s3 is not the primary on 2020-03-02 - call pay is logged for the primary only",
-  C3: 'ERR 42501 new row violates row-level security policy for table \\"call_pay_logs\\"',
+  C3: "ERR PY004 PAY_READ_ONLY: the office reads call pay and writes none - a call-in is logged by the surgeon or the scheduler",
+  O3: PAY_STIPEND_OFF_ERR, O8: PAY_STIPEND_OFF_ERR, O9: PAY_STIPEND_OFF_ERR,
   A4: "ERR PY002 PAY_NOT_PRIMARY: s3 is not the primary on 2020-03-03 - call pay is logged for the primary only",
 };
 // Top-level statements of a SQL file (comment lines dropped; a $$ body is one statement with the create it belongs to).
@@ -2500,7 +2514,7 @@ function payStatements(sql) {
   return out;
 }
 
-step("call pay: the migration - two NEW tables, report-first NOT APPLIED, the CLI apply line and rollback, no supersedes, mirrored (not exempt)");
+step("call pay: the migration - two NEW tables + the stipend-switch helper, report-first NOT APPLIED, the CLI apply line and rollback, no supersedes, mirrored (not exempt)");
 const payMig = read(PAY_MIGRATION);
 ok(!/\r/.test(payMig), "call pay migration has CRLF line endings");
 ok(migFiles.includes(PAY_FILE) && !PREPARED_NOT_MIRRORED.includes(PAY_FILE), "sql/migrations/" + PAY_FILE + " is a mirrored migration (not exempt)");
@@ -2512,9 +2526,23 @@ ok(/NO RATE FIGURE ANYWHERE/.test(payHdr), "the call pay migration header must s
 ok(!/^-- supersedes:/m.test(payMig) && !/^-- PREPARED FOLLOW-UP/m.test(payMig), "the call pay migration redefines no existing function (no supersedes line) and is not a NOT-MIRRORED follow-up");
 const payStmts = payStatements(payMig);
 ok(payStmts.length >= 25, "the call pay migration's statements could not be split (" + payStmts.length + ")");
-payStmts.forEach((st) => ok(!/^(drop table|alter table public\.(?!call_pay_)|drop function|create or replace function public\.(?!call_pay_)|update |delete )/i.test(st), "the call pay migration touches only its own two tables / functions: " + st.slice(0, 120)));
+payStmts.forEach((st) => ok(!/^(drop table|alter table public\.(?!call_pay_)|drop function|create or replace function public\.(?!call_pay_|silvis_pay_enabled\()|update |delete )/i.test(st), "the call pay migration touches only its own two tables / three functions: " + st.slice(0, 120)));
 eq(payStmts.filter((st) => /^create table/.test(st)).map((st) => st.match(/public\.([a-z_]+)/)[1]), ["call_pay_settings", "call_pay_logs"], "the call pay migration creates exactly two tables;");
-eq(payStmts.filter((st) => /^create or replace function/.test(st)).map((st) => st.match(/public\.([a-z_]+)/)[1]), ["call_pay_logs_guard", "call_pay_settings_touch"], "the call pay migration creates exactly two functions;");
+eq(payStmts.filter((st) => /^create or replace function/.test(st)).map((st) => st.match(/public\.([a-z_]+)/)[1]), ["silvis_pay_enabled", "call_pay_logs_guard", "call_pay_settings_touch"], "the call pay migration creates exactly three functions (the 5b switch helper, the guard, the touch);");
+{
+  // 5b: the switch column and its helper. stipend_off_ids is a JSON array of non-empty strings (roster ids), default '[]' -
+  // everyone paid by the stipend until the scheduler switches someone off (data, never a roster id in the repo). The helper is
+  // security definer (it reads the settings row whoever the caller is, so the settings read policy does not recurse on itself),
+  // stable, with a pinned search_path, and executable by authenticated / service_role only.
+  const col = (payMig.match(/^  stipend_off_ids +[^\n]*$/m) || [""])[0];
+  ok(col === "  stipend_off_ids                 jsonb not null default '[]'::jsonb check (case when jsonb_typeof(stipend_off_ids) = 'array' then not jsonb_path_exists(stipend_off_ids, 'strict $[*] ? (@.type() != \"string\" || @ == \"\")') else false end),", "call_pay_settings.stipend_off_ids must be `jsonb not null default '[]'` with the array-of-non-empty-strings check: " + col);
+  const helper = (payMig.match(/create or replace function public\.silvis_pay_enabled\(pid text\)[\s\S]*?\n\$\$;/) || [""])[0];
+  ok(helper === "create or replace function public.silvis_pay_enabled(pid text) returns boolean\nlanguage sql stable security definer set search_path = public, pg_temp as $$\n  select pid is not null and not exists (select 1 from public.call_pay_settings s where s.stipend_off_ids ? pid);\n$$;", "silvis_pay_enabled(pid) must read exactly as approved (security definer, stable, search_path public, pg_temp; null -> false):\n" + helper);
+  ok(helper && payMig.indexOf(helper) > payMig.indexOf("create table if not exists public.call_pay_settings") && payMig.indexOf(helper) < payMig.indexOf("create or replace function public.call_pay_logs_guard"), "the helper is created after call_pay_settings (a SQL body is checked at create) and before the guard");
+  ["revoke execute on function public.silvis_pay_enabled(text) from public;", "revoke execute on function public.silvis_pay_enabled(text) from anon;", "grant execute on function public.silvis_pay_enabled(text) to authenticated;", "grant execute on function public.silvis_pay_enabled(text) to service_role;"].forEach((g) => ok(payMig.indexOf(g) > 0 && schema.indexOf(g) > 0, "the helper's grants (as offer_status): " + g));
+  ok(/drop function if exists public\.silvis_pay_enabled\(text\);/.test(payHdr), "the rollback drops the helper too");
+  ok(!/'s[0-9]+'/.test(payStmts.join("\n")), "the migration names no roster id (who is switched off is data the scheduler sets)");
+}
 
 step("call pay: schema.sql mirrors every statement of the migration; the six policies read exactly as approved, in order; triggers identical; revision r after q");
 const schemaCode = schema.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
@@ -2541,6 +2569,11 @@ ok(/raise exception 'PAY_FUTURE: [^']*' , ?|raise exception 'PAY_FUTURE: /.test(
 ok(/raise exception 'PAY_NOT_PRIMARY: [^\n]*using errcode = 'PY002';/.test(payGuard) && /d\.primary_id = new\.person_id/.test(payGuard), "PAY_NOT_PRIMARY / PY002 against schedule_days.primary_id");
 ok(/raise exception 'PAY_HOURS_OVER: [^\n]*using errcode = 'PY003';/.test(payGuard) && /others \+ new\.hours > 24/.test(payGuard) && /l\.id is distinct from new\.id/.test(payGuard), "PAY_HOURS_OVER / PY003 sums the person's OTHER rows of the day");
 ok(payGuard.indexOf("PY001") < payGuard.indexOf("PY002") && payGuard.indexOf("PY002") < payGuard.indexOf("PY003"), "the guard refuses in the order PY001, PY002, PY003");
+// 5a / 5b: the office coordinator is refused (PY004) and a switched-off person's call-in is refused for everyone (PY005),
+// both before the day / primary / hours checks
+ok(/  if public\.silvis_is_coord\(\) then\n    raise exception 'PAY_READ_ONLY: [^\n]*using errcode = 'PY004';\n  end if;/.test(payGuard), "PAY_READ_ONLY / PY004: the guard refuses the office coordinator");
+ok(/  if not public\.silvis_pay_enabled\(new\.person_id\) then\n    raise exception 'PAY_STIPEND_OFF: [^\n]*using errcode = 'PY005';\n  end if;/.test(payGuard), "PAY_STIPEND_OFF / PY005: the guard refuses a new or edited call-in of a switched-off person, for every caller");
+ok(payGuard.indexOf("PY004") < payGuard.indexOf("PY005") && payGuard.indexOf("PY005") < payGuard.indexOf("PY001"), "the guard refuses PY004, then PY005, before PY001-PY003");
 ok(/new\.created_by := old\.created_by;/.test(payGuard) && /new\.created_at := old\.created_at;/.test(payGuard) && /new\.created_by := coalesce\(public\.silvis_person_id\(\), auth\.uid\(\)::text, new\.created_by\);/.test(payGuard), "created_by / created_at are stamped on insert and pinned on update");
 ok(!/\bsilvis_is_sched\b/.test(payGuard), "the primary-only guard applies to every caller - no scheduler exemption");
 ok(/perform pg_advisory_xact_lock\(hashtext\('call_pay:' \|\| new\.person_id \|\| ':' \|\| new\.day::text\)\);\n  select coalesce\(sum\(l\.hours\), 0\) into others/.test(payGuard), "call_pay_logs_guard must take the (person, day) advisory lock right before the 24 h sum (two concurrent inserts must not both pass PY003)");
@@ -2587,6 +2620,14 @@ ok(payLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(payProbe.slice(
 ok(/raise exception 'PROBE_SETUP: call_pay_logs is absent - sql\/migrations\/2026-09-27-call-pay\.sql is not applied';/.test(payProbe) && payProbe.indexOf("PROBE_SETUP: call_pay_logs is absent") < payProbe.indexOf("insert into auth.users"), "call pay probe's setup must raise PROBE_SETUP before any fixture when the tables are absent");
 PAY_CASES.forEach((k) => ok(payProbe.indexOf("values ('" + k + "', ") >= 0 || payProbe.indexOf("values ('" + k + "', v)") >= 0, "call pay probe lacks case " + k));
 ok(/'probe-pay-' \|\| u \|\| '@example\.test'/.test(payProbe), "call pay probe's throwaway users are probe-pay-<uuid>@example.test");
+{
+  // 5b: the setup switches s2 / s3 ON before the fixture call-in (whatever the live switches read), the O block switches s3 OFF;
+  // the final raise rolls both back (verify-rls 14d reads the list before and after)
+  const setOn = payProbe.indexOf("update public.call_pay_settings set stipend_off_ids = stipend_off_ids - 's2' - 's3' where id = 'main';");
+  ok(setOn > 0 && setOn < payProbe.indexOf("insert into public.call_pay_logs (day, person_id, hours, note) values ('2020-03-03', 's2', 2, 'probe-pay fixture');"), "the probe setup switches s2 and s3 on BEFORE the fixture call-in");
+  const setOff = payProbe.indexOf("update public.call_pay_settings set stipend_off_ids = (stipend_off_ids - 's3') || '[\"s3\"]'::jsonb where id = 'main';");
+  ok(setOff > payProbe.indexOf("values ('A4', ") && setOff < payProbe.indexOf("values ('O1', "), "the probe switches s3 off after the A block, before the O cases");
+}
 ok(/set person_id = 's3', role = 'surgeon' where id = surgeon;/.test(payProbe) && /set person_id = 's2', role = 'surgeon' where id = surgeon2;/.test(payProbe) && /set role = 'coordinator' where id = coord;/.test(payProbe) && /set person_id = 's1', role = 'admin' where id = admin_u;/.test(payProbe) && /role = 'viewer' and person_id is null/.test(payProbe), "call pay probe fixtures: surgeon s3, surgeon s2, an unlinked coordinator, an unlinked viewer, admin s1");
 const payProbeCode = payProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
 ok(Array.from(payProbeCode.matchAll(/'(20[0-9]{2})-([0-9]{2})-[0-9]{2}'/g)).every((m) => m[1] === "2020" && m[2] === "03"), "every fixture day in the call pay probe is a PAST day in 2020-03 (PY001 refuses a future day)");
@@ -2620,9 +2661,13 @@ ok(/email like 'probe-pay-%@example\.test'/.test(s14) && /source = 'probe-pay'/.
 ok(/SILVIS_CALL_PAY_APPLIED=1 +grade section 14 strictly/.test(vr.slice(0, vr.indexOf("case \"${1:-}\""))) && /SILVIS_CALL_PAY_APPLIED - see/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header and --help must name SILVIS_CALL_PAY_APPLIED");
 {
   const code14d = vr.slice(vr.indexOf("# 14d."), vr.indexOf('\necho\necho "RESULT: '));
-  const run14 = (cliOut, strict) => {
+  // the faked q(): the leftover count, or the stipend switch list - unchanged, unless offChanged (OFFMARK set): then the read
+  // after the probe differs from the read before it
+  const PAY_FAKE_Q = String.raw`q() { case "$1" in *off_ids*) if [ -n "$OFFMARK" ] && [ -f "$OFFMARK" ]; then echo '{"rows":[{"off_ids":"["s3"]"}]}'; else if [ -n "$OFFMARK" ]; then touch "$OFFMARK"; fi; echo '{"rows":[{"off_ids":"[]"}]}'; fi;; *) echo '{"rows":[{"leftover":0}]}';; esac; }` + "\n";
+  const run14 = (cliOut, strict, offChanged) => {
     const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; PAYSTRICT14=" + (strict ? "1" : "") + "\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
-      "linked() { true; }\nq() { echo '{\"rows\":[{\"leftover\":0}]}'; }\nsupabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" +
+      "OFFMARK=" + (offChanged ? "$(mktemp -u)" : "") + "\ntrap 'rm -f \"$OFFMARK\"' EXIT\n" +
+      "linked() { true; }\n" + PAY_FAKE_Q + "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" +
       code14d + "\necho \"RESULT $pass $fail\"\n";
     const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
     ok(!r.error, "bash could not be started to run section 14d: " + (r.error && r.error.message));
@@ -2632,13 +2677,16 @@ ok(/SILVIS_CALL_PAY_APPLIED=1 +grade section 14 strictly/.test(vr.slice(0, vr.in
   eq(Object.keys(after).sort(), PAY_CASES.slice().sort(), "the faked AFTER picture covers every probe case;");
   const res = Object.keys(after).sort().map((k) => k + "=" + after[k]).join(";");
   const ra = run14('{"message": "ERROR: P0001: PROBE_RESULTS ' + res + ';END"}', true);
-  eq(ra.result, [PAY_CASES.length + 1, 0], "section 14d against the AFTER picture: every case + the leftover check PASS (" + ra.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + ra.err.slice(0, 200) + ");");
+  eq(ra.result, [PAY_CASES.length + 2, 0], "section 14d against the AFTER picture: every case + the leftover check + the unchanged stipend switches PASS (" + ra.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + ra.err.slice(0, 200) + ");");
+  const rc = run14('{"message": "ERROR: P0001: PROBE_RESULTS ' + res + ';END"}', true, true);
+  eq(rc.result, [PAY_CASES.length + 1, 1], "section 14d must fail when the stipend switch list differs after the probe (it did not roll back);");
+  ok(/CHANGED the stipend switches/.test(rc.out), "section 14d names the changed stipend switches");
   const setup = '{"message": "ERROR: P0001: PROBE_SETUP: call_pay_logs is absent - sql/migrations/2026-09-27-call-pay.sql is not applied"}';
   eq(run14(setup, false).result, [2, 0], "section 14d BEFORE the apply: PROBE_SETUP is the expected not-applied picture (PASS) and the leftover check runs without the missing table;");
   eq(run14(setup, true).result, [1, 1], "section 14d with SILVIS_CALL_PAY_APPLIED=1: PROBE_SETUP is a FAIL;");
-  const broken = Object.assign({}, after, { S3: "inserted (NO refusal)", C1: "visible=2" });
+  const broken = Object.assign({}, after, { S3: "inserted (NO refusal)", C1: "sees_all=f coord=0 postgres=2" });
   const rb = run14('{"message": "ERROR: P0001: PROBE_RESULTS ' + Object.keys(broken).sort().map((k) => k + "=" + broken[k]).join(";") + ';END"}', true);
-  eq(rb.result, [PAY_CASES.length - 1, 2], "section 14d must fail a surgeon writing for another surgeon and a coordinator reading call-ins;");
+  eq(rb.result, [PAY_CASES.length, 2], "section 14d must fail a surgeon writing for another surgeon and an office read that is not every call-in;");
 }
 
 {

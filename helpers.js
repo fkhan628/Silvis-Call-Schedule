@@ -3420,15 +3420,19 @@ function daysReadTripped(count, lastCount) {
    is not required). wRVUs are out of scope for now: components is an object, so a later `wrvu` component slots in.
    NO FIGURE HERE: the rates are data the scheduler enters in the app (call_pay_settings, authenticated only); the defaults
    below are flags only (test/privacy.test.js pins that PAY_FLAG_DEFAULTS carries no number). Pure; never reads the clock
-   except through todayOrCentral when opts.today is missing. */
-var PAY_FLAG_DEFAULTS = { weekendDays: ["Sat", "Sun"], holidayUnitDaysAreHolidays: true, callInRequiredWeekday: true, callInRequiredWeekendHoliday: true, activationUnit: "hour" };
+   except through todayOrCentral when opts.today is missing.
+   Paid by the call stipend (Faraz 9/27, item 5b): settings.stipendOffIds lists the roster ids switched OFF in Setup > Pay rates
+   (default: nobody). A switched-off person has no My pay (payForMonth answers stipendOff with no day) and is left out of
+   Totals > Pay and its CSV (payTotalsRows); the database enforces it too (RLS + PY005 in call_pay_logs_guard). */
+var PAY_FLAG_DEFAULTS = { weekendDays: ["Sat", "Sun"], holidayUnitDaysAreHolidays: true, callInRequiredWeekday: true, callInRequiredWeekendHoliday: true, activationUnit: "hour", stipendOffIds: [] };
 var PAY_WEEK_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];   // weekend chips and the stored list, Monday first
 var PAY_RATE_KEYS = ["stipendPerShift", "callInWeekdayRate", "callInWeekendHolidayRate", "activationRate"];
 var PAY_RATE_COLUMNS = { stipendPerShift: "stipend_per_shift", callInWeekdayRate: "weekday_callin_rate", callInWeekendHolidayRate: "weekend_holiday_callin_rate", activationRate: "activation_rate" };
-var PAY_FLAG_COLUMNS = { weekendDays: "weekend_days", holidayUnitDaysAreHolidays: "holiday_unit_days_are_holidays", callInRequiredWeekday: "callin_required_weekday", callInRequiredWeekendHoliday: "callin_required_weekend_holiday", activationUnit: "activation_unit" };
+var PAY_FLAG_COLUMNS = { weekendDays: "weekend_days", holidayUnitDaysAreHolidays: "holiday_unit_days_are_holidays", callInRequiredWeekday: "callin_required_weekday", callInRequiredWeekendHoliday: "callin_required_weekend_holiday", activationUnit: "activation_unit", stipendOffIds: "stipend_off_ids" };
 var PAY_RATE_LABELS = { stipendPerShift: "Stipend per primary shift", callInWeekdayRate: "Weekday call-in rate", callInWeekendHolidayRate: "Weekend / holiday call-in rate", activationRate: "Activation rate" };
 var PAY_UNAVAILABLE_TEXT = "Pay tracking is available after the next database update.";
 var PAY_RATES_UNSET_TEXT = "Rates not set yet - the scheduler enters them in Setup > Pay rates.";
+var PAY_STIPEND_OFF_TEXT = "Not paid by the call stipend.";
 // A rate as a number rounded to cents, or null for "not set" (null / "" / junk / out of the 0-99999 range the table checks).
 function payRateNum(v) {
   if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
@@ -3437,8 +3441,17 @@ function payRateNum(v) {
   return Math.round(n * 100) / 100;
 }
 function payCents(rate) { return rate === null || rate === undefined ? null : Math.round(Number(rate) * 100); }
+// payIdList(v) -> the sorted, de-duplicated non-empty strings of an array (or a JSON-string array); [] for anything else.
+function payIdList(v) {
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  if (!Array.isArray(v)) return [];
+  var out = [];
+  v.forEach(function (x) { if (typeof x === "string" && x !== "" && out.indexOf(x) < 0) out.push(x); });
+  return out.sort();
+}
 // paySettingsFromRow(row) -> { rates: { stipendPerShift, ... (number | null) }, weekendDays, holidayUnitDaysAreHolidays,
-// callInRequiredWeekday, callInRequiredWeekendHoliday, activationUnit, state: "unset" | "partial" | "set", updatedAt, updatedBy }.
+// callInRequiredWeekday, callInRequiredWeekendHoliday, activationUnit, stipendOffIds (roster ids NOT paid by the call stipend,
+// sorted), state: "unset" | "partial" | "set", updatedAt, updatedBy }.
 // Accepts the call_pay_settings row (snake_case), a one-row array, null, [] or junk; a bad value falls back to its default.
 function paySettingsFromRow(row) {
   var r = Array.isArray(row) ? row[0] : row;
@@ -3457,11 +3470,26 @@ function paySettingsFromRow(row) {
     rates: rates, weekendDays: weekendDays,
     holidayUnitDaysAreHolidays: bool("holidayUnitDaysAreHolidays"), callInRequiredWeekday: bool("callInRequiredWeekday"), callInRequiredWeekendHoliday: bool("callInRequiredWeekendHoliday"),
     activationUnit: unit === "hour" || unit === "activation" ? unit : PAY_FLAG_DEFAULTS.activationUnit,
+    stipendOffIds: payIdList(pick("stipendOffIds")),
     state: set === 0 ? "unset" : set === PAY_RATE_KEYS.length ? "set" : "partial",
     updatedAt: typeof r.updated_at === "string" ? r.updated_at : null, updatedBy: typeof r.updated_by === "string" ? r.updated_by : null,
   };
 }
-function paySettingsNorm(s) { return s && typeof s === "object" && !Array.isArray(s) && s.rates && typeof s.rates === "object" && Array.isArray(s.weekendDays) ? s : paySettingsFromRow(s); }
+function paySettingsNorm(s) { return s && typeof s === "object" && !Array.isArray(s) && s.rates && typeof s.rates === "object" && Array.isArray(s.weekendDays) && Array.isArray(s.stipendOffIds) ? s : paySettingsFromRow(s); }
+// payStipendOn(settings, personId) -> false when personId is switched off ("Paid by the call stipend" off in Setup > Pay rates).
+function payStipendOn(settings, personId) { return !!personId && paySettingsNorm(settings).stipendOffIds.indexOf(personId) < 0; }
+// payStipendDelta(beforeRow, afterRow) -> { off: [ids newly switched off], on: [ids switched back on] } - roster ids only, for
+// the pay.rates audit detail (never an amount).
+function payStipendDelta(beforeRow, afterRow) {
+  var a = paySettingsNorm(beforeRow).stipendOffIds, b = paySettingsNorm(afterRow).stipendOffIds;
+  return { off: b.filter(function (id) { return a.indexOf(id) < 0; }), on: a.filter(function (id) { return b.indexOf(id) < 0; }) };
+}
+// paySettingsHidden(state, row) -> true when the last successful settings read answered NO row. For a linked surgeon that is
+// RLS saying he is switched off the stipend (the 'main' row exists once the migration is applied): his My pay card is not
+// rendered. Never true before a read succeeded (loading / failed / skipped / unavailable are not "switched off").
+function paySettingsHidden(state, row) {
+  return !!(state && typeof state === "object" && state.settingsLoaded && state.settings !== "unavailable") && (row === null || row === undefined || (Array.isArray(row) && row.length === 0));
+}
 // paySettingsToRow(settings) -> the call_pay_settings row the scheduler's Save upserts ({ id: "main", snake_case columns });
 // rates rounded to cents, null kept as null (never 0). updated_by / updated_at are stamped by the table's trigger.
 function paySettingsToRow(settings) {
@@ -3473,6 +3501,7 @@ function paySettingsToRow(settings) {
   row.holiday_unit_days_are_holidays = s.holidayUnitDaysAreHolidays;
   row.callin_required_weekday = s.callInRequiredWeekday;
   row.callin_required_weekend_holiday = s.callInRequiredWeekendHoliday;
+  row.stipend_off_ids = s.stipendOffIds.slice();
   return row;
 }
 // payRatesChanged(beforeRow, afterRow) -> the camelCase keys whose value differs - for the pay.rates audit detail, which
@@ -3546,7 +3575,8 @@ function paySummary(days) {
   out.hours = out.hours / 4;
   return out;
 }
-// payForMonth(personId, year, month0, opts) -> { from, to, ytdFrom, days: [payForDay ...], orphanLogs, month: summary, ytd: summary }.
+// payForMonth(personId, year, month0, opts) -> { from, to, ytdFrom, stipendOff, days: [payForDay ...], orphanLogs, month: summary, ytd: summary }.
+// A person switched off the call stipend (settings.stipendOffIds) answers stipendOff: true with no day, no orphan and empty summaries.
 // summary = { earnedCents, projectedCents (null when any day's total is), primaryDays, earnedDays, projectedDays, calledInDays,
 // activations, hours, missing }. YTD = Jan 1 through the last day of the selected month, split by today. orphanLogs = the
 // person's call-ins in the month on a day he is no longer the primary of (after a trade / restore): never counted, deletable.
@@ -3555,6 +3585,7 @@ function payForMonth(personId, year, month0, opts) {
   var y = Number(year), m = Number(month0);
   var from = fmt(new Date(y, m, 1)), to = fmt(new Date(y, m + 1, 0)), ytdFrom = fmt(new Date(y, 0, 1));
   var shared = Object.assign({}, o, { settings: paySettingsNorm(o.settings), holidaySet: o.holidaySet || payHolidaySet(o.holidays), today: todayOrCentral(o.today) });
+  if (!payStipendOn(shared.settings, personId)) return { from: from, to: to, ytdFrom: ytdFrom, stipendOff: true, days: [], orphanLogs: [], month: paySummary([]), ytd: paySummary([]) };
   var all = payPrimaryDays(o.schedule, personId, ytdFrom, to).map(function (d) { return payForDay(d, personId, shared); });
   var days = all.filter(function (d) { return d.day >= from; });
   var orphanLogs = (Array.isArray(o.logs) ? o.logs : []).filter(function (l) {
@@ -3563,11 +3594,13 @@ function payForMonth(personId, year, month0, opts) {
     var e = o.schedule ? o.schedule[d] : null;
     return !e || e.primary !== personId;
   });
-  return { from: from, to: to, ytdFrom: ytdFrom, days: days, orphanLogs: orphanLogs, month: paySummary(days), ytd: paySummary(all) };
+  return { from: from, to: to, ytdFrom: ytdFrom, stipendOff: false, days: days, orphanLogs: orphanLogs, month: paySummary(days), ytd: paySummary(all) };
 }
 // payTotalsRows(roster, year, month0, opts) -> [{ id, name, code, inactive, month, ytd, orphans }] - roster order, for Totals >
-// Pay (scheduler only): every active pool surgeon, plus an INACTIVE one who has a primary day or a call-in in that year (pay he
-// earned before he was set inactive stays in the month / YTD totals and the payroll CSV). Outside surgeons are never listed.
+// Pay (the scheduler, and the office coordinator read-only): every active pool surgeon, plus an INACTIVE one who has a primary
+// day or a call-in in that year (pay he earned before he was set inactive stays in the month / YTD totals and the payroll CSV).
+// Outside surgeons are never listed, nor a surgeon switched off the call stipend (settings.stipendOffIds - payStipendOffRows
+// names them for the panel's one line).
 function payTotalsRows(roster, year, month0, opts) {
   if (!Array.isArray(roster)) return [];
   var o = opts || {};
@@ -3576,12 +3609,19 @@ function payTotalsRows(roster, year, month0, opts) {
   var logs = Array.isArray(o.logs) ? o.logs : [];
   return roster.filter(function (r) {
     if (!r || !r.id || r.type === "external") return false;
+    if (!payStipendOn(shared.settings, r.id)) return false;
     if (r.active !== false) return true;
     return payPrimaryDays(o.schedule, r.id, y + "-01-01", y + "-12-31").length > 0 || logs.some(function (l) { return l && l.person_id === r.id && payLogDay(l).slice(0, 4) === y; });
   }).map(function (r) {
     var pm = payForMonth(r.id, year, month0, shared);
     return { id: r.id, name: r.name || r.id, code: r.code || "", inactive: r.active === false, month: pm.month, ytd: pm.ytd, orphans: pm.orphanLogs.length };
   });
+}
+// payStipendOffRows(roster, settings) -> [{ id, name }] - the roster's pool surgeons switched off the call stipend, roster order.
+function payStipendOffRows(roster, settings) {
+  var s = paySettingsNorm(settings);
+  return (Array.isArray(roster) ? roster : []).filter(function (r) { return r && r.id && r.type !== "external" && s.stipendOffIds.indexOf(r.id) >= 0; })
+    .map(function (r) { return { id: r.id, name: r.name || r.id }; });
 }
 function payCsvAmount(c) { return c === null || c === undefined ? "" : (c / 100).toFixed(2); }
 // payCsv(rows, year, month0) -> { name: "silvis-pay-YYYY-MM.csv", text } (ttCsvText). Plain 2-decimal numbers, no currency
@@ -3694,6 +3734,8 @@ function payErrorText(err) {
   if (/PY001|PAY_FUTURE/.test(t)) return "A call-in is logged once it happened - that day is after today.";
   if (/PY002|PAY_NOT_PRIMARY/.test(t)) return "Call pay is logged for the primary only - that surgeon is not the primary on that day (a trade may have moved it).";
   if (/PY003|PAY_HOURS_OVER/.test(t)) return "One call day holds at most 24 hours.";
+  if (/PY004|PAY_READ_ONLY/.test(t)) return "The office reads call pay only - a call-in is logged by the surgeon or the scheduler.";
+  if (/PY005|PAY_STIPEND_OFF/.test(t)) return "Not paid by the call stipend - no call-in is logged for this surgeon (Setup > Pay rates).";
   if (/23514|check constraint/.test(t)) return "Refused: hours must be quarter hours from 0 to 24, and a note at most 200 characters with no contact data.";
   if (/42501|row-level security|permission denied/.test(t)) return "Not allowed - a surgeon logs call-ins for his own primary days only.";
   if (/0 rows|refused/.test(t)) return "Nothing changed - the row is not yours or no longer exists. Refresh and try again.";
@@ -3716,7 +3758,8 @@ if (typeof module !== "undefined" && module.exports) {
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,
-    PAY_FLAG_DEFAULTS, PAY_WEEK_ORDER, PAY_RATE_KEYS, PAY_RATE_COLUMNS, PAY_FLAG_COLUMNS, PAY_RATE_LABELS, PAY_UNAVAILABLE_TEXT, PAY_RATES_UNSET_TEXT,
+    PAY_FLAG_DEFAULTS, PAY_WEEK_ORDER, PAY_RATE_KEYS, PAY_RATE_COLUMNS, PAY_FLAG_COLUMNS, PAY_RATE_LABELS, PAY_UNAVAILABLE_TEXT, PAY_RATES_UNSET_TEXT, PAY_STIPEND_OFF_TEXT,
+    payStipendOn, payStipendDelta, paySettingsHidden, payStipendOffRows,
     payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payViewState, payStateBeforeRead, payStateAfterRead, payRatesView, payErrorText, payLogAuditText,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,

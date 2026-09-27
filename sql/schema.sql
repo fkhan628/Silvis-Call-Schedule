@@ -75,10 +75,13 @@
 -- redundant). Applied after the 24-hour gate had passed (applied earlier, it would have turned the gate's verify-rls C21 red); the lost audit rows
 -- the tables could rebuild were backfilled (detail.backfilled = true; the rest listed - docs/SCHEMA-REVIEW.md).
 -- Revision 2026-09-27 r (call pay, sql/migrations/2026-09-27-call-pay.sql, report-first, NOT yet applied): Faraz 9/27 reverses the 9/21
--- "no compensation logic" rule - primary call pay is tracked in the app. Two NEW tables: call_pay_settings (one row 'main': the rates
--- the scheduler enters in Setup, null until then - no rate figure in this repo - plus the pay-model flags; read by the scheduler and
--- linked surgeons, written by the scheduler) and call_pay_logs (one row per call-in of the PRIMARY on a past call day; own rows for a
--- surgeon, every row for the scheduler; call_pay_logs_guard refuses PY001 PAY_FUTURE / PY002 PAY_NOT_PRIMARY / PY003 PAY_HOURS_OVER).
+-- "no compensation logic" rule - primary call pay is tracked in the app. Two NEW tables and one NEW helper: call_pay_settings (one row
+-- 'main': the rates the scheduler enters in Setup, null until then - no rate figure in this repo - plus the pay-model flags and
+-- stipend_off_ids, the surgeons NOT paid by the call stipend; read by the scheduler, the office coordinator (read-only) and linked
+-- surgeons who are switched on, written by the scheduler) and call_pay_logs (one row per call-in of the PRIMARY on a past call day;
+-- own rows for a switched-on surgeon, every row for the scheduler and - read-only - the coordinator; call_pay_logs_guard refuses
+-- PY004 PAY_READ_ONLY / PY005 PAY_STIPEND_OFF / PY001 PAY_FUTURE / PY002 PAY_NOT_PRIMARY / PY003 PAY_HOURS_OVER);
+-- silvis_pay_enabled(pid) (security definer) reads the switch for the policies and the guard.
 -- Neither is anon-readable (not in the read_all loop; anon's table privileges revoked on top). Nothing that exists is touched.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
@@ -1181,7 +1184,13 @@ create table if not exists public.office_notification_state (
 -- report-first, NOT yet applied - revision r). Authenticated only, never anon: the rates and the call-ins are pay data. The
 -- 'main' settings row starts with every rate null (seed rows below) - the scheduler enters the figures in Setup > Pay rates,
 -- so no rate figure is ever in this file. The client reads a missing table (404 PGRST205 / 42P01) as 'unavailable'.
+-- stipend_off_ids (item 5b): the roster ids NOT paid by the call stipend (Setup > Pay rates' per-surgeon switch, default ON =
+-- not listed; the list starts empty and is data the scheduler sets). silvis_pay_enabled(pid) (security definer, stable,
+-- search_path public, pg_temp; EXECUTE for authenticated / service_role only) reads that list as its owner - the settings
+-- read policy calls it without recursing on itself, and the guard sees the list whoever the caller is.
 -- call_pay_logs_guard is security invoker (schedule_days is readable by every role) and applies to every caller:
+--   PY004 PAY_READ_ONLY    the caller is the office coordinator (it reads call pay, writes none)
+--   PY005 PAY_STIPEND_OFF  the person is switched off (not paid by the call stipend) - no new or edited call-in, for anyone
 --   PY001 PAY_FUTURE       the day is after today in America/Chicago
 --   PY002 PAY_NOT_PRIMARY  the person is not the day's primary in schedule_days (backup is never paid)
 --   PY003 PAY_HOURS_OVER   more than 24 h on one call day for one person
@@ -1201,6 +1210,7 @@ create table if not exists public.call_pay_settings (
   holiday_unit_days_are_holidays  boolean not null default true,
   callin_required_weekday         boolean not null default true,
   callin_required_weekend_holiday boolean not null default true,
+  stipend_off_ids                 jsonb not null default '[]'::jsonb check (case when jsonb_typeof(stipend_off_ids) = 'array' then not jsonb_path_exists(stipend_off_ids, 'strict $[*] ? (@.type() != "string" || @ == "")') else false end),
   updated_by                      text,
   updated_at                      timestamptz not null default now()
 );
@@ -1217,12 +1227,27 @@ create table if not exists public.call_pay_logs (
 );
 create index if not exists call_pay_logs_person_day_idx on public.call_pay_logs(person_id, day);
 
+create or replace function public.silvis_pay_enabled(pid text) returns boolean
+language sql stable security definer set search_path = public, pg_temp as $$
+  select pid is not null and not exists (select 1 from public.call_pay_settings s where s.stipend_off_ids ? pid);
+$$;
+revoke execute on function public.silvis_pay_enabled(text) from public;
+revoke execute on function public.silvis_pay_enabled(text) from anon;
+grant execute on function public.silvis_pay_enabled(text) to authenticated;
+grant execute on function public.silvis_pay_enabled(text) to service_role;
+
 create or replace function public.call_pay_logs_guard() returns trigger
 language plpgsql security invoker set search_path = public as $$
 declare
   today_c date := (now() at time zone 'America/Chicago')::date;
   others  numeric;
 begin
+  if public.silvis_is_coord() then
+    raise exception 'PAY_READ_ONLY: the office reads call pay and writes none - a call-in is logged by the surgeon or the scheduler' using errcode = 'PY004';
+  end if;
+  if not public.silvis_pay_enabled(new.person_id) then
+    raise exception 'PAY_STIPEND_OFF: % is not paid by the call stipend - no call-in is logged for him (switched off in Setup > Pay rates)', new.person_id using errcode = 'PY005';
+  end if;
   if new.day > today_c then
     raise exception 'PAY_FUTURE: % is after today (%) in Central time - a call-in is logged once it happened', new.day, today_c using errcode = 'PY001';
   end if;
@@ -1471,29 +1496,31 @@ drop policy if exists contacts_write on public.office_contacts;
 create policy contacts_write on public.office_contacts for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
 
--- call pay (2026-09-27, revision r - report-first, NOT yet applied): the settings row is read by the scheduler / admin and by a
--- SURGEON-role account linked to a roster id (the rates his own pay is computed with), written by the scheduler / admin only;
--- a call-in row is read and written by the scheduler / admin (every row) and by a surgeon for his OWN roster id only.
--- Coordinator (never linked), viewer, follower and anon read and write nothing. Never anon: not in the read_all loop above.
+-- call pay (2026-09-27, revision r - report-first, NOT yet applied): the settings row is read by the scheduler / admin, by the
+-- office COORDINATOR (read-only - it prepares the stipends) and by a SURGEON-role account linked to a roster id that is paid by
+-- the call stipend (silvis_pay_enabled - the rates his own pay is computed with); written by the scheduler / admin only. A
+-- call-in row is read by the scheduler / admin and the coordinator (every row, a switched-off surgeon's earlier rows included)
+-- and by a surgeon for his OWN roster id while he is switched on; written by the scheduler / admin (every row) and that surgeon
+-- (own rows, switched on). Viewer, follower and anon read and write nothing. Never anon: not in the read_all loop above.
 drop policy if exists call_pay_settings_read on public.call_pay_settings;
 create policy call_pay_settings_read on public.call_pay_settings for select to authenticated
-  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and public.silvis_person_id() is not null));
+  using (public.silvis_is_sched() or public.silvis_is_coord() or (public.silvis_role() = 'surgeon' and public.silvis_pay_enabled(public.silvis_person_id())));
 drop policy if exists call_pay_settings_write on public.call_pay_settings;
 create policy call_pay_settings_write on public.call_pay_settings for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
 drop policy if exists call_pay_logs_read on public.call_pay_logs;
 create policy call_pay_logs_read on public.call_pay_logs for select to authenticated
-  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+  using (public.silvis_is_sched() or public.silvis_is_coord() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id)));
 drop policy if exists call_pay_logs_insert on public.call_pay_logs;
 create policy call_pay_logs_insert on public.call_pay_logs for insert to authenticated
-  with check (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+  with check (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id)));
 drop policy if exists call_pay_logs_update on public.call_pay_logs;
 create policy call_pay_logs_update on public.call_pay_logs for update to authenticated
-  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()))
-  with check (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id)))
+  with check (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id)));
 drop policy if exists call_pay_logs_delete on public.call_pay_logs;
 create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated
-  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id)));
 
 
 -- ============================================================================

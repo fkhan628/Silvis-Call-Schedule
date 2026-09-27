@@ -43,14 +43,17 @@ One 24-h day = **one shift** — no partial or weighted shifts; totals are a run
 backup sticking through the unit. **Call pay (Faraz 9/27 - reverses the 9/21 "no compensation logic and no $ display"
 rule):** the app tracks **primary** call pay only (backup is never paid) - stipend per primary shift, a call-in rate
 (weekday or weekend/holiday) when called in, an activation rate for the hours worked (model: `helpers.js` `payForDay` /
-`payForMonth`, `docs/SILVIS-CALL-RULES.md` §1 "Call pay"). My schedule > My pay shows a linked surgeon his own pay (the
-scheduler anyone's); Totals > Pay and Setup > Pay rates are the scheduler's only; coordinator / viewer / follower /
-`?public=1` see no $ and no pay UI. The **rates and pay flags live only in the authenticated `call_pay_settings` table and
-the call-ins in `call_pay_logs`** (`sql/migrations/2026-09-27-call-pay.sql`, report-first) - never in the repo, the seed, the
+`payForMonth`, `docs/SILVIS-CALL-RULES.md` §1 "Call pay"). Who sees pay (9/27 decisions): each surgeon his own (My
+schedule > My pay); the scheduler everyone's (Totals > Pay with its CSV, Setup > Pay rates); the office coordinator
+read-only, for preparing the stipends (Totals > Pay and its CSV only - no My pay, no call-in entry, no Pay rates, no write);
+viewer / follower / `?public=1` see no $ and no pay UI. A per-surgeon "Paid by the call stipend" switch (Setup > Pay rates,
+default on; `call_pay_settings.stipend_off_ids`) takes a surgeon out: no My pay, not in Totals > Pay, and no read of the
+rates - enforced in RLS (`silvis_pay_enabled`), not only in the UI; who is switched off is data Faraz sets, never code.
+The **rates and pay flags live only in the authenticated `call_pay_settings` table and the call-ins in `call_pay_logs`** (`sql/migrations/2026-09-27-call-pay.sql`, report-first) - never in the repo, the seed, the
 blob or any anon-readable table (a deliberate exception to "defaults are data in groupRules": the pay flags are data in
 `call_pay_settings`, not the public blob; `test/privacy.test.js` A6d pins no figure anywhere); tests use obviously fake
 rates. No $ in notifications, e-mails, calendar feeds, the public page or exports others see; pay audit rows carry keys /
-days / hours, never an amount.
+roster ids / days / hours, never an amount.
 Carried over from Davenport on purpose: office notifications, calendar sync, refresh/version check, data management,
 every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, vacation approvals, weighted accounting.
 

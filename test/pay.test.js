@@ -7,6 +7,9 @@
 // [I] config.js payDb in a vm sandbox (the four read states, no request without a fresh token, 0-row writes refused).
 // [J] source pins: who sees the pay UI (payVisible), where the tables are named, what the audit rows carry, and that no
 // notification / e-mail / calendar feed / share page / edge function ever mentions pay.
+// [K] Faraz 9/27 item 5: (5a) the office coordinator reads pay read-only (Totals > Pay + its CSV; no My pay, no log form, no
+// Pay rates, no write); (5b) the per-surgeon "Paid by the call stipend" switch (stipend_off_ids): a switched-off surgeon has
+// no My pay and is left out of Totals > Pay and its CSV (fake rates, fake roster).
 "use strict";
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -260,7 +263,9 @@ check("paySettingsToRow round-trips, keeps null as null (never 0) and rounds to 
   assert.strictEqual(row.activation_rate, 5.56);
   assert.strictEqual(row.weekday_callin_rate, null);
   assert.deepStrictEqual(H.paySettingsToRow(H.paySettingsFromRow(row)), row);
-  assert.deepStrictEqual(Object.keys(row).sort(), ["activation_rate", "activation_unit", "callin_required_weekday", "callin_required_weekend_holiday", "holiday_unit_days_are_holidays", "id", "stipend_per_shift", "weekday_callin_rate", "weekend_days", "weekend_holiday_callin_rate"]);
+  // 9/27 item 5b: stipend_off_ids (the roster ids NOT paid by the call stipend) is saved with the rates - deliberate pin change
+  assert.deepStrictEqual(Object.keys(row).sort(), ["activation_rate", "activation_unit", "callin_required_weekday", "callin_required_weekend_holiday", "holiday_unit_days_are_holidays", "id", "stipend_off_ids", "stipend_per_shift", "weekday_callin_rate", "weekend_days", "weekend_holiday_callin_rate"]);
+  assert.deepStrictEqual(row.stipend_off_ids, [], "nobody is switched off by default");
 });
 check("payRatesChanged names the changed keys and carries no value", () => {
   const ch = H.payRatesChanged(FAKE_ROW, Object.assign({}, FAKE_ROW, { stipend_per_shift: 101, weekend_days: ["Fri", "Sat", "Sun"] }));
@@ -517,15 +522,19 @@ console.log("\n[J] source pins - who sees pay, where the tables are named, what 
 const SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
 const CFG = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
 const HLP = fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8");
-check("payVisible: never on the public page, never while the profile failed to load; the scheduler, or a surgeon-role account linked to a roster id", () => {
-  assert.ok(SRC.includes('const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || (userProfile?.role === "surgeon" && !!mySurgeon));'), "the payVisible expression changed");
+check("payVisible: never on the public page, never while the profile failed to load; the scheduler, the office coordinator (read-only, 9/27 item 5a), or a surgeon-role account linked to a roster id", () => {
+  // 9/27 item 5a: `isCoordinator ||` joins the expression (deliberate pin change - the office reads pay, read-only)
+  assert.ok(SRC.includes('const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || isCoordinator || (userProfile?.role === "surgeon" && !!mySurgeon));'), "the payVisible expression changed");
+  assert.ok(SRC.includes('const payTotalsRole = payVisible && isScheduler ? "scheduler" : payVisible && isCoordinator ? "office" : null;'), "Totals > Pay: the scheduler's, or the office's read-only view");
   const at = SRC.indexOf("const payVisible = ");
-  ["const [isScheduler", "const isPublicMode", "const mySurgeon", "const [profileLoadFailed"].forEach((n) => assert.ok(SRC.indexOf(n) >= 0 && SRC.indexOf(n) < at, n + " must be declared before payVisible (no TDZ read)"));
+  ["const [isScheduler", "const isPublicMode", "const mySurgeon", "const [profileLoadFailed", "const isCoordinator"].forEach((n) => assert.ok(SRC.indexOf(n) >= 0 && SRC.indexOf(n) < at, n + " must be declared before payVisible (no TDZ read)"));
 });
-check("the pay UI is rendered only behind payVisible (My pay) / isScheduler (Setup) / payVisible && isScheduler (Totals > Pay)", () => {
+check("the pay UI is rendered only behind payVisible and not the office (My pay) / isScheduler (Setup) / payVisible && payTotalsRole (Totals > Pay)", () => {
   const cardUses = Array.from(SRC.matchAll(/<PayCard\b/g)).map(m => m.index);
   assert.strictEqual(cardUses.length, 1, "one PayCard use");
-  assert.ok(/\{payVisible && \(pid === mySurgeon \|\| isScheduler\) && pid && <PayCard\b/.test(SRC), "PayCard behind payVisible and the viewer's own id (or the scheduler)");
+  // 9/27 items 5a / 5b: `!isCoordinator && !payMyCardHidden &&` joins the gate (deliberate pin change - no My pay for the office,
+  // none for a surgeon switched off the stipend)
+  assert.ok(/\{payVisible && !isCoordinator && !payMyCardHidden && \(pid === mySurgeon \|\| isScheduler\) && pid && <PayCard\b/.test(SRC), "PayCard behind payVisible, never for the office, never for a switched-off surgeon, and the viewer's own id (or the scheduler)");
   const ratesUses = Array.from(SRC.matchAll(/<PayRatesCard\b/g)).map(m => m.index);
   assert.strictEqual(ratesUses.length, 1, "one PayRatesCard use");
   const SETUP_OPEN = '{view==="setup" && !isPublicMode && isScheduler && <>';
@@ -538,8 +547,9 @@ check("the pay UI is rendered only behind payVisible (My pay) / isScheduler (Set
   const closeAt = setupBlock.indexOf("\n        </>}");   // the block's own closer (its opener's indentation)
   assert.ok(closeAt > 0 && closeAt === setupBlock.lastIndexOf("\n        </>}"), "the Setup block closes once with </>} at its opener's indentation");
   assert.ok(ratesUses[0] < setupAt + closeAt, "PayRatesCard sits before the Setup block's closing </>}");
-  assert.ok(/\{payVisible && isScheduler && modeBtn\("pay", "Pay"\)\}/.test(SRC), "the Totals > Pay mode button renders only for the scheduler");
-  assert.ok(/const modeEff = mode === "pay" && !\(payVisible && isScheduler\) \? "month" : mode;/.test(SRC), "a stale 'pay' mode falls back to month for anyone else");
+  // 9/27 item 5a: payTotalsRole (the scheduler, or the office read-only) replaces isScheduler here - deliberate pin change
+  assert.ok(/\{payVisible && payTotalsRole && modeBtn\("pay", "Pay"\)\}/.test(SRC), "the Totals > Pay mode button renders only for the scheduler and the office");
+  assert.ok(/const modeEff = mode === "pay" && !\(payVisible && payTotalsRole\) \? "month" : mode;/.test(SRC), "a stale 'pay' mode falls back to month for anyone else");
 });
 check("a year switch never shows another year's call-ins: loadPay drops a stale answer (sequence + account) and the cards gate on payViewState", () => {
   const lp = SRC.slice(SRC.indexOf("const loadPay = async (year, explicit) => {"), SRC.indexOf("// Another account on this page"));
@@ -568,8 +578,10 @@ check("the pay tables are named only in config.js payDb", () => {
   const outside = CFG.replace(pd, "");
   assert.ok(!/call_pay_/.test(outside.replace(/^\/\/[^\n]*$/gm, "")), "config.js names a call_pay_ table outside payDb");
 });
-check("the pay audit rows carry keys / days / hours only - never an amount", () => {
-  assert.ok(/logAudit\("pay\.rates", "Pay rates updated", \{ changed \}\)/.test(SRC), "pay.rates carries { changed } only");
+check("the pay audit rows carry keys / roster ids / days / hours only - never an amount", () => {
+  // 9/27 item 5b: the switches add the roster ids switched off / on (deliberate pin change) - still no amount
+  assert.ok(/logAudit\("pay\.rates", "Pay rates updated", \{ changed, stipendOff: stipend\.off, stipendOn: stipend\.on \}\)/.test(SRC), "pay.rates carries { changed, stipendOff, stipendOn } only");
+  assert.ok(/const stipend = payStipendDelta\(paySettingsRow, row\);/.test(SRC), "the switch delta comes from helpers.js payStipendDelta (roster ids)");
   const logs = Array.from(SRC.matchAll(/logAudit\("pay\.log\.(add|edit|delete)"[^;]*;/g)).map(m => m[0]);
   assert.strictEqual(logs.length, 3, "pay.log.add / edit / delete");
   logs.forEach(l => { assert.ok(/payLogAuditText\(/.test(l), l); assert.ok(!/Cents|payMoney|rate/i.test(l), "an amount in " + l); });
@@ -595,6 +607,101 @@ check("the pay UI lives in module-scope components styled by THEME tokens (no he
   ["function PayCard(", "function PayRatesCard(", "function PayTotalsPanel("].forEach(n => assert.ok(block.includes(n), n));
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(block), "a hex colour inside the pay components");
   assert.ok(block.includes("PAY_UNAVAILABLE_TEXT") && block.includes("PAY_RATES_UNSET_TEXT"), "the unavailable / rates-not-set words come from helpers");
+});
+
+console.log("\n[K] 9/27 item 5 - the office reads pay (5a); the per-surgeon 'paid by the call stipend' switch (5b)");
+const ROSTER_K = [{ id: "s1", name: "Khan", code: "FAK" }, { id: "s2", name: "Burchett", code: "MAB" }, { id: "s3", name: "Acton", code: "BDA" }, { id: "x1", name: "Locum", type: "external" }];
+const SCHED_K = Object.assign({}, SCHED, { "2026-10-07": day("s3", "s1"), "2026-10-08": day("s2", "s1") });
+check("paySettingsFromRow reads stipend_off_ids: roster ids, de-duplicated and sorted; junk and non-strings dropped; default nobody", () => {
+  assert.deepStrictEqual(settings().stipendOffIds, []);
+  assert.deepStrictEqual(settings({ stipend_off_ids: ["s3", "s1", "s3", "", 7, null] }).stipendOffIds, ["s1", "s3"]);
+  assert.deepStrictEqual(settings({ stipend_off_ids: '["s2"]' }).stipendOffIds, ["s2"], "a JSON-string array");
+  assert.deepStrictEqual(settings({ stipend_off_ids: "junk" }).stipendOffIds, []);
+  assert.deepStrictEqual(H.paySettingsFromRow(null).stipendOffIds, []);
+  assert.deepStrictEqual(H.PAY_FLAG_DEFAULTS.stipendOffIds, [], "the default switches nobody off");
+  assert.strictEqual(H.payStipendOn(settings({ stipend_off_ids: ["s3"] }), "s3"), false);
+  assert.strictEqual(H.payStipendOn(settings({ stipend_off_ids: ["s3"] }), "s2"), true);
+  assert.strictEqual(H.payStipendOn(settings(), null), false, "no person, no pay");
+});
+check("paySettingsToRow writes stipend_off_ids; payRatesChanged names the key; payStipendDelta lists roster ids switched off / on (never an amount)", () => {
+  const before = Object.assign({}, FAKE_ROW, { stipend_off_ids: ["s2"] });
+  const after = Object.assign({}, FAKE_ROW, { stipend_off_ids: ["s3"] });
+  assert.deepStrictEqual(H.paySettingsToRow(after).stipend_off_ids, ["s3"]);
+  assert.deepStrictEqual(H.payRatesChanged(before, after), ["stipendOffIds"]);
+  assert.deepStrictEqual(H.payStipendDelta(before, after), { off: ["s3"], on: ["s2"] });
+  assert.deepStrictEqual(H.payStipendDelta(FAKE_ROW, FAKE_ROW), { off: [], on: [] });
+  assert.deepStrictEqual(H.payStipendDelta(null, after), { off: ["s3"], on: [] }, "a first save from no row");
+});
+check("payForMonth: a switched-off person answers stipendOff with no day, no orphan and empty totals; a switched-on one is unchanged", () => {
+  const off = settings({ stipend_off_ids: ["s1"] });
+  const logs = [log("2026-10-01", "s1", 2), log("2026-10-04", "s1", 1)];
+  const m = H.payForMonth("s1", 2026, 9, base({ settings: off, logs }));
+  assert.strictEqual(m.stipendOff, true);
+  assert.deepStrictEqual(m.days, []);
+  assert.deepStrictEqual(m.orphanLogs, []);
+  assert.strictEqual(m.month.primaryDays, 0);
+  assert.strictEqual(m.month.earnedCents, 0);
+  assert.strictEqual(m.ytd.primaryDays, 0);
+  const on = H.payForMonth("s1", 2026, 9, base({ settings: settings({ stipend_off_ids: ["s3"] }), logs }));
+  assert.strictEqual(on.stipendOff, false);
+  assert.deepStrictEqual(on, H.payForMonth("s1", 2026, 9, base({ logs })), "another person's switch changes nothing for s1");
+});
+check("payTotalsRows leaves a switched-off surgeon out (the table and the CSV); payStipendOffRows names him for the panel's line", () => {
+  const off = settings({ stipend_off_ids: ["s3"] });
+  const rows = H.payTotalsRows(ROSTER_K, 2026, 9, base({ schedule: SCHED_K, settings: off }));
+  assert.deepStrictEqual(rows.map(r => r.id), ["s1", "s2"], "s3 is switched off; the outside surgeon is never listed");
+  assert.deepStrictEqual(H.payTotalsRows(ROSTER_K, 2026, 9, base({ schedule: SCHED_K })).map(r => r.id), ["s1", "s2", "s3"], "switched on, s3 is listed");
+  const csv = H.payCsv(rows, 2026, 9).text;
+  assert.ok(!/Acton|BDA/.test(csv), "the switched-off surgeon is not in the pay CSV");
+  assert.deepStrictEqual(H.payStipendOffRows(ROSTER_K, off), [{ id: "s3", name: "Acton" }]);
+  assert.deepStrictEqual(H.payStipendOffRows(ROSTER_K, settings()), []);
+});
+check("paySettingsHidden: only a SUCCESSFUL settings read with no row reads as 'switched off' (RLS) - never loading / failed / skipped / unavailable", () => {
+  const st = (patch) => Object.assign({ settings: "ok", logs: "ok", loadedYear: 2026, attemptYear: 2026, settingsLoaded: true }, patch || {});
+  assert.strictEqual(H.paySettingsHidden(st(), null), true, "ok + no row = hidden");
+  assert.strictEqual(H.paySettingsHidden(st(), []), true);
+  assert.strictEqual(H.paySettingsHidden(st(), { id: "main" }), false, "a row = switched on");
+  assert.strictEqual(H.paySettingsHidden(st({ settings: "unread", settingsLoaded: false }), null), false, "loading");
+  assert.strictEqual(H.paySettingsHidden(st({ settings: "failed", settingsLoaded: false }), null), false, "a failed first read");
+  assert.strictEqual(H.paySettingsHidden(st({ settings: "skipped", settingsLoaded: false }), null), false, "no fresh token");
+  assert.strictEqual(H.paySettingsHidden(st({ settings: "unavailable", settingsLoaded: false }), null), false, "the migration is not applied");
+  assert.strictEqual(H.paySettingsHidden(null, null), false);
+});
+check("payErrorText maps PY004 (the office) and PY005 (switched off) to words", () => {
+  assert.match(H.payErrorText({ message: "PAY_READ_ONLY: the office reads call pay" }), /office reads call pay only/);
+  assert.match(H.payErrorText("ERR PY005 PAY_STIPEND_OFF: s3 is not paid"), /Not paid by the call stipend/);
+});
+check("5a source pins: the office reads every row, writes nothing, has no My pay / log form / Pay rates; its Totals > Pay says read-only", () => {
+  const lp = SRC.slice(SRC.indexOf("const loadPay = async (year, explicit) => {"), SRC.indexOf("// Another account on this page"));
+  assert.ok(/const who = isScheduler \|\| isCoordinator \? null : mySurgeon;/.test(lp), "the scheduler and the office read every call-in row");
+  assert.ok(SRC.includes("const payMayWrite = (personId) => payVisible && !isCoordinator && !!personId && (isScheduler || personId === mySurgeon);"), "the office never writes pay");
+  ["addPayLog", "updatePayLog", "deletePayLog"].forEach(fn => {
+    const at = SRC.indexOf("const " + fn + " = async ");
+    assert.ok(at > 0 && /payMayWrite\(/.test(SRC.slice(at, at + 300)), fn + " is gated by payMayWrite");
+  });
+  assert.ok(/const savePayRates = async \(next\) => \{\n    if \(!isScheduler\) return false;/.test(SRC), "only the scheduler saves the rates and the switches");
+  assert.ok(/ytdFloors=\{TOTALS_YTD_FLOORS\} payVisible=\{payVisible\} payTotalsRole=\{payTotalsRole\} payData=/.test(SRC), "TotalsCard gets payTotalsRole");
+  assert.ok(/office=\{payTotalsRole === "office"\}/.test(SRC), "Totals > Pay knows it is the office's view");
+  const panel = SRC.slice(SRC.indexOf("function PayTotalsPanel("), SRC.indexOf("// ---- end call pay components"));
+  assert.ok(/office \? "Read-only - for preparing the stipends\." : "Visible to the scheduler and, read-only, the office\."/.test(panel), "the panel says who sees it");
+  assert.ok(!/onAdd|onUpdate|onDelete|saveSettings|addLog|updateLog|deleteLog/.test(panel), "Totals > Pay has no write path");
+});
+check("5b source pins: the switches in Setup > Pay rates (default on), the one-line card, the hidden My pay, the left-out line in Totals > Pay", () => {
+  const rates = SRC.slice(SRC.indexOf("function PayRatesCard("), SRC.indexOf("function PayTotalsPanel("));
+  assert.ok(/data-testid="pay-stipend-switches"/.test(rates) && /testid=\{"pay-stipend-" \+ r\.id\}/.test(rates), "a switch per surgeon, testid pay-stipend-<id>");
+  assert.ok(/checked=\{draft\.stipendOffIds\.indexOf\(r\.id\) < 0\}/.test(rates), "on = not in stipend_off_ids (default on)");
+  assert.ok(/r\.type !== "external"/.test(rates), "outside surgeons get no switch");
+  assert.ok(/<PayRatesCard [^\n]*roster=\{surgeons\}/.test(SRC), "the switches list the roster");
+  assert.ok(SRC.includes("const payMyCardHidden = !isScheduler && paySettingsHidden(payState, paySettingsRow);"), "a linked surgeon whose settings read answered no row gets no My pay card");
+  const card = SRC.slice(SRC.indexOf("function PayCard("), SRC.indexOf("function PayRatesCard("));
+  const offAt = card.indexOf("if (pm.stipendOff) return ");
+  assert.ok(offAt > 0 && offAt < card.indexOf("pay-total-month") && offAt < card.indexOf("pay-log-form"), "PayCard answers one line for a switched-off surgeon before any figure or the log form");
+  assert.ok(/data-state="stipend-off"/.test(card) && /PAY_STIPEND_OFF_TEXT/.test(card), "the one line reads PAY_STIPEND_OFF_TEXT");
+  assert.strictEqual(H.PAY_STIPEND_OFF_TEXT, "Not paid by the call stipend.");
+  const panel = SRC.slice(SRC.indexOf("function PayTotalsPanel("), SRC.indexOf("// ---- end call pay components"));
+  assert.ok(/const offRows = payStipendOffRows\(roster \|\| \[\], settings\);/.test(panel) && /data-testid="pay-totals-stipend-off"/.test(panel), "Totals > Pay names who is left out");
+  const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  ["index-source.html", "helpers.js", "config.js"].forEach(f => assert.ok(!/stipend[^\n]{0,80}["'](s[0-9]+|Sarkar|SRK)["']/.test(code(fs.readFileSync(path.join(ROOT, f), "utf8"))), f + " names a surgeon next to the stipend switch (it is data Faraz sets)"));
 });
 
 (async () => {

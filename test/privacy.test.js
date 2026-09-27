@@ -245,6 +245,28 @@ function payKeyHits(value, where) {
 }
 // <<< A6d
 
+// >>> A6e
+// ---- A6e: who reads pay (Faraz 9/27 item 5 - folded into the unapplied call pay migration). The figures reach exactly: the
+// scheduler, the office coordinator READ-ONLY (it prepares the stipends; 5a) and a linked surgeon his own - only while he is
+// "paid by the call stipend" (5b: a switched-off surgeon reads no rate, enforced in RLS). Never a viewer, a follower, anon or
+// the public page. The switch list is data the scheduler sets: the repo names nobody in it.
+{
+  const mig = texts["sql/migrations/2026-09-27-call-pay.sql"] || "";
+  const pol = (name) => { const m = mig.match(new RegExp("create policy " + name + " on public\\.[a-z_]+[\\s\\S]*?;")); return m ? m[0] : ""; };
+  const reads = [pol("call_pay_settings_read"), pol("call_pay_logs_read")];
+  ok(reads.every(p => /public\.silvis_is_sched\(\)/.test(p) && /public\.silvis_is_coord\(\)/.test(p) && /public\.silvis_pay_enabled\(/.test(p)), "A6e: both pay read policies admit the scheduler, the office coordinator and a switched-on surgeon only (silvis_pay_enabled)");
+  ok(reads.concat([pol("call_pay_settings_write"), pol("call_pay_logs_insert"), pol("call_pay_logs_update"), pol("call_pay_logs_delete")]).every(p => p && !/viewer|follow|anon|\btrue\b/.test(p)), "A6e: no pay policy names a viewer, a follower, anon or `true`");
+  ok([pol("call_pay_settings_write"), pol("call_pay_logs_insert"), pol("call_pay_logs_update"), pol("call_pay_logs_delete")].every(p => p && !/silvis_is_coord/.test(p)), "A6e: the office coordinator is in no pay WRITE policy (read-only)");
+  ok(/^  stipend_off_ids +jsonb not null default '\[\]'::jsonb check /m.test(mig), "A6e: stipend_off_ids starts empty - nobody is switched off by the repo");
+  ok(!/stipend_off_ids[^\n;]*'[^']*"s[0-9]+"/.test(mig) && !/stipend_off_ids[^\n;]*'[^']*"s[0-9]+"/.test(texts["sql/schema.sql"] || ""), "A6e: the migration / schema.sql switch no roster id off (Faraz sets the switches as data)");
+  const hits = [];
+  files.filter(f => f === "docs/silvis-seed.json" || /^test\/fixtures\/.*\.json$/.test(f)).forEach(f => { if (/stipend_?off/i.test(texts[f] || "")) hits.push(f + "  <a stipend switch in a public data file>"); });
+  report("A6e stipend switches in the seed / fixtures (they live only in call_pay_settings)", hits);
+  const src = texts["index-source.html"] || "";
+  ok(src.includes('const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || isCoordinator || (userProfile?.role === "surgeon" && !!mySurgeon));'), "A6e: the client reads pay for the scheduler, the office and a linked surgeon only - never ?public=1, a viewer or a follower");
+}
+// <<< A6e
+
 // ---- summary ----------------------------------------------------------------
 if (failures.length) {
   failures.forEach(f => console.error("FAIL: " + f));

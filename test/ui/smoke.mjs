@@ -2760,12 +2760,41 @@ try {
           else if (tt.csvRows.some(r => r.some(v => E3_RE.test(v)))) fail(`${T}, Totals CSV: a row names East: ${tt.csvRows.filter(r => r.some(v => E3_RE.test(v))).slice(0, 1).map(r => r.join(",")).join("")}`);
           else ok(`${T}, Totals CSV: header + ${tt.csvRows.length} line(s), 21 fields each, no East column ('... ${tt.csvHeader.slice(12, 18).join(", ")} ...')`);
         }
-        // Call pay (9/27): a surgeon gets his own My pay card ('unavailable' before the migration) and no Totals > Pay; a
-        // coordinator, a viewer and ?public=1 get no pay UI at all and no dollar figure anywhere on the page
+        // Call pay (9/27): a surgeon gets his own My pay card ('unavailable' before the migration) and no Totals > Pay; the
+        // office coordinator (9/27 item 5a) reads Totals > Pay READ-ONLY with its CSV button - no My pay, no log form, no Pay
+        // rates; a viewer and ?public=1 get no pay UI at all and no dollar figure anywhere on the page
         {
           const payModeBtn = R.totals ? !!(await rp.$("[data-testid=totals-mode-pay]")) : false;
-          if (payModeBtn) fail(`${T}: Totals shows the scheduler's Pay mode button`);
-          if (R.kind === "surgeon") {
+          if (payModeBtn && R.kind !== "coordinator") fail(`${T}: Totals shows the scheduler's Pay mode button`);
+          if (R.kind === "coordinator") {
+            // the tables "exist" for this step (the settings row with no rate, no call-in): Totals > Pay reads 'ok' and offers
+            // its CSV; entering Totals again re-reads pay (loadPay runs on the view change)
+            try {
+              payMock = (url) => url.pathname.endsWith("/call_pay_settings") ? { status: 200, body: [{ id: "main" }] } : { status: 200, body: [] };
+              await rp.click('button[data-tab="calendar"]');
+              await rp.click('button[data-tab="totals"]');
+              await rp.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
+              const modeBtn = await rp.$("[data-testid=totals-mode-pay]");
+              if (!modeBtn) fail(`${T}: Totals has no Pay mode button (the office reads Totals > Pay, read-only)`);
+              else {
+                await modeBtn.click();
+                await rp.waitForSelector("[data-testid=pay-totals][data-state=ok]", { timeout: 8000 });
+                const csvBtn = await rp.$("[data-testid=pay-csv]");
+                const csvOn = csvBtn ? await csvBtn.isEnabled() : false;
+                const ptText = await rp.$eval("[data-testid=pay-totals]", el => el.innerText).catch(() => "");
+                const extra = await rp.evaluate(() => ["pay-card", "pay-log-form", "pay-log-save", "pay-rates", "pay-rates-save", "pay-stipend-switches"].filter(t => document.querySelector("[data-testid=" + t + "]")));
+                const tabs = await rp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
+                if (!csvBtn || !csvOn) fail(`${T}: Totals > Pay has no enabled 'Export pay CSV' button (csv ${!!csvBtn}, enabled ${csvOn})`);
+                else if (!/Read-only - for preparing the stipends/.test(ptText)) fail(`${T}: Totals > Pay does not say it is read-only: ` + ptText.slice(0, 160));
+                else if (extra.length) fail(`${T}: a pay write surface is rendered for the office: ${extra.join(", ")}`);
+                else if (tabs.includes("setup") || tabs.includes("myschedule")) fail(`${T}: the office has a Setup / My schedule tab (${tabs.join(", ")}) - no My pay, no Pay rates`);
+                else ok(`${T}: Totals > Pay read-only with its CSV button; no My pay, no log form, no Pay rates`);
+                await rp.click("[data-testid=totals-mode-month]");
+              }
+            } catch (e) { fail(`${T}: Totals > Pay (the office, read-only): ` + errLine(e)); }
+            finally { payMock = null; }
+            await rp.click('button[data-tab="calendar"]').catch(() => {});
+          } else if (R.kind === "surgeon") {
             await rp.click('button[data-tab="myschedule"]');
             const pc = await rp.waitForSelector("[data-testid=pay-card]", { timeout: 8000 }).then(() => true).catch(() => false);
             const pcState = pc ? await rp.$eval("[data-testid=pay-card]", el => el.getAttribute("data-state")) : null;
@@ -4635,11 +4664,13 @@ try {
     } catch (e) { fail("My pay (scheduler): no [data-testid=pay-card][data-state=unavailable] on My schedule: " + errLine(e)); }
     // Call pay review fix: a year switch never shows another year's call-ins as none. The tables "exist" (settings row with
     // no rate, the current year's logs []) and the PREVIOUS year's logs answer 500: switching to it must read data-state
-    // "failed" with no totals and no log form; switching back reads "ok".
+    // "failed" with no totals and no log form; switching back reads "ok". 9/27 item 5b: the settings row switches s3 off the
+    // call stipend (harness data), so picking s3 in the scheduler's person picker shows the one line 'Not paid by the call
+    // stipend' (data-state "stipend-off") instead of figures, with no log form.
     try {
       const yNow = Number(todayIso.slice(0, 4));
       payMock = (url) => {
-        if (url.pathname.endsWith("/call_pay_settings")) return { status: 200, body: [{ id: "main" }] };
+        if (url.pathname.endsWith("/call_pay_settings")) return { status: 200, body: [{ id: "main", stipend_off_ids: ["s3"] }] };
         const from = (url.searchParams.getAll("day").find(v => v.startsWith("gte.")) || "").slice(4, 8);
         return from === String(yNow) ? { status: 200, body: [] } : { status: 500, body: { message: "harness: pay read failed" } };
       };
@@ -4652,6 +4683,14 @@ try {
       await page.selectOption("[data-testid=pay-year-select]", String(yNow));
       await page.waitForSelector("[data-testid=pay-card][data-state=ok]", { timeout: 8000 });
       ok("My pay (year switch): back on " + yNow + " the card reads 'ok'");
+      await page.selectOption("[data-testid=mine-person]", "s3");
+      await page.waitForSelector("[data-testid=pay-card][data-state=stipend-off]", { timeout: 8000 });
+      const offText = await page.$eval("[data-testid=pay-card]", el => el.innerText).catch(() => "");
+      if (!/Not paid by the call stipend/.test(offText)) fail("My pay (switched off): the one line is missing: " + offText.slice(0, 160));
+      else if (await page.$("[data-testid=pay-total-month]") || await page.$("[data-testid=pay-log-form]")) fail("My pay (switched off): figures or the log form render for a surgeon switched off the call stipend");
+      else ok("My pay (switched off): the scheduler's picker shows one line 'Not paid by the call stipend' for s3 - no figures, no form");
+      await page.selectOption("[data-testid=mine-person]", "s1");
+      await page.waitForSelector("[data-testid=pay-card][data-state=ok]", { timeout: 8000 });
     } catch (e) { fail("My pay (year switch): " + errLine(e)); }
     finally { payMock = null; }
     await page.screenshot({ path: path.join(OUT, "mine.png"), fullPage: true });

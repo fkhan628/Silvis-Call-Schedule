@@ -16,7 +16,8 @@
 -- reads that as the not-applied picture unless SILVIS_CALL_PAY_APPLIED=1). AFTER it every case below must read as listed.
 --
 -- Fixtures are PAST days in 2020-03 (PY001 refuses a future day), schedule_days rows with source 'probe-pay' and the live
--- roster ids: 03-02 primary s3 / backup s2, 03-03 primary s2 / backup s3, 03-04 and 03-05 primary s3; one call_pay_logs
+-- roster ids (the setup first takes s2 and s3 OFF call_pay_settings.stipend_off_ids - they are paid by the stipend for every
+-- case until the O block switches s3 off; both changes roll back with the rest): 03-02 primary s3 / backup s2, 03-03 primary s2 / backup s3, 03-04 and 03-05 primary s3; one call_pay_logs
 -- row of s2 on 03-03. Every call_pay_logs row the probe writes carries a note starting 'probe-pay' (the leftover count keys
 -- on it). The acting users are throwaway auth.users rows (email probe-pay-<uuid>@example.test) whose user_profiles rows the
 -- handle_new_auth_user trigger creates; they are linked as surgeon s3, surgeon s2, coordinator (unlinked), viewer
@@ -28,6 +29,7 @@
 --   P2  postgres: anon's table privileges, and authenticated's TRUNCATE / REFERENCES / TRIGGER (revoked)
 --                                              anon_logs=f anon_settings=f auth_truncate=f
 --   P3  postgres: the settings rows            rows=1
+--   P4  postgres: the switch helper's grants   anon_exec=f auth_exec=t definer=t
 --   N1  anon reads call_pay_logs               ERR 42501 permission denied for table call_pay_logs
 --   N2  anon reads call_pay_settings           ERR 42501 permission denied for table call_pay_settings
 --   N3  anon inserts a call-in                 ERR 42501 permission denied for table call_pay_logs
@@ -53,9 +55,12 @@
 --                                              ERR PY002 PAY_NOT_PRIMARY: ...
 --   X2  s3 deletes his orphan row              deleted=1
 --   T1  surgeon s2 reads the probe rows        own=1 s3=0
---   C1  coordinator reads the probe rows       visible=0
---   C2  coordinator reads the settings         rows=0
---   C3  coordinator logs a call-in for s3      ERR 42501 new row violates row-level security policy for table "call_pay_logs"
+--   C1  coordinator reads every probe row (read-only, for preparing the stipends)
+--                                              sees_all=t
+--   C2  coordinator reads the settings         rows=1
+--   C3  coordinator logs a call-in for s3      ERR PY004 PAY_READ_ONLY: ...   (the guard refuses the office before RLS)
+--   C4  coordinator edits a probe row          updated=0
+--   C5  coordinator deletes a probe row        deleted=0
 --   V1  viewer reads the probe rows            visible=0
 --   V2  viewer reads the settings              rows=0
 --   A1  admin s1 reads every probe row         sees_all=t
@@ -63,6 +68,19 @@
 --                                              updated=1 updated_by=s1
 --   A3  admin logs 0.25 h for s3 on 03-05      ok created_by=s1
 --   A4  admin logs s3's backup day 03-03       ERR PY002 PAY_NOT_PRIMARY: ...   (the guard applies to every caller)
+--   O   s3 SWITCHED OFF (postgres adds 's3' to call_pay_settings.stipend_off_ids; rolled back like everything else):
+--   O1  s3 reads the settings                  rows=0
+--   O2  s3 reads his own probe rows            own=0
+--   O3  s3 logs a call-in on his primary 03-04 ERR PY005 PAY_STIPEND_OFF: ...
+--   O4  s3 edits his own probe rows            updated=0
+--   O5  s3 deletes his own probe rows          deleted=0
+--   O6  surgeon s2 (still switched on) reads the settings and his own row
+--                                              settings=1 own=1
+--   O7  the admin still reads s3's rows        sees_s3=t
+--   O8  the admin logs a call-in for s3 on 03-04
+--                                              ERR PY005 PAY_STIPEND_OFF: ...   (for everyone)
+--   O9  the admin edits s3's existing rows     ERR PY005 PAY_STIPEND_OFF: ...
+--   O10 the coordinator still reads s3's rows  sees_s3=t
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -100,13 +118,16 @@ begin
     raise exception 'PROBE_SETUP: the viewer is not an unlinked viewer';
   end if;
   insert into probe_ctx values ('surgeon', surgeon::text), ('surgeon2', surgeon2::text), ('coord', coord::text), ('viewer', viewer::text), ('admin', admin_u::text);
+  -- s2 and s3 are paid by the stipend for the cases below, whatever the live switches read (the O block switches s3 off)
+  update public.call_pay_settings set stipend_off_ids = stipend_off_ids - 's2' - 's3' where id = 'main';
   insert into public.schedule_days (day, primary_id, backup_id, source)
   values ('2020-03-02', 's3', 's2', 'probe-pay'), ('2020-03-03', 's2', 's3', 'probe-pay'),
          ('2020-03-04', 's3', null, 'probe-pay'), ('2020-03-05', 's3', null, 'probe-pay');
   insert into public.call_pay_logs (day, person_id, hours, note) values ('2020-03-03', 's2', 2, 'probe-pay fixture');
 end $$;
 
--- P1-P3: as postgres - the apply's fingerprint (policy names, anon's privileges, the settings row count; never a rate)
+-- P1-P4: as postgres - the apply's fingerprint (policy names, anon's privileges, the settings row count, the switch helper's
+-- grants; never a rate)
 do $$ declare v text; a boolean; b boolean; c boolean; n int; begin
   begin
     select string_agg(policyname::text, ',' order by policyname) into v from pg_policies where schemaname = 'public' and tablename in ('call_pay_logs', 'call_pay_settings');
@@ -121,6 +142,11 @@ do $$ declare v text; a boolean; b boolean; c boolean; n int; begin
     select count(*) into n from public.call_pay_settings;
     insert into probe_results values ('P3', 'rows=' || n);
   exception when others then insert into probe_results values ('P3', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    select has_function_privilege('anon', 'public.silvis_pay_enabled(text)', 'EXECUTE'), has_function_privilege('authenticated', 'public.silvis_pay_enabled(text)', 'EXECUTE'),
+           (select p.prosecdef from pg_proc p where p.oid = 'public.silvis_pay_enabled(text)'::regprocedure) into a, b, c;
+    insert into probe_results values ('P4', 'anon_exec=' || case when a then 't' else 'f' end || ' auth_exec=' || case when b then 't' else 'f' end || ' definer=' || case when c then 't' else 'f' end);
+  exception when others then insert into probe_results values ('P4', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
 end $$;
 
 -- N1-N3: as ANON (no sub) - anon's privileges are revoked, so every request is refused outright. The role is reset inside
@@ -270,14 +296,18 @@ do $$ declare u text; a int; b int; begin
   execute 'reset role';
 end $$;
 
--- C1-C3: as the COORDINATOR (never linked) - no pay data at all
-do $$ declare u text; n int; begin
+-- C1-C5: as the COORDINATOR (never linked) - reads every call-in and the settings (read-only: the office prepares the
+-- stipends), writes nothing (the guard refuses its insert with PY004 before RLS; update / delete match no row)
+do $$ declare u text; a int; b int; n int; begin
   select v into u from probe_ctx where k = 'coord';
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
   begin
-    select count(*) into n from public.call_pay_logs where note like 'probe-pay%';
-    insert into probe_results values ('C1', 'visible=' || n);
+    select count(*) into a from public.call_pay_logs where note like 'probe-pay%';
+    execute 'reset role';
+    select count(*) into b from public.call_pay_logs where note like 'probe-pay%';
+    execute 'set local role authenticated';
+    insert into probe_results values ('C1', 'sees_all=' || case when a = b and a > 0 then 't' else 'f coord=' || a || ' postgres=' || b end);
   exception when others then insert into probe_results values ('C1', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   begin
     select count(*) into n from public.call_pay_settings;
@@ -287,6 +317,16 @@ do $$ declare u text; n int; begin
     insert into public.call_pay_logs (day, person_id, hours, note) values ('2020-03-04', 's3', 1, 'probe-pay C3');
     insert into probe_results values ('C3', 'inserted (NO refusal)');
   exception when others then insert into probe_results values ('C3', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    update public.call_pay_logs set hours = hours where note like 'probe-pay%';
+    get diagnostics n = row_count;
+    insert into probe_results values ('C4', 'updated=' || n);
+  exception when others then insert into probe_results values ('C4', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    delete from public.call_pay_logs where note like 'probe-pay%';
+    get diagnostics n = row_count;
+    insert into probe_results values ('C5', 'deleted=' || n);
+  exception when others then insert into probe_results values ('C5', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 
@@ -332,6 +372,71 @@ do $$ declare u text; a int; b int; n int; cb text; begin
     insert into public.call_pay_logs (day, person_id, hours, note) values ('2020-03-03', 's3', 1, 'probe-pay A4');
     insert into probe_results values ('A4', 'inserted (NO refusal)');
   exception when others then insert into probe_results values ('A4', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  execute 'reset role';
+end $$;
+
+-- O1-O10: s3 is SWITCHED OFF (item 5b). As postgres the probe adds 's3' to stipend_off_ids (the final raise rolls it back with
+-- everything else), then acts as s3, as s2 (still switched on), as the admin and as the coordinator.
+do $$ declare us text; us2 text; ua text; uc text; n int; a int; b int; st int; begin
+  select v into us from probe_ctx where k = 'surgeon';
+  select v into us2 from probe_ctx where k = 'surgeon2';
+  select v into ua from probe_ctx where k = 'admin';
+  select v into uc from probe_ctx where k = 'coord';
+  update public.call_pay_settings set stipend_off_ids = (stipend_off_ids - 's3') || '["s3"]'::jsonb where id = 'main';
+  select count(*) into b from public.call_pay_logs where note like 'probe-pay%' and person_id = 's3';   -- as postgres
+  execute 'set local role authenticated';
+  -- as s3 (switched off)
+  perform set_config('request.jwt.claims', json_build_object('sub', us, 'role', 'authenticated')::text, true);
+  begin
+    select count(*) into n from public.call_pay_settings;
+    insert into probe_results values ('O1', 'rows=' || n);
+  exception when others then insert into probe_results values ('O1', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    select count(*) into n from public.call_pay_logs where note like 'probe-pay%' and person_id = 's3';
+    insert into probe_results values ('O2', 'own=' || n);
+  exception when others then insert into probe_results values ('O2', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    insert into public.call_pay_logs (day, person_id, hours, note) values ('2020-03-04', 's3', 1, 'probe-pay O3');
+    insert into probe_results values ('O3', 'inserted (NO refusal)');
+  exception when others then insert into probe_results values ('O3', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    update public.call_pay_logs set hours = hours where note like 'probe-pay%' and person_id = 's3';
+    get diagnostics n = row_count;
+    insert into probe_results values ('O4', 'updated=' || n);
+  exception when others then insert into probe_results values ('O4', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    delete from public.call_pay_logs where note like 'probe-pay%' and person_id = 's3';
+    get diagnostics n = row_count;
+    insert into probe_results values ('O5', 'deleted=' || n);
+  exception when others then insert into probe_results values ('O5', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  -- as s2 (still switched on): unchanged
+  perform set_config('request.jwt.claims', json_build_object('sub', us2, 'role', 'authenticated')::text, true);
+  begin
+    select count(*) into st from public.call_pay_settings;
+    select count(*) into n from public.call_pay_logs where note like 'probe-pay%' and person_id = 's2';
+    insert into probe_results values ('O6', 'settings=' || st || ' own=' || n);
+  exception when others then insert into probe_results values ('O6', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  -- as the admin: still reads s3's rows; the guard refuses a new or edited call-in of a switched-off person for him too
+  perform set_config('request.jwt.claims', json_build_object('sub', ua, 'role', 'authenticated')::text, true);
+  begin
+    select count(*) into a from public.call_pay_logs where note like 'probe-pay%' and person_id = 's3';
+    insert into probe_results values ('O7', 'sees_s3=' || case when a = b and a > 0 then 't' else 'f admin=' || a || ' postgres=' || b end);
+  exception when others then insert into probe_results values ('O7', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    insert into public.call_pay_logs (day, person_id, hours, note) values ('2020-03-04', 's3', 1, 'probe-pay O8');
+    insert into probe_results values ('O8', 'inserted (NO refusal)');
+  exception when others then insert into probe_results values ('O8', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    update public.call_pay_logs set hours = hours where note like 'probe-pay%' and person_id = 's3';
+    get diagnostics n = row_count;
+    insert into probe_results values ('O9', 'updated=' || n || ' (NO refusal)');
+  exception when others then insert into probe_results values ('O9', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  -- as the coordinator: still reads s3's rows
+  perform set_config('request.jwt.claims', json_build_object('sub', uc, 'role', 'authenticated')::text, true);
+  begin
+    select count(*) into a from public.call_pay_logs where note like 'probe-pay%' and person_id = 's3';
+    insert into probe_results values ('O10', 'sees_s3=' || case when a = b and a > 0 then 't' else 'f coord=' || a || ' postgres=' || b end);
+  exception when others then insert into probe_results values ('O10', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 

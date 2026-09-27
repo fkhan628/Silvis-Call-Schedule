@@ -1075,11 +1075,16 @@ function CallSchedule() {
   // CALL PAY (Faraz 9/27 - reverses the 9/21 "no compensation logic and no $ display" rule). Primary call pay only; the
   // model is helpers.js payForDay / payForMonth, the tables are config.js payDb's (sql/migrations/2026-09-27-call-pay.sql,
   // report-first - until it is applied every read answers "unavailable" and the cards say so, no toast). Who: a linked
-  // surgeon-role account (his own pay) and the scheduler (everyone's); never a coordinator, a viewer, a follower, ?public=1
-  // or a session whose profile failed to load (its fallback profile reads viewer). No notification, e-mail, feed row or
-  // calendar entry ever carries pay; the audit rows carry keys / days / hours, never an amount.
+  // surgeon-role account (his own pay, while he is paid by the call stipend), the scheduler (everyone's) and - read-only, for
+  // preparing the stipends (Faraz 9/27, item 5a) - the office coordinator (Totals > Pay and its CSV; no My pay, no log form,
+  // no Setup > Pay rates, no write); never a viewer, a follower, ?public=1 or a session whose profile failed to load (its
+  // fallback profile reads viewer). A surgeon switched off the stipend (item 5b) reads no settings row (RLS), so his My pay
+  // card is not rendered (paySettingsHidden). No notification, e-mail, feed row or calendar entry ever carries pay; the audit
+  // rows carry keys / roster ids / days / hours, never an amount.
   // ====================================================================
-  const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || (userProfile?.role === "surgeon" && !!mySurgeon));
+  const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || isCoordinator || (userProfile?.role === "surgeon" && !!mySurgeon));
+  // Totals > Pay: the scheduler's, and the office's read-only view (payTotalsRole "office")
+  const payTotalsRole = payVisible && isScheduler ? "scheduler" : payVisible && isCoordinator ? "office" : null;
   const [paySettingsRow, setPaySettingsRow] = useState(null);
   const [payLogRows, setPayLogRows] = useState([]);
   const [payState, setPayState] = useState({ settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false });
@@ -1097,8 +1102,8 @@ function CallSchedule() {
   const loadPay = async (year, explicit) => {
     if (!payVisible) return;
     const y = Number(year) || payYear;
-    const who = isScheduler ? null : mySurgeon;
-    if (!isScheduler && !who) return;
+    const who = isScheduler || isCoordinator ? null : mySurgeon;   // the scheduler and the office read every row
+    if (!isScheduler && !isCoordinator && !who) return;
     const gen = payGenRef.current;
     const seq = ++paySeqRef.current;
     setPayState(prev => payStateBeforeRead(prev, y));
@@ -1116,11 +1121,11 @@ function CallSchedule() {
   useEffect(() => {
     payGenRef.current++;
     setPaySettingsRow(null); setPayLogRows([]); setPayState({ settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false }); payToastShownRef.current = false;
-  }, [mySurgeon, isScheduler, payVisible]);
+  }, [mySurgeon, isScheduler, isCoordinator, payVisible]);
   useEffect(() => {
     if (!payVisible) return;
     if (view === "myschedule" || view === "totals" || view === "setup") loadPay(payYear, false);
-  }, [view, payVisible, payYear, mySurgeon, isScheduler]); // eslint-disable-line
+  }, [view, payVisible, payYear, mySurgeon, isScheduler, isCoordinator]); // eslint-disable-line
   const savePayRates = async (next) => {
     if (!isScheduler) return false;
     setPayBusy(true);
@@ -1129,13 +1134,17 @@ function CallSchedule() {
       const { error } = await payDb.saveSettings(row);
       if (error) { console.warn("call pay settings save failed", error); showToast("Couldn't save the pay rates: " + payErrorText(error), "error"); return false; }
       const changed = payRatesChanged(paySettingsRow, row);
-      logAudit("pay.rates", "Pay rates updated", { changed });
+      const stipend = payStipendDelta(paySettingsRow, row);   // roster ids switched off / back on - never an amount
+      logAudit("pay.rates", "Pay rates updated", { changed, stipendOff: stipend.off, stipendOn: stipend.on });
       showToast(changed.length ? "Pay rates saved." : "Saved - nothing had changed.", "success");
       await loadPay(payYear, true);
       return true;
     } finally { setPayBusy(false); }
   };
-  const payMayWrite = (personId) => payVisible && !!personId && (isScheduler || personId === mySurgeon);
+  // the office coordinator never writes pay (read-only; the database refuses it too - PY004 / RLS)
+  const payMayWrite = (personId) => payVisible && !isCoordinator && !!personId && (isScheduler || personId === mySurgeon);
+  // a linked surgeon whose settings read answered no row is switched off the call stipend (RLS): no My pay card for him
+  const payMyCardHidden = !isScheduler && paySettingsHidden(payState, paySettingsRow);
   const addPayLog = async (input) => {
     const personId = input && input.personId;
     if (!payMayWrite(personId)) return false;
@@ -6035,7 +6044,7 @@ function CallSchedule() {
 
           {/* Call pay (Faraz 9/27): the rates + pay-model flags - the scheduler's only (this whole block is isScheduler) */}
           <Collapsible css={css} ck="setup_pay" defaultOpen={false} title="Pay rates (primary call pay)">
-            <PayRatesCard css={css} dk={dk} row={paySettingsRow} state={payState} busy={payBusy} onSave={savePayRates} showToast={showToast} onRefresh={() => loadPay(payYear, true)}/>
+            <PayRatesCard css={css} dk={dk} row={paySettingsRow} state={payState} busy={payBusy} onSave={savePayRates} showToast={showToast} onRefresh={() => loadPay(payYear, true)} roster={surgeons}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_east" defaultOpen={false} title="East feed (Davenport, read-only)">
@@ -6607,9 +6616,10 @@ function CallSchedule() {
               </div>
               {daysBlock(pid, true)}
             </div>
-            {/* Call pay (Faraz 9/27): a linked surgeon's own pay; the scheduler's for the person picked above. Never for a
-                coordinator / viewer / follower / ?public=1 (payVisible). */}
-            {payVisible && (pid === mySurgeon || isScheduler) && pid && <PayCard key={pid} css={css} dk={dk} personId={pid} nameOf={nameOf} isSelf={pid === mySurgeon} schedule={schedule} holidays={holidays} settingsRow={paySettingsRow} logs={payLogRows} state={payState} today={todayStr} year={payYear} onYear={setPayYear} canEdit={isScheduler || pid === mySurgeon} busy={payBusy} onAdd={addPayLog} onUpdate={updatePayLog} onDelete={deletePayLog} onRefresh={() => loadPay(payYear, true)}/>}
+            {/* Call pay (Faraz 9/27): a linked surgeon's own pay (not rendered when he is switched off the call stipend -
+                payMyCardHidden); the scheduler's for the person picked above (one line for a switched-off surgeon). Never for
+                the office coordinator (Totals > Pay only), a viewer, a follower or ?public=1 (payVisible). */}
+            {payVisible && !isCoordinator && !payMyCardHidden && (pid === mySurgeon || isScheduler) && pid && <PayCard key={pid} css={css} dk={dk} personId={pid} nameOf={nameOf} isSelf={pid === mySurgeon} schedule={schedule} holidays={holidays} settingsRow={paySettingsRow} logs={payLogRows} state={payState} today={todayStr} year={payYear} onYear={setPayYear} canEdit={isScheduler || pid === mySurgeon} busy={payBusy} onAdd={addPayLog} onUpdate={updatePayLog} onDelete={deletePayLog} onRefresh={() => loadPay(payYear, true)}/>}
             <div style={css.card} data-testid="mine-offers">
               {(() => {
                 // Prompt 14 part 3a: the person's own future offers, as saved (the painter is where they change).
@@ -6833,7 +6843,7 @@ function CallSchedule() {
 
         {/* ================ TOTALS (Prompt 6 Slice F) - counts only, never $ ================ */}
         {view==="totals" && !isPublicMode && (
-          <TotalsCard css={css} dk={dk} roster={surgeons} schedule={schedule} ctx={rulesCtx} surgeonRules={surgeonRules} preview={previewGen} today={todayStr} nameOf={nameOf} Badge={Badge} showToast={showToast} ytdFloors={TOTALS_YTD_FLOORS} payVisible={payVisible} isScheduler={isScheduler} payData={{ settingsRow: paySettingsRow, logs: payLogRows, state: payState }} holidays={holidays} payYear={payYear} onPayYear={setPayYear} onPayRefresh={() => loadPay(payYear, true)} loaded={loaded} eastDetailsVisible={eastDetailsVisible}/>
+          <TotalsCard css={css} dk={dk} roster={surgeons} schedule={schedule} ctx={rulesCtx} surgeonRules={surgeonRules} preview={previewGen} today={todayStr} nameOf={nameOf} Badge={Badge} showToast={showToast} ytdFloors={TOTALS_YTD_FLOORS} payVisible={payVisible} payTotalsRole={payTotalsRole} payData={{ settingsRow: paySettingsRow, logs: payLogRows, state: payState }} holidays={holidays} payYear={payYear} onPayYear={setPayYear} onPayRefresh={() => loadPay(payYear, true)} loaded={loaded} eastDetailsVisible={eastDetailsVisible}/>
         )}
 
         {/* ================ SETTINGS ================ */}
@@ -8663,16 +8673,17 @@ const TOTALS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep
 // The year-to-date floor per year (the published schedule starts 2026-09-14): the Totals card's YTD range and the
 // Item C trade suggestions' running yearly tally both read it.
 const TOTALS_YTD_FLOORS = { "2026": "2026-09-14" };
-function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, payVisible, isScheduler, payData, holidays, payYear, onPayYear, onPayRefresh, loaded, eastDetailsVisible }) {
+function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, payVisible, payTotalsRole, payData, holidays, payYear, onPayYear, onPayRefresh, loaded, eastDetailsVisible }) {
   const T = THEME[dk ? "dark" : "light"];
   const now = parse(today);
   const [mode, setMode] = useState("month"); // month | ytd | rolling | fairness | pay
   const [year, setYear] = useState(now.getFullYear());
   const [month0, setMonth0] = useState(now.getMonth());
   const [withPreview, setWithPreview] = useState(false);
-  // Call pay (Faraz 9/27): the "Pay" mode is the scheduler's only - never rendered for anyone else, and a stale "pay" mode
-  // (a role change mid-session) falls back to month. Its year follows the picker (the App loads that year's call-ins).
-  const modeEff = mode === "pay" && !(payVisible && isScheduler) ? "month" : mode;
+  // Call pay (Faraz 9/27): the "Pay" mode is the scheduler's and - read-only (item 5a) - the office coordinator's
+  // (payTotalsRole); never rendered for anyone else, and a stale "pay" mode (a role change mid-session) falls back to month.
+  // Its year follows the picker (the App loads that year's call-ins).
+  const modeEff = mode === "pay" && !(payVisible && payTotalsRole) ? "month" : mode;
   useEffect(() => { if (modeEff === "pay" && typeof onPayYear === "function" && year !== payYear) onPayYear(year); }, [modeEff, year, payYear]); // eslint-disable-line
   const rangeMode = modeEff === "fairness" || modeEff === "pay" ? "month" : modeEff;
   const range = ttRangeFor(rangeMode, year, month0, { floors: ytdFloors || {} });
@@ -8799,7 +8810,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     <div style={css.card} data-testid="totals-card">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ ...css.cardT, margin: 0 }}>Totals</div>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{modeBtn("month", "By month")}{modeBtn("ytd", "Year to date")}{modeBtn("rolling", "Rolling 12 months")}{modeBtn("fairness", "Fairness")}{payVisible && isScheduler && modeBtn("pay", "Pay")}</div>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{modeBtn("month", "By month")}{modeBtn("ytd", "Year to date")}{modeBtn("rolling", "Rolling 12 months")}{modeBtn("fairness", "Fairness")}{payVisible && payTotalsRole && modeBtn("pay", "Pay")}</div>
         <select data-testid="totals-month" value={month0} onChange={e => setMonth0(Number(e.target.value))} style={{ ...css.inp, padding: "4px 8px", fontSize: 12 }}>{TOTALS_MON.map((m, i) => <option key={m} value={i}>{m}</option>)}</select>
         <select data-testid="totals-year" value={year} onChange={e => setYear(Number(e.target.value))} style={{ ...css.inp, padding: "4px 8px", fontSize: 12 }}>{years.map(y => <option key={y} value={y}>{y}</option>)}</select>
         {hasPreview && <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#7a4fbf", cursor: "pointer" }}><input type="checkbox" data-testid="totals-with-preview" checked={withPreview} onChange={e => setWithPreview(e.target.checked)}/> add rows with the Generate preview applied</label>}
@@ -8810,7 +8821,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       </div>
       {!ctx && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules context unavailable - caps, targets{eastDetailsVisible ? ", holiday units and East days" : " and holiday units"} show as '-' until the setup loads.</div>}
       {modeEff === "pay" ? (
-        <PayTotalsPanel css={css} dk={dk} roster={roster} schedule={schedule} holidays={holidays} settingsRow={payData && payData.settingsRow} logs={payData ? payData.logs : []} state={payData && payData.state} today={today} year={year} month0={month0} Badge={Badge} showToast={showToast} onRefresh={onPayRefresh}/>
+        <PayTotalsPanel css={css} dk={dk} roster={roster} schedule={schedule} holidays={holidays} settingsRow={payData && payData.settingsRow} logs={payData ? payData.logs : []} state={payData && payData.state} today={today} year={year} month0={month0} Badge={Badge} showToast={showToast} onRefresh={onPayRefresh} office={payTotalsRole === "office"}/>
       ) : modeEff !== "fairness" ? (
         <div className="table-wrap" style={css.tableWrap}>
           <table data-testid="totals-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
@@ -8908,8 +8919,10 @@ function SuCheck({ label, checked, onChange, title, testid }) {
 // Primary call pay only (backup is never paid). The model and every figure's arithmetic are helpers.js payForDay /
 // payForMonth (unit-tested in test/pay.test.js); the rates are data the scheduler enters in Setup > Pay rates and live
 // only in the authenticated call_pay_settings table (config.js payDb) - never in the repo, the seed or the blob. Who sees
-// what: a linked surgeon his own pay (My schedule > My pay), the scheduler anyone's plus Totals > Pay and Setup > Pay
-// rates; coordinator, viewer, follower and ?public=1 see no pay UI and no amount (payVisible in CallSchedule). Until
+// what: a linked surgeon his own pay (My schedule > My pay) while he is paid by the call stipend, the scheduler anyone's
+// plus Totals > Pay and Setup > Pay rates (with the per-surgeon "Paid by the call stipend" switches); the office
+// coordinator Totals > Pay and its CSV, read-only; viewer, follower and ?public=1 see no pay UI and no amount (payVisible /
+// payTotalsRole in CallSchedule). A surgeon switched off gets no My pay and is left out of Totals > Pay. Until
 // sql/migrations/2026-09-27-call-pay.sql is applied every card says PAY_UNAVAILABLE_TEXT (state "unavailable").
 // Colours are THEME tokens only (test/pay.test.js pins no hex literal between PayCard and the end marker).
 const PAY_KIND_WORD = { weekday: "Weekday", weekend: "Weekend", holiday: "Holiday" };
@@ -8957,6 +8970,9 @@ function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settin
     </div>
   );
   if (unavailable) return <div style={css.card} data-testid="pay-card" data-state="unavailable">{header}{payStateNote("unavailable", T)}</div>;
+  // item 5b: a surgeon switched off the call stipend - one line instead of figures (the scheduler's picker; his own card is
+  // not rendered at all - payMyCardHidden in CallSchedule)
+  if (pm.stipendOff) return <div style={css.card} data-testid="pay-card" data-state="stipend-off"><div data-testid="pay-stipend-off" style={{ fontSize: 13, color: T.muted }}><strong style={{ color: T.text }}>{title}</strong> - {PAY_STIPEND_OFF_TEXT}</div></div>;
   // payViewState: figures only when the call-ins held ARE this year's - another year's rows would read "not called in" everywhere
   const vs = payViewState(state, year);
   if (vs === "failed" || vs === "skipped" || vs === "loading") return <div style={css.card} data-testid="pay-card" data-state={vs}>{header}{payStateNote(vs, T, year)}</div>;
@@ -9042,7 +9058,7 @@ function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settin
     </div>
   );
 }
-function PayRatesCard({ css, dk, row, state, busy, onSave, showToast, onRefresh }) {
+function PayRatesCard({ css, dk, row, state, busy, onSave, showToast, onRefresh, roster }) {
   const T = THEME[dk ? "dark" : "light"];
   const toDraft = (r) => { const s = paySettingsFromRow(r); const d = { ...s, rateText: {} }; PAY_RATE_KEYS.forEach(k => { d.rateText[k] = s.rates[k] === null ? "" : String(s.rates[k]); }); return d; };
   const [draft, setDraft] = React.useState(() => toDraft(row));
@@ -9064,7 +9080,7 @@ function PayRatesCard({ css, dk, row, state, busy, onSave, showToast, onRefresh 
     <div data-testid="pay-rates" data-state={unavailable ? "unavailable" : loaded ? "ok" : (state && state.settings) || "unread"}>
       {unavailable ? payStateNote("unavailable", T) : (
         <>
-          <p style={{ fontSize: 12, color: T.muted, margin: "0 0 10px", lineHeight: 1.5 }}>Primary call pay, per 24-hour call day (07:00 to 07:00): the stipend every primary day; the call-in rate when the primary is called in (weekday, or weekend / holiday); the activation rate for the hours worked (weekday: after-hours hours; weekend / holiday: all hours) or per call-in. Backup is never paid. The rates live only in the database (signed-in scheduler and linked surgeons read them) - never in the repo, the seed or the public data. Empty = not set.</p>
+          <p style={{ fontSize: 12, color: T.muted, margin: "0 0 10px", lineHeight: 1.5 }}>Primary call pay, per 24-hour call day (07:00 to 07:00): the stipend every primary day; the call-in rate when the primary is called in (weekday, or weekend / holiday); the activation rate for the hours worked (weekday: after-hours hours; weekend / holiday: all hours) or per call-in. Backup is never paid. The rates live only in the database (the scheduler, the office read-only, and the linked surgeons paid by the call stipend read them) - never in the repo, the seed or the public data. Empty = not set.</p>
           {state && state.settings === "failed" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>Couldn't load the saved rates - reload before saving, or you may overwrite them.</div>}
           {state && state.settings === "skipped" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>The saved rates were not read - your session needs a fresh sign-in. Sign in again, then tap Refresh.</div>}
           {(!state || state.settings === "unread") && <div style={{ fontSize: 12, color: T.muted, marginBottom: 8 }}>Loading the saved rates...</div>}
@@ -9095,14 +9111,22 @@ function PayRatesCard({ css, dk, row, state, busy, onSave, showToast, onRefresh 
               <SuCheck testid="pay-flag-callInRequiredWeekday" label="The weekday call-in rate needs a logged call-in" checked={draft.callInRequiredWeekday} onChange={v => edit({ callInRequiredWeekday: v })}/>
               <SuCheck testid="pay-flag-callInRequiredWeekendHoliday" label="The weekend / holiday call-in rate needs a logged call-in" checked={draft.callInRequiredWeekendHoliday} onChange={v => edit({ callInRequiredWeekendHoliday: v })}/>
             </div>
-            <button data-testid="pay-rates-save" onClick={save} disabled={busy || !loaded || !dirty} style={{ ...css.btn(true), padding: "6px 14px", fontSize: 12 }}>{busy ? "Saving..." : "Save pay rates"}</button>
+            {/* item 5b: per-surgeon "Paid by the call stipend" (default on). Off = no My pay, left out of Totals > Pay and its
+                CSV, and the database lets him read no rate and log no call-in. Stored as roster ids in stipend_off_ids. */}
+            <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Paid by the call stipend (off: no My pay, left out of Totals &gt; Pay and its CSV, and he cannot read the rates):</div>
+            <div data-testid="pay-stipend-switches" style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+              {(roster || []).filter(r => r && r.id && r.type !== "external" && (r.active !== false || draft.stipendOffIds.indexOf(r.id) >= 0)).map(r => (
+                <SuCheck key={r.id} testid={"pay-stipend-" + r.id} label={(r.name || r.id) + (r.code ? " (" + r.code + ")" : "") + (r.active === false ? " - inactive" : "")} checked={draft.stipendOffIds.indexOf(r.id) < 0} onChange={v => edit({ stipendOffIds: v ? draft.stipendOffIds.filter(x => x !== r.id) : draft.stipendOffIds.concat([r.id]).sort() })}/>
+              ))}
+            </div>
+            <button data-testid="pay-rates-save" onClick={save} disabled={busy || !loaded || !dirty} style={{ ...css.btn(true), padding: "6px 14px", fontSize: 12 }}>{busy ? "Saving..." : "Save pay settings"}</button>
           </fieldset>
         </>
       )}
     </div>
   );
 }
-function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs, state, today, year, month0, Badge, showToast, onRefresh }) {
+function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs, state, today, year, month0, Badge, showToast, onRefresh, office }) {
   const T = THEME[dk ? "dark" : "light"];
   // payViewState: totals (and the pay CSV) only when the call-ins held ARE this year's - never another year's rows as none
   const vs = payViewState(state, year);
@@ -9112,6 +9136,7 @@ function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs
   const settings = paySettingsFromRow(settingsRow);
   const ratesView = payRatesView(state, settingsRow);
   const rows = payTotalsRows(roster || [], year, month0, { schedule: schedule || {}, holidays, logs: logs || [], settings, today });
+  const offRows = payStipendOffRows(roster || [], settings);   // switched off the call stipend: left out of the table and the CSV
   const exportPay = () => {
     try {
       const c = payCsv(rows, year, month0);
@@ -9125,11 +9150,12 @@ function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs
   return (
     <div data-testid="pay-totals" data-state={vs}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-        <span style={{ fontSize: 12, color: T.muted }}>Primary call pay, {TOTALS_MON[month0]} {year} and year to date (through {TOTALS_MON[month0]}). Earned = days up to today; projected = later days (the stipend only). Visible to the scheduler only.</span>
+        <span style={{ fontSize: 12, color: T.muted }}>Primary call pay, {TOTALS_MON[month0]} {year} and year to date (through {TOTALS_MON[month0]}). Earned = days up to today; projected = later days (the stipend only). {office ? "Read-only - for preparing the stipends." : "Visible to the scheduler and, read-only, the office."}</span>
         <button data-testid="pay-csv" onClick={exportPay} disabled={state.loadedYear !== Number(year)} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto" }}>Export pay CSV</button>
       </div>
       {vs === "stale" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>Couldn't refresh the {year} call-ins - showing the last ones loaded.{refreshBtn}</div>}
       {payRatesNote(ratesView, T, false)}
+      {offRows.length > 0 && <div data-testid="pay-totals-stipend-off" style={{ fontSize: 12, color: T.muted, marginBottom: 8 }}>{PAY_STIPEND_OFF_TEXT.replace(/\.$/, "")} (left out): {offRows.map(r => r.name).join(", ")}.</div>}
       <div className="table-wrap" style={css.tableWrap}>
         <table data-testid="pay-totals-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
           <thead><tr><th style={thL}>Surgeon</th><th style={th}>Primary days</th><th style={th}>Called in</th><th style={th}>Hours</th><th style={th}>Earned</th><th style={th}>Projected</th><th style={th}>YTD earned</th><th style={th}>YTD projected</th></tr></thead>
