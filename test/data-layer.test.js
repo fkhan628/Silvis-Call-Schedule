@@ -1299,6 +1299,113 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/[^\x00-\x7f]/.test(card), "the card source stays ASCII");
     });
   }
+  // Shift-adjust shortcuts (Faraz 9/27, "improve user ability to adjust shifts"): the trade shortcuts land ON the
+  // card; "Waiting on you" at the top of Time off & Trades (and a surgeon's badge counts only it); Alerts answer a
+  // two-way trade inline; the claim sheet names Give away; the painter jumps to the open period; the board tells a
+  // surgeon why Take is off in visible text; a vacation inside the freeze window gets an inline advisory (no confirm).
+  {
+    check("Shift-adjust (behaviour): helpers.offerPeriodJump - an OPEN period off screen gives 'Go to <label> (freezes M/D, in N days)' and its first month; the period's own months, a frozen / closed / non-upcoming period and junk give null", () => {
+      const p = { label: "Jan 2027", start_day: "2027-01-04", end_day: "2027-01-31", offers_close_at: "2026-11-23", status: "upcoming" };
+      const j = H.offerPeriodJump(p, "2026-09-27", { y: 2026, m: 8 });
+      assert.ok(j, "an open period, September on screen");
+      assert.strictEqual(j.text, "Go to Jan 2027 (freezes 11/23, in 57 days)");
+      assert.deepStrictEqual([j.y, j.m, j.start, j.close, j.days], [2027, 0, "2027-01-04", "2026-11-23", 57]);
+      assert.strictEqual(H.offerPeriodJump(p, "2026-11-22", { y: 2026, m: 10 }).text, "Go to Jan 2027 (freezes 11/23, in 1 day)", "one day, singular");
+      assert.strictEqual(H.offerPeriodJump(p, "2026-09-27", { y: 2027, m: 0 }), null, "the period's month is on screen");
+      const q = { ...p, label: "Feb - Apr 2027", start_day: "2027-02-01", end_day: "2027-05-02", offers_close_at: "2026-12-21" };
+      assert.strictEqual(H.offerPeriodJump(q, "2026-09-27", { y: 2027, m: 2 }), null, "a month inside a multi-month period");
+      assert.ok(H.offerPeriodJump(q, "2026-09-27", { y: 2027, m: 5 }), "a month after it (the button jumps back)");
+      assert.strictEqual(H.offerPeriodJump(p, "2026-11-23", { y: 2026, m: 8 }), null, "frozen on the close day (offerPeriodOpen)");
+      assert.strictEqual(H.offerPeriodJump({ ...p, status: "published" }, "2026-09-27", { y: 2026, m: 8 }), null, "not upcoming");
+      assert.strictEqual(H.offerPeriodJump(null, "2026-09-27", { y: 2026, m: 8 }), null);
+      assert.strictEqual(H.offerPeriodJump(p, "junk", { y: 2026, m: 8 }), null);
+      assert.strictEqual(H.offerPeriodJump({ ...p, label: "" }, "2026-09-27", { y: 2026, m: 8 }).label, "2027-01-04 - 2027-01-31", "no label -> the dates");
+    });
+    check("Shift-adjust (behaviour): helpers.vacationLeadNote - a start less than closeWeeksBeforeStart weeks away (groupRules.offerPeriods, default 6) gives { through: today + weeks*7 - 1 }; at or past the window, junk -> null", () => {
+      assert.deepStrictEqual(H.vacationLeadNote("2026-10-15", "2026-09-27", undefined), { through: "2026-11-07", weeks: 6, days: 18 });
+      assert.strictEqual(H.vacationLeadNote("2026-11-07", "2026-09-27", {}).days, 41, "day 41 is inside");
+      assert.strictEqual(H.vacationLeadNote("2026-11-08", "2026-09-27", {}), null, "day 42 is not");
+      assert.deepStrictEqual(H.vacationLeadNote("2026-11-08", "2026-09-27", { closeWeeksBeforeStart: 8 }), { through: "2026-11-21", weeks: 8, days: 42 }, "the group's rule wins");
+      assert.strictEqual(H.vacationLeadNote("2026-11-08", "2026-09-27", { closeWeeksBeforeStart: "junk" }), null, "a bad rule falls back to 6 weeks");
+      assert.ok(H.vacationLeadNote("2026-09-27", "2026-09-27", null), "today");
+      assert.strictEqual(H.vacationLeadNote("", "2026-09-27", null), null);
+      assert.strictEqual(H.vacationLeadNote("2026-10-01", "x", null), null);
+    });
+    check("Shift-adjust (behaviour): helpers.tradesWaitingOn - only PENDING rows addressed to the person (a give or a trade), in order; the proposer's own, decided rows, no person -> none", () => {
+      const rows = [{ id: "a", status: "pending", from_surgeon_id: "s3", to_surgeon_id: "s2" }, { id: "b", status: "pending", from_surgeon_id: "s2", to_surgeon_id: "s4" },
+        { id: "c", status: "accepted", from_surgeon_id: "s5", to_surgeon_id: "s2" }, { id: "d", status: "pending", from_surgeon_id: "s1", to_surgeon_id: "s2", kind: "give" }, null];
+      assert.deepStrictEqual(H.tradesWaitingOn(rows, "s2").map(r => r.id), ["a", "d"]);
+      assert.deepStrictEqual(H.tradesWaitingOn(rows, "s4").map(r => r.id), ["b"]);
+      assert.deepStrictEqual(H.tradesWaitingOn(rows, null), []);
+      assert.deepStrictEqual(H.tradesWaitingOn(null, "s2"), []);
+    });
+    check("Shift-adjust (behaviour): notifTradeProposal (lifted verbatim with notifGiveTrade) - Alerts Accept / Decline for the surgeon ASKED on a pending two-way trade (data.kind trade, or none on an old row); never the proposer, a third surgeon, the scheduler not asked, a decided row, a give (notifGiveTrade's), another type or a row without trade_id", () => {
+      const lift = (a, b) => { const i = src.indexOf(a); const j = i >= 0 ? src.indexOf(b, i + a.length) : -1; if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 50) + "' not found"); return src.slice(i, j); };
+      const body = lift("  const tradeUnitTag = (r) =>", "  // Days a person holds from today on")
+        + lift("  const notifGiveTrade = (n) => {", "\n  };\n") + "\n  };\n"
+        + lift("  const notifTradeProposal = (n) => {", "\n  };\n") + "\n  };\n";
+      const mk = (me, rows) => new Function("tradeRequests", "mySurgeon", "tradeProposalIsGive", body + "\nreturn { notifGiveTrade, notifTradeProposal };")(rows, me, H.tradeProposalIsGive);
+      const trade = () => [{ id: "t1", status: "pending", from_surgeon_id: "s3", to_surgeon_id: "s2", day: "2026-10-10", role: "primary", return_day: "2026-10-20", return_role: "backup", kind: "trade", detail: "x", submitted_at: "2026-09-27T12:00:00.000Z" }];
+      const give = () => [{ ...trade()[0], id: "g1", kind: "give", return_day: null, return_role: null }];
+      const n = (o) => ({ type: "trade_proposed", data: { kind: "trade", trade_id: "t1", ...o } });
+      const who = (me, note, rows) => { const r = mk(me, rows || trade()).notifTradeProposal(note); return r ? r.id : null; };
+      assert.strictEqual(who("s2", n()), "t1", "the surgeon asked");
+      assert.strictEqual(who("s2", { type: "trade_proposed", data: { trade_id: "t1" } }), "t1", "an old row without data.kind");
+      assert.strictEqual(who("s3", n()), null, "the proposer");
+      assert.strictEqual(who("s4", n()), null, "a third surgeon");
+      assert.strictEqual(who("s1", n()), null, "the scheduler, not asked (he answers from Trades)");
+      assert.strictEqual(who(null, n()), null, "an unlinked account");
+      assert.strictEqual(who("s2", n(), trade().map(r => ({ ...r, status: "accepted" }))), null, "a decided trade");
+      assert.strictEqual(who("s2", { type: "trade_accepted", data: { kind: "trade", trade_id: "t1" } }), null, "another type");
+      assert.strictEqual(who("s2", n({ trade_id: undefined })), null, "no trade_id");
+      assert.strictEqual(who("s2", n({ kind: "give", trade_id: "g1" }), give()), null, "a give alert is notifGiveTrade's");
+      assert.strictEqual(who("s2", n({ trade_id: "g1" }), give()), null, "a give row under a trade-kind alert stays a give");
+      const both = mk("s2", give());
+      assert.strictEqual(both.notifGiveTrade(n({ kind: "give", trade_id: "g1" })).id, "g1", "control: the give path still answers the give");
+    });
+    check("Shift-adjust pins: focusTradeCard (scroll + first empty field, rAF, a missing card is a no-op) is called at the end of proposeTradeForDay, which still sets 'trade'; the card carries the ref; 'Waiting on you' renders first in Time off & Trades through tradeRow(r, \"waiting\") with its own testids; a surgeon's badge counts only it, the scheduler's every pending trade", () => {
+      const ft = src.slice(src.indexOf("const focusTradeCard = () => {"), src.indexOf("const proposeTradeForDay = (day, role, pick) => {"));
+      assert.ok(ft.length > 0 && ft.length < 2500, "focusTradeCard sits just before proposeTradeForDay");
+      assert.ok(src.includes("const tradeCardRef = useRef(null);") && src.includes('<div style={css.card} data-testid="trade-card" ref={tradeCardRef}>'), "the card's ref");
+      assert.ok(ft.includes("if (!card) { if (left > 0) raf(() => land(left - 1)); return; }") && ft.includes("raf(() => land(8));"), "waits a few frames for the card, then gives up quietly");
+      assert.ok(ft.includes('card.scrollIntoView({ block: "start" });') && ft.includes("target.focus({ preventScroll: true });") && ft.includes('target = target || q("trade-submit");'), "scrolls, then focuses the first empty field or the submit button");
+      assert.ok(ft.includes('[["trade-mine-pick", "trade-day"], ["trade-to"], ["trade-theirs-pick", "trade-return-day"]]'), "field order: day, counter-party, return day");
+      const pt = src.slice(src.indexOf("const proposeTradeForDay = (day, role, pick) => {"), src.indexOf("// --- Clear schedule"));
+      assert.ok(pt.includes('setTradeKind("trade");') && pt.indexOf("focusTradeCard();") > pt.indexOf('setView("timeoff");'), "the landing runs after the view switch");
+      assert.ok(!/confirm\(/.test(ft + pt), "no dialog on the way to the card");
+      const v0 = src.indexOf('{view==="timeoff" && !isPublicMode && <>');
+      const w = src.indexOf('data-testid="trades-waiting"', v0), tc = src.indexOf('data-testid="timeoff-card"', v0);
+      assert.ok(v0 > 0 && w > v0 && w < tc, "the block is the first card of the view");
+      const wb = src.slice(w, tc);
+      assert.ok(src.slice(v0, w).includes("{!isCoordinator && !isViewer && mySurgeon && tradesWaitingOnMe.length > 0 && ("), "linked surgeons only, and only when something waits");
+      assert.ok(wb.includes('{tradesWaitingOnMe.map(r => tradeRow(r, "waiting"))}') && wb.includes("Waiting on you ({tradesWaitingOnMe.length})"), "the same row renderer, counted title");
+      assert.ok(src.includes("const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon), [tradeRequests, mySurgeon]);"), "the rows come from helpers.tradesWaitingOn");
+      const tr = src.slice(src.indexOf("const tradeRow = (r, where) => {"), src.indexOf("\n  };\n", src.indexOf("const tradeRow = (r, where) => {")));
+      assert.ok(tr.includes('const waiting = where === "waiting";') && tr.includes('data-testid={waiting ? "trade-waiting-row" : "trade-row"}') && tr.includes('data-testid={waiting ? "trade-waiting-accept" : "trade-accept"}') && tr.includes('data-testid={waiting ? "trade-waiting-decline" : "trade-decline"}'), "a waiting row never shares the Pending card's selectors");
+      assert.ok(tr.includes('{!waiting && canCancel && <button data-testid="trade-cancel"') && tr.includes('{!waiting && canRetry && <button data-testid="trade-retry"'), "Cancel / Retry stay on the Pending card");
+      assert.ok(src.includes("{pending.length === 0 ? <p style={{...muted,fontStyle:\"italic\"}}>{tradeListEmpty(\"Pending\")}</p> : <div style={{display:\"flex\",flexDirection:\"column\",gap:6}}>{pending.map(tradeRow)}</div>}"), "the Pending card is unchanged");
+      assert.ok(src.includes('const pendingTrades = isScheduler ? myTradeRequests.filter(r=>r.status==="pending").length : tradesWaitingOnMe.length;'), "badge: the scheduler counts all pending, a surgeon only what waits on him");
+      assert.ok(src.includes('<span data-testid="timeoff-badge"'), "the badge has a testid for the smoke");
+    });
+    check("Shift-adjust pins: Alerts answer a two-way trade inline (notif-trade-accept / -decline, click does not navigate) beside the untouched give path; the claim sheet names Give away; the board shows a surgeon the disabled-Take reason as text (scheduler unchanged, no new .hard read); the painter's ofp-goto-period; the vacation advisory is inline (no confirm on the add path); ASCII", () => {
+      const np = src.slice(src.indexOf('data-testid="notif-panel"'), src.indexOf("{/* Unlinked-account banner"));
+      assert.ok(np.includes("const tradeT = giveT ? null : notifTradeProposal(n);"), "a give alert never gets the trade buttons");
+      assert.ok(np.includes("onClick={(e)=>{ e.stopPropagation(); acceptTrade(tradeT); }}") && np.includes("onClick={(e)=>{ e.stopPropagation(); declineTrade(tradeT); }}"), "Accept / Decline through the Trades functions");
+      assert.ok(np.includes('data-testid="notif-trade-accept"') && np.includes('data-testid="notif-trade-decline"') && (np.match(/minHeight:36/g) || []).length >= 4, "36 px targets");
+      assert.ok(src.includes("To hand it back later, propose a trade or give it away.</p>"), "claim sheet wording");
+      const reg = src.slice(src.indexOf('data-testid="openshifts-card"'), src.indexOf("{claimSheet && ("));
+      assert.ok(reg.includes('{mySurgeon && !isScheduler && !(me && me.ok && !locked) && <span data-testid="ob-take-why" style={{fontSize:10.5,color:T.muted,'), "the reason as visible text, surgeons only, T token");
+      assert.ok(reg.includes('{locked ? "slot locked - ask the scheduler" : takeTitle(me)}</span>'), "the same reason the title carries (takeTitle - eastMaskedReasons)");
+      assert.ok(src.includes('<button data-testid="ofp-goto-period" data-start={periodJump.start} onClick={() => { setPendingStart(null); setYm({ y: periodJump.y, m: periodJump.m }); }}') && src.includes("const periodJump = period ? offerPeriodJump(period, today, ym) : null;"), "the painter's jump button");
+      assert.ok(src.includes("const m0 = (() => { const s = preferred ? String(preferred.start_day || \"\").slice(0, 10) : \"\"; return suIsIso(s) && s > today ? parse(s) : t0; })();"), "the opening month is unchanged");
+      const av = src.slice(src.indexOf("const addVac = async () => {"), src.indexOf("const rmVac = "));
+      assert.ok(av.includes("const lead = vacationLeadNote(vacStart, todayStr, groupRules && groupRules.offerPeriods);") && av.includes("if (!isCoordinator && vacSurgeon === mySurgeon)"), "a surgeon's own add inside the window");
+      assert.ok(!av.includes("confirm("), "no dialog on the vacation add path");
+      const vf = src.slice(src.indexOf("const renderVacationForm = (personChoices) => ("), src.indexOf("const authBox = "));
+      assert.ok(vf.includes('<div data-testid="vac-lead-note"') && vf.includes("color:T.text,borderLeft:\"3px solid \" + T.accent") && vf.includes("The schedule through {fmtMD(vacLeadNote.through)} is already being built - check Open shifts or propose a trade if this affects a call day."), "the advisory under the form");
+      assert.ok(!/[^\x00-\x7f]/.test(src), "index-source.html stays ASCII");
+    });
+  }
   // Prompt 19 step 3 (Faraz 9/24): accept / decline of a give. The receiver reads the pending give in Trades and in
   // Alerts ("Acton offers you Sat 10/10 primary (weekend unit, 10/10-10/11) - nothing in return", em / en dash) with
   // Accept / Decline; eligibility is re-checked at accept; apply_trade runs one-way for every row; both parties get the
@@ -1606,7 +1713,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   })();
   check("Prompt 19 S3 pins: Trades renders a give group with tradeGiveLine (data-kind give, testid trade-give-line) and keeps Accept / Decline for the receiver and the scheduler; the Alerts panel shows a pending give addressed to this account with the same line and Accept / Decline (click does not bubble to the row's navigation); the scheduler's revert link says a give is reverted one-way; notifyGiveApplied mails [from, to, ...schedulerIds]; ASCII", () => {
-    const tr = src.slice(src.indexOf("const tradeRow = (r) => {"), src.indexOf("return <>", src.indexOf("const tradeRow = (r) => {")));
+    const tr = src.slice(src.indexOf("const tradeRow = (r, where) => {"), src.indexOf("\n  };\n", src.indexOf("const tradeRow = (r, where) => {"))); // shift-adjust 9/27: tradeRow is hoisted to App scope (the "Waiting on you" block reuses it) - the slice ends at its closing brace
     assert.ok(tr.includes("const giveGroup = tradeIsGiveProposal(r);"), "the row knows whether its proposal (every status) is a give");
     assert.ok(tr.includes('data-kind={giveGroup ? "give" : "trade"}'), "data-kind on the row");
     assert.ok(tr.includes('{giveGroup ? <span data-testid="trade-give-line">{tradeGiveLine(named, tag, mySurgeon)}</span> : tradeLegsText(named, tenseFor(r.status))}'), "the give line replaces the legs text");
@@ -1745,7 +1852,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(H.labelGiveChanges(ch2.slice(1), sched2, tr2.filter(r => r.kind === "give"), isG).map(c => c.via || null), ["give", "give"], "control: the give alone labels 10/16 and 10/17");
   });
   check("Prompt 19 S4 pins: Trades - the section titles count gives separately (tradeListTitle with the whole-proposal predicate), the empty lines and notes say 'trades and gives', a give row's status chip reads 'give - <status>' and its meta line 'offered by'; the Activity log reads each row through auditEntryText with the give trade ids (tradeRequests + the give audit rows); the publish diff labels a give's change (labelGiveChanges over the live days and tradeRequests); every give e-mail carries data.kind 'give'; ASCII", () => {
-    const tr = src.slice(src.indexOf("const tradeRow = (r) => {"), src.indexOf("return <>", src.indexOf("const tradeRow = (r) => {")));
+    const tr = src.slice(src.indexOf("const tradeRow = (r, where) => {"), src.indexOf("\n  };\n", src.indexOf("const tradeRow = (r, where) => {"))); // shift-adjust 9/27: tradeRow is hoisted to App scope (the "Waiting on you" block reuses it) - the slice ends at its closing brace
     assert.ok(tr.includes('<span data-testid="trade-status" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:statusColor(r.status)}}>{tradeRowStatus(r.status, giveGroup)}</span>'), "the status chip names a give");
     assert.ok(tr.includes('<div data-testid="trade-meta" style={{fontSize:10,color:"#9aa4ae",fontFamily:mono,marginTop:2}}>{giveGroup ? "offered" : "proposed"} by {named.from_surgeon_name}'), "a give is 'offered by' the giver");
     const lists = src.slice(src.indexOf('<div style={css.card} data-testid="trades-pending">'), src.indexOf("{/* ================ TOTALS"));

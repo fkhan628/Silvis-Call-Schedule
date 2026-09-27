@@ -2858,6 +2858,45 @@ function offerNextPeriod(periods, today) {
   });
   return open || any;
 }
+// offerPeriodJump(period, today, shown) -> the painter's "Go to <label> (freezes M/D, in N days)" jump, or null.
+// Non-null only while `period` is still OPEN for offers (offerPeriodOpen) and the month shown ({ y, m }, m 0-based)
+// lies outside it: { label, start, close, days, y, m, text } - y / m = the period's first month (where the button
+// jumps), days = today -> offers_close_at. The opening month of the painter is not changed by it (pinned).
+function offerPeriodJump(period, today, shown) {
+  if (!period || typeof period !== "object" || !suIsIso(today) || !offerPeriodOpen(period, today)) return null;
+  const s = String(period.start_day !== undefined ? period.start_day : (period.start !== undefined ? period.start : "")).slice(0, 10);
+  const e = String(period.end_day !== undefined ? period.end_day : (period.end !== undefined ? period.end : "")).slice(0, 10);
+  if (!suIsIso(s) || !suIsIso(e)) return null;
+  const cur = shown && Number.isInteger(shown.y) && Number.isInteger(shown.m) ? shown.y + "-" + String(shown.m + 1).padStart(2, "0") : "";
+  if (cur && cur >= s.slice(0, 7) && cur <= e.slice(0, 7)) return null;
+  const raw = period.offers_close_at !== undefined ? period.offers_close_at : period.offersCloseAt;
+  const c = raw === undefined || raw === null ? "" : String(raw).slice(0, 10);
+  const close = suIsIso(c) ? c : null;
+  const days = close ? suDaysBetween(today, close) : null;
+  const label = String(period.label || (s + " - " + e));
+  const text = "Go to " + label + (close ? " (freezes " + fmtMD(close) + ", in " + days + " day" + (days === 1 ? "" : "s") + ")" : "");
+  return { label, start: s, close, days, y: Number(s.slice(0, 4)), m: Number(s.slice(5, 7)) - 1, text };
+}
+// vacationLeadNote(start, today, rules) -> { through, weeks, days } when a vacation starting on `start` begins less than
+// closeWeeksBeforeStart weeks from today (rules = groupRules.offerPeriods; absent / bad -> OP_PERIOD_DEFAULTS): the
+// schedule through `through` (today + weeks * 7 - 1) is already frozen for offers and being built, so the Time off
+// form shows an advisory (never a confirm - the add goes through). null otherwise or on a non-ISO date.
+function vacationLeadNote(start, today, rules) {
+  if (!suIsIso(start) || !suIsIso(today)) return null;
+  const R = rules && typeof rules === "object" ? rules : {};
+  const w = Number(R.closeWeeksBeforeStart);
+  const weeks = isFinite(w) && w > 0 ? w : OP_PERIOD_DEFAULTS.closeWeeksBeforeStart;
+  const days = suDaysBetween(today, start);
+  if (days >= weeks * 7) return null;
+  return { through: suAddDays(today, weeks * 7 - 1), weeks, days };
+}
+// tradesWaitingOn(rows, personId) -> the PENDING trade / give rows addressed to personId (the ones only they can answer:
+// Accept / Decline), in the order given. [] without a person. The Time off & Trades "Waiting on you" block and a
+// surgeon's tab badge read it (the scheduler's badge keeps counting every pending trade).
+function tradesWaitingOn(rows, personId) {
+  if (!personId || !Array.isArray(rows)) return [];
+  return rows.filter(r => r && r.status === "pending" && r.to_surgeon_id === personId);
+}
 // offerRulesWords(rules, groupRules) -> plain sentences describing one surgeon's rules, built from the DATA in
 // call_schedule_data.data.surgeonRules (no surgeon-specific branch; a key that is absent says nothing). Shown by
 // the painter next to "Go by my rules" so the person knows what that means for them. Never carries a note field.
@@ -3243,5 +3282,6 @@ if (typeof module !== "undefined" && module.exports) {
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
+    offerPeriodJump, vacationLeadNote, tradesWaitingOn,
   };
 }

@@ -2725,7 +2725,8 @@ try {
         if (!card) return null;
         const rows = Array.from(card.querySelectorAll("[data-testid=openshifts-table] tbody tr[data-slot]")).map(tr => {
           const b = tr.querySelector("[data-testid=ob-take]");
-          return { slot: tr.getAttribute("data-slot"), take: b ? (b.disabled ? "disabled" : "enabled") : "none", title: b ? (b.getAttribute("title") || "") : "", chips: Array.from(tr.querySelectorAll("[data-eligible-id]")).map(c => ({ id: c.getAttribute("data-eligible-id"), title: c.getAttribute("title") || "" })) };
+          const why = tr.querySelector("[data-testid=ob-take-why]");   // shift-adjust 9/27: a surgeon's visible Take reason
+          return { slot: tr.getAttribute("data-slot"), take: b ? (b.disabled ? "disabled" : "enabled") : "none", title: b ? (b.getAttribute("title") || "") : "", why: why ? why.textContent.trim() : null, chips: Array.from(tr.querySelectorAll("[data-eligible-id]")).map(c => ({ id: c.getAttribute("data-eligible-id"), title: c.getAttribute("title") || "" })) };
         });
         const hits = [];
         const text = card.innerText || "";
@@ -2878,6 +2879,27 @@ try {
           const busyRow = rowOf(board, E4_BUSY), softRow = rowOf(board, E4_SOFT);
           if ((E4_BUSY && !busyRow) || (E4_SOFT && !softRow)) fail(`${T}: the board does not list the harness-opened slot(s) - ${E4_BUSY && !busyRow ? E4_BUSY + " primary " : ""}${E4_SOFT && !softRow ? E4_SOFT + " primary" : ""} (${board.rows.length} row(s): ${board.rows.slice(0, 6).map(r => r.slot).join(", ")})`);
           const khanChip = softRow ? softRow.chips.find(c => c.id === "s1") || null : null;
+          // Shift-adjust (9/27): a surgeon reads why Take is off as TEXT beside the disabled button (a title never shows on
+          // a touch screen) - the title's own words ('slot locked - ask the scheduler' for a locked slot); an enabled Take
+          // has none; the scheduler's board is unchanged and the office / viewer boards (no Take column) carry none
+          try {
+            const whyRows = board.rows.filter(r => r.why !== null);
+            if (R.kind !== "surgeon") {
+              if (whyRows.length) fail(`${T}: the board shows ob-take-why text on ${whyRows.length} row(s) - it is for a surgeon's own disabled Take only (e.g. ${whyRows[0].slot} '${whyRows[0].why}')`);
+              else ok(`${T}: no ob-take-why text on the board (${R.kind === "scheduler" ? "the scheduler's board is unchanged" : "no Take column"})`);
+            } else {
+              const wantWhy = (r) => /^slot locked/.test(r.title) ? "slot locked - ask the scheduler" : r.title;
+              const dis = board.rows.filter(r => r.take === "disabled");
+              const bad = board.rows.filter(r => r.take === "disabled" ? r.why !== wantWhy(r) : r.why !== null);
+              if (bad.length) fail(`${T}: ob-take-why must repeat a disabled Take's title as visible text (and be absent on an enabled Take) - ${bad.length} row(s) wrong, e.g. ${JSON.stringify(bad[0])}`);
+              else if (!dis.length) ok(`${T}: ob-take-why not exercised - no disabled Take on this board (${board.rows.length} row(s)); no enabled Take carries the text`);
+              else ok(`${T}: every disabled Take (${dis.length}) shows its reason as text beside it, the title's words (e.g. ${dis[0].slot}: '${dis[0].why}'); enabled ones show none`);
+              if (R.me === "s1" && busyRow && busyRow.take === "disabled") {
+                if (busyRow.why !== E4_NA) fail(`${T}: Khan's visible Take reason on ${E4_BUSY} must read '${E4_NA}' (no East word) - '${busyRow.why}'`);
+                else ok(`${T}: Khan's visible Take reason on ${E4_BUSY} reads '${busyRow.why}'`);
+              }
+            }
+          } catch (e) { fail(`${T}: ob-take-why check threw - ${errLine(e)}`); }
           if (R.kind === "scheduler") {
             sched.board = board;
             // the scheduler keeps the detail: Khan's Take title on E4_BUSY, Khan's chip on E4_SOFT, his claim sheet there
@@ -4422,6 +4444,36 @@ try {
       else ok(`Offer painter 390x844: the day list keeps ${listGeom.list}px of ${listGeom.vh} (${Math.round(100 * listGeom.list / listGeom.vh)}%; footer ${Math.round(listGeom.footer)}px, period box one line: '${listGeom.line.replace(/\s+/g, " ").slice(0, 70)}')`);
       const sheetW = await page.evaluate(() => { const s = document.querySelector("[data-testid=ofp-sheet]"); return { sw: s.scrollWidth, cw: s.clientWidth, bg: getComputedStyle(s).backgroundColor }; });
       if (sheetW.sw > sheetW.cw + 1) fail(`Offer painter 390px: the sheet scrolls horizontally (${sheetW.sw} > ${sheetW.cw})`); else ok(`Offer painter 390px: no horizontal scroll (${sheetW.sw} in ${sheetW.cw}), background ${sheetW.bg}`);
+      // Shift-adjust (9/27): the sheet still opens on the current month (above); while the period is OPEN for offers and
+      // not on screen, a header button 'Go to <label> (freezes M/D, in N days)' jumps to its first month (>= 36 px, no
+      // horizontal scroll). The expectation is read from the harness period and today - the sheet is put back on the
+      // current month (< until disabled) for the steps below.
+      try {
+        const per = offerPeriod;
+        const perOpen = !!per && per.status === "upcoming" && (!per.offers_close_at || String(per.offers_close_at).slice(0, 10) > todayIso);
+        const onScreen = !!per && todayIso.slice(0, 7) >= String(per.start_day).slice(0, 7) && todayIso.slice(0, 7) <= String(per.end_day).slice(0, 7);
+        const gp = await page.$eval("[data-testid=ofp-goto-period]", el => { const r = el.getBoundingClientRect(); return { text: el.textContent.trim(), start: el.getAttribute("data-start"), h: r.height, right: r.right }; }).catch(() => null);
+        if (!perOpen || onScreen) {
+          if (gp) fail(`Offer painter: ofp-goto-period shows although the harness period is ${perOpen ? "already on screen" : "not open for offers"} - '${gp.text}'`);
+          else ok(`Offer painter: ofp-goto-period not exercised - the harness period ${per ? per.label : "(none)"} is ${!per ? "absent" : perOpen ? "on screen" : "frozen (closed " + String(per.offers_close_at).slice(0, 10) + ")"}; no button, as expected`);
+        } else {
+          const close = String(per.offers_close_at).slice(0, 10);
+          const n = Math.round((Date.UTC(+close.slice(0, 4), +close.slice(5, 7) - 1, +close.slice(8, 10)) - Date.UTC(+todayIso.slice(0, 4), +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10))) / 86400000);
+          const want = "Go to " + per.label + " (freezes " + mdOf(close) + ", in " + n + " day" + (n === 1 ? "" : "s") + ")";
+          if (!gp) fail(`Offer painter: no ofp-goto-period although ${per.label} is open for offers (freezes ${close}) and not on screen`);
+          else if (gp.text !== want || gp.start !== String(per.start_day).slice(0, 10) || gp.h < 36 || gp.right > 391) fail(`Offer painter: ofp-goto-period should read '${want}' (data-start ${per.start_day}, >= 36 px, on screen), got ${JSON.stringify(gp)}`);
+          else {
+            await page.click("[data-testid=ofp-goto-period]"); await page.waitForTimeout(250);
+            const jumped = await page.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month"));
+            const gone = !(await page.$("[data-testid=ofp-goto-period]"));
+            if (jumped !== String(per.start_day).slice(0, 7) || !gone) fail(`Offer painter: ofp-goto-period should jump to ${String(per.start_day).slice(0, 7)} and hide there, got month ${jumped}, button ${gone ? "hidden" : "still shown"}`);
+            else ok(`Offer painter: '${gp.text}' (${Math.round(gp.h)} px) jumps to ${jumped} and hides there`);
+          }
+          for (let k = 0; k < 24 && !(await page.$eval("[data-testid=ofp-prev]", el => el.disabled)); k++) { await page.click("[data-testid=ofp-prev]"); await page.waitForTimeout(120); }
+          const back = await page.$eval("[data-testid=ofp-month]", el => el.textContent.trim());
+          if (back !== month0) fail(`Offer painter: could not get back to ${month0} after the period jump (at ${back})`);
+        }
+      } catch (e) { fail("Offer painter (ofp-goto-period): " + errLine(e)); }
       const greyRow = rows0.find(r => r.state === "blocked" && r.why !== "past") || pastRows[0] || null;
       if (greyRow) await page.locator(`[data-testid=ofp-day][data-day="${greyRow.day}"]`).scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(OUT, "offers-greyed-390.png"), fullPage: false });
@@ -4860,6 +4912,9 @@ try {
       else if (!new RegExp("Khan is published on " + vacItems.length + " day\\(s\\)").test(conflictText) || missingItems.length) fail(`Time off refusal panel wrong: expected 'Khan is published on ${vacItems.length} day(s)' listing ${vacItems.map(i => mdOf(i.day) + " " + i.role).join(", ")}${missingItems.length ? " (missing: " + missingItems.map(i => mdOf(i.day) + " " + i.role).join(", ") + ")" : ""}: ` + conflictText);
       else if (!tradeShortcut) fail("Time off refusal: no 'propose a trade' shortcut beside the conflicting date");
       else ok(`Time off: Khan ${vacDay} refused client-side - panel lists ${vacItems.map(i => "'" + mdOf(i.day) + " " + i.role + "'").join(" + ")} (${vacItems.length} day(s), derived from the grid over the live rows) with a 'propose a trade' shortcut, NO time_off / audit / notification write`);
+      // Shift-adjust (9/27): the lead-time advisory follows a SAVED add only - a refused one shows none
+      if (await page.$("[data-testid=vac-lead-note]")) fail("Time off refusal: the lead-time advisory (vac-lead-note) rendered for a refused vacation - it follows a saved add only");
+      else ok("Time off refusal: no lead-time advisory for the refused range (vac-lead-note follows a saved add only)");
       // the shortcut lands on the trade form with the FIRST conflict item's day preselected
       // Item C (Faraz 9/23 evening): the shortcut also names the top suggested counter-party and pre-fills Trade with.
       const shortcut = await page.$eval("[data-testid=vac-conflict-trade]", el => ({ text: el.textContent.replace(/\s+/g, " ").trim(), suggested: el.getAttribute("data-suggested") || "" }));
@@ -4895,6 +4950,23 @@ try {
     else if (notifs.length !== 1 || !vacNotif) fail(`Time off clean range: expected exactly one notification (vacation_logged), got ${notifs.length}: ` + JSON.stringify(notifs.map(n => n.type)));
     else if (vacNotif.message !== "Khan logged vacation 3/2-3/3 (harness range)") fail("Time off clean range: composed message wrong: " + vacNotif.message);
     else ok("Time off clean range: one POST /rest/v1/time_off { s1, 2027-03-02..03 } + one audit timeoff.add + one notification vacation_logged \"" + vacNotif.message + "\"");
+    // Shift-adjust (9/27): a surgeon's own saved vacation that starts less than closeWeeksBeforeStart weeks out (6 - the seed's
+    // groupRules.offerPeriods) gets the inline advisory vac-lead-note 'The schedule through <M/D> is already being built -
+    // ...' (never a dialog on the add path); a later start gets none. The harness's clean range starts 2027-03-02, so which
+    // side it falls on is read from today (no fixed date is assumed).
+    try {
+      const leadDays = Math.round((Date.UTC(2027, 2, 2) - Date.UTC(+todayIso.slice(0, 4), +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10))) / 86400000);
+      const lead = await page.$eval("[data-testid=vac-lead-note]", el => ({ text: el.textContent.replace(/\s+/g, " ").trim(), start: el.getAttribute("data-start"), through: el.getAttribute("data-through") })).catch(() => null);
+      if (leadDays >= 42) {
+        if (lead) fail(`Time off lead-time advisory: 2027-03-02 is ${leadDays} days out (>= 6 weeks) yet vac-lead-note shows '${lead.text}'`);
+        else ok(`Time off lead-time advisory: none for 2027-03-02 (${leadDays} days out, past the 6-week freeze window); the in-window note is not exercised by this range until 2027-01-19 (helpers.vacationLeadNote is pinned in data-layer)`);
+      } else {
+        const want = isoAddDays(todayIso, 41);
+        if (!lead) fail(`Time off lead-time advisory: 2027-03-02 is ${leadDays} days out (< 6 weeks) but no vac-lead-note rendered`);
+        else if (lead.start !== "2027-03-02" || lead.through !== want || lead.text !== "The schedule through " + mdOf(want) + " is already being built - check Open shifts or propose a trade if this affects a call day.") fail("Time off lead-time advisory: expected start 2027-03-02, through " + want + " and the fixed sentence, got " + JSON.stringify(lead));
+        else ok(`Time off lead-time advisory: '${lead.text}' (2027-03-02 is ${leadDays} days out)`);
+      }
+    } catch (e) { fail("Time off lead-time advisory: " + errLine(e)); }
     // Prompt 21 step 2 (Faraz 9/26): the audit row goes out with Prefer: return=minimal (logAudit -> db.insert's { returning:
     // "minimal" }: an INSERT without RETURNING, which a writer who cannot read the row back is not refused - Acton's 9/24
     // vacations); the time_off and notifications POSTs of the same entry keep return=representation (their callers read
@@ -5321,6 +5393,26 @@ try {
             const r4 = await rp.evaluate((id) => { const row = document.querySelector('[data-testid=trade-row][data-trade-id="' + id + '"]'); const t = (sel, root) => { const e = (root || document).querySelector(sel); return e ? e.textContent.trim() : null; }; return { title: t('[data-testid=trades-pending-title]'), status: row ? t('[data-testid=trade-status]', row) : null, meta: row ? t('[data-testid=trade-meta]', row) : null }; }, giveId);
             if (!/^Pending (trades \(\d+\) and )?gives \([1-9]\d*\)$/.test(r4.title || "") || r4.status !== "give - pending" || !/^offered by Burchett /.test(r4.meta || "")) fail("Give (receiver, S4): the Trades list should name the give (title 'Pending [trades (n) and ]gives (n)', chip 'give - pending', 'offered by Burchett'), got " + JSON.stringify(r4));
             else ok(`Give (receiver, S4): Trades reads '${r4.title}', the row's chip '${r4.status}'`);
+            // Shift-adjust (9/27): "Waiting on you" - the give sits in the block at the TOP of Time off & Trades (before the
+            // vacation card) through the same row renderer, under its own testids (trade-waiting-row, Accept / Decline only),
+            // while the Pending card keeps its one trade-row; a surgeon's tab badge counts exactly the waiting rows
+            try {
+              const wt = await rp.evaluate((id) => {
+                const blk = document.querySelector("[data-testid=trades-waiting]");
+                const tc = document.querySelector("[data-testid=timeoff-card]");
+                const row = blk ? blk.querySelector('[data-testid=trade-waiting-row][data-trade-id="' + id + '"]') : null;
+                const badge = document.querySelector("button[data-tab=timeoff] [data-testid=timeoff-badge]");
+                return { blk: !!blk, first: !!(blk && tc && (blk.compareDocumentPosition(tc) & Node.DOCUMENT_POSITION_FOLLOWING)), rows: blk ? blk.querySelectorAll("[data-testid=trade-waiting-row]").length : 0,
+                  count: blk ? blk.getAttribute("data-count") : null, row: !!row, btns: row ? Array.from(row.querySelectorAll("button")).map(b => b.getAttribute("data-testid")) : [],
+                  badge: badge ? badge.textContent.trim() : null, pendingRows: document.querySelectorAll('[data-testid=trades-pending] [data-testid=trade-row][data-trade-id="' + id + '"]').length,
+                  anyRows: document.querySelectorAll('[data-testid=trade-row][data-trade-id="' + id + '"]').length };
+              }, giveId);
+              if (!wt.blk || !wt.row || !wt.first) fail("Give (receiver, waiting on you): the give should be listed in trades-waiting above the vacation card, got " + JSON.stringify(wt));
+              else if (wt.btns.join(",") !== "trade-waiting-accept,trade-waiting-decline") fail("Give (receiver, waiting on you): the row should offer Accept / Decline only (trade-waiting-accept, trade-waiting-decline), got " + JSON.stringify(wt.btns));
+              else if (String(wt.rows) !== wt.count || wt.badge !== String(wt.rows)) fail(`Give (receiver, waiting on you): the block lists ${wt.rows} row(s) (data-count ${wt.count}) and the Time off tab badge reads ${JSON.stringify(wt.badge)} - a surgeon's badge counts exactly the rows waiting on him`);
+              else if (wt.pendingRows !== 1 || wt.anyRows !== 1) fail(`Give (receiver, waiting on you): the Pending card must keep exactly one trade-row for the give (got ${wt.pendingRows} in Pending, ${wt.anyRows} in the page)`);
+              else ok(`Give (receiver, waiting on you): trades-waiting is the first card, lists the give with Accept / Decline (${wt.rows} row(s)); the tab badge reads ${wt.badge}; the Pending card keeps its single trade-row`);
+            } catch (e) { fail("Give (receiver, waiting on you): " + errLine(e)); }
             await rp.click('button[aria-label="Notifications"]');
             await rp.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
             const nLine = await rp.$eval("[data-testid=notif-give-line]", el => el.textContent.trim()).catch(() => "");
@@ -5329,6 +5421,11 @@ try {
             if (nLine !== wantLine || nBtns.join(",") !== "notif-give-accept,notif-give-decline") fail("Give (receiver): the Alerts row should read '" + wantLine + "' with Accept / Decline, got '" + nLine + "' " + JSON.stringify(nBtns));
             else if (rScroll > 392) fail("Give (receiver): the page scrolls horizontally with the Alerts panel open (scrollWidth " + rScroll + ")");
             else ok(`Give (receiver, Alerts): '${nLine}' - Accept / Decline; scrollWidth ${rScroll}`);
+            // Shift-adjust (9/27): a two-way trade alert addressed to a surgeon gets notif-trade-accept / -decline; a give alert
+            // never does (notifGiveTrade answers it). This page's feed holds the give only, so the trade path is not exercised.
+            const tBtns = await rp.$$eval("[data-testid=notif-trade-accept], [data-testid=notif-trade-decline]", els => els.length).catch(() => -1);
+            if (tBtns !== 0) fail("Give (receiver, Alerts): the give alert must not carry the two-way trade buttons (notif-trade-accept / -decline), found " + tBtns);
+            else ok("Give (receiver, Alerts): the give alert carries notif-give-* only, no notif-trade-*; inline Accept on a two-way trade alert is not exercised (no two-way trade_proposed row addressed to a surgeon page - notifTradeProposal is lifted and run in data-layer)");
             const beforeR = writes.length, dlgR = rDialogs.length;
             await rp.click("[data-testid=notif-give-accept]");
             await waitFor(() => writesSince(beforeR).some(w => /send-notification/.test(w.path) && (bodyOf(w) || {}).type === "trade_applied"), 10000);
@@ -8845,7 +8942,8 @@ try {
             "paint-offers", "nav-paint-offers", "ofp-sheet", "ofp-save", "ob-take", "ob-assign", "ob-external", "ob-email", "claim-sheet", "claim-confirm",
             "editor-save", "editor-trade", "undo-btn", "generate-panel", "gen-run", "gen-accept", "roster-save", "rules-save", "group-save", "holidays-save",
             "users-card", "seed-card", "import-file", "reset-all-data", "export-backup", "snapshot-restore", "avail-add", "east-override-save", "east-refresh",
-            "prd-new", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade"];
+            "prd-new", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade",
+            "notif-trade-accept", "notif-trade-decline", "trade-waiting-accept", "trade-waiting-decline", "ofp-goto-period"];
           // P20 R2: "notif-pref" left this list - a follower's OWN prefs switches (Settings > Notification settings, his row
           // by profile_id) are his; (c2) checks them and (e) counts their writes. Everything above stays forbidden, and so does
           // any notif-pref OUTSIDE [data-testid=notif-follower-prefs] (a surgeon's switches rendered for him - R2 review 9/25).

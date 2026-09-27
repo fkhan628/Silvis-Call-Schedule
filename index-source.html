@@ -380,6 +380,7 @@ function CallSchedule() {
   const [eastRefreshing, setEastRefreshing] = useState(false);
   const [seedState, setSeedState] = useState({ fileName: "", plan: null, diff: null, live: null, error: "", applying: false, result: null, loading: false, periodGap: 0 });
   const [vacConflict, setVacConflict] = useState(null);     // { personId, items: [{ day, role }] } from the last refused vacation
+  const [vacLeadNote, setVacLeadNote] = useState(null);     // helpers.vacationLeadNote of the surgeon's last added vacation (inline advisory, never a confirm)
 
   const [loaded, setLoaded] = useState(false);
   // Bumped after a successful login/biometric-unlock to re-run the data-load
@@ -758,6 +759,9 @@ function CallSchedule() {
     if (isScheduler || !mySurgeon) return tradeRequests;
     return tradeRequests.filter(r => r.from_surgeon_id === mySurgeon || r.to_surgeon_id === mySurgeon);
   }, [tradeRequests, isScheduler, mySurgeon]);
+  // "Waiting on you": the pending trades / gives addressed to this surgeon (helpers.tradesWaitingOn) - the block at the top
+  // of Time off & Trades and a surgeon's tab badge (the scheduler's badge keeps counting every pending trade).
+  const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon), [tradeRequests, mySurgeon]);
 
   // Profile read that FAILS LOUDLY: a non-2xx is a load failure, not "no
   // profile". (dbAuth.getProfile returns null for both - keep it for the
@@ -2497,6 +2501,32 @@ function CallSchedule() {
     }
     return true;
   };
+  // Land on the Propose card after a shortcut switched to Time off & Trades (on a phone it sits below the vacation card):
+  // once the card has rendered (a few animation frames at most), scroll it into view and focus the first field still
+  // empty - the day (picker or date), then Trade with / Give to, then the return day - else the submit button. A card
+  // that never renders (a viewer, the office, an unlinked account) is simply not found: nothing moves, nothing throws.
+  // Any "for this day" shortcut (trade or give) calls it after setting the form.
+  const tradeCardRef = useRef(null);
+  const focusTradeCard = () => {
+    const raf = (f) => typeof requestAnimationFrame === "function" ? requestAnimationFrame(f) : setTimeout(f, 16);
+    const land = (left) => {
+      const card = tradeCardRef.current;
+      if (!card) { if (left > 0) raf(() => land(left - 1)); return; }
+      try {
+        card.scrollIntoView({ block: "start" });
+        const q = (id) => { const el = card.querySelector('[data-testid="' + id + '"]'); return el && !el.disabled ? el : null; };
+        let target = null;
+        for (const group of [["trade-mine-pick", "trade-day"], ["trade-to"], ["trade-theirs-pick", "trade-return-day"]]) {
+          const els = group.map(q).filter(Boolean);
+          if (!els.length || els.some(el => el.value)) continue;
+          target = els[0]; break;
+        }
+        target = target || q("trade-submit");
+        if (target) target.focus({ preventScroll: true });
+      } catch (e) { console.warn("focusTradeCard: could not land on the trade card", e); }
+    };
+    raf(() => land(8));
+  };
   // "Propose a trade for this day": switch to Time off & Trades with the day
   // (and the role the viewer holds, else primary) preselected. Slice G wires
   // the rest of the form.
@@ -2512,6 +2542,7 @@ function CallSchedule() {
     if (pick && pick.to) { setTradeTo(pick.to); setTradeReturnDay(pick.returnDay || ""); if (pick.returnRole) setTradeReturnRole(pick.returnRole); }
     setEditorDay(null);
     setView("timeoff");
+    focusTradeCard(); // land on the card (scroll + first empty field) once it renders
   };
 
   // --- Clear schedule (a range; locked slots stay) ---
@@ -3530,6 +3561,17 @@ function CallSchedule() {
     if (!r || !(r.status === "pending" && !!mySurgeon && r.to_surgeon_id === mySurgeon)) return null;
     return tradeIsGiveProposal(r) ? r : null;
   };
+  // The two-way counterpart of notifGiveTrade: the pending TRADE a trade_proposed alert is about (data.kind 'trade', or
+  // no kind - a row from before gives existed) when this account is the surgeon asked; else null. The Alerts row then
+  // shows Accept / Decline under its stored text (acceptTrade re-checks both legs; a member is never asked to confirm).
+  // A give is left to notifGiveTrade - the two never answer the same alert.
+  const notifTradeProposal = (n) => {
+    const d = (n && n.data) || {};
+    if (!n || n.type !== "trade_proposed" || d.kind === "give" || !d.trade_id) return null;
+    const r = tradeRequests.find(x => x.id === d.trade_id);
+    if (!r || !(r.status === "pending" && !!mySurgeon && r.to_surgeon_id === mySurgeon)) return null;
+    return tradeIsGiveProposal(r) ? null : r;
+  };
 
   // --- Propose ---
   // Prompt 19 (Faraz 9/24): tradeKind "give" = a one-way give - the same holder, unit and receiver-eligibility checks, no
@@ -4156,8 +4198,14 @@ function CallSchedule() {
     if (!isScheduler && !isCoordinator && vacSurgeon !== mySurgeon) { showToast("You can only enter your own vacations.", "error"); return; }
     // The note standard (guide 3.1): operational only - the same denylist the importer / Setup apply (anon-readable table).
     if (vacNote && SU_NOTE_DENYLIST.test(vacNote)) { showToast("Notes are operational only (the whole group and the shareable page read them) - leave the reason out.", "error"); return; }
+    setVacLeadNote(null);
     const r = await toAdd(vacSurgeon, vacStart, vacEnd, vacNote);
-    if (r.ok) { setVacStart(todayCentral()); setVacEnd(todayCentral()); setVacNote(""); showToast("Vacation saved.", "success"); }
+    if (r.ok) {
+      // Lead-time advisory (inline, non-blocking - never a confirm on the add path): a surgeon's own vacation that starts
+      // inside the offers freeze window (groupRules.offerPeriods.closeWeeksBeforeStart) lands on a schedule already being built.
+      if (!isCoordinator && vacSurgeon === mySurgeon) { const lead = vacationLeadNote(vacStart, todayStr, groupRules && groupRules.offerPeriods); if (lead) setVacLeadNote({ ...lead, start: vacStart }); }
+      setVacStart(todayCentral()); setVacEnd(todayCentral()); setVacNote(""); showToast("Vacation saved.", "success");
+    }
   };
   const rmVac = (sid, rowId) => { if (confirm("Remove this vacation?")) toRemove(sid, rowId); };
   const saveEditVac = async () => {
@@ -5242,8 +5290,53 @@ function CallSchedule() {
           <button onClick={()=>setVacConflict(null)} aria-label="Dismiss" style={{background:"none",border:"none",color:"#8a3030",cursor:"pointer",fontSize:14}}>x</button>
         </div>
       )}
+      {vacLeadNote && (
+        <div data-testid="vac-lead-note" data-start={vacLeadNote.start} data-through={vacLeadNote.through} role="status" style={{flex:"1 1 100%",fontSize:12,lineHeight:1.5,color:T.text,borderLeft:"3px solid " + T.accent,padding:"4px 10px"}}>
+          The schedule through {fmtMD(vacLeadNote.through)} is already being built - check Open shifts or propose a trade if this affects a call day.
+        </div>
+      )}
     </div>
   );
+
+  // One trade / give row (Prompt 6 Slice G; hoisted to App scope so the "Waiting on you" block at the top of Time off &
+  // Trades renders the same row). where === "waiting" (that block) names the row and its Accept / Decline
+  // trade-waiting-row / trade-waiting-accept / trade-waiting-decline - the Pending card keeps trade-row / trade-accept /
+  // trade-decline, so one trade never matches the same selector twice - and shows only the answer (no Cancel / Retry /
+  // revert: those stay on the Pending card). A list .map(tradeRow) passes its index, which is never "waiting".
+  const statusColor = (st) => st === "pending" ? "#c09030" : st === "declined" || st === "cancelled" ? "#c04040" : st === "accepted" ? "#6030a0" : "#1a8040";
+  const tenseFor = (st) => st === "accepted" || st === "applied" ? "takes" : st === "declined" || st === "cancelled" ? "would have taken" : "would take";
+  const rowBox = { padding:"8px 12px", background: dk ? "#13294B" : "#f8f9fb", borderRadius:6, border:`1px solid ${dkCardBorder}` };
+  const tradeRow = (r, where) => {
+    const waiting = where === "waiting";
+    const named = tradeNamed(r);
+    const canAnswer = r.status === "pending" && (isScheduler || r.to_surgeon_id === mySurgeon);
+    const canCancel = r.status === "pending" && (isScheduler || r.from_surgeon_id === mySurgeon);
+    const canRetry = r.status === "accepted" && (isScheduler || r.from_surgeon_id === mySurgeon || r.to_surgeon_id === mySurgeon);
+    const busy = tradeBusy === r.id;
+    const err = tradeApplyErr[r.id];
+    const tag = tradeUnitTag(r);                       // fg-1: part of a unit proposal
+    const groupN = tag ? tradeGroupOf(r).length : 1;   // rows in the same status that move with this one
+    const giveGroup = tradeIsGiveProposal(r);           // Prompt 19 S3 review: the whole proposal, every status
+    return (
+      <div key={r.id} data-testid={waiting ? "trade-waiting-row" : "trade-row"} data-trade-id={r.id} data-status={r.status} data-kind={giveGroup ? "give" : "trade"} data-unit={tag ? tag.kind + ":" + tag.start : undefined} data-group={groupN} style={rowBox}>
+        <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{fontSize:12.5,color:dkText}}>{giveGroup ? <span data-testid="trade-give-line">{tradeGiveLine(named, tag, mySurgeon)}</span> : tradeLegsText(named, tenseFor(r.status))}{tag && <span data-testid="trade-unit-tag" title="A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together" style={{marginLeft:8,fontSize:10,fontWeight:700,color:"#7a5a20",background:"#fbf1d8",borderRadius:4,padding:"1px 6px",whiteSpace:"nowrap"}}>{tag.text} - day {tag.index} of {tag.n}</span>}</span>
+          <span data-testid="trade-status" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:statusColor(r.status)}}>{tradeRowStatus(r.status, giveGroup)}</span>
+        </div>
+        <div data-testid="trade-meta" style={{fontSize:10,color:"#9aa4ae",fontFamily:mono,marginTop:2}}>{giveGroup ? "offered" : "proposed"} by {named.from_surgeon_name} {fmtAuditTime(r.submitted_at)}{r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""}</div>
+        {err && <div data-testid="trade-apply-error" style={{...css.errBox,marginTop:6}}>Apply failed: {err}</div>}
+        {(canAnswer || (!waiting && (canCancel || canRetry || (isScheduler && r.status === "applied")))) && (
+          <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
+            {canAnswer && <button data-testid={waiting ? "trade-waiting-accept" : "trade-accept"} disabled={busy} onClick={()=>acceptTrade(r)} style={{...css.btn(true),padding:"4px 12px",fontSize:11,...(waiting ? {minHeight:36} : {})}}>{busy ? "Working" : groupN > 1 ? `Accept (${groupN} days)` : "Accept"}</button>}
+            {canAnswer && <button data-testid={waiting ? "trade-waiting-decline" : "trade-decline"} disabled={busy} onClick={()=>declineTrade(r)} style={{...css.btn(false),padding:"4px 12px",fontSize:11,...(waiting ? {minHeight:36} : {})}}>{groupN > 1 ? `Decline (${groupN} days)` : "Decline"}</button>}
+            {!waiting && canCancel && <button data-testid="trade-cancel" disabled={busy} onClick={()=>cancelTrade(r)} style={css.danger}>{groupN > 1 ? `Cancel (${groupN} days)` : "Cancel"}</button>}
+            {!waiting && canRetry && <button data-testid="trade-retry" disabled={busy} onClick={()=>retryApplyTrade(r)} style={{...css.btn(true),padding:"4px 12px",fontSize:11,background:"linear-gradient(135deg,#6030a0,#8050c0)",borderColor:"#6030a0"}}>{busy ? "Working" : "Retry apply"}</button>}
+            {!waiting && isScheduler && (r.status === "applied" || r.status === "accepted") && <button onClick={()=>goToDay(r.day)} title={giveGroup ? "The scheduler reverts a give by putting " + named.from_surgeon_name + " back on " + fmtMD(r.day) + " in the day editor - one-way, nothing else moves" : "The scheduler reverts a trade by editing the day"} style={css.mini(false)}>Open {fmtMD(r.day)} in the day editor</button>}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const authBox = (children) => (
     <div style={{display:"flex",justifyContent:"center",alignItems:"center",minHeight:"80vh",padding:20}}>
@@ -5547,12 +5640,13 @@ function CallSchedule() {
             let tabs = allTabs;
             if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
             if (!mySurgeon && !isFollowing) tabs = tabs.filter(([k]) => k !== "myschedule");
-            const pendingTrades = myTradeRequests.filter(r=>r.status==="pending").length;
+            // The scheduler's badge counts every pending trade (he may answer any); a surgeon's only the ones waiting on him.
+            const pendingTrades = isScheduler ? myTradeRequests.filter(r=>r.status==="pending").length : tradesWaitingOnMe.length;
             return tabs.map(([k,l]) =>
               <button key={k} data-tab={k} style={{...css.tab(view===k, T.accent),position:"relative"}} onClick={()=>setView(k)}>
                 {l}
                 {k==="timeoff" && pendingTrades > 0 && (
-                  <span style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
+                  <span data-testid="timeoff-badge" title={isScheduler ? pendingTrades + " pending trade(s) or give(s)" : pendingTrades + " trade(s) or give(s) waiting on your answer"} style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
                 )}
                 {k==="openshifts" && boardSlots.length > 0 && (
                   <span data-testid="openshifts-badge" title={boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "")} style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{boardSlots.length}</span>
@@ -5597,6 +5691,8 @@ function CallSchedule() {
               const targetTab = tabMap[n.type] || null;
               const giveT = notifGiveTrade(n);                      // Prompt 19 S3: a pending give this account may answer
               const giveN = giveT ? tradeGroupOf(giveT).length : 0;
+              const tradeT = giveT ? null : notifTradeProposal(n);   // a pending two-way trade this account is asked to answer
+              const tradeN = tradeT ? tradeGroupOf(tradeT).length : 0;
               return (
               <div key={n.id} data-testid="notif-row" data-type={n.type} onClick={()=>{if(targetTab){setView(targetTab);setShowNotifs(false);markNotifsSeen();}}}
                 style={{padding:"8px 10px",marginBottom:6,borderRadius:6,cursor:targetTab?"pointer":"default",background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`}}>
@@ -5613,6 +5709,12 @@ function CallSchedule() {
                   <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
                     <button data-testid="notif-give-accept" disabled={!!tradeBusy} onClick={(e)=>{ e.stopPropagation(); acceptTrade(giveT); }} style={{...css.btn(true),padding:"6px 14px",fontSize:12,minHeight:36}}>{tradeBusy === giveT.id ? "Working" : giveN > 1 ? `Accept (${giveN} days)` : "Accept"}</button>
                     <button data-testid="notif-give-decline" disabled={!!tradeBusy} onClick={(e)=>{ e.stopPropagation(); declineTrade(giveT); }} style={{...css.btn(false),padding:"6px 14px",fontSize:12,minHeight:36}}>{giveN > 1 ? `Decline (${giveN} days)` : "Decline"}</button>
+                  </div>
+                )}
+                {tradeT && (
+                  <div data-testid="notif-trade-actions" data-trade-id={tradeT.id} style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
+                    <button data-testid="notif-trade-accept" disabled={!!tradeBusy} onClick={(e)=>{ e.stopPropagation(); acceptTrade(tradeT); }} style={{...css.btn(true),padding:"6px 14px",fontSize:12,minHeight:36}}>{tradeBusy === tradeT.id ? "Working" : tradeN > 1 ? `Accept (${tradeN} days)` : "Accept"}</button>
+                    <button data-testid="notif-trade-decline" disabled={!!tradeBusy} onClick={(e)=>{ e.stopPropagation(); declineTrade(tradeT); }} style={{...css.btn(false),padding:"6px 14px",fontSize:12,minHeight:36}}>{tradeN > 1 ? `Decline (${tradeN} days)` : "Decline"}</button>
                   </div>
                 )}
                 {targetTab && <span style={{fontSize:10,color:T.accentText,marginTop:3,display:"inline-block"}}>Tap to view</span>}
@@ -6056,6 +6158,8 @@ function CallSchedule() {
                               {mySurgeon ? (me && me.ok && !locked
                                 ? <button type="button" data-testid="ob-take" onClick={(e) => openClaimSheet(s, e.currentTarget)} style={{...css.btn(true),padding:"6px 10px",fontSize:11}}>Take this shift</button>
                                 : <button type="button" data-testid="ob-take" disabled title={locked ? "slot locked - ask the scheduler to assign it" : takeTitle(me)} style={{...css.btn(false),padding:"6px 10px",fontSize:11,opacity:0.55,cursor:"not-allowed"}}>Take this shift</button>) : null}
+                              {/* A title never shows on a touch screen: a surgeon reads why Take is off beside it (the scheduler's board is unchanged) */}
+                              {mySurgeon && !isScheduler && !(me && me.ok && !locked) && <span data-testid="ob-take-why" style={{fontSize:10.5,color:T.muted,whiteSpace:"normal",lineHeight:1.3,maxWidth:150}}>{locked ? "slot locked - ask the scheduler" : takeTitle(me)}</span>}
                               {isScheduler && <button type="button" data-testid="ob-assign" onClick={() => { setEditorFocus(null); setEditorDay(s.day); }} title="Open the day editor on this day" style={{...css.mini(false),padding:"6px 9px"}}>Assign...</button>}
                               {isScheduler && s.role === "primary" && <button type="button" data-testid="ob-external" onClick={() => { setEditorFocus("external"); setEditorDay(s.day); }} title="Write in someone outside the roster as primary cover (saved from the day editor)" style={{...css.mini(false),padding:"6px 9px"}}>Outside cover</button>}
                             </div>
@@ -6093,7 +6197,7 @@ function CallSchedule() {
                     {claimSheet.soft.length
                       ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)} <span style={{fontFamily:mono,fontSize:11}}>(weight {x.weight})</span></li>)}</ul></div>
                       : <div data-testid="claim-no-warnings" style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
-                    <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade.</p>
+                    <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade or give it away.</p>
                     <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
                       <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
                       <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : "Confirm - take this shift"}</button>
@@ -6277,6 +6381,15 @@ function CallSchedule() {
 
         {/* ================ TIME OFF & TRADES (Prompt 6 Slice G) ================ */}
         {view==="timeoff" && !isPublicMode && <>
+          {/* "Waiting on you": the pending trades / gives only this surgeon can answer, first on the page (the Pending card
+              below still lists them with everything else). Not for the office, a viewer or an unlinked account. */}
+          {!isCoordinator && !isViewer && mySurgeon && tradesWaitingOnMe.length > 0 && (
+            <div style={{...css.card,border:"1px solid " + T.accent}} data-testid="trades-waiting" data-count={tradesWaitingOnMe.length}>
+              <div style={css.cardT} data-testid="trades-waiting-title">Waiting on you ({tradesWaitingOnMe.length})</div>
+              <p style={{fontSize:12,color:T.muted,margin:"0 0 8px",lineHeight:1.5}}>Accept or decline - nothing moves until you answer.</p>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>{tradesWaitingOnMe.map(r => tradeRow(r, "waiting"))}</div>
+            </div>
+          )}
           <div style={css.card} data-testid="timeoff-card">
             <div style={css.cardT}>{canEnterForAnyone || isViewer ? "Vacations" : "My vacations"}</div>
             {/* Prompt 16 B3: a viewer reads the group's vacations (time_off is readable by every signed-in account) with ONE
@@ -6350,41 +6463,8 @@ function CallSchedule() {
             const givenLabel = whole ? "the " + unitText(unit) : slotLabel(tradeDay, tradeRole);
             const pending = myTradeRequests.filter(r => r.status === "pending" || r.status === "accepted");
             const done = myTradeRequests.filter(r => r.status === "applied" || r.status === "declined" || r.status === "cancelled");
-            const statusColor = (st) => st === "pending" ? "#c09030" : st === "declined" || st === "cancelled" ? "#c04040" : st === "accepted" ? "#6030a0" : "#1a8040";
-            const tenseFor = (st) => st === "accepted" || st === "applied" ? "takes" : st === "declined" || st === "cancelled" ? "would have taken" : "would take";
-            const rowBox = { padding:"8px 12px", background: dk ? "#13294B" : "#f8f9fb", borderRadius:6, border:`1px solid ${dkCardBorder}` };
-            const tradeRow = (r) => {
-              const named = tradeNamed(r);
-              const canAnswer = r.status === "pending" && (isScheduler || r.to_surgeon_id === mySurgeon);
-              const canCancel = r.status === "pending" && (isScheduler || r.from_surgeon_id === mySurgeon);
-              const canRetry = r.status === "accepted" && (isScheduler || r.from_surgeon_id === mySurgeon || r.to_surgeon_id === mySurgeon);
-              const busy = tradeBusy === r.id;
-              const err = tradeApplyErr[r.id];
-              const tag = tradeUnitTag(r);                       // fg-1: part of a unit proposal
-              const groupN = tag ? tradeGroupOf(r).length : 1;   // rows in the same status that move with this one
-              const giveGroup = tradeIsGiveProposal(r);           // Prompt 19 S3 review: the whole proposal, every status
-              return (
-                <div key={r.id} data-testid="trade-row" data-trade-id={r.id} data-status={r.status} data-kind={giveGroup ? "give" : "trade"} data-unit={tag ? tag.kind + ":" + tag.start : undefined} data-group={groupN} style={rowBox}>
-                  <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-                    <span style={{fontSize:12.5,color:dkText}}>{giveGroup ? <span data-testid="trade-give-line">{tradeGiveLine(named, tag, mySurgeon)}</span> : tradeLegsText(named, tenseFor(r.status))}{tag && <span data-testid="trade-unit-tag" title="A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together" style={{marginLeft:8,fontSize:10,fontWeight:700,color:"#7a5a20",background:"#fbf1d8",borderRadius:4,padding:"1px 6px",whiteSpace:"nowrap"}}>{tag.text} - day {tag.index} of {tag.n}</span>}</span>
-                    <span data-testid="trade-status" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:statusColor(r.status)}}>{tradeRowStatus(r.status, giveGroup)}</span>
-                  </div>
-                  <div data-testid="trade-meta" style={{fontSize:10,color:"#9aa4ae",fontFamily:mono,marginTop:2}}>{giveGroup ? "offered" : "proposed"} by {named.from_surgeon_name} {fmtAuditTime(r.submitted_at)}{r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""}</div>
-                  {err && <div data-testid="trade-apply-error" style={{...css.errBox,marginTop:6}}>Apply failed: {err}</div>}
-                  {(canAnswer || canCancel || canRetry || (isScheduler && r.status === "applied")) && (
-                    <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
-                      {canAnswer && <button data-testid="trade-accept" disabled={busy} onClick={()=>acceptTrade(r)} style={{...css.btn(true),padding:"4px 12px",fontSize:11}}>{busy ? "Working" : groupN > 1 ? `Accept (${groupN} days)` : "Accept"}</button>}
-                      {canAnswer && <button data-testid="trade-decline" disabled={busy} onClick={()=>declineTrade(r)} style={{...css.btn(false),padding:"4px 12px",fontSize:11}}>{groupN > 1 ? `Decline (${groupN} days)` : "Decline"}</button>}
-                      {canCancel && <button data-testid="trade-cancel" disabled={busy} onClick={()=>cancelTrade(r)} style={css.danger}>{groupN > 1 ? `Cancel (${groupN} days)` : "Cancel"}</button>}
-                      {canRetry && <button data-testid="trade-retry" disabled={busy} onClick={()=>retryApplyTrade(r)} style={{...css.btn(true),padding:"4px 12px",fontSize:11,background:"linear-gradient(135deg,#6030a0,#8050c0)",borderColor:"#6030a0"}}>{busy ? "Working" : "Retry apply"}</button>}
-                      {isScheduler && (r.status === "applied" || r.status === "accepted") && <button onClick={()=>goToDay(r.day)} title={giveGroup ? "The scheduler reverts a give by putting " + named.from_surgeon_name + " back on " + fmtMD(r.day) + " in the day editor - one-way, nothing else moves" : "The scheduler reverts a trade by editing the day"} style={css.mini(false)}>Open {fmtMD(r.day)} in the day editor</button>}
-                    </div>
-                  )}
-                </div>
-              );
-            };
             return <>
-              <div style={css.card} data-testid="trade-card">
+              <div style={css.card} data-testid="trade-card" ref={tradeCardRef}>
                 <div style={css.cardT}>Propose a shift trade</div>
                 <p style={sectionNote}>By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. {isScheduler ? "As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor." : "A trade is two-way: pick the day and role you take in return."} <strong>Give away</strong> offers the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back; they accept or decline, and an accepted give is applied like a trade.</p>
                 {fromId && (
@@ -7297,6 +7377,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const holderText = (v, ds) => v ? holderLabel(v, nameOf) : (ds >= today ? "OPEN" : "-");
   const monthLabel = MO[ym.m] + " " + ym.y;
   const atCurrentMonth = ym.y === t0.getFullYear() && ym.m === t0.getMonth(); // navigation is from the current month forward: < stops here
+  const periodJump = period ? offerPeriodJump(period, today, ym) : null;     // "Go to <label> (freezes M/D, in N days)" - open period, not on screen
   const periodExpanded = periodOpen && (periodOpenBox || modeDirty); // one line by default; "Change" or a dirty mode opens the box
   const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.`
     : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
@@ -7322,6 +7403,13 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           <span data-testid="ofp-month" style={{ fontSize: 14, fontWeight: 700, color: text, minWidth: 150, textAlign: "center" }}>{monthLabel}</span>
           <button data-testid="ofp-next" onClick={() => { setPendingStart(null); setYm(p => { const m = p.m + 1; return m > 11 ? { y: p.y + 1, m: 0 } : { y: p.y, m }; }); }} aria-label="Next month" style={{ ...css.btn(false), minWidth: 48, minHeight: 44, fontSize: 15 }}>&rsaquo;</button>
         </div>
+        {/* The sheet still opens on the current month; while the period is open for offers and not on screen, one tap
+            jumps to its first month (helpers.offerPeriodJump - the deadline in days, not just a date in the footer) */}
+        {periodJump && (
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}>
+            <button data-testid="ofp-goto-period" data-start={periodJump.start} onClick={() => { setPendingStart(null); setYm({ y: periodJump.y, m: periodJump.m }); }} style={{ ...css.mini(false), minHeight: 36, padding: "6px 12px", fontSize: 12, whiteSpace: "normal", maxWidth: "100%" }}>{periodJump.text}</button>
+          </div>
+        )}
         <div data-testid="ofp-counts" data-month-primary={monthCounts.primary} data-month-backup={monthCounts.backup} data-month-either={monthCounts.either} data-period-count={periodCount} style={{ fontSize: 11, color: muted, textAlign: "center", marginTop: 2, lineHeight: 1.5 }}>
           {monthLabel}: <b style={{ color: text }}>{monthCounts.primary}</b> primary, <b style={{ color: text }}>{monthCounts.backup}</b> backup, <b style={{ color: text }}>{monthCounts.either}</b> either offered
           {period && <> - {periodLabel}: <b style={{ color: text }}>{periodCount}</b> day{periodCount === 1 ? "" : "s"}{cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : ""}</>}
