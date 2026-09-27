@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-NNLzbC38vTKz6GcKrDrqI/zPYOlLEMevPPEeFlwsFLU=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-1zRLVh0q7f0Yv40Lo3EBWwru03ceT+RKYJb87T+ayDI=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-qH3C9OgxZxFUrrsi/JX+CVpzCXOj5QsFv2zW1HOWDso=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-b7rwDO0Mo1/Ct7o4z18b2CT/aKUkQduGS+sV7xNZLrc=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -41,6 +41,11 @@
     @media (max-width: 600px) {
       select, input[type="date"], input[type="text"], input[type="password"], input[type="email"] { font-size: 16px !important; min-height: 38px; }
       button { min-height: 36px; }
+      /* A card's open/close title row (Collapsible and the Settings toggles) is a phone tap target too. */
+      .cardtoggle { min-height: 36px; }
+      /* An inline More / Less / Details toggle: 36 px wide too, and its negative vertical margins keep the 36 px height
+         from stretching the sentence's line box. */
+      .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
     }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
@@ -87,6 +92,8 @@
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
       .cal-legend { font-size: 10px !important; }
+      /* Day-click summary (9/27): the day editor's "Esc closes - arrow keys move a day" hint means nothing on a touch screen. */
+      .editor-kbd-hint { display: none; }
       /* Prompt 11 mobile pass: the PREVIEW tag no longer clips or sits on the
          B line / vacation dots (smaller, no tracking, and the cell grows). */
       .cal-cell.cal-preview { min-height: 78px; padding-bottom: 12px; }
@@ -100,6 +107,8 @@
       input[type="checkbox"] { width: 20px; height: 20px; }
       .trade-pick { width: 100% !important; }
       .trade-pick-wrap { flex: 1 1 100%; }
+      /* the offer deadline notice (9/27): on a phone the sentence takes the full width and "Choose shifts" sits under it */
+      .offer-notice-row .offer-notice-text { flex-basis: 100% !important; }
     }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
@@ -110,7 +119,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.27a";
+    var APP_VERSION = "2026.09.27b";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -307,6 +316,7 @@ function CallSchedule() {
     periodGap: 0
   });
   const [vacConflict, setVacConflict] = useState(null);
+  const [vacLeadNote, setVacLeadNote] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [reloadTrigger, setReloadTrigger] = useState(0);
   const [saveStatus, setSaveStatus] = useState("");
@@ -370,6 +380,7 @@ function CallSchedule() {
     showToast(r.message, r.skipped.length ? "error" : "info");
   }, []);
   const [officeContacts, setOfficeContacts] = useState([]);
+  const [officeContactsLoad, setOfficeContactsLoad] = useState("loading");
   const [newOfficeName, setNewOfficeName] = useState("");
   const [newOfficeEmail, setNewOfficeEmail] = useState("");
   const [newOfficeRole, setNewOfficeRole] = useState("");
@@ -946,6 +957,221 @@ function CallSchedule() {
   auditRef.current = {
     logAudit,
     nameOf
+  };
+  const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || isCoordinator || (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "surgeon" && !!mySurgeon);
+  const payTotalsRole = payVisible && isScheduler ? "scheduler" : payVisible && isCoordinator ? "office" : null;
+  const [paySettingsRow, setPaySettingsRow] = useState(null);
+  const [payLogRows, setPayLogRows] = useState([]);
+  const [payState, setPayState] = useState({
+    settings: "unread",
+    logs: "unread",
+    loadedYear: null,
+    attemptYear: null,
+    settingsLoaded: false
+  });
+  const [payYear, setPayYear] = useState(() => Number(todayCentral().slice(0, 4)));
+  const [payBusy, setPayBusy] = useState(false);
+  const payToastShownRef = useRef(false);
+  const payGenRef = useRef(0);
+  const paySeqRef = useRef(0);
+  const loadPay = async (year, explicit) => {
+    if (!payVisible) return;
+    const y = Number(year) || payYear;
+    const who = isScheduler || isCoordinator ? null : mySurgeon;
+    if (!isScheduler && !isCoordinator && !who) return;
+    const gen = payGenRef.current;
+    const seq = ++paySeqRef.current;
+    setPayState(prev => payStateBeforeRead(prev, y));
+    const [st, lg] = await Promise.all([payDb.loadSettings(), payDb.loadLogs({
+      personId: who,
+      from: y + "-01-01",
+      to: y + "-12-31"
+    })]);
+    if (gen !== payGenRef.current || seq !== paySeqRef.current) return;
+    if (st.state === "ok") setPaySettingsRow(st.row);
+    if (lg.state === "ok") setPayLogRows(lg.rows);
+    setPayState(prev => payStateAfterRead(prev, y, st, lg));
+    if (st.state === "failed" || lg.state === "failed") {
+      console.warn("call pay read failed", st.error || "", lg.error || "");
+      if (explicit || !payToastShownRef.current) {
+        payToastShownRef.current = true;
+        showToast("Couldn't load the pay data - the last loaded rows are kept. Try Refresh.", "error");
+      }
+    }
+  };
+  useEffect(() => {
+    payGenRef.current++;
+    setPaySettingsRow(null);
+    setPayLogRows([]);
+    setPayState({
+      settings: "unread",
+      logs: "unread",
+      loadedYear: null,
+      attemptYear: null,
+      settingsLoaded: false
+    });
+    payToastShownRef.current = false;
+  }, [mySurgeon, isScheduler, isCoordinator, payVisible]);
+  useEffect(() => {
+    if (!payVisible) return;
+    if (view === "myschedule" || view === "totals" || view === "setup") loadPay(payYear, false);
+  }, [view, payVisible, payYear, mySurgeon, isScheduler, isCoordinator]);
+  const savePayRates = async next => {
+    if (!isScheduler) return false;
+    setPayBusy(true);
+    try {
+      const row = paySettingsToRow(next);
+      const {
+        error
+      } = await payDb.saveSettings(row);
+      if (error) {
+        console.warn("call pay settings save failed", error);
+        showToast("Couldn't save the pay rates: " + payErrorText(error), "error");
+        return false;
+      }
+      const changed = payRatesChanged(paySettingsRow, row);
+      const stipend = payStipendDelta(paySettingsRow, row);
+      logAudit("pay.rates", "Pay rates updated", {
+        changed,
+        stipendOff: stipend.off,
+        stipendOn: stipend.on
+      });
+      showToast(changed.length ? "Pay rates saved." : "Saved - nothing had changed.", "success");
+      await loadPay(payYear, true);
+      return true;
+    } finally {
+      setPayBusy(false);
+    }
+  };
+  const payMayWrite = personId => payVisible && !isCoordinator && !!personId && (isScheduler || personId === mySurgeon);
+  const payMyCardHidden = !isScheduler && (paySettingsHidden(payState, paySettingsRow) || payStipendPending(payState));
+  const addPayLog = async input => {
+    const personId = input && input.personId;
+    if (!payMayWrite(personId)) return false;
+    if (payViewState(payState, payYear) !== "ok" && payViewState(payState, payYear) !== "stale") {
+      showToast("The call-ins are still loading - try again in a moment.", "error");
+      return false;
+    }
+    const why = payLogValidate(input, {
+      schedule,
+      personId,
+      today: todayCentral(),
+      logs: payLogRows
+    });
+    if (why) {
+      showToast(why, "error");
+      return false;
+    }
+    setPayBusy(true);
+    try {
+      const row = {
+        day: input.day,
+        person_id: personId,
+        hours: Number(input.hours),
+        note: String(input.note || "").trim() || null,
+        created_by: mySurgeon || (authUser === null || authUser === void 0 ? void 0 : authUser.id) || null
+      };
+      const {
+        data,
+        error
+      } = await payDb.addLog(row);
+      if (error) {
+        console.warn("call pay insert failed", error);
+        showToast(payErrorText(error), "error");
+        return false;
+      }
+      logAudit("pay.log.add", payLogAuditText("logged", nameOf(personId), row), {
+        id: data && data.id,
+        day: row.day,
+        person_id: personId,
+        hours: row.hours
+      });
+      showToast("Call-in logged.", "success");
+      await loadPay(payYear, true);
+      return true;
+    } finally {
+      setPayBusy(false);
+    }
+  };
+  const updatePayLog = async (prev, patch) => {
+    if (!prev || !payMayWrite(prev.person_id)) return false;
+    const day = String(prev.day).slice(0, 10);
+    if (payViewState(payState, payYear) !== "ok" && payViewState(payState, payYear) !== "stale") {
+      showToast("The call-ins are still loading - try again in a moment.", "error");
+      return false;
+    }
+    const why = payLogValidate({
+      day,
+      hours: patch.hours,
+      note: patch.note
+    }, {
+      schedule,
+      personId: prev.person_id,
+      today: todayCentral(),
+      logs: payLogRows,
+      editingId: prev.id
+    });
+    if (why) {
+      showToast(why, "error");
+      return false;
+    }
+    setPayBusy(true);
+    try {
+      const row = {
+        day,
+        person_id: prev.person_id,
+        hours: Number(patch.hours),
+        note: String(patch.note || "").trim() || null
+      };
+      const {
+        error
+      } = await payDb.updateLog(prev.id, {
+        hours: row.hours,
+        note: row.note
+      });
+      if (error) {
+        console.warn("call pay update failed", error);
+        showToast(payErrorText(error), "error");
+        return false;
+      }
+      logAudit("pay.log.edit", payLogAuditText("edited", nameOf(prev.person_id), row), {
+        id: prev.id,
+        day,
+        person_id: prev.person_id,
+        hours: row.hours
+      });
+      showToast("Call-in updated.", "success");
+      await loadPay(payYear, true);
+      return true;
+    } finally {
+      setPayBusy(false);
+    }
+  };
+  const deletePayLog = async prev => {
+    if (!prev || !payMayWrite(prev.person_id)) return false;
+    if (!window.confirm("Delete the call-in on " + fmtMD(String(prev.day).slice(0, 10)) + " (" + Number(prev.hours) + " h)?")) return false;
+    setPayBusy(true);
+    try {
+      const {
+        error
+      } = await payDb.deleteLog(prev.id);
+      if (error) {
+        console.warn("call pay delete failed", error);
+        showToast(payErrorText(error), "error");
+        return false;
+      }
+      logAudit("pay.log.delete", payLogAuditText("deleted", nameOf(prev.person_id), prev), {
+        id: prev.id,
+        day: String(prev.day).slice(0, 10),
+        person_id: prev.person_id,
+        hours: Number(prev.hours)
+      });
+      showToast("Call-in deleted.", "success");
+      await loadPay(payYear, true);
+      return true;
+    } finally {
+      setPayBusy(false);
+    }
   };
   const loadAudit = async () => {
     setAuditLoading(true);
@@ -2653,6 +2879,40 @@ function CallSchedule() {
     }
     return true;
   };
+  const tradeCardRef = useRef(null);
+  const focusTradeCard = () => {
+    const raf = f => typeof requestAnimationFrame === "function" ? requestAnimationFrame(f) : setTimeout(f, 16);
+    const land = left => {
+      const card = tradeCardRef.current;
+      if (!card) {
+        if (left > 0) raf(() => land(left - 1));
+        return;
+      }
+      try {
+        card.scrollIntoView({
+          block: "start"
+        });
+        const q = id => {
+          const el = card.querySelector('[data-testid="' + id + '"]');
+          return el && !el.disabled ? el : null;
+        };
+        let target = null;
+        for (const group of [["trade-mine-pick", "trade-day"], ["trade-to"], ["trade-theirs-pick", "trade-return-day"]]) {
+          const els = group.map(q).filter(Boolean);
+          if (!els.length || els.some(el => el.value)) continue;
+          target = els[0];
+          break;
+        }
+        target = target || q("trade-submit");
+        if (target) target.focus({
+          preventScroll: true
+        });
+      } catch (e) {
+        console.warn("focusTradeCard: could not land on the trade card", e);
+      }
+    };
+    raf(() => land(8));
+  };
   const proposeTradeForDay = (day, role, pick) => {
     setTradeDay(day);
     setTradeRole(role === "backup" ? "backup" : "primary");
@@ -2665,6 +2925,7 @@ function CallSchedule() {
     }
     setEditorDay(null);
     setView("timeoff");
+    focusTradeCard();
   };
   const clearSchedule = async () => {
     if (!isScheduler) return;
@@ -2855,6 +3116,9 @@ function CallSchedule() {
   useEffect(() => {
     if (view === "setup" && isAdmin) loadAllProfilesLoud();
   }, [view, isAdmin]);
+  useEffect(() => {
+    setVacLeadNote(null);
+  }, [view]);
   const addAvailabilityRows = async rows => {
     if (!isScheduler) return {
       ok: false
@@ -4146,6 +4410,13 @@ function CallSchedule() {
     if (!r || !(r.status === "pending" && !!mySurgeon && r.to_surgeon_id === mySurgeon)) return null;
     return tradeIsGiveProposal(r) ? r : null;
   };
+  const notifTradeProposal = n => {
+    const d = n && n.data || {};
+    if (!n || n.type !== "trade_proposed" || d.kind === "give" || !d.trade_id) return null;
+    const r = tradeRequests.find(x => x.id === d.trade_id);
+    if (!r || !(r.status === "pending" && !!mySurgeon && r.to_surgeon_id === mySurgeon)) return null;
+    return tradeIsGiveProposal(r) ? null : r;
+  };
   const submitTradeRequest = async () => {
     if (isPublicMode) return;
     const give = tradeKind === "give";
@@ -4706,6 +4977,9 @@ function CallSchedule() {
       console.warn("Couldn't persist notifications-seen marker:", e);
     }
   };
+  const waitingToday = todayCentral();
+  const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon, waitingToday, tradeUnitTag), [tradeRequests, mySurgeon, waitingToday]);
+  const pendingProposalCount = useMemo(() => countPendingProposals(myTradeRequests, tradeUnitTag), [myTradeRequests]);
   const auditGiveIds = useMemo(() => auditGiveTradeIds(auditEntries, tradeRequests, tradeIsGiveProposal), [auditEntries, tradeRequests]);
   const clearAllNotifications = useCallback(() => {
     if (!confirm("Clear notifications from this view? Only this device is affected - the shared feed and other devices are untouched.")) return;
@@ -4806,9 +5080,12 @@ function CallSchedule() {
         });
         if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 120)}`);
         const rows = await res.json();
-        if (Array.isArray(rows)) setOfficeContacts(rows);
+        if (!Array.isArray(rows)) throw new Error("office_contacts answered a non-array");
+        setOfficeContacts(rows);
+        setOfficeContactsLoad("ok");
       } catch (e) {
         console.warn("Load office contacts error:", e);
+        setOfficeContactsLoad("failed");
         showToast("Couldn't load office contacts - the list shown may be incomplete.", "error");
       }
     })();
@@ -5154,8 +5431,15 @@ function CallSchedule() {
       showToast("Notes are operational only (the whole group and the shareable page read them) - leave the reason out.", "error");
       return;
     }
+    setVacLeadNote(null);
     const r = await toAdd(vacSurgeon, vacStart, vacEnd, vacNote);
     if (r.ok) {
+      if (!isScheduler && !isCoordinator && !isViewer && vacSurgeon === mySurgeon) {
+        const lead = vacationLeadNote(vacStart, todayStr, groupRules && groupRules.offerPeriods);
+        if (lead) setVacLeadNote(_objectSpread(_objectSpread({}, lead), {}, {
+          start: vacStart
+        }));
+      }
       setVacStart(todayCentral());
       setVacEnd(todayCentral());
       setVacNote("");
@@ -5163,7 +5447,10 @@ function CallSchedule() {
     }
   };
   const rmVac = (sid, rowId) => {
-    if (confirm("Remove this vacation?")) toRemove(sid, rowId);
+    if (confirm("Remove this vacation?")) {
+      setVacLeadNote(null);
+      toRemove(sid, rowId);
+    }
   };
   const saveEditVac = async () => {
     if (!editVac || !editVac.start || !editVac.end) return;
@@ -5475,7 +5762,11 @@ function CallSchedule() {
     const when = n === null ? "" : n === 0 ? " (today)" : n === 1 ? " (tomorrow)" : n > 1 ? ` (in ${n} days)` : "";
     const closeLabel = prdDayWords(close);
     const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;
-    const message = `Your dates for ${p.label} (${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'.\n\nNothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page (the morning run sends the same note ${(groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose || OP_PERIOD_DEFAULTS.remindDaysBeforeClose).join(" and ")} days before the freeze).`;
+    const message = `Your dates for ${p.label} (${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'.\n\nNothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page (the morning run sends the same note ${(() => {
+      const lst = groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose;
+      const ds = (Array.isArray(lst) ? lst : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter(n => typeof n === "number" && isFinite(n) && n >= 0).sort((x, y) => y - x);
+      return ds.length > 1 ? ds.slice(0, -1).join(", ") + " and " + ds[ds.length - 1] : ds.join("");
+    })()} days before the freeze).`;
     const detail = "Paint my offers: " + window.location.origin + window.location.pathname + "#offers";
     setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
       [key]: {
@@ -6046,9 +6337,27 @@ function CallSchedule() {
       } catch (e) {
         console.warn("Couldn't persist the East panel state:", e);
       }
+      scrollToCardRef.current = "setup_east";
       setView("setup");
     } else setView("timeoff");
   };
+  const scrollToCardRef = useRef(null);
+  useEffect(() => {
+    if (view !== "setup" || !scrollToCardRef.current) return;
+    const ck = scrollToCardRef.current;
+    scrollToCardRef.current = null;
+    const t = setTimeout(() => {
+      try {
+        const el = document.querySelector('[data-testid="card-' + ck + '"]');
+        if (el) el.scrollIntoView({
+          block: "start"
+        });else console.warn("Couldn't find the " + ck + " card to scroll to");
+      } catch (e) {
+        console.warn("Couldn't scroll to the " + ck + " card:", e);
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [view]);
   const snapshotAgeText = iso => {
     if (!iso) return "none on file";
     const t = new Date(iso).getTime();
@@ -6142,6 +6451,26 @@ function CallSchedule() {
   const boardEnd = board.end;
   const boardRanges = board.ranges;
   const boardEndText = boardEnd ? fmtMD(boardEnd) : "-";
+  const boardKeys = useMemo(() => new Set(boardSlots.map(s => openSlotKey(s.day, s.role))), [boardSlots]);
+  const offerNotices = useMemo(() => {
+    return mySurgeon && !isPublicMode ? offerDeadlineNotices({
+      periods: periodRows,
+      offers: offerRows,
+      personId: mySurgeon,
+      today: todayStr,
+      groupRules
+    }) : [];
+  }, [mySurgeon, isPublicMode, periodRows, offerRows, todayStr, groupRules]);
+  const prdOpenCounts = useMemo(() => {
+    const out = {};
+    if (!isScheduler) return out;
+    (periodRows || []).forEach(p => {
+      const a = String(p && p.start_day || "").slice(0, 10),
+        b = String(p && p.end_day || "").slice(0, 10);
+      if (suIsIso(a) && suIsIso(b)) out[p.id || a] = b >= todayStr ? openSlots(schedule, a, b, todayStr).length : 0;
+    });
+    return out;
+  }, [isScheduler, periodRows, schedule, todayStr]);
   const boardTail = useMemo(() => {
     const through = suAddDays(todayStr, 59);
     const from = boardEnd && boardEnd >= todayStr ? suAddDays(boardEnd, 1) : todayStr;
@@ -6659,6 +6988,19 @@ function CallSchedule() {
       setCalYear(y);
     }
   };
+  const proposeGiveForDay = (day, role, from) => {
+    setTradeDay(day);
+    setTradeRole(role === "backup" ? "backup" : "primary");
+    setTradeKind("give");
+    setTradeReturnDay("");
+    if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);else if (isScheduler && from && poolSurgeons.some(s => s.id === from)) setTradeFrom(from);
+    setEditorDay(null);
+    setView("timeoff");
+  };
+  const openShiftsBoard = () => {
+    setEditorDay(null);
+    setView("openshifts");
+  };
   const rulesImported = surgeonRules !== undefined && groupRules !== undefined && holidays !== undefined;
   const setupIssues = useMemo(() => suSetupIssues({
     roster: surgeons,
@@ -6691,7 +7033,149 @@ function CallSchedule() {
     margin: "0 0 10px",
     lineHeight: 1.5
   };
+  const groupHeading = (testid, group, text, first) => React.createElement("div", {
+    "data-testid": testid,
+    "data-group": group,
+    role: "heading",
+    "aria-level": 2,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      margin: first ? "2px 4px 10px" : "24px 4px 10px",
+      fontSize: 13,
+      fontWeight: 600,
+      fontVariant: "small-caps",
+      letterSpacing: 0.6,
+      color: T.muted
+    }
+  }, React.createElement("span", null, text), React.createElement("span", {
+    "aria-hidden": "true",
+    style: {
+      flex: 1,
+      height: 1,
+      background: T.border
+    }
+  }));
+  const settingsToggleRow = open => _objectSpread(_objectSpread({}, css.cardT), {}, {
+    margin: open ? "0 0 12px" : 0,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    userSelect: "none"
+  });
+  const settingsChevron = open => React.createElement("span", {
+    "aria-hidden": "true",
+    style: {
+      fontSize: 11,
+      color: T.muted,
+      letterSpacing: 0,
+      transition: "transform .15s",
+      transform: open ? "rotate(90deg)" : "rotate(0deg)",
+      display: "inline-block",
+      width: 10,
+      flexShrink: 0
+    }
+  }, "▶");
+  const moreToggle = (k, text) => React.createElement("button", {
+    type: "button",
+    className: "moretoggle",
+    "data-testid": "more-" + k,
+    "aria-expanded": !!openSettingsCards[k],
+    onClick: () => toggleSettingsCard(k),
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      verticalAlign: "middle",
+      background: "none",
+      border: "none",
+      padding: "0 2px",
+      marginLeft: 4,
+      color: T.accentText,
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: "pointer",
+      fontFamily: font
+    }
+  }, openSettingsCards[k] ? "Less" : text || "More");
+  const moreNote = {
+    fontSize: 11.5,
+    color: T.muted,
+    margin: "0 0 10px",
+    lineHeight: 1.5
+  };
+  const onIOSDevice = (() => {
+    try {
+      return /iP(hone|ad|od)/.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+    } catch (e) {
+      console.warn("Couldn't read the user agent:", e);
+      return false;
+    }
+  })();
+  const cardSummary = text => text ? React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: T.muted
+    }
+  }, text) : null;
+  const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
   const dowShort = d => DAY_HDR[parse(d).getDay()];
+  const offerNoticeBox = (list, where) => {
+    if (!list || !list.length) return null;
+    const opR = groupRules && groupRules.offerPeriods || {};
+    const wk = (v, d) => typeof v === "number" && v > 0 ? v : d;
+    const closeW = wk(opR.closeWeeksBeforeStart, OP_PERIOD_DEFAULTS.closeWeeksBeforeStart),
+      pubW = wk(opR.publishWeeksBeforeStart, OP_PERIOD_DEFAULTS.publishWeeksBeforeStart);
+    const weeks = pubW === closeW ? String(closeW) : Math.min(pubW, closeW) + "-" + Math.max(pubW, closeW);
+    return React.createElement("div", {
+      "data-testid": "offer-deadline-notice",
+      "data-where": where,
+      role: "status",
+      style: {
+        fontSize: 12.5,
+        lineHeight: 1.5,
+        color: T.noticeText,
+        background: T.noticeBg,
+        border: `1px solid ${T.noticeBorder}`,
+        borderRadius: 8,
+        padding: "6px 10px",
+        marginBottom: 10
+      }
+    }, list.map(n => React.createElement("div", {
+      key: n.periodId || n.startDay,
+      className: "offer-notice-row",
+      "data-period-id": n.periodId || "",
+      "data-days": n.daysToClose,
+      "data-urgent": n.urgent ? "1" : "0",
+      style: {
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        flexWrap: "wrap",
+        padding: "3px 0"
+      }
+    }, React.createElement("span", {
+      className: "offer-notice-text",
+      style: {
+        flex: "1 1 240px",
+        minWidth: 0
+      }
+    }, "Choose your shifts for ", React.createElement("strong", null, n.label || fmtMD(n.startDay)), " before ", dowShort(n.closeAt), " ", fmtMD(n.closeAt), " (they freeze ", n.daysToClose === 1 ? "tomorrow" : "in " + n.daysToClose + " days", ") - the schedule is built ", weeks, " weeks before ", fmtMD(n.startDay), "."), React.createElement("button", {
+      type: "button",
+      "data-testid": "offer-deadline-choose",
+      onClick: () => setOfferSheet({
+        personId: mySurgeon,
+        periodId: n.periodId || null
+      }),
+      title: "Open the offer painter on " + (n.label || fmtMD(n.startDay)) + ": paint the days you will cover, or choose 'Go by my rules'",
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "5px 12px",
+        fontSize: 11
+      })
+    }, "Choose shifts"))));
+  };
   const isWeekendDay = d => {
     const w = parse(d).getDay();
     return w === 0 || w === 5 || w === 6;
@@ -6943,7 +7427,175 @@ function CallSchedule() {
       cursor: "pointer",
       fontSize: 14
     }
+  }, "x")), vacLeadNote && !isScheduler && !isCoordinator && !isViewer && React.createElement("div", {
+    "data-testid": "vac-lead-note",
+    "data-start": vacLeadNote.start,
+    "data-through": vacLeadNote.through,
+    role: "status",
+    style: {
+      flex: "1 1 100%",
+      fontSize: 12,
+      lineHeight: 1.5,
+      color: T.text,
+      borderLeft: "3px solid " + T.accent,
+      padding: "4px 10px",
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 8
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, "The schedule through ", fmtMD(vacLeadNote.through), " is already being built - check Open shifts or propose a trade if this affects a call day."), React.createElement("button", {
+    "data-testid": "vac-lead-note-dismiss",
+    onClick: () => setVacLeadNote(null),
+    "aria-label": "Dismiss the lead-time note",
+    style: {
+      background: "none",
+      border: "none",
+      color: T.muted,
+      cursor: "pointer",
+      fontSize: 14,
+      minWidth: 36,
+      minHeight: 36,
+      padding: 0,
+      flexShrink: 0
+    }
   }, "x")));
+  const statusColor = st => st === "pending" ? "#c09030" : st === "declined" || st === "cancelled" ? "#c04040" : st === "accepted" ? "#6030a0" : "#1a8040";
+  const tenseFor = st => st === "accepted" || st === "applied" ? "takes" : st === "declined" || st === "cancelled" ? "would have taken" : "would take";
+  const rowBox = {
+    padding: "8px 12px",
+    background: dk ? "#13294B" : "#f8f9fb",
+    borderRadius: 6,
+    border: `1px solid ${dkCardBorder}`
+  };
+  const tradeRow = (r, where) => {
+    const waiting = where === "waiting";
+    const named = tradeNamed(r);
+    const canAnswer = r.status === "pending" && (isScheduler || r.to_surgeon_id === mySurgeon);
+    const canCancel = r.status === "pending" && (isScheduler || r.from_surgeon_id === mySurgeon);
+    const canRetry = r.status === "accepted" && (isScheduler || r.from_surgeon_id === mySurgeon || r.to_surgeon_id === mySurgeon);
+    const busy = tradeBusy === r.id;
+    const err = tradeApplyErr[r.id];
+    const tag = tradeUnitTag(r);
+    const groupN = tag ? tradeGroupOf(r).length : 1;
+    const giveGroup = tradeIsGiveProposal(r);
+    const unitGroup = waiting && tag && groupN > 1 ? tradeGroupOf(r).map(tradeNamed) : null;
+    return React.createElement("div", {
+      key: r.id,
+      "data-testid": waiting ? "trade-waiting-row" : "trade-row",
+      "data-trade-id": r.id,
+      "data-status": r.status,
+      "data-kind": giveGroup ? "give" : "trade",
+      "data-unit": tag ? tag.kind + ":" + tag.start : undefined,
+      "data-group": groupN,
+      "data-days": unitGroup ? unitGroup.map(g => g.day).join(",") : undefined,
+      style: rowBox
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 8,
+        flexWrap: "wrap",
+        alignItems: "center"
+      }
+    }, unitGroup ? React.createElement("span", {
+      "data-testid": "trade-waiting-unit-line",
+      style: {
+        fontSize: 12.5,
+        color: dkText
+      }
+    }, tradeWaitingUnitLine(unitGroup, tag, mySurgeon, giveGroup)) : React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        color: dkText
+      }
+    }, giveGroup ? React.createElement("span", {
+      "data-testid": "trade-give-line"
+    }, tradeGiveLine(named, tag, mySurgeon)) : tradeLegsText(named, tenseFor(r.status)), tag && React.createElement("span", {
+      "data-testid": "trade-unit-tag",
+      title: "A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together",
+      style: {
+        marginLeft: 8,
+        fontSize: 10,
+        fontWeight: 700,
+        color: "#7a5a20",
+        background: "#fbf1d8",
+        borderRadius: 4,
+        padding: "1px 6px",
+        whiteSpace: "nowrap"
+      }
+    }, tag.text, " - day ", tag.index, " of ", tag.n)), React.createElement("span", {
+      "data-testid": "trade-status",
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        textTransform: "uppercase",
+        color: statusColor(r.status)
+      }
+    }, tradeRowStatus(r.status, giveGroup))), React.createElement("div", {
+      "data-testid": "trade-meta",
+      style: {
+        fontSize: 10,
+        color: "#9aa4ae",
+        fontFamily: mono,
+        marginTop: 2
+      }
+    }, giveGroup ? "offered" : "proposed", " by ", named.from_surgeon_name, " ", fmtAuditTime(r.submitted_at), r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""), err && React.createElement("div", {
+      "data-testid": "trade-apply-error",
+      style: _objectSpread(_objectSpread({}, css.errBox), {}, {
+        marginTop: 6
+      })
+    }, "Apply failed: ", err), (canAnswer || !waiting && (canCancel || canRetry || isScheduler && r.status === "applied")) && React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 6,
+        flexWrap: "wrap"
+      }
+    }, canAnswer && React.createElement("button", {
+      "data-testid": waiting ? "trade-waiting-accept" : "trade-accept",
+      disabled: busy,
+      onClick: () => acceptTrade(r),
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "4px 12px",
+        fontSize: 11
+      }, waiting ? {
+        minHeight: 36
+      } : {})
+    }, busy ? "Working" : groupN > 1 ? `Accept (${groupN} days)` : "Accept"), canAnswer && React.createElement("button", {
+      "data-testid": waiting ? "trade-waiting-decline" : "trade-decline",
+      disabled: busy,
+      onClick: () => declineTrade(r),
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "4px 12px",
+        fontSize: 11
+      }, waiting ? {
+        minHeight: 36
+      } : {})
+    }, groupN > 1 ? `Decline (${groupN} days)` : "Decline"), !waiting && canCancel && React.createElement("button", {
+      "data-testid": "trade-cancel",
+      disabled: busy,
+      onClick: () => cancelTrade(r),
+      style: css.danger
+    }, groupN > 1 ? `Cancel (${groupN} days)` : "Cancel"), !waiting && canRetry && React.createElement("button", {
+      "data-testid": "trade-retry",
+      disabled: busy,
+      onClick: () => retryApplyTrade(r),
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "4px 12px",
+        fontSize: 11,
+        background: "linear-gradient(135deg,#6030a0,#8050c0)",
+        borderColor: "#6030a0"
+      })
+    }, busy ? "Working" : "Retry apply"), !waiting && isScheduler && (r.status === "applied" || r.status === "accepted") && React.createElement("button", {
+      onClick: () => goToDay(r.day),
+      title: giveGroup ? "The scheduler reverts a give by putting " + named.from_surgeon_name + " back on " + fmtMD(r.day) + " in the day editor - one-way, nothing else moves" : "The scheduler reverts a trade by editing the day",
+      style: css.mini(false)
+    }, "Open ", fmtMD(r.day), " in the day editor")));
+  };
   const authBox = children => React.createElement("div", {
     style: {
       display: "flex",
@@ -7794,7 +8446,7 @@ function CallSchedule() {
     let tabs = allTabs;
     if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
     if (!mySurgeon && !isFollowing) tabs = tabs.filter(([k]) => k !== "myschedule");
-    const pendingTrades = myTradeRequests.filter(r => r.status === "pending").length;
+    const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
     return tabs.map(([k, l]) => React.createElement("button", {
       key: k,
       "data-tab": k,
@@ -7803,6 +8455,8 @@ function CallSchedule() {
       }),
       onClick: () => setView(k)
     }, l, k === "timeoff" && pendingTrades > 0 && React.createElement("span", {
+      "data-testid": "timeoff-badge",
+      title: isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer",
       style: {
         position: "absolute",
         top: -4,
@@ -7883,10 +8537,30 @@ function CallSchedule() {
     }),
     style: _objectSpread(_objectSpread({}, css.tab(false, T.accent)), {}, {
       fontSize: 12,
-      padding: "5px 10px"
+      padding: "5px 10px",
+      position: "relative"
     }),
     title: "Paint the dates you'll cover (primary / backup / either), any time ahead"
-  }, "Paint offers"))), React.createElement("div", {
+  }, "Paint offers", offerNotices.length > 0 && React.createElement("span", {
+    "data-testid": "offer-deadline-badge",
+    title: offerNotices.length + " period(s) waiting for your choices - the first freezes " + fmtMD(offerNotices[0].closeAt),
+    style: {
+      position: "absolute",
+      top: -4,
+      right: -4,
+      background: T.accent,
+      color: T.onAccent,
+      borderRadius: 10,
+      fontSize: 9,
+      fontWeight: 700,
+      minWidth: 16,
+      height: 16,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "0 4px"
+    }
+  }, offerNotices.length)))), React.createElement("div", {
     style: {
       maxWidth: 1020,
       margin: "0 auto",
@@ -7976,6 +8650,8 @@ function CallSchedule() {
     const targetTab = tabMap[n.type] || null;
     const giveT = notifGiveTrade(n);
     const giveN = giveT ? tradeGroupOf(giveT).length : 0;
+    const tradeT = giveT ? null : notifTradeProposal(n);
+    const tradeN = tradeT ? tradeGroupOf(tradeT).length : 0;
     return React.createElement("div", {
       key: n.id,
       "data-testid": "notif-row",
@@ -8058,7 +8734,40 @@ function CallSchedule() {
         fontSize: 12,
         minHeight: 36
       })
-    }, giveN > 1 ? `Decline (${giveN} days)` : "Decline")), targetTab && React.createElement("span", {
+    }, giveN > 1 ? `Decline (${giveN} days)` : "Decline")), tradeT && React.createElement("div", {
+      "data-testid": "notif-trade-actions",
+      "data-trade-id": tradeT.id,
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 6,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("button", {
+      "data-testid": "notif-trade-accept",
+      disabled: !!tradeBusy,
+      onClick: e => {
+        e.stopPropagation();
+        acceptTrade(tradeT);
+      },
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "6px 14px",
+        fontSize: 12,
+        minHeight: 36
+      })
+    }, tradeBusy === tradeT.id ? "Working" : tradeN > 1 ? `Accept (${tradeN} days)` : "Accept"), React.createElement("button", {
+      "data-testid": "notif-trade-decline",
+      disabled: !!tradeBusy,
+      onClick: e => {
+        e.stopPropagation();
+        declineTrade(tradeT);
+      },
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "6px 14px",
+        fontSize: 12,
+        minHeight: 36
+      })
+    }, tradeN > 1 ? `Decline (${tradeN} days)` : "Decline")), targetTab && React.createElement("span", {
       style: {
         fontSize: 10,
         color: T.accentText,
@@ -8076,7 +8785,7 @@ function CallSchedule() {
       color: profileLoadFailed ? "#8a3030" : "#2c4a68",
       lineHeight: 1.5
     })
-  }, profileLoadFailed ? "Couldn't load your account profile - some features are hidden until it loads. Reload the app; if this persists, tell the scheduler." : "Your account is not linked to a roster entry yet - the scheduler will link it. Until then you can view the schedule."), view === "setup" && !isPublicMode && isScheduler && React.createElement(React.Fragment, null, React.createElement(Collapsible, {
+  }, profileLoadFailed ? "Couldn't load your account profile - some features are hidden until it loads. Reload the app; if this persists, tell the scheduler." : "Your account is not linked to a roster entry yet - the scheduler will link it. Until then you can view the schedule."), view === "setup" && !isPublicMode && isScheduler && React.createElement(React.Fragment, null, groupHeading("setup-group", "cycle", "Every cycle", true), React.createElement(Collapsible, {
     css: css,
     ck: "setup_issues",
     defaultOpen: true,
@@ -8090,7 +8799,7 @@ function CallSchedule() {
   }, setupIssues.length === 0 ? React.createElement("p", {
     "data-testid": "setup-issues",
     style: _objectSpread(_objectSpread({}, muted), {}, {
-      color: "#1a8040"
+      color: T.success
     })
   }, "None.") : React.createElement("ul", {
     "data-testid": "setup-issues",
@@ -8098,16 +8807,95 @@ function CallSchedule() {
       margin: 0,
       paddingLeft: 18,
       fontSize: 12.5,
-      color: "#7a5a20",
+      color: T.warnText,
       lineHeight: 1.7
     }
   }, setupIssues.map(s => React.createElement("li", {
     key: s
   }, s)))), React.createElement(Collapsible, {
     css: css,
+    ck: "setup_generate",
+    defaultOpen: true,
+    title: "Generate (preview, then publish)"
+  }, React.createElement(PeriodsSection, {
+    css: css,
+    periods: periodRows,
+    offers: offerRows,
+    roster: surgeons,
+    groupRules: groupRules,
+    today: todayStr,
+    nameOf: nameOf,
+    notifPrefs: notifPrefs,
+    busy: prdBusy || genBusy,
+    remindState: prdRemind,
+    selfId: mySurgeon,
+    draft: prdDraft,
+    setDraft: setPrdDraft,
+    openCounts: prdOpenCounts,
+    onCreate: createPeriod,
+    onCloseNow: closePeriodNow,
+    onRemind: remindOffers,
+    onEnterFor: enterOffersFor,
+    onGenerate: generatePeriod
+  }), React.createElement(GeneratePanel, {
+    css: css,
+    presets: genPresets,
+    opts: genOpts,
+    setOpts: setGenOpts,
+    busy: genBusy,
+    busyMode: genWorkerOk ? "worker" : "inline",
+    preview: previewGen,
+    onRun: runGenerate,
+    onReroll: rerollGenerate,
+    onAccept: acceptPreview,
+    onDiscard: discardPreview,
+    nameOf: nameOf,
+    roster: surgeons,
+    rulesImported: rulesImported,
+    lastPublishedDay: lastPublishedDay,
+    genStart: genStart,
+    genFirstOpenDay: genFirstOpenDay,
+    laterRanges: laterAssignedRanges,
+    holidayNames: holidayNameByDay(holidays)
+  })), React.createElement(Collapsible, {
+    css: css,
+    ck: "setup_vacations",
+    defaultOpen: false,
+    title: "Vacations (everyone)",
+    summary: cardSummary(plural(groupVacationRows(vacations, surgeons.map(s => s.id), todayStr, false).reduce((n, g) => n + g.upcoming, 0), "upcoming vacation", "upcoming vacations")),
+    right: React.createElement("button", {
+      onClick: e => {
+        e.stopPropagation();
+        setPaintSheet(true);
+      },
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "3px 10px",
+        fontSize: 11
+      })
+    }, "Paint month")
+  }, React.createElement("p", {
+    style: sectionNote
+  }, "Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is."), renderVacationForm(poolSurgeons), React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      fontSize: 11,
+      color: "#5B6B82",
+      marginBottom: 8,
+      cursor: "pointer"
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    "data-testid": "vac-show-past",
+    checked: showPastVacations,
+    onChange: e => setShowPastVacations(e.target.checked)
+  }), " Show past vacations"), renderVacationList(surgeons.map(s => s.id), true)), groupHeading("setup-group", "config", "Configuration", false), React.createElement(Collapsible, {
+    css: css,
     ck: "setup_roster",
     defaultOpen: false,
-    title: "Roster"
+    title: "Roster",
+    summary: cardSummary(plural(poolSurgeons.length, "active surgeon", "active surgeons") + (rosterPool.length > poolSurgeons.length ? ", " + (rosterPool.length - poolSurgeons.length) + " inactive" : "") + (surgeons.length > rosterPool.length ? ", " + (surgeons.length - rosterPool.length) + " outside" : ""))
   }, React.createElement(RosterEditor, {
     css: css,
     roster: surgeons,
@@ -8141,7 +8929,8 @@ function CallSchedule() {
     css: css,
     ck: "setup_rules",
     defaultOpen: false,
-    title: "Rules (per surgeon, and group rules)"
+    title: "Rules (per surgeon, and group rules)",
+    summary: cardSummary(rulesImported ? "" : "Not imported yet")
   }, !rulesImported ? React.createElement("div", {
     style: css.warnBox
   }, "Rules are not imported yet - use Import seed below, then edit here.") : React.createElement(RulesEditor, {
@@ -8177,41 +8966,10 @@ function CallSchedule() {
     today: todayStr
   })), React.createElement(Collapsible, {
     css: css,
-    ck: "setup_vacations",
-    defaultOpen: false,
-    title: "Vacations (everyone)",
-    right: React.createElement("button", {
-      onClick: e => {
-        e.stopPropagation();
-        setPaintSheet(true);
-      },
-      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-        padding: "3px 10px",
-        fontSize: 11
-      })
-    }, "Paint month")
-  }, React.createElement("p", {
-    style: sectionNote
-  }, "Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is."), renderVacationForm(poolSurgeons), React.createElement("label", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 6,
-      fontSize: 11,
-      color: "#5B6B82",
-      marginBottom: 8,
-      cursor: "pointer"
-    }
-  }, React.createElement("input", {
-    type: "checkbox",
-    "data-testid": "vac-show-past",
-    checked: showPastVacations,
-    onChange: e => setShowPastVacations(e.target.checked)
-  }), " Show past vacations"), renderVacationList(surgeons.map(s => s.id), true)), React.createElement(Collapsible, {
-    css: css,
     ck: "setup_holidays",
     defaultOpen: false,
-    title: "Holidays (units per year)"
+    title: "Holidays (units per year)",
+    summary: cardSummary(holidays === undefined ? "Not imported yet" : Object.keys(holidays && holidays.units || {}).length ? "Years " + Object.keys(holidays.units).sort().join(", ") : "No years yet")
   }, React.createElement(HolidaysCard, {
     css: css,
     holidays: holidays,
@@ -8223,6 +8981,21 @@ function CallSchedule() {
     onEditDay: goToDay,
     showToast: showToast,
     rulesImported: rulesImported
+  })), React.createElement(Collapsible, {
+    css: css,
+    ck: "setup_pay",
+    defaultOpen: false,
+    title: "Pay rates (primary call pay)"
+  }, React.createElement(PayRatesCard, {
+    css: css,
+    dk: dk,
+    row: paySettingsRow,
+    state: payState,
+    busy: payBusy,
+    onSave: savePayRates,
+    showToast: showToast,
+    onRefresh: () => loadPay(payYear, true),
+    roster: surgeons
   })), React.createElement(Collapsible, {
     css: css,
     ck: "setup_east",
@@ -8257,64 +9030,10 @@ function CallSchedule() {
     eastVacConflicts: eastVacConflictRows
   })), React.createElement(Collapsible, {
     css: css,
-    ck: "setup_generate",
-    defaultOpen: true,
-    title: "Generate (preview, then publish)"
-  }, React.createElement(PeriodsSection, {
-    css: css,
-    periods: periodRows,
-    offers: offerRows,
-    roster: surgeons,
-    groupRules: groupRules,
-    today: todayStr,
-    nameOf: nameOf,
-    notifPrefs: notifPrefs,
-    busy: prdBusy || genBusy,
-    remindState: prdRemind,
-    selfId: mySurgeon,
-    draft: prdDraft,
-    setDraft: setPrdDraft,
-    onCreate: createPeriod,
-    onCloseNow: closePeriodNow,
-    onRemind: remindOffers,
-    onEnterFor: enterOffersFor,
-    onGenerate: generatePeriod
-  }), React.createElement(GeneratePanel, {
-    css: css,
-    presets: genPresets,
-    opts: genOpts,
-    setOpts: setGenOpts,
-    busy: genBusy,
-    busyMode: genWorkerOk ? "worker" : "inline",
-    preview: previewGen,
-    onRun: runGenerate,
-    onReroll: rerollGenerate,
-    onAccept: acceptPreview,
-    onDiscard: discardPreview,
-    nameOf: nameOf,
-    roster: surgeons,
-    rulesImported: rulesImported,
-    lastPublishedDay: lastPublishedDay,
-    genStart: genStart,
-    genFirstOpenDay: genFirstOpenDay,
-    laterRanges: laterAssignedRanges,
-    holidayNames: holidayNameByDay(holidays)
-  })), React.createElement(Collapsible, {
-    css: css,
-    ck: "setup_import",
-    defaultOpen: false,
-    title: "Import seed (docs/silvis-seed.json)"
-  }, React.createElement(SeedImportCard, {
-    css: css,
-    state: seedState,
-    onPick: pickSeedFile,
-    onApply: applySeedImport,
-    nameOf: nameOf
-  })), React.createElement(Collapsible, {
-    css: css,
     ck: "setup_office",
     defaultOpen: false,
-    title: "Office contacts"
+    title: "Office contacts",
+    summary: cardSummary(officeContacts.length ? officeContacts.filter(c => c.active).length + " active of " + officeContacts.length + (officeContactsLoad === "failed" ? " (couldn't reload)" : "") : officeContactsLoad === "failed" ? "Couldn't load" : officeContactsLoad === "ok" ? "None yet" : "")
   }, React.createElement("p", {
     style: sectionNote
   }, "Office staff who receive the publish notice and the Monday morning change digest. Entered by hand; this table is authenticated-read only (never anon-readable), which is why an address may be typed here and nowhere else in the app."), React.createElement("div", {
@@ -8375,7 +9094,7 @@ function CallSchedule() {
     style: _objectSpread(_objectSpread({}, muted), {}, {
       fontStyle: "italic"
     })
-  }, "No office contacts yet.") : React.createElement("div", {
+  }, officeContactsLoad === "failed" ? "Couldn't load the office contacts - reload the app to retry (this is not an empty list)." : officeContactsLoad === "ok" ? "No office contacts yet." : "Loading office contacts\u2026") : React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
@@ -8452,7 +9171,18 @@ function CallSchedule() {
       flexShrink: 0,
       padding: "0 4px"
     }
-  }, "x"))))), React.createElement(Collapsible, {
+  }, "x"))))), groupHeading("setup-group", "rare", "Rarely used", false), React.createElement(Collapsible, {
+    css: css,
+    ck: "setup_import",
+    defaultOpen: false,
+    title: "Import seed (docs/silvis-seed.json)"
+  }, React.createElement(SeedImportCard, {
+    css: css,
+    state: seedState,
+    onPick: pickSeedFile,
+    onApply: applySeedImport,
+    nameOf: nameOf
+  })), React.createElement(Collapsible, {
     css: css,
     ck: "setup_clear",
     defaultOpen: false,
@@ -8605,6 +9335,7 @@ function CallSchedule() {
       const covItem = (key, text, days, color) => {
         const n = days.length;
         const first = n ? days[0] : null;
+        const toBoard = !isScheduler && !isPublicMode;
         return React.createElement("button", {
           key: key,
           type: "button",
@@ -8613,9 +9344,10 @@ function CallSchedule() {
           "data-first": first || "",
           disabled: !loaded || !n,
           onClick: () => {
-            if (first) goToDay(first);
+            if (!first) return;
+            if (toBoard) openShiftsBoard();else goToDay(first);
           },
-          title: n ? "Open " + fmtMD(first) + " in the day editor" : "none in the next 60 days",
+          title: n ? toBoard ? "See the open shifts (first " + fmtMD(first) + ") on the Open shifts board" : "Open " + fmtMD(first) + " in the day editor" : "none in the next 60 days",
           style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
             color: !loaded ? dkSubtext : n ? color : "#1a8040",
             borderColor: !loaded ? "#c8d0d8" : n ? color : "#a0d8b0",
@@ -8840,7 +9572,7 @@ function CallSchedule() {
         fontSize: 11,
         marginLeft: "auto"
       })
-    }, copied ? "Copied" : "Share today")), !loaded && React.createElement("p", {
+    }, copied ? "Copied" : "Share today")), offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar"), !loaded && React.createElement("p", {
       style: muted
     }, "Loading schedule"), previewGen && React.createElement("div", {
       "data-testid": "preview-banner",
@@ -9415,6 +10147,9 @@ function CallSchedule() {
     mySurgeon: mySurgeon,
     vacationNames: vacNamesOn(editorDay),
     focusExternal: editorFocus === "external",
+    onGive: proposeGiveForDay,
+    onOpenShifts: openShiftsBoard,
+    openOnBoard: (d, r) => boardKeys.has(openSlotKey(d, r)),
     onSave: (next, meta) => {
       if (saveDayEdit(editorDay, next, meta)) setEditorDay(null);
     },
@@ -9683,7 +10418,16 @@ function CallSchedule() {
           opacity: 0.55,
           cursor: "not-allowed"
         })
-      }, "Take this shift") : null, isScheduler && React.createElement("button", {
+      }, "Take this shift") : null, mySurgeon && !isScheduler && !(me && me.ok && !locked) && React.createElement("span", {
+        "data-testid": "ob-take-why",
+        style: {
+          fontSize: 10.5,
+          color: T.muted,
+          whiteSpace: "normal",
+          lineHeight: 1.3,
+          maxWidth: 150
+        }
+      }, locked ? "slot locked - ask the scheduler" : takeTitle(me)), isScheduler && React.createElement("button", {
         type: "button",
         "data-testid": "ob-assign",
         onClick: () => {
@@ -9805,7 +10549,7 @@ function CallSchedule() {
         margin: "10px 0 0",
         lineHeight: 1.5
       }
-    }, "Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade."), React.createElement("div", {
+    }, "Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade or give it away."), React.createElement("div", {
       style: {
         display: "flex",
         justifyContent: "flex-end",
@@ -10111,11 +10855,12 @@ function CallSchedule() {
           width: 92
         }
       }, dowShort(x.day), " ", fmtMD(x.day)), React.createElement("span", {
+        "data-testid": "mine-role",
         style: {
           fontSize: 11,
           fontWeight: 700,
           width: 58,
-          color: x.role === "primary" ? T.title : "#7a5a20"
+          color: x.role === "primary" ? T.title : T.backupText
         }
       }, roleWord(x.role)), React.createElement("span", {
         style: _objectSpread(_objectSpread({}, muted), {}, {
@@ -10160,7 +10905,14 @@ function CallSchedule() {
           color: "#6030a0",
           borderColor: "#c0a8e0"
         })
-      }, "Propose a trade")))));
+      }, "Propose a trade"), own && React.createElement("button", {
+        "data-testid": "mine-give",
+        onClick: () => proposeGiveForDay(x.day, x.role, who),
+        style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+          color: T.text,
+          borderColor: T.border
+        })
+      }, "Give away")))));
     };
     if (following.length) return React.createElement(React.Fragment, null, following.map(fid => React.createElement("div", {
       key: fid,
@@ -10245,7 +10997,28 @@ function CallSchedule() {
         padding: "5px 12px",
         fontSize: 11
       })
-    }, copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"))), daysBlock(pid, true)), React.createElement("div", {
+    }, copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"))), daysBlock(pid, true)), payVisible && !isCoordinator && !payMyCardHidden && (pid === mySurgeon || isScheduler) && pid && React.createElement(PayCard, {
+      key: pid,
+      css: css,
+      dk: dk,
+      personId: pid,
+      nameOf: nameOf,
+      isSelf: pid === mySurgeon,
+      schedule: schedule,
+      holidays: holidays,
+      settingsRow: paySettingsRow,
+      logs: payLogRows,
+      state: payState,
+      today: todayStr,
+      year: payYear,
+      onYear: setPayYear,
+      canEdit: isScheduler || pid === mySurgeon,
+      busy: payBusy,
+      onAdd: addPayLog,
+      onUpdate: updatePayLog,
+      onDelete: deletePayLog,
+      onRefresh: () => loadPay(payYear, true)
+    }), React.createElement("div", {
       style: css.card,
       "data-testid": "mine-offers"
     }, (() => {
@@ -10253,7 +11026,7 @@ function CallSchedule() {
       const nextPer = offerNextPeriod(periodRows, todayStr);
       const st = nextPer ? offerStatus(nextPer, offerRows, pid) : null;
       const word = r => r === "either" ? "P or B" : r === "primary" ? "P" : "B";
-      return React.createElement(React.Fragment, null, React.createElement("div", {
+      return React.createElement(React.Fragment, null, pid === mySurgeon && offerNoticeBox(offerNotices, "mine"), React.createElement("div", {
         style: {
           display: "flex",
           alignItems: "center",
@@ -10351,7 +11124,29 @@ function CallSchedule() {
       testid: "mine-eastvac-list",
       compact: true
     })));
-  })(), view === "timeoff" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
+  })(), view === "timeoff" && !isPublicMode && React.createElement(React.Fragment, null, !isCoordinator && !isViewer && mySurgeon && tradesWaitingOnMe.length > 0 && React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.card), {}, {
+      boxShadow: "inset 4px 0 0 " + T.accent + ", 0 1px 3px rgba(0,0,0,0.04)"
+    }),
+    "data-testid": "trades-waiting",
+    "data-count": tradesWaitingOnMe.length
+  }, React.createElement("div", {
+    style: css.cardT,
+    "data-testid": "trades-waiting-title"
+  }, "Waiting on you (", tradesWaitingOnMe.length, ")"), React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: T.muted,
+      margin: "0 0 8px",
+      lineHeight: 1.5
+    }
+  }, "Accept or decline - nothing moves until you answer."), React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, tradesWaitingOnMe.map(r => tradeRow(r, "waiting")))), React.createElement("div", {
     style: css.card,
     "data-testid": "timeoff-card"
   }, React.createElement("div", {
@@ -10460,129 +11255,10 @@ function CallSchedule() {
     const givenLabel = whole ? "the " + unitText(unit) : slotLabel(tradeDay, tradeRole);
     const pending = myTradeRequests.filter(r => r.status === "pending" || r.status === "accepted");
     const done = myTradeRequests.filter(r => r.status === "applied" || r.status === "declined" || r.status === "cancelled");
-    const statusColor = st => st === "pending" ? "#c09030" : st === "declined" || st === "cancelled" ? "#c04040" : st === "accepted" ? "#6030a0" : "#1a8040";
-    const tenseFor = st => st === "accepted" || st === "applied" ? "takes" : st === "declined" || st === "cancelled" ? "would have taken" : "would take";
-    const rowBox = {
-      padding: "8px 12px",
-      background: dk ? "#13294B" : "#f8f9fb",
-      borderRadius: 6,
-      border: `1px solid ${dkCardBorder}`
-    };
-    const tradeRow = r => {
-      const named = tradeNamed(r);
-      const canAnswer = r.status === "pending" && (isScheduler || r.to_surgeon_id === mySurgeon);
-      const canCancel = r.status === "pending" && (isScheduler || r.from_surgeon_id === mySurgeon);
-      const canRetry = r.status === "accepted" && (isScheduler || r.from_surgeon_id === mySurgeon || r.to_surgeon_id === mySurgeon);
-      const busy = tradeBusy === r.id;
-      const err = tradeApplyErr[r.id];
-      const tag = tradeUnitTag(r);
-      const groupN = tag ? tradeGroupOf(r).length : 1;
-      const giveGroup = tradeIsGiveProposal(r);
-      return React.createElement("div", {
-        key: r.id,
-        "data-testid": "trade-row",
-        "data-trade-id": r.id,
-        "data-status": r.status,
-        "data-kind": giveGroup ? "give" : "trade",
-        "data-unit": tag ? tag.kind + ":" + tag.start : undefined,
-        "data-group": groupN,
-        style: rowBox
-      }, React.createElement("div", {
-        style: {
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 8,
-          flexWrap: "wrap",
-          alignItems: "center"
-        }
-      }, React.createElement("span", {
-        style: {
-          fontSize: 12.5,
-          color: dkText
-        }
-      }, giveGroup ? React.createElement("span", {
-        "data-testid": "trade-give-line"
-      }, tradeGiveLine(named, tag, mySurgeon)) : tradeLegsText(named, tenseFor(r.status)), tag && React.createElement("span", {
-        "data-testid": "trade-unit-tag",
-        title: "A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together",
-        style: {
-          marginLeft: 8,
-          fontSize: 10,
-          fontWeight: 700,
-          color: "#7a5a20",
-          background: "#fbf1d8",
-          borderRadius: 4,
-          padding: "1px 6px",
-          whiteSpace: "nowrap"
-        }
-      }, tag.text, " - day ", tag.index, " of ", tag.n)), React.createElement("span", {
-        "data-testid": "trade-status",
-        style: {
-          fontSize: 10,
-          fontWeight: 700,
-          textTransform: "uppercase",
-          color: statusColor(r.status)
-        }
-      }, tradeRowStatus(r.status, giveGroup))), React.createElement("div", {
-        "data-testid": "trade-meta",
-        style: {
-          fontSize: 10,
-          color: "#9aa4ae",
-          fontFamily: mono,
-          marginTop: 2
-        }
-      }, giveGroup ? "offered" : "proposed", " by ", named.from_surgeon_name, " ", fmtAuditTime(r.submitted_at), r.decided_at ? ` - decided ${fmtAuditTime(r.decided_at)}` : ""), err && React.createElement("div", {
-        "data-testid": "trade-apply-error",
-        style: _objectSpread(_objectSpread({}, css.errBox), {}, {
-          marginTop: 6
-        })
-      }, "Apply failed: ", err), (canAnswer || canCancel || canRetry || isScheduler && r.status === "applied") && React.createElement("div", {
-        style: {
-          display: "flex",
-          gap: 6,
-          marginTop: 6,
-          flexWrap: "wrap"
-        }
-      }, canAnswer && React.createElement("button", {
-        "data-testid": "trade-accept",
-        disabled: busy,
-        onClick: () => acceptTrade(r),
-        style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
-          padding: "4px 12px",
-          fontSize: 11
-        })
-      }, busy ? "Working" : groupN > 1 ? `Accept (${groupN} days)` : "Accept"), canAnswer && React.createElement("button", {
-        "data-testid": "trade-decline",
-        disabled: busy,
-        onClick: () => declineTrade(r),
-        style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-          padding: "4px 12px",
-          fontSize: 11
-        })
-      }, groupN > 1 ? `Decline (${groupN} days)` : "Decline"), canCancel && React.createElement("button", {
-        "data-testid": "trade-cancel",
-        disabled: busy,
-        onClick: () => cancelTrade(r),
-        style: css.danger
-      }, groupN > 1 ? `Cancel (${groupN} days)` : "Cancel"), canRetry && React.createElement("button", {
-        "data-testid": "trade-retry",
-        disabled: busy,
-        onClick: () => retryApplyTrade(r),
-        style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
-          padding: "4px 12px",
-          fontSize: 11,
-          background: "linear-gradient(135deg,#6030a0,#8050c0)",
-          borderColor: "#6030a0"
-        })
-      }, busy ? "Working" : "Retry apply"), isScheduler && (r.status === "applied" || r.status === "accepted") && React.createElement("button", {
-        onClick: () => goToDay(r.day),
-        title: giveGroup ? "The scheduler reverts a give by putting " + named.from_surgeon_name + " back on " + fmtMD(r.day) + " in the day editor - one-way, nothing else moves" : "The scheduler reverts a trade by editing the day",
-        style: css.mini(false)
-      }, "Open ", fmtMD(r.day), " in the day editor")));
-    };
     return React.createElement(React.Fragment, null, React.createElement("div", {
       style: css.card,
-      "data-testid": "trade-card"
+      "data-testid": "trade-card",
+      ref: tradeCardRef
     }, React.createElement("div", {
       style: css.cardT
     }, "Propose a shift trade"), React.createElement("p", {
@@ -10935,9 +11611,20 @@ function CallSchedule() {
     Badge: Badge,
     showToast: showToast,
     ytdFloors: TOTALS_YTD_FLOORS,
+    payVisible: payVisible,
+    payTotalsRole: payTotalsRole,
+    payData: {
+      settingsRow: paySettingsRow,
+      logs: payLogRows,
+      state: payState
+    },
+    holidays: holidays,
+    payYear: payYear,
+    onPayYear: setPayYear,
+    onPayRefresh: () => loadPay(payYear, true),
     loaded: loaded,
     eastDetailsVisible: eastDetailsVisible
-  }), view === "settings" && !isPublicMode && React.createElement(React.Fragment, null, React.createElement("div", {
+  }), view === "settings" && !isPublicMode && React.createElement(React.Fragment, null, isScheduler && groupHeading("settings-group", "personal", "Your preferences", true), React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
     style: css.cardT
@@ -10996,341 +11683,16 @@ function CallSchedule() {
   }, "Monday"), React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#8a94a0",
+      color: T.muted,
       flexBasis: "100%"
     }
-  }, "The month grid on this device: the calendar, the read-only page and the printable month. The week rows (MON/SUN DATES) always run Monday to Sunday."))), (isScheduler || isCoordinator) && React.createElement(Collapsible, {
-    css: css,
-    ck: "settings_audit",
-    defaultOpen: false,
-    title: React.createElement(React.Fragment, null, "Activity log ", React.createElement("span", {
-      style: {
-        fontWeight: 400,
-        fontSize: 11,
-        color: "#5B6B82"
-      }
-    }, isCoordinator ? "- your entries (vacations, offers)" : "- who changed what")),
-    right: React.createElement("button", {
-      onClick: e => {
-        e.stopPropagation();
-        loadAudit();
-      },
-      title: "Refresh",
-      style: {
-        background: "none",
-        border: "1px solid #d0d8e0",
-        borderRadius: 6,
-        color: "#5B6B82",
-        cursor: "pointer",
-        fontSize: 11,
-        padding: "2px 8px",
-        fontFamily: font
-      }
-    }, "Refresh")
-  }, auditLoading ? React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: "#8a94a0",
-      padding: "6px 0"
-    }
-  }, "Loading") : auditEntries.length === 0 ? React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: "#8a94a0",
-      padding: "6px 0"
-    }
-  }, "No activity recorded yet.") : React.createElement("div", {
-    style: {
-      maxHeight: 420,
-      overflowY: "auto"
-    }
-  }, auditEntries.map(en => {
-    const si = surgeons.findIndex(s => s.id === en.actor_id);
-    const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
-    const at = auditEntryText(en, auditGiveIds);
-    return React.createElement("div", {
-      key: en.id,
-      style: {
-        display: "flex",
-        gap: 8,
-        alignItems: "flex-start",
-        padding: "7px 2px",
-        borderBottom: "1px solid " + (dk ? "#243240" : "#eef1f4")
-      }
-    }, React.createElement("span", {
-      style: {
-        flexShrink: 0,
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: 0.4,
-        padding: "2px 7px",
-        borderRadius: 5,
-        background: c ? c.tg : dk ? "#243240" : "#eef1f4",
-        color: c ? c.tx : "#5B6B82",
-        border: `1px solid ${c ? c.bd : dk ? "#2a3a48" : "#DCE3EC"}`,
-        minWidth: 38,
-        textAlign: "center"
-      }
-    }, en.actor_name || "?"), React.createElement("div", {
-      style: {
-        flex: 1,
-        minWidth: 0
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 12.5,
-        color: dk ? "#c8d2dc" : "#3a4a58",
-        lineHeight: 1.35
-      }
-    }, at.summary), React.createElement("div", {
-      style: {
-        fontSize: 10,
-        color: "#9aa4ae",
-        marginTop: 1,
-        fontFamily: mono
-      }
-    }, fmtAuditTime(en.created_at), " - ", at.action)));
-  }))), isScheduler && React.createElement(Collapsible, {
-    css: css,
-    ck: "settings_client_versions",
-    defaultOpen: false,
-    title: React.createElement(React.Fragment, null, "Client versions ", React.createElement("span", {
-      style: {
-        fontWeight: 400,
-        fontSize: 11,
-        color: "#5B6B82"
-      }
-    }, "- who's on which build")),
-    right: React.createElement("button", {
-      onClick: e => {
-        e.stopPropagation();
-        loadClientVersions();
-      },
-      title: "Refresh",
-      style: {
-        background: "none",
-        border: "1px solid #d0d8e0",
-        borderRadius: 6,
-        color: "#5B6B82",
-        cursor: "pointer",
-        fontSize: 11,
-        padding: "2px 8px",
-        fontFamily: font
-      }
-    }, "Refresh")
-  }, React.createElement("p", {
-    style: {
-      fontSize: 11.5,
-      color: "#5B6B82",
-      margin: "0 0 8px",
-      lineHeight: 1.5
-    }
-  }, "Updated each time a signed-in user opens the app. \"Current\"/\"Behind\" compare against THIS device's build (", APP_VERSION, "). Row 'main' (minimum version) is edited in SQL."), clientVersionsErr && React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: "#c04040",
-      padding: "6px 0",
-      fontWeight: 600
-    }
-  }, clientVersionsErr), clientVersions !== null && cvProfiles === null && !clientVersionsErr && React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: "#c09030",
-      padding: "0 0 6px",
-      fontWeight: 600
-    }
-  }, "Couldn't check who has an account - \"Never signed up\" labels are unavailable this load."), clientVersions === null && !clientVersionsErr ? React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: "#8a94a0",
-      padding: "6px 0"
-    }
-  }, "Loading") : clientVersions !== null && React.createElement("div", {
-    style: {
-      display: "flex",
-      flexDirection: "column"
-    }
-  }, (() => {
-    const profilesKnown = cvProfiles !== null;
-    const byPerson = pid => clientVersions.filter(r => r.person_id === pid).sort((a, b) => (b.seen_at || "") < (a.seen_at || "") ? -1 : 1)[0];
-    const extras = clientVersions.filter(r => !r.person_id || !surgeons.some(p => p.id === r.person_id));
-    const line = (key, name, id, row, hasProfile) => {
-      let status;
-      if (row) {
-        const vc = versionCmp(row.app_version, APP_VERSION);
-        const cmp = vc === 0 ? "current" : vc < 0 ? "behind" : "newer";
-        const bs = cmp === "current" ? {
-          background: "#e8f6ec",
-          color: "#1a8040",
-          border: "1px solid #b8e0c4"
-        } : cmp === "behind" ? {
-          background: "#fef8e8",
-          color: "#c09030",
-          border: "1px solid #e8d090"
-        } : {
-          background: T.accentTint,
-          color: T.accentText,
-          border: "1px solid " + T.accent
-        };
-        status = React.createElement(React.Fragment, null, React.createElement("span", {
-          style: _objectSpread({
-            fontSize: 10,
-            fontWeight: 700,
-            padding: "2px 7px",
-            borderRadius: 5
-          }, bs)
-        }, cmp === "current" ? "Current" : cmp === "behind" ? "Behind" : "Newer than you"), React.createElement("span", {
-          style: {
-            fontSize: 11,
-            fontFamily: mono,
-            color: dk ? "#c8d2dc" : "#3a4a58"
-          }
-        }, row.app_version), React.createElement("span", {
-          style: {
-            fontSize: 11,
-            color: "#8a94a0"
-          }
-        }, row.seen_at ? fmtAuditTime(row.seen_at) : "", uaLabel(row.user_agent) ? ` - ${uaLabel(row.user_agent)}` : ""));
-      } else if (profilesKnown && !hasProfile) {
-        status = React.createElement("span", {
-          style: {
-            fontSize: 10,
-            fontWeight: 700,
-            padding: "2px 7px",
-            borderRadius: 5,
-            background: "#faeaea",
-            color: "#c04040",
-            border: "1px solid #eabcbc"
-          }
-        }, "Never signed up / not linked");
-      } else if (profilesKnown) {
-        status = React.createElement("span", {
-          style: {
-            fontSize: 10,
-            fontWeight: 700,
-            padding: "2px 7px",
-            borderRadius: 5,
-            background: dk ? "#243240" : "#eef1f4",
-            color: "#5B6B82",
-            border: "1px solid " + (dk ? "#2a3a48" : "#DCE3EC")
-          }
-        }, "Signed up - no heartbeat yet");
-      } else {
-        status = React.createElement("span", {
-          style: {
-            fontSize: 11,
-            color: "#8a94a0"
-          }
-        }, "no heartbeat recorded");
-      }
-      return React.createElement("div", {
-        key: key,
-        "data-cv-row": key,
-        style: {
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          padding: "7px 2px",
-          borderBottom: "1px solid " + (dk ? "#243240" : "#eef1f4")
-        }
-      }, React.createElement("span", {
-        "data-cv-name": "",
-        style: {
-          flexShrink: 0,
-          fontSize: 12,
-          fontWeight: 600,
-          color: dk ? "#c8d2dc" : "#1F2A3A",
-          minWidth: 60
-        }
-      }, name), React.createElement("span", {
-        "data-cv-id": "",
-        style: {
-          flexShrink: 0,
-          fontSize: 10,
-          color: "#9aa4ae",
-          fontFamily: mono,
-          minWidth: id ? 22 : 0,
-          display: id ? undefined : "none"
-        }
-      }, id), React.createElement("div", {
-        style: {
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          flexWrap: "wrap"
-        }
-      }, status));
-    };
-    return React.createElement(React.Fragment, null, surgeons.map(p => line(p.id, p.name, p.id, byPerson(p.id), (cvProfiles || []).some(pr => pr.person_id === p.id))), extras.map(r => {
-      const lb = cvAccountLabel(r, cvProfiles);
-      return line(r.id, lb.name, lb.id, r, true);
-    }));
-  })())), isScheduler && React.createElement("div", {
+  }, "For this device's month grids; the week rows always run Monday to Sunday."))), React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
-    onClick: () => toggleSettingsCard("officeNotif"),
-    style: _objectSpread(_objectSpread({}, css.cardT), {}, {
-      margin: openSettingsCards.officeNotif ? "0 0 12px" : 0,
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      userSelect: "none"
-    })
-  }, React.createElement("span", null, "Office notifications"), React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: "#5B6B82"
-    }
-  }, openSettingsCards.officeNotif ? "-" : "+")), openSettingsCards.officeNotif && React.createElement(React.Fragment, null, React.createElement("p", {
-    style: sectionNote
-  }, "Edits go live on save. ", React.createElement("strong", null, "Publish"), " sends the changes since the last publish (as \"10/12 P Philip -> Fierce\" lines, grouped by month) to the ", officeContacts.filter(c => c.active).length, " active office contact(s) and posts a notice in the app. Contacts are managed in Setup.", (lastPublished === null || lastPublished === void 0 ? void 0 : lastPublished.at) && React.createElement(React.Fragment, null, " Last published ", fmtAuditTime(lastPublished.at), ".")), React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 8,
-      flexWrap: "wrap"
-    }
-  }, React.createElement("button", {
-    onClick: openPublishDialog,
-    disabled: officeNotifBusy,
-    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
-      padding: "7px 16px",
-      fontSize: 12,
-      opacity: officeNotifBusy ? 0.5 : 1
-    })
-  }, "Publish and notify office"), React.createElement("button", {
-    onClick: triggerDigestTest,
-    disabled: officeNotifBusy || officeContacts.filter(c => c.active).length === 0,
-    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-      padding: "7px 14px",
-      fontSize: 12,
-      opacity: officeNotifBusy || officeContacts.filter(c => c.active).length === 0 ? 0.5 : 1
-    })
-  }, "Test the weekly digest now")), React.createElement("p", {
-    style: {
-      fontSize: 10,
-      color: "#a0a8b0",
-      margin: "8px 0 0",
-      lineHeight: 1.5
-    }
-  }, "Edge functions are deployed in Prompt 10; until then these buttons report \"not deployed\" and change nothing."))), React.createElement("div", {
-    style: css.card
-  }, React.createElement("div", {
+    className: "cardtoggle",
     onClick: () => toggleSettingsCard("notifSettings"),
-    style: _objectSpread(_objectSpread({}, css.cardT), {}, {
-      margin: openSettingsCards.notifSettings ? "0 0 12px" : 0,
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      userSelect: "none"
-    })
-  }, React.createElement("span", null, "Notification settings"), React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: T.muted
-    }
-  }, openSettingsCards.notifSettings ? "-" : "+")), openSettingsCards.notifSettings && React.createElement(React.Fragment, null, React.createElement("div", {
+    style: settingsToggleRow(openSettingsCards.notifSettings)
+  }, settingsChevron(openSettingsCards.notifSettings), React.createElement("span", null, "Notification settings")), openSettingsCards.notifSettings && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       background: dk ? "#1a2a3e" : "#f8f9fb",
       border: `1px solid ${dkCardBorder}`,
@@ -11345,14 +11707,14 @@ function CallSchedule() {
       color: dkText,
       marginBottom: 6
     }
-  }, "Email"), React.createElement("p", {
+  }, "Email"), mySurgeon && React.createElement("p", {
     style: {
       fontSize: 11,
       color: dkSubtext,
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "Emails go to your sign-in address. Choose which events email you and when the daily reminder arrives (Central time)."), notifPrefsLoadFailed && mySurgeon && React.createElement("div", {
+  }, "E-mails go to your sign-in address: pick which events send one and when the daily reminder arrives (Central time)."), notifPrefsLoadFailed && mySurgeon && React.createElement("div", {
     "data-testid": "notif-prefs-load-failed",
     style: _objectSpread(_objectSpread({}, css.errBox), {}, {
       marginBottom: 8
@@ -11370,7 +11732,7 @@ function CallSchedule() {
       margin: "0 0 4px",
       lineHeight: 1.5
     })
-  }, "You follow ", myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and "), ". These switches are yours: which e-mails about them reach your sign-in address, and when the reminder the day before each of their call days arrives (5:00 PM Central unless you pick an hour)."), followerPrefState === "unavailable" && React.createElement("div", {
+  }, "You follow ", myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and "), ". Pick which e-mails about them reach your sign-in address and when the day-before reminder arrives (5:00 PM Central by default)."), followerPrefState === "unavailable" && React.createElement("div", {
     "data-testid": "notif-follower-unavailable",
     role: "status",
     style: _objectSpread(_objectSpread({}, css.errBox), {}, {
@@ -11530,17 +11892,15 @@ function CallSchedule() {
       marginBottom: 6
     }
   }, "Pop-ups on this device"), React.createElement("p", {
+    "data-testid": "notif-permission",
+    "data-permission": browserNotifPermission,
     style: {
       fontSize: 11,
       color: dkSubtext,
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "Browser notifications while the app is open. Permission: ", React.createElement("span", {
-    style: {
-      fontFamily: mono
-    }
-  }, browserNotifPermission), "."), React.createElement("div", {
+  }, "Shown while the app is open. ", notifPermissionText(browserNotifPermission)), React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -11595,7 +11955,7 @@ function CallSchedule() {
   }, "(", (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) || "viewer", ")")), React.createElement("p", {
     style: {
       fontSize: 11,
-      color: "#5B6B82",
+      color: T.muted,
       margin: 0
     }
   }, authUser === null || authUser === void 0 ? void 0 : authUser.email)), React.createElement("button", {
@@ -11607,7 +11967,7 @@ function CallSchedule() {
   }, "Sign out")), biometricAvail ? React.createElement("div", {
     style: {
       paddingTop: 12,
-      borderTop: "1px solid #DCE3EC"
+      borderTop: "1px solid " + T.border
     }
   }, React.createElement("div", {
     style: {
@@ -11643,9 +12003,22 @@ function CallSchedule() {
       fontSize: 12
     })
   }, "Enable"))) : React.createElement("div", {
+    "data-testid": "biometric-unavailable",
     style: {
       paddingTop: 12,
-      borderTop: "1px solid #DCE3EC"
+      borderTop: "1px solid " + T.border
+    }
+  }, React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: dkSubtext,
+      margin: 0,
+      lineHeight: 1.5
+    }
+  }, "Face ID / Touch ID isn't available on this device.", onIOSDevice && " On iPhone, open the app from Safari and add it to the Home Screen first.", moreToggle("bioDetails", "Details")), openSettingsCards.bioDetails && React.createElement("div", {
+    "data-testid": "biometric-details",
+    style: {
+      marginTop: 8
     }
   }, React.createElement("div", {
     style: {
@@ -11656,26 +12029,16 @@ function CallSchedule() {
       gap: 8,
       marginBottom: 8
     }
-  }, React.createElement("div", {
-    style: {
-      flex: "1 1 240px",
-      minWidth: 0
-    }
   }, React.createElement("p", {
     style: {
-      fontSize: 12,
-      fontWeight: 600,
-      color: dkText,
-      margin: "0 0 2px"
-    }
-  }, "Biometric login unavailable"), React.createElement("p", {
-    style: {
+      flex: "1 1 240px",
+      minWidth: 0,
       fontSize: 11,
-      color: "#5B6B82",
-      margin: "0 0 4px",
+      color: T.muted,
+      margin: 0,
       lineHeight: 1.4
     }
-  }, "Face ID / Touch ID isn't reported as available. On iPhone this needs Safari and the app installed from Safari's Share menu (Add to Home Screen).")), React.createElement("button", {
+  }, "On iPhone this needs Safari and the app installed from Safari's Share menu (Add to Home Screen)."), React.createElement("button", {
     onClick: async () => {
       const r = await biometric.isAvailable();
       setBiometricAvail(r.available);
@@ -11694,7 +12057,7 @@ function CallSchedule() {
       borderRadius: 6,
       padding: "6px 10px",
       fontSize: 11,
-      color: dk ? "#b0b8c0" : "#5B6B82",
+      color: T.muted,
       lineHeight: 1.5,
       fontFamily: mono,
       wordBreak: "break-word",
@@ -11702,7 +12065,7 @@ function CallSchedule() {
     }
   }, React.createElement("strong", {
     style: {
-      color: dk ? "#d0d4dc" : "#3a4a58"
+      color: T.text
     }
   }, "Diagnostic:"), " ", biometricReason), React.createElement("div", {
     style: {
@@ -11722,16 +12085,20 @@ function CallSchedule() {
   }, "Try enable anyway"), React.createElement("span", {
     style: {
       fontSize: 10,
-      color: "#5B6B82",
+      color: T.muted,
       fontStyle: "italic"
     }
-  }, "Bypasses the availability check - the browser shows a Face ID prompt if it actually works.")))), React.createElement("div", {
+  }, "Skips the availability check; the browser shows a Face ID prompt if it works."))))), (mySurgeon || myFollows.length > 0 || isScheduler || isViewer) && React.createElement("div", {
+    "data-testid": "calsync-card",
     style: css.card
   }, React.createElement("div", {
     style: css.cardT
   }, "Live calendar sync"), React.createElement("p", {
     style: sectionNote
-  }, "Subscribe to ", isScheduler ? "these URLs" : isFollowing ? isViewer ? "the feed of each surgeon you follow, or the full-schedule feed" : "the feed of each surgeon you follow" : isViewer ? "the full-schedule feed" : "your personal URL", " in Google Calendar, Outlook or Apple Calendar. The calendar auto-updates when the schedule changes. In Google Calendar: Other calendars (+), From URL, paste the link."), mySurgeon && (() => {
+  }, "Subscribe to ", isScheduler ? "these URLs" : isFollowing ? isViewer ? "the feed of each surgeon you follow, or the full-schedule feed" : "the feed of each surgeon you follow" : isViewer ? "the full-schedule feed" : "your personal URL", " in Google Calendar, Outlook or Apple Calendar; it updates itself when the schedule changes.", moreToggle("calsyncHow", "How")), openSettingsCards.calsyncHow && React.createElement("p", {
+    "data-testid": "calsync-how",
+    style: moreNote
+  }, "In Google Calendar: Other calendars (+), From URL, paste the link."), mySurgeon && (() => {
     const myUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(mySurgeon)}`;
     return React.createElement("div", {
       style: {
@@ -11902,7 +12269,7 @@ function CallSchedule() {
         marginTop: 4,
         lineHeight: 1.5
       }
-    }, "for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself", " (", s.name, "'s Silvis shifts plus one all-day entry per Davenport day: night, service week, weekend, holiday or day call, and \"away\" for a Davenport vacation reviewed as away)."));
+    }, "for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself", " (", s.name, "'s Silvis shifts, an all-day entry for each Davenport shift, and an all-day 'away' entry for a Davenport vacation reviewed as away)."));
   }), React.createElement("div", {
     style: {
       fontSize: 11,
@@ -11930,19 +12297,13 @@ function CallSchedule() {
         border: copiedUrl === s.id ? "2px solid #1a8040" : undefined
       })
     }, copiedUrl === s.id ? "Copied " : "", s.name, " (", s.code, ")");
-  }))), React.createElement("p", {
-    style: {
-      fontSize: 10,
-      color: "#8a94a0",
-      marginTop: 6
-    }
-  }, "Requires the calendar-sync edge function (Prompt 10).")), React.createElement("div", {
+  })))), React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
     style: css.cardT
   }, "Refresh app"), React.createElement("p", {
     style: sectionNote
-  }, "If the app seems stuck on an old version or the schedule looks wrong, tap below to clear the cache and reload fresh. No data is lost."), React.createElement("button", {
+  }, "If the app looks stuck or out of date, refresh it; no data is lost."), React.createElement("button", {
     onClick: () => {
       if (confirm("Refresh the app? This clears the local cache and reloads the latest version. No data is lost.")) {
         if (typeof window.__silvisHardReset === "function") window.__silvisHardReset();else window.location.reload();
@@ -11953,13 +12314,315 @@ function CallSchedule() {
       fontSize: 13,
       borderRadius: 7
     })
-  }, "Refresh now")), isScheduler && React.createElement("div", {
+  }, "Refresh now")), isScheduler && groupHeading("settings-group", "scheduler", "Scheduler tools", false), (isScheduler || isCoordinator) && React.createElement(Collapsible, {
+    css: css,
+    ck: "settings_audit",
+    defaultOpen: false,
+    title: React.createElement(React.Fragment, null, "Activity log ", React.createElement("span", {
+      style: {
+        fontWeight: 400,
+        fontSize: 11,
+        color: "#5B6B82"
+      }
+    }, isCoordinator ? "- your entries (vacations, offers)" : "- who changed what")),
+    right: React.createElement("button", {
+      onClick: e => {
+        e.stopPropagation();
+        loadAudit();
+      },
+      title: "Refresh",
+      style: {
+        background: "none",
+        border: "1px solid #d0d8e0",
+        borderRadius: 6,
+        color: "#5B6B82",
+        cursor: "pointer",
+        fontSize: 11,
+        padding: "2px 8px",
+        fontFamily: font
+      }
+    }, "Refresh")
+  }, auditLoading ? React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#8a94a0",
+      padding: "6px 0"
+    }
+  }, "Loading") : auditEntries.length === 0 ? React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#8a94a0",
+      padding: "6px 0"
+    }
+  }, "No activity recorded yet.") : React.createElement("div", {
+    style: {
+      maxHeight: 420,
+      overflowY: "auto"
+    }
+  }, auditEntries.map(en => {
+    const si = surgeons.findIndex(s => s.id === en.actor_id);
+    const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
+    const at = auditEntryText(en, auditGiveIds);
+    return React.createElement("div", {
+      key: en.id,
+      style: {
+        display: "flex",
+        gap: 8,
+        alignItems: "flex-start",
+        padding: "7px 2px",
+        borderBottom: "1px solid " + (dk ? "#243240" : "#eef1f4")
+      }
+    }, React.createElement("span", {
+      style: {
+        flexShrink: 0,
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: 0.4,
+        padding: "2px 7px",
+        borderRadius: 5,
+        background: c ? c.tg : dk ? "#243240" : "#eef1f4",
+        color: c ? c.tx : "#5B6B82",
+        border: `1px solid ${c ? c.bd : dk ? "#2a3a48" : "#DCE3EC"}`,
+        minWidth: 38,
+        textAlign: "center"
+      }
+    }, en.actor_name || "?"), React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: dk ? "#c8d2dc" : "#3a4a58",
+        lineHeight: 1.35
+      }
+    }, at.summary), React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: "#9aa4ae",
+        marginTop: 1,
+        fontFamily: mono
+      }
+    }, fmtAuditTime(en.created_at), " - ", at.action)));
+  }))), isScheduler && React.createElement(Collapsible, {
+    css: css,
+    ck: "settings_client_versions",
+    defaultOpen: false,
+    title: React.createElement(React.Fragment, null, "Client versions ", React.createElement("span", {
+      style: {
+        fontWeight: 400,
+        fontSize: 11,
+        color: "#5B6B82"
+      }
+    }, "- who's on which build")),
+    right: React.createElement("button", {
+      onClick: e => {
+        e.stopPropagation();
+        loadClientVersions();
+      },
+      title: "Refresh",
+      style: {
+        background: "none",
+        border: "1px solid #d0d8e0",
+        borderRadius: 6,
+        color: "#5B6B82",
+        cursor: "pointer",
+        fontSize: 11,
+        padding: "2px 8px",
+        fontFamily: font
+      }
+    }, "Refresh")
+  }, React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: T.muted,
+      margin: "0 0 8px",
+      lineHeight: 1.5
+    }
+  }, "\"Current\" and \"Behind\" compare each user's last opened build against this device's (", APP_VERSION, ").", moreToggle("cvMore")), openSettingsCards.cvMore && React.createElement("p", {
+    style: moreNote
+  }, "A row updates each time a signed-in user opens the app. The minimum version (row 'main') is edited in SQL."), clientVersionsErr && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#c04040",
+      padding: "6px 0",
+      fontWeight: 600
+    }
+  }, clientVersionsErr), clientVersions !== null && cvProfiles === null && !clientVersionsErr && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#c09030",
+      padding: "0 0 6px",
+      fontWeight: 600
+    }
+  }, "Couldn't check who has an account - \"Never signed up\" labels are unavailable this load."), clientVersions === null && !clientVersionsErr ? React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#8a94a0",
+      padding: "6px 0"
+    }
+  }, "Loading") : clientVersions !== null && React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column"
+    }
+  }, (() => {
+    const profilesKnown = cvProfiles !== null;
+    const byPerson = pid => clientVersions.filter(r => r.person_id === pid).sort((a, b) => (b.seen_at || "") < (a.seen_at || "") ? -1 : 1)[0];
+    const extras = clientVersions.filter(r => !r.person_id || !surgeons.some(p => p.id === r.person_id));
+    const line = (key, name, id, row, hasProfile) => {
+      let status;
+      if (row) {
+        const vc = versionCmp(row.app_version, APP_VERSION);
+        const cmp = vc === 0 ? "current" : vc < 0 ? "behind" : "newer";
+        const bs = cmp === "current" ? {
+          background: "#e8f6ec",
+          color: "#1a8040",
+          border: "1px solid #b8e0c4"
+        } : cmp === "behind" ? {
+          background: "#fef8e8",
+          color: "#c09030",
+          border: "1px solid #e8d090"
+        } : {
+          background: T.accentTint,
+          color: T.accentText,
+          border: "1px solid " + T.accent
+        };
+        status = React.createElement(React.Fragment, null, React.createElement("span", {
+          style: _objectSpread({
+            fontSize: 10,
+            fontWeight: 700,
+            padding: "2px 7px",
+            borderRadius: 5
+          }, bs)
+        }, cmp === "current" ? "Current" : cmp === "behind" ? "Behind" : "Newer than you"), React.createElement("span", {
+          style: {
+            fontSize: 11,
+            fontFamily: mono,
+            color: dk ? "#c8d2dc" : "#3a4a58"
+          }
+        }, row.app_version), React.createElement("span", {
+          style: {
+            fontSize: 11,
+            color: "#8a94a0"
+          }
+        }, row.seen_at ? fmtAuditTime(row.seen_at) : "", uaLabel(row.user_agent) ? ` - ${uaLabel(row.user_agent)}` : ""));
+      } else if (profilesKnown && !hasProfile) {
+        status = React.createElement("span", {
+          style: {
+            fontSize: 10,
+            fontWeight: 700,
+            padding: "2px 7px",
+            borderRadius: 5,
+            background: "#faeaea",
+            color: "#c04040",
+            border: "1px solid #eabcbc"
+          }
+        }, "Never signed up / not linked");
+      } else if (profilesKnown) {
+        status = React.createElement("span", {
+          style: {
+            fontSize: 10,
+            fontWeight: 700,
+            padding: "2px 7px",
+            borderRadius: 5,
+            background: dk ? "#243240" : "#eef1f4",
+            color: "#5B6B82",
+            border: "1px solid " + (dk ? "#2a3a48" : "#DCE3EC")
+          }
+        }, "Signed up - no heartbeat yet");
+      } else {
+        status = React.createElement("span", {
+          style: {
+            fontSize: 11,
+            color: "#8a94a0"
+          }
+        }, "no heartbeat recorded");
+      }
+      return React.createElement("div", {
+        key: key,
+        "data-cv-row": key,
+        style: {
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          padding: "7px 2px",
+          borderBottom: "1px solid " + (dk ? "#243240" : "#eef1f4")
+        }
+      }, React.createElement("span", {
+        "data-cv-name": "",
+        style: {
+          flexShrink: 0,
+          fontSize: 12,
+          fontWeight: 600,
+          color: dk ? "#c8d2dc" : "#1F2A3A",
+          minWidth: 60
+        }
+      }, name), React.createElement("span", {
+        "data-cv-id": "",
+        style: {
+          flexShrink: 0,
+          fontSize: 10,
+          color: "#9aa4ae",
+          fontFamily: mono,
+          minWidth: id ? 22 : 0,
+          display: id ? undefined : "none"
+        }
+      }, id), React.createElement("div", {
+        style: {
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          flexWrap: "wrap"
+        }
+      }, status));
+    };
+    return React.createElement(React.Fragment, null, surgeons.map(p => line(p.id, p.name, p.id, byPerson(p.id), (cvProfiles || []).some(pr => pr.person_id === p.id))), extras.map(r => {
+      const lb = cvAccountLabel(r, cvProfiles);
+      return line(r.id, lb.name, lb.id, r, true);
+    }));
+  })())), isScheduler && React.createElement("div", {
+    style: css.card
+  }, React.createElement("div", {
+    className: "cardtoggle",
+    onClick: () => toggleSettingsCard("officeNotif"),
+    style: settingsToggleRow(openSettingsCards.officeNotif)
+  }, settingsChevron(openSettingsCards.officeNotif), React.createElement("span", null, "Office notifications")), openSettingsCards.officeNotif && React.createElement(React.Fragment, null, React.createElement("p", {
+    style: sectionNote
+  }, React.createElement("strong", null, "Publish"), " e-mails the changes since the last publish to the ", officeContacts.filter(c => c.active).length, " active office contact(s) and posts a notice in the app.", (lastPublished === null || lastPublished === void 0 ? void 0 : lastPublished.at) && React.createElement(React.Fragment, null, " Last published ", fmtAuditTime(lastPublished.at), "."), moreToggle("officeMore")), openSettingsCards.officeMore && React.createElement("p", {
+    style: moreNote
+  }, "Edits go live on save; Publish only tells people. The changes are listed as \"10/12 P Philip -> Fierce\" lines, grouped by month. Office contacts are managed in Setup."), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap"
+    }
+  }, React.createElement("button", {
+    onClick: openPublishDialog,
+    disabled: officeNotifBusy,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "7px 16px",
+      fontSize: 12,
+      opacity: officeNotifBusy ? 0.5 : 1
+    })
+  }, "Publish and notify office"), React.createElement("button", {
+    onClick: triggerDigestTest,
+    disabled: officeNotifBusy || officeContacts.filter(c => c.active).length === 0,
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "7px 14px",
+      fontSize: 12,
+      opacity: officeNotifBusy || officeContacts.filter(c => c.active).length === 0 ? 0.5 : 1
+    })
+  }, "Test the weekly digest now")))), isScheduler && React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
     style: css.cardT
   }, "Data management"), React.createElement("p", {
     style: sectionNote
-  }, "Download a full JSON backup: config (roster, rules, holidays, settings), every schedule day, vacations and availability rows. It can be re-imported below or used to rebuild the database."), React.createElement("div", {
+  }, "Download a full JSON backup of the schedule and setup, or import one.", moreToggle("dataMore")), openSettingsCards.dataMore && React.createElement("p", {
+    style: moreNote
+  }, "The backup holds the config (roster, rules, holidays, settings), every schedule day, and the vacation and availability rows; it can also rebuild the database. Import validates the shape, snapshots the current state first, then restores through the same compare-and-swap path as a snapshot restore. It never deletes vacation or availability rows."), React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -11994,14 +12657,7 @@ function CallSchedule() {
       fontSize: 13,
       borderRadius: 7
     })
-  }, "Import backup (JSON)")), React.createElement("p", {
-    style: {
-      fontSize: 10,
-      color: "#8a94a0",
-      margin: "6px 0 0",
-      lineHeight: 1.5
-    }
-  }, "Import validates the shape, snapshots the current state first, then restores through the same compare-and-swap path as a snapshot restore. It never deletes vacation or availability rows."), React.createElement("div", {
+  }, "Import backup (JSON)")), React.createElement("div", {
     style: {
       borderTop: "1px solid #f0d8d8",
       marginTop: 16,
@@ -12039,23 +12695,14 @@ function CallSchedule() {
   }, "Reset all data"))), isScheduler && React.createElement("div", {
     style: css.card
   }, React.createElement("div", {
+    className: "cardtoggle",
     onClick: () => toggleSettingsCard("restoreSnap"),
-    style: _objectSpread(_objectSpread({}, css.cardT), {}, {
-      margin: openSettingsCards.restoreSnap ? "0 0 12px" : 0,
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      userSelect: "none"
-    })
-  }, React.createElement("span", null, "Restore from snapshot"), React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: T.muted
-    }
-  }, openSettingsCards.restoreSnap ? "-" : "+")), openSettingsCards.restoreSnap && React.createElement(React.Fragment, null, React.createElement("p", {
+    style: settingsToggleRow(openSettingsCards.restoreSnap)
+  }, settingsChevron(openSettingsCards.restoreSnap), React.createElement("span", null, "Restore from snapshot")), openSettingsCards.restoreSnap && React.createElement(React.Fragment, null, React.createElement("p", {
     style: sectionNote
-  }, "Snapshots are saved automatically before destructive actions and periodically. Restoring replaces the current schedule and setup for everyone with the selected copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so a restore can itself be undone."), snapshotsLoading && React.createElement("div", {
+  }, "Restoring replaces the schedule and setup for everyone with the chosen copy; the current state is snapshotted first, so a restore can be undone.", moreToggle("snapMore")), openSettingsCards.snapMore && React.createElement("p", {
+    style: moreNote
+  }, "Snapshots are saved automatically before destructive actions and periodically. A restore also re-adds the copy's vacation and availability rows."), snapshotsLoading && React.createElement("div", {
     style: {
       fontSize: 12,
       color: T.muted
@@ -13074,6 +13721,7 @@ function OfferPainterSheet({
   const holderText = (v, ds) => v ? holderLabel(v, nameOf) : ds >= today ? "OPEN" : "-";
   const monthLabel = MO[ym.m] + " " + ym.y;
   const atCurrentMonth = ym.y === t0.getFullYear() && ym.m === t0.getMonth();
+  const periodJump = period ? offerPeriodJump(period, today, ym) : null;
   const periodExpanded = periodOpen && (periodOpenBox || modeDirty);
   const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.` : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
   if (!person) {
@@ -13216,7 +13864,33 @@ function OfferPainterSheet({
       minHeight: 44,
       fontSize: 15
     })
-  }, "›")), React.createElement("div", {
+  }, "›")), periodJump && React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "center"
+    }
+  }, React.createElement("button", {
+    "data-testid": "ofp-goto-period",
+    "data-start": periodJump.start,
+    onClick: () => {
+      setPendingStart(null);
+      setYm({
+        y: periodJump.y,
+        m: periodJump.m
+      });
+    },
+    title: periodJump.text,
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      minHeight: 36,
+      height: 36,
+      padding: "0 12px",
+      fontSize: 12,
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      maxWidth: "100%"
+    })
+  }, periodJump.text)), React.createElement("div", {
     "data-testid": "ofp-counts",
     "data-month-primary": monthCounts.primary,
     "data-month-backup": monthCounts.backup,
@@ -13761,6 +14435,7 @@ function Collapsible({
     style: style ? _objectSpread(_objectSpread({}, css.card), style) : css.card
   }, React.createElement("div", {
     "data-testid": "card-toggle-" + ck,
+    className: "cardtoggle",
     onClick: toggle,
     style: {
       display: "flex",
@@ -13772,7 +14447,7 @@ function Collapsible({
   }, React.createElement("span", {
     style: {
       fontSize: 11,
-      color: "#8a94a0",
+      color: "#5B6B82",
       transition: "transform .15s",
       transform: open ? "rotate(90deg)" : "rotate(0deg)",
       display: "inline-block",
@@ -13785,8 +14460,10 @@ function Collapsible({
       flex: 1
     })
   }, title), right), !open && summary != null && React.createElement("div", {
+    "data-testid": "card-summary-" + ck,
     style: {
-      marginTop: 10
+      marginTop: 4,
+      paddingLeft: 18
     }
   }, summary), open && React.createElement("div", {
     style: {
@@ -14286,8 +14963,12 @@ function DayEditor(props) {
     suggestTrade,
     css,
     dk,
-    focusExternal
+    focusExternal,
+    onGive,
+    onOpenShifts,
+    openOnBoard
   } = props;
+  const T = THEME[dk ? "dark" : "light"];
   const externalRef = React.useRef(null);
   React.useEffect(() => {
     if (!focusExternal || !externalRef.current) return;
@@ -14408,13 +15089,17 @@ function DayEditor(props) {
       ext = list.filter(o => o.external);
     return pool.filter(o => o.active && o.ok).concat(pool.filter(o => o.active && !o.ok)).concat(pool.filter(o => !o.active && o.id === draft[role])).concat(ext.filter(o => o.active || o.id === draft[role]));
   };
-  const opts = React.useMemo(() => ({
+  const opts = React.useMemo(() => canEdit ? {
     primary: evalRole("primary"),
     backup: evalRole("backup")
-  }), [ctx, day, draft, roster]);
+  } : {
+    primary: [],
+    backup: []
+  }, [ctx, day, draft, roster, canEdit]);
   const evalErrors = [].concat(opts.primary, opts.backup).filter(o => o.error);
   const evalBroken = evalErrors.length > 0;
   const offerInfo = React.useMemo(() => {
+    if (!canEdit) return null;
     if (!ctx || typeof offerState !== "function") return null;
     const items = [];
     let period = null;
@@ -14592,8 +15277,52 @@ function DayEditor(props) {
     return pill(v);
   };
   const myRole = mySurgeon && entry ? entry.primary === mySurgeon ? "primary" : entry.backup === mySurgeon ? "backup" : null : null;
+  const todayC = todayCentral();
+  const openRoles = ["primary", "backup"].filter(r => slotIsOpen(day, r === "primary" ? draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null) : draft.backup, todayC));
+  const boardRoles = typeof openOnBoard === "function" ? openRoles.filter(r => openOnBoard(day, r)) : [];
+  const summaryHolder = role => {
+    const v = role === "primary" ? draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null) : draft.backup;
+    const outside = React.createElement("span", {
+      style: {
+        color: T.muted,
+        fontWeight: 400,
+        fontSize: 12
+      }
+    }, " (outside surgeon)");
+    if (!v) return openRoles.includes(role) ? React.createElement("span", {
+      "data-testid": "editor-" + role + "-open",
+      style: {
+        color: T.open,
+        fontWeight: 800
+      }
+    }, "OPEN") : React.createElement("span", {
+      style: {
+        color: T.muted
+      }
+    }, "-");
+    if (String(v).indexOf("ext:") === 0) return React.createElement("span", {
+      style: {
+        color: T.text,
+        fontWeight: 700
+      }
+    }, String(v).slice(4), outside);
+    const s = roster.find(x => x.id === v) || null;
+    const c = colorOf(v);
+    return React.createElement("span", null, React.createElement("span", {
+      style: {
+        background: c.tg,
+        color: c.tx,
+        border: "1px solid " + c.bd,
+        borderRadius: 5,
+        padding: "1px 8px",
+        fontSize: 12.5,
+        fontWeight: 700
+      }
+    }, s && s.fullName || nameOf(v)), s && s.type === "external" ? outside : null);
+  };
   const tradeLinkRole = myRole || (entry && entry.primary ? "primary" : "backup");
-  const tradePick = typeof suggestTrade === "function" && !isPublicMode && (canEdit || myRole) ? suggestTrade(day, tradeLinkRole) : null;
+  const showTrade = !isPublicMode && (canEdit || !!myRole && day >= todayC);
+  const tradePick = typeof suggestTrade === "function" && showTrade ? suggestTrade(day, tradeLinkRole) : null;
   const optionLabel = (o, role) => {
     if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");
     const tag = offerTagFor(o.id, role);
@@ -14606,6 +15335,46 @@ function DayEditor(props) {
     const cur = list.find(o => o.id === draft[role]) || null;
     const ineligible = list.filter(o => !o.ok);
     const ov = overrides.find(x => x.role === role);
+    const confirmBadge = locked && awaitingConfirmation(opened) ? React.createElement("span", {
+      "data-testid": "confirm-badge",
+      title: "awaiting the scheduler's confirmation",
+      style: confirmBadgeStyle
+    }, "confirm") : null;
+    const mine = !isPublicMode && myRole === role;
+    if (!canEdit) return React.createElement("div", {
+      "data-testid": "editor-" + role + "-block",
+      "data-mine": mine ? "1" : undefined,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        padding: "8px 0",
+        borderBottom: "1px solid " + border
+      }
+    }, React.createElement("span", {
+      style: _objectSpread(_objectSpread({}, label), {}, {
+        marginBottom: 0,
+        minWidth: 60
+      })
+    }, role === "primary" ? "Primary" : "Backup"), summaryHolder(role), mine && React.createElement("span", {
+      "data-testid": "editor-you",
+      style: {
+        background: T.surface,
+        color: T.accentText,
+        border: "1px solid " + T.accent,
+        borderRadius: 10,
+        padding: "0 8px",
+        fontSize: 11,
+        fontWeight: 700
+      }
+    }, "You"), confirmBadge, confirmBadge && React.createElement("span", {
+      "data-testid": "editor-not-final",
+      style: {
+        color: T.muted,
+        fontSize: 11
+      }
+    }, "(not final yet)"));
     return React.createElement("div", {
       "data-testid": "editor-" + role + "-block",
       style: {
@@ -14631,11 +15400,7 @@ function DayEditor(props) {
     }, role === "primary" ? "Primary" : "Backup"), holderView(role), locked && React.createElement(Padlock, {
       title: role + " locked",
       size: 11
-    }), locked && awaitingConfirmation(opened) && React.createElement("span", {
-      "data-testid": "confirm-badge",
-      title: "awaiting the scheduler's confirmation",
-      style: confirmBadgeStyle
-    }, "confirm"), cur && cur.external && React.createElement("span", {
+    }), confirmBadge, cur && cur.external && React.createElement("span", {
       "data-testid": "editor-" + role + "-external-tag",
       style: {
         fontSize: 10,
@@ -14858,7 +15623,7 @@ function DayEditor(props) {
       lineHeight: 1.6,
       marginBottom: 10
     }
-  }, React.createElement("div", null, hol ? React.createElement(React.Fragment, null, React.createElement("span", {
+  }, (hol || canEdit) && React.createElement("div", null, hol ? React.createElement(React.Fragment, null, React.createElement("span", {
     style: {
       fontWeight: 700,
       color: "#8a6a10"
@@ -14875,12 +15640,14 @@ function DayEditor(props) {
       marginRight: 6,
       verticalAlign: "middle"
     })
-  }) : null, "East - ", l.text))), React.createElement("div", null, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off"), ctxError && React.createElement("div", {
+  }) : null, "East - ", l.text))), canEdit ? React.createElement("div", null, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off") : vacationNames.length > 0 && React.createElement("div", {
+    "data-testid": "editor-off"
+  }, "Off: ", vacationNames.join(", ")), canEdit && ctxError && React.createElement("div", {
     style: {
       color: "#a83232",
       fontWeight: 700
     }
-  }, "Eligibility unavailable: ", ctxError), !rulesImported && React.createElement("div", null, "Rules not imported yet - eligibility reflects locks, vacations and availability rows only."), entry && entry.source && React.createElement("div", {
+  }, "Eligibility unavailable: ", ctxError), canEdit && !rulesImported && React.createElement("div", null, "Rules not imported yet - eligibility reflects locks, vacations and availability rows only."), canEdit && entry && entry.source && React.createElement("div", {
     "data-testid": "editor-source"
   }, "Source: ", entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source)), roleBlock("primary"), roleBlock("backup"), pending && React.createElement("div", {
     "data-testid": "override-confirm",
@@ -14986,14 +15753,14 @@ function DayEditor(props) {
       width: "100%",
       opacity: draft.primary ? 0.6 : 1
     })
-  }))) : React.createElement("div", {
+  }))) : draft.note ? React.createElement("div", {
     "data-testid": "editor-note-view",
     style: {
       fontSize: 12,
       color: sub,
-      marginBottom: 10
+      margin: "10px 0"
     }
-  }, draft.note ? React.createElement(React.Fragment, null, "Note: ", draft.note) : "No note."), info && React.createElement("div", {
+  }, "Note: ", draft.note) : null, info && React.createElement("div", {
     role: "status",
     "data-testid": "editor-info",
     style: {
@@ -15002,7 +15769,7 @@ function DayEditor(props) {
       fontWeight: 600,
       marginBottom: 8
     }
-  }, info), evalBroken && React.createElement("div", {
+  }, info), canEdit && evalBroken && React.createElement("div", {
     role: "alert",
     "data-testid": "editor-eval-error",
     style: {
@@ -15035,12 +15802,12 @@ function DayEditor(props) {
       paddingBottom: `calc(${SAFE_AREA.bottom} + 12px)`,
       borderTop: "1px solid " + border
     }
-  }, !isPublicMode && (canEdit || myRole) && React.createElement("button", {
+  }, showTrade && React.createElement("button", {
     type: "button",
     "data-testid": "editor-trade",
     "data-suggested": tradePick && tradePick.to ? tradePick.to : undefined,
     onClick: () => onTrade(day, tradeLinkRole, tradePick || undefined),
-    style: {
+    style: canEdit ? {
       background: "none",
       border: "none",
       color: THEME[dk ? "dark" : "light"].accentText,
@@ -15050,12 +15817,37 @@ function DayEditor(props) {
       textDecoration: "underline",
       padding: 0,
       textAlign: "left"
-    }
-  }, "Propose a trade for this day", tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""), React.createElement("span", {
+    } : _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "7px 12px",
+      fontSize: 12,
+      minHeight: 36,
+      textAlign: "left"
+    })
+  }, "Propose a trade for this day", tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""), !isPublicMode && !canEdit && myRole && day >= todayC && typeof onGive === "function" && React.createElement("button", {
+    type: "button",
+    "data-testid": "editor-give",
+    onClick: () => onGive(day, myRole),
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "7px 12px",
+      fontSize: 12,
+      minHeight: 36
+    })
+  }, "Give away"), !isPublicMode && !canEdit && mySurgeon && !myRole && boardRoles.length > 0 && typeof onOpenShifts === "function" && React.createElement("button", {
+    type: "button",
+    "data-testid": "editor-open-shifts",
+    "data-roles": boardRoles.join(","),
+    onClick: () => onOpenShifts(),
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "7px 12px",
+      fontSize: 12,
+      minHeight: 36
+    })
+  }, "See it on Open shifts"), React.createElement("span", {
     style: {
       flex: 1
     }
-  }), React.createElement("span", {
+  }), canEdit && React.createElement("span", {
+    className: "editor-kbd-hint",
     style: {
       fontSize: 10,
       color: sub
@@ -15162,6 +15954,13 @@ function TotalsCard({
   Badge,
   showToast,
   ytdFloors,
+  payVisible,
+  payTotalsRole,
+  payData,
+  holidays,
+  payYear,
+  onPayYear,
+  onPayRefresh,
   loaded,
   eastDetailsVisible
 }) {
@@ -15171,7 +15970,11 @@ function TotalsCard({
   const [year, setYear] = useState(now.getFullYear());
   const [month0, setMonth0] = useState(now.getMonth());
   const [withPreview, setWithPreview] = useState(false);
-  const rangeMode = mode === "fairness" ? "month" : mode;
+  const modeEff = mode === "pay" && !(payVisible && payTotalsRole) ? "month" : mode;
+  useEffect(() => {
+    if (modeEff === "pay" && typeof onPayYear === "function" && year !== payYear) onPayYear(year);
+  }, [modeEff, year, payYear]);
+  const rangeMode = modeEff === "fairness" || modeEff === "pay" ? "month" : modeEff;
   const range = ttRangeFor(rangeMode, year, month0, {
     floors: ytdFloors || {}
   });
@@ -15299,7 +16102,7 @@ function TotalsCard({
   const targetText = r => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
   const targetBText = r => r.targetB === null ? "-" : String(r.targetB) + (r.targetBKind === "implied" ? "*" : "");
   const anyImplied = rows.some(r => r.targetKind === "implied" || r.targetBKind === "implied");
-  const periodText = range.label + (mode === "fairness" ? "" : "");
+  const periodText = range.label + (modeEff === "fairness" ? "" : "");
   const exportCsv = () => {
     try {
       const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
@@ -15383,7 +16186,7 @@ function TotalsCard({
       gap: 4,
       flexWrap: "wrap"
     }
-  }, modeBtn("month", "By month"), modeBtn("ytd", "Year to date"), modeBtn("rolling", "Rolling 12 months"), modeBtn("fairness", "Fairness")), React.createElement("select", {
+  }, modeBtn("month", "By month"), modeBtn("ytd", "Year to date"), modeBtn("rolling", "Rolling 12 months"), modeBtn("fairness", "Fairness"), payVisible && payTotalsRole && modeBtn("pay", "Pay")), React.createElement("select", {
     "data-testid": "totals-month",
     value: month0,
     onChange: e => setMonth0(Number(e.target.value)),
@@ -15419,7 +16222,7 @@ function TotalsCard({
     "data-testid": "totals-with-preview",
     checked: withPreview,
     onChange: e => setWithPreview(e.target.checked)
-  }), " add rows with the Generate preview applied"), React.createElement("button", {
+  }), " add rows with the Generate preview applied"), modeEff !== "pay" && React.createElement("button", {
     "data-testid": "totals-csv",
     onClick: exportCsv,
     style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
@@ -15438,7 +16241,23 @@ function TotalsCard({
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
       marginBottom: 8
     })
-  }, "Rules context unavailable - caps, targets", eastDetailsVisible ? ", holiday units and East days" : " and holiday units", " show as '-' until the setup loads."), mode !== "fairness" ? React.createElement("div", {
+  }, "Rules context unavailable - caps, targets", eastDetailsVisible ? ", holiday units and East days" : " and holiday units", " show as '-' until the setup loads."), modeEff === "pay" ? React.createElement(PayTotalsPanel, {
+    css: css,
+    dk: dk,
+    roster: roster,
+    schedule: schedule,
+    holidays: holidays,
+    settingsRow: payData && payData.settingsRow,
+    logs: payData ? payData.logs : [],
+    state: payData && payData.state,
+    today: today,
+    year: year,
+    month0: month0,
+    Badge: Badge,
+    showToast: showToast,
+    onRefresh: onPayRefresh,
+    office: payTotalsRole === "office"
+  }) : modeEff !== "fairness" ? React.createElement("div", {
     className: "table-wrap",
     style: css.tableWrap
   }, React.createElement("table", {
@@ -15683,7 +16502,7 @@ function TotalsCard({
         fontWeight: 700
       }
     }, " / ", r.deviationB, " B"))));
-  })()), hasOutside && React.createElement("div", {
+  })()), hasOutside && modeEff !== "pay" && React.createElement("div", {
     "data-testid": "totals-external",
     style: {
       marginTop: 12
@@ -15817,6 +16636,943 @@ function SuCheck({
     checked: !!checked,
     onChange: e => onChange(e.target.checked)
   }), " ", label);
+}
+const PAY_KIND_WORD = {
+  weekday: "Weekday",
+  weekend: "Weekend",
+  holiday: "Holiday"
+};
+function payStateNote(state, T, year) {
+  if (state === "unavailable") return React.createElement("div", {
+    "data-testid": "pay-unavailable",
+    style: {
+      fontSize: 12.5,
+      color: T.muted,
+      background: T.raised,
+      border: "1px solid " + T.border,
+      borderRadius: 6,
+      padding: "8px 10px"
+    }
+  }, PAY_UNAVAILABLE_TEXT);
+  if (state === "failed") return React.createElement("div", {
+    "data-testid": "pay-failed",
+    style: {
+      fontSize: 12.5,
+      color: T.open
+    }
+  }, "Couldn't load the ", year, " call-ins - no figures rather than a year without call-ins. Tap Refresh to try again.");
+  if (state === "skipped") return React.createElement("div", {
+    "data-testid": "pay-skipped",
+    style: {
+      fontSize: 12.5,
+      color: T.open
+    }
+  }, "The ", year, " call-ins were not read - your session needs a fresh sign-in. Sign in again, then tap Refresh.");
+  if (state === "loading") return React.createElement("div", {
+    "data-testid": "pay-loading",
+    style: {
+      fontSize: 12.5,
+      color: T.muted
+    }
+  }, "Loading pay", year ? " for " + year : "", "...");
+  return null;
+}
+function payRatesNote(view, T, forCard) {
+  if (view === "set") return null;
+  const text = view === "failed" ? "Couldn't load the pay rates - amounts show '-' until they load. Tap Refresh to try again." : view === "loading" ? "Loading the pay rates..." : view === "unset" ? PAY_RATES_UNSET_TEXT : "Some rates are not set yet - amounts that need them show '-'." + (forCard ? " The scheduler enters them in Setup > Pay rates." : "");
+  return React.createElement("div", {
+    "data-testid": view === "failed" ? "pay-rates-failed" : "pay-rates-unset",
+    style: {
+      fontSize: 12,
+      color: view === "failed" ? T.open : T.accentText,
+      marginBottom: 8
+    }
+  }, text);
+}
+function PayCard({
+  css,
+  dk,
+  personId,
+  nameOf,
+  isSelf,
+  schedule,
+  holidays,
+  settingsRow,
+  logs,
+  state,
+  today,
+  year,
+  onYear,
+  canEdit,
+  busy,
+  onAdd,
+  onUpdate,
+  onDelete,
+  onRefresh
+}) {
+  const T = THEME[dk ? "dark" : "light"];
+  const [month0, setMonth0] = React.useState(() => parse(today).getMonth());
+  const [draft, setDraft] = React.useState({
+    day: "",
+    hours: "",
+    note: ""
+  });
+  const [editing, setEditing] = React.useState(null);
+  const settings = paySettingsFromRow(settingsRow);
+  const logsState = state && state.logs,
+    setState = state && state.settings;
+  const unavailable = logsState === "unavailable" || setState === "unavailable";
+  const pm = payForMonth(personId, year, month0, {
+    schedule: schedule || {},
+    holidays,
+    logs: logs || [],
+    settings,
+    today
+  });
+  const loggable = pm.days.filter(d => !d.projected).map(d => d.day).reverse();
+  const formDay = editing ? String(editing.day).slice(0, 10) : loggable.indexOf(draft.day) >= 0 ? draft.day : loggable[0] || "";
+  const formKind = formDay ? payDayKind(formDay, settings, payHolidaySet(holidays)) : "weekday";
+  const years = [];
+  {
+    const yNow = parse(today).getFullYear();
+    for (let y = yNow - 2; y <= yNow + 1; y++) years.push(y);
+  }
+  const muted = {
+    fontSize: 12,
+    color: T.muted
+  };
+  const rowBorder = "1px solid " + T.border;
+  const money = c => payMoney(c);
+  const title = isSelf ? "My pay" : "Pay - " + nameOf(personId);
+  const header = React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.cardT), {}, {
+      margin: 0
+    })
+  }, title), React.createElement("span", {
+    "data-testid": "pay-month",
+    style: {
+      display: "inline-flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, React.createElement("select", {
+    "data-testid": "pay-month-select",
+    value: month0,
+    onChange: e => {
+      setMonth0(Number(e.target.value));
+      setEditing(null);
+    },
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12
+    })
+  }, TOTALS_MON.map((m, i) => React.createElement("option", {
+    key: m,
+    value: i
+  }, m))), React.createElement("select", {
+    "data-testid": "pay-year-select",
+    value: year,
+    onChange: e => {
+      onYear(Number(e.target.value));
+      setEditing(null);
+    },
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12
+    })
+  }, years.map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, y)))), onRefresh && React.createElement("button", {
+    "data-testid": "pay-refresh",
+    onClick: onRefresh,
+    disabled: busy,
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      marginLeft: "auto"
+    })
+  }, "Refresh"));
+  if (unavailable) return React.createElement("div", {
+    style: css.card,
+    "data-testid": "pay-card",
+    "data-state": "unavailable"
+  }, header, payStateNote("unavailable", T));
+  if (!payStipendKnown(state)) {
+    const vs0 = payViewState(state, year);
+    if (vs0 === "failed" || vs0 === "skipped" || vs0 === "loading") return React.createElement("div", {
+      style: css.card,
+      "data-testid": "pay-card",
+      "data-state": vs0
+    }, header, payStateNote(vs0, T, year));
+    const rv0 = payRatesView(state, settingsRow);
+    return React.createElement("div", {
+      style: css.card,
+      "data-testid": "pay-card",
+      "data-state": "settings-" + (rv0 === "failed" ? "failed" : "loading")
+    }, header, payRatesNote(rv0 === "failed" ? "failed" : "loading", T, true));
+  }
+  if (pm.stipendOff) return React.createElement("div", {
+    style: css.card,
+    "data-testid": "pay-card",
+    "data-state": "stipend-off"
+  }, React.createElement("div", {
+    "data-testid": "pay-stipend-off",
+    style: {
+      fontSize: 13,
+      color: T.muted
+    }
+  }, React.createElement("strong", {
+    style: {
+      color: T.text
+    }
+  }, title), " - ", PAY_STIPEND_OFF_TEXT));
+  const vs = payViewState(state, year);
+  if (vs === "failed" || vs === "skipped" || vs === "loading") return React.createElement("div", {
+    style: css.card,
+    "data-testid": "pay-card",
+    "data-state": vs
+  }, header, payStateNote(vs, T, year));
+  const ratesView = payRatesView(state, settingsRow);
+  const save = async () => {
+    const input = {
+      personId,
+      day: formDay,
+      hours: draft.hours,
+      note: draft.note
+    };
+    const ok = editing ? await onUpdate(editing, {
+      hours: draft.hours,
+      note: draft.note
+    }) : await onAdd(input);
+    if (ok) {
+      setDraft({
+        day: "",
+        hours: "",
+        note: ""
+      });
+      setEditing(null);
+    }
+  };
+  const startEdit = l => {
+    setEditing(l);
+    setDraft({
+      day: String(l.day).slice(0, 10),
+      hours: String(l.hours),
+      note: l.note || ""
+    });
+  };
+  const sumLine = (sm, label, testid) => React.createElement("div", {
+    "data-testid": testid,
+    "data-earned": sm.earnedCents === null ? "" : sm.earnedCents,
+    "data-projected": sm.projectedCents === null ? "" : sm.projectedCents,
+    style: {
+      flex: "1 1 160px",
+      background: T.raised,
+      border: rowBorder,
+      borderRadius: 8,
+      padding: "8px 10px"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+      color: T.muted
+    }
+  }, label), React.createElement("div", {
+    style: {
+      fontSize: 17,
+      fontWeight: 700,
+      color: T.text,
+      fontFamily: mono
+    }
+  }, money(sm.earnedCents), " ", React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 500,
+      color: T.muted
+    }
+  }, "earned")), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: T.muted
+    }
+  }, money(sm.projectedCents), " projected - ", sm.primaryDays, " primary day", sm.primaryDays === 1 ? "" : "s", ", ", sm.calledInDays, " called in, ", sm.hours, " h"));
+  return React.createElement("div", {
+    style: css.card,
+    "data-testid": "pay-card",
+    "data-state": vs
+  }, header, vs === "stale" && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: T.open,
+      marginBottom: 8
+    }
+  }, "Couldn't refresh the ", year, " call-ins - showing the last ones loaded."), payRatesNote(ratesView, T, true), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, sumLine(pm.month, TOTALS_MON[month0] + " " + year, "pay-total-month"), sumLine(pm.ytd, "Year to date (through " + TOTALS_MON[month0] + ")", "pay-total-ytd")), React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, muted), {}, {
+      marginBottom: 6
+    })
+  }, "Primary call days only (backup is not paid). One call day runs 07:00 to 07:00 - a call-in after midnight belongs to the day before. Future days are projected (the stipend only)."), pm.days.length === 0 ? React.createElement("div", {
+    "data-testid": "pay-empty",
+    style: muted
+  }, "No primary call days in ", TOTALS_MON[month0], " ", year, ".") : React.createElement("div", {
+    "data-testid": "pay-days"
+  }, pm.days.map(d => React.createElement("div", {
+    key: d.day,
+    "data-testid": "pay-day",
+    "data-day": d.day,
+    "data-kind": d.kind,
+    "data-projected": d.projected ? "1" : "0",
+    style: {
+      borderTop: rowBorder,
+      padding: "6px 0"
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "baseline",
+      flexWrap: "wrap"
+    }
+  }, React.createElement("strong", {
+    style: {
+      fontSize: 13,
+      color: T.text,
+      minWidth: 72
+    }
+  }, TT_DOW[parse(d.day).getDay()], " ", fmtMD(d.day)), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: T.muted
+    }
+  }, PAY_KIND_WORD[d.kind], d.holiday && d.kind === "holiday" ? " (" + d.holiday + ")" : ""), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: T.muted
+    }
+  }, d.projected ? "projected" : d.calledIn ? "called in " + d.activations + "x, " + d.hours + " h" : "not called in"), React.createElement("span", {
+    style: {
+      marginLeft: "auto",
+      fontFamily: mono,
+      fontSize: 13,
+      color: T.text,
+      fontWeight: 600
+    }
+  }, money(d.totalCents))), d.logs.length > 0 && !d.projected && d.logs.map(l => React.createElement("div", {
+    key: l.id,
+    "data-testid": "pay-log",
+    "data-id": l.id,
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center",
+      flexWrap: "wrap",
+      fontSize: 12,
+      color: T.muted,
+      padding: "2px 0 2px 12px"
+    }
+  }, React.createElement("span", null, "call-in: ", Number(l.hours), " h", l.note ? " - " + l.note : ""), canEdit && React.createElement("span", {
+    style: {
+      marginLeft: "auto",
+      display: "inline-flex",
+      gap: 4
+    }
+  }, React.createElement("button", {
+    "data-testid": "pay-log-edit",
+    disabled: busy,
+    onClick: () => startEdit(l),
+    style: css.mini(false)
+  }, "Edit"), React.createElement("button", {
+    "data-testid": "pay-log-delete",
+    disabled: busy,
+    onClick: () => onDelete(l),
+    style: css.mini(false)
+  }, "Delete"))))))), pm.orphanLogs.length > 0 && React.createElement("div", {
+    "data-testid": "pay-orphans",
+    style: {
+      marginTop: 8
+    }
+  }, pm.orphanLogs.map(l => React.createElement("div", {
+    key: l.id,
+    "data-testid": "pay-orphan",
+    "data-day": String(l.day).slice(0, 10),
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center",
+      flexWrap: "wrap",
+      fontSize: 12,
+      color: T.accentText,
+      padding: "2px 0"
+    }
+  }, React.createElement("span", null, "Not counted - no longer primary on ", TT_DOW[parse(String(l.day).slice(0, 10)).getDay()], " ", fmtMD(String(l.day).slice(0, 10)), " (", Number(l.hours), " h logged)"), canEdit && React.createElement("button", {
+    "data-testid": "pay-orphan-delete",
+    disabled: busy,
+    onClick: () => onDelete(l),
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      marginLeft: "auto"
+    })
+  }, "Delete")))), canEdit && React.createElement("div", {
+    "data-testid": "pay-log-form",
+    style: {
+      marginTop: 12,
+      borderTop: rowBorder,
+      paddingTop: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: T.text,
+      marginBottom: 6
+    }
+  }, editing ? "Edit the call-in on " + fmtMD(formDay) : "Log a call-in"), !editing && loggable.length === 0 ? React.createElement("div", {
+    style: muted
+  }, "No primary call day on or before today in ", TOTALS_MON[month0], " ", year, " to log a call-in on.") : React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "flex-end"
+    }
+  }, React.createElement("label", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 2,
+      fontSize: 11,
+      color: T.muted
+    }
+  }, "Call day (07:00 to 07:00)", React.createElement("select", {
+    "data-testid": "pay-log-day",
+    value: formDay,
+    disabled: !!editing || busy,
+    onChange: e => setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+      day: e.target.value
+    })),
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12
+    })
+  }, (editing ? [formDay] : loggable).map(d => React.createElement("option", {
+    key: d,
+    value: d
+  }, TT_DOW[parse(d).getDay()], " ", fmtMD(d))))), React.createElement("label", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 2,
+      fontSize: 11,
+      color: T.muted
+    }
+  }, formKind === "weekday" ? "After-hours hours" : "Hours worked", React.createElement("input", {
+    "data-testid": "pay-log-hours",
+    type: "number",
+    inputMode: "decimal",
+    step: "0.25",
+    min: "0",
+    max: "24",
+    value: draft.hours,
+    disabled: busy,
+    onChange: e => setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+      hours: e.target.value
+    })),
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12,
+      width: 90
+    })
+  })), React.createElement("label", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 2,
+      fontSize: 11,
+      color: T.muted,
+      flex: "1 1 160px"
+    }
+  }, "Note (optional - no patient or contact details)", React.createElement("input", {
+    "data-testid": "pay-log-note",
+    type: "text",
+    maxLength: 200,
+    value: draft.note,
+    disabled: busy,
+    onChange: e => setDraft(d => _objectSpread(_objectSpread({}, d), {}, {
+      note: e.target.value
+    })),
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12
+    })
+  })), React.createElement("button", {
+    "data-testid": "pay-log-save",
+    disabled: busy || !formDay,
+    onClick: save,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "6px 14px",
+      fontSize: 12
+    })
+  }, busy ? "Saving..." : editing ? "Save changes" : "Log call-in"), editing && React.createElement("button", {
+    "data-testid": "pay-log-cancel",
+    disabled: busy,
+    onClick: () => {
+      setEditing(null);
+      setDraft({
+        day: "",
+        hours: "",
+        note: ""
+      });
+    },
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "6px 14px",
+      fontSize: 12
+    })
+  }, "Cancel"))));
+}
+function PayRatesCard({
+  css,
+  dk,
+  row,
+  state,
+  busy,
+  onSave,
+  showToast,
+  onRefresh,
+  roster
+}) {
+  const T = THEME[dk ? "dark" : "light"];
+  const toDraft = r => {
+    const s = paySettingsFromRow(r);
+    const d = _objectSpread(_objectSpread({}, s), {}, {
+      rateText: {}
+    });
+    PAY_RATE_KEYS.forEach(k => {
+      d.rateText[k] = s.rates[k] === null ? "" : String(s.rates[k]);
+    });
+    return d;
+  };
+  const [draft, setDraft] = React.useState(() => toDraft(row));
+  const [dirty, setDirty] = React.useState(false);
+  React.useEffect(() => {
+    if (!dirty) setDraft(toDraft(row));
+  }, [row]);
+  const unavailable = state && state.settings === "unavailable";
+  const loaded = state && state.settings === "ok";
+  const edit = patch => {
+    setDirty(true);
+    setDraft(d => _objectSpread(_objectSpread({}, d), patch));
+  };
+  const save = async () => {
+    const rates = {};
+    PAY_RATE_KEYS.forEach(k => {
+      rates[k] = payRateNum(draft.rateText[k]);
+    });
+    const bad = PAY_RATE_KEYS.filter(k => String(draft.rateText[k]).trim() !== "" && rates[k] === null);
+    if (bad.length) {
+      showToast("A rate must be a number from 0 to 99999, or empty (not set): " + bad.map(k => PAY_RATE_LABELS[k]).join(", "), "error");
+      return;
+    }
+    const ok = await onSave(_objectSpread(_objectSpread({}, draft), {}, {
+      rates
+    }));
+    if (ok) setDirty(false);
+  };
+  const lbl = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    fontSize: 11,
+    color: T.muted
+  };
+  return React.createElement("div", {
+    "data-testid": "pay-rates",
+    "data-state": unavailable ? "unavailable" : loaded ? "ok" : state && state.settings || "unread"
+  }, unavailable ? payStateNote("unavailable", T) : React.createElement(React.Fragment, null, React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: T.muted,
+      margin: "0 0 10px",
+      lineHeight: 1.5
+    }
+  }, "Primary call pay, per 24-hour call day (07:00 to 07:00): the stipend every primary day; the call-in rate when the primary is called in (weekday, or weekend / holiday); the activation rate for the hours worked (weekday: after-hours hours; weekend / holiday: all hours) or per call-in. Backup is never paid. The rates live only in the database (the scheduler, the office read-only, and the linked surgeons paid by the call stipend read them) - never in the repo, the seed or the public data. Empty = not set."), state && state.settings === "failed" && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: T.open,
+      marginBottom: 8
+    }
+  }, "Couldn't load the saved rates - reload before saving, or you may overwrite them."), state && state.settings === "skipped" && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: T.open,
+      marginBottom: 8
+    }
+  }, "The saved rates were not read - your session needs a fresh sign-in. Sign in again, then tap Refresh."), (!state || state.settings === "unread") && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: T.muted,
+      marginBottom: 8
+    }
+  }, "Loading the saved rates..."), !loaded && onRefresh && React.createElement("button", {
+    "data-testid": "pay-rates-refresh",
+    onClick: onRefresh,
+    disabled: busy,
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      marginBottom: 8
+    })
+  }, "Refresh"), React.createElement("fieldset", {
+    disabled: busy || !loaded,
+    style: {
+      border: "none",
+      padding: 0,
+      margin: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, PAY_RATE_KEYS.map(k => React.createElement("label", {
+    key: k,
+    style: lbl
+  }, PAY_RATE_LABELS[k], k === "activationRate" ? draft.activationUnit === "hour" ? " (per hour)" : " (per call-in)" : "", React.createElement("input", {
+    "data-testid": "pay-rate-" + k,
+    type: "number",
+    inputMode: "decimal",
+    step: "0.01",
+    min: "0",
+    value: draft.rateText[k],
+    onChange: e => edit({
+      rateText: _objectSpread(_objectSpread({}, draft.rateText), {}, {
+        [k]: e.target.value
+      })
+    }),
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12,
+      width: 130
+    })
+  }))), React.createElement("label", {
+    style: lbl
+  }, "Activation rate is paid", React.createElement("select", {
+    "data-testid": "pay-activation-unit",
+    value: draft.activationUnit,
+    onChange: e => edit({
+      activationUnit: e.target.value
+    }),
+    style: _objectSpread(_objectSpread({}, css.inp), {}, {
+      padding: "4px 8px",
+      fontSize: 12
+    })
+  }, React.createElement("option", {
+    value: "hour"
+  }, "per hour worked"), React.createElement("option", {
+    value: "activation"
+  }, "per call-in")))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: T.muted,
+      marginBottom: 4
+    }
+  }, "Weekend days for pay (Friday is a weekday unless picked):"), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 4,
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, PAY_WEEK_ORDER.map(dw => {
+    const on = draft.weekendDays.indexOf(dw) >= 0;
+    return React.createElement("button", {
+      key: dw,
+      type: "button",
+      "data-testid": "pay-weekend-" + dw,
+      "aria-pressed": on,
+      onClick: () => edit({
+        weekendDays: PAY_WEEK_ORDER.filter(x => x === dw ? !on : draft.weekendDays.indexOf(x) >= 0)
+      }),
+      style: css.mini(on)
+    }, dw);
+  })), React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 4,
+      marginBottom: 10
+    }
+  }, React.createElement(SuCheck, {
+    testid: "pay-flag-holidayUnitDaysAreHolidays",
+    label: "Every day of a holiday unit is a holiday (e.g. Christmas Eve, the Thanksgiving Fri-Sun)",
+    checked: draft.holidayUnitDaysAreHolidays,
+    onChange: v => edit({
+      holidayUnitDaysAreHolidays: v
+    })
+  }), React.createElement(SuCheck, {
+    testid: "pay-flag-callInRequiredWeekday",
+    label: "The weekday call-in rate needs a logged call-in",
+    checked: draft.callInRequiredWeekday,
+    onChange: v => edit({
+      callInRequiredWeekday: v
+    })
+  }), React.createElement(SuCheck, {
+    testid: "pay-flag-callInRequiredWeekendHoliday",
+    label: "The weekend / holiday call-in rate needs a logged call-in",
+    checked: draft.callInRequiredWeekendHoliday,
+    onChange: v => edit({
+      callInRequiredWeekendHoliday: v
+    })
+  })), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: T.muted,
+      marginBottom: 4
+    }
+  }, "Paid by the call stipend (off: no My pay, left out of Totals > Pay and its CSV, and he cannot read the rates):"), React.createElement("div", {
+    "data-testid": "pay-stipend-switches",
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 4,
+      marginBottom: 10
+    }
+  }, (roster || []).filter(r => r && r.id && r.type !== "external" && (r.active !== false || draft.stipendOffIds.indexOf(r.id) >= 0)).map(r => React.createElement(SuCheck, {
+    key: r.id,
+    testid: "pay-stipend-" + r.id,
+    label: (r.name || r.id) + (r.code ? " (" + r.code + ")" : "") + (r.active === false ? " - inactive" : ""),
+    checked: draft.stipendOffIds.indexOf(r.id) < 0,
+    onChange: v => edit({
+      stipendOffIds: v ? draft.stipendOffIds.filter(x => x !== r.id) : draft.stipendOffIds.concat([r.id]).sort()
+    })
+  }))), React.createElement("button", {
+    "data-testid": "pay-rates-save",
+    onClick: save,
+    disabled: busy || !loaded || !dirty,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "6px 14px",
+      fontSize: 12
+    })
+  }, busy ? "Saving..." : "Save pay settings"))));
+}
+function PayTotalsPanel({
+  css,
+  dk,
+  roster,
+  schedule,
+  holidays,
+  settingsRow,
+  logs,
+  state,
+  today,
+  year,
+  month0,
+  Badge,
+  showToast,
+  onRefresh,
+  office
+}) {
+  const T = THEME[dk ? "dark" : "light"];
+  const vs = payViewState(state, year);
+  const refreshBtn = onRefresh ? React.createElement("button", {
+    "data-testid": "pay-totals-refresh",
+    onClick: onRefresh,
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      marginLeft: 8
+    })
+  }, "Refresh") : null;
+  if (vs === "unavailable") return React.createElement("div", {
+    "data-testid": "pay-totals",
+    "data-state": "unavailable"
+  }, payStateNote("unavailable", T));
+  if (vs === "failed" || vs === "skipped" || vs === "loading") return React.createElement("div", {
+    "data-testid": "pay-totals",
+    "data-state": vs,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: 6
+    }
+  }, payStateNote(vs, T, year), refreshBtn);
+  if (!payStipendKnown(state)) {
+    const rv0 = payRatesView(state, settingsRow) === "failed" ? "failed" : "loading";
+    return React.createElement("div", {
+      "data-testid": "pay-totals",
+      "data-state": "settings-" + rv0,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: 6
+      }
+    }, payRatesNote(rv0, T, false), refreshBtn);
+  }
+  const settings = paySettingsFromRow(settingsRow);
+  const ratesView = payRatesView(state, settingsRow);
+  const rows = payTotalsRows(roster || [], year, month0, {
+    schedule: schedule || {},
+    holidays,
+    logs: logs || [],
+    settings,
+    today
+  });
+  const offRows = payStipendOffRows(roster || [], settings);
+  const exportPay = () => {
+    if (!payStipendKnown(state)) return;
+    try {
+      const c = payCsv(rows, year, month0);
+      const real = downloadTextFile(c.text, c.name, "text/csv");
+      showToast(real ? "Downloaded " + c.name : "Opened the CSV in a new view (this browser blocks downloads) - save it from there.", real ? "success" : "info");
+    } catch (e) {
+      console.warn("pay CSV export failed:", e);
+      showToast("Couldn't export the pay CSV: " + (e && e.message ? e.message : String(e)), "error");
+    }
+  };
+  const th = {
+    textAlign: "right",
+    padding: "7px 8px",
+    color: T.muted,
+    fontWeight: 600,
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    whiteSpace: "nowrap"
+  };
+  const thL = _objectSpread(_objectSpread({}, th), {}, {
+    textAlign: "left"
+  });
+  const td = {
+    padding: "6px 8px",
+    fontFamily: mono,
+    fontSize: 12.5,
+    textAlign: "right",
+    color: T.text,
+    whiteSpace: "nowrap"
+  };
+  return React.createElement("div", {
+    "data-testid": "pay-totals",
+    "data-state": vs
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap",
+      marginBottom: 8
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: T.muted
+    }
+  }, "Primary call pay, ", TOTALS_MON[month0], " ", year, " and year to date (through ", TOTALS_MON[month0], "). Earned = days up to today; projected = later days (the stipend only). ", office ? "Read-only - for preparing the stipends." : "Visible to the scheduler and, read-only, the office."), React.createElement("button", {
+    "data-testid": "pay-csv",
+    onClick: exportPay,
+    disabled: state.loadedYear !== Number(year) || !payStipendKnown(state),
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "5px 12px",
+      fontSize: 11,
+      marginLeft: "auto"
+    })
+  }, "Export pay CSV")), vs === "stale" && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: T.open,
+      marginBottom: 8
+    }
+  }, "Couldn't refresh the ", year, " call-ins - showing the last ones loaded.", refreshBtn), payRatesNote(ratesView, T, false), offRows.length > 0 && React.createElement("div", {
+    "data-testid": "pay-totals-stipend-off",
+    style: {
+      fontSize: 12,
+      color: T.muted,
+      marginBottom: 8
+    }
+  }, PAY_STIPEND_OFF_TEXT.replace(/\.$/, ""), " (left out): ", offRows.map(r => r.name).join(", "), "."), React.createElement("div", {
+    className: "table-wrap",
+    style: css.tableWrap
+  }, React.createElement("table", {
+    "data-testid": "pay-totals-table",
+    style: {
+      width: "100%",
+      borderCollapse: "collapse",
+      minWidth: 620
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: thL
+  }, "Surgeon"), React.createElement("th", {
+    style: th
+  }, "Primary days"), React.createElement("th", {
+    style: th
+  }, "Called in"), React.createElement("th", {
+    style: th
+  }, "Hours"), React.createElement("th", {
+    style: th
+  }, "Earned"), React.createElement("th", {
+    style: th
+  }, "Projected"), React.createElement("th", {
+    style: th
+  }, "YTD earned"), React.createElement("th", {
+    style: th
+  }, "YTD projected"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
+    key: r.id,
+    "data-testid": "pay-row-" + r.id,
+    "data-earned": r.month.earnedCents === null ? "" : r.month.earnedCents,
+    style: {
+      borderTop: "1px solid " + T.border
+    }
+  }, React.createElement("td", {
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      textAlign: "left",
+      fontFamily: font
+    })
+  }, React.createElement(Badge, {
+    id: r.id
+  }), r.inactive && React.createElement("span", {
+    "data-testid": "pay-row-inactive",
+    style: {
+      fontSize: 10,
+      color: T.muted,
+      marginLeft: 6
+    }
+  }, "inactive"), r.orphans > 0 && React.createElement("span", {
+    title: "call-ins on days no longer this surgeon's primary (not counted)",
+    style: {
+      fontSize: 10,
+      color: T.accentText,
+      marginLeft: 6
+    }
+  }, r.orphans, " not counted")), React.createElement("td", {
+    style: td
+  }, r.month.primaryDays), React.createElement("td", {
+    style: td
+  }, r.month.calledInDays), React.createElement("td", {
+    style: td
+  }, r.month.hours), React.createElement("td", {
+    style: _objectSpread(_objectSpread({}, td), {}, {
+      fontWeight: 700
+    })
+  }, payMoney(r.month.earnedCents)), React.createElement("td", {
+    style: td
+  }, payMoney(r.month.projectedCents)), React.createElement("td", {
+    style: td
+  }, payMoney(r.ytd.earnedCents)), React.createElement("td", {
+    style: td
+  }, payMoney(r.ytd.projectedCents))))))));
 }
 function RosterEditor({
   css,
@@ -19025,14 +20781,14 @@ function GenDiagnostics({
   }, dg.eastForecast.map(f => f.day + " " + Math.round(f.probability * 100) + "%" + (f.busyByThreshold ? " busy" : "") + (f.assigned ? " (" + nameOf(f.id) + " " + f.assigned + ")" : "")).join(", ")), (dg.warnings || []).length > 0 && React.createElement(React.Fragment, null, React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
       margin: "8px 0 4px",
-      color: "#8a5a10"
+      color: LIGHT.warnText
     })
   }, "Warnings (", dg.warnings.length, ")"), React.createElement("ul", {
     style: {
       margin: 0,
       paddingLeft: 18,
       fontSize: 11.5,
-      color: "#7a5a20"
+      color: LIGHT.warnText
     }
   }, dg.warnings.map((w, i) => React.createElement("li", {
     key: i
@@ -19075,6 +20831,7 @@ function PeriodsSection({
   selfId,
   draft,
   setDraft,
+  openCounts,
   onCreate,
   onCloseNow,
   onRemind,
@@ -19197,7 +20954,16 @@ function PeriodsSection({
   };
   const daysTo = d => suIsIso(d) ? suDaysBetween(today, d) : null;
   const inWords = n => n === null ? "" : n === 0 ? " (today)" : n === 1 ? " (tomorrow)" : n > 1 ? ` (in ${n} days)` : ` (${-n} day${n === -1 ? "" : "s"} ago)`;
-  const draftWarn = draft && suIsIso(draft.offers_close_at) && draft.offers_close_at <= today ? "The close date has passed or is today: surgeons will be frozen out of this period as soon as it exists and the morning run will mark it closed. Move the date later to collect offers." : draft && suIsIso(draft.publish_by) && suIsIso(draft.start_day) && draft.publish_by > draft.start_day ? "Publish-by lies after the start - the schedule would be due after the period begins." : "";
+  const closeW = Number(rules.closeWeeksBeforeStart) > 0 ? Number(rules.closeWeeksBeforeStart) : OP_PERIOD_DEFAULTS.closeWeeksBeforeStart;
+  const shortLead = d => d && suIsIso(d.offers_close_at) && suIsIso(d.start_day) && d.offers_close_at > suAddDays(d.start_day, -7 * closeW);
+  const draftWarn = draft && suIsIso(draft.offers_close_at) && draft.offers_close_at <= today ? "The close date has passed or is today: surgeons will be frozen out of this period as soon as it exists and the morning run will mark it closed. Move the date later to collect offers." : draft && suIsIso(draft.publish_by) && suIsIso(draft.start_day) && draft.publish_by > draft.start_day ? "Publish-by lies after the start - the schedule would be due after the period begins." : shortLead(draft) ? "Offers close only " + suDaysBetween(draft.offers_close_at, draft.start_day) + " days before the start - the rules ask for " + closeW + " weeks (" + 7 * closeW + " days) so the schedule can be built and published in time. Allowed; move the close earlier if you can." : "";
+  const lead = React.useMemo(() => offerPeriodLeadWarnings({
+    periods: all,
+    today,
+    groupRules,
+    openCounts
+  }), [all, today, groupRules, openCounts]);
+  const leadWords = w => w.kind === "short-lead" ? "Choices close only " + (w.weeksBeforeStart > 0 ? w.weeksBeforeStart + " week" + (w.weeksBeforeStart === 1 ? "" : "s") + " (" + w.daysBeforeStart + " days)" : w.daysBeforeStart + " day" + (w.daysBeforeStart === 1 ? "" : "s")) + " before the start - the default is " + w.defaultWeeks + " weeks, so the schedule has less time to be built." : w.kind === "publish-due" ? "Publish by " + fmtMD(w.publishBy) + inWords(w.daysToPublish) + " - " + w.open + " slot" + (w.open === 1 ? " is" : "s are") + " still open in this period." : "Publish-by " + fmtMD(w.publishBy) + " has passed" + inWords(w.daysToPublish) + " - " + w.open + " slot" + (w.open === 1 ? " is" : "s are") + " still open in this period.";
   return React.createElement("div", {
     "data-testid": "periods-section",
     style: {
@@ -19242,7 +21008,14 @@ function PeriodsSection({
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). \"Generate this period\" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in \"only these days\" mode is never placed outside them, a \"preferred days\" surgeon only when a slot would otherwise stay open - the diagnostics list every such placement. Status below is derived from the offers on file - submitted (days inside the period), rules only (chose \"go by my rules\"), not started."), draft && React.createElement("div", {
+  }, "A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). \"Generate this period\" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in \"only these days\" mode is never placed outside them, a \"preferred days\" surgeon only when a slot would otherwise stay open - the diagnostics list every such placement. Status below is derived from the offers on file - submitted (days inside the period), rules only (chose \"go by my rules\"), not started."), lead.next && React.createElement("div", {
+    "data-testid": "prd-lead-warn",
+    "data-kind": "next-missing",
+    style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+      padding: "5px 9px",
+      marginBottom: 8
+    })
+  }, "Create the next period (from ", fmtMD(lead.next.from), ") - choices for it should close by ", fmtMD(lead.next.closeBy), inWords(lead.next.daysToClose), " so the schedule can be built ", closeW, " weeks ahead."), draft && React.createElement("div", {
     "data-testid": "prd-form",
     style: {
       border: "1px solid #c8d8e8",
@@ -19454,7 +21227,15 @@ function PeriodsSection({
         color: nNot ? "#a83232" : "#1a6030",
         fontWeight: 600
       }
-    }, nNot, " not started"), "."), React.createElement("div", {
+    }, nNot, " not started"), "."), (lead.periods[p.id || day(p.start_day)] || []).map(w => React.createElement("div", {
+      key: w.kind,
+      "data-testid": "prd-lead-warn",
+      "data-kind": w.kind,
+      style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+        padding: "5px 9px",
+        marginBottom: 6
+      })
+    }, leadWords(w))), React.createElement("div", {
       className: "table-wrap",
       style: css.tableWrap
     }, React.createElement("table", {
