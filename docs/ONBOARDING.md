@@ -57,7 +57,7 @@ afterwards; the editor keeps query history).*
 
 4. Tell them: **Time off** is self-service (no approval) and is refused over a day they are already published — trade
    first. **Trades** are by day and role; every "propose a trade" shortcut lands on the trade form with the next empty
-   field focused. Trades and gives waiting on their answer come first on **Time off & Trades** (**Waiting on you**; the
+   field focused. Trades and gives (for days still ahead) waiting on their answer come first on **Time off & Trades** (**Waiting on you**; the
    tab badge counts only those) and can be accepted or declined straight from **Alerts**. A vacation starting less than
    six weeks out (the offers freeze, `groupRules.offerPeriods`) is saved as usual with a note that the schedule through
    that date is already being built - check Open shifts or propose a trade. Their calendar subscription URL is in

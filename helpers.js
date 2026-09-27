@@ -2884,18 +2884,22 @@ function offerPeriodJump(period, today, shown) {
 function vacationLeadNote(start, today, rules) {
   if (!suIsIso(start) || !suIsIso(today)) return null;
   const R = rules && typeof rules === "object" ? rules : {};
-  const w = Number(R.closeWeeksBeforeStart);
-  const weeks = isFinite(w) && w > 0 ? w : OP_PERIOD_DEFAULTS.closeWeeksBeforeStart;
+  const w = R.closeWeeksBeforeStart;   // the same rule as offerTimeline's num(): a number > 0, else the default (a "8" string is not)
+  const weeks = typeof w === "number" && isFinite(w) && w > 0 ? w : OP_PERIOD_DEFAULTS.closeWeeksBeforeStart;
   const days = suDaysBetween(today, start);
   if (days >= weeks * 7) return null;
   return { through: suAddDays(today, weeks * 7 - 1), weeks, days };
 }
-// tradesWaitingOn(rows, personId) -> the PENDING trade / give rows addressed to personId (the ones only they can answer:
-// Accept / Decline), in the order given. [] without a person. The Time off & Trades "Waiting on you" block and a
-// surgeon's tab badge read it (the scheduler's badge keeps counting every pending trade).
-function tradesWaitingOn(rows, personId) {
+// tradesWaitingOn(rows, personId, today) -> the PENDING trade / give rows addressed to personId (the ones only they can
+// answer: Accept / Decline), in the order given. [] without a person. With an ISO `today`, a row whose day or return
+// day is before it is left out: the server refuses a member's Accept on it (trade_update_guard TRADE_PAST, strict <),
+// so it is not "waiting" - the Pending card still lists it with Decline. The Time off & Trades "Waiting on you" block
+// and a surgeon's tab badge read it (the scheduler's badge keeps counting every pending trade).
+function tradesWaitingOn(rows, personId, today) {
   if (!personId || !Array.isArray(rows)) return [];
-  return rows.filter(r => r && r.status === "pending" && r.to_surgeon_id === personId);
+  const t = suIsIso(today) ? today : null;
+  const past = (d) => t !== null && suIsIso(String(d || "").slice(0, 10)) && String(d).slice(0, 10) < t;
+  return rows.filter(r => r && r.status === "pending" && r.to_surgeon_id === personId && !past(r.day) && !(r.return_day && past(r.return_day)));
 }
 // offerRulesWords(rules, groupRules) -> plain sentences describing one surgeon's rules, built from the DATA in
 // call_schedule_data.data.surgeonRules (no surgeon-specific branch; a key that is absent says nothing). Shown by

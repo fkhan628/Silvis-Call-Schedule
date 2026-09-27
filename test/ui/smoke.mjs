@@ -3293,6 +3293,13 @@ try {
       else if (!/ - suggested: \S+$/.test(link.text)) fail(`Item C editor link: text '${link.text}' lacks ' - suggested: <Name>'`);
       else if (st.to !== link.suggested || st.day !== cDay || st.role !== cRole || st.from !== "s1" || st.editorOpen || st.topChip !== link.suggested || st.ret) fail("Item C editor link: the click did not pre-fill the card as expected: " + JSON.stringify({ link, st, cDay, cRole }));
       else ok(`Item C editor link on ${cDay}: '${link.text}' -> the card shows From ${st.from}, day ${st.day}, role ${st.role}, Trade with ${st.to} (= the top chip ${st.topChip}), return day '' (one-way), editor closed`);
+      // Shift-adjust (9/27): focusTradeCard lands ON the card - day and Trade with are filled, so focus is on the return day
+      try {
+        const land = await page.evaluate(() => { const a = document.activeElement, card = document.querySelector("[data-testid=trade-card]"); return { inCard: !!(card && a && card.contains(a)), id: a ? a.getAttribute("data-testid") : null, top: card ? Math.round(card.getBoundingClientRect().top) : null, vh: window.innerHeight }; });
+        if (!land.inCard || !["trade-theirs-pick", "trade-return-day"].includes(land.id)) fail("Shift-adjust landing (editor link): focus should be on the return-day field inside the trade card, got " + JSON.stringify(land));
+        else if (land.top === null || land.top < -2 || land.top > land.vh / 2) fail("Shift-adjust landing (editor link): the trade card's top is not in the upper half of the screen (scrollIntoView block start; the page end can stop it short of 0): " + JSON.stringify(land));
+        else ok(`Shift-adjust landing (editor link): the trade card is at the top (${land.top}px) and focus is on ${land.id}`);
+      } catch (e) { fail("Shift-adjust landing (editor link): " + errLine(e)); }
       await page.selectOption("[data-testid=trade-to]", "").catch(() => {});
       await page.fill("[data-testid=trade-return-day]", "").catch(() => {});
       if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
@@ -4461,7 +4468,7 @@ try {
           const n = Math.round((Date.UTC(+close.slice(0, 4), +close.slice(5, 7) - 1, +close.slice(8, 10)) - Date.UTC(+todayIso.slice(0, 4), +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10))) / 86400000);
           const want = "Go to " + per.label + " (freezes " + mdOf(close) + ", in " + n + " day" + (n === 1 ? "" : "s") + ")";
           if (!gp) fail(`Offer painter: no ofp-goto-period although ${per.label} is open for offers (freezes ${close}) and not on screen`);
-          else if (gp.text !== want || gp.start !== String(per.start_day).slice(0, 10) || gp.h < 36 || gp.right > 391) fail(`Offer painter: ofp-goto-period should read '${want}' (data-start ${per.start_day}, >= 36 px, on screen), got ${JSON.stringify(gp)}`);
+          else if (gp.text !== want || gp.start !== String(per.start_day).slice(0, 10) || gp.h < 36 || gp.h > 37 || gp.right > 391) fail(`Offer painter: ofp-goto-period should read '${want}' (data-start ${per.start_day}, one 36 px line - never wrapping into the day list's 45% - on screen), got ${JSON.stringify(gp)}`);
           else {
             await page.click("[data-testid=ofp-goto-period]"); await page.waitForTimeout(250);
             const jumped = await page.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month"));
@@ -4921,6 +4928,11 @@ try {
       await page.click("[data-testid=vac-conflict-trade]");
       await page.waitForTimeout(300);
       const preDay = await page.$eval("[data-testid=trade-day]", el => el.value).catch(() => "");
+      try {
+        const land = await page.evaluate(() => { const a = document.activeElement, card = document.querySelector("[data-testid=trade-card]"); return { inCard: !!(card && a && card.contains(a)), id: a ? a.getAttribute("data-testid") : null }; });
+        if (!land.inCard || !["trade-to", "trade-theirs-pick", "trade-return-day"].includes(land.id)) fail("Shift-adjust landing (vacation conflict): focus should be on the first empty field after the day inside the trade card, got " + JSON.stringify(land));
+        else ok(`Shift-adjust landing (vacation conflict): focus is on ${land.id} inside the trade card`);
+      } catch (e) { fail("Shift-adjust landing (vacation conflict): " + errLine(e)); }
       if (preDay !== vacFirst.day) fail(`Time off refusal: 'propose a trade' did not preselect the first conflict item ${vacFirst.day} (${vacFirst.role}, derived from the grid for the range ${vacDay}) in the trade form (got '${preDay}')`); else ok(`Time off refusal: 'propose a trade' preselects ${vacFirst.day} (${vacFirst.role} - the first conflict item for the range ${vacDay}) in the trade form`);
       const preTo = await page.$eval("[data-testid=trade-to]", el => el.value).catch(() => "");
       if (!shortcut.suggested) console.log(`     (Item C: no suggested counter-party for ${vacFirst.day} ${vacFirst.role} - the shortcut reads '${shortcut.text}'; nobody in the pool is eligible, so nothing to pre-fill)`);
@@ -4956,13 +4968,18 @@ try {
     // side it falls on is read from today (no fixed date is assumed).
     try {
       const leadDays = Math.round((Date.UTC(2027, 2, 2) - Date.UTC(+todayIso.slice(0, 4), +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10))) / 86400000);
-      const lead = await page.$eval("[data-testid=vac-lead-note]", el => ({ text: el.textContent.replace(/\s+/g, " ").trim(), start: el.getAttribute("data-start"), through: el.getAttribute("data-through") })).catch(() => null);
-      if (leadDays >= 42) {
-        if (lead) fail(`Time off lead-time advisory: 2027-03-02 is ${leadDays} days out (>= 6 weeks) yet vac-lead-note shows '${lead.text}'`);
-        else ok(`Time off lead-time advisory: none for 2027-03-02 (${leadDays} days out, past the 6-week freeze window); the in-window note is not exercised by this range until 2027-01-19 (helpers.vacationLeadNote is pinned in data-layer)`);
+      // the window the app reads: groupRules.offerPeriods.closeWeeksBeforeStart of the served blob (the seed's), a number > 0, else 6
+      const leadRule = ((JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules || {}).offerPeriods || {}).closeWeeksBeforeStart;
+      const leadWeeks = typeof leadRule === "number" && isFinite(leadRule) && leadRule > 0 ? leadRule : 6;
+      const leadWin = leadWeeks * 7;
+      const lead = await page.$eval("[data-testid=vac-lead-note]", el => ({ text: (el.firstElementChild ? el.firstElementChild.textContent : el.textContent).replace(/\s+/g, " ").trim(), start: el.getAttribute("data-start"), through: el.getAttribute("data-through"), dismiss: !!el.querySelector("[data-testid=vac-lead-note-dismiss]") })).catch(() => null);
+      if (leadDays >= leadWin) {
+        if (lead) fail(`Time off lead-time advisory: 2027-03-02 is ${leadDays} days out (>= ${leadWeeks} weeks) yet vac-lead-note shows '${lead.text}'`);
+        else ok(`Time off lead-time advisory: none for 2027-03-02 (${leadDays} days out, past the ${leadWeeks}-week freeze window); the in-window note is not exercised by this range until ${isoAddDays("2027-03-02", -(leadWin - 1))} (helpers.vacationLeadNote is pinned in data-layer)`);
       } else {
-        const want = isoAddDays(todayIso, 41);
-        if (!lead) fail(`Time off lead-time advisory: 2027-03-02 is ${leadDays} days out (< 6 weeks) but no vac-lead-note rendered`);
+        const want = isoAddDays(todayIso, leadWin - 1);
+        if (!lead) fail(`Time off lead-time advisory: 2027-03-02 is ${leadDays} days out (< ${leadWeeks} weeks) but no vac-lead-note rendered`);
+        else if (!lead.dismiss) fail("Time off lead-time advisory: no dismiss button (vac-lead-note-dismiss)");
         else if (lead.start !== "2027-03-02" || lead.through !== want || lead.text !== "The schedule through " + mdOf(want) + " is already being built - check Open shifts or propose a trade if this affects a call day.") fail("Time off lead-time advisory: expected start 2027-03-02, through " + want + " and the fixed sentence, got " + JSON.stringify(lead));
         else ok(`Time off lead-time advisory: '${lead.text}' (2027-03-02 is ${leadDays} days out)`);
       }
@@ -8922,7 +8939,7 @@ try {
         // (d2) P20 R1 (review): ff-7 is a pending give from s3 TO s2 (followed), backed by the served trade row - the
         //      follower reads it as its stored text, with no Accept / Decline (only the give's receiver answers it)
         {
-          const giveCtl = await pf.$$eval("[data-testid=notif-panel] [data-testid=notif-give-accept], [data-testid=notif-panel] [data-testid=notif-give-decline], [data-testid=notif-panel] [data-testid=notif-give-line]", els => els.map(e => e.getAttribute("data-testid")));
+          const giveCtl = await pf.$$eval("[data-testid=notif-panel] [data-testid=notif-give-accept], [data-testid=notif-panel] [data-testid=notif-give-decline], [data-testid=notif-panel] [data-testid=notif-give-line], [data-testid=notif-panel] [data-testid=notif-trade-accept], [data-testid=notif-panel] [data-testid=notif-trade-decline]", els => els.map(e => e.getAttribute("data-testid")));
           const ff7 = await pf.$$eval("[data-testid=notif-row][data-type=trade_proposed]", els => els.map(e => (e.innerText || "").trim()));
           if (!followTradeGets) fail(`F3 follower give alert (${theme}): the page never read shift_trade_requests - the give row behind ff-7 was not loaded, so this check proves nothing`);
           else if (giveCtl.length) fail(`F3 follower give alert (${theme}): a follower is offered the give's receiver controls for a surgeon he follows - ${giveCtl.join(", ")}`);

@@ -1327,6 +1327,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.vacationLeadNote("2026-11-08", "2026-09-27", {}), null, "day 42 is not");
       assert.deepStrictEqual(H.vacationLeadNote("2026-11-08", "2026-09-27", { closeWeeksBeforeStart: 8 }), { through: "2026-11-21", weeks: 8, days: 42 }, "the group's rule wins");
       assert.strictEqual(H.vacationLeadNote("2026-11-08", "2026-09-27", { closeWeeksBeforeStart: "junk" }), null, "a bad rule falls back to 6 weeks");
+      assert.strictEqual(H.vacationLeadNote("2026-11-08", "2026-09-27", { closeWeeksBeforeStart: "8" }), null, "a numeric STRING is not a rule either (offerTimeline's num(): the two never disagree about the window)");
+      assert.strictEqual(H.vacationLeadNote("2026-11-08", "2026-09-27", { closeWeeksBeforeStart: 0 }), null, "0 -> the default");
       assert.ok(H.vacationLeadNote("2026-09-27", "2026-09-27", null), "today");
       assert.strictEqual(H.vacationLeadNote("", "2026-09-27", null), null);
       assert.strictEqual(H.vacationLeadNote("2026-10-01", "x", null), null);
@@ -1338,6 +1340,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(H.tradesWaitingOn(rows, "s4").map(r => r.id), ["b"]);
       assert.deepStrictEqual(H.tradesWaitingOn(rows, null), []);
       assert.deepStrictEqual(H.tradesWaitingOn(null, "s2"), []);
+      // review: a row whose day or return day is before today is not waiting (a member's Accept is refused TRADE_PAST, strict <)
+      const dated = [{ id: "p1", status: "pending", to_surgeon_id: "s2", day: "2026-09-26" }, { id: "p2", status: "pending", to_surgeon_id: "s2", day: "2026-09-27" },
+        { id: "p3", status: "pending", to_surgeon_id: "s2", day: "2026-10-05", return_day: "2026-09-20" }, { id: "p4", status: "pending", to_surgeon_id: "s2", day: "2026-10-05", return_day: "2026-10-09" },
+        { id: "p5", status: "pending", to_surgeon_id: "s2", day: "2026-10-05", return_day: null }];
+      assert.deepStrictEqual(H.tradesWaitingOn(dated, "s2", "2026-09-27").map(r => r.id), ["p2", "p4", "p5"], "yesterday and a past return day drop out; today stays");
+      assert.deepStrictEqual(H.tradesWaitingOn(dated, "s2").map(r => r.id), ["p1", "p2", "p3", "p4", "p5"], "no today -> no date filter");
+      assert.deepStrictEqual(H.tradesWaitingOn(dated, "s2", "junk").map(r => r.id).length, 5, "a non-ISO today -> no date filter");
     });
     check("Shift-adjust (behaviour): notifTradeProposal (lifted verbatim with notifGiveTrade) - Alerts Accept / Decline for the surgeon ASKED on a pending two-way trade (data.kind trade, or none on an old row); never the proposer, a third surgeon, the scheduler not asked, a decided row, a give (notifGiveTrade's), another type or a row without trade_id", () => {
       const lift = (a, b) => { const i = src.indexOf(a); const j = i >= 0 ? src.indexOf(b, i + a.length) : -1; if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 50) + "' not found"); return src.slice(i, j); };
@@ -1379,7 +1388,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const wb = src.slice(w, tc);
       assert.ok(src.slice(v0, w).includes("{!isCoordinator && !isViewer && mySurgeon && tradesWaitingOnMe.length > 0 && ("), "linked surgeons only, and only when something waits");
       assert.ok(wb.includes('{tradesWaitingOnMe.map(r => tradeRow(r, "waiting"))}') && wb.includes("Waiting on you ({tradesWaitingOnMe.length})"), "the same row renderer, counted title");
-      assert.ok(src.includes("const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon), [tradeRequests, mySurgeon]);"), "the rows come from helpers.tradesWaitingOn");
+      assert.ok(src.includes("const waitingToday = todayCentral();") && src.includes("const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon, waitingToday), [tradeRequests, mySurgeon, waitingToday]);"), "the rows come from helpers.tradesWaitingOn, past days left out");
+      assert.ok(src.slice(v0, w).includes('boxShadow:"inset 4px 0 0 " + T.accent') && !src.includes("box-shadow"), "the accent is an inset shadow - the dark sheet repaints css.card borders, never box-shadow");
       const tr = src.slice(src.indexOf("const tradeRow = (r, where) => {"), src.indexOf("\n  };\n", src.indexOf("const tradeRow = (r, where) => {")));
       assert.ok(tr.includes('const waiting = where === "waiting";') && tr.includes('data-testid={waiting ? "trade-waiting-row" : "trade-row"}') && tr.includes('data-testid={waiting ? "trade-waiting-accept" : "trade-accept"}') && tr.includes('data-testid={waiting ? "trade-waiting-decline" : "trade-decline"}'), "a waiting row never shares the Pending card's selectors");
       assert.ok(tr.includes('{!waiting && canCancel && <button data-testid="trade-cancel"') && tr.includes('{!waiting && canRetry && <button data-testid="trade-retry"'), "Cancel / Retry stay on the Pending card");
@@ -1397,11 +1407,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(reg.includes('{mySurgeon && !isScheduler && !(me && me.ok && !locked) && <span data-testid="ob-take-why" style={{fontSize:10.5,color:T.muted,'), "the reason as visible text, surgeons only, T token");
       assert.ok(reg.includes('{locked ? "slot locked - ask the scheduler" : takeTitle(me)}</span>'), "the same reason the title carries (takeTitle - eastMaskedReasons)");
       assert.ok(src.includes('<button data-testid="ofp-goto-period" data-start={periodJump.start} onClick={() => { setPendingStart(null); setYm({ y: periodJump.y, m: periodJump.m }); }}') && src.includes("const periodJump = period ? offerPeriodJump(period, today, ym) : null;"), "the painter's jump button");
+      const gj = src.slice(src.indexOf('<button data-testid="ofp-goto-period"'), src.indexOf("</button>", src.indexOf('<button data-testid="ofp-goto-period"')));
+      assert.ok(gj.includes('minHeight: 36, height: 36, padding: "0 12px"') && gj.includes('whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"') && gj.includes("title={periodJump.text}"), "one 36 px line, never wrapping (the smoke's day-list >= 45% floor), full text in the title");
       assert.ok(src.includes("const m0 = (() => { const s = preferred ? String(preferred.start_day || \"\").slice(0, 10) : \"\"; return suIsIso(s) && s > today ? parse(s) : t0; })();"), "the opening month is unchanged");
       const av = src.slice(src.indexOf("const addVac = async () => {"), src.indexOf("const rmVac = "));
       assert.ok(av.includes("const lead = vacationLeadNote(vacStart, todayStr, groupRules && groupRules.offerPeriods);") && av.includes("if (!isCoordinator && vacSurgeon === mySurgeon)"), "a surgeon's own add inside the window");
       assert.ok(!av.includes("confirm("), "no dialog on the vacation add path");
       const vf = src.slice(src.indexOf("const renderVacationForm = (personChoices) => ("), src.indexOf("const authBox = "));
+      assert.ok(vf.includes('<button data-testid="vac-lead-note-dismiss" onClick={()=>setVacLeadNote(null)}') && src.includes("useEffect(() => { setVacLeadNote(null); }, [view]);") && src.includes('if (confirm("Remove this vacation?")) { setVacLeadNote(null); toRemove(sid, rowId); }'), "the note is dismissible and retires on a view change or a removal");
       assert.ok(vf.includes('<div data-testid="vac-lead-note"') && vf.includes("color:T.text,borderLeft:\"3px solid \" + T.accent") && vf.includes("The schedule through {fmtMD(vacLeadNote.through)} is already being built - check Open shifts or propose a trade if this affects a call day."), "the advisory under the form");
       assert.ok(!/[^\x00-\x7f]/.test(src), "index-source.html stays ASCII");
     });
