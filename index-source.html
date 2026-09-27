@@ -4486,7 +4486,7 @@ function CallSchedule() {
     // who gets both notes reads one spelling.
     const closeLabel = prdDayWords(close);
     const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;
-    const message = `Your dates for ${p.label} (${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'.\n\nNothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page (the morning run sends the same note ${((groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose) || OP_PERIOD_DEFAULTS.remindDaysBeforeClose).join(" and ")} days before the freeze).`;
+    const message = `Your dates for ${p.label} (${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'.\n\nNothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page (the morning run sends the same note ${(() => { const lst = groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose; const ds = (Array.isArray(lst) ? lst : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter(n => typeof n === "number" && isFinite(n) && n >= 0).sort((x, y) => y - x); return ds.length > 1 ? ds.slice(0, -1).join(", ") + " and " + ds[ds.length - 1] : ds.join(""); })()} days before the freeze).`;
     const detail = "Paint my offers: " + window.location.origin + window.location.pathname + "#offers";
     setPrdRemind(s => ({ ...s, [key]: { ok: false, note: "sending" } }));
     const r = await sendEmailNotif("offers_reminder", { subject, message, detail }, [personId]);
@@ -6184,7 +6184,7 @@ function CallSchedule() {
               <span style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>
               {!isPublicMode && <button onClick={shareTonightMsg} style={{...css.btn(false),padding:"4px 10px",fontSize:11,marginLeft:"auto"}}>{copied ? "Copied" : "Share today"}</button>}
             </div>
-            {/* 9/27: the offer deadline notice on the Calendar - URGENT rows only (inside the first reminder's window); the full list is on Mine */}
+            {/* 9/27: the offer deadline notice on the Calendar - URGENT rows only (within groupRules.offerPeriods.noticeUrgentDaysBeforeClose, default 14); the full list is on Mine */}
             {offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}
             {!loaded && <p style={muted}>Loading schedule</p>}
             {previewGen && (

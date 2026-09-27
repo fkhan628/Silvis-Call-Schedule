@@ -3701,15 +3701,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // 9/27 (Faraz: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks
     // before"): the surgeon's offer deadline notice (My schedule, urgent rows on the Calendar, a count on the nav's Paint
     // offers) and the scheduler's lead-time lines in Periods. Display only - no write, no send; data-driven
-    // (groupRules.offerPeriods.noticeDaysBeforeClose, default in helpers OP_NOTICE_DEFAULTS, never in the edge mirror's set).
+    // (groupRules.offerPeriods.noticeDaysBeforeClose + noticeUrgentDaysBeforeClose, defaults in helpers OP_NOTICE_DEFAULTS, never in the edge mirror's set).
     check("9/27 offer deadline notice: helpers export the two pure readers; OP_PERIOD_DEFAULTS stays literally the daily-reminder mirror's OTM_DEFAULTS (the notice default lives apart)", () => {
       assert.strictEqual(typeof H.offerDeadlineNotices, "function");
       assert.strictEqual(typeof H.offerPeriodLeadWarnings, "function");
-      assert.deepStrictEqual(H.OP_NOTICE_DEFAULTS, { noticeDaysBeforeClose: 42 });
+      // pin moved deliberately (9/27 ship): the notice's urgent window is its own key, noticeUrgentDaysBeforeClose 14
+      assert.deepStrictEqual(H.OP_NOTICE_DEFAULTS, { noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 });
       const hs = fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8"), cron = fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"), "utf8");
       const lit = (t, name) => { const m = t.match(new RegExp("const " + name + " = (\\{[^\\n]*?\\});")); return m ? m[1] : null; };
       assert.ok(lit(hs, "OP_PERIOD_DEFAULTS") && lit(hs, "OP_PERIOD_DEFAULTS") === lit(cron, "OTM_DEFAULTS"), "OP_PERIOD_DEFAULTS and the mirror's OTM_DEFAULTS must stay the same literal (edit edge-functions only with a redeploy)");
       assert.ok(!/noticeDaysBeforeClose/.test(lit(hs, "OP_PERIOD_DEFAULTS")) && !/noticeDaysBeforeClose/.test(cron), "the notice key never reaches the timeline defaults or the cron");
+      assert.ok(!/noticeUrgentDaysBeforeClose/.test(lit(hs, "OP_PERIOD_DEFAULTS")) && !/noticeUrgentDaysBeforeClose/.test(cron), "nor does the urgent key");
     });
     check("9/27 offer deadline notice: the linked surgeon only (mySurgeon && !isPublicMode), every open period on his own My schedule, URGENT rows only on the Calendar, a count badge on nav-paint-offers; 'Choose shifts' opens the painter for mySurgeon aimed at that period; T tokens only; writes nothing", () => {
       assert.ok(src.includes("return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: offerRows, personId: mySurgeon, today: todayStr, groupRules }) : [];"), "offerNotices = helpers.offerDeadlineNotices for the linked surgeon, [] otherwise (followers / viewers / the office / ?public=1 have no mySurgeon)");

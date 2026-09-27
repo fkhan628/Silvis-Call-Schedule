@@ -2863,24 +2863,27 @@ function offerNextPeriod(periods, today) {
  * The reading implemented (docs/SILVIS-CALL-RULES.md section 4, build guide section 17): a period's choices FREEZE
  * closeWeeksBeforeStart (6) weeks before it starts and its schedule is due publishWeeksBeforeStart (4) weeks before it
  * (both as before); a linked surgeon who has not answered for an open period gets an in-app notice starting
- * noticeDaysBeforeClose (42 = six weeks) days BEFORE the freeze. noticeDaysBeforeClose is DATA
- * (groupRules.offerPeriods); its default lives in OP_NOTICE_DEFAULTS, NOT in OP_PERIOD_DEFAULTS - that one stays
- * literally equal to the daily-reminder mirror's OTM_DEFAULTS, and offerTimeline's output (pinned against the mirror)
- * never carries the key: the cron does not read it. Pure: nothing here reads the clock, the DOM or the network. */
-const OP_NOTICE_DEFAULTS = { noticeDaysBeforeClose: 42 };
+ * noticeDaysBeforeClose (42 = six weeks) days BEFORE the freeze, and the notice turns urgent (it joins the Calendar)
+ * noticeUrgentDaysBeforeClose (14) days before it. Both are DATA (groupRules.offerPeriods); their defaults live in
+ * OP_NOTICE_DEFAULTS, NOT in OP_PERIOD_DEFAULTS - that one stays literally equal to the daily-reminder mirror's
+ * OTM_DEFAULTS, and offerTimeline's output (pinned against the mirror) never carries either key: the cron does not
+ * read them. The urgent window is its own key since 9/27 (Faraz: the six-week e-mail, remindDaysBeforeClose
+ * [42, 14, 3]) - reading the largest reminder offset would have made every notice urgent for all 42 days.
+ * Pure: nothing here reads the clock, the DOM or the network. */
+const OP_NOTICE_DEFAULTS = { noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 };
 // opNoticeRules(groupRules) -> the numbers the notices read from groupRules.offerPeriods, each absent / junk key
-// falling back to its default: noticeDays (>= 0; 0 = no notice), urgentDays = the largest remindDaysBeforeClose
-// (the first reminder e-mail's day; 0 when the list is empty), closeWeeks / publishWeeks (> 0, like offerTimeline).
+// falling back to its default: noticeDays (>= 0; 0 = no notice), urgentDays = noticeUrgentDaysBeforeClose (>= 0;
+// 0 = urgent never; independent of remindDaysBeforeClose, which only drives the cron's e-mails), closeWeeks /
+// publishWeeks (> 0, like offerTimeline).
 function opNoticeRules(groupRules) {
   const g = groupRules && typeof groupRules === "object" ? groupRules : {};
   const R = g.offerPeriods && typeof g.offerPeriods === "object" ? g.offerPeriods : {};
   const pos = (v, d) => (typeof v === "number" && isFinite(v) && v > 0 ? v : d);
-  const remind = (Array.isArray(R.remindDaysBeforeClose) ? R.remindDaysBeforeClose : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter(n => typeof n === "number" && isFinite(n) && n >= 0);
-  const nd = R.noticeDaysBeforeClose;
+  const nonNeg = (v, d) => (typeof v === "number" && isFinite(v) && v >= 0 ? v : d);
   return {
     rules: R,
-    noticeDays: typeof nd === "number" && isFinite(nd) && nd >= 0 ? nd : OP_NOTICE_DEFAULTS.noticeDaysBeforeClose,
-    urgentDays: remind.length ? Math.max.apply(null, remind) : 0,
+    noticeDays: nonNeg(R.noticeDaysBeforeClose, OP_NOTICE_DEFAULTS.noticeDaysBeforeClose),
+    urgentDays: nonNeg(R.noticeUrgentDaysBeforeClose, OP_NOTICE_DEFAULTS.noticeUrgentDaysBeforeClose),
     closeWeeks: pos(R.closeWeeksBeforeStart, OP_PERIOD_DEFAULTS.closeWeeksBeforeStart),
     publishWeeks: pos(R.publishWeeksBeforeStart, OP_PERIOD_DEFAULTS.publishWeeksBeforeStart),
   };
@@ -2890,8 +2893,8 @@ function opNoticeRules(groupRules) {
 // an absent close is start - closeWeeksBeforeStart through offerTimeline), the person's offerStatus is not_started
 // (never rules_only, never submitted) and daysToClose <= noticeDaysBeforeClose. Several periods can be open at once
 // (Jan 2027 and Feb - Apr 2027 on 9/27) - every one gets its notice, earliest freeze first:
-// [{ periodId, label, closeAt, daysToClose, startDay, publishBy, urgent }] with urgent = daysToClose <= the largest
-// remindDaysBeforeClose. [] for a missing person, a non-ISO today or no list.
+// [{ periodId, label, closeAt, daysToClose, startDay, publishBy, urgent }] with urgent = daysToClose <=
+// noticeUrgentDaysBeforeClose (default 14). [] for a missing person, a non-ISO today or no list.
 function offerDeadlineNotices(args) {
   const a = args && typeof args === "object" ? args : {};
   const today = opDay(a.today);

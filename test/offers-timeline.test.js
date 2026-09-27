@@ -69,11 +69,17 @@ check("offerRollcall(period, offers, ids) == fixture: status like offerStatus, o
 // runOffers never even reads it (call_periods?...&status=eq.upcoming, pinned in [C]); this is the maths' own guard.
 const SEED_PD = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
 const seedPeriodRow = (p) => ({ label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: p.status, rules_only_ids: p.rulesOnly || [] });
-check("PD / 9-24: the seed's first period (status published) -> offerCronPlan is action none / reason status:published on 9/29 and 10/2; Jan 2027 (upcoming, close 11/23; Faraz 9/24) reminds on 11/9 and 11/20 and closes on 11/23; Feb - Apr 2027 (upcoming, close 12/21, end 5/2) reminds on 12/7 and 12/18 and closes on 12/21", () => {
+check("PD / 9-24 / 9-27: the seed's first period (status published) -> offerCronPlan is action none / reason status:published on 9/29 and 10/2; Jan 2027 (upcoming, close 11/23; Faraz 9/24) reminds on 10/12, 11/9 and 11/20 and closes on 11/23; Feb - Apr 2027 (upcoming, close 12/21, end 5/2) reminds on 11/9, 12/7 and 12/18 and closes on 12/21 (the seed's reminders are [42, 14, 3] since 9/27)", () => {
   const [p0, p1, p2] = SEED_PD.offerPeriods.map(seedPeriodRow);
   eq([p0.status, p0.offers_close_at, p1.label, p1.status, p1.offers_close_at, p2.label, p2.status, p2.offers_close_at, p2.end_day], ["published", "2026-10-02", "Jan 2027", "upcoming", "2026-11-23", "Feb 2027 - Apr 2027", "upcoming", "2026-12-21", "2027-05-02"]);
   const R = SEED_PD.groupRules.offerPeriods;
   ["2026-09-23", "2026-09-29", "2026-10-02", "2026-10-03"].forEach(d => eq([H.offerCronPlan(p0, d, R).action, H.offerCronPlan(p0, d, R).reason], ["none", "status:published"], "first period @ " + d));
+  // 9/27 ship (Faraz: yes to the six-week e-mail) - pins added deliberately: the seed's list is [42, 14, 3], so each period
+  // also reminds 42 days out (Jan 2027 on 10/12, Feb - Apr 2027 on 11/9 - the same morning as Jan 2027's 14-day one)
+  eq(R.remindDaysBeforeClose, [42, 14, 3], "the seed's reminder list");
+  eq([H.offerCronPlan(p1, "2026-10-12", R).action, H.offerCronPlan(p1, "2026-10-12", R).reason, H.offerCronPlan(p1, "2026-10-12", R).remind_on], ["remind", "remind:42", ["2026-10-12", "2026-11-09", "2026-11-20"]], "Jan 2027: 42 days before 11/23");
+  eq([H.offerCronPlan(p1, "2026-10-11", R).action, H.offerCronPlan(p1, "2026-10-13", R).action], ["none", "none"], "exact days only: 43 and 41 days out send nothing");
+  eq([H.offerCronPlan(p2, "2026-11-09", R).action, H.offerCronPlan(p2, "2026-11-09", R).reason], ["remind", "remind:42"], "Feb - Apr 2027: 42 days before 12/21 (11/9)");
   eq([H.offerCronPlan(p1, "2026-11-09", R).action, H.offerCronPlan(p1, "2026-11-09", R).reason], ["remind", "remind:14"], "Jan 2027: 14 days before 11/23");
   eq([H.offerCronPlan(p1, "2026-11-20", R).action, H.offerCronPlan(p1, "2026-11-20", R).reason], ["remind", "remind:3"], "Jan 2027: 3 days before");
   eq([H.offerCronPlan(p1, "2026-11-23", R).action, H.offerCronPlan(p1, "2026-11-23", R).reason], ["close", "close:today"], "Jan 2027 closes 11/23");
@@ -132,15 +138,16 @@ check("mirror otmPoolIds / otmRollcall / otmStatus == fixture == helpers", () =>
   RC.expectedPoolIds.forEach(id => assert.strictEqual(m.status(per(RC.period), RC.offers, id), H.offerStatus(per(RC.period), RC.offers, id), "status parity " + id));
   eq(m.rollcall({ label: "no dates" }, RC.offers, RC.expectedPoolIds), []);
 });
-check("PD / 9-24: the mirror agrees on the seed's three periods - published -> none (status:published) on 9/29 and 10/2; Jan 2027 -> remind 11/9 + 11/20, close 11/23; Feb - Apr 2027 -> remind 12/7 + 12/18, close 12/21", () => {
+check("PD / 9-24 / 9-27: the mirror agrees on the seed's three periods - published -> none (status:published) on 9/29 and 10/2; Jan 2027 -> remind 10/12 + 11/9 + 11/20, close 11/23; Feb - Apr 2027 -> remind 11/9 + 12/7 + 12/18, close 12/21 (the deployed mirror reads the 3-entry list generically)", () => {
   const m = loadMirror();
   const [p0, p1, p2] = SEED_PD.offerPeriods.map(seedPeriodRow);
   const R = SEED_PD.groupRules.offerPeriods;
-  ["2026-09-29", "2026-10-02", "2026-11-09", "2026-11-20", "2026-11-23", "2026-12-07", "2026-12-18", "2026-12-21"].forEach(d => { eq(m.plan(p0, d, R), H.offerCronPlan(p0, d, R), "mirror == helpers, first period @ " + d); eq(m.plan(p1, d, R), H.offerCronPlan(p1, d, R), "mirror == helpers, Jan 2027 @ " + d); eq(m.plan(p2, d, R), H.offerCronPlan(p2, d, R), "mirror == helpers, Feb - Apr 2027 @ " + d); });
+  ["2026-09-29", "2026-10-02", "2026-10-11", "2026-10-12", "2026-10-13", "2026-11-09", "2026-11-20", "2026-11-23", "2026-12-07", "2026-12-18", "2026-12-21"].forEach(d => { eq(m.plan(p0, d, R), H.offerCronPlan(p0, d, R), "mirror == helpers, first period @ " + d); eq(m.plan(p1, d, R), H.offerCronPlan(p1, d, R), "mirror == helpers, Jan 2027 @ " + d); eq(m.plan(p2, d, R), H.offerCronPlan(p2, d, R), "mirror == helpers, Feb - Apr 2027 @ " + d); });
   eq(m.plan(p0, "2026-09-29", R).reason, "status:published");
   eq(m.plan(p0, "2026-10-02", R).action, "none");
-  eq([m.plan(p1, "2026-11-09", R).action, m.plan(p1, "2026-11-20", R).action, m.plan(p1, "2026-11-23", R).action], ["remind", "remind", "close"], "Jan 2027 in the mirror");
-  eq([m.plan(p2, "2026-12-07", R).action, m.plan(p2, "2026-12-18", R).action, m.plan(p2, "2026-12-21", R).action], ["remind", "remind", "close"], "Feb - Apr 2027 in the mirror");
+  eq([m.plan(p1, "2026-10-12", R).reason, m.plan(p1, "2026-11-09", R).action, m.plan(p1, "2026-11-20", R).action, m.plan(p1, "2026-11-23", R).action], ["remind:42", "remind", "remind", "close"], "Jan 2027 in the mirror (9/27: the 42-day e-mail on 10/12)");
+  eq([m.plan(p2, "2026-11-09", R).reason, m.plan(p2, "2026-12-07", R).action, m.plan(p2, "2026-12-18", R).action, m.plan(p2, "2026-12-21", R).action], ["remind:42", "remind", "remind", "close"], "Feb - Apr 2027 in the mirror (9/27: the 42-day e-mail on 11/9)");
+  eq(m.timeline(p1, R).remind_on, ["2026-10-12", "2026-11-09", "2026-11-20"], "the mirror's remind_on carries all three entries (no cap on the list)");
 });
 check("mirror == helpers on 400 seeded random (period start 2026-10 .. 2028-12, length 1-12, close override or computed, reminder lists incl. 0 / duplicates / junk, status, today around the close): timeline and plan identical", () => {
   const m = loadMirror();

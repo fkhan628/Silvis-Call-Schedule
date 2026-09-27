@@ -69,7 +69,7 @@ afterwards; the editor keeps query history).*
 Silvis runs offers-first. **Paint the dates you'll cover, any time**: primary, backup or either, one tap per day on your
 phone, for any date ahead, whenever you like — the app is where the offers live now (no more e-mailing lists around).
 **Each three-month period freezes six weeks before that period starts**: what you painted inside that period is what
-the generator places first, then it fills the gaps; the app e-mails you 14 and 3 days before the freeze if you have
+the generator places first, then it fills the gaps; the app e-mails you six weeks (42 days), 14 days and 3 days before the freeze if you have
 entered nothing for that period (it honours your e-mail preference). From six weeks before the freeze, if you have not
 answered for a period yet, you see a notice on My schedule (and on the Calendar in the last 14 days) with a "Choose
 shifts" button, plus a count on the Paint offers button. **Or tell the app to go by your rules** for that
@@ -81,8 +81,8 @@ apply on an offered day. A day is refused if it is past, on your vacation, or in
 ask Faraz: the database lets the scheduler enter a late offer (OF003 is skipped for the scheduler role), and he does that
 in the app from Setup → Generate → Periods → "Enter for someone" (the painter opens as that surgeon; the entry is stamped
 as relayed by the scheduler), or the office relays the dates from Time off → "Offers - enter for a surgeon" (Prompt 16
-A7, stamped `office-relay`). *Live since 9/23: the painter, the late-offer paths above, and the 14- and 3-day reminder
-e-mails (`daily-reminder` mode `offers`, cron job `silvis-offers-daily` — `edge-functions/README.md` §3 deploy record); the
+A7, stamped `office-relay`). *Live since 9/23: the painter, the late-offer paths above, and the reminder
+e-mails (14 and 3 days; the six-week one once Faraz sets `[42, 14, 3]` in Setup → Rules, 9/27) (`daily-reminder` mode `offers`, cron job `silvis-offers-daily` — `edge-functions/README.md` §3 deploy record); the
 first period was relayed from the seed before the painter existed. Still to come: the publish e-mail's line naming the
 days a surgeon was placed on outside his list.*
 

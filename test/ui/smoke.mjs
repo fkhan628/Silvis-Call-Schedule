@@ -913,13 +913,14 @@ const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER
 // 9/27 offer deadline notice: an INDEPENDENT restatement of helpers.offerDeadlineNotices over the harness's stores, read
 // at call time: every served period with status upcoming, a close after today, the person neither submitted (a row
 // inside it) nor rules-only, and the close within groupRules.offerPeriods.noticeDaysBeforeClose days (the seed's; 42
-// when absent); urgent = within the largest remindDaysBeforeClose. Sorted by close. Today is the Central date.
+// when absent); urgent = within groupRules.offerPeriods.noticeUrgentDaysBeforeClose days (the seed's; 14 when absent - its own
+// key since the 9/27 ship, NOT the reminder list, which is [42, 14, 3]). Sorted by close. Today is the Central date.
 // `periods` defaults to periodStore; the notice step passes its own list (periodStore + two synthetic periods).
 const NOTICE_OP = (() => { try { return JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules.offerPeriods || {}; } catch (e) { return {}; } })();
 const noticeIsoDiff = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
 const expOfferNotices = (person, periods) => {
   const nd = typeof NOTICE_OP.noticeDaysBeforeClose === "number" ? NOTICE_OP.noticeDaysBeforeClose : 42;
-  const urgentDays = Math.max(0, ...(Array.isArray(NOTICE_OP.remindDaysBeforeClose) ? NOTICE_OP.remindDaysBeforeClose : [14, 3]));
+  const urgentDays = typeof NOTICE_OP.noticeUrgentDaysBeforeClose === "number" && NOTICE_OP.noticeUrgentDaysBeforeClose >= 0 ? NOTICE_OP.noticeUrgentDaysBeforeClose : 14;
   return (periods || periodStore).filter(p => (p.status || "upcoming") === "upcoming" && p.offers_close_at > todayCentral
     && !offerStore.some(o => o.person_id === person && o.day >= p.start_day && o.day <= p.end_day) && !(p.rules_only_ids || []).includes(person)
     && noticeIsoDiff(todayCentral, p.offers_close_at) <= nd)
@@ -4800,7 +4801,7 @@ try {
       const expCal = exp.filter(n => n.urgent).map(n => n.id);
       const hidden = exp.filter(n => !n.urgent).map(n => n.id);
       if (!hidden.length || !expCal.length) fail(`Offer deadline notice (s2): the synthetic periods should give at least one urgent and one non-urgent row - the harness restatement reads ${JSON.stringify(exp.map(n => [n.id, n.days, n.urgent]))}`);
-      if (hidden.some(id => calRows.includes(id))) fail(`Offer deadline notice (s2, Calendar): a non-urgent row shows on the Calendar (${JSON.stringify(hidden.filter(id => calRows.includes(id)))}) - only rows within the largest reminder offset belong there`);
+      if (hidden.some(id => calRows.includes(id))) fail(`Offer deadline notice (s2, Calendar): a non-urgent row shows on the Calendar (${JSON.stringify(hidden.filter(id => calRows.includes(id)))}) - only rows within noticeUrgentDaysBeforeClose belong there`);
       else if (JSON.stringify(calRows) !== JSON.stringify(expCal)) fail(`Offer deadline notice (s2, Calendar): urgent rows only - expected ${JSON.stringify(expCal)}, got ${JSON.stringify(calRows)}`);
       else ok(`Offer deadline notice (s2, Calendar): ${expCal.length ? expCal.length + " urgent row(s) " + JSON.stringify(expCal) : "no notice (nothing urgent)"}; ${hidden.length} non-urgent row(s) kept off it`);
       // Mine: every row

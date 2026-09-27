@@ -1286,7 +1286,7 @@ are `user_profiles` rows by `person_id` like every other category (the Periods "
 `offers` behind the same `x-cron-secret` gate and `dryRun` contract as its other modes, posted once a morning by the
 pg_cron job `silvis-offers-daily` (`0 13 * * *` = 08:00 CDT / 07:00 CST, Vault secret, body `{"mode":"offers"}`;
 `edge-functions/README.md` §4). For every `call_periods` row still `upcoming` it runs the timeline maths: on a
-reminder day (`offers_close_at` − each `groupRules.offerPeriods.remindDaysBeforeClose`, default 14 and 3) it e-mails
+reminder day (`offers_close_at` − each `groupRules.offerPeriods.remindDaysBeforeClose`; built-in default 14 and 3, the seed [42, 14, 3] since the 9/27 ship) it e-mails
 the pool members whose derived status is `not_started` — "your dates for <label> freeze on <date> — paint them in
 the app or choose 'go by my rules'"; from `offers_close_at` on it flips the row to `closed` by compare-and-swap
 (`status = upcoming` → `closed`, so a parallel close or the app's "Close now" wins and no second summary goes out),
@@ -1338,12 +1338,15 @@ defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 
 **Deadline notices (9/27; Faraz: "add a 6 week warning for choosing shifts so that the new schedule can be produced at
 least 4-6 weeks before").** The reading implemented (rules doc §1 Process row, §8 item 21): the freeze stays at start − 6
 weeks and publish-by at start − 4 weeks; what was missing was visibility. Data: `groupRules.offerPeriods.noticeDaysBeforeClose`
-(seed 42; default in `helpers.js` `OP_NOTICE_DEFAULTS`, deliberately **not** in `OP_PERIOD_DEFAULTS`, which stays the
-literal twin of the `daily-reminder` mirror's `OTM_DEFAULTS` — `offerTimeline`'s output never carries the key and the cron
-never reads it). Two pure readers in `helpers.js`: `offerDeadlineNotices({ periods, offers, personId, today, groupRules })`
+(seed 42) and `noticeUrgentDaysBeforeClose` (seed 14; since the 9/27 ship) — defaults in `helpers.js` `OP_NOTICE_DEFAULTS`
+(`{ noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 }`), deliberately **not** in `OP_PERIOD_DEFAULTS`, which stays
+the literal twin of the `daily-reminder` mirror's `OTM_DEFAULTS` — `offerTimeline`'s output never carries either key and the
+cron never reads them). Two pure readers in `helpers.js`: `offerDeadlineNotices({ periods, offers, personId, today, groupRules })`
 returns one notice per open period (status upcoming, `offers_close_at` after today) on which the person's `offerStatus` is
 `not_started` and the freeze is at most `noticeDaysBeforeClose` days away — `{ periodId, label, closeAt, daysToClose,
-startDay, publishBy, urgent }`, urgent = within the largest `remindDaysBeforeClose` (14); several periods can be open at
+startDay, publishBy, urgent }`, urgent = `daysToClose` ≤ `noticeUrgentDaysBeforeClose` (14; 0 = never; absent / junk = 14 —
+its own key since the 9/27 ship: it used to be the largest `remindDaysBeforeClose`, which the six-week e-mail turned into 42,
+so every notice would have been urgent and on the Calendar for all six weeks); several periods can be open at
 once (Jan 2027 and Feb – Apr 2027 on 9/27) and each gets its row. `offerPeriodLeadWarnings({ periods, today, groupRules,
 openCounts })` returns the scheduler's lines: `short-lead` (an upcoming period whose close is later than start − 7 ×
 `closeWeeksBeforeStart`), `publish-due` / `publish-passed` (publish-by 7 days or less away, or passed, while the range still
@@ -1361,8 +1364,15 @@ class stacks the sentence over the button. Setup → Periods renders the lines a
 `css.warnBox`, and the New-period form's `prd-form-warn` adds the short-lead case with a STRICT `>` (the 3-month preset
 lands exactly on start − 42). Proof: `test/offers.test.js` section E, `test/data-layer.test.js` section G (9/27 pins), the
 smoke's offer-deadline-notice step (a surgeon page, dates restated from the harness stores) and its Periods (a2) / (c3)
-steps. Not changed: the cron and the e-mails — an e-mail at the notice's moment is the data-only `remindDaysBeforeClose`
-[42, 14, 3] (rules doc §8 item 21 lists the caveats).
+steps. The e-mail at the notice's moment (decided 9/27, Faraz: keep 42, yes to the six-week e-mail): `remindDaysBeforeClose`
+**[42, 14, 3]** — data only, the cron and `edge-functions/` are unchanged (the deployed `daily-reminder` reads any length of
+list and reminds on the exact days `offers_close_at` − n; its built-in default and `OP_PERIOD_DEFAULTS` stay [14, 3]). **The
+live value is set in the app:** Setup → Rules (per surgeon, and group rules) → Group rules → **Edit as JSON** → set `offerPeriods.remindDaysBeforeClose` to `[42, 14, 3]` (`noticeUrgentDaysBeforeClose` is optional — absent reads 14) → Apply JSON → **Save group rules**; the next morning's run (13:00 UTC) reads it, no redeploy; a later seed
+apply carries the same values. The Periods "Remind" note names the list ("the morning run sends the same note 42, 14 and 3
+days before the freeze"). Rules doc §8 item 21 has the cron's dates for the two open periods and the caveats. Proof:
+`test/offers.test.js` E4 / E7 (urgent reads its own key, default 14) and [C] (the seed block), `test/offers-timeline.test.js`
+(the seed's periods remind 42 days out, helpers and the mirror alike), `test/importer.test.js` 9/27 step (the block reaches
+the blob).
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 

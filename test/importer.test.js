@@ -1727,7 +1727,10 @@ step("9/26: neutral notes on Fierce's 11/9-11/16 backup rows; 10/15 answered");
   eq(plan.blob.settings.seedCoreHash, planPre.blob.settings.seedCoreHash, "9/26: seedCoreHash unchanged (notes are not a core key)");
   const OPTS_P = { now: NOW, offerPeriods: true };   // the CLI's plan (scripts/import-seed.js) - its stamp is the one the live row carries
   eq(IMP.importPlan(seed, OPTS_P).blob.settings.seedCoreHash, IMP.importPlan(seedPre, OPTS_P).blob.settings.seedCoreHash, "9/26: seedCoreHash unchanged in the period-aware plan too (the CLI's)");
-  eq([plan.blob.settings.seedRevisionCount - planPre.blob.settings.seedRevisionCount, plan.blob.settings.seedLastRevision], [1, "2026-09-26"], "9/26: one _meta.revisions entry, the last, dated 2026-09-26");
+  // pin moved deliberately 9/27: the lane SEED entry is still one entry dated 2026-09-26, but it is no longer the last
+  // (the 9/27 ship appended its own entry after it) - the intent (one entry for the item, dated the day) is kept
+  const laneSeedRevs = seed._meta.revisions.filter((t) => /lane SEED/.test(t));
+  eq([plan.blob.settings.seedRevisionCount - planPre.blob.settings.seedRevisionCount, laneSeedRevs.length, (laneSeedRevs[0].match(/^\d{4}-\d{2}-\d{2}/) || [])[0]], [1, 1, "2026-09-26"], "9/26: one _meta.revisions entry, dated 2026-09-26");
   eq(IMP.planDiff(plan, { blob: clone(planPre.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) }).tables.call_schedule_data.keys,
     { roster: "unchanged", surgeonRules: "unchanged", groupRules: "unchanged", holidays: "unchanged", settings: "update" }, "9/26: against the pre-9/26 blob only settings update (no Setup key is replaced)");
   // live-shaped diff: the four days the 9/23 publish filled (primary Philip / Acton, updated_by the publish tag) are
@@ -1749,6 +1752,21 @@ step("9/26: neutral notes on Fierce's 11/9-11/16 backup rows; 10/15 answered");
   ok(seed.openQuestions.some((t) => /^1\. ~~10\/15 \(Thu\)/.test(t) && /answered 9\/25: Burchett primary \(locked\), Khan backup/.test(t)), "9/26: open question 1 is struck with the answer");
   ok(seed.answeredQuestions.some((t) => /^10\/15 \(Thu\) primary/.test(t) && /9\/25 15:24 CDT/.test(t)), "9/26: answeredQuestions records 10/15");
   ok(!seed.openQuestions.some((t) => /10\/15 primary stays OPEN/.test(t)), "9/26: no open question still says 10/15 primary stays open");
+}
+
+step("9/27: the ship's seed entry - offerPeriods reminders 42 / 14 / 3 and the notice's own urgent key reach the blob");
+{
+  // Faraz 9/27: keep noticeDaysBeforeClose 42; the six-week e-mail is remindDaysBeforeClose [42, 14, 3]; the notice's
+  // urgent window is its own key (noticeUrgentDaysBeforeClose 14). A seed apply carries them into the blob the cron
+  // reads (the live values are set in the app first; the apply then changes nothing there).
+  eq(plan.blob.groupRules.offerPeriods, { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [42, 14, 3], noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 }, "9/27: blob groupRules.offerPeriods = the seed's block");
+  ok(!("offerPeriodsNote" in plan.blob.groupRules), "9/27: offerPeriodsNote is dropped before the blob (impScrubRuleNotes)");
+  const rev927 = seed._meta.revisions.filter((t) => /^2026-09-27 /.test(t));
+  eq(rev927.length, 1, "9/27: one _meta.revisions entry dated 2026-09-27");
+  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 1]], ["2026-09-27", rev927[0]], "9/27: it is the last entry, and seedLastRevision reads its date");
+  ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev927[0]), "9/27: the entry carries no amount and no contact-like value");
+  ok(/remindDaysBeforeClose \[14, 3\] -> \[42, 14, 3\]/.test(rev927[0]) && /noticeUrgentDaysBeforeClose 14/.test(rev927[0]) && /compensationInApp false -> true/.test(rev927[0]), "9/27: the entry names the reminder list, the urgent key and compensationInApp");
+  ok(seed.openQuestions.some((t) => /^18\. ~~Offer deadline notice/.test(t) && /DECIDED 9\/27/.test(t)), "9/27: open question 18 is struck and decided");
 }
 
 console.log("ok " + n + " assertions");
