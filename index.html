@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-5LRoLywvuQDpS4Xt6mU+cqWPZKkDL14r/6U51jM2ZHQ=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-a0Nywu4bbCPzw0XMNTcVYjgzRHmKZeMeo7hj7U7V+Aw=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-C4kBxoY/wE0PaR1W2CuHFDa5pJXa6F2FK6c1MkmRB7k=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-1zRLVh0q7f0Yv40Lo3EBWwru03ceT+RKYJb87T+ayDI=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +110,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.26b";
+    var APP_VERSION = "2026.09.26c";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -438,6 +438,11 @@ function CallSchedule() {
   const isAdmin = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin";
   const isCoordinator = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "coordinator";
   const canEnterForAnyone = isScheduler || isCoordinator;
+  const eastDetailsVisible = isScheduler && !isPublicMode;
+  const eastDetailsVisibleRef = useRef(false);
+  useEffect(() => {
+    eastDetailsVisibleRef.current = eastDetailsVisible;
+  }, [eastDetailsVisible]);
   const isUnlinked = !!authUser && !!userProfile && !userProfile.person_id;
   const isViewer = !!userProfile && userProfile.role === "viewer" && !userProfile.person_id && !profileLoadFailed;
   const myFollows = useMemo(() => profileLoadFailed ? [] : followedIdsOf(userProfile, surgeons.map(s => s.id)), [userProfile, surgeons, profileLoadFailed]);
@@ -920,6 +925,8 @@ function CallSchedule() {
           detail: _objectSpread({
             summary: summary
           }, details || {})
+        }, {
+          returning: "minimal"
         });
         if (error) {
           console.warn("audit log insert failed", error);
@@ -1119,7 +1126,7 @@ function CallSchedule() {
       }
     };
     const r = await Promise.all([one("east_feed", "week_monday.asc", setEastFeedRows, "feed"), one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"), one("east_overrides", "day.asc", setEastOverrideRows, "overrides")]);
-    if (!quiet && r.some(x => x === null)) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
+    if (!quiet && r.some(x => x === null) && eastDetailsVisibleRef.current) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
     return {
       ok: r.every(x => x !== null),
       feedRows: r[0]
@@ -1142,7 +1149,7 @@ function CallSchedule() {
       const missing = /HTTP 404\b/.test(String(e && e.message || e));
       console.warn("east_vacation_reviews load failed" + (missing ? " - the table is not on the database yet (migration 2026-09-23 not applied)" : ""), e);
       setEastVacReviewState(missing ? "missing" : "failed");
-      if (!quiet && !missing) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
+      if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
       return false;
     }
   };
@@ -4025,7 +4032,7 @@ function CallSchedule() {
       soft
     };
   };
-  const tradeReasonText = r => r && r.hard && r.hard.length ? reasonLabel(r.hard[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
+  const tradeReasonText = r => r && r.hard && r.hard.length ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible, r.eastVacation)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
   const rulesUnknownGate = (elig, whoId, what, verb) => {
     if (elig.error) showToast("Eligibility check failed: " + elig.error, "error");
     if (!isScheduler) {
@@ -5952,7 +5959,6 @@ function CallSchedule() {
   }, [vacations, gridDays]);
   const vacNamesOn = d => Object.keys(vacations).filter(pid => onVac(pid, d, vacations)).map(nameOf);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
-  const eastDetailsVisible = isScheduler && !isPublicMode;
   const glance = useMemo(() => suCoverageGlance(schedule, todayStr, 60, ctxInputs.eastForecast, forecastThreshold), [schedule, todayStr, ctxInputs, forecastThreshold]);
   const eastCoverageEnd = useMemo(() => {
     if (typeof coverageOf !== "function") return null;
@@ -6182,7 +6188,8 @@ function CallSchedule() {
           id: sg.id,
           ok: !!r.ok,
           hard: r.hard && r.hard.length ? r.hard : r.ok ? [] : ["unknown-surgeon"],
-          soft: r.soft || []
+          soft: r.soft || [],
+          eastVacation: r.eastVacation || null
         };
       });
     });
@@ -6261,7 +6268,7 @@ function CallSchedule() {
       day: slot.day,
       role: slot.role,
       unit: slot.unit,
-      soft: me ? me.soft : [],
+      soft: me ? eastMaskedReasons(me.soft, eastDetailsVisible) : [],
       mates: obUnitMates(boardSlots, slot)
     });
   };
@@ -6310,7 +6317,7 @@ function CallSchedule() {
     if (!s || claimBusy || !mySurgeon) return;
     const gate = (boardElig[openSlotKey(s.day, s.role)] || []).find(o => o.id === mySurgeon);
     if (!gate || !gate.ok) {
-      showToast("Not eligible any more: " + (gate ? reasonLabel(gate.hard[0], nameOf) : reasonLabel("unknown-surgeon")), "error");
+      showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible, gate.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon")), "error");
       closeClaimSheet();
       return;
     }
@@ -9434,10 +9441,11 @@ function CallSchedule() {
     }, text);
     const chip = o => {
       const c = colorOf(o.id);
+      const soft = eastMaskedReasons(o.soft, eastDetailsVisible);
       return React.createElement("span", {
         key: o.id,
         "data-eligible-id": o.id,
-        title: o.soft.length ? "allowed - " + o.soft.map(x => reasonLabel(x.reason, nameOf)).join("; ") : "no rule warnings",
+        title: soft.length ? "allowed - " + soft.map(x => reasonLabel(x.reason, nameOf)).join("; ") : "no rule warnings",
         style: {
           background: c.tg,
           color: c.tx,
@@ -9453,7 +9461,7 @@ function CallSchedule() {
         }
       }, nameOf(o.id));
     };
-    const takeTitle = me => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(me.hard[0], nameOf) : reasonLabel("unknown-surgeon");
+    const takeTitle = me => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible, me.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon");
     const sheetDate = d => {
       try {
         return parse(d).toLocaleDateString(undefined, {
@@ -9786,6 +9794,7 @@ function CallSchedule() {
         fontSize: 11
       }
     }, "(weight ", x.weight, ")"))))) : React.createElement("div", {
+      "data-testid": "claim-no-warnings",
       style: _objectSpread(_objectSpread({}, css.okBox), {}, {
         marginTop: 10
       })
@@ -10442,6 +10451,7 @@ function CallSchedule() {
     }));
     cands.sort((a, b) => (a.e && !a.e.ok ? 1 : 0) - (b.e && !b.e.ok ? 1 : 0));
     const toElig = dayOk && tradeTo ? eligOf(tradeTo) : null;
+    const toNotes = toElig && toElig.ok && toElig.soft ? eastMaskedReasons(toElig.soft, eastDetailsVisible) : [];
     const give = tradeKind === "give";
     const retUnit = !give && suIsIso(tradeReturnDay) && tradeTo && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo) : null;
     const retPaired = !!(retUnit && whole && retUnit.days.length === offerDays.length);
@@ -10798,17 +10808,18 @@ function CallSchedule() {
         style: bad ? {
           color: "#a0a8b0"
         } : undefined
-      }, s.name, bad ? " - " + (e.unknown ? "rules not loaded" : e.hard[0]) : "");
+      }, s.name, bad ? " - " + (e.unknown ? "rules not loaded" : eastMaskedReasons(e.hard, eastDetailsVisible, e.eastVacation)[0]) : "");
     }))), toElig && !toElig.ok && React.createElement("div", {
       "data-testid": "trade-to-reason",
       style: _objectSpread(_objectSpread({}, css.errBox), {}, {
         flex: "1 1 100%"
       })
-    }, nameOf(tradeTo), " can't take ", givenLabel, ": ", tradeReasonText(toElig), ". ", toElig.unknown ? "" : "Pick someone else or ask the scheduler."), toElig && toElig.ok && toElig.soft && toElig.soft.length > 0 && React.createElement("div", {
+    }, nameOf(tradeTo), " can't take ", givenLabel, ": ", tradeReasonText(toElig), ". ", toElig.unknown ? "" : "Pick someone else or ask the scheduler."), toElig && toElig.ok && toNotes.length > 0 && React.createElement("div", {
+      "data-testid": "trade-to-note",
       style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
         flex: "1 1 100%"
       })
-    }, "Allowed with a note: ", toElig.soft.map(softTag).join(", "), "."), !give && React.createElement(React.Fragment, null, React.createElement("div", {
+    }, "Allowed with a note: ", toNotes.map(softTag).join(", "), "."), !give && React.createElement(React.Fragment, null, React.createElement("div", {
       className: "trade-pick-wrap"
     }, React.createElement("label", {
       style: label
@@ -14001,6 +14012,31 @@ function softTag(soft) {
     default:
       return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
+}
+const EAST_HARD_REASON_KEYS = ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"];
+const EAST_SOFT_REASON_KEYS = ["east-forecast", "east-unknown", "east-clear"];
+const EAST_NOT_AVAILABLE = "not available";
+function eastMaskedReasons(list, eastDetailsVisible, eastVacation) {
+  if (eastDetailsVisible || !Array.isArray(list)) return list;
+  const out = [];
+  let masked = false;
+  list.forEach(x => {
+    const soft = !!x && typeof x === "object";
+    const key = String(soft ? x.reason : x).split("@")[0].split(":")[0].trim();
+    if (soft) {
+      if (EAST_SOFT_REASON_KEYS.indexOf(key) < 0) out.push(x);
+      return;
+    }
+    if (EAST_HARD_REASON_KEYS.indexOf(key) >= 0 || eastVacation && (key === "time-off" || key === "day-before-vacation")) {
+      if (!masked) {
+        masked = true;
+        out.push(EAST_NOT_AVAILABLE);
+      }
+      return;
+    }
+    out.push(x);
+  });
+  return out;
 }
 function eastVacationPerson(s, ef) {
   return !!(s && ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code && s.type !== "external");
