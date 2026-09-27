@@ -5324,13 +5324,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!notif.includes("Emails go to your sign-in address. Choose"), "the old unconditional sentence is gone");
       assert.ok(notif.includes("Available once your account is linked to a roster entry."), "the unlinked line stays (R2 pin)");
     });
-    check("SD6/SD7: Setup is three quiet groups - 'Every cycle' (Setup issues, Generate, Vacations), 'Configuration' (Roster, Users, Rules, Availability, Holidays, East feed, Office contacts), 'Rarely used' (Import seed, Clear schedule); closed cards show a one-line summary from loaded state", () => {
+    check("SD6/SD7: Setup is three quiet groups - 'Every cycle' (Setup issues, Generate, Vacations), 'Configuration' (Roster, Users, Rules, Availability, Holidays, Pay rates, East feed, Office contacts), 'Rarely used' (Import seed, Clear schedule); closed cards show a one-line summary from loaded state", () => {
       assert.ok(uAt > 0 && uEnd > uAt, "the Setup view slice");
       const steps = ['groupHeading("setup-group", "cycle", "Every cycle", true)', 'ck="setup_issues"', 'ck="setup_generate"', 'ck="setup_vacations"',
-        'groupHeading("setup-group", "config", "Configuration", false)', 'ck="setup_roster"', 'ck="setup_users"', 'ck="setup_rules"', 'ck="setup_availability"', 'ck="setup_holidays"', 'ck="setup_east"', 'ck="setup_office"',
+        'groupHeading("setup-group", "config", "Configuration", false)', 'ck="setup_roster"', 'ck="setup_users"', 'ck="setup_rules"', 'ck="setup_availability"', 'ck="setup_holidays"', 'ck="setup_pay"', 'ck="setup_east"', 'ck="setup_office"',
         'groupHeading("setup-group", "rare", "Rarely used", false)', 'ck="setup_import"', 'ck="setup_clear"'].map(k => setup.indexOf(k));
       steps.forEach((at, i) => assert.ok(at >= 0 && (i === 0 || at > steps[i - 1]), "Setup order broken at step " + i));
-      assert.strictEqual((setup.match(/<Collapsible css=\{css\} ck="setup_/g) || []).length, 12, "all twelve cards stay (smoke SETUP_CARDS)");
+      // integration 9/27: the call pay tracker's Setup > Pay rates (setup_pay) is the thirteenth card, in Configuration
+      assert.strictEqual((setup.match(/<Collapsible css=\{css\} ck="setup_/g) || []).length, 13, "all thirteen cards stay (smoke SETUP_CARDS, setup_pay included)");
       for (const t of ["Every cycle", "Configuration", "Rarely used"]) SMOKE_TEXT.forEach(x => assert.ok(!t.toLowerCase().includes(x), `heading '${t}' holds '${x}'`));
       for (const ck of ["setup_vacations", "setup_roster", "setup_rules", "setup_holidays", "setup_office"]) {
         const at = setup.indexOf(`ck="${ck}"`); const open = setup.slice(at, setup.indexOf("\n", setup.indexOf("\n", at) + 1) + 400);
