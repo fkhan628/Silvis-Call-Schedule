@@ -3604,6 +3604,120 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       r = await r2Api().loadFollower("");
       assert.strictEqual(r.state, "failed"); assert.strictEqual(a3calls.length, 0, "no request without an id");
     });
+    // ---- Prompt 21 step 2 (Faraz 9/26): logAudit sends Prefer: return=minimal - an option on db.insert, { returning:
+    //      "minimal" }, not a new helper. return=representation is INSERT ... RETURNING, which needs a SELECT policy that
+    //      sees the new row: a surgeon's audit row (and a coordinator's prefs.save) was refused 42501 -> HTTP 403 and lost
+    //      until audit_read_own (Acton's two vacations of 9/24). The real config.js db.insert runs against the stubbed
+    //      fetch; the stub answers the way the live table did before audit_read_own (DENIED for a RETURNING insert). ----
+    const P21_DENIED = { code: "42501", details: null, hint: null, message: 'new row violates row-level security policy for table "audit_log"' };
+    const p21Writes = () => a3calls.filter(c => !isRefresh(c));
+    const p21Plain = (x) => JSON.parse(JSON.stringify(x));
+    const P21_ROW = { actor_id: "s3", actor_name: "Acton", action: "timeoff.add", detail: { summary: "Added vacation for Acton: 2027-03-15 -> 2027-03-21" } };
+    await acheck("P21 S2 behaviour: db.insert(table, row, { returning: 'minimal' }) is ONE POST /rest/v1/<table> with Prefer: return=minimal, the user's bearer and the same body; PostgREST's answer to it - 201 with an EMPTY body - is success { data: null, error: null }", async () => {
+      setSession(FRESH, "p21a"); A3.auth._setExpired(false); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
+      const r = await A3.db.insert("audit_log", P21_ROW, { returning: "minimal" });
+      assert.deepStrictEqual(p21Plain(r), { data: null, error: null }, "an empty 2xx is a written row: " + JSON.stringify(r));
+      const w = p21Writes();
+      assert.deepStrictEqual(w.map(c => c.method + " " + r2Path(c)), ["POST /rest/v1/audit_log"], "one request");
+      assert.strictEqual(w[0].prefer, "return=minimal", "Prefer: " + w[0].prefer);
+      assert.strictEqual(w[0].bearer, FRESH, "the user's JWT (authFetch), never anon");
+      assert.deepStrictEqual(w[0].body, P21_ROW, "the row as given");
+    });
+    await acheck("P21 S2 behaviour: the default is unchanged - db.insert(table, row), with {} and with any other `returning` sends Prefer: return=representation and answers the first returned row; an empty 2xx there is still data null (the callers' `if (data)` guards read it as not written)", async () => {
+      setSession(FRESH, "p21b"); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, [{ id: 9, message: "m" }]);
+      const rs = [];
+      for (const opts of [undefined, {}, { returning: "representation" }, { returning: true }, { prefer: "return=minimal" }]) rs.push(await A3.db.insert("notifications", { message: "m" }, opts));
+      rs.forEach((r, i) => assert.deepStrictEqual(p21Plain(r), { data: { id: 9, message: "m" }, error: null }, "call " + i + ": " + JSON.stringify(r)));
+      assert.deepStrictEqual(p21Writes().map(c => c.prefer), Array(5).fill("return=representation"), "Prefer of each call");
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, "");
+      assert.deepStrictEqual(p21Plain(await A3.db.insert("notifications", { message: "m" })), { data: null, error: null }, "default + empty 2xx: data null (unchanged)");
+      // the live table's answer to a surgeon's RETURNING audit insert before audit_read_own: 403 42501, data null, the error body
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
+      const refused = await A3.db.insert("audit_log", P21_ROW);
+      assert.strictEqual(refused.data, null);
+      assert.strictEqual(refused.error && refused.error.code, "42501", "the default still reports the refusal: " + JSON.stringify(refused));
+    });
+    await acheck("P21 S2 behaviour: with { returning: 'minimal' } a non-2xx fails exactly as without it (the same { data: null, error } for a 403 42501 JSON body, a 400 with an empty body, a 500 HTML page), a 2xx whose body is not JSON (a proxy page) stays an error, and a 2xx with a JSON body is still data null - the body is never a row", async () => {
+      setSession(FRESH, "p21c"); a3calls.length = 0;
+      for (const [label, ans] of [
+        ["403 42501", () => resp(403, P21_DENIED)],
+        ["400 empty", () => resp(400, "")],
+        ["500 html", () => resp(500, "<html><body>502 Bad Gateway</body></html>")],
+        ["200 html", () => resp(200, "<html>captive portal</html>")],
+      ]) {
+        answer = (c) => isRefresh(c) ? resp(500, "unexpected") : ans(c);
+        const def = p21Plain(await A3.db.insert("audit_log", P21_ROW));
+        const min = p21Plain(await A3.db.insert("audit_log", P21_ROW, { returning: "minimal" }));
+        assert.deepStrictEqual(min, def, label + ": minimal " + JSON.stringify(min) + " vs default " + JSON.stringify(def));
+        assert.strictEqual(min.data, null, label + ": data null");
+        assert.ok(min.error, label + ": error set");
+      }
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, [{ id: "a1", ...P21_ROW }]);
+      assert.deepStrictEqual(p21Plain(await A3.db.insert("audit_log", P21_ROW, { returning: "minimal" })), { data: null, error: null }, "a JSON 2xx body under minimal: success, no row handed back");
+    });
+    await acheck("P21 S2 behaviour: a 401 on a minimal insert -> ONE refresh + ONE retry, and the retry carries Prefer: return=minimal too (authFetch keeps the caller's headers)", async () => {
+      const NEW_P21 = jwt(3600, "p21"); setSession(FRESH, "p21d"); A3.auth._setExpired(false); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(200, tokenBody(NEW_P21, "p21e")) : (c.bearer === NEW_P21 ? resp(201, "") : resp(401, { code: "PGRST301", message: "JWT expired" }));
+      const r = await A3.db.insert("audit_log", P21_ROW, { returning: "minimal" });
+      assert.deepStrictEqual(p21Plain(r), { data: null, error: null }, JSON.stringify(r));
+      assert.deepStrictEqual(a3calls.map(c => (isRefresh(c) ? "refresh" : c.method + " " + c.prefer)), ["POST return=minimal", "refresh", "POST return=minimal"]);
+      setSession(FRESH, "r0"); A3.auth._setExpired(false);
+    });
+    // logAudit lifted verbatim from index-source.html and run against the REAL db (config.js in the sandbox): the answer the
+    // E3 override toast reads. The stub is the pre-audit_read_own table: RETURNING refused, a minimal insert written.
+    const p21Src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const p21LaAt = p21Src.indexOf("  const logAudit = (action, summary, details) => {"), p21LaEnd = p21Src.indexOf("\n  };\n", p21LaAt);
+    await acheck("P21 S2 behaviour: logAudit (lifted) as a surgeon (s3) sends ONE POST /rest/v1/audit_log with Prefer: return=minimal and resolves TRUE where the pre-audit_read_own table refused a RETURNING insert; a refusal of the insert itself (403, e.g. an unlinked viewer's WITH CHECK) still resolves false; a network error resolves false - never a rejection", async () => {
+      assert.ok(p21LaAt > 0 && p21LaEnd > p21LaAt, "logAudit not found in index-source.html");
+      const mk = (profile) => new Function("db", "userProfile", "authUser", "surgeons", "console", p21Src.slice(p21LaAt, p21LaEnd + 5) + "\nreturn logAudit;")(A3.db, profile, { id: "u-p21" }, [], { warn: () => {} });
+      setSession(FRESH, "p21f"); A3.auth._setExpired(false); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
+      const ok = await mk({ person_id: "s3", display_name: "Acton" })("timeoff.add", "Added vacation for Acton: 2027-03-15 -> 2027-03-21", { person_id: "s3", start: "2027-03-15", end: "2027-03-21" });
+      assert.strictEqual(ok, true, "a surgeon's audit row is written");
+      const w = p21Writes();
+      assert.deepStrictEqual(w.map(c => c.method + " " + r2Path(c) + " [" + c.prefer + "]"), ["POST /rest/v1/audit_log [return=minimal]"]);
+      assert.deepStrictEqual([w[0].body.actor_id, w[0].body.actor_name, w[0].body.action, w[0].body.detail.summary, w[0].body.detail.person_id], ["s3", "Acton", "timeoff.add", "Added vacation for Acton: 2027-03-15 -> 2027-03-21", "s3"], "the row logAudit words");
+      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(403, P21_DENIED);
+      assert.strictEqual(await mk({ person_id: null, display_name: "Viewer" })("prefs.save", "x", {}), false, "the insert itself refused -> false");
+      answer = (c) => { if (isRefresh(c)) return resp(500, "unexpected"); throw new TypeError("Failed to fetch"); };
+      assert.strictEqual(await mk({ person_id: "s3", display_name: "Acton" })("timeoff.add", "x", {}), false, "a network error -> false, not a rejection");
+    });
+    check("P21 S2 pins: logAudit is the ONLY caller that passes { returning: 'minimal' } - of the five db.insert calls in index-source.html (audit_log, time_off, notifications, shift_trade_requests, office_contacts) only logAudit's audit_log insert has a third argument; no other module calls db.insert; config.js db.insert maps the option to the Prefer header", () => {
+      const strip = (t) => t.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+      // the top-level arguments of the call whose "(" is at `open` (strings skipped; enough for these five calls)
+      const topArgs = (text, open) => {
+        const args = []; let depth = 0, cur = "", q = null;
+        for (let i = open + 1; i < text.length; i++) {
+          const ch = text[i];
+          if (q) { cur += ch; if (ch === "\\") { cur += text[++i]; continue; } if (ch === q) q = null; continue; }
+          if (ch === '"' || ch === "'" || ch === "`") { q = ch; cur += ch; continue; }
+          if (ch === "(" || ch === "{" || ch === "[") depth++;
+          else if (ch === ")" || ch === "}" || ch === "]") { if (depth === 0) { args.push(cur.trim()); return args; } depth--; }
+          else if (ch === "," && depth === 0) { args.push(cur.trim()); cur = ""; continue; }
+          cur += ch;
+        }
+        return null;
+      };
+      const code = strip(p21Src);
+      const calls = [];
+      for (let at = code.indexOf("db.insert("); at >= 0; at = code.indexOf("db.insert(", at + 1)) calls.push({ at, args: topArgs(code, at + "db.insert".length) });
+      assert.deepStrictEqual(calls.map(c => c.args && c.args[0]), ['"audit_log"', '"time_off"', '"notifications"', '"shift_trade_requests"', '"office_contacts"'], "the db.insert callers: " + JSON.stringify(calls.map(c => c.args && c.args[0])));
+      const withOpts = calls.filter(c => c.args.length !== 2);
+      assert.deepStrictEqual(withOpts.map(c => c.args[0] + " " + c.args[2]), ['"audit_log" { returning: "minimal" }'], "only the audit_log insert passes an option, and it is { returning: \"minimal\" }");
+      const laAt = code.indexOf("  const logAudit = (action, summary, details) => {"), laEnd = code.indexOf("\n  };\n", laAt);
+      assert.ok(withOpts[0].at > laAt && withOpts[0].at < laEnd, "that insert is logAudit's");
+      assert.strictEqual((code.match(/\breturning\s*:/g) || []).length, 1, "`returning:` appears once in index-source.html's code");
+      ["helpers.js", "rules.js", "generator.js", "east-feed.js", "app-styles.js"].forEach(f => assert.ok(!/\bdb\.insert\(/.test(strip(fs.readFileSync(path.join(ROOT, f), "utf8"))), f + " calls db.insert"));
+      const cfg = strip(fs.readFileSync(path.join(ROOT, "config.js"), "utf8"));
+      assert.ok(!/\bdb\.insert\((?![)$])/.test(cfg), "config.js calls db.insert (only its own log lines and the wrapper's hint name it)");
+      const ins = cfg.slice(cfg.indexOf("async insert(table, row, opts) {"), cfg.indexOf("async update(table, id, data) {"));
+      assert.ok(ins.includes('const minimal = !!(opts && opts.returning === "minimal");') && ins.includes('Prefer: minimal ? "return=minimal" : "return=representation"'), "db.insert(table, row, opts): { returning: \"minimal\" } -> return=minimal, else return=representation");
+      assert.ok(ins.includes("if (minimal) return { data: null, error: res.ok ? null : data };"), "minimal: data null; the error is the default's");
+      const upd = cfg.slice(cfg.indexOf("async update(table, id, data) {"), cfg.indexOf("async upsert(table, row, opts) {"));
+      assert.ok(upd.includes('method: "PATCH", headers: { Prefer: "return=representation" },'), "db.update keeps return=representation (a PATCH that returns 0 rows is how RLS-7 tells 'nothing changed')");
+    });
     await acheck("A3 sign-in: auth.signIn stores the pair, clears sessionExpired ('restored' event) and hands the token to realtime.setAuth (the recovery / invite hash path goes through the same _saveSession)", async () => {
       A3.auth.sessionExpired = true; a3calls.length = 0; rtAuth.length = 0; events.length = 0;
       answer = (c) => c.url.includes("/auth/v1/token?grant_type=password") ? resp(200, tokenBody(NEW4, "r10")) : resp(500, "unexpected");

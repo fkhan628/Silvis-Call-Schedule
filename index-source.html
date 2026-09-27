@@ -1014,6 +1014,9 @@ function CallSchedule() {
   // Item E3 review (9/25): it answers a promise of true (row written) / false (refused or failed) - every caller
   // still ignores it except saveDayEdit on an override, whose two audit rows are the only copy of its reasons since
   // the note carries none (it toasts the scheduler when both are refused). Never throws, never rejects.
+  // Prompt 21 step 2 (Faraz 9/26): the insert goes out with Prefer: return=minimal (db.insert's { returning: "minimal" },
+  // passed by no other caller) - logAudit never reads the row back, and INSERT ... RETURNING needs a SELECT policy that
+  // sees the new row: until audit_read_own every surgeon's audit row was refused with a 403 (Acton's vacations of 9/24).
   const logAudit = (action, summary, details) => {
     return (async () => {
       try {
@@ -1022,7 +1025,7 @@ function CallSchedule() {
           actor_name: userProfile?.display_name || surgeons.find(s => s.id === userProfile?.person_id)?.name || "Unknown",
           action: action,
           detail: { summary: summary, ...(details || {}) },
-        });
+        }, { returning: "minimal" });
         if (error) { console.warn("audit log insert failed", error); return false; }
         return true;
       } catch (e) { console.warn("audit log failed", e); return false; }
@@ -1033,9 +1036,10 @@ function CallSchedule() {
   // through a first-render closure would attribute every audit to "Unknown".
   const auditRef = useRef({ logAudit, nameOf });
   auditRef.current = { logAudit, nameOf };
-  // audit_log is authenticated-read only (audit_read: scheduler / admin; audit_read_coord: a coordinator's own rows), so
-  // the read goes through readAuthOnlyTable: without a fresh session token it answers null ("not read") and the current
-  // entries stay - db.query's anon fallback would answer 200 + [] and show "No activity recorded yet" for a failed read.
+  // audit_log is authenticated-read only (audit_read: scheduler / admin; audit_read_coord: a coordinator's own rows;
+  // audit_read_own: every signed-in user's own rows - Prompt 21 step 1, live 2026-09-27 00:49:39Z), so the read goes
+  // through readAuthOnlyTable: without a fresh session token it answers null ("not read") and the current entries stay -
+  // db.query's anon fallback would answer 200 + [] and show "No activity recorded yet" for a failed read.
   const loadAudit = async () => {
     setAuditLoading(true);
     try {

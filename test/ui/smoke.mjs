@@ -751,6 +751,9 @@ const representation = (method, url, body) => {
   // the app treats that as a failed write, exactly as it should), so those
   // POSTs echo the row with a generated id. shift_trade_requests and
   // rpc/apply_trade are served by the tradeStore branch of the route above.
+  // Prompt 21 step 2 (Faraz 9/26): an audit_log POST with Prefer: return=minimal
+  // (logAudit's, from this build on) never reaches this echo - the route answers
+  // it 201 with no row ([]), as PostgREST hands none back.
   const rowTables = ["/rest/v1/time_off", "/rest/v1/notifications", "/rest/v1/audit_log"];
   if (method === "POST" && rowTables.some(t => url.pathname.startsWith(t))) {
     try {
@@ -1141,6 +1144,11 @@ const routeSupabase = async (route, scope) => {
       try { const b = JSON.parse(body || "{}"); const r = Array.isArray(b) ? b[0] : b; if (r && typeof r.updated_at === "string") { if (sessionScope) sessBlobWriteTs = r.updated_at; else blobWriteTs = r.updated_at; } } catch (e) {}
     }
     writes.push({ method, path: url.pathname + url.search, body: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? "(snapshot body omitted)" : body, prefer: req.headers()["prefer"] || "", auth: req.headers()["authorization"] || "", at: Date.now(), snapshotReason: url.pathname.startsWith("/rest/v1/call_schedule_snapshots") ? (() => { try { return JSON.parse(body).reason; } catch (e) { return null; } })() : undefined });
+    // Prompt 21 step 2 (Faraz 9/26): logAudit's insert asks for Prefer: return=minimal - PostgREST reads no column of the new
+    // row back and hands none back (201, empty body). The harness answers 201 with [] - no row, and not an empty body: Chromium
+    // reports a routed request fulfilled with an EMPTY body as requestfailed net::ERR_ABORTED (the B7 note below). The page's
+    // db.insert must read either as a written row; the empty-body answer is pinned in test/data-layer.test.js [P21 S2].
+    if (method === "POST" && url.pathname === "/rest/v1/audit_log" && /\breturn=minimal\b/.test(req.headers()["prefer"] || "")) return json(201, []);
     return json(method === "POST" ? 201 : 200, representation(method, url, body));
   }
   // Snapshot list / read from the store (authenticated-only table: anon would answer []).
@@ -4385,6 +4393,18 @@ try {
     else if (notifs.length !== 1 || !vacNotif) fail(`Time off clean range: expected exactly one notification (vacation_logged), got ${notifs.length}: ` + JSON.stringify(notifs.map(n => n.type)));
     else if (vacNotif.message !== "Khan logged vacation 3/2-3/3 (harness range)") fail("Time off clean range: composed message wrong: " + vacNotif.message);
     else ok("Time off clean range: one POST /rest/v1/time_off { s1, 2027-03-02..03 } + one audit timeoff.add + one notification vacation_logged \"" + vacNotif.message + "\"");
+    // Prompt 21 step 2 (Faraz 9/26): the audit row goes out with Prefer: return=minimal (logAudit -> db.insert's { returning:
+    // "minimal" }: an INSERT without RETURNING, which a writer who cannot read the row back is not refused - Acton's 9/24
+    // vacations); the time_off and notifications POSTs of the same entry keep return=representation (their callers read
+    // the row back).
+    {
+      const auditPosts = writesSince(before2, "/rest/v1/audit_log").filter(w => w.method === "POST" && (bodyOf(w) || {}).action === "timeoff.add");
+      const notifPosts = writesSince(before2, "/rest/v1/notifications").filter(w => w.method === "POST");
+      const repr = (w) => /\breturn=representation\b/.test(w.prefer || "");
+      if (auditPosts.length !== 1 || auditPosts[0].prefer !== "return=minimal") fail("P21 S2 (Time off clean range): the timeoff.add audit POST must carry Prefer: return=minimal: " + JSON.stringify(auditPosts.map(w => w.prefer)));
+      else if (!toPosts.length || !toPosts.every(repr) || !notifPosts.length || !notifPosts.every(repr)) fail("P21 S2 (Time off clean range): the time_off / notifications POSTs must keep Prefer: return=representation: " + JSON.stringify([...toPosts, ...notifPosts].map(w => w.path + " [" + w.prefer + "]")));
+      else ok("P21 S2 (Time off clean range): the timeoff.add audit POST carries Prefer: return=minimal (answered 201 with no row ([] - PostgREST sends an empty body)); the time_off and notifications POSTs keep return=representation");
+    }
     // ---- Item B (Faraz 9/23 evening): the list is grouped per surgeon in roster order - a vac-group-<id> header
     //      (Badge, full name, N upcoming) with that person's compact "Mon D-D" lines under it; the range just added
     //      reads "Mar 2-3 (2027) harness range" (en dash) with its Edit / Remove controls, under Khan's header. ----
@@ -5108,7 +5128,7 @@ try {
       const blk = weekendTriples[0];
       const blkHeld = await Promise.all(blk.map(d => cellAttr(d, "data-primary").catch(() => null)));
       if (blkHeld.some(Boolean)) fail(`block-member check: the derived row-less triple ${blk.join("/")} already holds a primary in the grid (${blkHeld.join(", ")}) - the row-less derivation is broken`);
-      const wOv = writes.length;
+      const wOv = writes.length, warnOv = consoleWarns.length;
       const ovReasons = await editDay(blk[1], "primary", "s5"); noteEdit(blk[1], { primary_id: "s5" });
       // Item E3 (Faraz 9/25: "Overrides stop writing reason codes into schedule_days.note; the schedule.override audit row
       // already keeps them") - observed on this override save (review 9/25): the schedule_days write for the day carries
@@ -5135,6 +5155,18 @@ try {
         else if (!ovAudit || !ovListed.length || !/despite /.test(String(ovAudit.detail.summary || ""))) fail(`Item E3 (override save ${blk[1]}): no schedule.override audit row naming the reasons: ${JSON.stringify(ovAudit)}`);
         else if (!deAudit || !deListed.length) fail(`Item E3 (override save ${blk[1]}): the schedule.day_edit audit row lacks detail.overrides[0].reasons: ${JSON.stringify(deAudit && deAudit.detail)}`);
         else ok(`Item E3 (override save ${blk[1]}): the schedule_days write's note is ${JSON.stringify(noteW)} (no tag, no reason); schedule.override reads '${String(ovAudit.detail.summary).slice(0, 110)}' and schedule.day_edit carries overrides [${deListed.join(", ")}]`);
+        // Prompt 21 step 2 (Faraz 9/26): both override audit rows went out with Prefer: return=minimal and were answered 201
+        // with no row (the route above) - the page must read that as written: logAudit resolves true, so no "audit log
+        // insert failed" warning and no "refused both rows" toast.
+        if (ovAudit && deAudit) {
+          await page.waitForTimeout(400);
+          const ovPosts = writes.slice(wOv).filter(w => w.method === "POST" && w.path === "/rest/v1/audit_log" && ["schedule.override", "schedule.day_edit"].includes((e3Body(w) || {}).action) && ((e3Body(w) || {}).detail || {}).day === blk[1]);
+          const auditWarns = consoleWarns.slice(warnOv).filter(t => /audit log (insert )?failed/.test(t));
+          const refusedToast = /the audit log refused both rows/.test(await bodyText());
+          if (ovPosts.length < 2 || !ovPosts.every(w => w.prefer === "return=minimal")) fail(`P21 S2 (override save ${blk[1]}): the two override audit POSTs must carry Prefer: return=minimal: ` + JSON.stringify(ovPosts.map(w => w.prefer)));
+          else if (auditWarns.length || refusedToast) fail(`P21 S2 (override save ${blk[1]}): a 201 with no row was read as a refused audit row (warnings ${JSON.stringify(auditWarns.slice(0, 2))}, refused toast ${refusedToast})`);
+          else ok(`P21 S2 (override save ${blk[1]}): both audit POSTs carry Prefer: return=minimal; their 201 answers with no row read as written (no 'audit log insert failed', no refused-rows toast)`);
+        }
       }
       await editDay(blk[2], "primary", "s5"); noteEdit(blk[2], { primary_id: "s5" });
       await showMonth(+blk[0].slice(0, 4), +blk[0].slice(5, 7) - 1);
@@ -7938,6 +7970,12 @@ try {
       else if (!toNotif || !/Acton logged vacation 3\/16-3\/17 \(office entry\) - entered by Office \(harness\)/.test(toNotif.message) || !toNotif.data || toNotif.data.entered_by !== COORD_UID || toNotif.data.surgeon_id !== "s3") fail("coordinator: the vacation_logged feed row must name the office and carry entered_by = the profile id: " + JSON.stringify(toNotif));
       else if (mails.length) fail("coordinator: a send-notification call went out (the function answers 403 for the role; nothing should be attempted): " + JSON.stringify(mails.map(w => w.path)));
       else ok(`coordinator: vacation for s3 = POST time_off { created_by ${COORD_UID.slice(-4)} } + audit timeoff.add { actor_id = profile id, actor_name '${toAudit.actor_name}' } + feed "${toNotif.message}"; no e-mail attempted`);
+      // Prompt 21 step 2 (Faraz 9/26): the office's audit row goes out with Prefer: return=minimal too - a coordinator is a
+      // writer whose SELECT policies did not cover every row audit_insert lets it write (the step-1 probe's C4: a coordinator's
+      // prefs.save insert WITH RETURNING was refused 42501 before audit_read_own; today's client never audits that save).
+      const coordAuditPosts = writesSince(b1, "/rest/v1/audit_log").filter(w => w.method === "POST" && (bodyOf(w) || {}).action === "timeoff.add");
+      if (coordAuditPosts.length !== 1 || coordAuditPosts[0].prefer !== "return=minimal") fail("P21 S2 (coordinator): the timeoff.add audit POST must carry Prefer: return=minimal: " + JSON.stringify(coordAuditPosts.map(w => w.prefer)));
+      else ok("P21 S2 (coordinator): the office's timeoff.add audit POST carries Prefer: return=minimal");
       if (!writesSince(b1).every(w => noAddress(w.body))) fail("coordinator: a write body carries an email address");
       // Remove the row just added: Edit / Remove render for the office; the DELETE goes by id and is audited as the office
       const b2 = writes.length;
@@ -8429,6 +8467,21 @@ if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(un
 // where a device that silently dropped to the inline run would show.
 const genWorkerWarns = consoleWarns.filter(t => /Generate worker failed/.test(t));
 if (genWorkerWarns.length) fail("'Generate worker failed' during the run (every later Generate on that page ran inline): " + [...new Set(genWorkerWarns)].map(t => t.slice(0, 200)).join(" | ")); else ok("no 'Generate worker failed' warning during the run (the worker path held on every Generate)");
+// Prompt 21 step 2 (Faraz 9/26) - the whole-run sweep: every audit_log POST a signed-in session sent (the scheduler, the
+// office, the surgeon / member sessions, the A3 session's refused ones) carried Prefer: return=minimal - logAudit is the one
+// audit writer - and every POST of the other db.insert tables (notifications, shift_trade_requests, office_contacts) kept
+// return=representation (their callers read the row back). time_off is left out: the seed import posts it return=minimal.
+{
+  const signedInPosts = writes.filter(w => w.method === "POST" && !w.public);
+  const auditPosts = signedInPosts.filter(w => /^\/rest\/v1\/audit_log(\?|$)/.test(w.path));
+  const otherPosts = signedInPosts.filter(w => /^\/rest\/v1\/(notifications|shift_trade_requests|office_contacts)(\?|$)/.test(w.path));
+  const badAudit = auditPosts.filter(w => w.prefer !== "return=minimal");
+  const badOther = otherPosts.filter(w => !/\breturn=representation\b/.test(w.prefer || ""));
+  if (!auditPosts.length) fail("P21 S2 sweep: no audit_log POST was recorded this run - nothing proves logAudit's Prefer");
+  else if (badAudit.length) fail(`P21 S2 sweep: ${badAudit.length} of ${auditPosts.length} audit_log POST(s) lacked Prefer: return=minimal: ` + JSON.stringify(badAudit.slice(0, 5).map(w => ((() => { try { return JSON.parse(w.body).action; } catch (e) { return "?"; } })()) + " [" + w.prefer + "]")));
+  else if (badOther.length) fail(`P21 S2 sweep: ${badOther.length} notifications / shift_trade_requests / office_contacts POST(s) lost Prefer: return=representation: ` + JSON.stringify(badOther.slice(0, 5).map(w => w.path + " [" + w.prefer + "]")));
+  else ok(`P21 S2 sweep: all ${auditPosts.length} audit_log POSTs of the run carried Prefer: return=minimal; the ${otherPosts.length} notifications / shift_trade_requests / office_contacts POSTs kept return=representation`);
+}
 
 // Prompt 16 B8 - supply chain + CSP: no request left for a CDN host; React, ReactDOM and supabase-js were fetched
 // from vendor/ with ?v=APP_VERSION; the served page carries the CSP meta with the three inline-script hashes and

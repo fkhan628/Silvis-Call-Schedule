@@ -241,9 +241,17 @@ const db = {
     }
     return await res.json();
   },
-  async insert(table, row) {
+  // opts.returning (Prompt 21 step 2, Faraz 9/26; supabase-js v1's option name, as onConflict is for upsert): "minimal"
+  // sends Prefer: return=minimal - PostgREST reads no column of the new row back and answers 201 with an empty body, so
+  // a writer whose SELECT policies cannot see the row he has just written is not refused (return=representation is
+  // INSERT ... RETURNING the row: 42501 -> HTTP 403 and the row is lost - Acton's audit rows of 9/24). With it a 2xx with
+  // an empty body answers { data: null, error: null } (there is no row to hand back); a non-2xx, and a 2xx whose body is
+  // not JSON (a proxy page), fail exactly as without it. Only logAudit passes it - it never reads the row back; every
+  // other caller keeps return=representation (the default, and what any other value means).
+  async insert(table, row, opts) {
+    const minimal = !!(opts && opts.returning === "minimal");
     const res = await authFetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-      method: "POST", headers: { Prefer: "return=representation" },
+      method: "POST", headers: { Prefer: minimal ? "return=minimal" : "return=representation" },
       body: JSON.stringify(row),
     });
     // Read the body as TEXT and check res.ok BEFORE parsing: a non-JSON error
@@ -258,6 +266,8 @@ const db = {
     }
     if (!res.ok) console.warn(`db.insert(${table}) failed: HTTP ${res.status}`, text.slice(0, 200));
     if (!res.ok && !data) data = { message: `HTTP ${res.status}`, status: res.status };
+    // return=minimal: the body is never a row (PostgREST sends none) - data stays null; error is the default's.
+    if (minimal) return { data: null, error: res.ok ? null : data };
     // On failure, return data:null (NOT the PostgREST error body) so callers'
     // `if (data)` success-guards can't mis-fire on the error object — that
     // false-success masked the RLS-blocked notifications insert. `error` still
