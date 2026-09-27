@@ -4330,7 +4330,12 @@ try {
       const la = lum(fg), lb = lum(bg);
       return { day: el.closest("[data-testid=mine-day]").getAttribute("data-day"), text: el.textContent.trim(), color: getComputedStyle(el).color, bg: bgCss, ratio: Math.round((Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05) * 100) / 100 };
     });
-    if (!bw) console.log("     (dark Backup role word: not exercised - s1 has no backup row in the next 90 days)");
+    // A missing row is "not exercised" only when the live rows give s1 no backup day in the list's 90-day window;
+    // otherwise the selector (mine-day[data-role=backup] / mine-role) broke.
+    const bwHorizon = utcDay(Date.parse(todayIso + "T12:00:00Z") + 90 * 86400000);
+    const bwExpected = recountRows.filter(r => r.day >= todayIso && r.day <= bwHorizon && r.backup_id === "s1").length;
+    if (!bw && bwExpected) fail(`My schedule dark: the live rows give s1 ${bwExpected} backup day(s) in the next 90 days but no [data-testid=mine-day][data-role=backup] [data-testid=mine-role] was found`);
+    else if (!bw) console.log("     (dark Backup role word: not exercised - s1 has no backup row in the next 90 days)");
     else if (bw.ratio === null || bw.ratio < 4.5) fail(`My schedule dark: the Backup role word on ${bw.day} reads ${bw.ratio}:1 (${bw.color} on ${bw.bg}), below 4.5:1`);
     else ok(`My schedule dark: the Backup role word on ${bw.day} '${bw.text}' ${bw.color} on ${bw.bg} = ${bw.ratio}:1`);
     await page.click('button[data-tab="settings"]');

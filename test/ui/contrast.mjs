@@ -109,6 +109,8 @@ export const contrastTable = (mod) => {
     (m.FALLBACK_SURGEON_COLORS || []).forEach((c, i) => add(theme, `fallback pill ${i} name on its tint`, c.tx, c.tg, "label"));
     add(theme, "outside surgeon name on page", theme === "dark" ? OUTSIDE_SURGEON_COLOR.dk : OUTSIDE_SURGEON_COLOR.tx, T.bg, "label");
   }
+  // The generator preview box (gen-preview, #faf7ff) is not repainted by the dark sheet: its Warnings read LIGHT.warnText in both themes.
+  add("both", "warning text on the generator preview box #FAF7FF", THEME.light.warnText, "#FAF7FF", "text");
   // opening screens (theme-independent orange gradient, white text)
   add("opening", "white SSC / button label on the orange gradient start", OPENING.text, OPENING.start, "label");
   add("opening", "white SSC / button label on the orange gradient end", OPENING.text, OPENING.end, "label");
