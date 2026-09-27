@@ -58,7 +58,7 @@ afterwards; the editor keeps query history).*
 4. Tell them: **Time off** is self-service (no approval) and is refused over a day they are already published — trade
    first. **Trades** are by day and role; every "propose a trade" shortcut lands on the trade form with the next empty
    field focused. Trades and gives (for days still ahead) waiting on their answer come first on **Time off & Trades** (**Waiting on you** - one row per
-   proposal, so a weekend or holiday unit is one row naming the unit and its days; the tab badge counts only those, one per proposal) and can be accepted or declined straight from **Alerts**. A vacation starting less than
+   proposal, so a weekend or holiday unit is one row naming the unit and its days; the tab badge counts only those, one per proposal; the scheduler's badge counts every pending proposal group-wide, also one per proposal) and can be accepted or declined straight from **Alerts**. A vacation starting less than
    six weeks out (the offers freeze, `groupRules.offerPeriods`) is saved as usual with a note that the schedule through
    that date is already being built - check Open shifts or propose a trade. Their calendar subscription URL is in
    **Settings → Live calendar sync**.
@@ -69,7 +69,7 @@ afterwards; the editor keeps query history).*
 Silvis runs offers-first. **Paint the dates you'll cover, any time**: primary, backup or either, one tap per day on your
 phone, for any date ahead, whenever you like — the app is where the offers live now (no more e-mailing lists around).
 **Each three-month period freezes six weeks before that period starts**: what you painted inside that period is what
-the generator places first, then it fills the gaps; the app e-mails you six weeks (42 days), 14 days and 3 days before the freeze if you have
+the generator places first, then it fills the gaps; the app e-mails you six weeks (42 days - new from 9/27), 14 days and 3 days before the freeze if you have
 entered nothing for that period (it honours your e-mail preference). From six weeks before the freeze, if you have not
 answered for a period yet, you see a notice on My schedule (and on the Calendar in the last 14 days) with a "Choose
 shifts" button, plus a count on the Paint offers button. **Or tell the app to go by your rules** for that

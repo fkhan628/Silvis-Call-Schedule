@@ -1586,7 +1586,7 @@ the existing `pay.rates` audit row (the changed keys plus the roster ids switche
 | object | before | after |
 |---|---|---|
 | `call_pay_settings` | - | new table, one row `main` (check `id = 'main'`): four `numeric(10,2)` rates, each null or 0-99999, **no default**; `activation_unit` `hour` \| `activation` (default `hour`); `weekend_days` jsonb array of `Sun`..`Sat` (default `["Sat","Sun"]` - Friday is a weekday for pay); `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday` (default true); `stipend_off_ids` jsonb array of non-empty strings (roster ids NOT paid by the call stipend; default `[]` - everyone paid); `updated_by` / `updated_at` stamped by `call_pay_settings_touch`. Seeded `(id)` only - every rate null, nobody switched off |
-| `silvis_pay_enabled(pid text)` | - | new helper: `language sql stable security definer set search_path = public, pg_temp`; true when `pid` is not null and not in `stipend_off_ids`. Reads the settings row as its owner, so the settings read policy that calls it does not recurse and the guard sees the list whoever the caller is. EXECUTE revoked from public / anon, granted to authenticated / service_role (as `offer_status`) |
+| `silvis_pay_enabled(pid text)` | - | new helper: `language sql stable security definer set search_path = public, pg_temp`; true when `pid` is not null and not in `stipend_off_ids` - **answered truly only to a caller entitled to know** (9/27 review: it is callable as `/rest/v1/rpc/silvis_pay_enabled` by every signed-in account): the scheduler / admin, the coordinator, the person `pid` himself, or a session with no signed-in user (`auth.uid()` null - service_role, the SQL editor, the linked CLI); a viewer, a follower or a colleague gets an uninformative `true` whoever is switched off (every policy passes the caller's own id, and a write for another person is refused by the write policies anyway). Reads the settings row as its owner, so the settings read policy that calls it does not recurse and the guard sees the list whoever the caller is. EXECUTE revoked from public / anon, granted to authenticated / service_role (as `offer_status`) |
 | `call_pay_logs` | - | new table: `id`, `day`, `person_id` (roster id), `hours numeric(5,2)` 0-24 in quarter hours, `note` (<= 200 characters, no `@`, no phone-like digit run), `created_by`, `created_at`, `updated_at`; index `(person_id, day)`, not unique (one row per call-in) |
 | `call_pay_logs_guard` (BEFORE INSERT OR UPDATE, security invoker, `set search_path = public`, every caller) | - | `PY004 PAY_READ_ONLY` the caller is the office coordinator; `PY005 PAY_STIPEND_OFF` the person is switched off the stipend (a new or edited row, for everyone); `PY001 PAY_FUTURE` day after today (Central); `PY002 PAY_NOT_PRIMARY` the person is not `schedule_days.primary_id` that day; `PY003 PAY_HOURS_OVER` the person's hours that day would exceed 24 - summed under a transaction advisory lock on (person, day), so two concurrent call-ins cannot both pass; stamps `created_by` / `created_at` on insert, pins them on update. No delete guard: a surgeon removes his own row after the day's primary changed |
 | grants | Supabase default (anon + authenticated all verbs on a new table, TRUNCATE / REFERENCES / TRIGGER included) | `revoke all ... from anon` on both tables (defence in depth for pay data - the other authenticated-only tables rely on RLS alone); `revoke truncate, references, trigger ... from authenticated` (RLS does not cover TRUNCATE); authenticated keeps select / insert / update / delete |
@@ -1639,6 +1639,11 @@ equal, never wider):**
    separate table would hide it; say so if that matters. A switched-off surgeon reads nothing (0 rows).
 5. **(5b) The scheduler may still delete a switched-off surgeon's call-in** (deletes are unguarded); the switched-off surgeon
    himself cannot (RLS). Switching him back on makes his earlier call-ins his again (read / edit / delete).
+6. **(9/27 review) Who may ask the switch helper.** `silvis_pay_enabled` is a security-definer function in `public`, so PostgREST
+   exposes it over RPC to every signed-in account. It answers truly only to the scheduler / admin, the coordinator, the person
+   himself or a no-user session; anyone else (a viewer, a follower, a surgeon asking about a colleague) gets `true` - no one
+   outside the pay roles learns who is switched off (probe `O11` / `O12`). A switched-on surgeon still reads the list in the
+   settings row (decision 4).
 
 **Blast radius.** Two new tables and one new helper function (`silvis_pay_enabled`); no existing table, column, policy,
 function, grant or row changes. The client that ships with
@@ -1663,10 +1668,13 @@ could re-grant anon through Supabase's default privileges; harmless - the polici
 2. Pre-check: `select to_regclass('public.call_pay_logs');` -> null.
 3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/call-pay-probe.sql` -> `PROBE_SETUP: call_pay_logs is absent ...`.
 4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-27-call-pay.sql`.
-5. Probe AFTER: every case as its header lists (48 cases; `P1` names the six policies, `P2` `anon_logs=f anon_settings=f auth_truncate=f`,
-   `P4` `anon_exec=f auth_exec=t definer=t`; the coordinator `C1`-`C5` read every row and write none; `O1`-`O10` switch s3 off
-   inside the probe's own transaction: no rate, no own row, `PY005` for him and for the admin, s2 unchanged, the admin and the
-   coordinator still read his rows).
+5. Probe AFTER: every case as its header lists (52 cases; `P1` names the six policies, `P2` `anon_logs=f anon_settings=f auth_truncate=f`,
+   `P4` `anon_exec=f auth_exec=t definer=t`; the coordinator `C1`-`C7` read every row and write none - no call-in, no rate, no
+   switch; `O1`-`O10` switch s3 off inside the probe's own transaction: no rate, no own row, `PY005` for him and for the admin,
+   s2 unchanged, the admin and the coordinator still read his rows; `O11` the helper tells a viewer and a colleague `true`,
+   `O12` gives the admin, the coordinator, s3 himself and a no-user session the real `false`). Run locally on 9/27 against a
+   Postgres 16 with Supabase-like stubs (auth schema, roles), over a fresh database and over one holding a pre-5b
+   `call_pay_settings`: every case read as listed.
 6. `SILVIS_CALL_PAY_APPLIED=1 bash scripts/verify-rls.sh` - sections 1-14 green (the flag makes a 404 / PROBE_SETUP a FAIL; 14d
    also reads `stipend_off_ids` before and after the probe and fails if it changed).
 7. Faraz enters the rates and sets the "Paid by the call stipend" switches in Setup > Pay rates (the app writes the `pay.rates`

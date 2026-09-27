@@ -935,6 +935,8 @@ if linked; then
     expect_err14 C3  PY004 "PAY_READ_ONLY"                            "the office coordinator cannot log a call-in (the guard refuses it before RLS)"
     expect_eq14  C4  "updated=0"                                     "the office coordinator cannot edit a call-in"
     expect_eq14  C5  "deleted=0"                                     "the office coordinator cannot delete a call-in"
+    expect_eq14  C6  "updated=0"                                     "the office coordinator cannot change the rates or the stipend switches"
+    expect_err14 C7  42501 'row-level security policy for table "call_pay_settings"' "the office coordinator cannot insert a settings row"
     expect_eq14  V1  "visible=0"                                     "a viewer (a follower) reads no call-in"
     expect_eq14  V2  "rows=0"                                        "a viewer reads no rate"
     expect_eq14  A1  "sees_all=t"                                    "the admin reads every call-in"
@@ -951,6 +953,8 @@ if linked; then
     expect_err14 O8  PY005 "PAY_STIPEND_OFF"                          "nobody, the admin included, logs a call-in for a switched-off surgeon"
     expect_err14 O9  PY005 "PAY_STIPEND_OFF"                          "nobody, the admin included, edits a switched-off surgeon's call-in"
     expect_eq14  O10 "sees_s3=t"                                     "the office coordinator still reads a switched-off surgeon's call-ins"
+    expect_eq14  O11 "viewer=t colleague=t"                          "silvis_pay_enabled over RPC tells a viewer / follower or a colleague nothing (true for a switched-off id)"
+    expect_eq14  O12 "admin=f coord=f self=f nojwt=f"                "silvis_pay_enabled gives the real answer to the admin, the coordinator, the person himself and a no-user session"
   fi
   if [ "$applied14" = "1" ]; then
     LEFTOVER14_SQL="select ((select count(*) from auth.users where email like 'probe-pay-%@example.test') + (select count(*) from public.schedule_days where source = 'probe-pay') + (select count(*) from public.call_pay_logs where note like 'probe-pay%'))::int as leftover"

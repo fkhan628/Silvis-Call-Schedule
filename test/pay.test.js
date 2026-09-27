@@ -564,7 +564,8 @@ check("a year switch never shows another year's call-ins: loadPay drops a stale 
   const panel = SRC.slice(SRC.indexOf("function PayTotalsPanel("), SRC.indexOf("// ---- end call pay components"));
   const pvs = panel.indexOf("const vs = payViewState(state, year);");
   assert.ok(pvs > 0 && panel.indexOf("pay-csv") > pvs && /if \(vs === "failed" \|\| vs === "skipped" \|\| vs === "loading"\) return /.test(panel), "Totals > Pay (and its CSV) render only after the payViewState gate");
-  assert.ok(/data-testid="pay-csv" onClick=\{exportPay\} disabled=\{state\.loadedYear !== Number\(year\)\}/.test(panel), "the pay CSV is disabled unless the rows held are this year's");
+  // 9/27 review fix (deliberate pin change, same intent): "|| !payStipendKnown(state)" joins - nor before the stipend switches are known
+  assert.ok(/data-testid="pay-csv" onClick=\{exportPay\} disabled=\{state\.loadedYear !== Number\(year\) \|\| !payStipendKnown\(state\)\}/.test(panel), "the pay CSV is disabled unless the rows held are this year's");
   assert.ok(/data-testid="pay-totals-refresh"/.test(panel), "Totals > Pay offers Refresh in the loading / failed / skipped states");
   assert.ok(/<PayCard key=\{pid\} /.test(SRC), "PayCard is keyed by the person (an open edit never carries over to another surgeon)");
   assert.ok(/payRatesNote\(ratesView, T, true\)/.test(card) && /const ratesView = payRatesView\(state, settingsRow\);/.test(card) && /payRatesNote\(ratesView, T, false\)/.test(panel), "both views show a failed rates read as failed (payRatesView), never 'not set yet'");
@@ -692,7 +693,8 @@ check("5b source pins: the switches in Setup > Pay rates (default on), the one-l
   assert.ok(/checked=\{draft\.stipendOffIds\.indexOf\(r\.id\) < 0\}/.test(rates), "on = not in stipend_off_ids (default on)");
   assert.ok(/r\.type !== "external"/.test(rates), "outside surgeons get no switch");
   assert.ok(/<PayRatesCard [^\n]*roster=\{surgeons\}/.test(SRC), "the switches list the roster");
-  assert.ok(SRC.includes("const payMyCardHidden = !isScheduler && paySettingsHidden(payState, paySettingsRow);"), "a linked surgeon whose settings read answered no row gets no My pay card");
+  // 9/27 review fix (deliberate pin change, same intent): payStipendPending joins - no My pay card before the first settings read answers
+  assert.ok(SRC.includes("const payMyCardHidden = !isScheduler && (paySettingsHidden(payState, paySettingsRow) || payStipendPending(payState));"), "a linked surgeon whose settings read answered no row gets no My pay card (nor one before that read answers)");
   const card = SRC.slice(SRC.indexOf("function PayCard("), SRC.indexOf("function PayRatesCard("));
   const offAt = card.indexOf("if (pm.stipendOff) return ");
   assert.ok(offAt > 0 && offAt < card.indexOf("pay-total-month") && offAt < card.indexOf("pay-log-form"), "PayCard answers one line for a switched-off surgeon before any figure or the log form");
@@ -702,6 +704,37 @@ check("5b source pins: the switches in Setup > Pay rates (default on), the one-l
   assert.ok(/const offRows = payStipendOffRows\(roster \|\| \[\], settings\);/.test(panel) && /data-testid="pay-totals-stipend-off"/.test(panel), "Totals > Pay names who is left out");
   const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   ["index-source.html", "helpers.js", "config.js"].forEach(f => assert.ok(!/stipend[^\n]{0,80}["'](s[0-9]+|Sarkar|SRK)["']/.test(code(fs.readFileSync(path.join(ROOT, f), "utf8"))), f + " names a surgeon next to the stipend switch (it is data Faraz sets)"));
+});
+
+check("9/27 review fix (behaviour): payStipendKnown / payStipendPending - a failed settings read beside a good call-ins read leaves the switches unknown (payViewState still 'ok'); a later failed refresh keeps them known", () => {
+  const fresh = { settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false };
+  assert.strictEqual(H.payStipendKnown(fresh), false);
+  assert.strictEqual(H.payStipendPending(fresh), true, "the first read has not answered");
+  const s1 = H.payStateAfterRead(H.payStateBeforeRead(fresh, 2026), 2026, { state: "failed" }, { state: "ok" });
+  assert.strictEqual(s1.settingsLoaded, false);
+  assert.strictEqual(H.payViewState(s1, 2026), "ok", "the call-ins view alone would render");
+  assert.strictEqual(H.payStipendKnown(s1), false, "but the switches are unknown - no rows, no CSV, no figures");
+  assert.strictEqual(H.payStipendPending(s1), false, "the read answered (failed): the own card shows its note");
+  assert.strictEqual(H.payRatesView(s1, null), "failed");
+  const s2 = H.payStateAfterRead(H.payStateBeforeRead(s1, 2026), 2026, { state: "ok", row: FAKE_ROW }, { state: "ok" });
+  assert.strictEqual(H.payStipendKnown(s2), true);
+  const s3 = H.payStateAfterRead(H.payStateBeforeRead(s2, 2026), 2026, { state: "failed" }, { state: "ok" });
+  assert.strictEqual(H.payStipendKnown(s3), true, "a later failed refresh keeps the row read before");
+  const un = H.payStateAfterRead(H.payStateBeforeRead(fresh, 2026), 2026, { state: "unavailable" }, { state: "unavailable" });
+  assert.strictEqual(H.payStipendPending(un), false, "'unavailable' answered: the card says so");
+  assert.strictEqual(H.payStipendKnown(null), false);
+  assert.strictEqual(H.payStipendPending(null), false);
+});
+check("9/27 review fix source pins: Totals > Pay (table + CSV) and PayCard (figures + form) wait for payStipendKnown", () => {
+  const panel = SRC.slice(SRC.indexOf("function PayTotalsPanel("), SRC.indexOf("// ---- end call pay components"));
+  const gate = panel.indexOf("if (!payStipendKnown(state)) {");
+  assert.ok(gate > 0 && gate < panel.indexOf("payTotalsRows(") && gate < panel.indexOf('data-testid="pay-totals-table"') && gate < panel.indexOf('data-testid="pay-csv"'), "no rows, table or CSV button before the switches are known");
+  assert.ok(panel.includes('disabled={state.loadedYear !== Number(year) || !payStipendKnown(state)}'), "the CSV button is disabled until they are");
+  assert.ok(/const exportPay = \(\) => \{\n    if \(!payStipendKnown\(state\)\) return;/.test(panel), "and the export itself refuses");
+  assert.ok(panel.includes('data-state={"settings-" + rv0}') && panel.includes("payRatesNote(rv0, T, false)"), "the rates' note (failed / loading) with Refresh");
+  const card = SRC.slice(SRC.indexOf("function PayCard("), SRC.indexOf("function PayRatesCard("));
+  const cg = card.indexOf("if (!payStipendKnown(state)) {");
+  assert.ok(cg > card.indexOf("if (unavailable) return ") && cg < card.indexOf("if (pm.stipendOff) return ") && cg < card.indexOf("pay-total-month") && cg < card.indexOf("pay-log-form"), "PayCard: after 'unavailable', before the stipend-off line, any figure or the form");
 });
 
 (async () => {

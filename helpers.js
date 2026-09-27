@@ -2999,20 +2999,38 @@ function vacationLeadNote(start, today, rules) {
 // where the proposal first appears (Faraz 9/27: one row and one badge count per proposal). With an ISO `today`, a
 // proposal with any row whose day or return day is before it is left out: the server refuses a member's Accept on it
 // (trade_update_guard TRADE_PAST, strict <), so it is not "waiting" - the Pending card still lists it with Decline.
-// The Time off & Trades "Waiting on you" block and a surgeon's tab badge read it (the scheduler's badge keeps counting
-// every pending trade).
+// The Time off & Trades "Waiting on you" block and a surgeon's tab badge read it (the scheduler's badge counts every
+// pending proposal group-wide - countPendingProposals, the same one-per-proposal grouping).
+// tradeProposalKey(r, tagOf) -> the grouping key of a unit proposal's row (kind|start|n|from|to|role - the app's
+// tradeGroupOf, which Accept / Decline act on), or null for a row that is not part of a unit (its own proposal).
+function tradeProposalKey(r, tagOf) {
+  const tag = r && typeof tagOf === "function" ? tagOf(r) : null;
+  return tag ? [tag.kind, tag.start, tag.n, r.from_surgeon_id, r.to_surgeon_id, r.role].join("|") : null;
+}
+// countPendingProposals(rows, tagOf) -> how many PENDING trade / give proposals the rows hold, ONE per proposal (Faraz 9/27:
+// a weekend or holiday unit is one badge count): the pending rows of a unit (tradeProposalKey) count once, every other
+// pending row counts 1. The scheduler's Time off tab badge (every pending proposal group-wide, past days included - the
+// Pending card lists them all). 0 for a non-array.
+function countPendingProposals(rows, tagOf) {
+  if (!Array.isArray(rows)) return 0;
+  const keys = new Set();
+  let n = 0;
+  for (const r of rows) {
+    if (!r || r.status !== "pending") continue;
+    const k = tradeProposalKey(r, tagOf);
+    if (k === null) n++;
+    else if (!keys.has(k)) { keys.add(k); n++; }
+  }
+  return n;
+}
 function tradesWaitingOn(rows, personId, today, tagOf) {
   if (!personId || !Array.isArray(rows)) return [];
   const t = suIsIso(today) ? today : null;
   const past = (d) => t !== null && suIsIso(String(d || "").slice(0, 10)) && String(d).slice(0, 10) < t;
   const mine = rows.filter(r => r && r.status === "pending" && r.to_surgeon_id === personId);
-  const keyOf = (r) => {
-    const tag = typeof tagOf === "function" ? tagOf(r) : null;
-    return tag ? [tag.kind, tag.start, tag.n, r.from_surgeon_id, r.to_surgeon_id, r.role].join("|") : null;
-  };
   const groups = new Map(), order = [];
   mine.forEach((r, i) => {
-    const k = keyOf(r) || ("row#" + i);
+    const k = tradeProposalKey(r, tagOf) || ("row#" + i);
     if (!groups.has(k)) { groups.set(k, []); order.push(k); }
     groups.get(k).push(r);
   });
@@ -3024,13 +3042,15 @@ function tradesWaitingOn(rows, personId, today, tagOf) {
   }
   return out;
 }
-// tradeWaitingUnitLine(group, tag, viewerId) -> the one line of a unit proposal in "Waiting on you" (rows named - the
-// app's tradeNamed - and sorted by day; tag = the head's unit tag). It names the unit and its days from the rows that
-// move together (Accept / Decline act on them all), e.g.
+// tradeWaitingUnitLine(group, tag, viewerId, isGive) -> the one line of a unit proposal in "Waiting on you" (rows named -
+// the app's tradeNamed - and sorted by day; tag = the head's unit tag). It names the unit and its days from the rows that
+// move together (Accept / Decline act on them all); the viewer reads "you" (the receiver always is, in Waiting on you), e.g.
 //   give   "Acton offers you primary for the Thanksgiving unit 11/26-11/29 (4 days) - nothing in return"
-//   trade  "Burchett would take primary for the Thanksgiving unit 11/26-11/29 (4 days); Acton would take backup 12/3-12/6 (4 days)"
-//   one-way "... (one-way - no return shift)". ASCII; "" without rows.
-function tradeWaitingUnitLine(group, tag, viewerId) {
+//   trade  "You would take primary for the Thanksgiving unit 11/26-11/29 (4 days); Acton would take backup 12/3-12/6 (4 days)"
+//   one-way "... (one-way - no return shift)". ASCII; "" without rows. `isGive` (a boolean) is the app's whole-proposal
+// verdict (tradeIsGiveProposal - every status, as the row's data-kind / status chip read it); without one the pending
+// group decides (tradeGroupIsGive).
+function tradeWaitingUnitLine(group, tag, viewerId, isGive) {
   const g = (Array.isArray(group) ? group : []).filter(r => r && typeof r === "object" && suIsIso(String(r.day || "").slice(0, 10)));
   if (!g.length) return "";
   const first = g[0], last = g[g.length - 1];
@@ -3038,12 +3058,15 @@ function tradeWaitingUnitLine(group, tag, viewerId) {
   const span = (a, b, n) => fmtMD(a) + (n > 1 ? "-" + fmtMD(b) : "") + " (" + n + " day" + (n === 1 ? "" : "s") + ")";
   const unit = (name ? "the " + name + " unit " : "") + span(first.day, last.day, g.length);
   const role = String(first.role || "");
-  const toWord = viewerId && viewerId === first.to_surgeon_id ? "you" : first.to_surgeon_name;
-  if (tradeGroupIsGive(g)) return first.from_surgeon_name + " offers " + toWord + " " + role + " for " + unit + " - nothing in return";
+  const toYou = !!viewerId && viewerId === first.to_surgeon_id, fromYou = !!viewerId && viewerId === first.from_surgeon_id;
+  const toWord = toYou ? "you" : first.to_surgeon_name;
+  const give = typeof isGive === "boolean" ? isGive : tradeGroupIsGive(g);
+  if (give) return (fromYou ? "You" : first.from_surgeon_name) + " offer" + (fromYou ? " " : "s ") + toWord + " " + role + " for " + unit + " - nothing in return";
   const ret = g.filter(r => r.return_day && r.return_role).map(r => r).sort((a, b) => a.return_day < b.return_day ? -1 : a.return_day > b.return_day ? 1 : 0);
-  if (!ret.length) return first.to_surgeon_name + " would take " + role + " for " + unit + " (one-way - no return shift)";
+  const taker = toYou ? "You" : first.to_surgeon_name, backTaker = fromYou ? "you" : first.from_surgeon_name;
+  if (!ret.length) return taker + " would take " + role + " for " + unit + " (one-way - no return shift)";
   const back = ret.length === 1 ? slotLabel(ret[0].return_day, ret[0].return_role) : ret[0].return_role + " " + span(ret[0].return_day, ret[ret.length - 1].return_day, ret.length);
-  return first.to_surgeon_name + " would take " + role + " for " + unit + "; " + first.from_surgeon_name + " would take " + back;
+  return taker + " would take " + role + " for " + unit + "; " + backTaker + " would take " + back;
 }
 // offerRulesWords(rules, groupRules) -> plain sentences describing one surgeon's rules, built from the DATA in
 // call_schedule_data.data.surgeonRules (no surgeon-specific branch; a key that is absent says nothing). Shown by
@@ -3490,6 +3513,14 @@ function payStipendDelta(beforeRow, afterRow) {
 function paySettingsHidden(state, row) {
   return !!(state && typeof state === "object" && state.settingsLoaded && state.settings !== "unavailable") && (row === null || row === undefined || (Array.isArray(row) && row.length === 0));
 }
+// payStipendKnown(state) -> true once a settings read has succeeded (payStateAfterRead's settingsLoaded): only then are the
+// "Paid by the call stipend" switches known. Before it, paySettingsFromRow(null) reads "nobody switched off" - so Totals > Pay,
+// its CSV and a PayCard show NO rows / figures / form until it is true (a failed settings read beside a good call-ins read
+// must never bring a switched-off surgeon back). A later failed refresh keeps the row read before, which stays authoritative.
+function payStipendKnown(state) { return !!(state && typeof state === "object" && state.settingsLoaded); }
+// payStipendPending(state) -> true while the FIRST settings read has not answered (settings "unread", never loaded): a linked
+// surgeon's own My pay card is not rendered yet, so a switched-off surgeon never sees a My pay header flash before it hides.
+function payStipendPending(state) { return !payStipendKnown(state) && !!state && typeof state === "object" && state.settings === "unread"; }
 // paySettingsToRow(settings) -> the call_pay_settings row the scheduler's Save upserts ({ id: "main", snake_case columns });
 // rates rounded to cents, null kept as null (never 0). updated_by / updated_at are stamped by the table's trigger.
 function paySettingsToRow(settings) {
@@ -3625,7 +3656,7 @@ function payStipendOffRows(roster, settings) {
 }
 function payCsvAmount(c) { return c === null || c === undefined ? "" : (c / 100).toFixed(2); }
 // payCsv(rows, year, month0) -> { name: "silvis-pay-YYYY-MM.csv", text } (ttCsvText). Plain 2-decimal numbers, no currency
-// sign; an amount whose rate is not set is left empty. The scheduler's local download only - never sent anywhere.
+// sign; an amount whose rate is not set is left empty. A local download only (the scheduler's, or the office's read-only one - item 5a) - never sent anywhere.
 function payCsv(rows, year, month0) {
   var ym = Number(year) + "-" + String(Number(month0) + 1).padStart(2, "0");
   var headers = ["Month", "Surgeon", "Code", "Primary days", "Called-in days", "Hours", "Earned (month)", "Projected (month)", "YTD earned", "YTD projected"];
@@ -3759,7 +3790,7 @@ if (typeof module !== "undefined" && module.exports) {
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,
     PAY_FLAG_DEFAULTS, PAY_WEEK_ORDER, PAY_RATE_KEYS, PAY_RATE_COLUMNS, PAY_FLAG_COLUMNS, PAY_RATE_LABELS, PAY_UNAVAILABLE_TEXT, PAY_RATES_UNSET_TEXT, PAY_STIPEND_OFF_TEXT,
-    payStipendOn, payStipendDelta, paySettingsHidden, payStipendOffRows,
+    payStipendOn, payStipendDelta, paySettingsHidden, payStipendKnown, payStipendPending, payStipendOffRows,
     payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payViewState, payStateBeforeRead, payStateAfterRead, payRatesView, payErrorText, payLogAuditText,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
@@ -3788,6 +3819,6 @@ if (typeof module !== "undefined" && module.exports) {
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
     OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
-    offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine,
+    offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine, countPendingProposals, tradeProposalKey,
   };
 }

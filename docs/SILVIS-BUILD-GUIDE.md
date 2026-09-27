@@ -270,7 +270,7 @@ Proof: `sql/probes/audit-read-own-probe.sql` (rolled back; 22 cases, BEFORE and 
 |---|---|---|---|
 | `call_pay_settings` | - | one row `main`: the rates (null until entered; no figure in the repo) + the flags + `stipend_off_ids`; read by scheduler/admin, the coordinator (read-only) and linked surgeon-role accounts that are switched on; written by scheduler/admin | `payDb.loadSettings` / `saveSettings` (config.js) - Setup > Pay rates with the stipend switches (scheduler), My pay (surgeon - not rendered when his read answers no row -, scheduler), Totals > Pay (scheduler, coordinator) |
 | `call_pay_logs` | - | one row per call-in; own rows for a switched-on surgeon-role account, every row for scheduler/admin, every row READ-ONLY for the coordinator; guard PY004 the office / PY005 switched off / PY001 future / PY002 not primary / PY003 over 24 h (every caller) | `payDb.loadLogs` / `addLog` / `updateLog` / `deleteLog` - My pay's "Log a call-in", Totals > Pay (reads) |
-| `silvis_pay_enabled(pid)` | - | security definer helper: pid not null and not in `stipend_off_ids`; EXECUTE for authenticated / service_role only | none directly (the policies and the guard call it) |
+| `silvis_pay_enabled(pid)` | - | security definer helper: pid not null and not in `stipend_off_ids` - the real answer only to the scheduler / admin, the coordinator, the person himself or a no-user session (anyone else gets true: it is callable over RPC, 9/27 review); EXECUTE for authenticated / service_role only | none directly (the policies and the guard call it) |
 | anon | (no such tables) | `revoke all` on both - an anon request is refused, never 200 + rows | none (the public page, calendar feeds and e-mails carry no pay) |
 
 Proof: `sql/probes/call-pay-probe.sql` (rolled back; 48 cases in its header - the coordinator's C1-C5 and the switched-off O1-O10 among them; PROBE_SETUP before the apply), `scripts/verify-rls.sh` section 14 (anon count=exact reads + anon POST + the probe + the stipend switch list unchanged by it; 404 / PROBE_SETUP pass until the apply unless `SILVIS_CALL_PAY_APPLIED=1`), the record in `docs/SCHEMA-REVIEW.md` "2026-09-27 - call pay" (status PREPARED until the record step; applied: _to be filled_).
@@ -981,7 +981,7 @@ per person and day, primary / backup / either). A **period** (default 3 months, 
 is the generation window: the days inside the next period **freeze six weeks before that period starts**
 (`offers_close_at` = start − `closeWeeksBeforeStart` weeks, editable per period; 9/27: this line said "before the current
 period ends", true only when periods run back to back), the schedule is due four weeks before
-(`publish_by`), and reminders go out 14 and 3 days before the freeze to anyone with nothing entered for that period who
+(`publish_by`), and reminders go out 42, 14 and 3 days before the freeze (`groupRules.offerPeriods.remindDaysBeforeClose` - the seed's `[42, 14, 3]` since 9/27; the built-in default is 14 and 3) to anyone with nothing entered for that period who
 has not chosen **"go by my rules"**. Status per surgeon per period is derived, never typed: submitted / rules-only /
 not started. A daily cron mode (`daily-reminder` mode `offers`, job `silvis-offers-daily`, Vault secret like the
 others) sends the reminders and the close summary; it never generates or publishes. **Data (part 1, applied live
@@ -1196,7 +1196,7 @@ holder covers every unit day), and `outsideOffers = [{ day, role, id }]`
 "you were placed on 11/5, a day you did not list — trade if needed"); an open slot inside a period carries
 `offered` (who offered it) and the note "no offer and no rule allows it" when nobody did. Helpers own the period
 maths (`periodFor`, `offerStatus` mirroring the SQL, `offerTimeline` from `groupRules.offerPeriods`: close = start −
-6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close, end = the last day of the Nth month
+6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close (the built-in default; the seed carries [42, 14, 3]), end = the last day of the Nth month
 extended to a Sunday like the Generate presets). The ER-panel author's Word document is **retired at go-live** (Faraz 9/22
 evening): the app is the source of truth; the ER-panel author keeps a viewer account, the weekly office digest and the ER Call Panels
 export for a paper copy. Published assignments remain locks. Proof: `test/rules.test.js` and

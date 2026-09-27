@@ -2472,18 +2472,22 @@ const PAY_POLICIES = {
   call_pay_logs_update: "create policy call_pay_logs_update on public.call_pay_logs for update to authenticated\n  using " + PAY_OWN + "\n  with check " + PAY_OWN + ";",
   call_pay_logs_delete: "create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated\n  using " + PAY_OWN + ";",
 };
-const PAY_CASES = ["P1", "P2", "P3", "P4", "N1", "N2", "N3", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "X1", "X2", "T1", "C1", "C2", "C3", "C4", "C5", "V1", "V2", "A1", "A2", "A3", "A4",
-  "O1", "O2", "O3", "O4", "O5", "O6", "O7", "O8", "O9", "O10"];
+const PAY_CASES = ["P1", "P2", "P3", "P4", "N1", "N2", "N3", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "X1", "X2", "T1", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "V1", "V2", "A1", "A2", "A3", "A4",
+  "O1", "O2", "O3", "O4", "O5", "O6", "O7", "O8", "O9", "O10", "O11", "O12"];
 const PAY_AFTER_EQ = {
   P1: "policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write",
   P2: "anon_logs=f anon_settings=f auth_truncate=f", P3: "rows=1", S1: "ok created_by=s3 hours=1.50", S6: "ok", S10: "own=2 others=0", S11: "updated=1 hours=2.25 created_by=s3",
   S12: "updated=0", S13: "deleted=0", S14: "rows=1", S15: "updated=0", S17: "updated=1 created_by=s3", X2: "deleted=1", T1: "own=1 s3=0",
   // 5a: the office coordinator reads every call-in and the settings row (was visible=0 / rows=0), writes nothing
   C1: "sees_all=t", C2: "rows=1", C4: "updated=0", C5: "deleted=0",
+  // 9/27 review: the office never writes call_pay_settings either (the rates, the switches)
+  C6: "updated=0",
   V1: "visible=0", V2: "rows=0", A1: "sees_all=t", A2: "updated=1 updated_by=s1", A3: "ok created_by=s1",
   // 5b: the switch helper's grants, and s3 switched off the stipend
   P4: "anon_exec=f auth_exec=t definer=t",
   O1: "rows=0", O2: "own=0", O4: "updated=0", O5: "deleted=0", O6: "settings=1 own=1", O7: "sees_s3=t", O10: "sees_s3=t",
+  // 9/27 review: silvis_pay_enabled over RPC - an uninformative true for a viewer / colleague, the real answer for the entitled
+  O11: "viewer=t colleague=t", O12: "admin=f coord=f self=f nojwt=f",
 };
 const PAY_STIPEND_OFF_ERR = "ERR PY005 PAY_STIPEND_OFF: s3 is not paid by the call stipend - no call-in is logged for him (switched off in Setup > Pay rates)";
 const PAY_AFTER_ERR = {   // what the probe records AFTER the apply (the CLI escapes the quotes, as the live output does)
@@ -2498,6 +2502,7 @@ const PAY_AFTER_ERR = {   // what the probe records AFTER the apply (the CLI esc
   S16: 'ERR 42501 new row violates row-level security policy for table \\"call_pay_settings\\"',
   X1: "ERR PY002 PAY_NOT_PRIMARY: s3 is not the primary on 2020-03-02 - call pay is logged for the primary only",
   C3: "ERR PY004 PAY_READ_ONLY: the office reads call pay and writes none - a call-in is logged by the surgeon or the scheduler",
+  C7: 'ERR 42501 new row violates row-level security policy for table \\"call_pay_settings\\"',
   O3: PAY_STIPEND_OFF_ERR, O8: PAY_STIPEND_OFF_ERR, O9: PAY_STIPEND_OFF_ERR,
   A4: "ERR PY002 PAY_NOT_PRIMARY: s3 is not the primary on 2020-03-03 - call pay is logged for the primary only",
 };
@@ -2537,7 +2542,13 @@ eq(payStmts.filter((st) => /^create or replace function/.test(st)).map((st) => s
   const col = (payMig.match(/^  stipend_off_ids +[^\n]*$/m) || [""])[0];
   ok(col === "  stipend_off_ids                 jsonb not null default '[]'::jsonb check (case when jsonb_typeof(stipend_off_ids) = 'array' then not jsonb_path_exists(stipend_off_ids, 'strict $[*] ? (@.type() != \"string\" || @ == \"\")') else false end),", "call_pay_settings.stipend_off_ids must be `jsonb not null default '[]'` with the array-of-non-empty-strings check: " + col);
   const helper = (payMig.match(/create or replace function public\.silvis_pay_enabled\(pid text\)[\s\S]*?\n\$\$;/) || [""])[0];
-  ok(helper === "create or replace function public.silvis_pay_enabled(pid text) returns boolean\nlanguage sql stable security definer set search_path = public, pg_temp as $$\n  select pid is not null and not exists (select 1 from public.call_pay_settings s where s.stipend_off_ids ? pid);\n$$;", "silvis_pay_enabled(pid) must read exactly as approved (security definer, stable, search_path public, pg_temp; null -> false):\n" + helper);
+  // 9/27 review fix (deliberate pin change, same intent + one gate): the helper answers truly only to a caller entitled to
+  // know (no signed-in user - service_role / SQL editor -, the scheduler, the coordinator, the person himself); any other
+  // signed-in caller gets an uninformative true - it is callable over /rest/v1/rpc and "who is switched off" is pay status
+  ok(helper === "create or replace function public.silvis_pay_enabled(pid text) returns boolean\nlanguage sql stable security definer set search_path = public, pg_temp as $$\n  select pid is not null and (\n    not coalesce(auth.uid() is null or public.silvis_is_sched() or public.silvis_is_coord() or pid = public.silvis_person_id(), false)\n    or not exists (select 1 from public.call_pay_settings s where s.stipend_off_ids ? pid));\n$$;", "silvis_pay_enabled(pid) must read exactly as approved (security definer, stable, search_path public, pg_temp; null -> false; the real answer only to an entitled caller, else true):\n" + helper);
+  ok(/answers truly only to a caller entitled to know/.test(payHdr), "the header says who gets the real answer");
+  const addCol = payStmts.filter((st) => /^alter table public\.call_pay_settings add column if not exists stipend_off_ids /.test(st));
+  ok(addCol.length === 1 && addCol[0] === "alter table public.call_pay_settings add column if not exists stipend_off_ids " + col.trim().replace(/^stipend_off_ids +/, "").replace(/,$/, "") + ";" && payMig.indexOf(addCol[0]) < payMig.indexOf(helper), "a re-run over a pre-5b call_pay_settings adds stipend_off_ids with the same type / default / check, before the helper reads it");
   ok(helper && payMig.indexOf(helper) > payMig.indexOf("create table if not exists public.call_pay_settings") && payMig.indexOf(helper) < payMig.indexOf("create or replace function public.call_pay_logs_guard"), "the helper is created after call_pay_settings (a SQL body is checked at create) and before the guard");
   ["revoke execute on function public.silvis_pay_enabled(text) from public;", "revoke execute on function public.silvis_pay_enabled(text) from anon;", "grant execute on function public.silvis_pay_enabled(text) to authenticated;", "grant execute on function public.silvis_pay_enabled(text) to service_role;"].forEach((g) => ok(payMig.indexOf(g) > 0 && schema.indexOf(g) > 0, "the helper's grants (as offer_status): " + g));
   ok(/drop function if exists public\.silvis_pay_enabled\(text\);/.test(payHdr), "the rollback drops the helper too");

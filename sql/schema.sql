@@ -1187,7 +1187,10 @@ create table if not exists public.office_notification_state (
 -- stipend_off_ids (item 5b): the roster ids NOT paid by the call stipend (Setup > Pay rates' per-surgeon switch, default ON =
 -- not listed; the list starts empty and is data the scheduler sets). silvis_pay_enabled(pid) (security definer, stable,
 -- search_path public, pg_temp; EXECUTE for authenticated / service_role only) reads that list as its owner - the settings
--- read policy calls it without recursing on itself, and the guard sees the list whoever the caller is.
+-- read policy calls it without recursing on itself, and the guard sees the list whoever the caller is. It answers truly only
+-- to the scheduler / admin, the coordinator, the person pid himself or a session with no signed-in user (auth.uid() null);
+-- any other signed-in caller (viewer, follower, a surgeon asking about a colleague) gets an uninformative true - it is
+-- callable over /rest/v1/rpc, and who is switched off is pay status (9/27 review). Every policy passes the caller's own id.
 -- call_pay_logs_guard is security invoker (schedule_days is readable by every role) and applies to every caller:
 --   PY004 PAY_READ_ONLY    the caller is the office coordinator (it reads call pay, writes none)
 --   PY005 PAY_STIPEND_OFF  the person is switched off (not paid by the call stipend) - no new or edited call-in, for anyone
@@ -1215,6 +1218,9 @@ create table if not exists public.call_pay_settings (
   updated_at                      timestamptz not null default now()
 );
 
+-- re-run over an older (pre-5b) call_pay_settings, e.g. a scratch database: create table if not exists skipped it - add the column
+alter table public.call_pay_settings add column if not exists stipend_off_ids jsonb not null default '[]'::jsonb check (case when jsonb_typeof(stipend_off_ids) = 'array' then not jsonb_path_exists(stipend_off_ids, 'strict $[*] ? (@.type() != "string" || @ == "")') else false end);
+
 create table if not exists public.call_pay_logs (
   id          uuid primary key default gen_random_uuid(),
   day         date not null,
@@ -1229,7 +1235,9 @@ create index if not exists call_pay_logs_person_day_idx on public.call_pay_logs(
 
 create or replace function public.silvis_pay_enabled(pid text) returns boolean
 language sql stable security definer set search_path = public, pg_temp as $$
-  select pid is not null and not exists (select 1 from public.call_pay_settings s where s.stipend_off_ids ? pid);
+  select pid is not null and (
+    not coalesce(auth.uid() is null or public.silvis_is_sched() or public.silvis_is_coord() or pid = public.silvis_person_id(), false)
+    or not exists (select 1 from public.call_pay_settings s where s.stipend_off_ids ? pid));
 $$;
 revoke execute on function public.silvis_pay_enabled(text) from public;
 revoke execute on function public.silvis_pay_enabled(text) from anon;

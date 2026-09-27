@@ -61,6 +61,8 @@
 --   C3  coordinator logs a call-in for s3      ERR PY004 PAY_READ_ONLY: ...   (the guard refuses the office before RLS)
 --   C4  coordinator edits a probe row          updated=0
 --   C5  coordinator deletes a probe row        deleted=0
+--   C6  coordinator updates the settings       updated=0   (the office never changes a rate or a switch)
+--   C7  coordinator inserts a settings row     ERR 42501 new row violates row-level security policy for table "call_pay_settings"
 --   V1  viewer reads the probe rows            visible=0
 --   V2  viewer reads the settings              rows=0
 --   A1  admin s1 reads every probe row         sees_all=t
@@ -81,6 +83,11 @@
 --                                              ERR PY005 PAY_STIPEND_OFF: ...   (for everyone)
 --   O9  the admin edits s3's existing rows     ERR PY005 PAY_STIPEND_OFF: ...
 --   O10 the coordinator still reads s3's rows  sees_s3=t
+--   O11 silvis_pay_enabled('s3') asked over RPC by the viewer (a follower) and by surgeon s2 (a colleague) - callers not
+--       entitled to know who is switched off get an uninformative true
+--                                              viewer=t colleague=t
+--   O12 the same call by the admin, the coordinator, s3 himself and a session with no signed-in user (postgres / service_role)
+--       - the real answer                      admin=f coord=f self=f nojwt=f
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -327,6 +334,15 @@ do $$ declare u text; a int; b int; n int; begin
     get diagnostics n = row_count;
     insert into probe_results values ('C5', 'deleted=' || n);
   exception when others then insert into probe_results values ('C5', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    update public.call_pay_settings set activation_unit = activation_unit where id = 'main';
+    get diagnostics n = row_count;
+    insert into probe_results values ('C6', 'updated=' || n);
+  exception when others then insert into probe_results values ('C6', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    insert into public.call_pay_settings (id) values ('main');
+    insert into probe_results values ('C7', 'inserted (NO refusal)');
+  exception when others then insert into probe_results values ('C7', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 
@@ -438,6 +454,40 @@ do $$ declare us text; us2 text; ua text; uc text; n int; a int; b int; st int; 
     insert into probe_results values ('O10', 'sees_s3=' || case when a = b and a > 0 then 't' else 'f coord=' || a || ' postgres=' || b end);
   exception when others then insert into probe_results values ('O10', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
+end $$;
+
+-- O11-O12: s3 is still switched off (same transaction). silvis_pay_enabled is callable as /rest/v1/rpc/silvis_pay_enabled by
+-- every signed-in account; only a caller entitled to know (the scheduler / admin, the coordinator, the person himself, a
+-- session with no signed-in user) gets the real answer - a viewer / follower or a colleague gets true, whoever is switched off.
+do $$ declare uv text; us2 text; ua text; uc text; us text; a boolean; b boolean; c boolean; d boolean; e boolean; f boolean; begin
+  select v into uv from probe_ctx where k = 'viewer';
+  select v into us2 from probe_ctx where k = 'surgeon2';
+  select v into ua from probe_ctx where k = 'admin';
+  select v into uc from probe_ctx where k = 'coord';
+  select v into us from probe_ctx where k = 'surgeon';
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', json_build_object('sub', uv, 'role', 'authenticated')::text, true);
+    a := public.silvis_pay_enabled('s3');
+    perform set_config('request.jwt.claims', json_build_object('sub', us2, 'role', 'authenticated')::text, true);
+    b := public.silvis_pay_enabled('s3');
+    execute 'reset role';
+    insert into probe_results values ('O11', 'viewer=' || coalesce(case when a then 't' else 'f' end, 'null') || ' colleague=' || coalesce(case when b then 't' else 'f' end, 'null'));
+  exception when others then insert into probe_results values ('O11', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', json_build_object('sub', ua, 'role', 'authenticated')::text, true);
+    c := public.silvis_pay_enabled('s3');
+    perform set_config('request.jwt.claims', json_build_object('sub', uc, 'role', 'authenticated')::text, true);
+    d := public.silvis_pay_enabled('s3');
+    perform set_config('request.jwt.claims', json_build_object('sub', us, 'role', 'authenticated')::text, true);
+    e := public.silvis_pay_enabled('s3');
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '{}', true);   -- no sub -> auth.uid() is null (postgres, service_role)
+    f := public.silvis_pay_enabled('s3');
+    insert into probe_results values ('O12', 'admin=' || coalesce(case when c then 't' else 'f' end, 'null') || ' coord=' || coalesce(case when d then 't' else 'f' end, 'null')
+      || ' self=' || coalesce(case when e then 't' else 'f' end, 'null') || ' nojwt=' || coalesce(case when f then 't' else 'f' end, 'null'));
+  exception when others then insert into probe_results values ('O12', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
 end $$;
 
 -- ---------- report + ROLL BACK EVERYTHING (this raise aborts the batch's transaction)

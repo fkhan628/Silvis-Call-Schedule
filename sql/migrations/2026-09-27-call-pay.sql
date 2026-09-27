@@ -23,7 +23,13 @@
 -- silvis_pay_enabled(pid) (security definer, stable, search_path public, pg_temp; EXECUTE revoked from public / anon,
 -- granted to authenticated / service_role): true when pid is not null and not listed in call_pay_settings.stipend_off_ids.
 -- It reads the settings row as its owner, so the settings read policy that calls it does not recurse on itself, and the
--- guard below sees the list even for a caller who may not read the row.
+-- guard below sees the list even for a caller who may not read the row. It answers truly only to a caller entitled to know:
+-- the scheduler / admin, the office coordinator, the person pid himself, or a session with no signed-in user (auth.uid()
+-- null: service_role, the SQL editor / linked CLI). Any other signed-in caller - a viewer, a follower, a surgeon asking
+-- about a colleague - gets an uninformative true (9/27 review: the function is callable as /rest/v1/rpc/silvis_pay_enabled,
+-- and "who is switched off" is pay status those roles never see). That true opens nothing: every policy calls it with the
+-- caller's own roster id, and in the guard the scheduler and the owner get the real answer (PY005), while any other writer's
+-- row is refused by the write policies anyway (42501).
 --
 -- Who reads / writes (RLS; `revoke all ... from anon` on both tables on top, defence in depth for pay data - an anon
 -- request is then refused outright (401 / 403) rather than answered 200 + []):
@@ -63,6 +69,8 @@
 -- PROBE_SETUP: call_pay_logs is absent); this file; probe AFTER; `SILVIS_CALL_PAY_APPLIED=1 bash scripts/verify-rls.sh`
 -- (sections 1-14 green); Faraz enters the rates and the stipend switches in Setup > Pay rates; the record step
 -- (docs/SCHEMA-REVIEW.md).
+-- Re-running: every statement is idempotent from no call pay tables or from this version of them; over an earlier draft's
+-- call_pay_settings (no stipend_off_ids - a scratch or preview database) the `alter table ... add column if not exists` adds it.
 -- Rolling back = `drop table if exists public.call_pay_logs; drop table if exists public.call_pay_settings;
 -- drop function if exists public.silvis_pay_enabled(text); drop function if exists public.call_pay_logs_guard(); drop function if exists public.call_pay_settings_touch();`
 -- (the tables' triggers and policies go with them, the helper after them; nothing else refers to either table).
@@ -84,6 +92,9 @@ create table if not exists public.call_pay_settings (
   updated_at                      timestamptz not null default now()
 );
 
+-- re-run over an older (pre-5b) call_pay_settings, e.g. a scratch database: create table if not exists skipped it - add the column
+alter table public.call_pay_settings add column if not exists stipend_off_ids jsonb not null default '[]'::jsonb check (case when jsonb_typeof(stipend_off_ids) = 'array' then not jsonb_path_exists(stipend_off_ids, 'strict $[*] ? (@.type() != "string" || @ == "")') else false end);
+
 create table if not exists public.call_pay_logs (
   id          uuid primary key default gen_random_uuid(),
   day         date not null,
@@ -98,7 +109,9 @@ create index if not exists call_pay_logs_person_day_idx on public.call_pay_logs(
 
 create or replace function public.silvis_pay_enabled(pid text) returns boolean
 language sql stable security definer set search_path = public, pg_temp as $$
-  select pid is not null and not exists (select 1 from public.call_pay_settings s where s.stipend_off_ids ? pid);
+  select pid is not null and (
+    not coalesce(auth.uid() is null or public.silvis_is_sched() or public.silvis_is_coord() or pid = public.silvis_person_id(), false)
+    or not exists (select 1 from public.call_pay_settings s where s.stipend_off_ids ? pid));
 $$;
 revoke execute on function public.silvis_pay_enabled(text) from public;
 revoke execute on function public.silvis_pay_enabled(text) from anon;

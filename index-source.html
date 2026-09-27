@@ -1143,8 +1143,10 @@ function CallSchedule() {
   };
   // the office coordinator never writes pay (read-only; the database refuses it too - PY004 / RLS)
   const payMayWrite = (personId) => payVisible && !isCoordinator && !!personId && (isScheduler || personId === mySurgeon);
-  // a linked surgeon whose settings read answered no row is switched off the call stipend (RLS): no My pay card for him
-  const payMyCardHidden = !isScheduler && paySettingsHidden(payState, paySettingsRow);
+  // a linked surgeon whose settings read answered no row is switched off the call stipend (RLS): no My pay card for him - and
+  // (9/27 review fix) none before the first settings read answers (helpers.payStipendPending), so a switched-off surgeon never
+  // sees a My pay header appear and vanish; a failed read shows the card with its note, never figures (PayCard)
+  const payMyCardHidden = !isScheduler && (paySettingsHidden(payState, paySettingsRow) || payStipendPending(payState));
   const addPayLog = async (input) => {
     const personId = input && input.personId;
     if (!payMayWrite(personId)) return false;
@@ -4014,13 +4016,15 @@ function CallSchedule() {
     try { localStorage.setItem("silvis-notif-seen", now); } catch(e) { console.warn("Couldn't persist notifications-seen marker:", e); }
   };
   // "Waiting on you": the pending trades / gives addressed to this surgeon (helpers.tradesWaitingOn) - the block at the top
-  // of Time off & Trades and a surgeon's tab badge (the scheduler's badge keeps counting every pending trade). ONE row per
-  // proposal (Faraz 9/27): a weekend-block / holiday-unit proposal's rows (tradeUnitTag - the same group tradeGroupOf
-  // hands Accept / Decline) collapse to one row and one badge count. A proposal with a day or return day already past is
-  // left out (a member's Accept would be refused TRADE_PAST); the Pending card keeps it. (Computed below tradeUnitTag,
-  // which it reads during render - a const above it would be in its temporal dead zone.)
+  // of Time off & Trades and a surgeon's tab badge. ONE row per proposal (Faraz 9/27): a weekend-block / holiday-unit
+  // proposal's rows (tradeUnitTag - the same group tradeGroupOf hands Accept / Decline) collapse to one row and one badge
+  // count. A proposal with a day or return day already past is left out (a member's Accept would be refused TRADE_PAST);
+  // the Pending card keeps it. The scheduler's badge counts every pending proposal group-wide, one per proposal as well
+  // (helpers.countPendingProposals - Faraz 9/27 "one badge count"). (Both computed below tradeUnitTag, which they read
+  // during render - a const above it would be in its temporal dead zone.)
   const waitingToday = todayCentral();
   const tradesWaitingOnMe = useMemo(() => tradesWaitingOn(tradeRequests, mySurgeon, waitingToday, tradeUnitTag), [tradeRequests, mySurgeon, waitingToday]);
+  const pendingProposalCount = useMemo(() => countPendingProposals(myTradeRequests, tradeUnitTag), [myTradeRequests]);
   // Prompt 19 S4: the Activity log names a give - the server's trade.apply row carries no kind, so the trade ids that
   // belong to a give come from the loaded trade rows (the whole-proposal predicate) and from the give's own audit rows
   // (kind 'give': trade_id / trade_ids), then helpers.auditEntryText words each line.
@@ -5565,7 +5569,7 @@ function CallSchedule() {
     return (
       <div key={r.id} data-testid={waiting ? "trade-waiting-row" : "trade-row"} data-trade-id={r.id} data-status={r.status} data-kind={giveGroup ? "give" : "trade"} data-unit={tag ? tag.kind + ":" + tag.start : undefined} data-group={groupN} data-days={unitGroup ? unitGroup.map(g => g.day).join(",") : undefined} style={rowBox}>
         <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          {unitGroup ? <span data-testid="trade-waiting-unit-line" style={{fontSize:12.5,color:dkText}}>{tradeWaitingUnitLine(unitGroup, tag, mySurgeon)}</span> :
+          {unitGroup ? <span data-testid="trade-waiting-unit-line" style={{fontSize:12.5,color:dkText}}>{tradeWaitingUnitLine(unitGroup, tag, mySurgeon, giveGroup)}</span> :
           <span style={{fontSize:12.5,color:dkText}}>{giveGroup ? <span data-testid="trade-give-line">{tradeGiveLine(named, tag, mySurgeon)}</span> : tradeLegsText(named, tenseFor(r.status))}{tag && <span data-testid="trade-unit-tag" title="A holiday unit or Fri-Sun block moves as one: these rows are accepted, declined and applied together" style={{marginLeft:8,fontSize:10,fontWeight:700,color:"#7a5a20",background:"#fbf1d8",borderRadius:4,padding:"1px 6px",whiteSpace:"nowrap"}}>{tag.text} - day {tag.index} of {tag.n}</span>}</span>}
           <span data-testid="trade-status" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",color:statusColor(r.status)}}>{tradeRowStatus(r.status, giveGroup)}</span>
         </div>
@@ -5886,13 +5890,14 @@ function CallSchedule() {
             let tabs = allTabs;
             if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
             if (!mySurgeon && !isFollowing) tabs = tabs.filter(([k]) => k !== "myschedule");
-            // The scheduler's badge counts every pending trade (he may answer any); a surgeon's only the ones waiting on him.
-            const pendingTrades = isScheduler ? myTradeRequests.filter(r=>r.status==="pending").length : tradesWaitingOnMe.length;
+            // The scheduler's badge counts every pending proposal (he may answer any); a surgeon's only the ones waiting on him -
+            // both ONE per proposal (Faraz 9/27: a weekend or holiday unit is one badge count).
+            const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
             return tabs.map(([k,l]) =>
               <button key={k} data-tab={k} style={{...css.tab(view===k, T.accent),position:"relative"}} onClick={()=>setView(k)}>
                 {l}
                 {k==="timeoff" && pendingTrades > 0 && (
-                  <span data-testid="timeoff-badge" title={isScheduler ? pendingTrades + " pending trade(s) or give(s)" : pendingTrades + " trade(s) or give(s) waiting on your answer"} style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
+                  <span data-testid="timeoff-badge" title={isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer"} style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
                 )}
                 {k==="openshifts" && boardSlots.length > 0 && (
                   <span data-testid="openshifts-badge" title={boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "")} style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{boardSlots.length}</span>
@@ -8970,6 +8975,15 @@ function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settin
     </div>
   );
   if (unavailable) return <div style={css.card} data-testid="pay-card" data-state="unavailable">{header}{payStateNote("unavailable", T)}</div>;
+  // 9/27 review fix: no figures and no form until a settings read has succeeded (helpers.payStipendKnown) - before it the
+  // "Paid by the call stipend" switch is unknown and a switched-off surgeon would read as paid. The call-ins' own states
+  // first (unchanged), then the rates' note (failed / loading) with Refresh.
+  if (!payStipendKnown(state)) {
+    const vs0 = payViewState(state, year);
+    if (vs0 === "failed" || vs0 === "skipped" || vs0 === "loading") return <div style={css.card} data-testid="pay-card" data-state={vs0}>{header}{payStateNote(vs0, T, year)}</div>;
+    const rv0 = payRatesView(state, settingsRow);
+    return <div style={css.card} data-testid="pay-card" data-state={"settings-" + (rv0 === "failed" ? "failed" : "loading")}>{header}{payRatesNote(rv0 === "failed" ? "failed" : "loading", T, true)}</div>;
+  }
   // item 5b: a surgeon switched off the call stipend - one line instead of figures (the scheduler's picker; his own card is
   // not rendered at all - payMyCardHidden in CallSchedule)
   if (pm.stipendOff) return <div style={css.card} data-testid="pay-card" data-state="stipend-off"><div data-testid="pay-stipend-off" style={{ fontSize: 13, color: T.muted }}><strong style={{ color: T.text }}>{title}</strong> - {PAY_STIPEND_OFF_TEXT}</div></div>;
@@ -9133,11 +9147,19 @@ function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs
   const refreshBtn = onRefresh ? <button data-testid="pay-totals-refresh" onClick={onRefresh} style={{ ...css.mini(false), marginLeft: 8 }}>Refresh</button> : null;
   if (vs === "unavailable") return <div data-testid="pay-totals" data-state="unavailable">{payStateNote("unavailable", T)}</div>;
   if (vs === "failed" || vs === "skipped" || vs === "loading") return <div data-testid="pay-totals" data-state={vs} style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>{payStateNote(vs, T, year)}{refreshBtn}</div>;
+  // 9/27 review fix: no table and no CSV until a settings read has succeeded (helpers.payStipendKnown) - before it nobody reads
+  // as switched off, so a surgeon off the call stipend would be back in the table and the office's CSV. The rates' note
+  // (failed / loading) and Refresh only.
+  if (!payStipendKnown(state)) {
+    const rv0 = payRatesView(state, settingsRow) === "failed" ? "failed" : "loading";
+    return <div data-testid="pay-totals" data-state={"settings-" + rv0} style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>{payRatesNote(rv0, T, false)}{refreshBtn}</div>;
+  }
   const settings = paySettingsFromRow(settingsRow);
   const ratesView = payRatesView(state, settingsRow);
   const rows = payTotalsRows(roster || [], year, month0, { schedule: schedule || {}, holidays, logs: logs || [], settings, today });
   const offRows = payStipendOffRows(roster || [], settings);   // switched off the call stipend: left out of the table and the CSV
   const exportPay = () => {
+    if (!payStipendKnown(state)) return;   // never a CSV before the stipend switches are known (the button is disabled too)
     try {
       const c = payCsv(rows, year, month0);
       const real = downloadTextFile(c.text, c.name, "text/csv");
@@ -9151,7 +9173,7 @@ function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs
     <div data-testid="pay-totals" data-state={vs}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
         <span style={{ fontSize: 12, color: T.muted }}>Primary call pay, {TOTALS_MON[month0]} {year} and year to date (through {TOTALS_MON[month0]}). Earned = days up to today; projected = later days (the stipend only). {office ? "Read-only - for preparing the stipends." : "Visible to the scheduler and, read-only, the office."}</span>
-        <button data-testid="pay-csv" onClick={exportPay} disabled={state.loadedYear !== Number(year)} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto" }}>Export pay CSV</button>
+        <button data-testid="pay-csv" onClick={exportPay} disabled={state.loadedYear !== Number(year) || !payStipendKnown(state)} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto" }}>Export pay CSV</button>
       </div>
       {vs === "stale" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>Couldn't refresh the {year} call-ins - showing the last ones loaded.{refreshBtn}</div>}
       {payRatesNote(ratesView, T, false)}

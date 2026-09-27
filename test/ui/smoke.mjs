@@ -2767,6 +2767,27 @@ try {
           const payModeBtn = R.totals ? !!(await rp.$("[data-testid=totals-mode-pay]")) : false;
           if (payModeBtn && R.kind !== "coordinator") fail(`${T}: Totals shows the scheduler's Pay mode button`);
           if (R.kind === "coordinator") {
+            // 9/27 review fix: the settings read FAILS (500) while the call-ins read answers 200 - the stipend switches are
+            // unknown, so Totals > Pay shows the rates' failed note and Refresh only: no table, no CSV (never a switched-off
+            // surgeon back in the office's file). This page's settings never loaded before (pre-migration 'unavailable').
+            try {
+              payMock = (url) => url.pathname.endsWith("/call_pay_settings") ? { status: 500, body: { message: "harness: settings read failed" } } : { status: 200, body: [] };
+              await rp.click('button[data-tab="calendar"]');
+              await rp.click('button[data-tab="totals"]');
+              await rp.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
+              const modeBtnF = await rp.$("[data-testid=totals-mode-pay]");
+              if (!modeBtnF) fail(`${T}: Totals has no Pay mode button (settings-failed step)`);
+              else {
+                await modeBtnF.click();
+                await rp.waitForSelector("[data-testid=pay-totals][data-state=settings-failed]", { timeout: 8000 });
+                const sf = await rp.evaluate(() => ({ table: !!document.querySelector("[data-testid=pay-totals-table]"), csv: !!document.querySelector("[data-testid=pay-csv]"),
+                  note: !!document.querySelector("[data-testid=pay-totals] [data-testid=pay-rates-failed]"), refresh: !!document.querySelector("[data-testid=pay-totals-refresh]") }));
+                if (sf.table || sf.csv || !sf.note || !sf.refresh) fail(`${T}: a failed settings read beside a good call-ins read must show the rates' failed note + Refresh with no table and no CSV, got ` + JSON.stringify(sf));
+                else ok(`${T}: settings read 500 + call-ins 200 -> Totals > Pay 'settings-failed': the note and Refresh, no table, no CSV`);
+                await rp.click("[data-testid=totals-mode-month]");
+              }
+            } catch (e) { fail(`${T}: Totals > Pay with the settings read failing: ` + errLine(e)); }
+            finally { payMock = null; }
             // the tables "exist" for this step (the settings row with no rate, no call-in): Totals > Pay reads 'ok' and offers
             // its CSV; entering Totals again re-reads pay (loadPay runs on the view change)
             try {
@@ -6118,6 +6139,21 @@ try {
     const tagText = unitRowCount ? await unitRows.first().locator("[data-testid=trade-unit-tag]").textContent().catch(() => "") : "";
     if (unitRowCount !== 4 || groupAttr !== "4" || !/Accept \(4 days\)/.test(acceptLabel) || !/Thanksgiving unit .* day \d of 4/.test(tagText)) fail(`Trades unit: expected 4 pending rows tagged holiday:2026-11-26 with data-group=4, a unit tag and 'Accept (4 days)', got ${unitRowCount} rows, group ${groupAttr}, tag '${tagText}', button '${acceptLabel}'`);
     else ok(`Trades unit: 4 pending rows carry the unit tag ('${tagText.trim()}'), data-group=4 and 'Accept (4 days)'`);
+    // Ship 9/27 review fix (Faraz 9/27 "one badge count"): the SCHEDULER's Time off badge counts every pending proposal
+    // group-wide, ONE per proposal - the 4-day unit above is one count, not four. In-page: each pending trade-row in the
+    // Pending card weighs 1 / data-group (a unit's rows share data-group = the rows that move together), so the sum is
+    // the number of proposals.
+    try {
+      const sb = await page.evaluate(() => {
+        const rows = Array.from(document.querySelectorAll("[data-testid=trades-pending] [data-testid=trade-row][data-status=pending]"));
+        const proposals = Math.round(rows.reduce((a, r) => a + 1 / Math.max(1, Number(r.getAttribute("data-group")) || 1), 0));
+        const badge = document.querySelector("button[data-tab=timeoff] [data-testid=timeoff-badge]");
+        return { rows: rows.length, proposals, badge: badge ? badge.textContent.trim() : null, title: badge ? badge.getAttribute("title") : null };
+      });
+      if (sb.badge !== String(sb.proposals)) fail(`Scheduler badge (one per proposal): the Time off badge reads ${JSON.stringify(sb.badge)} but the Pending card holds ${sb.proposals} pending proposal(s) over ${sb.rows} row(s) - a unit is one badge count`);
+      else if (sb.rows - sb.proposals < 3) fail(`Scheduler badge (one per proposal): expected the 4-day unit to collapse (rows ${sb.rows}, proposals ${sb.proposals})`);
+      else ok(`Scheduler badge (one per proposal): the Time off badge reads ${sb.badge} for ${sb.rows} pending row(s) - the 4-day unit counts once ('${sb.title}')`);
+    } catch (e) { fail("Scheduler badge (one per proposal): " + errLine(e)); }
     const uIds = (await unitRows.evaluateAll(els => els.map(e => e.getAttribute("data-trade-id")))).sort(); // the ids the mock assigned (the POST bodies carry none)
     await page.screenshot({ path: path.join(OUT, "trades.png"), fullPage: true });
     ok("screenshot test/ui/out/trades.png");
