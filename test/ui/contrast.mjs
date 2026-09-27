@@ -75,7 +75,7 @@ export const contrastTable = (mod) => {
     // Prompt 16 B2: the success green (Saving / "No open shifts" / a sent test notification) is a token too.
     if (T.success) { add(theme, "success green on card", T.success, T.surface, "text"); add(theme, "success green on page", T.success, T.bg, "text"); }
     // 9/27: the offer deadline notice (My schedule / Calendar) - running text on its own amber box, both themes.
-    if (T.warnText) add(theme, "offer deadline notice text on its box", T.warnText, T.warnBg, "text");
+    if (T.noticeText) add(theme, "offer deadline notice text on its box", T.noticeText, T.noticeBg, "text");
     add(theme, "header title on the navy bar", T.onNavy, T.navy, "text");
     add(theme, "header subline on the navy bar", T.navyMuted, T.navy, "text");
     add(theme, "nav tab label (inactive) on the navy bar", T.navTab, T.navy, "text");

@@ -1327,7 +1327,7 @@ holes, review 9/27), and `next` ("create the next period (from M/D) - choices fo
 only), the Calendar shows the urgent rows only, and the nav's *Paint offers* carries `offer-deadline-badge` (the count, in
 the accent tokens); each row's *Choose shifts* opens the painter for him aimed at that period (`setOfferSheet({ personId:
 mySurgeon, periodId })` — the `preferPeriodId` path Enter-for uses, so the painter opens on the period's first month).
-Colours are THEME tokens `warnText` / `warnBg` / `warnBorder` (both themes; rows in `test/ui/contrast.mjs`); on a phone a
+Colours are THEME tokens `noticeText` / `noticeBg` / `noticeBorder` (both themes; rows in `test/ui/contrast.mjs`); on a phone a
 class stacks the sentence over the button. Setup → Periods renders the lines as `prd-lead-warn` (`data-kind`) in
 `css.warnBox`, and the New-period form's `prd-form-warn` adds the short-lead case with a STRICT `>` (the 3-month preset
 lands exactly on start − 42). Proof: `test/offers.test.js` section E, `test/data-layer.test.js` section G (9/27 pins), the

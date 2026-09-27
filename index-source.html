@@ -5189,7 +5189,7 @@ function CallSchedule() {
     const closeW = wk(opR.closeWeeksBeforeStart, OP_PERIOD_DEFAULTS.closeWeeksBeforeStart), pubW = wk(opR.publishWeeksBeforeStart, OP_PERIOD_DEFAULTS.publishWeeksBeforeStart);
     const weeks = pubW === closeW ? String(closeW) : Math.min(pubW, closeW) + "-" + Math.max(pubW, closeW);
     return (
-      <div data-testid="offer-deadline-notice" data-where={where} role="status" style={{fontSize:12.5,lineHeight:1.5,color:T.warnText,background:T.warnBg,border:`1px solid ${T.warnBorder}`,borderRadius:8,padding:"6px 10px",marginBottom:10}}>
+      <div data-testid="offer-deadline-notice" data-where={where} role="status" style={{fontSize:12.5,lineHeight:1.5,color:T.noticeText,background:T.noticeBg,border:`1px solid ${T.noticeBorder}`,borderRadius:8,padding:"6px 10px",marginBottom:10}}>
         {list.map(n => (
           <div key={n.periodId || n.startDay} className="offer-notice-row" data-period-id={n.periodId || ""} data-days={n.daysToClose} data-urgent={n.urgent ? "1" : "0"} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",padding:"3px 0"}}>
             <span className="offer-notice-text" style={{flex:"1 1 240px",minWidth:0}}>Choose your shifts for <strong>{n.label || fmtMD(n.startDay)}</strong> before {dowShort(n.closeAt)} {fmtMD(n.closeAt)} (they freeze {n.daysToClose === 1 ? "tomorrow" : "in " + n.daysToClose + " days"}) - the schedule is built {weeks} weeks before {fmtMD(n.startDay)}.</span>

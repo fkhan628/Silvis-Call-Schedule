@@ -4467,7 +4467,7 @@ try {
         await np.waitForSelector("[data-testid=offer-deadline-notice]", { timeout: 5000 });
         const dk = await np.$eval("[data-testid=offer-deadline-notice] .offer-notice-text", el => ({ c: getComputedStyle(el).color, bg: getComputedStyle(el.closest("[data-testid=offer-deadline-notice]")).backgroundColor }));
         if (dk.c !== "rgb(242, 208, 138)" || dk.bg !== "rgb(46, 38, 18)") fail(`Offer deadline notice (dark): expected the dark tokens (text #F2D08A on #2E2612), got ${dk.c} on ${dk.bg}`);
-        else ok(`Offer deadline notice (dark): text ${dk.c} on ${dk.bg} (THEME.dark warnText / warnBg)`);
+        else ok(`Offer deadline notice (dark): text ${dk.c} on ${dk.bg} (THEME.dark noticeText / noticeBg)`);
         await np.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
         await np.screenshot({ path: path.join(OUT, "offer-notice-390-dark.png"), fullPage: false });
         await np.click('button[data-tab="settings"]');

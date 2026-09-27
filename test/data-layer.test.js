@@ -3389,14 +3389,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const box = src.slice(i, j);
       assert.ok(box.includes('data-testid="offer-deadline-notice"') && box.includes('className="offer-notice-row" data-period-id={n.periodId || ""}') && box.includes('data-testid="offer-deadline-choose"'), "one notice box, one row per period (data-period-id), a Choose shifts button per row");
       assert.ok(box.includes("onClick={()=>setOfferSheet({ personId: mySurgeon, periodId: n.periodId || null })}") && box.includes(">Choose shifts</button>"), "Choose shifts opens the offer painter for mySurgeon on that period");
-      assert.ok(box.includes("color:T.warnText,background:T.warnBg,border:`1px solid ${T.warnBorder}`"), "the box paints with the THEME tokens");
+      assert.ok(box.includes("color:T.noticeText,background:T.noticeBg,border:`1px solid ${T.noticeBorder}`"), "the box paints with the THEME tokens");
       assert.strictEqual(/#[0-9a-fA-F]{3,6}\b/.test(box), false, "no literal colour in the notice (T tokens only - the dark sheet repaints light literals only)");
       assert.strictEqual(/fetch\(|rest\/v1|logAudit\(|sendEmailNotif\(|confirm\(/.test(box), false, "the notice writes, sends and asks nothing");
       assert.ok(src.includes('{pid === mySurgeon && offerNoticeBox(offerNotices, "mine")}') && src.includes('{offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}'), "My schedule shows every notice on his own page; the Calendar only the urgent ones");
       assert.strictEqual((src.match(/offerNoticeBox\(/g) || []).length, 2, "exactly two mounts (My schedule, Calendar)");
       const nav = src.slice(src.indexOf('<button data-testid="nav-paint-offers"'), src.indexOf("</button>", src.indexOf('<button data-testid="nav-paint-offers"')));
       assert.ok(nav.includes('position:"relative"') && nav.includes('{offerNotices.length > 0 && (') && nav.includes('data-testid="offer-deadline-badge"') && nav.includes("background:T.accent,color:T.onAccent"), "the nav's Paint offers carries the count badge in the accent tokens");
-      ["warnText", "warnBg", "warnBorder"].forEach(k => assert.ok(/^#[0-9A-F]{6}$/.test(styles.THEME.light[k]) && /^#[0-9A-F]{6}$/.test(styles.THEME.dark[k]), "THEME token " + k + " in both themes"));
+      ["noticeText", "noticeBg", "noticeBorder"].forEach(k => assert.ok(/^#[0-9A-F]{6}$/.test(styles.THEME.light[k]) && /^#[0-9A-F]{6}$/.test(styles.THEME.dark[k]), "THEME token " + k + " in both themes"));
       assert.ok(src.includes(".offer-notice-row .offer-notice-text { flex-basis: 100% !important; }"), "the phone breakpoint stacks the sentence over the button (a class - inline styles cannot do media queries)");
     });
     check("9/27 Periods lead-time lines: prd-lead-warn per period (short lead / publish-by due or passed with open slots) and 'create the next period', from helpers.offerPeriodLeadWarnings over the parent's open-slot counts; css.warnBox; the draft's short-lead warning is STRICT (start - 6 weeks exactly is the rule)", () => {
