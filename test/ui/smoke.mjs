@@ -4443,7 +4443,7 @@ try {
       const card = await np.$eval("[data-testid=mine-offers]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
       const wrong = exp.map((n, i) => { const r = mine[i]; const when = n.days === 1 ? "tomorrow" : `in ${n.days} days`; return !r ? `${n.id}: missing` : (r.id !== n.id || r.days !== String(n.days) || r.urgent !== (n.urgent ? "1" : "0") || !r.text.includes(n.label) || !r.text.includes(when) || !r.text.includes(md(n.close)) || !r.text.includes("before " + md(n.start)) || !/Choose shifts/.test(r.text)) ? `${n.id}: ${JSON.stringify(r)}` : null; }).filter(Boolean);
       if (mine.length !== exp.length || wrong.length) fail(`Offer deadline notice (s2, Mine): expected ${exp.length} row(s) naming the label, the freeze M/D, 'in N days' and the start - got ${mine.length}: ${wrong.join("; ").slice(0, 300)}`);
-      else if (!/My offers \(\d+ upcoming days?\)/.test(card)) fail("Offer deadline notice (s2, Mine): the My offers title no longer reads inside mine-offers: " + card.slice(0, 160));
+      else if (!/My offers \(\d+ upcoming days?\)/i.test(card)) fail("Offer deadline notice (s2, Mine): the My offers title no longer reads inside mine-offers: " + card.slice(0, 160));
       else if (!exp.length) ok(`Offer deadline notice (s2, Mine): no notice - not exercised (today ${todayCentral}: no open period within its notice window for s2; the served period closes ${offerPeriod ? offerPeriod.offers_close_at : "-"})`);
       else ok(`Offer deadline notice (s2, Mine): ${mine.length} row(s): '${mine[0].text.slice(0, 140)}'`);
       if (exp.length) {
