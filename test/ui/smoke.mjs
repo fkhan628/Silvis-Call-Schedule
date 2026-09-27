@@ -1360,10 +1360,14 @@ try {
       await page.locator("[data-testid=today-banner] button", { hasText: "Share today" }).click();
       const shared = await page.waitForFunction(() => window.__sharedText, null, { timeout: 5000 }).then(h => h.jsonValue()).catch(() => null);
       await page.evaluate(() => { try { delete navigator.share; } catch (e) {} });
-      if (!shared) fail("Share today: navigator.share (stubbed) was never called with a text");
+      // the 30 s tick may re-render between the banner read and the click: re-read the page's clock and the banner's
+      // text AFTER the click and compare against those (skip if the clock crossed 00:00 / 07:00 in between)
+      const after = await page.evaluate(() => ({ clk: shiftClockCentral(new Date()), msg: ((document.querySelector("[data-testid=today-banner] [data-testid=today-banner-msg]") || {}).textContent) || "" }));
+      if (after.clk.shiftDay !== r.clk.shiftDay || after.clk.calendarDay !== r.clk.calendarDay) console.log(`     (Share today: the Central clock crossed a boundary around the click (${r.clk.shiftDay}/${r.clk.calendarDay} -> ${after.clk.shiftDay}/${after.clk.calendarDay}) - skipped this run)`);
+      else if (!shared) fail("Share today: navigator.share (stubbed) was never called with a text");
       else if (!/^Silvis call now \(until 07:00 /.test(shared) || !/\bnow\b/.test(shared)) fail("Share today: the text does not say 'now': " + shared);
       else if (/@|\d{3}[-. )]\d{3}[-. ]\d{4}/.test(shared)) fail("Share today: contact data in the text: " + shared);
-      else if (shared !== r.msg) fail(`Share today: the shared text '${shared}' is not the banner's '${r.msg}'`);
+      else if (shared !== after.msg) fail(`Share today: the shared text '${shared}' is not the banner's '${after.msg}'`);
       else ok("Share today: the shared text says 'now' and matches the banner: " + shared);
     }
   } catch (e) { fail("On call now / Share today: " + String(e && e.message || e).split("\n")[0]); }
@@ -8939,7 +8943,7 @@ try {
     else {
       const want = onCallNowExpect(pr.clk);
       if (pr.day !== pr.clk.shiftDay) fail(`?public=1 On call now: the banner's data-shift-day is ${pr.day}, the page's shiftDayCentral(new Date()) is ${pr.clk.shiftDay}`);
-      else if (pr.next !== pr.clk.beforeHandoff) fail(`?public=1 On call now: the 'From 07:00' line (${pr.next}) disagrees with the clock (beforeHandoff ${pr.clk.beforeHandoff})`);
+      else if ((pr.before === "1") !== pr.clk.beforeHandoff || pr.next !== pr.clk.beforeHandoff) fail(`?public=1 On call now: the 'From 07:00' line (${pr.next}, data-before-handoff=${pr.before}) disagrees with the clock (beforeHandoff ${pr.clk.beforeHandoff})`);
       else if (want && pr.msg !== want) fail(`?public=1 On call now: expected '${want}', got '${pr.msg}'`);
       else ok(`?public=1 On call now: the banner names the ${pr.clk.shiftDay} shift: ${pr.msg}`);
     }

@@ -2730,14 +2730,23 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(H.shiftDayCentral(new Date("2027-03-14T11:59:00Z")), "2027-03-13", "06:59 CDT");
     assert.strictEqual(H.shiftDayCentral(new Date("2027-03-14T12:00:00Z")), "2027-03-14", "07:00 CDT");
   });
-  check("shiftDayCentral reads Chicago whatever the device zone (TZ=Asia/Tokyo and TZ=Pacific/Honolulu child processes)", () => {
+  check("shiftDayCentral reads Chicago whatever the device zone (TZ=UTC, Asia/Kolkata, America/Los_Angeles, Asia/Tokyo, Pacific/Honolulu child processes; the 06:59 / 07:00 minutes of both DST days)", () => {
     const cp = require("child_process");
-    const code = 'const H = require(process.argv[1]); console.log(JSON.stringify(["2026-09-27T05:30:00Z", "2026-09-27T12:00:00Z", "2026-11-01T07:30:00Z", "2027-03-14T08:00:00Z"].map(t => H.shiftDayCentral(new Date(t)))));';
-    for (const zone of ["Asia/Tokyo", "Pacific/Honolulu"]) {
+    const code = 'const H = require(process.argv[1]); console.log(JSON.stringify(["2026-09-27T05:30:00Z", "2026-09-27T12:00:00Z", "2026-11-01T07:30:00Z", "2027-03-14T08:00:00Z", "2026-11-01T12:59:00Z", "2026-11-01T13:00:00Z", "2027-03-14T11:59:00Z", "2027-03-14T12:00:00Z"].map(t => H.shiftDayCentral(new Date(t)))));';
+    for (const zone of ["UTC", "Asia/Kolkata", "America/Los_Angeles", "Asia/Tokyo", "Pacific/Honolulu"]) {
       const r = cp.spawnSync(process.execPath, ["-e", code, path.join(ROOT, "helpers.js")], { env: { ...process.env, TZ: zone }, encoding: "utf8" });
       assert.strictEqual(r.status, 0, r.stderr);
-      assert.deepStrictEqual(JSON.parse(r.stdout.trim()), ["2026-09-26", "2026-09-27", "2026-10-31", "2027-03-13"], "TZ=" + zone);
+      assert.deepStrictEqual(JSON.parse(r.stdout.trim()), ["2026-09-26", "2026-09-27", "2026-10-31", "2027-03-13", "2026-10-31", "2026-11-01", "2027-03-13", "2027-03-14"], "TZ=" + zone);
     }
+  });
+  check("shiftClockCentral: a `now` that is neither a Date nor epoch ms warns (and reads the current time)", () => {
+    const orig = console.warn; const seen = [];
+    console.warn = (...a) => { seen.push(a.join(" ")); };
+    try { H.shiftDayCentral("2027-01-01T06:30:00Z"); H.shiftDayCentral("x"); } finally { console.warn = orig; }
+    assert.strictEqual(seen.filter(s => s.includes("neither a Date nor epoch ms")).length, 2, "both string arguments warn: " + JSON.stringify(seen));
+    const quiet = []; console.warn = (...a) => { quiet.push(a.join(" ")); };
+    try { H.shiftDayCentral(); H.shiftDayCentral(Date.now()); H.shiftDayCentral(new Date()); } finally { console.warn = orig; }
+    assert.deepStrictEqual(quiet, [], "no argument, epoch ms and a Date are silent");
   });
   check("onCallNow / onCallNowMsg: the pair on call now (until 07:00 <Dow>), the pair from 07:00 before the handoff, OPEN for an unassigned slot of yesterday's shift, no contact data", () => {
     const sched = { "2026-09-26": { primary: "s1", backup: null }, "2026-09-27": { primary: "s2", backup: "s3" }, "2026-09-28": { primary: null, backup: "s4", externalCover: "Locum" } };

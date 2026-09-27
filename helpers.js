@@ -131,7 +131,8 @@ function todayOrCentral(v) {
                    before when the Central hour is < 07)
      handoffDay    shiftDay + 1 - the day the current shift ends at 07:00
      beforeHandoff true between 00:00 and 06:59 Central (shiftDay !== calendarDay)
-   `now` is a Date or epoch ms (default: the current time). Read through
+   `now` is a Date or epoch ms (default: the current time; anything else - an
+   ISO string included - warns and reads the current time). Read through
    Intl.DateTimeFormat with timeZone America/Chicago and hourCycle 'h23' - never
    the device zone and never hour12 (whose "24" for midnight is a known engine
    quirk); both DST days fall out of the zone data (01:30 CDT and 01:30 CST are
@@ -140,6 +141,7 @@ function todayOrCentral(v) {
 const SHIFT_HANDOFF_HOUR = 7;
 let shiftClockFormatter = null;
 function shiftCentralParts(now) {
+  if (now !== undefined && now !== null && !(now instanceof Date) && typeof now !== "number") console.warn("shiftClockCentral: `now` is neither a Date nor epoch ms, using the current time:", now);
   let d = now instanceof Date ? now : (typeof now === "number" ? new Date(now) : new Date());
   if (isNaN(d.getTime())) { console.warn("shiftClockCentral: invalid time, using the current time:", now); d = new Date(); }
   try {
