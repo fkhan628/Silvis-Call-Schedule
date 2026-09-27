@@ -4960,6 +4960,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(styles.css.suCheck.color, styles.THEME.light.text);
       assert.strictEqual(styles.css.suCheck.display, "inline-flex");
     });
+    check("HANDOFF 3.4 item 1 (9/27): the Backup role word (My schedule / Following rows), Setup issues and the generator's Warnings read THEME tokens (backupText / warnText / success), never the light-only #7a5a20 / #8a5a10 / #1a8040 the dark sheet leaves at 2.29:1", () => {
+      const styles = require(path.join(ROOT, "app-styles.js"));
+      assert.strictEqual(styles.THEME.light.backupText, "#7A5A20"); assert.strictEqual(styles.THEME.dark.backupText, "#D4A84A");
+      assert.strictEqual(styles.THEME.light.warnText, "#7A5A20"); assert.strictEqual(styles.THEME.dark.warnText, "#D4A84A");
+      assert.ok(B2SRC.includes('<span data-testid="mine-role" style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:T.backupText}}>'), "the mine-day role word must be T.backupText (with data-testid=mine-role for the smoke probe)");
+      assert.ok(B2SRC.includes('<p data-testid="setup-issues" style={{...muted,color:T.success}}>None.</p>') && B2SRC.includes('<ul data-testid="setup-issues" style={{margin:0,paddingLeft:18,fontSize:12.5,color:T.warnText,lineHeight:1.7}}>'), "Setup issues: T.success for 'None.', T.warnText for the list");
+      const gd = B2SRC.slice(B2SRC.indexOf("function GenDiagnostics("), B2SRC.indexOf("function suHeldUnlockedSlotChanges("));
+      assert.ok(gd.includes('const T = THEME[dk ? "dark" : "light"];') && countIn(gd, "color: T.warnText") === 2 && !/#7a5a20|#8a5a10/i.test(gd), "GenDiagnostics: the Warnings heading + list are T.warnText, T resolved from dk");
+      assert.ok(B2SRC.includes("<GenDiagnostics css={css} dk={dk} ") && B2SRC.includes("<GeneratePanel css={css} dk={dk} "), "dk is threaded App -> GeneratePanel -> GenDiagnostics");
+    });
     check("the contrast gate is in the deploy chain (package.json + a build.yml step run `node test/ui/contrast.mjs`) and its region table fails a tree that puts #3a4a58 back on the SuCheck label (1.59:1 dark) while passing this one", () => {
       const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
       assert.ok(pkg.scripts.test.split("&&").map(s => s.trim()).includes("node test/ui/contrast.mjs"), "package.json test chain lacks `node test/ui/contrast.mjs`");

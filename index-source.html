@@ -5635,8 +5635,8 @@ function CallSchedule() {
         {/* ================ SETUP (scheduler) - Prompt 6 Slice E ================ */}
         {view==="setup" && !isPublicMode && isScheduler && <>
           <Collapsible css={css} ck="setup_issues" defaultOpen={true} title={<>Setup issues <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>- {setupIssues.length ? setupIssues.length + " warning(s)" : "none"}</span></>}>
-            {setupIssues.length === 0 ? <p data-testid="setup-issues" style={{...muted,color:"#1a8040"}}>None.</p> : (
-              <ul data-testid="setup-issues" style={{margin:0,paddingLeft:18,fontSize:12.5,color:"#7a5a20",lineHeight:1.7}}>{setupIssues.map(s => <li key={s}>{s}</li>)}</ul>
+            {setupIssues.length === 0 ? <p data-testid="setup-issues" style={{...muted,color:T.success}}>None.</p> : (
+              <ul data-testid="setup-issues" style={{margin:0,paddingLeft:18,fontSize:12.5,color:T.warnText,lineHeight:1.7}}>{setupIssues.map(s => <li key={s}>{s}</li>)}</ul>
             )}
           </Collapsible>
 
@@ -5685,7 +5685,7 @@ function CallSchedule() {
             {/* Prompt 14 part 3b: Periods - create from the presets, per-surgeon status, Remind, Close now, Enter for someone, Generate over the period. */}
             <PeriodsSection css={css} periods={periodRows} offers={offerRows} roster={surgeons} groupRules={groupRules} today={todayStr} nameOf={nameOf} notifPrefs={notifPrefs} busy={prdBusy || genBusy} remindState={prdRemind} selfId={mySurgeon} draft={prdDraft} setDraft={setPrdDraft}
               onCreate={createPeriod} onCloseNow={closePeriodNow} onRemind={remindOffers} onEnterFor={enterOffersFor} onGenerate={generatePeriod}/>
-            <GeneratePanel css={css} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} busyMode={genWorkerOk ? "worker" : "inline"} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} genStart={genStart} genFirstOpenDay={genFirstOpenDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
+            <GeneratePanel css={css} dk={dk} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} busyMode={genWorkerOk ? "worker" : "inline"} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} genStart={genStart} genFirstOpenDay={genFirstOpenDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_import" defaultOpen={false} title="Import seed (docs/silvis-seed.json)">
@@ -6194,7 +6194,7 @@ function CallSchedule() {
                   {upcoming.map(x => (
                     <div key={x.day} data-testid="mine-day" data-day={x.day} data-role={x.role} style={{display:"flex",gap:10,alignItems:"center",padding:"5px 8px",borderBottom:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
                       <span style={{fontFamily:mono,fontSize:12,color:dkText,width:92}}>{dowShort(x.day)} {fmtMD(x.day)}</span>
-                      <span style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:"#7a5a20"}}>{roleWord(x.role)}</span>
+                      <span data-testid="mine-role" style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:T.backupText}}>{roleWord(x.role)}</span>
                       <span style={{...muted,minWidth:120}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
                       {x.locked && <Padlock title="locked" size={9}/>}
                       {badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
@@ -9303,8 +9303,9 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
 }
 
 // --- Generate: presets, options, run, preview + diagnostics ---
-function GenDiagnostics({ css, dg, nameOf, roster }) {
+function GenDiagnostics({ css, dk, dg, nameOf, roster }) {
   if (!dg) return null;
+  const T = THEME[dk ? "dark" : "light"];
   const ids = (roster || []).map(s => s.id).filter(id => dg.tallies && dg.tallies[id]);
   const months = (dg.range && dg.range.months) || [];
   const soft = dg.softPenalties || [];
@@ -9402,7 +9403,7 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
         {(dg.eastConflicts || []).map((c, i) => <div key={i} data-testid="gen-east-conflict" style={{ fontSize: 12 }}>{fmtMD(c.day)} {c.role} {nameOf(c.id)}: {(c.reasons || []).map(r => reasonLabel(r, nameOf)).join(", ")}</div>)}
         <div style={{ ...css.subT, margin: "8px 0 4px" }}>East forecast days in range ({(dg.eastForecast || []).length}); unknown East days: {(dg.eastUnknownDays || []).length}</div>
         {(dg.eastForecast || []).length > 0 && <div style={{ fontSize: 11, fontFamily: mono, lineHeight: 1.5 }}>{dg.eastForecast.map(f => f.day + " " + Math.round(f.probability * 100) + "%" + (f.busyByThreshold ? " busy" : "") + (f.assigned ? " (" + nameOf(f.id) + " " + f.assigned + ")" : "")).join(", ")}</div>}
-        {(dg.warnings || []).length > 0 && <><div style={{ ...css.subT, margin: "8px 0 4px", color: "#8a5a10" }}>Warnings ({dg.warnings.length})</div><ul style={{ margin: 0, paddingLeft: 18, fontSize: 11.5, color: "#7a5a20" }}>{dg.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></>}
+        {(dg.warnings || []).length > 0 && <><div style={{ ...css.subT, margin: "8px 0 4px", color: T.warnText }}>Warnings ({dg.warnings.length})</div><ul style={{ margin: 0, paddingLeft: 18, fontSize: 11.5, color: T.warnText }}>{dg.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></>}
       </div>
     </div>
   );
@@ -9601,7 +9602,7 @@ function PeriodsSection({ css, periods, offers, roster, groupRules, today, nameO
   );
 }
 
-function GeneratePanel({ css, presets, opts, setOpts, busy, busyMode, preview, onRun, onReroll, onAccept, onDiscard, nameOf, roster, rulesImported, lastPublishedDay, genStart, genFirstOpenDay, laterRanges, holidayNames }) {
+function GeneratePanel({ css, dk, presets, opts, setOpts, busy, busyMode, preview, onRun, onReroll, onAccept, onDiscard, nameOf, roster, rulesImported, lastPublishedDay, genStart, genFirstOpenDay, laterRanges, holidayNames }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const p0 = presets && presets[0];
   const start = opts.start || (p0 ? p0.start : "");
@@ -9637,7 +9638,7 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, busyMode, preview, o
             <button data-testid="gen-accept" onClick={onAccept} disabled={busy} style={{ ...css.btn(true), padding: "5px 14px" }}>Accept &amp; Publish</button>
             <button data-testid="gen-discard" onClick={onDiscard} disabled={busy} style={css.danger}>Discard</button>
           </div>
-          <GenDiagnostics css={css} dg={preview.diagnostics} nameOf={nameOf} roster={roster} />
+          <GenDiagnostics css={css} dk={dk} dg={preview.diagnostics} nameOf={nameOf} roster={roster} />
         </div>
       )}
     </div>

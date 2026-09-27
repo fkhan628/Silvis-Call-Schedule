@@ -74,6 +74,11 @@ export const contrastTable = (mod) => {
     add(theme, "OPEN red on page", T.open, T.bg, "text");
     // Prompt 16 B2: the success green (Saving / "No open shifts" / a sent test notification) is a token too.
     if (T.success) { add(theme, "success green on card", T.success, T.surface, "text"); add(theme, "success green on page", T.success, T.bg, "text"); }
+    // HANDOFF 3.4 item 1 (9/27): the Backup role word on My schedule / Following rows, and the warning text
+    // (Setup issues, the generator's Warnings) - the literal #7a5a20 read 2.29:1 on the dark card.
+    add(theme, "backup role word on card", T.backupText, T.surface, "text");
+    add(theme, "backup role word on page", T.backupText, T.bg, "text");
+    add(theme, "warning text on card", T.warnText, T.surface, "text");
     add(theme, "header title on the navy bar", T.onNavy, T.navy, "text");
     add(theme, "header subline on the navy bar", T.navyMuted, T.navy, "text");
     add(theme, "nav tab label (inactive) on the navy bar", T.navTab, T.navy, "text");
