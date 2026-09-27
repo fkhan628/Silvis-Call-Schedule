@@ -1693,4 +1693,62 @@ step("Prompt 14 PD: the period status rides the upsert (advance only), the later
   ok(!p5.scheduleDayRows.some((d) => d.day >= "2027-07-21" && d.day <= "2027-08-02"), "PD: no schedule_days row in the range - the time_off trigger has nothing to refuse");
 }
 
+// Faraz 9/26: the 11/9-11/16 row notes reach schedule_days (anon-readable) - neutral text, who and which days, no East,
+// Davenport or decision history; every row keeps its own source slug, holders and locks. Restated here, not read from
+// the seed. The live side (the seed apply for the seed-owned days, a note-only rewrite for the days the app owns) is
+// pinned below on a synthetic live table shaped like the 2026-09-27 01:10Z read (Faraz 9/26).
+step("9/26: neutral notes on Fierce's 11/9-11/16 backup rows; 10/15 answered");
+{
+  const WEEK = "Fierce backup week 11/9-11/15", SRC = "; source " + FIERCE_SRC;
+  const NOTE926 = {
+    "2026-11-09": "seed: " + FIERCE_SRC + " - " + WEEK, "2026-11-10": "seed: " + FIERCE_SRC + " - " + WEEK,
+    "2026-11-11": "seed: " + NOV_SRC + " - " + WEEK + SRC, "2026-11-12": "seed: " + FIERCE_SRC + " - " + WEEK,
+    "2026-11-13": "seed: " + FIERCE_SRC + " - " + WEEK, "2026-11-14": "seed: " + NOV_SRC + " - " + WEEK + SRC,
+    "2026-11-15": "seed: " + NOV_SRC + " - " + WEEK + SRC, "2026-11-16": "seed: " + NOV_SRC + " - Fierce backup 11/16" + SRC
+  };
+  const D926 = Object.keys(NOTE926);
+  D926.forEach((d) => eq(byDay[d].note, NOTE926[d], "9/26: " + d + " schedule_days note = the row's own slug + the neutral text"));
+  eq(D926.map((d) => [byDay[d].backup_id, byDay[d].backup_locked, byDay[d].source]), D926.map(() => [FIERCE, true, "import"]), "9/26: Fierce's eight backups stay locked import rows (a note-only change)");
+  // the smoke's Item E3 pattern (test/ui/smoke.mjs E3_RE) over EVERY planned note, then the decision-history words
+  const E3_WORDS = /\beast\b|davenport|east-(?:busy|forecast|derived)|derived-lock/i;
+  eq(days.filter((d) => E3_WORDS.test(d.note || "")).map((d) => d.day), [], "9/26: no planned schedule_days note names East / Davenport (anon-readable table)");
+  ok(D926.every((d) => !/superseded|decision|his rule|9\/22:|Burchett|backup: /.test(byDay[d].note)), "9/26: no decision history, no other surgeon, no old 'backup: ' scope prefix in the eight notes");
+  // the notes sit outside the blob core: the seedCoreHash stamp does not move, only the revision count / date. seedPre
+  // stands in for the pre-9/26 seed on EVERY key this change touched - the eight notes, groupRules.locks.note, the two
+  // question lists and the revision entry (review 9/26: the one groupRules edit is covered too)
+  const seedPre = clone(seed);
+  seedPre.existingAssignments.forEach((a) => { if (NOTE926[a.date]) a.note = "(the note before 9/26)"; });
+  seedPre.groupRules.locks.note = "(the locks note before 9/26)";
+  seedPre.openQuestions = seedPre.openQuestions.map((t) => /^1\. /.test(t) ? "1. (open question 1 before 9/26)" : t);
+  seedPre.answeredQuestions = seedPre.answeredQuestions.filter((t) => !/^10\/15 \(Thu\) primary/.test(t));
+  seedPre._meta.revisions = seedPre._meta.revisions.filter((t) => !/lane SEED/.test(t));
+  const planPre = IMP.importPlan(seedPre, { now: NOW });
+  ok(plan.blob.groupRules.locks && !("note" in plan.blob.groupRules.locks), "9/26: groupRules.locks.note is dropped before the blob (impScrubRuleNotes) - the edited text never reaches call_schedule_data");
+  eq(plan.blob.settings.seedCoreHash, planPre.blob.settings.seedCoreHash, "9/26: seedCoreHash unchanged (notes are not a core key)");
+  const OPTS_P = { now: NOW, offerPeriods: true };   // the CLI's plan (scripts/import-seed.js) - its stamp is the one the live row carries
+  eq(IMP.importPlan(seed, OPTS_P).blob.settings.seedCoreHash, IMP.importPlan(seedPre, OPTS_P).blob.settings.seedCoreHash, "9/26: seedCoreHash unchanged in the period-aware plan too (the CLI's)");
+  eq([plan.blob.settings.seedRevisionCount - planPre.blob.settings.seedRevisionCount, plan.blob.settings.seedLastRevision], [1, "2026-09-26"], "9/26: one _meta.revisions entry, the last, dated 2026-09-26");
+  eq(IMP.planDiff(plan, { blob: clone(planPre.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) }).tables.call_schedule_data.keys,
+    { roster: "unchanged", surgeonRules: "unchanged", groupRules: "unchanged", holidays: "unchanged", settings: "update" }, "9/26: against the pre-9/26 blob only settings update (no Setup key is replaced)");
+  // live-shaped diff: the four days the 9/23 publish filled (primary Philip / Acton, updated_by the publish tag) are
+  // app-owned -> BLOCKED and kept out of the SQL; the four seed-owned days (updated_by seed) -> note-only updates
+  const PUB = "publish-preview (Faraz, 2026-09-23 overnight)";
+  const LIVE0127 = { "2026-11-09": [PHILIP, false, 2, PUB], "2026-11-10": [PHILIP, false, 2, PUB], "2026-11-11": [BURCHETT, true, 1, "seed"], "2026-11-12": [ACTON, false, 2, PUB],
+    "2026-11-13": [PHILIP, false, 2, PUB], "2026-11-14": [ACTON, true, 2, "seed"], "2026-11-15": [ACTON, true, 2, "seed"], "2026-11-16": [ACTON, true, 2, "seed"] };
+  const liveSd = clone(plan.scheduleDayRows).map((r) => {
+    const v = LIVE0127[r.day];
+    return v ? Object.assign(r, { primary_id: v[0], primary_locked: v[1], version: v[2], updated_by: v[3], note: r.note.split(" - ")[0] + " - (the note before 9/26)" }) : r;
+  });
+  const d926 = IMP.planDiff(plan, { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: liveSd });
+  eq([d926.tables.schedule_days.update, d926.tables.schedule_days.blocked, d926.tables.schedule_days.unchanged], [4, 4, days.length - 8], "9/26: update 4 (seed-owned), BLOCKED 4 (publish-filled), the rest unchanged");
+  eq(d926.changes, ["11/11 locks/note change", "11/14 locks/note change", "11/15 locks/note change", "11/16 locks/note change"], "9/26: the four updates are note-only (no P / B arrow)");
+  eq(d926.blockedDays, ["2026-11-09", "2026-11-10", "2026-11-12", "2026-11-13"], "9/26: the four publish-filled days are kept (the note rewrite does them)");
+  const sql926 = IMP.importSql(plan, { excludeDays: d926.blockedDays });
+  ok(["2026-11-11", "2026-11-14", "2026-11-15", "2026-11-16"].every((d) => sql926.indexOf("  ('" + d + "', ") >= 0) && d926.blockedDays.every((d) => sql926.indexOf("  ('" + d + "', ") < 0), "9/26: the apply's VALUES carry the four seed-owned days, never the four kept ones");
+  // 10/15 (open question 1) - answered 9/25 in the app; the import record stays (pinned at the top of this file)
+  ok(seed.openQuestions.some((t) => /^1\. ~~10\/15 \(Thu\)/.test(t) && /answered 9\/25: Burchett primary \(locked\), Khan backup/.test(t)), "9/26: open question 1 is struck with the answer");
+  ok(seed.answeredQuestions.some((t) => /^10\/15 \(Thu\) primary/.test(t) && /9\/25 15:24 CDT/.test(t)), "9/26: answeredQuestions records 10/15");
+  ok(!seed.openQuestions.some((t) => /10\/15 primary stays OPEN/.test(t)), "9/26: no open question still says 10/15 primary stays open");
+}
+
 console.log("ok " + n + " assertions");

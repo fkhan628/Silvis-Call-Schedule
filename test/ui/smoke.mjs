@@ -39,7 +39,8 @@
 //     against that page's own rules context (on ?public=1 the grid never drew an
 //     East-vacation marker - a no-op check there; its day editor is the proof) -
 //     while the scheduler's same surfaces keep every East item (screenshots
-//     e3-*.png); a day's note is left out and reported as a pending decision;
+//     e3-*.png); a day's note is left out and reported by day as PENDING
+//     until the live rows are reworded (Faraz 9/26);
 //     the block-member step's override save (Fierce, weekend-block-only) writes
 //     a schedule_days row with no '[override: ...]' tag or reason in its note
 //     while schedule.override / schedule.day_edit carry the reasons, and the
@@ -2229,9 +2230,10 @@ try {
   //    on every line for the others (a header that lost its East column over rows that kept it would shift every value).
   // "No East text" = no match of E3_RE (case-insensitive: innerText returns CSS-uppercased text as shown) in the
   // surface's visible text or in any title / aria-label inside it, and no [data-eastvac] element. A day's NOTE is data,
-  // not an E3 code surface (the importer's 11/9-11/16 seed notes say "East primary week ..."): the grid's "note: ..."
-  // hover bit, the NOTE marker's hover and the editor's read-only "Note: ..." line (editor-note-view) are left out of the
-  // match and reported by day as a PENDING decision for Faraz (reword the seed + the live rows) - never silently. The
+  // not an E3 code surface (the importer's 11/9-11/16 seed notes said "East primary week ..." until Faraz's 9/26
+  // rewording - the seed is neutral since 9/26, the live rows follow with the seed apply + a note-only rewrite): the grid's
+  // "note: ..." hover bit, the NOTE marker's hover and the editor's read-only "Note: ..." line (editor-note-view) are left
+  // out of the match and reported by day as PENDING (live rows not yet reworded) - never silently. The
   // main page (the scheduler) is checked on the same surfaces and must still show every one of them. The grid goes back
   // to November 2026 afterwards.
   {
@@ -2525,8 +2527,13 @@ try {
     }
     if (e3PubErrors.length) fail("Item E3 (?public=1): page errors: " + e3PubErrors.join(" | "));
     // A day's note is data, not an E3 code surface - but it is East text every role reads, so it is reported by day and
-    // named as the decision it needs (review 9/25), never dropped silently.
-    if (e3NoteDays.size) console.log(`     E3 PENDING - Faraz's decision (data, not an E3 code surface): ${e3NoteDays.size} served day note(s) name East (${Array.from(e3NoteDays).sort().join(", ")}) - the importer's 11/9-11/16 seed notes ("Fierce 9/22: East primary week 11/9 = Silvis backup ..."). Every role, ?public=1 included, reads them in the grid hover, the NOTE marker and the editor's Note line. Removing them needs BOTH the seed (docs/silvis-seed.json existingAssignments notes) and the live rows (a re-import, or a snapshot-first note rewrite) - the live rows alone come back with the next import.`);
+    // named as the decision it needs (review 9/25), never dropped silently. The 11/9-11/16 attribution is printed only
+    // when every day found lies in that week (review 9/26: another day's East note is named as such, not misattributed).
+    const e3NoteList = Array.from(e3NoteDays).sort();
+    const e3NoteFierce = e3NoteList.every((d) => d >= "2026-11-09" && d <= "2026-11-16");
+    if (e3NoteDays.size) console.log(`     E3 PENDING - live rows (data, not an E3 code surface): ${e3NoteDays.size} served day note(s) name East (${e3NoteList.join(", ")})` + (e3NoteFierce
+      ? ` - the 11/9-11/16 rows' pre-9/26 notes ("Fierce 9/22: East primary week 11/9 = Silvis backup ..."). Every role, ?public=1 included, reads them in the grid hover, the NOTE marker and the editor's Note line. Faraz decided 9/26 (neutral text: who and which days): the seed is reworded (docs/silvis-seed.json existingAssignments notes); the live rows follow with the seed apply (seed-owned days) and a snapshot-first note-only rewrite (the days the app owns).`
+      : ` - not only the 11/9-11/16 rows reworded 9/26: every role, ?public=1 included, reads these notes in the grid hover, the NOTE marker and the editor's Note line; each day needs Faraz's decision (reword the seed and the live row).`));
     else ok("Item E3: no served day note names East in the months and days checked");
     // the main page's own session token back (each role page above stored its own in the shared origin storage)
     await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);

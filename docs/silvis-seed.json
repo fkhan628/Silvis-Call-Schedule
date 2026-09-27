@@ -45,7 +45,8 @@
       "2026-09-23 (Claude Code, Prompt 14 P2 - rules + generator, from Faraz's 9/22 evening prompt v2; review fixes the same night): groupRules.offerPeriods { lengthMonths 3, presets [3, 6], closeWeeksBeforeStart 6, publishWeeksBeforeStart 4, remindDaysBeforeClose [14, 3] } + offerPeriodsNote; groupRules.weights.offerBonus 6 + outsideOffers 6 + offerBonusOverShare 0 (+ note). Engine: rules.js reads ctx.offers (call_offers rows) and ctx.periods (call_periods rows incl. rules_only_ids + offer_modes), derives the per-surgeon per-period status exactly like SQL offer_status() (submitted / rules_only / not_started) and the mode (offer_modes[id], absent = preferred); inside a period a submitted surgeon is offers-governed (exhaustive: hard not-offered off his offered days and roles; preferred: soft offered / outside-offers under his ordinary rules; outside-offers also rides on an exhaustive surgeon's claim result); an offer is folded into the dated-row map as an available row for its role (item W lifts the weekday patterns, obligations never lift); whitelist-month / outside-available-weeks are not applied to a submitted surgeon inside the period; opts.claim skips the exhaustive block (a Prompt 13 claim is an offer made on the spot - sql/migrations/2026-09-23-claim-offer.sql writes the call_offers row, except for a surgeon listed in the period's rules_only_ids, who keeps his rules-only status). generator.js fills offered units first, stops the offered bonus at the surgeon's share (offerBonusOverShare) so an offer is not a demand, and reports diagnostics.offers (byPerson offered / placed / unplaced with reasons - a holiday-unit day names the unit's failing day - and outsideOffers). No list changes here (part 5 converts the dated lists into call_offers rows). Proof: test/rules.test.js and test/generator-regression.js Prompt 14 P2 blocks, test/offers.test.js.",
       "2026-09-23 evening (Claude Code, Prompt 16 B10 - seed hygiene, from the 2026-09-23 pre-launch review section 4; no rule change): surgeonRules.s6.poolMember stays TRUE (the review suggested false because her windows already exclude her from the equal-share pool, but generator.js gates her window-week target on the same flag - false would drop her soft target of two per window week, caught by the regression pin impliedTargets.windowTarget; a poolMemberNote records it); groupRules.weights.eastClear 2 added explicitly (= the engine default). Keys read by nothing dropped (rules.js warns once per key while a blob still carries them, like RG-1 / RG-2): s1.weekendsInPool, s1.holidays2026 (the Thanksgiving unit lives in the four locked existingAssignments rows and holidays.units), s2.holidayPreference, s2/s3.splitPartner (a Setup display field only), s3.holidayRules.christmasOrNewYearOk / alternatingDaysOk, s4.preferences.noFullWeek (implemented as maxConsecutiveAnyRole 4 since Prompt 12 A), s5.outsideDerivedWeeks.canBePrimary, the four s5.eastFeed.liveVerified* snapshot keys, groupRules.generationHorizons.presets (the presets are the app's), groupRules.eastFeed.forecast.penaltyBelowThreshold (the weight is weights.eastForecastBelowThreshold), groupRules.locks.nullSlotIsNeverLocked (importer behaviour, not a switch). The ER-panel source slug of the 57 existingAssignments rows is a role slug now (office-er-call-panels-2026-09-16 / -22; the live schedule_days notes 'seed: <slug> ...' are updated by hand with the same replace). openQuestions: item 6 (10/24) is answered - published to Khan 9/23; item 1 reads accordingly.",
       "2026-09-24 morning (Claude Code, branch docs/periods-9-24, from Faraz's 9/24 decisions; data and docs only, no rule change): offerPeriods - 'Feb 2027 - Apr 2027' ends 2027-05-02 (Sunday; Faraz moved the live call_periods row from 2027-04-30 by SQL with an audit_log period.update entry so the last weekend unit stays whole; label unchanged), and a new 'Jan 2027' entry (2027-01-04 - 2027-01-31, offers close 2026-11-23, publish by 2026-12-07, upcoming, rulesOnly [], offerModes {}, source faraz-2026-09-24-period-jan) sits between the two as offerPeriods[1] - Faraz created the live row by SQL 9/24 (with an audit_log row); the seed carries both so the CLI's upsert by start_day matches the live table instead of reverting it. openQuestions item 17 decided (5/2). surgeonRules.s5.poolMemberNote added - Fierce's poolMember stays true (Faraz 9/24, closed, no follow-up); s6's B10 note marked closed the same day with no change. Pins re-pointed: test/offers.test.js, test/offers-timeline.test.js, test/importer.test.js (three periods, the 5/2 end, Jan 2027's 11/9 + 11/20 reminders and 11/23 close, Philip's Jan 2027 weeks warning).",
-      "2026-09-25 (Claude Code, branch fix/seed-ics, Faraz 9/25; data only, no rule change): roster s6.fullName copied from the live call_schedule_data blob (entered in Setup 2026-09-25 02:54 UTC) so the seed matches the live roster; no seed apply was run - the live blob already holds the value."
+      "2026-09-25 (Claude Code, branch fix/seed-ics, Faraz 9/25; data only, no rule change): roster s6.fullName copied from the live call_schedule_data blob (entered in Setup 2026-09-25 02:54 UTC) so the seed matches the live roster; no seed apply was run - the live blob already holds the value.",
+      "2026-09-26 (Claude Code, lane SEED, from Faraz's 9/26 decision on the 11/9-11/16 notes - they are public, so reword them to neutral text: who and which days, no East, Davenport or decision history; keep the seed slug; one item with the 10/15 openQuestions entry: one seed change, one seed apply and a note-only rewrite of the live rows, report-first; no rule, holder or lock change): existingAssignments 2026-11-09 .. 2026-11-16 notes - the seven days of the week read 'Fierce backup week 11/9-11/15' (Faraz's own example) and Mon 11/16, outside that week, 'Fierce backup 11/16'; the four rows whose source is office-er-call-panels-2026-09-22 (11/11, 11/14, 11/15, 11/16 - the slug names the primary's provenance) keep the backup slot's provenance as '; source fierce-2026-09-22-backup-week' (a slug, no East word) and drop the old 'backup: ' scope prefix and the superseded-entry tail. Every row keeps its own source slug, holders and lock, so the importer writes 'seed: <slug> - <note>' (importer.impDayNote) and nothing else on those rows moves. Of the seed's wording about this week only the existingAssignments notes reach an anon-readable table (schedule_days.note); surgeonRules.s5.notes, groupRules.locks.note and the other note keys are dropped before the blob (impScrubRuleNotes) and pendingDeltas / answeredQuestions / openQuestions are never imported, so their wording (the East week, the 11/16 decision, the superseded Burchett entries) stays here and in the rules doc section 3 (Fierce). openQuestions 1 struck (10/15: Burchett primary locked, Khan backup - set by the scheduler in the app 9/25 15:24 CDT) + an answeredQuestions line; existingAssignments 2026-10-15 unchanged (the live row is app-owned and kept by every import, the 10/24 precedent); openQuestions 11 and groupRules.locks.note follow. Blob: no core key moves (seedCoreHash of the seed is unchanged), settings.seedRevisionCount +1 and seedLastRevision 2026-09-26. Live (expected; the dry run confirms which days each step writes): the seed apply rewrites the notes of the days still seed-owned (source import, updated_by seed) and keeps the days the app owns (the 9/23 publish filled their primary); a snapshot-first compare-and-swap note rewrite (audit schedule.note) does those."
     ]
   },
   "site": {
@@ -298,7 +299,7 @@
       "note": "Both day-before rules (vacation trailing edge; Philip's day-before-Aledo) apply to PRIMARY only. Matches the group's own hand schedule (Philip was backup 10/14 before his 10/15 day and backup 10/22 before Aledo Friday 10/23) and the DB trigger, which checks start_date - 1 for primary only. 9/22 (Faraz, Prompt 12 H): under the open-backup rule both day-before rules stay PRIMARY-only - a standby backup the day before a vacation or an Aledo day is acceptable. trailingEdgeRoles and aledoDayBeforeRoles are the data levers (no dedicated Setup field: editable in Setup via the group rules Edit-as-JSON editor); widening them to both roles would also need the DB trigger widened."
     },
     "locks": {
-      "note": "Importer: primaryLocked = locked && (primary != null || externalCover != null); backupLocked = locked && backup != null. 10/15, 10/24 (open since 9/22 evening) and the 16 open October backups stay fillable and show in diagnostics.uncovered with per-surgeon reasons (the 9/23 publish filled all of them but 10/15 primary, unlocked); import/manual locks always beat East-derived locks (with a warning)."
+      "note": "Importer: primaryLocked = locked && (primary != null || externalCover != null); backupLocked = locked && backup != null. 10/15, 10/24 (open since 9/22 evening) and the 16 open October backups stay fillable and show in diagnostics.uncovered with per-surgeon reasons (the 9/23 publish filled all of them but 10/15 primary, unlocked; the scheduler filled 10/15 primary 9/25, locked, in the app); import/manual locks always beat East-derived locks (with a warning)."
     },
     "eastFeed": {
       "forecast": {
@@ -1534,7 +1535,7 @@
       "backup": "s5",
       "source": "fierce-2026-09-22-backup-week",
       "locked": true,
-      "note": "Fierce 9/22: East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); the ER-panel author's Burchett backup entry superseded"
+      "note": "Fierce backup week 11/9-11/15"
     },
     {
       "date": "2026-11-10",
@@ -1542,7 +1543,7 @@
       "backup": "s5",
       "source": "fierce-2026-09-22-backup-week",
       "locked": true,
-      "note": "Fierce 9/22: East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision)"
+      "note": "Fierce backup week 11/9-11/15"
     },
     {
       "date": "2026-11-11",
@@ -1550,7 +1551,7 @@
       "backup": "s5",
       "source": "office-er-call-panels-2026-09-22",
       "locked": true,
-      "note": "backup: Fierce 9/22 - East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); source fierce-2026-09-22-backup-week"
+      "note": "Fierce backup week 11/9-11/15; source fierce-2026-09-22-backup-week"
     },
     {
       "date": "2026-11-12",
@@ -1558,7 +1559,7 @@
       "backup": "s5",
       "source": "fierce-2026-09-22-backup-week",
       "locked": true,
-      "note": "Fierce 9/22: East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision)"
+      "note": "Fierce backup week 11/9-11/15"
     },
     {
       "date": "2026-11-13",
@@ -1566,7 +1567,7 @@
       "backup": "s5",
       "source": "fierce-2026-09-22-backup-week",
       "locked": true,
-      "note": "Fierce 9/22: East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision)"
+      "note": "Fierce backup week 11/9-11/15"
     },
     {
       "date": "2026-11-14",
@@ -1574,7 +1575,7 @@
       "backup": "s5",
       "source": "office-er-call-panels-2026-09-22",
       "locked": true,
-      "note": "backup: Fierce 9/22 - East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); source fierce-2026-09-22-backup-week; the ER-panel author's Burchett backup entry superseded"
+      "note": "Fierce backup week 11/9-11/15; source fierce-2026-09-22-backup-week"
     },
     {
       "date": "2026-11-15",
@@ -1582,7 +1583,7 @@
       "backup": "s5",
       "source": "office-er-call-panels-2026-09-22",
       "locked": true,
-      "note": "backup: Fierce 9/22 - East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); source fierce-2026-09-22-backup-week; the ER-panel author's Burchett backup entry superseded"
+      "note": "Fierce backup week 11/9-11/15; source fierce-2026-09-22-backup-week"
     },
     {
       "date": "2026-11-16",
@@ -1590,7 +1591,7 @@
       "backup": "s5",
       "source": "office-er-call-panels-2026-09-22",
       "locked": true,
-      "note": "backup: Fierce 9/22 - East primary week 11/9 = Silvis backup 11/9-11/15 (his rule, Faraz 9/22: it stands moving forward) plus Mon 11/16 (Faraz's decision); source fierce-2026-09-22-backup-week; the ER-panel author's Burchett backup entry superseded"
+      "note": "Fierce backup 11/16; source fierce-2026-09-22-backup-week"
     },
     {
       "date": "2026-11-17",
@@ -1849,10 +1850,11 @@
     "Derived-week yield rule (Prompt 12 T, general): an explicit published / import / manual / claimed row beats a derived-week lock; the generator keeps the explicit row, lists the day in diagnostics.derivedYields and warns once per derived week naming the days; a day whose explicit holder IS the derived surgeon is listed in diagnostics.derivedConfirmed (November 11/9-11/15: Fierce, nothing yields).",
     "October backfill (Prompt 12 T): the open October slots of the locked import inside 10/15-11/1 (10/24 primary; backups 10/15, 10/21, 10/23, 10/24, 10/25, 10/30, 10/31, 11/1 = the eight in the ER-panel author's 9/22 document, plus 10/16, 10/27, 10/29 whose backup is open in the import - Philip primary days from her 9/16 document, open question 14; 10/15 primary stays open for nobody) are filled by generator.generate(..., { fillOpenOnly: true }) - every held slot, locked or not, is fixed and never rewritten - run by scripts/preview-generate.js --backfill 2026-10-15..2026-11-01 as a separate section of the milestone preview; nothing is published by the script.",
     "2027 holiday units (Faraz 9/22 late, Prompt 12 AC): Thanksgiving Thu 11/25 - Sun 11/28 (same shape as 2026); July 4, 2027 is a Sunday observed Monday 7/5, so the unit is Sat 7/3 - Mon 7/5 under the Monday-absorbs-the-weekend rule. Data only (holidays.units 2027), editable in Setup; the builder defaults (helpers.defaultHolidayUnits) follow the same shapes for Add year. Open question 3 closed.",
-    "Burchett October backup (Burchett email 9/23, relayed by Faraz 9/23 morning; Prompt 12 item BK): he can take BACKUP on 10/9, 10/15, 10/20, 10/22 - four dated backup-only rows (s2.explicitBackupOnly['2026-10'], source burchett-email-2026-09-23; 10/12 keeps its 9/17 source) so his October list reflects it, and the four backups reassigned to him from Khan (10/9, 10/15 - the 9/23 publish fill), Acton (10/20) and Philip (10/22, over his backup cap there) as LOCKED manual edits through scripts/day-edit.js - the day editor's save path from the command line (snapshot 'day_edit' first, compare-and-swap on day + version + expected holder, audit schedule.day_edit / schedule.lock; the editor's manual_edit notice is printed, not sent). Primaries untouched; 10/15 primary stays open (open question 1). existingAssignments mirrors the rows after the edits (source strings and notes unchanged) so a re-import reads the four days as unchanged. Live order: day-edit --apply before import-seed --apply (10/20 and 10/22 were still seed-owned)."
+    "Burchett October backup (Burchett email 9/23, relayed by Faraz 9/23 morning; Prompt 12 item BK): he can take BACKUP on 10/9, 10/15, 10/20, 10/22 - four dated backup-only rows (s2.explicitBackupOnly['2026-10'], source burchett-email-2026-09-23; 10/12 keeps its 9/17 source) so his October list reflects it, and the four backups reassigned to him from Khan (10/9, 10/15 - the 9/23 publish fill), Acton (10/20) and Philip (10/22, over his backup cap there) as LOCKED manual edits through scripts/day-edit.js - the day editor's save path from the command line (snapshot 'day_edit' first, compare-and-swap on day + version + expected holder, audit schedule.day_edit / schedule.lock; the editor's manual_edit notice is printed, not sent). Primaries untouched; 10/15 primary stays open (open question 1). existingAssignments mirrors the rows after the edits (source strings and notes unchanged) so a re-import reads the four days as unchanged. Live order: day-edit --apply before import-seed --apply (10/20 and 10/22 were still seed-owned).",
+    "10/15 (Thu) primary (open question 1; answered 9/25, recorded here 9/26): Burchett took it with Khan as backup - set by the scheduler in the app 9/25 15:24 CDT, primary locked (Generate never touches a lock). An app edit, not a seed statement: existingAssignments 2026-10-15 stays the import record (primary open, Burchett backup locked - the 9/23 day-edit state), and the live row, app-owned, reads BLOCKED in every import dry run and is kept by every apply - the 10/24 precedent (open question 6)."
   ],
   "openQuestions": [
-    "1. 10/15 (Thu) \u2014 the one open primary day left in the locked October import (Sat 10/24 was published to Khan on 9/23, item 6); nobody's rules allow it. To be discussed by the group. (Imported unlocked; shows as uncovered with reasons; the 9/23 publish left it OPEN.)",
+    "1. ~~10/15 (Thu) \u2014 the one open primary day left in the locked October import (Sat 10/24 was published to Khan on 9/23, item 6); nobody's rules allow it. To be discussed by the group. (Imported unlocked; shows as uncovered with reasons; the 9/23 publish left it OPEN.)~~ - answered 9/25: Burchett primary (locked), Khan backup - set by the scheduler in the app 9/25 15:24 CDT (answeredQuestions; struck here 9/26). existingAssignments 2026-10-15 stays the import record (primary open, Burchett backup): the live row is app-owned and every re-import keeps it, as with 10/24 (item 6).",
     "2. Sarkar's home email address (none on record) \u2014 goes in the private contacts file, not here.",
     "3. ~~Holiday unit days for 2027 and the minor holidays~~ - answered: Monday minors absorb the weekend before (Faraz 9/22 evening, Prompt 12 U); Thanksgiving is Thu-Sun every year (2027: 11/25-11/28) and July 4 uses the observed day (2027: Sunday, observed Monday 7/5, unit Sat 7/3 - Mon 7/5) - Faraz 9/22 late, Prompt 12 AC. Christmas and New Year's stay Eve+Day. Data in holidays.units, editable in Setup. Not yet decided: a Saturday July 4 (observed Friday; builder default = the Friday alone; next in 2037).",
     "4. ~~Khan as BACKUP on ordinary Tuesdays/Thursdays~~ - answered 9/22: backup is open to everyone (surgeonRules.s1.hardNeverWeekdaysRoles = [\"primary\"]). Open instead: does anyone want an explicit backup opt-out (surgeonRules.<id>.backupOptOut, Setup -> Rules 'Does not take backup')? Nobody so far - ask the group once (rules doc section 8 item 9).",
@@ -1862,7 +1864,7 @@
     "8. ~~Thanksgiving 11/26-29 for Khan~~ - confirmed by Faraz 9/22 (evening; Prompt 12 Z): the item-B awaitingConfirmation flag and the 'confirm' badge are cleared, the four rows stay locked (source faraz-2026-09-21). Wed 11/25 is a separate locked one-off for Khan (2026 only, amendment A 9/22), not part of the unit - the unit stays Thu-Sun.",
     "9. Backup opt-outs - the 9/22 rule lets anyone opt out of backup explicitly (surgeonRules.<id>.backupOptOut); nobody has. Ask the group once.",
     "10. ~~11/9, 11/14, 11/15 backup - the ER-panel author published Burchett; Fierce's derived backup week claims the same days~~ - answered 9/22 (Prompt 12 T): Fierce takes backup 11/9-11/16 (his word); the ER-panel author's Burchett entries on 11/9, 11/14, 11/15, 11/16 are superseded and her document changes on those four days.",
-    "11. October's sixteen open backups (five before 10/15 - AB - and eleven from 10/15 on, item 14) + 10/24 primary - filled by the 9/23 publish from the committed preview (docs/PUBLISH-2026-09-23.md: the one-run default from the first open slot 10/7; 10/24 primary -> Khan; 10/15 primary stays OPEN, item 1). Review or trade any of them in the app; the fill-open-only path (scripts/preview-generate.js --backfill, Prompt 12 T) remains for a later backfill.",
+    "11. October's sixteen open backups (five before 10/15 - AB - and eleven from 10/15 on, item 14) + 10/24 primary - filled by the 9/23 publish from the committed preview (docs/PUBLISH-2026-09-23.md: the one-run default from the first open slot 10/7; 10/24 primary -> Khan; 10/15 primary stayed OPEN until the scheduler filled it 9/25, item 1). Review or trade any of them in the app; the fill-open-only path (scripts/preview-generate.js --backfill, Prompt 12 T) remains for a later backfill.",
     "12. Burchett 10/25 - in his own 9/17 plan but not in the ER-panel author's document; confirm it stands now that Sarkar is off 10/24.",
     "13. ~~11/5 (Thu) primary - open for nobody once Acton is locked as its backup~~ - answered 9/22 evening (Prompt 12 Y, Faraz): Acton's 9/17 message gave rules and preferences, never a date list (the November dates came through Burchett's relay), so his November list is preferences, the November whitelist comes off (s3.explicitListMonths = October only; no explicitAvailable['2026-11'] block), his relayed days stay locked, and his recurring rules allow Thu 11/5: primary 11/4-11/6 (a run of 3, his max), locked (source faraz-2026-09-22-acton-1105); 11/5 backup is open to anyone eligible. Burchett's November whitelist stays.",
     "14. 10/16, 10/27, 10/29 backup - open in the import (the ER-panel author's 9/16 document: Philip primary, no backup) but NOT in the open-backup list of her 9/22 document (10/15, 10/21, 10/23, 10/24, 10/25, 10/30, 10/31, 11/1): does her 9/22 document carry a backup on those three days? If so, send it and it is imported as a lock; meanwhile the October backfill proposes candidates for all eleven open backups.",

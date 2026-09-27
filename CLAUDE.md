@@ -119,8 +119,8 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   Don't gold-plate exports or edge functions until the surgeons are on the live app.
 - Pending inputs: Sarkar's home email, Philip's monthly cap — see `docs/SILVIS-CALL-RULES.md §8`. (Answered, not
   pending: Thu 10/15 primary — the 9/23 publish left it OPEN; Burchett took it with Khan as backup, set by the scheduler
-  9/25 15:24 CDT, primary locked (the seed's `openQuestions` keeps it until the next seed change); and Khan as backup
-  on ordinary Tue/Thu — backup is open to everyone since 9/22.) Treat the open ones as unknowns, not assumptions to
-  bake in. Every default taken for an unanswered question is data in `call_schedule_data.data.groupRules` /
-  `surgeonRules` (listed in `docs/SILVIS-CALL-RULES.md` §8 and the seed's `openQuestions`; the 9/21 orientation that
-  first listed them is history, `docs/HISTORY.md`), never a code branch.
+  9/25 15:24 CDT, primary locked (the seed's `openQuestions` 1 is struck since 9/26; the seed row stays the import
+  record); and Khan as backup on ordinary Tue/Thu — backup is open to everyone since 9/22.) Treat the open ones as
+  unknowns, not assumptions to bake in. Every default taken for an unanswered question is data in
+  `call_schedule_data.data.groupRules` / `surgeonRules` (listed in `docs/SILVIS-CALL-RULES.md` §8 and the seed's
+  `openQuestions`; the 9/21 orientation that first listed them is history, `docs/HISTORY.md`), never a code branch.
