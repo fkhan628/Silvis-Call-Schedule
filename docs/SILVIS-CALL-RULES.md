@@ -22,7 +22,8 @@ the two disagree, fix both.*
 | Fairness | ⟶ **9/22: everyone as equal as possible.** Primary counts are balanced across the pool and backup counts are balanced across the pool, each within the person's availability; nobody is a "neutral" filler. See §6. | Khan 9/22 |
 | Caps | ⟶ **9/22: monthly caps count primary days only** — backup days do not count toward Burchett's 8 (or anyone's total cap). An explicitly stated backup cap (Philip: ≤ 7 backup days and ≤ 1 backup weekend per month) still applies. Seed keys (Prompt 12 K): `surgeonRules.<id>.monthlyCap = { primary, preferred, countsEastDays }` — `primary` = hard cap on primary days per calendar month, `preferred` = soft ceiling on the same count, `countsEastDays: true` adds the days of an East *primary* week (Fierce); `null` = no cap, absent = `groupRules.defaultMonthlyCap.primary` (8). The pre-9/22 key `total` is read as an alias of `primary` with a warning. Philip's `backupCap = { perMonthDays: 7, weekendsPerMonth: 1 }` is the separate backup rule. | Khan 9/22 |
 | Outside surgeons | ⟶ **9/22: the roster can carry outside surgeons ("internal locums", e.g. a Davenport surgeon willing to take a shift)** who are **written in by hand** for specific days, never auto-assigned by the generator, and tallied separately. | Khan 9/22 |
-| Backup contract | Backup should never be called if the primary stays true to the location. (Stipend transfer on activation is a group/admin matter — **the app carries no compensation logic or $ display at all.**) | Burchett 9/18, Khan 9/21 |
+| Backup contract | Backup should never be called if the primary stays true to the location. (Stipend transfer on activation is a group/admin matter.) **Backup is never paid in the app.** ~~The app carries no compensation logic or $ display at all.~~ ⟶ **9/27: primary call pay is tracked in the app** (next row). | Burchett 9/18, Khan 9/21, **9/27** |
+| Call pay (9/27) | ⟶ **9/27 (Faraz; reverses the 9/21 "no compensation" rule): the app tracks PRIMARY call pay.** Per primary 24-h call day (07:00 → 07:00): a **stipend** per shift; a **call-in rate** when the primary is called in that day — the weekday rate on a weekday, the weekend / holiday rate (paid in addition to the stipend) on a weekend or holiday day; an **activation rate** for the hours worked (on a weekday the after-hours hours the surgeon enters, on a weekend / holiday all hours) — or, by a setting, per call-in. wRVU conversion is not tracked yet. A day is paid to whoever is its primary in the **current** schedule (a trade moves the pay with the day; a call-in logged on a day that later moved is listed as not counted). Days up to today are *earned*, later days *projected* (stipend only). **The figures are data, never in this document, the seed, the repo or any public table:** the scheduler enters them in Setup → Pay rates (`call_pay_settings`, authenticated only); surgeons log call-ins in My schedule → My pay (`call_pay_logs`, own rows only; a future day, a backup day and more than 24 h a day are refused; the optional note carries **no patient and no contact details** — hours only, e.g. "OR till 2am"). Who sees pay: each surgeon his own, the scheduler everyone's (Totals → Pay, with a CSV); the office coordinator, viewers, followers and the public page see none. No amount in notifications, e-mails, calendar feeds or exports others see. Defaults taken for the open questions (§8 item 22): Friday is a weekday for pay, every day of a holiday unit is a holiday, the call-in rates need a logged call-in, activation is per hour. Schema: `sql/migrations/2026-09-27-call-pay.sql` (report-first; until it is applied the cards say "Pay tracking is available after the next database update"). | Khan **9/27** |
 | Practice hygiene | No operating at another facility while on Silvis primary. 30-minute response time. | Khan 8/29, Burchett 8/27 |
 | Consecutive days | Default max **2 consecutive 24-h PRIMARY periods** (hard, real days); per-surgeon overrides below (weekend blocks are 3; Fierce weeks are 7). ⟶ **9/22 (Prompt 12 A): a holiday unit counts as one day only for a surgeon who opted in (Khan); any-role runs (primary or backup) have a SOFT per-surgeon limit (Burchett 3, Sarkar 2, Khan 4, Acton 4, Philip 4, Fierce 7) with a penalty that grows per day beyond it.** | Burchett 8/27, Khan 8/29, review 9/22 |
 | Week-long stints | No more week-long call stints for the general pool (Atwell/Fierce legacy pattern). Fierce's derived weeks are the explicit exception (§3). | Burchett 8/27, Khan 9/21 |
@@ -370,7 +371,8 @@ pool, within each person's availability:
 - **Outside surgeons** (internal locums) are never in the pool; their hand-written days reduce the pool's slot count.
 - Metrics per surgeon — by month, year-to-date and rolling 12 months: primary shifts, backup shifts, weekend days,
   major/minor holidays, longest run (primary-only and any-role), each vs. share/cap. One 24-hour day = one shift; nothing
-  is weighted or split. **No compensation, stipend or $ figures anywhere in the app.**
+  is weighted or split. The counts stay unweighted; ~~no compensation, stipend or $ figures anywhere in the app~~ ⟶ 9/27:
+  primary call pay is tracked separately (§1 "Call pay"; Totals → Pay, scheduler only) and never weights a count or a share.
 - Generation objective, in order: (1) zero uncovered primary days, (2) zero uncovered backup days, (3) zero hard-rule
   violations, (4) minimize soft penalties, (5) minimize primary spread, (6) minimize backup spread, (7) balance weekends
   and holidays.
@@ -515,10 +517,10 @@ day, Acton 10/23, Sarkar 10/20/22/24 — ⟶ 9/22 evening: 10/24 removed —, Bu
 week, Saturday OK, never Fri/Sun, no target; Khan may be backup on East days, Mon/Wed are auto-offered, no cap; Fierce is
 in the pool outside his derived weeks under his weekday pattern — Monday backup-only because primary must be on site,
 weekends as Fri+Sat+Sun blocks, 14 call days/month cap, and his "10 days off" is a preference not a rule; Acton has no
-specific cap; the office contact gets a viewer account (administration none); no compensation in the app; no Atwell; no APPs.
+specific cap; the office contact gets a viewer account (administration none); no compensation in the app (⟶ **reversed 9/27**: primary call pay is tracked - §1 "Call pay"); no Atwell; no APPs.
 
 **Scope decisions (Faraz 9/21):** dropped from Davenport — APP info/call/vacation, Fierce's separate backup weeks, no-call
-days, the vacation approval workflow, split/weighted shift accounting, compensation. Kept — shift trades, stats with shift
+days, the vacation approval workflow, split/weighted shift accounting, compensation (⟶ **9/27: Silvis tracks primary call pay, its own model** - §1). Kept — shift trades, stats with shift
 counts and fairness, a running yearly tally. Carried over — office notifications, calendar sync, refresh, data management
 and every safety feature. Holidays are the same DSG set, as primary + backup units.
 
@@ -660,3 +662,12 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     later than its 42-day mark never sends that one), the seed must carry the same list (a seed apply overwrites the
     blob's groupRules), and the in-app "urgent" window (the largest offset) would then widen to 42 days — the Calendar
     would show the notice for the whole six weeks.
+22. **Call pay (Faraz 9/27) — the defaults taken; each is a setting in Setup → Pay rates (`call_pay_settings`), none a code
+    branch.** (a) The stipend is **per primary 24-h shift** (a monthly stipend is not modelled - say so if it is monthly);
+    (b) the call-in rates are paid **only when the primary is called in** that day (`callin_required_weekday` /
+    `callin_required_weekend_holiday` = on) - or on every call day?; (c) the activation rate is **per hour worked** (weekday:
+    the after-hours hours the surgeon enters; weekend / holiday: all hours) - or per call-in (`activation_unit`)?; (d)
+    **Friday is a weekday** for pay (weekend days Sat + Sun); (e) **every day of a holiday unit is a holiday** (Christmas Eve,
+    New Year's Eve, the Thanksgiving Fri-Sun, a Sat / Sun a Monday minor absorbs) - switched off, units stop affecting pay (a
+    "named day only" list would be a later setting); (f) what counts as "after-hours" on a weekday is the surgeon's own entry;
+    (g) call-ins stay editable (no month lock after payroll); (h) wRVU conversion is not tracked yet (room is left for it).

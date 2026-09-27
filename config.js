@@ -344,6 +344,98 @@ const notifPrefsDb = {
   },
 };
 
+// ---- Call pay (Faraz 9/27; sql/migrations/2026-09-27-call-pay.sql - report-first, NOT applied until Faraz runs it) ----
+// The ONLY place the client names the two pay tables. Both are authenticated-only (never anon), so a read goes out only
+// with a FRESH user token (dbAuthHeaders) - without one it answers { state: "skipped" } and the caller keeps what it has
+// (an anon read would be refused, or answer 200 + [] - a failed read dressed as an empty one). Reads answer
+//   { state: "ok", row | rows }       rows may be [] (a real empty month)
+//   { state: "unavailable" }          the table does not exist yet (PostgREST 404 PGRST205 / 42P01 - helpers.payReadFailureState):
+//                                     the cards say "Pay tracking is available after the next database update", no toast
+//   { state: "failed", error }        anything else (a non-2xx, a non-array body, a network error) - never an empty "ok"
+//   { state: "skipped" }              no fresh token - nothing was read
+// Writes go through db / authFetch (the user's JWT, a refresh + one retry on a 401): saveSettings upserts the 'main' row;
+// addLog POSTs with return=representation (the surgeon's select policy sees his own new row); updateLog / deleteLog read
+// the matched rows back - 0 rows means refused (RLS filters silently) and answers { error: "0 rows ..." }.
+// A pay read pages at this size (PostgREST caps every answer at max-rows, Supabase default 1000 - loadScheduleDays and the
+// snapshot reader page the same way): the scheduler's year of call-ins could exceed it, and a capped 200 would drop the
+// latest days' call-ins from Totals > Pay and the pay CSV without a word.
+const PAY_PAGE = 1000;
+const payDb = {
+  _fresh() {
+    let token = null;
+    try { token = localStorage.getItem("silvis-auth-token"); } catch (e) { token = null; }
+    return !!(token && jwtIsFresh(token));
+  },
+  // _read(path, paged): paged = limit / offset pages of PAY_PAGE until a short page (the path must carry a total order).
+  async _read(path, paged) {
+    if (!payDb._fresh()) return { state: "skipped" };
+    try {
+      const all = [];
+      for (let offset = 0; ; offset += PAY_PAGE) {
+        const url = paged ? `${path}&limit=${PAY_PAGE}&offset=${offset}` : path;
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${url}`, { headers: dbAuthHeaders() });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          return { state: payReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` };
+        }
+        const rows = await res.json();
+        if (!Array.isArray(rows)) return { state: "failed", error: "unexpected response body" };
+        for (const r of rows) all.push(r);
+        if (!paged || rows.length < PAY_PAGE) break;
+      }
+      return { state: "ok", rows: all };
+    } catch (e) {
+      return { state: "failed", error: String((e && e.message) || e) };
+    }
+  },
+  async loadSettings() {
+    const r = await payDb._read("call_pay_settings?select=*&id=eq.main");
+    return r.state === "ok" ? { state: "ok", row: r.rows[0] || null } : r;
+  },
+  // loadLogs({ personId, from, to }): personId null = every row the caller may read (the scheduler); a surgeon passes his own.
+  async loadLogs(opts) {
+    const o = opts || {};
+    const iso = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (!iso(o.from) || !iso(o.to)) return { state: "failed", error: "loadLogs needs from / to days" };
+    const who = o.personId ? `&person_id=eq.${encodeURIComponent(o.personId)}` : "";
+    return payDb._read(`call_pay_logs?select=*&day=gte.${o.from}&day=lte.${o.to}${who}&order=day.asc,created_at.asc,id.asc`, true);
+  },
+  async saveSettings(row) {
+    return db.upsert("call_pay_settings", row, { onConflict: "id" });
+  },
+  async addLog(row) {
+    // return=representation: the surgeon's select policy sees his own new row, so the insert reads it back (its id)
+    try {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/call_pay_logs`, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(row) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { data: null, error: text || `HTTP ${res.status}` };
+      let rows = [];
+      try { rows = JSON.parse(text); } catch (e) { rows = []; }
+      const first = Array.isArray(rows) ? rows[0] : null;
+      return first ? { data: first, error: null } : { data: null, error: "0 rows: the call-in was not saved" };
+    } catch (e) {
+      return { data: null, error: String((e && e.message) || e) };
+    }
+  },
+  async updateLog(id, patch) {
+    const { data, error } = await db.update("call_pay_logs", encodeURIComponent(id), patch);
+    if (error) return { data: null, error };
+    return data.length ? { data: data[0], error: null } : { data: null, error: "0 rows: the call-in was not changed (not yours, or gone)" };
+  },
+  async deleteLog(id) {
+    try {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/call_pay_logs?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers: { Prefer: "return=representation" } });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { error: text || `HTTP ${res.status}` };
+      let rows = [];
+      try { rows = JSON.parse(text); } catch (e) { rows = []; }
+      return Array.isArray(rows) && rows.length ? { error: null } : { error: "0 rows: the call-in was not deleted (not yours, or gone)" };
+    } catch (e) {
+      return { error: String((e && e.message) || e) };
+    }
+  },
+};
+
 function payloadLooksWiped(p) {
   if (typeof payloadLooksWipedDaily === "function") return payloadLooksWipedDaily(p);
   // helpers.js not loaded (should never happen in the app - the loader order

@@ -74,6 +74,12 @@
 -- timeoff. / offers. / availability. families (prefs.save). audit_insert, audit_read and audit_read_coord are unchanged (audit_read_coord kept, now
 -- redundant). Applied after the 24-hour gate had passed (applied earlier, it would have turned the gate's verify-rls C21 red); the lost audit rows
 -- the tables could rebuild were backfilled (detail.backfilled = true; the rest listed - docs/SCHEMA-REVIEW.md).
+-- Revision 2026-09-27 r (call pay, sql/migrations/2026-09-27-call-pay.sql, report-first, NOT yet applied): Faraz 9/27 reverses the 9/21
+-- "no compensation logic" rule - primary call pay is tracked in the app. Two NEW tables: call_pay_settings (one row 'main': the rates
+-- the scheduler enters in Setup, null until then - no rate figure in this repo - plus the pay-model flags; read by the scheduler and
+-- linked surgeons, written by the scheduler) and call_pay_logs (one row per call-in of the PRIMARY on a past call day; own rows for a
+-- surgeon, every row for the scheduler; call_pay_logs_guard refuses PY001 PAY_FUTURE / PY002 PAY_NOT_PRIMARY / PY003 PAY_HOURS_OVER).
+-- Neither is anon-readable (not in the read_all loop; anon's table privileges revoked on top). Nothing that exists is touched.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -1171,6 +1177,100 @@ create table if not exists public.office_notification_state (
   updated_at       timestamptz not null default now()
 );
 
+-- ---------- call pay (2026-09-27, Faraz: primary call pay is tracked in the app; sql/migrations/2026-09-27-call-pay.sql,
+-- report-first, NOT yet applied - revision r). Authenticated only, never anon: the rates and the call-ins are pay data. The
+-- 'main' settings row starts with every rate null (seed rows below) - the scheduler enters the figures in Setup > Pay rates,
+-- so no rate figure is ever in this file. The client reads a missing table (404 PGRST205 / 42P01) as 'unavailable'.
+-- call_pay_logs_guard is security invoker (schedule_days is readable by every role) and applies to every caller:
+--   PY001 PAY_FUTURE       the day is after today in America/Chicago
+--   PY002 PAY_NOT_PRIMARY  the person is not the day's primary in schedule_days (backup is never paid)
+--   PY003 PAY_HOURS_OVER   more than 24 h on one call day for one person
+-- The guard takes a transaction advisory lock on (person, day) before the 24 h sum (no read-then-write race); both functions pin
+-- search_path. Deletes have no guard (RLS only), so a surgeon can remove his own row left behind after the day's primary changed.
+-- authenticated keeps select / insert / update / delete only (TRUNCATE / REFERENCES / TRIGGER from the default privileges revoked).
+-- `revoke all ... from anon`: defence in depth beyond RLS (the other authenticated-only tables rely on RLS alone) - an anon
+-- request is refused outright instead of answered 200 + [].
+create table if not exists public.call_pay_settings (
+  id                              text primary key default 'main' check (id = 'main'),
+  stipend_per_shift               numeric(10,2) check (stipend_per_shift is null or stipend_per_shift between 0 and 99999),
+  weekday_callin_rate             numeric(10,2) check (weekday_callin_rate is null or weekday_callin_rate between 0 and 99999),
+  weekend_holiday_callin_rate     numeric(10,2) check (weekend_holiday_callin_rate is null or weekend_holiday_callin_rate between 0 and 99999),
+  activation_rate                 numeric(10,2) check (activation_rate is null or activation_rate between 0 and 99999),
+  activation_unit                 text not null default 'hour' check (activation_unit in ('hour','activation')),
+  weekend_days                    jsonb not null default '["Sat","Sun"]'::jsonb check (jsonb_typeof(weekend_days) = 'array' and weekend_days <@ '["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]'::jsonb),
+  holiday_unit_days_are_holidays  boolean not null default true,
+  callin_required_weekday         boolean not null default true,
+  callin_required_weekend_holiday boolean not null default true,
+  updated_by                      text,
+  updated_at                      timestamptz not null default now()
+);
+
+create table if not exists public.call_pay_logs (
+  id          uuid primary key default gen_random_uuid(),
+  day         date not null,
+  person_id   text not null,
+  hours       numeric(5,2) not null default 0 check (hours >= 0 and hours <= 24 and hours * 4 = trunc(hours * 4)),
+  note        text check (note is null or (char_length(note) <= 200 and note !~ '@' and note !~ '[0-9]{3}[^0-9]?[0-9]{3}[^0-9]?[0-9]{4}')),
+  created_by  text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists call_pay_logs_person_day_idx on public.call_pay_logs(person_id, day);
+
+create or replace function public.call_pay_logs_guard() returns trigger
+language plpgsql security invoker set search_path = public as $$
+declare
+  today_c date := (now() at time zone 'America/Chicago')::date;
+  others  numeric;
+begin
+  if new.day > today_c then
+    raise exception 'PAY_FUTURE: % is after today (%) in Central time - a call-in is logged once it happened', new.day, today_c using errcode = 'PY001';
+  end if;
+  if not exists (select 1 from public.schedule_days d where d.day = new.day and d.primary_id = new.person_id) then
+    raise exception 'PAY_NOT_PRIMARY: % is not the primary on % - call pay is logged for the primary only', new.person_id, new.day using errcode = 'PY002';
+  end if;
+  -- one writer per person and day at a time: two concurrent call-ins cannot both pass the 24 h sum (read-then-write)
+  perform pg_advisory_xact_lock(hashtext('call_pay:' || new.person_id || ':' || new.day::text));
+  select coalesce(sum(l.hours), 0) into others
+    from public.call_pay_logs l
+   where l.person_id = new.person_id and l.day = new.day and l.id is distinct from new.id;
+  if others + new.hours > 24 then
+    raise exception 'PAY_HOURS_OVER: % already has % h logged on % - one call day holds at most 24 h', new.person_id, others, new.day using errcode = 'PY003';
+  end if;
+  if tg_op = 'INSERT' then
+    new.created_at := now();
+    new.created_by := coalesce(public.silvis_person_id(), auth.uid()::text, new.created_by);
+  else
+    new.created_at := old.created_at;
+    new.created_by := old.created_by;
+  end if;
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists call_pay_logs_guard_trg on public.call_pay_logs;
+create trigger call_pay_logs_guard_trg
+  before insert or update on public.call_pay_logs
+  for each row execute function public.call_pay_logs_guard();
+
+create or replace function public.call_pay_settings_touch() returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  new.updated_at := now();
+  new.updated_by := coalesce(public.silvis_person_id(), auth.uid()::text, new.updated_by);
+  return new;
+end $$;
+drop trigger if exists call_pay_settings_touch_trg on public.call_pay_settings;
+create trigger call_pay_settings_touch_trg
+  before insert or update on public.call_pay_settings
+  for each row execute function public.call_pay_settings_touch();
+
+revoke all on table public.call_pay_settings from anon;
+revoke all on table public.call_pay_logs from anon;
+revoke truncate, references, trigger on table public.call_pay_settings from authenticated;
+revoke truncate, references, trigger on table public.call_pay_logs from authenticated;
+grant select, insert, update, delete on table public.call_pay_settings to authenticated;
+grant select, insert, update, delete on table public.call_pay_logs to authenticated;
+
 -- ============================================================================
 -- Row Level Security
 -- ============================================================================
@@ -1193,6 +1293,8 @@ alter table public.office_contacts         enable row level security;
 alter table public.office_notification_state enable row level security;
 alter table public.call_offers             enable row level security;
 alter table public.call_periods            enable row level security;
+alter table public.call_pay_settings       enable row level security;
+alter table public.call_pay_logs           enable row level security;
 
 -- Anon-readable tables (shareable page + calendar-sync need these without a JWT)
 do $$ declare t text; begin
@@ -1369,11 +1471,38 @@ drop policy if exists contacts_write on public.office_contacts;
 create policy contacts_write on public.office_contacts for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
 
+-- call pay (2026-09-27, revision r - report-first, NOT yet applied): the settings row is read by the scheduler / admin and by a
+-- SURGEON-role account linked to a roster id (the rates his own pay is computed with), written by the scheduler / admin only;
+-- a call-in row is read and written by the scheduler / admin (every row) and by a surgeon for his OWN roster id only.
+-- Coordinator (never linked), viewer, follower and anon read and write nothing. Never anon: not in the read_all loop above.
+drop policy if exists call_pay_settings_read on public.call_pay_settings;
+create policy call_pay_settings_read on public.call_pay_settings for select to authenticated
+  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and public.silvis_person_id() is not null));
+drop policy if exists call_pay_settings_write on public.call_pay_settings;
+create policy call_pay_settings_write on public.call_pay_settings for all to authenticated
+  using (public.silvis_is_sched()) with check (public.silvis_is_sched());
+drop policy if exists call_pay_logs_read on public.call_pay_logs;
+create policy call_pay_logs_read on public.call_pay_logs for select to authenticated
+  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+drop policy if exists call_pay_logs_insert on public.call_pay_logs;
+create policy call_pay_logs_insert on public.call_pay_logs for insert to authenticated
+  with check (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+drop policy if exists call_pay_logs_update on public.call_pay_logs;
+create policy call_pay_logs_update on public.call_pay_logs for update to authenticated
+  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()))
+  with check (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+drop policy if exists call_pay_logs_delete on public.call_pay_logs;
+create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated
+  using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+
+
 -- ============================================================================
 -- Seed rows
 -- ============================================================================
 insert into public.call_schedule_data (id, data) values ('main', '{}'::jsonb) on conflict (id) do nothing;
 insert into public.client_versions (id, min_version, message) values ('main', null, null) on conflict (id) do nothing;
+-- call pay (revision r): the settings row with every rate null - the scheduler enters the figures in the app, never here.
+insert into public.call_pay_settings (id) values ('main') on conflict (id) do nothing;
 -- Office contacts are entered by hand in Setup (authenticated-read table). Template, kept commented so no
 -- contact data is ever committed:
 -- insert into public.office_contacts (name, email, role) values

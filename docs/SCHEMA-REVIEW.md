@@ -29,6 +29,8 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_offers` | Offers: one row per person and day (`role_pref` primary / backup / either, operational `note`, `entered_by`, `source` app / email-relay / import); triggers refuse a past day (`OF001`), a day inside the person's vacation (`OF002`) and non-scheduler writes inside a frozen period (`OF003`). Authenticated. Added 2026-09-22 (Prompt 14 part 1; block below). |
 | `call_periods` | Periods: generation windows with `offers_close_at` / `publish_by` / `status` / `rules_only_ids` / `offer_modes` (`{person_id: 'exhaustive' \| 'preferred'}`, absent = preferred; column from `sql/migrations/2026-09-23-offer-modes.sql`, applied live 2026-09-23 07:05Z - see the offer_modes subsection below). Authenticated read, scheduler write. |
 | `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. |
+| `call_pay_settings` | Call pay (Faraz 9/27), **prepared (NOT APPLIED)** - section at the end: ONE row `main` - the four rates the scheduler enters in Setup > Pay rates (`stipend_per_shift`, `weekday_callin_rate`, `weekend_holiday_callin_rate`, `activation_rate`; null = not set yet, no default and no figure anywhere in the repo) and the pay-model flags (`activation_unit`, `weekend_days`, `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday`). Authenticated only; anon privileges revoked. |
+| `call_pay_logs` | Call pay (Faraz 9/27), **prepared (NOT APPLIED)**: one row per call-in of the PRIMARY on a past call day (`day`, `person_id`, `hours` in quarter hours 0-24, optional contact-free `note`, `created_by`); `call_pay_logs_guard` refuses a future day (`PY001`), a day the person is not primary (`PY002`) and more than 24 h per day (`PY003`). Authenticated only; anon privileges revoked. |
 
 Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`.
 
@@ -50,6 +52,8 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `call_offers` | authenticated | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin; never anon (deliberately absent from the anon `read_all` loop) |
 | `call_periods` | authenticated | scheduler/admin (all verbs); never anon |
 | `east_vacation_reviews` (applied 2026-09-23) | authenticated (**no anon policy** — an anon read is a silent `200 + []`) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
+| `call_pay_settings` - prepared (NOT APPLIED), call pay 9/27 | scheduler/admin, and a surgeon-role account linked to a roster id; never coordinator / viewer / follower / anon (anon privileges revoked) | scheduler/admin (all verbs) |
+| `call_pay_logs` - prepared (NOT APPLIED), call pay 9/27 | scheduler/admin every row; a surgeon-role account his own rows (`person_id = silvis_person_id()`); nobody else (anon privileges revoked) | insert/update/delete: the same; `call_pay_logs_guard` (PY001-PY003) applies to every caller, the scheduler included |
 
 ## (c) Findings
 
@@ -1554,3 +1558,98 @@ Rolling back = `drop policy if exists audit_read_own on public.audit_log;` - it 
 apply step 8's undo.
 
 observed: applied 2026-09-27 00:49:39.789384Z (`supabase db query --linked -f sql/migrations/2026-09-25-audit-read-own.sql`, empty result, no error) by the orchestrator through the linked CLI, in the session that ran the 24-hour gate by hand - the gate PASSED first (return leg and followers applied, verify-rls 192 / 0, `send-notification` v8 / `daily-reminder` v6 deployed; the two sections above). Step 2: the branch rebased cleanly onto `7a23f09` (the record commit had not landed - step 2's note), `SILVIS_GEN_BUDGET_MS=40000 npm test && node build.js` and `bash -n scripts/verify-rls.sh` green. Probe BEFORE (22 cases) = the BEFORE column, 22 / 22: `P1=policies=audit_insert,audit_read,audit_read_coord`, `S1` / `S2` / `C2` / `C4` / `S7` / `C7` / `V1` / `V2` = `ERR 42501 new row violates row-level security policy for table "audit_log"`, `S5=own=0`, `T1=own=0 s3=0`, `C5=own_family=1 own_other=0`, `D1=own_family=1 own_other=0 coord=0`, `S3` / `S4` / `C1` / `C3` / `A1` = `ok`, `S6=s2=0 s1=0 coord=0 cli=0 cron=0`, `C6=coord2=0 surgeons=0 cli=0 cron=0`, `V3=visible=0`, `A2=sees_all=t`. Probe AFTER = the AFTER column, 22 / 22: `P1=policies=audit_insert,audit_read,audit_read_coord,audit_read_own`, `S1=ok`, `S2=ok rows=1`, `C2=ok`, `C4=ok rows=1`, `S5=own=5`, `T1=own=1 s3=0`, `C5=own_family=1 own_other=4`, `D1=own_family=1 own_other=1 coord=0`; the refusals (`S7` / `C7` / `V1` / `V2` ERR 42501), the zero counts (`S6`, `C6`, `V3=visible=0`) and the controls (`S3`, `S4`, `C1`, `C3`, `A1`, `A2`) unchanged. `SILVIS_RETURN_LEG_APPLIED=1 bash scripts/verify-rls.sh` from the rebased branch: `RESULT: 214 passed, 0 failed` - section 13 every case PASS (22 + the leftover check), section 11 `C21=own_family=1 others=0 own_other=1` PASS, section 5 `Q` / `Q3` refused; every leftover count 0 (sections 5, 7, 8, 9, 10, 11, 12, 13). Pushed `7a23f09..54dcdc0` (CI build `6886edc`). Step 3, the backfill: the reconciliation (step 8 b, read-only over `time_off`, `call_offers`, `shift_trade_requests` proposals and decisions, `notification_preferences` and coordinator `availability` since 2026-09-23) found 5 candidates. 2 false positives: Acton's two `trade.propose` rows of 2026-09-24 17:26Z (trades `61c575f8` / `6fec84bc`, 10/10 and 10/11 primary to Burchett) - Khan (s1) proposed and accepted them on Acton's behalf and all six audit rows exist under actor s1; the query matched the proposer on `from_surgeon_id`. 3 backfilled, in one guarded block (source rows re-checked, expected count 3, else raise and persist nothing) after snapshot `4a70d7d6-831a-40c4-96f0-ae72832d19fb` (`call_schedule_snapshots`, reason `audit_backfill`): audit row `ce86ffed-b3b9-4e5f-91d2-576764096ca7` (Acton `timeoff.add`, `Added vacation for Acton: 2027-03-15 -> 2027-03-21`, created_at 2026-09-24 18:17:57.797172Z), audit row `a9f2ab89-0447-43ca-8cbf-d62b77314c37` (Acton `timeoff.add`, `Added vacation for Acton: 2027-04-05 -> 2027-04-11`, 18:19:23.671158Z), audit row `6418111a-e1ae-4d23-bb62-b7fb7e782b3c` (Fierce `prefs.save`, `Saved notification prefs for Fierce`, created_at 2026-09-25 23:06:18.229Z) - actor and summary as `logAudit` words them, `actor_name` the roster name (`Acton` / `Fierce`; `user_profiles.display_name`, which `logAudit` prefers, was not read), `detail.backfilled = true`. Not recoverable, listed for Faraz: Fierce's 403 at 2026-09-25 23:06:06Z (a probable `prefs.save`, overwritten 12 s later by the 23:06:18Z save the row keeps) and his 403 at 2026-09-26 00:16:35Z (no source row explains it: the prefs row still read `updated_at` 2026-09-25 23:06:18.229Z at the reconciliation and every prefs save writes `updated_at`, so it was not a `prefs.save` - action unknown). *Later the same night (the seed apply's pre-flight): the 00:16:35Z 403 is Fierce's mode-only offers save - `call_periods` 'Jan 2027' `rules_only_ids` ["s5"], `updated_at` 2026-09-26 00:16:35.73471Z (the reconciliation covered `call_offers` rows, not a mode-only `set_offer_mode`) - backfilled as a fourth row: `b3323705-8b8e-4f63-8c37-aef3d219bd36` (s5 / Fierce, `offers.save`, summary `Fierce: 0 offer change(s), mode rules_only (Jan 2027)`, detail as `commitOffersPaint` words it plus `backfilled: true`), snapshot `b2d001e6-b00a-4792-a4ec-bc39fa1c7e8f` first. Only 23:06:06Z stays unrecoverable.* 403 coverage, complete: Cowork's four reads (step 8a's table, one row each) cover launch -> 2026-09-27 ~13:15Z with no gap - read 1 (2026-09-25 ~12:30Z; before 9/24 ~12:30Z only the scheduler had signed in), read 2 (2026-09-25 22:27Z, none), read 3 (2026-09-26 22:00Z, Fierce's three) and the closing read 4 (2026-09-27 ~13:15Z, window 2026-09-26 ~13:15Z -> 2026-09-27 ~13:15Z, well inside step 8a's no-gap deadline of 2026-09-27 22:00Z): no failed `audit_log` POST, and no `audit_log` POST at all between 2026-09-26 22:00Z and the apply. The list stands: four rows backfilled, 2026-09-25 23:06:06Z not recoverable; the DB reconciliation agreed (no candidate in that window). Undo of the backfill: `delete from public.audit_log where detail ->> 'backfilled' = 'true' and id in ('ce86ffed-b3b9-4e5f-91d2-576764096ca7', 'a9f2ab89-0447-43ca-8cbf-d62b77314c37', '6418111a-e1ae-4d23-bb62-b7fb7e782b3c', 'b3323705-8b8e-4f63-8c37-aef3d219bd36');`.
+
+## 2026-09-27 - call pay: call_pay_settings + call_pay_logs (Faraz 9/27; `sql/migrations/2026-09-27-call-pay.sql`)
+
+**Status: PREPARED - report-first, NOT APPLIED.**
+
+Faraz 9/27 reverses the 9/21 rule "no compensation logic and no $ display anywhere in this app": the app tracks **primary**
+call pay (backup is never paid). The pay model, per primary 24-h call day (07:00 -> 07:00): a shift stipend; a call-in rate
+when the primary is called in that day (the weekday rate on a weekday, the weekend/holiday rate on a weekend or holiday day);
+and an activation rate for the hours worked (on a weekday the after-hours hours the surgeon enters, on a weekend / holiday
+all hours) - or, by a flag, per call-in. wRVUs are out of scope for now (no column; room is left). The rates are entered by
+the scheduler in the app and live ONLY in `call_pay_settings`; **no figure is in the repo, the seed, the blob or any
+anon-readable table** (`test/privacy.test.js` A6d pins it; `test/schema.test.js` pins that the rate columns carry no default
+and the SQL no numeric literal beyond its check bounds).
+
+| object | before | after |
+|---|---|---|
+| `call_pay_settings` | - | new table, one row `main` (check `id = 'main'`): four `numeric(10,2)` rates, each null or 0-99999, **no default**; `activation_unit` `hour` \| `activation` (default `hour`); `weekend_days` jsonb array of `Sun`..`Sat` (default `["Sat","Sun"]` - Friday is a weekday for pay); `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday` (default true); `updated_by` / `updated_at` stamped by `call_pay_settings_touch`. Seeded `(id)` only - every rate null |
+| `call_pay_logs` | - | new table: `id`, `day`, `person_id` (roster id), `hours numeric(5,2)` 0-24 in quarter hours, `note` (<= 200 characters, no `@`, no phone-like digit run), `created_by`, `created_at`, `updated_at`; index `(person_id, day)`, not unique (one row per call-in) |
+| `call_pay_logs_guard` (BEFORE INSERT OR UPDATE, security invoker, `set search_path = public`, every caller) | - | `PY001 PAY_FUTURE` day after today (Central); `PY002 PAY_NOT_PRIMARY` the person is not `schedule_days.primary_id` that day; `PY003 PAY_HOURS_OVER` the person's hours that day would exceed 24 - summed under a transaction advisory lock on (person, day), so two concurrent call-ins cannot both pass; stamps `created_by` / `created_at` on insert, pins them on update. No delete guard: a surgeon removes his own row after the day's primary changed |
+| grants | Supabase default (anon + authenticated all verbs on a new table, TRUNCATE / REFERENCES / TRIGGER included) | `revoke all ... from anon` on both tables (defence in depth for pay data - the other authenticated-only tables rely on RLS alone); `revoke truncate, references, trigger ... from authenticated` (RLS does not cover TRUNCATE); authenticated keeps select / insert / update / delete |
+
+The six policies, verbatim (neither table is in the anon `read_all` loop):
+
+    create policy call_pay_settings_read on public.call_pay_settings for select to authenticated
+      using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and public.silvis_person_id() is not null));
+
+    create policy call_pay_settings_write on public.call_pay_settings for all to authenticated
+      using (public.silvis_is_sched()) with check (public.silvis_is_sched());
+
+    create policy call_pay_logs_read on public.call_pay_logs for select to authenticated
+      using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+
+    create policy call_pay_logs_insert on public.call_pay_logs for insert to authenticated
+      with check (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+
+    create policy call_pay_logs_update on public.call_pay_logs for update to authenticated
+      using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()))
+      with check (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+
+    create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated
+      using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()));
+
+Who sees what: a linked **surgeon** reads the settings row (the rates his own pay is computed with) and reads / writes only his
+own call-ins; the **scheduler / admin** reads and writes everything (Faraz is admin + s1); a **coordinator** (never linked),
+a **viewer**, a **follower** and **anon** read and write nothing - and the client renders no pay UI and no $ for them, nor on
+the public page. Audit rows the client writes for pay (`pay.rates`, `pay.log.add` / `.edit` / `.delete`) carry changed KEYS,
+days and hours - never an amount - since `audit_log` is readable by the scheduler and the row's author.
+
+**Decisions for Faraz to approve with the apply (RLS scope differs from the 9/27 task text in two places - both narrower or
+equal, never wider):**
+
+1. **Orphan rows stay readable and deletable by their owner.** The task text says a surgeon may select / insert / update /
+   delete his rows "only for days on which he was PRIMARY". As built, insert and update check the primary (PY002, in the
+   guard), but select and delete check the owner only (`person_id = silvis_person_id()`). A call-in left behind when a trade,
+   give or restore moved the day's primary is therefore still visible to its owner (listed as "not counted") and he can delete
+   it; he cannot edit it (PY002). Checking the primary on select / delete too would hide such rows and make them undeletable
+   except by the scheduler.
+2. **The guard binds the scheduler too.** The task text says "the scheduler can do all". RLS lets the scheduler read and write
+   every row, but `call_pay_logs_guard` applies to every caller: the scheduler cannot log a future day (PY001), a day the person
+   was not primary (PY002) or more than 24 h per day (PY003) either - for anyone. Deletes stay open to the scheduler.
+3. **Anon is refused outright** (privileges revoked on top of RLS), unlike the other authenticated-only tables; verify-rls
+   section 14 with `SILVIS_CALL_PAY_APPLIED=1` (and after the record step, always) fails an anon 200 even with `*/0`.
+
+**Blast radius.** Two new tables; no existing table, column, policy, function, grant or row changes. The client that ships with
+this file reads a missing table (PostgREST 404 `PGRST205`, or `42P01` / 400 "does not exist" on older versions) as
+**unavailable** - My schedule > My pay, Totals > Pay and Setup > Pay rates say "Pay tracking is available after the next
+database update", no toast, never an empty list - so the client may ship first. The only live side effect of the apply is
+PostgREST's schema cache: if the tables do not show after the apply, run `notify pgrst, 'reload schema';`.
+
+**What could break.** (1) The probe and verify-rls section 14 are written against an AFTER picture nobody has observed: the first
+live run may show a different refusal wording (e.g. anon 401 vs 403 after the revoke, or the exact 42501 text) - section 14
+accepts 401 / 403 / 42501, and `*/0` only without `SILVIS_CALL_PAY_APPLIED=1` (strict: an anon 200 is a FAIL - it would mean
+the revoke did not take). (2) Pay follows the CURRENT schedule: a trade, give, claim or restore that moves a past day's
+primary turns that day's call-ins into orphans (not counted; the owner can delete them, not edit them - PY002). `call_pay_logs` is
+not in `call_schedule_snapshots`, so a snapshot restore neither restores nor rolls back call-ins. (3) A later `create table`
+could re-grant anon through Supabase's default privileges; harmless - the policies still block anon.
+
+**Apply order.**
+
+1. The client may ship first (it shows "unavailable" until step 4).
+2. Pre-check: `select to_regclass('public.call_pay_logs');` -> null.
+3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/call-pay-probe.sql` -> `PROBE_SETUP: call_pay_logs is absent ...`.
+4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-27-call-pay.sql`.
+5. Probe AFTER: every case as its header lists (35 cases; `P1` names the six policies, `P2` `anon_logs=f anon_settings=f auth_truncate=f`).
+6. `SILVIS_CALL_PAY_APPLIED=1 bash scripts/verify-rls.sh` - sections 1-14 green (the flag makes a 404 / PROBE_SETUP a FAIL).
+7. Faraz enters the rates in Setup > Pay rates (the app writes the `pay.rates` audit row with the changed keys only).
+8. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed line; schema.sql revision r -> "applied
+   <timestamp>" (and the test pin with it); `SILVIS_CALL_PAY_APPLIED` dropped from verify-rls (strict becomes the default); guide
+   4.3's bullet updated.
+
+**Rolling back** = `drop table if exists public.call_pay_logs; drop table if exists public.call_pay_settings; drop function if exists
+public.call_pay_logs_guard(); drop function if exists public.call_pay_settings_touch();` (the triggers and policies go with the
+tables; the client falls back to "unavailable").
+
+observed: _to be filled by the orchestrator at the apply (probe BEFORE / AFTER, verify-rls counts, leftovers)_

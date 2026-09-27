@@ -1219,7 +1219,7 @@ ok(!/simple-protocol/.test(plProbe), "prelaunch probe header must not claim a si
 
 step("P16 A1: verify-rls.sh section 10 - anon rpc offer_status refused, the client gates, the probe graded case by case, leftovers counted");
 ok(/^echo "== 10\. /m.test(vr), "verify-rls.sh has no section 10");
-const s10 = vr.slice(vr.indexOf('echo "== 10. '));
+const s10 = vr.slice(vr.indexOf('echo "== 10. '), vr.indexOf('echo "== 14. ') > 0 ? vr.indexOf('echo "== 14. ') : vr.length);   // bounded at the call pay section (2026-09-27), whose anon POST must be refused
 ok(s10.length > 0 && s10.length < vr.length, "verify-rls.sh section 10 could not be sliced out");
 ok(/-X POST "\$URL\/rest\/v1\/rpc\/offer_status"/.test(s10), "section 10 must POST rest/v1/rpc/offer_status as anon");
 ok(/"HTTP 401"\|"HTTP 403"\) ok "anon rpc offer_status refused/.test(s10), "section 10a must accept 401/403 for the anon rpc call and name a 200 as the open grant");
@@ -2333,8 +2333,10 @@ ok(!/simple-protocol/.test(aoProbe), "audit read-back probe header must not clai
 
 step("P21 S1: verify-rls.sh section 13 grades the AFTER picture case by case (nine cases red before the apply, by name), counts leftovers, writes nothing over REST; section 11's C21 expects own_other=1");
 ok(/^echo "== 13\. /m.test(vr), "verify-rls.sh has no section 13");
-const s13 = vr.slice(vr.indexOf('echo "== 13. '), vr.indexOf('echo "RESULT: '));
-ok(s13.length > 0 && s13.length < vr.length, "verify-rls.sh section 13 could not be sliced out (it must sit right before the RESULT line)");
+// (bounded at section 14 since the call pay section landed after it, 2026-09-27)
+const s13End = vr.indexOf('echo "== 14. ') > 0 ? vr.indexOf('echo "== 14. ') : vr.indexOf('echo "RESULT: ');
+const s13 = vr.slice(vr.indexOf('echo "== 13. '), s13End);
+ok(s13.length > 0 && s13.length < vr.length, "verify-rls.sh section 13 could not be sliced out (it must sit right before section 14, or the RESULT line)");
 ok(/audit-read-own-probe\.sql/.test(s13) && /PROBE13="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/audit-read-own-probe\.sql"/.test(s13), "section 13 must run sql/probes/audit-read-own-probe.sql through the linked CLI (absolute path via pwd -W, as 11b / 12b)");
 AUDIT_OWN_CASES.forEach((k) => ok(new RegExp("expect_(eq|err)13\\s+" + k + "\\s").test(s13), "section 13 does not grade probe case " + k));
 Object.keys(AUDIT_OWN_AFTER).forEach((k) => ok(s13.indexOf("expect_eq13  " + k + "  \"" + AUDIT_OWN_AFTER[k] + "\"") >= 0, "section 13 must grade " + k + " = " + AUDIT_OWN_AFTER[k]));
@@ -2356,7 +2358,7 @@ ok(!/a surgeon still reads no audit row/.test(s11) && !/no read policy for him\)
 {
   // Grade section 13 for real against a faked CLI (no network): the AFTER results must be all green, the BEFORE results red on
   // exactly the nine cases the comment names. The CLI escapes the quotes of the error text, as the live output does.
-  const code13 = vr.slice(vr.indexOf('echo "== 13. '), vr.indexOf('\necho\necho "RESULT: '));
+  const code13 = vr.slice(vr.indexOf('echo "== 13. '), vr.indexOf('echo "== 14. ') > 0 ? vr.indexOf('\necho "== 14. ') : vr.indexOf('\necho\necho "RESULT: '));
   const ERRQ = 'ERR 42501 new row violates row-level security policy for table \\"audit_log\\"';
   const after = Object.assign({}, AUDIT_OWN_AFTER);
   AUDIT_OWN_ERR.forEach((k) => { after[k] = ERRQ; });
@@ -2442,5 +2444,238 @@ ok(/^\| `audit_read_own` \|/m.test(g43.slice(g43ao)) && /applied: (_to be filled
   ok(/applied: 2026-09-27 00:49:39 UTC/.test(aoProof) && !/_to be filled/.test(aoProof) && /403 coverage closed by Cowork's 2026-09-27 ~13:15Z read/.test(aoProof) && !/pending Cowork/.test(aoProof) && /backfilled 4 audit rows/.test(aoProof), "guide 4.3's Prompt 21 step 1 Proof line must carry 'applied: 2026-09-27 00:49:39 UTC ...', the four backfilled rows and the closed 403 coverage (Cowork's closing read, 9/27)");
 }
 console.log("- P21 S1: audit_read_own applied 2026-09-27 00:49:39Z after the 24-hour gate (report-first); probe + verify-rls section 13 + C21 own_other=1; step 3 backfill recorded");
+
+// ---- Call pay (2026-09-27, Faraz: primary call pay is tracked in the app - this reverses the 9/21 "no compensation logic" rule) ----
+// sql/migrations/2026-09-27-call-pay.sql (REPORT-FIRST, NOT APPLIED; revision r) creates two NEW tables and touches nothing that
+// exists: call_pay_settings (one 'main' row - the rates the scheduler enters in the app, null until then, and the pay-model flags)
+// and call_pay_logs (one row per call-in of the PRIMARY on a past call day). Neither is anon-readable, anon's privileges are
+// revoked on top, and NO RATE FIGURE may appear in the repo: the rate columns carry no default and the files carry no numeric
+// literal beyond the check bounds and the column precisions. schema.sql mirrors every statement; verify-rls.sh section 14 grades
+// the anon refusals and the rolled-back probe (sql/probes/call-pay-probe.sql), 404 / PROBE_SETUP passing until the apply unless
+// SILVIS_CALL_PAY_APPLIED=1.
+const PAY_FILE = "2026-09-27-call-pay.sql";
+const PAY_MIGRATION = path.join(ROOT, "sql", "migrations", PAY_FILE);
+const PAY_PROBE = path.join(ROOT, "sql", "probes", "call-pay-probe.sql");
+const PAY_S = "public.silvis_is_sched()";
+const PAY_OWN = "(" + PAY_S + " or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id()))";
+const PAY_POLICIES = {
+  call_pay_settings_read: "create policy call_pay_settings_read on public.call_pay_settings for select to authenticated\n  using (" + PAY_S + " or (public.silvis_role() = 'surgeon' and public.silvis_person_id() is not null));",
+  call_pay_settings_write: "create policy call_pay_settings_write on public.call_pay_settings for all to authenticated\n  using (" + PAY_S + ") with check (" + PAY_S + ");",
+  call_pay_logs_read: "create policy call_pay_logs_read on public.call_pay_logs for select to authenticated\n  using " + PAY_OWN + ";",
+  call_pay_logs_insert: "create policy call_pay_logs_insert on public.call_pay_logs for insert to authenticated\n  with check " + PAY_OWN + ";",
+  call_pay_logs_update: "create policy call_pay_logs_update on public.call_pay_logs for update to authenticated\n  using " + PAY_OWN + "\n  with check " + PAY_OWN + ";",
+  call_pay_logs_delete: "create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated\n  using " + PAY_OWN + ";",
+};
+const PAY_CASES = ["P1", "P2", "P3", "N1", "N2", "N3", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "X1", "X2", "T1", "C1", "C2", "C3", "V1", "V2", "A1", "A2", "A3", "A4"];
+const PAY_AFTER_EQ = {
+  P1: "policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write",
+  P2: "anon_logs=f anon_settings=f auth_truncate=f", P3: "rows=1", S1: "ok created_by=s3 hours=1.50", S6: "ok", S10: "own=2 others=0", S11: "updated=1 hours=2.25 created_by=s3",
+  S12: "updated=0", S13: "deleted=0", S14: "rows=1", S15: "updated=0", S17: "updated=1 created_by=s3", X2: "deleted=1", T1: "own=1 s3=0", C1: "visible=0",
+  C2: "rows=0", V1: "visible=0", V2: "rows=0", A1: "sees_all=t", A2: "updated=1 updated_by=s1", A3: "ok created_by=s1",
+};
+const PAY_AFTER_ERR = {   // what the probe records AFTER the apply (the CLI escapes the quotes, as the live output does)
+  N1: "ERR 42501 permission denied for table call_pay_logs", N2: "ERR 42501 permission denied for table call_pay_settings", N3: "ERR 42501 permission denied for table call_pay_logs",
+  S2: "ERR PY002 PAY_NOT_PRIMARY: s3 is not the primary on 2020-03-03 - call pay is logged for the primary only",
+  S3: 'ERR 42501 new row violates row-level security policy for table \\"call_pay_logs\\"',
+  S4: "ERR PY001 PAY_FUTURE: 2099-01-01 is after today (2098-12-02) in Central time - a call-in is logged once it happened",
+  S5: 'ERR 23514 new row for relation \\"call_pay_logs\\" violates check constraint \\"call_pay_logs_hours_check\\"',
+  S7: "ERR PY003 PAY_HOURS_OVER: s3 already has 23.00 h logged on 2020-03-05 - one call day holds at most 24 h",
+  S8: 'ERR 23514 new row for relation \\"call_pay_logs\\" violates check constraint \\"call_pay_logs_note_check\\"',
+  S9: "ERR PY003 PAY_HOURS_OVER: s3 already has 0 h logged on 2020-03-04 - one call day holds at most 24 h",
+  S16: 'ERR 42501 new row violates row-level security policy for table \\"call_pay_settings\\"',
+  X1: "ERR PY002 PAY_NOT_PRIMARY: s3 is not the primary on 2020-03-02 - call pay is logged for the primary only",
+  C3: 'ERR 42501 new row violates row-level security policy for table \\"call_pay_logs\\"',
+  A4: "ERR PY002 PAY_NOT_PRIMARY: s3 is not the primary on 2020-03-03 - call pay is logged for the primary only",
+};
+// Top-level statements of a SQL file (comment lines dropped; a $$ body is one statement with the create it belongs to).
+function payStatements(sql) {
+  const code = sql.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const out = []; let cur = ""; let inBody = false;
+  for (let i = 0; i < code.length; i++) {
+    if (code.startsWith("$$", i)) { inBody = !inBody; cur += "$$"; i++; continue; }
+    cur += code[i];
+    if (code[i] === ";" && !inBody) { if (cur.trim()) out.push(cur.trim()); cur = ""; }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+step("call pay: the migration - two NEW tables, report-first NOT APPLIED, the CLI apply line and rollback, no supersedes, mirrored (not exempt)");
+const payMig = read(PAY_MIGRATION);
+ok(!/\r/.test(payMig), "call pay migration has CRLF line endings");
+ok(migFiles.includes(PAY_FILE) && !PREPARED_NOT_MIRRORED.includes(PAY_FILE), "sql/migrations/" + PAY_FILE + " is a mirrored migration (not exempt)");
+const payHdr = payMig.slice(0, payMig.indexOf("create table if not exists public.call_pay_settings"));
+ok(/^-- REPORT-FIRST, NOT APPLIED \(/m.test(payHdr) && /Blast radius/.test(payHdr) && /REVERSES the 9\/21 rule/.test(payHdr), "the call pay migration header must say REPORT-FIRST, NOT APPLIED, state the blast radius and that it reverses the 9/21 rule");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-27-call-pay\.sql/.test(payHdr) && /SILVIS_CALL_PAY_APPLIED=1 bash scripts\/verify-rls\.sh/.test(payHdr) && /call-pay-probe\.sql/.test(payHdr), "the call pay migration header must carry the CLI apply line, the probe and the strict verify-rls run");
+ok(/^-- Rolling back = `drop table if exists public\.call_pay_logs; drop table if exists public\.call_pay_settings;$/m.test(payHdr) && /drop function if exists public\.call_pay_logs_guard\(\); drop function if exists public\.call_pay_settings_touch\(\);`/.test(payHdr), "the call pay migration header must give the rollback (both tables, both functions)");
+ok(/NO RATE FIGURE ANYWHERE/.test(payHdr), "the call pay migration header must state that no rate figure is in the repo");
+ok(!/^-- supersedes:/m.test(payMig) && !/^-- PREPARED FOLLOW-UP/m.test(payMig), "the call pay migration redefines no existing function (no supersedes line) and is not a NOT-MIRRORED follow-up");
+const payStmts = payStatements(payMig);
+ok(payStmts.length >= 25, "the call pay migration's statements could not be split (" + payStmts.length + ")");
+payStmts.forEach((st) => ok(!/^(drop table|alter table public\.(?!call_pay_)|drop function|create or replace function public\.(?!call_pay_)|update |delete )/i.test(st), "the call pay migration touches only its own two tables / functions: " + st.slice(0, 120)));
+eq(payStmts.filter((st) => /^create table/.test(st)).map((st) => st.match(/public\.([a-z_]+)/)[1]), ["call_pay_settings", "call_pay_logs"], "the call pay migration creates exactly two tables;");
+eq(payStmts.filter((st) => /^create or replace function/.test(st)).map((st) => st.match(/public\.([a-z_]+)/)[1]), ["call_pay_logs_guard", "call_pay_settings_touch"], "the call pay migration creates exactly two functions;");
+
+step("call pay: schema.sql mirrors every statement of the migration; the six policies read exactly as approved, in order; triggers identical; revision r after q");
+const schemaCode = schema.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+payStmts.forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this call pay statement byte for byte:\n" + st.slice(0, 300)));
+Object.keys(PAY_POLICIES).forEach((pn) => {
+  ok(policyText(payMig, pn) === PAY_POLICIES[pn], "the migration's policy " + pn + " must read exactly:\n" + PAY_POLICIES[pn]);
+  ok(policyText(schema, pn) === PAY_POLICIES[pn], "schema.sql's policy " + pn + " must read exactly:\n" + PAY_POLICIES[pn]);
+  eq((schema.match(new RegExp("create policy " + pn + " on ", "g")) || []).length, 1, "schema.sql must create " + pn + " exactly once;");
+  ok(schema.indexOf("drop policy if exists " + pn + " on public.") >= 0 && payMig.indexOf("drop policy if exists " + pn + " on public.") >= 0, pn + " must be dropped-if-exists first (idempotency)");
+});
+eq(Array.from(schema.matchAll(/create policy ([a-z_]+) on public\.call_pay_settings\b/g)).map((m) => m[1]), ["call_pay_settings_read", "call_pay_settings_write"], "call_pay_settings carries exactly these policies, in order;");
+eq(Array.from(schema.matchAll(/create policy ([a-z_]+) on public\.call_pay_logs\b/g)).map((m) => m[1]), ["call_pay_logs_read", "call_pay_logs_insert", "call_pay_logs_update", "call_pay_logs_delete"], "call_pay_logs carries exactly these policies, in order;");
+ok(schema.indexOf(PAY_POLICIES.call_pay_settings_read) > schema.indexOf("create policy contacts_write on public.office_contacts") && schema.indexOf(PAY_POLICIES.call_pay_settings_read) < schema.indexOf("-- Seed rows"), "the call pay policies sit after contacts_write, before the seed rows");
+["call_pay_logs_guard_trg", "call_pay_settings_touch_trg"].forEach((tn) => {
+  ok(triggerText(schema, tn) && triggerText(schema, tn) === triggerText(payMig, tn), "trigger " + tn + ": schema.sql differs from the migration");
+  ok(payMig.indexOf("drop trigger if exists " + tn + " on public.") >= 0, "trigger " + tn + " must be dropped-if-exists first");
+});
+ok(/before insert or update on public\.call_pay_logs\n  for each row execute function public\.call_pay_logs_guard\(\);/.test(schema), "call_pay_logs_guard runs BEFORE INSERT OR UPDATE (never on delete: an orphan row stays deletable)");
+["call_pay_logs_guard", "call_pay_settings_touch"].forEach((fn) => ok(functionText(schema, fn) === functionText(payMig, fn), fn + "(): schema.sql differs from the migration"));
+const payGuard = functionText(payMig, "call_pay_logs_guard");
+ok(!/security definer/.test(payGuard), "call_pay_logs_guard must be security invoker (schedule_days is readable by every role)");
+ok(/today_c date := \(now\(\) at time zone 'America\/Chicago'\)::date;/.test(payGuard), "call_pay_logs_guard's today is the Central date");
+ok(/raise exception 'PAY_FUTURE: [^']*' , ?|raise exception 'PAY_FUTURE: /.test(payGuard) && /using errcode = 'PY001';/.test(payGuard), "PAY_FUTURE / PY001");
+ok(/raise exception 'PAY_NOT_PRIMARY: [^\n]*using errcode = 'PY002';/.test(payGuard) && /d\.primary_id = new\.person_id/.test(payGuard), "PAY_NOT_PRIMARY / PY002 against schedule_days.primary_id");
+ok(/raise exception 'PAY_HOURS_OVER: [^\n]*using errcode = 'PY003';/.test(payGuard) && /others \+ new\.hours > 24/.test(payGuard) && /l\.id is distinct from new\.id/.test(payGuard), "PAY_HOURS_OVER / PY003 sums the person's OTHER rows of the day");
+ok(payGuard.indexOf("PY001") < payGuard.indexOf("PY002") && payGuard.indexOf("PY002") < payGuard.indexOf("PY003"), "the guard refuses in the order PY001, PY002, PY003");
+ok(/new\.created_by := old\.created_by;/.test(payGuard) && /new\.created_at := old\.created_at;/.test(payGuard) && /new\.created_by := coalesce\(public\.silvis_person_id\(\), auth\.uid\(\)::text, new\.created_by\);/.test(payGuard), "created_by / created_at are stamped on insert and pinned on update");
+ok(!/\bsilvis_is_sched\b/.test(payGuard), "the primary-only guard applies to every caller - no scheduler exemption");
+ok(/perform pg_advisory_xact_lock\(hashtext\('call_pay:' \|\| new\.person_id \|\| ':' \|\| new\.day::text\)\);\n  select coalesce\(sum\(l\.hours\), 0\) into others/.test(payGuard), "call_pay_logs_guard must take the (person, day) advisory lock right before the 24 h sum (two concurrent inserts must not both pass PY003)");
+["call_pay_logs_guard", "call_pay_settings_touch"].forEach((fn) => ok(new RegExp("create or replace function public\\." + fn + "\\(\\) returns trigger\nlanguage plpgsql security invoker set search_path = public as \\$\\$").test(payMig), fn + "() must be security invoker with a pinned search_path (function_search_path_mutable)"));
+["call_pay_settings", "call_pay_logs"].forEach((t) => ok(payMig.indexOf("revoke truncate, references, trigger on table public." + t + " from authenticated;") >= 0 && schema.indexOf("revoke truncate, references, trigger on table public." + t + " from authenticated;") >= 0, "authenticated must lose TRUNCATE / REFERENCES / TRIGGER on " + t + " (Supabase's default privileges grant them; RLS does not cover TRUNCATE)"));
+const payLoop = schema.match(/foreach t in array array\[[^\]]*\]/);
+ok(payLoop && !/call_pay/.test(payLoop[0]), "neither call pay table may be in the anon read_all loop");
+["call_pay_settings", "call_pay_logs"].forEach((t) => {
+  ok(new RegExp("^alter table public\\." + t + " +enable row level security;$", "m").test(schema), "schema.sql must enable RLS on " + t);
+  ok(schema.indexOf("revoke all on table public." + t + " from anon;") >= 0 && payMig.indexOf("revoke all on table public." + t + " from anon;") >= 0, "anon's privileges on " + t + " must be revoked (defence in depth for pay data - the other authenticated-only tables rely on RLS alone)");
+  ok(schema.indexOf("grant select, insert, update, delete on table public." + t + " to authenticated;") >= 0, t + " is granted to authenticated");
+  ok(!new RegExp("create policy [a-z_]+ on public\\." + t + " for [a-z]+ (?!to authenticated)").test(schema), "every " + t + " policy is `to authenticated`");
+});
+// No rate figure: the rate columns carry no default, the seed inserts the id only, and no numeric literal beyond the bounds.
+["stipend_per_shift", "weekday_callin_rate", "weekend_holiday_callin_rate", "activation_rate"].forEach((c) => {
+  const line = (payMig.match(new RegExp("^  " + c + " +[^\\n]*$", "m")) || [""])[0];
+  ok(/numeric\(10,2\) check \(/.test(line) && !/default/.test(line), "rate column " + c + " must be numeric(10,2) with a range check and NO default (a figure must never be in the repo): " + line);
+});
+eq(payStmts.filter((st) => /^insert into/.test(st)), ["insert into public.call_pay_settings (id) values ('main') on conflict (id) do nothing;"], "the migration's only insert is the 'main' settings row with the id alone (every rate null);");
+ok(schema.indexOf("insert into public.call_pay_settings (id) values ('main') on conflict (id) do nothing;") > schema.indexOf("-- Seed rows"), "schema.sql seeds the settings row under Seed rows");
+const PAY_ALLOWED_NUMBERS = ["0", "1", "2", "4", "5", "10", "24", "200", "99999"];   // check bounds, column precisions and `select 1` only
+const payBlock = schema.slice(schema.indexOf("-- ---------- call pay (2026-09-27"), schema.indexOf("-- Row Level Security"));
+[["the migration", payStmts.join("\n")], ["schema.sql's call pay block", payBlock.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n")]].forEach(([n, txt]) => {
+  const stripped = txt.replace("'[0-9]{3}[^0-9]?[0-9]{3}[^0-9]?[0-9]{4}'", "''").replace(/'[0-9]{4}-[0-9]{2}-[0-9]{2}'/g, "''").replace(/[a-z_]+[0-9]+[a-z_0-9]*/gi, "");
+  const nums = Array.from(stripped.matchAll(/\b[0-9]+(\.[0-9]+)?\b/g)).map((m) => m[0]);
+  ok(nums.length > 0 && nums.every((x) => PAY_ALLOWED_NUMBERS.includes(x)), n + " carries a numeric literal outside the check bounds / precisions (" + PAY_ALLOWED_NUMBERS.join(", ") + "): " + nums.filter((x) => !PAY_ALLOWED_NUMBERS.includes(x)).join(", "));
+});
+ok(payBlock.length > 0 && /PY001 PAY_FUTURE/.test(payBlock) && /revoke all/.test(payBlock), "schema.sql's call pay block (after office_notification_state, before the RLS banner) must document PY001-PY003 and the anon revoke");
+{
+  const rAt = header.search(/^-- Revision 2026-09-27 r \(call pay, sql\/migrations\/2026-09-27-call-pay\.sql, report-first, NOT yet applied\): /m);
+  const qAt = header.search(/^-- Revision 2026-09-25 q /m);
+  ok(rAt > 0 && rAt > qAt, "schema.sql's header must record revision 2026-09-27 r (call pay; 'report-first, NOT yet applied' until the record step) after revision q");
+  const revR = header.slice(rAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0];
+  ok(/PY001/.test(revR) && /not anon-readable|Neither is anon-readable/.test(revR) && /no rate figure/.test(revR) && /reverses the 9\/21/.test(revR), "revision r must name the guards, the anon posture, the absence of rate figures and the 9/21 reversal");
+}
+
+step("call pay: the probe is self-rolling-back, raises PROBE_SETUP before the apply, uses past 2020-03 fixtures and five throwaway users, never reads a rate");
+const payProbe = read(PAY_PROBE);
+ok(!/\r/.test(payProbe), "call pay probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(payProbe), "call pay probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(payProbe) && /grant insert, select on probe_results to authenticated;/.test(payProbe), "call pay probe collects into probe_results granted to authenticated");
+const payLastDo = payProbe.lastIndexOf("do $$");
+ok(payLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(payProbe.slice(payLastDo)), "call pay probe's last DO block must raise 'PROBE_RESULTS %;END'");
+ok(/raise exception 'PROBE_SETUP: call_pay_logs is absent - sql\/migrations\/2026-09-27-call-pay\.sql is not applied';/.test(payProbe) && payProbe.indexOf("PROBE_SETUP: call_pay_logs is absent") < payProbe.indexOf("insert into auth.users"), "call pay probe's setup must raise PROBE_SETUP before any fixture when the tables are absent");
+PAY_CASES.forEach((k) => ok(payProbe.indexOf("values ('" + k + "', ") >= 0 || payProbe.indexOf("values ('" + k + "', v)") >= 0, "call pay probe lacks case " + k));
+ok(/'probe-pay-' \|\| u \|\| '@example\.test'/.test(payProbe), "call pay probe's throwaway users are probe-pay-<uuid>@example.test");
+ok(/set person_id = 's3', role = 'surgeon' where id = surgeon;/.test(payProbe) && /set person_id = 's2', role = 'surgeon' where id = surgeon2;/.test(payProbe) && /set role = 'coordinator' where id = coord;/.test(payProbe) && /set person_id = 's1', role = 'admin' where id = admin_u;/.test(payProbe) && /role = 'viewer' and person_id is null/.test(payProbe), "call pay probe fixtures: surgeon s3, surgeon s2, an unlinked coordinator, an unlinked viewer, admin s1");
+const payProbeCode = payProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+ok(Array.from(payProbeCode.matchAll(/'(20[0-9]{2})-([0-9]{2})-[0-9]{2}'/g)).every((m) => m[1] === "2020" && m[2] === "03"), "every fixture day in the call pay probe is a PAST day in 2020-03 (PY001 refuses a future day)");
+Array.from(payProbeCode.matchAll(/insert into public\.call_pay_logs \(day, person_id, hours, note\) values \([^;]*;/g)).forEach((m) => ok(/'probe-pay[^']*'\)/.test(m[0]), "every call_pay_logs insert in the probe carries a 'probe-pay' note (the leftover count keys on it): " + m[0].slice(0, 160)));
+{
+  // every call_pay_logs read counts probe rows only - except N1, anon's bare count, which must be refused before it reads anything
+  const reads = Array.from(payProbeCode.matchAll(/from public\.call_pay_logs\b[^;]*/g)).map((m) => m[0]);
+  eq(reads.filter((r) => r.trim() === "from public.call_pay_logs").length, 1, "only N1 (anon) reads call_pay_logs without the probe filter;");
+  reads.filter((r) => r.trim() !== "from public.call_pay_logs").forEach((r) => ok(/note like 'probe-pay%'|where id = |l\.person_id = new\.person_id/.test(r), "every call_pay_logs read in the probe counts probe rows only: " + r.slice(0, 160)));
+}
+ok(!/stipend_per_shift|weekday_callin_rate|weekend_holiday_callin_rate|activation_rate\b/.test(payProbeCode), "the call pay probe never reads or writes a rate column");
+ok(/source = 'probe-pay'|'probe-pay'\)/.test(payProbeCode) && /values \('2020-03-02', 's3', 's2', 'probe-pay'\)/.test(payProbeCode), "the probe's schedule_days fixtures carry source 'probe-pay'");
+const payProbeHdr = payProbe.slice(0, payProbe.indexOf("create temp table probe_results"));
+Object.keys(PAY_AFTER_EQ).forEach((k) => ok(payProbeHdr.indexOf(PAY_AFTER_EQ[k]) > 0, "call pay probe header must state " + k + "'s AFTER string `" + PAY_AFTER_EQ[k] + "`"));
+
+step("call pay: verify-rls.sh section 14 - anon count=exact reads, the anon POST, 404 before the apply unless SILVIS_CALL_PAY_APPLIED=1, the surgeon read, the graded probe, leftovers; graded against a faked CLI");
+ok(/^echo "== 14\. call pay \(2026-09-27\): anon sees neither table, anon cannot write, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 14 (call pay)");
+const s14 = vr.slice(vr.indexOf('echo "== 14. '), vr.indexOf('echo "RESULT: '));
+ok(s14.length > 0 && s14.length < vr.length, "verify-rls.sh section 14 could not be sliced out (it sits right before the RESULT line)");
+ok(/for t in call_pay_settings call_pay_logs; do/.test(s14) && /-H "Prefer: count=exact"/.test(s14) && /if \[ "\$range" = "\*\/0" \]/.test(s14), "section 14a must read both tables as anon with count=exact and require Content-Range */0 on a 200");
+ok(/200\) if \[ "\$PAYSTRICT14" = "1" \]; then bad "anon read of \$t: HTTP 200/.test(s14), "section 14a must FAIL an anon 200 (even Content-Range */0) with SILVIS_CALL_PAY_APPLIED=1 - the anon revoke is then proven over REST");
+ok(/404\) if \[ "\$PAYSTRICT14" = "1" \]; then bad/.test(s14) && /PAYSTRICT14="\$\{SILVIS_CALL_PAY_APPLIED:-\}"/.test(s14), "section 14 must pass a 404 as 'not created yet' only while SILVIS_CALL_PAY_APPLIED is unset");
+ok(/-X POST "\$URL\/rest\/v1\/call_pay_logs"/.test(s14) && /"HTTP 401"\|"HTTP 403"\) ok "anon insert into call_pay_logs refused/.test(s14), "section 14b must POST call_pay_logs as anon and accept 401/403 (or 42501)");
+ok(/SILVIS_SURGEON_JWT/.test(s14) && /call_pay_logs\?select=person_id/.test(s14), "section 14c must read call_pay_logs as a surgeon (gated on SILVIS_SURGEON_JWT)");
+const s14code = s14.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+eq((s14code.match(/-X (POST|PATCH|DELETE|PUT)/g) || []).length, 1, "section 14 writes nothing over REST but the one anon POST that must be refused;");
+ok(/call-pay-probe\.sql/.test(s14) && /PROBE14="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/call-pay-probe\.sql"/.test(s14), "section 14d must run sql/probes/call-pay-probe.sql through the linked CLI");
+PAY_CASES.forEach((k) => ok(new RegExp("expect_(eq|err)14\\s+" + k + "\\s").test(s14), "section 14 does not grade probe case " + k));
+Object.keys(PAY_AFTER_EQ).forEach((k) => ok(new RegExp("expect_eq14\\s+" + k + "\\s+\"" + PAY_AFTER_EQ[k].replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\"").test(s14), "section 14 must grade " + k + " = " + PAY_AFTER_EQ[k]));
+ok(/email like 'probe-pay-%@example\.test'/.test(s14) && /source = 'probe-pay'/.test(s14) && /note like 'probe-pay%'/.test(s14) && /LEFT ROWS BEHIND/.test(s14), "section 14 must count leftovers (auth.users / schedule_days / call_pay_logs) and fail on non-zero");
+ok(/SILVIS_CALL_PAY_APPLIED=1 +grade section 14 strictly/.test(vr.slice(0, vr.indexOf("case \"${1:-}\""))) && /SILVIS_CALL_PAY_APPLIED - see/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header and --help must name SILVIS_CALL_PAY_APPLIED");
+{
+  const code14d = vr.slice(vr.indexOf("# 14d."), vr.indexOf('\necho\necho "RESULT: '));
+  const run14 = (cliOut, strict) => {
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; PAYSTRICT14=" + (strict ? "1" : "") + "\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "linked() { true; }\nq() { echo '{\"rows\":[{\"leftover\":0}]}'; }\nsupabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" +
+      code14d + "\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 14d: " + (r.error && r.error.message));
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const after = Object.assign({}, PAY_AFTER_EQ, PAY_AFTER_ERR);
+  eq(Object.keys(after).sort(), PAY_CASES.slice().sort(), "the faked AFTER picture covers every probe case;");
+  const res = Object.keys(after).sort().map((k) => k + "=" + after[k]).join(";");
+  const ra = run14('{"message": "ERROR: P0001: PROBE_RESULTS ' + res + ';END"}', true);
+  eq(ra.result, [PAY_CASES.length + 1, 0], "section 14d against the AFTER picture: every case + the leftover check PASS (" + ra.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + ra.err.slice(0, 200) + ");");
+  const setup = '{"message": "ERROR: P0001: PROBE_SETUP: call_pay_logs is absent - sql/migrations/2026-09-27-call-pay.sql is not applied"}';
+  eq(run14(setup, false).result, [2, 0], "section 14d BEFORE the apply: PROBE_SETUP is the expected not-applied picture (PASS) and the leftover check runs without the missing table;");
+  eq(run14(setup, true).result, [1, 1], "section 14d with SILVIS_CALL_PAY_APPLIED=1: PROBE_SETUP is a FAIL;");
+  const broken = Object.assign({}, after, { S3: "inserted (NO refusal)", C1: "visible=2" });
+  const rb = run14('{"message": "ERROR: P0001: PROBE_RESULTS ' + Object.keys(broken).sort().map((k) => k + "=" + broken[k]).join(";") + ';END"}', true);
+  eq(rb.result, [PAY_CASES.length - 1, 2], "section 14d must fail a surgeon writing for another surgeon and a coordinator reading call-ins;");
+}
+
+{
+  // 14a against a faked curl: an anon 200 + */0 passes only without the strict flag; 401 always passes; 404 only without it
+  const code14a = s14.slice(s14.indexOf('PAYSTRICT14="${SILVIS_CALL_PAY_APPLIED:-}"'), s14.indexOf("line=$(curl"));
+  const run14a = (status, range, strict) => {
+    const tmp = fs.mkdtempSync(path.join(require("os").tmpdir(), "vr14a-"));
+    const script = "set -u\nT=" + tmp + "; URL=http://x; ANON=a; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "curl() { local o=''; while [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then o=\"$2\"; shift; fi; shift; done; echo '[]' > \"$o\"; printf 'HTTP/2 " + status + "\\r\\n" + (range ? "content-range: " + range + "\\r\\n" : "") + "\\r\\n'; }\n" +
+      (strict ? "SILVIS_CALL_PAY_APPLIED=1\n" : "unset SILVIS_CALL_PAY_APPLIED\n") + code14a + "\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    fs.rmSync(tmp, { recursive: true, force: true });
+    return ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number);
+  };
+  eq(run14a(200, "*/0", false), [2, 0], "section 14a without the flag: anon 200 + */0 on both tables passes;");
+  eq(run14a(200, "*/0", true), [0, 2], "section 14a with SILVIS_CALL_PAY_APPLIED=1: anon 200 + */0 FAILS (the revoke did not take);");
+  eq(run14a(401, "", true), [2, 0], "section 14a with the flag: anon 401 passes;");
+  eq(run14a(404, "", true), [0, 2], "section 14a with the flag: 404 fails;");
+  eq(run14a(404, "", false), [2, 0], "section 14a without the flag: 404 (not created yet) passes;");
+}
+
+step("call pay: docs - SCHEMA-REVIEW.md section (NOT APPLIED, policies verbatim, blast radius, apply order, rollback), tables (a) / (b), guide 4.2 / 4.3");
+ok(/^## 2026-09-27 - call pay: call_pay_settings \+ call_pay_logs \(Faraz 9\/27; `sql\/migrations\/2026-09-27-call-pay\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-27 - call pay: call_pay_settings + call_pay_logs (Faraz 9/27; `sql/migrations/2026-09-27-call-pay.sql`)' section");
+const reviewPay = (() => { const at = review.indexOf("## 2026-09-27 - call pay:"), end = review.indexOf("\n## ", at + 1); return at < 0 ? "" : review.slice(at, end < 0 ? review.length : end); })();
+ok(/\*\*Status: PREPARED - report-first, NOT APPLIED\.\*\*/.test(reviewPay), "the call pay section's status line must read `**Status: PREPARED - report-first, NOT APPLIED.**` until the record step");
+Object.keys(PAY_POLICIES).forEach((pn) => ok(reviewPay.includes(PAY_POLICIES[pn].replace(/\n  /g, "\n      ")), "the call pay section must quote " + pn + " verbatim (indented as a code block)"));
+ok(/Blast radius/.test(reviewPay) && /notify pgrst, 'reload schema'/.test(reviewPay) && /What could break/.test(reviewPay), "the call pay section must state the blast radius (incl. the schema cache) and what could break");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-27-call-pay\.sql/.test(reviewPay) && /SILVIS_CALL_PAY_APPLIED=1 bash scripts\/verify-rls\.sh/.test(reviewPay) && /to_regclass\('public\.call_pay_logs'\)/.test(reviewPay) && /Setup > Pay rates/.test(reviewPay), "the call pay section's apply order: pre-check, probe BEFORE, apply, probe AFTER, strict verify-rls, the rates entered in Setup, the record step");
+ok(/drop table if exists public\.call_pay_logs;/.test(reviewPay.slice(reviewPay.indexOf("Rolling back"))), "the call pay section's rollback must drop both tables");
+ok(/observed: /.test(reviewPay), "the call pay section must carry an 'observed:' placeholder");
+["call_pay_settings", "call_pay_logs"].forEach((t) => {
+  ok(new RegExp("^\\| `" + t + "` [^\\n]*prepared \\(NOT APPLIED\\)", "m").test(tblA), "SCHEMA-REVIEW table (a) needs a `" + t + "` row marked prepared (NOT APPLIED)");
+  ok(new RegExp("^\\| `" + t + "` [^\\n]*prepared \\(NOT APPLIED\\)", "m").test(tblB), "SCHEMA-REVIEW table (b) needs a `" + t + "` row marked prepared (NOT APPLIED)");
+});
+const g42 = guide.slice(guide.indexOf("### 4.2 Tables"), guide.indexOf("### 4.3 RLS posture"));
+ok(/`call_pay_settings`/.test(g42) && /`call_pay_logs`/.test(g42), "guide 4.2 must list the two call pay tables");
+ok(/^- \*\*Call pay \(2026-09-27, report-first, NOT applied[;)]/m.test(g43) && /2026-09-27-call-pay\.sql/.test(g43), "guide 4.3 must carry the 'Call pay (2026-09-27, report-first, NOT applied)' bullet");
+console.log("- call pay: two new authenticated-only tables (report-first, NOT applied), mirrored, probe + verify-rls section 14 graded against a faked CLI, docs pinned");
 
 console.log("schema.test.js: " + N + " assertions passed");
