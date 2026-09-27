@@ -576,6 +576,28 @@ function CallSchedule() {
   // source 'office-relay'); no Setup, no Generate, no day editor, no trades. Never linked to a roster entry (DB check).
   const isCoordinator = userProfile?.role === "coordinator";
   const canEnterForAnyone = isScheduler || isCoordinator;
+  // Item E3 (Faraz 9/25: "East and override details are the scheduler's business"): ONE flag for everything E3 shows to
+  // the scheduler only - the day editor's East lines (eastStatusLines, the East-vacation review state included) and its
+  // "locked holder breaks: ..." line, the grid's East-vacation diamonds with their "East vacation:" hover bits and legend
+  // line, the coverage strip's "forecast-busy as primary", "East feed through" and "unreviewed East vacations" items, and
+  // Totals' East days column (header tooltip, cells, the fairness row's " + N East P-week", the footnote, the cap
+  // wording) and the same column in its CSV export. Surgeons, coordinators, viewers, followers and ?public=1 get none of
+  // it - no empty heading, no East word in a title. Faraz is both the scheduler and Khan (s1), so what was "scheduler and
+  // Khan" (the strip's unreviewed count) becomes scheduler-only with nothing lost. The pattern Item E used (9/24);
+  // display only - rules, the feed, the forecast and the generator are untouched. Unchanged on purpose (decided 9/24):
+  // My schedule / Following's badges, Khan's ?east=1 calendar feed and the office digest's Davenport section.
+  // Item E4 (Faraz 9/26: "the East details still visible to non-schedulers. The open-shifts board's chip hovers, the Take
+  // button title, the claim sheet list, the claim-gate toast and trade reasons say 'not available' to non-schedulers; the
+  // scheduler keeps the detail. The two 'couldn't load East ...' toasts show to the scheduler only."): the same flag, read
+  // through eastMaskedReasons (next to reasonLabel) on the board and the trade card and through eastDetailsVisibleRef in the
+  // two East loaders. Declared here, with the role flags, since E4 (it sat beside eastVacByDay): tradeReasonText and the
+  // loaders read it far above that line (a const read before its line is a TDZ crash).
+  const eastDetailsVisible = isScheduler && !isPublicMode;
+  // Item E4 (9/26): loadEastTables / loadEastVacationReviews run from the mount load's effect, which closes over
+  // reloadTrigger only - its closure's flag is that render's (false until the profile arrives). The loaders read this ref,
+  // mirrored after every render like userProfileRef above.
+  const eastDetailsVisibleRef = useRef(false);
+  useEffect(() => { eastDetailsVisibleRef.current = eastDetailsVisible; }, [eastDetailsVisible]);
   // Signed in, profile loaded, but not linked to a roster entry (viewers, and
   // every freshly invited account until the scheduler links it in Setup -> Users).
   const isUnlinked = !!authUser && !!userProfile && !userProfile.person_id;
@@ -1207,7 +1229,11 @@ function CallSchedule() {
       one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"),
       one("east_overrides", "day.asc", setEastOverrideRows, "overrides"),
     ]);
-    if (!quiet && r.some(x => x === null)) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
+    // Item E4 (Faraz 9/26: "The two 'couldn't load East ...' toasts show to the scheduler only"): the console.warn in
+    // one() stays for everyone; the toast is the scheduler's (eastDetailsVisibleRef - the mount load's closure predates
+    // the profile). When the MOUNT read fails before the profile has arrived the scheduler gets no toast from it: the
+    // sign-in re-run (reloadTrigger) reads again and toasts then, and Setup > East feed shows the failed table either way.
+    if (!quiet && r.some(x => x === null) && eastDetailsVisibleRef.current) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
     return { ok: r.every(x => x !== null), feedRows: r[0] };
   };
   // Prompt 15 part 3: the East vacation reviews (authenticated-only table). No
@@ -1231,7 +1257,9 @@ function CallSchedule() {
       // Review fix (E3, 9/23): a 404 (deploy before the migration) is NOT toasted to every
       // signed-in user at every start - the panel banner names it and a save attempt
       // refuses with a toast; only a real read failure toasts here.
-      if (!quiet && !missing) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
+      // Item E4 (Faraz 9/26): the scheduler's only, like the feed-cache toast above (the console.warn stays for everyone;
+      // the East-vacation list says "Couldn't load the reviews" where it is shown).
+      if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
       return false;
     }
   };
@@ -3403,7 +3431,10 @@ function CallSchedule() {
     }
     return { ok: true, hard: [], soft };
   };
-  const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonLabel(r.hard[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
+  // Item E4 (Faraz 9/26): the first hard reason through eastMaskedReasons - an East one reads "not available" unless
+  // eastDetailsVisible (the scheduler's text is unchanged). Every trade reason reads it here: the card's trade-to /
+  // trade-return boxes, the "Blocked: ..." and "Can't accept: ..." toasts, the scheduler's two confirms.
+  const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible, r.eastVacation)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
   // The scheduler may confirm past an UNKNOWN check; members are told to retry. True = proceed.
   const rulesUnknownGate = (elig, whoId, what, verb) => {
     if (elig.error) showToast("Eligibility check failed: " + elig.error, "error");
@@ -4598,21 +4629,11 @@ function CallSchedule() {
   // East-VACATION diamonds + their legend line + the "East vacation:" hover, My schedule / Following's E / O / F / EV
   // badges, the coverage strip's forecast / feed items, exports, print and calendar-sync. (Since Item E3, the same
   // evening, the diamonds, their legend line and hover and the strip's forecast / feed items are the scheduler's only -
-  // eastDetailsVisible, a few lines below; My schedule / Following, exports, print and calendar-sync are unchanged.)
+  // eastDetailsVisible, declared with the role flags since Item E4; My schedule / Following, exports, print and
+  // calendar-sync are unchanged.)
   // forecastThreshold (just below) stays: the grid no longer reads it, but the coverage glance (suCoverageGlance) and
   // Setup > East feed (EastFeedCard's threshold={forecastThreshold} prop) still do.
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
-  // Item E3 (Faraz 9/25: "East and override details are the scheduler's business"): ONE flag for everything E3 shows to
-  // the scheduler only - the day editor's East lines (eastStatusLines, the East-vacation review state included) and its
-  // "locked holder breaks: ..." line, the grid's East-vacation diamonds with their "East vacation:" hover bits and legend
-  // line, the coverage strip's "forecast-busy as primary", "East feed through" and "unreviewed East vacations" items, and
-  // Totals' East days column (header tooltip, cells, the fairness row's " + N East P-week", the footnote, the cap
-  // wording) and the same column in its CSV export. Surgeons, coordinators, viewers, followers and ?public=1 get none of
-  // it - no empty heading, no East word in a title. Faraz is both the scheduler and Khan (s1), so what was "scheduler and
-  // Khan" (the strip's unreviewed count) becomes scheduler-only with nothing lost. The pattern Item E used (9/24);
-  // display only - rules, the feed, the forecast and the generator are untouched. Unchanged on purpose (decided 9/24):
-  // My schedule / Following's badges, Khan's ?east=1 calendar feed and the office digest's Davenport section.
-  const eastDetailsVisible = isScheduler && !isPublicMode;
   // Coverage at a glance (Prompt 11): the next 60 days from today - open
   // primary / backup days, forecast-busy days that still hold that surgeon as
   // primary (should be 0), the East feed's coverage end, the last publish and
@@ -4839,7 +4860,9 @@ function CallSchedule() {
         // exhaustive surgeon is skipped for the board only; the soft 'outside-offers' rides along for the row's words
         try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }
         catch (e) { console.warn("board eligibility threw for", sg.id, s.role, s.day, e); r = { ok: false, hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)], soft: [] }; }
-        return { id: sg.id, ok: !!r.ok, hard: (r.hard && r.hard.length) ? r.hard : (r.ok ? [] : ["unknown-surgeon"]), soft: r.soft || [] };
+        // Item E4 (9/26): eastVacation (the derived East-vacation gloss of a time-off / day-before-vacation code) rides along
+        // for eastMaskedReasons - the Take title and the claim gate read it
+        return { id: sg.id, ok: !!r.ok, hard: (r.hard && r.hard.length) ? r.hard : (r.ok ? [] : ["unknown-surgeon"]), soft: r.soft || [], eastVacation: r.eastVacation || null };
       });
     });
     return out;
@@ -4882,7 +4905,9 @@ function CallSchedule() {
     claimReturnRef.current = opener || null;
     // The other open days of the same unit in this role (holiday unit; weekend
     // 'block'): a single-day claim is allowed but the sheet names what stays open.
-    setClaimSheet({ day: slot.day, role: slot.role, unit: slot.unit, soft: me ? me.soft : [], mates: obUnitMates(boardSlots, slot) });
+    // Item E4 (Faraz 9/26): the sheet's "Allowed, shown so you know" list is these notes - read through eastMaskedReasons
+    // here, so an East note is dropped for everyone but the scheduler (the sheet keeps no other use of them)
+    setClaimSheet({ day: slot.day, role: slot.role, unit: slot.unit, soft: me ? eastMaskedReasons(me.soft, eastDetailsVisible) : [], mates: obUnitMates(boardSlots, slot) });
   };
   const closeClaimSheet = () => {
     setClaimSheet(null);
@@ -4911,7 +4936,8 @@ function CallSchedule() {
     // P13R (c): the gate is eligibility() - read it again at confirm time (the rules or the schedule may have
     // moved since the sheet opened); a refusal here never reached the function, so no audit row.
     const gate = (boardElig[openSlotKey(s.day, s.role)] || []).find(o => o.id === mySurgeon);
-    if (!gate || !gate.ok) { showToast("Not eligible any more: " + (gate ? reasonLabel(gate.hard[0], nameOf) : reasonLabel("unknown-surgeon")), "error"); closeClaimSheet(); return; }
+    // Item E4 (Faraz 9/26): the claim-gate toast's reason through eastMaskedReasons ("not available" for an East one, the scheduler excepted)
+    if (!gate || !gate.ok) { showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible, gate.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon")), "error"); closeClaimSheet(); return; }
     setClaimBusy(true);
     const label = `${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} ${s.role}`;
     const a = await claimOpenSlotRpc(s.day, s.role);
@@ -5980,8 +6006,10 @@ function CallSchedule() {
           const rows = boardRows;
           const canAct = !!mySurgeon || isScheduler;
           const horizonBtn = (v, text) => <button key={String(v)} type="button" data-testid={"ob-horizon-" + v} onClick={() => setObHorizon(v)} style={{...css.mini(obHorizon === v),padding:"6px 10px"}}>{text}</button>;
-          const chip = (o) => { const c = colorOf(o.id); return <span key={o.id} data-eligible-id={o.id} title={o.soft.length ? "allowed - " + o.soft.map(x => reasonLabel(x.reason, nameOf)).join("; ") : "no rule warnings"} style={{background:c.tg,color:c.tx,border:"1px solid " + c.bd,borderRadius:5,padding:"1px 7px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",marginRight:4,marginBottom:2,display:"inline-block"}}>{nameOf(o.id)}</span>; };
-          const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(me.hard[0], nameOf) : reasonLabel("unknown-surgeon");
+          // Item E4 (Faraz 9/26): the chip hover and the Take title read their reasons through eastMaskedReasons - an East soft
+          // note is dropped and an East hard reason reads "not available" for everyone but the scheduler (eastDetailsVisible)
+          const chip = (o) => { const c = colorOf(o.id); const soft = eastMaskedReasons(o.soft, eastDetailsVisible); return <span key={o.id} data-eligible-id={o.id} title={soft.length ? "allowed - " + soft.map(x => reasonLabel(x.reason, nameOf)).join("; ") : "no rule warnings"} style={{background:c.tg,color:c.tx,border:"1px solid " + c.bd,borderRadius:5,padding:"1px 7px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",marginRight:4,marginBottom:2,display:"inline-block"}}>{nameOf(o.id)}</span>; };
+          const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible, me.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon");
           const sheetDate = (d) => { try { return parse(d).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }); } catch (e) { return d; } };
           return (
             <div style={css.card} data-testid="openshifts-card">
@@ -6064,7 +6092,7 @@ function CallSchedule() {
                     )}
                     {claimSheet.soft.length
                       ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)} <span style={{fontFamily:mono,fontSize:11}}>(weight {x.weight})</span></li>)}</ul></div>
-                      : <div style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
+                      : <div data-testid="claim-no-warnings" style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
                     <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade.</p>
                     <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
                       <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
@@ -6311,6 +6339,9 @@ function CallSchedule() {
             const cands = poolSurgeons.filter(s => s.id !== fromId).map(s => ({ s, e: dayOk ? eligOf(s.id) : null }));
             cands.sort((a, b) => ((a.e && !a.e.ok) ? 1 : 0) - ((b.e && !b.e.ok) ? 1 : 0));
             const toElig = dayOk && tradeTo ? eligOf(tradeTo) : null;
+            // Item E4 (Faraz 9/26): the "Allowed with a note" notes through eastMaskedReasons - an East note ("East 25%",
+            // "East unknown") is dropped for everyone but the scheduler
+            const toNotes = toElig && toElig.ok && toElig.soft ? eastMaskedReasons(toElig.soft, eastDetailsVisible) : [];
             const give = tradeKind === "give"; // Prompt 19: a give has no return leg - the return controls are not rendered
             const retUnit = !give && suIsIso(tradeReturnDay) && tradeTo && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeUnitOf(tradeReturnDay, tradeReturnRole, tradeTo) : null;
             const retPaired = !!(retUnit && whole && retUnit.days.length === offerDays.length);
@@ -6412,12 +6443,13 @@ function CallSchedule() {
                         <option value="">Select</option>
                         {cands.map(({ s, e }) => {
                           const bad = e && !e.ok;
-                          return <option key={s.id} value={s.id} data-eligible={e ? (e.unknown ? "unknown" : String(!bad)) : "unknown"} style={bad ? {color:"#a0a8b0"} : undefined}>{s.name}{bad ? " - " + (e.unknown ? "rules not loaded" : e.hard[0]) : ""}</option>;
+                          // Item E4 (Faraz 9/26): the greyed option's raw code through eastMaskedReasons ("not available" for an East one, the scheduler excepted)
+                          return <option key={s.id} value={s.id} data-eligible={e ? (e.unknown ? "unknown" : String(!bad)) : "unknown"} style={bad ? {color:"#a0a8b0"} : undefined}>{s.name}{bad ? " - " + (e.unknown ? "rules not loaded" : eastMaskedReasons(e.hard, eastDetailsVisible, e.eastVacation)[0]) : ""}</option>;
                         })}
                       </select>
                     </div>
                     {toElig && !toElig.ok && <div data-testid="trade-to-reason" style={{...css.errBox,flex:"1 1 100%"}}>{nameOf(tradeTo)} can't take {givenLabel}: {tradeReasonText(toElig)}. {toElig.unknown ? "" : "Pick someone else or ask the scheduler."}</div>}
-                    {toElig && toElig.ok && toElig.soft && toElig.soft.length > 0 && <div style={{...css.warnBox,flex:"1 1 100%"}}>Allowed with a note: {toElig.soft.map(softTag).join(", ")}.</div>}
+                    {toElig && toElig.ok && toNotes.length > 0 && <div data-testid="trade-to-note" style={{...css.warnBox,flex:"1 1 100%"}}>Allowed with a note: {toNotes.map(softTag).join(", ")}.</div>}
                     {!give && <>
                     <div className="trade-pick-wrap"><label style={label}>Their day + role (return)</label>
                       <select data-testid="trade-theirs-pick" className="trade-pick" value={suIsIso(tradeReturnDay) && schedule[tradeReturnDay] && schedule[tradeReturnDay][tradeReturnRole] === tradeTo ? tradeReturnDay + "|" + tradeReturnRole : ""} onChange={e=>{ const v = e.target.value.split("|"); if (v[0]) { setTradeReturnDay(v[0]); setTradeReturnRole(v[1]); } else setTradeReturnDay(""); }} style={{...inp,width:260,maxWidth:"100%"}} disabled={!tradeTo}>
@@ -7596,6 +7628,43 @@ function softTag(soft) {
     case "outside-offers": return "outside the offered days (penalty)";
     default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
+}
+// Item E4 (Faraz 9/26: "The open-shifts board's chip hovers, the Take button title, the claim sheet list, the claim-gate
+// toast and trade reasons say 'not available' to non-schedulers; the scheduler keeps the detail."): the ONE mapping of an
+// eligibility result's reason list for display there. With eastDetailsVisible (the App's isScheduler && !isPublicMode,
+// Item E3) the list comes back as it went in - the same array - so every scheduler string stays byte for byte what it
+// was. Without it:
+//  - an East HARD code - the four rules.js pushes from the East feed, the forecast and the derived weeks: east-busy,
+//    east-forecast-busy:<p>, derived-lock:<role>, derived-lock-held:<id> (the 'not available' row of helpers.js
+//    OPEN_SLOT_REASON_TABLE since Item E3, and rules.js RD_EAST_CONFLICT_PREFIXES) - and a vacation code (time-off:<day>,
+//    day-before-vacation) that a DERIVED East vacation produced (the result's eastVacation gloss, passed as the third
+//    argument; a Silvis time_off day carries none) read "not available", ONCE, where the first of them stood;
+//  - an East SOFT note - east-forecast:<p> ("East 25%"), east-unknown ("East unknown"), east-clear (the home East vacation
+//    day bonus) - is DROPPED (decided 9/26: a soft note blocks nothing, and "not available" would read as a block; a chip
+//    whose only note was East reads "no rule warnings", the claim sheet "No rule warnings for you on this day");
+//  - every other entry is kept verbatim, in order.
+// Entries are hard codes (strings) or soft notes ({ reason, weight }); "not available" is a string no label function
+// knows, so reasonLabel and softTag print it as is. rules.js has no east-vacation or east-id-unresolved code: an East
+// vacation reuses time-off / day-before-vacation (hence the gloss), and "East id unresolved" is a day-editor status line
+// (eastStatusLines, Item E3). Pure; test/data-layer.test.js pins the two lists against rules.js and helpers.js.
+const EAST_HARD_REASON_KEYS = ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"];
+const EAST_SOFT_REASON_KEYS = ["east-forecast", "east-unknown", "east-clear"];
+const EAST_NOT_AVAILABLE = "not available";
+function eastMaskedReasons(list, eastDetailsVisible, eastVacation) {
+  if (eastDetailsVisible || !Array.isArray(list)) return list;
+  const out = [];
+  let masked = false;
+  list.forEach(x => {
+    const soft = !!x && typeof x === "object";
+    const key = String(soft ? x.reason : x).split("@")[0].split(":")[0].trim();
+    if (soft) { if (EAST_SOFT_REASON_KEYS.indexOf(key) < 0) out.push(x); return; }
+    if (EAST_HARD_REASON_KEYS.indexOf(key) >= 0 || (eastVacation && (key === "time-off" || key === "day-before-vacation"))) {
+      if (!masked) { masked = true; out.push(EAST_NOT_AVAILABLE); }
+      return;
+    }
+    out.push(x);
+  });
+  return out;
 }
 // East status lines for one day, per surgeon with an East feature (data-driven
 // from ctxInputs.eastMeta): published busy / forecast p / clear / unknown for

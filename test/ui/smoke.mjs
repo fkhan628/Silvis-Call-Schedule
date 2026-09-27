@@ -44,6 +44,17 @@
 //     a schedule_days row with no '[override: ...]' tag or reason in its note
 //     while schedule.override / schedule.day_edit carry the reasons, and the
 //     Accept & Publish lastGenerate names no East reason (Item E3);
+//     Item E4 (Faraz 9/26): on pages served two harness-opened PRIMARY slots
+//     and the harness's own East state for Khan (an east_overrides busy day,
+//     a one-day 'home' East vacation - never the live feed's), the open-shifts
+//     board's chip hovers, Take titles, claim sheet and (driven through the
+//     app's 60 s poll) claim-gate toast, and the trade card's option, reason
+//     box, 'Allowed with a note' and 'Blocked: ...' toast read 'not available'
+//     / drop the East note for a surgeon, Khan as a surgeon, a coordinator and
+//     a viewer while a second scheduler page keeps every East word; each page
+//     reloaded with its east_feed / east_vacation_reviews reads answering 500
+//     toasts 'Couldn't load the East ...' for the scheduler only (?public=1
+//     too; e4-*.png);
 //     a 390px viewport keeps the grid readable (codes instead of names, no
 //     horizontal scroll, NO clipped pill / truncated OPEN / overflowing P-B
 //     line - vis-001); the year field accepts typed input key by key
@@ -451,6 +462,9 @@ const FOLLOW_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FOLL
 let followPrefsColumn = "present";
 let followPrefRow = { id: "00000000-0000-4000-8000-0000000000e1", person_id: null, profile_id: FOLLOW_UID, schedule_updates_email: true, trade_updates_email: true, shift_reminders_email: false, reminder_hour_central: 20 };
 let followerPrefs400Lines = 0;
+// Item E4 (review, Faraz 9/26): the browser's own "status of 500" line for each east_feed / east_vacation_reviews read
+// the E4 route forced to fail on a watched page - armed per forced answer, consumed one line each, cleared after E4.
+let e4Forced500Lines = 0;
 const FOLLOW_FEED = [
   { id: "ff-7", type: "trade_proposed", title: "Day offered (harness)", message: "s3 offers s2 a day - nothing in return", data: { kind: "give", trade_id: FOLLOW_GIVE_ID, from_surgeon_id: "s3", to_surgeon_id: "s2" }, created_at: "2026-09-23T15:00:00Z" },
   { id: "ff-6", type: "vacation_logged", title: "Vacation logged (harness)", message: "s3 logged a vacation", data: { surgeon_id: "s3" }, created_at: "2026-09-23T14:00:00Z" },
@@ -730,6 +744,7 @@ const watchPage = (pg, tag) => {
       else if (expiredWrites401 && /status of (401|400)|Save failed: Error: blob save failed: .*JWT expired/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // Prompt 16 A3: the 401s of the expired-bearer writes, the 400 of the rejected refresh and the blob leg's own console.error for that 401 - all forced by the harness
       else if (b7DeadLinkStatusLines > 0 && /status of (401|400)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); b7DeadLinkStatusLines--; } // Prompt 16 B7: the dead link's probe (401) and its refresh (400), answered by the B7 route
       else if (followerPrefs400Lines > 0 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); followerPrefs400Lines--; } // Prompt 20 R2: the follower's prefs read before revision o (42703), answered by the follower route
+      else if (e4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); e4Forced500Lines--; } // Item E4 (9/26): the East reads the E4 route answered 500 (the toast pass)
       else consoleErrors.push(msg.text());
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -820,6 +835,22 @@ const scheduleDayRows = async (route, req, url) => {
     return o;
   };
   return (Array.isArray(rows) ? rows : []).map(overlay);
+};
+// The east_feed rows a GET is answered with: the live cache, every row's data.vacations stripped, the newest published
+// week hosting `ranges` as FAK's (the route below passes eastVacFeed; Item E4's pages, 9/26, add their one-day 'home'
+// ranges to it).
+const eastFeedRows = async (route, req, ranges) => {
+  const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+  let rows = await res.json().catch(() => []);
+  if (!Array.isArray(rows)) rows = [];
+  const published = rows.filter(r => r && r.data && r.data.isForecast !== true).map(r => r.week_monday).sort();
+  const host = published[published.length - 1] || null;
+  return rows.map(r => {
+    if (!r || !r.data || typeof r.data !== "object") return r;
+    const data = { ...r.data }; delete data.vacations;
+    if (r.week_monday === host) data.vacations = ranges.map(x => ({ code: "FAK", start: x.start, end: x.end }));
+    return { ...r, data };
+  });
 };
 let schedFeed = null; // Prompt 19 S5: { page, rows } - the notifications feed served to the scheduler's page during the give check
 // Prompt 14 part 3a (the offer painter): call_offers / call_periods are authenticated-only tables, so the anon
@@ -1204,19 +1235,7 @@ const routeSupabase = async (route, scope) => {
   // Prompt 15 part 3: the East feed cache stays live, but its vacation lists are the harness's: every row's
   // data.vacations is stripped and the newest cached week hosts the three FAK fixture ranges (the ride-on host
   // rule of east-feed.js planVacationCache puts a range beyond the published weeks on the latest cached week).
-  if (method === "GET" && url.pathname === "/rest/v1/east_feed") {
-    const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
-    let rows = await res.json().catch(() => []);
-    if (!Array.isArray(rows)) rows = [];
-    const published = rows.filter(r => r && r.data && r.data.isForecast !== true).map(r => r.week_monday).sort();
-    const host = published[published.length - 1] || null;
-    return json(200, rows.map(r => {
-      if (!r || !r.data || typeof r.data !== "object") return r;
-      const data = { ...r.data }; delete data.vacations;
-      if (r.week_monday === host) data.vacations = eastVacFeed.map(x => ({ code: "FAK", start: x.start, end: x.end }));
-      return { ...r, data };
-    }));
-  }
+  if (method === "GET" && url.pathname === "/rest/v1/east_feed") return json(200, await eastFeedRows(route, req, eastVacFeed));
   // Anon READ passthrough: the fake JWT would be rejected by the real project,
   // so swap it for the anon key (what dbReadHeaders does for an expired token).
   const headers = { ...req.headers() };
@@ -2513,6 +2532,482 @@ try {
     await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
     if (writes.some(w => w.public)) fail("Item E3 (?public=1): the public page attempted a write: " + JSON.stringify(writes.filter(w => w.public)));
     await showMonth(2026, 10).catch(() => {});
+  }
+
+  // ---- Item E4 (Faraz 9/26): the open-shifts board, the trade card and the two East load toasts ----
+  // Faraz: "the East details still visible to non-schedulers. The open-shifts board's chip hovers, the Take button title,
+  // the claim sheet list, the claim-gate toast and trade reasons say 'not available' to non-schedulers; the scheduler keeps
+  // the detail. The two 'couldn't load East ...' toasts show to the scheduler only. Same smoke pattern as E3 (surgeon,
+  // coordinator, viewer, ?public=1)." One page per role (E3's profiles and routes, every token minted here; Khan as a
+  // surgeon too - the person whose own Take title and claim sheet carry East reasons) plus a SECOND scheduler page (the
+  // main page is left alone). The East state every check reads is the harness's, never the live feed's (review 9/26: a
+  // pick from the live feed and forecast goes vacuous once Davenport publishes through the window or the rows run out):
+  //  - the pick: the scheduler page loads first with nothing overlaid and, on ITS rules context, picks Mon-Thu days (today
+  //    + 3 on, outside the holiday units) for Khan as PRIMARY - E4_BUSY and E4_SOFT among the served rows whose primary
+  //    another surgeon holds (unlocked, no outside cover, Khan not the backup, not the harness's open / claimed slots) and
+  //    T_HARD / T_SOFT among Burchett's upcoming primary days in the trade card's own picker: a day Khan is free on first,
+  //    else one only codes the overlay outranks hold him back (see the pick mode). A kind with no day fails the run in
+  //    LIVE mode (a console line under the seed fixtures);
+  //  - the overlay (e4Ov) every E4 page is then served - the main page and the stores untouched: E4_BUSY and E4_SOFT
+  //    primary blanked in each schedule_days answer; an east_overrides busy:true row for Khan on E4_BUSY and T_HARD
+  //    ('east-busy' - an override busies the day whatever the feed says, Prompt 12 C); a one-day 'home' East vacation of
+  //    his on E4_SOFT and T_SOFT ('east-clear', the primary-only soft note, Prompt 15 part 2) on the east_feed cache (the
+  //    host week that carries EASTVAC_RANGES) with its 'home' row on the east_vacation_reviews answer. The scheduler page
+  //    reloads and must read all four on its own rules - a miss there is named a harness failure, never the app's;
+  //  - the board (every signed-in page): the whole card's text and titles (chip hovers, Take titles, the Why column);
+  //    Khan's Take title on E4_BUSY and his claim sheet on E4_SOFT (his two pages), Khan's chip on E4_SOFT (every page);
+  //  - the claim gate, driven on Khan's surgeon page: the sheet open on E4_SOFT, that page's east_overrides answer turns
+  //    busy for him there, the app's 60 s poll re-reads it (refreshAll -> loadEastTables(true); up to a minute), Confirm ->
+  //    "Not eligible any more: not available" and no claim_open_slot call. The scheduler's wording of the same toast is a
+  //    self-test of the page's shipped helper (eastMaskedReasons + reasonLabel), not a driven surface;
+  //  - the trade card (the scheduler page with From = Burchett, then Burchett's own page): T_HARD to Khan - the greyed
+  //    option, the trade-to-reason box and the "Blocked: ..." toast after Propose (refused in the client: no
+  //    shift_trade_requests write) - and T_SOFT to Khan ("Allowed with a note");
+  //  - the two toasts: every page reloaded with its east_feed and east_vacation_reviews GETs answering 500, a recorder
+  //    (init script) keeping every toast shown: the scheduler must see both, no other role either - non-vacuous when the
+  //    page did read the table (counted in the wrapper; ?public=1 never reads the reviews - a no-op there by
+  //    construction, its feed-cache toast is the proof). The browser's own "status of 500" line of each forced answer is
+  //    expected (watchPage's e4Forced500Lines on the signed-in pages; the public page reports page errors only, as in E3).
+  {
+    const E4_RE = /\beast\b|davenport|east-(?:busy|forecast|derived|unknown|clear)|derived-lock/i;
+    const E4_NA = "not available";
+    const E4_TOAST_RE = /Couldn't load the East/;
+    const E4_STAMP = "2026-09-26T00:00:00Z";
+    const e4Jwt = (uid, email) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: uid, role: "authenticated", email, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    // What every E4 page is served on top of its route (the pick fills it): blank = primary blanked, busy = Khan's
+    // east_overrides busy:true days, home = his one-day 'home' East vacations.
+    const e4Ov = { blank: [], busy: [], home: [] };
+    let E4_BUSY = null, E4_SOFT = null;
+    const sched = { board: null, busyTitle: null, softChip: null, claimText: null, trade: { hard: null, soft: null }, tradeRead: null, noteRead: null };
+    // The page's rules context (E3's fiber walk) and rules.js eligibility() - every in-page reading of the rules below.
+    //   pick:  args.from, args.exclude (days), args.values ("day|role" of the trade card's picker, From = Burchett) ->
+    //          { busy, soft } (served rows, board options { claim: true }) and { tHard, tSoft } (the trade card's options
+    //          { ignoreLocks: true, claim: true }), each a day Khan (s1) is free on as primary, else held back only by codes
+    //          the day's overlay outranks;
+    //   check: args.day / role / cand / opts -> that one result, to prove a surface non-vacuous on THIS page.
+    const e4Rules = (pg, mode, args) => pg.evaluate(({ mode, args }) => {
+      const rootEl = document.getElementById("root");
+      const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+      if (!ck) return { error: "no React container key on #root" };
+      const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+      let ctx = null, n = 0; const stack = [current];
+      while (stack.length && !ctx && n++ < 500000) {
+        const f = stack.pop(); if (!f) continue;
+        if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+        if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+      }
+      if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+      if (typeof eligibility !== "function") return { error: "rules.js eligibility() is not a global on this page" };
+      const EH = ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"], ES = ["east-forecast", "east-unknown", "east-clear"];
+      const key = (c) => String(c).split("@")[0].split(":")[0];
+      const hard0 = (e) => (e && !e.ok && e.hard && e.hard.length) ? e.hard[0] : null;
+      const eastHard = (e) => !!hard0(e) && EH.includes(key(hard0(e)));
+      const glossHard = (e) => !!hard0(e) && !!e.eastVacation && /^(time-off|day-before-vacation)$/.test(key(hard0(e)));
+      const eastSoft = (e) => (e && e.ok ? (e.soft || []) : []).filter(s => ES.includes(key(s.reason))).map(s => s.reason);
+      const wd = (d) => new Date(d + "T12:00:00Z").getUTCDay();
+      const elig = (d, role, id, o) => { try { return eligibility(ctx, d, role, id, o); } catch (e) { return { ok: false, hard: ["threw: " + String(e && e.message || e)], soft: [] }; } };
+      if (mode === "pick") {
+        const plain = (d) => d >= args.from && wd(d) >= 1 && wd(d) <= 4 && !ctx.holidayByDay[d] && !args.exclude.includes(d);
+        const near = (a, b) => !!a && !!b && Math.abs(Date.parse(a + "T12:00:00Z") - Date.parse(b + "T12:00:00Z")) < 2 * 86400000;   // two 'home' days a day apart would merge into one range
+        // A day Khan is free on comes first; failing that, one where only codes the overlay outranks hold him back:
+        //  BUSY - East codes and the weekday pattern (pushed after rules.js's East block, so the override's east-busy reads first);
+        //  SOFT - the forecast and the weekday pattern (a 'home' East-vacation day is not forecast and is a dated availability
+        //  for both roles). e4Confirm reads the result on the reloaded page either way.
+        const BUSY_OK = ["east-busy", "east-forecast-busy", "hard-never-weekday", "weekday-not-allowed"], SOFT_OK = ["east-forecast-busy", "hard-never-weekday", "weekday-not-allowed"];
+        const why = {};
+        const rank = (days, o, keys) => days.map(d => ({ d, e: elig(d, "primary", "s1", o) }))
+          .filter(x => x.e.ok || ((x.e.hard || []).length > 0 && x.e.hard.every(c => keys.includes(key(c)))))
+          .sort((a, b) => ((a.e.ok ? 0 : 1) - (b.e.ok ? 0 : 1)) || (a.d < b.d ? -1 : a.d > b.d ? 1 : 0))
+          .map(x => { why[x.d] = x.e.ok ? "free" : x.e.hard.join(","); return x.d; });
+        const rows = Object.keys(ctx.schedule).sort().filter(d => { const e = ctx.schedule[d] || {}; return plain(d) && !!e.primary && e.primary !== "s1" && e.backup !== "s1" && !e.primaryLocked && !e.externalCover; });
+        const softRows = rank(rows, { claim: true }, SOFT_OK), soft = softRows[0] || null;
+        const busyRows = rank(rows.filter(d => d !== soft), { claim: true }, BUSY_OK), busy = busyRows[0] || null;
+        const tDays = args.values.map(v => v.split("|")).filter(([d, role]) => role === "primary" && plain(d) && d !== busy && d !== soft).map(([d]) => d);
+        const tSoftList = rank(tDays.filter(d => !near(d, soft)), { ignoreLocks: true, claim: true }, SOFT_OK), tSoft = tSoftList[0] || null;
+        const tHardList = rank(tDays.filter(d => d !== tSoft), { ignoreLocks: true, claim: true }, BUSY_OK), tHard = tHardList[0] || null;
+        const w = (d) => d ? d + " (" + why[d] + ")" : "none";
+        return { rows: rows.length, softN: softRows.length, busyN: busyRows.length, tDays: tDays.length, tSoftN: tSoftList.length, tHardN: tHardList.length, busy, soft, tHard, tSoft, text: { busy: w(busy), soft: w(soft), tHard: w(tHard), tSoft: w(tSoft) } };
+      }
+      if (mode === "check") {
+        const e = elig(args.day, args.role, args.cand, args.opts || {});
+        return { ok: !!e.ok, hard0: hard0(e), hard: (e.hard || []).slice(0, 4), eastHard: eastHard(e) || glossHard(e), eastSoft: eastSoft(e) };
+      }
+      return { error: "unknown mode " + mode };
+    }, { mode, args });
+    const e4Toasts = (pg, from) => pg.evaluate((n) => (window.__e4Toasts || []).slice(n || 0), from || 0);
+    // every toast the page shows, one entry per text change (installed before the app's own scripts)
+    const e4ToastRecorder = () => {
+      window.__e4Toasts = [];
+      const scan = () => {
+        const el = document.querySelector("[data-testid=toast]");
+        const t = el ? (el.textContent || "").replace(/\s+/g, " ").trim() : "";
+        if (t && window.__e4Toasts[window.__e4Toasts.length - 1] !== t) window.__e4Toasts.push(t);
+      };
+      new MutationObserver(scan).observe(document, { childList: true, subtree: true, characterData: true });
+    };
+    // (1) the E4 route: the overlay on every page, the East reads answering 500 while st.failEast, the page's
+    // east_overrides reads counted (st.ovGets - the claim-gate step waits for the poll's) and, while st.gateBusy names a
+    // day, one more busy:true row for Khan there (that page only)
+    const e4Route = (base, st) => async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      const get = req.method() === "GET";
+      const json = (body) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+      if (get && url.pathname === "/rest/v1/east_overrides") st.ovGets++;
+      if (get && st.failEast && (url.pathname === "/rest/v1/east_feed" || url.pathname === "/rest/v1/east_vacation_reviews")) {
+        st.forced[url.pathname === "/rest/v1/east_feed" ? "feed" : "reviews"]++;
+        if (st.watched) e4Forced500Lines++;
+        return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "XX000", message: "harness: Item E4 forced read failure", details: null, hint: null }) });
+      }
+      if (get && url.pathname === "/rest/v1/schedule_days" && e4Ov.blank.length) return json((await scheduleDayRows(route, req, url)).map(r => r && e4Ov.blank.includes(r.day) ? { ...r, primary_id: null } : r));
+      const busyDays = e4Ov.busy.concat(st.gateBusy ? [st.gateBusy] : []);
+      if (get && url.pathname === "/rest/v1/east_overrides" && busyDays.length) {
+        const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+        let rows = await res.json().catch(() => []);
+        if (!Array.isArray(rows)) rows = [];
+        rows = rows.filter(r => !(r && r.person_id === "s1" && busyDays.includes(String(r.day || "").slice(0, 10))))
+          .concat(busyDays.map(d => ({ day: d, person_id: "s1", busy: true, note: null, updated_by: "harness", updated_at: E4_STAMP })))
+          .sort((a, b) => String(a.day) < String(b.day) ? -1 : String(a.day) > String(b.day) ? 1 : 0);
+        return json(rows);
+      }
+      if (get && url.pathname === "/rest/v1/east_feed" && e4Ov.home.length) return json(await eastFeedRows(route, req, eastVacFeed.concat(e4Ov.home.map(d => ({ start: d, end: d })))));
+      if (get && url.pathname === "/rest/v1/east_vacation_reviews" && e4Ov.home.length) return json(eastVacReviewStore.concat(e4Ov.home.map(d => ({ id: "e4-home-" + d, person_id: "s1", start: d, end: d, decision: "home", decided_at: E4_STAMP, decided_by: "s1" }))).sort((a, b) => a.start < b.start ? -1 : 1));
+      return base(route);
+    };
+    const e4PublicBase = async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      if (req.method() !== "GET") { writes.push({ method: req.method(), path: url.pathname, body: req.postData() || "", public: true }); return route.fulfill({ status: 200, contentType: "application/json", body: "[]" }); }
+      if (url.pathname === "/rest/v1/east_feed") return routeSupabase(route);
+      const fx = fixtureAnswer(url);
+      if (fx) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(fx) });
+      const headers = { ...req.headers() }; headers["authorization"] = "Bearer " + ANON_KEY;
+      return route.continue({ headers });
+    };
+    const SURG4_UID = "00000000-0000-4000-8000-00000000e4e4", KHAN4_UID = "00000000-0000-4000-8000-00000000e4e1";
+    const SURG4_PROFILE = { id: SURG4_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-26T00:00:00Z" };
+    const KHAN4_PROFILE = { id: KHAN4_UID, person_id: "s1", role: "surgeon", display_name: "Khan", email: null, created_at: "2026-09-26T00:00:00Z" };
+    // every signed-in page gets a token minted here (review 9/26: the start-time COORD_JWT / VIEWER_JWT / FAKE_JWT expire an
+    // hour into the run, and an expired token skips the east_vacation_reviews read the toast and 'home' checks need)
+    const ROLES_E4 = [
+      { tag: "scheduler", kind: "scheduler", file: "scheduler", jwt: e4Jwt(FAKE_UID, FAKE_EMAIL), route: routeSupabase, me: "s1" },
+      { tag: "surgeon", kind: "surgeon", file: "surgeon", jwt: e4Jwt(SURG4_UID, "surgeon@example.com"), route: routeSupabaseAs(SURG4_PROFILE), me: "s2", trades: true },
+      { tag: "Khan as surgeon", kind: "surgeon", file: "khan-surgeon", jwt: e4Jwt(KHAN4_UID, "khan-surgeon@example.com"), route: routeSupabaseAs(KHAN4_PROFILE), me: "s1" },
+      { tag: "coordinator", kind: "coordinator", file: "coordinator", jwt: e4Jwt(COORD_UID, "office@example.com"), route: routeSupabaseAs(COORD_PROFILE), me: null },
+      { tag: "viewer", kind: "viewer", file: "viewer", jwt: e4Jwt(VIEWER_UID, "viewer@example.com"), route: routeSupabaseAs(VIEWER_PROFILE), me: null },
+      { tag: "?public=1", kind: "public", file: "public", jwt: null, route: e4PublicBase, me: null, url: BASE + "?public=1" },
+    ];
+    const e4Load = async (pg, R) => {
+      if (R.url) {
+        await loadWithRetry(pg, R.url, "[data-testid=cal-month]", 30000, "item E4 " + R.tag);
+        await pg.waitForFunction(() => !/Loading schedule/i.test(document.body.innerText || "") && !!document.querySelector("[data-testid=cal-grid] .cal-cell:not([data-primary=''])"), null, { timeout: 30000 });
+      } else {
+        await loadWithRetry(pg, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "item E4 " + R.tag);
+        await pg.waitForSelector("text=Synced", { timeout: 30000 });
+      }
+      await pg.waitForTimeout(800);
+    };
+    const e4Board = async (pg) => {
+      await pg.click('button[data-tab="openshifts"]');
+      await pg.waitForSelector("[data-testid=openshifts-table]", { timeout: 8000 });
+      await pg.click("[data-testid=ob-horizon-all]");
+      await pg.waitForTimeout(400);
+      return pg.evaluate(({ src, flags }) => {
+        const RE = new RegExp(src, flags);
+        const card = document.querySelector("[data-testid=openshifts-card]");
+        if (!card) return null;
+        const rows = Array.from(card.querySelectorAll("[data-testid=openshifts-table] tbody tr[data-slot]")).map(tr => {
+          const b = tr.querySelector("[data-testid=ob-take]");
+          return { slot: tr.getAttribute("data-slot"), take: b ? (b.disabled ? "disabled" : "enabled") : "none", title: b ? (b.getAttribute("title") || "") : "", chips: Array.from(tr.querySelectorAll("[data-eligible-id]")).map(c => ({ id: c.getAttribute("data-eligible-id"), title: c.getAttribute("title") || "" })) };
+        });
+        const hits = [];
+        const text = card.innerText || "";
+        const m = RE.exec(text);
+        if (m) hits.push("text '..." + text.slice(Math.max(0, m.index - 50), m.index + 60).replace(/\s+/g, " ") + "...'");
+        Array.from(card.querySelectorAll("[title],[aria-label]")).forEach(el => ["title", "aria-label"].forEach(a => { const v = el.getAttribute(a); if (v && RE.test(v)) hits.push(a + " '" + v.slice(0, 140) + "'"); }));
+        return { rows, hits };
+      }, { src: E4_RE.source, flags: E4_RE.flags });
+    };
+    const rowOf = (board, day) => (board && day) ? board.rows.find(r => r.slot === day + "|primary") || null : null;
+    const e4ClaimSheet = async (pg, day) => {
+      await pg.click(`tr[data-slot="${day}|primary"] [data-testid=ob-take]`);
+      await pg.waitForSelector("[data-testid=claim-sheet] [role=dialog]", { timeout: 5000 });
+      const t = await pg.$eval("[data-testid=claim-sheet] [role=dialog]", el => ({ text: el.innerText.replace(/\s+/g, " ").trim(), soft: !!el.querySelector("[data-testid=claim-soft]"), none: !!el.querySelector("[data-testid=claim-no-warnings]") }));
+      await pg.click("[data-testid=claim-cancel]");
+      await pg.waitForSelector("[data-testid=claim-sheet]", { state: "detached", timeout: 3000 });
+      return t;
+    };
+    // The claim gate, driven (see the block comment): { toast, calls, open, hard0 } or { error } - the day's override is
+    // withdrawn again whatever happens
+    const e4ClaimGate = async (pg, st, day) => {
+      await pg.click(`tr[data-slot="${day}|primary"] [data-testid=ob-take]`);
+      await pg.waitForSelector("[data-testid=claim-sheet] [role=dialog]", { timeout: 5000 });
+      const n0 = (await e4Toasts(pg)).length, w0 = writes.length, g0 = st.ovGets;
+      st.gateBusy = day;
+      try {
+        if (!(await waitFor(() => st.ovGets > g0, 75000, 250))) return { error: "no east_overrides re-read within 75 s (the app's 60 s poll)" };
+        let chk = null;
+        await waitFor(async () => { chk = await e4Rules(pg, "check", { day, role: "primary", cand: "s1", opts: { claim: true } }); return !!chk && !chk.error && chk.eastHard; }, 8000, 250);
+        if (!chk || chk.error || !chk.eastHard) return { error: "the poll's re-read never reached this page's rules: " + JSON.stringify(chk) };
+        await pg.waitForTimeout(300);
+        if (!(await pg.$("[data-testid=claim-sheet] [role=dialog]"))) return { error: "the claim sheet closed on its own during the poll" };
+        await pg.click("[data-testid=claim-confirm]");
+        await waitFor(async () => (await e4Toasts(pg, n0)).some(t => /^Not eligible any more: /.test(t)), 5000);
+        await pg.waitForTimeout(300);
+        return {
+          toast: (await e4Toasts(pg, n0)).find(t => /^Not eligible any more: /.test(t)) || "",
+          calls: writes.slice(w0).filter(w => /\/rpc\/claim_open_slot/.test(w.path)).length,
+          open: !!(await pg.$("[data-testid=claim-sheet]")), hard0: chk.hard0,
+        };
+      } finally {
+        st.gateBusy = null;
+        if (await pg.$("[data-testid=claim-cancel]")) { await pg.click("[data-testid=claim-cancel]").catch(() => {}); await pg.waitForSelector("[data-testid=claim-sheet]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+      }
+    };
+    const e4TradePick = async (pg, pair) => {
+      await pg.selectOption("[data-testid=trade-mine-pick]", pair.value);
+      await pg.waitForTimeout(200);
+      if (await pg.$("[data-testid=trade-unit]")) throw new Error("the trade card reads " + pair.value + " as a unit day");
+      await pg.selectOption("[data-testid=trade-to]", pair.cand);
+      await pg.waitForTimeout(250);
+      return {
+        opt: await pg.$eval(`[data-testid=trade-to] option[value="${pair.cand}"]`, o => ({ text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })),
+        reason: await pg.$eval("[data-testid=trade-to-reason]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => ""),
+        note: await pg.$eval("[data-testid=trade-to-note]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => ""),
+      };
+    };
+    const e4Propose = async (pg) => {
+      const n0 = (await e4Toasts(pg)).length, w0 = writes.length;
+      await pg.click("[data-testid=trade-submit]");
+      await waitFor(async () => (await e4Toasts(pg, n0)).some(t => /^Blocked: /.test(t)), 4000);
+      await pg.waitForTimeout(300);
+      return { toast: (await e4Toasts(pg, n0)).find(t => /^Blocked: /.test(t)) || "", posts: writes.slice(w0).filter(w => w.path.startsWith("/rest/v1/shift_trade_requests")) };
+    };
+    const e4TradeCard = async (pg, R) => {
+      await pg.click('button[data-tab="timeoff"]');
+      await pg.waitForSelector("[data-testid=trade-card]", { timeout: 8000 });
+      if (R.kind === "scheduler") { await pg.selectOption("[data-testid=trade-from]", "s2"); await pg.waitForTimeout(200); }
+    };
+    // (0) the pick, on the scheduler page before any overlay (its rules read what every E4 page is served, bar e4Ov)
+    const e4Pick = async (pg) => {
+      await e4TradeCard(pg, { kind: "scheduler" });
+      const values = await pg.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => o.value).filter(Boolean));
+      const pk = await e4Rules(pg, "pick", { from: isoPlus(todayCentral, 3), exclude: [harnessOpen.day].concat(Object.keys(claimedDays)).filter(Boolean), values });
+      if (pk.error) throw new Error("rules context (pick): " + pk.error);
+      E4_BUSY = pk.busy; E4_SOFT = pk.soft;
+      sched.trade = { hard: pk.tHard ? { value: pk.tHard + "|primary", cand: "s1" } : null, soft: pk.tSoft ? { value: pk.tSoft + "|primary", cand: "s1" } : null };
+      e4Ov.blank = [E4_BUSY, E4_SOFT].filter(Boolean);
+      e4Ov.busy = [E4_BUSY, pk.tHard].filter(Boolean);
+      e4Ov.home = [E4_SOFT, pk.tSoft].filter(Boolean);
+      ok(`Item E4 (pick): of ${pk.rows} served Mon-Thu row(s) another surgeon holds as primary, E4_SOFT ${pk.text.soft} and E4_BUSY ${pk.text.busy} (both blanked; ${pk.softN} / ${pk.busyN} fit); of Burchett's ${pk.tDays} upcoming Mon-Thu primary day(s), T_SOFT ${pk.text.tSoft} and T_HARD ${pk.text.tHard} (${pk.tSoftN} / ${pk.tHardN} fit) - Khan's override busy on ${e4Ov.busy.join(", ") || "-"}, his 'home' East vacation on ${e4Ov.home.join(", ") || "-"}`);
+      const miss = (what) => {
+        const m = `Item E4 (pick): ${what} - the checks that need it are vacuous this run`;
+        if (fixture) console.log(`     (${m}; seed fixtures)`);
+        else fail(m + " (LIVE mode: the overlay needs only a day Khan may take as primary, or one only East / the weekday pattern holds him back)");
+      };
+      if (!E4_BUSY || !E4_SOFT) miss(`no ${[!E4_SOFT && "E4_SOFT", !E4_BUSY && "E4_BUSY"].filter(Boolean).join(" / ")} among the ${pk.rows} served Mon-Thu row(s) from ${isoPlus(todayCentral, 3)} whose primary another surgeon holds`);
+      if (!pk.tHard || !pk.tSoft) miss(`no ${[!pk.tSoft && "T_SOFT", !pk.tHard && "T_HARD"].filter(Boolean).join(" / ")} among Burchett's ${pk.tDays} upcoming Mon-Thu primary day(s)`);
+    };
+    // (0b) after the reload with the overlay: the scheduler page's own rules must read each overlaid day as intended
+    const e4Confirm = async (pg) => {
+      const want = [
+        { what: "E4_BUSY", day: E4_BUSY, opts: { claim: true }, need: "'east-busy' first", test: (c) => c.hard0 === "east-busy", drop: () => { E4_BUSY = null; } },
+        { what: "E4_SOFT", day: E4_SOFT, opts: { claim: true }, need: "allowed with 'east-clear'", test: (c) => c.ok && c.eastSoft.includes("east-clear"), drop: () => { E4_SOFT = null; } },
+        { what: "T_HARD", day: sched.trade.hard && sched.trade.hard.value.split("|")[0], opts: { ignoreLocks: true, claim: true }, need: "'east-busy' first", test: (c) => c.hard0 === "east-busy", drop: () => { sched.trade.hard = null; } },
+        { what: "T_SOFT", day: sched.trade.soft && sched.trade.soft.value.split("|")[0], opts: { ignoreLocks: true, claim: true }, need: "allowed with 'east-clear'", test: (c) => c.ok && c.eastSoft.includes("east-clear"), drop: () => { sched.trade.soft = null; } },
+      ].filter(w => w.day);
+      const read = [];
+      for (const w of want) {
+        // up to 5 s: the sign-in re-run may still be re-reading the East tables (both reads carry the overlay)
+        let c = null;
+        await waitFor(async () => { c = await e4Rules(pg, "check", { day: w.day, role: "primary", cand: "s1", opts: w.opts }); return !c.error && w.test(c); }, 5000, 250);
+        if (c.error || !w.test(c)) { fail(`Item E4 (scheduler): the harness overlay did not reach this page's rules - Khan on ${w.what} ${w.day} primary must read ${w.need}: ${JSON.stringify(c)} (a harness failure, not the app's; its checks are skipped)`); w.drop(); }
+        else read.push(`${w.what} ${w.day}: ${c.ok ? "allowed, " + c.eastSoft.join(", ") : c.hard0}`);
+      }
+      if (read.length) ok(`Item E4 (scheduler): the overlay reached this page's rules - ${read.join("; ")}`);
+    };
+    let e4PubErrors = [];
+    for (const R of ROLES_E4) {
+      const T = `Item E4 (${R.tag})`;
+      const st = { failEast: false, forced: { feed: 0, reviews: 0 }, ovGets: 0, gateBusy: null, watched: R.kind !== "public" };
+      const rp = await context.newPage();
+      // the signed-in pages report through watchPage like E3's role pages; the public page like E3's (page errors only -
+      // its anon reads are not the signed-in console's)
+      if (st.watched) watchPage(rp, "e4-" + R.file);
+      else rp.on("pageerror", (e) => e4PubErrors.push(String(e && e.message || e)));
+      if (R.jwt) await rp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, R.jwt);
+      await rp.addInitScript(e4ToastRecorder);
+      await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await rp.route((url) => url.hostname === SUPABASE_HOST, e4Route(R.route, st));
+      rp.on("dialog", (d) => d.dismiss().catch(() => {}));   // nothing in E4 is confirmed
+      try {
+        await e4Load(rp, R);
+        // the page's role, read from the page (E3's rule: a failed profile read would prove nothing)
+        if (R.kind !== "public") {
+          const tabInfo = await rp.$$eval("button[data-tab]", els => els.map(e => ({ k: e.getAttribute("data-tab"), t: (e.textContent || "").trim() })));
+          const tabs = tabInfo.map(x => x.k), toText = (tabInfo.find(x => x.k === "timeoff") || {}).t || "";
+          const roleOk = R.kind === "scheduler" ? tabs.includes("setup")
+            : R.kind === "surgeon" ? !tabs.includes("setup") && /^Time off & Trades/.test(toText) && tabs.includes("myschedule")
+            : !tabs.includes("setup") && toText === "Time off" && !tabs.includes("myschedule");
+          if (!roleOk) throw new Error(`the page does not read as a ${R.tag} (tabs ${tabs.join(",")}, Time off tab '${toText}')`);
+          if (R.kind === "coordinator" || R.kind === "viewer") {
+            await rp.click('button[data-tab="timeoff"]');
+            await rp.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
+            const office = !!(await rp.$("[data-testid=coord-offers-card]"));
+            if (office !== (R.kind === "coordinator")) throw new Error(`the page does not read as a ${R.tag}: the office's offers card is ${office ? "shown" : "missing"}`);
+          }
+          ok(`${T}: the page reads as a ${R.tag} (tabs ${tabs.join(",")})`);
+        } else if (await rp.$("button[data-tab]")) throw new Error("the ?public=1 page shows the signed-in nav - it is not the public page");
+        // (0) the scheduler page (the first) picks the days, then reloads with the overlay and confirms it
+        if (R.kind === "scheduler") {
+          await e4Pick(rp);
+          await e4Load(rp, R);
+          await e4Confirm(rp);
+        }
+        // (2) the board (signed-in pages)
+        if (R.kind !== "public") {
+          const board = await e4Board(rp);
+          if (!board) throw new Error("the open-shifts card did not render");
+          const busyRow = rowOf(board, E4_BUSY), softRow = rowOf(board, E4_SOFT);
+          if ((E4_BUSY && !busyRow) || (E4_SOFT && !softRow)) fail(`${T}: the board does not list the harness-opened slot(s) - ${E4_BUSY && !busyRow ? E4_BUSY + " primary " : ""}${E4_SOFT && !softRow ? E4_SOFT + " primary" : ""} (${board.rows.length} row(s): ${board.rows.slice(0, 6).map(r => r.slot).join(", ")})`);
+          const khanChip = softRow ? softRow.chips.find(c => c.id === "s1") || null : null;
+          if (R.kind === "scheduler") {
+            sched.board = board;
+            // the scheduler keeps the detail: Khan's Take title on E4_BUSY, Khan's chip on E4_SOFT, his claim sheet there
+            // (each read against this page's rules by e4Confirm above)
+            if (busyRow) {
+              sched.busyTitle = busyRow.title;
+              if (busyRow.take !== "disabled" || !E4_RE.test(busyRow.title)) fail(`${T}: Khan's Take on ${E4_BUSY} must be disabled with the East reason in its title (the rules here: east-busy) - ${busyRow.take}, '${busyRow.title}'`);
+              else ok(`${T}: Khan's Take on ${E4_BUSY} is disabled - title '${busyRow.title}' (the East detail kept)`);
+            }
+            if (softRow) {
+              sched.softChip = khanChip ? khanChip.title : null;
+              if (!khanChip || !E4_RE.test(khanChip.title)) fail(`${T}: Khan's chip on ${E4_SOFT} must name his East note (the rules here: east-clear) - ${khanChip ? "'" + khanChip.title + "'" : "no chip"}`);
+              else ok(`${T}: Khan's chip on ${E4_SOFT} reads '${khanChip.title.slice(0, 120)}' (the East detail kept)`);
+              if (softRow.take === "enabled") {
+                const cs = await e4ClaimSheet(rp, E4_SOFT);
+                sched.claimText = cs.text;
+                if (!cs.soft || !E4_RE.test(cs.text)) fail(`${T}: Khan's claim sheet on ${E4_SOFT} must list his East note under 'Allowed, shown so you know' - '${cs.text.slice(0, 200)}'`);
+                else ok(`${T}: Khan's claim sheet on ${E4_SOFT} lists the East note - '${(cs.text.match(/Allowed, shown so you know:[^.]*/) || [cs.text])[0].slice(0, 140)}'`);
+              } else fail(`${T}: Khan's Take on ${E4_SOFT} is ${softRow.take} although the rules here allow him there (east-clear) - title '${softRow.title}'`);
+            }
+            if (!board.hits.length && (busyRow || softRow)) fail(`${T}: the scheduler's board carries no East word at all although the E4 slots are listed`);
+          } else {
+            if (board.hits.length) fail(`${T}: the open-shifts board shows East detail - ${board.hits.slice(0, 4).join("; ")}`);
+            else ok(`${T}: the open-shifts board (${board.rows.length} row(s): text, chip hovers, Take titles) carries no East word${sched.board && sched.board.hits.length ? ` - the scheduler's reads ${sched.board.hits.length} (e.g. ${sched.board.hits[0].slice(0, 90)})` : ""}`);
+            if (softRow) {
+              const chk = await e4Rules(rp, "check", { day: E4_SOFT, role: "primary", cand: "s1", opts: { claim: true } });
+              if (!khanChip) fail(`${T}: Khan's chip on ${E4_SOFT} is missing (this page's rules: ${JSON.stringify(chk)})`);
+              else if (E4_RE.test(khanChip.title)) fail(`${T}: Khan's chip on ${E4_SOFT} names East: '${khanChip.title}'`);
+              else if (chk.error || !chk.eastSoft.length) fail(`${T}: this page's rules give Khan no East note on ${E4_SOFT} - the chip check proves nothing (${JSON.stringify(chk)})`);
+              else ok(`${T}: Khan's chip on ${E4_SOFT} reads '${khanChip.title.slice(0, 100)}' - the rules here hold ${chk.eastSoft.join(", ")} (the scheduler's chip: '${(sched.softChip || "").slice(0, 80)}')`);
+            }
+            if (R.me === "s1") {   // Khan as a surgeon: his own Take title, claim sheet and claim gate
+              if (busyRow) {
+                const chk = await e4Rules(rp, "check", { day: E4_BUSY, role: "primary", cand: "s1", opts: { claim: true } });
+                if (busyRow.take !== "disabled" || busyRow.title !== E4_NA) fail(`${T}: Khan's Take on ${E4_BUSY} must be disabled with the title '${E4_NA}' - ${busyRow.take}, '${busyRow.title}'`);
+                else if (chk.error || !chk.eastHard) fail(`${T}: this page's rules give Khan no East hard reason on ${E4_BUSY} (${JSON.stringify(chk)}) - the Take-title check proves nothing`);
+                else ok(`${T}: Khan's Take on ${E4_BUSY} is disabled - title '${busyRow.title}' (the rules here: ${chk.hard0}; the scheduler's title: '${sched.busyTitle || ""}')`);
+              }
+              if (softRow && softRow.take === "enabled") {
+                const cs = await e4ClaimSheet(rp, E4_SOFT);
+                if (E4_RE.test(cs.text)) fail(`${T}: Khan's claim sheet on ${E4_SOFT} names East: '${cs.text.slice(0, 200)}'`);
+                else ok(`${T}: Khan's claim sheet on ${E4_SOFT} shows no East note (${cs.soft ? "other notes listed" : cs.none ? "'No rule warnings for you on this day'" : "no list"}) while the scheduler's lists it`);
+                const g = await e4ClaimGate(rp, st, E4_SOFT);
+                if (g.error) fail(`${T}: the claim gate on ${E4_SOFT} could not be driven - ${g.error}`);
+                else if (!g.toast.startsWith("Not eligible any more: " + E4_NA) || E4_RE.test(g.toast)) fail(`${T}: the claim-gate toast must read 'Not eligible any more: ${E4_NA}' with no East word - '${g.toast}' (the rules here: ${g.hard0})`);
+                else if (g.calls || g.open) fail(`${T}: the claim gate must refuse before claim_open_slot and close the sheet - ${g.calls} call(s), sheet ${g.open ? "still open" : "closed"}`);
+                else ok(`${T}: claim gate on ${E4_SOFT} (the poll re-read Khan's override busy; the rules here: ${g.hard0}): toast '${g.toast}', no claim_open_slot call, the sheet closed`);
+              } else if (softRow) fail(`${T}: Khan's Take on ${E4_SOFT} is ${softRow.take} - title '${softRow.title}'`);
+            } else if (R.me) {   // Burchett: his own claim sheet, wherever he may take an E4 slot (no East feature - vacuous by data, scanned anyway)
+              const mine = [busyRow, softRow].filter(r => r && r.take === "enabled");
+              for (const r of mine) {
+                const cs = await e4ClaimSheet(rp, r.slot.split("|")[0]);
+                if (E4_RE.test(cs.text)) fail(`${T}: the claim sheet on ${r.slot} names East: '${cs.text.slice(0, 200)}'`);
+                else ok(`${T}: the claim sheet on ${r.slot} shows no East word (Burchett has no East feature - vacuous by data)`);
+              }
+            }
+          }
+          await rp.screenshot({ path: path.join(OUT, "e4-" + R.file + "-board.png"), fullPage: true }).catch(() => {});
+        }
+        // (3) the trade card: the scheduler (From = Burchett) reads the picked pairs, then Burchett's own page
+        if (R.kind === "scheduler" || R.trades) {
+          await e4TradeCard(rp, R);
+          const hp = sched.trade.hard, sp = sched.trade.soft;
+          if (R.kind === "scheduler") {
+            if (hp) {
+              const got = await e4TradePick(rp, hp);
+              const pr = await e4Propose(rp);
+              sched.tradeRead = { ...got, toast: pr.toast };
+              if (got.opt.eligible !== "false" || !got.opt.text.endsWith(" - east-busy")) fail(`${T}: the greyed option for Khan on ${hp.value} must read 'Khan - east-busy' (the raw code, as before E4) - '${got.opt.text}' (${got.opt.eligible})`);
+              else if (!E4_RE.test(got.reason) || !E4_RE.test(pr.toast)) fail(`${T}: the trade-to-reason box / Blocked toast lost the East wording: '${got.reason}' / '${pr.toast}'`);
+              else if (!pr.toast || pr.posts.length) fail(`${T}: Propose to an ineligible counter-party must toast 'Blocked: ...' and write nothing - '${pr.toast}', ${pr.posts.length} write(s)`);
+              else ok(`${T}: trade card (From Burchett, ${hp.value}, to Khan): option '${got.opt.text}', box '${got.reason.slice(0, 100)}', toast '${pr.toast.slice(0, 110)}' - the detail kept`);
+            }
+            if (sp) {
+              const got = await e4TradePick(rp, sp);
+              sched.noteRead = got.note;
+              if (!E4_RE.test(got.note)) fail(`${T}: 'Allowed with a note' for Khan on ${sp.value} must name the East note (east-clear) - '${got.note}'`);
+              else ok(`${T}: 'Allowed with a note' for Khan on ${sp.value}: '${got.note}' (the detail kept)`);
+            }
+            // the claim gate's wording for both kinds of reader: a self-test of the page's shipped helper (Khan's surgeon page
+            // drives the gate itself - see the block comment); the scheduler's text must stay the pre-E4 one
+            const gate = await rp.evaluate(() => (typeof eastMaskedReasons === "function" && typeof reasonLabel === "function") ? { other: "Not eligible any more: " + reasonLabel(eastMaskedReasons(["east-busy"], false, null)[0], (x) => x), sched: "Not eligible any more: " + reasonLabel(eastMaskedReasons(["east-busy"], true, null)[0], (x) => x), vac: reasonLabel(eastMaskedReasons(["time-off:2026-12-01"], false, "unreviewed")[0], (x) => x) } : null);
+            if (!gate || gate.other !== "Not eligible any more: " + E4_NA || gate.sched !== "Not eligible any more: on East (Davenport) call" || gate.vac !== E4_NA) fail(`${T}: the page's eastMaskedReasons / reasonLabel give the claim-gate toast the wrong reason: ${JSON.stringify(gate)}`);
+            else ok(`Item E4 (claim gate, helper self-test): the page's shipped helper words the toast '${gate.other}' for everyone but the scheduler ('${gate.sched}')`);
+          } else {
+            if (hp) {
+              const [pd, prole] = hp.value.split("|");
+              const chk = await e4Rules(rp, "check", { day: pd, role: prole, cand: hp.cand, opts: { ignoreLocks: true, claim: true } });
+              const got = await e4TradePick(rp, hp);
+              const pr = await e4Propose(rp);
+              if (chk.error || !chk.eastHard) fail(`${T}: this page's rules give Khan no East hard reason on ${hp.value} (${JSON.stringify(chk)}) - the trade checks prove nothing`);
+              else if (got.opt.eligible !== "false" || !got.opt.text.endsWith(" - " + E4_NA) || E4_RE.test(got.opt.text)) fail(`${T}: the greyed option must read '<name> - ${E4_NA}' - '${got.opt.text}'`);
+              else if (!got.reason.includes(E4_NA) || E4_RE.test(got.reason)) fail(`${T}: the trade-to-reason box must say '${E4_NA}' with no East word - '${got.reason}'`);
+              else if (!pr.toast.includes(E4_NA) || E4_RE.test(pr.toast)) fail(`${T}: the Blocked toast must say '${E4_NA}' with no East word - '${pr.toast}'`);
+              else if (pr.posts.length) fail(`${T}: Propose to an ineligible counter-party wrote ${pr.posts.length} shift_trade_requests row(s)`);
+              else ok(`${T}: trade card (${hp.value}, to Khan; the rules here: ${chk.hard0}): option '${got.opt.text}', box '${got.reason.slice(0, 90)}', toast '${pr.toast.slice(0, 100)}', nothing written - the scheduler's read '${((sched.tradeRead || {}).reason || "").slice(0, 60)}'`);
+            } else console.log(`     (${T}: no T_HARD pair this run - the trade-reason checks here are vacuous)`);
+            // review 9/26: run whenever the scheduler page had a T_SOFT pair, whatever became of T_HARD
+            if (sp) {
+              const [qd, qrole] = sp.value.split("|");
+              const chk2 = await e4Rules(rp, "check", { day: qd, role: qrole, cand: sp.cand, opts: { ignoreLocks: true, claim: true } });
+              const got2 = await e4TradePick(rp, sp);
+              if (chk2.error || !chk2.eastSoft.length) fail(`${T}: this page's rules give Khan no East note on ${sp.value} (${JSON.stringify(chk2)}) - the note check proves nothing`);
+              else if (E4_RE.test(got2.note)) fail(`${T}: 'Allowed with a note' names East: '${got2.note}'`);
+              else ok(`${T}: 'Allowed with a note' for Khan on ${sp.value} ${got2.note ? "reads '" + got2.note + "'" : "is not shown"} - the rules here hold ${chk2.eastSoft.join(", ")} (the scheduler's: '${sched.noteRead || ""}')`);
+            } else console.log(`     (${T}: no T_SOFT pair this run - the 'Allowed with a note' check here is vacuous)`);
+          }
+          await rp.screenshot({ path: path.join(OUT, "e4-" + R.file + "-trade.png"), fullPage: true }).catch(() => {});
+        }
+        // (4) the two toasts: reload with the East reads failing
+        st.failEast = true;
+        if (R.url) await e4Load(rp, R); else { await rp.reload(); await rp.waitForSelector("text=Synced", { timeout: 30000 }); }
+        // a signed-in page loads twice (the mount load, then the re-run the stored session's sign-in triggers - the one that
+        // runs with the profile known); ?public=1 once and never the reviews
+        const wantReviews = R.kind !== "public", wantLoads = R.kind === "public" ? 1 : 2;
+        await waitFor(() => st.forced.feed >= wantLoads && (!wantReviews || st.forced.reviews >= wantLoads), 25000);
+        await rp.waitForTimeout(1500);
+        const shown = (await e4Toasts(rp)).filter(t => E4_TOAST_RE.test(t));
+        const feedT = shown.some(t => /Couldn't load the East \(Davenport\) feed cache/.test(t)), revT = shown.some(t => /Couldn't load the East vacation reviews/.test(t));
+        const reads = `east_feed read ${st.forced.feed}x, east_vacation_reviews ${st.forced.reviews}x (500)`;
+        if (!st.forced.feed || (wantReviews && !st.forced.reviews)) fail(`${T}: the forced failure never reached the page (${reads}) - the toast check proves nothing`);
+        else if (R.kind === "scheduler") {
+          if (!feedT || !revT) fail(`${T}: the scheduler must still see both toasts - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else ok(`${T}: with ${reads} both 'Couldn't load the East ...' toasts show`);
+        } else if (shown.length) fail(`${T}: a 'Couldn't load the East ...' toast shows to a non-scheduler - ${JSON.stringify(shown)} (${reads})`);
+        else ok(`${T}: ${reads} - no 'Couldn't load the East ...' toast${wantReviews ? "" : " (public mode never reads the reviews - the feed-cache toast is its proof)"}`);
+        st.failEast = false;
+        await rp.screenshot({ path: path.join(OUT, "e4-" + R.file + ".png"), fullPage: true }).catch(() => {});
+      } catch (e) { fail(`${T}: the pass threw: ` + errLine(e)); try { await rp.screenshot({ path: path.join(OUT, "failure-e4-" + R.file + ".png"), fullPage: true }); } catch (e2) {} }
+      st.failEast = false; st.gateBusy = null;
+      await rp.close();
+    }
+    e4Forced500Lines = 0;   // a forced answer whose console line never came must not absorb a later page's real 500
+    if (e4PubErrors.length) fail("Item E4 (?public=1): page errors: " + e4PubErrors.join(" | "));
+    if (writes.some(w => w.public)) fail("Item E4 (?public=1): the public page attempted a write: " + JSON.stringify(writes.filter(w => w.public)));
+    // the main page's own session token back (each E4 page stored its own in the shared origin storage)
+    await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
   }
 
   // ---- Prompt 12 B / Z: the "confirm" badge follows the schedule_days note; Thanksgiving is confirmed -> no badge ----

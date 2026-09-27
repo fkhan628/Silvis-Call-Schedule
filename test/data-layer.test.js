@@ -2077,6 +2077,150 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(/Notes in anon-readable tables carry no reasons/.test(claudeMd), "CLAUDE.md still states the rule Item E3 applies to override notes");
   });
 
+  // Item E4 (Faraz 9/26: "the East details still visible to non-schedulers. The open-shifts board's chip hovers, the Take
+  // button title, the claim sheet list, the claim-gate toast and trade reasons say 'not available' to non-schedulers; the
+  // scheduler keeps the detail. The two 'couldn't load East ...' toasts show to the scheduler only."): ONE helper,
+  // eastMaskedReasons(list, eastDetailsVisible, eastVacation), lifted verbatim (with REASON_WORDS / reasonLabel / softTag)
+  // and run; its two key lists pinned against rules.js (every East code it pushes, hard and soft) and helpers.js (the
+  // codes openSlotReason reads as 'not available' since Item E3); every reason the board and the trade card render reads
+  // through it; the two East loaders lifted verbatim and run against stub reads with the ref false / true.
+  const e4Lift = (a, end) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(end, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' not found"); return src.slice(i, j + end.length); };
+  const e4Loaders = await (async () => {
+    try {
+      const tablesSrc = e4Lift("  const loadEastTables = async (quiet) => {", "\n  };\n");
+      const reviewsSrc = e4Lift("  const loadEastVacationReviews = async (quiet) => {", "\n  };\n");
+      const tables = async (visible, failTable, quiet) => {
+        const toasts = [], warns = [];
+        const db = { query: async (t) => { if (t === failTable) throw new Error("HTTP 500"); return []; } };
+        const fn = new Function("db", "setEastFeedRows", "setEastForecastRows", "setEastOverrideRows", "setEastLoadState", "showToast", "eastDetailsVisibleRef", "console", tablesSrc + "\nreturn loadEastTables;")(
+          db, () => {}, () => {}, () => {}, () => {}, (m, t) => toasts.push(t + " " + m), { current: visible }, { warn: (m) => warns.push(String(m)) });
+        const r = await fn(quiet);
+        return { toasts, warns, ok: r.ok };
+      };
+      const reviews = async (visible, err, quiet, publicMode) => {
+        const toasts = [], warns = [], reads = [];
+        const fn = new Function("isPublicMode", "readAuthOnlyTable", "setEastVacReviewState", "setEastVacationReviewRows", "showToast", "eastDetailsVisibleRef", "console", reviewsSrc + "\nreturn loadEastVacationReviews;")(
+          !!publicMode, async (t) => { reads.push(t); if (err) throw new Error(err); return []; }, () => {}, () => {}, (m, t) => toasts.push(t + " " + m), { current: visible }, { warn: (m) => warns.push(String(m)) });
+        const r = await fn(quiet);
+        return { toasts, warns, reads, r };
+      };
+      return {
+        tOff: await tables(false, "east_feed", false), tOn: await tables(true, "east_feed", false), tOnQuiet: await tables(true, "east_overrides", true), tOnOk: await tables(true, null, false),
+        rOff: await reviews(false, "HTTP 500", false), rOn: await reviews(true, "HTTP 500", false), rOn404: await reviews(true, "HTTP 404 not found", false), rOnQuiet: await reviews(true, "HTTP 500", true), rPublic: await reviews(false, "HTTP 500", false, true),
+      };
+    } catch (e) { return { error: String(e && e.message || e) }; }
+  })();
+  check("Item E4 (9/26): eastMaskedReasons maps East reasons to 'not available' (hard) / drops them (soft) for non-schedulers, the scheduler's list unchanged; every board / trade-card reason reads it; the two East load toasts are the scheduler's", () => {
+    const noComments = (t) => t.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+    // (1) the helper, lifted verbatim with the label functions, and run
+    const helperSrc = e4Lift("const EAST_HARD_REASON_KEYS = [", "\n}\n");
+    assert.ok(helperSrc.includes("function eastMaskedReasons(list, eastDetailsVisible, eastVacation) {"), "the helper's signature");
+    const labelsSrc = e4Lift("const REASON_WORDS = {", "\n};\n") + "\n" + e4Lift("function reasonLabel(code, nameOf) {", "\n}\n") + "\n" + e4Lift("function softTag(soft) {", "\n}\n");
+    const E = new Function(labelsSrc + "\n" + helperSrc + "\nreturn { EAST_HARD_REASON_KEYS, EAST_SOFT_REASON_KEYS, EAST_NOT_AVAILABLE, eastMaskedReasons, reasonLabel, softTag };")();
+    const m = E.eastMaskedReasons;
+    assert.strictEqual(E.EAST_NOT_AVAILABLE, "not available");
+    // the scheduler: the SAME array back (hard and soft) - every string built from it is byte for byte the pre-E4 one
+    const hardS = ["east-busy", "time-off:2026-10-12"], softS = [{ reason: "east-forecast:0.25", weight: 3 }, { reason: "preferred", weight: -2 }];
+    assert.strictEqual(m(hardS, true, "unreviewed"), hardS, "the scheduler's hard list is returned as is (identity)");
+    assert.strictEqual(m(softS, true), softS, "the scheduler's soft list is returned as is (identity)");
+    assert.strictEqual(E.reasonLabel(m(["east-busy"], true)[0], nameOf), "on East (Davenport) call", "the scheduler still reads the East wording");
+    assert.strictEqual(E.softTag(m([{ reason: "east-forecast:0.25" }], true)[0]), "East 25%");
+    // everyone else: each East hard code reads 'not available', once, where the first stood; the rest verbatim, in order
+    ["east-busy", "east-forecast-busy:0.62", "derived-lock:backup", "derived-lock-held:s5", "east-busy@2026-11-26"].forEach(c => assert.deepStrictEqual(m([c], false), ["not available"], c + " -> 'not available'"));
+    assert.deepStrictEqual(m(["monthly-cap:4", "east-busy", "holds-other-role", "derived-lock:primary", "east-forecast-busy:0.70"], false), ["monthly-cap:4", "not available", "holds-other-role"], "deduplicated in the place of the first East code; other codes verbatim, in order");
+    // a derived East vacation (the eastVacation gloss) is East-derived; a Silvis vacation (no gloss) stays 'on vacation'
+    assert.deepStrictEqual(m(["time-off:2026-10-12", "east-busy"], false, "unreviewed"), ["not available"], "an East-vacation time-off reads 'not available' (and dedupes with east-busy)");
+    assert.deepStrictEqual(m(["day-before-vacation"], false, "away"), ["not available"], "the trailing edge of an East vacation too");
+    assert.deepStrictEqual(m(["time-off:2026-10-12", "east-busy"], false, null), ["time-off:2026-10-12", "not available"], "a Silvis vacation (no gloss) keeps its own code");
+    assert.strictEqual(E.reasonLabel(m(["time-off:2026-10-12"], false)[0], nameOf), "on vacation");
+    // soft East notes are dropped - the same objects kept for the rest
+    const softMix = [{ reason: "east-forecast:0.25", weight: 3 }, { reason: "preferred", weight: -2 }, { reason: "east-unknown", weight: 2 }, { reason: "east-clear", weight: -2 }, { reason: "outside-offers", weight: 4 }];
+    const softOut = m(softMix, false);
+    assert.deepStrictEqual(softOut.map(x => x.reason), ["preferred", "outside-offers"], "east-forecast / east-unknown / east-clear dropped, the rest in order");
+    assert.ok(softOut[0] === softMix[1] && softOut[1] === softMix[4], "kept soft notes are the same objects (weight and all)");
+    assert.deepStrictEqual(m([{ reason: "east-unknown", weight: 2 }], false), [], "a list of East notes only -> empty (a chip reads 'no rule warnings', the claim sheet 'No rule warnings for you on this day')");
+    assert.strictEqual(m(null, false), null, "a non-array is passed through");
+    // the label functions print the mapped entry as is
+    assert.strictEqual(E.reasonLabel("not available", nameOf), "not available");
+    assert.strictEqual(E.softTag({ reason: "not available" }), "not available");
+    // no East wording left in any label a non-scheduler can get from a mapped list of every rules.js hard code
+    const R = require(path.join(ROOT, "rules.js"));
+    const EAST_TEXT = /\beast\b|davenport|derived/i;
+    R.HARD_REASONS.forEach(code => {
+      const c = code.endsWith(":") ? code + "x" : code;
+      const out = m([c], false, "unreviewed").map(x => E.reasonLabel(x, nameOf));
+      assert.ok(!out.some(t => EAST_TEXT.test(t)), "rules.HARD_REASONS " + code + " still reads East to a non-scheduler: " + out.join(" | "));
+    });
+    // (2) the key lists = what rules.js pushes and what helpers.js reads as 'not available'
+    const rulesSrc = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8");
+    const keyOf = (c) => String(c).split("@")[0].split(":")[0];
+    const eastHardInRules = Array.from(new Set(R.HARD_REASONS.map(keyOf).filter(k => /east|derived/.test(k)))).sort();
+    assert.deepStrictEqual(E.EAST_HARD_REASON_KEYS.slice().sort(), eastHardInRules, "EAST_HARD_REASON_KEYS = the East codes of rules.HARD_REASONS");
+    const pushedHard = Array.from(new Set((rulesSrc.match(/hard\.push\("([a-z-]+)/g) || []).map(s => s.slice(11)).filter(k => /east|derived/.test(k)))).sort();
+    assert.deepStrictEqual(pushedHard, E.EAST_HARD_REASON_KEYS.slice().sort(), "every East hard.push(...) literal in rules.js is in EAST_HARD_REASON_KEYS (and nothing else)");
+    const conflictPrefixes = /var RD_EAST_CONFLICT_PREFIXES = \[([^\]]*)\]/.exec(rulesSrc);
+    assert.ok(conflictPrefixes, "rules.js RD_EAST_CONFLICT_PREFIXES found");
+    assert.deepStrictEqual(JSON.parse("[" + conflictPrefixes[1] + "]").map(keyOf).sort(), E.EAST_HARD_REASON_KEYS.slice().sort(), "= rules.js RD_EAST_CONFLICT_PREFIXES (the East conflict report's codes)");
+    const naCodes = R.HARD_REASONS.map(keyOf).filter(k => H.openSlotReason({ x: [k + ":x"] }) === "no eligible surgeon - not available").sort();
+    assert.deepStrictEqual(naCodes, E.EAST_HARD_REASON_KEYS.slice().sort(), "= the codes helpers.openSlotReason reads as 'not available' (Item E3)");
+    const pushedSoft = Array.from(new Set((rulesSrc.match(/soft\.push\(\{ reason: "([a-z-]+)/g) || []).map(s => /"([a-z-]+)$/.exec(s)[1]).filter(k => /east/.test(k)))).sort();
+    assert.deepStrictEqual(pushedSoft, E.EAST_SOFT_REASON_KEYS.slice().sort(), "EAST_SOFT_REASON_KEYS = every East soft.push(...) reason in rules.js");
+    assert.ok(!/"east-vacation|"east-id-unresolved/.test(rulesSrc), "rules.js grew an east-vacation / east-id-unresolved reason code - add it to the helper (an East vacation reuses time-off / day-before-vacation with the eastVacation gloss today)");
+    assert.ok(rulesSrc.includes('hard.push("time-off:" + date); if (P.eastVacationDays[date]) res.eastVacation = P.eastVacationDays[date];') && rulesSrc.includes('hard.push("day-before-vacation"); if (P.eastDayBefore[date]) res.eastVacation = P.eastDayBefore[date];') && rulesSrc.includes("if (st.eastVacation) out.eastVacation = st.eastVacation;"), "the eastVacation gloss the helper's third argument reads (rules.js static layer + glossed())");
+    // (3) every reason the board and the trade card render reads through the helper
+    const app = src.slice(src.indexOf("function CallSchedule() {"), src.indexOf("function MonthPainterSheet("));
+    const appCode = noComments(app);
+    assert.ok(appCode.includes('const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible, r.eastVacation)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";'), "tradeReasonText (the trade-to / trade-return boxes, the Blocked / Can't accept toasts, the scheduler's confirms)");
+    assert.ok(appCode.includes('showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible, gate.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon")), "error");'), "the claim-gate toast");
+    assert.ok(appCode.includes("soft: r.soft || [], eastVacation: r.eastVacation || null };"), "boardElig carries the eastVacation gloss");
+    assert.ok(appCode.includes("const soft = eastMaskedReasons(o.soft, eastDetailsVisible); return <span key={o.id} data-eligible-id={o.id} title={soft.length ? \"allowed - \" + soft.map(x => reasonLabel(x.reason, nameOf)).join(\"; \") : \"no rule warnings\"}"), "the board's eligible chip hover");
+    assert.ok(appCode.includes('const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible, me.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon");'), "the Take button's title");
+    assert.ok(appCode.includes("setClaimSheet({ day: slot.day, role: slot.role, unit: slot.unit, soft: me ? eastMaskedReasons(me.soft, eastDetailsVisible) : [], mates: obUnitMates(boardSlots, slot) });") && (appCode.match(/setClaimSheet\(\{/g) || []).length === 1, "the claim sheet's list is masked where the sheet is opened (its one setClaimSheet({...}))");
+    assert.ok(appCode.includes('eastMaskedReasons(e.hard, eastDetailsVisible, e.eastVacation)[0]) : ""}</option>;'), "the trade card's greyed counter-party option (its raw code)");
+    assert.ok(appCode.includes("const toNotes = toElig && toElig.ok && toElig.soft ? eastMaskedReasons(toElig.soft, eastDetailsVisible) : [];") && appCode.includes("Allowed with a note: {toNotes.map(softTag).join(\", \")}."), "the trade card's 'Allowed with a note'");
+    assert.strictEqual((appCode.match(/eastMaskedReasons\(/g) || []).length, 7, "seven call sites in the App (tradeReasonText, the claim gate, the chip, the Take title, the claim sheet, the option, the note) - a new one needs its pin here");
+    // nothing on those surfaces reads a reason around the helper: no hard[0] left in the App, every reasonLabel( there takes
+    // the helper's answer, a constant or x.reason of a masked list (the chip's soft, the sheet's claimSheet.soft), every softTag the notes
+    assert.strictEqual((appCode.match(/hard\[0\]/g) || []).length, 0, "a raw hard[0] read in the App (outside the helper)");
+    const labelCalls = appCode.match(/reasonLabel\([^,)]*/g) || [];
+    const badLabel = labelCalls.filter(c => !/^reasonLabel\((eastMaskedReasons\(|"|x\.reason$)/.test(c));
+    assert.deepStrictEqual(badLabel, [], "a reasonLabel( in the App outside the helper: " + badLabel.join(" | "));
+    assert.strictEqual((appCode.match(/x\.reason, nameOf/g) || []).length, 2, "x.reason is labelled in two places only (the chip's masked soft, the sheet's masked claimSheet.soft)");
+    assert.ok(appCode.includes("{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)}"), "the claim sheet renders claimSheet.soft (masked at open)");
+    assert.ok((appCode.match(/softTag/g) || []).length === 1 && appCode.includes("{toNotes.map(softTag).join("), "softTag in the App: the trade note only (through toNotes)");
+    // ... and every .hard / .soft read in the App, as a complete list (review 9/26: the two pins above guard hard[0] and
+    // reasonLabel( only - a new raw render such as {toElig.hard.join(", ")} passed them). Where each sits: r.hard x3 in
+    // tradeReasonText and x3 in the boardElig row; r.soft once in tradeEligibilityOver's union (masked later, toNotes) and
+    // once in the boardElig row; gate.hard the claim gate; me.hard the Take title; me.soft the claim sheet (masked at open);
+    // o.soft the chip; claimSheet.soft x2 the sheet (already masked); toElig.soft x2 toNotes; e.hard the greyed option. A
+    // new read of a reason list goes through eastMaskedReasons and is added here, or this fails.
+    const reasonReads = {};
+    (appCode.match(/[A-Za-z_$][\w$]*(?:\.[\w$]+)*\.(?:hard|soft)\b/g) || []).forEach(k => { reasonReads[k] = (reasonReads[k] || 0) + 1; });
+    assert.deepStrictEqual(reasonReads, { "r.hard": 6, "r.soft": 2, "gate.hard": 1, "me.hard": 1, "me.soft": 1, "o.soft": 1, "claimSheet.soft": 2, "toElig.soft": 2, "e.hard": 1 }, "the App's .hard / .soft reads changed - a new one must read through eastMaskedReasons (then list it here): " + JSON.stringify(reasonReads));
+    // the flag is declared before every reader (a const read before its line is a TDZ crash), the ref mirrors it
+    const flagAt = src.indexOf("const eastDetailsVisible = isScheduler && !isPublicMode;");
+    assert.ok(flagAt > 0 && flagAt < src.indexOf("  const loadEastTables = async (quiet) => {") && flagAt < src.indexOf("const tradeReasonText = ") && src.indexOf("const isScheduler") < flagAt, "eastDetailsVisible declared with the role flags, before the loaders and tradeReasonText");
+    assert.strictEqual(count("const eastDetailsVisibleRef = useRef(false);"), 1);
+    assert.ok(src.includes("useEffect(() => { eastDetailsVisibleRef.current = eastDetailsVisible; }, [eastDetailsVisible]);"), "the ref is mirrored from the flag after every render");
+    // (4) the two toasts: gated on the ref, the console.warn kept for everyone - and run
+    assert.ok(src.includes('if (!quiet && r.some(x => x === null) && eastDetailsVisibleRef.current) showToast("Couldn\'t load the East (Davenport) feed cache'), "the feed-cache toast reads the ref");
+    assert.ok(src.includes('if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("Couldn\'t load the East vacation reviews'), "the reviews toast reads the ref");
+    assert.strictEqual(count("showToast(\"Couldn't load the East"), 2, "two 'Couldn't load the East ...' toasts, both gated");
+    assert.ok(!e4Loaders.error, "the loaders could not be lifted / run: " + e4Loaders.error);
+    const L = e4Loaders;
+    assert.deepStrictEqual(L.tOff.toasts, [], "a non-scheduler gets no feed-cache toast");
+    assert.ok(L.tOff.warns.some(w => /^east_feed load failed/.test(w)) && L.tOff.ok === false, "... but the console.warn and the failed result stay");
+    assert.deepStrictEqual(L.tOn.toasts, ["error Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads."], "the scheduler gets it, unchanged");
+    assert.deepStrictEqual(L.tOnQuiet.toasts, [], "a quiet (poll) read never toasts");
+    assert.deepStrictEqual(L.tOnOk.toasts, [], "no failure, no toast");
+    assert.deepStrictEqual(L.rOff.toasts, [], "a non-scheduler gets no reviews toast");
+    assert.ok(L.rOff.warns.some(w => /^east_vacation_reviews load failed/.test(w)) && L.rOff.r === false, "... but the console.warn stays");
+    assert.deepStrictEqual(L.rOn.toasts, ["error Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load."], "the scheduler gets it, unchanged");
+    assert.deepStrictEqual(L.rOn404.toasts, [], "a 404 (migration not applied) is still not toasted");
+    assert.deepStrictEqual(L.rOnQuiet.toasts, [], "a quiet (poll) read never toasts");
+    assert.ok(L.rPublic.r === true && L.rPublic.reads.length === 0 && L.rPublic.toasts.length === 0, "public mode still never reads the reviews");
+  });
+
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
   console.log("\n[M] outside surgeons pins");
   check("M: the day editor's per-role select carries an 'Outside surgeons' optgroup (data-testid editor-<role>-externals)", () => {
@@ -2685,7 +2829,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(wb.includes("if (!quiet) showToast(\"The East vacation reviews table is not on the database yet"), "the 'missing' refusal toast is silenced under quiet");
     const ls = src.indexOf("const loadEastVacationReviews = async (quiet) => {");
     const lb = src.slice(ls, src.indexOf("\n  };", ls));
-    assert.ok(lb.includes("if (!quiet && !missing) showToast("), "a 404 at start is not toasted (the panel banner names it; a save attempt refuses with a toast)");
+    // Item E4 (9/26): the condition gained "&& eastDetailsVisibleRef.current" (the toast is the scheduler's only; pinned and run in "Item E4 (9/26)")
+    assert.ok(lb.includes("if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("), "a 404 at start is not toasted (the panel banner names it; a save attempt refuses with a toast)");
   });
   check("P15 fix: public mode draws no East-vacation marker, legend, title or strip item (the reviews are never loaded there, so every state would read 'unreviewed'); the strip item renders for the scheduler and for the person with the East code only (never a dead end for another surgeon or the viewer)", () => {
     const ps = src.indexOf("const eastVacPeople = useMemo(() => {");
