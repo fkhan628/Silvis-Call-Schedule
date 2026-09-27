@@ -1237,6 +1237,12 @@ const routeSupabase = async (route, scope) => {
   // data.vacations is stripped and the newest cached week hosts the three FAK fixture ranges (the ride-on host
   // rule of east-feed.js planVacationCache puts a range beyond the published weeks on the latest cached week).
   if (method === "GET" && url.pathname === "/rest/v1/east_feed") return json(200, await eastFeedRows(route, req, eastVacFeed));
+  // Call pay (Faraz 9/27): sql/migrations/2026-09-27-call-pay.sql is report-first - the harness answers what the live
+  // project answers before the apply (PostgREST 12.2+: 404 PGRST205), so every pay surface must read "unavailable" (the
+  // sentence, no error toast), never an empty list. The ok-state rendering with rows and the writes are NOT exercised here.
+  if (/^\/rest\/v1\/call_pay_(settings|logs)$/.test(url.pathname)) {
+    return route.fulfill({ status: 404, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public." + url.pathname.split("/").pop() + "' in the schema cache" }) });
+  }
   // Anon READ passthrough: the fake JWT would be rejected by the real project,
   // so swap it for the anon key (what dbReadHeaders does for an expired token).
   const headers = { ...req.headers() };
@@ -2520,6 +2526,26 @@ try {
           else if (tt.csvRows.length < 6 || badRows.length) fail(`${T}, Totals CSV: every line must carry the header's 21 fields (the East cell dropped from the rows too) - ${tt.csvRows.length} row(s), ${badRows.length} with another count: ${badRows.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
           else if (tt.csvRows.some(r => r.some(v => E3_RE.test(v)))) fail(`${T}, Totals CSV: a row names East: ${tt.csvRows.filter(r => r.some(v => E3_RE.test(v))).slice(0, 1).map(r => r.join(",")).join("")}`);
           else ok(`${T}, Totals CSV: header + ${tt.csvRows.length} line(s), 21 fields each, no East column ('... ${tt.csvHeader.slice(12, 18).join(", ")} ...')`);
+        }
+        // Call pay (9/27): a surgeon gets his own My pay card ('unavailable' before the migration) and no Totals > Pay; a
+        // coordinator, a viewer and ?public=1 get no pay UI at all and no dollar figure anywhere on the page
+        {
+          const payModeBtn = R.totals ? !!(await rp.$("[data-testid=totals-mode-pay]")) : false;
+          if (payModeBtn) fail(`${T}: Totals shows the scheduler's Pay mode button`);
+          if (R.kind === "surgeon") {
+            await rp.click('button[data-tab="myschedule"]');
+            const pc = await rp.waitForSelector("[data-testid=pay-card]", { timeout: 8000 }).then(() => true).catch(() => false);
+            const pcState = pc ? await rp.$eval("[data-testid=pay-card]", el => el.getAttribute("data-state")) : null;
+            if (!pc) fail(`${T}: My schedule has no My pay card`);
+            else if (pcState !== "unavailable") fail(`${T}: My pay reads '${pcState}' before the migration (expected 'unavailable')`);
+            else if (!payModeBtn) ok(`${T}: My pay card 'unavailable' before the call pay migration; no Totals > Pay`);
+          } else {
+            const anyPay = await rp.evaluate(() => !!document.querySelector("[data-testid=pay-card], [data-testid=pay-rates], [data-testid=pay-totals], [data-testid=totals-mode-pay]"));
+            const dollar = await rp.evaluate(() => /\$\s?\d/.test(document.body.innerText || ""));
+            if (anyPay) fail(`${T}: a pay surface is rendered for this role`);
+            else if (dollar) fail(`${T}: a dollar figure appears on the page`);
+            else if (!payModeBtn) ok(`${T}: no pay UI and no dollar figure on the page`);
+          }
         }
         await rp.screenshot({ path: path.join(OUT, "e3-" + R.file + ".png"), fullPage: true }).catch(() => {});
       } catch (e) { fail(`${T}: the pass threw: ` + errLine(e)); try { await rp.screenshot({ path: path.join(OUT, "failure-e3-" + R.file + ".png"), fullPage: true }); } catch (e2) {} }
@@ -4163,7 +4189,23 @@ try {
       if (others.some(r => r.visible.target !== "-" || r.visible.deviation !== "-")) fail("Totals target: a surgeon without a target shows a target/deviation: " + JSON.stringify(others.map(r => [r.id, r.visible.target, r.visible.deviation])));
     }
     const totalsText = await page.$eval("[data-testid=totals-card]", el => el.innerText);
-    if (/\$/.test(totalsText)) fail("Totals: a '$' appears in the card text (no compensation figures anywhere)"); else ok("Totals: no '$' anywhere in the card");
+    if (/\$/.test(totalsText)) fail("Totals: a '$' appears in the card text (counts are unweighted; pay lives in the Pay mode only)"); else ok("Totals: no '$' anywhere in the card");
+    // Call pay (9/27): the scheduler's Totals > Pay mode - present, 'unavailable' before the migration, and the counts CSV
+    // button is hidden while it is on (the counts CSV stays $-free); back to "By month" afterwards
+    try {
+      if (!(await page.$("[data-testid=totals-mode-pay]"))) fail("Totals > Pay: the scheduler has no Pay mode button");
+      else {
+        await page.click("[data-testid=totals-mode-pay]");
+        await page.waitForSelector("[data-testid=pay-totals][data-state=unavailable]", { timeout: 8000 });
+        const ptText = await page.$eval("[data-testid=pay-totals]", el => el.innerText);
+        const csvShown = !!(await page.$("[data-testid=totals-csv]"));
+        if (!/after the next database update/.test(ptText)) fail("Totals > Pay: the unavailable sentence is missing: " + ptText.slice(0, 120));
+        else if (csvShown) fail("Totals > Pay: the counts CSV button stays visible in pay mode");
+        else ok("Totals > Pay: 'unavailable' before the call pay migration; the counts CSV button hidden in pay mode");
+        await page.click("[data-testid=totals-mode-month]");
+        await page.waitForSelector("[data-testid=totals-table]", { timeout: 8000 });
+      }
+    } catch (e) { fail("Totals > Pay: " + errLine(e)); }
     const capCells = published.map(r => r.visible.cap);
     if (!capCells.some(c => c && c !== "-")) fail("Totals: no surgeon shows a cap (rules context missing?): " + capCells.join(",")); else ok("Totals: cap column filled from the rules (" + capCells.join(", ") + "; '-' = no cap)");
     const eastHdr = await page.$$eval("[data-testid=totals-table] thead th", ths => ths.map(t => t.textContent.trim()));
@@ -4305,6 +4347,16 @@ try {
     if (!(await page.$("[data-testid=mine-person]"))) fail("My schedule: the scheduler's person picker is missing");
     const mineText = await page.$eval("[data-testid=mine-card]", el => el.innerText);
     if (!noAddress(mineText)) fail("My schedule: an email address is rendered");
+    // Call pay (9/27): the scheduler's My pay card, before the migration: 'unavailable' with the sentence, no error toast
+    try {
+      await page.waitForSelector("[data-testid=pay-card][data-state=unavailable]", { timeout: 8000 });
+      const payText = await page.$eval("[data-testid=pay-card]", el => el.innerText);
+      const toastNow = await page.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+      if (!/Pay tracking is available after the next database update/.test(payText)) fail("My pay (scheduler): the unavailable card lacks its sentence: " + payText.slice(0, 160));
+      else if (/pay data/i.test(toastNow)) fail("My pay (scheduler): a missing pay table raised an error toast: " + toastNow);
+      else if (await page.$("[data-testid=pay-log-form]")) fail("My pay (scheduler): the log form renders while the tables do not exist");
+      else ok("My pay (scheduler): 'unavailable' before the call pay migration - the sentence, no toast, no form");
+    } catch (e) { fail("My pay (scheduler): no [data-testid=pay-card][data-state=unavailable] on My schedule: " + errLine(e)); }
     await page.screenshot({ path: path.join(OUT, "mine.png"), fullPage: true });
     ok("screenshot test/ui/out/mine.png");
   } catch (e) { fail("My schedule harness exception: " + errLine(e)); }
@@ -5761,7 +5813,7 @@ try {
   // snapshot (no writes) -> Accept & Publish for real (snapshot before the
   // first schedule_days write, publish dialog), Import seed dry run (zero
   // changes, no writes) and a seed with an injected contact KEY (refused).
-  const SETUP_CARDS = ["setup_issues", "setup_roster", "setup_users", "setup_rules", "setup_availability", "setup_vacations", "setup_holidays", "setup_east", "setup_generate", "setup_import", "setup_office", "setup_clear"];
+  const SETUP_CARDS = ["setup_issues", "setup_roster", "setup_users", "setup_rules", "setup_availability", "setup_vacations", "setup_holidays", "setup_pay", "setup_east", "setup_generate", "setup_import", "setup_office", "setup_clear"];
   // (openCard is defined above, before the Totals section that also needs it.)
   try {
     await page.click('button[data-tab="setup"]');
@@ -5774,6 +5826,14 @@ try {
       const name = ck.replace(/^setup_/, "");
       await card.screenshot({ path: path.join(OUT, `setup-${name}.png`) });
       if (pageErrors.length > before) fail(`setup card ${ck}: pageerror ${pageErrors.slice(before).join(" | ")}`); else ok(`setup card ${ck}: expanded, screenshot test/ui/out/setup-${name}.png`);
+    }
+    // Call pay (9/27): Setup > Pay rates reads 'unavailable' before the migration - the sentence, no rate inputs
+    {
+      const prState = await page.$eval("[data-testid=pay-rates]", el => el.getAttribute("data-state")).catch(() => null);
+      const prText = await page.$eval("[data-testid=pay-rates]", el => el.innerText).catch(() => "");
+      if (prState !== "unavailable" || !/after the next database update/.test(prText)) fail(`Setup > Pay rates: expected the 'unavailable' state before the migration, got ${prState}: ${prText.slice(0, 120)}`);
+      else if (await page.$("[data-testid=pay-rate-stipendPerShift]")) fail("Setup > Pay rates: rate inputs render while the table does not exist");
+      else ok("Setup > Pay rates: 'unavailable' before the call pay migration (no inputs)");
     }
     // Setup issues render as a list or "None."
     const issues = await page.$eval("[data-testid=setup-issues]", el => el.innerText.trim()).catch(() => null);

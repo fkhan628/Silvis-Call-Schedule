@@ -3208,6 +3208,242 @@ function daysReadTripped(count, lastCount) {
   return Number(count) === 0 && Number(lastCount) > 0;
 }
 
+/* === CALL PAY (Faraz 9/27 - reverses the 9/21 "no compensation logic" rule) ===
+   Primary call pay only (backup is never paid). The unit is one PRIMARY 24-h call day D (07:00 D -> 07:00 D+1), paid when
+   schedule[D].primary === the person in the CURRENT schedule (an externally covered day - primary null - is nobody's).
+   Components per day, in integer cents (a missing rate is NEVER 0: the component and the day's total are null and the rate
+   key is listed in `missing` - "rates not set yet"):
+     stipend    - rates.stipendPerShift, every primary day
+     callIn     - weekday: callInWeekdayRate; weekend / holiday: callInWeekendHolidayRate - when the primary was called in
+                  that day (at least one call_pay_logs row), or always when the matching callInRequired* flag is off
+     activation - activationUnit "hour": the day's logged hours x activationRate (on a weekday the surgeon enters the
+                  after-hours hours, on a weekend / holiday all hours worked); "activation": the number of call-ins x rate
+   Kind of D: "holiday" when D is a day of a holiday unit and holidayUnitDaysAreHolidays, else "weekend" when D's weekday is
+   in weekendDays (default Sat + Sun - Friday is a weekday for pay), else "weekday". Earned vs projected: D <= today (Central)
+   is earned; a later day is projected and counts only what needs no log (the stipend, plus the call-in part when a call-in
+   is not required). wRVUs are out of scope for now: components is an object, so a later `wrvu` component slots in.
+   NO FIGURE HERE: the rates are data the scheduler enters in the app (call_pay_settings, authenticated only); the defaults
+   below are flags only (test/privacy.test.js pins that PAY_FLAG_DEFAULTS carries no number). Pure; never reads the clock
+   except through todayOrCentral when opts.today is missing. */
+var PAY_FLAG_DEFAULTS = { weekendDays: ["Sat", "Sun"], holidayUnitDaysAreHolidays: true, callInRequiredWeekday: true, callInRequiredWeekendHoliday: true, activationUnit: "hour" };
+var PAY_WEEK_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];   // weekend chips and the stored list, Monday first
+var PAY_RATE_KEYS = ["stipendPerShift", "callInWeekdayRate", "callInWeekendHolidayRate", "activationRate"];
+var PAY_RATE_COLUMNS = { stipendPerShift: "stipend_per_shift", callInWeekdayRate: "weekday_callin_rate", callInWeekendHolidayRate: "weekend_holiday_callin_rate", activationRate: "activation_rate" };
+var PAY_FLAG_COLUMNS = { weekendDays: "weekend_days", holidayUnitDaysAreHolidays: "holiday_unit_days_are_holidays", callInRequiredWeekday: "callin_required_weekday", callInRequiredWeekendHoliday: "callin_required_weekend_holiday", activationUnit: "activation_unit" };
+var PAY_RATE_LABELS = { stipendPerShift: "Stipend per primary shift", callInWeekdayRate: "Weekday call-in rate", callInWeekendHolidayRate: "Weekend / holiday call-in rate", activationRate: "Activation rate" };
+var PAY_UNAVAILABLE_TEXT = "Pay tracking is available after the next database update.";
+var PAY_RATES_UNSET_TEXT = "Rates not set yet - the scheduler enters them in Setup > Pay rates.";
+// A rate as a number rounded to cents, or null for "not set" (null / "" / junk / out of the 0-99999 range the table checks).
+function payRateNum(v) {
+  if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
+  var n = Number(v);
+  if (!isFinite(n) || n < 0 || n > 99999) return null;
+  return Math.round(n * 100) / 100;
+}
+function payCents(rate) { return rate === null || rate === undefined ? null : Math.round(Number(rate) * 100); }
+// paySettingsFromRow(row) -> { rates: { stipendPerShift, ... (number | null) }, weekendDays, holidayUnitDaysAreHolidays,
+// callInRequiredWeekday, callInRequiredWeekendHoliday, activationUnit, state: "unset" | "partial" | "set", updatedAt, updatedBy }.
+// Accepts the call_pay_settings row (snake_case), a one-row array, null, [] or junk; a bad value falls back to its default.
+function paySettingsFromRow(row) {
+  var r = Array.isArray(row) ? row[0] : row;
+  if (!r || typeof r !== "object") r = {};
+  var rates = {};
+  PAY_RATE_KEYS.forEach(function (k) { rates[k] = payRateNum(r[PAY_RATE_COLUMNS[k]] !== undefined ? r[PAY_RATE_COLUMNS[k]] : (r.rates ? r.rates[k] : undefined)); });
+  var pick = function (k) { var c = PAY_FLAG_COLUMNS[k]; return r[c] !== undefined ? r[c] : r[k]; };
+  var wd = pick("weekendDays");
+  if (typeof wd === "string") { try { wd = JSON.parse(wd); } catch (e) { wd = null; } }
+  var weekendDays = Array.isArray(wd) && wd.every(function (d) { return TT_DOW.indexOf(d) >= 0; })
+    ? PAY_WEEK_ORDER.filter(function (d) { return wd.indexOf(d) >= 0; }) : PAY_FLAG_DEFAULTS.weekendDays.slice();
+  var bool = function (k) { var v = pick(k); return typeof v === "boolean" ? v : PAY_FLAG_DEFAULTS[k]; };
+  var unit = pick("activationUnit");
+  var set = PAY_RATE_KEYS.filter(function (k) { return rates[k] !== null; }).length;
+  return {
+    rates: rates, weekendDays: weekendDays,
+    holidayUnitDaysAreHolidays: bool("holidayUnitDaysAreHolidays"), callInRequiredWeekday: bool("callInRequiredWeekday"), callInRequiredWeekendHoliday: bool("callInRequiredWeekendHoliday"),
+    activationUnit: unit === "hour" || unit === "activation" ? unit : PAY_FLAG_DEFAULTS.activationUnit,
+    state: set === 0 ? "unset" : set === PAY_RATE_KEYS.length ? "set" : "partial",
+    updatedAt: typeof r.updated_at === "string" ? r.updated_at : null, updatedBy: typeof r.updated_by === "string" ? r.updated_by : null,
+  };
+}
+function paySettingsNorm(s) { return s && typeof s === "object" && !Array.isArray(s) && s.rates && typeof s.rates === "object" && Array.isArray(s.weekendDays) ? s : paySettingsFromRow(s); }
+// paySettingsToRow(settings) -> the call_pay_settings row the scheduler's Save upserts ({ id: "main", snake_case columns });
+// rates rounded to cents, null kept as null (never 0). updated_by / updated_at are stamped by the table's trigger.
+function paySettingsToRow(settings) {
+  var s = paySettingsNorm(settings);
+  var row = { id: "main" };
+  PAY_RATE_KEYS.forEach(function (k) { row[PAY_RATE_COLUMNS[k]] = payRateNum(s.rates[k]); });
+  row.activation_unit = s.activationUnit;
+  row.weekend_days = s.weekendDays.slice();
+  row.holiday_unit_days_are_holidays = s.holidayUnitDaysAreHolidays;
+  row.callin_required_weekday = s.callInRequiredWeekday;
+  row.callin_required_weekend_holiday = s.callInRequiredWeekendHoliday;
+  return row;
+}
+// payRatesChanged(beforeRow, afterRow) -> the camelCase keys whose value differs - for the pay.rates audit detail, which
+// carries KEYS only, never an amount (audit_log is readable by the scheduler and the row's author).
+function payRatesChanged(beforeRow, afterRow) {
+  var a = paySettingsToRow(beforeRow), b = paySettingsToRow(afterRow), out = [];
+  PAY_RATE_KEYS.forEach(function (k) { if (a[PAY_RATE_COLUMNS[k]] !== b[PAY_RATE_COLUMNS[k]]) out.push(k); });
+  Object.keys(PAY_FLAG_COLUMNS).forEach(function (k) { if (JSON.stringify(a[PAY_FLAG_COLUMNS[k]]) !== JSON.stringify(b[PAY_FLAG_COLUMNS[k]])) out.push(k); });
+  return out;
+}
+// payHolidaySet(holidays) -> { "YYYY-MM-DD": unit name } - every day of every holiday unit (holidayNameByDay's shapes).
+function payHolidaySet(holidays) { return holidayNameByDay(holidays); }
+// payDayKind(day, settings, holidaySet) -> "holiday" | "weekend" | "weekday" (holiday wins over weekend).
+function payDayKind(day, settings, holidaySet) {
+  var s = paySettingsNorm(settings);
+  if (s.holidayUnitDaysAreHolidays && holidaySet && holidaySet[day]) return "holiday";
+  return ttIsIso(day) && s.weekendDays.indexOf(ttDow(day)) >= 0 ? "weekend" : "weekday";
+}
+// payPrimaryDays(schedule, personId, from, to) -> the sorted ISO days in [from, to] whose primary is personId.
+function payPrimaryDays(schedule, personId, from, to) {
+  if (!schedule || typeof schedule !== "object" || !personId) return [];
+  return Object.keys(schedule).filter(function (d) {
+    var e = schedule[d];
+    return ttIsIso(d) && (!from || d >= from) && (!to || d <= to) && e && e.primary === personId;
+  }).sort();
+}
+function payLogDay(l) { return l && l.day ? String(l.day).slice(0, 10) : ""; }
+function payLogQuarters(l) { var n = Number(l && l.hours); return isFinite(n) && n > 0 ? Math.round(n * 4) : 0; }
+// payForDay(day, personId, { schedule, holidays | holidaySet, logs, settings, today }) -> null when personId is not the
+// day's primary; else { day, kind, holiday, primary: true, calledIn, activations, quarters, hours, logs, components:
+// { stipend, callIn, activation } (cents or null), totalCents (null when a needed rate is missing), projected, missing }.
+function payForDay(day, personId, opts) {
+  var o = opts || {};
+  var e = o.schedule && ttIsIso(day) ? o.schedule[day] : null;
+  if (!e || !personId || e.primary !== personId) return null;
+  var s = paySettingsNorm(o.settings);
+  var hs = o.holidaySet || payHolidaySet(o.holidays);
+  var kind = payDayKind(day, s, hs);
+  var today = todayOrCentral(o.today);
+  var projected = day > today;
+  var logs = (Array.isArray(o.logs) ? o.logs : []).filter(function (l) { return l && l.person_id === personId && payLogDay(l) === day; });
+  var counted = projected ? [] : logs;
+  var quarters = counted.reduce(function (n, l) { return n + payLogQuarters(l); }, 0);
+  var activations = counted.length, calledIn = activations > 0;
+  var missing = [];
+  var need = function (k) { var c = payCents(s.rates[k]); if (c === null && missing.indexOf(k) < 0) missing.push(k); return c; };
+  var comp = { stipend: need("stipendPerShift"), callIn: 0, activation: 0 };
+  var wkHol = kind !== "weekday";
+  var required = wkHol ? s.callInRequiredWeekendHoliday : s.callInRequiredWeekday;
+  if (projected ? !required : (calledIn || !required)) comp.callIn = need(wkHol ? "callInWeekendHolidayRate" : "callInWeekdayRate");
+  var units = s.activationUnit === "activation" ? activations : quarters;
+  if (units > 0) {
+    var rc = need("activationRate");
+    comp.activation = rc === null ? null : (s.activationUnit === "activation" ? rc * units : Math.round(rc * units / 4));
+  }
+  var total = comp.stipend === null || comp.callIn === null || comp.activation === null ? null : comp.stipend + comp.callIn + comp.activation;
+  return { day: day, kind: kind, holiday: hs[day] || null, primary: true, calledIn: calledIn, activations: activations, quarters: quarters, hours: quarters / 4,
+    logs: logs, components: comp, totalCents: total, projected: projected, missing: missing };
+}
+function paySummary(days) {
+  var out = { earnedCents: 0, projectedCents: 0, primaryDays: days.length, earnedDays: 0, projectedDays: 0, calledInDays: 0, activations: 0, hours: 0, missing: [] };
+  days.forEach(function (d) {
+    if (d.projected) { out.projectedDays++; out.projectedCents = out.projectedCents === null || d.totalCents === null ? null : out.projectedCents + d.totalCents; }
+    else {
+      out.earnedDays++; out.earnedCents = out.earnedCents === null || d.totalCents === null ? null : out.earnedCents + d.totalCents;
+      if (d.calledIn) out.calledInDays++;
+      out.activations += d.activations; out.hours += d.quarters;
+    }
+    d.missing.forEach(function (k) { if (out.missing.indexOf(k) < 0) out.missing.push(k); });
+  });
+  out.hours = out.hours / 4;
+  return out;
+}
+// payForMonth(personId, year, month0, opts) -> { from, to, ytdFrom, days: [payForDay ...], orphanLogs, month: summary, ytd: summary }.
+// summary = { earnedCents, projectedCents (null when any day's total is), primaryDays, earnedDays, projectedDays, calledInDays,
+// activations, hours, missing }. YTD = Jan 1 through the last day of the selected month, split by today. orphanLogs = the
+// person's call-ins in the month on a day he is no longer the primary of (after a trade / restore): never counted, deletable.
+function payForMonth(personId, year, month0, opts) {
+  var o = opts || {};
+  var y = Number(year), m = Number(month0);
+  var from = fmt(new Date(y, m, 1)), to = fmt(new Date(y, m + 1, 0)), ytdFrom = fmt(new Date(y, 0, 1));
+  var shared = Object.assign({}, o, { settings: paySettingsNorm(o.settings), holidaySet: o.holidaySet || payHolidaySet(o.holidays), today: todayOrCentral(o.today) });
+  var all = payPrimaryDays(o.schedule, personId, ytdFrom, to).map(function (d) { return payForDay(d, personId, shared); });
+  var days = all.filter(function (d) { return d.day >= from; });
+  var orphanLogs = (Array.isArray(o.logs) ? o.logs : []).filter(function (l) {
+    var d = payLogDay(l);
+    if (!l || l.person_id !== personId || d < from || d > to) return false;
+    var e = o.schedule ? o.schedule[d] : null;
+    return !e || e.primary !== personId;
+  });
+  return { from: from, to: to, ytdFrom: ytdFrom, days: days, orphanLogs: orphanLogs, month: paySummary(days), ytd: paySummary(all) };
+}
+// payTotalsRows(roster, year, month0, opts) -> [{ id, name, code, month, ytd, orphans }] - one row per active pool surgeon
+// (not an outside surgeon), roster order - for Totals > Pay (scheduler only).
+function payTotalsRows(roster, year, month0, opts) {
+  if (!Array.isArray(roster)) return [];
+  var o = opts || {};
+  var shared = Object.assign({}, o, { settings: paySettingsNorm(o.settings), holidaySet: o.holidaySet || payHolidaySet(o.holidays), today: todayOrCentral(o.today) });
+  return roster.filter(function (r) { return r && r.id && r.active !== false && r.type !== "external"; }).map(function (r) {
+    var pm = payForMonth(r.id, year, month0, shared);
+    return { id: r.id, name: r.name || r.id, code: r.code || "", month: pm.month, ytd: pm.ytd, orphans: pm.orphanLogs.length };
+  });
+}
+function payCsvAmount(c) { return c === null || c === undefined ? "" : (c / 100).toFixed(2); }
+// payCsv(rows, year, month0) -> { name: "silvis-pay-YYYY-MM.csv", text } (ttCsvText). Plain 2-decimal numbers, no currency
+// sign; an amount whose rate is not set is left empty. The scheduler's local download only - never sent anywhere.
+function payCsv(rows, year, month0) {
+  var ym = Number(year) + "-" + String(Number(month0) + 1).padStart(2, "0");
+  var headers = ["Month", "Surgeon", "Code", "Primary days", "Called-in days", "Hours", "Earned (month)", "Projected (month)", "YTD earned", "YTD projected"];
+  var body = (rows || []).map(function (r) {
+    return [ym, r.name, r.code, r.month.primaryDays, r.month.calledInDays, r.month.hours, payCsvAmount(r.month.earnedCents), payCsvAmount(r.month.projectedCents), payCsvAmount(r.ytd.earnedCents), payCsvAmount(r.ytd.projectedCents)];
+  });
+  return { name: "silvis-pay-" + ym + ".csv", text: ttCsvText(headers, body) };
+}
+// payMoney(cents) -> "<currency>1,234.50" (en-US, USD) or "-" when null.
+function payMoney(cents) {
+  if (cents === null || cents === undefined || !isFinite(Number(cents))) return "-";
+  var v = Number(cents) / 100;
+  try { return v.toLocaleString("en-US", { style: "currency", currency: "USD" }); } catch (e) { return "USD " + v.toFixed(2); }
+}
+var PAY_NOTE_CONTACT_RE = /@|[0-9]{3}[^0-9]?[0-9]{3}[^0-9]?[0-9]{4}/;   // the call_pay_logs note check, mirrored
+// payLogValidate({ day, hours, note }, { schedule, personId, today, logs, editingId }) -> null when the call-in may be saved,
+// else the message. Checks in order: a primary day of the person, not after today, hours 0-24 in quarter steps, the day's
+// total within 24 h (the person's other rows), the note (<= 200 characters, no contact-like text).
+function payLogValidate(input, opts) {
+  var i = input || {}, o = opts || {};
+  var day = String(i.day || "");
+  if (!ttIsIso(day)) return "Pick the call day (07:00 to 07:00) the call-in belongs to.";
+  var e = o.schedule ? o.schedule[day] : null;
+  if (!e || !o.personId || e.primary !== o.personId) return "Call pay is logged for the primary only - " + fmtMD(day) + " is not a primary call day of this surgeon.";
+  if (day > todayOrCentral(o.today)) return "A call-in is logged once it happened - " + fmtMD(day) + " is after today.";
+  var raw = i.hours;
+  var h = raw === "" || raw === null || raw === undefined ? NaN : Number(raw);
+  if (!isFinite(h) || h < 0 || h > 24 || Math.round(h * 4) !== h * 4) return "Hours must be between 0 and 24, in quarter-hour steps (0.25).";
+  var others = (Array.isArray(o.logs) ? o.logs : []).filter(function (l) { return l && l.person_id === o.personId && payLogDay(l) === day && (!o.editingId || l.id !== o.editingId); })
+    .reduce(function (n, l) { return n + payLogQuarters(l); }, 0);
+  if (others + Math.round(h * 4) > 96) return "One call day holds at most 24 hours - " + (others / 4) + " h are already logged on " + fmtMD(day) + ".";
+  var note = i.note === null || i.note === undefined ? "" : String(i.note);
+  if (note.length > 200) return "Keep the note to 200 characters.";
+  if (PAY_NOTE_CONTACT_RE.test(note)) return "Refused: the note looks like contact data (an @ or a phone number).";
+  return null;
+}
+// payReadFailureState(status, bodyText) -> "unavailable" when the table does not exist yet (the migration is not applied:
+// PostgREST 404 PGRST205 on 12.2+, 404 / 400 42P01 or "... does not exist" on older versions), else "failed".
+function payReadFailureState(status, bodyText) {
+  var st = Number(status), t = String(bodyText || "");
+  return (st === 404 || st === 400) && /PGRST205|42P01|Could not find the table|does not exist/.test(t) ? "unavailable" : "failed";
+}
+// payErrorText(err) -> human words for a refused pay write (the guard's tokens / errcodes, RLS, a 0-row answer).
+function payErrorText(err) {
+  var t = String(err && (err.message || err.error || err.body) || err || "");
+  if (/PY001|PAY_FUTURE/.test(t)) return "A call-in is logged once it happened - that day is after today.";
+  if (/PY002|PAY_NOT_PRIMARY/.test(t)) return "Call pay is logged for the primary only - that surgeon is not the primary on that day (a trade may have moved it).";
+  if (/PY003|PAY_HOURS_OVER/.test(t)) return "One call day holds at most 24 hours.";
+  if (/23514|check constraint/.test(t)) return "Refused: hours must be quarter hours from 0 to 24, and a note at most 200 characters with no contact data.";
+  if (/42501|row-level security|permission denied/.test(t)) return "Not allowed - a surgeon logs call-ins for his own primary days only.";
+  if (/0 rows|refused/.test(t)) return "Nothing changed - the row is not yours or no longer exists. Refresh and try again.";
+  if (/PGRST205|42P01|does not exist/.test(t)) return PAY_UNAVAILABLE_TEXT;
+  return "Couldn't save - check your connection and try again.";
+}
+// payLogAuditText(name, row) -> "Call-in logged: <Name> <Dy M/D>, <h> h" (no amount - the audit row never carries one).
+function payLogAuditText(verb, name, row) {
+  var d = payLogDay(row);
+  var h = Number(row && row.hours);
+  return "Call-in " + (verb || "logged") + ": " + (name || (row && row.person_id) || "?") + " " + (ttIsIso(d) ? ttDow(d) + " " + fmtMD(d) : "?") + ", " + (isFinite(h) ? h : 0) + " h";
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, setupSaveToasts, suPatternRowIds, daysReadTripped,
@@ -3217,6 +3453,8 @@ if (typeof module !== "undefined" && module.exports) {
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,
+    PAY_FLAG_DEFAULTS, PAY_WEEK_ORDER, PAY_RATE_KEYS, PAY_RATE_COLUMNS, PAY_FLAG_COLUMNS, PAY_RATE_LABELS, PAY_UNAVAILABLE_TEXT, PAY_RATES_UNSET_TEXT,
+    payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payErrorText, payLogAuditText,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

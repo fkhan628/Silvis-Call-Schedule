@@ -194,6 +194,57 @@ const PERSONAL_EAST = /^(?=[^]*(davenport|east vacation|east mirror|east feed))(
 report("A6c personal East vacation ranges", scan([{ label: "personal range on the East side", re: RANGE, also: PERSONAL_EAST }], { files: f => /\.(md|json)$/.test(f) }));
 // <<< A6c
 
+// >>> A6d
+// ---- A6d: pay figures (Faraz 9/27 - the app tracks primary call pay; the RATES are entered by the scheduler in the app and
+// live ONLY in the authenticated call_pay_settings table). The repo, the seed and the blob are public, so no rate figure may
+// appear anywhere here. Nothing below names a figure (they are short numbers - a digest of one would be trivially
+// enumerable); the pins are shapes: (a) no pay-rate key with a number in the seed or a fixture, (b) no dollar amount in any
+// tracked text file, (c) the code's pay defaults are flags only.
+const PAY_KEY = /^(payRates?|pay_?rates?|callPay\w*|call_pay\w*|stipend\w*|\w*(Rate|Rates|_rate|_rates)|activation\w*|wrvu\w*)$/i;
+function payKeyHits(value, where) {
+  const hits = [];
+  const numeric = (v) => typeof v === "number" || (typeof v === "string" && /^\s*\d+(\.\d+)?\s*$/.test(v)) || (v && typeof v === "object" && Object.values(v).some(numeric));
+  (function walk(v, p) {
+    if (Array.isArray(v)) { v.forEach((x, i) => walk(x, p + "[" + i + "]")); return; }
+    if (!v || typeof v !== "object") return;
+    Object.keys(v).forEach(k => {
+      if (PAY_KEY.test(k) && numeric(v[k])) hits.push(where + ":" + p + "." + k + "  <pay-rate key carrying a number>");
+      if (k === "call_pay_settings") hits.push(where + ":" + p + "." + k + "  <call_pay_settings copied into a public file>");
+      walk(v[k], p + "." + k);
+    });
+  })(value, "$");
+  return hits;
+}
+{
+  const jsonFiles = files.filter(f => f === "docs/silvis-seed.json" || /^test\/fixtures\/.*\.json$/.test(f));
+  ok(jsonFiles.includes("docs/silvis-seed.json") && jsonFiles.length >= 2, "A6d must walk the seed and the tracked fixtures");
+  const hits = [];
+  jsonFiles.forEach(f => { try { hits.push(...payKeyHits(JSON.parse(texts[f]), f)); } catch (e) { hits.push(f + "  <not JSON: " + e.message + ">"); } });
+  report("A6d pay-rate keys in the seed / fixtures (rates live only in call_pay_settings)", hits);
+  // the scanner itself: a planted rate is caught, the seed's flags and notes are not
+  ok(payKeyHits({ groupRules: { payRates: { stipend: 1 } } }, "x").length >= 1 && payKeyHits({ a: { activationRate: "2.5" } }, "x").length === 1 && payKeyHits({ compensationInApp: true, compensationNote: "text", generatedOn: "2026-09-27" }, "x").length === 0,
+    "A6d key scanner self-check (a planted rate must be caught; booleans / notes / dates must not)");
+}
+// (b) a dollar amount: a currency sign followed by a figure of two or more digits (or a thousands group). "$1"-style shell /
+// SQL parameters are one digit and pass. The pattern is built from a character code so this file carries no literal of it.
+{
+  const D = "\\" + String.fromCharCode(36);
+  const AMOUNT = new RegExp(D + "\\s?\\d{1,3}(,\\d{3})+(\\.\\d\\d)?\\b|" + D + "\\s?\\d{2,}(\\.\\d\\d)?\\b");
+  report("A6d dollar amounts in a tracked file", scan([{ label: "dollar amount", re: AMOUNT }]));
+  ok(AMOUNT.test(String.fromCharCode(36) + "12") && !AMOUNT.test(String.fromCharCode(36) + "1 ") && !AMOUNT.test("a $$ body"), "A6d amount pattern self-check");
+}
+// (c) the code's pay defaults are flags only - PAY_FLAG_DEFAULTS carries no number, the four rate columns no default
+{
+  const H = require(path.join(ROOT, "helpers.js"));
+  const nums = [];
+  (function walk(v, p) { if (typeof v === "number") nums.push(p); else if (v && typeof v === "object") Object.keys(v).forEach(k => walk(v[k], p + "." + k)); })(H.PAY_FLAG_DEFAULTS, "PAY_FLAG_DEFAULTS");
+  ok(H.PAY_FLAG_DEFAULTS && nums.length === 0, "helpers.js PAY_FLAG_DEFAULTS must carry flags only, found a number at " + nums.join(", "));
+  ok(H.PAY_RATE_KEYS.every(k => H.paySettingsFromRow(null).rates[k] === null), "a missing settings row reads every rate as null ('rates not set yet'), never a figure");
+  const mig = texts["sql/migrations/2026-09-27-call-pay.sql"] || "";
+  ok(/stipend_per_shift +numeric\(10,2\) check/.test(mig) && !/_rate +numeric\(10,2\) default|stipend_per_shift +numeric\(10,2\) default/.test(mig), "the call pay migration's rate columns carry no default");
+}
+// <<< A6d
+
 // ---- summary ----------------------------------------------------------------
 if (failures.length) {
   failures.forEach(f => console.error("FAIL: " + f));

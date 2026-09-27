@@ -40,7 +40,17 @@ first, then backup.
 One 24-h day = **one shift** — no partial or weighted shifts; totals are a running yearly tally. Time off is
 **vacations only** (no no-call days), self-entered with **no approval**, refused over a day the surgeon is already on call
 (DB trigger + client check — trade first). Holidays are the same six as Davenport, as **units** with one primary + one
-backup sticking through the unit. There is **no compensation logic and no $ display** anywhere in this app (Faraz 9/21).
+backup sticking through the unit. **Call pay (Faraz 9/27 - reverses the 9/21 "no compensation logic and no $ display"
+rule):** the app tracks **primary** call pay only (backup is never paid) - stipend per primary shift, a call-in rate
+(weekday or weekend/holiday) when called in, an activation rate for the hours worked (model: `helpers.js` `payForDay` /
+`payForMonth`, `docs/SILVIS-CALL-RULES.md` §1 "Call pay"). My schedule > My pay shows a linked surgeon his own pay (the
+scheduler anyone's); Totals > Pay and Setup > Pay rates are the scheduler's only; coordinator / viewer / follower /
+`?public=1` see no $ and no pay UI. The **rates and pay flags live only in the authenticated `call_pay_settings` table and
+the call-ins in `call_pay_logs`** (`sql/migrations/2026-09-27-call-pay.sql`, report-first) - never in the repo, the seed, the
+blob or any anon-readable table (a deliberate exception to "defaults are data in groupRules": the pay flags are data in
+`call_pay_settings`, not the public blob; `test/privacy.test.js` A6d pins no figure anywhere); tests use obviously fake
+rates. No $ in notifications, e-mails, calendar feeds, the public page or exports others see; pay audit rows carry keys /
+days / hours, never an amount.
 Carried over from Davenport on purpose: office notifications, calendar sync, refresh/version check, data management,
 every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, vacation approvals, weighted accounting.
 
@@ -64,9 +74,9 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`).
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with
   `[skip ci]`, Pages redeploys.
-- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 18 suites: rules, east-feed, data-layer,
-  schema, importer, week-rows, exports, totals, holidays, publish, day-edit, open-shifts, offers, offers-timeline, edge-functions,
-  ci, privacy, water-fill — then the generator regression as the 19th, then the build; `test/ci.test.js` keeps the chain, the
+- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 20 suites: rules, east-feed, data-layer,
+  contrast, schema, importer, week-rows, exports, totals, pay, holidays, publish, day-edit, open-shifts, offers, offers-timeline,
+  edge-functions, ci, privacy, water-fill — then the generator regression as the 21st, then the build; `test/ci.test.js` keeps the chain, the
   workflow steps and the paths filter aligned, so trust it over this list);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
@@ -80,7 +90,9 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   (user JWT, sends even an expired token so a dead write fails loudly) for **every** mutation.
 - **RLS:** anon-readable — `schedule_days`, `call_schedule_data`, `time_off`, `availability`, `east_feed`, `east_overrides`
   (day, roster id, busy flag, an operational note), `east_forecast` (week flags + busy probabilities) and `client_versions` (anon
-  reads the `main` row only).
+  reads the `main` row only). Pay data (`call_pay_settings`, `call_pay_logs`) is never anon-readable (anon privileges revoked on top of
+  RLS); the client reads them only through `config.js` `payDb` with a fresh user token and reads a missing table as
+  "unavailable", never as an empty list.
   An RLS-blocked read returns HTTP 200 + `[]` — **silent**. Reads must distinguish failure from empty (`db.query` throws on
   non-2xx; keep that). **The service-role key is server-side only — never in client code or a URL.** RLS changes apply to
   the live DB instantly — always report-first with blast radius.

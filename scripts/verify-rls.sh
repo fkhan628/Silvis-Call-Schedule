@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
+#   SILVIS_CALL_PAY_APPLIED=1                                 grade section 14 strictly (404 / PROBE_SETUP = FAIL): only on the run right after sql/migrations/2026-09-27-call-pay.sql is applied; the record step makes strict the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
@@ -15,7 +16,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_CALL_PAY_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -836,6 +837,119 @@ if linked; then
   fi
 else
   echo "   SKIP 13 (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 14. call pay (2026-09-27): anon sees neither table, anon cannot write, rolled-back probe =="
+# sql/migrations/2026-09-27-call-pay.sql (report-first, NOT applied until Faraz runs it): call_pay_settings (the rates + flags,
+# scheduler / linked-surgeon read) and call_pay_logs (the primary's call-ins, own rows / scheduler). Neither table is anon-readable
+# and anon's table privileges are revoked, so an anon request is refused (401 / 403 / 42501) - or, RLS alone, 200 with
+# Content-Range */0 (the section 8 shape). Nothing here writes over REST except the anon POST that must be refused, and nothing
+# reads or prints a rate. BEFORE the apply the tables do not exist: 404 (PGRST205 / 42P01) and the probe's PROBE_SETUP are the
+# expected not-applied picture and PASS; with SILVIS_CALL_PAY_APPLIED=1 (the run right after the apply) they FAIL.
+PAYSTRICT14="${SILVIS_CALL_PAY_APPLIED:-}"
+for t in call_pay_settings call_pay_logs; do
+  hdr=$(curl -s -D - -o $T/vr14_$t.json "$URL/rest/v1/$t?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
+  code=$(echo "$hdr" | grep -oE '^HTTP/[0-9.]+ [0-9]+' | head -1 | awk '{print $2}')
+  range=$(echo "$hdr" | grep -i '^content-range:' | tr -d '\r' | awk '{print $2}')
+  echo "   anon GET $t -> HTTP $code  Content-Range: ${range:-<none>}  body: $(head -c 120 $T/vr14_$t.json)"
+  case "$code" in
+    200) if [ "$range" = "*/0" ]; then ok "anon sees 0 rows of $t (200 + [] with count=exact -> Content-Range */0)"; else bad "anon read of $t: 200 with Content-Range '$range' (expected */0 or a refusal - pay data must never reach anon)"; fi;;
+    401|403) ok "anon read of $t refused (HTTP $code)";;
+    404) if [ "$PAYSTRICT14" = "1" ]; then bad "anon read of $t: HTTP 404 with SILVIS_CALL_PAY_APPLIED=1 (the table should exist after the apply)"; else ok "$t not created yet (before the migration: HTTP 404)"; fi;;
+    *) bad "anon read of $t: HTTP ${code:-<none>}";;
+  esac
+done
+line=$(curl -s -o $T/vr14b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/call_pay_logs" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"person_id":"s9test","day":"2020-03-02","hours":1,"note":"verify-rls anon"}')
+echo "   anon POST call_pay_logs -> $line  body: $(head -c 160 $T/vr14b.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon insert into call_pay_logs refused ($line)";;
+  "HTTP 404") if [ "$PAYSTRICT14" = "1" ]; then bad "anon POST call_pay_logs: HTTP 404 with SILVIS_CALL_PAY_APPLIED=1"; else ok "call_pay_logs not created yet (before the migration: anon POST 404)"; fi;;
+  *) if grep -q '42501' $T/vr14b.json; then ok "anon insert into call_pay_logs refused (42501)"; else bad "anon insert into call_pay_logs: $line (expected 401/403 or 42501)"; fi;;
+esac
+# 14c. As a surgeon (read-only): every call_pay_logs row he can read is his own
+if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
+  line=$(curl -s -o $T/vr14c.json -w 'HTTP %{http_code}' "$URL/rest/v1/call_pay_logs?select=person_id" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT")
+  echo "   surgeon GET call_pay_logs -> $line  distinct person_id: $(grep -oE '"person_id":"[^"]*"' $T/vr14c.json | sort -u | tr '\n' ' ')"
+  n14c=$(grep -oE '"person_id":"[^"]*"' $T/vr14c.json | sort -u | wc -l | tr -d ' ')
+  case "$line" in
+    "HTTP 200") if [ "$n14c" -le 1 ]; then ok "a surgeon reads only his own call-in rows ($n14c distinct person_id)"; else bad "a surgeon reads call-in rows of $n14c people (expected his own only)"; fi;;
+    "HTTP 404") if [ "$PAYSTRICT14" = "1" ]; then bad "surgeon GET call_pay_logs: HTTP 404 with SILVIS_CALL_PAY_APPLIED=1"; else ok "call_pay_logs not created yet (surgeon GET 404)"; fi;;
+    *) bad "surgeon GET call_pay_logs: $line";;
+  esac
+else
+  echo "   SKIP 14c (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment)"
+fi
+# 14d. sql/probes/call-pay-probe.sql through the linked CLI (rolls itself back; never reads a rate). Expectations are the
+# AFTER-apply picture; the probe's header lists every case.
+if linked; then
+  PROBE14="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/call-pay-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE14" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  applied14=1
+  if echo "$out" | grep -q 'PROBE_SETUP: call_pay_logs is absent'; then
+    applied14=0
+    if [ "$PAYSTRICT14" = "1" ]; then bad "call pay probe: PROBE_SETUP - call_pay_logs is absent with SILVIS_CALL_PAY_APPLIED=1"; else ok "call pay probe: the tables are absent (before the migration: PROBE_SETUP)"; fi
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "call pay probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results14=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results14" | tr ';' '\n' | sed 's/^/   /'
+    case_val14()   { echo "$results14" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq14()  { v=$(case_val14 "$1" | sed 's/\\//g'); [ "$v" = "$2" ] && ok "call pay probe $1: $3" || bad "call pay probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err14() { v=$(case_val14 "$1" | sed 's/\\//g'); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "call pay probe $1: $4"; else bad "call pay probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    expect_eq14  P1  "policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write" "the two tables carry exactly the six call pay policies"
+    expect_eq14  P2  "anon_logs=f anon_settings=f"                   "anon holds no privilege on either table (revoked)"
+    expect_eq14  P3  "rows=1"                                        "the settings table holds the one 'main' row"
+    expect_err14 N1  42501 "permission denied for table call_pay_logs"      "anon cannot read the call-ins"
+    expect_err14 N2  42501 "permission denied for table call_pay_settings"  "anon cannot read the rates"
+    expect_err14 N3  42501 "permission denied for table call_pay_logs"      "anon cannot log a call-in"
+    expect_eq14  S1  "ok created_by=s3 hours=1.50"                   "a surgeon logs a call-in on his primary day and reads it back (RETURNING)"
+    expect_err14 S2  PY002 "PAY_NOT_PRIMARY"                          "a surgeon cannot log his backup day (backup is never paid)"
+    expect_err14 S3  42501 'row-level security policy for table "call_pay_logs"' "a surgeon cannot log a call-in for another surgeon"
+    expect_err14 S4  PY001 "PAY_FUTURE"                               "a call-in is not logged ahead of the day"
+    expect_err14 S5  23514 "call_pay_logs_hours_check"                "hours are quarter hours"
+    expect_eq14  S6  "ok"                                            "23 h on one call day is accepted"
+    expect_err14 S7  PY003 "PAY_HOURS_OVER"                           "a call day holds at most 24 h across its rows"
+    expect_err14 S8  23514 "call_pay_logs_note_check"                 "a note carries no contact data ('@')"
+    expect_err14 S9  PY003 "PAY_HOURS_OVER"                           "24.25 h in one row is refused"
+    expect_eq14  S10 "own=2 others=0"                                "a surgeon reads his own call-ins and nobody else's"
+    expect_eq14  S11 "updated=1 hours=2.25 created_by=s3"            "a surgeon edits his own call-in"
+    expect_eq14  S12 "updated=0"                                     "a surgeon cannot edit another surgeon's call-in"
+    expect_eq14  S13 "deleted=0"                                     "a surgeon cannot delete another surgeon's call-in"
+    expect_eq14  S14 "rows=1"                                        "a linked surgeon reads the settings row (the rates his pay is computed with)"
+    expect_eq14  S15 "updated=0"                                     "a surgeon cannot change the settings"
+    expect_err14 S16 42501 'row-level security policy for table "call_pay_settings"' "a surgeon cannot insert a settings row"
+    expect_eq14  S17 "updated=1 created_by=s3"                       "created_by is pinned on update"
+    expect_err14 X1  PY002 "PAY_NOT_PRIMARY"                          "a row on a day the surgeon no longer holds cannot be edited"
+    expect_eq14  X2  "deleted=1"                                     "but its owner can delete it"
+    expect_eq14  T1  "own=1 s3=0"                                    "a second surgeon reads his own call-in and none of s3's"
+    expect_eq14  C1  "visible=0"                                     "a coordinator reads no call-in"
+    expect_eq14  C2  "rows=0"                                        "a coordinator reads no rate"
+    expect_err14 C3  42501 'row-level security policy for table "call_pay_logs"' "a coordinator cannot log a call-in"
+    expect_eq14  V1  "visible=0"                                     "a viewer (a follower) reads no call-in"
+    expect_eq14  V2  "rows=0"                                        "a viewer reads no rate"
+    expect_eq14  A1  "sees_all=t"                                    "the admin reads every call-in"
+    expect_eq14  A2  "updated=1 updated_by=s1"                       "the admin writes the settings row (updated_by stamped)"
+    expect_eq14  A3  "ok created_by=s1"                              "the admin logs a call-in for a surgeon on his primary day"
+    expect_err14 A4  PY002 "PAY_NOT_PRIMARY"                          "the primary-only guard applies to the admin too"
+  fi
+  if [ "$applied14" = "1" ]; then
+    LEFTOVER14_SQL="select ((select count(*) from auth.users where email like 'probe-pay-%@example.test') + (select count(*) from public.schedule_days where source = 'probe-pay') + (select count(*) from public.call_pay_logs where note like 'probe-pay%'))::int as leftover"
+  else
+    LEFTOVER14_SQL="select ((select count(*) from auth.users where email like 'probe-pay-%@example.test') + (select count(*) from public.schedule_days where source = 'probe-pay'))::int as leftover"
+  fi
+  r=$(q "$LEFTOVER14_SQL")
+  if ! echo "$r" | grep -q '"leftover"'; then
+    bad "call pay probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "call pay probe persisted nothing (leftover count 0: auth.users probe-pay-* / schedule_days source probe-pay / call_pay_logs probe-pay notes)"
+  else
+    bad "call pay probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.call_pay_logs where note like 'probe-pay%';"
+    echo "      delete from public.schedule_days where source = 'probe-pay';"
+    echo "      delete from auth.users where email like 'probe-pay-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 14d (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo
