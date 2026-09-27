@@ -1053,7 +1053,7 @@ check("Item D source pins - office-notifications: the digest composes buildEastS
   assert.ok(!/["']s6["']/.test(onSrc.replace(/\/\/[^\n]*/g, "")), "no literal Davenport id in the function");
 });
 check("Item D: index-source.html Settings (scheduler) shows the combined link for every eastVacationPerson with a Copy button and the office note (en dash / em dash as JS escapes, ASCII source); edge-functions/README.md section 5 lists the east=1 checks and section 3 carries the pending Item D deploy rows (calendar-sync v2 -> v3, office-notifications v3 -> v4); docs/SILVIS-BUILD-GUIDE.md names the combined feed", () => {
-  const settings = appSrc.slice(appSrc.indexOf("Live calendar sync"), appSrc.indexOf("Requires the calendar-sync edge function"));
+  const settings = appSrc.slice(appSrc.indexOf("Live calendar sync"), appSrc.indexOf("{/* calendar-sync card end */}"));
   assert.ok(/surgeons\.filter\(s => eastVacationPerson\(s, surgeonRules && surgeonRules\[s\.id\] && surgeonRules\[s\.id\]\.eastFeed\)\)\.map\(/.test(settings), "one combined row per East person, by the app's own predicate");
   assert.ok(/calendar-sync\?surgeon=\$\{s\.code\}&east=1/.test(settings), "the combined URL");
   assert.ok(/data-testid="combined-sync-url"/.test(settings) && /data-testid="copy-combined-sync-url"/.test(settings) && /data-testid="combined-sync-note"/.test(settings), "the box, the Copy button and the note carry test ids");

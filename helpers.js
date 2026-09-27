@@ -3175,6 +3175,15 @@ function notifTestMessage(shown, permission) {
   return "This browser could not show a notification from the page (on an iPhone the app has to be installed to the Home Screen) - nothing was shown.";
 }
 
+// Settings > Pop-ups on this device: Notification.permission ("granted" / "denied" / "default", or the app's own
+// "unsupported" when the browser has no Notification API) in plain words - never the raw token.
+function notifPermissionText(permission) {
+  if (permission === "granted") return "Allowed on this device.";
+  if (permission === "denied") return "Blocked in this browser - allow them in the browser's site settings to get pop-ups.";
+  if (permission === "default") return "Not allowed yet - tap Allow notifications.";
+  return "This browser can't show pop-ups (on an iPhone, add the app to the Home Screen first).";
+}
+
 // (e) The toasts for Setup saves that wait for the blob write: ONE toast naming every distinct label, in order
 // ("Group rules and Holiday units saved.") - the app's toast is single-slot (a second showToast replaces the
 // first), so one line per settled run is the only way every label is seen (B9 review 9/24).
@@ -3210,7 +3219,7 @@ function daysReadTripped(count, lastCount) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, setupSaveToasts, suPatternRowIds, daysReadTripped,
+    GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     reviewStateFor, derivedEastVacations,
     authLinkError, AUTH_LINK_ERROR_MESSAGE,
     notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,

@@ -1334,6 +1334,44 @@ try {
   await page.screenshot({ path: path.join(OUT, "settings-open.png"), fullPage: true });
   ok("settings cards expanded without error");
 
+  // Settings declutter (9/27): the scheduler's Settings is two quiet groups - 'Your preferences' above Appearance and
+  // 'Scheduler tools' above the Activity log - the three in-memory toggles carry the Collapsible chevron, the Pop-ups
+  // box says the permission in plain words, and (biometrics unavailable, as on every desktop) Account shows one line
+  // with Details holding Re-check / Try enable anyway.
+  try {
+    const sd = await page.evaluate(() => {
+      const heads = Array.from(document.querySelectorAll("[data-testid=settings-group]")).map(h => ({ group: h.getAttribute("data-group"), text: h.textContent.trim(), fs: getComputedStyle(h).fontVariantCaps }));
+      const pos = (el) => el ? el.getBoundingClientRect().top + window.scrollY : null;
+      const titleEl = (t) => Array.from(document.querySelectorAll("span, div")).find(e => e.children.length === 0 && e.textContent.trim() === t) || null;
+      const light = Array.from(document.querySelectorAll("button")).find(b => b.textContent.trim() === "Light");
+      const perm = document.querySelector("[data-testid=notif-permission]");
+      return { heads, personalTop: pos(document.querySelector("[data-testid=settings-group][data-group=personal]")), schedTop: pos(document.querySelector("[data-testid=settings-group][data-group=scheduler]")),
+        lightTop: pos(light), refreshTop: pos(titleEl("Refresh app")), auditTop: pos(document.querySelector("[data-testid=card-settings_audit]")), restoreTop: pos(titleEl("Restore from snapshot")),
+        plusMinus: Array.from(document.querySelectorAll("span")).filter(s => s.children.length === 0 && /^[+-]$/.test(s.textContent.trim()) && s.parentElement && /Office notifications|Notification settings|Restore from snapshot/i.test(s.parentElement.textContent)).length,
+        permText: perm ? perm.textContent.trim() : null, permRaw: perm ? perm.getAttribute("data-permission") : null,
+        bioLine: !!document.querySelector("[data-testid=biometric-unavailable]"), bioDetails: !!document.querySelector("[data-testid=biometric-details]") };
+    });
+    const groups = sd.heads.map(h => h.group).join(",");
+    if (groups !== "personal,scheduler") fail("Settings declutter: the scheduler should see the 'Your preferences' then 'Scheduler tools' headings, got " + JSON.stringify(sd.heads));
+    else if (sd.heads[0].text !== "Your preferences" || sd.heads[1].text !== "Scheduler tools") fail("Settings declutter: heading texts " + JSON.stringify(sd.heads));
+    else if (!(sd.personalTop < sd.lightTop && sd.lightTop < sd.refreshTop && sd.refreshTop < sd.schedTop && sd.schedTop < sd.auditTop && sd.auditTop < sd.restoreTop)) fail("Settings declutter: group order on screen is wrong: " + JSON.stringify(sd));
+    else if (sd.plusMinus) fail(`Settings declutter: ${sd.plusMinus} toggle(s) still draw the old +/- glyph`);
+    else ok(`Settings declutter: 'Your preferences' (Appearance .. Refresh app) above 'Scheduler tools' (Activity log .. Restore from snapshot), small caps (${sd.heads[0].fs}); the three toggles draw the chevron`);
+    if (sd.permText === null) fail("Settings declutter: the Pop-ups box has no [data-testid=notif-permission] line (Notification settings was expanded above)");
+    else if (/\b(granted|denied|default|unsupported)\b/.test(sd.permText)) fail("Settings declutter: the Pop-ups box still prints the raw permission token: " + sd.permText);
+    else ok(`Settings declutter: Pop-ups permission '${sd.permRaw}' reads '${sd.permText}'`);
+    if (!sd.bioLine) console.log("     (Settings declutter: biometrics report available in this browser - the Account 'Details' disclosure is not exercised this run)");
+    else if (sd.bioDetails) fail("Settings declutter: the biometric Details (Re-check / Try enable anyway) are open on entry - they belong behind Details");
+    else {
+      await page.click("[data-testid=more-bioDetails]");
+      await page.waitForTimeout(200);
+      const det = await page.$eval("[data-testid=biometric-details]", el => el.innerText).catch(() => "");
+      if (!/Re-check/.test(det) || !/Try enable anyway/.test(det)) fail("Settings declutter: Account > Details does not hold Re-check / Try enable anyway: " + det.slice(0, 160));
+      else ok("Settings declutter: Account shows one biometric line; Details opens Re-check / Try enable anyway (and the diagnostic when the browser gives one)");
+      await page.click("[data-testid=more-bioDetails]");
+    }
+  } catch (e) { fail("Settings declutter (scheduler): " + String(e && e.message || e).split("\n")[0]); }
+
   // Item 5a (Faraz 9/24): in the Client versions card an account with no person_id shows its user_profiles
   // display_name and role ("Office (harness) - coordinator") with an EMPTY id column; a profile without a display_name
   // keeps "(unlinked account)" + the id8; a linked roster row is untouched. While cvExtrasFixture is armed the route
@@ -2178,6 +2216,18 @@ try {
       await sp.waitForTimeout(800);
       const tabsS = await sp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
       if (tabsS.includes("setup")) fail("Item E (surgeon): the mocked surgeon page shows a Setup tab - it is being treated as the scheduler, so the clean-grid checks below prove nothing: " + tabsS.join(","));
+      // Settings declutter (9/27): a surgeon sees only his own cards - no group heading at all, no 'Scheduler tools' -
+      // and keeps his calendar-sync card (he has a roster link).
+      try {
+        await sp.click('button[data-tab="settings"]');
+        await sp.waitForTimeout(400);
+        const sdS = await sp.evaluate(() => ({ heads: document.querySelectorAll("[data-testid=settings-group]").length, tools: /Scheduler tools/i.test(document.body.innerText || ""),
+          sync: !!document.querySelector("[data-testid=calsync-card]"), exp: !!document.querySelector("[data-testid=export-backup]"), pageW: document.documentElement.scrollWidth }));
+        if (sdS.heads || sdS.tools) fail(`Settings declutter (surgeon): a surgeon must see no group heading and no 'Scheduler tools' (headings ${sdS.heads}, text ${sdS.tools})`);
+        else if (!sdS.sync || sdS.exp) fail(`Settings declutter (surgeon): expected his calendar-sync card and no scheduler card (sync ${sdS.sync}, export ${sdS.exp})`);
+        else if (sdS.pageW > 392) fail(`Settings declutter (surgeon, 390): the page scrolls sideways (${sdS.pageW})`);
+        else ok(`Settings declutter (surgeon, 390): no group heading, no 'Scheduler tools', his calendar-sync card present, no sideways scroll (${sdS.pageW})`);
+      } catch (e) { fail("Settings declutter (surgeon): " + String(e && e.message || e).split("\n")[0]); }
       for (const theme of ["dark", "light"]) {
         await sp.click('button[data-tab="settings"]');
         await sp.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
@@ -5766,6 +5816,33 @@ try {
   try {
     await page.click('button[data-tab="setup"]');
     await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 8000 });
+    // Setup declutter (9/27): three quiet headings - 'Every cycle' (issues, Generate, Vacations), 'Configuration'
+    // (Roster .. Office contacts), 'Rarely used' (Import seed, Clear schedule) - and a one-line summary on a closed
+    // Roster / Holidays / Office contacts card (the summary goes away once the card is open).
+    try {
+      const su = await page.evaluate(() => {
+        const top = (sel) => { const el = document.querySelector(sel); return el ? el.getBoundingClientRect().top + window.scrollY : null; };
+        const heads = Array.from(document.querySelectorAll("[data-testid=setup-group]")).map(h => h.getAttribute("data-group"));
+        const order = ["[data-testid=setup-group][data-group=cycle]", "[data-testid=card-setup_issues]", "[data-testid=card-setup_generate]", "[data-testid=card-setup_vacations]",
+          "[data-testid=setup-group][data-group=config]", "[data-testid=card-setup_roster]", "[data-testid=card-setup_office]", "[data-testid=setup-group][data-group=rare]", "[data-testid=card-setup_import]", "[data-testid=card-setup_clear]"].map(top);
+        const sums = {};
+        for (const ck of ["setup_roster", "setup_holidays", "setup_office"]) {
+          const card = document.querySelector(`[data-testid=card-${ck}]`);
+          const s = document.querySelector(`[data-testid=card-summary-${ck}]`);
+          sums[ck] = { open: card ? card.getAttribute("data-open") : null, text: s ? s.textContent.trim() : null };
+        }
+        return { heads, order, sums, pageW: document.documentElement.scrollWidth };
+      });
+      if (su.heads.join(",") !== "cycle,config,rare") fail("Setup declutter: expected the headings cycle, config, rare - got " + su.heads.join(","));
+      else if (su.order.some((t, i) => t === null || (i && t <= su.order[i - 1]))) fail("Setup declutter: the cards are not under their headings in order: " + JSON.stringify(su.order));
+      else ok("Setup declutter: 'Every cycle' (issues, Generate, Vacations) / 'Configuration' (Roster .. Office contacts) / 'Rarely used' (Import seed, Clear schedule)");
+      for (const [ck, s] of Object.entries(su.sums)) {
+        if (s.open === null) fail(`Setup declutter: card-${ck} missing`);
+        else if (s.open === "1") { if (s.text !== null) fail(`Setup declutter: ${ck} is open and still shows its summary '${s.text}'`); else console.log(`     (Setup declutter: ${ck} is open from an earlier step - its closed summary is not exercised this run)`); }
+        else if (!s.text) fail(`Setup declutter: the closed ${ck} card shows no summary line`);
+        else ok(`Setup declutter: closed ${ck} summary '${s.text}'`);
+      }
+    } catch (e) { fail("Setup declutter: " + String(e && e.message || e).split("\n")[0]); }
     for (const ck of SETUP_CARDS) {
       const before = pageErrors.length;
       const card = await openCard(ck);
@@ -8546,6 +8623,25 @@ try {
       const logTitle = auditCard ? (await auditCard.innerText()).replace(/\s+/g, " ").slice(0, 80) : "";
       if (!auditCard || exportBtn || cvCard || !auditGets.length || !/your entries/i.test(logTitle)) fail(`coordinator: Settings should show the Activity log ('your entries') with one audit_log read and nothing of the scheduler's (export / client versions): card=${!!auditCard} export=${!!exportBtn} cv=${!!cvCard} reads=${auditGets.length} title='${logTitle}'`);
       else ok(`coordinator: Settings = Activity log '${logTitle.slice(0, 50)}' (audit_log read ${auditGets.length}x); no export, no client versions`);
+      // Settings declutter (9/27): the office (no roster link, following nobody) gets no group heading and no empty
+      // calendar-sync card (it used to render a sentence and no URL); opening Notification settings shows ONE e-mail line.
+      try {
+        const coordFollows = Array.isArray(COORD_PROFILE.follows) ? COORD_PROFILE.follows.length : 0;
+        const sdC = await pc.evaluate(() => ({ heads: document.querySelectorAll("[data-testid=settings-group]").length, tools: /Scheduler tools/i.test(document.body.innerText || ""), sync: !!document.querySelector("[data-testid=calsync-card]") }));
+        if (sdC.heads || sdC.tools) fail(`coordinator: Settings shows a group heading (${sdC.heads}) / 'Scheduler tools' (${sdC.tools}) - the headings are the scheduler's`);
+        else if (coordFollows) console.log(`     (coordinator: the harness profile follows ${coordFollows} surgeon(s) - the no-URL calendar-sync case is not exercised this run)`);
+        else if (sdC.sync) fail("coordinator: the calendar-sync card renders with no URL to offer (no roster link, no follow, not scheduler / viewer)");
+        else ok("coordinator: Settings has no group heading and no empty calendar-sync card");
+        const nt = await pc.$("text=Notification settings");
+        if (nt) {
+          await nt.click(); await pc.waitForTimeout(250);
+          const em = await pc.evaluate(() => document.body.innerText || "");
+          const linked = (em.match(/Available once your account is linked to a roster entry\./g) || []).length, addr = /E-mails? go to your sign-in address/i.test(em);
+          if (linked !== 1 || addr) fail(`coordinator: the Email box should read one 'Available once ...' line and no sign-in-address sentence (count ${linked}, sentence ${addr})`);
+          else ok("coordinator: the Email box reads one line - 'Available once your account is linked to a roster entry.'");
+          await nt.click(); await pc.waitForTimeout(150);
+        } else fail("coordinator: no Notification settings card");
+      } catch (e) { fail("coordinator Settings declutter: " + String(e && e.message || e).split("\n")[0]); }
       await pc.screenshot({ path: path.join(OUT, "coordinator.png"), fullPage: true });
       ok("screenshot test/ui/out/coordinator.png");
     } catch (e) { fail("coordinator session: " + errLine(e)); try { await pc.screenshot({ path: path.join(OUT, "failure-coordinator.png"), fullPage: true }); } catch (e2) {} }
