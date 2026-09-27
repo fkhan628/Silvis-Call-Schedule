@@ -41,6 +41,11 @@
     @media (max-width: 600px) {
       select, input[type="date"], input[type="text"], input[type="password"], input[type="email"] { font-size: 16px !important; min-height: 38px; }
       button { min-height: 36px; }
+      /* A card's open/close title row (Collapsible and the Settings toggles) is a phone tap target too. */
+      .cardtoggle { min-height: 36px; }
+      /* An inline More / Less / Details toggle: 36 px wide too, and its negative vertical margins keep the 36 px height
+         from stretching the sentence's line box. */
+      .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
     }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
@@ -495,6 +500,8 @@ function CallSchedule() {
 
   // --- Office Notifications ---
   const [officeContacts, setOfficeContacts] = useState([]);
+  // "loading" | "ok" | "failed": a failed read must never read as an empty table (the Setup card's summary and body).
+  const [officeContactsLoad, setOfficeContactsLoad] = useState("loading");
   const [newOfficeName, setNewOfficeName] = useState("");
   const [newOfficeEmail, setNewOfficeEmail] = useState("");
   const [newOfficeRole, setNewOfficeRole] = useState("");
@@ -3928,8 +3935,9 @@ function CallSchedule() {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/office_contacts?select=*&order=name.asc`, { headers: dbAuthHeaders() });
         if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 120)}`);
         const rows = await res.json();
-        if (Array.isArray(rows)) setOfficeContacts(rows);
-      } catch(e) { console.warn("Load office contacts error:", e); showToast("Couldn't load office contacts - the list shown may be incomplete.", "error"); }
+        if (!Array.isArray(rows)) throw new Error("office_contacts answered a non-array");
+        setOfficeContacts(rows); setOfficeContactsLoad("ok");
+      } catch(e) { console.warn("Load office contacts error:", e); setOfficeContactsLoad("failed"); showToast("Couldn't load office contacts - the list shown may be incomplete.", "error"); }
     })();
   }, [loaded, isScheduler, reloadTrigger]);
 
@@ -4722,9 +4730,23 @@ function CallSchedule() {
       // Collapsible reads its open flag at mount; the strip lives on the calendar, so the
       // Setup view (and the card) mounts fresh with the flag set.
       try { writeCollapseFlag("setup_east", true); } catch (e) { console.warn("Couldn't persist the East panel state:", e); }
+      scrollToCardRef.current = "setup_east";
       setView("setup");
     } else setView("timeoff");
   };
+  // Settings / Setup declutter review (9/27): Setup now opens with the (open) Generate card near the top, so the East
+  // card sits screens below the fold - a one-shot scroll brings the deep link's target into view once Setup mounts.
+  const scrollToCardRef = useRef(null);
+  useEffect(() => {
+    if (view !== "setup" || !scrollToCardRef.current) return;
+    const ck = scrollToCardRef.current;
+    scrollToCardRef.current = null;
+    const t = setTimeout(() => {
+      try { const el = document.querySelector('[data-testid="card-' + ck + '"]'); if (el) el.scrollIntoView({ block: "start" }); else console.warn("Couldn't find the " + ck + " card to scroll to"); }
+      catch (e) { console.warn("Couldn't scroll to the " + ck + " card:", e); }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [view]);
   const snapshotAgeText = (iso) => {
     if (!iso) return "none on file";
     const t = new Date(iso).getTime();
@@ -5187,6 +5209,28 @@ function CallSchedule() {
   const label = { fontSize:10, color:"#5B6B82", fontWeight:600, textTransform:"uppercase", letterSpacing:0.5, display:"block", marginBottom:2 };
   const muted = { fontSize:12, color:"#5B6B82" };
   const sectionNote = { fontSize:12, color:"#5B6B82", margin:"0 0 10px", lineHeight:1.5 };
+  // Settings / Setup declutter (9/27): a quiet group heading (small caps, muted, a hairline to its right) - never a
+  // collapsible, so every card below it stays mounted on entry; the Collapsible chevron for the three Settings toggles
+  // that stay IN MEMORY (openSettingsCards - never persisted: the smoke's role pages share one localStorage, and a
+  // persisted flag would make a later text= click close an already-open card); a small More / Less disclosure (also in
+  // memory) for the detail behind a one-sentence note.
+  const groupHeading = (testid, group, text, first) => (
+    <div data-testid={testid} data-group={group} role="heading" aria-level={2} style={{display:"flex",alignItems:"center",gap:10,margin:first ? "2px 4px 10px" : "24px 4px 10px",fontSize:13,fontWeight:600,fontVariant:"small-caps",letterSpacing:0.6,color:T.muted}}>
+      <span>{text}</span><span aria-hidden="true" style={{flex:1,height:1,background:T.border}}/>
+    </div>
+  );
+  const settingsToggleRow = (open) => ({...css.cardT,margin:open?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"});
+  const settingsChevron = (open) => <span aria-hidden="true" style={{fontSize:11,color:T.muted,letterSpacing:0,transition:"transform .15s",transform:open?"rotate(90deg)":"rotate(0deg)",display:"inline-block",width:10,flexShrink:0}}>&#9654;</span>;
+  const moreToggle = (k, text) => (
+    <button type="button" className="moretoggle" data-testid={"more-" + k} aria-expanded={!!openSettingsCards[k]} onClick={()=>toggleSettingsCard(k)} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",verticalAlign:"middle",background:"none",border:"none",padding:"0 2px",marginLeft:4,color:T.accentText,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:font}}>{openSettingsCards[k] ? "Less" : (text || "More")}</button>
+  );
+  const moreNote = { fontSize:11.5, color:T.muted, margin:"0 0 10px", lineHeight:1.5 };
+  // (review 9/27) iPhone / iPad (iPadOS reports a Mac UA with touch): the one case where 'biometrics unavailable' has a
+  // fix the user can make, so its hint stays on the visible line instead of only behind Details.
+  const onIOSDevice = (() => { try { return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); } catch (e) { console.warn("Couldn't read the user agent:", e); return false; } })();
+  // Collapsible's summary line (shown only while the card is closed): cheap, exact counts from state already loaded.
+  const cardSummary = (text) => text ? <span style={{fontSize:11.5,color:T.muted}}>{text}</span> : null;
+  const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
   const dowShort = (d) => DAY_HDR[parse(d).getDay()];
   const isWeekendDay = (d) => { const w = parse(d).getDay(); return w === 0 || w === 5 || w === 6; };
 
@@ -5661,13 +5705,36 @@ function CallSchedule() {
 
         {/* ================ SETUP (scheduler) - Prompt 6 Slice E ================ */}
         {view==="setup" && !isPublicMode && isScheduler && <>
+          {groupHeading("setup-group", "cycle", "Every cycle", true)}
+
           <Collapsible css={css} ck="setup_issues" defaultOpen={true} title={<>Setup issues <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>- {setupIssues.length ? setupIssues.length + " warning(s)" : "none"}</span></>}>
             {setupIssues.length === 0 ? <p data-testid="setup-issues" style={{...muted,color:T.success}}>None.</p> : (
               <ul data-testid="setup-issues" style={{margin:0,paddingLeft:18,fontSize:12.5,color:T.warnText,lineHeight:1.7}}>{setupIssues.map(s => <li key={s}>{s}</li>)}</ul>
             )}
           </Collapsible>
 
-          <Collapsible css={css} ck="setup_roster" defaultOpen={false} title="Roster">
+          <Collapsible css={css} ck="setup_generate" defaultOpen={true} title="Generate (preview, then publish)">
+            {/* Prompt 14 part 3b: Periods - create from the presets, per-surgeon status, Remind, Close now, Enter for someone, Generate over the period. */}
+            <PeriodsSection css={css} periods={periodRows} offers={offerRows} roster={surgeons} groupRules={groupRules} today={todayStr} nameOf={nameOf} notifPrefs={notifPrefs} busy={prdBusy || genBusy} remindState={prdRemind} selfId={mySurgeon} draft={prdDraft} setDraft={setPrdDraft}
+              onCreate={createPeriod} onCloseNow={closePeriodNow} onRemind={remindOffers} onEnterFor={enterOffersFor} onGenerate={generatePeriod}/>
+            <GeneratePanel css={css} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} busyMode={genWorkerOk ? "worker" : "inline"} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} genStart={genStart} genFirstOpenDay={genFirstOpenDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
+          </Collapsible>
+
+          <Collapsible css={css} ck="setup_vacations" defaultOpen={false} title="Vacations (everyone)"
+            summary={cardSummary(plural(groupVacationRows(vacations, surgeons.map(s => s.id), todayStr, false).reduce((n, g) => n + g.upcoming, 0), "upcoming vacation", "upcoming vacations"))}
+            right={<button onClick={(e)=>{e.stopPropagation(); setPaintSheet(true);}} style={{...css.btn(false),padding:"3px 10px",fontSize:11}}>Paint month</button>}>
+            <p style={sectionNote}>Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is.</p>
+            {renderVacationForm(poolSurgeons)}
+            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
+              <input type="checkbox" data-testid="vac-show-past" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past vacations
+            </label>
+            {renderVacationList(surgeons.map(s => s.id), true)}
+          </Collapsible>
+
+          {groupHeading("setup-group", "config", "Configuration", false)}
+
+          <Collapsible css={css} ck="setup_roster" defaultOpen={false} title="Roster"
+            summary={cardSummary(plural(poolSurgeons.length, "active surgeon", "active surgeons") + (rosterPool.length > poolSurgeons.length ? ", " + (rosterPool.length - poolSurgeons.length) + " inactive" : "") + (surgeons.length > rosterPool.length ? ", " + (surgeons.length - rosterPool.length) + " outside" : ""))}>
             <RosterEditor css={css} roster={surgeons} schedule={schedule} availabilityRows={availabilityRows} timeOffRows={timeOffRows} onSave={saveRoster} showToast={showToast}/>
           </Collapsible>
 
@@ -5678,7 +5745,8 @@ function CallSchedule() {
             </Collapsible>
           )}
 
-          <Collapsible css={css} ck="setup_rules" defaultOpen={false} title="Rules (per surgeon, and group rules)">
+          <Collapsible css={css} ck="setup_rules" defaultOpen={false} title="Rules (per surgeon, and group rules)"
+            summary={cardSummary(rulesImported ? "" : "Not imported yet")}>
             {!rulesImported ? <div style={css.warnBox}>Rules are not imported yet - use Import seed below, then edit here.</div> :
               <RulesEditor css={css} dk={dk} roster={surgeons} surgeonRules={surgeonRules || {}} groupRules={groupRules || {}} holidayNames={holidayNamesAll} onSaveSurgeon={saveSurgeonRules} onSaveGroup={saveGroupRules} showToast={showToast} today={todayStr}/>}
           </Collapsible>
@@ -5687,17 +5755,8 @@ function CallSchedule() {
             <AvailabilityCard css={css} rows={availabilityRows} roster={poolSurgeons} nameOf={nameOf} onAdd={addAvailabilityRows} onDelete={deleteAvailabilityRow} busy={availBusy} today={todayStr}/>
           </Collapsible>
 
-          <Collapsible css={css} ck="setup_vacations" defaultOpen={false} title="Vacations (everyone)"
-            right={<button onClick={(e)=>{e.stopPropagation(); setPaintSheet(true);}} style={{...css.btn(false),padding:"3px 10px",fontSize:11}}>Paint month</button>}>
-            <p style={sectionNote}>Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is.</p>
-            {renderVacationForm(poolSurgeons)}
-            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
-              <input type="checkbox" data-testid="vac-show-past" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past vacations
-            </label>
-            {renderVacationList(surgeons.map(s => s.id), true)}
-          </Collapsible>
-
-          <Collapsible css={css} ck="setup_holidays" defaultOpen={false} title="Holidays (units per year)">
+          <Collapsible css={css} ck="setup_holidays" defaultOpen={false} title="Holidays (units per year)"
+            summary={cardSummary(holidays === undefined ? "Not imported yet" : (Object.keys((holidays && holidays.units) || {}).length ? "Years " + Object.keys(holidays.units).sort().join(", ") : "No years yet"))}>
             <HolidaysCard css={css} holidays={holidays} groupRules={groupRules} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported}/>
           </Collapsible>
 
@@ -5708,18 +5767,8 @@ function CallSchedule() {
               eastVac={eastVacPeople} eastVacReviewState={eastVacReviewState} onReviewEastVac={saveEastVacationReview} eastVacBusyKey={eastVacBusy} canReviewEastVac={(pid) => isScheduler || pid === mySurgeon} eastVacConflicts={eastVacConflictRows}/>
           </Collapsible>
 
-          <Collapsible css={css} ck="setup_generate" defaultOpen={true} title="Generate (preview, then publish)">
-            {/* Prompt 14 part 3b: Periods - create from the presets, per-surgeon status, Remind, Close now, Enter for someone, Generate over the period. */}
-            <PeriodsSection css={css} periods={periodRows} offers={offerRows} roster={surgeons} groupRules={groupRules} today={todayStr} nameOf={nameOf} notifPrefs={notifPrefs} busy={prdBusy || genBusy} remindState={prdRemind} selfId={mySurgeon} draft={prdDraft} setDraft={setPrdDraft}
-              onCreate={createPeriod} onCloseNow={closePeriodNow} onRemind={remindOffers} onEnterFor={enterOffersFor} onGenerate={generatePeriod}/>
-            <GeneratePanel css={css} presets={genPresets} opts={genOpts} setOpts={setGenOpts} busy={genBusy} busyMode={genWorkerOk ? "worker" : "inline"} preview={previewGen} onRun={runGenerate} onReroll={rerollGenerate} onAccept={acceptPreview} onDiscard={discardPreview} nameOf={nameOf} roster={surgeons} rulesImported={rulesImported} lastPublishedDay={lastPublishedDay} genStart={genStart} genFirstOpenDay={genFirstOpenDay} laterRanges={laterAssignedRanges} holidayNames={holidayNameByDay(holidays)}/>
-          </Collapsible>
-
-          <Collapsible css={css} ck="setup_import" defaultOpen={false} title="Import seed (docs/silvis-seed.json)">
-            <SeedImportCard css={css} state={seedState} onPick={pickSeedFile} onApply={applySeedImport} nameOf={nameOf}/>
-          </Collapsible>
-
-          <Collapsible css={css} ck="setup_office" defaultOpen={false} title="Office contacts">
+          <Collapsible css={css} ck="setup_office" defaultOpen={false} title="Office contacts"
+            summary={cardSummary(officeContacts.length ? officeContacts.filter(c => c.active).length + " active of " + officeContacts.length + (officeContactsLoad === "failed" ? " (couldn't reload)" : "") : officeContactsLoad === "failed" ? "Couldn't load" : officeContactsLoad === "ok" ? "None yet" : "")}>
             <p style={sectionNote}>Office staff who receive the publish notice and the Monday morning change digest. Entered by hand; this table is authenticated-read only (never anon-readable), which is why an address may be typed here and nowhere else in the app.</p>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:12}}>
               <div style={{flex:"1 1 140px"}}><label style={label}>Name</label><input value={newOfficeName} onChange={e=>setNewOfficeName(e.target.value)} style={{...inp,width:"100%"}}/></div>
@@ -5727,7 +5776,7 @@ function CallSchedule() {
               <div style={{flex:"1 1 160px"}}><label style={label}>Role (optional)</label><input value={newOfficeRole} onChange={e=>setNewOfficeRole(e.target.value)} placeholder="Trauma coordinator" style={{...inp,width:"100%"}}/></div>
               <button onClick={addOfficeContact} disabled={officeNotifBusy} style={{...css.btn(true),padding:"6px 14px",fontSize:12,opacity:officeNotifBusy?0.6:1}}>Add</button>
             </div>
-            {officeContacts.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No office contacts yet.</p> : (
+            {officeContacts.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>{officeContactsLoad === "failed" ? "Couldn't load the office contacts - reload the app to retry (this is not an empty list)." : officeContactsLoad === "ok" ? "No office contacts yet." : "Loading office contacts\u2026"}</p> : (
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {officeContacts.map(c => (
                   <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:c.active?"#fff":"#f4f6f8",borderRadius:6,border:"1px solid #DCE3EC",opacity:c.active?1:0.6}}>
@@ -5744,6 +5793,12 @@ function CallSchedule() {
                 ))}
               </div>
             )}
+          </Collapsible>
+
+          {groupHeading("setup-group", "rare", "Rarely used", false)}
+
+          <Collapsible css={css} ck="setup_import" defaultOpen={false} title="Import seed (docs/silvis-seed.json)">
+            <SeedImportCard css={css} state={seedState} onPick={pickSeedFile} onApply={applySeedImport} nameOf={nameOf}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_clear" defaultOpen={false} title="Clear schedule (range)">
@@ -6520,6 +6575,8 @@ function CallSchedule() {
 
         {/* ================ SETTINGS ================ */}
         {view==="settings" && !isPublicMode && <>
+          {isScheduler && groupHeading("settings-group", "personal", "Your preferences", true)}
+
           <div style={css.card}>
             <div style={css.cardT}>Appearance</div>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
@@ -6532,9 +6589,206 @@ function CallSchedule() {
               <span style={{fontSize:13,color:"#5B6B82"}}>Week starts on</span>
               <button data-testid="week-start-sun" aria-pressed={weekStartsOn === "sun"} onClick={()=>setWeekStartsOn("sun")} style={{...css.btn(weekStartsOn === "sun"),padding:"6px 16px",fontSize:12}}>Sunday</button>
               <button data-testid="week-start-mon" aria-pressed={weekStartsOn === "mon"} onClick={()=>setWeekStartsOn("mon")} style={{...css.btn(weekStartsOn === "mon"),padding:"6px 16px",fontSize:12}}>Monday</button>
-              <span style={{fontSize:11,color:"#8a94a0",flexBasis:"100%"}}>The month grid on this device: the calendar, the read-only page and the printable month. The week rows (MON/SUN DATES) always run Monday to Sunday.</span>
+              <span style={{fontSize:11,color:T.muted,flexBasis:"100%"}}>For this device's month grids; the week rows always run Monday to Sunday.</span>
             </div>
           </div>
+
+          <div style={css.card}>
+            <div className="cardtoggle" onClick={()=>toggleSettingsCard("notifSettings")} style={settingsToggleRow(openSettingsCards.notifSettings)}>
+              {settingsChevron(openSettingsCards.notifSettings)}
+              <span>Notification settings</span>
+            </div>
+            {openSettingsCards.notifSettings && <>
+              <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:12}}>
+                <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Email</div>
+                {/* Only a linked surgeon gets this line; a follower's intro says where his e-mails go, and an unlinked
+                    coordinator / viewer reads the one 'Available once ...' line (9/27: the two used to contradict). */}
+                {mySurgeon && <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>E-mails go to your sign-in address: pick which events send one and when the daily reminder arrives (Central time).</p>}
+                {notifPrefsLoadFailed && mySurgeon && <div data-testid="notif-prefs-load-failed" style={{...css.errBox,marginBottom:8}}>Couldn't load your saved notification settings - the switches below show the DEFAULTS, not what is saved. Reload before changing anything here.</div>}
+                {/* Prompt 20 R2 (Faraz 9/25): a follower's OWN switches - his row by profile_id (saveFollowerPref). Enabled
+                    only after his row was read; before revision o the card says so, a failed read says so. */}
+                {!mySurgeon ? (isFollowing ? (
+                  <div data-testid="notif-follower-prefs" data-state={followerPrefState} style={{display:"flex",flexDirection:"column",gap:6}}>
+                    <p style={{...muted,margin:"0 0 4px",lineHeight:1.5}}>You follow {myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and ")}. Pick which e-mails about them reach your sign-in address and when the day-before reminder arrives (5:00 PM Central by default).</p>
+                    {followerPrefState === "unavailable" && <div data-testid="notif-follower-unavailable" role="status" style={{...css.errBox,marginBottom:4}}>Follower settings are available after the next update.</div>}
+                    {followerPrefState === "failed" && <div data-testid="notif-follower-load-failed" role="alert" style={{...css.errBox,marginBottom:4}}>Couldn't load your saved notification settings - reload before changing anything here.</div>}
+                    {followerPrefState === "loading" && <span style={{fontSize:11,color:T.muted}}>Loading your saved settings...</span>}
+                    {[["schedule_updates_email","Schedule published, open shifts, shifts taken"],["trade_updates_email","Trade proposed / accepted / declined"],["shift_reminders_email","Reminder the day before their call"]].map(([key, text]) => (
+                      <label key={key} data-testid="notif-pref" data-key={key} style={{display:"flex",alignItems:"center",gap:8,cursor:followerPrefsEditable?"pointer":"default",fontSize:12,color:T.text,opacity:followerPrefsEditable?1:0.6}}>
+                        <input type="checkbox" checked={(followerPref || {})[key] !== false} disabled={!followerPrefsEditable} onChange={e=>saveFollowerPref({[key]:e.target.checked})}/> {text}
+                      </label>
+                    ))}
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
+                      <span data-testid="notif-hour-label" style={{fontSize:12,color:T.text,minWidth:160}}>Reminder hour (Central):</span>
+                      <select data-testid="notif-follower-hour" value={typeof (followerPref || {}).reminder_hour_central === "number" ? followerPref.reminder_hour_central : ""} disabled={!followerPrefsEditable} onChange={e=>saveFollowerPref({ reminder_hour_central: e.target.value === "" ? null : parseInt(e.target.value,10) })} style={{...inp,padding:"4px 8px",fontSize:12,width:120}}>
+                        <option value="">default</option>
+                        {Array.from({length:24}, (_,i)=>{ const h12 = i===0?12:i>12?i-12:i; return <option key={i} value={i}>{h12}:00 {i<12?"AM":"PM"}</option>; })}
+                      </select>
+                      {notifPrefsSaving && <span style={{fontSize:10,color:T.success}}>Saving</span>}
+                    </div>
+                  </div>
+                ) : <p style={muted}>Available once your account is linked to a roster entry.</p>) : (() => {
+                  const myPref = notifPrefs[mySurgeon] || {};
+                  return (
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {[["schedule_updates_email","Schedule published / changes affecting me"],["trade_updates_email","Trade proposed / accepted / declined"],["shift_reminders_email","Shift reminders"]].map(([key, text]) => (
+                        <label key={key} data-testid="notif-pref" style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:T.text}}>
+                          <input type="checkbox" checked={myPref[key] !== false} onChange={e=>saveNotifPref(mySurgeon, {[key]:e.target.checked})}/> {text}
+                        </label>
+                      ))}
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
+                        <span data-testid="notif-hour-label" style={{fontSize:12,color:T.text,minWidth:160}}>Reminder hour (Central):</span>
+                        <select value={typeof myPref.reminder_hour_central === "number" ? myPref.reminder_hour_central : ""} onChange={e=>saveNotifPref(mySurgeon, { reminder_hour_central: e.target.value === "" ? null : parseInt(e.target.value,10) })} style={{...inp,padding:"4px 8px",fontSize:12,width:120}}>
+                          <option value="">default</option>
+                          {Array.from({length:24}, (_,i)=>{ const h12 = i===0?12:i>12?i-12:i; return <option key={i} value={i}>{h12}:00 {i<12?"AM":"PM"}</option>; })}
+                        </select>
+                        {notifPrefsSaving && <span style={{fontSize:10,color:T.success}}>Saving</span>}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+              <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px"}}>
+                <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Pop-ups on this device</div>
+                <p data-testid="notif-permission" data-permission={browserNotifPermission} style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Shown while the app is open. {notifPermissionText(browserNotifPermission)}</p>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {browserNotifPermission === "default" && <button onClick={requestBrowserNotifPermission} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Allow notifications</button>}
+                  <button onClick={sendTestNotification} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Send test notification</button>
+                  {notifTestSent && <span style={{fontSize:11,color:T.success,fontWeight:600}}>{notifTestSent}</span>}
+                </div>
+              </div>
+            </>}
+          </div>
+
+          <div style={css.card}>
+            <div style={css.cardT}>Account</div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:12}}>
+              <div>
+                <p style={{fontSize:13,color:dkText,margin:"0 0 2px"}}>
+                  Signed in as <strong style={{color:T.title}}>{mySurgeon ? nameOf(mySurgeon) : (userProfile?.display_name || (isViewer ? "a read-only account" : "unlinked account"))}</strong>
+                  <span style={{...muted,marginLeft:6}}>({userProfile?.role || "viewer"})</span>
+                </p>
+                <p style={{fontSize:11,color:T.muted,margin:0}}>{authUser?.email}</p>
+              </div>
+              <button onClick={handleSignOut} style={{...css.btn(false),padding:"6px 14px",fontSize:12}}>Sign out</button>
+            </div>
+            {biometricAvail ? (
+              <div style={{paddingTop:12,borderTop:"1px solid " + T.border}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <p style={{fontSize:12,fontWeight:600,color:dkText,margin:"0 0 2px"}}>Biometric login</p>
+                    <p style={{fontSize:11,color:"#5B6B82",margin:0}}>{biometricEnrolled ? "Face ID / Touch ID is enabled" : "Use Face ID or Touch ID to unlock the app"}</p>
+                  </div>
+                  {biometricEnrolled
+                    ? <button onClick={handleBiometricUnenroll} style={{...css.btn(false),padding:"6px 14px",fontSize:12}}>Disable</button>
+                    : <button onClick={handleBiometricEnroll} style={{...css.btn(true),padding:"6px 14px",fontSize:12}}>Enable</button>}
+                </div>
+              </div>
+            ) : (
+              /* Biometric unavailable (every desktop): one short line; the iPhone hint, the diagnostic, Re-check and
+                 Try enable anyway sit behind Details (in memory, like the other Settings toggles). */
+              <div data-testid="biometric-unavailable" style={{paddingTop:12,borderTop:"1px solid " + T.border}}>
+                <p style={{fontSize:12,color:dkSubtext,margin:0,lineHeight:1.5}}>Face ID / Touch ID isn't available on this device.{onIOSDevice && " On iPhone, open the app from Safari and add it to the Home Screen first."}{moreToggle("bioDetails", "Details")}</p>
+                {openSettingsCards.bioDetails && <div data-testid="biometric-details" style={{marginTop:8}}>
+                  <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:8}}>
+                    <p style={{flex:"1 1 240px",minWidth:0,fontSize:11,color:T.muted,margin:0,lineHeight:1.4}}>On iPhone this needs Safari and the app installed from Safari's Share menu (Add to Home Screen).</p>
+                    <button onClick={async () => { const r = await biometric.isAvailable(); setBiometricAvail(r.available); setBiometricReason(r.reason); if (r.available) setBiometricEnrolled(biometric.isEnrolled()); }} style={{...css.btn(false),padding:"6px 14px",fontSize:12,flexShrink:0}}>Re-check</button>
+                  </div>
+                  {biometricReason && (
+                    <div style={{background:dk?"#0f1e30":"#f4f6f8",border:`1px solid ${dk?"#24406B":"#DCE3EC"}`,borderRadius:6,padding:"6px 10px",fontSize:11,color:T.muted,lineHeight:1.5,fontFamily:mono,wordBreak:"break-word",marginBottom:8}}>
+                      <strong style={{color:T.text}}>Diagnostic:</strong> {biometricReason}
+                    </div>
+                  )}
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                    <button onClick={handleBiometricForceEnroll} disabled={!authUser} style={{...css.btn(true),padding:"6px 14px",fontSize:12,opacity:authUser?1:0.5}}>Try enable anyway</button>
+                    <span style={{fontSize:10,color:T.muted,fontStyle:"italic"}}>Skips the availability check; the browser shows a Face ID prompt if it works.</span>
+                  </div>
+                </div>}
+              </div>
+            )}
+          </div>
+
+          {/* 9/27: the card renders only when it has a feed to offer (a roster link, a follow, the scheduler or the viewer) -
+              an unlinked coordinator who follows nobody used to get the sentence and no URL. */}
+          {(mySurgeon || myFollows.length > 0 || isScheduler || isViewer) && <div data-testid="calsync-card" style={css.card}>
+            <div style={css.cardT}>Live calendar sync</div>
+            <p style={sectionNote}>Subscribe to {isScheduler ? "these URLs" : isFollowing ? (isViewer ? "the feed of each surgeon you follow, or the full-schedule feed" : "the feed of each surgeon you follow") : isViewer ? "the full-schedule feed" : "your personal URL"} in Google Calendar, Outlook or Apple Calendar; it updates itself when the schedule changes.{moreToggle("calsyncHow", "How")}</p>
+            {openSettingsCards.calsyncHow && <p data-testid="calsync-how" style={moreNote}>In Google Calendar: Other calendars (+), From URL, paste the link.</p>}
+            {mySurgeon && (() => {
+              const myUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(mySurgeon)}`;
+              return (
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>My calendar:</div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <input readOnly value={myUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
+                    <button onClick={()=>copyText(myUrl, "my")} style={{...css.btn(copiedUrl==="my"),padding:"4px 10px",fontSize:10,whiteSpace:"nowrap"}}>{copiedUrl==="my" ? "Copied" : "Copy"}</button>
+                  </div>
+                </div>
+              );
+            })()}
+            {/* Prompt 20 F3: a follower gets each followed surgeon's own feed (the same public per-surgeon URL the scheduler's
+                pills copy, matched on code), one row per followed surgeon, above the full feed. Read-only: a URL and Copy. */}
+            {myFollows.map(fid => {
+              const followUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(fid)}`;
+              const key = "follow-" + fid;
+              return (
+                <div key={key} data-testid="follow-sync" data-surgeon={fid} style={{marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>{nameOf(fid)}'s calendar (you follow {nameOf(fid)}):</div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <input readOnly data-testid="follow-sync-url" value={followUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
+                    <button data-testid="follow-sync-copy" onClick={()=>copyText(followUrl, key)} style={{...css.btn(copiedUrl===key),padding:"8px 14px",fontSize:11,minHeight:36,whiteSpace:"nowrap"}}>{copiedUrl===key ? "Copied" : "Copy"}</button>
+                  </div>
+                </div>
+              );
+            })}
+            {/* Prompt 16 B3: the public full-schedule feed (the same URL the shareable page uses) is the scheduler's AND the
+                viewer's - a viewer has no personal URL, so without this the card was empty for the office viewer. */}
+            {(isScheduler || isViewer) && <>
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Full schedule:</div>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <input data-testid="calsync-full" readOnly value={`${EDGE_FN_BASE}/calendar-sync`} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
+                  <button data-testid="calsync-full-copy" onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync`, "full")} style={{...css.btn(copiedUrl==="full"),padding:"4px 10px",fontSize:10,whiteSpace:"nowrap"}}>{copiedUrl==="full" ? "Copied" : "Copy"}</button>
+                </div>
+              </div>
+            </>}
+            {isScheduler && <>
+              {/* Item D (2026-09-24): the combined Silvis + Davenport feed (calendar-sync ?surgeon=<CODE>&east=1) of every
+                  surgeon whose East feature reads busy days (eastVacationPerson - today Khan), for office staff at either
+                  site. Scheduler only; the URL is the same public feed URL with one flag - no contact data, no token. */}
+              {surgeons.filter(s => eastVacationPerson(s, surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed)).map(s => {
+                const combinedUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}&east=1`;
+                const key = "combined-" + s.id;
+                return (
+                  <div key={key} data-testid={"combined-sync-" + s.id} style={{marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>{s.name} {"\u2013"} combined Silvis + Davenport (where {s.name} is, every day):</div>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                      <input readOnly data-testid="combined-sync-url" value={combinedUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
+                      <button data-testid="copy-combined-sync-url" onClick={()=>copyText(combinedUrl, key)} style={{...css.btn(copiedUrl===key),padding:"8px 14px",fontSize:11,minHeight:36,whiteSpace:"nowrap"}}>{copiedUrl===key ? "Copied" : "Copy"}</button>
+                    </div>
+                    <div data-testid="combined-sync-note" style={{fontSize:11,color:"#5B6B82",marginTop:4,lineHeight:1.5}}>{"for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself"} ({s.name}'s Silvis shifts, an all-day entry for each Davenport shift, and an all-day 'away' entry for a Davenport vacation reviewed as away).</div>
+                  </div>
+                );
+              })}
+              <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Per surgeon (matched on code):</div>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
+                {surgeons.map(s => (
+                  <button key={s.id} data-pill="1" onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}`, s.id)} style={{...css.badge(sMap[s.id]?.idx||0, s),cursor:"pointer",padding:"3px 10px",fontSize:10,border:copiedUrl===s.id?"2px solid #1a8040":undefined}}>
+                    {copiedUrl===s.id ? "Copied " : ""}{s.name} ({s.code})
+                  </button>
+                ))}
+              </div>
+            </>}
+            {/* calendar-sync card end */}
+          </div>}
+
+          <div style={css.card}>
+            <div style={css.cardT}>Refresh app</div>
+            <p style={sectionNote}>If the app looks stuck or out of date, refresh it; no data is lost.</p>
+            <button onClick={()=>{ if (confirm("Refresh the app? This clears the local cache and reloads the latest version. No data is lost.")) { if (typeof window.__silvisHardReset === "function") window.__silvisHardReset(); else window.location.reload(); } }} style={{...css.btn(true),padding:"8px 16px",fontSize:13,borderRadius:7}}>Refresh now</button>
+          </div>
+
+          {isScheduler && groupHeading("settings-group", "scheduler", "Scheduler tools", false)}
 
           {(isScheduler || isCoordinator) && (
             <Collapsible css={css} ck="settings_audit" defaultOpen={false}
@@ -6569,9 +6823,10 @@ function CallSchedule() {
             <Collapsible css={css} ck="settings_client_versions" defaultOpen={false}
               title={<>Client versions <span style={{fontWeight:400,fontSize:11,color:"#5B6B82"}}>- who's on which build</span></>}
               right={<button onClick={(e)=>{e.stopPropagation(); loadClientVersions();}} title="Refresh" style={{background:"none",border:"1px solid #d0d8e0",borderRadius:6,color:"#5B6B82",cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:font}}>Refresh</button>}>
-              <p style={{fontSize:11.5,color:"#5B6B82",margin:"0 0 8px",lineHeight:1.5}}>
-                Updated each time a signed-in user opens the app. "Current"/"Behind" compare against THIS device's build ({APP_VERSION}). Row 'main' (minimum version) is edited in SQL.
+              <p style={{fontSize:11.5,color:T.muted,margin:"0 0 8px",lineHeight:1.5}}>
+                "Current" and "Behind" compare each user's last opened build against this device's ({APP_VERSION}).{moreToggle("cvMore")}
               </p>
+              {openSettingsCards.cvMore && <p style={moreNote}>A row updates each time a signed-in user opens the app. The minimum version (row 'main') is edited in SQL.</p>}
               {clientVersionsErr && <div style={{fontSize:12,color:"#c04040",padding:"6px 0",fontWeight:600}}>{clientVersionsErr}</div>}
               {clientVersions !== null && cvProfiles === null && !clientVersionsErr && (
                 <div style={{fontSize:11,color:"#c09030",padding:"0 0 6px",fontWeight:600}}>Couldn't check who has an account - "Never signed up" labels are unavailable this load.</div>
@@ -6626,221 +6881,33 @@ function CallSchedule() {
 
           {isScheduler && (
             <div style={css.card}>
-              <div onClick={()=>toggleSettingsCard("officeNotif")} style={{...css.cardT,margin:openSettingsCards.officeNotif?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",userSelect:"none"}}>
+              <div className="cardtoggle" onClick={()=>toggleSettingsCard("officeNotif")} style={settingsToggleRow(openSettingsCards.officeNotif)}>
+                {settingsChevron(openSettingsCards.officeNotif)}
                 <span>Office notifications</span>
-                <span style={{fontSize:12,color:"#5B6B82"}}>{openSettingsCards.officeNotif ? "-" : "+"}</span>
               </div>
               {openSettingsCards.officeNotif && <>
                 <p style={sectionNote}>
-                  Edits go live on save. <strong>Publish</strong> sends the changes since the last publish (as "10/12 P Philip -&gt; Fierce" lines, grouped by month) to the {officeContacts.filter(c=>c.active).length} active office contact(s) and posts a notice in the app. Contacts are managed in Setup.
-                  {lastPublished?.at && <> Last published {fmtAuditTime(lastPublished.at)}.</>}
+                  <strong>Publish</strong> e-mails the changes since the last publish to the {officeContacts.filter(c=>c.active).length} active office contact(s) and posts a notice in the app.
+                  {lastPublished?.at && <> Last published {fmtAuditTime(lastPublished.at)}.</>}{moreToggle("officeMore")}
                 </p>
+                {openSettingsCards.officeMore && <p style={moreNote}>Edits go live on save; Publish only tells people. The changes are listed as "10/12 P Philip -&gt; Fierce" lines, grouped by month. Office contacts are managed in Setup.</p>}
                 <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                   <button onClick={openPublishDialog} disabled={officeNotifBusy} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:officeNotifBusy?0.5:1}}>Publish and notify office</button>
                   <button onClick={triggerDigestTest} disabled={officeNotifBusy || officeContacts.filter(c=>c.active).length===0} style={{...css.btn(false),padding:"7px 14px",fontSize:12,opacity:(officeNotifBusy || officeContacts.filter(c=>c.active).length===0)?0.5:1}}>Test the weekly digest now</button>
                 </div>
-                <p style={{fontSize:10,color:"#a0a8b0",margin:"8px 0 0",lineHeight:1.5}}>Edge functions are deployed in Prompt 10; until then these buttons report "not deployed" and change nothing.</p>
               </>}
             </div>
           )}
 
-          <div style={css.card}>
-            <div onClick={()=>toggleSettingsCard("notifSettings")} style={{...css.cardT,margin:openSettingsCards.notifSettings?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",userSelect:"none"}}>
-              <span>Notification settings</span>
-              <span style={{fontSize:12,color:T.muted}}>{openSettingsCards.notifSettings ? "-" : "+"}</span>
-            </div>
-            {openSettingsCards.notifSettings && <>
-              <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:12}}>
-                <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Email</div>
-                <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Emails go to your sign-in address. Choose which events email you and when the daily reminder arrives (Central time).</p>
-                {notifPrefsLoadFailed && mySurgeon && <div data-testid="notif-prefs-load-failed" style={{...css.errBox,marginBottom:8}}>Couldn't load your saved notification settings - the switches below show the DEFAULTS, not what is saved. Reload before changing anything here.</div>}
-                {/* Prompt 20 R2 (Faraz 9/25): a follower's OWN switches - his row by profile_id (saveFollowerPref). Enabled
-                    only after his row was read; before revision o the card says so, a failed read says so. */}
-                {!mySurgeon ? (isFollowing ? (
-                  <div data-testid="notif-follower-prefs" data-state={followerPrefState} style={{display:"flex",flexDirection:"column",gap:6}}>
-                    <p style={{...muted,margin:"0 0 4px",lineHeight:1.5}}>You follow {myFollows.map(fid => "Dr. " + nameOf(fid)).join(" and ")}. These switches are yours: which e-mails about them reach your sign-in address, and when the reminder the day before each of their call days arrives (5:00 PM Central unless you pick an hour).</p>
-                    {followerPrefState === "unavailable" && <div data-testid="notif-follower-unavailable" role="status" style={{...css.errBox,marginBottom:4}}>Follower settings are available after the next update.</div>}
-                    {followerPrefState === "failed" && <div data-testid="notif-follower-load-failed" role="alert" style={{...css.errBox,marginBottom:4}}>Couldn't load your saved notification settings - reload before changing anything here.</div>}
-                    {followerPrefState === "loading" && <span style={{fontSize:11,color:T.muted}}>Loading your saved settings...</span>}
-                    {[["schedule_updates_email","Schedule published, open shifts, shifts taken"],["trade_updates_email","Trade proposed / accepted / declined"],["shift_reminders_email","Reminder the day before their call"]].map(([key, text]) => (
-                      <label key={key} data-testid="notif-pref" data-key={key} style={{display:"flex",alignItems:"center",gap:8,cursor:followerPrefsEditable?"pointer":"default",fontSize:12,color:T.text,opacity:followerPrefsEditable?1:0.6}}>
-                        <input type="checkbox" checked={(followerPref || {})[key] !== false} disabled={!followerPrefsEditable} onChange={e=>saveFollowerPref({[key]:e.target.checked})}/> {text}
-                      </label>
-                    ))}
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
-                      <span data-testid="notif-hour-label" style={{fontSize:12,color:T.text,minWidth:160}}>Reminder hour (Central):</span>
-                      <select data-testid="notif-follower-hour" value={typeof (followerPref || {}).reminder_hour_central === "number" ? followerPref.reminder_hour_central : ""} disabled={!followerPrefsEditable} onChange={e=>saveFollowerPref({ reminder_hour_central: e.target.value === "" ? null : parseInt(e.target.value,10) })} style={{...inp,padding:"4px 8px",fontSize:12,width:120}}>
-                        <option value="">default</option>
-                        {Array.from({length:24}, (_,i)=>{ const h12 = i===0?12:i>12?i-12:i; return <option key={i} value={i}>{h12}:00 {i<12?"AM":"PM"}</option>; })}
-                      </select>
-                      {notifPrefsSaving && <span style={{fontSize:10,color:T.success}}>Saving</span>}
-                    </div>
-                  </div>
-                ) : <p style={muted}>Available once your account is linked to a roster entry.</p>) : (() => {
-                  const myPref = notifPrefs[mySurgeon] || {};
-                  return (
-                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                      {[["schedule_updates_email","Schedule published / changes affecting me"],["trade_updates_email","Trade proposed / accepted / declined"],["shift_reminders_email","Shift reminders"]].map(([key, text]) => (
-                        <label key={key} data-testid="notif-pref" style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:T.text}}>
-                          <input type="checkbox" checked={myPref[key] !== false} onChange={e=>saveNotifPref(mySurgeon, {[key]:e.target.checked})}/> {text}
-                        </label>
-                      ))}
-                      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
-                        <span data-testid="notif-hour-label" style={{fontSize:12,color:T.text,minWidth:160}}>Reminder hour (Central):</span>
-                        <select value={typeof myPref.reminder_hour_central === "number" ? myPref.reminder_hour_central : ""} onChange={e=>saveNotifPref(mySurgeon, { reminder_hour_central: e.target.value === "" ? null : parseInt(e.target.value,10) })} style={{...inp,padding:"4px 8px",fontSize:12,width:120}}>
-                          <option value="">default</option>
-                          {Array.from({length:24}, (_,i)=>{ const h12 = i===0?12:i>12?i-12:i; return <option key={i} value={i}>{h12}:00 {i<12?"AM":"PM"}</option>; })}
-                        </select>
-                        {notifPrefsSaving && <span style={{fontSize:10,color:T.success}}>Saving</span>}
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-              <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px"}}>
-                <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Pop-ups on this device</div>
-                <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Browser notifications while the app is open. Permission: <span style={{fontFamily:mono}}>{browserNotifPermission}</span>.</p>
-                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                  {browserNotifPermission === "default" && <button onClick={requestBrowserNotifPermission} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Allow notifications</button>}
-                  <button onClick={sendTestNotification} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Send test notification</button>
-                  {notifTestSent && <span style={{fontSize:11,color:T.success,fontWeight:600}}>{notifTestSent}</span>}
-                </div>
-              </div>
-            </>}
-          </div>
-
-          <div style={css.card}>
-            <div style={css.cardT}>Account</div>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:12}}>
-              <div>
-                <p style={{fontSize:13,color:dkText,margin:"0 0 2px"}}>
-                  Signed in as <strong style={{color:T.title}}>{mySurgeon ? nameOf(mySurgeon) : (userProfile?.display_name || (isViewer ? "a read-only account" : "unlinked account"))}</strong>
-                  <span style={{...muted,marginLeft:6}}>({userProfile?.role || "viewer"})</span>
-                </p>
-                <p style={{fontSize:11,color:"#5B6B82",margin:0}}>{authUser?.email}</p>
-              </div>
-              <button onClick={handleSignOut} style={{...css.btn(false),padding:"6px 14px",fontSize:12}}>Sign out</button>
-            </div>
-            {biometricAvail ? (
-              <div style={{paddingTop:12,borderTop:"1px solid #DCE3EC"}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-                  <div>
-                    <p style={{fontSize:12,fontWeight:600,color:dkText,margin:"0 0 2px"}}>Biometric login</p>
-                    <p style={{fontSize:11,color:"#5B6B82",margin:0}}>{biometricEnrolled ? "Face ID / Touch ID is enabled" : "Use Face ID or Touch ID to unlock the app"}</p>
-                  </div>
-                  {biometricEnrolled
-                    ? <button onClick={handleBiometricUnenroll} style={{...css.btn(false),padding:"6px 14px",fontSize:12}}>Disable</button>
-                    : <button onClick={handleBiometricEnroll} style={{...css.btn(true),padding:"6px 14px",fontSize:12}}>Enable</button>}
-                </div>
-              </div>
-            ) : (
-              <div style={{paddingTop:12,borderTop:"1px solid #DCE3EC"}}>
-                <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:8}}>
-                  <div style={{flex:"1 1 240px",minWidth:0}}>
-                    <p style={{fontSize:12,fontWeight:600,color:dkText,margin:"0 0 2px"}}>Biometric login unavailable</p>
-                    <p style={{fontSize:11,color:"#5B6B82",margin:"0 0 4px",lineHeight:1.4}}>Face ID / Touch ID isn't reported as available. On iPhone this needs Safari and the app installed from Safari's Share menu (Add to Home Screen).</p>
-                  </div>
-                  <button onClick={async () => { const r = await biometric.isAvailable(); setBiometricAvail(r.available); setBiometricReason(r.reason); if (r.available) setBiometricEnrolled(biometric.isEnrolled()); }} style={{...css.btn(false),padding:"6px 14px",fontSize:12,flexShrink:0}}>Re-check</button>
-                </div>
-                {biometricReason && (
-                  <div style={{background:dk?"#0f1e30":"#f4f6f8",border:`1px solid ${dk?"#24406B":"#DCE3EC"}`,borderRadius:6,padding:"6px 10px",fontSize:11,color:dk?"#b0b8c0":"#5B6B82",lineHeight:1.5,fontFamily:mono,wordBreak:"break-word",marginBottom:8}}>
-                    <strong style={{color:dk?"#d0d4dc":"#3a4a58"}}>Diagnostic:</strong> {biometricReason}
-                  </div>
-                )}
-                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                  <button onClick={handleBiometricForceEnroll} disabled={!authUser} style={{...css.btn(true),padding:"6px 14px",fontSize:12,opacity:authUser?1:0.5}}>Try enable anyway</button>
-                  <span style={{fontSize:10,color:"#5B6B82",fontStyle:"italic"}}>Bypasses the availability check - the browser shows a Face ID prompt if it actually works.</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div style={css.card}>
-            <div style={css.cardT}>Live calendar sync</div>
-            <p style={sectionNote}>Subscribe to {isScheduler ? "these URLs" : isFollowing ? (isViewer ? "the feed of each surgeon you follow, or the full-schedule feed" : "the feed of each surgeon you follow") : isViewer ? "the full-schedule feed" : "your personal URL"} in Google Calendar, Outlook or Apple Calendar. The calendar auto-updates when the schedule changes. In Google Calendar: Other calendars (+), From URL, paste the link.</p>
-            {mySurgeon && (() => {
-              const myUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(mySurgeon)}`;
-              return (
-                <div style={{marginBottom:10}}>
-                  <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>My calendar:</div>
-                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                    <input readOnly value={myUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
-                    <button onClick={()=>copyText(myUrl, "my")} style={{...css.btn(copiedUrl==="my"),padding:"4px 10px",fontSize:10,whiteSpace:"nowrap"}}>{copiedUrl==="my" ? "Copied" : "Copy"}</button>
-                  </div>
-                </div>
-              );
-            })()}
-            {/* Prompt 20 F3: a follower gets each followed surgeon's own feed (the same public per-surgeon URL the scheduler's
-                pills copy, matched on code), one row per followed surgeon, above the full feed. Read-only: a URL and Copy. */}
-            {myFollows.map(fid => {
-              const followUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(fid)}`;
-              const key = "follow-" + fid;
-              return (
-                <div key={key} data-testid="follow-sync" data-surgeon={fid} style={{marginBottom:10}}>
-                  <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>{nameOf(fid)}'s calendar (you follow {nameOf(fid)}):</div>
-                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                    <input readOnly data-testid="follow-sync-url" value={followUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
-                    <button data-testid="follow-sync-copy" onClick={()=>copyText(followUrl, key)} style={{...css.btn(copiedUrl===key),padding:"8px 14px",fontSize:11,minHeight:36,whiteSpace:"nowrap"}}>{copiedUrl===key ? "Copied" : "Copy"}</button>
-                  </div>
-                </div>
-              );
-            })}
-            {/* Prompt 16 B3: the public full-schedule feed (the same URL the shareable page uses) is the scheduler's AND the
-                viewer's - a viewer has no personal URL, so without this the card was empty for the office viewer. */}
-            {(isScheduler || isViewer) && <>
-              <div style={{marginBottom:10}}>
-                <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Full schedule:</div>
-                <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                  <input data-testid="calsync-full" readOnly value={`${EDGE_FN_BASE}/calendar-sync`} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
-                  <button data-testid="calsync-full-copy" onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync`, "full")} style={{...css.btn(copiedUrl==="full"),padding:"4px 10px",fontSize:10,whiteSpace:"nowrap"}}>{copiedUrl==="full" ? "Copied" : "Copy"}</button>
-                </div>
-              </div>
-            </>}
-            {isScheduler && <>
-              {/* Item D (2026-09-24): the combined Silvis + Davenport feed (calendar-sync ?surgeon=<CODE>&east=1) of every
-                  surgeon whose East feature reads busy days (eastVacationPerson - today Khan), for office staff at either
-                  site. Scheduler only; the URL is the same public feed URL with one flag - no contact data, no token. */}
-              {surgeons.filter(s => eastVacationPerson(s, surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed)).map(s => {
-                const combinedUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}&east=1`;
-                const key = "combined-" + s.id;
-                return (
-                  <div key={key} data-testid={"combined-sync-" + s.id} style={{marginBottom:10}}>
-                    <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>{s.name} {"\u2013"} combined Silvis + Davenport (where {s.name} is, every day):</div>
-                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                      <input readOnly data-testid="combined-sync-url" value={combinedUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
-                      <button data-testid="copy-combined-sync-url" onClick={()=>copyText(combinedUrl, key)} style={{...css.btn(copiedUrl===key),padding:"8px 14px",fontSize:11,minHeight:36,whiteSpace:"nowrap"}}>{copiedUrl===key ? "Copied" : "Copy"}</button>
-                    </div>
-                    <div data-testid="combined-sync-note" style={{fontSize:11,color:"#5B6B82",marginTop:4,lineHeight:1.5}}>{"for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself"} ({s.name}'s Silvis shifts plus one all-day entry per Davenport day: night, service week, weekend, holiday or day call, and "away" for a Davenport vacation reviewed as away).</div>
-                  </div>
-                );
-              })}
-              <div style={{fontSize:11,fontWeight:600,color:"#5B6B82",marginBottom:4}}>Per surgeon (matched on code):</div>
-              <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
-                {surgeons.map(s => (
-                  <button key={s.id} data-pill="1" onClick={()=>copyText(`${EDGE_FN_BASE}/calendar-sync?surgeon=${s.code}`, s.id)} style={{...css.badge(sMap[s.id]?.idx||0, s),cursor:"pointer",padding:"3px 10px",fontSize:10,border:copiedUrl===s.id?"2px solid #1a8040":undefined}}>
-                    {copiedUrl===s.id ? "Copied " : ""}{s.name} ({s.code})
-                  </button>
-                ))}
-              </div>
-            </>}
-            <p style={{fontSize:10,color:"#8a94a0",marginTop:6}}>Requires the calendar-sync edge function (Prompt 10).</p>
-          </div>
-
-          <div style={css.card}>
-            <div style={css.cardT}>Refresh app</div>
-            <p style={sectionNote}>If the app seems stuck on an old version or the schedule looks wrong, tap below to clear the cache and reload fresh. No data is lost.</p>
-            <button onClick={()=>{ if (confirm("Refresh the app? This clears the local cache and reloads the latest version. No data is lost.")) { if (typeof window.__silvisHardReset === "function") window.__silvisHardReset(); else window.location.reload(); } }} style={{...css.btn(true),padding:"8px 16px",fontSize:13,borderRadius:7}}>Refresh now</button>
-          </div>
-
           {isScheduler && <div style={css.card}>
             <div style={css.cardT}>Data management</div>
-            <p style={sectionNote}>Download a full JSON backup: config (roster, rules, holidays, settings), every schedule day, vacations and availability rows. It can be re-imported below or used to rebuild the database.</p>
+            <p style={sectionNote}>Download a full JSON backup of the schedule and setup, or import one.{moreToggle("dataMore")}</p>
+            {openSettingsCards.dataMore && <p style={moreNote}>The backup holds the config (roster, rules, holidays, settings), every schedule day, and the vacation and availability rows; it can also rebuild the database. Import validates the shape, snapshots the current state first, then restores through the same compare-and-swap path as a snapshot restore. It never deletes vacation or availability rows.</p>}
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
               <button data-testid="export-backup" onClick={exportBackup} style={{...css.btn(true),padding:"8px 16px",fontSize:13,borderRadius:7}}>Export backup (JSON)</button>
               <input ref={importFileRef} data-testid="import-file" type="file" accept="application/json,.json" style={{display:"none"}} onChange={e=>{ const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) importBackupFile(f); }}/>
               <button onClick={()=>importFileRef.current && importFileRef.current.click()} style={{...css.btn(false),padding:"8px 16px",fontSize:13,borderRadius:7}}>Import backup (JSON)</button>
             </div>
-            <p style={{fontSize:10,color:"#8a94a0",margin:"6px 0 0",lineHeight:1.5}}>Import validates the shape, snapshots the current state first, then restores through the same compare-and-swap path as a snapshot restore. It never deletes vacation or availability rows.</p>
             <div style={{borderTop:"1px solid #f0d8d8",marginTop:16,paddingTop:12}}>
               <div style={{fontSize:11,fontWeight:700,color:"#a05050",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Danger zone</div>
               <p style={{fontSize:11,color:"#a06868",marginBottom:10,lineHeight:1.4}}>Deletes every schedule day and resets the config blob for everyone. A snapshot is saved automatically first (if it can't be, nothing happens). Requires typing <strong>RESET</strong>.</p>
@@ -6849,12 +6916,13 @@ function CallSchedule() {
           </div>}
 
           {isScheduler && <div style={css.card}>
-            <div onClick={()=>toggleSettingsCard("restoreSnap")} style={{...css.cardT,margin:openSettingsCards.restoreSnap?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",userSelect:"none"}}>
+            <div className="cardtoggle" onClick={()=>toggleSettingsCard("restoreSnap")} style={settingsToggleRow(openSettingsCards.restoreSnap)}>
+              {settingsChevron(openSettingsCards.restoreSnap)}
               <span>Restore from snapshot</span>
-              <span style={{fontSize:12,color:T.muted}}>{openSettingsCards.restoreSnap ? "-" : "+"}</span>
             </div>
             {openSettingsCards.restoreSnap && <>
-              <p style={sectionNote}>Snapshots are saved automatically before destructive actions and periodically. Restoring replaces the current schedule and setup for everyone with the selected copy and re-adds its vacation/availability rows. A fresh snapshot of the current state is saved first, so a restore can itself be undone.</p>
+              <p style={sectionNote}>Restoring replaces the schedule and setup for everyone with the chosen copy; the current state is snapshotted first, so a restore can be undone.{moreToggle("snapMore")}</p>
+              {openSettingsCards.snapMore && <p style={moreNote}>Snapshots are saved automatically before destructive actions and periodically. A restore also re-adds the copy's vacation and availability rows.</p>}
               {snapshotsLoading && <div style={{fontSize:12,color:T.muted}}>Loading snapshots</div>}
               {!snapshotsLoading && snapshotLoadFailed && (
                 <div style={{...css.errBox,fontWeight:600}}>Couldn't load your backups - this does NOT mean none exist. Tap Refresh; if it keeps failing, reload the app (your session may have expired).</div>
@@ -7513,12 +7581,15 @@ function Collapsible({ title, ck, defaultOpen = false, summary = null, children,
   });
   return (
     <div data-testid={"card-" + ck} data-open={open ? "1" : "0"} style={style ? { ...css.card, ...style } : css.card}>
-      <div data-testid={"card-toggle-" + ck} onClick={toggle} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
-        <span style={{ fontSize: 11, color: "#8a94a0", transition: "transform .15s", transform: open ? "rotate(90deg)" : "rotate(0deg)", display: "inline-block", width: 10, flexShrink: 0 }}>&#9654;</span>
+      <div data-testid={"card-toggle-" + ck} className="cardtoggle" onClick={toggle} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
+        {/* chevron: the light muted token's literal (module scope has no T); the dark sheet repaints a span's
+            rgb(91, 107, 130) to #9FB0C8 (THEME.dark.muted), so it matches the Settings toggles' T.muted chevron in both themes */}
+        <span style={{ fontSize: 11, color: "#5B6B82", transition: "transform .15s", transform: open ? "rotate(90deg)" : "rotate(0deg)", display: "inline-block", width: 10, flexShrink: 0 }}>&#9654;</span>
         <div style={{ ...css.cardT, marginBottom: 0, flex: 1 }}>{title}</div>
         {right}
       </div>
-      {!open && summary != null && <div style={{ marginTop: 10 }}>{summary}</div>}
+      {/* summary: a one-line status under the title while closed, aligned with the title text (chevron 10 + gap 8) */}
+      {!open && summary != null && <div data-testid={"card-summary-" + ck} style={{ marginTop: 4, paddingLeft: 18 }}>{summary}</div>}
       {open && <div style={{ marginTop: 12 }}>{children}</div>}
     </div>
   );

@@ -5063,10 +5063,135 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(B3count('(userProfile?.display_name || (isViewer ? "a read-only account" : "unlinked account"))'), 1, "the Account line does not call a viewer 'unlinked'");
       assert.strictEqual(B3count('["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"]'), 1, "the nav tab reads 'Time off' for a viewer or the office - the trades section returns null for both, so the label must not promise trades");
       // The per-surgeon pills stay the scheduler's: the block that maps surgeons to calendar-sync?surgeon= pills is inside an isScheduler-only guard.
-      const calCard = B3SRC.slice(B3SRC.indexOf("<div style={css.cardT}>Live calendar sync</div>"), B3SRC.indexOf("Requires the calendar-sync edge function"));
+      const calCard = B3SRC.slice(B3SRC.indexOf("<div style={css.cardT}>Live calendar sync</div>"), B3SRC.indexOf("{/* calendar-sync card end */}"));
       assert.ok(calCard.includes("{isScheduler && <>") && calCard.indexOf("{isScheduler && <>") < calCard.indexOf("Per surgeon (matched on code)"), "the per-surgeon pills stay behind isScheduler");
       assert.ok(calCard.indexOf("{(isScheduler || isViewer) && <>") < calCard.indexOf("Full schedule:") && calCard.indexOf("Full schedule:") < calCard.indexOf("{isScheduler && <>"), "the full-schedule block is the shared one, before the per-surgeon block");
       assert.ok(calCard.includes("{mySurgeon && (() => {"), "the personal URL block still keys on the roster link (a viewer has none, so no empty 'My calendar' block)");
+    });
+  }
+
+  /* ---------------- SD. Settings / Setup declutter (9/27: "the settings tabs look a little busy") ---------------- */
+  console.log("\n[SD] Settings / Setup declutter (quiet group headings, one collapse look, shorter notes, role fixes, Setup groups + closed-card summaries)");
+  {
+    const SD = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const SDcount = (s) => SD.split(s).length - 1;
+    const sAt = SD.indexOf('{view==="settings" && !isPublicMode && <>'), sEnd = SD.indexOf('Refresh list</button>', sAt);
+    const settings = SD.slice(sAt, sEnd);
+    const uAt = SD.indexOf('{view==="setup" && !isPublicMode && isScheduler && <>'), uEnd = SD.indexOf("{/* ================ CALENDAR", uAt);
+    const setup = SD.slice(uAt, uEnd);
+    // Every Playwright text= title the smoke clicks (first case-insensitive substring match) - a heading or a summary must hold none.
+    const SMOKE_TEXT = ["activity log", "client versions", "office notifications", "notification settings", "restore from snapshot", "live calendar sync", "week rows", "calendar tools", "keep me signed in", "sign in to your account", "synced"];
+    check("SD1: Settings is two quiet groups for the scheduler - 'Your preferences' (Appearance, Notification settings, Account, Live calendar sync, Refresh app) then 'Scheduler tools' (Activity log, Client versions, Office notifications, Data management, Restore from snapshot); the headings are the scheduler's only, never a collapsible, and carry no smoke text= title", () => {
+      assert.ok(sAt > 0 && sEnd > sAt, "the Settings view slice");
+      const hp = '{isScheduler && groupHeading("settings-group", "personal", "Your preferences", true)}';
+      const hs = '{isScheduler && groupHeading("settings-group", "scheduler", "Scheduler tools", false)}';
+      assert.strictEqual(SDcount(hp), 1, "the personal heading, scheduler-only"); assert.strictEqual(SDcount(hs), 1, "the scheduler-tools heading, scheduler-only");
+      const order = [hp, "<div style={css.cardT}>Appearance</div>", "<span>Notification settings</span>", "<div style={css.cardT}>Account</div>", "<div style={css.cardT}>Live calendar sync</div>",
+        "<div style={css.cardT}>Refresh app</div>", hs, 'ck="settings_audit"', 'ck="settings_client_versions"', "<span>Office notifications</span>", "<div style={css.cardT}>Data management</div>",
+        'data-testid="export-backup"', 'data-testid="reset-all-data"', "<span>Restore from snapshot</span>"].map(k => settings.indexOf(k));
+      order.forEach((at, i) => assert.ok(at >= 0 && (i === 0 || at > order[i - 1]), "Settings order broken at step " + i + " (" + at + ")"));
+      assert.strictEqual(settings.indexOf("<button"), settings.indexOf("<button onClick={()=>setDarkMode(false)}"), "the Light / Dark buttons are still the first buttons on the view (the smoke's has-text('Light'|'Dark') clicks)");
+      for (const t of ["Your preferences", "Scheduler tools"]) SMOKE_TEXT.forEach(x => assert.ok(!t.toLowerCase().includes(x), `heading '${t}' holds the smoke title '${x}'`));
+      const gh = SD.slice(SD.indexOf("  const groupHeading = "), SD.indexOf("  const settingsToggleRow = "));
+      assert.ok(gh.includes('fontVariant:"small-caps"') && gh.includes("color:T.muted") && gh.includes("background:T.border") && !/#[0-9a-fA-F]{3,6}/.test(gh), "the heading is small caps in T.muted with a T.border hairline - tokens only");
+      assert.ok(!/Collapsible|onClick/.test(gh), "a heading is never a collapsible (every card under it stays mounted on entry)");
+    });
+    check("SD2: one collapse look - the three in-memory toggles (officeNotif, notifSettings, restoreSnap) carry Collapsible's left chevron and the cardtoggle tap-target class, never the old +/- glyph; they stay in openSettingsCards (not persisted)", () => {
+      for (const k of ["officeNotif", "notifSettings", "restoreSnap"]) {
+        assert.strictEqual(SDcount(`<div className="cardtoggle" onClick={()=>toggleSettingsCard("${k}")} style={settingsToggleRow(openSettingsCards.${k})}>\n`), 1, k + ": the toggle row");
+        assert.strictEqual(SDcount(`{settingsChevron(openSettingsCards.${k})}`), 1, k + ": the chevron");
+        assert.ok(!SD.includes(`{openSettingsCards.${k} ? "-" : "+"}`), k + ": the +/- glyph is gone");
+      }
+      assert.strictEqual(SDcount("  const [openSettingsCards, setOpenSettingsCards] = useState({});\n"), 1, "in-memory state (a reload closes them)");
+      assert.strictEqual(SDcount("  const toggleSettingsCard = (key) => setOpenSettingsCards(p => ({ ...p, [key]: !p[key] }));\n"), 1, "the toggle writes no localStorage");
+      assert.ok(!/writeCollapseFlag\((officeNotif|notifSettings|restoreSnap|"officeNotif"|"notifSettings"|"restoreSnap")/.test(SD), "never a persisted flag");
+      const chev = SD.slice(SD.indexOf("  const settingsChevron = "), SD.indexOf("  const moreToggle = "));
+      assert.ok(chev.includes("&#9654;") && chev.includes("color:T.muted") && chev.includes('rotate(90deg)'), "the same right-pointing chevron, turned when open, in T.muted");
+      const col = SD.slice(SD.indexOf("function Collapsible("), SD.indexOf("// --- Rules-context helpers"));
+      assert.ok(col.includes('className="cardtoggle"') && col.includes('color: "#5B6B82"') && col.includes('data-testid={"card-summary-" + ck}'), "Collapsible: the cardtoggle class, the muted chevron (the dark sheet maps it to #9FB0C8), the summary line's test id");
+      assert.ok(col.includes("readCollapseFlag(ck)") && col.includes("writeCollapseFlag(ck, n)"), "Collapsible's persistence is unchanged");
+      const mq = SD.indexOf("@media (max-width: 600px) {"), ct = SD.indexOf(".cardtoggle { min-height: 36px; }");
+      assert.ok(mq > 0 && ct > SD.indexOf("button { min-height: 36px; }", mq) && ct < SD.indexOf(".cal-grid {", mq), "a title row is a 36 px phone tap target (the first phone block, beside the button rule)");
+    });
+    check("SD3: stale developer copy is gone from Settings (Prompt 10, 'Edge functions are deployed'); the long notes are one sentence with the rest behind an in-memory More / Less; the calendar-sync card ends at its own marker", () => {
+      assert.ok(!/Prompt 10/.test(settings) && !settings.includes("Edge functions are deployed") && !SD.includes("Requires the calendar-sync edge function"), "no stale Prompt 10 copy");
+      assert.strictEqual(SDcount("{/* calendar-sync card end */}"), 1, "the card's end marker (the B3 / F3 / Item D slices end here)");
+      for (const k of ["calsyncHow", "cvMore", "officeMore", "dataMore", "snapMore", "bioDetails"]) {
+        assert.ok(settings.includes(`{moreToggle("${k}"`), k + ": the More toggle");
+        assert.ok(settings.includes(`{openSettingsCards.${k} && `), k + ": the detail renders only when opened");
+      }
+      const mt = SD.slice(SD.indexOf("  const moreToggle = "), SD.indexOf("  const moreNote = "));
+      assert.ok(mt.includes("toggleSettingsCard(k)") && mt.includes("aria-expanded") && mt.includes("color:T.accentText") && !/#[0-9a-fA-F]{3,6}/.test(mt), "More is an in-memory toggle, a real button, in a token colour");
+      assert.ok(SD.includes('const moreNote = { fontSize:11.5, color:T.muted,'), "the detail text is T.muted");
+      // the detail that matters kept its words (behind More): import's safety path, restore's re-add, the SQL minimum-version row
+      assert.ok(settings.includes("Import validates the shape, snapshots the current state first, then restores through the same compare-and-swap path as a snapshot restore. It never deletes vacation or availability rows."), "the import safety sentence survives");
+      assert.ok(settings.includes("the current state is snapshotted first, so a restore can be undone") && settings.includes("A restore also re-adds the copy's vacation and availability rows."), "the restore note keeps the undo and the re-add");
+      assert.ok(settings.includes("Requires typing <strong>RESET</strong>."), "the Danger zone note is untouched");
+      assert.ok(settings.includes("For this device's month grids; the week rows always run Monday to Sunday.") && !settings.includes("MON/SUN DATES"), "the Appearance hint is one sentence (T.muted)");
+    });
+    check("SD4: Account - with biometrics unavailable (every desktop) one short line and a Details toggle hold the iPhone hint, the diagnostic, Re-check and Try enable anyway; the available branch is unchanged; the Pop-ups box says the permission in plain words (helpers.notifPermissionText)", () => {
+      const bio = SD.slice(SD.indexOf('<div data-testid="biometric-unavailable"'), SD.indexOf("<div style={css.cardT}>Live calendar sync</div>"));
+      // review 9/27: on an iPhone / iPad the fix (Safari + Home Screen) stays on the visible line; everywhere else one short line + Details
+      assert.ok(bio.includes("Face ID / Touch ID isn't available on this device.{onIOSDevice && \" On iPhone, open the app from Safari and add it to the Home Screen first.\"}{moreToggle(\"bioDetails\", \"Details\")}"), "one short line (+ the iOS fix on iOS) + Details");
+      assert.ok(SD.includes('  const onIOSDevice = (() => { try { return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }'), "iOS detection covers iPadOS's Mac UA");
+      const det = bio.slice(bio.indexOf("{openSettingsCards.bioDetails && "));
+      assert.ok(det.includes(">Re-check</button>") && det.includes(">Try enable anyway</button>") && det.includes("Diagnostic:</strong> {biometricReason}") && det.includes("Add to Home Screen"), "the diagnostic box, Re-check and Try enable anyway sit behind Details");
+      assert.ok(!/color:(dk\?)?"#/.test(bio), "the moved block reads tokens (T.muted / T.text)");
+      assert.ok(SD.includes(": <button onClick={handleBiometricEnroll} style={{...css.btn(true),padding:\"6px 14px\",fontSize:12}}>Enable</button>}"), "the available branch keeps Enable / Disable");
+      assert.ok(SD.includes("Shown while the app is open. {notifPermissionText(browserNotifPermission)}</p>") && !SD.includes("Permission: <span style={{fontFamily:mono}}>{browserNotifPermission}</span>"), "plain words, not the raw Notification.permission token");
+      assert.strictEqual(H.notifPermissionText("granted"), "Allowed on this device.");
+      assert.ok(/^Blocked/.test(H.notifPermissionText("denied")) && /Allow notifications/.test(H.notifPermissionText("default")) && /can't show pop-ups/.test(H.notifPermissionText("unsupported")) && /can't show pop-ups/.test(H.notifPermissionText(undefined)));
+      ["granted", "denied", "default", "unsupported", undefined].forEach(p => { const t = H.notifPermissionText(p); assert.ok(!/notification settings/i.test(t) && !/^(granted|denied|default|unsupported)$/.test(t), "never the raw token, never the smoke's 'Notification settings' title: " + t); });
+    });
+    check("SD5: role fixes - the calendar-sync card renders only when a URL block would (roster link, a follow, scheduler or viewer: never the unlinked coordinator's empty card); the Email box gives an unlinked coordinator / viewer ONE line (the sign-in-address sentence is the linked surgeon's only)", () => {
+      assert.strictEqual(SDcount('{(mySurgeon || myFollows.length > 0 || isScheduler || isViewer) && <div data-testid="calsync-card" style={css.card}>\n            <div style={css.cardT}>Live calendar sync</div>'), 1, "the card's guard mirrors its four URL blocks");
+      // (review 9/27: derived from the source, not a copy of the logic) the guard's terms are exactly the conditions
+      // of the card's top-level URL blocks - a new URL block for another role must widen the guard too.
+      const gm = SD.match(/\{\(([^)]*)\) && <div data-testid="calsync-card"/);
+      assert.ok(gm, "the calsync-card guard");
+      const terms = gm[1].split("||").map(t => t.trim());
+      const card = SD.slice(SD.indexOf('<div data-testid="calsync-card"'), SD.indexOf("{/* calendar-sync card end */}"));
+      const blocks = (card.match(/^ {12}\{(?!\/\*)(?!openSettingsCards\.)[^\n]*/gm) || []).map(l => l.trim());
+      assert.deepStrictEqual(blocks.map(l => l.slice(0, 32)), ["{mySurgeon && (() => {", "{myFollows.map(fid => {", "{(isScheduler || isViewer) && <>", "{isScheduler && <>"].map(l => l.slice(0, 32)), "the card's four URL blocks: " + JSON.stringify(blocks));
+      const needs = { "{mySurgeon &&": ["mySurgeon"], "{myFollows.map": ["myFollows.length > 0"], "{(isScheduler || isViewer)": ["isScheduler", "isViewer"], "{isScheduler &&": ["isScheduler"] };
+      for (const b of blocks) { const k = Object.keys(needs).find(x => b.startsWith(x)); assert.ok(k, "a URL block with an unknown condition: " + b); needs[k].forEach(t => assert.ok(terms.includes(t), "the guard is missing '" + t + "' (block " + b + ")")); }
+      assert.deepStrictEqual(terms.slice().sort(), ["isScheduler", "isViewer", "myFollows.length > 0", "mySurgeon"], "no extra role widens the guard (the unlinked coordinator with no follows gets no card)");
+      const notif = SD.slice(SD.indexOf("<span>Notification settings</span>"), SD.indexOf("<div style={css.cardT}>Account</div>"));
+      assert.strictEqual((notif.match(/E-mails go to your sign-in address/g) || []).length, 1, "one sign-in-address sentence");
+      assert.ok(notif.includes("{mySurgeon && <p style={{fontSize:11,color:dkSubtext,margin:\"0 0 8px\",lineHeight:1.5}}>E-mails go to your sign-in address"), "shown to a linked surgeon only");
+      assert.ok(!notif.includes("Emails go to your sign-in address. Choose"), "the old unconditional sentence is gone");
+      assert.ok(notif.includes("Available once your account is linked to a roster entry."), "the unlinked line stays (R2 pin)");
+    });
+    check("SD6/SD7: Setup is three quiet groups - 'Every cycle' (Setup issues, Generate, Vacations), 'Configuration' (Roster, Users, Rules, Availability, Holidays, East feed, Office contacts), 'Rarely used' (Import seed, Clear schedule); closed cards show a one-line summary from loaded state", () => {
+      assert.ok(uAt > 0 && uEnd > uAt, "the Setup view slice");
+      const steps = ['groupHeading("setup-group", "cycle", "Every cycle", true)', 'ck="setup_issues"', 'ck="setup_generate"', 'ck="setup_vacations"',
+        'groupHeading("setup-group", "config", "Configuration", false)', 'ck="setup_roster"', 'ck="setup_users"', 'ck="setup_rules"', 'ck="setup_availability"', 'ck="setup_holidays"', 'ck="setup_east"', 'ck="setup_office"',
+        'groupHeading("setup-group", "rare", "Rarely used", false)', 'ck="setup_import"', 'ck="setup_clear"'].map(k => setup.indexOf(k));
+      steps.forEach((at, i) => assert.ok(at >= 0 && (i === 0 || at > steps[i - 1]), "Setup order broken at step " + i));
+      assert.strictEqual((setup.match(/<Collapsible css=\{css\} ck="setup_/g) || []).length, 12, "all twelve cards stay (smoke SETUP_CARDS)");
+      for (const t of ["Every cycle", "Configuration", "Rarely used"]) SMOKE_TEXT.forEach(x => assert.ok(!t.toLowerCase().includes(x), `heading '${t}' holds '${x}'`));
+      for (const ck of ["setup_vacations", "setup_roster", "setup_rules", "setup_holidays", "setup_office"]) {
+        const at = setup.indexOf(`ck="${ck}"`); const open = setup.slice(at, setup.indexOf("\n", setup.indexOf("\n", at) + 1) + 400);
+        assert.ok(/summary=\{cardSummary\(/.test(open), ck + ": a summary");
+      }
+      // review 9/27: a failed office_contacts read never reads as 'None yet' (summary) or 'No office contacts yet.' (body)
+      assert.ok(setup.includes('summary={cardSummary(officeContacts.length ? officeContacts.filter(c => c.active).length + " active of " + officeContacts.length + (officeContactsLoad === "failed" ? " (couldn\'t reload)" : "") : officeContactsLoad === "failed" ? "Couldn\'t load" : officeContactsLoad === "ok" ? "None yet" : "")}'), "office contacts: N active of M; 'None yet' only after a successful read");
+      assert.ok(setup.includes('{officeContactsLoad === "failed" ? "Couldn\'t load the office contacts - reload the app to retry (this is not an empty list)." : officeContactsLoad === "ok" ? "No office contacts yet." : '), "the card body says a failed read, not an empty list");
+      const ocl = SD.slice(SD.indexOf("  // --- Load Office Contacts (scheduler/admin) ---"), SD.indexOf("  // --- Save Notification Preference"));
+      assert.ok(ocl.includes('setOfficeContacts(rows); setOfficeContactsLoad("ok");') && ocl.includes('setOfficeContactsLoad("failed"); showToast("Couldn\'t load office contacts'), "the loader sets ok only after a good read and failed in its catch");
+      assert.strictEqual(SDcount('const [officeContactsLoad, setOfficeContactsLoad] = useState("loading");'), 1, "starts as loading (no summary)");
+      assert.ok(SD.includes("  const cardSummary = (text) => text ? <span style={{fontSize:11.5,color:T.muted}}>{text}</span> : null;"), "the summary is T.muted and nothing when empty");
+    });
+    check("SD8 (review 9/27): the coverage strip's East deep link scrolls the (now lower) Setup > East feed card into view - a one-shot ref set in openEastVacPanel, consumed by an effect on view", () => {
+      const oe = SD.slice(SD.indexOf("  const openEastVacPanel = () => {"), SD.indexOf("  const snapshotAgeText = "));
+      assert.ok(oe.indexOf('try { writeCollapseFlag("setup_east", true); }') < oe.indexOf('scrollToCardRef.current = "setup_east";') && oe.indexOf('scrollToCardRef.current = "setup_east";') < oe.indexOf('setView("setup");'), "flag, then the one-shot ref, then the view");
+      assert.strictEqual(SDcount("  const scrollToCardRef = useRef(null);"), 1, "one ref");
+      const eff = oe.slice(oe.indexOf("  useEffect(() => {"));
+      assert.ok(eff.includes('if (view !== "setup" || !scrollToCardRef.current) return;') && eff.includes("scrollToCardRef.current = null;") && eff.includes("document.querySelector('[data-testid=\"card-' + ck + '\"]')") && eff.includes('el.scrollIntoView({ block: "start" })') && eff.includes("console.warn(\"Couldn't scroll to the \"") && eff.includes("}, [view]);"), "the effect consumes the ref once, scrolls card-<ck> to the top, never fails silently");
+      const mq = SD.indexOf("@media (max-width: 600px)"), mt = SD.indexOf(".moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }", mq);
+      assert.ok(mq > 0 && mt > mq && mt < SD.indexOf(".cal-grid {", mq), "an inline More toggle is 36 px wide at phone width without stretching its line (first phone block)");
+      assert.ok(SD.includes('<button type="button" className="moretoggle" data-testid={"more-" + k}'), "moreToggle carries the class");
+      assert.ok(SD.includes("an all-day entry for each Davenport shift, and an all-day 'away' entry for a Davenport vacation reviewed as away)") && !SD.includes("each Davenport day, including a Davenport vacation"), "the combined-feed note says a vacation is an 'away' entry, not a Davenport shift");
     });
   }
 
@@ -5909,7 +6034,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(own.includes('data-testid="paint-offers"') && own.includes('data-testid="mine-offers"') && own.includes('data-testid="mine-vacations"'), "the own Mine keeps the painter, the offers card and the vacations card");
     });
     check("P20 F3 pins: Settings > Live calendar sync offers each followed surgeon's feed (calendar-sync?surgeon=<CODE>) with a Copy button, above the full feed; the sentence names it; no write path", () => {
-      const a = src.indexOf("Live calendar sync"), b = src.indexOf("Requires the calendar-sync edge function", a);
+      const a = src.indexOf("Live calendar sync"), b = src.indexOf("{/* calendar-sync card end */}", a);
       const card = src.slice(a, b);
       const f0 = card.indexOf("{myFollows.map(fid => {");
       assert.ok(f0 > 0, "one row per followed surgeon");
