@@ -63,9 +63,11 @@ afterwards; the editor keeps query history).*
 
 Silvis runs offers-first. **Paint the dates you'll cover, any time**: primary, backup or either, one tap per day on your
 phone, for any date ahead, whenever you like — the app is where the offers live now (no more e-mailing lists around).
-**The next three months freeze six weeks before the current period ends**: what you painted inside that period is what
+**Each three-month period freezes six weeks before that period starts**: what you painted inside that period is what
 the generator places first, then it fills the gaps; the app e-mails you 14 and 3 days before the freeze if you have
-entered nothing for that period (it honours your e-mail preference). **Or tell the app to go by your rules** for that
+entered nothing for that period (it honours your e-mail preference). From six weeks before the freeze, if you have not
+answered for a period yet, you see a notice on My schedule (and on the Calendar in the last 14 days) with a "Choose
+shifts" button, plus a count on the Paint offers button. **Or tell the app to go by your rules** for that
 period ("Go by my rules"): your recurring rules in Setup → Rules place you and you hear nothing more. When you submit,
 say whether the list is **"only these days"** (you are never placed on a day you did not list) or **"my preferred days
 — use my rules to fill gaps"** (the default: your days first, your rules cover what is still open, and your publish

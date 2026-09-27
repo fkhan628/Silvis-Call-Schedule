@@ -81,6 +81,8 @@ export const contrastTable = (mod) => {
     add(theme, "backup role word on card", T.backupText, T.surface, "text");
     add(theme, "backup role word on page", T.backupText, T.bg, "text");
     add(theme, "warning text on card", T.warnText, T.surface, "text");
+    // 9/27: the offer deadline notice (My schedule / Calendar) - running text on its own amber box, both themes.
+    if (T.noticeText) add(theme, "offer deadline notice text on its box", T.noticeText, T.noticeBg, "text");
     add(theme, "header title on the navy bar", T.onNavy, T.navy, "text");
     add(theme, "header subline on the navy bar", T.navyMuted, T.navy, "text");
     add(theme, "nav tab label (inactive) on the navy bar", T.navTab, T.navy, "text");

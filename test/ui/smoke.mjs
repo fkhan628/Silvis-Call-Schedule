@@ -909,6 +909,22 @@ const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER
   .concat(U3C && U3C.other ? [
     { id: crypto.randomUUID(), person_id: "s3", day: U3C.other.day, role_pref: U3C.other.offeredRole, note: null, entered_by: "s3", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" },
   ] : []);
+// 9/27 offer deadline notice: an INDEPENDENT restatement of helpers.offerDeadlineNotices over the harness's stores, read
+// at call time: every served period with status upcoming, a close after today, the person neither submitted (a row
+// inside it) nor rules-only, and the close within groupRules.offerPeriods.noticeDaysBeforeClose days (the seed's; 42
+// when absent); urgent = within the largest remindDaysBeforeClose. Sorted by close. Today is the Central date.
+// `periods` defaults to periodStore; the notice step passes its own list (periodStore + two synthetic periods).
+const NOTICE_OP = (() => { try { return JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules.offerPeriods || {}; } catch (e) { return {}; } })();
+const noticeIsoDiff = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+const expOfferNotices = (person, periods) => {
+  const nd = typeof NOTICE_OP.noticeDaysBeforeClose === "number" ? NOTICE_OP.noticeDaysBeforeClose : 42;
+  const urgentDays = Math.max(0, ...(Array.isArray(NOTICE_OP.remindDaysBeforeClose) ? NOTICE_OP.remindDaysBeforeClose : [14, 3]));
+  return (periods || periodStore).filter(p => (p.status || "upcoming") === "upcoming" && p.offers_close_at > todayCentral
+    && !offerStore.some(o => o.person_id === person && o.day >= p.start_day && o.day <= p.end_day) && !(p.rules_only_ids || []).includes(person)
+    && noticeIsoDiff(todayCentral, p.offers_close_at) <= nd)
+    .sort((a, b) => a.offers_close_at < b.offers_close_at ? -1 : 1)
+    .map(p => ({ id: p.id, label: p.label, close: p.offers_close_at, start: p.start_day, days: noticeIsoDiff(todayCentral, p.offers_close_at), urgent: noticeIsoDiff(todayCentral, p.offers_close_at) <= urgentDays }));
+};
 let failSaveOffers = false;
 // applyOfferMode(who, periodId, mode) mirrors set_offer_mode: { code, message } on a refusal, { ok } after the write.
 // save_offers calls it for p_mode inside its "transaction" (the store is mutated only after every check passed, so a
@@ -4599,6 +4615,109 @@ try {
   } catch (e) { fail("Settings combined feed link (Item D): " + errLine(e)); }
   await page.setViewportSize({ width: 1180, height: 900 });
 
+  // ---- 9/27: the offer deadline notice (Faraz: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks before") ----
+  // A page as surgeon s2 (Burchett: not_started on the served period - his harness row 10/14 lies outside it). The
+  // expected rows are expOfferNotices("s2", noticePeriods) (the restatement above), so nothing here depends on the
+  // calendar date: the served period drops out after its 10/2 close, the two synthetic ones below never do. The nav's Paint offers carries offer-deadline-badge = the count; Mine
+  // shows one offer-notice-row per period (data-period-id, the label, "in N days" / "tomorrow", the start M/D) inside
+  // mine-offers, and "My offers (N upcoming day(s))" still reads; the Calendar shows the URGENT rows only; "Choose
+  // shifts" opens the painter for s2 aimed at that period with zero offer writes; at 390 px no horizontal page scroll
+  // and the button is >= 36 px tall; screenshots in both themes. The scheduler page (s1 is rules-only there) shows none.
+  // Review 9/27: the served period closes 10/2, so this page gets its OWN period list (GET call_periods answered by the
+  // extra handler; periodStore and every other step are untouched): periodStore + two synthetic upcoming periods, one
+  // closing today+10 (urgent) and one today+30 (inside the window, NOT urgent), both after the last served end, s2
+  // not_started on both - so the Calendar's "urgent rows only" branch is exercised on every run, whatever the date.
+  {
+    const NOTICE_UID = "00000000-0000-4000-8000-00000000d1e6";
+    const NOTICE_PROFILE = { id: NOTICE_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z" };
+    const NOTICE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: NOTICE_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const lastServedEnd = periodStore.map(p => p.end_day).sort().pop() || todayCentral;
+    const synthBase = isoAddDays(lastServedEnd > isoAddDays(todayCentral, 60) ? lastServedEnd : isoAddDays(todayCentral, 60), 1);
+    const synthPeriod = (n, start, end, close) => ({ id: "00000000-0000-4000-8000-0000000d1e6" + n, label: "Notice check " + n, start_day: start, end_day: end, offers_close_at: close, publish_by: isoAddDays(start, -28), status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "harness", created_at: "2026-09-27T00:00:00Z", updated_at: "2026-09-27T00:00:00Z" });
+    const noticePeriods = periodStore.concat([
+      synthPeriod(1, synthBase, isoAddDays(synthBase, 27), isoAddDays(todayCentral, 10)),
+      synthPeriod(2, isoAddDays(synthBase, 28), isoAddDays(synthBase, 55), isoAddDays(todayCentral, 30)),
+    ]);
+    const noticeRoute = async ({ req, url, json }) => {
+      if (url.pathname.startsWith("/rest/v1/call_periods") && req.method() === "GET") { await json(200, noticePeriods.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1)); return true; }
+      return false;
+    };
+    const exp = expOfferNotices("s2", noticePeriods);
+    const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+    let noticeThemeWas;   // the origin's storage is shared with the other pages: the dark leg puts the flag back below, thrown or not
+    const np = await context.newPage();
+    watchPage(np, "offer-notice");
+    await np.setViewportSize({ width: 390, height: 844 });
+    await np.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, NOTICE_JWT);
+    await np.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await np.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(NOTICE_PROFILE, noticeRoute));
+    np.on("dialog", (d) => d.accept());
+    try {
+      await loadWithRetry(np, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (offer deadline notice)");
+      noticeThemeWas = await np.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode"); } catch (e) { return null; } });
+      await np.waitForSelector("text=Synced", { timeout: 30000 });
+      await np.waitForTimeout(800);
+      if ((await np.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")))).includes("setup")) throw new Error("the notice page shows a Setup tab - it is being treated as the scheduler");
+      const badge = await np.$eval("[data-testid=nav-paint-offers] [data-testid=offer-deadline-badge]", el => el.textContent.trim()).catch(() => null);
+      if (exp.length ? badge !== String(exp.length) : badge !== null) fail(`Offer deadline notice (s2): the nav's Paint offers badge should read ${exp.length ? "'" + exp.length + "'" : "nothing"}, got ${JSON.stringify(badge)}`);
+      else ok(`Offer deadline notice (s2): nav badge ${exp.length ? "'" + exp.length + "'" : "absent"} (${exp.length} period(s) waiting)`);
+      // Calendar: urgent rows only
+      await np.click('button[data-tab="calendar"]');
+      await np.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
+      await np.waitForTimeout(200);
+      const calRows = await np.$$eval("[data-testid=offer-deadline-notice][data-where=calendar] .offer-notice-row", els => els.map(e => e.getAttribute("data-period-id")));
+      const expCal = exp.filter(n => n.urgent).map(n => n.id);
+      const hidden = exp.filter(n => !n.urgent).map(n => n.id);
+      if (!hidden.length || !expCal.length) fail(`Offer deadline notice (s2): the synthetic periods should give at least one urgent and one non-urgent row - the harness restatement reads ${JSON.stringify(exp.map(n => [n.id, n.days, n.urgent]))}`);
+      if (hidden.some(id => calRows.includes(id))) fail(`Offer deadline notice (s2, Calendar): a non-urgent row shows on the Calendar (${JSON.stringify(hidden.filter(id => calRows.includes(id)))}) - only rows within the largest reminder offset belong there`);
+      else if (JSON.stringify(calRows) !== JSON.stringify(expCal)) fail(`Offer deadline notice (s2, Calendar): urgent rows only - expected ${JSON.stringify(expCal)}, got ${JSON.stringify(calRows)}`);
+      else ok(`Offer deadline notice (s2, Calendar): ${expCal.length ? expCal.length + " urgent row(s) " + JSON.stringify(expCal) : "no notice (nothing urgent)"}; ${hidden.length} non-urgent row(s) kept off it`);
+      // Mine: every row
+      await np.click('button[data-tab="myschedule"]');
+      await np.waitForSelector("[data-testid=mine-offers]", { timeout: 8000 });
+      await np.waitForTimeout(200);
+      const mine = await np.$$eval("[data-testid=mine-offers] [data-testid=offer-deadline-notice][data-where=mine] .offer-notice-row", els => els.map(e => ({ id: e.getAttribute("data-period-id"), days: e.getAttribute("data-days"), urgent: e.getAttribute("data-urgent"), text: e.innerText.replace(/\s+/g, " ").trim() })));
+      const card = await np.$eval("[data-testid=mine-offers]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+      const wrong = exp.map((n, i) => { const r = mine[i]; const when = n.days === 1 ? "tomorrow" : `in ${n.days} days`; return !r ? `${n.id}: missing` : (r.id !== n.id || r.days !== String(n.days) || r.urgent !== (n.urgent ? "1" : "0") || !r.text.includes(n.label) || !r.text.includes(when) || !r.text.includes(md(n.close)) || !r.text.includes("before " + md(n.start)) || !/Choose shifts/.test(r.text)) ? `${n.id}: ${JSON.stringify(r)}` : null; }).filter(Boolean);
+      if (mine.length !== exp.length || wrong.length) fail(`Offer deadline notice (s2, Mine): expected ${exp.length} row(s) naming the label, the freeze M/D, 'in N days' and the start - got ${mine.length}: ${wrong.join("; ").slice(0, 300)}`);
+      else if (!/My offers \(\d+ upcoming days?\)/.test(card)) fail("Offer deadline notice (s2, Mine): the My offers title no longer reads inside mine-offers: " + card.slice(0, 160));
+      else if (!exp.length) ok(`Offer deadline notice (s2, Mine): no notice - not exercised (today ${todayCentral}: no open period within its notice window for s2; the served period closes ${offerPeriod ? offerPeriod.offers_close_at : "-"})`);
+      else ok(`Offer deadline notice (s2, Mine): ${mine.length} row(s): '${mine[0].text.slice(0, 140)}'`);
+      if (exp.length) {
+        const geo = await np.evaluate(() => { const b = document.querySelector("[data-testid=offer-deadline-choose]"); const r = b ? b.getBoundingClientRect() : null; return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, h: r ? r.height : 0 }; });
+        if (geo.sw > geo.cw + 1 || geo.h < 36) fail(`Offer deadline notice 390px: page scrolls sideways (${geo.sw} > ${geo.cw}) or Choose shifts is under 36 px (${geo.h})`);
+        else ok(`Offer deadline notice 390px: no horizontal scroll (${geo.sw} in ${geo.cw}), Choose shifts ${Math.round(geo.h)} px tall`);
+        await np.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
+        await np.screenshot({ path: path.join(OUT, "offer-notice-390.png"), fullPage: false });
+        const b0 = writes.length;
+        await np.click(`[data-testid=offer-deadline-notice][data-where=mine] .offer-notice-row[data-period-id="${exp[0].id}"] [data-testid=offer-deadline-choose]`);
+        const sheet = await np.waitForSelector("[data-testid=ofp-sheet][data-person=s2]", { timeout: 5000 }).then(() => true).catch(() => false);
+        await np.waitForTimeout(300);
+        const line = await np.$eval("[data-testid=ofp-period-line]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+        const offerWrites = writes.slice(b0).filter(w => /call_offers|rpc\/(save_offers|set_offer_mode)/.test(w.path));
+        if (!sheet || !line.includes(exp[0].label) || offerWrites.length) fail(`Offer deadline notice: Choose shifts must open the painter for s2 on ${exp[0].label} with zero offer writes (sheet ${sheet}, period line '${line.slice(0, 80)}', writes ${offerWrites.length})`);
+        else ok(`Offer deadline notice: Choose shifts opened the painter for s2 on '${exp[0].label}' (period line '${line.slice(0, 60)}'), zero writes`);
+        if (sheet) { await np.click("[data-testid=ofp-close]"); await np.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+        await np.click('button[data-tab="settings"]');
+        await np.click("button:has-text('Dark')");
+        await np.click('button[data-tab="myschedule"]');
+        await np.waitForSelector("[data-testid=offer-deadline-notice]", { timeout: 5000 });
+        const dk = await np.$eval("[data-testid=offer-deadline-notice] .offer-notice-text", el => ({ c: getComputedStyle(el).color, bg: getComputedStyle(el.closest("[data-testid=offer-deadline-notice]")).backgroundColor }));
+        if (dk.c !== "rgb(242, 208, 138)" || dk.bg !== "rgb(46, 38, 18)") fail(`Offer deadline notice (dark): expected the dark tokens (text #F2D08A on #2E2612), got ${dk.c} on ${dk.bg}`);
+        else ok(`Offer deadline notice (dark): text ${dk.c} on ${dk.bg} (THEME.dark noticeText / noticeBg)`);
+        await np.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
+        await np.screenshot({ path: path.join(OUT, "offer-notice-390-dark.png"), fullPage: false });
+        await np.click('button[data-tab="settings"]');
+        await np.click("button:has-text('Light')");
+        ok("screenshots test/ui/out/offer-notice-390.png / -dark.png");
+      }
+    } catch (e) { fail("Offer deadline notice (s2): the surgeon page check threw: " + String(e && e.message || e).split("\n")[0]); }
+    finally {
+      if (noticeThemeWas !== undefined) await np.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, noticeThemeWas).catch((e) => fail("Offer deadline notice (s2): could not put the shared silvis-dark-mode flag back: " + errLine(e)));
+    }
+    await np.close();
+  }
+
   // ---- Prompt 14 part 3a: the offer painter (My schedule -> Paint my offers; nav action; both themes) ----
   // 390 px, light: the current month greys every past row ('past', disabled, >= 52 px; screenshot with a reason);
   // the first month ahead with six paintable rows: arm Primary (gradient, white text; screenshot), tap a day, tap
@@ -4636,6 +4755,13 @@ try {
       const offersCard = await page.$eval("[data-testid=mine-offers]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
       if (!/My offers \(0 upcoming days\)/i.test(offersCard) || !offersCard.includes(offerPeriod.label) || !/going by my rules/.test(offersCard)) fail("Offer painter: the My offers card does not read '0 upcoming days' + the seed period + 'going by my rules' for s1: " + offersCard.slice(0, 200));
       else ok("Offer painter: My schedule shows 'My offers (0 upcoming days)' and '" + offerPeriod.label + ": going by my rules' for s1 (the seed's rulesOnly)");
+      // 9/27: the offer deadline notice speaks to not_started people only - s1 is rules-only on the served period
+      try {
+        const expS1 = expOfferNotices("s1");
+        const s1Rows = await page.$$eval("[data-testid=mine-offers] .offer-notice-row", els => els.map(e => e.getAttribute("data-period-id")));
+        if (JSON.stringify(s1Rows) !== JSON.stringify(expS1.map(n => n.id))) fail(`Offer deadline notice (scheduler as s1): expected ${JSON.stringify(expS1.map(n => n.id))} (rules-only on the served period = none), got ${JSON.stringify(s1Rows)}`);
+        else ok(`Offer deadline notice (scheduler as s1): ${s1Rows.length ? s1Rows.length + " row(s)" : "no notice - s1 goes by his rules on " + offerPeriod.label}`);
+      } catch (e) { fail("Offer deadline notice (s1): " + String(e && e.message || e).split("\n")[0]); }
       await page.click("[data-testid=paint-offers]");
       await page.waitForSelector("[data-testid=ofp-sheet]", { timeout: 5000 });
       await page.waitForTimeout(300);
@@ -6800,6 +6926,25 @@ try {
         else if (!enterOk) fail(`Periods: the scheduler's own row (${SELF}) must read 'Paint my offers' and every other row 'Enter for <name>': ${JSON.stringify(box0.rows.map(r => r.id + ": " + r.enter.trim()))}`);
         else if (JSON.stringify(box0.remind) !== JSON.stringify(expRemind)) fail(`Periods: Remind must appear on the not_started rows only while the period is open (expected ${JSON.stringify(expRemind)}, got ${JSON.stringify(box0.remind)})`);
         else ok(`Periods: ${per.label} (${box0.pill}) = ${IDS.map(id => id + " " + expStatus(id, per) + (expStatus(id, per) === "submitted" ? " " + expOffered(id, per) + "d" : "")).join(", ")}; Remind on ${expRemind.length ? expRemind.join(", ") : "nobody (frozen)"} only; ${SELF}'s row 'Paint my offers', the others 'Enter for <name>'`);
+        // (a2) 9/27 lead-time lines (helpers.offerPeriodLeadWarnings), restated from the stores - date-independent: the served
+        // period is upcoming with its close 10/2 only 31 days before its 11/2 start (later than start - 6 weeks), so its
+        // box MUST carry prd-lead-warn[data-kind=short-lead] naming 4 weeks (31 days); "create the next period" shows iff
+        // today >= (last end + 1) - 42 - noticeDaysBeforeClose (the seed's, 42 when absent).
+        const leadKinds = (id) => page.$$eval(`[data-testid=prd-period][data-period-id="${id}"] [data-testid=prd-lead-warn]`, els => els.map(e => ({ kind: e.getAttribute("data-kind"), text: e.textContent.replace(/\s+/g, " ").trim() })));
+        const expNextLine = () => { const lastEnd = periodStore.map(p => p.end_day).sort().pop(); const from = isoAddDays(lastEnd, 1), closeBy = isoAddDays(from, -42); const nd = typeof NOTICE_OP.noticeDaysBeforeClose === "number" ? NOTICE_OP.noticeDaysBeforeClose : 42; return todayCentral >= isoAddDays(closeBy, -nd) ? { from, closeBy } : null; };
+        const nextLine = () => page.$eval("[data-testid=periods-section] > [data-testid=prd-lead-warn][data-kind=next-missing]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+        try {
+          const lk0 = await leadKinds(per.id);
+          const leadDays = Math.round((Date.parse(per.start_day + "T00:00:00Z") - Date.parse(per.offers_close_at + "T00:00:00Z")) / 86400000);
+          const expShort = (per.status || "upcoming") === "upcoming" && leadDays < 42;
+          const short = lk0.find(w => w.kind === "short-lead");
+          if (expShort && (!short || !short.text.includes(`only ${Math.floor(leadDays / 7)} weeks (${leadDays} days) before the start`))) fail(`Periods lead (a2): ${per.label} closes ${leadDays} days before its start - expected a short-lead line naming ${Math.floor(leadDays / 7)} weeks (${leadDays} days), got ${JSON.stringify(lk0)}`);
+          else if (!expShort && short) fail(`Periods lead (a2): ${per.label} has ${leadDays} days of lead - no short-lead line expected, got '${short.text}'`);
+          else ok(`Periods lead (a2): ${per.label} ${expShort ? "carries '" + short.text.slice(0, 90) + "'" : "has no short-lead line (" + leadDays + " days of lead)"}${lk0.filter(w => w.kind !== "short-lead").length ? "; also " + lk0.filter(w => w.kind !== "short-lead").map(w => w.kind).join(", ") : ""}`);
+          const nx = expNextLine(), nt = await nextLine();
+          if (nx ? !(nt && nt.includes(`from ${mdOf(nx.from)}`) && nt.includes(`close by ${mdOf(nx.closeBy)}`)) : nt !== null) fail(`Periods lead (a2): 'Create the next period' should be ${nx ? "shown (from " + mdOf(nx.from) + ", close by " + mdOf(nx.closeBy) + ")" : "absent"} today ${todayCentral}, got ${JSON.stringify(nt)}`);
+          else ok(`Periods lead (a2): 'Create the next period' ${nx ? "shown: '" + nt.slice(0, 100) + "'" : "absent - not due yet (not exercised today " + todayCentral + ")"}`);
+        } catch (e) { fail("Periods lead (a2): " + String(e && e.message || e).split("\n")[0]); }
         // (b) Remind on a not_started surgeon = ONE send-notification offers_reminder and nothing else
         if (expRemind.length) {
           const who = expRemind[0];
@@ -6865,6 +7010,22 @@ try {
         else if (!formGone || !f3 || f3.close !== handClose || f3.start !== nudged || writesSince(bCol).length) fail(`Periods form: collapsing the Generate card must keep the draft (form hidden while closed, back with close ${handClose} / start ${nudged} when reopened, zero writes); got hidden=${formGone}, ${JSON.stringify(f3)}, writes ${writesSince(bCol).length}`);
         else if (f4.close !== isoAddDays(nudged, -42) || f4.start !== nudged || f4.publish !== isoAddDays(nudged, -28)) fail(`Periods form: a preset click must refill every date from the rules (close ${isoAddDays(nudged, -42)}), got ${JSON.stringify(f4)}`);
         else ok(`Periods form: hand-set close ${handClose} survived Start -> ${nudged} (publish re-derived ${f2.publish}); the draft survived the card collapsing / reopening; the 3-month preset refilled every date`);
+        // (c3) 9/27: the draft's short-lead warning is STRICT - the preset's start - 42 (f4) reads no "Offers close only";
+        // start - 41 does (only while that close is still after today: the "close has passed" warning outranks it)
+        try {
+          const warnNow = () => page.$eval("[data-testid=prd-form-warn]", el => el.textContent.trim()).catch(() => "");
+          const w42 = await warnNow();
+          const c41 = isoAddDays(nudged, -41);
+          if (/Offers close only/.test(w42)) fail(`Periods form (c3): close exactly start - 42 (${f4.close}) must not warn short lead (strict >), got '${w42.slice(0, 120)}'`);
+          else if (c41 <= todayCentral) ok(`Periods form (c3): start - 42 reads no short-lead warning; start - 41 not exercised (${c41} is not after today ${todayCentral})`);
+          else {
+            await page.fill("[data-testid=prd-close]", c41);
+            await page.waitForTimeout(150);
+            const w41 = await warnNow();
+            if (!/^Offers close only 41 days before the start/.test(w41)) fail(`Periods form (c3): close ${c41} (start - 41) must warn 'Offers close only 41 days before the start ...', got '${w41.slice(0, 120)}'`);
+            else ok(`Periods form (c3): start - 42 quiet, start - 41 warns '${w41.slice(0, 90)}'`);
+          }
+        } catch (e) { fail("Periods form (c3): " + String(e && e.message || e).split("\n")[0]); }
         await page.fill("[data-testid=prd-start]", expDefaultStart);
         await page.click("[data-testid=prd-preset-3]");
         await page.waitForTimeout(150);
@@ -6890,6 +7051,14 @@ try {
           const expRemind1 = isOpen(created) ? IDS.slice() : [];
           if (box1.rows.length !== 6 || box1.rows.some(r => r.status !== "not_started" || r.offered !== 0) || box1.label !== expLabel || box1.status !== "upcoming" || JSON.stringify(box1.remind) !== JSON.stringify(expRemind1) || !box1.closeNow || (await page.$("[data-testid=prd-form]"))) fail(`Periods create: the new box should read '${expLabel}' upcoming, six not_started rows, Remind on all six, Close now, form folded: ` + JSON.stringify({ label: box1.label, status: box1.status, remind: box1.remind, closeNow: box1.closeNow, rows: box1.rows.map(r => r.text) }));
           else ok(`Periods create: ONE POST call_periods + ONE audit period.create ("${cAud[0].detail.summary}"); '${expLabel}' renders upcoming with six not_started rows and Remind on each`);
+          // 9/27: the new period closes exactly start - 6 weeks - no short-lead line (strict); the next-period line follows the new last end
+          try {
+            const lk1 = await leadKinds(created.id);
+            const nx1 = expNextLine(), nt1 = await nextLine();
+            if (lk1.some(w => w.kind === "short-lead")) fail(`Periods lead (create): '${expLabel}' closes exactly start - 42 - no short-lead line expected, got ${JSON.stringify(lk1)}`);
+            else if (nx1 ? !(nt1 && nt1.includes(`from ${mdOf(nx1.from)}`)) : nt1 !== null) fail(`Periods lead (create): 'Create the next period' should be ${nx1 ? "shown from " + mdOf(nx1.from) : "absent (a period now follows)"}, got ${JSON.stringify(nt1)}`);
+            else ok(`Periods lead (create): '${expLabel}' has no short-lead line; 'Create the next period' ${nx1 ? "moved to " + mdOf(nx1.from) : "absent"}`);
+          } catch (e) { fail("Periods lead (create): " + String(e && e.message || e).split("\n")[0]); }
           if (!expRemind.length) { // the seed period was frozen: exercise Remind here instead
             const who = "s3"; const b0 = writes.length;
             await page.click(`${boxSel(created.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind]`);
@@ -9140,7 +9309,8 @@ try {
             "editor-save", "editor-trade", "undo-btn", "generate-panel", "gen-run", "gen-accept", "roster-save", "rules-save", "group-save", "holidays-save",
             "users-card", "seed-card", "import-file", "reset-all-data", "export-backup", "snapshot-restore", "avail-add", "east-override-save", "east-refresh",
             "prd-new", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade",
-            "mine-give", "editor-give", "editor-open-shifts"]; // day-click summary (9/27): the linked surgeon's actions
+            "mine-give", "editor-give", "editor-open-shifts", // day-click summary (9/27): the linked surgeon's actions
+            "offer-deadline-notice", "offer-deadline-choose", "offer-deadline-badge"]; // 9/27: the offer deadline notice is the linked surgeon's only
           // P20 R2: "notif-pref" left this list - a follower's OWN prefs switches (Settings > Notification settings, his row
           // by profile_id) are his; (c2) checks them and (e) counts their writes. Everything above stays forbidden, and so does
           // any notif-pref OUTSIDE [data-testid=notif-follower-prefs] (a surgeon's switches rendered for him - R2 review 9/25).

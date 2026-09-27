@@ -965,8 +965,9 @@ Silvis is an **offers** problem where Davenport is a rules problem: the schedule
 days each surgeon emails in, relayed through whoever is collecting them and retyped by the ER-panel author. From Prompt 14 the
 app is where offers live. **Surgeons may enter offers for any future date, whenever they like** (`call_offers`, one row
 per person and day, primary / backup / either). A **period** (default 3 months, preset 6; `groupRules.offerPeriods`)
-is the generation window: the days inside the next period **freeze six weeks before the current period ends** (= six
-weeks before the next one starts; `offers_close_at`, editable per period), the schedule is due four weeks before
+is the generation window: the days inside the next period **freeze six weeks before that period starts**
+(`offers_close_at` = start − `closeWeeksBeforeStart` weeks, editable per period; 9/27: this line said "before the current
+period ends", true only when periods run back to back), the schedule is due four weeks before
 (`publish_by`), and reminders go out 14 and 3 days before the freeze to anyone with nothing entered for that period who
 has not chosen **"go by my rules"**. Status per surgeon per period is derived, never typed: submitted / rules-only /
 not started. A daily cron mode (`daily-reminder` mode `offers`, job `silvis-offers-daily`, Vault secret like the
@@ -1321,6 +1322,35 @@ the proof that Burchett's and Acton's November days come out as the ER-panel aut
 this period" is the offers-first path for every period after the published one (Jan 2027, then Feb – Apr 2027). Decisions recorded for the first period: the offer modes
 (rules doc §8 item 20 — Burchett / Philip exhaustive, Acton / Fierce preferred, Khan / Sarkar rules-only, set 9/23 as
 defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 (data, renameable).
+
+**Deadline notices (9/27; Faraz: "add a 6 week warning for choosing shifts so that the new schedule can be produced at
+least 4-6 weeks before").** The reading implemented (rules doc §1 Process row, §8 item 21): the freeze stays at start − 6
+weeks and publish-by at start − 4 weeks; what was missing was visibility. Data: `groupRules.offerPeriods.noticeDaysBeforeClose`
+(seed 42; default in `helpers.js` `OP_NOTICE_DEFAULTS`, deliberately **not** in `OP_PERIOD_DEFAULTS`, which stays the
+literal twin of the `daily-reminder` mirror's `OTM_DEFAULTS` — `offerTimeline`'s output never carries the key and the cron
+never reads it). Two pure readers in `helpers.js`: `offerDeadlineNotices({ periods, offers, personId, today, groupRules })`
+returns one notice per open period (status upcoming, `offers_close_at` after today) on which the person's `offerStatus` is
+`not_started` and the freeze is at most `noticeDaysBeforeClose` days away — `{ periodId, label, closeAt, daysToClose,
+startDay, publishBy, urgent }`, urgent = within the largest `remindDaysBeforeClose` (14); several periods can be open at
+once (Jan 2027 and Feb – Apr 2027 on 9/27) and each gets its row. `offerPeriodLeadWarnings({ periods, today, groupRules,
+openCounts })` returns the scheduler's lines: `short-lead` (an upcoming period whose close is later than start − 7 ×
+`closeWeeksBeforeStart`), `publish-due` / `publish-passed` (publish-by 7 days or less away, or passed, while the range still
+has open slots from today on — the app never flips a status to `published`, so the parent counts `openSlots` over the
+schedule; a row whose status does read `published` gets neither line — it has shipped and the open-shifts board reports its
+holes, review 9/27), and `next` ("create the next period (from M/D) - choices for it should close by M/D" once today ≥ (last end + 1)
+− 7 × `closeWeeksBeforeStart` − `noticeDaysBeforeClose`). UI (`index-source.html`, display only — no write, no send, no
+`confirm()`): for the linked surgeon (`mySurgeon && !isPublicMode`; followers, viewers, the office and `?public=1` have no
+`mySurgeon`) the `offer-deadline-notice` box lists every notice at the top of My schedule's `mine-offers` card (his own page
+only), the Calendar shows the urgent rows only, and the nav's *Paint offers* carries `offer-deadline-badge` (the count, in
+the accent tokens); each row's *Choose shifts* opens the painter for him aimed at that period (`setOfferSheet({ personId:
+mySurgeon, periodId })` — the `preferPeriodId` path Enter-for uses, so the painter opens on the period's first month).
+Colours are THEME tokens `noticeText` / `noticeBg` / `noticeBorder` (both themes; rows in `test/ui/contrast.mjs`); on a phone a
+class stacks the sentence over the button. Setup → Periods renders the lines as `prd-lead-warn` (`data-kind`) in
+`css.warnBox`, and the New-period form's `prd-form-warn` adds the short-lead case with a STRICT `>` (the 3-month preset
+lands exactly on start − 42). Proof: `test/offers.test.js` section E, `test/data-layer.test.js` section G (9/27 pins), the
+smoke's offer-deadline-notice step (a surgeon page, dates restated from the harness stores) and its Periods (a2) / (c3)
+steps. Not changed: the cron and the e-mails — an e-mail at the notice's moment is the data-only `remindDaysBeforeClose`
+[42, 14, 3] (rules doc §8 item 21 lists the caveats).
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)
 
