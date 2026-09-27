@@ -4826,6 +4826,9 @@ function CallSchedule() {
   const boardEnd = board.end;          // last day of the published block, or null with no schedule on file
   const boardRanges = board.ranges;    // later assigned [{ start, end }] whose open slots are listed too
   const boardEndText = boardEnd ? fmtMD(boardEnd) : "-";
+  // Day-click summary (9/27): the slots the board lists, so the summary's "See it on Open shifts" shows only for a slot
+  // the board actually carries (not a day after the published block with no row).
+  const boardKeys = useMemo(() => new Set(boardSlots.map(s => openSlotKey(s.day, s.role))), [boardSlots]);
   // Open slots inside the coverage strip's 60-day window that the board cannot
   // list: days AFTER the published block with no row (nothing to claim -
   // Generate covers them). Shown as a footer so the strip and the board can
@@ -5154,12 +5157,15 @@ function CallSchedule() {
   // Day-click summary (Faraz 9/27): "Give away" on the day editor (a surgeon's own day) and on My schedule's rows - the
   // Propose card opened in give mode (one-way, no return day) with the day and the role preselected, the member as From.
   // The give itself goes through the card's own path (the unit rule and the receiver's eligibility are the trade path's).
-  const proposeGiveForDay = (day, role) => {
+  // `from` (My schedule's row owner): the scheduler giving away a surgeon he picked in mine-person gets that surgeon as
+  // From - a pool member only, like proposeTradeForDay's pick.from - so the card's day pick matches the holder.
+  const proposeGiveForDay = (day, role, from) => {
     setTradeDay(day);
     setTradeRole(role === "backup" ? "backup" : "primary");
     setTradeKind("give");
     setTradeReturnDay("");
     if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);
+    else if (isScheduler && from && poolSurgeons.some(s => s.id === from)) setTradeFrom(from);
     setEditorDay(null);
     setView("timeoff");
   };
@@ -6014,7 +6020,7 @@ function CallSchedule() {
             canEdit={isScheduler && !isPublicMode} eastDetailsVisible={eastDetailsVisible} rulesImported={rulesImported} isPublicMode={isPublicMode}
             nameOf={nameOf} codeOf={codeOf} colorOf={colorOf} mySurgeon={mySurgeon}
             vacationNames={vacNamesOn(editorDay)} focusExternal={editorFocus === "external"}
-            onGive={proposeGiveForDay} onOpenShifts={openShiftsBoard}
+            onGive={proposeGiveForDay} onOpenShifts={openShiftsBoard} openOnBoard={(d, r) => boardKeys.has(openSlotKey(d, r))}
             onSave={(next, meta) => { if (saveDayEdit(editorDay, next, meta)) setEditorDay(null); }}
             onCancel={() => setEditorDay(null)} onNav={editorNav} onTrade={proposeTradeForDay}
             suggestTrade={(d, r) => {
@@ -6225,7 +6231,7 @@ function CallSchedule() {
                       {badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
                       {own && (() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
                       {own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} style={{...css.mini(false),marginLeft:"auto",color:"#6030a0",borderColor:"#c0a8e0"}}>Propose a trade</button>}
-                      {own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}
+                      {own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role, who)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}
                     </div>
                   ))}
                 </div>
@@ -7856,7 +7862,7 @@ function offersLoadVerdict(st) {
 // Left/Right arrows move a day when the draft is clean and focus is not in a
 // field.
 function DayEditor(props) {
-  const { day, entry, roster, ctxInputs, ctxError, canEdit, eastDetailsVisible, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, suggestTrade, css, dk, focusExternal, onGive, onOpenShifts } = props;
+  const { day, entry, roster, ctxInputs, ctxError, canEdit, eastDetailsVisible, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, suggestTrade, css, dk, focusExternal, onGive, onOpenShifts, openOnBoard } = props;
   // Day-click summary (Faraz 9/27: "me as the scheduler needs the full view, users don't need as much"): canEdit (the
   // scheduler) keeps the full editor below unchanged. Everyone else - a surgeon on his own or another's day, the office,
   // a viewer, a follower, ?public=1 - gets a SUMMARY: the holders by full name (the grid shows codes on a phone), a You
@@ -8055,6 +8061,9 @@ function DayEditor(props) {
   // grid words it (helpers.slotIsOpen): OPEN from today on, '-' on a past day (nobody can be paged for it).
   const todayC = todayCentral();
   const openRoles = ["primary", "backup"].filter(r => slotIsOpen(day, r === "primary" ? (draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null)) : draft.backup, todayC));
+  // the board link's roles: OPEN slots the Open shifts board lists (openOnBoard - today..the published block's end plus
+  // later assigned ranges); none when the viewer holds the day (the board's Take is off for a surgeon already on it)
+  const boardRoles = typeof openOnBoard === "function" ? openRoles.filter(r => openOnBoard(day, r)) : [];
   const summaryHolder = (role) => {
     const v = role === "primary" ? (draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null)) : draft.backup;
     const outside = <span style={{color:T.muted,fontWeight:400,fontSize:12}}> (outside surgeon)</span>;
@@ -8090,8 +8099,9 @@ function DayEditor(props) {
       <div data-testid={"editor-" + role + "-block"} data-mine={mine ? "1" : undefined} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"8px 0",borderBottom:"1px solid " + border}}>
         <span style={{...label,marginBottom:0,minWidth:60}}>{role === "primary" ? "Primary" : "Backup"}</span>
         {summaryHolder(role)}
-        {mine && <span data-testid="editor-you" style={{background:T.accentTint,color:T.accentText,border:"1px solid " + T.accent,borderRadius:10,padding:"0 8px",fontSize:11,fontWeight:700}}>You</span>}
+        {mine && <span data-testid="editor-you" style={{background:T.surface,color:T.accentText,border:"1px solid " + T.accent,borderRadius:10,padding:"0 8px",fontSize:11,fontWeight:700}}>You</span>}
         {confirmBadge}
+        {confirmBadge && <span data-testid="editor-not-final" style={{color:T.muted,fontSize:11}}>(not final yet)</span>}
       </div>
     );
     return (
@@ -8214,14 +8224,15 @@ function DayEditor(props) {
           {!isPublicMode && (canEdit || myRole) && (
             <button type="button" data-testid="editor-trade" data-suggested={tradePick && tradePick.to ? tradePick.to : undefined} onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)} style={canEdit ? {background:"none",border:"none",color:THEME[dk ? "dark" : "light"].accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0,textAlign:"left"} : {...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36,textAlign:"left"}}>Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}</button>
           )}
-          {/* Day-click summary (9/27): the linked surgeon's own actions - give his day away (the Propose card in give mode), or
-              take an OPEN slot (today onward) on the Open shifts board. Never for the office, a viewer, a follower (no roster
-              link) or ?public=1; the scheduler has the full editor and the board's Assign. */}
-          {!isPublicMode && !canEdit && myRole && typeof onGive === "function" && (
+          {/* Day-click summary (9/27): the linked surgeon's own actions - give his day away (the Propose card in give mode; today
+              onward - a past day cannot be accepted), or take an OPEN slot the board lists, on a day he does not already hold,
+              on the Open shifts board. Never for the office, a viewer, a follower (no roster link) or ?public=1; the scheduler
+              has the full editor and the board's Assign. */}
+          {!isPublicMode && !canEdit && myRole && day >= todayC && typeof onGive === "function" && (
             <button type="button" data-testid="editor-give" onClick={() => onGive(day, myRole)} style={{...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36}}>Give away</button>
           )}
-          {!isPublicMode && !canEdit && mySurgeon && openRoles.length > 0 && typeof onOpenShifts === "function" && (
-            <button type="button" data-testid="editor-open-shifts" data-roles={openRoles.join(",")} onClick={() => onOpenShifts()} style={{...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36}}>See it on Open shifts</button>
+          {!isPublicMode && !canEdit && mySurgeon && !myRole && boardRoles.length > 0 && typeof onOpenShifts === "function" && (
+            <button type="button" data-testid="editor-open-shifts" data-roles={boardRoles.join(",")} onClick={() => onOpenShifts()} style={{...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36}}>See it on Open shifts</button>
           )}
           <span style={{flex:1}}/>
           {canEdit && <span className="editor-kbd-hint" style={{fontSize:10,color:sub}}>Esc closes - arrow keys move a day</span>}

@@ -2403,15 +2403,6 @@ try {
       const eV = await e3Editor(page, E3_VAC_DAY);
       const eL = await e3Editor(page, E3_LOCK_DAY);
       sched.lockBreaks = eL.breaks.length > 0;
-      // Day-click summary (9/27): the scheduler's day editor is still the FULL editor (Faraz: "me as the scheduler needs
-      // the full view") - both selects, Save, the keyboard hint in the DOM (hidden only at <= 600px), the Source line and
-      // the filler lines on 10/15, and none of the summary's parts (You chip, Give away, See it on Open shifts)
-      try {
-        const fullBad = [[factsS.derivedDay, eD], [E3_LOCK_DAY, eL]].filter(([d, e]) => e.selects !== 2 || !e.save || !e.kbdHint || e.you || e.give || e.openShifts).map(([d, e]) => d + " " + JSON.stringify({ selects: e.selects, save: e.save, kbdHint: e.kbdHint, you: e.you, give: e.give, openShifts: e.openShifts }));
-        if (fullBad.length) fail("Day-click summary (scheduler): the full editor lost a part or gained a summary part - " + fullBad.join(" | "));
-        else if (!/^Source: /.test(eL.source) || !eL.filler) fail(`Day-click summary (scheduler, ${E3_LOCK_DAY}): the Source line ('${eL.source}') or the 'Not in a holiday unit.' / 'Vacations: ...' lines are gone from the scheduler's editor`);
-        else ok(`Day-click summary (scheduler): the full editor stays on ${factsS.derivedDay} and ${E3_LOCK_DAY} - 2 selects, Save, keyboard hint, '${eL.source}', the filler lines; offers lines ${eD.offers}${eD.offers ? "" : " (none on " + factsS.derivedDay + " this run - the offers lines are checked by U3c)"}; no You chip / Give away / Open shifts link`);
-      } catch (e) { fail("Day-click summary (scheduler): " + errLine(e)); }
       if (!eD.east.some(t => /East week -> Silvis (primary|backup) \(derived\)/.test(t))) fail(`Item E3 (scheduler, day editor ${factsS.derivedDay}): the derived-week East line is gone: ${JSON.stringify(eD.east)}`);
       else if (!eV.eastVac || !eV.east.some(t => /East \(Davenport\) vacation, unreviewed/.test(t))) fail(`Item E3 (scheduler, day editor ${E3_VAC_DAY}): the East-vacation review state is gone: ${JSON.stringify(eV.east)}`);
       else ok(`Item E3 (scheduler, day editor): the East lines stay - ${factsS.derivedDay} "${(eD.east.find(t => /derived/.test(t)) || "").slice(0, 80)}", ${E3_VAC_DAY} "${(eV.east.find(t => /vacation/.test(t)) || "").slice(0, 80)}" (with its diamond); ${eD.east.length} / ${eV.east.length} East line(s)`);
@@ -2435,6 +2426,20 @@ try {
       } else console.log(`     (Item E3: Fierce's cap does not count East days in this rules context (countsEastDays: ${factsS.countsEast.join(",") || "none"}) - the fairness ' + N East P-week' check is vacuous this run)`);
     } catch (e) {
       fail("Item E3 (scheduler): the scheduler pass threw: " + errLine(e));
+      if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+    }
+    // Day-click summary (9/27): the scheduler's day editor is still the FULL editor (Faraz: "me as the scheduler needs the
+    // full view") - both selects, Save, the keyboard hint in the DOM (hidden only at <= 600px), the Source line and the
+    // filler lines, and none of the summary's parts (You chip, Give away, See it on Open shifts). Its own try on
+    // E3_LOCK_DAY (10/15), which needs neither a derived East week nor East vacations, so it runs even when the E3
+    // scheduler pass above throws.
+    try {
+      const eF = await e3Editor(page, E3_LOCK_DAY);
+      const bad = [eF.selects !== 2 ? eF.selects + " select(s)" : "", !eF.save ? "no Save" : "", !eF.kbdHint ? "no keyboard hint" : "", !/^Source: /.test(eF.source) ? "no Source line ('" + eF.source + "')" : "", !eF.filler ? "no 'Not in a holiday unit.' / 'Vacations: ...' line" : "", eF.you ? "a You chip" : "", eF.give ? "Give away" : "", eF.openShifts ? "See it on Open shifts" : ""].filter(Boolean);
+      if (bad.length) fail(`Day-click summary (scheduler, ${E3_LOCK_DAY}): the full editor lost a part or gained a summary part - ${bad.join(", ")}`);
+      else ok(`Day-click summary (scheduler, ${E3_LOCK_DAY}): the full editor stays - 2 selects, Save, keyboard hint, '${eF.source}', the filler lines; offers lines ${eF.offers}${eF.offers ? "" : " (none this run - the offers lines are checked by U3c)"}; no You chip / Give away / Open shifts link`);
+    } catch (e) {
+      fail("Day-click summary (scheduler): " + errLine(e));
       if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
     }
 
@@ -2537,9 +2542,9 @@ try {
         }
         // Day-click summary (9/27): a surgeon on his OWN day (a day the served rows give him in November 2026 or, if he
         // has none there, December; an upcoming one when the month has it) - the You chip on his row, Propose a trade +
-        // Give away as real buttons (>= 36px), no offers / Source; Give away opens the Propose card in give mode. Then an
-        // OPEN slot (the grid's data-open, today onward) offers 'See it on Open shifts', which lands on the board, and the
-        // coverage strip's open count leads to the board too (not to a read-only day).
+        // (today onward) Give away as real buttons (>= 36px), no offers / Source; Give away opens the Propose card in give
+        // mode. Then an OPEN slot the board lists, on a day he does not hold, offers 'See it on Open shifts', which lands
+        // on the board, and the coverage strip's open count leads to the board too (not to a read-only day).
         if (R.kind === "surgeon") {
           const pid = R.pid;
           const DS = `Day-click summary (${R.tag} ${pid})`;
@@ -2572,24 +2577,36 @@ try {
                 };
               }, role);
               if (od.blocks !== 2 || !od.youIn || od.you !== 1) fail(`${DS}, ${own.day} (${role}): his row must carry the one You chip (blocks ${od.blocks}, chip on his row ${od.youIn}, chips ${od.you})`);
-              else if (!od.trade || od.trade.tag !== "BUTTON" || !/^Propose a trade for this day/.test(od.trade.text) || !od.give || od.give.text !== "Give away") fail(`${DS}, ${own.day}: Propose a trade + Give away expected, got ${JSON.stringify({ trade: od.trade, give: od.give })}`);
+              // Give away only today onward (a give on a past day is refused at accept - TRADE_PAST)
+              const upcoming = !!todayCal && own.day >= todayCal;
+              if (!od.trade || od.trade.tag !== "BUTTON" || !/^Propose a trade for this day/.test(od.trade.text) || (upcoming ? !od.give || od.give.text !== "Give away" : !!od.give)) fail(`${DS}, ${own.day}: Propose a trade${upcoming ? " + Give away" : " and no Give away (a past day)"} expected, got ${JSON.stringify({ trade: od.trade, give: od.give })}`);
               else if (od.offers || od.source) fail(`${DS}, ${own.day}: the summary still shows ${od.offers} offers line(s) / a Source line (${od.source})`);
-              else ok(`${DS}, ${own.day} (${role}): You chip on his row, '${od.trade.text.slice(0, 70)}' (${od.trade.h}px) + 'Give away' (${od.give.h}px), no offers lines, no Source line`);
-              await rp.click("[data-testid=day-editor] [data-testid=editor-give]");
-              await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
-              await rp.waitForSelector("[data-testid=trade-kind-give]", { timeout: 8000 });
-              const gp = await rp.$eval("[data-testid=trade-kind-give]", el => el.getAttribute("aria-pressed"));
-              if (gp !== "true") fail(`${DS}: Give away should open the Propose card in give mode (trade-kind-give aria-pressed true), got ${gp}`);
-              else ok(`${DS}: Give away closed the editor and opened the Propose card in give mode`);
+              else ok(`${DS}, ${own.day} (${role}): You chip on his row, '${od.trade.text.slice(0, 70)}' (${od.trade.h}px)${upcoming ? " + 'Give away' (" + od.give.h + "px)" : ", no Give away (a past day)"}, no offers lines, no Source line`);
+              if (upcoming && od.give) {
+                await rp.click("[data-testid=day-editor] [data-testid=editor-give]");
+                await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
+                await rp.waitForSelector("[data-testid=trade-kind-give]", { timeout: 8000 });
+                const gp = await rp.$eval("[data-testid=trade-kind-give]", el => el.getAttribute("aria-pressed"));
+                if (gp !== "true") fail(`${DS}: Give away should open the Propose card in give mode (trade-kind-give aria-pressed true), got ${gp}`);
+                else ok(`${DS}: Give away closed the editor and opened the Propose card in give mode`);
+              } else {
+                console.log(`     (${DS}: ${own.day} is past - the Give away click is not exercised)`);
+                await rp.keyboard.press("Escape");
+                await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
+              }
             }
-            // an OPEN slot today onward (the grid's own data-open) -> the board
+            // an OPEN slot the board lists (read from the board's own rows), on a day he does not hold -> the board
+            await rp.click('button[data-tab="openshifts"]');
+            await rp.waitForSelector("[data-testid=openshifts-card]", { timeout: 8000 });
+            const boardDays = await rp.$$eval("[data-testid=openshifts-table] tbody tr[data-day]", els => Array.from(new Set(els.map(e => e.getAttribute("data-day")))));
+            await rp.click('button[data-tab="calendar"]');
             let openDay = null;
             for (const [yy, mm] of [[2026, 10], [2026, 11]]) {
               await e3Month(rp, yy, mm);
-              openDay = await rp.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", (els, mo) => { const c = els.find(e => e.getAttribute("data-open") && !e.getAttribute("data-preview") && e.getAttribute("data-day").slice(5, 7) === mo); return c ? c.getAttribute("data-day") : null; }, String(mm + 1).padStart(2, "0"));
+              openDay = await rp.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", (els, a) => { const c = els.find(e => e.getAttribute("data-open") && !e.getAttribute("data-preview") && e.getAttribute("data-day").slice(5, 7) === a.mo && a.board.includes(e.getAttribute("data-day")) && e.getAttribute("data-primary") !== a.pid && e.getAttribute("data-backup") !== a.pid); return c ? c.getAttribute("data-day") : null; }, { mo: String(mm + 1).padStart(2, "0"), board: boardDays, pid });
               if (openDay) break;
             }
-            if (!openDay) console.log(`     (${DS}: no OPEN slot in November / December 2026 on this page - 'See it on Open shifts' is not exercised)`);
+            if (!openDay) console.log(`     (${DS}: no board-listed OPEN slot he does not hold in November / December 2026 on this page (${boardDays.length} board day(s)) - 'See it on Open shifts' is not exercised)`);
             else {
               await rp.click(`[data-testid=cal-grid] .cal-cell[data-day="${openDay}"]`);
               await rp.waitForSelector("[data-testid=day-editor] [role=dialog]", { timeout: 5000 });
