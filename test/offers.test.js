@@ -96,7 +96,7 @@ check("PD (9/23) / 9-24: the seed's offerPeriods[0] is published (read-only for 
   const P = seed.offerPeriods;
   eq(P.length, 3);
   eq([P[0].label, P[0].status, P[0].start, P[0].end, P[0].offersCloseAt], ["Nov 2026 - Jan 2027", "published", "2026-11-02", "2027-01-03", "2026-10-02"]);
-  eq([P[1].label, P[1].start, P[1].end, P[1].offersCloseAt, P[1].publishBy, P[1].status, P[1].rulesOnly, P[1].offerModes, P[1].source], ["Jan 2027", "2027-01-04", "2027-01-31", "2026-11-23", "2026-12-07", "upcoming", [], {}, "faraz-2026-09-24-period-jan"], "9-24: the Jan 2027 row exactly as Faraz created it live");
+  eq([P[1].label, P[1].start, P[1].end, P[1].offersCloseAt, P[1].publishBy, P[1].status, P[1].rulesOnly, P[1].offerModes, P[1].source], ["Jan 2027", "2027-01-04", "2027-01-31", "2026-11-23", "2026-12-07", "upcoming", ["s5"], {}, "faraz-2026-09-24-period-jan"], "9-24 / 9-27: the Jan 2027 row as live (created by Faraz 9/24; rulesOnly ['s5'] = Fierce's 'Go by my rules' choice of 2026-09-26 00:16:35Z, mirrored 9/27 so the seed apply keeps it)");
   eq([P[2].label, P[2].start, P[2].end, P[2].offersCloseAt, P[2].publishBy, P[2].status, P[2].rulesOnly, P[2].offerModes], ["Feb 2027 - Apr 2027", "2027-02-01", "2027-05-02", "2026-12-21", "2027-01-04", "upcoming", [], {}], "9-24: Feb - Apr 2027 ends Sunday 2027-05-02 (the live end since Faraz's 9/24 SQL update; label unchanged)");
   eq(H.offerPeriodOpen(P[0], "2026-09-23"), false, "published = frozen for a surgeon whatever the close date (the painter greys its days; OF003 in the database still reads offers_close_at only)");
   eq([H.offerPeriodOpen(P[1], "2026-09-24"), H.offerPeriodOpen(P[2], "2026-09-24")], [true, true], "both later periods are open today");
