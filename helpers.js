@@ -119,6 +119,78 @@ function todayOrCentral(v) {
   return (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : todayCentral();
 }
 
+/* ═══ The shift day (review 9/27, Do first 3) ═══
+   A call day is ONE 07:00 -> 07:00 shift (America/Chicago), so from 00:00 to
+   06:59 Central the pair on call NOW is the previous calendar day's. todayCentral()
+   stays the calendar date (the OPEN logic, the today ring, the coverage strip,
+   Mine, the board, the notices); only "who is on call now" - the today banner,
+   Share today and the ?public=1 banner - reads the shift day.
+   shiftClockCentral(now) -> { calendarDay, shiftDay, handoffDay, beforeHandoff }
+     calendarDay   the Central calendar date of `now` (todayCentral's answer)
+     shiftDay      the call day whose shift covers `now` (calendarDay, or the day
+                   before when the Central hour is < 07)
+     handoffDay    shiftDay + 1 - the day the current shift ends at 07:00
+     beforeHandoff true between 00:00 and 06:59 Central (shiftDay !== calendarDay)
+   `now` is a Date or epoch ms (default: the current time). Read through
+   Intl.DateTimeFormat with timeZone America/Chicago and hourCycle 'h23' - never
+   the device zone and never hour12 (whose "24" for midnight is a known engine
+   quirk); both DST days fall out of the zone data (01:30 CDT and 01:30 CST are
+   both before the handoff). With no time-zone data the device clock is used and
+   a warning is logged, exactly as todayCentral does. */
+const SHIFT_HANDOFF_HOUR = 7;
+let shiftClockFormatter = null;
+function shiftCentralParts(now) {
+  let d = now instanceof Date ? now : (typeof now === "number" ? new Date(now) : new Date());
+  if (isNaN(d.getTime())) { console.warn("shiftClockCentral: invalid time, using the current time:", now); d = new Date(); }
+  try {
+    if (!shiftClockFormatter) shiftClockFormatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" });
+    const p = {};
+    shiftClockFormatter.formatToParts(d).forEach(x => { if (x.type !== "literal") p[x.type] = x.value; });
+    const y = Number(p.year), m = Number(p.month), dd = Number(p.day), h = Number(p.hour);
+    if (y > 0 && m >= 1 && m <= 12 && dd >= 1 && dd <= 31 && h >= 0 && h <= 24) return { y, m, d: dd, h: h === 24 ? 0 : h };
+    console.warn("shiftClockCentral: unexpected Intl parts, using the device clock:", p);
+  } catch (e) { console.warn("shiftClockCentral: time zone data unavailable, using the device clock", e); }
+  return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate(), h: d.getHours() };
+}
+// The ISO day `n` days after the civil date y-m-d (UTC arithmetic - no device zone, no DST).
+function shiftIsoPlus(y, m, d, n) {
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
+}
+function shiftClockCentral(now) {
+  const c = shiftCentralParts(now);
+  const beforeHandoff = c.h < SHIFT_HANDOFF_HOUR;
+  const back = beforeHandoff ? -1 : 0;
+  return { calendarDay: shiftIsoPlus(c.y, c.m, c.d, 0), shiftDay: shiftIsoPlus(c.y, c.m, c.d, back), handoffDay: shiftIsoPlus(c.y, c.m, c.d, back + 1), beforeHandoff };
+}
+// shiftDayCentral(now) -> "YYYY-MM-DD": the call day whose 07:00 -> 07:00 shift covers `now` (Central).
+function shiftDayCentral(now) { return shiftClockCentral(now).shiftDay; }
+
+// onCallNow(schedule, now) -> the today banner's / Share today's view of the
+// shift clock: { shiftDay, calendarDay, handoffDay, handoffDow, beforeHandoff,
+// current, next } - current = schedule[shiftDay] (the pair on call now), next =
+// schedule[calendarDay] before 07:00 (the pair from 07:00), else null. A missing
+// row is null (the banner's HolderTag reads it OPEN - through dayHolder, never
+// slotIsOpen, which answers false for yesterday's shift). Pure given `now`.
+function onCallNow(schedule, now) {
+  const c = shiftClockCentral(now);
+  const s = schedule && typeof schedule === "object" ? schedule : {};
+  return { shiftDay: c.shiftDay, calendarDay: c.calendarDay, handoffDay: c.handoffDay, handoffDow: ttDow(c.handoffDay), beforeHandoff: c.beforeHandoff,
+    current: s[c.shiftDay] || null, next: c.beforeHandoff ? (s[c.calendarDay] || null) : null };
+}
+// onCallNowMsg(view, nameOf, loaded) -> the Share today text (names only, never contact data):
+//   "Silvis call now (until 07:00 Mon): P Khan / B Acton"
+//   + before 07:00 "; from 07:00: P Burchett / B Philip"
+// An unassigned slot reads OPEN (holderLabel). Before the first load with no row: "Silvis call now: loading schedule".
+function onCallNowMsg(view, nameOf, loaded) {
+  const v = view || {};
+  if (!loaded && !v.current) return "Silvis call now: loading schedule";
+  const pair = (a) => `P ${holderLabel(dayHolder(a, "primary"), nameOf)} / B ${holderLabel(dayHolder(a, "backup"), nameOf)}`;
+  let msg = `Silvis call now (until 07:00 ${v.handoffDow || "?"}): ${pair(v.current)}`;
+  if (v.beforeHandoff) msg += `; from 07:00: ${pair(v.next)}`;
+  return msg;
+}
+
 // slotIsOpen(dateStr, holder, today) -> true iff the slot has NO holder
 // (null / undefined / "") AND dateStr is today or later (today inclusive,
 // both ISO strings). An unassigned slot before today is not OPEN - nobody can
@@ -3796,6 +3868,7 @@ if (typeof module !== "undefined" && module.exports) {
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
+    SHIFT_HANDOFF_HOUR, shiftClockCentral, shiftDayCentral, onCallNow, onCallNowMsg,
     vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,

@@ -77,6 +77,7 @@ checked and should not be raised again. The scheduler asked for this file to liv
 - **Effort** M · **Risk** medium (sync path: branch, PR and smoke) · **Scheduler-only** no · must ship before the poll de-dup item in section 3.
 
 ### 3. "On call today" ignores the 07:00 handoff (medium)
+- **Status:** Done on feat/on-call-now (not merged yet) - `helpers.shiftDayCentral` / `onCallNow`; the banner, Share today and `?public=1` name the pair on call now (build guide §9). The optional "You: next call" line is not in it (a separate item).
 - **Why:**
   - `todayStr = todayCentral()` (4521; helpers.js:108-115) drives the banner and the share text (4523-4529, 5816-5822).
   - Shifts run 07:00 to 07:00 (CLAUDE.md:34; calendar-sync/index.ts:219). So from 00:00 to 06:59 the banner and Share name the next pair, and ?public=1 shows the same.

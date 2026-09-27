@@ -2697,6 +2697,90 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes("const goToday = () => { const n = parse(todayCentral());"), "goToday");
     assert.strictEqual(count("useState(() => new Date().getMonth())"), 0, "a device-clock month initialiser remains");
   });
+
+  /* ---------------- G2. on call NOW follows the 07:00 handoff (review 9/27, Do first 3) ---------------- */
+  // Central wall-clock cases are written as UTC instants: CDT = UTC-5, CST = UTC-6.
+  const shiftCase = (utc) => H.shiftClockCentral(new Date(utc));
+  check("shiftDayCentral: before 07:00 Central is the previous calendar day's shift; 07:00 on is the calendar day (00:30, 06:59, 07:00, 23:59)", () => {
+    assert.strictEqual(H.SHIFT_HANDOFF_HOUR, 7);
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-09-27T05:30:00Z")), "2026-09-26", "00:30 CDT Sun 9/27");
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-09-27T11:59:00Z")), "2026-09-26", "06:59 CDT");
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-09-27T12:00:00Z")), "2026-09-27", "07:00 CDT");
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-09-28T04:59:00Z")), "2026-09-27", "23:59 CDT Sun 9/27");
+    assert.strictEqual(H.shiftDayCentral(Date.parse("2026-09-27T05:30:00Z")), "2026-09-26", "epoch ms is accepted");
+    assert.deepStrictEqual(shiftCase("2026-09-27T05:30:00Z"), { calendarDay: "2026-09-27", shiftDay: "2026-09-26", handoffDay: "2026-09-27", beforeHandoff: true });
+    assert.deepStrictEqual(shiftCase("2026-09-27T12:00:00Z"), { calendarDay: "2026-09-27", shiftDay: "2026-09-27", handoffDay: "2026-09-28", beforeHandoff: false });
+  });
+  check("shiftDayCentral: month and year boundaries (Oct 1 00:30 -> 9/30; Jan 1 00:30 -> Dec 31; Dec 31 23:59 -> Dec 31)", () => {
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-10-01T05:30:00Z")), "2026-09-30");
+    assert.strictEqual(H.shiftDayCentral(new Date("2027-01-01T06:30:00Z")), "2026-12-31", "Jan 1 00:30 CST");
+    assert.deepStrictEqual(shiftCase("2027-01-01T06:30:00Z"), { calendarDay: "2027-01-01", shiftDay: "2026-12-31", handoffDay: "2027-01-01", beforeHandoff: true });
+    assert.strictEqual(H.shiftDayCentral(new Date("2027-01-01T05:59:00Z")), "2026-12-31", "Dec 31 23:59 CST");
+    assert.strictEqual(H.shiftDayCentral(new Date("2027-01-01T13:00:00Z")), "2027-01-01", "Jan 1 07:00 CST");
+  });
+  check("shiftDayCentral: fall back 2026-11-01 (01:30 CDT and 01:30 CST both before the handoff; 06:59 / 07:00 CST)", () => {
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-11-01T06:30:00Z")), "2026-10-31", "01:30 CDT");
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-11-01T07:30:00Z")), "2026-10-31", "01:30 CST (the repeated hour)");
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-11-01T12:59:00Z")), "2026-10-31", "06:59 CST");
+    assert.strictEqual(H.shiftDayCentral(new Date("2026-11-01T13:00:00Z")), "2026-11-01", "07:00 CST");
+  });
+  check("shiftDayCentral: spring forward 2027-03-14 (01:59 CST -> 03:00 CDT; 06:59 / 07:00 CDT)", () => {
+    assert.strictEqual(H.shiftDayCentral(new Date("2027-03-14T07:59:00Z")), "2027-03-13", "01:59 CST");
+    assert.strictEqual(H.shiftDayCentral(new Date("2027-03-14T08:00:00Z")), "2027-03-13", "03:00 CDT (one minute later)");
+    assert.strictEqual(H.shiftDayCentral(new Date("2027-03-14T11:59:00Z")), "2027-03-13", "06:59 CDT");
+    assert.strictEqual(H.shiftDayCentral(new Date("2027-03-14T12:00:00Z")), "2027-03-14", "07:00 CDT");
+  });
+  check("shiftDayCentral reads Chicago whatever the device zone (TZ=Asia/Tokyo and TZ=Pacific/Honolulu child processes)", () => {
+    const cp = require("child_process");
+    const code = 'const H = require(process.argv[1]); console.log(JSON.stringify(["2026-09-27T05:30:00Z", "2026-09-27T12:00:00Z", "2026-11-01T07:30:00Z", "2027-03-14T08:00:00Z"].map(t => H.shiftDayCentral(new Date(t)))));';
+    for (const zone of ["Asia/Tokyo", "Pacific/Honolulu"]) {
+      const r = cp.spawnSync(process.execPath, ["-e", code, path.join(ROOT, "helpers.js")], { env: { ...process.env, TZ: zone }, encoding: "utf8" });
+      assert.strictEqual(r.status, 0, r.stderr);
+      assert.deepStrictEqual(JSON.parse(r.stdout.trim()), ["2026-09-26", "2026-09-27", "2026-10-31", "2027-03-13"], "TZ=" + zone);
+    }
+  });
+  check("onCallNow / onCallNowMsg: the pair on call now (until 07:00 <Dow>), the pair from 07:00 before the handoff, OPEN for an unassigned slot of yesterday's shift, no contact data", () => {
+    const sched = { "2026-09-26": { primary: "s1", backup: null }, "2026-09-27": { primary: "s2", backup: "s3" }, "2026-09-28": { primary: null, backup: "s4", externalCover: "Locum" } };
+    const early = H.onCallNow(sched, new Date("2026-09-27T05:30:00Z")); // 00:30 Sun 9/27
+    assert.strictEqual(early.shiftDay, "2026-09-26"); assert.strictEqual(early.handoffDow, "Sun"); assert.strictEqual(early.beforeHandoff, true);
+    assert.strictEqual(early.current, sched["2026-09-26"]); assert.strictEqual(early.next, sched["2026-09-27"]);
+    assert.strictEqual(H.onCallNowMsg(early, nameOf, true), "Silvis call now (until 07:00 Sun): P Khan / B OPEN; from 07:00: P Burchett / B Acton");
+    assert.strictEqual(H.slotIsOpen("2026-09-26", null, "2026-09-27"), false, "fixture: slotIsOpen says a past day is not OPEN - the banner must not ask it");
+    const day = H.onCallNow(sched, new Date("2026-09-27T12:00:00Z")); // 07:00 Sun
+    assert.strictEqual(day.shiftDay, "2026-09-27"); assert.strictEqual(day.handoffDow, "Mon"); assert.strictEqual(day.next, null);
+    assert.strictEqual(H.onCallNowMsg(day, nameOf, true), "Silvis call now (until 07:00 Mon): P Burchett / B Acton");
+    const mon = H.onCallNow(sched, new Date("2026-09-28T20:00:00Z"));
+    assert.strictEqual(H.onCallNowMsg(mon, nameOf, true), "Silvis call now (until 07:00 Tue): P Locum (external) / B Philip", "an external cover stands in for the primary");
+    const none = H.onCallNow({}, new Date("2026-09-27T05:30:00Z"));
+    assert.strictEqual(none.current, null);
+    assert.strictEqual(H.onCallNowMsg(none, nameOf, true), "Silvis call now (until 07:00 Sun): P OPEN / B OPEN; from 07:00: P OPEN / B OPEN");
+    assert.strictEqual(H.onCallNowMsg(none, nameOf, false), "Silvis call now: loading schedule", "before the first load: a placeholder, never OPEN");
+    assert.ok(!/@|\d{3}[-. ]\d{3}[-. ]\d{4}/.test(H.onCallNowMsg(early, nameOf, true)), "names only");
+  });
+  check("index-source.html: the today banner and Share today read the shift day (onCallNow); todayStr stays todayCentral(); the shift clock ticks and is cleaned up", () => {
+    assert.ok(src.includes("  const todayStr = todayCentral();\n"), "todayStr stays the calendar date");
+    assert.strictEqual(count("const todayAssign"), 0, "the calendar-day todayAssign is gone (the banner reads onCall)");
+    assert.ok(src.includes("  const onCall = onCallNow(schedule, Date.now());"), "onCall");
+    assert.ok(src.includes("  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded);"), "the share text is helpers.onCallNowMsg");
+    const sh = src.slice(src.indexOf("  const shareTonightMsg = async () => {"), src.indexOf("\n  };\n", src.indexOf("  const shareTonightMsg = async () => {")));
+    assert.ok(sh.includes("const msg = buildTonightMsg();"), "Share today sends buildTonightMsg");
+    const b0 = src.indexOf('<div data-testid="today-banner"'), b1 = src.indexOf("{offerNoticeBox(offerNotices.filter(n => n.urgent), \"calendar\")}", b0);
+    assert.ok(b0 > 0 && b1 > b0, "the banner block");
+    const banner = src.slice(b0, b1);
+    for (const w of ['data-shift-day={onCall.shiftDay}', "On call now (until 07:00 {onCall.handoffDow}):", '<HolderTag a={onCall.current} role="primary" small/>', '<HolderTag a={onCall.current} role="backup" small/>',
+      "<span data-testid=\"today-banner-msg\" style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>", "{onCall.beforeHandoff && (", 'data-testid="today-banner-next"', "<span>From 07:00:</span>", '<HolderTag a={onCall.next} role="primary" small/>', '<HolderTag a={onCall.next} role="backup" small/>', "{copied ? \"Copied\" : \"Share today\"}"]) assert.ok(banner.includes(w), "banner: " + w);
+    assert.ok(!banner.includes("slotIsOpen") && !banner.includes("todayStr"), "the banner never asks slotIsOpen or the calendar day");
+    assert.strictEqual(count("On call today"), 0, "the old 'On call today' wording remains");
+    assert.strictEqual(count("Silvis call today"), 0, "the old share wording remains");
+    // HolderTag keeps the loading guard and renders an explicit OPEN for an empty slot of any date
+    const ht = src.slice(src.indexOf("  const HolderTag = ({a, role, small}) => {"), src.indexOf("\n  };\n", src.indexOf("  const HolderTag = ({a, role, small}) => {")));
+    assert.ok(ht.includes("if (!v && !loaded) return <LoadingTag/>;") && ht.includes("if (!v) return <OpenTag/>;") && !ht.includes("slotIsOpen"), "HolderTag: loading guard, then OPEN");
+    // the shift clock: one interval + one visibilitychange listener, both removed in the cleanup
+    const tk = src.slice(src.indexOf("  const [, setShiftClockKey] = useState("), src.indexOf("  const buildTonightMsg = () =>"));
+    assert.ok(tk.includes("const shiftClockTimer = setInterval(tick, 30000);") && tk.includes('document.addEventListener("visibilitychange", onVisible);'), "the shift clock timer + visibility listener");
+    assert.ok(tk.includes('return () => { clearInterval(shiftClockTimer); document.removeEventListener("visibilitychange", onVisible); };') && tk.includes("}, []);"), "the shift clock cleanup");
+    assert.ok(tk.includes('setShiftClockKey(c.calendarDay + "|" + c.shiftDay)'), "the tick changes state only when the calendar day or the shift day moves");
+  });
   check("empty-schedule note and legend say OPEN is today onward", () => {
     assert.ok(src.includes("No schedule days in the database yet - every day from today shows OPEN."), "empty-schedule note");
     // TH: the legend's OPEN is the theme's red token (T.open = #B91C1C light / #F06060 dark), same wording.

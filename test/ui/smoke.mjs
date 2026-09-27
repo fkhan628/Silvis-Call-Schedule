@@ -670,6 +670,43 @@ const liveEarlyByDay = {}; liveRowsEarly.forEach(r => { liveEarlyByDay[r.day] = 
 // the app's holder rule: an external cover stands in for a primary; a day with no row is open in both roles
 const liveOpenEarly = (d, role) => { const r = liveEarlyByDay[d]; return role === "primary" ? !(r && (r.primary_id || r.external_cover)) : !(r && r.backup_id); };
 const isoPlus = (d, n) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + n * 86400000).toISOString().slice(0, 10);
+// Do first 3 (review 9/27): the today banner and Share today name the pair on call NOW - the 07:00 -> 07:00 shift
+// covering this moment (helpers.js shiftClockCentral / onCallNow; before 07:00 Central the previous calendar day's
+// pair, plus the pair from 07:00). The expectation is restated from the up-front rows and the blob roster for the
+// clock the PAGE reads (shiftClockCentral(new Date()) evaluated in the page), never a wall-clock constant, so the
+// check holds at any hour. The harness-opened slot (live mode) is >= today + 3, never the shift day or today.
+const onCallRosterEarly = await (async () => {
+  try {
+    let d;
+    if (fixture) d = fixture.call_schedule_data[0].data;
+    else {
+      const r = await fetch(`https://${SUPABASE_HOST}/rest/v1/call_schedule_data?id=eq.main&select=data`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      d = ((await r.json())[0] || {}).data; if (typeof d === "string") d = JSON.parse(d);
+    }
+    const m = {}; ((d && d.roster) || []).forEach(x => { if (x && x.id) m[x.id] = x.name; });
+    return m;
+  } catch (e) { console.log("     (roster read for the on-call-now check failed: " + (e && e.message || e) + " - names are not compared)"); return null; }
+})();
+const onCallNowExpect = (clk) => {
+  if (!onCallRosterEarly || !clk) return null;
+  const lab = (v) => (v === null || v === undefined || v === "") ? "OPEN" : String(v).startsWith("ext:") ? String(v).slice(4) + " (external)" : (onCallRosterEarly[v] || v);
+  const pair = (r) => `P ${lab(r ? (r.primary_id || (r.external_cover ? "ext:" + r.external_cover : null)) : null)} / B ${lab(r ? r.backup_id : null)}`;
+  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(clk.handoffDay + "T12:00:00Z").getUTCDay()];
+  return `Silvis call now (until 07:00 ${dow}): ${pair(liveEarlyByDay[clk.shiftDay])}` + (clk.beforeHandoff ? `; from 07:00: ${pair(liveEarlyByDay[clk.calendarDay])}` : "");
+};
+// Reads the page's own shift clock, waits (<= 40 s: the app re-reads it every 30 s) until the banner shows that
+// shift day, and returns { clk, bannerDay, msg, next } or { crossed: true } when the clock moved while reading.
+const readOnCallBanner = async (pg) => {
+  const clockOf = () => pg.evaluate(() => (typeof shiftClockCentral === "function" ? shiftClockCentral(new Date()) : null));
+  const clk = await clockOf();
+  if (!clk) return { error: "helpers.shiftClockCentral is not a page global" };
+  await pg.waitForFunction(() => { const el = document.querySelector("[data-testid=today-banner]"); return !!el && el.getAttribute("data-shift-day") === shiftDayCentral(new Date()); }, null, { timeout: 40000 }).catch(() => {});
+  const b = await pg.$eval("[data-testid=today-banner]", el => ({ day: el.getAttribute("data-shift-day"), before: el.getAttribute("data-before-handoff"), msg: (el.querySelector("[data-testid=today-banner-msg]") || {}).textContent || "", next: !!el.querySelector("[data-testid=today-banner-next]"), text: el.textContent }));
+  const clk2 = await clockOf();
+  if (clk2.shiftDay !== clk.shiftDay || clk2.calendarDay !== clk.calendarDay) return { crossed: true, clk, clk2 };
+  return { clk, ...b };
+};
 // the first open slot (today or later - the app's OPEN rule) between two ISO days inclusive, else null
 const liveOpenBetween = (from, to) => { for (let d = from < todayCentral ? todayCentral : from; d <= to; d = isoPlus(d, 1)) if (liveOpenEarly(d, "primary") || liveOpenEarly(d, "backup")) return d; return null; };
 // LIVE mode only: the slot the harness opens for the claim scenario (the search after the first load). The GET
@@ -1303,6 +1340,33 @@ try {
   await page.waitForSelector("text=Synced", { timeout: 30000 }).catch(() => fail("header never reached 'Synced' (initial load did not complete)"));
   const unlinked = await page.$("[data-testid=unlinked-banner]");
   if (unlinked) fail("unlinked-account banner shown for a profile that HAS person_id s1"); else ok("no unlinked banner for the linked scheduler profile");
+
+  // Do first 3 (review 9/27): the today banner names the pair of shiftDayCentral(new Date()) (the page's helper), the
+  // "From 07:00" line shows exactly before the handoff, and Share today's text says "now" (navigator.share stubbed to
+  // capture it; no contact data). Clock-robust: every expectation derives from the clock the page reads.
+  try {
+    const r = await readOnCallBanner(page);
+    if (r.error) fail("On call now: " + r.error);
+    else if (r.crossed) console.log(`     (On call now: the Central clock crossed a boundary while reading (${r.clk.shiftDay} -> ${r.clk2.shiftDay}) - skipped this run)`);
+    else {
+      const want = onCallNowExpect(r.clk);
+      if (r.day !== r.clk.shiftDay) fail(`On call now: the banner's data-shift-day is ${r.day}, the page's shiftDayCentral(new Date()) is ${r.clk.shiftDay}`);
+      else if ((r.before === "1") !== r.clk.beforeHandoff || r.next !== r.clk.beforeHandoff) fail(`On call now: the 'From 07:00' line (${r.next}, data-before-handoff=${r.before}) disagrees with the clock (beforeHandoff ${r.clk.beforeHandoff})`);
+      else if (!/^Silvis call now \(until 07:00 (Sun|Mon|Tue|Wed|Thu|Fri|Sat)\): P .+ \/ B .+/.test(r.msg)) fail("On call now: the banner's share text is not 'Silvis call now (until 07:00 <Dow>): P ... / B ...': " + r.msg);
+      else if (want && r.msg !== want) fail(`On call now: the banner's share text for the ${r.clk.shiftDay} shift should be '${want}', got '${r.msg}'`);
+      else if (!/^On call now \(until 07:00 /.test(r.text)) fail("On call now: the banner does not open with 'On call now (until 07:00 <Dow>)': " + r.text.slice(0, 90));
+      else ok(`On call now: the banner names the ${r.clk.shiftDay} shift (the page's shiftDayCentral(new Date()); calendar day ${r.clk.calendarDay}${r.clk.beforeHandoff ? ", before 07:00 - with the 'From 07:00' line" : ""}): ${r.msg}${want ? "" : " (names not compared)"}`);
+      await page.evaluate(() => { window.__sharedText = null; Object.defineProperty(navigator, "share", { configurable: true, writable: true, value: async (d) => { window.__sharedText = d && d.text; } }); });
+      await page.locator("[data-testid=today-banner] button", { hasText: "Share today" }).click();
+      const shared = await page.waitForFunction(() => window.__sharedText, null, { timeout: 5000 }).then(h => h.jsonValue()).catch(() => null);
+      await page.evaluate(() => { try { delete navigator.share; } catch (e) {} });
+      if (!shared) fail("Share today: navigator.share (stubbed) was never called with a text");
+      else if (!/^Silvis call now \(until 07:00 /.test(shared) || !/\bnow\b/.test(shared)) fail("Share today: the text does not say 'now': " + shared);
+      else if (/@|\d{3}[-. )]\d{3}[-. ]\d{4}/.test(shared)) fail("Share today: contact data in the text: " + shared);
+      else if (shared !== r.msg) fail(`Share today: the shared text '${shared}' is not the banner's '${r.msg}'`);
+      else ok("Share today: the shared text says 'now' and matches the banner: " + shared);
+    }
+  } catch (e) { fail("On call now / Share today: " + String(e && e.message || e).split("\n")[0]); }
 
   // Realtime mock joined?
   if (await waitFor(() => rt.joined, 15000)) ok(`realtime mock joined ${rt.topic} (frames: ${[...new Set(rt.frames)].join(", ")})`);
@@ -8868,6 +8932,17 @@ try {
     else ok(`?public=1: schedule loaded - ${filled.length} of ${pubCells.length} visible cells carry an assignment (e.g. ${filled[0].day} P ${filled[0].p || filled[0].ext})`);
     const pubBanner = await pub.$eval("[data-testid=today-banner]", el => el.textContent).catch(() => "");
     if (/loading/i.test(pubBanner)) fail("?public=1: today banner still shows the loading placeholder: " + pubBanner); else ok("?public=1: today banner shows real holders: " + pubBanner.replace(/\s+/g, " ").slice(0, 90));
+    // Do first 3 (review 9/27): the public banner follows the same shift day (the page's shiftDayCentral(new Date())).
+    const pr = await readOnCallBanner(pub);
+    if (pr.error) fail("?public=1 On call now: " + pr.error);
+    else if (pr.crossed) console.log(`     (?public=1 On call now: the Central clock crossed a boundary while reading - skipped this run)`);
+    else {
+      const want = onCallNowExpect(pr.clk);
+      if (pr.day !== pr.clk.shiftDay) fail(`?public=1 On call now: the banner's data-shift-day is ${pr.day}, the page's shiftDayCentral(new Date()) is ${pr.clk.shiftDay}`);
+      else if (pr.next !== pr.clk.beforeHandoff) fail(`?public=1 On call now: the 'From 07:00' line (${pr.next}) disagrees with the clock (beforeHandoff ${pr.clk.beforeHandoff})`);
+      else if (want && pr.msg !== want) fail(`?public=1 On call now: expected '${want}', got '${pr.msg}'`);
+      else ok(`?public=1 On call now: the banner names the ${pr.clk.shiftDay} shift: ${pr.msg}`);
+    }
     // Item E (Faraz 9/24; Item E2 9/25): the public link gets the clean grid too - November 2026 (the month whose
     // derived / forecast days the scheduler's day editor was checked on above) carries no E / F / f badge, no
     // "East-derived:" hover bit and no East legend line.

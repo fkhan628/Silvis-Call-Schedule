@@ -4712,14 +4712,25 @@ function CallSchedule() {
   // todayCentral) drives the today ring, the coverage strip and the OPEN
   // logic (an unassigned slot is OPEN only from today forward, Faraz 9/22).
   const todayStr = todayCentral();
-  const todayAssign = schedule[todayStr] || null;
-  const buildTonightMsg = () => {
-    const a = todayAssign;
-    if (!a && !loaded) return "Silvis call today: loading schedule";
-    const p = a ? holderLabel(dayHolder(a, "primary"), nameOf) : "OPEN";
-    const b = a ? holderLabel(dayHolder(a, "backup"), nameOf) : "OPEN";
-    return `Silvis call today: P ${p} / B ${b}`;
-  };
+  // "On call now" follows the 07:00 -> 07:00 shift (review 9/27, Do first 3):
+  // from 00:00 to 06:59 Central the pair on call is the previous calendar
+  // day's (helpers.js shiftClockCentral / onCallNow). ONLY the today banner,
+  // Share today and the ?public=1 banner read it - todayStr (above) stays the
+  // calendar date for the OPEN logic, the today ring and everything else.
+  const onCall = onCallNow(schedule, Date.now());
+  // The shift clock ticks while the app stays open: every 30 s (and when the
+  // page becomes visible again) the Central calendar day + shift day are
+  // re-read; the state changes only when one of them moves (00:00 / 07:00),
+  // which re-renders the banner even when the 60 s poll finds nothing new.
+  const [, setShiftClockKey] = useState(() => { const c = shiftClockCentral(); return c.calendarDay + "|" + c.shiftDay; });
+  useEffect(() => {
+    const tick = () => { const c = shiftClockCentral(); setShiftClockKey(c.calendarDay + "|" + c.shiftDay); };
+    const onVisible = () => { if (document.visibilityState === "visible") tick(); };
+    const shiftClockTimer = setInterval(tick, 30000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(shiftClockTimer); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded);
   const [copied, setCopied] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState("");
   const copyText = async (text, label) => {
@@ -6190,13 +6201,18 @@ function CallSchedule() {
               </div>
             </div>
 
-            {/* On call today */}
-            <div data-testid="today-banner" style={{fontSize:12.5,color:dkText,background:dk?"#13294B":"#f8f9fb",border:"1px solid " + dkCardBorder,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-              <strong>On call today {fmtMD(todayStr)}:</strong>
-              <span>P</span> <HolderTag a={todayAssign} role="primary" small/>
-              <span>B</span> <HolderTag a={todayAssign} role="backup" small/>
-              <span style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>
+            {/* On call now - the 07:00 -> 07:00 shift covering this moment (onCall = helpers.onCallNow); before 07:00 a second line names the pair from 07:00 */}
+            <div data-testid="today-banner" data-shift-day={onCall.shiftDay} data-before-handoff={onCall.beforeHandoff ? "1" : "0"} style={{fontSize:12.5,color:dkText,background:dk?"#13294B":"#f8f9fb",border:"1px solid " + dkCardBorder,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <strong title={"The " + fmtMD(onCall.shiftDay) + " shift, 07:00 " + ttDow(onCall.shiftDay) + " to 07:00 " + onCall.handoffDow + " (Central)"}>On call now (until 07:00 {onCall.handoffDow}):</strong>
+              <span>P</span> <HolderTag a={onCall.current} role="primary" small/>
+              <span>B</span> <HolderTag a={onCall.current} role="backup" small/>
+              <span data-testid="today-banner-msg" style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>
               {!isPublicMode && <button onClick={shareTonightMsg} style={{...css.btn(false),padding:"4px 10px",fontSize:11,marginLeft:"auto"}}>{copied ? "Copied" : "Share today"}</button>}
+              {onCall.beforeHandoff && (
+                <div data-testid="today-banner-next" style={{flexBasis:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",color:dkSubtext}}>
+                  <span>From 07:00:</span> <HolderTag a={onCall.next} role="primary" small/> <span>/</span> <HolderTag a={onCall.next} role="backup" small/>
+                </div>
+              )}
             </div>
             {/* 9/27: the offer deadline notice on the Calendar - URGENT rows only (within groupRules.offerPeriods.noticeUrgentDaysBeforeClose, default 14); the full list is on Mine */}
             {offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}
