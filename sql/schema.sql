@@ -59,14 +59,15 @@
 -- to the TRADE_IMMUTABLE leg list. apply_trade() is unchanged (the receiver already applies a one-way row as a party). The member return-leg
 -- refusal (a member 'trade' without return_day AND return_role) is DEFERRED to the follow-up below - old installed builds send a whole-unit
 -- trade's tail rows without a return leg, so a member's one-way 'trade' is still accepted, as today.
--- Revision 2026-09-24 o (Prompt 20 F1, sql/migrations/2026-09-24-followers.sql, report-first, NOT yet applied): FOLLOWERS - user_profiles.follows jsonb
+-- Revision 2026-09-24 o (Prompt 20 F1, sql/migrations/2026-09-24-followers.sql, applied 2026-09-27 00:43:54Z by the 24-hour gate after the probe): FOLLOWERS - user_profiles.follows jsonb
 -- (the roster ids an account follows; a JSON array of non-empty strings, user_profiles_follows_shape; admin-set through user_profiles_admin -
 -- user_profiles_self_update and _self_insert pin it); notification_preferences keyed by a new id (person_id stays UNIQUE and becomes nullable,
 -- profile_id -> user_profiles for an unlinked follower, exactly one of the two: notification_preferences_one_owner); prefs_own adds profile_id = auth.uid().
--- PREPARED FOLLOW-UP, NOT MIRRORED (sql/migrations/2026-09-25-member-trade-return-leg.sql, report-first, NOT applied): trade_insert_guard() with the member return-leg refusal
--- added back (S1's body); apply only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain. This file
--- mirrors what the next apply makes live, so its body is NOT below; the commit that records its apply mirrors it and adds Revision 2026-09-25 p here
--- (test/schema.test.js exempts that one file from the mirror pin, by name, while this line reads NOT MIRRORED).
+-- Revision 2026-09-25 p (Prompt 19 follow-up, sql/migrations/2026-09-25-member-trade-return-leg.sql, applied 2026-09-27 00:43:01Z): trade_insert_guard() with the
+-- member return-leg refusal added back (S1's body): a member's 'trade' without return_day AND return_role is refused (TRADE_INELIGIBLE: a trade needs a
+-- return shift ...); scheduler / server rows and a give with no return leg are unchanged. Held back until the client_versions min_version bump to
+-- 2026.09.25c (the rollout build, after Prompt 19's client) and 24 h with every heartbeat on it or newer (old builds sent a whole unit's tail rows
+-- without a return leg); mirrored below since.
 -- Revision 2026-09-25 q (Prompt 21 step 1, sql/migrations/2026-09-25-audit-read-own.sql, report-first, NOT yet applied): audit_read_own - a signed-in
 -- user reads the audit_log rows he wrote (actor_id = his roster id when linked, else auth.uid()::text), so the client's logAudit INSERT ... RETURNING
 -- (db.insert sends Prefer: return=representation) no longer fails 42501 / HTTP 403 for a linked surgeon, nor for a coordinator's row outside the
@@ -302,8 +303,8 @@ create table if not exists public.shift_trade_requests (
 create index if not exists trade_status_idx on public.shift_trade_requests(status, submitted_at desc);
 create index if not exists trade_day_idx    on public.shift_trade_requests(day);
 -- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): what the row is. 'trade' = day for day (a member's
--- trade carries its return shift - enforced by trade_insert_guard only once the prepared follow-up
--- sql/migrations/2026-09-25-member-trade-return-leg.sql is applied; the scheduler may still record a one-way 'trade', as before); 'give' = a
+-- trade carries its return shift - enforced by trade_insert_guard since the follow-up
+-- sql/migrations/2026-09-25-member-trade-return-leg.sql, revision p, applied 2026-09-27; the scheduler may still record a one-way 'trade', as before); 'give' = a
 -- member offers one of his days (or each day of a unit, one row per day) to a named colleague and nothing comes back - never a
 -- return leg, for any caller (the check below; trade_insert_guard raises the readable sentence first). Existing rows read 'trade'.
 -- A give is accepted / declined / cancelled / applied exactly like a trade (apply_trade: a party or the scheduler; return_day null
@@ -374,11 +375,13 @@ create trigger trade_update_guard_trg
 -- the client's strings; an unknown id or a missing roster reads as the id (display data, never a refusal).
 -- 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): a member (neither scheduler nor server) may insert
 -- a 'give' - one of his days to a named colleague, NO return day and NO return role; a 'give' with a return leg is refused for
--- every caller (TRADE_INELIGIBLE: a give is one-way ...). A member 'trade' without a return leg is still accepted (as before):
--- that refusal is the prepared follow-up sql/migrations/2026-09-25-member-trade-return-leg.sql, NOT mirrored here until it is
--- applied (old installed builds send unit-tail rows without a return leg). The scheduler / server may still insert a one-way 'trade' (unchanged) and may insert a 'give' - it
+-- every caller (TRADE_INELIGIBLE: a give is one-way ...). The scheduler / server may still insert a one-way 'trade' (unchanged) and may insert a 'give' - it
 -- means the same one-way move, labelled as a give. from := me, the same-surgeon refusal and the roster names are unchanged: a
 -- member's give on a day he does not hold lands from HIM and apply_trade refuses it later (TRADE_STALE).
+-- 2026-09-25 p (Prompt 19 follow-up, sql/migrations/2026-09-25-member-trade-return-leg.sql, applied 2026-09-27 00:43:01Z): inside the member
+-- branch, right after the normalisation, a member's 'trade' without return_day AND return_role is refused (TRADE_INELIGIBLE: a trade needs a
+-- return shift ...), a half leg too. Split out of the give-kind file and held back until every installed app ran the Prompt 19 client (old
+-- builds sent a whole unit's tail rows as one-way 'trade' rows); the body below is the follow-up's (S1's), byte for byte.
 create or replace function public.trade_insert_guard() returns trigger
 language plpgsql as $$
 declare
@@ -394,6 +397,11 @@ begin
     new.status          := 'pending';
     new.submitted_at    := now();
     new.decided_at      := null;
+    -- (2026-09-24, Prompt 19) a member's 'trade' carries its return shift (return_day AND return_role); a one-way row from a
+    -- member is a 'give'. kind null reads as a trade here (the not-null constraint refuses it after the trigger anyway).
+    if new.kind is distinct from 'give' and (new.return_day is null or new.return_role is null) then
+      raise exception 'TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead' using errcode = 'P0001';
+    end if;
   end if;
   -- (2026-09-24, Prompt 19) a give is one-way for EVERY caller, the scheduler and the server-side roles included
   if new.kind = 'give' and (new.return_day is not null or new.return_role is not null) then

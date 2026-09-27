@@ -2,7 +2,7 @@
 -- Silvis Call Schedule - migration 2026-09-25: a member's trade needs a return leg (Prompt 19 follow-up; split out of
 -- sql/migrations/2026-09-24-give-kind.sql on 2026-09-24). One trigger function (create or replace, idempotent) with its
 -- trigger re-created. No table, column, check, policy, RPC grant or row is touched; apply_trade() is NOT redefined.
--- PREPARED FOLLOW-UP - REPORT-FIRST, NOT APPLIED. NOT MIRRORED in sql/schema.sql until its apply is recorded.
+-- APPLIED 2026-09-27 00:43:01Z by the 24-hour gate (run by hand); sql/schema.sql mirrors it as Revision 2026-09-25 p since the record step.
 --
 -- Gate: apply only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain
 -- (Settings > client heartbeats show no build older than the Prompt 19 one for a full day), and only after
@@ -48,6 +48,9 @@
 -- block): its checkInsertGuard call STAYS needsReturn=false and its undo stays undoInsert (optionally freeze its
 -- trade_insert_guard by sha256 once it is no longer the newest). Switch verify-rls.sh section 5's Q / Q3 lines to the refused
 -- sentence; the SCHEMA-REVIEW status and observed lines and the guide 4.3 row.
+-- Done 2026-09-27 (the record step, after the 00:43:01Z apply): every edit above, the marker line's place taken by the APPLIED
+-- line at the top of this header (and pinned); verify-rls.sh section 5 grades Q / Q3 refused only since, so the "STORED until
+-- this file's record step" line under Acceptance is history.
 -- Rolling back = re-running the give-kind trade_insert_guard (sql/migrations/2026-09-24-give-kind.sql's body and trigger).
 -- ============================================================================
 

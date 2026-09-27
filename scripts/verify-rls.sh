@@ -6,7 +6,6 @@
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
-#   SILVIS_RETURN_LEG_APPLIED=1                               grade section 5's Q / Q3 as REFUSED: only on the 24-hour gate's run right after sql/migrations/2026-09-25-member-trade-return-leg.sql is applied (Faraz 9/25); the default grades them STORED until that file's record step, which makes REFUSED the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
@@ -16,7 +15,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_RETURN_LEG_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -126,22 +125,15 @@ if linked; then
     # 2026-09-24 (Prompt 19 give a day, sql/migrations/2026-09-24-give-kind.sql): shift_trade_requests.kind 'trade' | 'give'. Before the migration
     # GIVE_SETUP and every case naming kind read 'ERR column  kind  ... does not exist', P2 / T read TRADE_NOT_FOUND, T2 actor=null summary=null
     # and S3 rows=0 status=null (the probe header lists them); U, Q and Q3 are the same before and after. Q / Q3 (a member 'trade' with no or half
-    # a return leg) stay STORED: the member return-leg refusal was split out into the prepared follow-up
-    # sql/migrations/2026-09-25-member-trade-return-leg.sql (old installed builds send unit-tail rows without a return leg); its record step
-    # switches these two lines to the refused sentence - grading them refused before that apply would fail against the live DB.
+    # a return leg) stayed STORED under that file: the member return-leg refusal was split out into the follow-up
+    # sql/migrations/2026-09-25-member-trade-return-leg.sql (old installed builds sent unit-tail rows without a return leg). That file is applied
+    # (2026-09-27 00:43:01Z, the 24-hour gate; revision p) and its record step made the refused sentence the only grading of Q / Q3.
     expect_eq         GIVE_SETUP "ok"                          "the give fixtures insert (the kind column exists)"
     expect_eq         O "status=pending from=s2 kind=give return=null" "a member gives his own day with no return leg (kind 'give')"
     expect_eq         P "status=pending from=s2 kind=give"       "a member's give naming someone else's day lands FROM HIM (from forced, never refused at insert)"
     expect_eq         P2 "ERR TRADE_STALE: 2030-03-03 primary is no longer held by s2" "apply_trade refuses a give of a day the giver does not hold"
-    if [ "${SILVIS_RETURN_LEG_APPLIED:-}" = "1" ]; then
-      # the 24-hour gate's run right after sql/migrations/2026-09-25-member-trade-return-leg.sql (Faraz 9/25): from that apply on a member
-      # 'trade' needs a whole return leg; the file's record step makes these two lines the only ones and drops the variable
-      expect_eq       Q "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead" "a member 'trade' without a return leg is refused (the return-leg follow-up is applied)"
-      expect_eq       Q3 "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead" "a member 'trade' with a half leg (return day, no return role) is refused (the return-leg follow-up is applied)"
-    else
-    expect_eq         Q "status=pending return=null"             "a member 'trade' without a return leg is still stored (the refusal is the prepared follow-up's)"
-    expect_eq         Q3 "status=pending return=2030-03-04 return_role=null" "a member 'trade' with a half leg (return day, no return role) is still stored (the refusal is the prepared follow-up's)"
-    fi
+    expect_eq         Q "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead" "a member 'trade' without a return leg is refused (the return-leg follow-up, applied 2026-09-27)"
+    expect_eq         Q3 "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead" "a member 'trade' with a half leg (return day, no return role) is refused (the return-leg follow-up, applied 2026-09-27)"
     expect_eq         Q2 "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift" "a member 'give' with a return leg is refused"
     expect_eq         Q4 "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift" "a member 'give' carrying only a return role is refused"
     expect_eq         R "ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade" "a member may not change kind on his own pending row"

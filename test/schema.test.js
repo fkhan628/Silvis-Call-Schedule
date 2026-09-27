@@ -57,9 +57,9 @@
 //   - trade_insert_guard(): a member may insert a 'give' with no return day / role; a 'give' with a return leg is refused for
 //     every caller; the rest is B6's byte for byte. The member return-leg refusal (a member 'trade' without return_day AND
 //     return_role) is NOT in this file: old installed builds send a whole-unit trade's tail rows without a return leg, so it is
-//     the PREPARED follow-up sql/migrations/2026-09-25-member-trade-return-leg.sql (report-first, NOT applied; after a
-//     client_versions min_version bump and a day for old builds to drain) - schema.sql does NOT mirror that file until its apply
-//     is recorded (the one file exempt from the newest-migration mirror pin, by name); its body is S1's (f9ad08f), pinned by sha256,
+//     the follow-up sql/migrations/2026-09-25-member-trade-return-leg.sql (report-first; applied 2026-09-27 00:43:01Z by the
+//     24-hour gate, after the client_versions min_version bump and a day for old builds to drain) - schema.sql mirrors it since its
+//     record step (revision p; until then it was the one file exempt from the mirror pin, by name); its body is S1's (f9ad08f), pinned by sha256,
 //   - trade_update_guard(): kind joins the TRADE_IMMUTABLE leg list; the rest is the 9/23 trade-past body byte for byte,
 //   - apply_trade() untouched (the receiver already applies a one-way row as a party); the file declares `-- supersedes:` B6;
 //     B6's trade_insert_guard and the 9/23 trade_update_guard are frozen by sha256; the probe gains GIVE_SETUP and O..U.
@@ -82,8 +82,10 @@ const ROOT = path.join(__dirname, "..");
 const SCHEMA = path.join(ROOT, "sql", "schema.sql");
 const MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-22-trade-guards.sql");
 const LOCKS_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-definer-locks.sql");   // Prompt 16 B6 (5b superseded its apply_trade / claim_open_slot, Prompt 19 its trade_insert_guard)
-const GIVE_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-give-kind.sql");   // Prompt 19: the newest MIRRORED for trade_insert_guard + trade_update_guard (report-first, not applied)
-const RETURN_LEG_FILE = "2026-09-25-member-trade-return-leg.sql";   // Prompt 19 follow-up: PREPARED, NOT applied, NOT mirrored in schema.sql
+const GIVE_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-give-kind.sql");   // Prompt 19 (applied 2026-09-25): the newest for trade_update_guard; its trade_insert_guard is frozen (sha256) since the follow-up
+const RETURN_LEG_FILE = "2026-09-25-member-trade-return-leg.sql";   // Prompt 19 follow-up: applied 2026-09-27 00:43:01Z, mirrored in schema.sql (revision p) - the newest for trade_insert_guard
+// sha256 of the give-kind file's trade_insert_guard, frozen as applied 2026-09-25 (live until the follow-up's apply, 2026-09-27)
+const GIVE_INSERT_GUARD_SHA256 = "edb1945657e5dbd392cc291a0ef5d1feca25f327a2c4ba95a55f98cced49e1aa";
 const RETURN_LEG_MIGRATION = path.join(ROOT, "sql", "migrations", RETURN_LEG_FILE);
 // sha256 of S1's trade_insert_guard body (git show f9ad08f:sql/migrations/2026-09-24-give-kind.sql) - the follow-up re-creates it
 const S1_INSERT_GUARD_SHA256 = "0866c8228ef8e8b209c7c0d5925f27f901e909ef409675046ae73fac7da3dbbd";
@@ -119,8 +121,9 @@ ok(!/\r/.test(schema), "schema.sql has CRLF line endings");
 /* ------------------------------------------------- trade_insert_guard() */
 // `names` = true for schema.sql and the 2026-09-24 definer-locks migration (roster names); false for the
 // 2026-09-22 migration, frozen as applied. `give` (Prompt 19) = true for schema.sql, the give-kind migration and its follow-up;
-// `needsReturn` = true ONLY for the prepared follow-up 2026-09-25-member-trade-return-leg.sql (the member return-leg refusal,
-// deferred out of the give-kind file for the old installed builds' unit tails) - schema.sql and give-kind must NOT carry it.
+// `needsReturn` = true for the follow-up 2026-09-25-member-trade-return-leg.sql (the member return-leg refusal, deferred out of
+// the give-kind file for the old installed builds' unit tails; applied 2026-09-27) and for schema.sql, which mirrors it since its
+// record step - the give-kind file, frozen as applied, must NOT carry it.
 const GIVE_NEEDS_RETURN_IF = "if new.kind is distinct from 'give' and (new.return_day is null or new.return_role is null) then";
 const GIVE_NEEDS_RETURN_RAISE = "raise exception 'TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead' using errcode = 'P0001';";
 const GIVE_ONE_WAY_IF = "if new.kind = 'give' and (new.return_day is not null or new.return_role is not null) then";
@@ -185,8 +188,8 @@ function checkInsertGuard(n, s, names, give, needsReturn) {
   ok(/create trigger trade_insert_guard_trg\s+before insert on public\.shift_trade_requests\s+for each row execute function public\.trade_insert_guard\(\);/.test(s),
     n + ": `create trigger trade_insert_guard_trg before insert on public.shift_trade_requests for each row execute function public.trade_insert_guard();` missing");
 }
-step("trade_insert_guard() + BEFORE INSERT trigger in schema.sql");
-checkInsertGuard("schema.sql", schema, true, true, false);
+step("trade_insert_guard() + BEFORE INSERT trigger in schema.sql (the member return-leg refusal mirrored since the follow-up's record step)");
+checkInsertGuard("schema.sql", schema, true, true, true);
 
 /* --------------------------------------------------------- apply_trade() */
 const CHECKS = [
@@ -311,15 +314,15 @@ ok(!/\r/.test(migration), "migration has CRLF line endings");
 checkInsertGuard("migration", migration, false, false);
 checkApplyTrade("migration", migration, false, false);
 
-step("2026-09-22 migration: both bodies frozen as applied live (sha256); schema.sql's trade_insert_guard = the 2026-09-24 give-kind migration (Prompt 19, the newest touching it)");
+step("2026-09-22 migration: both bodies frozen as applied live (sha256); schema.sql's trade_insert_guard = the 2026-09-25 member return-leg follow-up (Prompt 19, the newest touching it; applied 2026-09-27)");
 (function frozen() {
   const sha = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
   eq(sha(functionText(migration, "apply_trade")), "d9ec012b9265b8a7fe4f6db7242165e181709d58f824bdf72a793a7c9d908737",
     "2026-09-22-trade-guards.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-22 (a change belongs in a NEW migration);");
   eq(sha(functionText(migration, "trade_insert_guard")), "b2b5e23fe401765241523846131265825bdcca18bcfb41f1d328d54729357a5b",
     "2026-09-22-trade-guards.sql trade_insert_guard() must stay byte-for-byte what was applied live on 2026-09-22 (the roster names went into the 2026-09-24 migration);");
-  const a = functionText(schema, "trade_insert_guard"), b = functionText(read(GIVE_MIGRATION), "trade_insert_guard");
-  ok(a && b && a === b, "trade_insert_guard(): schema.sql differs from sql/migrations/2026-09-24-give-kind.sql (the newest migration touching it; keep them identical)");
+  const a = functionText(schema, "trade_insert_guard"), b = functionText(read(RETURN_LEG_MIGRATION), "trade_insert_guard");
+  ok(a && b && a === b, "trade_insert_guard(): schema.sql differs from sql/migrations/" + RETURN_LEG_FILE + " (the newest migration touching it, applied 2026-09-27; keep them identical)");
 })();
 
 const PAST_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-trade-past-guard.sql");
@@ -667,17 +670,24 @@ ok(migFiles.length >= 4, "expected at least the four migrations under sql/migrat
 const migText = {};
 migFiles.forEach((f) => { migText[f] = read(path.join(MIG_DIR, f)); });
 const supersedes = (later, earlier) => new RegExp("^--\\s*supersedes:?\\s+sql/migrations/" + earlier.replace(/\./g, "\\.") + "\\s*$", "m").test(migText[later]);
-// Prompt 19 split (2026-09-24): ONE prepared file is exempt from the mirror, by name - the member return-leg follow-up
-// (report-first, NOT applied: it must wait for a client_versions min_version bump and for old installed builds to drain, so
-// schema.sql mirrors what the NEXT apply makes live, the give-kind body). The exemption holds only while the file says it is
-// not applied and schema.sql's header records it as NOT MIRRORED; the commit that records its apply mirrors the body, adds
-// Revision 2026-09-25 p and empties this list (the pin below then compares schema.sql with it like any other file).
-const PREPARED_NOT_MIRRORED = [RETURN_LEG_FILE];
+// Prompt 19 split (2026-09-24): a prepared file may be exempt from the mirror, by name, while it waits for a gate (the member
+// return-leg follow-up was, from 9/24 until its apply was recorded: it had to wait for a client_versions min_version bump and for
+// old installed builds to drain, so schema.sql mirrored what the NEXT apply made live, the give-kind body). The exemption holds
+// only while the file says it is not applied and schema.sql's header records it as NOT MIRRORED. The follow-up's record step
+// (applied 2026-09-27 00:43:01Z) mirrored its body, added Revision 2026-09-25 p and emptied this list; the pin below compares
+// schema.sql with it like any other file.
+const PREPARED_NOT_MIRRORED = [];
+const PREPARED_MARKER = /^-- PREPARED FOLLOW-UP - REPORT-FIRST, NOT APPLIED\. NOT MIRRORED in sql\/schema\.sql until its apply is recorded\.$/m;
 PREPARED_NOT_MIRRORED.forEach((f) => {
   ok(migFiles.includes(f), "sql/migrations/" + f + " is listed as PREPARED_NOT_MIRRORED but does not exist");
-  ok(/^-- PREPARED FOLLOW-UP - REPORT-FIRST, NOT APPLIED\. NOT MIRRORED in sql\/schema\.sql until its apply is recorded\.$/m.test(migText[f] || ""), "sql/migrations/" + f + " is exempt from the schema.sql mirror only while its header reads `-- PREPARED FOLLOW-UP - REPORT-FIRST, NOT APPLIED. NOT MIRRORED in sql/schema.sql until its apply is recorded.`");
+  ok(PREPARED_MARKER.test(migText[f] || ""), "sql/migrations/" + f + " is exempt from the schema.sql mirror only while its header reads `-- PREPARED FOLLOW-UP - REPORT-FIRST, NOT APPLIED. NOT MIRRORED in sql/schema.sql until its apply is recorded.`");
   ok(schema.slice(0, schema.indexOf("create extension if not exists pgcrypto;")).split("\n").some((l) => l.includes("sql/migrations/" + f) && /PREPARED FOLLOW-UP, NOT MIRRORED/.test(l)), "schema.sql's header must record sql/migrations/" + f + " on a `PREPARED FOLLOW-UP, NOT MIRRORED` line while it is exempt from the mirror");
 });
+// ... and the other way round (the marker-line pin, moved here by the follow-up's record step): a file NOT on the list carries no
+// PREPARED FOLLOW-UP marker, and schema.sql's header names no file on a NOT MIRRORED line - a marker left behind would claim an
+// exemption the suite no longer grants.
+migFiles.filter((f) => !PREPARED_NOT_MIRRORED.includes(f)).forEach((f) => ok(!/^-- PREPARED FOLLOW-UP/m.test(migText[f]), "sql/migrations/" + f + " carries a `-- PREPARED FOLLOW-UP` marker line but is not listed in PREPARED_NOT_MIRRORED (drop the marker at its record step, or list the file while it waits)"));
+ok(!schema.slice(0, schema.indexOf("create extension if not exists pgcrypto;")).split("\n").some((l) => /PREPARED FOLLOW-UP, NOT MIRRORED/.test(l) && !PREPARED_NOT_MIRRORED.some((f) => l.includes("sql/migrations/" + f))), "schema.sql's header carries a `PREPARED FOLLOW-UP, NOT MIRRORED` line for a file that is not exempt (its record step replaces the line with its Revision line)");
 const newest = {};
 migFiles.filter((f) => !PREPARED_NOT_MIRRORED.includes(f)).forEach((f) => {
   Array.from(migText[f].matchAll(/^create or replace function public\.([a-z_]+)\(/gm)).map((m) => m[1]).forEach((name) => {
@@ -1610,15 +1620,16 @@ ok(/E3/.test(g43) && /F2/.test(g43) && /B3/.test(g43) && /applied: (_to be fille
 
 // ---- Prompt 19 (2026-09-24): give a day - shift_trade_requests.kind 'trade' | 'give' ----
 // Faraz 9/24: a member offers one of his days to a named colleague, nothing comes back; the colleague accepts or declines; on
-// accept it is applied exactly like a trade (apply_trade, return_day null). REPORT-FIRST (not applied; the orchestrator applies
-// it after the go). Split 2026-09-24 (S1 review, major; Faraz offline - the orchestrator took the report's option (b)): the member
-// return-leg refusal is NOT in this file - it would refuse the unit-tail rows of OLD installed builds - and lives in the PREPARED
-// follow-up sql/migrations/2026-09-25-member-trade-return-leg.sql (pinned in its own block below). Same-day order against B6 by its `-- supersedes:` line; B6's trade_insert_guard and
-// the 9/23 trade_update_guard are frozen by sha256 above; schema.sql mirrors this file (functions AND the table lines). Pinned
+// accept it is applied exactly like a trade (apply_trade, return_day null). REPORT-FIRST (applied 2026-09-25 05:34 UTC by the
+// orchestrator after the go). Split 2026-09-24 (S1 review, major; Faraz offline - the orchestrator took the report's option (b)): the member
+// return-leg refusal is NOT in this file - it would refuse the unit-tail rows of OLD installed builds - and lives in the
+// follow-up sql/migrations/2026-09-25-member-trade-return-leg.sql (applied 2026-09-27; pinned in its own block below). Same-day order against B6 by its `-- supersedes:` line; B6's trade_insert_guard and
+// the 9/23 trade_update_guard are frozen by sha256 above; schema.sql mirrors this file's trade_update_guard and table lines, and
+// its trade_insert_guard until the follow-up's record step (frozen by sha256 below since, now that it is no longer the newest). Pinned
 // below: the file's shape, the byte identity, header revision n, the table DDL, that nothing else in either trigger body
 // moved (the body with the Prompt 19 lines undone equals the frozen one, byte for byte), apply_trade untouched, the probe's new
 // cases with verify-rls.sh's expected strings, verify-rls 6a's return leg, the SCHEMA-REVIEW.md record and the guide row.
-step("Prompt 19: migration 2026-09-24-give-kind.sql - the kind column + two checks, trade_insert_guard + trade_update_guard (nothing else), supersedes B6, byte-identical to schema.sql, both triggers re-created, CLI apply line");
+step("Prompt 19: migration 2026-09-24-give-kind.sql - the kind column + two checks, trade_insert_guard (frozen as applied, sha256) + trade_update_guard (byte-identical to schema.sql) (nothing else), supersedes B6, both triggers re-created, CLI apply line");
 const giveMig = read(GIVE_MIGRATION);
 ok(!/\r/.test(giveMig), "give-kind migration has CRLF line endings");
 checkInsertGuard("give-kind migration", giveMig, true, true, false);
@@ -1629,10 +1640,13 @@ ok(!/drop function|drop table|create table|drop policy|create policy|grant |revo
 ok(!/public\.apply_trade\(|claim_open_slot|call_offers_guard|time_off_no_call_conflict|handle_new_auth_user/.test(giveMig.replace(/--[^\n]*/g, "")), "the give-kind migration's statements touch no other function - apply_trade is NOT redefined (comments may name it)");
 eq((giveMig.match(/^create trigger /gm) || []).length, 2, "the give-kind migration re-creates exactly its two triggers;");
 ok(/^-- supersedes: sql\/migrations\/2026-09-24-definer-locks\.sql$/m.test(giveMig), "the give-kind migration must declare `-- supersedes: sql/migrations/2026-09-24-definer-locks.sql` (same day; it re-creates B6's trade_insert_guard after B6)");
-["trade_insert_guard", "trade_update_guard"].forEach((name) => {
-  const a = functionText(schema, name), b = functionText(giveMig, name);
-  ok(a && b && a === b, name + "(): schema.sql differs from sql/migrations/2026-09-24-give-kind.sql (keep them identical; the migration is what runs live)");
-});
+{
+  const a = functionText(schema, "trade_update_guard"), b = functionText(giveMig, "trade_update_guard");
+  ok(a && b && a === b, "trade_update_guard(): schema.sql differs from sql/migrations/2026-09-24-give-kind.sql (keep them identical; the migration is what runs live)");
+  // the follow-up's record step (2026-09-27): schema.sql's trade_insert_guard is the follow-up's, and this file's stays frozen as applied
+  eq(crypto.createHash("sha256").update(functionText(giveMig, "trade_insert_guard") || "").digest("hex"), GIVE_INSERT_GUARD_SHA256, "the give-kind file's trade_insert_guard must stay byte-for-byte what was applied live on 2026-09-25 (the member return-leg refusal belongs to sql/migrations/" + RETURN_LEG_FILE + ");");
+  ok(functionText(schema, "trade_insert_guard") === functionText(read(RETURN_LEG_MIGRATION), "trade_insert_guard") && functionText(schema, "trade_insert_guard") !== functionText(giveMig, "trade_insert_guard"), "trade_insert_guard(): schema.sql mirrors the member return-leg follow-up (the newest touching it), not the give-kind file");
+}
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-give-kind\.sql/.test(giveMig), "the give-kind migration header must carry the CLI apply line for the orchestrator");
 ok(/REPORT-FIRST/.test(giveMig) && /Blast radius/.test(giveMig) && /TAIL rows/.test(giveMig), "the give-kind migration header must say it is report-first and state the blast radius (incl. the live client's one-way unit-tail rows)");
 ok(/DEFERRED to the follow-up sql\/migrations\/2026-09-25-member-trade-return-leg\.sql/.test(giveMig.slice(0, giveMig.indexOf("alter table public.shift_trade_requests add column"))), "the give-kind migration header must say the member return-leg refusal is DEFERRED to the follow-up sql/migrations/2026-09-25-member-trade-return-leg.sql");
@@ -1641,7 +1655,10 @@ ok(/-- Revision 2026-09-24 n \(Prompt 19 give a day, sql\/migrations\/2026-09-24
 {
   const revN = header.slice(header.indexOf("-- Revision 2026-09-24 n ")).split("\n-- Revision ")[0].replace(/\n-- /g, " ");
   ok(/member return-leg refusal[^.]*DEFERRED to the follow-up/.test(revN) && !/refuses a member 'trade' without/.test(revN), "schema.sql's revision n text must say the member return-leg refusal is DEFERRED to the follow-up (and no longer claim the guard refuses a member 'trade' without one)");
-  ok(!/^-- Revision 2026-09-25 p/m.test(header), "schema.sql must NOT carry a `-- Revision 2026-09-25 p` line yet - it is planned in the follow-up file and written by the commit that records the follow-up's apply");
+  // written by the commit that records the follow-up's apply (2026-09-27), in place of the PREPARED FOLLOW-UP, NOT MIRRORED line
+  ok(/^-- Revision 2026-09-25 p \(Prompt 19 follow-up, sql\/migrations\/2026-09-25-member-trade-return-leg\.sql, applied 2026-09-27 00:43:01Z\)/m.test(header), "schema.sql must carry `-- Revision 2026-09-25 p (Prompt 19 follow-up, sql/migrations/2026-09-25-member-trade-return-leg.sql, applied 2026-09-27 00:43:01Z)` (the follow-up's record step)");
+  ok(!/^-- PREPARED FOLLOW-UP, NOT MIRRORED/m.test(header), "schema.sql's header must no longer carry the PREPARED FOLLOW-UP, NOT MIRRORED line (revision p replaced it)");
+  ok(header.search(/^-- Revision 2026-09-25 p /m) > header.search(/^-- Revision 2026-09-24 o /m), "revision p follows revision o in schema.sql's header");
 }
 
 step("Prompt 19: the kind column DDL - additive, defaulted, two named checks, byte-identical in schema.sql and the migration, after the trades table");
@@ -1660,12 +1677,13 @@ ok(schema.indexOf(KIND_DDL) > schema.indexOf("create index if not exists trade_d
 ok(!/\bkind\b/.test(schema.slice(schema.indexOf("create table if not exists public.shift_trade_requests ("), schema.indexOf("create index if not exists trade_status_idx"))), "schema.sql: the create table stays as it was (an existing table never sees a create-table column; the alter adds it, like call_periods.offer_modes)");
 
 step("Prompt 19: nothing else in either trigger body moved (the body with the Prompt 19 lines undone equals the frozen one, byte for byte); apply_trade untouched");
-// the shipped body (schema.sql = give-kind) has ONE Prompt 19 block, after the member branch; the follow-up adds the member one back
+// the give-kind body has ONE Prompt 19 block, after the member branch (undoInsert); the follow-up - live since 2026-09-27 and
+// mirrored in schema.sql since its record step - adds the member one back (undoFollowUp undoes both)
 const undoInsert = (t) => t.replace(/\n  end if;\n  -- \(2026-09-24, Prompt 19\)[^\n]*\n  if new\.kind = 'give'[\s\S]*?\n  end if;\n/, "\n  end if;\n");
 const undoFollowUp = (t) => t.replace(/    -- \(2026-09-24, Prompt 19\)[\s\S]*?\n    end if;\n  end if;\n  -- \(2026-09-24, Prompt 19\)[^\n]*\n  if new\.kind = 'give'[\s\S]*?\n  end if;\n/, "  end if;\n");
 const undoUpdate = (t) => t.replace("new.return_role is distinct from old.return_role\n     or new.kind is distinct from old.kind then", "new.return_role is distinct from old.return_role then");
-[["schema.sql", schema], ["give-kind migration", giveMig]].forEach(([n, s]) => {
-  eq(undoInsert(functionText(s, "trade_insert_guard")), functionText(locksMig, "trade_insert_guard"), n + ": with the Prompt 19 lines undone textually, trade_insert_guard must equal B6's applied body byte for byte (from := me, the same-surgeon refusal and the roster names untouched);");
+[["schema.sql", schema, undoFollowUp], ["give-kind migration", giveMig, undoInsert]].forEach(([n, s, undo]) => {
+  eq(undo(functionText(s, "trade_insert_guard")), functionText(locksMig, "trade_insert_guard"), n + ": with the Prompt 19 lines undone textually, trade_insert_guard must equal B6's applied body byte for byte (from := me, the same-surgeon refusal and the roster names untouched);");
   eq(undoUpdate(functionText(s, "trade_update_guard")), functionText(pastMigration, "trade_update_guard"), n + ": with the kind line undone textually, trade_update_guard must equal the 9/23 applied body byte for byte (the status transitions untouched);");
 });
 ok(functionText(schema, "apply_trade") === functionText(auditMig, "apply_trade"), "apply_trade(): schema.sql still equals the 5b file - Prompt 19 does not redefine it");
@@ -1677,9 +1695,10 @@ const GIVE_CASES = {
   O: "status=pending from=s2 kind=give return=null",
   P: "status=pending from=s2 kind=give",
   P2: "ERR TRADE_STALE: 2030-03-03 primary is no longer held by s2",
-  Q: "status=pending return=null",   // split 2026-09-24: the same before and after the give-kind apply (the refusal is the follow-up's)
+  // Q / Q3: stored before and after the give-kind apply (split 2026-09-24); refused since the follow-up's apply (2026-09-27, its record step flipped them)
+  Q: "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead",
   Q2: "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift",
-  Q3: "status=pending return=2030-03-04 return_role=null",   // review follow-up: a half leg - stored before and after (split 2026-09-24)
+  Q3: "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead",   // review follow-up: a half leg
   Q4: "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift",   // review follow-up: a give carrying only a return role
   R: "ERR TRADE_IMMUTABLE: only the scheduler may change the legs of a trade",
   S: "rows=0 kind=trade",
@@ -1734,7 +1753,9 @@ ok(!review19.includes(GIVE_NEEDS_RETURN_IF), "the Prompt 19 section must NOT quo
 ok(/\*\*Split \(2026-09-24/.test(review19) && /old installed builds/.test(review19) && /2026-09-25-member-trade-return-leg\.sql/.test(review19) && /min_version/.test(review19), "the Prompt 19 section must state the split: why (old installed builds), what ships now, and the follow-up file with its min_version gate");
 ok(review19.includes("         or new.kind is distinct from old.kind then"), "the Prompt 19 section must quote the trade_update_guard hunk");
 ok(/What could break/.test(review19) && /Blast radius/.test(review19) && /Unit tails/.test(review19) && /TRADE_STALE/.test(review19), "the Prompt 19 section must state what could break (the live client's unit-tail rows), the blast radius and the give-of-someone-else's-day outcome (TRADE_STALE)");
-Object.keys(GIVE_CASES).forEach((k) => ok(review19.includes("`" + GIVE_CASES[k] + "`"), "the Prompt 19 section's probe table must list " + k + "'s AFTER value `" + GIVE_CASES[k] + "`"));
+// the give-kind section's table records what THAT file made live: Q / Q3 stored (their refused value is the follow-up section's)
+const GIVE_FILE_AFTER = Object.assign({}, GIVE_CASES, { Q: "status=pending return=null", Q3: "status=pending return=2030-03-04 return_role=null" });
+Object.keys(GIVE_FILE_AFTER).forEach((k) => ok(review19.includes("`" + GIVE_FILE_AFTER[k] + "`"), "the Prompt 19 section's probe table must list " + k + "'s AFTER value `" + GIVE_FILE_AFTER[k] + "` (the give-kind file's AFTER)"));
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-give-kind\.sql/.test(review19) && /supersedes: sql\/migrations\/2026-09-24-definer-locks\.sql/.test(review19), "the Prompt 19 section must carry the CLI apply line and the same-day supersedes line");
 ok(/2026-09-24-give-kind\.sql/.test(g43) && /Give a day \(Prompt 19, `sql\/migrations\/2026-09-24-give-kind\.sql`, prepared 2026-09-24 \u2014 report-first, (NOT applied|applied 2026-)/.test(g43), "guide 4.3 must carry the Prompt 19 bullet (prepared 2026-09-24, report-first, NOT applied - or 'applied 2026-MM-DD' after the record step)");
 ["shift_trade_requests.kind", "trade_insert_guard", "trade_update_guard", "apply_trade"].forEach((r) => ok(new RegExp("^\\| `" + r.replace(/\./g, "\\.") + "` \\|", "m").test(g43), "guide 4.3's Prompt 19 table lacks a row for " + r));
@@ -1761,16 +1782,18 @@ ok(/section 5c \(anon \`select=kind\` reads HTTP 200/.test(g43), "guide 4.3's Pr
   const g19 = g43.slice(g43.indexOf("Give a day (Prompt 19"));
   const insRow = (g19.match(/^\| `trade_insert_guard` \|[^\n]*/m) || [""])[0];
   ok(/deferred/i.test(insRow) && /2026-09-25-member-trade-return-leg\.sql/.test(insRow) && /EVERY installed app runs the client step/.test(insRow), "guide 4.3's Prompt 19 trade_insert_guard row must say the member return-leg refusal is deferred to sql/migrations/2026-09-25-member-trade-return-leg.sql (until EVERY installed app runs the client step)");
+  ok(/applied 2026-09-27/.test(insRow) && !/NOT applied/.test(insRow), "guide 4.3's Prompt 19 trade_insert_guard row must record the follow-up's apply (2026-09-27) - the follow-up's record step");
 }
 
-// Prompt 19 S5 (tests): the new kind through the PREPARED trade_insert_guard, read as behaviour. guardVerdict re-reads the
+// Prompt 19 S5 (tests): the new kind through the trade_insert_guards, read as behaviour. guardVerdict re-reads the
 // guard's own `if <cond> then raise 'TRADE_INELIGIBLE: ...'` statements out of the function text (so a changed condition
 // changes the verdict), runs the member branch's ones only for a member caller (after from := me), and answers the first
 // raise or "ok". The live DB half of the same cases is the probe (O = a member give with no return leg accepted, Q = a
-// member trade with none - accepted as today after the give-kind apply, refused only after the follow-up), graded by
-// verify-rls.sh section 5 - those run only after the migration is applied. Split 2026-09-24: each case has TWO verdicts, the
-// shipped guard's (schema.sql = give-kind) and the prepared follow-up's (sql/migrations/2026-09-25-member-trade-return-leg.sql).
-step("Prompt 19 S5: the prepared trade_insert_guards, read as behaviour - a member give with no return leg is accepted by both; a member trade with no return leg (kind omitted = the 'trade' default) is ACCEPTED by the shipped give-kind guard (old builds' unit tails) and refused only by the follow-up; the live B6 guard accepted it too (Q's BEFORE); every TRADE_INELIGIBLE raise is translated (none skipped); probe O / Q run as the member caller");
+// member trade with none - accepted after the give-kind apply, refused since the follow-up's), graded by verify-rls.sh
+// section 5. Split 2026-09-24: each case has TWO verdicts, the give-kind file's (live 2026-09-25 -> 2026-09-27, frozen by
+// sha256) and the follow-up's (sql/migrations/2026-09-25-member-trade-return-leg.sql, live since 2026-09-27 00:43:01Z; schema.sql
+// mirrors it since its record step).
+step("Prompt 19 S5: the trade_insert_guards, read as behaviour - a member give with no return leg is accepted by both; a member trade with no return leg (kind omitted = the 'trade' default) was ACCEPTED by the give-kind guard (old builds' unit tails) and is refused by the follow-up (schema.sql's since its record step); the B6 guard accepted it too (Q's BEFORE); every TRADE_INELIGIBLE raise is translated (none skipped); probe O / Q run as the member caller");
 const guardVerdict = (fn, caller, row) => {
   const memberAt = fn.indexOf("if not (public.silvis_is_sched() or server) then");
   const memberEnd = fn.indexOf("\n  end if;\n", fn.indexOf("new.decided_at      := null;"));
@@ -1799,12 +1822,12 @@ const guardVerdict = (fn, caller, row) => {
 };
 {
   const MEMBER = { member: true, me: "s2" }, SCHED = { member: false };
-  const give = functionText(schema, "trade_insert_guard"), b6 = functionText(locksMig, "trade_insert_guard");
+  const give = functionText(giveMig, "trade_insert_guard"), b6 = functionText(locksMig, "trade_insert_guard");   // the give-kind file's body (frozen as applied)
   const followUp = functionText(read(RETURN_LEG_MIGRATION), "trade_insert_guard");
   const NEEDS = "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead";
   const ONEWAY = "ERR TRADE_INELIGIBLE: a give is one-way - it carries no return shift";
   const base = { from_surgeon_id: "s2", to_surgeon_id: "s3", day: "2030-03-27", role: "primary" };
-  // [what, caller, row, verdict of the shipped give-kind guard, verdict of the prepared follow-up guard]
+  // [what, caller, row, verdict of the give-kind file's guard, verdict of the follow-up's guard (= schema.sql's)]
   const CASES = [
     ["member give, no return leg (probe O)", MEMBER, { ...base, kind: "give" }, "ok", "ok"],
     ["member trade, kind omitted, no return leg (probe Q; an old build's unit tail)", MEMBER, { ...base }, "ok", NEEDS],
@@ -1819,11 +1842,12 @@ const guardVerdict = (fn, caller, row) => {
     ["scheduler give (probe U3)", SCHED, { ...base, kind: "give", from_surgeon_id: "s3", to_surgeon_id: "s4" }, "ok", "ok"],
     ["scheduler give WITH a return leg (probe U2)", SCHED, { ...base, kind: "give", from_surgeon_id: "s3", to_surgeon_id: "s4", return_day: "2030-03-04", return_role: "backup" }, ONEWAY, ONEWAY],
   ];
-  CASES.forEach(([what, caller, row, want]) => eq(guardVerdict(give, caller, row), want, "prepared trade_insert_guard (schema.sql = the give-kind migration): " + what + ";"));
-  CASES.forEach(([what, caller, row, , wantFu]) => eq(guardVerdict(followUp, caller, row), wantFu, "prepared follow-up trade_insert_guard (sql/migrations/" + RETURN_LEG_FILE + "): " + what + ";"));
-  // The live guard (B6, frozen by sha256 above) is the BEFORE: it never refused a member's one-way trade (only the client
+  CASES.forEach(([what, caller, row, want]) => eq(guardVerdict(give, caller, row), want, "give-kind trade_insert_guard (sql/migrations/2026-09-24-give-kind.sql, frozen as applied): " + what + ";"));
+  CASES.forEach(([what, caller, row, , wantFu]) => eq(guardVerdict(followUp, caller, row), wantFu, "follow-up trade_insert_guard (sql/migrations/" + RETURN_LEG_FILE + ", applied 2026-09-27): " + what + ";"));
+  CASES.forEach(([what, caller, row, , wantFu]) => eq(guardVerdict(functionText(schema, "trade_insert_guard"), caller, row), wantFu, "schema.sql's trade_insert_guard (the follow-up's since its record step): " + what + ";"));
+  // The B6 guard (frozen by sha256 above) was the BEFORE of Prompt 19: it never refused a member's one-way trade (only the client
   // did - Q's BEFORE in the probe header reads status=pending return=null) and knew no kind.
-  eq(guardVerdict(b6, MEMBER, { ...base }), "ok", "the live B6 trade_insert_guard accepted a member trade with no return leg (the BEFORE the follow-up closes; the give-kind file keeps it);");
+  eq(guardVerdict(b6, MEMBER, { ...base }), "ok", "the B6 trade_insert_guard accepted a member trade with no return leg (the BEFORE the follow-up closed; the give-kind file kept it);");
   // the evaluator refuses to grade a body with a refusal it cannot read (S5 review), and models SQL NULL in "a = b"
   let unread = null;
   try { guardVerdict(give.replace("if new.from_surgeon_id = new.to_surgeon_id then", "if coalesce(new.from_surgeon_id, '') = new.to_surgeon_id then"), MEMBER, { ...base, kind: "give" }); } catch (e) { unread = String(e.message); }
@@ -1845,15 +1869,15 @@ const guardVerdict = (fn, caller, row) => {
   });
 }
 
-// ---- Prompt 19 follow-up (prepared 2026-09-24): the member return-leg refusal, split out of the give-kind file ----
+// ---- Prompt 19 follow-up (prepared 2026-09-24, applied 2026-09-27): the member return-leg refusal, split out of the give-kind file ----
 // S1 review (major): the refusal breaks OLD installed builds during the rollout - an old build saves a member's whole-unit trade
 // for one return day as a head row WITH the return leg plus tail rows WITHOUT one; refused tails leave a half-saved unit proposal
-// whose head row, if accepted, applies as a unit split. So the give-kind file ships without it and this file re-creates
-// trade_insert_guard with it (S1's body, byte for byte - pinned by sha256 against git show f9ad08f), REPORT-FIRST and NOT
-// applied: only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain. schema.sql
-// does NOT mirror it (PREPARED_NOT_MIRRORED above); the probe's Q / Q3 refusal is this file's acceptance case - documented in the
-// probe header and SCHEMA-REVIEW, never graded live by verify-rls.sh before the apply (it would fail today).
-step("Prompt 19 follow-up: sql/migrations/2026-09-25-member-trade-return-leg.sql - PREPARED (report-first, NOT applied, NOT mirrored), trade_insert_guard only = S1's body (sha256), = the give-kind body plus the member block, undone = B6's");
+// whose head row, if accepted, applies as a unit split. So the give-kind file shipped without it and this file re-creates
+// trade_insert_guard with it (S1's body, byte for byte - pinned by sha256 against git show f9ad08f), REPORT-FIRST, applied only
+// after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain: the 24-hour gate applied it
+// 2026-09-27 00:43:01Z (probe Q / Q3 refused, the other 32 cases unchanged). Its record step mirrored it into schema.sql
+// (revision p), emptied PREPARED_NOT_MIRRORED and made verify-rls.sh section 5 grade Q / Q3 refused by default.
+step("Prompt 19 follow-up: sql/migrations/2026-09-25-member-trade-return-leg.sql - APPLIED 2026-09-27 and mirrored (revision p), trade_insert_guard only = S1's body (sha256), = the give-kind body plus the member block, undone = B6's");
 const fuMig = read(RETURN_LEG_MIGRATION);
 ok(!/\r/.test(fuMig), "the follow-up migration has CRLF line endings");
 checkInsertGuard("follow-up migration", fuMig, true, true, true);
@@ -1865,9 +1889,9 @@ eq(crypto.createHash("sha256").update(fuFn || "").digest("hex"), S1_INSERT_GUARD
 const MEMBER_BLOCK = "    -- (2026-09-24, Prompt 19) a member's 'trade' carries its return shift (return_day AND return_role); a one-way row from a\n    -- member is a 'give'. kind null reads as a trade here (the not-null constraint refuses it after the trigger anyway).\n    " + GIVE_NEEDS_RETURN_IF + "\n      " + GIVE_NEEDS_RETURN_RAISE + "\n    end if;\n";
 eq(fuFn, functionText(giveMig, "trade_insert_guard").replace("    new.decided_at      := null;\n  end if;\n", "    new.decided_at      := null;\n" + MEMBER_BLOCK + "  end if;\n"), "the follow-up's body must be the give-kind body with ONLY the member return-leg block added (right after the normalisation, inside the member branch);");
 eq(undoFollowUp(fuFn), functionText(locksMig, "trade_insert_guard"), "the follow-up's body with both Prompt 19 blocks undone must equal B6's applied body byte for byte;");
-ok(!schema.includes(GIVE_NEEDS_RETURN_IF) && functionText(schema, "trade_insert_guard") !== fuFn, "schema.sql must NOT carry the member return-leg block (it mirrors what the next apply makes live - the give-kind body) until the follow-up's apply is recorded");
+ok(schema.includes(GIVE_NEEDS_RETURN_IF) && functionText(schema, "trade_insert_guard") === fuFn, "schema.sql must carry the member return-leg block - it mirrors the follow-up since its apply was recorded (2026-09-27)");
 const fuHdr = fuMig.slice(0, fuMig.indexOf("create or replace function"));
-ok(/^-- PREPARED FOLLOW-UP - REPORT-FIRST, NOT APPLIED\. NOT MIRRORED in sql\/schema\.sql until its apply is recorded\.$/m.test(fuHdr), "the follow-up header must carry the PREPARED / NOT APPLIED / NOT MIRRORED marker line");
+ok(!/^-- PREPARED FOLLOW-UP/m.test(fuHdr) && /^-- APPLIED 2026-09-27 00:43:01Z by the 24-hour gate \(run by hand\); sql\/schema\.sql mirrors it as Revision 2026-09-25 p since the record step\.$/m.test(fuHdr), "the follow-up header's PREPARED / NOT APPLIED / NOT MIRRORED marker line is gone; its place reads `-- APPLIED 2026-09-27 00:43:01Z by the 24-hour gate (run by hand); sql/schema.sql mirrors it as Revision 2026-09-25 p since the record step.`");
 ok(/apply only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain/.test(fuHdr.replace(/\n-- /g, " ")), "the follow-up header must say: apply only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain");
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-25-member-trade-return-leg\.sql/.test(fuHdr), "the follow-up header must carry the CLI apply line");
 ok(/Revision 2026-09-25 p/.test(fuHdr) && /test\/schema\.test\.js/.test(fuHdr) && /PREPARED_NOT_MIRRORED/.test(fuHdr), "the follow-up header must plan schema.sql's Revision 2026-09-25 p and the record step (mirror the body, empty PREPARED_NOT_MIRRORED)");
@@ -1878,25 +1902,20 @@ const FU_Q = "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day 
   ok(fuHdr.includes(k + "=" + FU_Q), "the follow-up header must state its acceptance case " + k + "=" + FU_Q);
   ok(probeHdr.includes("AFTER the follow-up (" + RETURN_LEG_FILE + "): refused -> " + k + "=" + FU_Q), "the trade probe header must state " + k + "'s value after the follow-up (`AFTER the follow-up (" + RETURN_LEG_FILE + "): refused -> " + k + "=...`)");
 });
-// 24-hour gate (Faraz 9/25): the REFUSED grading of Q / Q3 exists only behind SILVIS_RETURN_LEG_APPLIED=1 (the gate's run right after
-// the return-leg apply); by default Q / Q3 are graded STORED until the follow-up's record step (which makes REFUSED the default).
+// 24-hour gate (Faraz 9/25): the REFUSED grading of Q / Q3 lived behind SILVIS_RETURN_LEG_APPLIED=1 for the gate's run right after the
+// return-leg apply (Q / Q3 were graded STORED by default until then). The follow-up's record step (2026-09-27) made REFUSED the
+// only grading and dropped the variable - from the file header, --help and section 5 alike.
 {
-  const rlIf = vr.indexOf('if [ "${SILVIS_RETURN_LEG_APPLIED:-}" = "1" ]; then');
-  const rlElse = rlIf < 0 ? -1 : vr.indexOf("\n    else\n", rlIf);
-  const rlFi = rlElse < 0 ? -1 : vr.indexOf("\n    fi\n", rlElse);
-  ok(rlIf > 0 && rlElse > rlIf && rlFi > rlElse, "verify-rls.sh section 5 needs the SILVIS_RETURN_LEG_APPLIED if / else / fi around Q / Q3");
-  const outside = vr.slice(0, rlIf) + vr.slice(rlElse);
-  ok(!/expect_eq\s+Q3?\s+"ERR TRADE_INELIGIBLE: a trade needs a return shift/.test(outside), "verify-rls.sh must NOT grade Q / Q3 as refused by default before the follow-up is applied (the live DB accepts them today - the record step of the follow-up flips them)");
-  const flagged = vr.slice(rlIf, rlElse), dflt = vr.slice(rlElse, rlFi);
+  ok(!/SILVIS_RETURN_LEG_APPLIED/.test(vr), "verify-rls.sh no longer reads or documents SILVIS_RETURN_LEG_APPLIED (the follow-up's record step dropped it)");
   const REFUSED_RL = "ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead";
   ["Q", "Q3"].forEach((k) => {
-    ok(flagged.includes("expect_eq       " + k + " \"" + REFUSED_RL + "\""), "under SILVIS_RETURN_LEG_APPLIED=1 section 5 must grade " + k + " refused with the migration's exact sentence");
-    ok(read(path.join(ROOT, "sql", "migrations", "2026-09-25-member-trade-return-leg.sql")).includes(REFUSED_RL.replace("ERR ", "")), "the flagged sentence must be the return-leg migration's own");
+    eq((s5.match(new RegExp("^\\s*expect_eq\\s+" + k + "\\s", "gm")) || []).length, 1, "section 5 grades " + k + " exactly once (no second, STORED grading behind a variable);");
+    ok(s5.includes("expect_eq         " + k + " \"" + REFUSED_RL + "\""), "section 5 must grade " + k + " refused with the migration's exact sentence, by default");
+    ok(read(path.join(ROOT, "sql", "migrations", "2026-09-25-member-trade-return-leg.sql")).includes(REFUSED_RL.replace("ERR ", "")), "the graded sentence must be the return-leg migration's own");
   });
-  ok(/expect_eq\s+Q\s+"status=pending return=null"/.test(dflt) && /expect_eq\s+Q3\s+"status=pending return=2030-03-04 return_role=null"/.test(dflt), "by default section 5 grades Q / Q3 STORED");
-  ok(/SILVIS_RETURN_LEG_APPLIED/.test(vr.slice(0, vr.indexOf('echo "== 1.'))), "the file header documents SILVIS_RETURN_LEG_APPLIED");
+  ok(!/expect_eq\s+Q3?\s+"status=pending return=/.test(vr), "verify-rls.sh must no longer grade Q / Q3 STORED (the live DB refuses them since 2026-09-27 00:43:01Z)");
 }
-step("Prompt 19 follow-up: docs/SCHEMA-REVIEW.md carries its own PREPARED section (why, the block, the window, the gate, Q / Q3, apply order with the orphaned-head check, observed placeholder); the guide row names it");
+step("Prompt 19 follow-up: docs/SCHEMA-REVIEW.md carries its own section (why, the block, the window, the gate, Q / Q3, apply order with the orphaned-head check, APPLIED status + observed line, the gate's TRADE_PAST date note); the guide row names it");
 ok(/## 2026-09-25 - member trade return leg \(Prompt 19 follow-up; `sql\/migrations\/2026-09-25-member-trade-return-leg\.sql`\)/.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-25 - member trade return leg (Prompt 19 follow-up; `sql/migrations/2026-09-25-member-trade-return-leg.sql`)' section");
 const reviewFu = (() => { const at = review.indexOf("## 2026-09-25 - member trade return leg"), end = review.indexOf("\n## ", at + 1); return review.slice(at, end < 0 ? review.length : end); })();
 ok(/^\*\*Status: (PREPARED - report-first \(not applied\)|APPLIED 2026-)[^*]*\*\*$/.test(((reviewFu.match(/\*\*Status: [^*]*\*\*/) || [""])[0])), "the follow-up section's status line must read 'Status: PREPARED - report-first (not applied) ...' (or 'APPLIED 2026-...' after its record step)");
@@ -1907,6 +1926,14 @@ ok(reviewFu.includes("and t.detail ~ ', day 1 of [0-9]+\\]'") && reviewFu.includ
 ["Q", "Q3"].forEach((k) => ok(reviewFu.includes("| `" + k + "` |") && reviewFu.includes("`" + FU_Q + "`"), "the follow-up section's probe table must list " + k + " refused (`" + FU_Q + "`)"));
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-25-member-trade-return-leg\.sql/.test(reviewFu) && /Revision 2026-09-25 p/.test(reviewFu) && /PREPARED_NOT_MIRRORED/.test(reviewFu), "the follow-up section must carry the CLI apply line and its record step (Revision 2026-09-25 p, mirror, PREPARED_NOT_MIRRORED emptied, Q / Q3 re-graded)");
 ok(/observed: /.test(reviewFu), "the follow-up section must carry an 'observed:' line");
+// the record step (2026-09-27): the status line, the observed line, and the gate's procedure note on the TRADE_PAST date
+{
+  ok(((reviewFu.match(/\*\*Status: [^*]*\*\*/) || [""])[0]) === "**Status: APPLIED 2026-09-27 00:43:01Z.**", "the follow-up section's status line must read `**Status: APPLIED 2026-09-27 00:43:01Z.**` (its record step)");
+  const obsFu = (reviewFu.match(/^observed: .*$/m) || [""])[0];
+  ok(!/_to be filled/.test(obsFu) && /applied 2026-09-27 00:43:01/.test(obsFu) && obsFu.includes("`Q=" + FU_Q + "`") && /RETURN-LEG APPLY ACCEPTED/.test(obsFu) && /0 rows/.test(obsFu) && /192 passed, 0 failed/.test(obsFu), "the follow-up section's observed line must carry the apply time, Q refused (AFTER), RETURN-LEG APPLY ACCEPTED, the orphaned-head check's 0 rows and verify-rls 192 / 0");
+  const note = reviewFu.slice(reviewFu.indexOf("**Gate procedure note"));
+  ok(reviewFu.indexOf("**Gate procedure note") > 0 && /TRADE_PAST/.test(note) && /BOTH sides/.test(note) && /expect_past/.test(note) && note.includes("(<date>)"), "the follow-up section must carry the gate procedure note: a comparison of probe runs from different days blanks the Central date inside TRADE_PAST on both sides (verify-rls already grades I / K by token + day, expect_past)");
+}
 
 // ---- Prompt 20 F1 (2026-09-24) - followers: user_profiles.follows + notification_preferences for an unlinked account ----
 // sql/migrations/2026-09-24-followers.sql (REPORT-FIRST, not applied; revision o): a viewer / coordinator account follows roster
@@ -1993,7 +2020,8 @@ const prefsTable = sliceBetween(schema, "create table if not exists public.notif
 ok(prefsTable && /\n  id                        uuid primary key default gen_random_uuid\(\),/.test(prefsTable) && /\n  person_id                 text unique,/.test(prefsTable) && /\n  profile_id                uuid unique references public\.user_profiles\(id\) on delete cascade,/.test(prefsTable) && /\n  constraint notification_preferences_one_owner check \(num_nonnulls\(person_id, profile_id\) = 1\)\n\);$/.test(prefsTable), "schema.sql's notification_preferences create table must carry id (primary key), person_id unique, profile_id unique -> user_profiles on delete cascade and the one-owner check (a from-scratch schema)");
 ok(!/person_id\s+text primary key/.test(prefsTable || ""), "notification_preferences.person_id is no longer the primary key");
 ok(schema.indexOf(FOLLOW_DDL[3]) > schema.indexOf("create table if not exists public.notification_preferences (") && schema.indexOf(FOLLOW_DDL[FOLLOW_DDL.length - 1]) < schema.indexOf("create table if not exists public.audit_log ("), "the notification_preferences DDL sits right after its create table, before audit_log");
-ok(/-- Revision 2026-09-24 o \(Prompt 20 F1, sql\/migrations\/2026-09-24-followers\.sql, (report-first, NOT yet applied|applied 2026-)[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 o (followers; 'report-first, NOT yet applied' until the record step writes 'applied <timestamp>')");
+// tightened to the applied wording by the record step (2026-09-27, the 24-hour gate), as revision m's pin was at its record step
+ok(/-- Revision 2026-09-24 o \(Prompt 20 F1, sql\/migrations\/2026-09-24-followers\.sql, applied 2026-09-27 00:43:54Z[^)]*\)/.test(schema) && !/^-- Revision 2026-09-24 o [^\n]*NOT yet applied/m.test(schema), "schema.sql header must record revision 2026-09-24 o (followers) as 'applied 2026-09-27 00:43:54Z' (the record step; it read 'report-first, NOT yet applied' before)");
 
 step("P20 F1: the probe is self-rolling-back, reports the prefs row count BEFORE (PROBE_SETUP) and AFTER (R1), acts as a follower / a second follower / a surgeon / the admin, covers R1..X1");
 const foProbe = read(FOLLOW_PROBE);
@@ -2071,6 +2099,12 @@ ok(/## 2026-09-24 - followers: user_profiles\.follows \+ notification_preference
 const reviewF1 = (() => { const at = review.indexOf("## 2026-09-24 - followers:"), end = review.indexOf("\n## ", at + 1); return at < 0 ? "" : review.slice(at, end < 0 ? review.length : end); })();
 ok(/^\*\*Status: (PREPARED - report-first \(not applied\)|APPLIED 2026-)/.test(((reviewF1.match(/\*\*Status: [^*]*\*\*/) || [""])[0])), "the F1 section's status line must read 'Status: PREPARED - report-first (not applied)' (or 'APPLIED 2026-...' after the record step)");
 ok(/observed: /.test(reviewF1), "the F1 section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
+// the record step (2026-09-27, the 24-hour gate): the status line and the observed line (BEFORE sentinel with its row count, AFTER R1, verify-rls)
+{
+  ok(((reviewF1.match(/\*\*Status: [^*]*\*\*/) || [""])[0]) === "**Status: APPLIED 2026-09-27 00:43:54Z.**", "the F1 section's status line must read `**Status: APPLIED 2026-09-27 00:43:54Z.**` (its record step)");
+  const obsF1 = (reviewF1.match(/^observed: .*$/m) || [""])[0];
+  ok(!/_to be filled/.test(obsF1) && /applied 2026-09-27 00:43:54/.test(obsF1) && /notification_preferences rows=2`/.test(obsF1) && /`R1=rows=2 person=2 profile=0 ids=2`/.test(obsF1) && /192 passed, 0 failed/.test(obsF1) && /leftover 0/.test(obsF1), "the F1 observed line must carry the apply time, the BEFORE sentinel with its row count (2), R1 AFTER with the same count, verify-rls 192 / 0 and the leftover count");
+}
 Object.keys(FOLLOW_POLICIES).forEach((p) => ok(reviewF1.includes(FOLLOW_POLICIES[p].replace(/\n  /g, "\n      ")), "the F1 section must quote the AFTER text of " + p + " verbatim (indented as a code block)"));
 FOLLOW_CASES.forEach((k) => ok(new RegExp("^\\| `" + k + "` \\|", "m").test(reviewF1), "the F1 probe table lacks a row for " + k));
 ok(/Blast radius/.test(reviewF1) && /send-notification/.test(reviewF1) && /daily-reminder/.test(reviewF1) && /on_conflict=person_id/.test(reviewF1), "the F1 section must state the blast radius, both edge functions' person_id reads and the client's on_conflict=person_id");
@@ -2085,9 +2119,17 @@ const tblA = review.slice(review.indexOf("## (a) "), review.indexOf("## (b) "));
 const tblB = review.slice(review.indexOf("## (b) "), review.indexOf("## (c) "));
 ok(/^\| `user_profiles` \|[^\n]*follows/m.test(tblA) && /^\| `notification_preferences` \|[^\n]*profile_id/m.test(tblA), "SCHEMA-REVIEW table (a) must name user_profiles.follows and notification_preferences.profile_id");
 ok(/^\| `notification_preferences` \|[^\n]*profile_id/m.test(tblB) && /^\| `user_profiles` \|[^\n]*follows/m.test(tblB), "SCHEMA-REVIEW table (b) must name the prefs profile_id clause and the follows pin");
-ok(/2026-09-24-followers\.sql/.test(g43) && /report-first, (NOT applied|applied 2026-)/.test(g43.slice(g43.indexOf("2026-09-24-followers.sql") - 400)), "guide 4.3 must carry the Prompt 20 F1 bullet (report-first, NOT applied - or 'applied 2026-MM-DD' after the record step)");
+ok(!/Prompt 20 F1 \(prepared/.test(tblA + tblB) && (tblA + tblB).split("\n").filter((l) => /Prompt 20 F1 \(applied 2026-09-27/.test(l)).length === 4, "SCHEMA-REVIEW tables (a) / (b): the four Prompt 20 F1 notes drop 'prepared' and read 'applied 2026-09-27' (the record step)");
+{
+  // the bullet line itself (a slice around the file name also reaches the Prompt 19 bullet above it); tightened at the record step
+  const f1Bullet = (g43.match(/^- \*\*Followers \(Prompt 20 F1, [^\n]*/m) || [""])[0];
+  ok(/`sql\/migrations\/2026-09-24-followers\.sql`/.test(f1Bullet) && /report-first, applied 2026-09-27 00:43 UTC/.test(f1Bullet) && !/NOT applied/.test(f1Bullet), "guide 4.3 must carry the Prompt 20 F1 bullet reading 'report-first, applied 2026-09-27 00:43 UTC' (the record step; it read 'report-first, NOT applied' before)");
+}
 ["user_profiles.follows", "user_profiles_self_update", "user_profiles_self_insert", "notification_preferences` key", "prefs_own"].forEach((p) => ok(new RegExp("^\\| `" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "m").test(g43.slice(g43.indexOf("2026-09-24-followers.sql"))), "guide 4.3's F1 table lacks a row for " + p));
-ok(/applied: (_to be filled by the orchestrator_|2026-)/.test(g43.slice(g43.indexOf("2026-09-24-followers.sql"))), "guide 4.3's F1 bullet must carry the 'applied: _to be filled by the orchestrator_' placeholder");
+{
+  const f1Proof = (g43.match(/^Proof: `sql\/probes\/followers-probe\.sql`[^\n]*/m) || [""])[0];
+  ok(/applied: 2026-09-27 00:43:54 UTC/.test(f1Proof) && !/_to be filled/.test(f1Proof), "guide 4.3's F1 Proof line must carry 'applied: 2026-09-27 00:43:54 UTC ...' (the record step filled the placeholder)");
+}
 
 // ---- Prompt 20 R1 (rebase onto Prompt 19, 9/25) - Faraz's decisions on the Followers file are recorded; the file ships in ONE rollout
 // with the member return-leg follow-up, and the two never touch the same object (followers: user_profiles / notification_preferences;

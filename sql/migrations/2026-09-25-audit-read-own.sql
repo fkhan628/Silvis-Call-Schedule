@@ -62,6 +62,9 @@
 -- the return-leg's revision p, SILVIS_RETURN_LEG_APPLIED gone from verify-rls section 5), resolve the conflicts (sql/schema.sql's
 -- header, the end of docs/SCHEMA-REVIEW.md, guide 4.3, scripts/verify-rls.sh, test/schema.test.js), re-run the gates -> apply
 -- this file -> verify-rls from the rebased branch -> push. If the gate reports instead of applying, stop.
+-- As run (2026-09-27): the gate was run by hand and its record commit landed AFTER this file's push, not before - the branch was
+-- rebased onto 7a23f09 (no record commit yet), verify-rls ran with SILVIS_RETURN_LEG_APPLIED=1, and the record commit that drops
+-- that variable (revision o applied, revision p) followed (docs/SCHEMA-REVIEW.md, apply order step 2).
 --
 -- Apply live with the Supabase CLI (absolute path; the workdir is a directory linked with `supabase link --project-ref
 -- bzhsroegtagqhutbnsrp`), or paste the file into the SQL editor as ONE session:

@@ -93,6 +93,8 @@
 -- below as "AFTER the follow-up" and graded only from that file's record step on. The give fixtures (days 2030-03-25 / 03-27, trade ids
 -- ...030-...034) sit in their own block: before the migration it fails on the missing column and says so (GIVE_SETUP), the
 -- other cases still run. A missing column reads 'ERR column  kind  ... does not exist' (the report flattens the quotes).
+-- As run: the follow-up was applied 2026-09-27 00:43:01Z (schema.sql revision p; Q / Q3 refused, the other cases unchanged),
+-- and since its record step verify-rls.sh section 5 grades Q / Q3 refused only - the "stored" grading above is history.
 --   GIVE_SETUP the give fixtures (as postgres)
 --        BEFORE: ERR column  kind  of relation  shift_trade_requests  does not exist   AFTER: GIVE_SETUP=ok
 --   O  surgeon (s2) gives his own day (2030-03-27 primary) to s3 - kind 'give', NO return day / role

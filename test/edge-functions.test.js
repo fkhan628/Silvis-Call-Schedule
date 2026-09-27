@@ -1255,12 +1255,12 @@ check("P20 F3 source pins - daily-reminder (reminder mode): after the surgeons' 
   assert.ok(/you receive this because you follow Dr\. \$\{escHtml\(opts\.surgeonName\)\}; to change the reminder hour or stop these reminders, use Notification settings under Settings in the app\./.test(fr), "P20 R2: the follower footer points at his own reminder switch and hour (Notification settings under Settings in the app)");
   assert.ok(!/ask the scheduler/.test(fr), "P20 R2: the follower frame no longer says to ask the scheduler (he has the switches)");
 });
-check("P20 F3: edge-functions/README.md - section 3 carries the pending Prompt 20 F3 deploy rows (send-notification and daily-reminder, next version, pending) with the proofs to observe; section 5 shows the daily-reminder dryRun `followers` object and the send-notification followers_* keys; the gate table says a follower never sends", () => {
+check("P20 F3: edge-functions/README.md - section 3 carries the Prompt 20 F3 deploy rows (send-notification v8 and daily-reminder v6, deployed 2026-09-27 by the 24-hour gate) with the proofs to observe; section 5 shows the daily-reminder dryRun `followers` object and the send-notification followers_* keys; the gate table says a follower never sends", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i = s3.indexOf("### Deploy record - Prompt 20 F3");
   assert.ok(i > 0, "the Prompt 20 F3 deploy record");
   const rec = s3.slice(i, s3.indexOf("\n### ", i + 10) > 0 ? s3.indexOf("\n### ", i + 10) : undefined);
-  assert.ok(/\| `send-notification` \|[^\n]*-> next \(pending\)/.test(rec) && /\| `daily-reminder` \|[^\n]*-> next \(pending\)/.test(rec), "one pending row per function");
+  assert.ok(/\| `send-notification` \|[^\n]*v7 -> v8 \(deployed 2026-09-27 00:46:04 UTC/.test(rec) && /\| `daily-reminder` \|[^\n]*v5 -> v6 \(deployed 2026-09-27 00:46:09 UTC/.test(rec) && !/\(pending\)/.test(rec), "one deployed row per function (the gate's record), no pending row left");
   assert.ok(/revision o/.test(rec) && /followers_added/.test(rec) && /"followers"/.test(rec), "the proofs: revision o first, followers_added, the dryRun followers object");
   const dr = readme.slice(readme.indexOf("### daily-reminder"), readme.indexOf("## 6."));
   assert.ok(/"followers":\{"accounts":/.test(dr), "section 5: the dryRun followers object");
@@ -1538,21 +1538,22 @@ check("P20 R1 (c): the scheduler extra ids ride ONLY on trade_applied - tradeExt
   });
 });
 
-check("P20 R1: edge-functions/README.md section 3 - the Prompt 19 v7 record stays as deployed (2026-09-25 05:36:23 UTC, v6 -> v7) and the Followers record is a PENDING v8 on base v7 (daily-reminder v5 -> v6), with Faraz's 9/25 decisions (publish mail yes, the self-insert pin kept, follows cleared on a role change) and the one rollout", () => {
+check("P20 R1: edge-functions/README.md section 3 - the Prompt 19 v7 record stays as deployed (2026-09-25 05:36:23 UTC, v6 -> v7) and the Followers record is v8 on base v7 (daily-reminder v5 -> v6), DEPLOYED 2026-09-27 00:46 UTC by the 24-hour gate (401s, cmp-identical re-downloads), with Faraz's 9/25 decisions (publish mail yes, the self-insert pin kept, follows cleared on a role change) and the one rollout", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i19 = s3.indexOf("### Deploy record - Prompt 19 S3"), i20 = s3.indexOf("### Deploy record - Prompt 20 F3");
   assert.ok(i19 > 0 && i20 > i19, "both records, Prompt 19 first");
   const rec19 = s3.slice(i19, i20), rec20 = s3.slice(i20, s3.indexOf("\n### ", i20 + 10));
   assert.ok(/\| 2026-09-25 05:36:23 \| `send-notification` \| v6 -> v7 \(deployed 2026-09-25 05:36:23 UTC/.test(rec19), "the v7 deploy row, as recorded");
-  assert.ok(/\| \(pending\) \| `send-notification` \| v7 \(Prompt 19, live\) -> next \(pending\): v8 \|/.test(rec20), "send-notification: base v7, next v8");
+  assert.ok(/\| 2026-09-27 00:46:04 \| `send-notification` \| v7 -> v8 \(deployed 2026-09-27 00:46:04 UTC; live v7 backed up first; the re-download `cmp`-identical to [^\n|]*; observed 00:46 UTC: an unauthenticated POST -> 401\) \|/.test(rec20), "send-notification: v7 -> v8, deployed 2026-09-27 00:46:04 UTC (backup first, cmp-identical re-download, 401)");
   assert.ok(!/current \(v6/.test(rec20), "no v6 base left");
-  assert.ok(/\| \(pending\) \| `daily-reminder` \| v5 -> next \(pending\): v6 \|/.test(rec20), "daily-reminder v5 -> v6");
+  assert.ok(/\| 2026-09-27 00:46:09 \| `daily-reminder` \| v5 -> v6 \(deployed 2026-09-27 00:46:09 UTC; live v5 backed up first; the re-download `cmp`-identical to [^\n|]*; observed 00:46 UTC: an unauthenticated POST -> 401\) \|/.test(rec20), "daily-reminder: v5 -> v6, deployed 2026-09-27 00:46:09 UTC (backup first, cmp-identical re-download, 401)");
+  assert.ok(!/PENDING, nothing deployed/.test(rec20) && /deployed 2026-09-27 00:46 UTC by the orchestrator/.test(rec20), "the record's heading says it is deployed");
   assert.ok(/followers_added` names only followers of `<from>` \/ `<to>`/.test(rec20), "the v8 proof keeps the give's trade_applied path");
   const dec = rec20.slice(rec20.indexOf("Decisions (Faraz 9/25)"));
   assert.ok(rec20.indexOf("Decisions (Faraz 9/25)") > 0, "the decisions paragraph");
   assert.ok(/publish e-mail/.test(dec) && /`user_profiles_self_insert` `follows = '\[\]'`/.test(dec) && /keeps clearing `follows`/.test(dec) && /ONE rollout/.test(dec), "publish mail, the pin, the role-change clear, one rollout");
   const gateRow = readme.split("\n").find((l) => /^\| send-notification \| OFF \|/.test(l)) || "";
-  assert.ok(/Prompt 19 S3 \(v7, deployed 2026-09-25 05:36 UTC\)/.test(gateRow) && /A follower \(Prompt 20 F3, v8 PENDING/.test(gateRow), "the gate row carries both, v7 deployed and the follower sentence pending");
+  assert.ok(/Prompt 19 S3 \(v7, deployed 2026-09-25 05:36 UTC\)/.test(gateRow) && /A follower \(Prompt 20 F3, v8, deployed 2026-09-27 00:46 UTC/.test(gateRow), "the gate row carries both, v7 and the follower sentence's v8 deployed");
   assert.ok(!/decision needed/i.test(readme), "no 'decision needed' left");
 });
 

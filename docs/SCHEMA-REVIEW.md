@@ -11,7 +11,7 @@ Verification: `scripts/verify-rls.sh`.*
 
 | Table | Purpose |
 |---|---|
-| `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. Prompt 20 F1 (prepared 2026-09-24, report-first, not yet applied - see the section at the end): `follows` jsonb, the roster ids an account follows (admin-set). |
+| `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. Prompt 20 F1 (applied 2026-09-27 00:43:54Z, report-first - see the section at the end): `follows` jsonb, the roster ids an account follows (admin-set). |
 | `call_schedule_data` | One row `main`: roster (names/codes), `surgeonRules`, `groupRules`, holiday units, settings blob. Anon-read. |
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
 | `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. |
@@ -19,9 +19,9 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
-| `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, prepared) - Prompt 19, prepared, not yet applied. |
+| `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
-| `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (prepared, not yet applied): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. |
+| `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. |
 | `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, prepared 2026-09-25 and not yet applied: every signed-in user the rows he wrote - `audit_read_own`, section at the end). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the two SQL functions' rows do so since the item 5b migration (applied 2026-09-24; the two earlier `trade.apply` rows backfilled - section at the end); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
@@ -40,10 +40,10 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `client_versions` | anon: row `main` only; authenticated: all rows | scheduler/admin all rows; each authenticated user may insert/update **their own** heartbeat row (`id = auth.uid()`) |
 | `time_off` | anyone (anon) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 | `east_overrides` | anyone (anon) | scheduler/admin |
-| `user_profiles` | authenticated | self-insert as `viewer` with **no `person_id`**; self-update may not change `role` or `person_id`; admin: everything. Prompt 20 F1 (prepared): self-insert and self-update pin `follows` too (only the admin sets it) |
+| `user_profiles` | authenticated | self-insert as `viewer` with **no `person_id`**; self-update may not change `role` or `person_id`; admin: everything. Prompt 20 F1 (applied 2026-09-27): self-insert and self-update pin `follows` too (only the admin sets it) |
 | `shift_trade_requests` | authenticated | insert: proposer or scheduler; update: parties + scheduler, and a trigger restricts non-schedulers to status moves on a pending trade (counter-party → accepted/declined, proposer → cancelled) |
 | `notifications` | authenticated | insert: any authenticated user |
-| `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (prepared): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()` |
+| `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (applied 2026-09-27): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()` |
 | `audit_log` | scheduler/admin, every row (`audit_read`); a coordinator its own `timeoff.` / `offers.` / `availability.` rows (`audit_read_coord`, Prompt 16 A7). Prompt 21 step 1 (prepared, not yet applied - waits for the 24-hour gate): `audit_read_own` - every signed-in user the rows he wrote (`actor_id` = his roster id when linked, else his profile id), which the client's `INSERT ... RETURNING` needs | insert (`audit_insert`, Prompt 16 A1 / A7): scheduler/admin, a linked person as himself (`actor_id` = his roster id), a coordinator as itself (`actor_id` = its profile id); an unlinked viewer none |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
@@ -984,7 +984,7 @@ refusal and kind immutability are safe for the live client - `kind` defaults to 
 Q / Q3) as a follow-up migration once the min-version bump is in and the heartbeats show no older build - a second report.
 (c) A server-side exemption for unit-tail rows (keyed on the `[unit ... day N of M]` detail stamp, N > 1) - no window, but it
 ties the database to client text. Faraz is offline for a few days ("push if it appears things will go well"), so the orchestrator took the safe one,
-(b): this file is phase 1, `sql/migrations/2026-09-25-member-trade-return-leg.sql` is phase 2 (PREPARED, its own section below).
+(b): this file is phase 1, `sql/migrations/2026-09-25-member-trade-return-leg.sql` is phase 2 (PREPARED then; applied 2026-09-27 - its own section below).
 
 **The probe (`sql/probes/trade-guards-probe.sql`, rolls itself back; `scripts/verify-rls.sh` section 5 grades it).** A / G / H / N
 insert WITH a return leg (return 2030-03-04 backup) so they keep testing what they tested once the follow-up lands - their
@@ -1046,8 +1046,9 @@ observed: applied 2026-09-25 05:34:26 UTC (`supabase db query --linked -f sql/mi
 
 ## 2026-09-25 - member trade return leg (Prompt 19 follow-up; `sql/migrations/2026-09-25-member-trade-return-leg.sql`)
 
-**Status: PREPARED - report-first (not applied); apply only after the Prompt 19 min_version bump and a day for old builds to drain.**
+**Status: APPLIED 2026-09-27 00:43:01Z.**
 *Rollout (Faraz 9/25): ONE gate for this file and the followers file (revision o) - push the client, raise `client_versions.min_version` to that build, wait 24 h and require every heartbeat of the last 24 h to be on it or newer, then apply both with their probes. The gate (a scheduled task following a runbook outside the repo) grades the AFTER picture with `SILVIS_RETURN_LEG_APPLIED=1 bash scripts/verify-rls.sh` (section 5 then wants Q / Q3 refused; the default run keeps grading them STORED). The record step below makes REFUSED the default and drops that variable.*
+*As run (2026-09-27): the gate was run by hand on Faraz's instruction (the scheduled run sat on a permission prompt and applied nothing), with the variable as planned; the record commit has since made REFUSED the only grading of Q / Q3 and dropped `SILVIS_RETURN_LEG_APPLIED` from `scripts/verify-rls.sh`. Was PREPARED - report-first (not applied) until then.*
 Phase 2 of the Prompt 19 split (decision (b) in the section above): the member return-leg refusal S1 wrote into
 `2026-09-24-give-kind.sql`, moved out because it breaks **old installed builds** during the rollout. The file re-creates
 `trade_insert_guard` only - byte-for-byte S1's body (`git show f9ad08f:sql/migrations/2026-09-24-give-kind.sql`; `test/schema.test.js`
@@ -1055,7 +1056,8 @@ pins its sha256, proves it is the give-kind body plus this one block, and that u
 its trigger; no table, check, policy, grant or row. `sql/schema.sql` does NOT mirror it (it mirrors what the next apply makes live);
 its header carries a `PREPARED FOLLOW-UP, NOT MIRRORED` line instead of a revision line, and the suite exempts this one file from the
 newest-migration mirror pin by name (`PREPARED_NOT_MIRRORED`) while that line and the file's marker say so. Revision
-`2026-09-25 p` is planned, written only by the record step.
+`2026-09-25 p` is planned, written only by the record step. *(As run: the record step of 2026-09-27 mirrored the body as
+revision p, replaced that header line and the marker, and emptied `PREPARED_NOT_MIRRORED`.)*
 
 **Before / after.** Before (the give-kind guard): a member `'trade'` with no or half a return leg is stored; only the client
 refuses it. After - one block inside the member branch, right after the normalisation, everything else the give-kind body's:
@@ -1130,11 +1132,28 @@ gate). Order:
 
 Rolling back = re-running the give-kind `trade_insert_guard` body and trigger (`sql/migrations/2026-09-24-give-kind.sql`).
 
-observed: _to be filled by the orchestrator after the apply_
+**Gate procedure note - comparing probe runs from different days (Faraz's go, 2026-09-27).** Trade probe cases `I` and `K`
+print the Central run day inside their `TRADE_PAST` text (`ERR TRADE_PAST: 2020-02-03 is before today (<YYYY-MM-DD>) in Central
+time  past days are changed by the scheduler only`). The gate's first pass compared its 9/26 BEFORE run with the 9/25 baseline
+text for text and stopped at step 1.1 on that date alone (`drift: I,K`). Any comparison of two probe runs taken on different
+Central days - BEFORE against a baseline, AFTER against BEFORE across midnight - blanks that one date on BOTH sides of the
+comparison first: only the `today (YYYY-MM-DD)` inside a `TRADE_PAST` text, nothing else, and the `Q` / `Q3` checks stay exact.
+The gate's comparer does it with one helper, used on both sides of both comparisons:
+
+    const blank = (v) => (typeof v === "string" ? v.replace(/(TRADE_PAST: .* is before today )\(\d{4}-\d{2}-\d{2}\)/, "$1(<date>)") : v);
+
+With it the 9/26 BEFORE read 34 / 34 equal to the baseline and the run resumed from step 1.1. `scripts/verify-rls.sh` needs no
+change for it - section 5 already grades `I` / `K` by the token and the day (`expect_past`), not the sentence. The comparer lives
+outside the repo (`silvis-gate`) and carries the fix there; the runbook's text is unchanged. The same holds for any future baseline
+taken from this probe.
+
+observed: applied 2026-09-27 00:43:01.250052Z (`supabase db query --linked -f sql/migrations/2026-09-25-member-trade-return-leg.sql`, empty result, no error) by the 24-hour gate, run by hand in the orchestrator session on Faraz's instruction (the scheduled `silvis-24h-gate` run sat on a permission prompt from its first read and applied nothing; it was stopped first). Gate: `client_versions.min_version` 2026.09.25c since 2026-09-25T20:16:18Z; heartbeats PASS 28.08 h after the bump - s1-s5 all on 2026.09.25e (three older unlinked rows, last seen more than 24 h before, not judged). Trade probe BEFORE (34 cases): `Q=status=pending return=null`, `Q3=status=pending return=2030-03-04 return_role=null`, every case equal to the 9/25 post-give-kind baseline once the TRADE_PAST date is blanked (the note above; raw drift `I,K` only). AFTER: `Q=ERR TRADE_INELIGIBLE: a trade needs a return shift - pick the day and role you take in return, or give the day instead`, `Q3=` the same sentence; the other 32 cases unchanged -> RETURN-LEG APPLY ACCEPTED. Orphaned-head check (step 4, `submitted_at >= '2026-09-27 00:43:01.250052+00'`): 0 rows; the day-after re-run is due after 2026-09-28 00:43Z. `SILVIS_PREFS_ROWS_BEFORE=2 SILVIS_RETURN_LEG_APPLIED=1 bash scripts/verify-rls.sh` (the gate's copy at 33e529d), after both this file and the followers file: `RESULT: 192 passed, 0 failed` - section 5 `probe Q` / `probe Q3` PASS as refused, leftover 0. Then `send-notification` v8 and `daily-reminder` v6 were deployed (edge-functions/README.md section 3). The record commit: schema.sql revision p (this body), `PREPARED_NOT_MIRRORED` emptied, section 5 grades `Q` / `Q3` refused by default, `SILVIS_RETURN_LEG_APPLIED` gone.
 
 ## 2026-09-24 - followers: user_profiles.follows + notification_preferences for an unlinked account (Prompt 20 F1)
 
-**Status: PREPARED - report-first (not applied).** `sql/migrations/2026-09-24-followers.sql` changes row-level security and a primary
+**Status: APPLIED 2026-09-27 00:43:54Z.**
+*By the 24-hour gate, run by hand on Faraz's instruction, right after the member return-leg follow-up (the section above); observed line at the end. Was PREPARED - report-first (not applied) until then.*
+`sql/migrations/2026-09-24-followers.sql` changes row-level security and a primary
 key on the live project (guide section 4.3), so this section is the report; the orchestrator applies the file after Faraz's go and fills
 the *observed:* line at the end. What it is for: a viewer (or coordinator) account follows one or more surgeons and receives what that
 surgeon receives, read-only - no new role, viewer + `follows`. This file is the data half only; the client and the two edge functions
@@ -1178,7 +1197,7 @@ and the whole file rolls back - the pre-check reads the names first.
 
 **Decisions (Faraz 9/25).** Taken on the prepared file; nothing in it changes because of them:
 
-- **Followers get the publish e-mail** - yes. `send-notification` (v8, pending) adds the followers to `schedule_published` as F3 built it
+- **Followers get the publish e-mail** - yes. `send-notification` (v8, deployed 2026-09-27 00:46:04 UTC) adds the followers to `schedule_published` as F3 built it
   (the publish broadcast reaches linked persons only, so a follower was never in it before).
 - **The self-insert pin stays**: `user_profiles_self_insert` keeps `follows = '[]'::jsonb` (and `user_profiles_self_update` keeps its
   `follows` pin) - a profile never chooses whom it follows; the admin sets it in Setup > Users through `user_profiles_admin`.
@@ -1293,7 +1312,7 @@ drop `notification_preferences_person_id_key` / `_profile_id_key`, drop the colu
 `user_profiles_self_update` (A1's text in `sql/migrations/2026-09-24-prelaunch-rls.sql`) and `user_profiles_self_insert` (without the
 `follows` clause); drop `user_profiles_follows_shape` and the `follows` column.
 
-observed: _to be filled by the orchestrator after the apply (BEFORE sentinel with its row count, AFTER sentinel, verify-rls section 12 lines, leftover count)._
+observed: applied 2026-09-27 00:43:54.256885Z (`supabase db query --linked -f sql/migrations/2026-09-24-followers.sql`, empty result, no error) by the 24-hour gate (run by hand), 53 s after the member return-leg follow-up. Step 1: no separate 12a' run before the apply - the served build was attested by the gate's heartbeats instead: `client_versions.min_version` 2026.09.25c since 2026-09-25T20:16:18Z (the rollout build, whose `config.js` already sends the prefs upsert with `on_conflict=person_id`), heartbeats PASS 28.08 h after the bump (s1-s5 on 2026.09.25e, newer than 2026.09.25c); the post-apply verify-rls run below read 12a' `live client: the served build sends the prefs upsert with on_conflict=person_id` PASS. Pre-checks (read-only): `notification_preferences` rows = 2 (N = 2), `user_profiles.follows` absent, constraints `notification_preferences_pkey:p,notification_preferences_reminder_hour_central_check:c` (one primary key, as expected). Probe BEFORE: `PROBE_SETUP: user_profiles.follows / notification_preferences.profile_id are absent - sql/migrations/2026-09-24-followers.sql is not applied (this is the BEFORE picture) - notification_preferences rows=2`. Probe AFTER, every case its AFTER value: `R1=rows=2 person=2 profile=0 ids=2`, `K1=pk=id unique=person_id,profile_id`, `F1` / `F4` / `S4` / `I1` = `ERR 42501 ... for table "user_profiles"`, `P6` / `P7` / `P8` = `ERR 42501 ... for table "notification_preferences"`, `P9` / `A6` = `ERR 23514 ... "notification_preferences_one_owner"`, `A2` / `A3` / `A4` = `ERR 23514 ... "user_profiles_follows_shape"`, `S2=ERR 23505 duplicate key value violates unique constraint "notification_preferences_person_id_key"`, `F2=updated=1`, `P1=ok rows=1 schedule=false`, `P2=updated=1`, `P3=own=1 others=0`, `P4=updated=0`, `P5=deleted=0`, `A1=updated=1 follows=["s2"]`, `A5=probe_rows=3`, `F3=follows=["s2"]`, `S1=ok rows=1 schedule=false`, `S3=own=1 others=0`, `I2=ok follows=[]`, `X1=before=1 after=0`. Post-check: `follows` column present; prefs rows 2 -> 2 (none lost, none added); constraints now `notification_preferences_one_owner:c, notification_preferences_person_id_key:u, notification_preferences_pkey:p, notification_preferences_profile_id_fkey:f, notification_preferences_profile_id_key:u, notification_preferences_reminder_hour_central_check:c`. `SILVIS_PREFS_ROWS_BEFORE=2 SILVIS_RETURN_LEG_APPLIED=1 bash scripts/verify-rls.sh` (the gate's copy at 33e529d): `RESULT: 192 passed, 0 failed`; section 12 every case PASS, incl. `R1 (apply-time run): no follower row yet and the 2 surgeon rows equal the count before (2)`; leftover 0. `send-notification` v8 and `daily-reminder` v6 deployed after both files (edge-functions/README.md section 3). Next: Faraz sets Follows for the follower accounts in Setup > Users.
 
 ## 2026-09-25 - audit_log read-back: audit_read_own (Prompt 21 step 1; `sql/migrations/2026-09-25-audit-read-own.sql`)
 
@@ -1454,6 +1473,11 @@ grades the AFTER column, so before the apply it is red on exactly `P1 S1 S2 S5 T
    `git checkout -- index.html version.json`) and `bash -n scripts/verify-rls.sh`, and report the resolutions with the gate results.
    Steps 3-9 run from the rebased branch. If the record commit has not landed yet, step 6 runs with `SILVIS_RETURN_LEG_APPLIED=1`
    whenever the return-leg file is live (section 5's `Q` / `Q3`).
+   *As run (2026-09-27): that fallback. The gate was run by hand and its record commit had not landed when this step ran - the
+   branch was rebased cleanly onto `7a23f09` (E2 + E3 since `33e529d`, no record commit yet), step 6 ran with
+   `SILVIS_RETURN_LEG_APPLIED=1`, and the record commit (revision o applied, revision p, section 5's `Q` / `Q3` refused by
+   default, the variable dropped) landed on `main` after this branch's push (`54dcdc0`). From that commit on verify-rls needs no
+   variable for section 5.*
 3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/audit-read-own-probe.sql` -> the BEFORE column.
    Dry run observed 2026-09-25 22:55 UTC (Faraz's go, rolled back): all 22 cases read exactly their BEFORE string (P1 the three
    policies; S1 / S2 / C2 / C4 / S7 / C7 / V1 / V2 ERR 42501; S5 `own=0`; T1 `own=0 s3=0`; C5 `own_family=1 own_other=0`; D1
@@ -1464,7 +1488,7 @@ grades the AFTER column, so before the apply it is red on exactly `P1 S1 S2 S5 T
 6. `SILVIS_WORKDIR=<dir> bash scripts/verify-rls.sh` from the rebased branch: section 13 green, section 11's `C21` `own_other=1`,
    every leftover count 0. Run it with whatever variables the rebased sections still call for (after the gate's record step section
    5 needs no `SILVIS_RETURN_LEG_APPLIED` - see step 2; `SILVIS_PREFS_ROWS_BEFORE` as the followers section says, if section 12
-   still reads it).
+   still reads it). As run: with `SILVIS_RETURN_LEG_APPLIED=1` (step 2's note) - the variable no longer exists since the record commit.
 7. Push (1d: after verify-rls). Nothing in the commit depends on the backfill.
 8. **Step 3, the backfill**, in the same session (Faraz 9/25: every member or coordinator write that has no audit row).
    a) The ground truth is the API gateway log - the source of the 9/24 evidence: every `POST /rest/v1/audit_log` -> 403 from launch
