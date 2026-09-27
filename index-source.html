@@ -43,6 +43,9 @@
       button { min-height: 36px; }
       /* A card's open/close title row (Collapsible and the Settings toggles) is a phone tap target too. */
       .cardtoggle { min-height: 36px; }
+      /* An inline More / Less / Details toggle: 36 px wide too, and its negative vertical margins keep the 36 px height
+         from stretching the sentence's line box. */
+      .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
     }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
@@ -495,6 +498,8 @@ function CallSchedule() {
 
   // --- Office Notifications ---
   const [officeContacts, setOfficeContacts] = useState([]);
+  // "loading" | "ok" | "failed": a failed read must never read as an empty table (the Setup card's summary and body).
+  const [officeContactsLoad, setOfficeContactsLoad] = useState("loading");
   const [newOfficeName, setNewOfficeName] = useState("");
   const [newOfficeEmail, setNewOfficeEmail] = useState("");
   const [newOfficeRole, setNewOfficeRole] = useState("");
@@ -3928,8 +3933,9 @@ function CallSchedule() {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/office_contacts?select=*&order=name.asc`, { headers: dbAuthHeaders() });
         if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 120)}`);
         const rows = await res.json();
-        if (Array.isArray(rows)) setOfficeContacts(rows);
-      } catch(e) { console.warn("Load office contacts error:", e); showToast("Couldn't load office contacts - the list shown may be incomplete.", "error"); }
+        if (!Array.isArray(rows)) throw new Error("office_contacts answered a non-array");
+        setOfficeContacts(rows); setOfficeContactsLoad("ok");
+      } catch(e) { console.warn("Load office contacts error:", e); setOfficeContactsLoad("failed"); showToast("Couldn't load office contacts - the list shown may be incomplete.", "error"); }
     })();
   }, [loaded, isScheduler, reloadTrigger]);
 
@@ -4722,9 +4728,23 @@ function CallSchedule() {
       // Collapsible reads its open flag at mount; the strip lives on the calendar, so the
       // Setup view (and the card) mounts fresh with the flag set.
       try { writeCollapseFlag("setup_east", true); } catch (e) { console.warn("Couldn't persist the East panel state:", e); }
+      scrollToCardRef.current = "setup_east";
       setView("setup");
     } else setView("timeoff");
   };
+  // Settings / Setup declutter review (9/27): Setup now opens with the (open) Generate card near the top, so the East
+  // card sits screens below the fold - a one-shot scroll brings the deep link's target into view once Setup mounts.
+  const scrollToCardRef = useRef(null);
+  useEffect(() => {
+    if (view !== "setup" || !scrollToCardRef.current) return;
+    const ck = scrollToCardRef.current;
+    scrollToCardRef.current = null;
+    const t = setTimeout(() => {
+      try { const el = document.querySelector('[data-testid="card-' + ck + '"]'); if (el) el.scrollIntoView({ block: "start" }); else console.warn("Couldn't find the " + ck + " card to scroll to"); }
+      catch (e) { console.warn("Couldn't scroll to the " + ck + " card:", e); }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [view]);
   const snapshotAgeText = (iso) => {
     if (!iso) return "none on file";
     const t = new Date(iso).getTime();
@@ -5175,9 +5195,12 @@ function CallSchedule() {
   const settingsToggleRow = (open) => ({...css.cardT,margin:open?"0 0 12px":0,cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"});
   const settingsChevron = (open) => <span aria-hidden="true" style={{fontSize:11,color:T.muted,letterSpacing:0,transition:"transform .15s",transform:open?"rotate(90deg)":"rotate(0deg)",display:"inline-block",width:10,flexShrink:0}}>&#9654;</span>;
   const moreToggle = (k, text) => (
-    <button type="button" data-testid={"more-" + k} aria-expanded={!!openSettingsCards[k]} onClick={()=>toggleSettingsCard(k)} style={{background:"none",border:"none",padding:"0 2px",marginLeft:4,color:T.accentText,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:font}}>{openSettingsCards[k] ? "Less" : (text || "More")}</button>
+    <button type="button" className="moretoggle" data-testid={"more-" + k} aria-expanded={!!openSettingsCards[k]} onClick={()=>toggleSettingsCard(k)} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",verticalAlign:"middle",background:"none",border:"none",padding:"0 2px",marginLeft:4,color:T.accentText,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:font}}>{openSettingsCards[k] ? "Less" : (text || "More")}</button>
   );
   const moreNote = { fontSize:11.5, color:T.muted, margin:"0 0 10px", lineHeight:1.5 };
+  // (review 9/27) iPhone / iPad (iPadOS reports a Mac UA with touch): the one case where 'biometrics unavailable' has a
+  // fix the user can make, so its hint stays on the visible line instead of only behind Details.
+  const onIOSDevice = (() => { try { return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); } catch (e) { console.warn("Couldn't read the user agent:", e); return false; } })();
   // Collapsible's summary line (shown only while the card is closed): cheap, exact counts from state already loaded.
   const cardSummary = (text) => text ? <span style={{fontSize:11.5,color:T.muted}}>{text}</span> : null;
   const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
@@ -5718,7 +5741,7 @@ function CallSchedule() {
           </Collapsible>
 
           <Collapsible css={css} ck="setup_office" defaultOpen={false} title="Office contacts"
-            summary={cardSummary(officeContacts.length ? officeContacts.filter(c => c.active).length + " active of " + officeContacts.length : "None yet")}>
+            summary={cardSummary(officeContacts.length ? officeContacts.filter(c => c.active).length + " active of " + officeContacts.length + (officeContactsLoad === "failed" ? " (couldn't reload)" : "") : officeContactsLoad === "failed" ? "Couldn't load" : officeContactsLoad === "ok" ? "None yet" : "")}>
             <p style={sectionNote}>Office staff who receive the publish notice and the Monday morning change digest. Entered by hand; this table is authenticated-read only (never anon-readable), which is why an address may be typed here and nowhere else in the app.</p>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:12}}>
               <div style={{flex:"1 1 140px"}}><label style={label}>Name</label><input value={newOfficeName} onChange={e=>setNewOfficeName(e.target.value)} style={{...inp,width:"100%"}}/></div>
@@ -5726,7 +5749,7 @@ function CallSchedule() {
               <div style={{flex:"1 1 160px"}}><label style={label}>Role (optional)</label><input value={newOfficeRole} onChange={e=>setNewOfficeRole(e.target.value)} placeholder="Trauma coordinator" style={{...inp,width:"100%"}}/></div>
               <button onClick={addOfficeContact} disabled={officeNotifBusy} style={{...css.btn(true),padding:"6px 14px",fontSize:12,opacity:officeNotifBusy?0.6:1}}>Add</button>
             </div>
-            {officeContacts.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No office contacts yet.</p> : (
+            {officeContacts.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>{officeContactsLoad === "failed" ? "Couldn't load the office contacts - reload the app to retry (this is not an empty list)." : officeContactsLoad === "ok" ? "No office contacts yet." : "Loading office contacts\u2026"}</p> : (
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {officeContacts.map(c => (
                   <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:c.active?"#fff":"#f4f6f8",borderRadius:6,border:"1px solid #DCE3EC",opacity:c.active?1:0.6}}>
@@ -6633,7 +6656,7 @@ function CallSchedule() {
               /* Biometric unavailable (every desktop): one short line; the iPhone hint, the diagnostic, Re-check and
                  Try enable anyway sit behind Details (in memory, like the other Settings toggles). */
               <div data-testid="biometric-unavailable" style={{paddingTop:12,borderTop:"1px solid " + T.border}}>
-                <p style={{fontSize:12,color:dkSubtext,margin:0,lineHeight:1.5}}>Face ID / Touch ID isn't available on this device.{moreToggle("bioDetails", "Details")}</p>
+                <p style={{fontSize:12,color:dkSubtext,margin:0,lineHeight:1.5}}>Face ID / Touch ID isn't available on this device.{onIOSDevice && " On iPhone, open the app from Safari and add it to the Home Screen first."}{moreToggle("bioDetails", "Details")}</p>
                 {openSettingsCards.bioDetails && <div data-testid="biometric-details" style={{marginTop:8}}>
                   <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:8}}>
                     <p style={{flex:"1 1 240px",minWidth:0,fontSize:11,color:T.muted,margin:0,lineHeight:1.4}}>On iPhone this needs Safari and the app installed from Safari's Share menu (Add to Home Screen).</p>
@@ -6711,7 +6734,7 @@ function CallSchedule() {
                       <input readOnly data-testid="combined-sync-url" value={combinedUrl} style={{...css.inp,width:"100%",maxWidth:420,fontSize:10,fontFamily:mono,padding:"4px 8px"}} onClick={e=>e.target.select()}/>
                       <button data-testid="copy-combined-sync-url" onClick={()=>copyText(combinedUrl, key)} style={{...css.btn(copiedUrl===key),padding:"8px 14px",fontSize:11,minHeight:36,whiteSpace:"nowrap"}}>{copiedUrl===key ? "Copied" : "Copy"}</button>
                     </div>
-                    <div data-testid="combined-sync-note" style={{fontSize:11,color:"#5B6B82",marginTop:4,lineHeight:1.5}}>{"for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself"} ({s.name}'s Silvis shifts plus an all-day entry for each Davenport day, including a Davenport vacation reviewed as away).</div>
+                    <div data-testid="combined-sync-note" style={{fontSize:11,color:"#5B6B82",marginTop:4,lineHeight:1.5}}>{"for office staff at either site \u2014 paste it into Outlook as an internet calendar; it updates itself"} ({s.name}'s Silvis shifts, an all-day entry for each Davenport shift, and an all-day 'away' entry for a Davenport vacation reviewed as away).</div>
                   </div>
                 );
               })}

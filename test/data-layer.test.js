@@ -4961,7 +4961,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("SD4: Account - with biometrics unavailable (every desktop) one short line and a Details toggle hold the iPhone hint, the diagnostic, Re-check and Try enable anyway; the available branch is unchanged; the Pop-ups box says the permission in plain words (helpers.notifPermissionText)", () => {
       const bio = SD.slice(SD.indexOf('<div data-testid="biometric-unavailable"'), SD.indexOf("<div style={css.cardT}>Live calendar sync</div>"));
-      assert.ok(bio.includes("Face ID / Touch ID isn't available on this device.{moreToggle(\"bioDetails\", \"Details\")}"), "one short line + Details");
+      // review 9/27: on an iPhone / iPad the fix (Safari + Home Screen) stays on the visible line; everywhere else one short line + Details
+      assert.ok(bio.includes("Face ID / Touch ID isn't available on this device.{onIOSDevice && \" On iPhone, open the app from Safari and add it to the Home Screen first.\"}{moreToggle(\"bioDetails\", \"Details\")}"), "one short line (+ the iOS fix on iOS) + Details");
+      assert.ok(SD.includes('  const onIOSDevice = (() => { try { return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }'), "iOS detection covers iPadOS's Mac UA");
       const det = bio.slice(bio.indexOf("{openSettingsCards.bioDetails && "));
       assert.ok(det.includes(">Re-check</button>") && det.includes(">Try enable anyway</button>") && det.includes("Diagnostic:</strong> {biometricReason}") && det.includes("Add to Home Screen"), "the diagnostic box, Re-check and Try enable anyway sit behind Details");
       assert.ok(!/color:(dk\?)?"#/.test(bio), "the moved block reads tokens (T.muted / T.text)");
@@ -4973,9 +4975,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("SD5: role fixes - the calendar-sync card renders only when a URL block would (roster link, a follow, scheduler or viewer: never the unlinked coordinator's empty card); the Email box gives an unlinked coordinator / viewer ONE line (the sign-in-address sentence is the linked surgeon's only)", () => {
       assert.strictEqual(SDcount('{(mySurgeon || myFollows.length > 0 || isScheduler || isViewer) && <div data-testid="calsync-card" style={css.card}>\n            <div style={css.cardT}>Live calendar sync</div>'), 1, "the card's guard mirrors its four URL blocks");
-      const guard = (r) => !!(r.mySurgeon || r.follows > 0 || r.isScheduler || r.isViewer);
-      assert.strictEqual(guard({ follows: 0 }), false, "coordinator, no follows: no card");
-      assert.ok(guard({ follows: 1 }) && guard({ isViewer: true }) && guard({ mySurgeon: "s2" }) && guard({ isScheduler: true }), "every role with a feed keeps it");
+      // (review 9/27: derived from the source, not a copy of the logic) the guard's terms are exactly the conditions
+      // of the card's top-level URL blocks - a new URL block for another role must widen the guard too.
+      const gm = SD.match(/\{\(([^)]*)\) && <div data-testid="calsync-card"/);
+      assert.ok(gm, "the calsync-card guard");
+      const terms = gm[1].split("||").map(t => t.trim());
+      const card = SD.slice(SD.indexOf('<div data-testid="calsync-card"'), SD.indexOf("{/* calendar-sync card end */}"));
+      const blocks = (card.match(/^ {12}\{(?!\/\*)(?!openSettingsCards\.)[^\n]*/gm) || []).map(l => l.trim());
+      assert.deepStrictEqual(blocks.map(l => l.slice(0, 32)), ["{mySurgeon && (() => {", "{myFollows.map(fid => {", "{(isScheduler || isViewer) && <>", "{isScheduler && <>"].map(l => l.slice(0, 32)), "the card's four URL blocks: " + JSON.stringify(blocks));
+      const needs = { "{mySurgeon &&": ["mySurgeon"], "{myFollows.map": ["myFollows.length > 0"], "{(isScheduler || isViewer)": ["isScheduler", "isViewer"], "{isScheduler &&": ["isScheduler"] };
+      for (const b of blocks) { const k = Object.keys(needs).find(x => b.startsWith(x)); assert.ok(k, "a URL block with an unknown condition: " + b); needs[k].forEach(t => assert.ok(terms.includes(t), "the guard is missing '" + t + "' (block " + b + ")")); }
+      assert.deepStrictEqual(terms.slice().sort(), ["isScheduler", "isViewer", "myFollows.length > 0", "mySurgeon"], "no extra role widens the guard (the unlinked coordinator with no follows gets no card)");
       const notif = SD.slice(SD.indexOf("<span>Notification settings</span>"), SD.indexOf("<div style={css.cardT}>Account</div>"));
       assert.strictEqual((notif.match(/E-mails go to your sign-in address/g) || []).length, 1, "one sign-in-address sentence");
       assert.ok(notif.includes("{mySurgeon && <p style={{fontSize:11,color:dkSubtext,margin:\"0 0 8px\",lineHeight:1.5}}>E-mails go to your sign-in address"), "shown to a linked surgeon only");
@@ -4994,8 +5004,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         const at = setup.indexOf(`ck="${ck}"`); const open = setup.slice(at, setup.indexOf("\n", setup.indexOf("\n", at) + 1) + 400);
         assert.ok(/summary=\{cardSummary\(/.test(open), ck + ": a summary");
       }
-      assert.ok(setup.includes('summary={cardSummary(officeContacts.length ? officeContacts.filter(c => c.active).length + " active of " + officeContacts.length : "None yet")}'), "office contacts: N active of M");
+      // review 9/27: a failed office_contacts read never reads as 'None yet' (summary) or 'No office contacts yet.' (body)
+      assert.ok(setup.includes('summary={cardSummary(officeContacts.length ? officeContacts.filter(c => c.active).length + " active of " + officeContacts.length + (officeContactsLoad === "failed" ? " (couldn\'t reload)" : "") : officeContactsLoad === "failed" ? "Couldn\'t load" : officeContactsLoad === "ok" ? "None yet" : "")}'), "office contacts: N active of M; 'None yet' only after a successful read");
+      assert.ok(setup.includes('{officeContactsLoad === "failed" ? "Couldn\'t load the office contacts - reload the app to retry (this is not an empty list)." : officeContactsLoad === "ok" ? "No office contacts yet." : '), "the card body says a failed read, not an empty list");
+      const ocl = SD.slice(SD.indexOf("  // --- Load Office Contacts (scheduler/admin) ---"), SD.indexOf("  // --- Save Notification Preference"));
+      assert.ok(ocl.includes('setOfficeContacts(rows); setOfficeContactsLoad("ok");') && ocl.includes('setOfficeContactsLoad("failed"); showToast("Couldn\'t load office contacts'), "the loader sets ok only after a good read and failed in its catch");
+      assert.strictEqual(SDcount('const [officeContactsLoad, setOfficeContactsLoad] = useState("loading");'), 1, "starts as loading (no summary)");
       assert.ok(SD.includes("  const cardSummary = (text) => text ? <span style={{fontSize:11.5,color:T.muted}}>{text}</span> : null;"), "the summary is T.muted and nothing when empty");
+    });
+    check("SD8 (review 9/27): the coverage strip's East deep link scrolls the (now lower) Setup > East feed card into view - a one-shot ref set in openEastVacPanel, consumed by an effect on view", () => {
+      const oe = SD.slice(SD.indexOf("  const openEastVacPanel = () => {"), SD.indexOf("  const snapshotAgeText = "));
+      assert.ok(oe.indexOf('try { writeCollapseFlag("setup_east", true); }') < oe.indexOf('scrollToCardRef.current = "setup_east";') && oe.indexOf('scrollToCardRef.current = "setup_east";') < oe.indexOf('setView("setup");'), "flag, then the one-shot ref, then the view");
+      assert.strictEqual(SDcount("  const scrollToCardRef = useRef(null);"), 1, "one ref");
+      const eff = oe.slice(oe.indexOf("  useEffect(() => {"));
+      assert.ok(eff.includes('if (view !== "setup" || !scrollToCardRef.current) return;') && eff.includes("scrollToCardRef.current = null;") && eff.includes("document.querySelector('[data-testid=\"card-' + ck + '\"]')") && eff.includes('el.scrollIntoView({ block: "start" })') && eff.includes("console.warn(\"Couldn't scroll to the \"") && eff.includes("}, [view]);"), "the effect consumes the ref once, scrolls card-<ck> to the top, never fails silently");
+      const mq = SD.indexOf("@media (max-width: 600px)"), mt = SD.indexOf(".moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }", mq);
+      assert.ok(mq > 0 && mt > mq && mt < SD.indexOf(".cal-grid {", mq), "an inline More toggle is 36 px wide at phone width without stretching its line (first phone block)");
+      assert.ok(SD.includes('<button type="button" className="moretoggle" data-testid={"more-" + k}'), "moreToggle carries the class");
+      assert.ok(SD.includes("an all-day entry for each Davenport shift, and an all-day 'away' entry for a Davenport vacation reviewed as away)") && !SD.includes("each Davenport day, including a Davenport vacation"), "the combined-feed note says a vacation is an 'away' entry, not a Davenport shift");
     });
   }
 

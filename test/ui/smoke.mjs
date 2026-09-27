@@ -2227,6 +2227,12 @@ try {
         else if (!sdS.sync || sdS.exp) fail(`Settings declutter (surgeon): expected his calendar-sync card and no scheduler card (sync ${sdS.sync}, export ${sdS.exp})`);
         else if (sdS.pageW > 392) fail(`Settings declutter (surgeon, 390): the page scrolls sideways (${sdS.pageW})`);
         else ok(`Settings declutter (surgeon, 390): no group heading, no 'Scheduler tools', his calendar-sync card present, no sideways scroll (${sdS.pageW})`);
+        // review 9/27: the inline More / How toggle is a 36 x 36 phone tap target and does not stretch its sentence's line
+        const mt = await sp.$eval("[data-testid=more-calsyncHow]", el => { const r = el.getBoundingClientRect(), p = el.parentElement, lh = parseFloat(getComputedStyle(p).lineHeight) || 18;
+          return { w: Math.round(r.width), h: Math.round(r.height), ph: Math.round(p.getBoundingClientRect().height), lh: Math.round(lh) }; }).catch(() => null);
+        if (!mt) console.log("     (Settings declutter (surgeon, 390): no calendar-sync 'How' toggle on this page - the tap-target check is not exercised)");
+        else if (mt.w < 36 || mt.h < 36) fail(`Settings declutter (surgeon, 390): the inline 'How' toggle is ${mt.w} x ${mt.h} - under the 36 px tap target`);
+        else ok(`Settings declutter (surgeon, 390): the inline 'How' toggle is ${mt.w} x ${mt.h} (its note is ${mt.ph} px at a ${mt.lh} px line height)`);
       } catch (e) { fail("Settings declutter (surgeon): " + String(e && e.message || e).split("\n")[0]); }
       for (const theme of ["dark", "light"]) {
         await sp.click('button[data-tab="settings"]');
@@ -6362,6 +6368,14 @@ try {
         const opened = await page.getAttribute("[data-testid=card-setup_east]", "data-open").catch(() => null);
         const listThere = await page.$("[data-testid=eastvac-list]");
         if (flagBefore !== "0" || opened !== "1" || !listThere) fail("coverage strip: the count did not open Setup > East feed with the panel (collapse flag before the click '" + flagBefore + "', card-setup_east data-open=" + opened + ")"); else ok("coverage strip: 'unreviewed East vacations: 1 (Khan)' opens Setup > East feed with the panel open (the card's collapse flag was '0' before the click)");
+        // Setup declutter review (9/27): the East card now sits below the (open) Generate card, so the deep link scrolls it
+        // into view (a one-shot scroll once Setup mounts) - the card's top must be inside the viewport.
+        try {
+          const box = await page.$eval("[data-testid=card-setup_east]", el => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), vh: window.innerHeight }; }).catch(() => null);
+          if (!box) fail("coverage strip: card-setup_east missing after the click - the scroll-into-view check could not run");
+          else if (box.top >= -2 && box.top < box.vh) ok(`coverage strip: Setup > East feed card is scrolled into view (top=${box.top}, viewport ${box.vh})`);
+          else fail(`coverage strip: the East deep link left its card outside the viewport (top=${box.top}, viewport ${box.vh}) - the scheduler lands on Generate, not the card he asked for`);
+        } catch (e) { fail("coverage strip: the scroll-into-view check threw: " + e.message); }
       }
       // My schedule and the Time off view list the same three decisions
       await page.click('button[data-tab="myschedule"]');
@@ -8636,7 +8650,7 @@ try {
         if (nt) {
           await nt.click(); await pc.waitForTimeout(250);
           const em = await pc.evaluate(() => document.body.innerText || "");
-          const linked = (em.match(/Available once your account is linked to a roster entry\./g) || []).length, addr = /E-mails? go to your sign-in address/i.test(em);
+          const linked = (em.match(/Available once your account is linked to a roster entry\./g) || []).length, addr = /E-?mails? go to your sign-in address/i.test(em);
           if (linked !== 1 || addr) fail(`coordinator: the Email box should read one 'Available once ...' line and no sign-in-address sentence (count ${linked}, sentence ${addr})`);
           else ok("coordinator: the Email box reads one line - 'Available once your account is linked to a roster entry.'");
           await nt.click(); await pc.waitForTimeout(150);
